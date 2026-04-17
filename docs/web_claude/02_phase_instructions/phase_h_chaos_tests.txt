@@ -1,0 +1,254 @@
+================================================================
+PHASE H — Chaos Test Suite
+================================================================
+
+Phase G complete (1351/1351 green). Final technical gate before
+Phase I verdict. Adds deliberate failure-injection integration
+tests.
+
+LOCATION: tests/integration/test_chaos.py
+
+PURPOSE: Simulation smoke test (Module 37) covered happy
+paths. Chaos tests cover UNHAPPY paths — process crashes mid-
+transaction, broker API failures, network timeouts, race
+conditions. The goal is not "pass" but "system fails SAFELY":
+  - No double orders
+  - No lost capital
+  - No orphan trades invisible to reconciler
+  - Kill switch fires when it should
+  - Reconciliation cleans up on restart
+
+================================================================
+LOCK (CX1-CX12)
+================================================================
+
+CX1 — File: tests/integration/test_chaos.py
+  Extends existing integration harness. Reuses SimKiteClient +
+  fixtures from test_end_to_end_smoke.py. Add controlled
+  failure injection methods to SimKiteClient where needed.
+
+CX2 — pytest marker: @pytest.mark.chaos + @pytest.mark.integration
+  Runnable via: pytest -m chaos
+  Included in full suite run by default.
+
+CX3 — SimKiteClient extensions (if needed):
+  - raise_on_next_place_order(exc: Exception)
+  - raise_on_next_order_history(exc: Exception)
+  - delay_next_place_order(seconds: float)
+  - raise_on_quote(symbol: str, exc: Exception)
+  - script_partial_fill(order_id: str, filled_qty: int, remaining: int)
+  - script_status_unknown(order_id: str)
+  After scripted raise/delay fires once, normal behavior
+  resumes.
+
+================================================================
+CHAOS SCENARIOS (CX4-CX12)
+================================================================
+
+CX4 — SCENARIO 1: Process crashes between place_order success
+       and state update
+  Setup:
+    1. Seed system with pending signal through to sizing
+    2. Configure SimKite to return success on place_order
+    3. Mock state_store.update_order_placed to raise
+       RuntimeError
+  Expected:
+    - Broker shows order (via SimKite script)
+    - Local state missing order update
+    - Reconciler detects ORPHAN_ORDER on next cycle
+    - Reconciler action: cancel the orphan OR write local
+      record (per G1 policy)
+    - No duplicate placement on retry
+    - Capital reservation released or recovered correctly
+
+CX5 — SCENARIO 2: Broker place_order network timeout
+  Setup:
+    1. Seed system with signal
+    2. SimKite.delay_next_place_order(60) -> triggers adapter
+       timeout at configured read_sec
+  Expected:
+    - adapter raises BrokerTimeoutError
+    - order_placer catches, releases reservation
+    - signal marked PLACEMENT_FAILED
+    - No partial state (no orders row with PENDING stuck)
+    - Kill switch NOT triggered (single timeout not catastrophic)
+    - After 3 consecutive timeouts: kill switch fires
+
+CX6 — SCENARIO 3: SimKite returns "status unknown" for order
+  Setup:
+    1. Place order successfully
+    2. SimKite.script_status_unknown(order_id) for next N polls
+  Expected:
+    - order_monitor handles empty/unknown status per Phase B
+      fix (BLOCKER #8)
+    - After N consecutive unknowns: orphan detection fires
+    - on_orphan_callback triggers soft_kill
+
+CX7 — SCENARIO 4: Partial fill then rejection of remaining qty
+  Setup:
+    1. Place entry for qty=100
+    2. SimKite scripts partial fill (60 filled, 40 pending)
+    3. Then SimKite rejects remaining 40
+  Expected:
+    - Trade moves to PARTIAL status
+    - SL and TGT orders placed for 60 (not 100)
+    - Capital committed for 60 only
+    - Rejected 40 logged, no retry attempt
+
+CX8 — SCENARIO 5: Both SL and TGT complete simultaneously
+       (LIMIT_TRIPLE race)
+  Setup:
+    1. Place LIMIT_TRIPLE order (entry + SL + TGT)
+    2. Entry fills
+    3. SimKite returns COMPLETE for BOTH SL and TGT on same
+       poll cycle
+  Expected:
+    - System detects double-exit condition
+    - Reconciler or order_monitor flags CRITICAL
+    - Kill switch fires
+    - No double capital release
+    - Trade marked with special status (DOUBLE_EXIT or similar)
+    - Operator alert sent
+
+CX9 — SCENARIO 6: Quote feed dies mid-trail
+  Setup:
+    1. Active SmartTgt trail position
+    2. SimKite.raise_on_quote raises for 3 consecutive polls
+  Expected:
+    - smart_tgt logs WARNING, skips trail that cycle
+    - No modify_order call with stale data
+    - After 3 failures: appropriate log level (not kill switch —
+      quote feed hiccups are transient)
+    - When quotes resume: trail catches up via
+      recompute-on-reconnect path (G6)
+
+CX10 — SCENARIO 7: Kill switch activates while signal
+        in-flight
+  Setup:
+    1. Signal enters pipeline at screening stage
+    2. Mid-screening: kill_switch.hard_kill()
+    3. Pipeline continues to sizing, risk engine
+  Expected:
+    - Risk engine CHECK 1 (kill switch) rejects the signal
+    - OR last-mile check in order_placer rejects
+    - Signal marked REJECTED_KILL_SWITCH
+    - No broker order placed
+    - Capital never reserved
+
+CX11 — SCENARIO 8: SQLite database locked during mutation
+  Setup:
+    1. Hold write transaction in test thread
+    2. Attempt signal processing from worker thread
+    3. Release after 3 seconds
+  Expected:
+    - Worker waits (WAL mode + BEGIN IMMEDIATE)
+    - OR gets sqlite3.OperationalError
+    - If error: handled gracefully, retry or signal
+      REJECTED_DB_LOCKED
+    - No partial transactions committed
+
+CX12 — SCENARIO 9: Restart with pending broker order
+  Setup:
+    1. Fresh state_store
+    2. SimKite pre-seeded with 1 open order for RELIANCE
+       (simulates orphan left by prior crashed run)
+    3. Start system
+  Expected:
+    - startup scenario detected (CRASH based on no SHUTDOWN event)
+    - Reconciler synchronous pass finds broker order not in
+      local state
+    - CHECK 6 ORPHAN_ORDER action per G1
+    - Either: cancel the orphan OR adopt into local state
+    - Log CRITICAL + operator alert
+
+================================================================
+SCENARIO 10 (BONUS): Multi-failure cascade
+================================================================
+
+CX13 (bonus) — SCENARIO 10: Multiple simultaneous failures
+  Setup:
+    1. Send 3 signals concurrently
+    2. SimKite scripts:
+       - Signal 1: timeout on place_order
+       - Signal 2: success
+       - Signal 3: broker rejection
+  Expected:
+    - Signal 1: reservation released, no orphan
+    - Signal 2: placed and tracked normally
+    - Signal 3: reservation released, logged
+    - System continues processing (no deadlock)
+    - Other signals in queue not affected
+
+================================================================
+IMPLEMENTATION NOTES
+================================================================
+
+- Reuse fixtures from conftest.py (wired_system, sim_kite, etc.)
+- Each scenario: one test function @pytest.mark.chaos
+- Minimal assertions: focus on "no worse than initial state"
+  (no duplicate orders, no lost capital, reconciliation cleans up)
+- time.sleep acceptable for async simulation (keep < 1s per test)
+- Expected runtime: chaos suite completes in < 60 seconds
+- If any scenario test FAILS: system has a real bug. Fix before
+  paper trial.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Extend SimKiteClient with failure injection methods
+   (tests/integration/sim_kite.py)
+2. Build tests/integration/test_chaos.py with 9-10 scenarios
+3. Run chaos suite isolated first:
+     pytest tests/integration/test_chaos.py -v -m chaos
+4. Run full suite:
+     pytest tests/ -q
+5. Expected total: 1351 + ~10 = ~1361
+
+================================================================
+FAILURE HANDLING DURING BUILD
+================================================================
+
+If any chaos scenario fails AND the failure indicates a real
+bug (not a test harness issue):
+  STOP. Report the scenario and failure details to Rama.
+  Web Claude will decide: fix now or document as known
+  limitation.
+
+Do NOT skip a scenario because it's inconvenient. Chaos tests
+exist to find bugs that unit tests don't catch.
+
+================================================================
+MEMORY UPDATE
+================================================================
+
+After green:
+  Phase H complete, chaos suite at tests/integration/test_chaos.py
+  CX1-CX12 locked under testing_module section
+  Any discovered bugs + fixes documented separately
+
+================================================================
+POST-PHASE-H
+================================================================
+
+After chaos suite green:
+  Rama requests: Web Claude gives CONSOLIDATED VERDICT
+    - Everything fixed across Phases A-H
+    - Everything deferred to v2.1 (with rationale)
+    - Recommendation: paper trial vs live?
+  
+  Rama will then decide: paper trial 5-7 days, or live with
+  small capital directly.
+
+  Web Claude's strong recommendation (stated up front):
+  DO PAPER TRIAL. Not negotiable. Chaos tests don't cover
+  unknown unknowns from real data, real webhooks, real Kite
+  latency, real market microstructure, and real operator
+  response drills. 5-7 paper sessions with daily review of
+  logs + reconciliation is the minimum safe path to live.
+
+  Live with Rs 10-25K for 2 weeks after paper, then scale.
+
+================================================================
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================

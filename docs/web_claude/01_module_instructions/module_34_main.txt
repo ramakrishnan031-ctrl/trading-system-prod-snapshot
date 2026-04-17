@@ -1,0 +1,505 @@
+================================================================
+MODULE 34: main.py orchestrator
+================================================================
+
+CONTEXT: 1049/1049 across 36 suites. All subsystems built.
+main.py wires them together, handles lifecycle, CLI, startup
+phases, shutdown. utils/startup_checks.py is the library.
+utils/kill_switch.py does NOT exist — G5c --resume lives in
+main.py directly.
+
+LOCKED DECISIONS REFERENCED:
+  G4, G5a, G5b, G5c, L8, CL1, CL4, EV2, E1, P17, RC14
+
+================================================================
+LOCK (MAIN1-MAIN25)
+================================================================
+
+MAIN1 — Purpose: Single entry point. Orchestrates startup,
+  runtime, shutdown. NOT a library — standalone script.
+  Invoked as `python main.py [args]`.
+
+MAIN2 — CLI flags (argparse):
+  --mode {paper,live}       default paper
+  --resume                  clears HARD_KILL, allows startup
+  --config PATH             override config/ directory
+  --status                  print subsystem status, exit 0
+  --dry-run                 run startup checks only, no trading
+  --version                 print version, exit 0
+
+MAIN3 — Top-level error handling (E1):
+  if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except TradingSystemError as e:
+        logger.critical("system_error", exc_info=True)
+        sys.exit(1)
+    except Exception as e:
+        logger.critical("unexpected_error", exc_info=True)
+        sys.exit(2)
+
+  Exit codes:
+    0 — clean shutdown
+    1 — TradingSystemError
+    2 — unexpected exception
+    3 — startup check failure (blocking)
+    4 — HALT scenario without --resume
+    5 — invalid args / config
+
+MAIN4 — Phase 0a: Logger setup (L8):
+  FIRST call. Before any other module imports get_logger.
+    setup_logging(log_dir=Path("logs"))
+  Creates logs/ dir if absent.
+
+MAIN5 — Phase 0b: Config load (CL1, CL4):
+  app_config = config_loader.load_all(args.config or Path("config"))
+  Log INFO with loaded file count.
+  CL4 hash diff handled later in Phase 0c after state_store
+  opened.
+
+MAIN6 — Phase 0c: State store + startup scenario detection:
+  store = StateStore(db_path=Path("data_store/trading_system.db"))
+  time_auth = initialize_time_authority(app_config)
+  kill_switch = KillSwitch(store, bus, logger)  # loads persisted state
+  scenario_result = startup_checks.detect_startup_scenario(
+    store, kill_switch, time_auth.today_ist_date(), logger)
+
+  Handle per scenario:
+    COLD  -> log "cold start"
+    WARM  -> log "warm restart"
+    CRASH -> log CRITICAL "crash detected", write
+             CRASH_DETECTED system_event
+    HALT  -> require --resume. If absent: exit 4.
+             If present: kill_switch.resume(
+               reason="--resume flag",
+               resumed_by="operator"
+             ), log CRITICAL
+
+  CL4 hash diff check:
+    result = startup_checks.check_config_hash(store, app_config, logger)
+    if result.changed:
+      write CONFIG_DIFF system_event
+      Alert operator via telegram WARN.
+
+MAIN7 — Phase 0d: Other startup checks:
+  Call startup_checks.run_all_startup_checks(...)
+    - Clock skew (G4): blocking
+    - Config files present: blocking
+    - Required secrets: blocking
+    - Scanner connectivity (P17): warning
+    - Market holiday: warning
+  If report.ok == False: log CRITICAL with blocking_failures,
+  exit 3.
+  If --dry-run: print full report, exit 0.
+
+MAIN8 — Phase 0e: Construct subsystems (strict order):
+
+  1. event_bus = EventBus(logger)
+
+  2. broker_adapter = ZerodhaAdapter(
+       kite_client=build_kite_client(app_config),
+       rate_limiter=RateLimiter(app_config.broker_limits, logger),
+       product_resolver=ProductResolver(app_config.system_config.product_map),
+       cost_calculator=CostCalculator(app_config.broker_costs),
+       state_machine=OrderStateMachine(event_bus, logger),
+       logger=get_logger("zerodha_adapter"),
+       paper_mode=(args.mode == "paper"),
+     )
+
+  3. fund_manager = FundManager(
+       state_store=store, bus=event_bus, logger=...,
+       ...<from app_config>...,
+       on_critical_failure=_on_critical_failure_cb,
+     )
+     fund_manager.initialize(broker_adapter.get_margins().net)
+
+  4. position_sizer = PositionSizer(fund_manager, ...)
+
+  5. risk_engine = RiskEngine(
+       fund_manager, store, kill_switch=kill_switch, ...
+     )
+
+  6. market_windows = MarketWindows(
+       holidays=load_holidays(app_config)
+     )
+
+  7. notifier = TelegramNotifier(
+       bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
+       chat_ids=app_config.alerts.telegram.chat_ids,
+       failed_alerts_log_path=...,
+       sentinel_dir=...,
+       logger=get_logger("telegram_notifier"),
+       paper_mode=(args.mode == "paper"),
+     )
+
+  8. live_feed = LiveFeedManager(
+       api_key=os.environ["ZERODHA_API_KEY"],
+       access_token=os.environ["ZERODHA_ACCESS_TOKEN"],
+       on_critical_failure=_on_critical_failure_cb,
+       logger=...,
+     )
+
+  9. candle_store = CandleStore(logger, candle_interval_sec=60)
+     live_feed.register_callback(
+       lambda ticks: [candle_store.on_tick(t) for t in ticks]
+     )
+
+  10. smart_tgt = SmartTgtManager(
+        broker_adapter, store, candle_store,
+        logger=..., quote_fn=broker_adapter.get_quote,
+        enabled=app_config.system_config.smart_tgt_enabled,
+      )
+
+  11. Reconnect chain (ST13):
+      live_feed.set_on_reconnect_callback(
+        lambda ts: (candle_store.mark_reconnect(ts),
+                    smart_tgt.on_reconnect(ts))
+      )
+
+  12. order_monitor = OrderMonitor(
+        broker_adapter, state_machine=sm, bus=event_bus,
+        logger=..., poll_interval_sec=...,
+        on_orphan_callback=_on_orphan_cb,
+      )
+
+  13. order_placer = OrderPlacer(
+        broker_adapter, sm, order_monitor, fund_manager,
+        kill_switch, store, event_bus, logger=...,
+      )
+
+  14. order_reconciler = OrderReconciler(
+        broker_adapter, store, fund_manager, sm, kill_switch,
+        product_resolver, event_bus, notifier, logger=...,
+        quote_fn=broker_adapter.get_quote,
+        poll_interval_sec=app_config.order_reconciler.poll_interval_sec,
+        capital_drift_tolerance=...,
+      )
+
+  15. strategies = load_all_strategies(
+        Path(args.config or "config") / "strategies"
+      )
+
+  16. scorer = QualityScorer(app_config.scoring_weights, logger)
+      step_executor = StepExecutor(logger)
+      screener = SecondaryScreener(
+        step_executor, scorer, store,
+        quote_fn=broker_adapter.get_quote, logger=...
+      )
+
+  17. eod = EodSquareoff(
+        broker_adapter, store, fund_manager, sm, event_bus,
+        market_windows, time_auth, kill_switch, logger=...,
+      )
+
+  18. entry_gate = EntryGate(
+        quote_fn=broker_adapter.get_quote, logger=...,
+        state_store=store, on_release=_on_gate_release_cb,
+      )
+
+  19. signal_queue = queue.Queue(
+        maxsize=app_config.system_config.signal_queue.capacity
+      )
+
+  20. signal_processor = SignalProcessor(
+        signal_queue, store, event_bus,
+        fund_manager, position_sizer, risk_engine,
+        kill_switch, market_windows,
+        strategies=strategies,
+        scan_webhook_map=app_config.scan_webhook_map.scanners,
+        secondary_screener=screener,
+        quality_scorer=scorer,
+        order_placer=order_placer,
+        logger=...,
+        worker_count=app_config.signal_processor.worker_count,
+      )
+
+  21. webhook_receiver = WebhookReceiver(
+        signal_queue, store, app_config,
+        market_windows, kill_switch, logger=...,
+        secret_token=os.environ.get("WEBHOOK_SECRET"),
+      )
+
+MAIN9 — Phase 0e: Event bus subscriptions (EV2):
+  event_bus.subscribe(OrderFilled, fund_manager.on_order_filled)
+  event_bus.subscribe(PositionClosed, fund_manager.on_position_closed)
+  event_bus.subscribe(OrderStateChanged, order_reconciler.on_state_change)
+  event_bus.subscribe(KillSwitchActivated, _log_kill_switch_event)
+  event_bus.subscribe(CapitalDriftDetected, _log_capital_drift_event)
+  (Verify method names match actual implementations; if
+  differ, wire the actual handler methods.)
+
+MAIN10 — Phase 0f: Startup reconciliation (RC14, G5b):
+  order_reconciler._reconcile()  # SYNCHRONOUS one-shot
+  Logs result. If UNRECOVERABLE actions taken during this
+  pass -> kill_switch already triggered by reconciler.
+  Check: if kill_switch.is_active(): log CRITICAL, exit 1.
+
+MAIN11 — Phase 0g: Subsystem .start() sequence:
+  live_feed.connect()           # connect websocket
+  order_monitor.start()         # poll thread
+  order_reconciler.start()      # poll thread + event subscription
+  entry_gate.start()            # worker pool
+  signal_processor.start()      # dispatcher + workers
+  smart_tgt.start()             # registers candle callback
+  webhook_receiver_thread = Thread(
+    target=webhook_receiver.app.run,
+    kwargs={"host": app_config.system_config.webhook.bind_host,
+            "port": app_config.system_config.webhook.bind_port,
+            "threaded": True,
+            "use_reloader": False},
+    daemon=True,
+  )
+  webhook_receiver_thread.start()
+
+  Post-start verification (P17):
+    sleep(2)  # let Flask bind
+    result = startup_checks.check_webhook_endpoint(
+      f"http://127.0.0.1:{port}/health", http_fetcher_fn, logger)
+    if not result.reachable:
+      log CRITICAL, exit 1.
+
+MAIN12 — Phase 0h: Mark startup complete:
+  store.insert_system_event(
+    event_type="STARTUP",
+    event_ts=now_ist_iso(),
+    details={"scenario": scenario.value, "mode": args.mode,
+             "version": VERSION},
+    session_date=today_iso,
+  )
+  store.upsert_session(
+    session_date=today_iso,
+    mode=args.mode,
+    last_config_hash=json.dumps(app_config.file_hashes),
+    kill_state=kill_switch.current_state().value,
+    ...
+  )
+  notifier.send(
+    severity="INFO",
+    title="System started",
+    body=f"Scenario: {scenario.value}. Mode: {args.mode}.",
+    source_module="main",
+  )
+
+MAIN13 — Runtime loop:
+  Register SIGINT + SIGTERM handlers that set a global
+  threading.Event: _shutdown_event.
+  Main thread waits on _shutdown_event:
+    _shutdown_event.wait()  # blocks until signaled
+  All actual work happens in background threads.
+  Log INFO periodically (every N min): "heartbeat — subsystems
+  running".
+
+MAIN14 — EOD scheduling:
+  Option (i): Dedicated scheduler thread that calls
+              eod.check_and_fire(now_ist()) every 5s.
+  Option (ii): Integrate into reconciler or monitor loop.
+  Lock: Option (i). Simple dedicated thread, clean
+  separation. Daemon thread.
+
+MAIN15 — Shutdown sequence (MAIN13 triggered):
+  Clean shutdown order (reverse of start):
+  1. Log INFO "shutdown initiated"
+  2. signal_processor.stop()     # stop accepting new work
+  3. entry_gate.stop()
+  4. webhook_receiver app.shutdown() if possible
+     (Flask dev server doesn't support clean stop —
+     acceptable for v2; daemon thread dies on process exit)
+  5. smart_tgt.stop()
+  6. order_reconciler.stop()
+  7. order_monitor.stop()
+  8. live_feed.disconnect()
+  9. notifier.send(INFO, "System stopping", ...)
+  10. store.insert_system_event(
+        event_type="SHUTDOWN",
+        event_ts=now_ist_iso(), ...
+      )
+  11. store.close()
+  12. Log INFO "shutdown complete"
+  13. return 0
+
+MAIN16 — --status mode:
+  Loads config + state_store read-only.
+  Prints:
+    Scenario (from detect_startup_scenario)
+    Kill switch state
+    Open positions count
+    Daily P&L
+    Last STARTUP/SHUTDOWN events
+    Subsystem versions
+  Exits 0. No subsystems instantiated.
+
+MAIN17 — --dry-run mode:
+  Phases 0a-0d only. Prints StartupReport.
+  Subsystems NOT constructed. No threads started.
+  Exits 0 if ok, 3 if blocking failures.
+
+MAIN18 — Callback implementations:
+
+  _on_critical_failure_cb(source: str, reason: str):
+    Log CRITICAL.
+    kill_switch.soft_kill(reason=f"{source}: {reason}",
+                          triggered_by="auto")
+    notifier.send(CRITICAL, ...)
+
+  _on_orphan_cb(order_id: str, reason: str):
+    Same path — CRITICAL alert + kill_switch.soft_kill.
+
+  _on_gate_release_cb(entry: WatchEntry, reason: str):
+    If reason == "PRICE_HIT":
+      Reconstruct signal flow: call signal_processor's
+      post-screen pipeline with the entry data.
+      Ideally signal_processor exposes a public method
+      continue_from_gate(entry) — if not, main.py wires
+      directly to sizer + risk + reserve + placer here.
+      Lock: extend signal_processor with this method.
+    If reason in ("TIMEOUT", "QUOTE_UNAVAILABLE"):
+      Log INFO, no action (signal status already updated
+      by entry_gate).
+
+MAIN19 — Kite client construction:
+  build_kite_client(app_config) -> KiteConnect:
+    kite = KiteConnect(api_key=os.environ["ZERODHA_API_KEY"])
+    kite.set_access_token(os.environ["ZERODHA_ACCESS_TOKEN"])
+    return kite
+  Paper mode: this function NOT called; adapter constructed
+  with paper_mode=True and a mock kite client.
+
+MAIN20 — Holidays loader:
+  load_holidays(app_config) -> set[date]:
+    from nse_holidays_<year>.yaml load dates.
+    Convert to set of date objects.
+
+MAIN21 — Initialize time authority:
+  initialize_time_authority(app_config) -> TimeAuthority:
+    Applies configured skew thresholds.
+    Registers critical-skew callback.
+
+MAIN22 — Secret env vars required:
+  ZERODHA_API_KEY
+  ZERODHA_ACCESS_TOKEN
+  TELEGRAM_BOT_TOKEN
+  WEBHOOK_SECRET (optional)
+  Checked in Phase 0d.
+
+MAIN23 — Layer & deps:
+  Top level. Imports EVERYTHING. Only module that does so.
+  No other module imports main.
+
+MAIN24 — File size:
+  Expect 400-600 lines. If exceeds 600, split into
+  main.py + bootstrap/ helper module (but main.py stays
+  the entry point).
+
+MAIN25 — NOT in scope:
+  - utils/kill_switch.py (does not exist; G5c logic inline here)
+  - scripts/preflight_scanner_check.py (next module)
+  - reports/daily_review.py (later module)
+  - systemd service file (deployment concern)
+  - Hot config reload
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Extend signal_processor with continue_from_gate() method
+   (per MAIN18). This takes a WatchEntry and runs the
+   post-screening pipeline (sizing, risk, reserve, place).
+   Add tests to test_signal_processor.
+
+2. Build main.py per MAIN1-MAIN25 (~500 lines).
+
+3. Build tests/unit/test_main.py covering:
+
+   CLI parsing:
+   - --version prints version, exits 0
+   - --status triggers status mode
+   - --dry-run triggers dry-run mode
+   - --mode paper/live accepted
+   - --mode invalid -> exit 5
+   - --resume flag parsed
+   - --config <path> used
+
+   Phase sequencing:
+   - Logger set up FIRST (before other imports triggered)
+   - Config loaded (mock load_all)
+   - State store opened
+   - Scenario detected correctly from seeded state
+   - HALT without --resume -> exit 4
+   - HALT with --resume -> kill_switch.resume called
+   - Clock skew blocks startup -> exit 3
+   - Missing config files -> exit 3
+   - Missing secrets -> exit 3
+   - Config hash change -> alert + continue
+
+   Subsystem wiring:
+   - Event bus subscriptions registered
+   - Reconnect chain wired (live_feed -> candle_store, smart_tgt)
+   - All callbacks injected
+   - Order of construction respected (fund_manager after
+     broker_adapter; placer after monitor; etc.)
+   - Paper mode uses MockAdapter, no real Kite calls
+
+   Startup reconciliation:
+   - reconciler._reconcile() called synchronously
+   - If UNRECOVERABLE action fired: exit 1
+
+   Start sequence:
+   - live_feed.connect called
+   - order_monitor.start called
+   - All .start()-able modules started
+   - webhook endpoint self-check performed
+   - STARTUP system_event written
+   - session row upserted
+   - INFO telegram alert sent
+
+   Shutdown:
+   - SIGTERM triggers shutdown_event
+   - Subsystems stopped in reverse order
+   - SHUTDOWN system_event written
+   - store closed
+   - Exit 0
+
+   Callbacks:
+   - _on_critical_failure triggers soft_kill + alert
+   - _on_orphan_cb triggers soft_kill + alert
+   - _on_gate_release PRICE_HIT continues pipeline
+   - _on_gate_release TIMEOUT just logs
+
+   Status mode:
+   - Prints all expected fields
+   - Does NOT construct subsystems
+   - Does NOT start threads
+
+   TESTING STRATEGY:
+   - Use extensive mocking. Cannot test real websocket/Flask
+     startup in unit test.
+   - MockKiteClient, MockTicker, bypass real network.
+   - Test each phase in isolation with harness.
+   - Integration test: full startup + shutdown with all
+     mocks, verify no exceptions, correct state transitions.
+
+4. Re-run all 36 prior suites + new one. Report 37-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: main.py
+  Tests: report actual (expect 25-40)
+  Locked: MAIN1-MAIN25 under main_module: section
+  Schema: unchanged
+  Cross-module: signal_processor extended with
+                continue_from_gate()
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+Module 35 = scripts/preflight_scanner_check.py (standalone
+            CLI for P17 — operator runs before market open)
+Module 36 = reports/daily_review.py (EOD analytics)
+Module 37 = Integration smoke tests (full pipeline, paper mode)

@@ -1,0 +1,344 @@
+================================================================
+PENDING ITEMS SNAPSHOT — Trading System v2
+Date: 17-Apr-2026
+Status: 1411/1411 tests green, Task 3 complete
+================================================================
+
+This document lists EVERYTHING remaining after Task 3.
+Grouped by urgency.
+
+================================================================
+PART 1: PRE-PAPER-TRIAL OPERATOR ACTIONS (Rama)
+================================================================
+
+These are YOUR actions, not VS Code Claude's. Complete before
+Monday 20-Apr market open.
+
+1. .env file verification
+   - Path: D:\Projects\trading-system\.env
+   - Fill REAL values for all FILL_* placeholders:
+     * ZERODHA_API_KEY_LFL836
+     * ZERODHA_API_SECRET_LFL836
+     * ZERODHA_TOTP_LFL836 (unused in v2, fill anyway)
+     * TELEGRAM_BOT_TOKEN
+     * TELEGRAM_CHANNEL_PRIMARY
+     * TELEGRAM_CHANNEL_SECONDARY (placeholder OK)
+     * TELEGRAM_PERSONAL_CHAT_ID
+     * WEBHOOK_SECRET (use once-generated value, do NOT regenerate)
+   - Placeholder accounts (DR6114, D351962, ZA004, ZA005)
+     stay as FILL_WHEN_READY — system ignores them.
+
+2. .gitignore verification
+   - Run: git status
+   - Confirm .env does NOT appear
+   - If it does: add ".env" to .gitignore immediately
+
+3. NSE reference data placement
+   - Path: D:\Projects\trading-system\config\reference_data\
+   - Files required:
+     * security_master_file.csv (at root of reference_data)
+     * index_members\ folder with 17 CSV files
+   - Source: NSE official downloads (you have these)
+
+4. NSE holidays YAML
+   - Path: D:\Projects\trading-system\config\nse_holidays_2026.yaml
+   - I shared this file earlier (15 weekday holidays from
+     official NSE circular NSE/CMTR/71775)
+   - Verify it's in place
+
+5. Telegram bot setup
+   - Bot created via BotFather
+   - Bot added to primary alert channel as admin
+   - Personal chat ID captured (from @userinfobot or similar)
+   - Test bot can send a message: optional sanity check
+
+6. Chartink webhook configuration
+   - All 15 scanners configured with webhook URL pointing to
+     your machine (or public tunnel like ngrok if behind NAT)
+   - URL format: http://<your-ip>:5000/webhook/<scanner_name>
+   - Each scanner uses the same WEBHOOK_SECRET for HMAC
+
+7. Kill switch accessibility
+   - Know the command to trigger soft_kill / hard_kill manually
+     during runtime (we'll document this)
+   - Mentally rehearse emergency shutdown
+
+================================================================
+PART 2: DURING PAPER TRIAL (daily operator actions)
+================================================================
+
+These happen EVERY trading day during paper trial:
+
+Morning routine (08:30-09:00 IST):
+  a. Activate venv
+  b. python scripts\zerodha_login.py (fresh token daily)
+  c. python scripts\refresh_instruments.py (daily for F&O;
+     weekly minimum for equity-only)
+  d. python scripts\preflight_scanner_check.py
+  e. python main.py --interactive (or --mode paper if VM)
+
+During session (09:15-15:30):
+  a. Monitor logs\system.log in separate terminal
+  b. Watch Telegram primary channel for alerts
+  c. Kill switch ready if anything looks wrong
+
+End of day (15:30+):
+  a. System auto-runs EOD square-off
+  b. Daily review generated to reports\daily\<date>\
+  c. Review the xlsx:
+     - SUMMARY (funnel, P&L, counts)
+     - MULTI_INNING_TRACKING (innings 2+3 verification)
+     - RECONCILIATION_LOG (should be mostly empty)
+     - CAPITAL_LEDGER (every mutation explained)
+  d. Ctrl+C to shutdown cleanly
+
+Weekly review (after 5-7 sessions):
+  a. Aggregate findings
+  b. Share with Web Claude for analysis
+  c. Plan Phase H (chaos tests) timing
+  d. Plan live trading start
+
+================================================================
+PART 3: PENDING CODE WORK
+================================================================
+
+3.1 PENDING (from audit, must fix before live)
+
+  Item: OrderMonitor.track() for SL/TGT legs (H5)
+  File: orders/order_placer.py
+  Why pending: LIMIT_TRIPLE protocol places 3 separate orders.
+    Currently only entry is tracked. SL/TGT untracked.
+  Risk during paper: Low. CO_PLUS_TGT is default (SL native
+    in CO). Only TGT untracked, reconciler catches orphans.
+  When to fix: During or after first paper week.
+  Effort: Small, ~1-2 hours.
+
+3.2 VERIFY DURING PAPER (2 items)
+
+  Item: preflight_scanner_check uses requests library (H8)
+  Action: Run preflight once. If it works, done. If import
+    fails: pip install requests>=2.33, add to requirements.
+
+  Item: cost_calculator stamp_duty hardcoded (L3)
+  Action: During paper, compare system P&L to what broker
+    would charge. If off: fix cost_calculator per yaml.
+
+3.3 PHASE H — CHAOS TESTS (after paper trial)
+
+  Full spec in: instructions\phase_h_chaos_tests.txt
+  (already prepared, forwarded to VS Code Claude earlier
+   but deferred per your call)
+
+  Scope: 10 deliberate failure-injection integration tests:
+    - Crash mid-transaction
+    - Network timeout
+    - Partial fills then rejection
+    - Both SL+TGT complete (race)
+    - Quote feed dies mid-trail
+    - Kill switch during in-flight signal
+    - SQLite locked during mutation
+    - Restart with orphan broker order
+    - Multi-failure cascade
+
+  Timing: After 5-7 successful paper sessions.
+  Effort: ~1-2 days of VS Code Claude work + regression.
+
+================================================================
+PART 4: v2.1 DEFERRED WORK (after v2 is stable)
+================================================================
+
+These are FEATURE additions, not safety fixes. None blocks paper
+or initial live trading with intraday equity strategies.
+
+4.1 Real market data calculations
+  - ATR calculation (currently falls back to FIXED_PCT with
+    WARN or HALT per config)
+  - VWAP real calculation
+  - RSI / other indicators
+  - Requires: real-time data provider integration
+  - Effort: Medium. One module per indicator.
+
+4.2 Sector strength computation
+  - Currently static 0.5 score for all symbols
+  - Needs real market breadth feed
+  - Effort: Small once data feed exists.
+
+4.3 Positional strategy full logic
+  - CNC overnight holding
+  - Multi-day SL management
+  - T+1/T+2 margin handling
+  - Currently: positional strategies loadable but discouraged
+    for live use
+  - Effort: Medium. ~1 week design + build.
+
+4.4 Historical candle backfill on startup
+  - Currently live-only from connect time
+  - Would give first 5-10 minutes proper context
+  - Effort: Small.
+
+4.5 Schema migration framework
+  - Currently delete-DB-on-upgrade
+  - Proper migrations for production
+  - Effort: Medium.
+
+4.6 BSE exchange support
+  - NSE-only in v2
+  - Extend cost_calculator + instruments.csv
+  - Effort: Small.
+
+4.7 Multi-account signal routing
+  - AccountRegistry built but router uses primary
+  - Capital-weighted splitting across enabled accounts
+  - Needed when you want to trade all 3 real Zerodha accounts
+  - Effort: Medium.
+
+4.8 AngelOne broker adapter
+  - Currently Zerodha-only
+  - Would parallel zerodha_adapter.py + zerodha_login.py
+  - Needed when activating AngelOne accounts
+  - Effort: Medium.
+
+4.9 Charts in daily review
+  - Currently data tables only
+  - Add matplotlib/plotly charts
+  - Effort: Small. Cosmetic improvement.
+
+4.10 Systemd service files / deployment automation
+  - For Oracle VM production deployment
+  - systemd unit + auto-restart
+  - cron for 05:00 AM token cleanup
+  - Effort: Small. Mostly yaml/config.
+
+4.11 Hot config reload
+  - Currently requires restart
+  - Signal handler for SIGHUP to re-read config
+  - Effort: Medium. Careful synchronization needed.
+
+4.12 Bot command interface
+  - Operator types /status, /positions, /kill in Telegram
+  - Bot replies
+  - Uses personal_chat_id (currently whitelisted for this)
+  - Effort: Medium. Polling loop or webhook for bot.
+
+4.13 Real-time web dashboard (optional)
+  - Flask/FastAPI page showing live positions, P&L
+  - Not required, just nice-to-have
+  - Effort: Medium.
+
+================================================================
+PART 5: DOCUMENTATION GAPS
+================================================================
+
+Create these for operator sanity:
+
+5.1 README.md at project root
+  Content:
+    - Quick start
+    - Daily routine
+    - Emergency procedures (kill switch usage)
+    - Log file locations
+    - Troubleshooting common issues
+
+5.2 docs\operator_runbook.md
+  Content:
+    - Pre-market checklist
+    - During-market monitoring guide
+    - EOD review protocol
+    - Weekly review questions
+    - Paper-to-live transition checklist
+    - Live capital scaling plan
+
+5.3 docs\vm_deployment.md (for later)
+  Content:
+    - Oracle VM setup
+    - Bare repo cloning
+    - systemd service config
+    - cron entries (token cleanup at 05:00 IST)
+    - SCP script (copy_token_to_vm.bat already exists)
+    - Network/firewall settings
+
+5.4 docs\strategy_tuning.md (for later)
+  Content:
+    - How to adjust strategy YAML parameters
+    - Which params matter most
+    - How to add a new strategy
+    - How to disable/remove a strategy
+
+================================================================
+PART 6: SUMMARY
+================================================================
+
+For Monday paper trial start: NOTHING in Part 3 blocks you.
+All Part 1 actions are operator setup, 30-60 minutes total.
+
+Recommended order:
+  1. Tonight (Friday) / Saturday: Complete Part 1 actions 1-6
+  2. Sunday evening: Part 1 action 7 (kill switch drill)
+  3. Monday 08:30: Begin daily routine (Part 2)
+  4. Monday 15:30+: First EOD review (Part 2)
+  5. Tuesday-Friday: Repeat Part 2
+  6. After 5-7 sessions: Phase H (Part 3.3), then consider live
+
+For live trading: Complete Part 3.1 (OrderMonitor SL/TGT fix)
+  + Phase H chaos tests + 5-7 green paper sessions first.
+
+v2.1 work (Part 4) happens after v2 stable and you feel
+confident with operator discipline.
+
+================================================================
+FILE COUNT SANITY CHECK (what should exist in project)
+================================================================
+
+Key files Rama should see:
+  D:\Projects\trading-system\
+    main.py
+    requirements.txt
+    .env                    (real credentials, gitignored)
+    .env.example            (template, safe to commit)
+    .gitignore
+    README.md               (to be created, Part 5.1)
+    config\
+      system_config.yaml
+      broker_limits.yaml
+      broker_costs.yaml
+      slippage_model.yaml
+      scoring_weights.yaml
+      scan_webhook_map.yaml
+      chartink_scanners.yaml
+      nse_holidays_2026.yaml
+      accounts.csv           (5 rows, env var names)
+      instruments.csv        (2800 rows after refresh)
+      strategies\
+        (15 YAML files)
+      reference_data\
+        security_master_file.csv
+        index_members\*.csv  (17 files)
+    core\             (11 modules)
+    broker\           (6 modules)
+    capital\          (5 modules)
+    orders\           (9 modules)
+    signals\          (2 modules)
+    screening\        (4 modules)
+    data\             (2 modules)
+    strategies\       (2 modules)
+    alerts\           (2 modules)
+    reports\          (1 module)
+    scripts\          (4 scripts)
+    utils\            (2 modules)
+    tests\
+      unit\           (~45 test files)
+      integration\    (2-3 files)
+      fixtures\
+    data_store\       (runtime, SQLite + session token)
+    logs\             (runtime, rotating)
+    memory\           (mempalace files, multiple .md)
+    docs\
+      v2_design_spec.md
+      locked_decisions.yaml
+      (operator_runbook.md — to create)
+      (vm_deployment.md — to create)
+      web_claude\     (instruction archive from Web Claude)
+
+If anything major missing, flag it before Monday.
+
+================================================================

@@ -1,0 +1,59 @@
+Locked in — and that's a great answer. You picked **option γ in spirit but with a cleaner formulation than the one I proposed.**
+
+What you're saying: build the abstraction (`EntryEngine` interface with `entry_mode` config + `FullEntryEngine` implementation in v2), and slot in `ScalingEntryEngine` as a sibling class in v2.1. The schema accommodates both from day one (the `legs` table exists with `leg_index` column; FULL just always writes `leg_index=0`). Switching modes later is a config change + new class, not a refactor.
+
+This is better than my γ because it forces the design to be **mode-agnostic from the start** — the rest of the system (capital reservation, recovery, reporting) talks to `EntryEngine` and never knows which implementation it's getting. That's the right level of abstraction.
+
+**G10 locked: `entry_mode` config field, `EntryEngine` abstract base, `FullEntryEngine` only in v2, `ScalingEntryEngine` reserved as sibling class for v2.1. Schema includes `leg_index` from day one.**
+
+---
+
+# All 10 gaps resolved. Recap:
+
+| # | Decision |
+|---|---|
+| **G1** | Reconciler: hybrid cadence (30s + on-event) + 6 checks + 3-tier action policy |
+| **G2a** | 3-ID lifecycle: signal_id at webhook → trade_id at capital reservation → order_id from broker |
+| **G2b** | Scaling entry (when built) uses single trade_id with multiple legs |
+| **G3** | Capital invariant: Levels 1+2 here (anchored Python check + transactional ledger), Level 3 via G1 reconciler |
+| **G4** | Hybrid clock (VM runtime + broker validation) + 4-tier skew thresholds + startup NTP check |
+| **G5a** | 4 startup scenarios: Cold / Warm / Crash / Halt with differentiated procedures |
+| **G5b** | Crash recovery places fresh SL at last DB level *if* current price is on the favorable side; else MARKET exit |
+| **G5c** | Halt-type dependent restart: hard_kill needs `--resume`, soft_kill auto-resumes if condition cleared |
+| **G6** | WebSocket events + 60s heartbeat; discard partial candles; backfill cache without firing callbacks; one trail recompute on reconnect |
+| **G7** | Token bucket per category + 4-step backoff on 429 + soft_kill after 4 failures |
+| **G8** | 4-tier alert system + sentinel file pattern + separate systemd email watcher for CRITICAL |
+| **G9** | Direct calls everywhere by default; tiny EventBus only for 4 fan-out events |
+| **G10** | `entry_mode` config + `EntryEngine` abstraction; FULL implementation in v2, SCALE deferred to v2.1 |
+
+---
+
+# Three quick confirmations before I write the consolidated spec
+
+These came up earlier in our conversation but never got answered. They're each a single-question decision and they affect the spec.Quick guidance:
+
+- **Q1:** I'd recommend "Configurable with 3 as default" — it's not a hard architectural decision either way, just a config value, but it should be visibly tunable rather than buried.
+- **Q2:** I'd recommend "No, plain SQLite" — SQLCipher adds operational pain (key management, backup encryption, can't `sqlite3 db.db` for debugging) and your DB doesn't contain anything more sensitive than what's already in `.env`. Defer until you actually need it.
+- **Q3:** I'd recommend "Defer to v2.1" — it's a nice feature but completely orthogonal to live trading correctness. Build the trade log structured well enough that adding LLM review later is a 50-line script.
+
+After your answers, I produce the consolidated v2 design document.
+Q: Q1: max_open_positions — the v2 docs show 3, which feels low. Is 3 the real value you want?
+A: Configurable,  but use as 10 default (one more I do have many point to discuss with you once you complete the questions, but before final design lock)
+
+Q: Q2: SQLCipher database encryption — build into v2 or defer?
+A: Q2: No encryption — plain SQLite, secrets only in .env [One of the point i want to propose no encryption in anywhere in the system for anything)
+
+Q: Q3: AI/LLM daily trade review — v2 or v2.1?
+A: Defer to v2.1 — nice to have, not core
+
+All three locked.
+
+- **Q1:** `max_open_positions` configurable, **default 10**.
+- **Q2:** No encryption anywhere in the system. Plain SQLite, secrets in `.env` only. (I'll bake "no encryption" as a project-wide principle into the spec.)
+- **Q3:** LLM review deferred to v2.1.
+
+You said you have more points to discuss before locking the final design. **Go ahead — bring them up now.**
+
+I won't start writing the consolidated spec until you've raised everything. Better to surface all of it now than to discover something important after the spec is written and have to revise.
+
+What are the points?

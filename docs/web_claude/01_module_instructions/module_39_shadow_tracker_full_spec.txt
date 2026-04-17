@@ -1,0 +1,424 @@
+================================================================
+MODULE 39: orders/shadow_tracker.py (FULL SPEC, STANDALONE)
+================================================================
+
+Re-issued standalone because modules_38_39_40_final.txt wasn't
+archived on your side. This file contains everything needed
+to build Module 39.
+
+Module 38 already built (1261/1261). Module 40 will follow
+after 39 green.
+
+================================================================
+CONTEXT
+================================================================
+
+PURPOSE — Concern 4 fix:
+  Original trade places real broker order and exits at SL or TGT.
+  shadow_tracker then SIMULATES innings 2 and 3 (up to 3 total)
+  by continuing to watch the same symbol. Each simulated inning:
+    - entry_price = previous inning's exit_price
+    - sl_price, tgt_price recomputed using original strategy
+      rules applied to new entry_price
+    - No real broker order
+  Prevents the old-system bug: "system reports TGT hit when
+  actually SL hit then price recovered and hit TGT later".
+  User wants visibility into all 3 innings for the day.
+
+================================================================
+LOCK (SH1-SH15)
+================================================================
+
+SH1 — Inning dataclass (frozen):
+  Inning:
+    inning_number: int            # 1, 2, or 3
+    trade_id: str                 # links to original trade
+    symbol: str
+    direction: str                # "LONG" | "SHORT"
+    entry_price: float
+    entry_ts: datetime
+    sl_price: float
+    tgt_price: float
+    exit_price: Optional[float]
+    exit_ts: Optional[datetime]
+    exit_reason: Optional[str]    # "SL" | "TGT" | "EOD" | "OPEN"
+    duration_sec: Optional[int]
+    pnl_pct: Optional[float]
+    pnl_per_share: Optional[float]
+    is_real: bool                 # True ONLY for inning 1
+
+SH2 — Constructor:
+  ShadowTracker(
+    state_store,
+    bus,                    # subscribe to PositionClosed event
+    live_feed,              # subscribe to tick updates
+    market_windows,
+    time_authority,
+    notifier,               # telegram alerts per inning close
+    logger,
+    max_innings=3,
+    alert_per_inning=True,
+    enabled=True,
+  )
+
+SH3 — Event subscription (on construction):
+  bus.subscribe(PositionClosed, self._on_position_closed)
+
+  Handler receives PositionClosed with payload:
+    {trade_id, symbol, exit_price, realized_pnl, signal_id}
+  Logic:
+    1. Look up trade details from state_store:
+         direction, strategy_name (via signal_id -> scanner -> scan_map)
+    2. Look up original strategy params (sl_method/pct, tgt_method/pct)
+    3. Derive inning 1 data:
+         entry_price = trade.entry_price (actual filled)
+         sl_price = trade.sl_price
+         tgt_price = trade.tgt_price
+         exit_price = event.exit_price
+         exit_reason = derived from trade.close_reason
+                       (SL_HIT -> "SL", TGT_HIT -> "TGT", EOD -> "EOD")
+         is_real = True
+    4. Persist inning 1 to innings table
+    5. If alert_per_inning: send telegram INFO
+    6. If exit_reason in ("SL", "TGT") AND inning_number < max_innings
+       AND market_windows.is_market_open(now):
+         _start_simulated_inning(prev_inning=inning_1)
+
+SH4 — Starting a simulated inning:
+  _start_simulated_inning(prev_inning: Inning):
+    1. entry_price = prev_inning.exit_price
+    2. entry_ts = prev_inning.exit_ts (or now_ist if missing)
+    3. direction = prev_inning.direction
+    4. Fetch original strategy for this symbol (via trade.signal_id)
+    5. Apply strategy.sl_method to new entry_price -> new sl_price
+       Apply strategy.tgt_method to new entry_price -> new tgt_price
+       (Same derivation rules as signal_processor._derive_prices
+        and _derive_target, already implemented.)
+    6. Create Inning dataclass:
+         inning_number = prev_inning.inning_number + 1
+         trade_id = prev_inning.trade_id
+         symbol, direction copied
+         entry_price, entry_ts as above
+         sl_price, tgt_price as computed
+         exit_price=None, exit_ts=None, exit_reason=None
+         is_real=False
+    7. Persist to innings table
+    8. Register in _active_innings dict under RLock
+    9. Log INFO: "Started inning {N} for {symbol} entry={price}"
+
+SH5 — Tick processing:
+  on_tick(tick: dict):
+    Expects tick with keys: instrument_token, last_price.
+    (Consistent with BLOCKER #1 callback fix.)
+
+    Resolve symbol from token:
+      row = instrument_cache.get_by_token(tick["instrument_token"])
+      symbol = row.symbol
+    (Module 38 provides instrument_cache; inject via constructor)
+
+    Under lock:
+      matching = [inning for inning in _active_innings.values()
+                  if inning.symbol == symbol]
+    For each match:
+      ltp = tick["last_price"]
+      hit = _check_hit(inning, ltp)
+      if hit:
+        _close_inning(inning, ltp, exit_reason=hit)
+
+SH6 — Hit detection:
+  _check_hit(inning, ltp) -> Optional[str]:
+    if inning.direction == "LONG":
+      if ltp <= inning.sl_price: return "SL"
+      if ltp >= inning.tgt_price: return "TGT"
+    else:  # SHORT
+      if ltp >= inning.sl_price: return "SL"
+      if ltp <= inning.tgt_price: return "TGT"
+    return None
+
+SH7 — Closing an inning:
+  _close_inning(inning, exit_price, exit_reason):
+    Under RLock:
+      1. Compute pnl:
+           if direction == "LONG":
+             pnl_per_share = exit_price - entry_price
+           else:
+             pnl_per_share = entry_price - exit_price
+           pnl_pct = (pnl_per_share / entry_price) * 100
+           duration_sec = (now - entry_ts).total_seconds()
+      2. Update innings table via update_inning_close(...)
+      3. Remove from _active_innings
+    If alert_per_inning:
+      notifier.send(INFO with inning summary)
+    Decision for next inning:
+      If exit_reason in ("SL", "TGT")
+         AND inning.inning_number < max_innings
+         AND market_windows.is_market_open(now):
+        _start_simulated_inning(inning)  # cascade
+      Else: end of chain for this trade
+
+SH8 — EOD handling:
+  Subscribe to EodSquareoffComplete event (add to core/events.py
+  if not already present).
+  On EOD:
+    Under lock:
+      active_copy = list(_active_innings.values())
+    For each inning in active_copy:
+      Determine current_ltp:
+        if live_feed has last tick for symbol: use it
+        else: use inning.entry_price (fallback, log WARNING)
+      _close_inning(inning, current_ltp, exit_reason="EOD")
+    No new innings started after EOD.
+
+SH9 — Database schema (innings table):
+  Add to core/schema.sql:
+
+  CREATE TABLE IF NOT EXISTS innings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id TEXT NOT NULL,
+    inning_number INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    entry_ts TEXT NOT NULL,
+    sl_price REAL NOT NULL,
+    tgt_price REAL NOT NULL,
+    exit_price REAL,
+    exit_ts TEXT,
+    exit_reason TEXT,
+    duration_sec INTEGER,
+    pnl_pct REAL,
+    pnl_per_share REAL,
+    is_real INTEGER NOT NULL,
+    UNIQUE(trade_id, inning_number)
+  );
+  CREATE INDEX IF NOT EXISTS idx_innings_trade ON innings(trade_id);
+  CREATE INDEX IF NOT EXISTS idx_innings_date
+    ON innings(substr(entry_ts, 1, 10));
+
+  Bump EXPECTED_SCHEMA_VERSION 8 -> 9.
+
+SH10 — state_store helpers (4 new):
+
+  insert_inning(inning: Inning) -> None
+    Inserts all fields. is_real stored as 0/1.
+    Raises IntegrityError on UNIQUE violation (should not
+    happen in normal flow).
+
+  update_inning_close(trade_id, inning_number, exit_price,
+                      exit_ts, exit_reason, duration_sec,
+                      pnl_pct, pnl_per_share) -> None
+    UPDATE innings WHERE trade_id=? AND inning_number=?
+
+  get_innings_for_trade(trade_id) -> list[Inning]
+    Returns all innings for a trade, ordered by inning_number.
+
+  get_innings_for_date(date_iso) -> list[Inning]
+    Returns all innings where entry_ts starts with date_iso.
+    Ordered by (trade_id, inning_number).
+
+  (Module 40 may add a get_inning_summary_by_trade_and_date
+   helper that flattens multiple innings into one row — that's
+   Module 40's concern.)
+
+SH11 — System config additions:
+  Add to SystemConfig schema (config/system_config.yaml):
+
+    shadow_tracker:
+      enabled: true
+      max_innings: 3           # int 1-5, validated
+      alert_per_inning: true
+
+  Update SystemConfig Pydantic schema in config_loader.
+  Update test_config_loader.
+
+SH12 — Layer & deps:
+  Layer 5 (orders/). Imports:
+    stdlib: threading, datetime, typing, dataclasses
+    core.exceptions
+    core.events (EventType enum + subscribe)
+    core.logger
+    core.time_authority
+    core.state_store
+    core.instrument_cache (for token -> symbol lookup)
+    alerts.telegram_notifier (for alert_per_inning)
+  Does NOT import broker adapter (no real orders).
+  Does NOT import strategy modules directly — strategy params
+  passed via trade record lookup.
+
+SH13 — enabled=False behavior:
+  All public methods become no-ops when enabled=False:
+    _on_position_closed: early return
+    on_tick: early return
+    EOD handler: early return
+  innings table still exists, just stays empty.
+  This allows runtime disable without stopping trading.
+
+SH14 — Thread safety:
+  _active_innings dict guarded by threading.RLock.
+  tick callback fires on live_feed consumer thread.
+  PositionClosed handler fires on event bus thread.
+  EOD handler fires on event bus thread.
+  All acquire same RLock.
+  No nested calls that re-enter lock from different owner.
+
+SH15 — Testing (tests/unit/test_shadow_tracker.py):
+
+  EVENT HANDLING:
+  - PositionClosed event -> inning 1 persisted with is_real=True
+  - PositionClosed for closed trade with no strategy found ->
+    logs ERROR, no inning created
+  - PositionClosed when enabled=False -> no-op
+
+  CASCADE:
+  - Inning 1 exit_reason=TGT -> inning 2 auto-started
+  - Inning 2 exit_reason=SL -> inning 3 auto-started
+  - Inning 3 completes -> no inning 4 (max_innings=3)
+  - Inning 1 exit_reason=EOD -> NO inning 2 (chain ends)
+  - Inning 2 exit_reason=EOD -> inning 3 NOT started
+
+  HIT DETECTION:
+  - LONG: SL hit when ltp <= sl_price
+  - LONG: TGT hit when ltp >= tgt_price
+  - LONG: ltp between SL and TGT -> no hit
+  - SHORT: SL hit when ltp >= sl_price
+  - SHORT: TGT hit when ltp <= tgt_price
+  - SHORT: ltp between SL and TGT -> no hit
+  - Boundary: ltp == sl_price -> SL hit
+  - Boundary: ltp == tgt_price -> TGT hit
+
+  SIMULATED INNING CALCULATION:
+  - LONG strategy FIXED_PCT: inning 2 sl/tgt correctly
+    computed from inning 1 exit_price
+  - SHORT strategy FIXED_PCT: same
+  - RISK_REWARD target method applied to new entry
+
+  PERSISTENCE:
+  - insert_inning stores all fields correctly
+  - update_inning_close populates closure fields
+  - get_innings_for_trade returns correct order
+  - get_innings_for_date filters by date correctly
+
+  PNL:
+  - LONG profit case: pnl_per_share + pnl_pct correct
+  - LONG loss case: pnl_per_share + pnl_pct negative
+  - SHORT profit: exit < entry -> positive pnl
+  - SHORT loss: exit > entry -> negative pnl
+
+  EOD:
+  - EodSquareoffComplete -> active innings closed with
+    exit_reason=EOD
+  - No innings started after EOD even if hit detected later
+
+  ALERTS:
+  - alert_per_inning=True -> notifier.send called on each close
+  - alert_per_inning=False -> no notifier calls
+  - Alert contains symbol, inning_number, entry, exit, pnl_pct
+
+  TOKEN MAPPING:
+  - on_tick uses instrument_cache to resolve symbol
+  - Unknown token in tick -> log WARNING, skip
+
+  THREAD SAFETY:
+  - Concurrent PositionClosed + on_tick for same symbol:
+    no races, consistent state
+  - Concurrent on_tick from two threads for different symbols:
+    both processed correctly
+
+  IS_REAL FLAG:
+  - Inning 1: is_real=True
+  - Inning 2: is_real=False
+  - Inning 3: is_real=False
+
+  Expected test count: 30-35
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add innings table + indexes to core/schema.sql (SH9)
+   Bump EXPECTED_SCHEMA_VERSION to 9
+   Update test_state_store schema tests
+
+2. Add 4 helpers per SH10 to core/state_store.py
+   Update test_state_store.py
+
+3. Add shadow_tracker section to SystemConfig schema (SH11)
+   Update config/system_config.yaml with new section
+   Update test_config_loader.py
+
+4. Build orders/shadow_tracker.py per SH1-SH14 (~400 lines)
+
+5. Build tests/unit/test_shadow_tracker.py per SH15 (~500 lines)
+
+6. Add EodSquareoffComplete to core/events.py if missing
+   (verify first — may already exist)
+
+7. Wire into main.py Phase 0e + 0g:
+     shadow_tracker = ShadowTracker(
+       state_store, event_bus, live_feed, market_windows,
+       time_authority, telegram_notifier, logger,
+       max_innings=app_config.system.shadow_tracker.max_innings,
+       alert_per_inning=app_config.system.shadow_tracker.alert_per_inning,
+       enabled=app_config.system.shadow_tracker.enabled,
+     )
+     # Must be injected with instrument_cache for SH5 token lookup
+     shadow_tracker.set_instrument_cache(instrument_cache)
+     # Register tick callback (along with candle_store from BLOCKER #1 fix)
+     live_feed.register_callback(
+       lambda ticks: [
+         (candle_store.on_tick(t["instrument_token"],
+                                 t["last_price"],
+                                 t.get("timestamp") or now_ist()),
+          shadow_tracker.on_tick(t))
+         for t in ticks
+       ]
+     )
+     # Note: clean up the tuple-callback pattern if test_main expects
+     # separate calls. Refactor to a proper dispatcher function.
+
+   Preferred wiring (cleaner, test-friendly):
+     def _tick_dispatcher(ticks):
+         for t in ticks:
+             ts = t.get("timestamp") or now_ist()
+             candle_store.on_tick(t["instrument_token"],
+                                    t["last_price"], ts)
+             shadow_tracker.on_tick(t)
+     live_feed.register_callback(_tick_dispatcher)
+
+8. Update test_main.py for new wiring
+
+9. Run full suite. Expected: 1261 + ~35 = ~1296.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: orders/shadow_tracker.py
+  Locked: SH1-SH15 under orders_module: section of
+          docs/locked_decisions.yaml (append)
+  Schema version: bumped to 9
+  Cross-module:
+    - state_store: +1 table (innings) + 4 helpers
+    - system_config.yaml: +1 section (shadow_tracker)
+    - events.py: +EodSquareoffComplete if missing
+    - main.py: +tick dispatcher + shadow_tracker wiring
+  Audit items addressed:
+    - Concern 4 (multi-inning tracking) CLOSED
+
+================================================================
+WHAT IS NOT IN SCOPE (Module 40 work)
+================================================================
+
+- Daily report MULTI_INNING_TRACKING section (Module 40)
+- get_inning_summary_by_trade_and_date helper (Module 40)
+- Summary aggregates across all trades (Module 40)
+
+Focus Module 39 on tracking + persistence + alerts only.
+
+================================================================
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================
+
+Report completion with 38-suite table.
+Then Module 40 spec will follow.

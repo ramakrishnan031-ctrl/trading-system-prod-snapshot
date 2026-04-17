@@ -1,0 +1,33 @@
+# config/broker_limits.yaml — Trading System v2
+#
+# Client-side token bucket limits per Zerodha API endpoint category (G7).
+# broker/rate_limiter.py enforces these before every broker call.
+# On 429 from broker, apply backoff_sequence_sec then soft_kill (G7).
+#
+# Locked decisions: G7
+
+order:
+  burst: 8          # Max burst tokens (8 orders at once)
+  rate_per_sec: 8   # Refill rate (8 per second sustained)
+
+quote:
+  burst: 1
+  rate_per_sec: 1
+
+historical:
+  burst: 2
+  rate_per_sec: 2
+
+margins:
+  burst: 8
+  rate_per_sec: 8
+
+backoff_sequence_sec:   # G7: 4-step backoff on 429 response
+  - 1
+  - 5
+  - 30
+  # 4th step is soft_kill -- handled in code, not here
+
+timeouts:             # ZA12: kiteconnect HTTP timeouts
+  connect_sec: 5      # TCP connection timeout
+  read_sec: 10        # response read timeout

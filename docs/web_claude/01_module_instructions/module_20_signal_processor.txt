@@ -1,0 +1,270 @@
+MODULE: signals/signal_processor.py
+
+CONTEXT: 480/480 green across 19 modules. Webhook receiver
+queues raw signals; signal_processor is the worker that
+drains the queue, screens each signal, sizes it, gets risk
+approval, places the order. Audit Issues #29 (CRITICAL — single
+thread blocks queue), #21 (in_flight never cleared), #20 (sector
+race) drive design.
+
+LOCK BEFORE BUILD:
+
+SP1 — Purpose: Worker pool that drains signal_queue, runs each
+  signal through the screen -> size -> approve -> place
+  pipeline. Owns the orchestration; delegates all decisions to
+  specialized modules.
+
+SP2 — Audit Issue #29 fix — ThreadPoolExecutor:
+  NOT a single worker thread. Use concurrent.futures.
+  ThreadPoolExecutor with N workers (default 5, configurable).
+  Each signal dispatched to executor; queue draining never
+  blocks on entry_gate sleeps or screening I/O.
+
+SP3 — Constructor:
+  SignalProcessor(
+    signal_queue,            # queue.Queue from receiver
+    state_store,
+    bus,
+    fund_manager,
+    position_sizer,
+    risk_engine,
+    kill_switch,
+    order_placer,            # NOT YET BUILT - inject as None for now,
+                             # add real placer after module 21
+    secondary_screener,      # NOT YET BUILT - inject as None for now
+    quality_scorer,          # NOT YET BUILT - inject as None for now
+    market_windows,
+    logger,
+    worker_count=5,
+    drain_poll_sec=0.1,      # how often to check queue when empty
+  )
+  When optional modules are None: skip those steps gracefully,
+  log INFO. Lets us test orchestration before downstream
+  modules exist.
+
+SP4 — Lifecycle:
+  start() launches dispatcher thread + N executor workers.
+  stop() signals shutdown, drains in-flight tasks (5s timeout),
+         shuts down executor cleanly.
+  is_running() -> bool
+
+SP5 — Dispatcher loop:
+  Single dispatcher thread runs:
+    while not _stop:
+      try:
+        signal_tuple = signal_queue.get(timeout=drain_poll_sec)
+        executor.submit(_process_one, signal_tuple)
+      except queue.Empty:
+        continue
+  Dispatcher NEVER processes signals itself. Pure handoff.
+
+SP6 — Pipeline (lock; ordered, short-circuit on first reject):
+  _process_one(signal_id, scanner_name, symbol, trigger_price,
+               triggered_at) execution:
+
+  1. Pre-flight checks (cheap, no I/O):
+     - kill_switch.is_active("entry") -> reject "KILL_SWITCH"
+     - market_windows.is_entry_allowed(now_ist) -> reject
+       "OUTSIDE_ENTRY_WINDOW"
+     - signal age > expiry -> reject "EXPIRED"
+       (defense-in-depth; receiver also checks)
+
+  2. Strategy lookup:
+     - scan_webhook_map.get(scanner_name) -> intent + side +
+       strategy params. Reject "UNKNOWN_SCANNER" if missing.
+
+  3. Quality scoring (optional in this build):
+     - if quality_scorer is None: assign tier="MEDIUM"
+     - else: score = quality_scorer.score(symbol, ...)
+             tier from score thresholds in scoring_weights.yaml
+     - reject "BELOW_SCORE_THRESHOLD" if score < min_pass
+
+  4. Secondary screening (optional in this build):
+     - if secondary_screener is None: skip
+     - else: result = secondary_screener.screen(signal_payload)
+             reject with screener-provided reason if not passed
+
+  5. Position sizing:
+     - sizer.calculate(symbol, side, entry_price, sl_price,
+                       intent, score_tier, lot_size)
+     - reject if sizing.success=False (use sizing.reason)
+
+  6. Risk approval:
+     - risk_engine.approve(symbol, side, intent, sizing,
+                           signal_id)
+     - reject with approval.failed_check if not approved
+
+  7. Capital reservation:
+     - fund_manager.reserve(symbol, qty, price, intent,
+                            signal_id)
+     - reject "RESERVE_FAILED" if not success
+       (race condition: someone else used capital between
+        approve and reserve)
+
+  8. Order placement (optional in this build):
+     - if order_placer is None: log INFO, mark signal
+       PROCESSED_NO_PLACER, release reservation, return
+     - else: order_placer.place(symbol, side, qty, entry_price,
+                                sl_price, intent, signal_id,
+                                reservation_id)
+     - On placement exception: release reservation, mark
+       signal PLACEMENT_FAILED, log ERROR
+
+  9. Update signal status: PROCESSED with placed_at_ts.
+
+SP7 — Audit Issue #21 fix — _in_flight cleanup ALWAYS:
+  Receiver added symbol to _in_flight on accept. Processor
+  must remove it after pipeline finishes (success or fail).
+  Use try/finally:
+    try:
+      _process_one(...)
+    finally:
+      receiver.release_in_flight(symbol)
+  Audit flaw: receiver added but processor exception path
+  forgot to clear -> permanent block on that symbol.
+
+SP8 — Audit Issue #20 fix — derive sl_price:
+  Strategy YAML defines sl_method:
+    "fixed_pct" -> sl = entry * (1 +/- sl_pct)
+    "atr"       -> sl = entry +/- sl_atr_multiple * atr
+                   (atr from candle data — for now, if no
+                    atr provider, log WARNING and use fixed_pct
+                    fallback configured in YAML)
+  For now: implement fixed_pct only. atr method = TODO with
+  graceful fallback. Log WARNING on each fallback.
+
+SP9 — Signal status updates (write to state_store on EVERY
+  state change):
+  QUEUED        -> set by receiver
+  PROCESSING    -> set when _process_one starts
+  REJECTED_<X>  -> set on any pipeline reject (X = check name)
+  RESERVED      -> set after step 7 success
+  PROCESSED     -> set after step 9 (full pipeline success)
+  PLACEMENT_FAILED -> set on step 8 exception
+  Each update: state_store.update_signal_status(signal_id,
+    status, reason, ts).
+  Audit P16: every signal_id has final status + ts + reason.
+
+SP10 — Strategy params source:
+  scan_webhook_map: dict[scanner_name, scanner_config] where
+  scanner_config: {intent, side, strategy_yaml_path}.
+  strategy_yaml loaded ONCE at processor construction (don't
+  re-read per signal). Hold dict[scanner_name, strategy_dict]
+  in memory.
+  If a strategy YAML missing or invalid: refuse to start
+  (per Project Rule 14 — Schema Enforcement). Already
+  validated by config_loader at startup.
+
+SP11 — Concurrency safety:
+  - signal_queue is thread-safe (queue.Queue)
+  - state_store calls thread-safe (SQLite WAL)
+  - fund_manager calls thread-safe (own RLock)
+  - risk_engine is stateless
+  - position_sizer is stateless
+  Therefore _process_one is naturally thread-safe across
+  workers. No additional locks in processor.
+
+SP12 — Error handling:
+  - Pipeline rejection: logged INFO, signal status updated,
+    NOT raised
+  - Unexpected exception in _process_one: logged ERROR with
+    full traceback, signal status PLACEMENT_FAILED, in_flight
+    released, NOT raised (worker thread continues)
+  - kill_switch tripped DURING processing: detected at next
+    pre-flight on next signal; current signal completes
+  - record_api_failure called on any BrokerError caught
+    (kill_switch auto-trip mechanism)
+
+SP13 — Metrics (in-memory, exposed via getter):
+  processor.stats() -> dict {
+    signals_processed: int,
+    signals_rejected: dict[reason, count],
+    signals_placed: int,
+    avg_pipeline_ms: float,
+    workers_active: int,
+    queue_depth: int,
+  }
+  Used by /health endpoint and daily report.
+
+SP14 — Layer & deps:
+  Layer 5 (signals/). Imports: stdlib (queue, threading,
+  concurrent.futures, time), core.exceptions, core.events,
+  core.logger, core.time_authority, core.state_store,
+  capital.fund_manager, capital.position_sizer,
+  capital.risk_engine, capital.kill_switch,
+  core.market_windows, core.config_loader (for SystemConfig).
+  No direct broker import (order_placer abstracts it).
+
+SP15 — System config additions:
+  signal_processor:
+    worker_count: int       (default 5, validated >= 1, <= 50)
+    drain_poll_sec: float   (default 0.1, validated > 0)
+    pipeline_timeout_sec: int (default 30, hard kill on
+                                executor.submit not finishing)
+  Update YAML stub. Re-run test_config_loader.
+
+SP16 — NOT in scope:
+  - Order placement implementation (order_placer in next module)
+  - Quality scoring implementation
+  - Secondary screening implementation
+  - ATR / candle data lookup
+  Processor is pure orchestration. Inject None for unbuilt
+  modules; pipeline degrades gracefully.
+
+BUILD STEPS:
+
+1. Add update_signal_status helper to state_store if missing:
+     update_signal_status(signal_id, status, reason, ts)
+   Update test_state_store with test for it.
+   Re-run test_state_store.
+
+2. Extend SystemConfig per SP15. Update YAML stub.
+   Re-run test_config_loader.
+
+3. Build signals/signal_processor.py per SP1-SP16.
+   No order_placer/scorer/screener stubs in main code.
+   Main code accepts None and skips gracefully.
+
+4. Build tests/unit/test_signal_processor.py covering:
+   - start() launches dispatcher + workers
+   - stop() drains and joins within 5s
+   - is_running() correct before/after lifecycle
+   - Signal flowing through full pipeline (with mocks for
+     fund_manager, sizer, risk_engine returning success):
+     status QUEUED -> PROCESSING -> RESERVED -> PROCESSED
+   - kill_switch active -> rejected REJECTED_KILL_SWITCH
+   - Outside entry window -> REJECTED_OUTSIDE_ENTRY_WINDOW
+   - Expired signal -> REJECTED_EXPIRED
+   - Unknown scanner -> REJECTED_UNKNOWN_SCANNER
+   - Sizer returns failure -> REJECTED_SIZING_<reason>
+   - Risk engine rejects -> REJECTED_<failed_check>
+   - fund_manager.reserve fails -> REJECTED_RESERVE_FAILED
+   - order_placer=None -> PROCESSED_NO_PLACER, reservation
+     released
+   - order_placer raises -> PLACEMENT_FAILED, reservation
+     released, in_flight released
+   - Unexpected exception in pipeline -> PLACEMENT_FAILED,
+     in_flight released (regression for audit Issue #21)
+   - in_flight released ALWAYS via finally (test with
+     simulated exception at each pipeline stage)
+   - 5 workers process 5 signals concurrently (no serialization)
+   - 100 signals through 5 workers complete in reasonable time
+   - Pipeline metrics correct after run
+   - Strategy YAML loaded at construction, cached
+   - sl_method=fixed_pct -> sl_price = entry * (1 - sl_pct)
+     for BUY, entry * (1 + sl_pct) for SELL
+   - sl_method=atr without atr provider -> WARNING + fallback
+     to fixed_pct
+   - Signal status row in state_store updated at each step
+   - record_api_failure called when sizer/risk/reserve raises
+     BrokerError (use injected mock that raises)
+   - stats() returns valid dict
+   - Concurrent shutdown during processing: in-flight tasks
+     complete or time out cleanly
+
+5. Re-run all 19 prior suites + new one. Report 20-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Mock all injected dependencies with MagicMock
+or hand-rolled fakes. Real fund_manager + state_store
+acceptable for integration-style tests.

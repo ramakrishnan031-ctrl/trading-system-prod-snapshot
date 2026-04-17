@@ -1,0 +1,205 @@
+MODULE: broker/zerodha_adapter.py
+
+CONTEXT: 247/247 green across 12 modules. OSM ready to receive
+state transitions. Adapter is the only module that touches
+kiteconnect; everything else uses its typed interface.
+
+LOCK BEFORE BUILD:
+
+ZA1 — Wraps kiteconnect.KiteConnect. Injected at construction.
+      No direct kiteconnect import anywhere else in codebase.
+      Constructor:
+        ZerodhaAdapter(
+          kite_client,            # KiteConnect instance OR mock
+          rate_limiter,           # RateLimiter instance
+          product_resolver,       # ProductResolver instance
+          cost_calculator,        # CostCalculator instance
+          state_machine,          # OrderStateMachine instance
+          logger,                 # logger from get_logger
+          paper_mode=False,       # if True, simulate; never call kite
+        )
+
+ZA2 — Methods (typed dataclass returns):
+  place_order(symbol, side, qty, price, order_type, intent,
+              tag=None) -> PlacedOrder
+  cancel_order(broker_order_id) -> CancelResult
+  modify_order(broker_order_id, price=None, qty=None,
+               trigger_price=None) -> ModifyResult
+  get_order_history(broker_order_id) -> list[OrderHistoryEntry]
+  get_positions() -> list[Position]
+  get_margins() -> MarginInfo
+  get_quote(symbols: list[str]) -> dict[str, Quote]
+
+  Where:
+  PlacedOrder: internal_order_id, broker_order_id, symbol, side,
+               qty, price, order_type, product, status, ts
+  CancelResult: broker_order_id, success, reason
+  ModifyResult: broker_order_id, success, reason
+  OrderHistoryEntry: broker_order_id, status, filled_qty,
+                     avg_price, rejection_reason, ts
+  Position: symbol, qty, avg_price, product, side
+  MarginInfo: net, available, used, ts
+  Quote: symbol, last_price, bid, ask, volume, ts
+
+  All dataclasses frozen=True, defined at top of module.
+
+ZA3 — Rate limiter integration:
+  Every API call: rate_limiter.acquire(category) before call.
+  Category map (lock):
+    place_order, cancel_order, modify_order -> "order"
+    get_order_history -> "order"
+    get_positions, get_margins -> "margins"
+    get_quote -> "quote"
+
+ZA4 — Product resolver integration:
+  place_order receives semantic intent (INTRADAY/DELIVERY/etc.).
+  Adapter calls product_resolver.resolve(intent, "zerodha")
+  to get broker code BEFORE building the kite request.
+  Reject unknown intent -> ProductNotSupportedError bubbles up.
+
+ZA5 — Error mapping (exception translation table):
+  HTTP 403 / "TokenException" -> BrokerAuthError
+  HTTP 5xx / requests.Timeout / socket.timeout -> BrokerTimeoutError
+  Kite "InputException" with "rejected" -> OrderRejectedError
+  Kite "OrderException" -> OrderRejectedError
+  Kite "NetworkException" -> BrokerTimeoutError
+  Kite "GeneralException" -> BrokerError (base)
+  Any other unknown exception -> BrokerError, log full traceback
+
+ZA6 — OrderRejectedError context (lock):
+  {symbol, side, qty, price, intent, broker_code,
+   rejection_reason, kite_status_code}
+
+ZA7 — Internal order ID:
+  Adapter calls new_order_id() (from core.ids) at start of
+  place_order. Registers with state_machine in PENDING.
+  After successful kite call, transitions to SUBMITTED.
+  On kite exception, transitions to FAILED.
+  Returns PlacedOrder with BOTH internal_order_id and
+  broker_order_id (the kite response order_id).
+
+ZA8 — State machine integration on every place_order outcome:
+  Success path: PENDING -> SUBMITTED
+  Exception path: PENDING -> FAILED
+  cancel_order: caller is responsible for state transition
+                AFTER getting CancelResult (adapter does NOT
+                auto-transition because cancel may be partial).
+
+ZA9 — Logging contract:
+  Every method entry: logger.info("call_start", extra={method, args_redacted})
+  Every method exit: logger.info("call_end", extra={method, duration_ms, result_summary})
+  Every exception: log_exception(logger, exc) before re-raise.
+  No request bodies logged (PII / API key risk).
+
+ZA10 — Paper mode:
+  If paper_mode=True at construction:
+    place_order: skip kite, generate fake broker_order_id
+                 ("PAPER_" + uuid4 hex 12 chars), simulate
+                 immediate SUBMITTED state, return PlacedOrder.
+    cancel_order: always success, never calls kite.
+    modify_order: always success, never calls kite.
+    get_order_history: returns single SUBMITTED entry.
+    get_positions: returns empty list.
+    get_margins: returns MarginInfo from injected paper_capital
+                 (constructor takes optional paper_capital: float
+                 default 100000.0).
+    get_quote: caller must inject quote provider for paper;
+               raise NotImplementedError if no provider given.
+  Same interface, same return types, same exceptions possible
+  (e.g., simulated rejection if qty <= 0).
+
+ZA11 — Retry policy:
+  Adapter does NOT retry. Caller (order_placer / order_monitor)
+  owns retry logic. Adapter raises and gets out of the way.
+  Audit Issue: place_order is non-idempotent; auto-retry would
+  cause duplicate orders. Single attempt only.
+
+ZA12 — Timeout values:
+  Read from broker_limits.yaml under timeouts: section.
+  Extend BrokerLimitsConfig schema if needed:
+    timeouts:
+      connect_sec: 5
+      read_sec: 10
+  Pass to kite at construction OR per call. Verify kiteconnect
+  API for how to set these.
+
+ZA13 — Validation before kite call:
+  qty > 0 (else ValueError, no kite call, no FAILED transition)
+  price > 0 for LIMIT order (else ValueError)
+  side in {"BUY", "SELL"}
+  order_type in {"MARKET", "LIMIT", "SL", "SL-M"}
+  symbol non-empty string
+  All validation BEFORE rate_limiter.acquire (don't burn tokens
+  on bad input).
+
+ZA14 — Layer & deps:
+  Layer 3 (broker/, depends on broker layer 2).
+  Imports: kiteconnect (external), stdlib, core.exceptions,
+  core.ids, core.events, core.logger, broker.rate_limiter,
+  broker.product_resolver, broker.cost_calculator,
+  broker.order_state_machine.
+
+ZA15 — kiteconnect SDK NOT installed yet:
+  Check pip list. If missing, add kiteconnect>=4.2.0 to
+  requirements.txt and install in venv.
+  If install fails on Windows due to compiled deps, report
+  and stop — user will resolve.
+
+ZA16 — No event publication from adapter:
+  State machine already publishes OrderStateChanged.
+  Adapter does NOT publish OrderFilled / etc. — that's the
+  order_monitor's job (it polls fills and transitions OPEN->
+  COMPLETE which triggers OrderStateChanged; OrderFilled is
+  emitted by order_monitor, not by adapter).
+
+BUILD STEPS:
+
+1. Verify kiteconnect installed in venv:
+     pip list | findstr kiteconnect
+   If absent, add to requirements.txt, run:
+     pip install kiteconnect
+   Report success/failure before proceeding.
+
+2. Extend BrokerLimitsConfig in core/config_loader.py to add
+   timeouts: {connect_sec: int, read_sec: int}.
+   Update config/broker_limits.yaml stub.
+   Re-run test_config_loader.py.
+
+3. Build broker/zerodha_adapter.py per ZA1-ZA16.
+   Module size will be larger (~400-500 lines). If exceeds
+   600 lines, split: keep adapter class in zerodha_adapter.py,
+   move dataclasses to broker/types.py.
+
+4. Build tests/unit/test_zerodha_adapter.py using a MockKite
+   class (no real kite imports needed for tests). Mock returns
+   canned responses for each method. Cover:
+   - place_order success: rate_limiter called, product_resolver
+     called, state machine PENDING->SUBMITTED, returns PlacedOrder
+     with both IDs, internal ID matches new_order_id pattern
+   - place_order kite exception: state machine PENDING->FAILED,
+     OrderRejectedError raised with full context
+   - place_order TokenException: BrokerAuthError raised
+   - place_order timeout: BrokerTimeoutError raised
+   - place_order qty=0: ValueError, no rate_limiter call,
+     no state machine register
+   - place_order price=0 LIMIT: ValueError
+   - place_order invalid side: ValueError
+   - place_order ProductNotSupportedError bubbles up
+   - cancel_order success: returns CancelResult success=True
+   - cancel_order failure: returns success=False with reason,
+     no exception
+   - modify_order success
+   - get_positions returns list[Position]
+   - get_margins returns MarginInfo
+   - get_quote returns dict[str, Quote]
+   - Paper mode: place_order returns PAPER_xxx broker_order_id
+   - Paper mode: cancel always success
+   - Paper mode: get_margins returns paper_capital
+   - Paper mode: get_quote raises NotImplementedError if no provider
+   - Logging: every method call logs entry+exit
+   - Logging: exceptions logged via log_exception before re-raise
+   - Rate limiter: each method calls acquire with correct category
+
+5. Re-run all 12 prior suites + new one. Report 13-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.

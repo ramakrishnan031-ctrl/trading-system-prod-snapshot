@@ -1,0 +1,357 @@
+================================================================
+TASK 3 — NSE Reference Data Integration
+================================================================
+
+Module 41 green (1394/1394). Last task before paper trial.
+
+PURPOSE:
+  Current config/instruments.csv has 5 equity stubs (M38
+  minimal template). Rama has placed NSE official files
+  (security master + sector index members) at:
+    config/reference_data/security_master_file.csv
+    config/reference_data/index_members/*.csv
+
+  Task 3: extend scripts/refresh_instruments.py to merge
+  these NSE files with Kite instrument_token API, produce
+  a real 2800-row instruments.csv with sector + lot_size
+  + is_fno populated.
+
+================================================================
+IMPORTANT: CHECK EXISTING FIRST (Foundation 3.3)
+================================================================
+
+Before creating anything new:
+  1. Read existing scripts/refresh_instruments.py (Module 38)
+  2. Read existing core/instrument_cache.py
+  3. Check if config/reference_data/ folder exists
+  4. Check if any prior attempt at merging NSE data exists
+  5. Report what's already there before proceeding
+
+Do NOT duplicate. Extend existing refresh_instruments.py,
+don't create refresh_instruments_v2.py.
+
+================================================================
+RAMA HAS PLACED (verify these files exist first)
+================================================================
+
+  config/reference_data/security_master_file.csv
+    Source: NSE official website
+    Columns: symbol, name_of_company, series, fno_stock,
+             date_of_listing, paid_up_value, market_lot,
+             isin_number, face_value
+    Rows: ~2802 NSE equity symbols
+
+  config/reference_data/index_members/
+    Contains 17 CSV files, each listing symbols in that index:
+      fno_symbols.csv           (F&O eligible list)
+      nifty50.csv               (market-cap index)
+      nifty100.csv              (market-cap index)
+      nifty_next50.csv          (market-cap index)
+      nifty_midcap_select.csv   (market-cap index)
+      nifty_auto.csv            (SECTOR: AUTO)
+      nifty_bank.csv            (SECTOR: BANKING)
+      nifty_fin_services.csv    (SECTOR: FINANCIAL_SERVICES)
+      nifty_fmcg.csv            (SECTOR: FMCG)
+      nifty_healthcare.csv      (SECTOR: HEALTHCARE)
+      nifty_it.csv              (SECTOR: IT)
+      nifty_metal.csv           (SECTOR: METALS)
+      nifty_oil_gas.csv         (SECTOR: OIL_GAS)
+      nifty_pharma.csv          (SECTOR: PHARMA)
+      nifty_private_bank.csv    (SECTOR: PRIVATE_BANKING)
+      nifty_psu_bank.csv        (SECTOR: PSU_BANKING)
+      nifty_realty.csv          (SECTOR: REALTY)
+
+    Each file format: single column "symbol", one symbol per row.
+
+If files not present: print clear error and exit 1.
+Operator must place them first.
+
+================================================================
+LOCK (RI1-RI15 — "Reference Data Integration")
+================================================================
+
+RI1 — Purpose: Extend scripts/refresh_instruments.py to
+  produce a full instruments.csv from 3 data sources:
+    (a) NSE security master (local CSV)
+    (b) NSE index members (local CSVs)
+    (c) Kite instrument dump (API call)
+
+  Output: config/instruments.csv in M38 format:
+    symbol, exchange, instrument_token, lot_size,
+    is_fno, tick_size, sector
+
+  Row count: ~2800 NSE equity symbols.
+
+RI2 — Data sources priority:
+
+  For each symbol in Kite instruments dump (exchange=NSE,
+  instrument_type=EQ):
+
+    symbol:           from Kite (tradingsymbol)
+    exchange:         "NSE"
+    instrument_token: from Kite (instrument_token)
+    lot_size:         from NSE security master (market_lot)
+                      fallback: Kite (lot_size)
+                      fallback: 1
+    is_fno:           from NSE security master (fno_stock=yes)
+                      cross-check: also in fno_symbols.csv
+    tick_size:        0.05 default for equity
+                      (Kite also provides tick_size; use it)
+    sector:           from index_members sector CSVs
+                      fallback: "OTHER"
+
+RI3 — Sector mapping:
+
+  Build sector lookup from these 13 SECTOR-specific index files:
+    nifty_auto            -> AUTO
+    nifty_bank            -> BANKING
+    nifty_fin_services    -> FINANCIAL_SERVICES
+    nifty_fmcg            -> FMCG
+    nifty_healthcare      -> HEALTHCARE
+    nifty_it              -> IT
+    nifty_metal           -> METALS
+    nifty_oil_gas         -> OIL_GAS
+    nifty_pharma          -> PHARMA
+    nifty_private_bank    -> PRIVATE_BANKING
+    nifty_psu_bank        -> PSU_BANKING
+    nifty_realty          -> REALTY
+
+  Skip (these are market-cap indices, not sectors):
+    nifty50, nifty100, nifty_next50, nifty_midcap_select,
+    fno_symbols
+
+  Conflict handling:
+    If symbol appears in MULTIPLE sector indices (rare):
+      Priority order (most specific wins):
+        nifty_psu_bank OR nifty_private_bank > nifty_bank
+        nifty_pharma > nifty_healthcare (often overlap)
+        nifty_fin_services > nifty_bank (rare overlap)
+      Log INFO with conflict details.
+
+    If symbol in NO sector index -> sector = "OTHER"
+
+  Symbols NOT in security_master but IN Kite: include with
+  sector="OTHER", is_fno=false, lot_size=1.
+  Log WARNING with count.
+
+RI4 — F&O determination priority:
+  1. NSE security master fno_stock = "yes" -> is_fno = True
+  2. Else if symbol in fno_symbols.csv -> is_fno = True
+  3. Else -> is_fno = False
+
+  If mismatch between sources: log INFO + use security master
+  as authority (NSE's own definition).
+
+RI5 — Lot size for F&O:
+  For is_fno = True symbols:
+    Kite instrument dump has the REAL lot size (varies
+    per symbol, e.g., 50 for NIFTY, 25 for BANKNIFTY).
+    USE Kite's lot_size for F&O.
+  For is_fno = False symbols:
+    lot_size = 1 (equity intraday).
+
+RI6 — Kite instruments API call:
+
+  Requires valid access_token. Script needs login first.
+  Options:
+    (a) Script requires existing valid token (operator runs
+        scripts/zerodha_login.py first). If no token: exit
+        with clear message.
+    (b) Script triggers login flow itself if token missing.
+    Recommend (a) — simpler, explicit.
+
+  Call:
+    from kiteconnect import KiteConnect
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+    all_instruments = kite.instruments("NSE")
+
+  Filter:
+    equity_rows = [i for i in all_instruments
+                   if i["instrument_type"] == "EQ"
+                   and i["exchange"] == "NSE"]
+
+  Note: equity dump ~2800 rows. Fast API call.
+
+RI7 — Atomic write (Foundation 3.2):
+
+  Build full output in memory / tmp file.
+  Write to config/instruments.csv.tmp first.
+  Validate: row count > 1000 (sanity check).
+  Rename .tmp -> instruments.csv.
+  Never write directly to final path.
+
+RI8 — CLI args for refresh_instruments.py:
+  --account LFL836            (which account's token to use)
+  --dry-run                   (no write, just report counts)
+  --verbose                   (log every symbol merge decision)
+
+  Default: use primary account from accounts.csv.
+
+RI9 — Output report:
+  At end, print:
+    Loaded Kite instruments: 2xxx
+    Loaded NSE security master: 2xxx
+    Sector assignments: {sector: count, ...}
+    F&O symbols: xxx
+    Equity symbols: xxxx
+    Total rows written: xxxx
+    Symbols in Kite but not in NSE master: xx (count only)
+    Symbols in NSE master but not in Kite: xx (count only)
+
+RI10 — Update instrument_cache validation (IC3):
+
+  Current validator expects 5 fields. Add sector field.
+  Update InstrumentRow dataclass if not present:
+    symbol, exchange, instrument_token (int), lot_size (int),
+    is_fno (bool), tick_size (float), sector (str)
+
+  Update CSV parser accordingly.
+  Update test_instrument_cache with new expectations.
+
+RI11 — Update main.py sector_lookup_fn (HIGH #2):
+
+  Currently:
+    sector_lookup_fn = lambda sym: (
+      instrument_cache.sector(sym)
+      if instrument_cache.has(sym) else "UNKNOWN"
+    )
+
+  This already works. Just verify it's wired. Risk engine's
+  sector concentration check will now function with real data.
+
+RI12 — Error handling:
+  - Missing NSE security master file: exit 2 with message
+    "Place NSE security master at config/reference_data/..."
+  - Missing index_members/: exit 2 with message
+  - Missing Kite token: exit 6 ("Run zerodha_login.py first")
+  - Kite API error: exit 1 with error details
+  - Empty Kite response: exit 1 (token may be stale)
+  - Partial data: NEVER write incomplete instruments.csv
+    (atomic rename only after full success)
+
+RI13 — Logging:
+  Write log: logs/refresh_instruments.log
+  Log level INFO.
+  Every merge decision at DEBUG (gated by --verbose).
+  Final report at INFO.
+  Errors at ERROR with traceback.
+
+RI14 — Run frequency guidance:
+  Weekly minimum. Daily for F&O trading days (lot sizes
+  can change at expiry).
+  Document in README: "Run before market open if F&O lot
+  size changes expected."
+
+RI15 — Tests (tests/unit/test_refresh_instruments.py):
+
+  - Load security master: correct row count, columns parsed
+  - Load single index file: returns list of symbols
+  - Build sector map: 13 sectors covered
+  - Merge logic: symbol in Kite + NSE + sector index ->
+    correct sector assigned
+  - Merge: symbol in Kite + NSE but no sector -> "OTHER"
+  - Merge: symbol in Kite but not in NSE -> sector="OTHER",
+    is_fno=false, warning logged
+  - F&O priority: security_master fno=yes overrides list
+  - Sector conflict resolution per RI3
+  - Atomic write: verify .tmp created then renamed
+  - Row count sanity: <1000 rows -> abort, log ERROR
+  - Missing reference files -> exit 2
+  - Invalid token -> exit 6
+  - Final CSV has all 7 columns per M38 schema
+
+  Mock Kite.instruments() with synthetic data.
+  Use real NSE reference data files for integration check
+  (place small fixtures in tests/fixtures/reference_data/).
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Report existing state:
+   - scripts/refresh_instruments.py current size/line count
+   - core/instrument_cache.py InstrumentRow current fields
+   - config/instruments.csv current row count
+   - config/reference_data/ folder contents
+
+2. Extend scripts/refresh_instruments.py per RI1-RI14:
+   - Add NSE reference loaders
+   - Add sector merge logic
+   - Keep existing Kite fetch code (don't break)
+   - Atomic write
+   - CLI args
+
+3. Update core/instrument_cache.py if InstrumentRow lacks
+   sector field:
+   - Add sector: str
+   - Update tests
+
+4. Build tests/unit/test_refresh_instruments.py (RI15)
+   Create tests/fixtures/reference_data/ with small fixtures:
+     - 10-symbol security_master_fixture.csv
+     - 3 index_members fixture files (enough to test)
+
+5. Run full suite. Expect: 1394 + ~15 = ~1409.
+
+6. Manual run for Rama (not part of test suite):
+   Once green, Rama runs:
+     python scripts/refresh_instruments.py
+   First time: prompts for login if no token.
+   Writes real 2800-row instruments.csv.
+   This is operator action, not build task.
+
+================================================================
+WHAT NOT TO DO
+================================================================
+
+- Do NOT create a new module (this extends existing script)
+- Do NOT duplicate instrument_cache (extend in place)
+- Do NOT remove the 5-stub instruments.csv yet — refresh
+  script overwrites it after successful build. If script
+  fails, operator still has working stubs for paper testing.
+- Do NOT modify Kite login flow (zerodha_login.py stays as-is)
+- Do NOT add new config files beyond what's listed
+- Do NOT auto-run on main.py startup (it's explicit operator task)
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+After green:
+  Task: 3 - NSE Reference Data Integration
+  Locked: RI1-RI15 under instruments_module section
+  Schema: InstrumentRow may have gained sector field
+  Files:
+    - scripts/refresh_instruments.py (extended)
+    - core/instrument_cache.py (maybe)
+    - tests/unit/test_refresh_instruments.py (new)
+    - tests/fixtures/reference_data/ (new)
+  Operator action: Rama runs script once to produce real
+                   instruments.csv. Recurring weekly.
+
+================================================================
+AFTER TASK 3 — PAPER TRIAL READY
+================================================================
+
+Rama's Monday plan (paper trial):
+
+  Sunday evening / Monday morning:
+    1. Run: python scripts/zerodha_login.py
+       (opens Kite browser, paste request_token, saves file)
+    2. Run: python scripts/refresh_instruments.py
+       (merges NSE + Kite, writes full 2800-row instruments.csv)
+    3. Run: python scripts/preflight_scanner_check.py
+       (verifies all 15 Chartink scanners reachable)
+    4. Start: python main.py --interactive
+       (full interactive flow: account, mode=paper, start)
+    5. Monitor logs + Telegram alerts during market hours
+    6. Review: reports/daily/<date>/daily_review.xlsx at EOD
+
+Remaining items beyond v2 paper:
+  - Phase H (chaos tests) — after 5-7 paper sessions
+  - v2.1 features (ATR, AngelOne, multi-account)
+
+================================================================
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================

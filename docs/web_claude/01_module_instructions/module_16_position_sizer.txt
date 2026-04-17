@@ -1,0 +1,166 @@
+MODULE: capital/position_sizer.py
+
+CONTEXT: 331/331 green across 15 modules. fund_manager owns
+capital state. position_sizer computes HOW MANY SHARES to
+trade based on risk per trade, SL distance, available capital.
+This is the second of three capital modules (sizer, risk_engine
+next). Audit Issue #20, #24 flagged uninitialized variables and
+double-counting in legacy position sizing.
+
+LOCK BEFORE BUILD:
+
+PS1 — Purpose: Pure calculation of position size (qty) for
+  a signal, given entry price, SL price, risk parameters,
+  and available capital. Returns a typed sizing decision.
+  No state, no side effects, no broker calls.
+
+PS2 — Risk-based sizing formula (lock):
+  risk_per_trade_rs = total_capital * risk_per_trade_pct
+  sl_distance = abs(entry_price - sl_price)
+  qty_by_risk = floor(risk_per_trade_rs / sl_distance)
+
+  margin_per_share = entry_price / leverage
+  qty_by_capital = floor(available_bucket_capital / margin_per_share)
+
+  qty_by_concentration = floor((total_capital * max_concentration_pct)
+                               / entry_price)
+
+  final_qty = min(qty_by_risk, qty_by_capital, qty_by_concentration)
+  Apply tier multiplier (PS5), apply lot_size rounding (PS6).
+  If final_qty <= 0: SizingResult(success=False, reason=...)
+
+PS3 — Constructor:
+  PositionSizer(
+    fund_manager,           # FundManager instance (read-only access)
+    leverage_map,           # dict from system_config
+    risk_per_trade_pct,     # default 0.01 (1%)
+    max_concentration_pct,  # default 0.10 (10% per symbol)
+    min_qty_threshold=1,    # below this, reject signal
+    logger,
+  )
+  All limits from system_config.yaml.
+
+PS4 — API:
+  sizer.calculate(
+    symbol, side, entry_price, sl_price, intent,
+    score_tier="MEDIUM",     # from quality_scorer
+    lot_size=1,              # equity = 1; F&O uses contract lot
+  ) -> SizingResult
+
+  SizingResult (frozen dataclass):
+    success: bool
+    qty: int
+    margin_required: float
+    risk_amount: float        # actual rs at risk = qty * sl_distance
+    bucket: str               # "intraday" | "positional"
+    constraint: str           # "RISK" | "CAPITAL" | "CONCENTRATION"
+                              # | "TIER" | "BELOW_MIN" — what bound the qty
+    reason: str               # human-readable explanation
+    breakdown: dict           # all 3 candidate qtys + tier mult
+
+PS5 — Tier multipliers (audit Quality Scorer fix Bug 5):
+  HIGH    -> 1.0  (full size)
+  MEDIUM  -> 0.7
+  LOW     -> 0.5  (audit: was incorrectly getting 1.0)
+  Multiplier applied AFTER min(qty_by_risk, capital, conc)
+  but BEFORE lot_size rounding.
+  Tier multipliers from system_config.yaml (PS9).
+
+PS6 — Lot size rounding:
+  After all calculations: qty = (qty // lot_size) * lot_size
+  If result < lot_size: success=False with constraint="BELOW_MIN".
+  Default lot_size=1 (equity); F&O instruments pass actual lot.
+
+PS7 — Bucket determination:
+  intent INTRADAY/COVER_ORDER -> bucket="intraday"
+  intent DELIVERY            -> bucket="positional"
+  Read available capital for that bucket from fund_manager
+  snapshot at moment of calculation.
+  NOTE: This is a snapshot read, not a reservation. Caller
+  (signal_processor) reserves via fund_manager.reserve()
+  AFTER sizer returns success.
+
+PS8 — Validation (raises ValueError, NOT SizingResult fail):
+  - entry_price <= 0
+  - sl_price <= 0
+  - sl_price == entry_price (zero SL distance, infinite size)
+  - intent not in valid set
+  - score_tier not in {"HIGH","MEDIUM","LOW"}
+  - lot_size <= 0
+  - side not in {"BUY","SELL"}
+  These are programmer errors, not signal rejections.
+
+PS9 — System config additions:
+  Extend SystemConfig:
+    position_sizing:
+      risk_per_trade_pct: float    (validated > 0, < 1)
+      max_concentration_pct: float (validated > 0, <= 1)
+      min_qty_threshold: int       (validated >= 1)
+      tier_multipliers:
+        HIGH: float
+        MEDIUM: float
+        LOW: float
+  Update YAML stub. Re-run test_config_loader.
+
+PS10 — SL direction sanity (logged WARNING, not rejection):
+  BUY:  sl_price should be < entry_price. If sl > entry, log
+        WARNING (caller probably passed wrong side).
+  SELL: sl_price should be > entry_price. Same warning.
+  Calculation proceeds with abs(entry-sl) regardless.
+
+PS11 — Layer & deps:
+  Layer 4 (capital/, depends on capital/fund_manager).
+  Imports: stdlib, core.logger, core.exceptions (ValueError
+  is stdlib; no new exception class), capital.fund_manager
+  (for type hint only — injected).
+
+PS12 — NOT in scope:
+  - Risk engine portfolio-level checks (separate module)
+  - Sector concentration (separate module)
+  - Daily loss limit check (fund_manager handles this)
+  - Reserving capital (caller does this after sizer success)
+  Sizer is pure math + read-only fund_manager snapshot.
+
+PS13 — Determinism:
+  Same inputs + same fund_manager state -> same output.
+  No randomness, no time-dependent behavior, no I/O.
+  Aligns with Foundation Rule 1.1.
+
+BUILD STEPS:
+
+1. Extend SystemConfig per PS9. Update YAML stub.
+   Re-run test_config_loader.
+
+2. Build capital/position_sizer.py per PS1-PS13.
+
+3. Build tests/unit/test_position_sizer.py covering:
+   - Risk-bound qty: 100k cap, 1% risk = 1000rs risk,
+     SL dist 10rs -> qty_by_risk = 100
+   - Capital-bound qty: tiny bucket -> capital binds
+   - Concentration-bound qty: huge bucket but 10% cap binds
+   - All three: returns min, constraint field correct
+   - Tier HIGH: full qty
+   - Tier MEDIUM: qty * 0.7 floor
+   - Tier LOW: qty * 0.5 floor (regression for audit Bug 5)
+   - Lot size 50: qty rounded down to nearest 50
+   - Lot size > computed qty: success=False, BELOW_MIN
+   - INTRADAY uses intraday bucket
+   - DELIVERY uses positional bucket
+   - INTRADAY when intraday bucket exhausted but positional
+     has cash -> success=False (no cross-bucket borrow)
+   - Margin calc: 5x leverage INTRADAY, 1x DELIVERY
+   - SL on wrong side: WARNING logged, calc proceeds
+   - entry_price=0 -> ValueError
+   - sl_price=entry_price -> ValueError
+   - Invalid intent -> ValueError
+   - Invalid tier -> ValueError
+   - Invalid lot_size -> ValueError
+   - Determinism: same inputs twice -> identical SizingResult
+   - SizingResult.breakdown shows all 3 candidate qtys
+   - reason field non-empty and human-readable on both
+     success and failure
+   - success=True implies qty >= min_qty_threshold and >= lot_size
+
+4. Re-run all 15 prior suites + new one. Report 16-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.

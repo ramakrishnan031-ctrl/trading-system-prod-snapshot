@@ -1,0 +1,49 @@
+# config/strategies/vwap_bounce_long.yaml
+# Locked decisions: S1-S15
+
+name: "vwap_bounce_long"
+display_name: "VWAP Bounce Long"
+description: "Long entry on price bounce off VWAP with volume confirmation"
+
+direction: "LONG"
+intent: "INTRADAY"
+order_protocol: "CO_PLUS_TGT"
+
+entry_method: "LIMIT"
+entry_offset_pct: 0.001
+
+sl_method: "FIXED_PCT"
+sl_pct: 0.008
+sl_atr_multiplier: 1.5
+sl_min_pct: 0.003
+sl_max_pct: 0.05
+
+tgt_method: "RISK_REWARD"
+tgt_pct: 0.0
+tgt_risk_reward: 2.0
+tgt_atr_multiplier: 2.5
+
+smart_tgt_enabled: true
+smart_tgt_trail_trigger_pct: 0.005
+smart_tgt_trail_step_pct: 0.003
+
+pullback_wait_enabled: true
+pullback_wait_tolerance_pct: 0.005
+pullback_wait_timeout_sec: 180
+
+min_score: 0
+min_volume_surge: 1.5
+min_adr_pct: 0.005
+max_spread_pct: 0.005
+
+max_risk_pct: 0.0
+lot_size: 1
+
+entry_start_time: "09:30"
+entry_end_time: "13:30"
+active_days:
+  - MON
+  - TUE
+  - WED
+  - THU
+  - FRI

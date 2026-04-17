@@ -1,0 +1,379 @@
+================================================================
+MODULE 25: orders/order_reconciler.py
+================================================================
+
+CONTEXT: 678/678 across 27 suites. All dependencies present:
+  adapter (get_positions, get_quote, cancel_order, place_order),
+  state_store (existing + 5 new query helpers),
+  fund_manager, kill_switch, invariant, events (CapitalDriftDetected),
+  alerts (telegram_notifier, critical), product_resolver,
+  state_machine, logger.
+
+LOCKED DECISIONS REFERENCED:
+  G1   — 6 checks, 3-tier action, hybrid cadence
+  G5b  — Crash-recovery SL: favorable-side check before fresh SL
+  P14  — Poll interval 15s (overrides G1's 30s)
+  EV6  — CapitalDriftDetected event payload
+  G3   — Level 3 broker drift detection lives HERE
+  PR5  — product_resolver.intent_for() for broker->system mapping
+  L3   — Dedicated reconciler log file
+
+================================================================
+MODULE-SPECIFIC LOCK (RC1-RC20)
+================================================================
+
+RC1 — Purpose: Continuously compare broker's view of positions/
+  orders with our state_store. Detect drift, adopt orphans,
+  handle manual closes, trigger halt on unrecoverable issues.
+  This is the system's safety net.
+
+RC2 — Constructor:
+  OrderReconciler(
+    adapter,             # ZerodhaAdapter
+    state_store,
+    fund_manager,
+    state_machine,       # OrderStateMachine
+    kill_switch,
+    product_resolver,    # for intent_for() reverse lookup
+    bus,                 # for CapitalDriftDetected
+    notifier,            # TelegramNotifier (alerts on drift)
+    logger,
+    quote_fn,            # Callable[[list[str]], dict[str,Quote]]
+                         # wired to adapter.get_quote at startup
+    poll_interval_sec=15,  # P14
+    capital_drift_tolerance=0.02,  # 2% tolerance for G3 Level 3
+  )
+
+RC3 — Hybrid cadence (G1):
+  Two trigger paths:
+  (a) Periodic: daemon thread polls every poll_interval_sec.
+  (b) Event-driven: subscribe to OrderStateChanged event;
+      run reconciliation on every state change.
+  Both invoke the same _reconcile() method. Use a threading.Lock
+  to prevent concurrent reconciliation (event-driven could fire
+  during periodic poll).
+
+RC4 — Lifecycle:
+  start() -> launches daemon polling thread + subscribes to
+             OrderStateChanged event on bus
+  stop()  -> signals thread, unsubscribes, joins (5s timeout)
+  is_running() -> bool
+
+RC5 — The 6 Checks (G1, lock execution order):
+
+  Each check returns list[ReconciliationAction]. After all 6
+  checks run, actions are grouped by tier and executed.
+
+  CHECK 1: MANUAL_CLOSE
+    Broker has NO position for a symbol we track as OPEN.
+    Detection: for each local open trade, check if symbol
+    missing from broker positions.
+    Tier: RECOVERABLE (auto-fix).
+    Action: Mark trade as CLOSED_MANUAL in state_store.
+            Release used capital via fund_manager.
+            Log WARNING with trade_id.
+            Send INFO telegram alert.
+
+  CHECK 2: ORPHAN_ADOPTION
+    Broker has a position for a symbol NOT in our state_store.
+    Detection: broker position symbol not in any local open trade.
+    Tier: UNRECOVERABLE (halt).
+    Action: Log CRITICAL. Send CRITICAL alert (sentinel + telegram).
+            Trigger soft_kill (unknown position = uncontrolled risk).
+            Do NOT attempt auto-adoption (manual operator action).
+
+  CHECK 3: HEALTHY
+    Broker position matches local trade (symbol, qty, direction).
+    Detection: qty and direction match.
+    Tier: COSMETIC (ignore).
+    Action: Log DEBUG "healthy match" for trade_id. No action.
+
+  CHECK 4: PARTIAL_CLOSE
+    Broker qty < local qty for same symbol.
+    Detection: broker has position but qty < our tracked qty.
+    Tier: RECOVERABLE (auto-fix).
+    Action: Update local qty to broker qty. Adjust fund_manager
+            used capital for the delta. Log WARNING.
+            Send WARN telegram alert.
+
+  CHECK 5: POSITION_GREW
+    Broker qty > local qty for same symbol.
+    Detection: broker qty > our tracked qty.
+    Tier: UNRECOVERABLE (halt).
+    Action: Log CRITICAL. Soft_kill. CRITICAL alert.
+            Unknown growth = uncontrolled risk.
+
+  CHECK 6: ORPHAN_ORDER
+    Broker has open order with no matching local order.
+    Detection: broker order not in state_machine or state_store.
+    Tier: RECOVERABLE (auto-fix).
+    Action: Cancel the orphan order via adapter.cancel_order().
+            Log WARNING. Send WARN telegram.
+            On cancel failure: escalate to CRITICAL + soft_kill.
+
+RC6 — 3-Tier action policy (G1):
+  COSMETIC     -> log only, no state change, no alert
+  RECOVERABLE  -> auto-fix + log WARNING + telegram WARN
+  UNRECOVERABLE -> soft_kill + log CRITICAL + sentinel + telegram CRITICAL
+
+RC7 — G5b Crash-recovery SL check (runs as part of CHECK 1 / CHECK 3):
+  After confirming a position exists at broker AND locally:
+    Query state_store.get_sl_order_for_trade(trade_id).
+    If no SL order exists at broker for this trade:
+      1. Get last DB-known SL price from state_store.
+      2. Get current LTP via quote_fn([symbol]).
+      3. Favorable-side check:
+         LONG: LTP > sl_price -> place fresh SL-M order at sl_price
+         LONG: LTP <= sl_price -> place MARKET exit immediately
+         SHORT: LTP < sl_price -> place fresh SL-M order at sl_price
+         SHORT: LTP >= sl_price -> place MARKET exit immediately
+      4. Log action taken with LTP, SL, direction.
+      5. On placement failure: CRITICAL alert + soft_kill.
+
+RC8 — Capital drift detection (G3 Level 3):
+  After all 6 checks, compare fund_manager snapshot vs broker margins:
+    broker_margins = adapter.get_margins()
+    local_total = fund_manager.get_snapshot().total_capital
+    drift_pct = abs(broker_margins.available - local_total) / local_total
+    if drift_pct > capital_drift_tolerance:
+      Publish CapitalDriftDetected(expected=local_total,
+                                    actual=broker_margins.available,
+                                    delta=...)
+      Log CRITICAL. CRITICAL alert.
+      Do NOT auto-correct (operator decision). But DO
+      soft_kill to prevent further trading.
+  This is G3 Level 3 — broker is source of truth, local state
+  is suspect.
+
+RC9 — ReconciliationAction dataclass:
+  ReconciliationAction(
+    check_name: str,          # e.g. "MANUAL_CLOSE"
+    tier: str,                # "COSMETIC" | "RECOVERABLE" | "UNRECOVERABLE"
+    symbol: str,
+    trade_id: str | None,
+    description: str,
+    action_taken: str,        # what reconciler did
+    success: bool,
+  )
+
+RC10 — Reconciliation log table:
+  Add reconciliation_log table to state_store:
+    id, ts, check_name, tier, symbol, trade_id, description,
+    action_taken, success
+  One row per action per reconciliation cycle.
+  Bump schema_version. Update test_state_store.
+
+RC11 — Reconciliation summary:
+  After each _reconcile() cycle:
+    summary = {
+      "ts": now_ist_iso,
+      "checks_run": 6,
+      "actions": list[ReconciliationAction],
+      "cosmetic_count": int,
+      "recoverable_count": int,
+      "unrecoverable_count": int,
+      "capital_drift_detected": bool,
+      "duration_ms": int,
+    }
+  Logged at INFO level. Stored in reconciliation_log.
+
+RC12 — Error handling during reconciliation:
+  If adapter raises during any check (BrokerTimeoutError,
+  BrokerAuthError):
+    Log ERROR, abort current reconciliation cycle, schedule
+    retry on next poll. Do NOT halt system for transient errors.
+  If adapter raises BrokerAuthError 3 consecutive cycles:
+    trigger soft_kill via kill_switch.record_api_failure.
+
+RC13 — Startup reconciliation:
+  On start(), run one immediate _reconcile() before entering
+  periodic loop. Catches any drift that accumulated during
+  downtime. Log INFO "startup reconciliation complete" with
+  summary.
+
+RC14 — Interaction with order_monitor:
+  Reconciler and order_monitor both poll broker. To avoid
+  redundant API calls:
+    Reconciler fetches positions + orders ONCE per cycle.
+    Passes fresh data to checks. Does NOT duplicate
+    order_monitor's order polling.
+  Reconciler checks POSITIONS. order_monitor checks ORDERS.
+  They are complementary, not overlapping.
+
+RC15 — Idempotency:
+  Running _reconcile() multiple times with same broker state
+  and same local state produces identical actions. No
+  cumulative side effects. MANUAL_CLOSE only fires once
+  because first run marks trade as CLOSED_MANUAL; second
+  run sees no open trade for that symbol.
+
+RC16 — Logging:
+  Logger name: "order_reconciler" (routes to reconciler log
+  per L3). All log lines carry trade_id when applicable.
+
+RC17 — System config additions:
+  order_reconciler:
+    poll_interval_sec: int           (default 15, P14)
+    capital_drift_tolerance: float   (default 0.02, validated > 0)
+    enable_event_driven: bool        (default true, for G1 hybrid)
+  Update YAML stub. Re-run test_config_loader.
+
+RC18 — Layer & deps:
+  Layer 5 (orders/). Imports: stdlib (threading, time,
+  dataclasses), core.exceptions, core.events
+  (CapitalDriftDetected, OrderStateChanged), core.logger,
+  core.time_authority, core.state_store,
+  broker.zerodha_adapter (type hint), broker.product_resolver,
+  broker.order_state_machine (STATES, TERMINAL_STATES),
+  capital.fund_manager, capital.kill_switch,
+  alerts.telegram_notifier, alerts.critical.
+
+RC19 — Broker position format:
+  adapter.get_positions() returns list[Position] with fields:
+  symbol, qty, avg_price, product, side.
+  Reconciler uses product_resolver.intent_for(product, "zerodha")
+  to map back to system taxonomy (INTRADAY vs DELIVERY).
+
+RC20 — NOT in scope:
+  - Smart TGT trailing (separate module)
+  - Order modification / amendment
+  - Historical data backfill
+  - P&L computation (fund_manager owns this)
+  Reconciler is detection + remediation. Lightweight actions only.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add reconciliation_log table to schema.sql per RC10.
+   Bump schema_version. Update test_state_store.
+
+2. Add 5 missing query helpers to state_store per the
+   pre-module-25 list:
+     get_all_open_trades()
+     get_orders_for_trade(trade_id)
+     get_sl_order_for_trade(trade_id)
+     mark_trade_manually_closed(trade_id)
+     get_pending_all_products()
+   Update test_state_store with tests for each.
+
+3. Extend SystemConfig per RC17. Update YAML stub.
+   Re-run test_config_loader.
+
+4. Build orders/order_reconciler.py per RC1-RC20.
+   Expect ~400-500 lines. This is the most complex safety
+   module — take extra care with the 6-check logic.
+
+5. Build tests/unit/test_order_reconciler.py covering:
+
+   CHECK 1 — MANUAL_CLOSE:
+   - Broker has no position for locally-open trade -> trade
+     marked CLOSED_MANUAL, capital released, WARNING logged
+   - Multiple manual closes in one cycle -> all handled
+
+   CHECK 2 — ORPHAN_ADOPTION:
+   - Broker has position not in local state -> CRITICAL alert,
+     soft_kill fired, position NOT adopted
+   - Multiple orphans -> each triggers CRITICAL separately
+
+   CHECK 3 — HEALTHY:
+   - Broker matches local state -> DEBUG log, no action
+
+   CHECK 4 — PARTIAL_CLOSE:
+   - Broker qty < local qty -> local qty updated, capital
+     adjusted, WARNING logged
+
+   CHECK 5 — POSITION_GREW:
+   - Broker qty > local qty -> CRITICAL alert, soft_kill
+
+   CHECK 6 — ORPHAN_ORDER:
+   - Broker has order not in local state -> cancelled,
+     WARNING logged
+   - Cancel failure -> CRITICAL alert, soft_kill
+
+   G5b CRASH RECOVERY:
+   - LONG position, no SL at broker, LTP > SL -> fresh SL placed
+   - LONG position, no SL at broker, LTP <= SL -> MARKET exit
+   - SHORT position, no SL at broker, LTP < SL -> fresh SL placed
+   - SHORT position, no SL at broker, LTP >= SL -> MARKET exit
+   - SL placement failure -> CRITICAL alert + soft_kill
+
+   G3 LEVEL 3 — CAPITAL DRIFT:
+   - Drift > tolerance -> CapitalDriftDetected event published,
+     soft_kill fired, CRITICAL alert sent
+   - Drift within tolerance -> no action
+
+   LIFECYCLE:
+   - start() launches thread + subscribes to event
+   - stop() joins within 5s
+   - Startup reconciliation runs immediately on start()
+
+   HYBRID CADENCE:
+   - Event-driven: OrderStateChanged triggers _reconcile()
+   - Periodic: _reconcile() runs every poll_interval_sec
+   - Concurrent prevention: Lock prevents parallel _reconcile()
+
+   ERROR HANDLING:
+   - BrokerTimeoutError during check -> abort cycle, retry next poll
+   - 3 consecutive BrokerAuthError -> record_api_failure, soft_kill
+
+   IDEMPOTENCY:
+   - Same state twice -> identical result, no double-close
+
+   LOGGING:
+   - Logger name is "order_reconciler" (L3 routing)
+   - All actions logged with trade_id in extra
+
+   PERSISTENCE:
+   - reconciliation_log row written per action
+
+   EDGE CASES:
+   - No open trades, no broker positions -> healthy (no actions)
+   - Empty broker response -> all local trades = MANUAL_CLOSE
+     (be careful: this COULD be a broker API bug. Consider
+      adding a "too many manual closes" threshold that triggers
+      CRITICAL instead of auto-closing everything)
+   - quote_fn raises -> G5b check skips with WARNING, does NOT
+     halt (transient quote failure != capital risk)
+
+6. Re-run all 27 prior suites + new one. Report 28-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: orders/order_reconciler.py
+  Tests added: ~30-40
+  Total cumulative: report
+  Locked: RC1-RC20 under orders_reconciler: section
+  Schema version: bumped
+  Cross-module: state_store (5 new queries + 1 table),
+                config_loader (1 new section), events
+                (CapitalDriftDetected publisher), kill_switch
+                (triggered on UNRECOVERABLE), telegram
+                (alerts sent), critical (sentinels written)
+  Deviations from instruction: list if any
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+After reconciler green, remaining module tree:
+  BLOCKED (need data/live_feed.py):
+    - smart_tgt_manager
+    - secondary_screener (+ quality_scorer, step_executor)
+    - screening/entry_gate
+  UNBLOCKED:
+    - data/live_feed.py (unblocks 4+ modules)
+    - strategies/schema.py + strategies/loader.py (unblocks
+      signal_processor full pipeline + entry_gate)
+    - data/candle_store.py
+    - data/instrument_cache.py
+    - reports/daily_report.py
+    - main.py (orchestrator)
+
+Recommend: data/live_feed.py next (biggest unblocker).
+Paste its locked decisions before instruction.
+
+WINDOWS REMINDER: ASCII-only print() strings.

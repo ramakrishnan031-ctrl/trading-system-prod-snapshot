@@ -1,0 +1,75 @@
+# config/scan_webhook_map.yaml — Trading System v2
+#
+# Maps each Chartink scanner name to its target strategy configuration.
+# Validated at startup (P17, S10): every strategy name must have a
+# corresponding YAML file in config/strategies/. Duplicate scanner
+# names -> CRITICAL startup failure.
+#
+# Format (S14):
+#   scanners:
+#     <scanner_name_as_registered_in_chartink>:
+#       strategy: <strategy_name>          # matches StrategyConfig.name
+#       chartink_url: <full_chartink_url>  # for P17 pre-flight check
+#
+# Locked decisions: P17, P6, S10, S14
+
+scanners:
+  open_low_breakout_long:
+    strategy: open_low_breakout_long
+    chartink_url: "https://chartink.com/screener/open-low-breakout-long"
+
+  first_pullback_long:
+    strategy: first_pullback_long
+    chartink_url: "https://chartink.com/screener/first-pullback-long"
+
+  vwap_bounce_long:
+    strategy: vwap_bounce_long
+    chartink_url: "https://chartink.com/screener/vwap-bounce-long"
+
+  gap_go_long:
+    strategy: gap_go_long
+    chartink_url: "https://chartink.com/screener/gap-go-long"
+
+  gap_fade_long:
+    strategy: gap_fade_long
+    chartink_url: "https://chartink.com/screener/gap-fade-long"
+
+  range_breakout_long:
+    strategy: range_breakout_long
+    chartink_url: "https://chartink.com/screener/range-breakout-long"
+
+  open_high_breakdown_short:
+    strategy: open_high_breakdown_short
+    chartink_url: "https://chartink.com/screener/open-high-breakdown-short"
+
+  first_pullback_short:
+    strategy: first_pullback_short
+    chartink_url: "https://chartink.com/screener/first-pullback-short"
+
+  vwap_rejection_short:
+    strategy: vwap_rejection_short
+    chartink_url: "https://chartink.com/screener/vwap-rejection-short"
+
+  gap_go_short:
+    strategy: gap_go_short
+    chartink_url: "https://chartink.com/screener/gap-go-short"
+
+  gap_fade_short:
+    strategy: gap_fade_short
+    chartink_url: "https://chartink.com/screener/gap-fade-short"
+
+  range_breakout_short:
+    strategy: range_breakout_short
+    chartink_url: "https://chartink.com/screener/range-breakout-short"
+
+  positional_momentum_long:
+    strategy: positional_momentum_long
+    chartink_url: "https://chartink.com/screener/positional-momentum-long"
+
+  positional_sector_rotation:
+    strategy: positional_sector_rotation
+    chartink_url: "https://chartink.com/screener/positional-sector-rotation"
+
+  positional_swing_long:
+    strategy: positional_swing_long
+    chartink_url: "https://chartink.com/screener/positional-swing-long"

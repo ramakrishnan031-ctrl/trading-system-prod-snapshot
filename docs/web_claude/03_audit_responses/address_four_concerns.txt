@@ -1,0 +1,296 @@
+================================================================
+RESPONSE TO FOUR CONCERNS — Gaps in v2 Foundation
+================================================================
+
+You are RIGHT on all four. These are genuine gaps, not
+oversights by you. Let me address each honestly.
+
+================================================================
+CONCERN 1: Empty folders
+================================================================
+
+Likely empty (or near-empty) folders:
+  - app/             (mentioned in audit as "38 stub files")
+  - data_store/      (DB lives here but no tracked files)
+  - logs/            (created at runtime, empty in repo)
+  - reports/daily/   (created at runtime)
+  - venv/            (ignored, correct)
+
+ACTION:
+  Check each directory. Any folder that exists in the repo
+  with no tracked files should have either:
+    (a) a .gitkeep file (if runtime-populated)
+    (b) be deleted (if leftover from v1 audit)
+    (c) have actual files (if a real module)
+
+Specifically:
+  - app/ -> DELETE (v1 dead stub tree per audit Part 8)
+  - data_store/ -> add .gitkeep + entry in .gitignore
+                   for trading_system.db and *.flag
+  - logs/ -> add .gitkeep + .gitignore *.log entries
+  - reports/daily/ -> add .gitkeep + .gitignore *.xlsx, *.md
+
+Instruct VS Code Claude:
+  List all folders in repo. For each folder with no .py
+  files: decide delete vs .gitkeep. Report what was cleaned.
+
+================================================================
+CONCERN 2: accounts.csv and F&O-aware input files
+================================================================
+
+Also correct. v2 foundation deferred these. We have:
+  - broker_costs.yaml (cost rates)
+  - system_config.yaml (limits)
+  - strategy YAMLs
+
+Missing inputs that were in scope per Base_input.txt:
+  - accounts.csv — multiple Zerodha accounts. Capital per
+                    account, API keys per account.
+  - f&o-aware file — which symbols are F&O vs equity.
+                     Needed for lot_size, margin calc,
+                     position_sizer (S3 already has
+                     lot_size: int but nothing populates it).
+
+GAP ASSESSMENT:
+  accounts.csv -> SIGNIFICANT gap. Multi-account was in
+                   "Base_input.txt" but foundation built
+                   single-account. v2.1 work OR build
+                   now before paper trial.
+
+  f&o-aware file -> MEDIUM gap. Single-account with equity-
+                     only works for paper trial. But
+                     lot_size=1 hardcoded means F&O signals
+                     would size wrong. Needs instrument
+                     metadata file.
+
+PROPOSED NEW MODULE (Module 38a):
+  config/accounts.csv — multi-account registry
+  config/instruments.csv OR config/fno_aware.yaml —
+    symbol -> lot_size, is_fno, exchange
+  core/instrument_cache.py — load + expose lookups
+  Extends position_sizer to use real lot_size
+  Extends zerodha_adapter to support account selection
+
+Decision point: build this BEFORE paper trial or DEFER?
+  Recommend: BUILD BEFORE paper trial if you plan to trade
+  F&O or use multiple accounts. If paper trial is equity
+  single-account only, can defer.
+
+================================================================
+CONCERN 3: 15 strategies.yaml inside the system
+================================================================
+
+Clarification needed — we DID build 15 strategy YAMLs in
+Module 27 (S12):
+  config/strategies/open_low_breakout_long.yaml
+  config/strategies/first_pullback_long.yaml
+  ... (all 15 files per S12)
+
+  These are loaded by strategies/loader.py at startup.
+
+Are you asking about something DIFFERENT? Two possibilities:
+
+  (a) You mean the scanner DEFINITIONS (Chartink query
+      conditions) — these live on Chartink's website only.
+      The system only needs to know the scanner name +
+      strategy mapping (scan_webhook_map.yaml).
+
+  (b) You mean the strategy files exist but feel empty /
+      unpopulated with REAL working values. They currently
+      have DEFAULT values per S13 (sl_pct=0.01, etc.) but
+      not battle-tested values.
+
+ACTION:
+  VS Code Claude: verify 15 files exist in config/strategies/.
+  Print one (first_pullback_long.yaml) so user can see the
+  content.
+  User: clarify which interpretation (a) or (b) applies.
+
+If (b): this is expected — foundation provides sensible
+defaults. Tuning real values is v2.1 work using paper trial
+data.
+
+================================================================
+CONCERN 4: CRITICAL GAP — Multi-inning stock tracking
+================================================================
+
+This is the MOST important gap you identified. Analysis:
+
+What the current system does:
+  - Places ONE entry order per signal
+  - Monitors its fills
+  - Marks trade CLOSED when SL or TGT hits
+  - That's it. Stock price after CLOSED is ignored.
+
+Your requirement:
+  After original entry (actual broker order placed on signal):
+    INNING 1: actual trade entry -> actual SL or TGT hit
+    INNING 2: from inning-1 exit price, simulate re-entry
+              at same price, track to next SL/TGT (no real
+              broker order)
+    INNING 3: same from inning-2 exit
+  Up to 3 innings tracked. Telegram and reports show ALL
+  innings, not just the first one.
+
+This is a POWERFUL backtesting/analysis feature. Protects
+against the bug you described: "exited at SL, then price
+recovered to TGT — report falsely claims TGT hit".
+
+This was NOT in locked_decisions.yaml. It's a NEW capability.
+
+PROPOSED MODULE 38 (before paper trial):
+  orders/shadow_tracker.py
+
+  Purpose: After a trade closes (real exit at SL/TGT),
+  continue tracking the same symbol for up to 3 "innings"
+  using simulated entries at the original SL/TGT price.
+  No real broker orders. Pure price monitoring.
+
+LOCK (ST-NEW1 to ST-NEW12):
+
+ST-NEW1 — Inning data model:
+  Inning dataclass:
+    inning_number: int (1, 2, or 3)
+    trade_id: str (links to original trade)
+    entry_price: float (actual for inning 1;
+                        = previous inning's exit price for 2+)
+    entry_ts: datetime
+    sl_price: float
+    tgt_price: float
+    direction: str (LONG | SHORT)
+    exit_price: float | None
+    exit_ts: datetime | None
+    exit_reason: str | None (SL | TGT | EOD | STILL_OPEN)
+    is_real: bool (True for inning 1, False for 2+)
+
+ST-NEW2 — shadow_tracker registers on PositionClosed event:
+  Subscribe to PositionClosed event bus type.
+  When fires: check if trade has < 3 innings.
+  If yes and within market hours:
+    Start inning 2 simulated:
+      entry_price = exit_price of inning 1
+      sl/tgt computed from strategy (same rules as original)
+      Register with live_feed LTP updates for this symbol
+      Track until SL or TGT hit OR market close (15:30)
+
+ST-NEW3 — Rules:
+  - SL hit -> close inning, start next one at same price
+  - TGT hit -> close inning, start next one at same price
+  - Market close (15:30) -> close inning with
+    exit_reason=EOD, stop tracking
+  - Already 3 innings recorded -> stop tracking
+  - Symbol's original trade had direction X -> all innings
+    keep direction X (LONG stays LONG)
+
+ST-NEW4 — Telegram alerts:
+  Per inning close: send INFO alert with:
+    Symbol, direction, inning #, entry, exit, P&L %,
+    real/simulated tag
+  Final alert when all 3 innings done or EOD:
+    Summary of all innings for this trade.
+
+ST-NEW5 — Persistence:
+  Add innings table to state_store:
+    id, trade_id, inning_number, entry_price, entry_ts,
+    sl_price, tgt_price, direction, exit_price, exit_ts,
+    exit_reason, is_real
+  Query helpers:
+    get_innings_for_trade(trade_id) -> list[Inning]
+    get_innings_for_date(date_iso) -> list[Inning]
+
+ST-NEW6 — Daily report integration:
+  Add new sheet/section: MULTI_INNING_ANALYSIS
+    For each trade that had innings: show all 3 (or fewer)
+    with real vs simulated flag and P&L.
+  Update SUMMARY sheet: "Total innings tracked", "Simulated
+  tgt hits", etc.
+
+ST-NEW7 — Layer & deps:
+  Layer 5 (orders/). Imports: stdlib, core.exceptions,
+  core.events (subscribes to PositionClosed), core.logger,
+  core.time_authority, core.state_store, data.live_feed
+  (register LTP callback), alerts.telegram_notifier.
+
+ST-NEW8 — Configuration:
+  system_config.yaml:
+    shadow_tracker:
+      enabled: bool (default true)
+      max_innings: int (default 3, validated 1-5)
+      alert_per_inning: bool (default true)
+
+ST-NEW9 — Testing:
+  Mock PositionClosed event, simulate LTP movements,
+  verify innings created correctly. Cover:
+    - Inning 1 real, SL hit -> inning 2 starts at SL price
+    - Inning 2 TGT hit -> inning 3 starts at TGT price
+    - 3 innings completed -> no inning 4
+    - EOD interrupts inning 2 -> closes with exit_reason=EOD
+    - Market close before inning 1 closes -> inning 1 EOD,
+      no innings 2+
+    - LONG and SHORT direction handled correctly
+    - is_real correctly True only for inning 1
+
+ST-NEW10 — Shadow means NO real broker orders:
+  Do NOT call adapter.place_order for innings 2+. Ever.
+  Pure LTP monitoring. User must understand these are
+  simulated educational/analytical data points.
+
+ST-NEW11 — Logger name: "shadow_tracker"
+ST-NEW12 — NOT in scope:
+  - More than 3 innings
+  - Overnight innings (all close at EOD)
+  - Triggering real orders on shadow SL/TGT
+
+================================================================
+RECOMMENDED NEXT STEPS (your call)
+================================================================
+
+Option A — BUILD Module 38 (shadow_tracker) + instrument_cache
+  BEFORE paper trial. Adds ~2 more build cycles. Real test
+  coverage of your stated requirement (Concern 4).
+
+Option B — DEFER to v2.1. Start paper trial with current
+  system. Limitation: no multi-inning analysis yet.
+
+Recommendation: Option A. Your Concern 4 is a correctness
+issue (system lies about outcomes if naive). Better to
+build before trial than retrofit after accumulating
+misleading reports.
+
+Also recommend: Clean up empty folders (Concern 1) and
+add accounts + instruments (Concern 2) in same batch.
+
+================================================================
+INSTRUCTION TO VS CODE CLAUDE
+================================================================
+
+Before building more modules, do these in order:
+
+TASK 1 — Cleanup:
+  - Delete app/ if exists (v1 dead code)
+  - Add .gitkeep to data_store/, logs/, reports/daily/
+  - Verify .gitignore covers *.db, *.log, *.flag, *.xlsx
+    under runtime dirs, .env
+  - Report what changed
+
+TASK 2 — Show user one strategy YAML:
+  - Print contents of config/strategies/first_pullback_long.yaml
+  - Print contents of config/strategies/positional_swing_long.yaml
+  - Let user confirm defaults are acceptable OR flag them
+    for tuning
+
+TASK 3 — Paste locked decisions mentioning:
+  - accounts, multi-account, multiple brokers
+  - instrument, lot_size, F&O
+  - shadow, inning, simulation
+  If any exist, report them. If none: user confirms
+  proceeding to build new modules for these as NEW
+  locked decisions.
+
+After Tasks 1-3 done + user confirms direction:
+  Module 38 = orders/shadow_tracker.py (Concern 4 fix)
+  Module 39 = core/instrument_cache.py + accounts support
+  Module 40 = Updated daily_review with inning analysis
+
+Web Claude produces instructions per module after user
+decides Option A vs Option B.

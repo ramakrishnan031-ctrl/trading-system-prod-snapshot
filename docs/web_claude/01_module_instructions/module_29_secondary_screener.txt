@@ -1,0 +1,233 @@
+================================================================
+MODULE 29: screening/secondary_screener.py
+================================================================
+
+CONTEXT: 859/859 across 33 suites. quality_scorer + step_executor
+ready. This module orchestrates the 10-step screening pipeline.
+Audit P9a (10 steps + bug fixes) + P18 (PASSED/REJECTED/SKIPPED).
+
+LOCKED DECISIONS REFERENCED:
+  P9a  — Keep 10 steps, fix exception bypass, SHORT blindness,
+         insufficient data, signal age, circuit check, latency
+  P18  — Every signal leaves with PASSED/REJECTED_<step>/
+         SKIPPED_<reason>. No silent drops.
+  P9b  — All weights from scoring_weights.yaml (via quality_scorer)
+
+================================================================
+LOCK (SS1-SS15)
+================================================================
+
+SS1 — Purpose: Take a signal + market data, run 10-step
+  screening via step_executor, score via quality_scorer,
+  return typed screening decision. Pure orchestration.
+  Writes screening result to state_store (P18).
+
+SS2 — Constructor:
+  SecondaryScreener(
+    step_executor,          # StepExecutor instance
+    quality_scorer,         # QualityScorer instance
+    state_store,            # for P18 result writes
+    quote_fn,               # Callable[[list[str]], dict[str,Quote]]
+                            # for circuit state check (P9a add)
+    logger,
+  )
+
+SS3 — Public API:
+  screener.screen(
+    signal_id: str,
+    symbol: str,
+    scanner_name: str,
+    trigger_price: float,
+    triggered_at: datetime,
+    direction: str,         # "LONG" | "SHORT"
+    intent: str,            # "INTRADAY" | "DELIVERY"
+    strategy: StrategyConfig,  # from strategies/loader
+    market_data: dict | None,  # pre-fetched; if None, screener
+                                # fetches via quote_fn
+  ) -> ScreeningResult
+
+  ScreeningResult (frozen dataclass):
+    passed: bool
+    status: str              # "PASSED" | "REJECTED_<step>" | "SKIPPED_<reason>"
+    score: int               # 0-100
+    tier: str                # "HIGH" | "MEDIUM" | "LOW"
+    rejected_step: str | None  # which step caused rejection
+    step_results: dict[str, float]
+    step_statuses: dict[str, str]
+    error_steps: list[str]
+    latencies_ms: dict[str, float]
+    market_data_snapshot: dict  # captured at screening time
+
+SS4 — Pipeline (lock; ordered):
+  1. Fetch market data if not provided:
+     quote = quote_fn([symbol])
+     Build market_data dict from Quote fields.
+     If quote_fn raises: return SKIPPED_QUOTE_UNAVAILABLE.
+
+  2. Build thresholds dict from strategy:
+     min_volume_surge, min_adr_pct, max_spread_pct from
+     StrategyConfig.
+
+  3. Run step_executor.run_all(signal, market_data, thresholds)
+     -> StepExecutorResult.
+
+  4. Check error_steps: if any step errored AND that step
+     has weight > 0, reject with REJECTED_STEP_ERROR.
+     P9a fix (a): exception = rejection, not silent continue.
+
+  5. Score via quality_scorer.score(step_results)
+     -> ScoreResult.
+
+  6. Apply per-strategy min_score override:
+     effective_min = strategy.min_score if strategy.min_score > 0
+                     else scorer's global min_pass_score.
+     If total_score < effective_min:
+       return REJECTED_SCORE_<total_score>.
+
+  7. Signal age check (P9a add):
+     Already handled by step_10_signal_age in step_executor.
+     If step_10 returned 0.0: status = REJECTED_SIGNAL_AGE.
+     (This is defense-in-depth; step_executor already scored
+     it 0.0, but screener gives explicit rejection reason.)
+
+  8. If all passed: status = "PASSED".
+
+SS5 — P18 persistence:
+  After screen() completes, write result to state_store:
+    state_store.update_signal_status(
+      signal_id, status, reason=rejected_step or "PASSED",
+      ts=now_ist())
+  Additionally, write screening detail row to a screener_results
+  table (NEW) with: signal_id, score, tier, status,
+  step_results_json, latencies_json, ts.
+  Used by daily report for screening analytics.
+
+SS6 — screener_results table:
+  Add to state_store schema.sql:
+    id, signal_id, score, tier, status, step_results TEXT,
+    latencies TEXT, market_data_snapshot TEXT, ts TEXT
+  All TEXT fields are JSON strings (serialized dicts).
+  Bump schema_version. Update test_state_store.
+
+SS7 — Market data assembly:
+  From Quote (already built in zerodha_adapter):
+    ltp = quote.last_price
+    bid = quote.bid
+    ask = quote.ask
+    volume = quote.volume
+  Additional fields NOT in Quote but needed:
+    vwap, atr, rsi, sector, day_high, day_low, prev_close,
+    avg_volume_20d, open, circuit_state.
+  For v2: fields not available from quote_fn -> set to None.
+  step_executor handles missing keys gracefully (SE8).
+  v2.1 will add data providers for these fields.
+
+SS8 — Circuit state check (P9a add):
+  From Quote or from kite quote response:
+    If quote has "upper_circuit_limit" / "lower_circuit_limit":
+      circuit_state = "upper_circuit" if ltp >= upper_limit
+      circuit_state = "lower_circuit" if ltp <= lower_limit
+      circuit_state = "normal" otherwise
+    If fields missing: circuit_state = "unknown" (step_9 scores 1.0)
+
+SS9 — Direction propagation:
+  signal dict passed to step_executor includes direction.
+  Steps 2, 4 are direction-aware (SE4 audit fix b).
+  Screener is responsible for including direction in the
+  signal dict from StrategyConfig.
+
+SS10 — Error handling:
+  - quote_fn failure: SKIPPED_QUOTE_UNAVAILABLE (not REJECTED)
+  - step_executor exception (should never happen per SE5,
+    but defense): SKIPPED_EXECUTOR_ERROR
+  - quality_scorer exception: SKIPPED_SCORER_ERROR
+  - state_store write failure: log ERROR but still return
+    ScreeningResult (don't crash signal pipeline for DB issue)
+
+SS11 — Logging:
+  Logger name: "secondary_screener".
+  Every screen() call: INFO with signal_id, symbol, result.
+  Step details: DEBUG level.
+  Errors: ERROR with traceback.
+
+SS12 — Layer & deps:
+  Layer 5 (screening/). Imports: stdlib (json, dataclasses),
+  screening.step_executor, screening.quality_scorer,
+  core.state_store, core.logger, core.time_authority,
+  strategies.schema (StrategyConfig type).
+  No broker import (quote_fn injected).
+
+SS13 — Determinism:
+  Same signal + same market_data + same config -> same result.
+  market_data changes (live quotes) make each call non-deterministic
+  by nature; but for SAME snapshot, result is deterministic.
+
+SS14 — Integration with signal_processor:
+  signal_processor currently passes secondary_screener=None
+  and skips screening. After this module:
+  - signal_processor needs update to wire SecondaryScreener
+  - Pass screen() result to decide pipeline continuation
+  NOTE: Do NOT modify signal_processor in this build.
+  Wire-up happens in Module 30 (integration wiring).
+
+SS15 — NOT in scope:
+  - Modifying signal_processor
+  - Real VWAP/ATR/RSI computation (v2.1)
+  - Sector strength calculation (placeholder per SE4 step_6)
+  - Historical data backfill for market_data
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add screener_results table to schema.sql per SS6.
+   Bump schema_version. Update test_state_store.
+
+2. Add insert_screener_result helper to state_store.
+   Update test_state_store.
+
+3. Build screening/secondary_screener.py per SS1-SS15
+   (~200 lines).
+
+4. Build tests/unit/test_secondary_screener.py covering:
+   - All steps pass, score >= min -> PASSED
+   - Step 1 fails -> REJECTED_volume_surge
+   - Step 2 fails (LONG, ltp < vwap) -> REJECTED_vwap_position
+   - Step 2 direction-aware: SHORT + ltp > vwap -> REJECTED
+   - Step error in executor -> REJECTED_STEP_ERROR (P9a fix a)
+   - Score below global min_pass -> REJECTED_SCORE_55
+   - Score below strategy min_score override -> REJECTED
+   - Score above strategy override but below global -> PASSED
+     (strategy override is effective_min)
+   - Signal age > 90s -> REJECTED_SIGNAL_AGE
+   - quote_fn raises -> SKIPPED_QUOTE_UNAVAILABLE
+   - market_data provided (no quote_fn call) -> works
+   - Circuit hit -> step_9 = 0.0 -> affects total score
+   - P18: state_store.update_signal_status called with
+     correct status string
+   - P18: screener_results row written with all fields
+   - ScreeningResult fields all populated
+   - market_data_snapshot captured in result
+   - Direction in signal dict -> propagated to step_executor
+   - Strategy thresholds override defaults
+   - state_store write failure -> log ERROR, still return result
+   - Same inputs twice -> identical result
+   - All 15 strategies can screen without error (regression:
+     load each strategy, build mock market_data, run screen())
+
+5. Re-run all 33 prior suites + new one. Report 34-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: screening/secondary_screener.py
+  Tests: report actual
+  Locked: SS1-SS15 under screening_module: section
+  Schema version: bumped
+  Cross-module: state_store (1 new table + 1 helper),
+                signal_processor NOT yet wired (Module 30)
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.

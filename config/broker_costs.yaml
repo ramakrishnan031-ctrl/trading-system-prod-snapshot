@@ -1,0 +1,21 @@
+# config/broker_costs.yaml — Trading System v2
+#
+# Brokerage rates applied identically in live and paper modes (P12, CC9).
+# All rates are applied by broker/cost_calculator.py.
+# Verify against Zerodha contract notes before each live season.
+#
+# Locked decisions: P12, CC3–CC8
+#
+# All _pct fields are PERCENTAGES (e.g. 0.03 means 0.03%, not 0.0003 fraction).
+# cost_calculator.py divides by 100 before multiplying by turnover.
+
+zerodha:
+  brokerage_flat_intraday: 20.0     # Flat ₹20 cap per executed order (MIS/CO/CNC SELL)
+  brokerage_pct_intraday: 0.03      # 0.03% of turnover (MIS/CO/CNC SELL); capped at flat (CC3)
+  stt_sell_pct: 0.025               # STT 0.025% on sell-side turnover (MIS/CO intraday) (CC4)
+  stt_cnc_pct: 0.1                  # STT 0.1% on turnover for CNC both sides (CC4)
+  exchange_txn_pct: 0.00297         # NSE exchange transaction charge 0.00297% on turnover (CC5)
+  gst_pct: 18.0                     # GST 18% on (brokerage + exchange_txn + sebi) (CC6)
+  sebi_pct: 0.0001                  # SEBI turnover fee 0.0001% (₹10 per crore) (CC7)
+  stamp_duty_mis_buy_pct: 0.003     # Stamp duty 0.003% on buy-side turnover for MIS/CO (CC8)
+  stamp_duty_cnc_buy_pct: 0.015     # Stamp duty 0.015% on buy-side turnover for CNC (CC8)

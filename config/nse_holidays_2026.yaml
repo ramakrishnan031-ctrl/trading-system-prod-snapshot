@@ -1,0 +1,47 @@
+# NSE Trading Holidays 2026
+# Source: NSE Circular NSE/CMTR/71775 dated 12-Dec-2025
+# Capital Market Segment
+#
+# Note: Muhurat Trading on 08-Nov-2026 (Sunday, Diwali Laxmi Pujan)
+# Timings to be notified by NSE separately.
+# System treats this as holiday by default. Operator can override
+# if Muhurat session participation is desired.
+#
+# Holidays falling on Saturday/Sunday are NOT listed below
+# (weekends are already non-trading days):
+#   15-Feb-2026 (Sun) Mahashivratri
+#   21-Mar-2026 (Sat) Id-Ul-Fitr
+#   15-Aug-2026 (Sat) Independence Day
+#   08-Nov-2026 (Sun) Diwali Laxmi Pujan (Muhurat Trading)
+
+holidays:
+  - date: "2026-01-26"
+    name: "Republic Day"
+  - date: "2026-03-03"
+    name: "Holi"
+  - date: "2026-03-26"
+    name: "Shri Ram Navami"
+  - date: "2026-03-31"
+    name: "Shri Mahavir Jayanti"
+  - date: "2026-04-03"
+    name: "Good Friday"
+  - date: "2026-04-14"
+    name: "Dr Baba Saheb Ambedkar Jayanti"
+  - date: "2026-05-01"
+    name: "Maharashtra Day"
+  - date: "2026-05-28"
+    name: "Bakri Id"
+  - date: "2026-06-26"
+    name: "Muharram"
+  - date: "2026-09-14"
+    name: "Ganesh Chaturthi"
+  - date: "2026-10-02"
+    name: "Mahatma Gandhi Jayanti"
+  - date: "2026-10-20"
+    name: "Dussehra"
+  - date: "2026-11-10"
+    name: "Diwali Balipratipada"
+  - date: "2026-11-24"
+    name: "Prakash Gurpurb Sri Guru Nanak Dev"
+  - date: "2026-12-25"
+    name: "Christmas"

@@ -1,0 +1,354 @@
+================================================================
+SECOND AUDIT RESPONSE — 30 Issues Triaged
+================================================================
+
+This audit is CONCRETE and most issues are real bugs, not
+hypothetical risks. Address in priority order below.
+
+First: VERIFY each claim before fixing. Some may be outdated
+or based on stale file versions. Then fix the confirmed ones.
+
+================================================================
+PRIORITY 1 — BLOCKERS (system will crash at startup or on
+first tick). Fix BEFORE any paper trial run.
+================================================================
+
+ISSUE #25 — LiveFeedManager callback signature mismatch
+  Claim: main.py wires
+    live_feed.register_callback(
+      lambda ticks: [candle_store.on_tick(t) for t in ticks])
+  but candle_store.on_tick expects (token, ltp, ts) not a
+  tick dict.
+
+  VERIFY: Read main.py and data/candle_store.py. Confirm
+  actual signatures.
+
+  FIX: Lambda unpacks tick dict correctly:
+    live_feed.register_callback(
+      lambda ticks: [
+        candle_store.on_tick(
+          t["instrument_token"],
+          t["last_price"],
+          t.get("timestamp") or now_ist()
+        ) for t in ticks
+      ])
+
+ISSUE #13 — CandleStore never started
+  Claim: main.py creates CandleStore but never calls start()
+  which means timer thread for clock-based candle close never
+  runs.
+
+  VERIFY: Grep main.py for candle_store.start(). Check
+  CandleStore has a start() method (LF12 says clock timer
+  thread).
+
+  FIX: Add candle_store.start() in main.py Phase 0g BEFORE
+  live_feed.connect(). Add candle_store.stop() in shutdown
+  sequence.
+
+ISSUE #4 — Paper mode quote_provider missing
+  Claim: zerodha_adapter.get_quote in paper mode requires
+  quote_provider callable; main.py doesn't inject one.
+  get_quote will raise NotImplementedError.
+
+  VERIFY: Check ZerodhaAdapter paper_mode branch for
+  get_quote. Check main.py adapter construction.
+
+  FIX: For paper mode, inject a SimQuoteProvider that
+  returns canned quotes OR reads from a CSV seed file.
+  Minimum for paper: quote_fn that returns fake Quote
+  objects so reconciler and screener work.
+
+ISSUE #24 — instrument_token -> symbol mapping not set
+  Claim: CandleStore.set_token_map() never called in main.py.
+  Ticks come in with token, but candles lack symbol.
+
+  VERIFY: Grep main.py for set_token_map.
+
+  FIX: After instrument_cache loads (Module 38), call:
+    token_map = {row.instrument_token: row.symbol
+                  for row in instrument_cache.all_rows()}
+    candle_store.set_token_map(token_map)
+
+ISSUE #7 + #8 — Callbacks call soft_kill without triggered_by
+  Claim: _make_orphan_cb and _make_critical_failure_cb call
+  kill_switch.soft_kill() missing triggered_by param.
+
+  VERIFY: Read main.py callback factory functions. Check
+  KillSwitch.soft_kill signature.
+
+  FIX: Pass triggered_by explicitly:
+    kill_switch.soft_kill(
+      reason=f"{source}: {reason}",
+      triggered_by="system_auto"
+    )
+
+ISSUE #10 — broker_orders_fn=None disables CHECK 6
+  Claim: main.py passes None for broker_orders_fn, so
+  reconciler ORPHAN_ORDER check never runs. Major safety
+  hole.
+
+  VERIFY: Check OrderReconciler constructor, confirm
+  broker_orders_fn is a parameter and ORPHAN_ORDER check
+  requires it.
+
+  FIX: Wire adapter.kite.orders() or similar as
+    broker_orders_fn=lambda: adapter.get_open_orders()
+  If no such adapter method: add get_open_orders() to
+  ZerodhaAdapter that calls kite.orders() and filters
+  status IN ('OPEN', 'TRIGGER PENDING').
+
+================================================================
+PRIORITY 2 — HIGH SEVERITY (will cause silent bugs in paper
+or block live). Fix within first week of paper trial.
+================================================================
+
+ISSUE #12 — sector_lookup_fn returns UNKNOWN for all symbols
+  Claim: risk_engine sector exposure check useless because
+  every symbol gets UNKNOWN.
+
+  VERIFY: Grep main.py for sector_lookup_fn wiring.
+
+  FIX: Two options:
+    (a) Add sector column to instruments.csv (Module 38).
+        Lookup from there.
+    (b) Hardcode sector map for top 200 symbols in
+        config/sectors.yaml.
+  Recommend (a) — extends already-planned instruments.csv.
+
+ISSUE #15 — OrderMonitor.track() not called for SL/TGT legs
+  Claim: order_placer tracks only entry; SL and TGT orders
+  untracked. If SL/TGT stays open indefinitely, no timeout
+  handling.
+
+  VERIFY: Read order_placer.py and order_protocol_*.py.
+  For CO_PLUS_TGT: CO has SL embedded, but TGT is separate.
+  For LIMIT_TRIPLE: SL and TGT are separate.
+
+  FIX: After protocol places orders, track each one:
+    for placed in result.placed_orders:
+      order_monitor.track(
+        placed.internal_order_id,
+        placed.broker_order_id,
+        symbol, side, qty, placed.price,
+        placed_at=now_ist()
+      )
+
+ISSUE #16 — EodSquareoff _fired_for_date set before _fire()
+  Claim: flag set before fire logic runs. If _fire raises,
+  flag is True and EOD won't retry.
+
+  VERIFY: Read orders/eod_squareoff.py check_and_fire.
+
+  FIX: Reorder:
+    try:
+      self._fire(now)
+      self._fired_for_date[today] = True
+    except Exception:
+      # flag NOT set, next poll will retry
+      raise
+
+ISSUE #22 — fund_manager.reset_daily_pnl() never called
+  Claim: exists but not wired to EOD.
+
+  VERIFY: Check eod_squareoff.py _fire() sequence.
+
+  FIX: Add to EOD fire sequence after position exits done:
+    self.fund_manager.reset_daily_pnl()
+  OR call from main.py EOD scheduler after eod.check_and_fire
+  returns True.
+
+ISSUE #11 — Telegram paper mode sends real alerts
+  Claim: paper_mode flag not propagated to notifier.
+
+  VERIFY: Check main.py TelegramNotifier construction.
+
+  FIX: Pass paper_mode=args.mode == "paper" to notifier.
+  Audit verified this already in TG9 but main.py might not
+  be wiring it.
+
+ISSUE #3 — ATR fallback silent
+  Claim: step_executor returns 0.5 for missing ATR (neutral
+  score), and price derivation falls back FIXED_PCT for ATR
+  method without loud alert.
+
+  VERIFY: Read screening/step_executor.py step_3_atr_filter
+  and signals/signal_processor.py _derive_prices.
+
+  FIX: Option 1 — HALT: if strategy uses ATR and ATR data
+    unavailable, reject signal with REJECTED_NO_ATR_DATA.
+  Option 2 — Log WARNING on EVERY fallback (not just first):
+    "ATR fallback for signal {signal_id}: using FIXED_PCT
+     because ATR data unavailable"
+  Recommend Option 1 for live, Option 2 for paper.
+  Add config flag: strategies.atr_fallback_mode: "HALT"|"WARN".
+
+================================================================
+PRIORITY 3 — BUGS (correctness issues, not blockers)
+================================================================
+
+ISSUE #2 — Race in fill_map
+  Claim: _on_order_filled in order_monitor thread may race
+  with place() completion.
+
+  VERIFY: Read orders/order_placer.py _fill_map lock usage.
+  If all access is guarded by self._fill_map_lock, race
+  is theoretical. If any path accesses without lock, fix.
+
+  FIX: Ensure EVERY read, write, pop of _fill_map is under
+  _fill_map_lock. Grep for self._fill_map and add lock
+  scope where missing.
+
+ISSUE #5 — No schema migration logic
+  Claim: EXPECTED_SCHEMA_VERSION=8; no migration from older.
+
+  VERIFY: Check core/state_store.py init path.
+
+  FIX: For foundation, this is intentional — fresh DB per
+  install. Document: "Delete trading_system.db if upgrading
+  from schema < 8". For production: add proper migration
+  system (v2.1 work).
+
+ISSUE #9 — in_flight symbol stuck on crash
+  Claim: if signal_processor crashes before finally block,
+  symbol is stuck.
+
+  VERIFY: Read signals/signal_processor.py _process_one.
+
+  FIX: Add timeout mechanism:
+    webhook_receiver tracks added_ts per in_flight entry.
+    Background thread: every 60s, evict entries older than
+    300s. Log WARNING per eviction.
+
+ISSUE #19 — alerts/critical.py reference
+  Claim: alert_watcher imports alerts.critical which may
+  not exist.
+
+  VERIFY: Check alerts/ directory. critical.py WAS built
+  in Module 24. Should exist.
+
+  FIX: If missing, build per CR1-CR10 in Module 24
+  instructions. If present, no action.
+
+ISSUE #17 — openpyxl import at report time
+  Claim: import at use time means runtime crash if missing.
+
+  VERIFY: Check reports/daily_review.py imports.
+
+  FIX: Import at top of file. Add to startup_checks to
+  verify openpyxl importable.
+
+ISSUE #18 — requests library usage
+  Claim: preflight_scanner uses requests, may not be in
+  requirements.
+
+  VERIFY: Check requirements.txt for requests. (Already
+  installed as kiteconnect dep, but should be explicit.)
+
+  FIX: Add requests>=2.33 to requirements.txt explicitly.
+
+================================================================
+PRIORITY 4 — LOW / NITPICKS
+================================================================
+
+ISSUE #21 — Log rotation: use RotatingFileHandler. v2.1.
+ISSUE #23 — 10-day holiday lookahead: raise to 30. Minor.
+ISSUE #26 — _log variable confusing: rename. Cosmetic.
+ISSUE #27 — BRACKET_ORDER empty string: already raises
+            ProductNotSupportedError. OK.
+ISSUE #28 — cost_calculator hardcoding: verify via grep,
+            fix if real.
+ISSUE #29 — rate_limiter freeze/refill interaction: inspect
+            logic, likely fine.
+ISSUE #30 — order_state_machine not persisted: by design
+            per OSM11. Reconciler recovers. OK.
+
+================================================================
+ITEMS I DISAGREE WITH
+================================================================
+
+ISSUE #14 — "SmartTgtManager on_reconnect wiring improper"
+  Claim is vague. If main.py follows ST13 pattern:
+    live_feed.set_on_reconnect_callback(
+      lambda ts: (candle_store.mark_reconnect(ts),
+                  smart_tgt_manager.on_reconnect(ts)))
+  Then wiring is correct. Verify actual main.py code.
+
+ISSUE #20 — WebhookReceiver signal_id uniqueness
+  Claim: no validation before insert. But primary key +
+  UNIQUE index on fingerprint catches duplicates. This is
+  correct by design.
+
+ISSUE #1 (first part) — "Atomicity"
+  Already addressed in previous audit response. Reconciler
+  is the safety net. Acceptable design.
+
+================================================================
+ACTION PLAN
+================================================================
+
+PHASE 1 (pre-paper trial, ~4-6 hours):
+  Fix all 6 PRIORITY 1 blockers.
+  Run full test suite. All must stay green.
+  Add regression tests for each fix.
+
+PHASE 2 (during paper trial, ~1-2 days):
+  Fix PRIORITY 2 issues as paper trial reveals them.
+  Monitor reconciliation_log and logs/ for unexpected
+  entries per fix.
+
+PHASE 3 (after paper trial, before live):
+  Fix remaining PRIORITY 3 bugs.
+  Run chaos test suite (from previous audit response).
+  Verify all audit issues closed.
+
+================================================================
+INSTRUCTION TO VS CODE CLAUDE
+================================================================
+
+Step 1: VERIFY each of 30 issues against actual code.
+  Report for each: CONFIRMED | NOT_APPLICABLE | UNCLEAR.
+
+Step 2: Fix all CONFIRMED PRIORITY 1 issues. Add regression
+  tests. Run full suite. Report table.
+
+Step 3: Fix all CONFIRMED PRIORITY 2 issues. Add tests.
+  Run suite.
+
+Step 4: Store this audit response + fix outcomes in
+  mempalace as second_audit_fixes.md.
+
+Step 5: Report:
+  - Which issues were real
+  - Which were stale/already-fixed
+  - What remains for v2.1
+  - Current test count after all fixes
+
+DO NOT skip verification. A few of these issues may be
+outdated relative to current code. Verify first, fix confirmed
+only.
+
+================================================================
+FINAL STANCE
+================================================================
+
+This audit is REAL and most issues are likely true. But
+SOME issues may be stale. The fix-plan above is contingent
+on VS Code Claude verifying each against actual current code.
+
+Previous audit concerns (from earlier file) are supplemented
+by this one. Together they're a good live-readiness checklist.
+
+Do not skip to paper trial until PRIORITY 1 items confirmed
+fixed.
+
+Memory note: Both audits stored together. Module 38/39/40
+from earlier instructions ALSO must be built before live.
+Running list of remaining work:
+  - Verify + fix this audit's P1/P2 issues
+  - Build Module 38 (instrument_cache + accounts)
+  - Build Module 39 (shadow_tracker)
+  - Build Module 40 (daily_review multi-inning update)
+  - Add chaos test suite (from previous audit response)
+  - Then paper trial 5-7 sessions
+  - Then live with ultra-small capital

@@ -1,0 +1,175 @@
+MODULE: broker/order_monitor.py
+
+CONTEXT: 274/274 green across 13 modules. Adapter places orders
+and returns broker_order_id but never polls fills. order_monitor
+polls broker for fill status, drives state machine to terminal,
+emits OrderFilled event for downstream (capital, positions).
+
+LOCK BEFORE BUILD:
+
+OM1 — Purpose: Poll broker for live order status, detect fills
+      (full/partial), drive state_machine transitions, emit
+      OrderFilled event on COMPLETE, handle EXPIRED/REJECTED.
+      Also handles entry-order timeout cancellation
+      (audit Issue #14: orphaned entry orders).
+
+OM2 — Constructor:
+  OrderMonitor(
+    adapter,             # ZerodhaAdapter
+    state_machine,       # OrderStateMachine
+    bus,                 # EventBus
+    logger,
+    poll_interval_sec=2, # from system_config.yaml
+    fill_timeout_sec=60, # cancel-if-not-filled threshold
+  )
+  poll_interval_sec and fill_timeout_sec read from system_config.
+
+OM3 — Track method:
+  monitor.track(internal_order_id, broker_order_id, symbol,
+                side, qty, expected_price, placed_at: datetime)
+  Adds to internal _watched dict. Polling thread picks up.
+
+OM4 — Polling thread:
+  monitor.start() launches single daemon thread.
+  Thread loops: every poll_interval_sec, iterates snapshot of
+  _watched, calls adapter.get_order_history(broker_order_id) for
+  each, processes status.
+  monitor.stop() signals thread to exit, joins with 5s timeout.
+
+OM5 — Status processing (Zerodha statuses to internal states):
+  "OPEN" or "TRIGGER PENDING"  -> state OPEN
+  "PARTIAL" or filled_qty > 0 and < qty  -> state PARTIAL
+  "COMPLETE" -> state COMPLETE, emit OrderFilled
+  "CANCELLED" -> state CANCELLED, remove from _watched
+  "REJECTED" -> state FAILED, remove from _watched
+  Unknown status -> log WARNING, no transition
+
+OM6 — OrderFilled event payload (already in events.py;
+  verify schema matches):
+  {internal_order_id, broker_order_id, symbol, side,
+   qty, avg_fill_price, expected_price, slippage_pct,
+   filled_at: datetime}
+  If schema differs, extend OrderFilled dataclass FIRST
+  (update test_events.py).
+
+OM7 — Fill timeout (audit Issue #14):
+  If order in OPEN or SUBMITTED state for > fill_timeout_sec:
+    1. Call adapter.cancel_order(broker_order_id)
+    2. On cancel success: state SUBMITTED/OPEN -> CANCELLED
+    3. On cancel failure: log CRITICAL, state -> FAILED,
+       emit alert via on_orphan_callback (constructor-injected,
+       optional). NEVER leave broker order open silently.
+  Per audit: "Orphaned broker position" is CRITICAL severity.
+
+OM8 — Partial fill handling (audit Issue #26):
+  When status = PARTIAL with filled_qty > previous filled_qty,
+  transition to PARTIAL (self-loop OK per OSM2). Track
+  cumulative filled_qty in _watched entry. Emit OrderFilled
+  ONLY on COMPLETE — partial fills update internal state and
+  log INFO but do NOT emit OrderFilled (that's a final-state
+  event).
+
+OM9 — Slippage calculation:
+  slippage_pct = (avg_fill_price - expected_price) / expected_price * 100
+  For SELL: invert sign so positive slippage = unfavorable.
+  For BUY: positive slippage = unfavorable (paid more than expected).
+  Lock formula:
+    BUY:  slippage_pct = (avg_fill - expected) / expected * 100
+    SELL: slippage_pct = (expected - avg_fill) / expected * 100
+
+OM10 — Thread safety:
+  _watched dict guarded by threading.Lock.
+  Polling thread iterates a snapshot (copy under lock,
+  process outside lock). Avoids audit Issue (paper engine
+  iterating dict while it changes).
+
+OM11 — Backpressure / error tolerance:
+  If adapter raises BrokerTimeoutError during poll: log,
+  skip that order this cycle, retry next cycle.
+  If adapter raises BrokerAuthError: log CRITICAL, stop
+  monitor thread (auth is dead, no point polling).
+  3 consecutive cycles with auth error -> call
+  on_critical_failure callback (constructor-injected).
+
+OM12 — Idempotency:
+  Polling the same order multiple times must be safe.
+  State machine rejects illegal transitions (already
+  COMPLETE -> COMPLETE) — monitor catches
+  InvalidTransitionError, logs DEBUG, continues. Not an
+  error condition.
+
+OM13 — Layer & deps:
+  Layer 3 (broker/). Imports: stdlib (threading, time),
+  core.exceptions, core.events, core.logger, core.time_authority,
+  broker.zerodha_adapter (for type hint only — injected),
+  broker.order_state_machine (for STATES, TERMINAL_STATES,
+  InvalidTransitionError).
+
+OM14 — System config additions:
+  Extend SystemConfig in core/config_loader.py:
+    order_monitor:
+      poll_interval_sec: int  (default 2, validated >= 1)
+      fill_timeout_sec: int   (default 60, validated >= 5)
+  Update config/system_config.yaml stub.
+  Re-run test_config_loader.py.
+
+OM15 — Untrack method:
+  monitor.untrack(internal_order_id) removes from _watched.
+  Used by external code that wants to stop monitoring (e.g.,
+  after manual cancellation). Idempotent (no-op if not present).
+
+OM16 — Status query:
+  monitor.is_watching(internal_order_id) -> bool
+  monitor.watched_count() -> int
+  Used by tests and shutdown logic.
+
+BUILD STEPS:
+
+1. Verify OrderFilled event schema in core/events.py matches OM6.
+   If gap, extend dataclass, update test_events.py.
+
+2. Extend SystemConfig per OM14. Update YAML stub.
+   Re-run test_config_loader.py.
+
+3. Build broker/order_monitor.py per OM1-OM16.
+
+4. Build tests/unit/test_order_monitor.py using MockAdapter
+   that returns scripted get_order_history responses.
+   Cover:
+   - track() adds to _watched
+   - track() same internal_id twice -> ValueError
+   - untrack() removes
+   - untrack() unknown id -> no-op (no exception)
+   - watched_count() correct
+   - Polling: status COMPLETE -> state COMPLETE,
+     OrderFilled event published with correct payload
+   - Polling: status OPEN -> state OPEN, no event
+   - Polling: status PARTIAL with partial qty -> state PARTIAL,
+     filled_qty tracked, no OrderFilled event yet
+   - Polling: PARTIAL then COMPLETE -> OrderFilled emitted once
+     with cumulative qty and avg price
+   - Polling: status CANCELLED -> state CANCELLED, removed
+   - Polling: status REJECTED -> state FAILED, removed
+   - Polling: unknown status -> WARNING logged, no transition
+   - Slippage BUY: fill > expected -> positive slippage_pct
+   - Slippage SELL: fill < expected -> positive slippage_pct
+   - Fill timeout: order OPEN beyond fill_timeout_sec ->
+     cancel called, state -> CANCELLED
+   - Fill timeout cancel fails -> state -> FAILED,
+     on_orphan_callback fired
+   - BrokerTimeoutError during poll -> skipped, retried next
+     cycle
+   - BrokerAuthError 3 consecutive cycles -> on_critical_failure
+     fired, monitor stops
+   - Idempotent: COMPLETE order polled again -> InvalidTransition
+     caught, DEBUG logged, no crash
+   - start()/stop() lifecycle: stop joins within 5s
+   - Thread safety: 20 concurrent track() + untrack() from
+     5 threads, no exceptions, _watched consistent
+
+5. Re-run all 13 prior suites + new one. Report 14-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Mock time using a fake time provider (or use
+time.monotonic patch) for timeout tests. Don't actually
+sleep 60s in tests.

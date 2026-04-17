@@ -1,0 +1,1536 @@
+"""
+tests/unit/test_signal_processor.py
+
+Validates signals/signal_processor.py against SP1-SP16 + SPW1-SPW10.
+
+All injected dependencies are hand-rolled fakes (no MagicMock) so behaviour
+is explicit and portable.  state_store uses a real in-memory SQLite DB so
+status-update assertions are meaningful.
+
+Run: python -m pytest tests/unit/test_signal_processor.py -v
+Or:  python tests/unit/test_signal_processor.py  (standalone mode)
+"""
+from __future__ import annotations
+
+import pytest
+import queue
+import sys
+import tempfile
+import threading
+import time
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from core.exceptions import BrokerError
+from core.state_store import StateStore
+from signals.signal_processor import SignalProcessor
+
+
+# ---------------------------------------------------------------------------
+# Strategy fixture (mock -- avoids importing Pydantic StrategyConfig)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _MockStrategy:
+    name: str = "gap_go_long_v1"
+    direction: str = "LONG"
+    intent: str = "INTRADAY"
+    entry_method: str = "MARKET"
+    entry_offset_pct: float = 0.0
+    sl_method: str = "FIXED_PCT"
+    sl_pct: float = 0.02
+    sl_min_pct: float = 0.003
+    sl_max_pct: float = 0.05
+    tgt_method: str = "RISK_REWARD"
+    tgt_pct: float = 0.04
+    tgt_risk_reward: float = 2.0
+    lot_size: int = 1
+    min_score: int = 0
+    min_volume_surge: float = 1.3
+    min_adr_pct: float = 0.005
+    max_spread_pct: float = 0.005
+
+
+_BUY_STRATEGY = _MockStrategy(name="gap_go_long_v1", direction="LONG")
+_SELL_STRATEGY = _MockStrategy(name="gap_go_short_v1", direction="SHORT")
+_ATR_STRATEGY = _MockStrategy(name="atr_v1", direction="LONG", sl_method="ATR", sl_pct=0.02)
+
+_STRATEGIES = {
+    "gap_go_long_v1": _BUY_STRATEGY,
+    "gap_go_short_v1": _SELL_STRATEGY,
+    "atr_v1": _ATR_STRATEGY,
+}
+_SCAN_WEBHOOK_MAP = {
+    "gap_go_long":  {"strategy": "gap_go_long_v1"},
+    "gap_go_short": {"strategy": "gap_go_short_v1"},
+    "atr_scanner":  {"strategy": "atr_v1"},
+}
+
+
+# ---------------------------------------------------------------------------
+# Screening result mock
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _MockScreeningResult:
+    passed: bool = True
+    status: str = "PASSED"
+    score: int = 75
+    tier: str = "HIGH"
+    rejected_step: object = None
+    step_results: dict = field(default_factory=dict)
+    step_statuses: dict = field(default_factory=dict)
+    error_steps: list = field(default_factory=list)
+    latencies_ms: dict = field(default_factory=dict)
+    market_data_snapshot: dict = field(default_factory=dict)
+
+
+class _MockScreener:
+    """
+    Mock SecondaryScreener.  By default returns PASSED (HIGH tier).
+
+    If state_store is provided, mirrors P18 behaviour by writing signal
+    status to the store -- so screener-rejected-path tests can verify
+    the final DB status.
+    """
+
+    def __init__(self, result=None, state_store=None):
+        self._result = result if result is not None else _MockScreeningResult()
+        self._store = state_store
+        self.calls: List[dict] = []
+
+    def screen(
+        self,
+        signal_id: str,
+        symbol: str,
+        scanner_name: str,
+        trigger_price: float,
+        triggered_at,
+        *,
+        direction: str,
+        intent: str,
+        strategy,
+        market_data=None,
+    ):
+        self.calls.append({
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "scanner_name": scanner_name,
+            "direction": direction,
+            "tier": self._result.tier,
+        })
+        # Mirror P18: screener writes signal status (PASSED / REJECTED_* / SKIPPED_*)
+        if self._store is not None:
+            self._store.update_signal_status(signal_id, self._result.status)
+        return self._result
+
+
+# ---------------------------------------------------------------------------
+# Other test doubles
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _SizingResult:
+    success: bool
+    qty: int = 10
+    margin_required: float = 5000.0
+    risk_amount: float = 500.0
+    bucket: str = "intraday"
+    constraint: str = "RISK"
+    reason: str = "ok"
+    breakdown: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _ApprovalResult:
+    approved: bool
+    reason: str = "ok"
+    failed_check: str = ""
+    checks_run: List[str] = field(default_factory=list)
+    snapshot: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _ReservationResult:
+    success: bool
+    reservation_id: str = "res_abc123"
+    margin: float = 5000.0
+    bucket: str = "intraday"
+    reason_if_failed: str = ""
+
+
+class _MockPositionSizer:
+    def __init__(self, result=None, raise_exc=None):
+        self._result = result or _SizingResult(success=True)
+        self._raise = raise_exc
+        self.calls: List[dict] = []
+
+    def calculate(self, symbol, direction, entry_price, sl_price, intent,
+                  score_tier="MEDIUM", lot_size=1):
+        self.calls.append({"symbol": symbol, "score_tier": score_tier,
+                           "direction": direction})
+        if self._raise:
+            raise self._raise
+        return self._result
+
+
+class _MockRiskEngine:
+    def __init__(self, result=None, raise_exc=None):
+        self._result = result or _ApprovalResult(approved=True)
+        self._raise = raise_exc
+        self.calls: List[dict] = []
+
+    def approve(self, symbol, direction, intent, sizing_result, signal_id):
+        self.calls.append({"symbol": symbol, "signal_id": signal_id})
+        if self._raise:
+            raise self._raise
+        return self._result
+
+
+class _MockFundManager:
+    def __init__(self, reserve_result=None, raise_exc=None):
+        self._reserve_result = reserve_result or _ReservationResult(success=True)
+        self._raise = raise_exc
+        self.released: List[str] = []
+
+    def reserve(self, symbol, qty, price, intent, signal_id=None):
+        if self._raise:
+            raise self._raise
+        return self._reserve_result
+
+    def release(self, reservation_id, reason=""):
+        self.released.append(reservation_id)
+        return True
+
+    def get_snapshot(self):
+        class _Snap:
+            total = 1_000_000.0
+        return _Snap()
+
+
+class _MockOrderPlacer:
+    def __init__(self, raise_exc=None):
+        self._raise = raise_exc
+        self.calls: List[dict] = []
+
+    def place(self, *, symbol, side, qty, entry_price, sl_price, intent,
+              signal_id, reservation_id, tgt_price=None):
+        if self._raise:
+            raise self._raise
+        self.calls.append({
+            "signal_id": signal_id,
+            "symbol": symbol,
+            "tgt_price": tgt_price,
+        })
+
+
+class _MockKillSwitch:
+    def __init__(self, active=False):
+        self._active = active
+        self.failure_count = 0
+
+    def is_active(self, intent="entry"):
+        return self._active
+
+    def record_api_failure(self):
+        self.failure_count += 1
+
+    def record_success(self):
+        pass
+
+
+class _MockMarketWindows:
+    def __init__(self, entry_allowed=True):
+        self._allowed = entry_allowed
+
+    def is_entry_allowed(self, now):
+        return self._allowed
+
+
+class _MockBus:
+    def publish(self, event):
+        pass
+
+
+class _NullLogger:
+    def __init__(self):
+        self.warnings: List[str] = []
+        self.errors: List[str] = []
+        self.infos: List[str] = []
+
+    def debug(self, *a, **kw): pass
+    def info(self, msg, *a, **kw): self.infos.append(str(msg))
+    def warning(self, msg, *a, **kw): self.warnings.append(str(msg))
+    def error(self, msg, *a, **kw): self.errors.append(str(msg))
+    def critical(self, *a, **kw): pass
+
+
+# ---------------------------------------------------------------------------
+# Fixture helpers
+# ---------------------------------------------------------------------------
+
+def _make_store() -> tuple:
+    td = tempfile.mkdtemp()
+    store = StateStore(Path(td) / "test.db")
+    return store, td
+
+
+def _insert_queued_signal(store: StateStore, signal_id: str,
+                          symbol: str = "RELIANCE",
+                          scanner: str = "gap_go_long") -> None:
+    """Insert a minimal signals row with status=QUEUED."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    fp = f"{scanner}|{symbol}|{datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    import hashlib
+    fingerprint = hashlib.sha256(fp.encode()).hexdigest()
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO signals
+              (signal_id, symbol, scanner, strategy,
+               triggered_at, received_at, expires_at,
+               status, fingerprint, fingerprint_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                signal_id, symbol, scanner, scanner,
+                datetime.now().isoformat(), datetime.now().isoformat(),
+                datetime.now().isoformat(),
+                "QUEUED", fingerprint, today,
+            ),
+        )
+
+
+def _make_proc(
+    sq=None,
+    store=None,
+    fm=None,
+    sizer=None,
+    risk=None,
+    ks=None,
+    placer=None,
+    mw=None,
+    strategies=None,
+    scan_webhook_map=None,
+    screener=None,
+    quality_scorer=None,
+    in_flight_fn=None,
+    logger=None,
+    worker_count=3,
+    drain_poll_sec=0.02,
+    signal_expiry_sec=60,
+):
+    if sq is None:
+        sq = queue.Queue(maxsize=100)
+    if store is None:
+        store, _ = _make_store()
+    if fm is None:
+        fm = _MockFundManager()
+    if sizer is None:
+        sizer = _MockPositionSizer()
+    if risk is None:
+        risk = _MockRiskEngine()
+    if ks is None:
+        ks = _MockKillSwitch(active=False)
+    if mw is None:
+        mw = _MockMarketWindows(entry_allowed=True)
+    if strategies is None:
+        strategies = _STRATEGIES
+    if scan_webhook_map is None:
+        scan_webhook_map = _SCAN_WEBHOOK_MAP
+    if screener is None:
+        screener = _MockScreener(state_store=store)
+    if quality_scorer is None:
+        quality_scorer = object()   # opaque placeholder; not called by processor
+    if logger is None:
+        logger = _NullLogger()
+    bus = _MockBus()
+
+    proc = SignalProcessor(
+        signal_queue=sq,
+        state_store=store,
+        bus=bus,
+        fund_manager=fm,
+        position_sizer=sizer,
+        risk_engine=risk,
+        kill_switch=ks,
+        market_windows=mw,
+        strategies=strategies,
+        scan_webhook_map=scan_webhook_map,
+        secondary_screener=screener,
+        quality_scorer=quality_scorer,
+        order_placer=placer,
+        logger=logger,
+        in_flight_release_fn=in_flight_fn,
+        worker_count=worker_count,
+        drain_poll_sec=drain_poll_sec,
+        signal_expiry_sec=signal_expiry_sec,
+    )
+    return proc, sq, store
+
+
+def _now_tup(signal_id="sig_001", scanner="gap_go_long", symbol="RELIANCE",
+             price=2500.0, age_sec=0):
+    """Return a signal tuple with triggered_at = now - age_sec."""
+    triggered_at = datetime.now() - timedelta(seconds=age_sec)
+    return (signal_id, scanner, symbol, price, triggered_at)
+
+
+def _run_one(proc, sig_tuple, store=None, wait_sec=2.0):
+    """Start processor, enqueue one signal, stop (drains), return store row."""
+    proc.start()
+    proc._queue.put(sig_tuple)
+    proc.stop()
+    if store:
+        return store.fetch_one(
+            "SELECT status, rejection_reason FROM signals WHERE signal_id = ?",
+            (sig_tuple[0],),
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle tests
+# ---------------------------------------------------------------------------
+
+def test_start_launches_dispatcher_and_workers():
+    """start() transitions is_running() to True; stop() back to False."""
+    proc, _, _ = _make_proc()
+    assert not proc.is_running()
+    proc.start()
+    assert proc.is_running()
+    proc.stop()
+    assert not proc.is_running()
+    print("  OK start/stop/is_running lifecycle correct")
+
+
+def test_stop_drains_within_5s():
+    """stop() completes in < 5 seconds even with signals queued."""
+    proc, sq, _ = _make_proc()
+    proc.start()
+    for i in range(20):
+        sq.put(_now_tup(f"sig_{i:03d}"))
+    t0 = time.monotonic()
+    proc.stop()
+    elapsed = time.monotonic() - t0
+    assert elapsed < 5.0, f"stop() took {elapsed:.2f}s"
+    print(f"  OK stop() drained 20 signals in {elapsed:.3f}s")
+
+
+def test_is_running_before_start():
+    """is_running() is False before start()."""
+    proc, _, _ = _make_proc()
+    assert not proc.is_running()
+    print("  OK is_running() False before start()")
+
+
+# ---------------------------------------------------------------------------
+# Full pipeline (status progression)
+# ---------------------------------------------------------------------------
+
+def test_full_pipeline_queued_to_processed():
+    """Full pipeline with placer: status progresses QUEUED -> PROCESSED."""
+    store, _ = _make_store()
+    sig_id = "sig_full_001"
+    _insert_queued_signal(store, sig_id)
+
+    placer = _MockOrderPlacer()
+    screener = _MockScreener(state_store=store)
+    proc, sq, _ = _make_proc(store=store, placer=placer, screener=screener)
+
+    row = _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert row is not None, "Signal row not found after processing"
+    assert row["status"] == "PROCESSED", f"Expected PROCESSED, got {row['status']}"
+    assert len(placer.calls) == 1
+    assert placer.calls[0]["signal_id"] == sig_id
+    print("  OK full pipeline -> PROCESSED, placer called")
+
+
+def test_full_pipeline_no_placer_processed_no_placer():
+    """order_placer=None -> PROCESSED_NO_PLACER, reservation released."""
+    store, _ = _make_store()
+    sig_id = "sig_noplac_001"
+    _insert_queued_signal(store, sig_id)
+
+    fm = _MockFundManager()
+    screener = _MockScreener(state_store=store)
+    proc, sq, _ = _make_proc(store=store, fm=fm, placer=None, screener=screener)
+
+    row = _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert row["status"] == "PROCESSED_NO_PLACER", row["status"]
+    assert "res_abc123" in fm.released, f"Reservation not released: {fm.released}"
+    print("  OK no placer -> PROCESSED_NO_PLACER, reservation released")
+
+
+# ---------------------------------------------------------------------------
+# Pipeline rejection tests
+# ---------------------------------------------------------------------------
+
+def _assert_rejected(store, sig_id, expected_status_prefix):
+    row = store.fetch_one(
+        "SELECT status, rejection_reason FROM signals WHERE signal_id = ?", (sig_id,)
+    )
+    assert row is not None, f"Signal row missing for {sig_id}"
+    status = row["status"]
+    assert status.startswith(expected_status_prefix), \
+        f"Expected status starting with {expected_status_prefix!r}, got {status!r}"
+    return row
+
+
+def test_kill_switch_active_rejects():
+    """Kill switch active -> REJECTED_KILL_SWITCH."""
+    store, _ = _make_store()
+    sig_id = "sig_ks_001"
+    _insert_queued_signal(store, sig_id)
+
+    ks = _MockKillSwitch(active=True)
+    proc, _, _ = _make_proc(store=store, ks=ks)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_KILL_SWITCH")
+    print("  OK kill_switch active -> REJECTED_KILL_SWITCH")
+
+
+def test_outside_entry_window_rejects():
+    """Outside entry window -> REJECTED_OUTSIDE_ENTRY_WINDOW."""
+    store, _ = _make_store()
+    sig_id = "sig_oew_001"
+    _insert_queued_signal(store, sig_id)
+
+    mw = _MockMarketWindows(entry_allowed=False)
+    proc, _, _ = _make_proc(store=store, mw=mw)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_OUTSIDE_ENTRY_WINDOW")
+    print("  OK outside entry window -> REJECTED_OUTSIDE_ENTRY_WINDOW")
+
+
+def test_expired_signal_rejects():
+    """Signal older than expiry_sec -> REJECTED_EXPIRED."""
+    store, _ = _make_store()
+    sig_id = "sig_exp_001"
+    _insert_queued_signal(store, sig_id)
+
+    proc, _, _ = _make_proc(store=store, signal_expiry_sec=30)
+
+    _run_one(proc, _now_tup(sig_id, age_sec=90), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_EXPIRED")
+    print("  OK expired signal -> REJECTED_EXPIRED")
+
+
+def test_unknown_strategy_rejects():
+    """Scanner not in scan_webhook_map -> REJECTED_UNKNOWN_STRATEGY."""
+    store, _ = _make_store()
+    sig_id = "sig_unk_001"
+    _insert_queued_signal(store, sig_id, scanner="no_such_scanner")
+
+    proc, _, _ = _make_proc(store=store)
+
+    tup = ("sig_unk_001", "no_such_scanner", "RELIANCE", 2500.0, datetime.now())
+    _run_one(proc, tup, store=store)
+    _assert_rejected(store, sig_id, "REJECTED_UNKNOWN_STRATEGY")
+    print("  OK unknown scanner -> REJECTED_UNKNOWN_STRATEGY")
+
+
+def test_unknown_strategy_name_rejects():
+    """strategy name in map not found in strategies dict -> REJECTED_UNKNOWN_STRATEGY."""
+    store, _ = _make_store()
+    sig_id = "sig_unk_002"
+    _insert_queued_signal(store, sig_id, scanner="missing_strat_scanner")
+
+    bad_map = {"missing_strat_scanner": {"strategy": "does_not_exist"}}
+    proc, _, _ = _make_proc(store=store, scan_webhook_map=bad_map)
+
+    tup = ("sig_unk_002", "missing_strat_scanner", "RELIANCE", 2500.0, datetime.now())
+    _run_one(proc, tup, store=store)
+    _assert_rejected(store, sig_id, "REJECTED_UNKNOWN_STRATEGY")
+    print("  OK strategy name not in strategies dict -> REJECTED_UNKNOWN_STRATEGY")
+
+
+def test_sizer_failure_rejects():
+    """Sizer returns success=False -> REJECTED_SIZING_<constraint>."""
+    store, _ = _make_store()
+    sig_id = "sig_sz_001"
+    _insert_queued_signal(store, sig_id)
+
+    sizer = _MockPositionSizer(
+        result=_SizingResult(success=False, qty=0, constraint="BELOW_MIN",
+                             reason="qty below minimum threshold")
+    )
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, sizer=sizer, screener=screener)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_SIZING_BELOW_MIN")
+    print("  OK sizer failure -> REJECTED_SIZING_BELOW_MIN")
+
+
+def test_risk_engine_rejection():
+    """Risk engine rejects -> REJECTED_<failed_check>."""
+    store, _ = _make_store()
+    sig_id = "sig_re_001"
+    _insert_queued_signal(store, sig_id)
+
+    risk = _MockRiskEngine(result=_ApprovalResult(
+        approved=False,
+        failed_check="MAX_OPEN_POSITIONS",
+        reason="Too many open positions",
+    ))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, risk=risk, screener=screener)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_MAX_OPEN_POSITIONS")
+    print("  OK risk engine rejection -> REJECTED_MAX_OPEN_POSITIONS")
+
+
+def test_reserve_failure_rejects():
+    """fund_manager.reserve returns success=False -> REJECTED_RESERVE_FAILED."""
+    store, _ = _make_store()
+    sig_id = "sig_res_001"
+    _insert_queued_signal(store, sig_id)
+
+    fm = _MockFundManager(reserve_result=_ReservationResult(
+        success=False, reservation_id="", reason_if_failed="insufficient capital"
+    ))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, fm=fm, screener=screener)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_RESERVE_FAILED")
+    print("  OK reserve failure -> REJECTED_RESERVE_FAILED")
+
+
+def test_order_placer_raises_placement_failed():
+    """order_placer.place() raises -> PLACEMENT_FAILED, reservation released."""
+    store, _ = _make_store()
+    sig_id = "sig_pf_001"
+    _insert_queued_signal(store, sig_id)
+
+    fm = _MockFundManager()
+    placer = _MockOrderPlacer(raise_exc=RuntimeError("broker refused"))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, fm=fm, placer=placer, screener=screener)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row["status"] == "PLACEMENT_FAILED", row["status"]
+    assert "res_abc123" in fm.released
+    print("  OK placer raises -> PLACEMENT_FAILED, reservation released")
+
+
+def test_unexpected_exception_placement_failed():
+    """Unexpected exception mid-pipeline -> PLACEMENT_FAILED, in_flight cleared."""
+    store, _ = _make_store()
+    sig_id = "sig_ue_001"
+    _insert_queued_signal(store, sig_id)
+
+    released = []
+
+    sizer = _MockPositionSizer(raise_exc=RuntimeError("disk full"))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(
+        store=store, sizer=sizer, screener=screener,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row["status"] in ("PLACEMENT_FAILED", "REJECTED_SIZING_BROKER_ERROR"), row["status"]
+    assert "RELIANCE" in released, f"in_flight not released: {released}"
+    print("  OK unexpected exception -> PLACEMENT_FAILED, in_flight released")
+
+
+# ---------------------------------------------------------------------------
+# Screener-specific pipeline tests (SPW3, SPW7, SPW8)
+# ---------------------------------------------------------------------------
+
+def test_screener_rejects_signal():
+    """Screener passes=False -> pipeline stops, in_flight released, no sizing."""
+    store, _ = _make_store()
+    sig_id = "sig_scr_rej_001"
+    _insert_queued_signal(store, sig_id)
+
+    released = []
+    rejected_result = _MockScreeningResult(
+        passed=False, status="REJECTED_VOLUME_SURGE", tier="LOW"
+    )
+    screener = _MockScreener(result=rejected_result, state_store=store)
+    sizer = _MockPositionSizer()
+
+    proc, _, _ = _make_proc(
+        store=store, screener=screener, sizer=sizer,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    # Screener wrote REJECTED_VOLUME_SURGE to store (P18)
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row["status"] == "REJECTED_VOLUME_SURGE", row["status"]
+    # Sizer must NOT have been called
+    assert len(sizer.calls) == 0, "Sizer called after screener rejection"
+    # in_flight must be released
+    assert "RELIANCE" in released, f"in_flight not released: {released}"
+    print("  OK screener rejects -> REJECTED_VOLUME_SURGE, no sizing, in_flight released")
+
+
+def test_screener_skipped_logs_warning():
+    """Screener SKIPPED_* -> WARNING logged, pipeline stops, no sizing, in_flight released."""
+    store, _ = _make_store()
+    sig_id = "sig_scr_skip_001"
+    _insert_queued_signal(store, sig_id)
+
+    released = []
+    log = _NullLogger()
+    skipped_result = _MockScreeningResult(
+        passed=False, status="SKIPPED_QUOTE_UNAVAILABLE", tier="LOW"
+    )
+    screener = _MockScreener(result=skipped_result, state_store=store)
+    sizer = _MockPositionSizer()
+
+    proc, _, _ = _make_proc(
+        store=store, screener=screener, sizer=sizer, logger=log,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    # Warning logged
+    assert any("SKIPPED" in w for w in log.warnings), f"No SKIPPED warning: {log.warnings}"
+    # Sizer not called
+    assert len(sizer.calls) == 0, "Sizer called after screener SKIPPED"
+    # in_flight released
+    assert "RELIANCE" in released, f"in_flight not released: {released}"
+    print("  OK screener SKIPPED -> WARNING logged, no sizing, in_flight released")
+
+
+def test_screener_passed_uses_tier_for_sizing():
+    """Screener passes with tier=HIGH -> sizer.calculate called with 'HIGH'."""
+    store, _ = _make_store()
+    sig_id = "sig_scr_pass_001"
+    _insert_queued_signal(store, sig_id)
+
+    high_result = _MockScreeningResult(passed=True, status="PASSED", tier="HIGH")
+    screener = _MockScreener(result=high_result, state_store=store)
+    sizer = _MockPositionSizer()
+
+    proc, _, _ = _make_proc(store=store, screener=screener, sizer=sizer)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert len(sizer.calls) == 1, f"Sizer not called: {sizer.calls}"
+    assert sizer.calls[0]["score_tier"] == "HIGH", f"Wrong tier: {sizer.calls[0]}"
+    print("  OK screener PASSED tier=HIGH -> sizer called with HIGH")
+
+
+def test_screener_passes_direction_from_strategy():
+    """Screener.screen() receives direction from strategy_obj.direction (LONG/SHORT)."""
+    store, _ = _make_store()
+    sig_id = "sig_dir_001"
+    _insert_queued_signal(store, sig_id, scanner="gap_go_short")
+
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, screener=screener)
+
+    tup = ("sig_dir_001", "gap_go_short", "RELIANCE", 2500.0, datetime.now())
+    _run_one(proc, tup, store=store)
+
+    assert len(screener.calls) >= 1, "Screener not called"
+    assert screener.calls[0]["direction"] == "SHORT", \
+        f"Expected SHORT, got {screener.calls[0]['direction']}"
+    print("  OK screener called with direction=SHORT from strategy_obj")
+
+
+def test_no_double_write_screener_rejected():
+    """P18: processor does NOT write REJECTED status when screener already rejected."""
+    store, _ = _make_store()
+    sig_id = "sig_nodbl_001"
+    _insert_queued_signal(store, sig_id)
+
+    rejected_result = _MockScreeningResult(
+        passed=False, status="REJECTED_SCORE_40", tier="LOW"
+    )
+    screener = _MockScreener(result=rejected_result, state_store=store)
+
+    proc, _, _ = _make_proc(store=store, screener=screener)
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    # The screener wrote REJECTED_SCORE_40; processor must not overwrite
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row["status"] == "REJECTED_SCORE_40", \
+        f"Expected REJECTED_SCORE_40, got {row['status']}"
+    print("  OK no double-write: screener status REJECTED_SCORE_40 preserved")
+
+
+def test_in_flight_released_on_screener_skipped():
+    """in_flight release fn called when screener returns SKIPPED_* (SPW8)."""
+    released = []
+    store, _ = _make_store()
+    sig_id = "sig_if_skip_001"
+    _insert_queued_signal(store, sig_id)
+
+    skipped = _MockScreeningResult(passed=False, status="SKIPPED_EXECUTOR_ERROR", tier="LOW")
+    screener = _MockScreener(result=skipped, state_store=store)
+
+    proc, _, _ = _make_proc(
+        store=store, screener=screener,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert "RELIANCE" in released, f"in_flight not released on SKIPPED: {released}"
+    print("  OK in_flight released on screener SKIPPED path (SPW8)")
+
+
+def test_in_flight_released_on_screener_rejected():
+    """in_flight release fn called when screener rejects (SPW8)."""
+    released = []
+    store, _ = _make_store()
+    sig_id = "sig_if_rej_001"
+    _insert_queued_signal(store, sig_id)
+
+    rejected = _MockScreeningResult(passed=False, status="REJECTED_CIRCUIT", tier="LOW")
+    screener = _MockScreener(result=rejected, state_store=store)
+
+    proc, _, _ = _make_proc(
+        store=store, screener=screener,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert "RELIANCE" in released, f"in_flight not released on screener rejected: {released}"
+    print("  OK in_flight released on screener REJECTED path (SPW8)")
+
+
+# ---------------------------------------------------------------------------
+# Audit #21 fix: in_flight released ALWAYS via finally
+# ---------------------------------------------------------------------------
+
+def test_in_flight_released_on_rejection():
+    """in_flight release fn called even when signal is rejected (audit #21)."""
+    released = []
+    store, _ = _make_store()
+    sig_id = "sig_if_001"
+    _insert_queued_signal(store, sig_id)
+
+    ks = _MockKillSwitch(active=True)
+    proc, _, _ = _make_proc(
+        store=store, ks=ks,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert "RELIANCE" in released, f"in_flight not released on rejection: {released}"
+    print("  OK in_flight released after rejection (audit #21 fix)")
+
+
+def test_in_flight_released_on_success():
+    """in_flight release fn called on successful processing."""
+    released = []
+    store, _ = _make_store()
+    sig_id = "sig_ifs_001"
+    _insert_queued_signal(store, sig_id)
+
+    placer = _MockOrderPlacer()
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(
+        store=store, placer=placer, screener=screener,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert "RELIANCE" in released, f"in_flight not released on success: {released}"
+    print("  OK in_flight released after success (audit #21 fix)")
+
+
+def test_in_flight_released_on_placer_exception():
+    """in_flight release fn called when placer raises (audit #21)."""
+    released = []
+    store, _ = _make_store()
+    sig_id = "sig_ifp_001"
+    _insert_queued_signal(store, sig_id)
+
+    placer = _MockOrderPlacer(raise_exc=RuntimeError("network error"))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(
+        store=store, placer=placer, screener=screener,
+        in_flight_fn=lambda sym: released.append(sym),
+    )
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert "RELIANCE" in released, f"in_flight not released on placer exception: {released}"
+    print("  OK in_flight released when placer raises (audit #21 fix)")
+
+
+# ---------------------------------------------------------------------------
+# Price derivation tests (SPW4)
+# ---------------------------------------------------------------------------
+
+def test_derive_prices_market_entry_long():
+    """MARKET entry LONG: entry_price == trigger_price."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", entry_method="MARKET", sl_pct=0.02)
+    entry, sl = proc._derive_prices(2500.0, strategy)
+    assert abs(entry - 2500.0) < 0.01, f"Expected entry=2500.0, got {entry}"
+    assert abs(sl - 2450.0) < 0.01, f"Expected sl=2450.0, got {sl}"
+    print(f"  OK MARKET LONG entry={entry}, sl={sl}")
+
+
+def test_derive_prices_limit_entry_long():
+    """LIMIT entry LONG: entry = trigger * (1 - offset_pct)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", entry_method="LIMIT",
+                             entry_offset_pct=0.005, sl_pct=0.02)
+    entry, sl = proc._derive_prices(2000.0, strategy)
+    assert abs(entry - 1990.0) < 0.01, f"Expected 1990.0, got {entry}"
+    print(f"  OK LIMIT LONG entry={entry} (trigger*(1-0.005))")
+
+
+def test_derive_prices_limit_entry_short():
+    """LIMIT entry SHORT: entry = trigger * (1 + offset_pct)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="SHORT", entry_method="LIMIT",
+                             entry_offset_pct=0.005, sl_pct=0.02)
+    entry, sl = proc._derive_prices(2000.0, strategy)
+    assert abs(entry - 2010.0) < 0.01, f"Expected 2010.0, got {entry}"
+    print(f"  OK LIMIT SHORT entry={entry} (trigger*(1+0.005))")
+
+
+def test_derive_prices_sl_long():
+    """LONG FIXED_PCT: sl = entry * (1 - sl_pct)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", entry_method="MARKET", sl_pct=0.02)
+    entry, sl = proc._derive_prices(1000.0, strategy)
+    assert abs(sl - 980.0) < 0.01, f"Expected 980.0, got {sl}"
+    print(f"  OK LONG sl={sl} (entry*(1-0.02))")
+
+
+def test_derive_prices_sl_short():
+    """SHORT FIXED_PCT: sl = entry * (1 + sl_pct)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="SHORT", entry_method="MARKET", sl_pct=0.02)
+    entry, sl = proc._derive_prices(1000.0, strategy)
+    assert abs(sl - 1020.0) < 0.01, f"Expected 1020.0, got {sl}"
+    print(f"  OK SHORT sl={sl} (entry*(1+0.02))")
+
+
+def test_derive_prices_atr_fallback_warns():
+    """sl_method=ATR without provider -> WARNING logged + FIXED_PCT fallback."""
+    log = _NullLogger()
+    proc, _, _ = _make_proc(logger=log)
+    strategy = _MockStrategy(direction="LONG", sl_method="ATR", sl_pct=0.03)
+    entry, sl = proc._derive_prices(1000.0, strategy)
+    assert abs(sl - 970.0) < 0.01, f"Expected 970.0, got {sl}"
+    assert any("ATR" in w for w in log.warnings), f"No ATR warning: {log.warnings}"
+    print(f"  OK ATR fallback -> FIXED_PCT, sl={sl}, warning logged")
+
+
+def test_derive_prices_sl_min_pct_enforced():
+    """SL too tight (sl_distance_pct < sl_min_pct) -> adjusted, WARNING logged."""
+    log = _NullLogger()
+    proc, _, _ = _make_proc(logger=log)
+    # sl_pct=0.001 < sl_min_pct=0.003 -> should be adjusted to sl_min_pct
+    strategy = _MockStrategy(direction="LONG", sl_pct=0.001,
+                             sl_min_pct=0.003, sl_max_pct=0.05)
+    entry, sl = proc._derive_prices(1000.0, strategy)
+    expected_sl = 1000.0 * (1.0 - 0.003)
+    assert abs(sl - expected_sl) < 0.01, f"Expected sl~{expected_sl}, got {sl}"
+    assert any("sl_min_pct" in w.lower() or "< sl_min_pct" in w.lower()
+               for w in log.warnings), f"No sl_min warning: {log.warnings}"
+    print(f"  OK sl_min_pct enforced: sl adjusted to {sl}")
+
+
+def test_derive_prices_sl_max_pct_enforced():
+    """SL too wide (sl_distance_pct > sl_max_pct) -> adjusted, WARNING logged."""
+    log = _NullLogger()
+    proc, _, _ = _make_proc(logger=log)
+    # sl_pct=0.08 > sl_max_pct=0.05 -> should be adjusted to sl_max_pct
+    strategy = _MockStrategy(direction="LONG", sl_pct=0.08,
+                             sl_min_pct=0.003, sl_max_pct=0.05)
+    entry, sl = proc._derive_prices(1000.0, strategy)
+    expected_sl = 1000.0 * (1.0 - 0.05)
+    assert abs(sl - expected_sl) < 0.01, f"Expected sl~{expected_sl}, got {sl}"
+    assert any("sl_max_pct" in w.lower() or "> sl_max_pct" in w.lower()
+               for w in log.warnings), f"No sl_max warning: {log.warnings}"
+    print(f"  OK sl_max_pct enforced: sl adjusted to {sl}")
+
+
+# ---------------------------------------------------------------------------
+# Target derivation tests (SPW5)
+# ---------------------------------------------------------------------------
+
+def test_derive_target_fixed_pct_long():
+    """LONG FIXED_PCT: tgt = entry * (1 + tgt_pct)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", tgt_method="FIXED_PCT", tgt_pct=0.04)
+    tgt = proc._derive_target(1000.0, 980.0, strategy)
+    assert abs(tgt - 1040.0) < 0.01, f"Expected 1040.0, got {tgt}"
+    print(f"  OK LONG FIXED_PCT tgt={tgt}")
+
+
+def test_derive_target_fixed_pct_short():
+    """SHORT FIXED_PCT: tgt = entry * (1 - tgt_pct)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="SHORT", tgt_method="FIXED_PCT", tgt_pct=0.04)
+    tgt = proc._derive_target(1000.0, 1020.0, strategy)
+    assert abs(tgt - 960.0) < 0.01, f"Expected 960.0, got {tgt}"
+    print(f"  OK SHORT FIXED_PCT tgt={tgt}")
+
+
+def test_derive_target_risk_reward_long():
+    """LONG RISK_REWARD: tgt = entry + (entry - sl) * ratio."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", tgt_method="RISK_REWARD", tgt_risk_reward=2.0)
+    # entry=1000, sl=980 -> risk=20 -> tgt=1000+20*2=1040
+    tgt = proc._derive_target(1000.0, 980.0, strategy)
+    assert abs(tgt - 1040.0) < 0.01, f"Expected 1040.0, got {tgt}"
+    print(f"  OK LONG RISK_REWARD tgt={tgt} (entry + risk*2)")
+
+
+def test_derive_target_risk_reward_short():
+    """SHORT RISK_REWARD: tgt = entry - (sl - entry) * ratio."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="SHORT", tgt_method="RISK_REWARD", tgt_risk_reward=2.0)
+    # entry=1000, sl=1020 -> risk=20 -> tgt=1000-20*2=960
+    tgt = proc._derive_target(1000.0, 1020.0, strategy)
+    assert abs(tgt - 960.0) < 0.01, f"Expected 960.0, got {tgt}"
+    print(f"  OK SHORT RISK_REWARD tgt={tgt} (entry - risk*2)")
+
+
+def test_derive_target_atr_fallback():
+    """tgt_method=ATR -> WARNING + FIXED_PCT fallback."""
+    log = _NullLogger()
+    proc, _, _ = _make_proc(logger=log)
+    strategy = _MockStrategy(direction="LONG", tgt_method="ATR", tgt_pct=0.04)
+    tgt = proc._derive_target(1000.0, 980.0, strategy)
+    # Falls back to FIXED_PCT
+    assert abs(tgt - 1040.0) < 0.01, f"Expected 1040.0, got {tgt}"
+    assert any("ATR" in w for w in log.warnings), f"No ATR warning: {log.warnings}"
+    print(f"  OK tgt_method=ATR fallback -> FIXED_PCT, tgt={tgt}")
+
+
+def test_atr_fallback_mode_halt_sl_raises_pipeline_reject():
+    """MED #12: atr_fallback_mode=HALT + sl_method=ATR -> _PipelineReject raised."""
+    from signals.signal_processor import _PipelineReject
+    proc, _, _ = _make_proc()
+    proc._atr_fallback_mode = "HALT"
+    strategy = _MockStrategy(direction="LONG", sl_method="ATR", sl_pct=0.03)
+    raised = False
+    try:
+        proc._derive_prices(1000.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "REJECTED_NO_ATR_DATA", f"Unexpected check: {exc.check}"
+    assert raised, "HALT mode + ATR sl_method must raise _PipelineReject"
+    print("  OK atr_fallback_mode=HALT + sl_method=ATR -> REJECTED_NO_ATR_DATA (MED #12)")
+
+
+def test_atr_fallback_mode_halt_tgt_raises_pipeline_reject():
+    """MED #12: atr_fallback_mode=HALT + tgt_method=ATR -> _PipelineReject raised."""
+    from signals.signal_processor import _PipelineReject
+    proc, _, _ = _make_proc()
+    proc._atr_fallback_mode = "HALT"
+    strategy = _MockStrategy(direction="LONG", tgt_method="ATR", tgt_pct=0.04)
+    raised = False
+    try:
+        proc._derive_target(1000.0, 970.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "REJECTED_NO_ATR_DATA", f"Unexpected check: {exc.check}"
+    assert raised, "HALT mode + ATR tgt_method must raise _PipelineReject"
+    print("  OK atr_fallback_mode=HALT + tgt_method=ATR -> REJECTED_NO_ATR_DATA (MED #12)")
+
+
+def test_atr_fallback_mode_warn_still_falls_back():
+    """MED #12: atr_fallback_mode=WARN (default) keeps fallback behavior."""
+    log = _NullLogger()
+    proc, _, _ = _make_proc(logger=log)
+    proc._atr_fallback_mode = "WARN"
+    strategy = _MockStrategy(direction="LONG", sl_method="ATR", sl_pct=0.03)
+    entry, sl = proc._derive_prices(1000.0, strategy)
+    assert abs(sl - 970.0) < 0.01, f"Expected fallback sl=970.0, got {sl}"
+    assert any("ATR" in w for w in log.warnings), "WARN mode must log warning"
+    print(f"  OK atr_fallback_mode=WARN keeps fallback behavior, sl={sl} (MED #12)")
+
+
+def test_tgt_price_passed_to_order_placer():
+    """tgt_price computed by processor is passed to order_placer.place()."""
+    store, _ = _make_store()
+    sig_id = "sig_tgt_001"
+    _insert_queued_signal(store, sig_id)
+
+    placer = _MockOrderPlacer()
+    # RISK_REWARD: entry=2500, sl=2500*(1-0.02)=2450, risk=50, tgt=2500+50*2=2600
+    strategy = _MockStrategy(
+        direction="LONG", entry_method="MARKET", sl_pct=0.02,
+        tgt_method="RISK_REWARD", tgt_risk_reward=2.0, lot_size=1,
+    )
+    strategies = {"gap_go_long_v1": strategy}
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(
+        store=store, placer=placer, screener=screener, strategies=strategies,
+    )
+
+    _run_one(proc, _now_tup(sig_id, price=2500.0), store=store)
+
+    assert len(placer.calls) == 1, "Placer not called"
+    tgt = placer.calls[0]["tgt_price"]
+    assert tgt is not None, "tgt_price not passed to placer"
+    assert abs(tgt - 2600.0) < 0.01, f"Expected tgt=2600.0, got {tgt}"
+    print(f"  OK tgt_price={tgt} passed to order_placer (RISK_REWARD 2x)")
+
+
+# ---------------------------------------------------------------------------
+# Concurrency tests
+# ---------------------------------------------------------------------------
+
+def test_5_workers_process_5_signals_concurrently():
+    """5 signals submitted together complete faster than 5 * sleep_time (parallelism)."""
+    barrier = threading.Barrier(5, timeout=5.0)
+    processed_order = []
+    lock = threading.Lock()
+
+    class _SlowRisk(_MockRiskEngine):
+        def approve(self, symbol, direction, intent, sizing, signal_id):
+            barrier.wait()
+            with lock:
+                processed_order.append(symbol)
+            return _ApprovalResult(approved=True)
+
+    proc, sq, store = _make_proc(risk=_SlowRisk(), worker_count=5)
+    proc.start()
+
+    symbols = [f"SYM{i}" for i in range(5)]
+    for i, sym in enumerate(symbols):
+        sq.put((f"sig_{i:03d}", "gap_go_long", sym, 1000.0, datetime.now()))
+
+    proc.stop()
+
+    assert len(processed_order) == 5, f"Expected 5 processed, got {len(processed_order)}"
+    print(f"  OK 5 signals processed concurrently (barrier passed): {processed_order}")
+
+
+def test_100_signals_complete_in_reasonable_time():
+    """100 signals through 5 workers complete in < 10s."""
+    proc, sq, _ = _make_proc(worker_count=5, drain_poll_sec=0.01)
+    proc.start()
+
+    t0 = time.monotonic()
+    for i in range(100):
+        sq.put(_now_tup(f"sig_{i:04d}", symbol=f"SYM{i % 20:02d}"))
+
+    proc.stop()
+    elapsed = time.monotonic() - t0
+    assert elapsed < 10.0, f"100 signals took {elapsed:.2f}s"
+    print(f"  OK 100 signals in {elapsed:.3f}s with 5 workers")
+
+
+# ---------------------------------------------------------------------------
+# Metrics (SP13, SPW9)
+# ---------------------------------------------------------------------------
+
+def test_stats_returns_valid_dict():
+    """stats() returns a dict with all required keys including screener metrics."""
+    proc, _, _ = _make_proc()
+    s = proc.stats()
+    required = {
+        "signals_processed", "signals_rejected", "signals_placed",
+        "avg_pipeline_ms", "workers_active", "queue_depth",
+        "signals_screened_passed", "signals_screened_rejected",
+        "signals_screened_skipped", "avg_screening_ms",
+    }
+    missing = required - set(s.keys())
+    assert not missing, f"Missing stats keys: {missing}"
+    assert isinstance(s["signals_rejected"], dict)
+    assert isinstance(s["signals_screened_rejected"], dict)
+    assert isinstance(s["signals_screened_skipped"], dict)
+    print(f"  OK stats() keys all present: {sorted(s.keys())}")
+
+
+def test_stats_correct_after_run():
+    """stats() counts reflect actual processing results."""
+    store, _ = _make_store()
+    placer = _MockOrderPlacer()
+    screener = _MockScreener(state_store=store)
+    proc, sq, _ = _make_proc(store=store, placer=placer, screener=screener, worker_count=2)
+    proc.start()
+
+    for i in range(2):
+        sig_id = f"sig_stat_{i:03d}"
+        _insert_queued_signal(store, sig_id, symbol=f"SYM{i}")
+        sq.put((sig_id, "gap_go_long", f"SYM{i}", 1000.0, datetime.now()))
+
+    proc.stop()
+
+    s = proc.stats()
+    assert s["signals_placed"] == 2, f"Expected 2 placed, got {s['signals_placed']}"
+    assert s["signals_processed"] == 2, f"Expected 2 processed, got {s['signals_processed']}"
+    assert s["avg_pipeline_ms"] > 0, "avg_pipeline_ms should be > 0"
+    assert s["signals_screened_passed"] == 2, f"Expected 2 screened_passed, got {s['signals_screened_passed']}"
+    print(f"  OK stats after 2 signals: {s}")
+
+
+def test_stats_screener_rejected_counted():
+    """stats() screener_rejected dict incremented on screener rejection."""
+    store, _ = _make_store()
+    sig_id = "sig_scr_stat_001"
+    _insert_queued_signal(store, sig_id)
+
+    rejected = _MockScreeningResult(passed=False, status="REJECTED_SCORE_30", tier="LOW")
+    screener = _MockScreener(result=rejected, state_store=store)
+
+    proc, _, _ = _make_proc(store=store, screener=screener)
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    s = proc.stats()
+    assert "REJECTED_SCORE_30" in s["signals_screened_rejected"], \
+        f"Missing in screener_rejected: {s['signals_screened_rejected']}"
+    assert s["signals_screened_rejected"]["REJECTED_SCORE_30"] == 1
+    print(f"  OK screener_rejected counted: {s['signals_screened_rejected']}")
+
+
+# ---------------------------------------------------------------------------
+# Signal status step-by-step (SP9)
+# ---------------------------------------------------------------------------
+
+def test_signal_status_updated_at_each_step():
+    """Status written before pipeline (PROCESSING) and by screener (PASSED) before sizer."""
+    store, _ = _make_store()
+    sig_id = "sig_step_001"
+    _insert_queued_signal(store, sig_id)
+
+    statuses_seen = []
+
+    class _ObservingSizer(_MockPositionSizer):
+        def calculate(self, *a, **kw):
+            row = store.fetch_one(
+                "SELECT status FROM signals WHERE signal_id = ?", (sig_id,)
+            )
+            if row:
+                statuses_seen.append(row["status"])
+            return _SizingResult(success=True)
+
+    placer = _MockOrderPlacer()
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, sizer=_ObservingSizer(), placer=placer,
+                             screener=screener)
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    # At sizer time: screener has already written PASSED (P18 compliance)
+    assert "PASSED" in statuses_seen, \
+        f"Expected PASSED at sizer-time (screener wrote it); got: {statuses_seen}"
+    row_final = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row_final["status"] == "PROCESSED", row_final["status"]
+    print(f"  OK status at sizer-time: {statuses_seen} -> final PROCESSED")
+
+
+# ---------------------------------------------------------------------------
+# BrokerError -> record_api_failure (SP12)
+# ---------------------------------------------------------------------------
+
+def test_broker_error_in_sizer_calls_record_failure():
+    """BrokerError from sizer -> kill_switch.record_api_failure() called."""
+    store, _ = _make_store()
+    sig_id = "sig_be_001"
+    _insert_queued_signal(store, sig_id)
+
+    ks = _MockKillSwitch()
+    sizer = _MockPositionSizer(raise_exc=BrokerError("connection refused"))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, ks=ks, sizer=sizer, screener=screener)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert ks.failure_count >= 1, f"record_api_failure not called: {ks.failure_count}"
+    print(f"  OK BrokerError in sizer -> record_api_failure called ({ks.failure_count}x)")
+
+
+def test_broker_error_in_risk_calls_record_failure():
+    """BrokerError from risk_engine -> kill_switch.record_api_failure() called."""
+    store, _ = _make_store()
+    sig_id = "sig_be_002"
+    _insert_queued_signal(store, sig_id)
+
+    ks = _MockKillSwitch()
+    risk = _MockRiskEngine(raise_exc=BrokerError("timeout"))
+    screener = _MockScreener(state_store=store)
+    proc, _, _ = _make_proc(store=store, ks=ks, risk=risk, screener=screener)
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    assert ks.failure_count >= 1, f"record_api_failure not called: {ks.failure_count}"
+    print(f"  OK BrokerError in risk -> record_api_failure called ({ks.failure_count}x)")
+
+
+# ---------------------------------------------------------------------------
+# Concurrent shutdown
+# ---------------------------------------------------------------------------
+
+def test_concurrent_shutdown_cleans_up():
+    """Stop during active processing completes or times out cleanly."""
+    slow_done = threading.Event()
+
+    class _SlowSizer(_MockPositionSizer):
+        def calculate(self, *a, **kw):
+            time.sleep(0.1)
+            slow_done.set()
+            return _SizingResult(success=True)
+
+    proc, sq, store = _make_proc(sizer=_SlowSizer(), worker_count=3)
+    proc.start()
+
+    for i in range(3):
+        sq.put(_now_tup(f"sig_shut_{i:03d}", symbol=f"SYM{i}"))
+
+    time.sleep(0.02)
+    t0 = time.monotonic()
+    proc.stop()
+    elapsed = time.monotonic() - t0
+
+    assert not proc.is_running()
+    assert elapsed < 8.0, f"stop() during active processing took {elapsed:.2f}s"
+    print(f"  OK concurrent shutdown clean in {elapsed:.3f}s")
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: audit blocker fixes
+# ---------------------------------------------------------------------------
+
+def test_derive_prices_negative_entry_raises():
+    """
+    BLOCKER #15 regression: entry_price <= 0 raises ValueError.
+    A strategy with entry_offset_pct >= 1.0 on a LONG would produce entry <= 0.
+    """
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", entry_method="LIMIT",
+                              entry_offset_pct=1.0, sl_pct=0.02)
+    with pytest.raises(ValueError, match="entry_price="):
+        proc._derive_prices(trigger_price=100.0, strategy=strategy)
+
+
+def test_continue_from_gate_uses_side_not_direction():
+    """
+    BLOCKER #4 regression: continue_from_gate converts LONG->BUY / SHORT->SELL
+    before calling sizer.calculate() and risk.approve().
+    Previously passed "LONG"/"SHORT" directly, causing ValueError in sizer.
+    """
+    from screening.entry_gate import WatchEntry
+    from datetime import datetime
+
+    sizer = _MockPositionSizer()
+    risk = _MockRiskEngine()
+
+    class _CapturePlacer:
+        calls = []
+        def place(self, **kwargs):
+            self.calls.append(kwargs)
+
+    placer = _CapturePlacer()
+    proc, _, store = _make_proc(sizer=sizer, risk=risk, placer=placer)
+
+    entry = WatchEntry(
+        signal_id="sig_gate_001",
+        symbol="RELIANCE",
+        direction="LONG",  # "LONG"/"SHORT" — NOT "BUY"/"SELL"
+        trigger_price=2500.0,
+        entry_price=2495.0,
+        sl_price=2445.0,
+        tgt_price=2595.0,
+        tolerance_pct=0.005,
+        timeout_sec=300,
+        strategy_name="gap_go_long_v1",
+        tier="HIGH",
+        scanner_name="gap_go_long",
+        intent="INTRADAY",
+        added_at=datetime.now(),
+    )
+
+    # Insert a matching signal row so update_signal_status doesn't raise FK error
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO signals "
+            "(signal_id, symbol, scanner, strategy, triggered_at, "
+            "received_at, expires_at, status, fingerprint, fingerprint_date) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("sig_gate_001", "RELIANCE", "gap_go_long", "gap_go_long_v1",
+             "2026-04-15 10:00:00", "2026-04-15 10:00:00", "2026-04-15 10:01:00",
+             "PROCESSING", "fp_gate_001", "2026-04-15"),
+        )
+
+    proc.continue_from_gate(entry)
+
+    # sizer and risk should have been called with "BUY", not "LONG"
+    assert sizer.calls, "sizer.calculate() was not called"
+    assert sizer.calls[0]["direction"] == "BUY", (
+        f"Expected sizer called with 'BUY' but got {sizer.calls[0]['direction']!r}"
+    )
+    assert placer.calls, "placer.place() was not called"
+    assert placer.calls[0]["side"] == "BUY", (
+        f"Expected placer called with side='BUY' but got {placer.calls[0]['side']!r}"
+    )
+
+
+def test_continue_from_gate_short_converts_to_sell():
+    """
+    BLOCKER #4 regression (SHORT path): direction="SHORT" -> side="SELL".
+    """
+    from screening.entry_gate import WatchEntry
+    from datetime import datetime
+
+    sizer = _MockPositionSizer()
+
+    class _CapturePlacer:
+        calls = []
+        def place(self, **kwargs):
+            self.calls.append(kwargs)
+
+    placer = _CapturePlacer()
+    proc, _, store = _make_proc(
+        sizer=sizer, placer=placer,
+        strategies={"gap_go_short_v1": _SELL_STRATEGY},
+        scan_webhook_map={"gap_go_short": {"strategy": "gap_go_short_v1"}},
+    )
+
+    entry = WatchEntry(
+        signal_id="sig_gate_002",
+        symbol="HDFCBANK",
+        direction="SHORT",
+        trigger_price=1500.0,
+        entry_price=1502.0,
+        sl_price=1530.0,
+        tgt_price=1440.0,
+        tolerance_pct=0.005,
+        timeout_sec=300,
+        strategy_name="gap_go_short_v1",
+        tier="HIGH",
+        scanner_name="gap_go_short",
+        intent="INTRADAY",
+        added_at=datetime.now(),
+    )
+
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO signals "
+            "(signal_id, symbol, scanner, strategy, triggered_at, "
+            "received_at, expires_at, status, fingerprint, fingerprint_date) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("sig_gate_002", "HDFCBANK", "gap_go_short", "gap_go_short_v1",
+             "2026-04-15 10:00:00", "2026-04-15 10:00:00", "2026-04-15 10:01:00",
+             "PROCESSING", "fp_gate_002", "2026-04-15"),
+        )
+
+    proc.continue_from_gate(entry)
+
+    assert sizer.calls, "sizer.calculate() was not called"
+    assert sizer.calls[0]["direction"] == "SELL", (
+        f"Expected 'SELL' but got {sizer.calls[0]['direction']!r}"
+    )
+    assert placer.calls, "placer.place() was not called"
+    assert placer.calls[0]["side"] == "SELL", (
+        f"Expected side='SELL' but got {placer.calls[0]['side']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Standalone runner
+# ---------------------------------------------------------------------------
+
+def run_all_tests() -> int:
+    tests = [
+        test_start_launches_dispatcher_and_workers,
+        test_stop_drains_within_5s,
+        test_is_running_before_start,
+        test_full_pipeline_queued_to_processed,
+        test_full_pipeline_no_placer_processed_no_placer,
+        test_kill_switch_active_rejects,
+        test_outside_entry_window_rejects,
+        test_expired_signal_rejects,
+        test_unknown_strategy_rejects,
+        test_unknown_strategy_name_rejects,
+        test_sizer_failure_rejects,
+        test_risk_engine_rejection,
+        test_reserve_failure_rejects,
+        test_order_placer_raises_placement_failed,
+        test_unexpected_exception_placement_failed,
+        test_screener_rejects_signal,
+        test_screener_skipped_logs_warning,
+        test_screener_passed_uses_tier_for_sizing,
+        test_screener_passes_direction_from_strategy,
+        test_no_double_write_screener_rejected,
+        test_in_flight_released_on_screener_skipped,
+        test_in_flight_released_on_screener_rejected,
+        test_in_flight_released_on_rejection,
+        test_in_flight_released_on_success,
+        test_in_flight_released_on_placer_exception,
+        test_derive_prices_market_entry_long,
+        test_derive_prices_limit_entry_long,
+        test_derive_prices_limit_entry_short,
+        test_derive_prices_sl_long,
+        test_derive_prices_sl_short,
+        test_derive_prices_atr_fallback_warns,
+        test_derive_prices_sl_min_pct_enforced,
+        test_derive_prices_sl_max_pct_enforced,
+        test_derive_target_fixed_pct_long,
+        test_derive_target_fixed_pct_short,
+        test_derive_target_risk_reward_long,
+        test_derive_target_risk_reward_short,
+        test_derive_target_atr_fallback,
+        test_atr_fallback_mode_halt_sl_raises_pipeline_reject,
+        test_atr_fallback_mode_halt_tgt_raises_pipeline_reject,
+        test_atr_fallback_mode_warn_still_falls_back,
+        test_tgt_price_passed_to_order_placer,
+        test_5_workers_process_5_signals_concurrently,
+        test_100_signals_complete_in_reasonable_time,
+        test_stats_returns_valid_dict,
+        test_stats_correct_after_run,
+        test_stats_screener_rejected_counted,
+        test_signal_status_updated_at_each_step,
+        test_broker_error_in_sizer_calls_record_failure,
+        test_broker_error_in_risk_calls_record_failure,
+        test_concurrent_shutdown_cleans_up,
+    ]
+
+    print("=" * 70)
+    print("signal_processor.py -- Test Suite (SPW1-SPW10)")
+    print("=" * 70)
+
+    failed = []
+    for test in tests:
+        print(f"\n-> {test.__name__}")
+        try:
+            test()
+        except AssertionError as exc:
+            failed.append((test.__name__, f"AssertionError: {exc}"))
+            print(f"  FAIL: {exc}")
+        except Exception as exc:
+            failed.append((test.__name__, f"{type(exc).__name__}: {exc}"))
+            print(f"  ERROR: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+
+    print("\n" + "=" * 70)
+    if failed:
+        print(f"FAILED: {len(failed)} of {len(tests)} tests")
+        for name, err in failed:
+            print(f"  FAIL {name}: {err}")
+        return 1
+    print(f"PASSED: all {len(tests)} tests")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_all_tests())

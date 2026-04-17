@@ -1,0 +1,55 @@
+================================================================
+PHASE E — Module 39: orders/shadow_tracker.py
+================================================================
+
+Module 38 complete (1261/1261 green). Move to Phase E.
+
+Reference spec: modules_38_39_40_final.txt
+  Section: "MODULE 39: orders/shadow_tracker.py"
+  Locks: SH1-SH15
+
+No changes to that spec. Build exactly as locked.
+
+PURPOSE RECAP (Rama's Concern 4):
+  Original trade exits at SL or TGT. shadow_tracker then
+  simulates inning 2 and inning 3 (up to 3 innings total)
+  by continuing to watch the same symbol for further SL/TGT
+  hits using original strategy's rules applied to the new
+  entry price = previous inning's exit price.
+  No real broker orders for innings 2-3. Pure price tracking.
+  Fixes old system's "said TGT but actually SL first" bug.
+
+EXECUTION CHECKLIST:
+
+1. Add innings table to core/schema.sql per SH9
+   Bump schema version (expect v9)
+2. Add 4 state_store helpers per SH10:
+     insert_inning(Inning)
+     update_inning_close(...)
+     get_innings_for_trade(trade_id)
+     get_innings_for_date(date_iso)
+3. Update test_state_store.py with new helper tests
+4. Extend SystemConfig per SH11:
+     shadow_tracker:
+       enabled: true
+       max_innings: 3
+       alert_per_inning: true
+5. Build orders/shadow_tracker.py per SH1-SH15 (~400 lines)
+6. Build tests/unit/test_shadow_tracker.py per SH15
+7. Wire into main.py:
+     shadow_tracker = ShadowTracker(
+       state_store, bus, live_feed, market_windows,
+       time_authority, notifier, logger,
+       max_innings=3, alert_per_inning=True
+     )
+     live_feed.register_callback(shadow_tracker.on_tick)
+   Also ensure live_feed tick callback properly unpacks
+   (per BLOCKER #1 fix) and routes to shadow_tracker too.
+8. Run full suite + 36 new tests approx.
+
+EXPECTED TEST DELTA: ~30-35 new tests (1261 + ~30 = ~1295)
+
+NOTE: Module 40 (daily_review multi-inning update) comes
+AFTER Module 39 green. Don't combine.
+
+Report completion with 38+ suite table.

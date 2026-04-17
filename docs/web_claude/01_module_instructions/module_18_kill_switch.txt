@@ -1,0 +1,196 @@
+MODULE: capital/kill_switch.py
+
+CONTEXT: 389/389 green across 17 modules. Capital trio
+(fund_manager, position_sizer, risk_engine) complete.
+kill_switch is the system-wide STOP button. Audit Issues
+#4, #18, and Project Rule 13 drive the design. This module
+is small but CRITICAL — must be deadlock-free (audit Issue #4
+flagged a deadlock in the legacy implementation).
+
+LOCK BEFORE BUILD:
+
+KS1 — Purpose: System-wide trading halt mechanism.
+  Three modes:
+    SOFT_KILL — block new entries, allow exits and monitoring
+    HARD_KILL — block ALL orders + attempt to cancel open broker
+                orders (Project Rule 13)
+    INACTIVE  — normal operation
+  is_active(intent="entry") -> bool used by every order dispatch.
+
+KS2 — State model:
+  Single state: KillState enum {INACTIVE, SOFT_KILL, HARD_KILL}.
+  Plus reason: str, triggered_at: datetime, triggered_by: str.
+  Persisted in state_store kill_switch_state table (single-row,
+  id=1) for restart recovery.
+
+KS3 — Audit Issue #18 fix — startup recovery:
+  On construction, READ state from state_store. If row exists
+  and state != INACTIVE, log CRITICAL and remain in that state.
+  DO NOT overwrite with INACTIVE on startup. Manual operator
+  must call resume() to clear.
+  Old bug: startup re-init overwrote operator's manual halt.
+
+KS4 — Audit Issue #4 fix — deadlock prevention:
+  Use threading.RLock (NOT Lock).
+  soft_kill() and hard_kill() may call internal methods that
+  re-acquire the lock. RLock allows reentrant acquisition by
+  same thread. Original deadlock: record_api_failure() held
+  Lock then called soft_kill() which tried to acquire same
+  Lock -> freeze.
+
+KS5 — Constructor:
+  KillSwitch(
+    state_store,        # for persistence (kill_switch_state table)
+    bus,                # for KillSwitchActivated event
+    logger,
+    on_hard_kill_cancel_fn=None,  # optional callable invoked on
+                                   # hard_kill to cancel broker orders
+                                   # Signature: () -> CancellationReport
+                                   # CancellationReport: {attempted: int,
+                                   #   succeeded: int, failed: list[str]}
+  )
+
+KS6 — Public API:
+  is_active(intent: str = "entry") -> bool
+    intent="entry" -> True if SOFT_KILL or HARD_KILL
+    intent="exit"  -> True only if HARD_KILL
+    intent="any"   -> True if either kill mode
+
+  is_active_for_dispatch() -> bool
+    Convenience: returns True if HARD_KILL (last-mile gate
+    per Project Rule 13). Called immediately before broker
+    dispatch in order_placer.
+
+  current_state() -> KillState (enum value)
+  status() -> dict {state, reason, triggered_at, triggered_by}
+
+  soft_kill(reason: str, triggered_by: str = "system") -> None
+    Atomic: persist state -> publish event -> log CRITICAL.
+    Idempotent: calling when already SOFT_KILL is no-op
+    (logged DEBUG).
+    Calling when HARD_KILL: ignored, log WARNING (cannot
+    downgrade hard to soft).
+
+  hard_kill(reason: str, triggered_by: str = "system")
+    -> CancellationReport
+    Atomic: persist state -> publish event -> log CRITICAL ->
+    invoke on_hard_kill_cancel_fn() if provided ->
+    return CancellationReport.
+    Audit Project Rule 13: MUST attempt to cancel all known
+    open orders. Failed cancellations -> CRITICAL alert via
+    callback (handled inside on_hard_kill_cancel_fn).
+    Idempotent: calling when already HARD_KILL re-runs
+    cancellation attempt (in case orders re-appeared).
+
+  resume(reason: str, resumed_by: str) -> None
+    Manual operator action. Sets state to INACTIVE.
+    Persists. Publishes event. Logs INFO with reason.
+    Refuses if state already INACTIVE (raises ValueError).
+    Triggered_by must be non-empty (audit trail).
+
+  record_api_failure() -> None
+    Internal counter. After N consecutive API failures
+    (configurable, default 3), auto-trigger soft_kill().
+    Counter resets on any successful API call (record_success()).
+    This is the auto-trip mechanism.
+
+  record_success() -> None
+    Resets api_failure counter.
+
+KS7 — Auto-trip thresholds (from system_config):
+  kill_switch:
+    api_failure_threshold: int  (default 3)
+    enable_auto_trip: bool      (default true)
+  Extend SystemConfig schema. Update YAML stub.
+
+KS8 — Event publication:
+  KillSwitchActivated event on every state change including
+  resume() (use a "resume" subtype or include new_state in
+  payload).
+  Payload: {previous_state, new_state, reason, triggered_by, ts}
+  Verify KillSwitchActivated dataclass in core/events.py
+  matches; extend if needed.
+
+KS9 — State persistence row schema (kill_switch_state table):
+  id INTEGER PRIMARY KEY CHECK (id = 1)  -- single row
+  state TEXT NOT NULL
+  reason TEXT NOT NULL
+  triggered_at TEXT NOT NULL  -- ISO IST
+  triggered_by TEXT NOT NULL
+  Add to schema.sql. Bump schema_version. Update test_state_store.
+
+KS10 — get_kill_info() helper (audit fix — was missing):
+  Convenience method returning status dict for startup_checks
+  and main.py --status flag. Audit flagged calls to non-existent
+  get_kill_info(). Must exist.
+
+KS11 — Layer & deps:
+  Layer 4 (capital/). Imports: stdlib (threading, enum,
+  dataclasses), core.exceptions, core.events
+  (KillSwitchActivated), core.logger, core.time_authority,
+  core.state_store. NO cancel logic inside (injected callback).
+
+KS12 — Determinism:
+  Single source of truth. is_active() result depends ONLY on
+  current state. No time-based logic, no random behavior.
+
+KS13 — NOT in scope:
+  - Deciding WHEN to auto-trip (modules call record_api_failure;
+    counter logic is here but the calling decisions are not)
+  - Performing actual broker cancellations (injected callback)
+  - Restart of trading after halt (manual resume() only)
+  - Telegram alerts (logger CRITICAL fires alerter elsewhere)
+
+BUILD STEPS:
+
+1. Add kill_switch_state table to core/state_store.py
+   schema.sql per KS9. Bump schema_version. Update
+   test_state_store.py with persistence tests for the
+   new table (insert, single-row constraint, read on init).
+
+2. Verify KillSwitchActivated event payload matches KS8.
+   Extend core/events.py and test_events.py if needed.
+
+3. Extend SystemConfig per KS7. Update YAML stub.
+   Re-run test_config_loader.
+
+4. Build capital/kill_switch.py per KS1-KS13.
+   PAY ATTENTION: RLock not Lock. No nested separate locks.
+   Atomicity: persist BEFORE publishing event. If persist
+   fails, do not publish.
+
+5. Build tests/unit/test_kill_switch.py covering:
+   - Initial state INACTIVE if no persisted row
+   - Construction with persisted SOFT_KILL state -> remains
+     SOFT_KILL (audit Issue #18 regression)
+   - Construction with persisted HARD_KILL state -> remains
+     HARD_KILL
+   - is_active("entry") true on SOFT_KILL and HARD_KILL
+   - is_active("exit") true only on HARD_KILL
+   - is_active("any") true on either
+   - is_active_for_dispatch() true only on HARD_KILL
+   - soft_kill() persists state, publishes event, logs CRITICAL
+   - soft_kill() when already SOFT_KILL -> no-op (DEBUG log)
+   - soft_kill() when HARD_KILL -> WARNING, no downgrade
+   - hard_kill() invokes on_hard_kill_cancel_fn, returns report
+   - hard_kill() with no callback -> empty report
+   - hard_kill() when already HARD_KILL -> re-runs cancel
+   - resume() from SOFT_KILL -> INACTIVE
+   - resume() from HARD_KILL -> INACTIVE
+   - resume() from INACTIVE -> ValueError
+   - resume() with empty triggered_by -> ValueError
+   - record_api_failure 3 times -> auto soft_kill (default threshold)
+   - record_api_failure resets after record_success
+   - enable_auto_trip=False -> no auto-trip even at threshold
+   - get_kill_info() returns full status dict
+   - status() dict has all 4 fields
+   - Audit Issue #4 regression: hard_kill from inside a method
+     holding the lock does not deadlock (use RLock test)
+   - Concurrent soft_kill from 5 threads: only one event published
+     (idempotent), final state SOFT_KILL
+   - Persistence atomicity: simulate state_store write failure,
+     verify in-memory state NOT changed and event NOT published
+
+6. Re-run all 17 prior suites + new one. Report 18-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.

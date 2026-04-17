@@ -1,0 +1,30 @@
+# config/chartink_scanners.yaml — Trading System v2
+#
+# Canonical Chartink scanner URLs used by the pre-flight health check (P17).
+# scripts/preflight_scanner_check.py sends an HTTP HEAD request to each URL
+# and fails CRITICAL if any is unreachable at startup.
+#
+# Format:
+#   scanners:
+#     <scanner_name>: <full_chartink_url>
+#
+# Locked decisions: P17, S15
+# Note: URLs are placeholders. Replace with actual Chartink screener URLs
+#       once scanners are configured and active in Chartink.
+
+scanners:
+  open_low_breakout_long: "https://chartink.com/screener/open-low-breakout-long"
+  first_pullback_long: "https://chartink.com/screener/first-pullback-long"
+  vwap_bounce_long: "https://chartink.com/screener/vwap-bounce-long"
+  gap_go_long: "https://chartink.com/screener/gap-go-long"
+  gap_fade_long: "https://chartink.com/screener/gap-fade-long"
+  range_breakout_long: "https://chartink.com/screener/range-breakout-long"
+  open_high_breakdown_short: "https://chartink.com/screener/open-high-breakdown-short"
+  first_pullback_short: "https://chartink.com/screener/first-pullback-short"
+  vwap_rejection_short: "https://chartink.com/screener/vwap-rejection-short"
+  gap_go_short: "https://chartink.com/screener/gap-go-short"
+  gap_fade_short: "https://chartink.com/screener/gap-fade-short"
+  range_breakout_short: "https://chartink.com/screener/range-breakout-short"
+  positional_momentum_long: "https://chartink.com/screener/positional-momentum-long"
+  positional_sector_rotation: "https://chartink.com/screener/positional-sector-rotation"
+  positional_swing_long: "https://chartink.com/screener/positional-swing-long"

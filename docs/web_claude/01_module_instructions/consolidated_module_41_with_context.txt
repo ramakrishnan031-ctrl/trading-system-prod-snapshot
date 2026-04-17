@@ -1,0 +1,411 @@
+================================================================
+CONSOLIDATED INSTRUCTION — What happened + Module 41 build
+================================================================
+
+PURPOSE: Bring you up to speed on everything since Phase G
+completed, then build Module 41.
+
+================================================================
+SECTION 1: WHAT HAPPENED (context for mempalace)
+================================================================
+
+After Phase G (1351/1351 green):
+
+1. PHASE H (chaos tests) DEFERRED — Rama decided to run
+   chaos tests AFTER paper trial, not before. Rationale:
+   paper trial with real data first, then inject failures.
+
+2. PHASE I (verdict) DELIVERED — Web Claude gave consolidated
+   fixed/deferred verdict to Rama:
+   - 32 fixed, 6 already-fixed, 6 verified-ok, 3 closed,
+     1 pending, 2 verify, 8 deferred
+   - Verdict: READY FOR PAPER TRIAL. NOT YET FOR LIVE.
+
+3. TASK 1 COMPLETED (you did this) — audit_closeout_final.md
+   written to mempalace + locked_decisions.yaml appended.
+
+4. TASK 2 COMPLETED (you did this) — accounts.csv replaced
+   with single LFL836 row. .env.example created. .gitignore
+   verified.
+
+5. TASK 2b COMPLETED (you did this) — Telegram whitelist
+   enforcement. Channels config with enabled flag. 1355/1355.
+
+6. ACCOUNTS.CSV SCHEMA REVISED — Rama wants 5 accounts
+   (3 real + 2 placeholders), with paper_capital column
+   (Rs 50,00,000 per account). New final locked schema:
+
+   account_id,broker,label,is_primary,api_key_env,
+   api_secret_env,totp_secret_env,paper_capital,
+   capital_share_pct,enabled
+
+   Rama will place the final CSV at config/accounts.csv.
+   You need to update AccountRegistry to support the new
+   columns (paper_capital, label if not already present).
+
+7. .ENV REVISED — Access tokens removed from .env (they
+   come from data_store/session/zerodha_token.json instead).
+   Token is generated daily via browser login, SCP'd to VM.
+   Deleted at 05:00 AM IST by cron on VM.
+
+8. INTERACTIVE STARTUP FLOW DESIGNED — Rama wants main.py
+   to support --interactive flag with account selection,
+   token check, mode selection, holiday guard, and a welcome
+   banner. Full spec in Module 41 below.
+
+9. ZERODHA LOGIN PORT — Old system's auth/zerodha_login.py
+   to be ported as scripts/zerodha_login.py. Browser-assisted
+   flow: opens Kite URL, operator logs in, pastes
+   request_token, system exchanges for access_token.
+
+10. ZERODHA USERNAME PRE-FILL — NOT possible via URL params.
+    Kite login page uses browser cookies to remember user ID
+    ("Change user" link). No code change needed. Documented
+    as "use same browser each morning."
+
+Store all above as memory/post_phase_g_context.md.
+
+================================================================
+SECTION 2: MODULE 41 BUILD INSTRUCTION
+================================================================
+
+Build the interactive startup flow per SU1-SU20 below.
+Current suite: 1355/1355 green.
+
+================================================================
+LOCK (SU1-SU20)
+================================================================
+
+SU1 — File additions:
+  scripts/zerodha_login.py (ported from old system)
+  utils/holiday_guard.py (mini holiday checker, runs pre-logger)
+  main.py gets --interactive flag + new startup flow
+  core/account_registry.py extended for paper_capital + label
+
+SU2 — accounts.csv schema (FINAL, locked):
+
+  Columns:
+    account_id      string, unique
+    broker          "zerodha" (v2); "angelone" (v2.1)
+    label           free text, shown in selector
+    is_primary      bool, exactly 1 row true
+    api_key_env     env var NAME for api_key
+    api_secret_env  env var NAME for api_secret
+    totp_secret_env env var NAME for totp (unused in v2)
+    paper_capital   float, INR, used in paper mode only
+    capital_share_pct  float 0.0-1.0 (v2.1 multi-account)
+    enabled         bool, gates inclusion in selector
+
+SU3 — AccountRow update:
+  Add to AccountRow dataclass (if not present):
+    label: str
+    paper_capital: float
+  CSV parser must read these. Validate paper_capital > 0
+  for enabled accounts.
+
+SU4 — --interactive flag:
+  python main.py --interactive        (paper mode default)
+  python main.py --interactive --mode live
+  python main.py --mode paper         (non-interactive, VM)
+  python main.py --mode live          (non-interactive, VM)
+
+SU5 — Non-interactive (default): existing headless flow.
+  Uses primary account. Reads existing token file. Token
+  missing/expired: exit 6. No prompts.
+
+SU6 — Holiday-first guard (runs BEFORE logger setup):
+
+  Create utils/holiday_guard.py:
+    is_trading_day(today: date, holidays_yaml_path: Path) -> bool
+      Loads nse_holidays_<year>.yaml directly (mini YAML read).
+      Returns False if weekend OR in holiday list.
+    next_trading_day(from_date: date, holidays_yaml_path: Path) -> date
+      Walks forward skipping non-trading days.
+
+  In main.py, at VERY TOP of main() function:
+    today = date.today()  # before time_authority exists
+    if not is_trading_day(today, Path("config")):
+      print("=" * 60)
+      print(f"  Market closed today: {today} ({today.strftime('%A')})")
+      print(f"  Next trading day: {next_trading_day(today)}")
+      print("  System not started. No logs created.")
+      print("=" * 60)
+      sys.exit(0)
+
+  This runs BEFORE setup_logging() — zero log file creation
+  on holidays/weekends.
+
+SU7 — Interactive Step 1: Pre-flight checks
+
+  After holiday check passes + logger initialized + config loaded:
+    print("=" * 60)
+    print("  TRADING SYSTEM v2 -- INTERACTIVE STARTUP")
+    print("=" * 60)
+    print()
+    print(f"  Today: {today:%d-%b-%Y (%A)} -- Trading day")
+    print()
+    Run startup_checks. Print each:
+      [OK] Config files loaded
+      [OK] Clock sync (skew: 0.3s)
+      [OK] Secrets present
+      [OK] Chartink scanners (15/15)
+    If any FAIL: print, exit 3.
+    print()
+    print("  All checks passed.")
+
+SU8 — Interactive Step 2: Display accounts
+
+  accounts = account_registry.get_enabled_accounts()
+  Print table:
+    Available accounts:
+    #  Account   Broker    Label
+    1  LFL836    Zerodha   Kandasamy
+    2  DR6114    Zerodha   Ramakrishnan
+    ...
+  Prompt: "Select account [1]: "
+  Default: 1. "q" exits. Invalid re-prompts.
+  After selection:
+    print(f"  Selected: {acct.account_id} ({acct.broker} - {acct.label})")
+
+SU9 — Interactive Step 3: Check existing token
+
+  Token path: data_store/session/zerodha_token.json
+
+  If valid token exists for selected account AND today's date:
+    "Token found for {account_id}, generated at {saved_at}."
+    "Use existing token? [Y/n]: "
+    Y or Enter: skip to Step 4.
+    n: proceed to login (SU10).
+
+  If token missing OR wrong account OR old date:
+    If wrong account:
+      "!! Token belongs to {token.account_id}, not {selected} !!"
+      "!! Re-login required. !!"
+    Proceed to login (SU10).
+
+SU10 — Interactive Step 3b: Login flow
+
+  Port from old system auth/zerodha_login.py:
+
+  a. Resolve credentials from .env:
+       api_key = os.environ.get(acct.api_key_env)
+       api_secret = os.environ.get(acct.api_secret_env)
+     If missing: print error with env var name, exit 5.
+
+  b. Build login URL:
+       https://kite.zerodha.com/connect/login?v=3&api_key={api_key}
+
+  c. Open in default browser:
+       webbrowser.open(login_url)
+
+  d. Print instructions:
+       "  Browser opened. Complete login:"
+       "    User ID + Password + TOTP from Kite app"
+       ""
+       "  After login, browser redirects to localhost URL."
+       "  Copy the request_token value from the URL."
+       ""
+       "  Paste request_token here: "
+
+  e. Exchange request_token -> access_token:
+       checksum = sha256(api_key + request_token + api_secret)
+       POST https://api.kite.trade/session/token
+       Parse response for access_token.
+       On error: print, exit 1.
+
+  f. Save token:
+       data_store/session/zerodha_token.json:
+       {
+         "account_id": "LFL836",
+         "broker": "zerodha",
+         "access_token": "<token>",
+         "api_key": "<for mismatch detect>",
+         "date": "2026-04-17",
+         "saved_at": "2026-04-17T08:45:12+05:30",
+         "expires_at": "2026-04-18T05:00:00+05:30"
+       }
+
+  g. Print success:
+       "Login successful! Token saved for LFL836."
+
+SU11 — Interactive Step 4: Select mode
+
+  "Select mode:"
+  "  1. PAPER (capital: Rs 50,00,000 from config)"
+  "  2. LIVE  (capital: syncs from broker)"
+  "Select [1]: "
+
+  1 or Enter: paper. Use acct.paper_capital.
+  2: live. Proceed to Step 5 confirmation.
+
+SU12 — Interactive Step 5: Live confirmation
+
+  Only if mode == live:
+  Initialize KiteConnect with access_token.
+  Call kite.margins() for capital.
+
+  Print:
+    "*** LIVE MODE SELECTED ***"
+    ""
+    "Account:        LFL836 (Kandasamy)"
+    "Broker capital: Rs 2,45,000.00"
+    ""
+    "WARNING: Real money will be traded."
+    ""
+    "Type 'CONFIRM LIVE' to proceed: "
+
+  Exact phrase only. Anything else: exit 7 or re-prompt.
+
+SU13 — Interactive Step 6: Start system
+
+  Print:
+    "=" * 60
+    "  TRADING SYSTEM v2 -- STARTING"
+    "=" * 60
+    ""
+    "  Welcome, {label}!"
+    ""
+    "  Today:   {date} ({day})"
+    "  Broker:  {broker}"
+    "  Account: {account_id} ({label})"
+    "  Mode:    {mode}"
+    "  Capital: Rs {capital:,.2f}"
+    ""
+    "  Starting subsystems..."
+    "=" * 60
+
+  Then normal Phase 0a-0h startup flow.
+
+  After all subsystems started:
+    "[OK] All subsystems started"
+    "[OK] Webhook listening on :5000"
+    "[OK] System ready for signals"
+    ""
+    "Press Ctrl+C to initiate clean shutdown."
+
+  Enter shutdown_event.wait() loop.
+
+SU14 — Non-interactive flow (existing, minimal changes):
+  Skip SU7-SU13. Use primary account. Read token file.
+  If invalid: exit 6. Use --mode flag. Proceed to Phase 0a.
+
+SU15 — Exit codes (extend existing):
+  0 — clean shutdown OR holiday exit
+  1 — TradingSystemError
+  2 — unexpected exception
+  3 — startup check failure
+  4 — HALT without --resume
+  5 — invalid args / config / missing env var
+  6 — token missing or expired (NEW)
+  7 — live mode confirmation cancelled (NEW)
+  8 — account selection cancelled (NEW)
+
+SU16 — scripts/zerodha_login.py standalone:
+  Can be run independently:
+    python scripts/zerodha_login.py --account LFL836
+  Does only the login flow (SU10).
+  Reuses same token_save logic.
+  Main.py calls this internally for the login step (DRY).
+
+SU17 — Token validity helpers (in scripts/zerodha_login.py):
+  is_token_valid(account_id: str, token_path: Path) -> bool
+    File exists AND account_id matches AND date == today AND
+    access_token non-empty.
+  load_token(token_path: Path) -> dict | None
+    Parse JSON or return None on any error.
+
+SU18 — Token cleanup (documentation only, not code):
+  VM cron: 0 5 * * 1-5 rm -f .../zerodha_token.json
+  Add to README under "VM Setup" section.
+
+SU19 — fund_manager paper_capital wiring:
+  In main.py after mode selected:
+    if mode == "paper":
+      capital = selected_account.paper_capital
+    else:
+      kite = KiteConnect(api_key=api_key)
+      kite.set_access_token(access_token)
+      margins = kite.margins("equity")
+      capital = margins["equity"]["net"]
+    fund_manager.initialize(capital)
+
+SU20 — Tests:
+
+  tests/unit/test_holiday_guard.py:
+    - Trading weekday -> True
+    - Saturday -> False
+    - Sunday -> False
+    - Configured NSE holiday -> False
+    - next_trading_day skips weekend correctly
+    - next_trading_day skips holiday correctly
+    - Missing yaml file -> raises with clear message
+
+  tests/unit/test_zerodha_login.py:
+    - is_token_valid: valid, wrong account, old date, missing,
+      corrupt JSON
+    - exchange_request_token: success (mock HTTP), API error
+    - save_token: creates correct JSON structure
+    - Login URL construction correct
+
+  tests/unit/test_interactive_startup.py:
+    - Holiday exit: code 0, no logs
+    - Weekend exit: code 0, no logs
+    - Account selection: valid input, invalid, default, quit
+    - Mode selection: paper (default), live
+    - Live confirmation: exact phrase required, wrong phrase
+      -> exit 7
+    - Token mismatch warning printed
+    - Paper capital used from accounts.csv
+    - Non-interactive: uses primary, no prompts
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Update core/account_registry.py:
+   - AccountRow: add label (str), paper_capital (float)
+   - CSV parser: read new columns
+   - Validation: paper_capital > 0 for enabled accounts
+   - Update test_account_registry.py
+
+2. Create utils/holiday_guard.py per SU6 (~60 lines)
+   Create tests/unit/test_holiday_guard.py
+
+3. Port scripts/zerodha_login.py per SU10+SU16+SU17 (~200 lines)
+   Create tests/unit/test_zerodha_login.py
+
+4. Update main.py per SU4-SU15:
+   - Add --interactive flag to argparse
+   - Add holiday guard at top (SU6)
+   - Add interactive flow (SU7-SU13) gated by flag
+   - Add exit codes SU15
+   - Welcome banner (SU13)
+   - fund_manager paper_capital wiring (SU19)
+   Update tests/unit/test_main.py
+
+5. Run full suite. Expected: 1355 + ~40 = ~1395.
+
+================================================================
+MEMORY UPDATE
+================================================================
+
+Write after green:
+  Module: M41 Interactive Startup Flow
+  Locked: SU1-SU20 under startup_module section
+  Schema: accounts.csv extended (paper_capital, label)
+  Cross-module: fund_manager, main.py, account_registry
+  New files: utils/holiday_guard.py, scripts/zerodha_login.py
+  Context: memory/post_phase_g_context.md (write Section 1)
+
+WINDOWS REMINDER: ASCII-only print() strings.
+Use "->" not arrows, "Rs" not rupee symbol in all print().
+
+================================================================
+NEXT AFTER MODULE 41
+================================================================
+
+After green: Rama begins paper trial.
+Remaining build work (after paper trial):
+  - Task 3: NSE reference data integration
+  - Phase H: Chaos test suite
+  - v2.1 features (ATR, AngelOne, multi-account, etc.)

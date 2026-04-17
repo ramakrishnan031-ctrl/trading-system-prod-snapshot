@@ -1,0 +1,247 @@
+================================================================
+STARTUP FLOW REDESIGN — Discussion Document
+================================================================
+
+Rama's proposed flow vs current design. Analysis below.
+Decisions needed before VS Code Claude builds anything.
+
+================================================================
+RAMA'S PROPOSED FLOW
+================================================================
+
+1. Activate venv
+2. Pre-flight checks (scanners, config, holidays)
+3. List Zerodha accounts (from accounts.csv)
+4. Operator selects account (interactive prompt)
+5. Auto-generate access token (using api_key + secret + TOTP)
+6. Save token to data_store/session/zerodha_token.json
+7. Copy token to VM (if running on PC)
+8. System asks: Paper or Live?
+9. If holiday/weekend: refuse to start main.py, show message
+   "Today is holiday/weekend. Next trading day: <date>"
+   No log files created. No threads started.
+10. If Live: sync capital from broker (show on screen)
+    If Paper: use capital from accounts.csv
+11. Token mismatch detection: if token file belongs to
+    different account_id than selected -> BLOCK with error
+12. Start headless operation
+
+================================================================
+WEB CLAUDE'S ANALYSIS
+================================================================
+
+WHAT'S GOOD (keep as-is):
+  - Interactive account selection before startup: YES. Better
+    than hardcoded primary. Operator confirms which account.
+  - Auto token generation via TOTP: YES. Eliminates manual
+    Kite login browser flow. kiteconnect supports
+    kite.generate_session(request_token, api_secret).
+    BUT: Zerodha's login flow requires a browser redirect
+    to get request_token first. Pure headless TOTP login
+    needs kiteconnect's login helper or selenium. Clarify
+    which method you used in old system.
+  - Holiday/weekend block: YES. Correct. No main.py, no logs,
+    clean exit. market_windows already has this check.
+  - Live capital from broker: YES. Correct. fund_manager
+    already calls broker.get_margins() to initialize.
+  - Paper capital from config: YES. Already designed this way.
+  - Token mismatch detection: YES. Smart. Token file should
+    contain account_id metadata so system can verify.
+
+WHAT NEEDS CLARIFICATION:
+
+QUESTION A — Token generation method:
+  Zerodha login flow has 2 steps:
+    Step 1: Browser redirect -> user logs in -> gets request_token
+    Step 2: kite.generate_session(request_token, api_secret) -> access_token
+
+  You CANNOT skip Step 1 purely with TOTP. Zerodha requires
+  browser-based OAuth. The TOTP is for 2FA during browser login,
+  not a headless replacement.
+
+  Options:
+  (i)  Use selenium/playwright to automate browser login
+       (old system may have done this). Fragile but works.
+  (ii) Use a lightweight script that opens browser, user
+       completes login, script captures redirect URL and
+       extracts request_token. Semi-manual.
+  (iii) Use third-party kite login helper (pyotp + requests
+        to simulate browser flow). Exists in community but
+        against Zerodha TOS.
+
+  Which did your old system use? This determines what we build.
+
+QUESTION B — accounts.csv schema change:
+  Current M38 schema: api_key_env, api_secret_env, totp_secret_env
+  Your flow needs: system reads ACTUAL values (not env var
+  names) to auto-login. Two approaches:
+
+  (i)  Keep env var names in CSV, resolve from .env at login time.
+       System does: api_key = os.environ[row.api_key_env]
+       This preserves the security model (no credentials in CSV).
+
+  (ii) Put credentials directly in CSV (your uploaded version).
+       Simpler but less secure. CSV must be gitignored.
+
+  Recommend: (i). Credentials stay in .env. CSV has names only.
+  The interactive prompt shows label + account_id from CSV.
+  After selection, system resolves credentials from .env.
+
+QUESTION C — Capital in accounts.csv for paper mode:
+  Current schema has capital_share_pct (split ratio).
+  Your flow wants: actual capital AMOUNT for paper mode.
+  Need a new column: paper_capital (float, e.g., 100000.0).
+
+  Revised CSV schema:
+    account_id, broker, label, is_primary,
+    api_key_env, api_secret_env, totp_secret_env,
+    paper_capital, capital_share_pct, enabled
+
+  Live mode: ignores paper_capital, syncs from broker.
+  Paper mode: uses paper_capital as starting balance.
+
+QUESTION D — Single startup script or separate?
+  Options:
+  (i)  Everything in main.py (login + select + start).
+       Monolithic but simple.
+  (ii) Separate scripts/login.py that handles account
+       selection + token generation, then calls main.py.
+       Cleaner separation.
+  (iii) main.py --interactive flag that enables the
+        account selection prompt. Default (non-interactive)
+        uses primary account for automated/VM restarts.
+
+  Recommend: (iii). Interactive for operator on PC.
+  Non-interactive for VM (systemd auto-restart uses primary
+  account + existing token file).
+
+QUESTION E — Token file format:
+  Current: zerodha_token.json (from old system)
+  Proposed enhanced format:
+    {
+      "account_id": "LFL836",
+      "access_token": "abc123...",
+      "generated_at": "2026-04-17T08:45:00+05:30",
+      "expires_at": "2026-04-18T05:00:00+05:30",
+      "api_key": "pvahsvuu..."  (for mismatch detection)
+    }
+  Mismatch check: if selected account_id != token.account_id
+  -> BLOCK with error "Token belongs to LFL836 but you
+  selected DR6114. Re-login required."
+
+QUESTION F — VM vs PC flow difference:
+  PC (interactive):
+    venv -> preflight -> select account -> login -> save token
+    -> copy to VM -> select mode -> start
+  VM (headless):
+    systemd starts main.py -> reads existing token file
+    -> validates account_id matches primary -> starts
+    If token expired or missing -> exit with code 6
+    -> operator gets alert -> re-runs login on PC -> SCP
+
+  Both paths must be supported. Interactive = PC.
+  Non-interactive = VM.
+
+================================================================
+PROPOSED REVISED FLOW (after clarifications)
+================================================================
+
+INTERACTIVE MODE (PC operator):
+
+  $ cd D:\Projects\trading-system
+  $ venv\Scripts\activate
+  $ python main.py --interactive
+
+  Step 1: Pre-flight checks (config, holidays, scanners)
+    If holiday/weekend:
+      "Today is <date> (<day>). Market closed."
+      "Next trading day: <next_date> (<next_day>)"
+      Exit 0. No logs created. No threads.
+
+  Step 2: Display accounts
+    ┌────┬───────────┬─────────────┬─────────┐
+    │  # │ Account   │ Label       │ Status  │
+    ├────┼───────────┼─────────────┼─────────┤
+    │  1 │ LFL836    │ Kandasamy   │ enabled │
+    │  2 │ DR6114    │ Ramakrishnan│ disabled│
+    │  3 │ D351962   │ Dhanalakshmi│ disabled│
+    └────┴───────────┴─────────────┴─────────┘
+    Select account [1]:
+
+  Step 3: Check existing token
+    If valid token exists for selected account:
+      "Token found for LFL836, generated at 08:30 today."
+      "Use existing token? [Y/n]:"
+    If no token or expired:
+      "No valid token. Initiating login..."
+      -> Run login flow (method per Question A)
+      -> Save to data_store/session/zerodha_token.json
+
+  Step 4: Select mode
+    "Select mode:"
+    "  1. Paper (capital: Rs 100,000 from config)"
+    "  2. Live  (capital: syncs from broker)"
+    Select [1]:
+
+  Step 5: If Live mode selected:
+    Sync margins from broker.
+    "Broker capital available: Rs 2,45,000.00"
+    "Confirm start in LIVE mode? [y/N]:"
+    (Defaults to No — operator must explicitly confirm live)
+
+  Step 6: Start system
+    "Starting trading system..."
+    "Account: LFL836 (Kandasamy)"
+    "Mode: PAPER | Capital: Rs 100,000"
+    -> main.py normal Phase 0a-0h startup
+    -> Headless operation begins
+
+NON-INTERACTIVE MODE (VM / systemd):
+
+  $ python main.py --mode paper
+    OR
+  $ python main.py --mode live
+
+  Uses primary account from accounts.csv.
+  Reads existing token file. If missing/expired: exit 6.
+  No prompts. No account selection.
+
+================================================================
+WHAT NEEDS DECISIONS FROM RAMA
+================================================================
+
+Before VS Code Claude builds anything, confirm:
+
+1. Question A: How does your old system generate tokens?
+   (selenium? community helper? manual browser?)
+
+2. Question C: Add paper_capital column to accounts.csv?
+   Example value for LFL836: 100000? 500000?
+
+3. Question D: Do you approve the --interactive flag approach?
+   (interactive for PC, non-interactive for VM)
+
+4. Question E: Token file format with account_id for mismatch
+   detection — approved?
+
+5. Any other flow changes?
+
+================================================================
+WHAT THIS IS NOT
+================================================================
+
+This is a DISCUSSION document, not a build instruction.
+Do NOT forward to VS Code Claude yet. Rama confirms answers
+to Questions A-E first. Then Web Claude produces the build
+instruction.
+
+This redesign affects:
+  - main.py (interactive startup flow)
+  - scripts/login.py or scripts/generate_token.py (new)
+  - accounts.csv schema (paper_capital column)
+  - Token file format
+  - startup_checks.py (holiday block enhancement)
+  - fund_manager (live capital sync vs paper capital)
+
+Estimated effort: ~1 new module + main.py update.
+Not a rebuild — an enhancement to existing foundation.

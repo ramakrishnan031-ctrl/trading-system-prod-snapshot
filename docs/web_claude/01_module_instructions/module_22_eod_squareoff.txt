@@ -1,0 +1,295 @@
+================================================================
+PART A — MEMORY HYGIENE RULES (LOCK PERMANENTLY)
+================================================================
+
+For VS Code Claude — write to mempalace AT THESE TRIGGER POINTS:
+
+MH1 — End of every module build:
+  After test suite green + locked decisions written, store
+  ONE memory entry summarizing:
+    - Module name + path
+    - Total tests passed (cumulative + this module)
+    - Locked decision IDs added (e.g. EOD1-EOD12)
+    - Schema version after this module
+    - Cross-module impacts (other modules touched)
+    - Any deviations from instruction file (if any)
+
+MH2 — On every locked_decisions.yaml edit:
+  Store: which decision IDs added/changed, justification,
+  affected modules. Web Claude needs to be told these to
+  stay aligned.
+
+MH3 — On every schema_version bump:
+  Store: old version -> new version, table changes, migration
+  notes. Critical for restart-safety.
+
+MH4 — On every cross-module bug fix:
+  Store: bug description, root cause, files touched, regression
+  test added. Prevents re-introduction.
+
+MH5 — On every deviation from web claude's instructions:
+  Store: what spec was given, what was built, why deviation
+  was justified (locked_decisions.yaml override, etc.).
+
+MH6 — Daily memory consolidation prompt:
+  At end of each working session, store a session summary:
+    - Modules built this session (list + paths)
+    - Total test count delta (start -> end)
+    - Open issues/TODOs
+    - Next planned module
+
+For Web Claude (me) — context discipline:
+
+WCH1 — Before each new module instruction, ALWAYS request
+  the user paste the relevant locked_decisions.yaml section.
+  Do NOT invent OP/RE/SP-style numbering when locked
+  numbering already exists.
+
+WCH2 — Use locked decision IDs verbatim in instructions.
+  E.g., "per G1, P14, EV6" not "per OP1, OP2, OP3".
+
+WCH3 — If user reports a deviation between my instruction
+  and what was built, ALWAYS treat locked_decisions.yaml
+  as authoritative. Patch gaps, do not rebuild.
+
+WCH4 — Track running test count + module count in every
+  reply preamble going forward. Lose-track risk is high
+  across 20+ modules.
+
+WCH5 — At session start, if no recent context: ask user
+  to paste current 21+ row test table + last 3 locked
+  decision IDs added. Recovers state quickly.
+
+User responsibility (bridge):
+  - Paste locked_decisions.yaml sections to Web Claude before
+    each module so instructions stay aligned
+  - Forward Web Claude's full instruction .txt to VS Code Claude
+  - Forward VS Code Claude's test reports back to Web Claude
+  - Flag any deviation, ambiguity, or contradiction
+    immediately — do not let it accumulate
+
+================================================================
+PART B — MODULE 22: orders/eod_squareoff.py
+================================================================
+
+CONTEXT: 516/516 green across 21 modules. EOD square-off is
+the only module with all dependencies present and tightly
+specified by P1 + P1_market_windows_api. Closes the orders
+layer for safe paper-mode running.
+
+LOCKED DECISIONS REFERENCED (from locked_decisions.yaml):
+  P1                    — Times from market_windows.py only
+  P1_market_windows_api — is_eod_squareoff_due() pure;
+                           eod_squareoff owns "already fired" flag
+
+ADDITIONAL DECISIONS TO LOCK (EOD1-EOD12):
+
+EOD1 — Purpose: Square off all open intraday positions at
+  EOD square-off time (15:17 IST per P1). Cancels pending
+  intraday orders first, then exits filled positions with
+  staggered MARKET orders. Releases capital reservations
+  and used balances. Publishes PositionClosed events.
+
+EOD2 — Constructor:
+  EodSquareoff(
+    adapter,             # ZerodhaAdapter
+    state_store,         # for open positions + pending orders
+    fund_manager,        # for release
+    state_machine,       # for transitions
+    bus,                 # for PositionClosed events
+    market_windows,      # for is_eod_squareoff_due check
+    time_authority,      # for now_ist
+    kill_switch,         # to record state on EOD trigger
+    logger,
+    inter_order_delay_ms=500,  # P8_P13 audit fix: avoid
+                                # liquidity vacuum
+  )
+
+EOD3 — "Already fired" flag (P1_market_windows_api ownership):
+  Internal _fired_for_date: dict[date, bool].
+  check_and_fire(now: datetime) -> bool:
+    if not market_windows.is_eod_squareoff_due(now): return False
+    if market_windows.is_trading_holiday(now): return False
+    today = now.date()
+    if _fired_for_date.get(today, False): return False
+    _fire(now)
+    _fired_for_date[today] = True
+    return True
+  Idempotent: caller can poll every second after 15:17 — only
+  fires once per trading day.
+
+EOD4 — Scheduler integration:
+  Module exposes check_and_fire() but does NOT own a thread.
+  main.py scheduler calls it every N seconds (configurable,
+  default 5s). Keeps module testable; no embedded clock.
+  Optional: provide start_polling(poll_interval_sec=5) helper
+  that launches a daemon thread for environments without an
+  external scheduler. Tests use check_and_fire() directly.
+
+EOD5 — Fire sequence (lock; ordered):
+  1. Log INFO: "EOD square-off triggered for {date}"
+  2. Set kill_switch to SOFT_KILL with reason="EOD_SQUAREOFF"
+     (prevents new entries during square-off; existing exits
+     still allowed)
+  3. Cancel all pending intraday entry orders:
+     - Query state_store.get_pending_intraday_orders() -> list
+     - For each: adapter.cancel_order(broker_order_id)
+     - On success: state_machine transition to CANCELLED,
+       fund_manager.release(reservation_id, "EOD_CANCEL")
+     - On cancel failure: log CRITICAL, leave for reconciler
+  4. Square off all open intraday positions:
+     - Query state_store.get_open_intraday_positions() -> list
+     - For each (in deterministic order — sorted by symbol
+       per Foundation Rule 3.7):
+       a. Determine exit side (BUY position -> SELL exit)
+       b. adapter.place_order(symbol, exit_side, qty, MARKET,
+                              INTRADAY, tag="EOD_SQUAREOFF")
+       c. On success: register internal_order_id with
+          state_machine, hand off to order_monitor for fill
+          tracking. order_monitor will update fund_manager
+          on fill (existing flow).
+       d. On exception: log CRITICAL, mark position as
+          EOD_EXIT_FAILED in state_store. Reconciler picks up.
+       e. time.sleep(inter_order_delay_ms / 1000) BETWEEN
+          orders (audit fix: prevents liquidity vacuum)
+  5. Log INFO summary: positions_squared, cancels_succeeded,
+     cancels_failed, exits_placed, exits_failed
+  6. Publish EodSquareoffComplete event (NEW event type,
+     add to core/events.py + test_events.py)
+  7. Set kill_switch back to INACTIVE via resume() ONLY IF
+     it was set to SOFT_KILL by THIS module (check stored flag).
+     Don't auto-resume if operator had triggered hard_kill.
+
+EOD6 — POSITIONAL positions NOT squared off:
+  Filter by intent. Only INTRADAY and COVER_ORDER positions
+  exit at EOD. DELIVERY (CNC) positions remain open overnight.
+  Audit explicit per P1.
+
+EOD7 — Fill confirmation OUT of scope:
+  EOD module places MARKET exits and trusts order_monitor
+  to track fills. Does NOT block waiting for confirmations.
+  Caller (main.py) can poll order_monitor for completion
+  if needed for shutdown sequencing.
+
+EOD8 — State persistence:
+  Add eod_squareoff_log table to state_store:
+    id, fired_date, fired_at, positions_attempted,
+    positions_succeeded, positions_failed, cancels_attempted,
+    cancels_succeeded, cancels_failed, duration_sec
+  One row per fire. Used by daily report.
+  Bump schema_version. Update test_state_store.
+
+EOD9 — Restart recovery:
+  On construction, query eod_squareoff_log for today's date:
+    if row exists with fired_at < now AND positions_failed > 0:
+      log WARNING "EOD ran today but had failures; reconciler
+                   should handle"
+  Do NOT auto-fire on restart even if past 15:17. Operator
+  must manually invoke if needed.
+  Edge case: if restart at 15:18 and EOD never ran today,
+  log CRITICAL and DO fire (one-time recovery, mark log row).
+  Lock: recovery-fire allowed only if no log row exists for
+  today AND now is past EOD time AND not past 15:30 (market
+  close).
+
+EOD10 — Emergency manual fire:
+  fire_now(reason: str, triggered_by: str) -> EodFireResult
+  Bypasses time check. Used by operator emergency shutdown.
+  Logs CRITICAL with reason. Marks _fired_for_date[today].
+  Does NOT skip the kill_switch SOFT_KILL step.
+
+EOD11 — Layer & deps:
+  Layer 5 (orders/). Imports: stdlib (threading, time, datetime),
+  core.exceptions, core.events, core.logger, core.time_authority,
+  core.state_store, core.market_windows,
+  broker.zerodha_adapter, broker.order_state_machine,
+  capital.fund_manager, capital.kill_switch.
+
+EOD12 — System config additions:
+  eod_squareoff:
+    inter_order_delay_ms: int   (default 500, validated >= 0, <= 5000)
+    poll_interval_sec: int      (default 5, validated >= 1)
+    auto_resume_kill_switch: bool (default true)
+  Update YAML stub. Re-run test_config_loader.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add eod_squareoff_log table to schema.sql per EOD8.
+   Bump schema_version. Update test_state_store with insert
+   + query test for the table.
+
+2. Add EodSquareoffComplete event to core/events.py per EOD5.
+   Update test_events.py.
+
+3. Add 2 query helpers to state_store:
+     get_pending_intraday_orders() -> list[OrderRow]
+     get_open_intraday_positions() -> list[PositionRow]
+   Filter by intent IN ("INTRADAY","COVER_ORDER") and
+   appropriate status. Update test_state_store.
+
+4. Extend SystemConfig per EOD12. Update YAML stub.
+   Re-run test_config_loader.
+
+5. Build orders/eod_squareoff.py per EOD1-EOD12.
+
+6. Build tests/unit/test_eod_squareoff.py covering:
+   - check_and_fire before 15:17 -> False, no action
+   - check_and_fire on holiday -> False
+   - check_and_fire at 15:17 first time -> True, sequence runs
+   - check_and_fire same day twice -> second returns False
+     (idempotent flag)
+   - check_and_fire next day after fire -> True (flag is
+     per-date)
+   - kill_switch transitioned to SOFT_KILL during fire
+   - kill_switch resumed to INACTIVE after fire (if
+     auto_resume_kill_switch=true)
+   - kill_switch NOT auto-resumed if operator already had
+     it in HARD_KILL (or different reason)
+   - Pending INTRADAY orders cancelled
+   - Pending DELIVERY orders NOT cancelled (regression EOD6)
+   - Open INTRADAY positions exited with MARKET (BUY -> SELL)
+   - Open DELIVERY positions NOT touched (regression EOD6)
+   - Exit orders placed in symbol-sorted order (Foundation 3.7)
+   - inter_order_delay_ms applied between orders
+     (mock time.sleep, verify call count + args)
+   - Adapter cancel exception -> log CRITICAL, continue
+     with next position
+   - Adapter place_order exception during exit -> log CRITICAL,
+     mark EOD_EXIT_FAILED, continue
+   - eod_squareoff_log row written with full counts
+   - EodSquareoffComplete event published with summary payload
+   - fire_now() bypasses time check, logs CRITICAL with reason
+   - fire_now() still records _fired_for_date flag
+   - Restart at 15:18 with no log row for today -> recovery fire
+   - Restart at 15:18 with log row already present -> no fire
+   - Restart at 15:31 with no log row -> WARNING but no fire
+     (past market close)
+   - State machine transitions correct for cancelled orders
+   - fund_manager.release called for each cancelled reservation
+   - fund_manager NOT called for filled position exits
+     (order_monitor handles that on fill confirmation)
+
+7. Re-run all 21 prior suites + new one. Report 22-row table.
+
+================================================================
+MEMORY UPDATES (per MH1 - DO THIS AFTER GREEN)
+================================================================
+
+Store in mempalace:
+  Module: orders/eod_squareoff.py
+  Tests added: ~25
+  Total cumulative: report actual
+  Locked decisions added: EOD1-EOD12
+  Schema version: bumped to vN (record number)
+  Events added: EodSquareoffComplete
+  Config additions: eod_squareoff section in SystemConfig
+  Cross-module: state_store (3 new queries + 1 new table),
+                events.py (1 new type), config_loader (1 new
+                section)
+  Deviations from instruction: list if any
+
+================================================================
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================

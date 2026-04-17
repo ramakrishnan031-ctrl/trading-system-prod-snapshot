@@ -1,0 +1,293 @@
+================================================================
+MODULE 31: screening/entry_gate.py
+================================================================
+
+CONTEXT: 902/902 across 34 suites. entry_gate is the pullback
+wait mechanism. After a signal PASSES screening, if the
+strategy has pullback_wait_enabled=True, the signal is held
+in a watchlist until price retraces to the entry level (or
+timeout). Only then does it flow to sizing + placement.
+
+LOCKED DECISIONS REFERENCED:
+  P11a — Price-based pullback wait. NOT time-based.
+         Worker thread polls LTP every 5s. Fires entry only
+         when price retraces to entry_price +/- tolerance.
+         Hard timeout 180s default. Per-strategy opt-in via
+         pullback_wait_enabled.
+  S3   — StrategyConfig.pullback_wait_enabled,
+         pullback_wait_tolerance_pct, pullback_wait_timeout_sec
+
+AUDIT ISSUES ADDRESSED:
+  #8  — Delayed Entry Monitor time-tier logic flaw (replaced
+        with price-based wait per P11a)
+  #21 — _in_flight never cleared on exception
+  #29 — Single-thread blocking queue (entry_gate uses own thread)
+
+================================================================
+LOCK (EG1-EG15)
+================================================================
+
+EG1 — Purpose: Hold signals in a price-watchlist. Poll LTP
+  at fixed interval. When price enters entry_price +/- tolerance
+  zone: release to downstream callback (signal_processor's
+  post-gate pipeline). Or release on timeout (with timeout
+  status).
+
+EG2 — Constructor:
+  EntryGate(
+    quote_fn,           # Callable[[list[str]], dict[str, Quote]]
+    logger,
+    state_store,        # for status updates
+    on_release,         # Callable[[WatchEntry, str], None]
+                        # called when signal is released
+                        # reason: "PRICE_HIT" | "TIMEOUT"
+    poll_interval_sec=5,   # P11a default
+    worker_count=2,
+  )
+
+EG3 — WatchEntry dataclass (internal tracking):
+  WatchEntry (frozen for immutable fields, but mutable ts):
+    signal_id: str
+    symbol: str
+    direction: str              # LONG | SHORT
+    trigger_price: float        # scanner price
+    entry_price: float          # derived from strategy
+    sl_price: float
+    tgt_price: float
+    tolerance_pct: float        # from strategy
+    timeout_sec: int            # from strategy
+    strategy_name: str
+    tier: str                   # from screener result
+    scanner_name: str
+    intent: str
+    added_at: datetime          # when added to watchlist
+    extras: dict                # any signal_processor context
+                                # needed for downstream
+
+EG4 — Public API:
+  gate.add(entry: WatchEntry) -> None
+    Adds to watchlist. Raises ValueError if signal_id already
+    present.
+
+  gate.remove(signal_id: str) -> bool
+    Removes from watchlist. Returns True if removed, False
+    if not present. Used by external cancellation.
+
+  gate.watchlist() -> list[WatchEntry]
+    Returns snapshot of current watchlist (copy).
+
+  gate.size() -> int
+
+  gate.start() -> launches poll thread pool
+  gate.stop()  -> signals shutdown, joins within 5s
+
+EG5 — Price trigger logic (lock per P11a):
+  For each WatchEntry per poll cycle:
+    ltp = quote_fn([symbol])[symbol].last_price
+    tolerance = entry_price * tolerance_pct
+    lower = entry_price - tolerance
+    upper = entry_price + tolerance
+
+    HIT condition:
+      LONG:  ltp <= upper AND ltp >= lower  (pullback into zone)
+      SHORT: ltp >= lower AND ltp <= upper  (pullback into zone)
+
+    More precisely per audit + P11a intent:
+      LONG pullback: after breakout, price retraces DOWN to
+                     entry zone. Fire when lower <= ltp <= upper.
+      SHORT pullback: after breakdown, price retraces UP to
+                      entry zone. Same condition: lower <= ltp <= upper.
+
+    The tolerance window is symmetric. Fire on first touch.
+
+EG6 — Timeout logic:
+  If (now_ist() - entry.added_at).total_seconds() >= entry.timeout_sec:
+    Release with reason="TIMEOUT".
+    Per audit: timeout is HARD, not time-tier. Default 180s.
+
+EG7 — Release protocol:
+  When HIT or TIMEOUT:
+    1. Remove from watchlist (atomic, under lock)
+    2. Update state_store.update_signal_status:
+       HIT     -> status="GATE_RELEASED_PRICE_HIT"
+       TIMEOUT -> status="GATE_RELEASED_TIMEOUT"
+    3. Call on_release(entry, reason)
+       The callback (in signal_processor) resumes the
+       post-screener pipeline: sizing -> risk -> reserve -> place.
+    4. Log INFO with signal_id + reason + elapsed_sec
+  Release MUST NOT raise. Errors in on_release logged,
+  do not crash the polling thread.
+
+EG8 — Polling thread model:
+  Uses ThreadPoolExecutor with worker_count workers.
+  Main poll thread runs every poll_interval_sec:
+    snapshot = list(self._watchlist.values())  # under lock
+    for entry in snapshot:
+      executor.submit(self._check_one, entry)
+  _check_one fetches quote, evaluates HIT/TIMEOUT, releases
+  if needed. Each worker handles independent symbols
+  concurrently (different API calls).
+
+EG9 — quote_fn error handling:
+  If quote_fn raises for a symbol:
+    Log WARNING, skip that entry this cycle, retry next poll.
+    Do NOT timeout the entry early on quote failures.
+    Audit defensive: transient quote failure != gate failure.
+  If quote_fn raises 3 consecutive cycles for same symbol:
+    Log ERROR. Release with reason="QUOTE_UNAVAILABLE".
+    Entry is removed, caller (signal_processor) can decide
+    whether to proceed (likely reject).
+
+EG10 — Thread safety:
+  _watchlist dict (signal_id -> WatchEntry) guarded by
+  threading.Lock.
+  add() / remove() / watchlist() all acquire.
+  Poll thread snapshots under lock, releases lock, then
+  processes outside lock.
+  _check_one may remove via gate.remove() (acquires lock
+  again). No nesting.
+
+EG11 — Idempotency:
+  add() with duplicate signal_id raises ValueError.
+  remove() is idempotent.
+  _check_one on already-removed entry: no-op (handled
+  by re-reading watchlist before action).
+
+EG12 — Logging:
+  Logger name: "entry_gate".
+  Every add/remove/release: INFO.
+  Every poll cycle summary: DEBUG (count, duration).
+  Errors: ERROR with traceback via log_exception.
+
+EG13 — Layer & deps:
+  Layer 5 (screening/). Imports: stdlib (threading, time,
+  concurrent.futures, dataclasses, datetime), core.logger,
+  core.time_authority, core.state_store.
+  NO broker import (quote_fn injected).
+  NO strategies import (strategy data passed via WatchEntry).
+
+EG14 — Integration with signal_processor (Module 33 does
+  the wiring; this module only defines the contract):
+  In signal_processor._process_one pipeline AFTER screening
+  PASSED:
+    if strategy.pullback_wait_enabled:
+      entry_gate.add(WatchEntry(...))
+      # Pipeline pauses here. on_release callback continues.
+      return
+    else:
+      # Skip gate, proceed to sizing inline
+  on_release callback in signal_processor:
+    def _on_gate_release(entry, reason):
+      # Reconstruct pipeline from WatchEntry data
+      # Run sizing -> risk -> reserve -> place
+      # or reject if reason == "TIMEOUT" with status already set
+
+EG15 — NOT in scope:
+  - Integration wiring (Module 33 main.py orchestrator wires
+    entry_gate into signal_processor)
+  - Non-price timeout strategies (audit Issue #8 deprecated)
+  - Priority reordering in watchlist
+  - Candle-based triggers (only LTP per P11a)
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Build screening/entry_gate.py per EG1-EG15 (~250 lines).
+
+2. Build tests/unit/test_entry_gate.py covering:
+
+   LIFECYCLE:
+   - Constructor validates poll_interval_sec > 0
+   - start() launches threads
+   - stop() joins within 5s
+   - Double start() is no-op (or raises; choose and lock)
+
+   ADD / REMOVE:
+   - add() inserts WatchEntry into watchlist
+   - add() duplicate signal_id -> ValueError
+   - remove() by signal_id -> True, entry gone
+   - remove() unknown -> False, no exception
+   - size() / watchlist() return correct snapshot
+
+   PRICE TRIGGER:
+   - LONG: ltp enters zone (lower <= ltp <= upper) -> release
+     with PRICE_HIT
+   - LONG: ltp outside zone -> no release
+   - SHORT: ltp enters zone -> release
+   - Exact boundary: ltp = lower -> HIT
+   - Exact boundary: ltp = upper -> HIT
+   - ltp just outside: no HIT
+   - Tolerance calculation: 1% of 1000 = 10; zone 990-1010
+
+   TIMEOUT:
+   - Entry added, time passes > timeout_sec -> release TIMEOUT
+   - Entry hit before timeout -> release PRICE_HIT (not TIMEOUT)
+   - Multiple entries: each has independent timeout
+
+   QUOTE FAILURES:
+   - quote_fn raises once -> skip cycle, no release
+   - quote_fn raises 3 consecutive -> release QUOTE_UNAVAILABLE
+   - Quote failure on symbol A doesn't affect symbol B
+
+   THREAD SAFETY:
+   - Concurrent add/remove from 5 threads: no races,
+     watchlist consistent
+   - Poll thread iterates snapshot while add happens: no
+     modification-during-iteration
+
+   RELEASE CALLBACK:
+   - on_release called with (entry, reason) on HIT
+   - on_release called with (entry, reason) on TIMEOUT
+   - on_release raises: error logged, poll thread continues
+   - Entry removed from watchlist BEFORE on_release called
+     (idempotency: callback can safely re-add if desired)
+   - state_store.update_signal_status called with correct
+     status string before on_release
+
+   STATE PERSISTENCE:
+   - GATE_RELEASED_PRICE_HIT written on HIT
+   - GATE_RELEASED_TIMEOUT written on TIMEOUT
+   - GATE_RELEASED_QUOTE_UNAVAILABLE written on quote fail
+   - Write failure -> log ERROR but still invoke callback
+
+   EDGE CASES:
+   - add() while stop() in progress: add raises or queues
+     (choose and lock)
+   - Empty watchlist: poll cycle is no-op
+   - 100 entries in watchlist: all polled per cycle
+   - tolerance_pct=0: entry fires only at exact price (pathological
+     but valid)
+
+3. Re-run all 34 prior suites + new one. Report 35-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: screening/entry_gate.py
+  Tests: report actual
+  Locked: EG1-EG15 under screening_module: section
+  Schema: unchanged
+  Cross-module: state_store (uses existing update_signal_status),
+                on_release callback interface for signal_processor
+                (wiring deferred to Module 33)
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Use MockQuoteFn for deterministic tests. Mock
+time via time.monotonic patch or time_authority mock.
+Avoid real time.sleep longer than 0.5s in tests.
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+Module 32 = orders/smart_tgt_manager (G6 + P8_P13)
+Module 33 = main.py orchestrator (wires all modules)
+Module 34 = reports/daily_report
+Module 35 = scripts/startup_checks, scripts/preflight_scanner
+
+After entry_gate green, paste any locked decisions for
+smart_tgt_manager beyond G6 + P8_P13 (already in hand).

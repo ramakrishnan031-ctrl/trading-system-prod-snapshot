@@ -1,0 +1,110 @@
+================================================================
+V2 FOUNDATION COMPLETE — Final wrap-up
+================================================================
+
+1187/1187 green. Every subsystem built, unit-tested,
+integration-tested. Time to lock this state and move to
+paper trial.
+
+================================================================
+WRAP-UP TASKS (do all; then report done)
+================================================================
+
+1. Create .env.example at repo root:
+   ZERODHA_API_KEY=your_api_key_here
+   ZERODHA_ACCESS_TOKEN=your_access_token_here
+   TELEGRAM_BOT_TOKEN=your_bot_token_here
+   WEBHOOK_SECRET=optional_hmac_secret
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=you@example.com
+   SMTP_PASSWORD=app_password_here
+   SMTP_FROM=you@example.com
+   SMTP_TO=alerts@example.com
+
+   Also ensure .env is in .gitignore (check; add if missing).
+
+2. Create/update README.md at repo root with:
+   - Project name, purpose
+   - Install steps:
+       python -m venv venv
+       venv\Scripts\activate
+       pip install -r requirements.txt
+   - Environment setup (copy .env.example to .env)
+   - Run commands:
+       python main.py --mode paper              # paper trading
+       python main.py --mode paper --dry-run    # startup checks only
+       python main.py --status                  # subsystem status
+       python main.py --mode live --resume      # post-HALT live start
+       python scripts\preflight_scanner_check.py
+       python -m reports.daily_review
+   - Test commands:
+       pytest tests\ -q                         # full suite
+       pytest tests\integration\ -v             # integration only
+   - Directory layout (1-paragraph overview)
+   - Link to docs/locked_decisions.yaml for architecture
+
+3. Verify requirements.txt has all deps pinned:
+   pydantic==2.13.0
+   PyYAML==6.0.3
+   kiteconnect>=4.2.0
+   flask>=3.0
+   openpyxl>=3.1
+   requests>=2.33
+   pytest (dev)
+
+4. Git tag:
+   git add .
+   git commit -m "v2 foundation complete: 1187/1187 tests green"
+   git tag v2.0.0-foundation-complete
+   (Do NOT push unless user confirms)
+
+5. Final summary to user, one concise block:
+   - Total modules built
+   - Total tests (units + integration)
+   - Total locked decisions
+   - Final schema version
+   - Files changed today
+   - What's ready for paper trial
+   - What's deferred to v2.1
+
+6. Final mempalace write: session summary entry capturing
+   "v2 foundation complete" state so restart won't lose it.
+
+================================================================
+DEFERRED TO v2.1 (not in foundation)
+================================================================
+
+Document these in a docs/v2_1_roadmap.md file:
+
+  - Real ATR/VWAP/RSI calculation providers
+  - Sector strength computation
+  - Positional strategy full logic (CNC overnight)
+  - Historical candle backfill
+  - Charts in daily_review
+  - Systemd service files for deployment
+  - Operator runbook
+  - Live-mode paper trial results + tuning
+
+================================================================
+POST-COMPLETION: FIRST PAPER TRIAL
+================================================================
+
+Suggest to user (not a build task):
+
+Before live trading:
+  1. Run `python main.py --mode paper --dry-run` — verify
+     all startup checks pass with real Kite credentials
+  2. Run `python main.py --mode paper` during market hours
+     for at least 3 full sessions
+  3. Verify webhooks from Chartink are reaching the endpoint
+     (check webhook_audit table)
+  4. Review daily_review.xlsx at EOD each day
+  5. Monitor logs/*.log for ERRORs
+  6. Check no capital invariant violations, no orphan orders
+  7. Only then consider live mode
+
+================================================================
+Report when all 6 wrap-up tasks complete.
+Then the build phase is officially done.
+================================================================

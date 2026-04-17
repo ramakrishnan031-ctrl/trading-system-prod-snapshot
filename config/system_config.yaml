@@ -1,0 +1,131 @@
+# config/system_config.yaml — Trading System v2
+#
+# Master configuration. Every numeric and boolean limit here has a
+# corresponding runtime check, Telegram alert, and daily report row (P2).
+# All time values are "HH:MM" strings interpreted as IST (P1).
+#
+# Locked decisions: P1, P2, P4, P8, P11b, P13, P14, P15, Q1, G4, PR8
+# product_map embedded here per CL6 note (no separate broker_product_map.yaml).
+
+trading_hours:
+  entry_start: "09:30"        # Entry order window opens (P1)
+  entry_end: "13:30"          # Entry order window closes (P1)
+  eod_squareoff_time: "15:17" # Square-off trigger; 3-min buffer before RMS auto-sq at 15:20 (P1)
+
+limits:
+  max_open_positions: 10      # Hard cap; blocking on breach (Q1, P5)
+  max_trades_per_day: 20      # Hard cap; Telegram warn at 80%, block at 100% (P4)
+  daily_loss_limit_pct: 2.0   # % of cash_floor; soft_kill on breach
+
+signal_queue:
+  capacity: 300               # Max signals in queue before HTTP 503 (P15)
+  backpressure_pct: 0.80      # 503 threshold = capacity * backpressure_pct (P15)
+  expiry_sec: 60              # WR6: reject signal older than this many seconds
+
+polling:
+  order_monitor_sec: 15       # order_monitor poll interval (P14)
+  order_reconciler_sec: 15    # reconciler poll interval (P14)
+
+order_fill_timeout:
+  limit_sec: 60               # LIMIT order fill timeout; cancel + mark FAILED on expiry (P11b)
+  market_sec: 0               # MARKET order: no wait needed (P11b)
+
+product_map:                  # PR8: broker -> {INTENT -> broker_code}
+  zerodha:
+    INTRADAY: "MIS"           # Margin Intraday Squareoff (PR3)
+    DELIVERY: "CNC"           # Cash-and-Carry -- delivery / positional (PR3)
+    COVER_ORDER: "CO"         # Cover Order -- bracket with built-in SL (PR3)
+    BRACKET_ORDER: ""         # Zerodha discontinued BO; empty = not supported (PR3)
+
+clock:
+  warn_skew_sec: 2.0          # G4 tier 1: log warning
+  alert_skew_sec: 5.0         # G4 tier 2: Telegram alert, continue trading
+  halt_skew_sec: 30.0         # G4 tier 3: fire on_critical_skew -> soft_kill
+  startup_max_skew_sec: 30.0  # G4: refuse to start if startup skew exceeds this
+
+order_monitor:                # OM14
+  poll_interval_sec: 2        # poll broker every 2s for fill updates (>= 1)
+  fill_timeout_sec: 60        # cancel unfilled OPEN/SUBMITTED order after 60s (>= 5)
+
+capital:                      # FM16
+  intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
+  positional_bucket_pct: 0.30 # 30% of total capital for positional (CNC)
+  daily_loss_limit: 10000.0   # absolute rupee daily loss limit (> 0)
+  leverage_map:
+    INTRADAY: 5.0             # MIS leverage
+    COVER_ORDER: 6.0          # CO leverage
+    DELIVERY: 1.0             # CNC, no leverage
+    BRACKET_ORDER: 5.0        # BO leverage
+
+position_sizing:              # PS9
+  risk_per_trade_pct: 0.01    # 1% of total capital at risk per trade (PS2)
+  max_concentration_pct: 0.10 # max 10% of total capital in one symbol (PS2)
+  min_qty_threshold: 1        # reject signal if final qty below this (PS6)
+  tier_multipliers:           # PS5: applied after min(risk, capital, conc)
+    HIGH: 1.0                 # full size
+    MEDIUM: 0.70              # 70% of computed size
+    LOW: 0.50                 # 50% of computed size (audit Bug 5 fix)
+
+risk:                         # RE13 — portfolio-level pre-trade gate limits
+  max_open_positions: 10      # hard cap on concurrent open positions (>= 1)
+  max_daily_trades: 20        # hard cap on trades per day (>= 1)
+  max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
+  max_consecutive_losses: 4   # halt after 4 consecutive net losses (>= 1)
+  daily_loss_limit_pct: 0.05  # 5% of total capital daily loss limit (> 0, <= 1)
+
+webhook:                      # WR14 — HTTP server settings
+  bind_host: "127.0.0.1"     # interface to bind
+  bind_port: 5000             # port to listen on
+  require_hmac: true          # production must validate HMAC
+
+signal_processor:             # SP15 — worker pool settings
+  worker_count: 5             # ThreadPoolExecutor workers (1-50)
+  drain_poll_sec: 0.1         # queue poll interval when empty
+  pipeline_timeout_sec: 30    # hard per-signal processing deadline
+
+kill_switch:                  # KS7 — auto-trip settings
+  api_failure_threshold: 3    # consecutive API failures before auto soft_kill (>= 1)
+  enable_auto_trip: true      # if false, record_api_failure never triggers soft_kill
+
+eod_squareoff:                # EOD12 — EOD square-off settings
+  inter_order_delay_ms: 500   # ms delay between successive MARKET exit orders (>= 0, <= 5000)
+  poll_interval_sec: 5        # scheduler poll cadence; passed to start_polling() (>= 1)
+  auto_resume_kill_switch: true  # if true, resume SOFT_KILL after EOD fire completes
+
+alerts:                       # TG12/AW11 — alert subsystem settings
+  failed_alerts_log_path: "logs/failed_alerts.log"
+  sentinel_dir: "data_store"
+  watcher_max_attempts: 5
+  watcher_lock_path: "data_store/alert_watcher.lock"
+  watcher_log_path: "logs/alert_watcher.log"
+  telegram:
+    bot_token_env: "TELEGRAM_BOT_TOKEN"
+    channels:
+      - chat_id_env: "TELEGRAM_CHANNEL_PRIMARY"
+        label: "Primary Alert Channel"
+        enabled: true
+      - chat_id_env: "TELEGRAM_CHANNEL_SECONDARY"
+        label: "Secondary Alert Channel"
+        enabled: false
+    personal_chat_id_env: "TELEGRAM_PERSONAL_CHAT_ID"
+    whitelist_only: true
+  smtp:
+    host: "smtp.gmail.com"
+    port: 587
+    use_tls: true
+    username: "alerts@example.com"
+    password: "app-password-here"
+    from_address: "alerts@example.com"
+    to_addresses:
+      - "operator@example.com"
+    timeout_sec: 30
+
+order_reconciler:             # RC17 — reconciler tuning
+  poll_interval_sec: 15       # P14: 15-second periodic cadence
+  capital_drift_tolerance: 50.0  # G3 Level 3: alert if broker/local delta > Rs50
+  enable_event_driven: true   # G1: subscribe OrderStateChanged for instant re-check
+
+shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
+  enabled: true               # SH13: false = all handlers no-ops; table stays empty
+  max_innings: 3              # SH4: total innings (1 real + up to 2 simulated)
+  alert_per_inning: true      # SH7: send Telegram INFO on each inning close

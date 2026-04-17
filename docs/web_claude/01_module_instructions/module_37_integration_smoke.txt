@@ -1,0 +1,228 @@
+================================================================
+MODULE 37 (FINAL): Integration smoke test
+================================================================
+
+1178/1178. Every module unit-tested in isolation. Final gate:
+END-TO-END pipeline in paper mode with real subsystem wiring
+(no mocks) and a scripted signal flow.
+
+Audit Part 7 "Simulation Tests" drives scope.
+
+================================================================
+LOCK (IT1-IT12)
+================================================================
+
+IT1 — Purpose: One integration test file that boots the full
+  system in paper mode, injects signals, verifies state
+  transitions end-to-end. NOT a unit test. Slower, fewer
+  mocks, higher confidence.
+
+IT2 — Location: tests/integration/test_end_to_end_smoke.py
+
+IT3 — Test environment:
+  - Paper mode (no real Kite)
+  - tmp data_store dir per test
+  - tmp logs dir per test
+  - Real config/ files (the 8 stubs already exist)
+  - In-memory or tmp SQLite
+  - Time authority: mock now_ist() to a fixed trading time
+    (e.g., 2026-04-15 10:30 IST) so window checks pass
+  - Flask webhook: use test_client (no port binding)
+  - kiteconnect: replace with a SimKiteClient that returns
+    scripted responses for place_order, get_positions,
+    get_quote, get_margins
+
+IT4 — SimKiteClient:
+  Fake Kite client. Methods:
+    place_order(...) -> returns fake broker_order_id
+    cancel_order(...) -> success
+    modify_order(...) -> success
+    order_history(...) -> returns scripted status progression
+    positions() -> returns scripted position list
+    quote([symbols]) -> returns scripted ltp per symbol
+    margins() -> returns scripted available/used cash
+  Each method has a script attribute that tests populate.
+
+IT5 — Required scenarios (lock; all 7 must pass):
+
+  SCENARIO 1 — Happy path (signal -> placed -> filled -> closed):
+    - Seed SimKiteClient: quote=100, margins.available=100000
+    - Start main.py in background thread (or directly wire
+      subsystems if full main.py too heavy)
+    - POST /webhook/open_low_breakout_long with one signal
+      for RELIANCE at trigger_price=100
+    - Wait for signal to flow through:
+      * webhook accepts (200)
+      * signal queued
+      * signal_processor picks up
+      * screener PASSES (pre-seed market_data)
+      * sizer computes qty
+      * risk_engine approves
+      * fund_manager reserves capital
+      * order_placer places CO + TGT
+      * order_monitor tracks
+      * SimKite scripted to return COMPLETE status on next poll
+      * OrderFilled event published
+      * fund_manager commits reservation to used
+    - Verify state_store:
+      * signals row with status=PROCESSED
+      * orders rows (CO + TGT) with status=COMPLETE/SUBMITTED
+      * capital_ledger rows (reserve, commit)
+      * reconciliation_log empty (nothing to reconcile)
+
+  SCENARIO 2 — Screener rejection:
+    - Same setup, but mock market_data to fail step_2
+      (ltp < vwap for LONG)
+    - Signal should be rejected at screener
+    - Verify: signals.status = REJECTED_vwap_position
+    - Verify: no orders placed, no capital reserved
+
+  SCENARIO 3 — Risk engine rejection (max_open_positions):
+    - Pre-seed state_store with N open positions at cap
+    - Signal should pass screener but fail risk
+    - Verify: signals.status = REJECTED_OPEN_POSITIONS
+    - Verify: no capital reserved
+
+  SCENARIO 4 — Duplicate signal (dedup):
+    - POST same signal fingerprint twice within same minute
+    - First: 200 accepted
+    - Second: 200 with DUPLICATE in response
+
+  SCENARIO 5 — Kill switch blocks new signals:
+    - kill_switch.soft_kill(reason="test")
+    - POST new signal
+    - Verify: 403 response
+    - Verify: signals.status includes KILL_SWITCH rejection
+
+  SCENARIO 6 — EOD square-off:
+    - Pre-seed with 2 open intraday positions
+    - Advance mocked time to 15:17
+    - Trigger eod.check_and_fire()
+    - Verify: adapter.place_order called with opposite side
+      for each position (MARKET exit)
+    - Verify: eod_squareoff_log row written
+    - Verify: kill_switch set to SOFT_KILL during EOD,
+      resumed after
+
+  SCENARIO 7 — Reconciler detects manual close:
+    - Pre-seed state_store with 1 open trade for RELIANCE
+    - Script SimKiteClient.positions() to return empty list
+      (broker says no position)
+    - Trigger reconciler._reconcile()
+    - Verify: trade marked CLOSED_MANUAL
+    - Verify: fund_manager.release_used called
+    - Verify: reconciliation_log row with MANUAL_CLOSE
+
+IT6 — Test structure:
+  Use pytest fixtures for:
+    @fixture tmp_store: tmp SQLite state_store
+    @fixture tmp_dirs: tmp data_store + logs + reports
+    @fixture sim_kite: SimKiteClient with default script
+    @fixture wired_system: full wired subsystems (bus, adapter,
+                            fund_manager, ..., all connected)
+    @fixture webhook_client: Flask test_client from webhook_receiver
+  Each scenario = one test function.
+
+IT7 — Timing:
+  Use time_authority patch for deterministic now_ist().
+  Poll intervals reduced via config override:
+    order_monitor.poll_interval_sec = 0.05
+    order_reconciler.poll_interval_sec = 0.05
+    entry_gate.poll_interval_sec = 0.05
+  time.sleep(0.2) between async trigger and state check.
+
+IT8 — Assertions:
+  Each scenario ends with database + in-memory state assertions.
+  Use state_store.fetch_all() for row counts.
+  Check event bus subscriber call counts (or event sink).
+  Check kill_switch state.
+  Check fund_manager.get_snapshot().
+
+IT9 — Cleanup:
+  Every test: stop() all started subsystems in teardown.
+  tmp dirs auto-deleted.
+  Thread leaks: fail test if threads remain after teardown.
+
+IT10 — Expected test count: 7 (one per scenario)
+  Each test may have 5-10 assertions internally.
+
+IT11 — Run configuration:
+  Add pytest marker: @pytest.mark.integration
+  Runnable separately: pytest tests/integration/ -v
+  Also included in full suite runs.
+
+IT12 — Failure diagnostics:
+  On failure: print full state_store contents (compact),
+  last 20 log lines from test run, event bus history.
+  Integration failures are hardest to debug; make output
+  verbose.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Create tests/integration/ dir if absent, + __init__.py.
+
+2. Build SimKiteClient helper in tests/integration/sim_kite.py.
+   Scripted, stateful, configurable per test. ~150 lines.
+
+3. Build fixtures in tests/integration/conftest.py:
+   - tmp_state_store
+   - sim_kite
+   - wired_system (the biggest fixture; ~100 lines wiring)
+   - webhook_client
+
+4. Build tests/integration/test_end_to_end_smoke.py per IT5
+   (~400 lines, 7 test functions).
+
+5. Run integration tests in isolation first:
+     pytest tests/integration/test_end_to_end_smoke.py -v
+   All 7 must pass.
+
+6. Run FULL suite:
+     pytest tests/ -q
+   Expected: 1178 + 7 = 1185. Plus whatever unit tests
+   get added alongside (minimal).
+
+7. Report final table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: tests/integration/test_end_to_end_smoke.py
+  Tests: 7 end-to-end scenarios
+  Locked: IT1-IT12 under integration_tests: section
+  SimKiteClient helper documented
+  Cross-module: exercises every single module built so far
+  FOUNDATION COMPLETE milestone: full system runs in paper
+  mode end-to-end with all 7 audit scenarios passing.
+
+================================================================
+POST-MODULE-37 (SYSTEM COMPLETE)
+================================================================
+
+After 37 green, v2 core is DONE. Final checklist for user:
+
+  1. Update requirements.txt committed with all deps
+  2. .env.example file documents required secrets
+  3. README.md (if absent) with run instructions:
+     python main.py --mode paper
+     python main.py --mode live --resume (after HALT)
+     python scripts/preflight_scanner_check.py
+     python -m reports.daily_review
+  4. systemd service file for alert_watcher.py (operator)
+  5. Git tag v2.0.0-foundation-complete
+  6. Switch to paper-mode live-data trial (actual market
+     hours, real webhook from Chartink, SimKite replaced
+     with real Kite in paper_mode=True adapter)
+
+Deferred to v2.1:
+  - Real ATR/VWAP/RSI calculation (data providers)
+  - Sector strength calculation
+  - Positional strategy logic (CNC overnight)
+  - Historical backfill on candle_store
+  - Enhanced daily report with charts
+
+WINDOWS REMINDER: ASCII-only print() strings.

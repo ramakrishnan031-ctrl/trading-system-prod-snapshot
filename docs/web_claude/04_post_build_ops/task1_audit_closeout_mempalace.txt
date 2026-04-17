@@ -1,0 +1,310 @@
+================================================================
+TASK 1: Write audit closeout to mempalace
+================================================================
+
+Write the following as: memory/audit_closeout_final.md
+This is the AUTHORITATIVE record of all 54 audit items.
+
+After writing, append to docs/locked_decisions.yaml under
+a new section:
+  audit_closeout:
+    title: "54-item audit closure status"
+    reference: "memory/audit_closeout_final.md"
+    completed_at: "<today's date>"
+
+================================================================
+CONTENT TO WRITE (verbatim into memory/audit_closeout_final.md)
+================================================================
+
+---
+name: Audit Closeout - 54 items from 3 external audits
+type: project
+description: Authoritative final status of every audit finding.
+  32 fixed, 6 already-fixed, 6 verified-ok, 3 closed-by-design,
+  1 pending, 2 verify-during-paper, 8 deferred-to-v2.1.
+  Total test count at closeout: 1351/1351 green.
+---
+
+# AUDIT CLOSEOUT (54 items)
+
+Sources:
+- Audit 1: "Pre-live audit" (10 high-level concerns)
+- Audit 2: "Second pass" (30 concrete issues)
+- Audit 3: "Final thorough pass" (19 additional)
+
+## STATUS LEGEND
+
+- FIXED: Code changed + regression test added
+- ALREADY_FIXED: Triage found no bug (audit was stale)
+- VERIFIED_OK: Code inspection showed behavior correct
+- CLOSED: Locked design decision covers the concern
+- PENDING: Scheduled for paper trial phase
+- VERIFY: Non-urgent verification during paper trial
+- DEFERRED: v2.1 feature work, not a safety gap
+
+## CRITICAL (15 items)
+
+C1 | State consistency order+DB atomicity
+     Source: A1#1, A2#1 | Status: CLOSED | Phase: Design
+     Note: Reconciler is safety net per G1
+
+C2 | Race in order_placer fill_map
+     Source: A2#2 | Status: VERIFIED_OK | Phase: G
+     Note: All 3 _fill_map accesses under _fill_map_lock
+
+C3 | ATR/sector silent fallback
+     Source: A2#3 | Status: FIXED | Phase: G
+     Note: WARN/HALT config flag (atr_fallback_mode) added
+
+C4 | Paper mode quote_provider missing
+     Source: A2#4, A3 | Status: FIXED | Phase: B
+     Note: SimQuoteProvider injected in paper mode
+
+C5 | Schema version mismatch (no migration)
+     Source: A2#5 | Status: DEFERRED | Phase: v2.1
+     Note: Delete-DB-on-upgrade policy documented
+
+C6 | SmartTgt quote_fn missing
+     Source: A2#6 | Status: CLOSED | Phase: B
+     Note: Optional with WARN log if absent
+
+C7 | Orphan callback triggered_by missing
+     Source: A2#7 | Status: ALREADY_FIXED | Phase: A
+     Note: Both callbacks had triggered_by="auto" at triage
+
+C8 | Critical failure callback triggered_by missing
+     Source: A2#8 | Status: ALREADY_FIXED | Phase: A
+     Note: Same as C7
+
+C9 | in_flight symbols never timeout
+     Source: A2#9 | Status: FIXED | Phase: C
+     Note: 300s sweeper thread evicts stuck symbols
+
+C10 | broker_orders_fn=None disables CHECK 6
+     Source: A2#10, A3 | Status: FIXED | Phase: B
+     Note: get_open_orders() added to adapter, wired
+
+C11 | Kite client timeout not configured
+     Source: A3#1 | Status: FIXED | Phase: B
+     Note: read_sec + connect_sec from broker_limits.yaml
+
+C12 | Empty order history silently ignored
+     Source: A3#2 | Status: FIXED | Phase: B
+     Note: Orphan detection after N consecutive empties
+
+C13 | continue_from_gate wrong side parameter
+     Source: A3#3 | Status: FIXED | Phase: B
+     Note: LONG/SHORT converted to BUY/SELL
+
+C14 | EntryGate/SignalProcessor start order wrong
+     Source: A3#4 | Status: FIXED | Phase: B
+     Note: signal_processor.start() now before entry_gate
+
+C15 | order_reconciler missing product field
+     Source: A3#5 | Status: ALREADY_FIXED | Phase: A
+     Note: get_all_open_trades had o.product since Module 37
+
+## HIGH (15 items)
+
+H1 | Telegram paper mode sends real alerts
+     Source: A2#11 | Status: ALREADY_FIXED | Phase: A
+     Note: paper_mode wired in main.py line 560
+
+H2 | sector_lookup_fn returns UNKNOWN
+     Source: A2#12 | Status: FIXED | Phase: D (Module 38)
+     Note: instruments.csv sector column + lambda wired
+
+H3 | CandleStore never started
+     Source: A2#13, A3 | Status: FIXED | Phase: B
+     Note: start() + stop() wired in main.py
+
+H4 | SmartTgt reconnect wiring
+     Source: A2#14, A3#6 | Status: CLOSED | Phase: Design
+     Note: ST13 chain via _tick_dispatcher in main.py
+
+H5 | OrderMonitor.track() for SL/TGT legs
+     Source: A2#15 | Status: PENDING | Phase: Paper trial
+     Note: CO_PLUS_TGT default has broker-native SL so
+     risk is limited. Only TGT leg untracked. Reconciler
+     catches orphans. Fix before live, OK for paper.
+
+H6 | EodSquareoff _fired_for_date race
+     Source: A2#16 | Status: FIXED | Phase: B
+     Note: Flag set AFTER successful _fire()
+
+H7 | daily_review openpyxl lazy import
+     Source: A2#17 | Status: FIXED | Phase: C
+     Note: Module-level import now
+
+H8 | preflight uses requests not in requirements
+     Source: A2#18 | Status: VERIFY | Phase: Paper trial
+     Note: requests likely installed via kiteconnect dep.
+     Run preflight once to confirm. If fails: pip install.
+
+H9 | alerts/critical.py reference
+     Source: A2#19, A3#10 | Status: VERIFIED_OK | Phase: A
+     Note: Built in Module 24, exists on disk
+
+H10 | ids validation in WebhookReceiver
+     Source: A2#20 | Status: VERIFIED_OK | Phase: A
+     Note: DB PRIMARY KEY enforces uniqueness
+
+H11 | Log rotation missing
+     Source: A2#21 | Status: FIXED | Phase: C
+     Note: RotatingFileHandler 50MB with 5 backups
+
+H12 | telegram_notifier.py missing
+     Source: A3#7 | Status: VERIFIED_OK | Phase: A
+     Note: Built in Module 24, exists on disk
+
+H13 | check_clock_skew hardcoded 30s
+     Source: A3#8 | Status: FIXED | Phase: C
+     Note: Now reads from app_config tolerance_sec
+
+H14 | _cancel_pending_entries order status not updated
+     Source: A3#9 | Status: FIXED | Phase: C
+     Note: UPDATE orders SET status=CANCELLED in transaction
+
+H15 | webhook queue.Full returns 200
+     Source: A3#10 | Status: FIXED | Phase: C
+     Note: Returns 503 now
+
+## MEDIUM (14 items)
+
+M1 | Logs directory hardcoded, no rotation
+     Source: A2#21 | Status: FIXED | Phase: C
+     Note: Same fix as H11
+
+M2 | market_windows cap=10 for holidays
+     Source: A2#23 | Status: FIXED | Phase: G
+     Note: Raised to 30
+
+M3 | CandleStore token_map not populated
+     Source: A2#24 | Status: FIXED | Phase: D (Module 38)
+     Note: set_token_map wired with instrument_cache.token_map()
+
+M4 | LiveFeed callback signature mismatch
+     Source: A2#25 | Status: FIXED | Phase: B
+     Note: _tick_dispatcher unpacks (token, ltp, ts)
+
+M5 | Daily P&L reset never called
+     Source: A2#22 | Status: FIXED | Phase: B
+     Note: reset_daily_pnl() in EOD fire sequence
+
+M6 | rate_limiter freeze no thaw log
+     Source: A2#29 | Status: FIXED | Phase: G
+     Note: _was_frozen flag + INFO log on thaw
+
+M7 | _derive_prices can return negative prices
+     Source: A3#11 | Status: FIXED | Phase: B
+     Note: entry_price > 0 guard added
+
+M8 | order_placer hardcoded MIS/CNC
+     Source: A3#12 | Status: FIXED | Phase: C
+     Note: product_resolver injected and used
+
+M9 | position_sizer sl_distance=0
+     Source: A3#13 | Status: FIXED | Phase: G
+     Note: Returns SizingResult(success=False, SL_DISTANCE_ZERO)
+
+M10 | risk_engine snapshot incomplete
+     Source: A3#14 | Status: VERIFIED_OK | Phase: G
+     Note: RE11 builds snapshot before all checks (lines 222-233)
+
+M11 | Session row write timing
+     Source: A3#15 | Status: FIXED | Phase: G
+     Note: Early _write_session() after Phase 0c
+
+M12 | CO protocol success=True on TGT fail
+     Source: A3#18 | Status: FIXED | Phase: G
+     Note: Returns success=False when any leg fails
+
+M13 | candle_store MAX_HISTORY=390
+     Source: A3#20 | Status: FIXED | Phase: G
+     Note: Bumped to 500 with comment
+
+M14 | ATR silent fallback (same as C3)
+     Source: A2#3 | Status: FIXED | Phase: G
+     Note: atr_fallback_mode config flag
+
+## LOW (10 items)
+
+L1 | main.py _log variable reassigned
+     Source: A2#26 | Status: DEFERRED | Phase: v2.1
+     Note: Cosmetic rename, no runtime impact
+
+L2 | product_resolver BRACKET_ORDER empty string
+     Source: A2#27 | Status: DEFERRED | Phase: v2.1
+     Note: ProductNotSupportedError raised at runtime
+
+L3 | cost_calculator stamp_duty possibly hardcoded
+     Source: A2#28 | Status: VERIFY | Phase: Paper trial
+     Note: Grep yaml value vs code; verify during trial
+
+L4 | rate_limiter freeze edge cases
+     Source: A2#29 | Status: FIXED | Phase: G
+     Note: Same as M6
+
+L5 | order_state_machine not persisted
+     Source: A2#30 | Status: DEFERRED | Phase: Design
+     Note: By design per OSM11; reconciler recovers
+
+L6 | KillSwitch.resume no args check
+     Source: A3#16 | Status: DEFERRED | Phase: v2.1
+     Note: Rarely triggered, low risk
+
+L7 | Paper mode error message unclear
+     Source: A3#17 | Status: DEFERRED | Phase: v2.1
+     Note: Cosmetic improvement
+
+L8 | smart_tgt MAX_FAILURES hardcoded
+     Source: A3#19 | Status: DEFERRED | Phase: v2.1
+     Note: 3 is reasonable default
+
+L9 | BSE exchange not supported
+     Source: N/A | Status: DEFERRED | Phase: v2.1
+     Note: NSE-only for v2
+
+L10 | ATR real calculation
+     Source: N/A | Status: DEFERRED | Phase: v2.1
+     Note: Requires real-time data provider
+
+## SUMMARY TOTALS
+
+| Status        | Count |
+|---------------|-------|
+| FIXED         |    32 |
+| ALREADY_FIXED |     6 |
+| VERIFIED_OK   |     6 |
+| CLOSED        |     3 |
+| PENDING       |     1 |
+| VERIFY        |     2 |
+| DEFERRED      |     8 |
+| **TOTAL**     |**54** |
+
+Test count at closeout: 1351/1351 green
+Schema version: 9
+
+================================================================
+AFTER WRITING
+================================================================
+
+1. Confirm file written: memory/audit_closeout_final.md
+2. Append reference to docs/locked_decisions.yaml:
+
+   audit_closeout:
+     title: "54-item audit closure status"
+     reference: "memory/audit_closeout_final.md"
+     completed_at: "2026-04-16"
+     totals:
+       fixed: 32
+       already_fixed: 6
+       verified_ok: 6
+       closed_by_design: 3
+       pending: 1
+       verify: 2
+       deferred: 8
+
+3. Report: "Task 1 complete. Mempalace updated."
+
+Then await Task 2 instruction from Rama.

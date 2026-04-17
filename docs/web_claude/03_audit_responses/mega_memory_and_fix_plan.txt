@@ -1,0 +1,473 @@
+================================================================
+MEGA MEMORY UPDATE + VERIFY + FIX INSTRUCTION
+================================================================
+
+User has now delivered 3 audits. Before any new code changes,
+dump EVERYTHING into mempalace so future Claude sessions can
+pick up where we left off without re-reading this entire chat.
+
+================================================================
+PART 1: MEMORY WRITE (do this FIRST, before anything else)
+================================================================
+
+Write the following memory files to
+C:\Users\rama\.claude\projects\D--Projects-trading-system\memory\
+
+### FILE 1: project_master_state.md
+
+```
+---
+name: Trading System v2 - Master State (as of current session)
+type: project
+description: Complete handoff document for the v2 build project.
+---
+
+# PROJECT
+- Location: D:\Projects\trading-system\
+- User: Rama (non-techie bridge)
+- Two-Claude architecture:
+  Web Claude = stateless design architect producing .txt
+               instructions at /mnt/user-data/outputs/instructions/
+  VS Code Claude (me) = stateful executor with this mempalace
+  Rama = bridge forwarding between them
+
+# PROCESS RULES (LOCKED)
+- Web Claude cannot see mempalace; Rama pastes locked decisions
+  when Web Claude asks
+- docs/locked_decisions.yaml is AUTHORITATIVE. If Web Claude
+  spec contradicts locked, locked wins. Flag conflict.
+- Every module green -> write memory entry per MH1-MH6
+- Windows quirk: ASCII-only print() strings (cp1252 encoding)
+- TemporaryDirectory cleanup needs ignore_cleanup_errors=True
+- tests under tests/unit and tests/integration
+- All deviations from Web Claude spec must be reported
+
+# BUILD STATE (CURRENT)
+- 37 modules built, 1187+ tests green, schema v8, ~200 locked
+- All foundation modules complete per Modules 1-37
+- Full suite ran 1187/1187 green before 3 audits arrived
+- Integration smoke test with 13 scenarios green
+
+# MODULES BUILT
+Layer 0-1: exceptions, time_authority, events, config_loader,
+  logger, state_store, market_windows, ids
+Layer 2-3: broker/rate_limiter, cost_calculator,
+  product_resolver, order_state_machine, zerodha_adapter,
+  order_monitor
+Capital: fund_manager (3-balance G3/P7a), position_sizer,
+  risk_engine (6 checks), kill_switch (RLock), invariant
+Orders: entry_engine, order_manager, order_protocol_limit,
+  order_protocol_co, full_entry_engine, order_placer,
+  eod_squareoff, smart_tgt_manager
+Signals: webhook_receiver (Flask + HMAC), signal_processor
+Screening: quality_scorer, step_executor, secondary_screener,
+  entry_gate (P11a price pullback)
+Data: live_feed, candle_store
+Strategies: schema, loader, 15 YAML files at config/strategies/
+Alerts: critical.py (sentinel), telegram_notifier.py,
+  scripts/alert_watcher.py
+Reports: reports/daily_review.py
+Scripts: scripts/preflight_scanner_check.py
+Utils: utils/startup_checks.py
+Top: main.py orchestrator
+Tests: tests/integration/test_end_to_end_smoke.py + SimKite
+
+# PENDING BUILD (not yet done)
+- Module 38: core/instrument_cache.py + core/account_registry.py
+  + config/instruments.csv + config/accounts.csv +
+  scripts/refresh_instruments.py
+- Module 39: orders/shadow_tracker.py (multi-inning tracking,
+  max 3 innings: 1 real + 2 simulated)
+- Module 40: reports/daily_review.py update with
+  MULTI_INNING_TRACKING section (one row per trade with
+  3 inning columns flattened)
+
+# PENDING AUDIT FIXES (3 audits, 54 issues)
+See fix_plan_consolidated.md for full details.
+
+# ARCHITECTURAL DECISIONS (LOCKED HIGHLIGHTS)
+- Capital invariant: margin_available + reserved + used
+                      == cash_floor + min(0, realized_pnl_today)
+- Three-ID lifecycle: signal_id -> trade_id -> order_id (G2a)
+- CO_PLUS_TGT protocol default, LIMIT_TRIPLE fallback
+- Kill switch 2 layers: risk_engine + last-mile order_placer
+- 3-mode kill: INACTIVE/SOFT_KILL/HARD_KILL; HARD requires --resume
+- Reconnect chain (ST13): main.py chains live_feed callback ->
+  candle_store.mark_reconnect -> smart_tgt.on_reconnect
+- EventBus: synchronous in-process, 4 seeded events + 2 more
+- JSON-line logging system/trades/reconciler; human format debug
+- Schema version in EXPECTED_SCHEMA_VERSION=8
+
+# INSTRUCTION FILES RECEIVED FROM WEB CLAUDE
+Rama has all these archived locally. Key ones:
+  module_01..module_37 instructions
+  pre_module_XX_locked_requests
+  verify_module_34
+  fix_flaky_signal_age_test
+  address_four_concerns
+  modules_38_39_40_final
+  pre_live_audit_response
+  second_audit_response
+  (this file) mega memory update + third audit response
+
+# NEXT STEPS PRIORITIZED
+Step 1: Verify 54 audit issues against actual code
+Step 2: Fix Priority 1 blockers (Audit #3 list of 10)
+Step 3: Build Module 38 (instrument_cache + accounts)
+Step 4: Build Module 39 (shadow_tracker)
+Step 5: Build Module 40 (daily_review update)
+Step 6: Fix Priority 2 high-severity issues
+Step 7: Add chaos test suite
+Step 8: Paper trial 5-7 sessions
+Step 9: Live with Rs 10K-25K for 2 weeks
+Step 10: Scale up gradually
+```
+
+### FILE 2: audit_findings_consolidated.md
+
+```
+---
+name: Three Audits Consolidated - 54 Issues
+type: project
+description: Full list of all issues from 3 external audits,
+             priorities, and fix ownership.
+---
+
+# AUDIT SOURCES
+- Audit 1: "pre-live audit" (high-level, 10 concerns)
+- Audit 2: "second pass" (30 concrete issues with line numbers)
+- Audit 3: "final thorough pass" (19 additional + consolidated
+           54 total)
+
+# TOTAL: 54 issues (15 critical + 15 high + 14 medium + 10 low)
+# + 2 MISSING FILES flagged (but both actually built in Module 24)
+
+================================================================
+PRIORITY 1 - CRITICAL BLOCKERS (must fix before paper trial)
+================================================================
+
+BLOCKER #1 - LiveFeedManager callback signature mismatch
+  Source: Audit 2 #25, Audit 3 #1 (confirmed)
+  File: main.py line ~380
+  Current (broken):
+    live_feed.register_callback(
+      lambda ticks: [candle_store.on_tick(t) for t in ticks])
+  on_tick signature: on_tick(instrument_token, ltp, ts)
+  Fix:
+    live_feed.register_callback(
+      lambda ticks: [candle_store.on_tick(
+        t["instrument_token"], t["last_price"],
+        t.get("timestamp") or now_ist()
+      ) for t in ticks])
+
+BLOCKER #2 - CandleStore.start() never called
+  Source: Audit 2 #13, Audit 3 #2
+  File: main.py Phase 0g
+  Fix: Add candle_store.start() BEFORE live_feed.connect().
+       Add candle_store.stop() in shutdown sequence.
+
+BLOCKER #3 - Paper mode quote_provider missing
+  Source: Audit 2 #4, Audit 3 #3
+  File: zerodha_adapter.py + main.py
+  Fix: Inject SimQuoteProvider in paper mode. Return canned
+       quotes so get_quote() doesn't raise NotImplementedError.
+
+BLOCKER #4 - continue_from_gate() uses wrong side parameter
+  Source: Audit 3 #4 (NEW, most critical)
+  File: signal_processor.py line ~469
+  Current: self._placer.place(side=direction, ...)
+  Bug: direction is "LONG"/"SHORT", placer expects "BUY"/"SELL"
+  Fix: Convert with _direction_to_side helper:
+       side = "BUY" if direction == "LONG" else "SELL"
+  Impact: CRASHES on any gate-released signal
+
+BLOCKER #5 - EntryGate starts before SignalProcessor
+  Source: Audit 3 #4 (second part)
+  File: main.py Phase 0g start sequence
+  Fix: Swap order. signal_processor.start() BEFORE
+       entry_gate.start().
+
+BLOCKER #6 - order_reconciler _check1_manual_close references
+             missing 'product' field
+  Source: Audit 3 #5
+  File: order_reconciler.py line ~325
+  Bug: trade["product"] - field not in SELECT of
+       get_all_open_trades()
+  Fix: Add o.product to SELECT in state_store.get_all_open_trades
+
+BLOCKER #7 - KiteConnect constructor missing timeouts
+  Source: Audit 3 #1
+  File: main.py line ~353
+  Fix:
+    kite = KiteConnect(
+      api_key=os.environ["ZERODHA_API_KEY"],
+      timeout=app_config.broker_limits.timeouts.read_sec,
+    )
+
+BLOCKER #8 - OrderMonitor empty get_order_history silently skips
+  Source: Audit 3 #2
+  File: order_monitor.py line ~214
+  Bug: if not history: return (silent skip)
+  Fix: Treat as orphan after N consecutive empty responses.
+       Add failure counter per order.
+
+BLOCKER #9 - _make_orphan_cb and _make_critical_failure_cb
+             call soft_kill without triggered_by
+  Source: Audit 2 #7, #8
+  File: main.py callback factories
+  Fix: kill_switch.soft_kill(reason=..., triggered_by="system_auto")
+
+BLOCKER #10 - broker_orders_fn=None disables CHECK 6 (ORPHAN_ORDER)
+  Source: Audit 2 #10, Audit 3 #9
+  File: main.py reconciler wiring
+  Fix: Add ZerodhaAdapter.get_open_orders() method that calls
+       kite.orders() filtered to OPEN/TRIGGER PENDING.
+       Pass as broker_orders_fn.
+
+BLOCKER #11 - set_token_map never called in main.py
+  Source: Audit 2 #24
+  File: main.py
+  Fix: After instrument_cache loaded (Module 38):
+    token_map = {row.instrument_token: row.symbol
+                  for row in instrument_cache.all_rows()}
+    candle_store.set_token_map(token_map)
+
+BLOCKER #12 - fund_manager.reset_daily_pnl() never called
+  Source: Audit 2 #22
+  File: eod_squareoff.py _fire sequence
+  Fix: Call fund_manager.reset_daily_pnl() at end of EOD fire.
+
+BLOCKER #13 - EodSquareoff _fired_for_date set BEFORE _fire()
+  Source: Audit 2 #16
+  File: eod_squareoff.py check_and_fire
+  Fix: Set flag AFTER successful _fire() return.
+
+BLOCKER #14 - EodSquareoff post-15:30 restart doesn't fire
+  Source: Audit 2 #5 (new critical)
+  File: eod_squareoff.py line ~320
+  Current: if now.time() > 15:30: log CRITICAL and return
+  Bug: If crash at 15:29, restart 15:31 -> positions stay open
+       overnight.
+  Fix: On post-15:30 startup, if open positions exist,
+       fire EOD immediately (even past hard stop). This is
+       safety, not a schedule.
+
+BLOCKER #15 - signal_processor _derive_prices can return
+              negative entry_price
+  Source: Audit 3 #11
+  File: signal_processor.py _derive_prices
+  Fix: Validate entry_offset_pct < 1.0 at strategy load.
+       Also validate entry_price > 0 after derivation;
+       reject signal otherwise.
+
+================================================================
+PRIORITY 2 - HIGH SEVERITY (fix during/after paper trial)
+================================================================
+
+HIGH #1 - OrderMonitor.track() missing for SL/TGT legs
+  File: order_placer.py after protocol places orders
+  Fix: For each placed order (entry + SL + TGT or entry+TGT):
+       order_monitor.track(internal_id, broker_id, symbol,
+                            side, qty, price, placed_at)
+
+HIGH #2 - sector_lookup_fn returns "UNKNOWN" for all
+  File: main.py
+  Fix: Add sector column to instruments.csv (Module 38).
+       Wire sector_lookup_fn to instrument_cache lookup.
+
+HIGH #3 - Telegram paper_mode may send real alerts
+  File: main.py notifier construction
+  Fix: Pass paper_mode=(args.mode == "paper") to notifier.
+       TelegramNotifier.send must suppress send_real in
+       paper mode.
+
+HIGH #4 - ATR method silently falls back to FIXED_PCT
+  File: signal_processor.py _derive_prices +
+        step_executor.py step_3
+  Fix: Option A - HALT: REJECTED_NO_ATR_DATA if ATR configured
+       but not available.
+       Option B - WARN: log WARNING every fallback.
+       Config flag: strategies.atr_fallback_mode.
+
+HIGH #5 - check_clock_skew hardcoded tolerance 30.0
+  Source: Audit 3 #8
+  File: startup_checks.py line ~298
+  Fix: Read from app_config.system.clock.startup_max_skew_sec
+
+HIGH #6 - webhook_receiver returns 200 on queue.Full
+  Source: Audit 3 #10
+  File: webhook_receiver.py
+  Fix: Return 503 Service Unavailable when queue.Full.
+       Client can retry.
+
+HIGH #7 - order_placer persists hardcoded "MIS"/"CNC"
+  Source: Audit 3 #12
+  File: order_placer.py _persist_entry_orders
+  Fix: Use product_resolver.resolve(intent) instead of
+       hardcoded map.
+
+HIGH #8 - eod_squareoff _cancel_pending_entries doesn't
+           update order row status
+  Source: Audit 3 #9
+  File: eod_squareoff.py
+  Fix: After cancel, update orders row status to CANCELLED.
+
+HIGH #9 - in_flight symbols never timeout on hard crash
+  Source: Audit 2 #9, Audit 3 #3
+  File: webhook_receiver.py + signal_processor.py
+  Fix: Background sweeper thread evicts in_flight entries
+       older than 300s. Logs WARNING per eviction.
+
+HIGH #10 - openpyxl imported lazily in daily_review
+  File: reports/daily_review.py
+  Fix: Import at top of file. Add openpyxl to
+       startup_checks importability probe.
+
+HIGH #11 - No log rotation
+  File: logger.py
+  Fix: Use RotatingFileHandler with maxBytes=50MB, backupCount=5.
+
+HIGH #12 - alerts/critical.py referenced but not provided
+  Status: Actually built in Module 24. Verify exists. If missing,
+          build per CR1-CR10.
+
+HIGH #13 - telegram_notifier.py referenced but not provided
+  Status: Actually built in Module 24. Verify exists. If missing,
+          build per TG1-TG15.
+
+================================================================
+PRIORITY 3 - MEDIUM (fix before scaling up)
+================================================================
+
+MED #1 - position_sizer sl_distance == 0 only warns, should reject
+  Fix: Return SizingResult(success=False, reason=SL_TOO_CLOSE)
+
+MED #2 - risk_engine ApprovalResult.snapshot incomplete on early
+         rejection
+  Fix: Ensure all 9 fields populated even when rejecting early.
+
+MED #3 - rate_limiter freeze doesn't auto-thaw
+  Fix: thaw when acquire() succeeds after penalize().
+
+MED #4 - CO protocol returns success=True even when TGT fails
+  Fix: Return success=False if any leg fails.
+
+MED #5 - No schema migration logic
+  Status: Foundation fresh DB only. v2.1 work.
+
+MED #6-14: see Audit 3 medium list.
+
+================================================================
+VERIFICATION PROTOCOL
+================================================================
+
+Before fixing ANY issue:
+  1. Read the actual source file at current state
+  2. Confirm the bug still exists as described
+  3. Report: CONFIRMED / NOT_APPLICABLE / ALREADY_FIXED / UNCLEAR
+  4. Only fix CONFIRMED issues
+  5. Add regression test for each fix
+
+Some issues may be stale (auditor looking at old snapshots).
+In particular:
+  - Missing telegram_notifier.py - we built this
+  - Missing alerts/critical.py - we built this
+  - Some "hardcoded" things may have been parameterized already
+```
+
+================================================================
+PART 2: FIX EXECUTION ORDER
+================================================================
+
+AFTER memory written, execute in strict order:
+
+PHASE A: VERIFY all 15 blockers (not fix yet)
+  Produce triage report for each:
+    - CONFIRMED (bug exists, fix needed)
+    - NOT_APPLICABLE (never true)
+    - ALREADY_FIXED (stale audit)
+    - UNCLEAR (need Rama + Web Claude to clarify)
+  Halt if 3+ NOT_APPLICABLE found -> audit may be stale.
+
+PHASE B: Fix ALL confirmed Priority 1 blockers
+  Each fix in its own commit-worthy change.
+  Each fix gets regression test.
+  Run full suite after each fix (should stay green, not
+  drop count unless test intentionally added).
+  Report table: fix -> tests added -> status.
+
+PHASE C: Verify + fix Priority 2 HIGH issues
+  Same triage protocol.
+  Same fix-with-test discipline.
+
+PHASE D: Build Module 38 (instrument_cache + accounts)
+  Per earlier modules_38_39_40_final.txt instruction.
+  After build: Priority 2 HIGH #2 (sector lookup) also
+  closes since instruments.csv has sector column.
+
+PHASE E: Build Module 39 (shadow_tracker)
+  Per earlier instruction.
+
+PHASE F: Build Module 40 (daily_review multi-inning update)
+  Per earlier instruction.
+
+PHASE G: Priority 3 MEDIUM issues (optional before paper,
+         required before live)
+
+PHASE H: Chaos test suite
+  tests/integration/test_chaos.py with ~10 failure
+  injection scenarios.
+
+PHASE I: Report to Rama with FINAL checklist:
+  - All blockers status
+  - All high issues status
+  - New modules 38-40 status
+  - Total tests
+  - Ready-for-paper-trial verdict
+
+================================================================
+PART 3: CRITICAL REMINDERS
+================================================================
+
+- Windows: ASCII-only print() strings
+- Do NOT rush. Verify before fix. Skip nothing.
+- If ANY fix breaks existing tests: STOP and investigate.
+  Tests that were green are the ground truth.
+- If Rama forwards new audit input mid-work: finish current
+  module first, then triage new input.
+- After each phase: write mempalace summary entry.
+- Flag any issue that seems like it contradicts locked_decisions.
+  Locked wins. Never change locked silently.
+
+================================================================
+PART 4: ENCOURAGEMENT
+================================================================
+
+This is massive work. 1187 tests + 37 modules + 3 audits is a
+serious codebase. Getting to paper trial is the correct goal.
+Live trading with real money is many weeks away, and that's
+SAFE, not slow.
+
+Don't be discouraged by 54 audit issues. Most are minor.
+The ~10 real blockers are concentrated and fixable in 1-2
+days. Then paper trial reveals real behavior. Then live.
+
+Estimate: 3-5 days to PHASE I completion. Then Rama can
+begin paper trial this month.
+
+================================================================
+REPORT BACK FORMAT
+================================================================
+
+After each phase, report to Rama:
+  Phase: A/B/C/D/E/F/G/H/I
+  What was done:
+    - <bullet list>
+  Test count: before / after
+  Next phase: <name>
+  Blockers encountered: none | <list>
+
+Rama forwards to Web Claude only if stuck or new design
+decision needed.
+
+GO.

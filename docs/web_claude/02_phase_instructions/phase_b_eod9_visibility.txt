@@ -1,0 +1,46 @@
+================================================================
+PHASE B ADDITION — EOD9 visibility (not a code change)
+================================================================
+
+Your BLOCKER #14 triage is CORRECT. EOD9 locks "do NOT fire
+after 15:30" to avoid competing with broker RMS. Good catch
+on locked_decisions > audit.
+
+HOWEVER: the scenario is real and operator needs visibility:
+  - Crash at 15:29
+  - Restart at 15:31
+  - Positions remain open
+  - Broker RMS auto-squareoffs at ~15:31-15:32 at whatever
+    price the market gives
+  - Operator must know this happened
+
+ADDITION TO PHASE B (no code logic change):
+
+In eod_squareoff.py check_and_fire, when now > 15:30 AND
+open positions exist:
+
+  Current: log CRITICAL and return
+  Add:
+    1. Write system_event row: event_type="EOD_SKIPPED_LATE"
+       with details = {open_positions_count: N, positions: [...]}
+    2. Send telegram CRITICAL alert:
+       "System restarted after 15:30 with N open positions.
+        Broker RMS will auto-squareoff. Review trades
+        manually tomorrow."
+    3. Still return (no fire) per EOD9
+
+This preserves the locked design decision while ensuring
+operator awareness. Same "don't compete with RMS" but operator
+is NOT in the dark about it.
+
+Add test:
+  - post-15:30 startup with 2 open positions
+  - Assert: system_event row written with type EOD_SKIPPED_LATE
+  - Assert: notifier.send called with CRITICAL severity
+  - Assert: no broker orders placed
+
+This is a small addition, not a policy change. Include in
+Phase B along with the other 11 fixes. One more test case,
+~30 lines.
+
+Carry on with Phase B.

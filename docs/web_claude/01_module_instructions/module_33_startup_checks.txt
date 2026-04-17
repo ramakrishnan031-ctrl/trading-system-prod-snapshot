@@ -1,0 +1,394 @@
+================================================================
+MODULE 33: utils/startup_checks.py
+================================================================
+
+CONTEXT: 1002/1002 across 35 suites. main.py cannot be built
+until startup_checks exists. This module is the LIBRARY for
+Phase 0c (G5a scenario detection) + Phase 0d (NTP, scanner
+preflight). main.py (Module 34) will call these.
+
+DEFERRED from Module 33 to later:
+  - main.py itself (Module 34)
+  - scripts/preflight_scanner_check.py (standalone runner,
+    Module 35)
+  - reports/daily_review.py (Module 36)
+
+LOCKED DECISIONS REFERENCED:
+  G5a  — Four-scenario startup model (COLD/WARM/CRASH/HALT)
+  G5c  — --resume requirement after hard_kill
+  G4   — Clock startup NTP check (skew > 30s -> refuse start)
+  P17  — Pre-flight scanner check at startup
+  CL4  — Config hash diff alert
+  RC14 — Reconciler runs reconcile_once synchronously before
+         poll thread starts (enforced by caller, not here)
+
+================================================================
+LOCK (SC1-SC15)
+================================================================
+
+SC1 — Purpose: Library module providing all startup checks.
+  Pure functions + one detection function returning a
+  StartupScenario. Called by main.py during Phase 0c + 0d.
+  NO side effects beyond logging. State mutations (writing
+  system_events rows) done by caller, not here.
+
+SC2 — StartupScenario enum:
+  class StartupScenario(Enum):
+      COLD = "COLD"     # new trading day
+      WARM = "WARM"     # same day, clean prior stop
+      CRASH = "CRASH"   # same day, no SHUTDOWN marker
+      HALT = "HALT"     # kill_switch was active
+
+SC3 — Main detection API:
+  detect_startup_scenario(
+    state_store,
+    kill_switch,         # for kill_state query
+    today_date: date,    # from time_authority
+    logger,
+  ) -> StartupScenarioResult
+
+  StartupScenarioResult (frozen dataclass):
+    scenario: StartupScenario
+    session_date_previous: date | None
+    kill_state: str      # "INACTIVE" | "SOFT_KILL" | "HARD_KILL"
+    kill_reason: str     # if not INACTIVE
+    shutdown_marker_found: bool
+    last_shutdown_ts: datetime | None
+    detection_details: dict   # for logging
+
+SC4 — Detection algorithm (lock per G5a):
+
+  1. Read session row from state_store (session table).
+     If missing entirely -> COLD (first ever startup).
+
+  2. If session.kill_state == "HARD_KILL" -> HALT.
+     (G5c: requires --resume, NO auto-recovery)
+
+  3. If session.kill_state == "SOFT_KILL":
+     check kill_switch for the original reason.
+     If condition still applies (e.g., api_failure count
+     not reset) -> HALT.
+     If condition cleared -> WARM (auto-resume per G5c).
+
+  4. If session.session_date != today_date -> COLD.
+     (Previous session was a different day.)
+
+  5. Same day. Check system_events for SHUTDOWN row with
+     ts_date == today_date:
+     If found -> WARM (clean stop earlier today).
+     If NOT found -> CRASH (process died unexpectedly).
+
+  Log INFO with scenario + details.
+
+SC5 — NTP clock check:
+  check_clock_skew(
+    time_authority,      # for assert_clock_at_startup
+    broker_adapter,      # to get broker timestamp
+    logger,
+  ) -> ClockCheckResult
+
+  ClockCheckResult:
+    passed: bool
+    skew_sec: float
+    tolerance_sec: float
+    broker_time: datetime
+    local_time: datetime
+
+  Implementation:
+    1. Call broker_adapter.get_positions() or similar cheap
+       call to get a broker response with timestamp.
+       (Or use a dedicated API; doesn't matter — any Kite
+       response carries a Date header.)
+    2. Extract broker timestamp.
+    3. Call time_authority.assert_clock_at_startup(broker_ts)
+    4. If raises ClockSkewTooLarge: return
+       ClockCheckResult(passed=False, ...).
+    5. Else return passed=True with skew value.
+
+  Caller (main.py) decides whether to refuse start on failure
+  per G4 (>30s -> refuse).
+
+SC6 — Config hash check (CL4):
+  check_config_hash(
+    state_store,
+    current_app_config,   # from load_all()
+    logger,
+  ) -> ConfigHashResult
+
+  ConfigHashResult:
+    changed: bool
+    changed_files: list[str]   # filenames whose hash differs
+    previous_hashes: dict
+    current_hashes: dict
+
+  Implementation:
+    1. Read last session's file_hashes from session table.
+    2. Compare with current_app_config.file_hashes.
+    3. Identify differing files.
+    4. Return result. Caller decides to alert + persist.
+
+SC7 — Scanner preflight (P17):
+  check_scanner_connectivity(
+    scan_webhook_map,
+    chartink_scanners,
+    http_fetcher_fn,      # injected callable for HTTP GET
+                          # Signature: (url: str, timeout: float) -> tuple[status, body_snippet]
+    logger,
+    timeout_sec=10.0,
+  ) -> ScannerPreflightResult
+
+  ScannerPreflightResult:
+    all_reachable: bool
+    results: list[ScannerCheck]
+
+  ScannerCheck:
+    scanner_name: str
+    url: str
+    reachable: bool
+    status_code: int | None
+    error: str | None
+    response_has_content: bool
+
+  Implementation:
+    For each scanner in scan_webhook_map:
+      Look up chartink_url from chartink_scanners.yaml
+      Call http_fetcher_fn(url, timeout)
+      Record result. DO NOT parse Chartink HTML (just
+      reachability).
+    Log WARNING per unreachable scanner.
+    all_reachable = all(r.reachable for r in results)
+
+SC8 — Webhook endpoint self-test (P17):
+  check_webhook_endpoint(
+    webhook_url: str,     # e.g. "http://localhost:5000/health"
+    http_fetcher_fn,
+    timeout_sec=5.0,
+    logger,
+  ) -> WebhookEndpointResult
+
+  WebhookEndpointResult:
+    reachable: bool
+    status_code: int | None
+    response_body: str | None
+
+  Used by main.py AFTER starting webhook receiver to confirm
+  Flask is listening. Curl /health locally.
+
+SC9 — Config file presence check:
+  check_config_files_present(
+    config_dir: Path,
+    logger,
+  ) -> list[str]   # missing file names, empty = all present
+
+  Fast pre-load check. If any required file missing, caller
+  refuses start with clear error (before attempting Pydantic
+  parse which may give cryptic messages).
+  Required files (derived from CL2):
+    system_config.yaml, broker_costs.yaml, broker_limits.yaml,
+    slippage_model.yaml, scoring_weights.yaml,
+    scan_webhook_map.yaml, chartink_scanners.yaml,
+    nse_holidays_<YEAR>.yaml (where YEAR is current year).
+
+SC10 — Market holiday check:
+  check_market_holiday_today(
+    market_windows,
+    today_date,
+    logger,
+  ) -> bool
+  Returns True if today is a trading holiday.
+  Caller decides to exit cleanly or continue (paper mode
+  might still want to run).
+
+SC11 — Secret env var check:
+  check_required_secrets(
+    required_keys: list[str],   # e.g. ["ZERODHA_API_KEY",
+                                 #      "ZERODHA_ACCESS_TOKEN",
+                                 #      "TELEGRAM_BOT_TOKEN"]
+    logger,
+  ) -> list[str]  # missing keys, empty = all set
+
+  Uses os.environ.get(). Does NOT log actual values.
+
+SC12 — Aggregate startup check runner:
+  run_all_startup_checks(
+    state_store, kill_switch, time_authority, broker_adapter,
+    market_windows, app_config,
+    scan_webhook_map, chartink_scanners,
+    http_fetcher_fn, webhook_url,
+    required_secrets,
+    config_dir,
+    logger,
+  ) -> StartupReport
+
+  StartupReport (frozen dataclass):
+    ok: bool                 # all critical checks passed
+    scenario: StartupScenario
+    blocking_failures: list[str]  # check names that failed
+    warnings: list[str]
+    scenario_details: StartupScenarioResult
+    clock: ClockCheckResult
+    config_hash: ConfigHashResult
+    scanners: ScannerPreflightResult | None  # skipped on COLD
+    webhook: WebhookEndpointResult | None     # skipped pre-start
+    market_holiday: bool
+    missing_secrets: list[str]
+    missing_config_files: list[str]
+
+  Runs all checks in order. Collects results. Does NOT abort
+  on first failure (collect everything). Caller decides
+  terminal action based on ok field.
+
+  "Blocking" checks (if fail -> ok=False):
+    - missing_config_files non-empty
+    - missing_secrets non-empty
+    - clock.passed == False
+    - scenario == HALT and --resume not given (caller handles)
+
+  "Warning" checks (don't block):
+    - config_hash.changed (alert operator)
+    - market_holiday (alert operator)
+    - scanner unreachable (log, continue)
+
+SC13 — Layer & deps:
+  Layer 6 (utils/). Imports: stdlib (datetime, enum,
+  dataclasses, os, pathlib, typing, requests),
+  core.exceptions (ClockSkewTooLarge),
+  core.logger, core.time_authority.
+  Does NOT import state_store, kill_switch, broker, etc.
+  directly — receives them via parameter. Pure library.
+
+SC14 — Determinism:
+  Given same state_store contents + same broker response +
+  same env + same filesystem: same result.
+  Time-dependent: today_date changes the behavior (that's
+  correct). Keep other clock dependencies out.
+
+SC15 — NOT in scope:
+  - State mutations (writing STARTUP/CRASH_DETECTED rows)
+  - Process control (exit codes)
+  - Resume handling (main.py does this based on HALT)
+  - Thread starting
+  - Subsystem construction
+  These are main.py's job.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Verify session table exists in schema.sql with fields
+   needed for SC4:
+     session_date, kill_state, kill_reason, last_config_hash,
+     mode, last_shutdown_ts
+   If missing fields: extend schema, bump version, update
+   test_state_store.
+
+2. Verify system_events table exists with:
+     id, event_type, event_ts, details JSON, session_date
+   Required event types (text check): STARTUP, SHUTDOWN,
+   CRASH_DETECTED, KILL_SWITCH, RECOVERY, CONFIG_DIFF.
+
+3. Add these state_store helpers if missing:
+     get_session_row() -> dict | None
+     find_shutdown_event_for_date(date_iso: str) -> dict | None
+     upsert_session(...) -> None   (for main.py, not this module)
+   Update test_state_store.
+
+4. Build utils/startup_checks.py per SC1-SC15 (~400 lines).
+   Keep functions small and testable independently.
+
+5. Build tests/unit/test_startup_checks.py covering:
+
+   detect_startup_scenario:
+   - No session row -> COLD
+   - session.session_date < today -> COLD
+   - session.kill_state == HARD_KILL -> HALT
+   - session.kill_state == SOFT_KILL, condition cleared -> WARM
+   - session.kill_state == SOFT_KILL, condition persists -> HALT
+   - Same day, SHUTDOWN event found -> WARM
+   - Same day, no SHUTDOWN event -> CRASH
+   - StartupScenarioResult fields populated
+
+   check_clock_skew:
+   - Skew within tolerance -> passed=True, skew_sec correct
+   - Skew > threshold -> passed=False, ClockSkewTooLarge
+     caught and converted to result
+   - Broker adapter raises -> passed=False with error
+   - Naive broker timestamp handled (time_authority regression)
+
+   check_config_hash:
+   - Hash matches -> changed=False
+   - Hash differs -> changed=True, changed_files correct
+   - First run (no previous hash) -> changed=False (not
+     a change, it's first)
+
+   check_scanner_connectivity:
+   - All scanners reachable -> all_reachable=True
+   - One scanner returns 404 -> reachable=False for that one
+   - One scanner times out -> reachable=False with error
+   - Empty scan_webhook_map -> all_reachable=True (vacuous)
+   - http_fetcher_fn mocked returns canned responses
+
+   check_webhook_endpoint:
+   - Reachable + 200 -> reachable=True
+   - Connection refused -> reachable=False
+   - Returns body in response_body
+
+   check_config_files_present:
+   - All present -> empty list
+   - Missing system_config -> returns ["system_config.yaml"]
+   - Multiple missing -> returns list in order
+
+   check_market_holiday_today:
+   - Weekday non-holiday -> False
+   - Saturday -> True (market_windows treats as holiday)
+   - Configured holiday -> True
+
+   check_required_secrets:
+   - All set -> empty list
+   - Missing one -> returns that key name
+   - Multiple missing -> returns list
+
+   run_all_startup_checks:
+   - All pass -> StartupReport.ok=True, no blocking_failures
+   - Missing config file -> ok=False, listed
+   - Missing secret -> ok=False, listed
+   - Clock skew fails -> ok=False, clock.passed=False
+   - Config hash changed -> ok=True (warning only)
+   - Scanner unreachable -> ok=True (warning only)
+   - HALT scenario -> ok=False (requires caller action)
+   - StartupReport contains all sub-results
+
+6. Re-run all 35 prior suites + new one. Report 36-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: utils/startup_checks.py
+  Tests: report actual
+  Locked: SC1-SC15 under startup_module: section
+  Schema: maybe bumped if session/system_events fields added
+  Cross-module: state_store (possibly 3 new helpers),
+                time_authority used read-only
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Mock http_fetcher_fn, broker_adapter. Use real
+state_store (in-memory) with seeded rows.
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+Module 34 = main.py orchestrator (uses startup_checks)
+Module 35 = scripts/preflight_scanner_check.py (standalone)
+Module 36 = reports/daily_review.py
+
+Module 34 will be BIG. Confirm utils/kill_switch.py status
+before Module 34. If it doesn't exist (only capital/kill_switch.py
+does), decide whether G5c --resume logic lives in:
+  (a) main.py directly
+  (b) a new utils/kill_switch.py helper
+  (c) extend capital/kill_switch.py
+Flag this in your Module 33 completion report.

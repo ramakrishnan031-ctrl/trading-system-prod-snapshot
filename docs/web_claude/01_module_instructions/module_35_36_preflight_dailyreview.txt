@@ -1,0 +1,264 @@
+================================================================
+MODULE 35 + 36 (combined): Final two modules
+================================================================
+
+1111/1111 green across 39 suites. Only 3 things remain:
+  Module 35: scripts/preflight_scanner_check.py
+  Module 36: reports/daily_review.py
+  Module 37: Integration smoke test (final gate)
+
+Build 35 then 36 in sequence. Combined here to save round-trips.
+
+================================================================
+MODULE 35: scripts/preflight_scanner_check.py
+================================================================
+
+LOCKED: P17 — Pre-flight scanner check at startup
+
+LOCK (PF1-PF8):
+
+PF1 — Purpose: Standalone CLI that operator runs BEFORE
+  market open to verify all 15 Chartink scanners are
+  reachable and returning expected shape. Independent of
+  main.py. Exit 0 if all good, 1 if any unreachable.
+
+PF2 — CLI:
+  python scripts/preflight_scanner_check.py [--config PATH]
+                                             [--verbose]
+                                             [--timeout N]
+
+PF3 — Execution:
+  1. Load AppConfig via config_loader
+  2. For each scanner in scan_webhook_map:
+     - Fetch Chartink URL via requests.get (timeout 10s)
+     - Record status, response size
+  3. Print summary table: scanner_name, URL, reachable,
+     status_code, response_size
+  4. Exit 0 if all reachable with 2xx, else 1
+
+PF4 — HTTP: requests library (already in venv).
+  Headers: User-Agent set to avoid blocks.
+  Timeout: 10s default, --timeout override.
+
+PF5 — Output format:
+  Plain text table to stdout. No JSON, no file writes.
+  If --verbose: print response snippet per scanner.
+
+PF6 — Integration with startup_checks:
+  Re-use check_scanner_connectivity() from utils/startup_checks.
+  This script is a thin wrapper: load config, inject http
+  fetcher, call the library function, format output.
+  NO duplicate logic.
+
+PF7 — Layer:
+  Layer 7 (scripts/). Imports: argparse, requests, pathlib,
+  core.config_loader, utils.startup_checks.
+
+PF8 — NOT in scope:
+  - Modifying scanner config
+  - Detecting Chartink HTML changes
+  - Polling / scheduling
+
+BUILD (Module 35):
+1. Build scripts/preflight_scanner_check.py (~100 lines)
+2. Build tests/unit/test_preflight_scanner.py covering:
+   - All reachable -> exit 0
+   - One unreachable -> exit 1
+   - Verbose flag prints snippets
+   - Custom timeout respected
+   - Missing config -> clear error, exit 1
+3. Re-run all 39 suites + new one.
+
+================================================================
+MODULE 36: reports/daily_review.py
+================================================================
+
+LOCKED: P10 (signal funnel), P16 (final signal status),
+        P18 (screener outcomes)
+
+LOCK (DR1-DR15):
+
+DR1 — Purpose: Generate daily EOD review report. Reads all
+  of today's data from state_store, produces .xlsx (primary)
+  + .md (fallback/summary). Called by main.py at EOD or
+  manually via CLI.
+
+DR2 — CLI:
+  python -m reports.daily_review [--date YYYY-MM-DD]
+                                  [--output-dir DIR]
+                                  [--format xlsx|md|both]
+  Default date = today IST.
+  Default output = reports/daily/.
+  Default format = both.
+
+DR3 — Report contents (8 sheets/sections):
+
+  1. SUMMARY:
+     Total signals received, screened-passed, placed,
+     completed, realized P&L, win rate, avg trade duration
+
+  2. SIGNAL_FUNNEL (P10):
+     Stage -> count drop-off:
+     RECEIVED -> QUEUED -> PROCESSING -> PASSED_SCREEN ->
+     SIZED -> APPROVED -> RESERVED -> PLACED -> FILLED ->
+     EXITED. Counts + drop-off % per stage.
+
+  3. SCREENER_ANALYTICS (P18):
+     Per-step rejection counts. Per-tier distribution.
+     Average score. Step latencies (avg/p95).
+
+  4. TRADES:
+     Per-trade row: trade_id, signal_id, symbol, side,
+     qty, entry_price, exit_price, sl, tgt, gross_pnl,
+     costs, net_pnl, duration_min, status, exit_reason,
+     screener_tier.
+
+  5. ORDERS:
+     Per-order row: internal_order_id, broker_order_id,
+     trade_id, leg (ENTRY/SL/TGT), status, placed_at,
+     filled_at, rejection_reason (if any).
+
+  6. CAPITAL_LEDGER:
+     Every capital mutation today: ts, mutation_type,
+     amount, bucket, balance_before, balance_after,
+     signal_id, reservation_id, reason.
+
+  7. KILL_SWITCH_EVENTS + RECONCILIATION_LOG + SYSTEM_EVENTS:
+     All today's system events. STARTUP/SHUTDOWN/CRASH/
+     KILL_SWITCH/RECOVERY/CONFIG_DIFF timestamps.
+
+  8. ALERTS_SENT:
+     Telegram messages sent today per severity.
+     Sentinel files written (delivered vs failed).
+
+DR4 — Output formats:
+  .xlsx: openpyxl, one sheet per DR3 section.
+  .md: single file, one heading per section, pipe-tables.
+  Both written to reports/daily/<date>/daily_review.{xlsx,md}
+
+DR5 — Dependencies:
+  Add openpyxl>=3.1 to requirements.txt. Install in venv.
+  No new deps beyond that.
+
+DR6 — Constructor:
+  DailyReviewGenerator(
+    state_store,
+    time_authority,
+    logger,
+  )
+  generate(date_iso: str, output_dir: Path,
+           formats: list[str]) -> ReportPaths
+  ReportPaths: {xlsx_path: Path|None, md_path: Path|None}
+
+DR7 — Read-only:
+  Daily review NEVER mutates state_store. All queries
+  read-only. Multiple invocations safe.
+
+DR8 — Data sources (queries):
+  Add helpers to state_store if missing:
+    get_signals_for_date(date_iso) -> list[dict]
+    get_trades_for_date(date_iso) -> list[dict]
+    get_orders_for_date(date_iso) -> list[dict]
+    get_capital_ledger_for_date(date_iso) -> list[dict]
+    get_system_events_for_date(date_iso) -> list[dict]
+    get_reconciliation_log_for_date(date_iso) -> list[dict]
+    get_screener_results_for_date(date_iso) -> list[dict]
+  Update test_state_store.
+
+DR9 — Signal funnel logic:
+  Read all signals WHERE received_date = date.
+  Group by status. Build funnel from status transitions:
+    received = count(*)
+    queued = count(status IN queue-forward statuses)
+    passed_screen = count(status == PASSED or later)
+    etc.
+  Each row also shows absolute count AND % of prior stage.
+
+DR10 — Screener analytics:
+  Query screener_results for date.
+  Per rejection_step: count, avg_score.
+  Per tier: count, avg_score.
+  Per step latency: avg, p50, p95.
+
+DR11 — P&L calculation:
+  For each completed trade (status=CLOSED):
+    gross_pnl from capital_ledger exit row
+    costs = sum of cost rows linked to trade_id
+    net_pnl = gross - costs
+  Sum all net_pnl for daily total.
+  Win rate = count(net_pnl > 0) / count(closed trades)
+
+DR12 — Empty day handling:
+  If no signals / no trades: generate report anyway with
+  zero rows + "No activity today" summary line. Useful
+  for holiday verification.
+
+DR13 — Layer:
+  Layer 7 (reports/). Imports: openpyxl, stdlib (pathlib,
+  datetime, json), core.state_store, core.time_authority,
+  core.logger.
+
+DR14 — Integration with main.py:
+  main.py EOD sequence (after eod_squareoff fires):
+    generator = DailyReviewGenerator(store, time_auth, logger)
+    paths = generator.generate(today_iso, Path("reports/daily"),
+                                ["xlsx", "md"])
+    notifier.send(INFO, "Daily review ready",
+                  body=f"xlsx: {paths.xlsx_path}", ...)
+  Can also run standalone via CLI.
+
+DR15 — NOT in scope:
+  - Historical multi-day aggregation
+  - Charts / plots (future enhancement)
+  - Email delivery (operator reads files)
+  - Comparison vs yesterday
+
+BUILD (Module 36):
+1. Install openpyxl: pip install openpyxl>=3.1
+2. Add 7 date-scoped query helpers to state_store per DR8.
+   Update test_state_store.
+3. Build reports/__init__.py
+4. Build reports/daily_review.py (~400 lines).
+5. Build tests/unit/test_daily_review.py covering:
+   - Empty day -> report generated with zero rows
+   - Full day -> all 8 sections populated
+   - XLSX format: 8 sheets named correctly
+   - MD format: 8 sections with headings
+   - Both format -> both files created
+   - Signal funnel correct for sample data
+   - Screener analytics: rejection counts per step
+   - P&L calculation: gross - costs = net
+   - Win rate calculation
+   - CLI mode with --date flag
+   - Default date = today
+   - Output dir created if absent
+   - Read-only: state_store unchanged after generation
+6. Integration test: seed state_store with synthetic full
+   day of data, generate report, verify contents.
+7. Re-run all 40 prior suites + new one (41 total).
+
+================================================================
+MEMORY UPDATE (per MH1) — after EACH module
+================================================================
+
+Module 35: scripts/preflight_scanner_check.py
+  Locked: PF1-PF8 under scripts_module: section
+  Tests: ~5
+  Cross-module: utils.startup_checks (reuse)
+
+Module 36: reports/daily_review.py
+  Locked: DR1-DR15 under reports_module: section
+  Tests: ~25-30
+  Cross-module: state_store (+7 helpers), added openpyxl dep
+  main.py integration: add DailyReviewGenerator call to EOD
+  path (minor; no schema change)
+
+================================================================
+AFTER MODULE 36 GREEN
+================================================================
+
+Final step: Module 37 — Integration smoke test.
+Full pipeline in paper mode, seeded signal, verify end-to-end.
+Will send instructions once 36 is green.
+
+WINDOWS REMINDER: ASCII-only print() strings.

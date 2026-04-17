@@ -1,0 +1,30 @@
+# config/scoring_weights.yaml — Trading System v2
+#
+# All secondary screener step weights and tier thresholds (P9b).
+# NO weights are hardcoded in screening/*.py — this file is the single source.
+# Weights are non-negative integers; final score = sum of weights for passed steps.
+# Adjust weights based on live data once system is trading (v2 → v2.1 iteration).
+#
+# Locked decisions: P9b
+
+steps:
+  volume_surge: 15      # Step 1: volume vs 20-day avg
+  vwap_position: 10     # Step 2: price relative to VWAP (direction-aware)
+  atr_filter: 10        # Step 3: ATR-based volatility gate
+  rsi_range: 10         # Step 4: RSI in acceptable range
+  price_action: 15      # Step 5: candle structure + swing confirmation
+  sector_strength: 10   # Step 6: sector index momentum
+  time_of_day: 5        # Step 7: entry time quality (later in session = lower weight)
+  spread_check: 5       # Step 8: bid-ask spread vs ATR
+  circuit_check: 10     # Step 9: upper/lower circuit state via kite.quote()
+  signal_age: 10        # Step 10: signal freshness (now - triggered_at ≤ 90s, P9a)
+
+min_pass_score: 60      # Signals below this score are REJECTED_SCREEN
+
+tier_multipliers:       # Applied to position size in position_sizer (P10)
+  high: 1.0             # Score ≥ high_score_threshold
+  medium: 0.75          # Score between medium and high thresholds
+  low: 0.5              # Score between min_pass_score and medium threshold
+
+high_score_threshold: 80
+medium_score_threshold: 65

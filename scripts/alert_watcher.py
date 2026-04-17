@@ -1,0 +1,349 @@
+#!/usr/bin/env python
+"""
+scripts/alert_watcher.py -- Trading System v2
+
+Purpose:
+    Standalone CLI script invoked by systemd timer (or Windows Task Scheduler)
+    every N seconds. Finds .flag sentinel files written by alerts/critical.py,
+    sends each via SMTP email, renames to .delivered. Survives trading process
+    crash (runs as a separate process).
+
+Locked Design Decisions:
+    AW1  -- Standalone CLI. Periodic invocation (not daemon). Survives process crash.
+    AW2  -- CLI: python alert_watcher.py [--config <path>] [--once] [--dry-run]
+            Default: read config, process all pending, exit.
+    AW3  -- Lock file: data_store/alert_watcher.lock (pid stored inside).
+            If lock exists + pid alive: exit 0 silently.
+            If lock exists + pid dead (stale): clean up and proceed.
+    AW4  -- Processing: list_pending -> read -> send_email -> mark_delivered.
+            SmtpError -> increment counter; mark_failed at max_attempts.
+    AW5  -- Attempt counter persisted in data_store/alert_watcher_attempts.json.
+            Entries cleared for files no longer .flag.
+    AW6  -- Email: Subject "[<SEV>] <title> [<host>:<pid>]".
+            Body: plain-text. Uses smtplib.SMTP + STARTTLS or SSL.
+    AW7  -- SMTP config via alerts.smtp section of system_config.yaml.
+    AW8  -- Own log file: logs/alert_watcher.log (plain text, not JSON).
+    AW9  -- Exit codes: 0=success, 1=config error, 2=SMTP auth failure.
+    AW10 -- Layer 6. Imports: stdlib, alerts.critical, core.config_loader.
+    AW11 -- Config additions: alerts.smtp + watcher_max_attempts, watcher_lock_path,
+            watcher_log_path.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import smtplib
+import socket
+import sys
+from datetime import datetime, timezone, timedelta
+from email.mime.text import MIMEText
+from pathlib import Path
+
+# Allow running directly from scripts/ or from project root
+_PROJECT_ROOT = Path(__file__).parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
+
+from alerts.critical import (
+    list_pending_sentinels,
+    mark_delivered,
+    mark_failed,
+    read_sentinel,
+)
+from core.config_loader import load_all
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+# ------------------------------------------------------------------------------
+# Lock file management (AW3)
+# ------------------------------------------------------------------------------
+
+def _acquire_lock(lock_path: Path) -> bool:
+    """
+    Try to acquire the watcher lock (AW3).
+
+    Returns True if lock acquired, False if another live instance holds it.
+    Cleans up stale lock (dead pid) automatically.
+    """
+    if lock_path.exists():
+        try:
+            pid = int(lock_path.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            pid = None
+
+        if pid is not None:
+            try:
+                os.kill(pid, 0)  # signal 0: check existence without sending
+                # PID alive -> another instance is running
+                return False
+            except (ProcessLookupError, PermissionError):
+                # PID dead (stale lock) or we have no permission to signal
+                # Treat as stale on ProcessLookupError; proceed on PermissionError
+                # since that usually means the process does exist (Windows)
+                if isinstance(sys.exc_info()[1], ProcessLookupError):
+                    lock_path.unlink(missing_ok=True)  # stale, clean up
+                else:
+                    return False  # process exists, cannot signal (Windows live process)
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def _release_lock(lock_path: Path) -> None:
+    """Release the lock file (AW3)."""
+    lock_path.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------------------
+# Attempt counter (AW5)
+# ------------------------------------------------------------------------------
+
+def _load_attempts(counter_path: Path) -> dict[str, int]:
+    if not counter_path.exists():
+        return {}
+    try:
+        return json.loads(counter_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_attempts(counter_path: Path, counters: dict[str, int]) -> None:
+    counter_path.parent.mkdir(parents=True, exist_ok=True)
+    raw = json.dumps(counters, indent=2)
+    tmp = counter_path.with_suffix(".tmp")
+    tmp.write_text(raw, encoding="utf-8")
+    tmp.replace(counter_path)
+
+
+def _prune_attempts(counters: dict[str, int], sentinel_dir: Path) -> dict[str, int]:
+    """Remove entries for files that are no longer .flag (delivered/failed/gone)."""
+    pending_names = {p.name for p in list_pending_sentinels(sentinel_dir)}
+    return {k: v for k, v in counters.items() if k in pending_names}
+
+
+# ------------------------------------------------------------------------------
+# Email sending (AW6, AW7)
+# ------------------------------------------------------------------------------
+
+class SmtpError(Exception):
+    """SMTP delivery failure (AW4)."""
+
+
+class SmtpAuthError(SmtpError):
+    """SMTP authentication failure -> exit 2 (AW9)."""
+
+
+def _build_email(
+    data: dict,
+    from_address: str,
+    to_addresses: list[str],
+) -> MIMEText:
+    """Build a plain-text MIMEText for the sentinel data (AW6)."""
+    host = data.get("hostname", socket.gethostname())
+    pid = data.get("pid", os.getpid())
+    severity = data.get("context", {}).get("severity", "CRITICAL")
+    title = data.get("title", "(no title)")
+
+    subject = f"[{severity}] {title} [{host}:{pid}]"
+
+    body_lines = [
+        f"Alert ID   : {data.get('id', '?')}",
+        f"Timestamp  : {data.get('ts', '?')}",
+        f"Severity   : {severity}",
+        f"Title      : {title}",
+        f"Module     : {data.get('source_module', '?')}",
+        f"Hostname   : {host}",
+        f"PID        : {pid}",
+        "",
+        "--- Body ---",
+        data.get("body", ""),
+        "",
+        "--- Context ---",
+    ]
+    for k, v in data.get("context", {}).items():
+        body_lines.append(f"  {k}: {v}")
+
+    msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = from_address
+    msg["To"] = ", ".join(to_addresses)
+    return msg
+
+
+def _send_email(smtp_cfg, data: dict, log: logging.Logger) -> None:
+    """
+    Send a single email via SMTP (AW6).
+
+    Raises:
+        SmtpAuthError: on authentication failure (exit 2).
+        SmtpError:     on any other SMTP failure.
+    """
+    msg = _build_email(data, smtp_cfg.from_address, smtp_cfg.to_addresses)
+
+    try:
+        if smtp_cfg.use_tls:
+            server = smtplib.SMTP(smtp_cfg.host, smtp_cfg.port, timeout=smtp_cfg.timeout_sec)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        else:
+            server = smtplib.SMTP_SSL(smtp_cfg.host, smtp_cfg.port, timeout=smtp_cfg.timeout_sec)
+
+        try:
+            server.login(smtp_cfg.username, smtp_cfg.password)
+            server.sendmail(smtp_cfg.from_address, smtp_cfg.to_addresses, msg.as_string())
+        finally:
+            server.quit()
+
+    except smtplib.SMTPAuthenticationError as exc:
+        raise SmtpAuthError(f"SMTP authentication failed: {exc}") from exc
+    except smtplib.SMTPException as exc:
+        raise SmtpError(f"SMTP error: {exc}") from exc
+    except OSError as exc:
+        raise SmtpError(f"Network error: {exc}") from exc
+
+
+# ------------------------------------------------------------------------------
+# Logger setup (AW8)
+# ------------------------------------------------------------------------------
+
+def _setup_watcher_log(log_path: Path) -> logging.Logger:
+    """Configure the watcher's own plain-text log file (AW8)."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = logging.getLogger("alert_watcher")
+    log.setLevel(logging.DEBUG)
+    if not log.handlers:
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        log.addHandler(fh)
+    return log
+
+
+# ------------------------------------------------------------------------------
+# Main processing loop (AW4)
+# ------------------------------------------------------------------------------
+
+def run_once(
+    cfg,
+    dry_run: bool = False,
+    log: logging.Logger | None = None,
+) -> int:
+    """
+    Process all pending sentinels once (AW4).
+
+    Returns 0 on success, 2 on SmtpAuthError.
+    """
+    if log is None:
+        log = logging.getLogger("alert_watcher")
+
+    alerts_cfg = cfg.system.alerts
+    sentinel_dir = Path(alerts_cfg.sentinel_dir)
+    max_attempts = alerts_cfg.watcher_max_attempts
+    counter_path = sentinel_dir / "alert_watcher_attempts.json"
+    smtp_cfg = alerts_cfg.smtp
+
+    counters = _load_attempts(counter_path)
+
+    pending = list_pending_sentinels(sentinel_dir)
+    if not pending:
+        log.info("No pending sentinels found.")
+        return 0
+
+    log.info("Found %d pending sentinel(s).", len(pending))
+    auth_error_exit = False
+
+    for sentinel_path in pending:
+        fname = sentinel_path.name
+
+        try:
+            data = read_sentinel(sentinel_path)
+        except (OSError, ValueError) as exc:
+            log.error("Corrupt sentinel %s: %s", fname, exc)
+            if not dry_run:
+                try:
+                    mark_failed(sentinel_path, f"corrupt: {exc}")
+                except OSError:
+                    pass
+            continue
+
+        if dry_run:
+            log.info("[dry-run] Would send email for %s", fname)
+            continue
+
+        try:
+            _send_email(smtp_cfg, data, log)
+            mark_delivered(sentinel_path)
+            counters.pop(fname, None)
+            log.info("Delivered %s -> .delivered", fname)
+
+        except SmtpAuthError as exc:
+            log.error("SMTP auth failure: %s", exc)
+            auth_error_exit = True
+            break  # no point continuing; all sends will fail
+
+        except SmtpError as exc:
+            count = counters.get(fname, 0) + 1
+            counters[fname] = count
+            log.error("SMTP error for %s (attempt %d/%d): %s", fname, count, max_attempts, exc)
+            if count >= max_attempts:
+                try:
+                    mark_failed(sentinel_path, str(exc))
+                    counters.pop(fname, None)
+                    log.error("Abandoned %s after %d attempts -> .failed", fname, max_attempts)
+                except OSError:
+                    pass
+
+    # Prune entries for files no longer pending
+    counters = _prune_attempts(counters, sentinel_dir)
+    _save_attempts(counter_path, counters)
+
+    return 2 if auth_error_exit else 0
+
+
+# ------------------------------------------------------------------------------
+# CLI entrypoint (AW2)
+# ------------------------------------------------------------------------------
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Alert watcher: process critical sentinel files and send email."
+    )
+    parser.add_argument("--config", default=None, help="Path to config directory")
+    parser.add_argument("--once", action="store_true", help="Run one pass and exit (default)")
+    parser.add_argument("--dry-run", action="store_true", dest="dry_run",
+                        help="Log actions without sending email or renaming files")
+    args = parser.parse_args()
+
+    # Load config (AW10)
+    config_dir = Path(args.config) if args.config else None
+    try:
+        if config_dir:
+            cfg = load_all(config_dir)
+        else:
+            cfg = load_all()
+    except Exception as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return 1
+
+    alerts_cfg = cfg.system.alerts
+    log_path = Path(alerts_cfg.watcher_log_path)
+    log = _setup_watcher_log(log_path)
+
+    lock_path = Path(alerts_cfg.watcher_lock_path)
+
+    if not _acquire_lock(lock_path):
+        log.info("Another alert_watcher instance is running. Exiting.")
+        return 0
+
+    try:
+        return run_once(cfg, dry_run=args.dry_run, log=log)
+    finally:
+        _release_lock(lock_path)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

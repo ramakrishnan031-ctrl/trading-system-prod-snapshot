@@ -1,0 +1,70 @@
+================================================================
+CLARIFICATION — Earlier instruction files are SUBSUMED
+================================================================
+
+Rama is checking whether anything is missing. Confirming
+scope consolidation so nothing is duplicated or forgotten.
+
+The following files YOU may have seen earlier are now
+SUBSUMED by mega_memory_and_fix_plan.txt + full_audit_raw_dump.txt.
+Do NOT treat them as separate pending work:
+
+  - address_four_concerns.txt
+      -> Concern 1 (empty folders): DONE (auth deleted,
+         .gitkeep added)
+      -> Concern 2 (accounts + F&O): handled by Phase D
+         (Module 38)
+      -> Concern 3 (15 strategy YAMLs): NOT a gap, already
+         exist at config/strategies/ (confirmed)
+      -> Concern 4 (multi-inning tracking): handled by
+         Phase E (Module 39) + Phase F (Module 40)
+
+  - pre_live_audit_response.txt
+      -> All 10 concerns mapped into mega plan priorities
+      -> Concerns already-addressed items noted
+      -> Gaps A-F mapped to specific phases
+
+  - second_audit_response.txt
+      -> All 30 issues included in mega plan
+      -> Priority 1/2/3 triage preserved
+
+  - modules_38_39_40_final.txt
+      -> Full specs for Modules 38, 39, 40
+      -> These ARE the work for Phases D, E, F
+      -> Reference this file when building those modules
+
+================================================================
+EXECUTION ORDER (unchanged from mega file)
+================================================================
+
+Phase A: Verify 15 blockers against actual code. Triage
+         (CONFIRMED/NOT_APPLICABLE/ALREADY_FIXED/UNCLEAR).
+Phase B: Fix confirmed P1 blockers + regression tests.
+Phase C: Verify + fix P2 HIGH severity issues.
+Phase D: Build Module 38 (instrument_cache + accounts) per
+         modules_38_39_40_final.txt.
+Phase E: Build Module 39 (shadow_tracker) per same file.
+Phase F: Build Module 40 (daily_review multi-inning) per
+         same file.
+Phase G: P3 MEDIUM severity issues.
+Phase H: Chaos test suite.
+Phase I: Final report to Rama with ready-for-paper verdict.
+
+================================================================
+STATE OF MEMPALACE
+================================================================
+
+After writing memory files per mega instruction, mempalace
+should have:
+  - project_master_state.md (complete handoff doc)
+  - audit_findings_consolidated.md (54 issues organized)
+  - audit_raw_dump.md (verbatim audit text, 3 audits)
+  - all prior per-module memory entries (Modules 1-37)
+
+Future Claude sessions: read project_master_state.md FIRST,
+then drill into specifics.
+
+================================================================
+Acknowledge this file + continue Phase A.
+No new work items. Just consolidation confirmation.
+================================================================

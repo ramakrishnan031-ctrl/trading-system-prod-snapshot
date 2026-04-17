@@ -1,0 +1,195 @@
+================================================================
+MODULE 23: capital/invariant.py
+================================================================
+
+CONTEXT: 560/560 across 22 modules. capital/invariant.py is
+the smallest possible module — pure assertion function used
+inside fund_manager. Already partially implemented inside
+fund_manager (FM11 invariant check). This module EXTRACTS
+that logic into a reusable, testable, anchored function per
+G3 Level 1.
+
+LOCKED DECISIONS (verbatim from locked_decisions.yaml):
+  G3   — Capital invariant enforcement (Level 1 = anchored
+         Python check inside every capital-mutating transaction)
+  P7a  — Three-balance model: cash_floor, realized_pnl_today,
+         margin_used. Tradable = cash_floor + min(0, realized_pnl_today).
+         Charges deducted from realized_pnl, never from margin.
+  E4   — CapitalInvariantViolation (StateError, CRITICAL)
+  G1   — Level 3 broker drift lives in reconciler, NOT here.
+
+================================================================
+MODULE-SPECIFIC LOCK (INV1-INV10)
+================================================================
+
+INV1 — Purpose: Pure stateless assertion that capital balances
+  satisfy the G3 invariant at the moment of call. Raises
+  CapitalInvariantViolation on breach. Returns None on success.
+
+INV2 — Invariant equation (per G3, P7a):
+  margin_available + margin_reserved + margin_used
+    == cash_floor + min(0, realized_pnl_today)
+  Tolerance: 0.01 (paise). Anything beyond -> violation.
+  RATIONALE: profits don't add to tradable until T+1 settlement,
+  but losses count immediately. Hence min(0, realized_pnl_today).
+
+INV3 — Public API (single function):
+  assert_capital_invariant(
+    margin_available: float,
+    margin_reserved: float,
+    margin_used: float,
+    cash_floor: float,
+    realized_pnl_today: float,
+    bucket: str = "global",      # for context
+    mutation_type: str = "",     # for context (e.g. "reserve", "release")
+    reservation_id: str = "",    # for context
+    tolerance: float = 0.01,
+  ) -> None
+  Raises CapitalInvariantViolation with full context dict on breach.
+
+INV4 — Context dict on violation (lock):
+  {
+    "bucket": str,
+    "mutation_type": str,
+    "reservation_id": str,
+    "margin_available": float,
+    "margin_reserved": float,
+    "margin_used": float,
+    "cash_floor": float,
+    "realized_pnl_today": float,
+    "lhs": float,           # available + reserved + used
+    "rhs": float,           # cash_floor + min(0, realized_pnl)
+    "delta": float,         # lhs - rhs
+    "tolerance": float,
+  }
+
+INV5 — Helper functions (module-level, also exported):
+  compute_lhs(available, reserved, used) -> float
+  compute_rhs(cash_floor, realized_pnl_today) -> float
+  compute_tradable_balance(cash_floor, realized_pnl_today) -> float
+    Returns cash_floor + min(0, realized_pnl_today) per P7a.
+  All pure functions, no side effects.
+
+INV6 — Negative balance guards (additional defensive checks):
+  Before invariant check, validate each balance is not
+  catastrophically negative:
+    if margin_available < -tolerance: raise (separate violation
+      with mutation_type="NEGATIVE_AVAILABLE")
+    if margin_reserved < -tolerance: raise (NEGATIVE_RESERVED)
+    if margin_used < -tolerance: raise (NEGATIVE_USED)
+    if cash_floor < -tolerance: raise (NEGATIVE_CASH_FLOOR)
+  realized_pnl_today CAN be negative (losses) — no check.
+
+INV7 — fund_manager refactor (mandatory):
+  Remove the inline invariant check from fund_manager.py FM11.
+  Replace with import + call to assert_capital_invariant.
+  Behavior must remain identical — all 30 fund_manager tests
+  must continue to pass without modification.
+  This is the audit fix: single source of truth for invariant
+  logic.
+
+INV8 — Layer & deps:
+  Layer 3 (capital/, depends on core only).
+  Imports: stdlib only, core.exceptions
+  (CapitalInvariantViolation).
+  NO state_store, NO logger (caller logs after catching).
+  NO config_loader (tolerance is parameter, not config —
+  invariant tolerance is mathematical constant).
+
+INV9 — Determinism:
+  Same inputs -> same outcome (raise or return None).
+  No randomness, no time, no I/O. Foundation Rule 1.1.
+  Thread-safe by virtue of being pure.
+
+INV10 — NOT in scope:
+  - Recovery from violation (caller's responsibility)
+  - Logging (caller logs after catching)
+  - State persistence (caller's responsibility)
+  - Broker drift detection (G1 reconciler — separate module)
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Build capital/invariant.py per INV1-INV10.
+   Approximately 80-120 lines including docstring + helpers.
+
+2. Refactor capital/fund_manager.py:
+   - Remove inline invariant block from FM11
+   - Import assert_capital_invariant
+   - Replace inline check with single call passing current
+     balances + bucket + mutation_type + reservation_id
+   - Keep on_critical_failure callback firing on catch
+   - VERIFY all 30 fund_manager tests pass unchanged
+
+3. Build tests/unit/test_invariant.py covering:
+   - Valid balances (no realized loss): no exception
+   - Valid balances (realized loss reduces tradable): no exception
+   - Valid balances (realized profit IGNORED — P7a):
+     e.g. cash=1000, realized=+500, available+reserved+used=1000
+     -> PASS (profit doesn't lift the equation; P7a explicitly
+        says profits don't count toward tradable until T+1)
+   - Realized loss: cash=1000, realized=-200,
+     available+reserved+used must equal 800. Test both pass
+     and fail cases.
+   - Off-by-paisa: delta=0.005 -> pass (within tolerance)
+   - Off-by-rupee: delta=1.0 -> raise
+   - Negative available -> raise NEGATIVE_AVAILABLE
+   - Negative reserved -> raise NEGATIVE_RESERVED
+   - Negative used -> raise NEGATIVE_USED
+   - Negative cash_floor -> raise NEGATIVE_CASH_FLOOR
+   - Negative realized_pnl_today -> NO raise (allowed per P7a)
+   - Custom tolerance respected
+   - Context dict has all 12 fields per INV4
+   - lhs / rhs / delta computed correctly in context
+   - compute_lhs sums correctly
+   - compute_rhs uses min(0, pnl) — profit case: pnl=500 -> rhs=cash_floor
+   - compute_rhs uses min(0, pnl) — loss case: pnl=-300 -> rhs=cash_floor-300
+   - compute_tradable_balance matches compute_rhs
+   - CapitalInvariantViolation severity is CRITICAL (E2/E4)
+   - CapitalInvariantViolation isa StateError isa TradingSystemError
+   - Pure: same inputs called 100 times -> same outcome
+   - Thread-safe: 50 concurrent calls from 5 threads, no races
+   - Importable as: from capital.invariant import assert_capital_invariant
+
+4. Re-run all 22 prior suites + new one. Report 23-row table.
+   fund_manager.py count must remain 30/30 (regression
+   check — refactor must be behavior-preserving).
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store in mempalace after green:
+  Module: capital/invariant.py
+  Path: capital/invariant.py
+  Tests added: ~20-25 in test_invariant.py
+  Total cumulative test count: report
+  Locked decisions added: INV1-INV10 (under capital_module:
+    new section in locked_decisions.yaml)
+  Locked decisions referenced: G3, P7a, E4, G1
+  Schema version: unchanged
+  Cross-module impacts:
+    - fund_manager.py: FM11 inline invariant block removed,
+      replaced with import + call (behavior-preserving)
+    - test_fund_manager.py: must remain 30/30 (regression
+      verified)
+  Deviations from instruction: list if any
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+After invariant green, paste locked_decisions.yaml sections
+for ALL of these so I can produce module 24 instructions:
+  - alerts/critical.py (G8, E2, L7, P2 already shared — good)
+  - alerts/telegram_notifier.py (G8 + others)
+  - scripts/alert_watcher.py (G8)
+
+These three form the alerts subsystem. Building critical.py
+alone leaves a half-functional alert chain. Recommend
+building all three back-to-back as one module-trio in
+sequence.
+
+WINDOWS REMINDER: ASCII-only print() strings everywhere,
+including __main__ runner output.

@@ -1,0 +1,280 @@
+================================================================
+MODULE 30: signal_processor integration wiring
+================================================================
+
+CONTEXT: 885/885 across 34 suites. signal_processor was built
+(Module 20) with secondary_screener=None and quality_scorer=None.
+Now these exist. This module wires them in + adds strategy lookup.
+
+This is NOT a new module — it's an UPDATE to existing
+signals/signal_processor.py. Treat as Module 30 for tracking.
+
+LOCKED DECISIONS REFERENCED:
+  SP3, SP6 — signal_processor constructor + pipeline
+  SS3, SS14 — screener API, integration hook
+  S9, S10 — strategies.loader API, scan_webhook_map linkage
+  P18 — screener writes status; processor doesn't double-write
+
+================================================================
+LOCK (SPW1-SPW10 — "Signal Processor Wiring")
+================================================================
+
+SPW1 — Purpose: Complete the signal_processor pipeline by
+  wiring in strategies/loader, secondary_screener,
+  quality_scorer. NO new module created. Existing
+  signal_processor.py and test_signal_processor.py modified.
+
+SPW2 — Constructor update:
+  Remove parameters that are None-default placeholders:
+    secondary_screener (now required)
+    quality_scorer (now required — injected into screener but
+                    signal_processor also needs access for
+                    logging/metrics, KEEP as parameter)
+  Add parameter:
+    strategies: dict[str, StrategyConfig]  # from load_all_strategies()
+    scan_webhook_map: dict  # for scanner_name -> strategy_name
+  order_placer remains optional for now (Module 33 will wire).
+
+  New constructor signature:
+    SignalProcessor(
+      signal_queue,
+      state_store,
+      bus,
+      fund_manager,
+      position_sizer,
+      risk_engine,
+      kill_switch,
+      market_windows,
+      strategies,            # NEW: dict[str, StrategyConfig]
+      scan_webhook_map,      # NEW: dict
+      secondary_screener,    # NEW (was None)
+      quality_scorer,        # NEW (was None)
+      order_placer=None,     # still optional
+      logger=...,
+      worker_count=5,
+      drain_poll_sec=0.1,
+    )
+
+SPW3 — Pipeline update (SP6 pipeline with screener wired in):
+
+  Existing steps 1-2 unchanged (pre-flight, strategy lookup).
+
+  Step 2 enhancement — strategy lookup:
+    Old: scan_webhook_map -> intent + side + strategy params
+    New: scan_webhook_map[scanner_name] -> {strategy: "name"}
+         strategy_obj = strategies[strategy_name]
+         intent = strategy_obj.intent
+         direction = strategy_obj.direction
+    Reject REJECTED_UNKNOWN_STRATEGY if strategy_name missing.
+
+  Step 3 update — SCREENING (replaces old quality scoring skip):
+    result = secondary_screener.screen(
+      signal_id, symbol, scanner_name, trigger_price,
+      triggered_at, direction=strategy_obj.direction,
+      intent=strategy_obj.intent, strategy=strategy_obj,
+      market_data=None,  # screener fetches via its own quote_fn
+    )
+    if result.status.startswith("SKIPPED_"):
+      # quote unavailable, executor error, etc.
+      log WARNING, update signal status (already done by
+      screener), release in_flight, return.
+    if not result.passed:
+      # REJECTED_<step> or REJECTED_SCORE_<n>
+      log INFO, release in_flight, return.
+      # screener already called update_signal_status (P18)
+      # signal_processor does NOT double-write status.
+    # At this point: result.passed=True, status=PASSED
+    # result.tier used in step 5 (sizing)
+
+  Step 4 — REMOVE (old "if quality_scorer is None" branch):
+    screener now always used. tier comes from result.tier.
+
+  Step 5 — sizing:
+    sizer.calculate(
+      symbol, side=strategy_obj.direction,
+      entry_price=<derive from signal+strategy>,
+      sl_price=<derive from strategy.sl_method>,
+      intent=strategy_obj.intent,
+      score_tier=result.tier,  # from screener
+      lot_size=strategy_obj.lot_size,
+    )
+
+  Step 6 — risk engine: unchanged.
+  Step 7 — capital reserve: unchanged.
+  Step 8 — order placer: unchanged (optional).
+  Step 9 — signal status:
+    If screener rejected: already written by screener.
+    If passed but processor rejected later (risk, reserve):
+      update status REJECTED_<step>.
+    If full success: status = PROCESSED.
+    DO NOT overwrite PASSED with PROCESSING mid-pipeline
+    (screener already wrote PASSED).
+
+SPW4 — Entry/SL price derivation (moved here from planning):
+  _derive_prices(trigger_price, strategy) -> tuple[float, float]:
+    entry_price = trigger_price  (default)
+    If strategy.entry_method == "LIMIT":
+      if direction=LONG:  entry = trigger * (1 - entry_offset_pct)
+      if direction=SHORT: entry = trigger * (1 + entry_offset_pct)
+
+    If strategy.sl_method == "FIXED_PCT":
+      if direction=LONG:  sl = entry * (1 - sl_pct)
+      if direction=SHORT: sl = entry * (1 + sl_pct)
+    If strategy.sl_method == "ATR":
+      For v2: fall back to sl_pct with WARNING (ATR data
+      not yet available). v2.1 adds real ATR.
+
+    Enforce sl_min_pct / sl_max_pct bounds:
+      sl_distance = abs(entry - sl)
+      sl_distance_pct = sl_distance / entry
+      if sl_distance_pct < sl_min_pct: adjust sl to min
+      if sl_distance_pct > sl_max_pct: adjust sl to max
+      Log WARNING on adjustment.
+
+    Return (entry_price, sl_price)
+
+SPW5 — Target price derivation:
+  _derive_target(entry, sl, strategy) -> float:
+    If tgt_method == "FIXED_PCT":
+      if direction=LONG:  tgt = entry * (1 + tgt_pct)
+      if direction=SHORT: tgt = entry * (1 - tgt_pct)
+    If tgt_method == "RISK_REWARD":
+      sl_distance = abs(entry - sl)
+      if direction=LONG:  tgt = entry + sl_distance * ratio
+      if direction=SHORT: tgt = entry - sl_distance * ratio
+    If tgt_method == "ATR":
+      Same fallback as SL (use FIXED_PCT for now).
+    Return tgt_price.
+
+  Note: target is computed here but used by order_placer
+  when placing TGT leg (CO_PLUS_TGT protocol).
+
+SPW6 — order_placer call update:
+  When order_placer is wired (Module 33):
+    placer.place(
+      symbol, side=direction, qty, entry_price, sl_price,
+      intent=intent, signal_id, reservation_id,
+      order_type=strategy.entry_method,
+      tag=f"{scanner_name}:{result.tier}",
+    )
+  Also pass tgt_price if order_placer supports it.
+  NOTE: Current order_placer signature may need extension for
+  tgt_price. Verify by reading orders/order_placer.py.
+  If tgt_price not in signature: extend it (minor change).
+
+SPW7 — P18 compliance:
+  Screener already writes signal status (PASSED / REJECTED_<step>).
+  signal_processor writes status ONLY for stages AFTER screening:
+    REJECTED_SIZING_<reason>, REJECTED_RISK_<check>,
+    REJECTED_RESERVE_FAILED, RESERVED, PROCESSED,
+    PLACEMENT_FAILED.
+  Pre-screening statuses (KILL_SWITCH, OUTSIDE_ENTRY_WINDOW,
+  EXPIRED, UNKNOWN_STRATEGY): still written by
+  signal_processor as before (those happen before screener
+  is called).
+
+SPW8 — in_flight cleanup (SP7 regression guard):
+  Every code path must release in_flight in finally block.
+  Verify by code inspection. Ensure the new SPW3 paths
+  (screener SKIPPED, screener REJECTED) also hit the finally.
+
+SPW9 — Metrics update:
+  processor.stats() dict now tracks screener outcomes:
+    {
+      ...,
+      signals_screened_passed: int,
+      signals_screened_rejected: dict[step, count],
+      signals_screened_skipped: dict[reason, count],
+      avg_screening_ms: float,
+    }
+  Populate inside _process_one after screener call.
+
+SPW10 — Backward compat NOT required:
+  This is an internal-only change. Breaking old test fixtures
+  that passed secondary_screener=None is acceptable.
+  Update existing tests to provide real screener + strategies.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Read signals/signal_processor.py. Identify:
+   - Constructor signature
+   - _process_one() body
+   - Current scan_webhook_map lookup logic
+   - Current sizer.calculate() call site
+   - Current sl_method handling
+   - stats() dict structure
+
+2. Modify signals/signal_processor.py per SPW1-SPW10.
+   Expect ~100-150 lines of changes. Keep module under
+   400 total lines.
+
+3. Update tests/unit/test_signal_processor.py:
+   - Existing tests that pass secondary_screener=None:
+     provide a MockScreener that returns canned ScreeningResult.
+   - Existing tests that pass quality_scorer=None: provide
+     MockScorer or real QualityScorer with test config.
+   - Add new tests:
+     * Screener rejects -> signal in REJECTED_<step>, pipeline
+       stops, in_flight released
+     * Screener passes -> sizing called with tier from result
+     * Screener SKIPPED -> WARNING logged, pipeline stops,
+       no sizing call
+     * Unknown strategy -> REJECTED_UNKNOWN_STRATEGY (before
+       screener called)
+     * Price derivation: LIMIT entry offset applied correctly
+     * Price derivation: SL direction correct for LONG vs SHORT
+     * Price derivation: sl_min_pct enforced (SL too tight ->
+       adjusted, WARNING logged)
+     * Price derivation: sl_max_pct enforced (SL too wide ->
+       adjusted)
+     * Target derivation: FIXED_PCT correct LONG and SHORT
+     * Target derivation: RISK_REWARD ratio correct
+     * ATR method falls back to FIXED_PCT with WARNING
+     * stats() dict has new screener metrics
+     * No double-write of signal status (screener writes
+       PASSED/REJECTED; processor writes only post-screen
+       statuses)
+     * in_flight released on screener SKIPPED path (regression)
+     * in_flight released on screener REJECTED path
+   Existing tests must continue to pass (behavior preserving
+   for their pipeline stages).
+
+4. If orders/order_placer.py signature lacks tgt_price:
+   extend it (optional keyword arg, default None).
+   Update orders/order_placer.py and test_order_placer.py.
+   Minimal change; tgt_price just stored on order row for
+   the TGT leg placement inside protocol.
+
+5. Re-run all 34 prior suites. Report 34-row table.
+   Expected count delta: +N tests in test_signal_processor.py,
+   +M tests in test_order_placer.py (if signature extended).
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: signals/signal_processor.py UPDATE (not new module)
+  Locked: SPW1-SPW10 under signals_module: section (append)
+  Files touched: signals/signal_processor.py,
+                 tests/unit/test_signal_processor.py,
+                 possibly orders/order_placer.py + tests
+  Cross-module: strategies.loader (consumed),
+                screening.secondary_screener (consumed),
+                screening.quality_scorer (consumed),
+                scan_webhook_map.yaml format now required by
+                processor
+  Deviations: list if any, especially if order_placer
+              signature needed changes
+
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================
+
+NEXT PREVIEW:
+  Module 31 = screening/entry_gate (P11a pullback wait)
+  Module 32 = orders/smart_tgt_manager (G6 + P8_P13)
+  Module 33 = main.py orchestrator (wires everything together)
+  Module 34 = reports/daily_report
+  Module 35 = scripts/startup_check, scripts/preflight_scanner

@@ -1,0 +1,102 @@
+================================================================
+TASK 2b: Telegram channel whitelist enforcement
+================================================================
+
+Rama wants STRICT control over where Telegram sends messages:
+
+REQUIREMENT:
+  1. Primary channel (TELEGRAM_CHANNEL_PRIMARY) — ENABLED,
+     receives ALL alerts (signals, trades, kills, EOD, etc.)
+  2. Secondary channel (TELEGRAM_CHANNEL_SECONDARY) — PLACEHOLDER,
+     currently disabled. Reserved for future use (v2.1 multi-account).
+     System must NOT send here unless explicitly enabled.
+  3. Personal chat ID (TELEGRAM_PERSONAL_CHAT_ID) — WHITELISTED
+     but system sends ZERO messages to this ID. Reserved for
+     future operator commands / bot interaction in v2.1.
+
+IMPLEMENTATION:
+
+1. Update config/system_config.yaml telegram section:
+
+   telegram:
+     bot_token_env: "TELEGRAM_BOT_TOKEN"
+     channels:
+       - chat_id_env: "TELEGRAM_CHANNEL_PRIMARY"
+         label: "Primary Alert Channel"
+         enabled: true
+       - chat_id_env: "TELEGRAM_CHANNEL_SECONDARY"
+         label: "Secondary Alert Channel"
+         enabled: false
+     personal_chat_id_env: "TELEGRAM_PERSONAL_CHAT_ID"
+     whitelist_only: true
+
+2. Update alerts/telegram_notifier.py:
+
+   Current: sends to ALL chat_ids in config list.
+   Change: only send to channels where enabled=true.
+
+   Pseudocode:
+     def send(self, severity, title, body, source_module):
+       for channel in self._channels:
+         if not channel.enabled:
+           continue
+         chat_id = os.environ.get(channel.chat_id_env)
+         if not chat_id:
+           self._log.warning(f"Skipping {channel.label}: env var not set")
+           continue
+         self._send_message(chat_id, formatted_text)
+       # personal_chat_id: NEVER send here (whitelisted only)
+
+3. Update SystemConfig Pydantic schema for new telegram structure:
+   TelegramChannelConfig:
+     chat_id_env: str
+     label: str
+     enabled: bool = False
+
+   TelegramConfig:
+     bot_token_env: str = "TELEGRAM_BOT_TOKEN"
+     channels: list[TelegramChannelConfig]
+     personal_chat_id_env: str = ""
+     whitelist_only: bool = True
+
+4. Update main.py notifier construction:
+   Read channel configs. Resolve env vars at construction.
+   Pass only enabled channels to TelegramNotifier.
+
+5. Update test_telegram_notifier.py:
+   - Only enabled channels receive messages
+   - Disabled channel: no send attempt
+   - Personal chat ID: never receives messages
+   - Missing env var for enabled channel: WARNING logged, skipped
+   - All channels disabled + paper mode: no sends at all
+
+6. Run full suite. Expect: 1351 + ~3 new tests = ~1354.
+
+================================================================
+WHY THIS MATTERS
+================================================================
+
+Telegram bot API sends to ANY chat_id you tell it to.
+Without whitelist enforcement, a misconfigured chat_id could
+leak trade signals to unintended recipients.
+
+whitelist_only=true means: system ONLY sends to channels
+listed in config with enabled=true. Any other chat_id in
+code (typo, debug leftover, etc.) would have no send path.
+
+Personal chat ID is stored for future bot-command features
+(operator sends /status to bot, bot replies). That's v2.1.
+For now: stored, whitelisted, zero messages sent to it.
+
+================================================================
+REPORT
+================================================================
+
+Confirm:
+  - system_config.yaml updated
+  - telegram_notifier.py whitelist logic added
+  - Config schema updated
+  - Tests added
+  - Full suite green
+
+Then await Task 3 from Rama.

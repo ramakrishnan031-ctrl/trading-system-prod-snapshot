@@ -1,0 +1,212 @@
+MODULE: orders/order_placer.py
+
+CONTEXT: 509/509 green across 20 modules. signal_processor
+hands off approved+sized+reserved signals; order_placer is
+the LAST mile before broker dispatch. Audit Issues #1, #14,
+#21 (broker response validation), and Project Rule 13
+(last-mile kill switch check) drive the design.
+
+LOCK BEFORE BUILD:
+
+OP1 — Purpose: Take a fully-approved trade and place the
+  entry order with the broker. Owns the dispatch decision.
+  Coordinates state_machine, monitor handoff, and capital
+  reconciliation on rejection.
+
+OP2 — Constructor:
+  OrderPlacer(
+    adapter,             # ZerodhaAdapter
+    state_machine,       # OrderStateMachine
+    order_monitor,       # OrderMonitor (for tracking)
+    fund_manager,        # for release on rejection
+    kill_switch,         # MANDATORY (last-mile check)
+    state_store,         # for orders table writes
+    bus,                 # for event publication
+    logger,
+  )
+  kill_switch is REQUIRED here, not optional. Last-mile
+  check is non-negotiable per Project Rule 13.
+
+OP3 — API:
+  placer.place(
+    symbol, side, qty, entry_price, sl_price, intent,
+    signal_id, reservation_id,
+    order_type="LIMIT",
+    tag=None,
+  ) -> PlacementResult
+
+  PlacementResult (frozen dataclass):
+    success: bool
+    internal_order_id: str | None
+    broker_order_id: str | None
+    reason: str               # rejection reason or "PLACED"
+    placed_at: datetime | None
+
+OP4 — Audit Project Rule 13 — LAST-MILE kill switch check:
+  IMMEDIATELY before adapter.place_order() call:
+    if kill_switch.is_active("entry"):
+      release reservation
+      return PlacementResult(success=False, reason="KILL_SWITCH_LAST_MILE")
+  This is in addition to risk_engine's earlier check.
+  Audit found: signal sleeping in entry_gate could fire
+  AFTER hard_kill activated. Last-mile gate prevents this.
+
+OP5 — Pipeline (lock; ordered):
+  1. Pre-check: validate inputs (qty>0, prices>0, intent valid).
+     Invalid -> ValueError BEFORE any state change.
+  2. LAST-MILE kill_switch check (OP4).
+  3. Generate internal_order_id via new_order_id() and write
+     row to orders table (status=PENDING, leg_index=0 per G2b).
+  4. state_machine.register(internal_order_id) -> PENDING.
+  5. Call adapter.place_order(...) wrapped in try/except.
+  6. On adapter SUCCESS:
+     - Update orders row with broker_order_id, status=SUBMITTED.
+     - state_machine.transition(internal_order_id, SUBMITTED).
+     - order_monitor.track(internal_order_id, broker_order_id,
+                            symbol, side, qty, entry_price,
+                            placed_at=now_ist()).
+     - Return PlacementResult(success=True, ...).
+  7. On adapter EXCEPTION:
+     - Update orders row status=FAILED, rejection_reason.
+     - state_machine.transition(internal_order_id, FAILED).
+     - fund_manager.release(reservation_id, "PLACEMENT_FAILED").
+     - Log ERROR via log_exception.
+     - Return PlacementResult(success=False, reason=str(exc)).
+     - DO NOT raise. Caller (signal_processor) gets result back.
+
+OP6 — Audit Issue #21 fix — broker response validation:
+  Adapter is responsible for translating raw kite response into
+  typed PlacedOrder OR raising. Placer trusts adapter.
+  Defense: if adapter returns PlacedOrder with empty
+  broker_order_id, treat as failure (raise OrderRejectedError
+  with context). Audit: error JSON was treated as order ID.
+
+OP7 — Audit Issue #14 fix — entry order timeout:
+  Placer does NOT poll for fills. order_monitor handles that
+  per OM7 (already built). Placer just hands off via .track().
+  Monitor's fill_timeout_sec triggers cancellation if order
+  not filled. This module's job ends at successful dispatch.
+
+OP8 — Idempotency:
+  signal_processor passes signal_id + reservation_id.
+  Place is NOT auto-retried (audit explicit: place_order is
+  non-idempotent). If placer raises mid-dispatch (network
+  partition), state may be ambiguous: order may or may not
+  be at broker. The orders table row exists. Reconciler
+  (next module) resolves ambiguous state on next cycle.
+  Per audit: "do NOT retry automatically. Verify with
+  broker first."
+
+OP9 — Order row schema (verify orders table in state_store
+  has these columns; extend if not):
+  internal_order_id PK, broker_order_id, signal_id,
+  trade_id, symbol, side, qty, entry_price, sl_price,
+  intent, product, order_type, status, leg_index,
+  rejection_reason, placed_at, created_at, updated_at
+  leg_index=0 per G2b/G10 for FULL entry.
+
+OP10 — Trade ID generation:
+  new_trade_id() called once per place() AT START. Stored in
+  the orders row. trade_id will link this entry to its future
+  exit order(s). signal_id -> trade_id -> order_id chain
+  per G2a.
+
+OP11 — Event publication:
+  No new event types needed in this module. state_machine
+  publishes OrderStateChanged on every transition (PENDING ->
+  SUBMITTED or PENDING -> FAILED). That's the audit trail.
+  Placer does NOT publish OrderPlaced separately (would
+  duplicate state_machine's events).
+
+OP12 — Logging:
+  Every place() call: INFO at start with signal_id, symbol,
+  qty, intent. INFO at success with broker_order_id and
+  duration_ms. ERROR at failure with rejection reason.
+  Audit trail = orders table + log files + state_machine
+  events. Triple redundancy (audit explicit).
+
+OP13 — Layer & deps:
+  Layer 5 (orders/). Imports: stdlib (dataclasses), core.ids,
+  core.exceptions, core.events, core.logger, core.time_authority,
+  core.state_store, broker.zerodha_adapter (type only),
+  broker.order_state_machine (STATES, transition),
+  broker.order_monitor (track), capital.fund_manager (release),
+  capital.kill_switch (is_active).
+
+OP14 — State store helpers needed:
+  insert_order_row(internal_order_id, signal_id, trade_id,
+                   symbol, side, qty, entry_price, sl_price,
+                   intent, order_type, status="PENDING",
+                   leg_index=0)
+  update_order_row(internal_order_id, broker_order_id=None,
+                   status=None, rejection_reason=None,
+                   updated_at=None)
+  get_order_row(internal_order_id) -> dict | None
+  Add to state_store. Update test_state_store.
+
+OP15 — NOT in scope:
+  - SL/TGT order placement (separate module: orders/sl_tgt_placer)
+  - Modification (modify_sl, trail_sl) — separate module
+  - Cancellation (caller does this via adapter directly,
+    not via placer)
+  - Reconciliation (reconciler module)
+
+BUILD STEPS:
+
+1. Verify orders table schema covers OP9. Extend schema.sql
+   if needed. Bump schema_version. Update test_state_store.
+
+2. Add 3 order row helpers to state_store per OP14.
+   Add tests in test_state_store.
+
+3. Build orders/order_placer.py per OP1-OP15.
+   Module ~200 lines. Class OrderPlacer with place() method.
+   Module-level new_trade_id call per OP10.
+
+4. Build tests/unit/test_order_placer.py covering:
+   - place() success path:
+     * order row inserted with status=PENDING
+     * state_machine registered + transitioned to SUBMITTED
+     * adapter.place_order called
+     * order row updated with broker_order_id + SUBMITTED
+     * monitor.track called with correct args
+     * PlacementResult success=True with both IDs
+   - LAST-MILE kill_switch active -> reservation released,
+     no adapter call, no order row PENDING update,
+     PlacementResult success=False reason=KILL_SWITCH_LAST_MILE
+   - kill_switch tripped between risk_engine and place_order
+     (race condition test): risk_engine approved but kill
+     active at place time -> rejected at last mile
+   - Adapter raises OrderRejectedError -> order row FAILED,
+     state_machine FAILED, reservation released,
+     PlacementResult success=False with reason
+   - Adapter raises BrokerTimeoutError -> same handling
+   - Adapter raises BrokerAuthError -> same handling
+   - Adapter returns PlacedOrder with empty broker_order_id
+     -> treated as failure
+   - Invalid qty=0 -> ValueError BEFORE any state change
+     (no order row, no reservation release)
+   - Invalid entry_price=0 -> ValueError
+   - Invalid sl_price <= 0 -> ValueError
+   - Invalid intent -> ValueError
+   - new_trade_id generated and stored in orders row
+   - leg_index=0 always (G2b regression)
+   - signal_id propagated to orders row
+   - reservation_id used in fund_manager.release on failure
+   - Logging: INFO at start, INFO at success, ERROR at failure
+   - place() does NOT auto-retry on exception (regression
+     test for OP8)
+   - Multiple concurrent place() calls: 5 threads, 5 distinct
+     orders, all with unique internal_order_id and trade_id
+   - state_machine.transition exception during success path
+     (e.g., already terminal) -> log ERROR but order is
+     placed; status reflected in orders table
+   - kill_switch=None at construction -> ValueError (mandatory
+     per OP2)
+
+5. Re-run all 20 prior suites + new one. Report 21-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Use MockAdapter and MockMonitor with controllable
+return values. Real fund_manager + state_store + state_machine
++ kill_switch acceptable.

@@ -1,0 +1,234 @@
+MODULE: signals/webhook_receiver.py
+
+CONTEXT: 449/449 green across 18 modules. Capital + broker
+layers complete. Now entering signals/ — the entry point for
+external Chartink scanner alerts. Audit Issues #16 (queue size
+not propagated) and Project Rule 12 (Signal Integrity) drive
+the design. Webhook receiver is HTTP-facing -> security and
+backpressure are first-class.
+
+LOCK BEFORE BUILD:
+
+WR1 — Purpose: Accept incoming POST webhooks from Chartink
+  scanners, validate payload, dedupe, enqueue for downstream
+  signal_processor. HTTP-facing entry point. Must NEVER block
+  the HTTP thread on heavy work.
+
+WR2 — HTTP framework: Flask (single-file, stdlib-friendly,
+  battle-tested, no async complexity).
+  Add flask>=3.0 to requirements.txt.
+  Single endpoint: POST /webhook/<scanner_name>
+  Health endpoint: GET /health -> 200 OK with status JSON.
+  No other endpoints in v2.
+
+WR3 — Constructor:
+  WebhookReceiver(
+    signal_queue,        # queue.Queue (bounded)
+    state_store,         # for signal dedup + persistence
+    config,              # SystemConfig (for scan_webhook_map etc.)
+    market_windows,      # to reject signals outside entry window
+    kill_switch,         # to reject when active
+    logger,
+    secret_token=None,   # optional shared secret for HMAC validation
+  )
+  signal_queue is bounded queue.Queue (capacity from
+  system_config.signal_queue.capacity).
+
+WR4 — Endpoint contract POST /webhook/<scanner_name>:
+  Request body: JSON
+    {
+      "stocks": "RELIANCE,TCS,INFY",  -- comma-separated
+      "trigger_prices": "2500.5,3650.0,1450.25",
+      "triggered_at": "2026-04-15 10:15:00",  -- IST naive
+      "scan_name": "first_pullback_long"  -- for cross-check
+    }
+  scanner_name path param must match scan_webhook_map key.
+  scan_name in body must match scanner_name path param
+  (defense in depth).
+
+WR5 — Response codes (lock):
+  200 OK            - accepted N signals, returns {accepted: N,
+                      rejected: M, reasons: [...]}
+  400 Bad Request   - malformed JSON / missing fields / bad date
+  401 Unauthorized  - HMAC mismatch (when secret_token configured)
+  403 Forbidden     - kill_switch active OR outside entry window
+  404 Not Found     - scanner_name not in scan_webhook_map
+  503 Service Unavailable - queue at capacity (Project Rule 12)
+  500 only for unhandled exceptions (logged at CRITICAL).
+
+WR6 — Project Rule 12 enforcement:
+  Backpressure: When queue size > capacity * backpressure_pct
+  (e.g., 80%), respond 503 immediately.
+  Signal Expiry: Compute age = now_ist() - triggered_at.
+  If age > signal_expiry_sec (from config, default 60),
+  reject signal individually. Multi-stock payloads: process
+  each stock independently; some may pass, others rejected.
+
+WR7 — Project Rule 12 — Signal Deduplication:
+  For each (scanner_name, symbol, triggered_at_minute):
+    fingerprint = sha256(scanner_name + "|" + symbol + "|"
+                         + triggered_at.strftime("%Y-%m-%d %H:%M"))
+  Reject if fingerprint exists in signals table for today
+  (state_store.signals UNIQUE constraint per audit P6 already
+  enforces this; receiver pre-checks for fast 409).
+  Lock: triggered_at_minute uses MINUTE precision (not second).
+  Multiple signals for same (scanner, symbol) within same
+  minute = duplicate.
+
+WR8 — HMAC validation (optional but locked):
+  If secret_token provided at construction:
+    Header: X-Webhook-Signature: sha256=<hex>
+    Computed: hmac.new(secret_token.encode(), raw_body,
+                       hashlib.sha256).hexdigest()
+    Reject 401 on mismatch (timing-safe compare).
+  If secret_token=None: HMAC check skipped (dev mode).
+  Production deployment MUST set secret_token via env var.
+
+WR9 — Signal record creation:
+  For each accepted (scanner, symbol, price, ts):
+    signal_id = new_signal_id()
+    Insert row in state_store.signals with:
+      signal_id, scanner_name, symbol, trigger_price,
+      triggered_at, received_at, fingerprint, status="QUEUED"
+    Push (signal_id, scanner_name, symbol, trigger_price,
+          triggered_at) tuple to signal_queue
+    If queue.put_nowait fails (Full): mark signal status
+      "QUEUE_FULL" in DB, return in rejected list.
+
+WR10 — Status codes for individual signals (in 200 response):
+  Each stock processed individually; reasons list contains:
+    "ACCEPTED"
+    "DUPLICATE"
+    "EXPIRED"
+    "INVALID_SYMBOL"     - empty/malformed
+    "INVALID_PRICE"      - <= 0 or non-numeric
+    "QUEUE_FULL"
+    "OUTSIDE_HOURS"      - market window check
+  Multi-stock response example:
+    {"accepted": 2, "rejected": 1,
+     "results": [
+       {"symbol": "RELIANCE", "status": "ACCEPTED", "signal_id": "sig_..."},
+       {"symbol": "TCS", "status": "DUPLICATE"},
+       {"symbol": "INFY", "status": "ACCEPTED", "signal_id": "sig_..."}
+     ]}
+
+WR11 — Threading model:
+  Flask runs on its built-in werkzeug server (development)
+  OR gunicorn (production) — receiver code is server-agnostic.
+  Each request handled in own thread.
+  signal_queue is thread-safe (queue.Queue).
+  state_store calls are thread-safe (SQLite WAL).
+  No long blocking work in request handler — must return
+  in <100ms typical.
+
+WR12 — Shutdown:
+  receiver.stop() flushes pending writes, closes Flask app
+  cleanly. Used by main.py shutdown handler.
+
+WR13 — Audit log (NEW table):
+  Add webhook_audit table to state_store:
+    id, ts, scanner_name, source_ip, payload_size_bytes,
+    response_code, signals_accepted, signals_rejected,
+    duration_ms
+  Every POST writes one row regardless of outcome.
+  Used for forensics and rate analysis.
+  Bump schema_version. Update test_state_store.
+
+WR14 — System config additions:
+  signal_queue:
+    capacity: int                (default 1000)
+    backpressure_pct: float      (default 0.80, validated 0-1)
+    expiry_sec: int              (default 60)
+  webhook:
+    bind_host: str               (default "127.0.0.1")
+    bind_port: int               (default 5000)
+    require_hmac: bool           (default true in production)
+  Update YAML stub. Re-run test_config_loader.
+
+WR15 — Layer & deps:
+  Layer 5 (signals/). Imports: flask, stdlib (hmac, hashlib,
+  json, queue, threading), core.exceptions, core.ids,
+  core.logger, core.time_authority, core.state_store,
+  core.config_loader (SystemConfig), core.market_windows,
+  capital.kill_switch.
+
+WR16 — NOT in scope:
+  - Signal screening (separate module: signals/signal_processor)
+  - Strategy lookup / scan_webhook_map resolution beyond
+    "is this scanner_name known?"
+  - Order placement
+  - Telegram alerts on rejection
+  Receiver is a thin validating gateway. All heavy lifting
+  happens downstream.
+
+WR17 — In-flight tracking (Project Rule 12):
+  For each accepted signal, track (signal_id, symbol) in
+  in-memory _in_flight set (thread-safe). signal_processor
+  removes the entry when done. webhook_receiver checks set
+  on entry to prevent same-symbol concurrent processing.
+  If symbol already in _in_flight: reject with status
+  "IN_PROCESS" (NEW status code, add to WR10).
+
+BUILD STEPS:
+
+1. Add webhook_audit table to schema.sql per WR13.
+   Bump schema_version. Update test_state_store with audit
+   row insert/query test.
+
+2. Verify signals table schema supports WR9 fields.
+   Already exists per audit G2a. Verify columns:
+   signal_id, scanner_name, symbol, trigger_price,
+   triggered_at, received_at, fingerprint, status,
+   status_reason, status_ts. Extend if missing.
+
+3. Extend SystemConfig per WR14. Update YAML stub.
+   Re-run test_config_loader.
+
+4. Install flask in venv:
+     pip install "flask>=3.0"
+   Add to requirements.txt.
+
+5. Build signals/webhook_receiver.py per WR1-WR17.
+   Class WebhookReceiver with .app (Flask app) attribute.
+   Caller does receiver.app.run(host, port) or hands .app
+   to gunicorn.
+
+6. Build tests/unit/test_webhook_receiver.py using Flask's
+   test_client (no actual port binding):
+   - Health endpoint returns 200 with status JSON
+   - Valid single-stock payload -> 200, 1 accepted, signal in queue,
+     row in signals table
+   - Valid multi-stock payload -> 200, all accepted
+   - Mixed valid+invalid payload -> 200 with per-stock results
+   - Unknown scanner_name path param -> 404
+   - scan_name body mismatch path -> 400
+   - Malformed JSON -> 400
+   - Missing required field -> 400
+   - Bad triggered_at format -> 400
+   - HMAC absent when required -> 401
+   - HMAC mismatch -> 401
+   - HMAC valid -> 200
+   - HMAC=None mode -> no header check
+   - kill_switch SOFT_KILL active -> 403
+   - kill_switch HARD_KILL active -> 403
+   - Outside entry window (after 13:30) -> 403
+   - Queue at backpressure threshold -> 503
+   - Queue full on individual signal -> per-stock QUEUE_FULL
+   - Duplicate signal (same fingerprint same minute) -> per-stock DUPLICATE
+   - Different minute, same scanner+symbol -> ACCEPTED (not dup)
+   - Different scanner, same symbol same minute -> ACCEPTED
+   - Symbol in _in_flight set -> per-stock IN_PROCESS
+   - Expired signal (triggered_at older than expiry_sec) -> per-stock EXPIRED
+   - Invalid price (0, negative, "abc") -> per-stock INVALID_PRICE
+   - Empty symbol -> per-stock INVALID_SYMBOL
+   - Webhook audit row written for every POST regardless of outcome
+   - Concurrent POSTs from 5 threads -> all processed, queue
+     consistent, no double-insert
+   - Performance: 100 single-stock POSTs complete in < 5s
+     (smoke test for handler latency)
+
+7. Re-run all 18 prior suites + new one. Report 19-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Use Flask test_client (no real HTTP). All tests
+run synchronously without binding a port.

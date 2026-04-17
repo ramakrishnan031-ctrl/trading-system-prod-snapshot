@@ -1,0 +1,17 @@
+# config/slippage_model.yaml — Trading System v2
+#
+# Per-liquidity-tier slippage applied to paper mode fills and cost calculations (P12).
+# Values are in basis points (bps); 1 bps = 0.01% of price.
+# capital/cost_calculator.py reads this; symbol_validator.py assigns tiers.
+#
+# Locked decisions: P12
+
+tiers:
+  liquid:
+    slippage_bps: 5      # Large-cap, high-volume stocks (avg daily vol > 50L shares)
+  mid:
+    slippage_bps: 15     # Mid-cap stocks
+  small:
+    slippage_bps: 30     # Small-cap / less liquid stocks
+
+default_tier: liquid     # Tier assigned when symbol is not explicitly classified

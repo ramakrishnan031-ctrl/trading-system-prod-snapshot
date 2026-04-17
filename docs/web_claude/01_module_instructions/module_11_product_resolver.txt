@@ -1,0 +1,134 @@
+================================================================
+INSTRUCTION FOR VS CODE CLAUDE — Module #11
+Module: broker/product_resolver.py
+Date: 2026-04-15
+================================================================
+
+CONTEXT:
+  206/206 green across 10 modules. Foundation + 2 broker
+  modules (rate_limiter, cost_calculator) complete.
+  product_resolver.py replaces hardcoded "MIS"/"CNC" usage
+  flagged in audit Issue #29 (order_direction_router hardcodes
+  Zerodha product codes).
+
+================================================================
+DESIGN DECISIONS TO LOCK BEFORE BUILDING
+================================================================
+
+PR1 — Purpose:
+  Single source of truth for translating semantic product
+  intent -> broker-specific product code. Removes all
+  hardcoded "MIS"/"CNC"/"CO" strings from the codebase.
+
+PR2 — Semantic intents (broker-agnostic):
+  - INTRADAY        (auto-square-off same day, leveraged)
+  - DELIVERY        (overnight hold, full cash)
+  - COVER_ORDER     (intraday with mandatory SL, higher leverage)
+  - BRACKET_ORDER   (intraday with SL+TGT bracket — if supported)
+
+PR3 — Broker mappings (from system_config.yaml product_map):
+  Zerodha:
+    INTRADAY      -> "MIS"
+    DELIVERY      -> "CNC"
+    COVER_ORDER   -> "CO"
+    BRACKET_ORDER -> "BO"   (note: Zerodha discontinued BO;
+                              resolver should raise
+                              ProductNotSupportedError)
+  Future brokers (AngelOne, etc.) added by extending YAML.
+
+PR4 — API:
+  from broker.product_resolver import ProductResolver
+
+  resolver = ProductResolver(product_map: dict[str, dict[str, str]])
+  resolver.resolve(intent: str, broker: str = "zerodha") -> str
+    -> Returns broker-specific code.
+    -> Raises ProductNotSupportedError if mapping missing
+       OR mapping value is empty/null/None.
+    -> Raises ValueError if intent not in PR2 list.
+
+PR5 — Reverse lookup (for reconciler):
+  resolver.intent_for(broker_code: str, broker: str = "zerodha")
+    -> str (semantic intent)
+  Used by order_reconciler when reading broker positions back —
+  needs to know if "MIS" means INTRADAY in our taxonomy.
+  Raises ValueError if code unknown.
+
+PR6 — Validation at construction:
+  __init__ validates that product_map dict has at least
+  one broker entry. Each broker entry must be dict[str, str].
+  Reject empty maps with ValueError at construction time.
+
+PR7 — New exception class:
+  ProductNotSupportedError(BrokerError, SEVERITY="ERROR")
+  context: {intent, broker, available_intents}
+  Add to core/exceptions.py.
+
+PR8 — Schema extension:
+  system_config.yaml needs product_map section (already
+  stubbed per config_loader build). Verify schema in
+  config_loader.py supports nested dict structure:
+    product_map:
+      zerodha:
+        INTRADAY: "MIS"
+        DELIVERY: "CNC"
+        COVER_ORDER: "CO"
+        BRACKET_ORDER: ""    # empty -> not supported
+
+  If schema needs extension, update SystemConfig model first,
+  re-run test_config_loader.py.
+
+PR9 — Layer & deps:
+  Layer 2 (broker/). Imports: stdlib only,
+  core.exceptions (ProductNotSupportedError).
+  No core.config_loader dependency (product_map dict
+  injected by caller, same pattern as market_windows).
+
+PR10 — No defaults inside resolver:
+  If a mapping is missing in YAML, the system fails loud.
+  No "well, MIS is probably right" fallback. Aligns with
+  Project Rule 14 — No Silent Fallbacks.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add ProductNotSupportedError to core/exceptions.py.
+   Update test_exceptions.py to cover new class
+   (instantiation, severity, context, ISA chain to
+   BrokerError and TradingSystemError).
+
+2. Verify SystemConfig in core/config_loader.py has
+   product_map: dict[str, dict[str, str]] field with
+   extra="forbid". Extend if needed.
+   Update config/system_config.yaml stub if needed.
+   Re-run test_config_loader.py — must stay green
+   (or update test count if new test added).
+
+3. Build broker/product_resolver.py per PR1-PR10.
+
+4. Build tests/unit/test_product_resolver.py covering:
+   - resolve(INTRADAY, zerodha) -> "MIS"
+   - resolve(DELIVERY, zerodha) -> "CNC"
+   - resolve(COVER_ORDER, zerodha) -> "CO"
+   - resolve(BRACKET_ORDER, zerodha) -> raises
+     ProductNotSupportedError (empty mapping)
+   - resolve("UNKNOWN", zerodha) -> raises ValueError
+   - resolve(INTRADAY, "unknown_broker") -> raises
+     ProductNotSupportedError
+   - intent_for("MIS", zerodha) -> "INTRADAY"
+   - intent_for("XX", zerodha) -> raises ValueError
+   - constructor with empty dict -> raises ValueError
+   - constructor with non-dict broker entry -> raises ValueError
+   - All 4 semantic intents present in resolver after construction
+   - Mutating injected dict after construction does NOT
+     affect resolver behavior (defensive copy)
+
+5. Re-run all 10 prior suites + new one. Report total.
+
+================================================================
+WINDOWS REMINDER
+================================================================
+All test print() strings: ASCII only.
+No Rs symbol, no arrows, no em-dashes.
+Use "->" for arrows, "Rs" or "INR" for rupee, "-" for dash.
+================================================================

@@ -1,0 +1,264 @@
+================================================================
+MODULE 40: reports/daily_review.py update (FULL SPEC)
+================================================================
+
+Modules 38 + 39 complete. 1309/1309 green.
+Final module before Phase G (Medium severity fixes).
+
+Adds MULTI_INNING_TRACKING section to daily_review per Rama's
+request: "one row per stock tracked through number of columns".
+
+================================================================
+LOCK (DR-U1 to DR-U5)
+================================================================
+
+DR-U1 — New sheet (xlsx) / section (md) named:
+  "MULTI_INNING_TRACKING"
+
+  One row per trade that has at least one inning recorded.
+  Innings 2 and 3 columns left blank if trade had fewer innings.
+
+DR-U2 — Column layout (per row):
+
+  Identification block (5 cols):
+    trade_id
+    signal_id
+    symbol
+    direction
+    scanner_name
+
+  INNING 1 block (9 cols, real):
+    i1_entry            float
+    i1_entry_ts         ISO string
+    i1_sl               float
+    i1_tgt              float
+    i1_exit             float (blank if OPEN)
+    i1_exit_ts          ISO string (blank if OPEN)
+    i1_exit_reason      "SL" | "TGT" | "EOD" | "OPEN"
+    i1_pnl_pct          float (blank if OPEN)
+    i1_duration_min     int (blank if OPEN)
+    i1_is_real          "REAL" always (inning 1)
+
+  INNING 2 block (9 cols, simulated, may be blank):
+    i2_entry, i2_entry_ts, i2_sl, i2_tgt,
+    i2_exit, i2_exit_ts, i2_exit_reason,
+    i2_pnl_pct, i2_duration_min
+    i2_is_real          "SIM" when present, blank otherwise
+
+  INNING 3 block (9 cols, simulated, may be blank):
+    i3_entry, i3_entry_ts, i3_sl, i3_tgt,
+    i3_exit, i3_exit_ts, i3_exit_reason,
+    i3_pnl_pct, i3_duration_min
+    i3_is_real          "SIM" when present, blank otherwise
+
+  Aggregate block (4 cols):
+    total_innings              int (1, 2, or 3)
+    cumulative_simulated_pnl_pct
+       sum of i2_pnl_pct + i3_pnl_pct (where present)
+    best_inning_pnl_pct
+       max of present inning pnl_pcts
+    worst_inning_pnl_pct
+       min of present inning pnl_pcts
+
+  Total: 5 + 9 + 9 + 9 + 4 = 36 columns per row.
+
+  Empty innings (trade had only 1): i2/i3 columns BLANK
+  (not zero, not None — blank string in xlsx, empty cell
+  in markdown).
+
+DR-U3 — Data source — new state_store helper:
+
+  Add to core/state_store.py:
+
+    get_inning_summary_by_date(date_iso: str) -> list[dict]
+
+  Implementation: query innings table joined with trades +
+  signals to get scanner_name:
+
+    SELECT
+      i.trade_id,
+      t.signal_id,
+      i.symbol,
+      i.direction,
+      s.scanner_name,
+      i.inning_number,
+      i.entry_price, i.entry_ts,
+      i.sl_price, i.tgt_price,
+      i.exit_price, i.exit_ts, i.exit_reason,
+      i.pnl_pct, i.duration_sec, i.is_real
+    FROM innings i
+    JOIN trades t ON i.trade_id = t.trade_id
+    JOIN signals s ON t.signal_id = s.signal_id
+    WHERE substr(i.entry_ts, 1, 10) = ?
+    ORDER BY i.trade_id, i.inning_number
+
+  Returns flat list of per-inning rows. Python code in
+  daily_review pivots this into per-trade rows with
+  3 inning blocks.
+
+  Add get_innings_summary_by_date tests to test_state_store.
+
+DR-U4 — Summary section additions (extend existing SUMMARY sheet):
+
+  Append to SUMMARY section (not a new sheet):
+    --- Multi-Inning Tracking ---
+    Trades with inning tracking: N
+    Trades with inning 1 TGT hit: N
+    Trades with inning 2 reached: N
+    Trades with inning 2 TGT hit: N (simulated)
+    Trades with inning 3 reached: N
+    Trades with inning 3 TGT hit: N (simulated)
+    Cumulative simulated P&L (innings 2+3): Rs X.XX
+    Note: "Simulated innings are hypothetical tracking only.
+           No real orders placed for innings 2 and 3."
+
+DR-U5 — Format mirroring:
+
+  XLSX: new sheet named "MULTI_INNING_TRACKING" with 36-column
+        header row + data rows. Header row frozen. Column
+        widths auto-sized for readability.
+
+  MD: new section with pipe table. Long tables acceptable.
+      Long tables may scroll horizontally — that's fine.
+
+  Both formats:
+    - Empty innings -> blank cells (not "None", not 0)
+    - Exit reason "OPEN" -> no pnl, no duration
+    - Timestamps in ISO format "YYYY-MM-DD HH:MM:SS"
+    - pnl_pct formatted to 2 decimals
+    - duration_min formatted as integer minutes
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add get_inning_summary_by_date helper to
+   core/state_store.py per DR-U3.
+   Update test_state_store.py with helper tests:
+     - Empty day -> []
+     - 1 trade with 1 inning -> 1 row
+     - 1 trade with 3 innings -> 3 rows (ordered)
+     - 2 trades same date -> rows for both, ordered by trade_id
+     - Date filter correct (prev/next day excluded)
+
+2. Update reports/daily_review.py:
+
+   a) Add _pivot_innings_to_trade_rows helper:
+        Input: flat list from get_inning_summary_by_date
+        Output: list of dicts with 36 columns each
+        Group by trade_id.
+        For each trade: create row with 5 id cols + 3 inning blocks
+        + 4 aggregate cols.
+        Blank out i2 and i3 blocks if innings don't exist.
+        Compute aggregates from present innings.
+
+   b) Add _write_multi_inning_sheet_xlsx:
+        Create new worksheet "MULTI_INNING_TRACKING"
+        Header row with 36 column names
+        Freeze header row (ws.freeze_panes = "A2")
+        Write rows
+        Auto-size columns (min 10, max 25 chars)
+
+   c) Add _write_multi_inning_section_md:
+        "## Multi-Inning Tracking" heading
+        Pipe table with 36 columns
+        Blank innings appear as empty cells ("|  |")
+
+   d) Extend _write_summary_section_xlsx and
+      _write_summary_section_md per DR-U4:
+        Count trades, count inning-level aggregates,
+        sum simulated P&L, add note line.
+
+   e) Update the main generate() method to call new helpers
+      in sequence:
+        write_summary (updated)
+        write_signal_funnel
+        write_screener_analytics
+        write_trades
+        write_orders
+        write_capital_ledger
+        write_system_events
+        write_alerts
+        write_multi_inning_tracking  (NEW)
+
+3. Update tests/unit/test_daily_review.py:
+
+   Basic rendering:
+   - Empty day with no innings -> section present with only
+     header + "No multi-inning data for this date" row
+   - 1 trade with 1 inning -> row shows i1 filled, i2/i3 blank
+   - 1 trade with 2 innings -> i1/i2 filled, i3 blank
+   - 1 trade with 3 innings -> all 3 blocks filled
+   - 2 trades with mixed inning counts -> 2 rows with
+     correct column fills
+
+   Pivoting logic:
+   - _pivot_innings_to_trade_rows: 3 inning rows for one trade
+     -> single dict with 36 fields populated
+   - 1 inning row -> dict with i2/i3 cols as blanks
+   - Innings delivered out-of-order in input -> correctly
+     assigned to i1/i2/i3 positions via inning_number
+
+   Aggregates:
+   - total_innings computed correctly (1, 2, or 3)
+   - cumulative_simulated_pnl_pct sums i2 + i3 only (not i1)
+   - best/worst_inning_pnl_pct span all present innings
+   - OPEN inning (no exit) excluded from aggregates
+
+   XLSX specifics:
+   - Sheet "MULTI_INNING_TRACKING" exists
+   - Header row frozen
+   - 36 columns present
+
+   MD specifics:
+   - Section heading "## Multi-Inning Tracking" present
+   - Pipe table present
+   - Blank cells for missing innings
+
+   Summary integration:
+   - Summary sheet contains "Multi-Inning Tracking" sub-block
+   - All 6 count lines present
+   - Simulated P&L total correct
+   - Disclaimer note present
+
+4. Run full suite. Expected: 1309 + ~20 = ~1329.
+
+================================================================
+EDGE CASES TO COVER IN TESTS
+================================================================
+
+- Trade with inning 1 OPEN at EOD (no exit) -> row shows
+  i1 partial, i2/i3 blank, aggregates skip OPEN inning
+- All 3 innings OPEN (unlikely but possible if system
+  restart during active tracking) -> row shows all 3 with
+  OPEN exit_reason, blank pnl
+- Negative pnl inning (loss) -> worst_inning_pnl_pct
+  captures it, cumulative sum includes negatives
+- Inning 2 better than inning 1 (common case) ->
+  best_inning_pnl_pct = i2_pnl_pct
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: reports/daily_review.py UPDATE (not new module)
+  Locked: DR-U1 to DR-U5 appended to reports_module section
+  Schema: unchanged (uses existing innings table from M39)
+  Cross-module: +1 state_store helper
+  Deliverable: MULTI_INNING_TRACKING section in both xlsx
+               and md output
+  Audit items addressed:
+    - Concern 4 reporting visibility CLOSED
+    - User's stated requirement met: "one row per stock
+      tracked through number of columns"
+
+================================================================
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================
+
+Report completion with test count delta.
+After Module 40 green:
+  Phase G = Priority 3 MEDIUM severity fixes (14 items)
+  Phase H = chaos test suite
+  Phase I = final verdict to Rama

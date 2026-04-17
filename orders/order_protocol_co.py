@@ -1,0 +1,212 @@
+"""
+orders/order_protocol_co.py — Trading System v2
+
+Purpose:
+    CO_PLUS_TGT order protocol. Places two broker orders:
+      1. CO (Cover Order) — variety="co", order_type="SL". This is the entry
+         order; the broker automatically maintains the SL bracket. The entry
+         triggers when the SL trigger is not hit, i.e., price moves in the
+         intended direction. The CO trigger_price = sl_price (built-in SL).
+      2. TGT LIMIT — separate LIMIT order on the closing side at tgt_price.
+
+    Per P8/P13: CO is the default protocol for intraday strategies.
+    CO eliminates the entry-to-SL window race condition atomically.
+
+    Kiteconnect CO mechanics:
+      - variety="co"
+      - order_type="SL" (the CO entry IS a stop-loss bracket order)
+      - For a LONG entry (BUY CO): price=entry_price, trigger_price=sl_price
+        The broker places a buy limit at entry_price with a built-in SL at
+        sl_price. If price drops to sl_price before filling, the CO exits.
+      - The SL bracket is managed entirely by Zerodha; we do NOT place a
+        separate SL order.
+      - TGT must be a separate LIMIT SELL order (INTRADAY/MIS).
+
+Locked Design Decisions:
+    OPC1 -- Two broker orders: CO entry + separate LIMIT TGT (P8/P13 default).
+    OPC2 -- CO uses variety="co", order_type="SL", trigger_price=sl_price.
+            Entry side = signal side. SL is embedded in CO (no separate SL order).
+    OPC3 -- TGT side = opposite of signal side, order_type="LIMIT".
+    OPC4 -- If CO placement fails: raise immediately, do not place TGT.
+            If TGT fails after CO: log ERROR (position at risk, no TGT);
+            return success=True with tgt_broker_order_id="" so caller can
+            handle (e.g. set up smart_tgt fallback).
+    OPC5 -- sl_broker_order_id="" in EntryResult (SL is inside CO bracket).
+    OPC6 -- Layer 5 (orders/). Imports broker/zerodha_adapter, orders/entry_engine.
+    OPC7 -- order_protocol = "CO_PLUS_TGT".
+
+What This Module Does NOT Do:
+    - Does not manage DB rows (order_placer's job)
+    - Does not modify the CO SL after placement (smart_tgt_manager's job)
+    - Does not cancel/exit positions (other modules handle that)
+"""
+from __future__ import annotations
+
+import logging
+
+from broker.zerodha_adapter import ZerodhaAdapter
+from core.exceptions import BrokerError, OrderRejectedError
+from core.logger import log_exception
+from orders.entry_engine import EntryEngine, EntryResult
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _exit_side(entry_side: str) -> str:
+    return "SELL" if entry_side == "BUY" else "BUY"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CoPlusTgtProtocol
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CoPlusTgtProtocol(EntryEngine):
+    """
+    CO_PLUS_TGT entry protocol (P8/P13 default).
+
+    Places: CO entry order (with built-in SL bracket) → separate LIMIT TGT.
+    """
+
+    def __init__(
+        self,
+        adapter: ZerodhaAdapter,
+        logger: logging.Logger,
+    ) -> None:
+        self._adapter = adapter
+        self._log = logger
+
+    def execute(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        qty: int,
+        entry_price: float,
+        sl_price: float,
+        tgt_price: float,
+        intent: str,
+        trade_id: str,
+        tag: str = "",
+    ) -> EntryResult:
+        """
+        Place CO entry + separate LIMIT TGT. (OPC1–OPC7)
+        """
+        order_tag = tag or trade_id
+        exit_side = _exit_side(side)
+
+        # ── Step 1: CO entry order ─────────────────────────────────────────
+        try:
+            co_placed = self._adapter.place_order(
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                price=entry_price,
+                order_type="SL",            # CO uses SL order_type
+                intent=intent,
+                tag=order_tag,
+                trigger_price=sl_price,     # built-in SL bracket
+                variety="co",               # ZA17: Cover Order variety
+            )
+        except BrokerError:
+            raise  # OPC4: CO failure → propagate immediately
+
+        # OP-LM3: empty broker_order_id from CO is a silent broker failure
+        if not co_placed.broker_order_id:
+            raise OrderRejectedError(
+                "adapter returned empty broker_order_id for CO order",
+                symbol=symbol, trade_id=trade_id, leg="CO",
+            )
+
+        self._log.info(
+            "co_plus_tgt.co_placed",
+            extra={
+                "trade_id": trade_id, "symbol": symbol,
+                "broker_order_id": co_placed.broker_order_id,
+                "entry_price": entry_price,
+                "sl_price": sl_price,
+            },
+        )
+
+        # ── Step 2: TGT LIMIT ─────────────────────────────────────────────
+        tgt_placed = None
+        try:
+            tgt_placed = self._adapter.place_order(
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                price=tgt_price,
+                order_type="LIMIT",
+                intent=intent,
+                tag=order_tag,
+            )
+        except BrokerError as exc:
+            # MED #13: TGT failed after CO placed.
+            # CO may be live in the market; return success=False so caller
+            # releases the reservation and marks trade FAILED.
+            # The CO order itself must be reconciled (order_reconciler handles
+            # orphaned CO orders on next startup).
+            log_exception(self._log, exc)
+            self._log.error(
+                "co_plus_tgt.tgt_failed_co_is_live",
+                extra={
+                    "trade_id": trade_id,
+                    "co_broker_id": co_placed.broker_order_id,
+                    "tgt_price": tgt_price,
+                    "failure_details": "TGT leg failed; CO leg placed",
+                },
+            )
+            return EntryResult(
+                success=False,
+                entry_broker_order_id=co_placed.broker_order_id,
+                sl_broker_order_id="",
+                tgt_broker_order_id="",
+                entry_internal_id=co_placed.internal_order_id,
+                sl_internal_id="",
+                tgt_internal_id="",
+                order_protocol="CO_PLUS_TGT",
+                rejection_reason=f"TGT leg failed (CO leg placed={co_placed.broker_order_id}): {exc}",
+            )
+
+        # OP-LM3: empty tgt broker_order_id treated as TGT failure (MED #13 soft path)
+        if not tgt_placed.broker_order_id:
+            self._log.error(
+                "co_plus_tgt.tgt_empty_broker_id_co_is_live",
+                extra={
+                    "trade_id": trade_id,
+                    "co_broker_id": co_placed.broker_order_id,
+                    "failure_details": "TGT leg returned empty broker_order_id; CO leg placed",
+                },
+            )
+            return EntryResult(
+                success=False,
+                entry_broker_order_id=co_placed.broker_order_id,
+                sl_broker_order_id="",
+                tgt_broker_order_id="",
+                entry_internal_id=co_placed.internal_order_id,
+                sl_internal_id="",
+                tgt_internal_id="",
+                order_protocol="CO_PLUS_TGT",
+                rejection_reason=f"TGT leg returned empty broker_order_id (CO leg placed={co_placed.broker_order_id})",
+            )
+
+        self._log.info(
+            "co_plus_tgt.tgt_placed",
+            extra={
+                "trade_id": trade_id, "symbol": symbol,
+                "broker_order_id": tgt_placed.broker_order_id,
+                "tgt_price": tgt_price,
+            },
+        )
+
+        return EntryResult(
+            success=True,
+            entry_broker_order_id=co_placed.broker_order_id,
+            sl_broker_order_id="",             # OPC5: SL inside CO bracket
+            tgt_broker_order_id=tgt_placed.broker_order_id,
+            entry_internal_id=co_placed.internal_order_id,
+            sl_internal_id="",
+            tgt_internal_id=tgt_placed.internal_order_id,
+            order_protocol="CO_PLUS_TGT",
+        )

@@ -1,0 +1,266 @@
+MODULE: capital/fund_manager.py
+
+CONTEXT: 301/301 green across 14 modules. Broker layer complete
+through order_monitor. Now entering capital/ — the layer with
+the most CRITICAL audit findings (Issues #1, #3, #6, #24).
+fund_manager is the single source of truth for all capital
+state. This module MUST be defect-free; it caused multiple
+catastrophic findings in the audit.
+
+LOCK BEFORE BUILD:
+
+FM1 — Purpose: Single source of truth for capital state.
+  Holds: total_capital, available_capital, reserved_capital,
+         used_capital, daily_realized_pnl.
+  All capital mutations go through this module. No other
+  module owns capital state. Replaces the 5+ scattered
+  capital tracking points flagged in audit Part 3.1.
+
+FM2 — Three-balance model (audit P7a):
+  total_capital     = broker net (cash + holdings)
+  available_capital = total - reserved - used
+  reserved_capital  = sum of in-flight order margin requirements
+  used_capital      = sum of filled position margin requirements
+  Invariant: available + reserved + used == total
+  Checked inside EVERY mutation transaction (audit G3).
+
+FM3 — Bucket split (audit Issue #3):
+  Capital allocated across two buckets:
+    intraday_bucket  (default 70%)
+    positional_bucket (default 30%)
+  Each bucket has independent available/reserved/used.
+  Bucket split percentages from system_config.yaml.
+  Reservations and uses are bucket-scoped:
+    INTRADAY/COVER_ORDER intent -> intraday bucket
+    DELIVERY intent              -> positional bucket
+  Cross-bucket borrowing FORBIDDEN (audit explicitly).
+
+FM4 — Margin calculation (audit catastrophic flaw fix):
+  required_margin = qty * price / leverage
+  NOT qty * price (notional). Audit found system was deducting
+  5x the actual margin blocked.
+  Leverage by intent (lock; from system_config):
+    INTRADAY      -> 5.0  (MIS leverage)
+    COVER_ORDER   -> 6.0  (CO leverage)
+    DELIVERY      -> 1.0  (CNC, no leverage)
+    BRACKET_ORDER -> 5.0
+  Module-level helper:
+    required_margin(qty, price, intent, leverage_map) -> float
+
+FM5 — Atomic reserve/release/commit (audit Issue #1, #24):
+  All capital state changes wrapped in single threading.RLock.
+  Snapshot + reservation in SAME atomic block. No "check then
+  reserve" pattern that audit found exploitable.
+
+  Public API:
+    reserve(symbol, qty, price, intent, signal_id) -> ReservationResult
+      - Atomically: compute margin, check bucket available,
+        reserve if sufficient.
+      - Returns ReservationResult(success, reservation_id, margin,
+                                   bucket, reason_if_failed)
+      - On success: available -= margin, reserved += margin
+      - On insufficient: returns success=False with reason,
+        does NOT raise.
+      - Writes to capital_ledger via state_store (G3) inside
+        same transaction.
+
+    release(reservation_id, reason) -> bool
+      - Atomically: available += margin, reserved -= margin
+      - Used on order rejection / cancel.
+      - Idempotent: releasing twice is a no-op (returns False
+        second time, no exception).
+
+    commit_to_used(reservation_id, actual_fill_price, actual_qty)
+                  -> CommitResult
+      - Atomically: reserved -= reserved_margin,
+                    used += actual_margin (recomputed at fill)
+      - Used on OrderFilled event.
+      - Handles partial fills: actual_qty may be < reserved qty.
+        Excess margin returns to available.
+
+    release_used(symbol, exit_price, exit_qty, intent)
+                -> ReleaseResult
+      - Atomically: used -= margin, available += margin + pnl
+      - Updates daily_realized_pnl by (exit_value - entry_value
+        - costs).
+      - Used on PositionClosed event.
+
+FM6 — Reservation tracking:
+  Each reserve() generates reservation_id (uuid4 hex 16 chars).
+  Internal _reservations dict: {reservation_id -> {symbol, qty,
+    margin, bucket, intent, ts, signal_id}}.
+  Required for release() and commit_to_used() to know what to
+  reverse.
+
+FM7 — Daily loss limit (audit Issue #6):
+  Tracks daily_realized_pnl. After every release_used(), checks:
+    if daily_realized_pnl <= -daily_loss_limit:
+      fire on_daily_loss_breach callback (constructor-injected)
+  This is RECOVERED post-trade (audit flaw: monitors after exit).
+  Intra-trade unrealized P&L monitoring is order_monitor's job.
+  fund_manager is the realized side only.
+
+FM8 — Snapshot API:
+  get_snapshot() -> CapitalSnapshot
+    Frozen dataclass with: total, intraday_avail, intraday_reserved,
+    intraday_used, positional_avail, positional_reserved,
+    positional_used, daily_realized_pnl, ts.
+  Used by reporting, telegram, and risk_engine.
+  ALWAYS taken under lock (consistent point-in-time view).
+
+FM9 — Broker sync (audit Issue: double deduction fix):
+  sync_from_broker(broker_balance: float) updates total_capital
+  to match broker truth. Internal reserved + used are NOT
+  touched (those are our tracking). Available is recomputed:
+    available = total - reserved - used
+  Audit flaw was subtracting used from broker balance after
+  broker had already reduced it. Lock: NEVER subtract used
+  from broker_balance. Broker balance is total. Our reserved
+  and used are subtracted from total to get available.
+
+FM10 — Capital ledger persistence (audit G3):
+  Every mutation writes a row to capital_ledger table
+  (already in state_store schema):
+    {ts, mutation_type, amount, bucket, balance_before,
+     balance_after, signal_id, reservation_id, reason}
+  Inside same transaction as the in-memory mutation.
+  If state_store write fails: mutation rolled back, exception
+  raised. No silent in-memory drift.
+
+FM11 — Invariant violation:
+  After every mutation, before commit:
+    if abs((available + reserved + used) - total) > 0.01:
+      raise CapitalInvariantViolation(
+        context={total, available, reserved, used,
+                 expected_sum, actual_sum, mutation_type,
+                 reservation_id})
+  CapitalInvariantViolation already exists in core.exceptions.
+  This is CRITICAL severity. Fires on_critical_failure
+  callback before raising.
+
+FM12 — Constructor:
+  FundManager(
+    state_store,                    # for capital_ledger writes
+    bus,                            # for CapitalDriftDetected event
+    logger,
+    intraday_bucket_pct=0.70,       # from system_config
+    positional_bucket_pct=0.30,
+    daily_loss_limit=10000.0,
+    leverage_map=None,              # dict from system_config
+    on_daily_loss_breach=None,
+    on_critical_failure=None,
+  )
+  Validates: intraday_pct + positional_pct == 1.0
+             leverage_map covers all 4 intents
+             daily_loss_limit > 0
+
+FM13 — Initialization:
+  initialize(broker_balance: float) called once at startup
+  AFTER first broker call. Sets total_capital, splits into
+  buckets, available = total per bucket, reserved/used = 0.
+  Writes initial snapshot row to capital_ledger.
+
+FM14 — Reset for new trading day:
+  reset_daily_pnl() called by EOD scheduler. Sets
+  daily_realized_pnl = 0. Logs INFO with previous day total.
+  reserved/used NOT reset (positions carry over weekend).
+
+FM15 — Layer & deps:
+  Layer 3 (capital/). Imports: stdlib (threading, dataclasses),
+  core.exceptions (CapitalInvariantViolation), core.events
+  (CapitalDriftDetected), core.logger, core.time_authority,
+  core.ids, core.state_store (for capital_ledger writes),
+  core.config_loader (SystemConfig type).
+
+FM16 — System config additions:
+  Extend SystemConfig in core/config_loader.py:
+    capital:
+      intraday_bucket_pct: float  (validated: > 0, < 1)
+      positional_bucket_pct: float (validated: == 1 - intraday)
+      daily_loss_limit: float      (validated: > 0)
+      leverage_map:
+        INTRADAY: float
+        COVER_ORDER: float
+        DELIVERY: float
+        BRACKET_ORDER: float
+  Update config/system_config.yaml stub.
+  Re-run test_config_loader.py.
+
+FM17 — NOT in scope for this module:
+  - Position sizing (separate module: capital/position_sizer.py)
+  - Risk per trade calculation (capital/risk_engine.py)
+  - Cost deduction (cost_calculator already built; fund_manager
+    receives net values from caller)
+  fund_manager is a pure capital ledger.
+
+BUILD STEPS:
+
+1. Verify capital_ledger table exists in state_store schema.sql
+   with columns matching FM10. Extend if needed.
+   If schema changes, bump schema_version, update
+   test_state_store.py.
+
+2. Extend SystemConfig per FM16. Update YAML stub.
+   Re-run test_config_loader.py.
+
+3. Verify CapitalDriftDetected event payload schema in
+   core/events.py supports FM11 violation context.
+   Extend if needed; update test_events.py.
+
+4. Build capital/fund_manager.py per FM1-FM17.
+   This module is HIGH RISK. Pay extreme attention to:
+   - Lock acquisition order (single RLock, no nested locks)
+   - Atomicity of state_store write + in-memory update
+   - Invariant check on EVERY mutation, before commit
+   - Bucket isolation (no cross-bucket leakage)
+   - Idempotency of release()
+
+5. Build tests/unit/test_fund_manager.py covering:
+   - initialize() splits 100000 into 70k/30k buckets correctly
+   - reserve(INTRADAY) draws from intraday bucket only
+   - reserve(DELIVERY) draws from positional bucket only
+   - reserve insufficient -> success=False, no state change
+   - reserve success -> available decreases by margin,
+     reserved increases by margin, capital_ledger row written
+   - release(reservation_id) restores available
+   - release(reservation_id) twice -> second returns False,
+     no double-restore
+   - release(unknown_id) -> False
+   - commit_to_used full fill -> reserved=0, used=margin
+   - commit_to_used partial fill -> excess returns to available
+   - release_used with profit -> available += margin + pnl,
+     daily_realized_pnl increases
+   - release_used with loss -> daily_realized_pnl decreases
+   - daily_loss_limit breach -> on_daily_loss_breach fired
+   - Invariant violation simulation (manually corrupt state)
+     -> CapitalInvariantViolation raised, on_critical_failure
+     fired
+   - Margin calculation: 100 qty @ 500 INTRADAY (5x lev) =
+     100*500/5 = 10000 margin
+   - Margin calculation: 10 qty @ 1000 DELIVERY (1x lev) =
+     10000 margin
+   - sync_from_broker updates total, recomputes available,
+     does NOT touch reserved/used
+   - sync_from_broker NEVER subtracts used from broker_balance
+     (regression test for audit flaw)
+   - get_snapshot returns frozen consistent view
+   - Bucket isolation: drain intraday completely, can still
+     reserve DELIVERY
+   - Cross-bucket borrowing forbidden: reserve INTRADAY when
+     intraday bucket exhausted -> success=False even if
+     positional has capacity
+   - Constructor validation: intraday_pct + positional_pct != 1
+     -> ValueError
+   - Constructor validation: missing leverage entry -> ValueError
+   - reset_daily_pnl() zeroes pnl, leaves reserved/used intact
+   - Thread safety: 100 concurrent reserve+release from
+     5 threads, final state consistent, invariant holds
+   - capital_ledger write failure simulation -> mutation
+     rolled back, exception raised
+   - Reservation ID format: 16 hex chars
+
+6. Re-run all 14 prior suites + new one. Report 15-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Use in-memory SQLite (":memory:") for state_store
+in fund_manager tests for speed.

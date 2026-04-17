@@ -1,0 +1,277 @@
+================================================================
+PRE-LIVE AUDIT RESPONSE
+================================================================
+
+The 10 concerns are the RIGHT questions to ask before live.
+Some are already addressed by the build; some are genuine
+gaps. Honest breakdown below. VS Code Claude should VERIFY
+each against actual code, not trust the summary.
+
+================================================================
+PART 1: WHERE THE AUDIT IS ALREADY ADDRESSED
+================================================================
+
+Concern 1 — Atomicity (order + DB):
+  PARTIALLY addressed. order_placer per OP5:
+    1. Insert orders row PENDING
+    2. Register state_machine PENDING
+    3. Call adapter.place_order
+    4. On success: update row + transition
+    5. On exception: update row FAILED + release reservation
+  Gap: steps 1-2 are separate transactions from 4-5. If
+  broker call succeeds but step 4 update fails (DB crash
+  between broker success and DB commit), system lost track
+  of live broker order.
+  Mitigation: reconciler catches this next cycle.
+  Verdict: not "non-atomic" in usual sense; reconciliation
+           is the safety net. Acceptable if reconciler is
+           robust (Concern 3).
+
+Concern 2 — Broker failure handling:
+  MOSTLY addressed.
+  - Partial fills: order_monitor OM8 handles
+  - Delayed fills: order_monitor OM7 (fill_timeout -> cancel)
+  - Rejected SL: goes through OrderRejectedError path
+  - Network retry: adapter does NOT auto-retry place_order
+    (OP8 explicit), caller handles
+  Gap: "IF SL missing -> HALT SYSTEM" logic is SOFT.
+  Current behavior: reconciler G5b places fresh SL or
+  MARKET exit. System does not halt on missing SL.
+  Verdict: depends on interpretation. Replacement
+           mechanism works but is not "halt". User
+           should confirm which behavior they want.
+
+Concern 3 — Reconciliation 6 checks:
+  ADDRESSED in Module 25 (order_reconciler).
+  All 6 checks per G1 implemented with RC5.
+  3-tier action policy per RC6.
+  Tests cover each check.
+  Verdict: structurally sound. Live trial will reveal
+           edge cases real broker responses create.
+
+Concern 4 — Crash recovery (broker as source of truth):
+  PARTIALLY addressed.
+  - G5a four-scenario startup detected
+  - G5b orphan SL recovery (favorable-side check)
+  - startup reconciliation runs synchronously before trading
+  Gap: System does NOT fully rebuild state from broker on
+  restart. It trusts local state_store + runs reconciliation
+  to patch differences. For CRASH scenario, this is the
+  audit-intended behavior.
+  Verdict: "broker = source of truth ALWAYS" is AMBIGUOUS.
+           If interpreted strictly (wipe local state, rebuild
+           from broker) -> NOT done. If interpreted as
+           (broker overrides local on conflict) -> IS done
+           via reconciler. Current behavior is the latter.
+
+Concern 5 — Concurrency + SQLite:
+  ADDRESSED.
+  - WAL mode: YES (Q2 lock at schema creation time)
+  - Short transactions: YES (FM3/FM5, all mutations bounded)
+  - No nested transactions: YES (single RLock in fund_manager,
+    no nested begin/commit)
+  Verdict: solid.
+
+Concern 6 — Order lifecycle SL OR TGT (not both):
+  PARTIALLY addressed.
+  CO_PLUS_TGT architecture (P8_P13): CO contains SL natively,
+  separate LIMIT TGT order. When CO SL triggers at broker,
+  the CO completes -> order_monitor sees COMPLETE -> marks
+  trade closed. The TGT LIMIT order becomes orphaned and
+  order_reconciler CHECK 6 cancels it.
+  LIMIT_TRIPLE (fallback): 3 separate orders. If both SL and
+  TGT execute (extremely rare race at broker), current code
+  does NOT have a "both fired" detection.
+  Verdict: CO path is safe by design. LIMIT_TRIPLE has
+           theoretical double-exit risk. Reconciler
+           would catch partial_close + position_grew.
+           Worth ADDING a test case for this scenario.
+
+Concern 7 — Kill switch at all action points:
+  ADDRESSED after Module 21 reconciliation.
+  OP-LM1 last-mile check in order_placer. Risk engine also
+  checks (RE5 check 1). Two layers.
+  Signal processing checks kill_switch pre-flight (SP6 step 1).
+  Verdict: solid.
+
+Concern 8 — Signal dedup at DB level:
+  ADDRESSED. signals table has UNIQUE INDEX on
+  (fingerprint, fingerprint_date) per audit P6 + G2a.
+  DB rejects duplicate at commit time -> IntegrityError
+  caught by webhook receiver WR7.
+  Verdict: solid. Python-side check is fast path; DB is
+           authoritative.
+
+Concern 9 — Logging traceability:
+  ADDRESSED.
+  L2/L9: every log envelope carries signal_id, trade_id,
+  order_id when in extra dict. TradeContext LoggerAdapter
+  binds IDs. Reconciler log separate per L3.
+  Verdict: solid.
+
+Concern 10 — Chaos testing:
+  PARTIALLY addressed.
+  Module 37 integration smoke test covers 7 scenarios:
+  happy path, screener reject, risk reject, duplicate,
+  kill switch, EOD, reconciler manual close.
+  MISSING from integration tests:
+  - Crash mid-trade (process kill between order + state
+    update)
+  - Network timeout mid-order
+  - Partial fill then rejection of remaining
+  - Restart with pending order at broker
+  Verdict: good coverage but not chaos-level. Need
+           deliberate failure injection before live.
+
+================================================================
+PART 2: GENUINE REMAINING GAPS
+================================================================
+
+Real concerns that need action BEFORE live:
+
+GAP A — Two-phase atomicity (Concern 1):
+  Add integration test:
+    1. place_order succeeds
+    2. immediately raise RuntimeError before state_store
+       update is attempted
+    3. Assert: reconciler next cycle detects orphan order
+       and handles correctly
+  If test fails: fix reconciler to recognize this case.
+
+GAP B — Chaos test suite (Concern 10):
+  Add tests/integration/test_chaos.py with ~10 scenarios:
+    - Process interrupt at each pipeline stage
+    - Adapter raises mid-fill
+    - Network timeout mid-order
+    - SQLite locked during mutation
+    - Broker returns unknown status code
+    - Quote feed dies mid-trail
+    - Kill switch activates while pipeline in-flight
+  Mock all externals, simulate failures deliberately.
+
+GAP C — Both-SL-TGT execution test (Concern 6):
+  For LIMIT_TRIPLE protocol only, add test:
+    - Both SL and TGT broker orders report COMPLETE
+      simultaneously
+    - Verify: reconciler detects double-exit, system
+      flags as CRITICAL, operator review required
+  If no such detection exists: add it as a new check in
+  reconciler or add a UNIQUE constraint at DB level that
+  prevents two terminal exits for same trade.
+
+GAP D — Explicit SL-missing halt option (Concern 2):
+  Currently G5b auto-places fresh SL or MARKET exit.
+  Add config flag:
+    order_monitor.halt_on_missing_sl: bool (default false)
+    If true: any detected missing SL -> soft_kill instead
+    of auto-fix. Conservative mode for new operators.
+
+GAP E — Instrument and accounts CSV (if not built yet):
+  Module 38 from previous instruction set. Cannot trade
+  F&O correctly without instruments.csv. Cannot scale to
+  multi-account without accounts.csv.
+
+GAP F — Shadow tracker (Concern correctness):
+  Module 39 from previous instruction set. Prevents the
+  "system says TGT hit after SL already hit" bug from
+  the old system.
+
+================================================================
+PART 3: AGREEMENT WITH "DO NOT GO LIVE YET"
+================================================================
+
+The audit's bottom line is CORRECT:
+  1. Paper trade 5-7 days
+  2. Inject failures manually
+  3. Fix inconsistencies
+  4. Small capital first
+
+Also recommend:
+  - Run ALL chaos scenarios in controlled environment
+    before first real rupee
+  - Monitor reconciliation_log daily for unexpected entries
+  - Keep system_events log for audit trail
+  - Have kill switch bound to a hotkey (operator-accessible)
+
+================================================================
+PART 4: ACTION ITEMS FOR VS CODE CLAUDE
+================================================================
+
+VERIFICATION (do these first, report results):
+
+Verify 1: Check signals table has UNIQUE INDEX on
+  (fingerprint, fingerprint_date). Show the CREATE statement
+  from schema.sql. Confirm SQLite enforces it.
+
+Verify 2: Grep core/state_store.py for "journal_mode"
+  or "WAL". Confirm WAL is enabled at connection init.
+
+Verify 3: Show the critical path in orders/order_placer.py:
+  the block that runs between adapter.place_order() success
+  and the orders row being updated with broker_order_id.
+  Is there any gap that would leave a live broker order
+  untracked if the process dies between those lines?
+
+Verify 4: Grep all calls to "log.info" / "log.error" /
+  "log.warning" in orders/*, broker/*, signals/*.
+  Count how many DO NOT include extra={...signal_id...} or
+  TradeContext binding. Report any hot-path logs missing IDs.
+
+Verify 5: Check if LIMIT_TRIPLE protocol handles the case
+  where both SL and TGT orders report COMPLETE. Show the
+  code path that would detect this.
+
+Verify 6: Confirm modules 38, 39, 40 status:
+  - core/instrument_cache.py exists?
+  - core/account_registry.py exists?
+  - orders/shadow_tracker.py exists?
+  - reports/daily_review.py has MULTI_INNING_TRACKING section?
+
+NEW TESTS (after verification):
+
+Test 1 — Orphan after place success:
+  tests/integration/test_orphan_after_place.py
+  Simulate: place_order succeeds -> process "crashes"
+  before state update. Next startup: reconciler finds
+  broker order not in state_store (ORPHAN_ORDER check),
+  handles it per G1.
+
+Test 2 — Chaos suite:
+  tests/integration/test_chaos.py
+  10 scenarios per GAP B.
+
+Test 3 — Both terminal exits:
+  tests/integration/test_double_exit.py
+  Simulate LIMIT_TRIPLE with both SL and TGT reporting
+  COMPLETE at same broker poll. Verify system detects
+  and flags.
+
+MEMORY UPDATE:
+  Store this entire response as pre_live_audit_response.md
+  in memory/. Includes all verdicts and gaps.
+  Also record GAPS A-F as pending tasks.
+
+================================================================
+PART 5: FINAL VERDICT
+================================================================
+
+The audit's 10 concerns are WELL-TAKEN but the majority are
+either addressed or have reasonable mitigation via reconciler
++ kill_switch + logging discipline already built.
+
+The REAL remaining risks before live:
+  1. Two-phase atomicity edge case (catch via chaos test)
+  2. LIMIT_TRIPLE double-exit theoretical race (add test)
+  3. Missing chaos test suite (Module 37 is smoke, not chaos)
+  4. Shadow tracker not yet built (Module 39 pending)
+  5. Instrument/account CSV not yet built (Module 38 pending)
+
+The audit's recommendation "do not go live yet" is CORRECT
+not because the system is broken, but because no system
+that has never met real market data is ready for live.
+
+Paper trial is the right gate. 5-7 sessions minimum. Review
+daily_review and reconciliation_log each day. Fix whatever
+surfaces. Then live with ultra-small capital.
+
+No shortcuts here.

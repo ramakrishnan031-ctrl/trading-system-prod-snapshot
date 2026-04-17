@@ -1,0 +1,118 @@
+================================================================
+TASK 2: accounts.csv single-account setup + .env security
+================================================================
+
+Task 1 complete. Now set up the real account config.
+
+V2 is SINGLE-ACCOUNT (Zerodha LFL836 only). AngelOne accounts
+deferred to v2.1 (no AngelOne adapter built).
+
+================================================================
+STEP 1: Replace config/accounts.csv
+================================================================
+
+Overwrite config/accounts.csv with exactly this content:
+
+account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled,primary
+LFL836,zerodha,ZERODHA_API_KEY,ZERODHA_ACCESS_TOKEN,1.0,true,true
+
+One row. One account. All capital to this account.
+
+NOTE: If AccountRegistry schema (from M38 IC5) does NOT have
+a "primary" column, drop it from the CSV. Check the existing
+AccountRow dataclass for expected columns. The CSV must match
+whatever M38 built.
+
+If M38 schema is:
+  account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled
+
+Then use:
+  account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled
+  LFL836,zerodha,ZERODHA_API_KEY,ZERODHA_ACCESS_TOKEN,1.0,true
+
+================================================================
+STEP 2: Create or update .env.example
+================================================================
+
+Create .env.example at project root (if not exists) with:
+
+# Zerodha credentials (LFL836)
+ZERODHA_API_KEY=your_api_key_here
+ZERODHA_API_SECRET=your_api_secret_here
+ZERODHA_ACCESS_TOKEN=daily_fresh_token_here
+
+# Telegram alerts
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+
+# Webhook security (optional)
+WEBHOOK_SECRET=optional_hmac_secret
+
+This is a TEMPLATE file. Safe to commit. No real values.
+
+================================================================
+STEP 3: Verify .gitignore
+================================================================
+
+Ensure .gitignore contains:
+  .env
+  *.db
+  logs/*.log
+  data_store/
+  reports/daily/
+
+If any missing, add them. .env must NEVER be committed.
+
+================================================================
+STEP 4: Verify AccountRegistry loads
+================================================================
+
+Run quick check:
+  python -c "
+from core.account_registry import AccountRegistry
+from pathlib import Path
+ar = AccountRegistry(Path('config/accounts.csv'), None)
+print(f'Loaded: {ar.get_enabled_accounts()}')
+print(f'Primary: {ar.get_primary_account()}')
+"
+
+Should print LFL836 account row without error.
+
+If AccountRegistry constructor or method names differ from
+above, adjust the check to match actual implementation.
+
+================================================================
+STEP 5: Run full test suite
+================================================================
+
+pytest tests/ -q
+
+Expected: 1351 still green (no code changes, only CSV content
+change which tests use their own fixtures for).
+
+================================================================
+REPORT
+================================================================
+
+Confirm:
+  - config/accounts.csv replaced with single-account row
+  - .env.example created/updated
+  - .gitignore verified
+  - AccountRegistry loads successfully
+  - Full suite still green
+
+Then await Task 3 instruction from Rama.
+
+================================================================
+SECURITY REMINDER FOR RAMA
+================================================================
+
+Rama: after VS Code Claude confirms Task 2 done, YOU must:
+  1. Create .env file (NOT .env.example) at project root
+  2. Put REAL credentials in it:
+       ZERODHA_API_KEY=pvahsvuu3xjsefc7
+       ZERODHA_API_SECRET=i2yagofwnx101r1y8mq7ltmxmqj4e751
+       ZERODHA_ACCESS_TOKEN=<get fresh daily via kite login>
+       TELEGRAM_BOT_TOKEN=<your real bot token>
+  3. Verify .env is gitignored (git status should not show it)
+  4. DELETE the original accounts.csv you uploaded (it had
+     plaintext credentials — security risk)

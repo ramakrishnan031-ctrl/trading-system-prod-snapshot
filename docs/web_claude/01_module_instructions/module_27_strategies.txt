@@ -1,0 +1,313 @@
+================================================================
+MODULE 27: strategies/schema.py + strategies/loader.py
+         + config/strategies/*.yaml (15 files)
+================================================================
+
+CONTEXT: 768/768 across 30 suites. Strategy schema is undefined
+in locked_decisions.yaml. This instruction DEFINES it. VS Code
+Claude must lock S1-S20 before building.
+
+CRITICAL: These schema decisions affect EVERY downstream module
+(screener, entry_gate, signal_processor, order_placer). Get
+them right. Once locked, changing fields is expensive.
+
+================================================================
+STRATEGY SCHEMA LOCK (S1-S20)
+================================================================
+
+S1 — Strategy YAMLs are SIGNAL-AGNOSTIC.
+  No per-symbol or per-instrument overrides in strategy files.
+  Strategy defines the PATTERN (e.g., "open_low_breakout_long").
+  Symbol comes from the Chartink scanner signal at runtime.
+  Scanner -> strategy mapping is in scan_webhook_map.yaml.
+
+S2 — One YAML per Chartink scanner (15 files).
+  Each file defines parameters for ONE scanner pattern.
+  File naming: snake_case matching scan_webhook_map key.
+  Location: config/strategies/<name>.yaml
+
+S3 — StrategyConfig Pydantic model (COMPLETE field list):
+
+  # --- Identity ---
+  name: str                    # e.g. "open_low_breakout_long"
+  display_name: str            # e.g. "Open Low Breakout Long"
+  description: str             # one-liner purpose
+
+  # --- Direction & Product ---
+  direction: str               # "LONG" | "SHORT"
+  intent: str                  # "INTRADAY" | "DELIVERY"
+  order_protocol: str          # "CO_PLUS_TGT" | "LIMIT_TRIPLE"
+
+  # --- Entry ---
+  entry_method: str            # "MARKET" | "LIMIT"
+  entry_offset_pct: float      # for LIMIT: offset from trigger price
+                                # BUY: trigger * (1 - offset) = limit
+                                # SELL: trigger * (1 + offset) = limit
+                                # default 0.0 (at trigger price)
+
+  # --- Stop Loss ---
+  sl_method: str               # "FIXED_PCT" | "ATR"
+  sl_pct: float                # used when sl_method=FIXED_PCT
+                                # LONG: sl = entry * (1 - sl_pct)
+                                # SHORT: sl = entry * (1 + sl_pct)
+  sl_atr_multiplier: float     # used when sl_method=ATR
+                                # sl = entry -/+ atr * multiplier
+                                # default 1.5
+  sl_min_pct: float            # floor: SL distance never < this %
+                                # default 0.003 (0.3%)
+  sl_max_pct: float            # cap: SL distance never > this %
+                                # default 0.05 (5%)
+
+  # --- Target ---
+  tgt_method: str              # "FIXED_PCT" | "RISK_REWARD" | "ATR"
+  tgt_pct: float               # used when tgt_method=FIXED_PCT
+  tgt_risk_reward: float       # used when tgt_method=RISK_REWARD
+                                # tgt_distance = sl_distance * ratio
+                                # default 2.0
+  tgt_atr_multiplier: float    # used when tgt_method=ATR
+                                # default 2.5
+
+  # --- Smart TGT (trail SL) ---
+  smart_tgt_enabled: bool      # enable trail SL via smart_tgt_manager
+  smart_tgt_trail_trigger_pct: float  # start trailing after this %
+                                       # profit reached (default 0.005)
+  smart_tgt_trail_step_pct: float     # trail SL by this step
+                                       # (default 0.003)
+
+  # --- Pullback Wait (P11a) ---
+  pullback_wait_enabled: bool          # opt-in to entry_gate delay
+  pullback_wait_tolerance_pct: float   # price must retrace this %
+                                        # default 0.005
+  pullback_wait_timeout_sec: int       # hard timeout (default 180)
+
+  # --- Screening Thresholds ---
+  min_score: int               # minimum quality score to pass
+                                # default: use global from scoring_weights
+                                # if set here, overrides global
+  min_volume_surge: float      # step 1 threshold (default 1.3)
+  min_adr_pct: float           # ATR/ADR filter (default 0.5%)
+  max_spread_pct: float        # bid-ask spread cap (default 0.5%)
+
+  # --- Risk ---
+  max_risk_pct: float          # per-trade risk override
+                                # default: use global from system_config
+                                # if set, overrides position_sizer default
+  lot_size: int                # for F&O; equity = 1 (default 1)
+
+  # --- Time ---
+  entry_start_time: str        # override entry window start
+                                # format "HH:MM", default "09:30"
+  entry_end_time: str          # override entry window end
+                                # default "13:30"
+  active_days: list[str]       # ["MON","TUE","WED","THU","FRI"]
+                                # default: all 5 weekdays
+
+S4 — Validation rules (Pydantic validators):
+  - direction IN ("LONG", "SHORT")
+  - intent IN ("INTRADAY", "DELIVERY")
+  - order_protocol IN ("CO_PLUS_TGT", "LIMIT_TRIPLE")
+  - entry_method IN ("MARKET", "LIMIT")
+  - sl_method IN ("FIXED_PCT", "ATR")
+  - tgt_method IN ("FIXED_PCT", "RISK_REWARD", "ATR")
+  - sl_pct > 0 when sl_method=FIXED_PCT
+  - sl_min_pct <= sl_pct <= sl_max_pct when FIXED_PCT
+  - tgt_pct > 0 when tgt_method=FIXED_PCT
+  - tgt_risk_reward > 0 when tgt_method=RISK_REWARD
+  - entry_start_time < entry_end_time (parse as time objects)
+  - active_days subset of {MON,TUE,WED,THU,FRI}
+  - lot_size >= 1
+  - All float fields that are percentages: > 0, < 1
+    (expressed as decimal: 0.01 = 1%, not 1.0 = 1%)
+  - extra="forbid" (no unknown fields — Project Rule 14)
+
+S5 — Optional fields with defaults:
+  Fields with sane defaults listed in S3 (shown after #).
+  All fields PRESENT in YAML — no omissions. If a strategy
+  doesn't use ATR SL, it still declares sl_atr_multiplier
+  with the default value. NO conditional presence.
+  Rationale: every YAML is self-documenting. grep-able.
+
+S6 — Positional strategies (3 of 15) differences:
+  intent: "DELIVERY"
+  order_protocol: "LIMIT_TRIPLE" (no CO for CNC)
+  entry_end_time: "14:30" (later than intraday)
+  pullback_wait_enabled: false (momentum breakouts)
+  smart_tgt_enabled: false (managed by EOD exit or manual)
+
+S7 — SHORT strategies differences:
+  direction: "SHORT"
+  sl_pct: SL ABOVE entry (math inverted in position_sizer,
+          already handled per PS10)
+  All 5 short strategies: gap_go_short, gap_fade_short,
+  open_high_breakdown_short, first_pullback_short,
+  vwap_rejection_short, range_breakout_short (6 total).
+
+S8 — strategies/schema.py exports:
+  StrategyConfig — the Pydantic model
+  validate_strategy(yaml_path: Path) -> StrategyConfig
+    Loads YAML, validates, returns typed object.
+    Raises ConfigSchemaError on failure.
+
+S9 — strategies/loader.py exports:
+  load_all_strategies(strategies_dir: Path) -> dict[str, StrategyConfig]
+    Loads ALL .yaml files from dir.
+    Returns dict keyed by strategy name.
+    ANY invalid file -> raise ConfigSchemaError immediately
+    (Project Rule 14: no partial loads).
+  get_strategy(name: str) -> StrategyConfig
+    Lookup from loaded dict. Raises ConfigMissingError if
+    not found.
+  Strategies loaded ONCE at startup (no hot reload).
+
+S10 — scan_webhook_map.yaml linkage:
+  scan_webhook_map maps scanner_name -> strategy_name.
+  Loader validates at startup: every strategy_name in
+  scan_webhook_map must have a corresponding YAML file.
+  Missing -> ConfigMissingError with file name.
+
+S11 — Layer & deps:
+  strategies/schema.py: Layer 2. Imports: pydantic, stdlib.
+  strategies/loader.py: Layer 2. Imports: pydantic, yaml,
+    core.config_loader (for scan_webhook_map cross-check),
+    core.exceptions (ConfigSchemaError, ConfigMissingError),
+    strategies.schema.
+
+S12 — The 15 strategy YAML files (lock names + directions):
+
+  INTRADAY LONG (6):
+    open_low_breakout_long.yaml
+    first_pullback_long.yaml
+    vwap_bounce_long.yaml
+    gap_go_long.yaml
+    gap_fade_long.yaml
+    range_breakout_long.yaml
+
+  INTRADAY SHORT (6):
+    open_high_breakdown_short.yaml
+    first_pullback_short.yaml
+    vwap_rejection_short.yaml
+    gap_go_short.yaml
+    gap_fade_short.yaml
+    range_breakout_short.yaml
+
+  POSITIONAL (3):
+    positional_momentum_long.yaml
+    positional_sector_rotation.yaml
+    positional_swing_long.yaml
+
+S13 — Strategy parameter defaults by category:
+
+  INTRADAY LONG defaults:
+    sl_method: FIXED_PCT, sl_pct: 0.01 (1%)
+    tgt_method: RISK_REWARD, tgt_risk_reward: 2.0
+    smart_tgt_enabled: true
+    pullback_wait_enabled: true (except gap_go, range_breakout)
+    order_protocol: CO_PLUS_TGT
+    entry_method: LIMIT, entry_offset_pct: 0.001
+
+  INTRADAY SHORT defaults:
+    Same as LONG except direction: SHORT
+    order_protocol: CO_PLUS_TGT
+
+  POSITIONAL defaults:
+    sl_method: ATR, sl_atr_multiplier: 2.0
+    tgt_method: ATR, tgt_atr_multiplier: 3.0
+    smart_tgt_enabled: false
+    pullback_wait_enabled: false
+    order_protocol: LIMIT_TRIPLE
+    intent: DELIVERY
+    entry_method: LIMIT, entry_offset_pct: 0.002
+
+S14 — scan_webhook_map.yaml content (populate from stubs):
+  scanners:
+    open_low_breakout_long:
+      strategy: open_low_breakout_long
+      chartink_url: "https://chartink.com/screener/open-low-breakout-long"
+    first_pullback_long:
+      strategy: first_pullback_long
+      chartink_url: "https://chartink.com/screener/first-pullback-long"
+    ... (all 15 entries)
+
+S15 — chartink_scanners.yaml content:
+  Mirror scan_webhook_map but with scanner validation fields
+  (expected condition count, last_verified date). Populate
+  from Chartink doc (project file Chartink_latest_strategies).
+
+S16-S20 — RESERVED for future strategy params. Not defined now.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Build strategies/schema.py per S3-S8 (~150 lines).
+   StrategyConfig Pydantic model with all validators.
+   validate_strategy(path) function.
+
+2. Build strategies/loader.py per S9-S11 (~100 lines).
+   load_all_strategies(), get_strategy().
+   Cross-validate against scan_webhook_map at load time.
+
+3. Create config/strategies/ directory.
+   Generate all 15 YAML files per S12-S13.
+   Each file must be COMPLETE (all fields present per S5).
+   Use S13 defaults with strategy-specific overrides.
+   Key per-strategy differences:
+     gap_go_long: pullback_wait_enabled: false (momentum entry)
+     range_breakout_long: pullback_wait_enabled: false
+     gap_go_short: pullback_wait_enabled: false
+     range_breakout_short: pullback_wait_enabled: false
+     All positional: see S6
+
+4. Populate config/scan_webhook_map.yaml per S14.
+   Populate config/chartink_scanners.yaml per S15.
+   These are currently empty stubs.
+
+5. Update strategies/__init__.py.
+
+6. Build tests/unit/test_strategies.py covering:
+   - StrategyConfig: valid YAML -> all fields populated
+   - StrategyConfig: missing required field -> ConfigSchemaError
+   - StrategyConfig: unknown field -> ConfigSchemaError (extra=forbid)
+   - StrategyConfig: invalid direction -> validation error
+   - StrategyConfig: invalid intent -> validation error
+   - StrategyConfig: sl_pct=0 when FIXED_PCT -> validation error
+   - StrategyConfig: sl_min > sl_pct -> validation error
+   - StrategyConfig: entry_start >= entry_end -> validation error
+   - StrategyConfig: active_days invalid -> validation error
+   - StrategyConfig: float fields negative -> validation error
+   - validate_strategy with valid file -> StrategyConfig returned
+   - validate_strategy with invalid file -> ConfigSchemaError
+   - load_all_strategies: loads all 15 -> dict with 15 entries
+   - load_all_strategies: one corrupt -> ConfigSchemaError
+     (no partial load)
+   - get_strategy: existing name -> correct StrategyConfig
+   - get_strategy: missing name -> ConfigMissingError
+   - scan_webhook_map cross-validation: all 15 strategies
+     referenced exist as YAML files
+   - scan_webhook_map references missing strategy -> error
+   - LONG strategy: direction=LONG, sl calculation direction
+   - SHORT strategy: direction=SHORT
+   - POSITIONAL: intent=DELIVERY, protocol=LIMIT_TRIPLE
+   - All 15 YAML files individually validate (regression: no
+     corrupt files per audit Part 4)
+   - Defaults populated correctly per S13
+
+7. Re-run all 30 prior suites + new one. Report 31-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: strategies/schema.py + strategies/loader.py
+  Files created: 2 .py + 15 .yaml + 2 config stubs populated
+  Tests: report actual
+  Locked: S1-S15 under strategies_module: section
+  Schema: unchanged
+  Cross-module: config/scan_webhook_map.yaml populated,
+                config/chartink_scanners.yaml populated,
+                config/strategies/ created with 15 validated
+                YAML files
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.

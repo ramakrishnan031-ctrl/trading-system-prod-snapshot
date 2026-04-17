@@ -1,0 +1,55 @@
+================================================================
+PHASE D — Module 38: instrument_cache + accounts
+================================================================
+
+Phase C complete (1199/1199 green). Move to Phase D.
+
+Reference spec: modules_38_39_40_final.txt (already in your
+instruction archive). Section starts at:
+  "MODULE 38: core/instrument_cache.py + accounts.csv"
+  (locks IC1-IC15)
+
+No changes to that spec. Build exactly as locked.
+
+EXECUTION CHECKLIST:
+
+1. Implement core/instrument_cache.py + core/account_registry.py
+2. Add InstrumentNotFoundError to core/exceptions.py
+3. Create config/instruments.csv (5 equity stubs per IC15):
+     RELIANCE, TCS, INFY, HDFCBANK, SBIN
+     All lot_size=1, is_fno=false, tick_size=0.05
+     ADD sector column per HIGH #2 (sector lookup gap)
+4. Create config/accounts.csv (1 primary account per IC15)
+5. Build scripts/refresh_instruments.py per IC12
+6. Extend utils/startup_checks.py for IC13 (instruments.csv +
+   accounts.csv required)
+7. Update capital/position_sizer.py per IC7
+   (lot_size from instrument_cache)
+8. Update orders/order_placer.py per IC8
+   (round LIMIT prices to tick_size)
+9. Update broker/zerodha_adapter.py per IC9
+   (optional account_id param, no-op for v2)
+10. Update signals/signal_processor.py to use instrument_cache
+11. Update main.py wiring per IC11 + HIGH #2 fix:
+    - Construct InstrumentCache + AccountRegistry
+    - Inject into sizer, placer, signal_processor
+    - token_map for candle_store (closes BLOCKER #11):
+        token_map = {row.instrument_token: row.symbol
+                     for row in instrument_cache.all_rows()}
+        candle_store.set_token_map(token_map)
+    - sector_lookup_fn = instrument_cache.sector (closes HIGH #2):
+        risk_engine sector_lookup_fn=lambda sym: (
+          instrument_cache.get_by_symbol(sym).sector
+          if instrument_cache.has(sym) else "UNKNOWN")
+12. Build tests per IC14 (3 test files)
+
+EXPECTED TEST DELTA: ~40 new tests (1199 + 40 = ~1239)
+
+SIDE BENEFIT:
+  This module also closes 2 audit items:
+    - BLOCKER #11 (set_token_map never called) — fixed
+    - HIGH #2 (sector_lookup_fn useless) — fixed via
+      instruments.csv sector column
+
+Report completion with 37+ suite table.
+Then proceed to Module 39 (shadow_tracker).

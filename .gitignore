@@ -1,0 +1,63 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Trading System v2 — .gitignore
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Credentials — NEVER commit
+.env
+env
+
+# SQLite databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+data_store/
+
+# Logs
+logs/
+*.log
+
+# Generated reports
+reports/daily/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# pytest cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+
+# Claude Code internals
+memory/
+mempalace.yaml
+CLAUDE_md_and_explanations.txt
+.claude/settings.local.json

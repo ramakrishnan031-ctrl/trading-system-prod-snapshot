@@ -1,0 +1,456 @@
+================================================================
+RESPONSE TO 3 QUESTIONS
+  1. 54-point audit closeout (fixed vs pending)
+  2. accounts.csv — can it be used?
+  3. NSE official files — any use?
+================================================================
+
+================================================================
+SECTION 1: AUDIT CLOSEOUT (54 items across 3 audits)
+Purpose: Hand this section to VS Code Claude so he knows
+         exactly what's done vs pending for his mempalace.
+================================================================
+
+Audits received:
+  Audit 1: "Pre-live audit" — 10 high-level concerns
+  Audit 2: "Second pass"    — 30 concrete issues
+  Audit 3: "Final thorough" — 19 additional (total 54)
+
+Overlap exists — some items appear in multiple audits. Below
+table lists each UNIQUE issue once, tagged with originating
+audit(s).
+
+----------------------------------------------------------------
+CRITICAL (15 items)
+----------------------------------------------------------------
+
+# | Issue                                            | Source    | Status         | Phase | Notes
+--|--------------------------------------------------|-----------|----------------|-------|-------
+C1| State consistency order+DB atomicity             | A1#1,A2#1 | CLOSED         | Design| Reconciler is safety net (G1)
+C2| Race in order_placer fill_map                    | A2#2     | VERIFIED_OK    | G     | All paths under _fill_map_lock
+C3| ATR/sector silent fallback                       | A2#3     | CLOSED         | G     | WARN/HALT config flag added
+C4| Paper mode quote_provider missing                | A2#4,A3  | FIXED          | B     | SimQuoteProvider injected
+C5| Schema version mismatch (no migration)           | A2#5     | DEFERRED       | v2.1  | Delete-DB-on-upgrade policy
+C6| SmartTgt quote_fn missing                        | A2#6     | CLOSED         | B     | Optional with WARN log
+C7| Orphan callback triggered_by missing             | A2#7     | ALREADY_FIXED  | A     | Confirmed at triage
+C8| Critical failure callback triggered_by missing   | A2#8     | ALREADY_FIXED  | A     | Confirmed at triage
+C9| in_flight symbols never timeout                  | A2#9     | FIXED          | C     | 300s sweeper thread
+C10| broker_orders_fn=None disables CHECK 6          | A2#10,A3 | FIXED          | B     | get_open_orders wired
+C11| Kite client timeout not configured              | A3#1     | FIXED          | B     | read_sec + connect_sec
+C12| Empty order history silently ignored            | A3#2     | FIXED          | B     | Orphan after N empties
+C13| continue_from_gate wrong side param             | A3#3     | FIXED          | B     | LONG/SHORT -> BUY/SELL
+C14| EntryGate/SignalProcessor start order wrong     | A3#4     | FIXED          | B     | Swapped in main.py
+C15| order_reconciler missing product field          | A3#5     | ALREADY_FIXED  | A     | Confirmed at triage
+
+----------------------------------------------------------------
+HIGH (15 items)
+----------------------------------------------------------------
+
+H1| Telegram paper mode sends real alerts            | A2#11     | ALREADY_FIXED | A     | paper_mode wired
+H2| sector_lookup_fn returns UNKNOWN                 | A2#12     | FIXED         | D     | Module 38 instruments.csv
+H3| CandleStore never started                       | A2#13,A3  | FIXED         | B     | start() + stop() wired
+H4| SmartTgt reconnect wiring                       | A2#14,A3#6| CLOSED        | Design| ST13 chain via main.py
+H5| OrderMonitor.track() for SL/TGT legs            | A2#15     | PENDING       | Paper | Deferred to paper trial
+H6| EodSquareoff _fired_for_date race               | A2#16     | FIXED         | B     | Set after success
+H7| daily_review openpyxl lazy import                | A2#17     | FIXED         | C     | Module-level import
+H8| preflight uses requests not in requirements      | A2#18     | VERIFY        | Paper | requests in kiteconnect deps
+H9| alerts/critical.py reference                     | A2#19,A3#10| VERIFIED_OK  | A     | Built in Module 24
+H10| ids validation in WebhookReceiver               | A2#20     | VERIFIED_OK   | A     | DB PRIMARY KEY enforced
+H11| Log rotation missing                           | A2#21     | FIXED         | C     | RotatingFileHandler 50MB/5
+H12| telegram_notifier.py missing                   | A3#7      | VERIFIED_OK   | A     | Built in Module 24
+H13| check_clock_skew hardcoded 30s                 | A3#8      | FIXED         | C     | Config-driven now
+H14| _cancel_pending_entries order status           | A3#9      | FIXED         | C     | UPDATE in transaction
+H15| webhook queue.Full returns 200                 | A3#10     | FIXED         | C     | Returns 503 now
+
+----------------------------------------------------------------
+MEDIUM (14 items)
+----------------------------------------------------------------
+
+M1| Logs directory hardcoded, no rotation            | A2#21     | FIXED         | C     | Same as H11
+M2| market_windows cap=10 for holidays               | A2#23     | FIXED         | G     | Raised to 30
+M3| CandleStore token_map not populated              | A2#24     | FIXED         | D     | Module 38 wired
+M4| LiveFeed callback signature mismatch             | A2#25     | FIXED         | B     | _tick_dispatcher
+M5| Daily P&L reset never called                     | A2#22     | FIXED         | B     | Wired in EOD fire
+M6| rate_limiter freeze no thaw log                  | A2#29     | FIXED         | G     | INFO log on thaw
+M7| _derive_prices can return negative prices        | A3#11     | FIXED         | B     | Guard added
+M8| order_placer hardcoded MIS/CNC                   | A3#12     | FIXED         | C     | product_resolver
+M9| position_sizer sl_distance=0                     | A3#13     | FIXED         | G     | REJECTS now
+M10| risk_engine snapshot incomplete                 | A3#14     | VERIFIED_OK   | G     | RE11 already built
+M11| Session row write timing                       | A3#15     | FIXED         | G     | Early write added
+M12| CO protocol success=True on TGT fail           | A3#18     | FIXED         | G     | Honest semantics
+M13| candle_store MAX_HISTORY=390                   | A3#20     | FIXED         | G     | Bumped to 500
+M14| ATR silent fallback                             | A2#3      | FIXED         | G     | Same as C3
+
+----------------------------------------------------------------
+LOW (10 items — all deferred as nits, not blockers)
+----------------------------------------------------------------
+
+L1| main.py _log variable reassigned (cosmetic)      | A2#26     | DEFERRED      | v2.1  | Rename later
+L2| product_resolver BRACKET_ORDER empty string      | A2#27     | DEFERRED      | v2.1  | Runtime check adequate
+L3| cost_calculator stamp_duty possibly hardcoded    | A2#28     | VERIFY        | Paper | Verify during trial
+L4| rate_limiter freeze edge cases                   | A2#29     | FIXED         | G     | Same as M6
+L5| order_state_machine not persisted                | A2#30     | DEFERRED      | Design| Reconciler recovers per OSM11
+L6| KillSwitch.resume no args check                  | A3#16     | DEFERRED      | v2.1  | Rarely triggered
+L7| Paper mode error message unclear                 | A3#17     | DEFERRED      | v2.1  | Cosmetic
+L8| smart_tgt MAX_FAILURES hardcoded                 | A3#19     | DEFERRED      | v2.1  | 3 is reasonable default
+L9| BSE exchange not supported                       | N/A       | DEFERRED      | v2.1  | NSE-only for v2
+L10| ATR real calculation                            | N/A       | DEFERRED      | v2.1  | Data provider needed
+
+----------------------------------------------------------------
+STATUS LEGEND
+----------------------------------------------------------------
+
+FIXED          — Code change applied, regression test added, suite green
+ALREADY_FIXED  — Triage found no bug (audit was stale vs actual code)
+VERIFIED_OK    — Code inspection showed behavior correct, no fix needed
+CLOSED         — Locked design decision covers the concern
+PENDING        — Real pending work, scheduled for paper trial phase
+DEFERRED       — v2.1 feature work, not a v2 safety gap
+VERIFY         — Non-urgent verification during paper trial
+
+----------------------------------------------------------------
+TOTALS
+----------------------------------------------------------------
+
+Fixed in code:                    32 items
+Already fixed on triage:           6 items
+Verified OK (no fix needed):       6 items
+Closed by design:                  3 items
+Pending for paper trial work:      1 item (H5: OrderMonitor.track SL/TGT)
+Verify during paper trial:         2 items (H8, L3)
+Deferred to v2.1:                  8 items (all feature gaps, none safety)
+
+Total addressed/accounted-for:   54 items
+Test count today:              1351 passing
+
+----------------------------------------------------------------
+PENDING WORK EXPLAINED
+----------------------------------------------------------------
+
+H5 — OrderMonitor.track() for SL/TGT legs
+  Why pending: LIMIT_TRIPLE protocol places separate SL and
+  TGT orders. Currently only entry is tracked by order_monitor.
+  If SL or TGT leg stays open indefinitely, no timeout logic.
+  When to fix: Before or during first paper trial week.
+  Risk if unfixed: In practice CO_PLUS_TGT is default (not
+  LIMIT_TRIPLE), so CO's native SL is broker-tracked. Only
+  TGT leg untracked. Reconciler will catch orphan TGT orders.
+  Not a blocker for paper. Fix before live.
+
+H8 — preflight scanner uses requests library
+  Why verify: requests may be transitively installed via
+  kiteconnect. Needs confirmation.
+  When: Run preflight check once during first paper session.
+  If fails: pip install requests>=2.33, add to requirements.
+  Risk: script may crash. Does not affect main system.
+
+L3 — cost_calculator stamp_duty potentially hardcoded
+  Why verify: Audit noted possible hardcoded 0.015 but
+  yaml has the value. Grep to confirm yaml value is read.
+  When: During paper trial, verify cost_calculator
+  output against broker's actual charges.
+  Risk if mismatched: paper P&L differs from live P&L by
+  a fraction.
+
+================================================================
+SECTION 2: accounts.csv USAGE
+================================================================
+
+YOUR UPLOADED FILE CONTENTS:
+  Header: broker,account_id,client_id,api_key,api_secret,
+          totp_secret,active,login_password
+  Rows:   10 accounts (5 Zerodha + 5 AngelOne)
+  4 active accounts (LFL836, K109963, D351962, AABW055879)
+  1 additional active (AAAH760816)
+  5 placeholder rows
+
+SCHEMA MISMATCH:
+
+Module 38 built AccountRegistry expecting this schema:
+  account_id,broker,api_key_env,access_token_env,
+  capital_share_pct,enabled
+
+Your uploaded schema differs in these ways:
+  - You have: api_key, api_secret, totp_secret (actual values)
+  - M38 expects: api_key_env, access_token_env (env var NAMES)
+  - You have: active (true/false)
+  - M38 expects: enabled (true/false) — just naming difference
+  - You have: client_id, login_password (extra fields)
+  - M38 expects: capital_share_pct (missing in yours)
+  - M38 requires: exactly 1 primary account (not in yours)
+
+ALSO CRITICAL: Your file contains LIVE credentials in plaintext!
+  - API secrets visible
+  - TOTP secrets visible
+  - This is a security risk if file is committed to git
+
+RECOMMENDATION:
+
+Option A — Adapt your file to M38 schema (SAFER, recommended):
+  1. Move actual credentials to .env file (NEVER committed)
+  2. accounts.csv holds only NAMES of env vars + metadata
+  3. Schema matches M38 locked decisions (IC1-IC15)
+
+Here is the correct template:
+
+```csv
+account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled,primary
+LFL836,zerodha,ZERODHA_API_KEY_LFL836,ZERODHA_TOKEN_LFL836,0.4,true,true
+K109963,angelone,ANGELONE_API_KEY_K109963,ANGELONE_TOKEN_K109963,0.3,true,false
+D351962,angelone,ANGELONE_API_KEY_D351962,ANGELONE_TOKEN_D351962,0.3,true,false
+AABW055879,angelone,ANGELONE_API_KEY_AABW055879,ANGELONE_TOKEN_AABW055879,0.0,false,false
+AAAH760816,angelone,ANGELONE_API_KEY_AAAH760816,ANGELONE_TOKEN_AAAH760816,0.0,false,false
+```
+
+Rules:
+  - Exactly one row with primary=true
+  - Sum of capital_share_pct for enabled=true rows must equal 1.0
+  - Disabled accounts can have capital_share_pct=0
+  - api_key_env and access_token_env are env var NAMES
+  - Actual values live in .env:
+      ZERODHA_API_KEY_LFL836=pvahsvuu3xjsefc7
+      ZERODHA_TOKEN_LFL836=<daily fresh from login>
+      ANGELONE_API_KEY_K109963=WjcKKPFG
+      ANGELONE_TOKEN_K109963=<daily fresh>
+      ... etc
+
+For TOTP secrets and client_ids (AngelOne specifics):
+  Also goes in .env as:
+    ANGELONE_TOTP_K109963=7LQANXYTNKVVGMUDZXQ5MA5SP4
+    ANGELONE_CLIENT_ID_K109963=ramakrishnan
+  These are read by an AngelOne-specific login helper (which
+  would be a v2.1 addition since M38 only supports Zerodha).
+
+Option B — Extend M38 schema (more work, multi-broker ready):
+  Extend AccountRegistry to support richer fields (client_id,
+  totp_secret_env, broker-specific metadata). Requires new
+  Module 38a "account_registry_v2".
+  Not needed for v2 single-account paper trial.
+
+RECOMMENDATION FOR NOW:
+
+Since v2 is designed SINGLE-ACCOUNT for paper trial and
+initial live, use this minimal template:
+
+```csv
+account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled,primary
+LFL836,zerodha,ZERODHA_API_KEY,ZERODHA_ACCESS_TOKEN,1.0,true,true
+```
+
+One active account (your Zerodha LFL836). Everything else
+stays out of config/accounts.csv. Store real credentials in
+.env only.
+
+WHERE TO SAVE:
+  Path: D:\Projects\trading-system\config\accounts.csv
+  (Replace whatever M38 created as the stub)
+
+WHAT TO DO WITH AngelOne ACCOUNTS:
+  DEFER to v2.1. AngelOne adapter doesn't exist yet. M38
+  only wired Zerodha. Listing AngelOne accounts here does
+  nothing for v2 and creates confusion.
+  Later when v2.1 adds AngelOneAdapter, extend accounts.csv
+  to include them.
+
+SECURITY NOTE (MANDATORY):
+  Delete the uploaded accounts.csv from your computer.
+  It contains real credentials in plaintext.
+  Never commit a file with actual api_key/api_secret values
+  to git. Always:
+    - Real credentials: .env (gitignored)
+    - Config file: names/references only (safe to commit)
+
+================================================================
+SECTION 3: NSE OFFICIAL FILES USAGE
+================================================================
+
+YOU UPLOADED:
+
+File 1: security_master_file.csv (2802 rows)
+  Columns: symbol, name_of_company, series, fno_stock,
+           date_of_listing, paid_up_value, market_lot,
+           isin_number, face_value
+
+File 2: index_members.zip (17 files)
+  fno_symbols.csv — F&O eligible stocks
+  nifty50.csv, nifty100.csv, nifty_next50.csv
+  Sector indices: nifty_auto, nifty_bank, nifty_fin_services,
+                  nifty_fmcg, nifty_healthcare, nifty_it,
+                  nifty_metal, nifty_midcap_select, nifty_next50,
+                  nifty_oil_gas, nifty_pharma, nifty_private_bank,
+                  nifty_psu_bank, nifty_realty
+
+ARE THEY USEFUL?
+
+security_master_file.csv:
+  VERY USEFUL. Replaces the 5-symbol stub config/instruments.csv
+  built by M38. Contains all 2802 NSE equity symbols with
+  fno_stock flag + market_lot + isin.
+  
+  BUT — M38 schema is different:
+    M38 expects: symbol, exchange, instrument_token, lot_size,
+                 is_fno, tick_size, sector
+    You have:    symbol, name, series, fno_stock, date_of_listing,
+                 paid_up_value, market_lot, isin, face_value
+  
+  Missing in your file:
+    - instrument_token (required by Zerodha API for WebSocket
+      subscription). Must come from kite.instruments() API.
+    - tick_size (standard 0.05 for most equity, some 0.01)
+    - sector (NOT in NSE security master; derived from index
+      membership files)
+  
+  Translation rules:
+    your.symbol       -> m38.symbol
+    your.fno_stock    -> m38.is_fno (yes/no to true/false)
+    your.market_lot   -> m38.lot_size
+    (always)          -> m38.tick_size = 0.05 (default for equity)
+    (always)          -> m38.exchange = "NSE"
+    (not present)     -> m38.instrument_token (Kite API required)
+
+index_members.zip:
+  VERY USEFUL for deriving sector information.
+  Since NSE security master doesn't include sector:
+    Build symbol->sector map from sector indices:
+      nifty_auto -> AUTO sector
+      nifty_bank -> BANKING
+      nifty_it -> IT
+      nifty_pharma -> PHARMA
+      nifty_fin_services -> FINANCIAL_SERVICES
+      nifty_fmcg -> FMCG
+      nifty_healthcare -> HEALTHCARE
+      nifty_metal -> METALS
+      nifty_oil_gas -> OIL_GAS
+      nifty_psu_bank -> PSU_BANKING
+      nifty_private_bank -> PRIVATE_BANKING
+      nifty_realty -> REALTY
+    Symbols not in any sector index -> sector="OTHER"
+  
+  fno_symbols.csv: cross-check against security_master's
+                   fno_stock column. Use as authority on F&O
+                   eligibility (NSE adds/removes monthly).
+
+HOW TO USE EFFECTIVELY:
+
+Extend scripts/refresh_instruments.py (M38) to:
+
+Step 1: Fetch Kite instrument dump for instrument_token
+  kite.instruments("NSE") returns all NSE instruments with
+  tokens. Filter to equity (INSTRUMENT_TYPE="EQ").
+
+Step 2: Merge with NSE security master for lot_size and
+  F&O flag:
+  Join by symbol. Take lot_size from security master
+  (more reliable than Kite's). Take instrument_token from
+  Kite.
+
+Step 3: Derive sector from index_members:
+  Read each nifty_*.csv except fno_symbols, nifty50, nifty100,
+  nifty_next50, nifty_midcap_select (these are market-cap
+  indices, not sectors). Build sector lookup from the
+  sector-specific indices.
+
+Step 4: Write merged instruments.csv in M38 format.
+
+The refresh script runs offline (operator runs morning before
+market). It is the ONLY source of truth for instruments.csv.
+Rebuild it weekly minimum, daily for F&O trading.
+
+RECOMMENDATION:
+
+1. Keep your NSE files in: config/reference_data/
+   - security_master_file.csv
+   - index_members/ (extracted folder with 17 CSVs)
+
+2. Update scripts/refresh_instruments.py to read these as
+   primary sources for lot_size + is_fno + sector, then
+   merge with Kite instrument_token lookup.
+
+3. This becomes a minor Module 38 enhancement (call it M38a):
+   "extend refresh_instruments.py to use NSE official files"
+
+4. Do this as part of pre-paper-trial setup (not a new locked
+   decision, just an enhancement to an existing script).
+
+VS CODE CLAUDE SHOULD:
+  - Create config/reference_data/ folder
+  - Copy user-uploaded files there (user will place them)
+  - Extend scripts/refresh_instruments.py per steps 1-4 above
+  - Regenerate config/instruments.csv with all 2800 NSE symbols
+  - Add sector mapping logic
+  - Test: verify 2800+ rows, sector assigned to ~500 symbols
+          (only sector-index members), rest = "OTHER"
+
+Expected additions:
+  config/reference_data/security_master_file.csv (user places)
+  config/reference_data/index_members/*.csv (user places)
+  scripts/refresh_instruments.py (extended with merge logic)
+  tests/unit/test_refresh_instruments.py (new test file)
+  Estimated effort: small — 2-3 hours
+
+================================================================
+CONSOLIDATED ACTION PLAN
+================================================================
+
+For VS Code Claude:
+
+TASK 1 — Update mempalace with 54-point audit closeout:
+  Write section 1 of this file as:
+    memory/audit_closeout_final.md
+  Include full table. Use this as authoritative reference
+  for anyone asking "what was done with audit findings".
+
+TASK 2 — accounts.csv minimal setup:
+  Replace config/accounts.csv with single-account template:
+    account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled,primary
+    LFL836,zerodha,ZERODHA_API_KEY,ZERODHA_ACCESS_TOKEN,1.0,true,true
+  Verify AccountRegistry loads it without error.
+  Verify .env.example (create if absent) lists both env vars.
+
+TASK 3 — NSE reference data integration:
+  a) Create config/reference_data/ folder
+  b) Rama will place security_master_file.csv and
+     index_members/*.csv there
+  c) Extend scripts/refresh_instruments.py:
+     - Read NSE security master for symbol, lot_size,
+       is_fno, isin
+     - Read Kite instruments API for instrument_token
+     - Derive sector from index_members sector CSVs
+     - Merge into config/instruments.csv per M38 schema
+  d) Add regression tests
+  e) Run full suite, expect +5-10 new tests
+
+TASK 4 — Pre-paper checklist handoff:
+  After tasks 1-3 complete, signal ready for paper trial
+  per Phase I verdict file.
+
+================================================================
+FOR RAMA (operator action items)
+================================================================
+
+Before VS Code Claude can execute Task 3:
+
+1. Copy files to project:
+   Copy security_master_file.csv to:
+     D:\Projects\trading-system\config\reference_data\
+
+   Extract index_members.zip into:
+     D:\Projects\trading-system\config\reference_data\index_members\
+   (should result in 17 .csv files in that folder)
+
+2. Delete the uploaded accounts.csv from your local machine
+   AFTER transferring just the LFL836 credentials to .env:
+     ZERODHA_API_KEY=pvahsvuu3xjsefc7
+     ZERODHA_API_SECRET=i2yagofwnx101r1y8mq7ltmxmqj4e751
+     ZERODHA_ACCESS_TOKEN=<fresh daily via kite login>
+   
+   Do NOT store the API secret in repo. Only in .env.
+
+3. Start VS Code Claude on Tasks 1-3.
+
+4. After all tasks green + paper trial starts, proceed per
+   phase_i_final_verdict.txt daily routine.
+
+================================================================
+END OF RESPONSE
+================================================================

@@ -1,0 +1,6 @@
+symbol,instrument_token,exchange,lot_size,tick_size,is_fno,sector
+RELIANCE,738561,NSE,1,0.05,false,ENERGY
+TCS,2953217,NSE,1,0.05,false,IT
+INFY,408065,NSE,1,0.05,false,IT
+HDFCBANK,341249,NSE,1,0.05,false,FINANCIALS
+SBIN,779521,NSE,1,0.05,false,FINANCIALS

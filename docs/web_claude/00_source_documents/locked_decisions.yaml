@@ -1,0 +1,451 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Trading System v2 — Locked Design Decisions
+# ──────────────────────────────────────────────────────────────────────────────
+# Single source of truth for every design decision made during the v2 design
+# review. Every entry here is referenced from the consolidated spec document.
+#
+# DO NOT modify this file casually. Each decision was made deliberately after
+# weighing alternatives. If a decision needs to change, document the reason
+# and the new alternatives considered.
+#
+# Format:
+#   <category>:
+#     <id>:
+#       title: short label
+#       decision: the locked answer
+#       rationale: why this won, in one or two sentences
+#       alternatives_considered: list of options that were rejected
+#       affects: list of modules/files this decision shapes
+#
+# ──────────────────────────────────────────────────────────────────────────────
+
+meta:
+  document_version: "1.0"
+  created: "2026-04-14"
+  total_decisions: 31
+  status: "LOCKED — consolidated spec is the authoritative interpretation"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G — V2 DESIGN GAPS (10 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+design_gaps:
+
+  G1:
+    title: "Broker reconciliation contract"
+    decision: "Hybrid cadence (every 30s + on every state-change event) + 6 checks (manual close / orphan adoption / healthy / partial close / position grew / orphan order) + 3-tier action policy (cosmetic→ignore, recoverable→auto-fix, unrecoverable→halt)"
+    rationale: "Periodic catches drift you didn't trigger; event-driven catches your own actions immediately. Six checks cover all possible (broker, local) state combinations. Three tiers prevent overreaction to noise and underreaction to real drift."
+    alternatives_considered:
+      - "30s periodic only with 6 checks + 3-tier action"
+      - "30s periodic only with 4 checks + halt-on-any-mismatch"
+    affects:
+      - "orders/order_reconciler.py"
+      - "core/state_store.py"
+      - "capital/fund_manager.py"
+
+  G2a:
+    title: "Three-ID lifecycle model"
+    decision: "signal_id assigned at webhook receipt (one per symbol per webhook); trade_id assigned at capital reservation success; order_id from broker on placement. signal_id → trade_id is 1:1 when committed; trade_id → order_id is 1:N (entry, SL, TGT, modifications)"
+    rationale: "Three different needs (audit, dedup, broker reference) require three different IDs. Conflating them is the root cause of the existing system's lack of traceability."
+    alternatives_considered:
+      - "Single trade_id assigned at webhook (insufficient for dedup)"
+      - "signal_id only, broker order_id reused as trade_id (loses lifecycle continuity)"
+    affects:
+      - "signals/webhook_receiver.py"
+      - "signals/signal_processor.py"
+      - "orders/order_manager.py"
+      - "core/state_store.py (signals/trades/orders tables)"
+
+  G2b:
+    title: "Scaling entry trade_id model (when implemented)"
+    decision: "Single trade_id with multiple legs. Each leg is a row in the orders table with leg_index. The trades row tracks total_qty_planned vs total_qty_filled."
+    rationale: "Scaling entries are conceptually one position with a blended entry. Per-leg trade_ids would defeat the purpose."
+    alternatives_considered:
+      - "One trade_id per leg (option β)"
+      - "trade_group_id + per-leg trade_id (option γ)"
+    affects:
+      - "orders/scaling_engine.py (v2.1, deferred)"
+
+  G3:
+    title: "Capital invariant enforcement"
+    decision: "Levels 1+2 implemented in the v2 codebase: Level 1 = anchored Python invariant check (margin_available + margin_reserved + margin_used = cash_floor + min(0, realized_intraday_pnl)) called inside every capital-mutating transaction; Level 2 = transactional capital_ledger writes wrapping every state change. Level 3 (broker drift detection) lives in G1's reconciler — not duplicated here."
+    rationale: "Anchored invariants catch drift bugs. Transactional ledger writes make it impossible to mutate capital without an audit trail. Avoiding duplication with G1 is the cleaner architecture."
+    alternatives_considered:
+      - "All 3 levels here, duplicating Level 3 with G1"
+      - "SQL trigger-based invariant (rejected: subtle bugs, hidden logic)"
+    affects:
+      - "capital/fund_manager.py"
+      - "core/state_store.py"
+
+  G4:
+    title: "Clock and time source"
+    decision: "Hybrid clock: VM clock as runtime source (all now() calls), broker clock validated periodically via existing API call timestamps. Four-tier skew thresholds: <2s normal; 2-5s warn; 5-30s alert + continue trading; >30s halt. Startup NTP check refuses to start if skew >30s."
+    rationale: "Per-call broker time is too slow. Pure VM clock is unsafe. Hybrid gets fast reads with cheap validation. Tiered thresholds avoid false halts on micro-drift."
+    alternatives_considered:
+      - "VM clock only + startup NTP (rejected: no runtime drift detection)"
+      - "Hybrid + log-only on skew (rejected: turns a safety check into a notification)"
+    affects:
+      - "core/time_authority.py"
+      - "every module that calls now()"
+
+  G5a:
+    title: "Four-scenario startup model"
+    decision: "Cold start (new trading day) / Warm restart (clean stop, same day) / Crash recovery (no clean shutdown marker) / Halt restart (kill_switch fired). Each scenario runs a different startup procedure. Detection via system_events table + kill_switch state + session_date comparison."
+    rationale: "These four scenarios have different correctness requirements. Treating them as one path is the existing system's biggest recovery bug source."
+    alternatives_considered:
+      - "Two scenarios (cold = new day, everything else = recovery)"
+    affects:
+      - "main.py"
+      - "utils/startup_checks.py"
+      - "orders/order_reconciler.py"
+
+  G5b:
+    title: "Crash recovery: orphan position with no broker SL"
+    decision: "Place fresh SL at last DB-known SL level, BUT only if current LTP is on the favorable side of that SL. If price has already crossed the SL on the wrong side, place an immediate MARKET exit instead of a fresh SL it would trip instantly."
+    rationale: "Defensive — assume the position is still tradeable when safe to do so, exit immediately when not."
+    alternatives_considered:
+      - "Always place fresh SL (rejected: can trip immediately)"
+      - "Always MARKET exit (rejected: takes unnecessary slippage)"
+      - "Halt and require manual decision (rejected: too operationally heavy)"
+    affects:
+      - "orders/order_reconciler.py"
+
+  G5c:
+    title: "Restart after kill_switch halt — manual --resume requirement"
+    decision: "Halt-type dependent. hard_kill ALWAYS requires manual --resume flag. soft_kill auto-resumes on next startup IF the original triggering condition has cleared (e.g., API now reachable, daily_loss reset because new day)."
+    rationale: "hard_kill is 'rules were broken' (manual review). soft_kill is 'transient condition' (self-healing when condition clears)."
+    alternatives_considered:
+      - "Always require --resume after any halt"
+      - "Always auto-resume"
+    affects:
+      - "utils/kill_switch.py"
+      - "main.py"
+
+  G6:
+    title: "Live feed reconnection and candle gap handling"
+    decision: "Detection via WebSocket events + 60s heartbeat. On gap detected: discard partially-built candles. Backfill the cache via REST historical API for missed minutes (don't re-fire smart_tgt callbacks for those bars). Recompute trail SL once on reconnect from current candle history. Alert if gap > 10 minutes."
+    rationale: "Smart TGT must not act on bars that already happened — that's making decisions in the past. But the cache needs the data so future calculations have correct context. Recompute-once handles the worst case where trail should have moved during the gap."
+    alternatives_considered:
+      - "WebSocket events only, no backfill (smart_tgt accepts the gap)"
+      - "Full backfill including firing callbacks on missed bars"
+    affects:
+      - "data/live_feed_manager.py"
+      - "orders/smart_tgt_manager.py"
+
+  G7:
+    title: "Broker rate limit handling"
+    decision: "Client-side token bucket per endpoint category (order: 8 burst/8/sec, quote: 1/1, historical: 2/2, margins: 8/8). Wraps every broker call. 4-step backoff on 429: 1s/5s/30s/soft_kill. Limits in config/broker_limits.yaml."
+    rationale: "Buckets prevent 429s by construction. Backoff handles the cases where buckets are mistuned. Soft_kill on persistent 429s catches systemic problems."
+    alternatives_considered:
+      - "Bucket only, no backoff"
+      - "Backoff only, no bucket"
+    affects:
+      - "broker/rate_limiter.py (new)"
+      - "broker/zerodha_adapter.py"
+
+  G8:
+    title: "Alert fallback (no single point of failure)"
+    decision: "Four alert tiers (INFO/WARN/ERROR/CRITICAL). INFO/WARN drop on Telegram failure. ERROR writes to failed_alerts.log on Telegram failure. CRITICAL ALWAYS writes a sentinel file at data_store/critical_alert_<id>.flag. A separate systemd timer runs scripts/alert_watcher.py every 60s — finds sentinel files and sends email via SMTP independently. Renames flag to .delivered on success."
+    rationale: "Telegram is single point of failure for alerts. The watcher pattern survives the trading process crashing because it's a separate process."
+    alternatives_considered:
+      - "Sentinel file only, no email watcher"
+      - "Inline email + Telegram in trading process"
+    affects:
+      - "alerts/telegram_notifier.py"
+      - "alerts/critical.py (new)"
+      - "scripts/alert_watcher.py (new)"
+
+  G9:
+    title: "Inter-module communication architecture"
+    decision: "Direct function calls everywhere by default. Tiny EventBus in core/events.py (~80 lines) reserved ONLY for 4 fan-out events: OrderFilled, PositionClosed, KillSwitchActivated, CapitalDriftDetected. Every other inter-module call is a direct import + call."
+    rationale: "Direct calls give debuggable stack traces 95% of the time. EventBus only earns its complexity on genuine fan-out (3+ subscribers reacting to the same event)."
+    alternatives_considered:
+      - "Full EventBus everywhere (rejected: unreadable stack traces, hidden coupling)"
+      - "No EventBus at all (close call, slightly more verbose for fan-out)"
+    affects:
+      - "core/events.py (new, minimal)"
+      - "every module's import structure"
+
+  G10:
+    title: "Scaling entry (40/30/30): build vs defer"
+    decision: "EntryEngine abstraction with entry_mode config field. FullEntryEngine implementation in v2 (single-shot only). ScalingEntryEngine reserved as sibling class for v2.1. Schema includes leg_index from day one (FULL always writes leg_index=0). Switching modes later is a config change + new class, no schema migration."
+    rationale: "Restarted 3 times — v2 needs to be smaller than instinct. The abstraction makes adding scaling later additive, not destructive. Live single-shot data is needed before deciding whether scaling is real edge."
+    alternatives_considered:
+      - "Build scaling in v2 (rejected: complexity compounds, audit count grows)"
+      - "Plain single-shot, no abstraction (rejected: future migration becomes refactor)"
+    affects:
+      - "orders/entry_engine.py (abstract)"
+      - "orders/full_entry_engine.py"
+      - "core/state_store.py (orders.leg_index column)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Q — PRODUCT-LEVEL CONFIRMATIONS (3 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+product:
+
+  Q1:
+    title: "max_open_positions value"
+    decision: "Configurable via config/system_config.yaml. Default value: 10."
+    rationale: "Operator should see this clearly, not have it buried as a constant. 10 matches user's actual risk appetite."
+    affects:
+      - "config/system_config.yaml"
+      - "capital/risk_engine.py"
+
+  Q2:
+    title: "Database and secrets encryption"
+    decision: "NO ENCRYPTION ANYWHERE in the system. Plain SQLite database. Plain text secrets in .env (never committed via .gitignore). This is a project-wide principle, not a per-component decision."
+    rationale: "SQLCipher and Fernet add operational pain (key management, debugging difficulty, backup encryption) for a system whose database contains nothing more sensitive than what's already in .env. The .env + .gitignore approach is sufficient."
+    alternatives_considered:
+      - "SQLCipher with key in .env"
+      - "Fernet for secrets, plain DB"
+    affects:
+      - "core/state_store.py"
+      - "utils/secrets_manager.py"
+      - "all secret loading code"
+
+  Q3:
+    title: "AI/LLM daily trade review"
+    decision: "Deferred to v2.1. Trade log structure in v2 will be designed to make later LLM integration a 50-line script."
+    rationale: "Orthogonal to live trading correctness. Build the structured trade log well in v2; bolt on LLM later."
+    affects:
+      - "reports/trade_logger.py (designed for future LLM consumption)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# P — ARCHITECTURE REVIEW POINTS (18 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+architecture_review:
+
+  P1:
+    title: "Trading hours window"
+    decision: "Entry order window: 09:30 - 13:30 IST. EOD square-off: 15:17 IST. All times sourced from core/market_windows.py — single source of truth, no hardcoded times anywhere else. Configurable via config/system_config.yaml."
+    rationale: "User explicitly specified 09:30-13:30 (avoids first 15min noise, avoids EOD chaos). 15:17 gives 3min buffer before Zerodha RMS auto-square-off at 15:20."
+    affects:
+      - "core/market_windows.py"
+      - "data/market_hours_guard.py"
+      - "orders/eod_squareoff.py"
+
+  P2:
+    title: "Config Honor Principle"
+    decision: "Every numeric/boolean limit in config MUST have: (a) runtime check that enforces it, (b) Telegram alert when reached or breached, (c) daily report row showing whether it was hit. NO 'namesake' config values. New section in CLAUDE.md called 'Config Honor Principle'."
+    rationale: "Existing system has multiple config values that exist for documentation but aren't enforced (max_trades_per_day, etc.). v2 enforces this as a principle."
+    affects:
+      - "CLAUDE.md (new section)"
+      - "every module that reads config"
+
+  P3:
+    title: "Pre-check before adding/modifying anything"
+    decision: "Phase 0 of every code change: search the repo for the concept name and similar names; report what exists; only then propose the change. Promoted from Foundation Rule 3.3 to literal first step in CLAUDE.md."
+    rationale: "Existing system has dead app/ tree (38 stub files), parallel implementations (two fund_managers, two quality_scorers), and competing sizing paths. All caused by skipping the duplicate prevention check."
+    affects:
+      - "CLAUDE.md (Phase 0 mandate)"
+
+  P4:
+    title: "max_trades_per_day enforcement"
+    decision: "Hard limit. Telegram warning at 80% of limit. Blocking alert + signal rejection at 100%. Daily report row shows whether limit was hit. Same Config Honor Principle from P2."
+    rationale: "Currently namesake."
+    affects:
+      - "signals/signal_processor.py"
+      - "capital/risk_engine.py"
+
+  P5:
+    title: "max_open_positions and max_trades enforcement"
+    decision: "Same enforcement as P4. Both checks happen in capital/risk_engine.py, NOT in the broken paper_engine import path that exists today. Live mode and paper mode use the same code path."
+    rationale: "Currently the live mode position cap is silently disabled because the check imports from paper_engine."
+    affects:
+      - "capital/risk_engine.py"
+      - "signals/signal_processor.py"
+
+  P6:
+    title: "Re-entry duplicate definition"
+    decision: "Duplicate = same scanner_name AND same trigger_minute (1-minute resolution). Different scanner OR different minute = new signal, allowed through screening. Fingerprint = hash(scanner_name + symbol + triggered_at_minute). Stored in signals table; uniqueness enforced at INSERT."
+    rationale: "Chartink's 'send duplicate notifications' setting causes retries — these should be absorbed as duplicates. Different scanners or different minutes represent genuine new setups."
+    affects:
+      - "signals/webhook_receiver.py"
+      - "signals/signal_validator.py"
+      - "core/state_store.py (signals table unique index)"
+
+  P7a:
+    title: "Capital model: 3-balance with T+1 settlement"
+    decision: "Three balances tracked: cash_floor (broker-settled cash, withdrawable), realized_pnl_today (today's net P&L from closed trades, can be ±), margin_used (sum of qty × entry × 0.20 across open positions). Tradable balance = cash_floor + min(0, realized_pnl_today) — losses count today, profits don't until T+1. Charges deducted from realized_pnl, never from margin. NO margin_multiplier as a balance multiplier."
+    rationale: "Verified from Zerodha docs: intraday profits not tradable until T+1 settlement. Existing system's effective = cash × 5 model is broker-incorrect and produces silent over-allocation."
+    affects:
+      - "capital/fund_manager.py"
+      - "core/state_store.py (capital_snapshot, capital_ledger tables)"
+      - "capital/cost_calculator.py"
+
+  P8_P13:
+    title: "Order architecture: CO + LIMIT TGT with fallback"
+    decision: "Architecture B. CO order (built-in entry+SL bracket) + separate LIMIT TGT. Two broker order_ids per trade instead of three. order_protocol field per strategy YAML: 'CO_PLUS_TGT' default, 'LIMIT_TRIPLE' fallback when stock has CO blocked. Smart TGT modifies CO trigger_price for trail SL (not cancel-replace)."
+    rationale: "CO eliminates the entry-to-SL window race condition atomically. CO does NOT save margin (verified: 20% for both MIS and CO since Sept 2021), but the structural simplicity is worth it. Separate TGT keeps target enforced at broker (survives system crashes)."
+    alternatives_considered:
+      - "Architecture C — CO only, smart_tgt closes at TGT price (loses crash-safety on TGT)"
+      - "Architecture A — current LIMIT_TRIPLE (3 orders, more race conditions)"
+    affects:
+      - "orders/order_placer.py"
+      - "orders/smart_tgt_manager.py"
+      - "config/strategies/*.yaml (order_protocol field)"
+      - "broker/zerodha_adapter.py"
+
+  P11a:
+    title: "Pullback confirmation: price-based, per-strategy opt-in"
+    decision: "Price-based pullback wait, NOT time-based. Worker thread polls LTP every 5s. Fires entry only when price has retraced to entry_price ± tolerance. Tolerance configurable per strategy in strategy YAML (pullback_tolerance_pct). Hard timeout (configurable, default 180s). Only applies to strategies that opt in via pullback_wait: enabled in their YAML."
+    rationale: "Time-based wait blocked the signal queue. Price-based is more responsive. Per-strategy opt-in respects that some strategies (gap fade, first pullback) shouldn't wait."
+    affects:
+      - "orders/entry_gate.py"
+      - "config/strategies/*.yaml (pullback_wait section)"
+
+  P11b:
+    title: "Entry order fill timeout"
+    decision: "Hybrid timeout: order_fill_timeout: { limit: 60, market: 0 }. On timeout: cancel order, mark trade as FAILED (not PARTIAL). On partial fill at timeout: force-exit the filled portion at MARKET, mark trade as FULLY FAILED, release all reserved capital."
+    rationale: "All-or-nothing semantics. Partial fills create unclear risk math."
+    affects:
+      - "orders/order_placer.py"
+      - "config/system_config.yaml"
+
+  P12:
+    title: "Paper-live parity: charges and slippage"
+    decision: "Identical cost_calculator applied in both paper and live modes. All rates in config/broker_costs.yaml. Slippage configurable per stock liquidity tier in config/slippage_model.yaml (default 5bps for liquid, more for mid/small caps). Paper mode applies slippage to fills. Daily report rows match contract notes within rounding."
+    rationale: "Existing paper engine has zero cost or slippage simulation. Paper P&L is therefore fictional. P12 is non-negotiable correctness requirement."
+    affects:
+      - "capital/cost_calculator.py"
+      - "paper/paper_engine.py"
+      - "config/broker_costs.yaml"
+      - "config/slippage_model.yaml"
+
+  P14:
+    title: "Polling intervals: 30s → 15s"
+    decision: "order_monitor poll interval: 15s (down from 30s). order_reconciler poll interval: 15s (down from 30s). Both configurable in config/system_config.yaml."
+    rationale: "Faster orphan detection. Within Zerodha rate limits with G7 token bucket."
+    affects:
+      - "orders/order_monitor.py"
+      - "orders/order_reconciler.py"
+      - "config/system_config.yaml"
+
+  P15:
+    title: "Signal queue size: 200 → 300"
+    decision: "Default queue capacity raised to 300. Backpressure (HTTP 503) still fires at 80% capacity = 240."
+    rationale: "Bigger buffer before backpressure. No technical objection."
+    affects:
+      - "signals/signal_queue.py"
+      - "config/system_config.yaml"
+
+  P16:
+    title: "Complete signal handling visibility"
+    decision: "Every signal_id assigned at webhook gets a final status before the system 'forgets' it. Statuses: TRADED, REJECTED_DUP, REJECTED_EXPIRED, REJECTED_SCREEN, REJECTED_RISK, REJECTED_CAPITAL, REJECTED_KILL, REJECTED_GATE, REJECTED_MARKET_HOURS, REJECTED_MAX_TRADES, REJECTED_MAX_POSITIONS, DROPPED_IN_FLIGHT, DROPPED_QUEUE_FULL. Every status writes a row to signals table with timestamp and reason. Daily report has signal funnel sheet."
+    rationale: "Currently many signals vanish silently. Operator visibility is essential for debugging strategy drift."
+    affects:
+      - "signals/webhook_receiver.py"
+      - "signals/signal_processor.py"
+      - "core/state_store.py (signals table)"
+      - "reports/daily_review.py"
+
+  P17:
+    title: "Pre-flight scanner check"
+    decision: "Lightweight check at startup: (a) all 15 Chartink scanner URLs reachable via HTTP HEAD, (b) scan_webhook_map.yaml maps every scanner to a valid existing strategy YAML, (c) own webhook endpoint reachable via local /health curl, (d) no duplicate scanner names in scan_webhook_map.yaml. CRITICAL on any failure. NOT parsing Chartink scan conditions (too brittle)."
+    rationale: "Catches the most common failure modes (scanner deleted, URL changed, duplicate config, Flask not bound) without taking on Chartink HTML parsing brittleness."
+    affects:
+      - "utils/startup_checks.py"
+      - "scripts/preflight_scanner_check.py (new)"
+
+  P18:
+    title: "Secondary screener explicit pass/skip/drop"
+    decision: "Every signal entering the screener leaves with one of: PASSED, REJECTED_<step>, SKIPPED_<reason>. The <step> matches the 10 screener step names so funnel report shows which step kills most signals. NO silent drops or 'log and continue' on step exceptions."
+    rationale: "Currently a step exception bypasses the gating logic entirely (try/except continue). Funnel visibility is essential for tuning."
+    affects:
+      - "screening/secondary_screener.py"
+      - "core/state_store.py"
+      - "reports/daily_review.py"
+
+  P9a:
+    title: "secondary_screener scope: keep + fix bugs + add missing checks"
+    decision: "Keep all 10 current steps. Fix critical bugs: (a) exception bypass at line 121 (any step exception = REJECTED_STEP_ERROR), (b) SHORT direction blindness in step 3 (vwap) and _calculate_prices (entry trigger), (c) Step 1 'allow through' on insufficient data → REJECTED_INSUFFICIENT_DATA, (d) two competing sizing paths consolidated. ADD missing checks: (1) signal age check (reject if now - signal.triggered_at > 90s), (2) circuit state check via kite.quote() (reject if upper/lower circuit hit), (3) per-step latency tracking in debug log."
+    rationale: "Keep the trading-edge logic; fix the engineering bugs that make the gating unreliable."
+    affects:
+      - "screening/secondary_screener.py"
+      - "screening/step_executor.py (new)"
+
+  P9b:
+    title: "Screener score weights config-driven"
+    decision: "All weights, thresholds, and tier boundaries in config/scoring_weights.yaml. NO scattered constants in screener code. Hot-reload not required (restart loads new config)."
+    rationale: "Current weights are arbitrary integers (5, 10, 15, 8) scattered across functions. No documented reasoning. Config makes them tunable without code edits — essential for v2.1 A/B testing once live data is available."
+    affects:
+      - "screening/secondary_screener.py"
+      - "screening/quality_scorer.py"
+      - "config/scoring_weights.yaml (new)"
+
+  P10:
+    title: "position_sizer: 4-layer model with binding-layer logging"
+    decision: "Single position_sizer module (delete _calculate_qty in signal_processor). Four layers: L1 risk-based (risk_amount / sl_distance), L2 per-trade cap ((cash_floor × max_usage%) / max_trades), L3 portfolio risk cap ((portfolio_risk_remaining) / sl_distance), L4 margin cap ((tradable_balance × leverage) / entry_price). Final = min(L1,L2,L3,L4) × tier_multiplier × time_of_day_multiplier. Binding layer logged for every trade. Daily report shows binding layer distribution."
+    rationale: "L4 is the broker constraint that the existing 3-layer model misses. Binding-layer logging tells you which constraint is limiting your trading the most — actionable signal."
+    affects:
+      - "capital/position_sizer.py"
+      - "signals/signal_processor.py (calls position_sizer)"
+      - "reports/daily_review.py (binding layer sheet)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CROSS-CUTTING PRINCIPLES
+# ══════════════════════════════════════════════════════════════════════════════
+
+principles:
+
+  no_encryption:
+    statement: "No encryption anywhere in the system."
+    scope: "Database, secrets, logs, backups, files in transit between PC and VM (SSH key auth is not 'encryption of data', it's transport security and is allowed)."
+    rationale: "Q2 decision. Operational simplicity for a single-developer system whose data sensitivity is bounded by .env contents."
+
+  config_honor_principle:
+    statement: "Every limit in config must be enforced AND alerted AND reported."
+    scope: "All numeric, boolean, time, and threshold values in config/*.yaml."
+    rationale: "P2 decision. No 'namesake' config values."
+
+  broker_is_truth:
+    statement: "The broker is the source of truth for orders, positions, and capital. Local state is a cache, refreshed on every event, with invariants checked on every refresh."
+    scope: "All capital, position, and order tracking."
+    rationale: "Project-specific rule already documented; v2 actually implements it (existing system inverted it)."
+
+  fail_fast_no_silent:
+    statement: "Every exception must either be logged with full traceback AND raised, OR explicitly handled with documented recovery. NO bare except, NO try/except/log/continue patterns that swallow errors."
+    scope: "Every .py file."
+    rationale: "Foundation Rule 1.6 + Rule 4. Existing system has ~40 try/except/pass sites that produce silent data corruption."
+
+  pre_check_before_change:
+    statement: "Before adding or modifying any file/code, search the repo for the concept name and similar names. Report what exists. Only then propose the change."
+    scope: "Every code change in v2 development and beyond."
+    rationale: "P3 decision. Promoted Foundation Rule 3.3 to mandatory Phase 0."
+
+  identity_traceability:
+    statement: "Every log line and report row that involves a trade activity must carry signal_id, trade_id, and order_id (when applicable)."
+    scope: "All logging output, all trade-related database rows, all Telegram alerts referencing trades."
+    rationale: "Project-specific rule + G2 decision. Existing system has zero traceability — debugging a losing day requires this."
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OUT OF SCOPE FOR V2 (Explicitly deferred)
+# ══════════════════════════════════════════════════════════════════════════════
+
+deferred_to_v2_1:
+
+  - feature: "Scaling entry (40/30/30 multi-leg)"
+    decision_ref: "G10"
+    note: "Schema and EntryEngine abstraction in v2; logic deferred"
+
+  - feature: "AI/LLM daily trade review"
+    decision_ref: "Q3"
+    note: "Trade log structured for later consumption"
+
+  - feature: "Backtesting harness"
+    decision_ref: "Earlier discussion"
+    note: "Build only after v2 is live and stable; otherwise risks false-confidence backtest"
+
+  - feature: "Multi-broker routing"
+    decision_ref: "Architectural"
+    note: "Broker abstraction in place, AngelOne adapter not built"
+
+  - feature: "SQLCipher / database encryption"
+    decision_ref: "Q2"
+    note: "Permanently deferred per project principle"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# END OF LOCKED DECISIONS
+# ══════════════════════════════════════════════════════════════════════════════

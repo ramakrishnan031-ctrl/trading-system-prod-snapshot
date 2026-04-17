@@ -1,0 +1,531 @@
+================================================================
+MODULES 38 + 39 + 40 — Final additions before paper trial
+================================================================
+
+Cleanup already done (auth/ removed, logs/.gitkeep added).
+Now build 3 modules in sequence.
+
+Build order:
+  38. core/instrument_cache.py + accounts support (CONCERN 2)
+  39. orders/shadow_tracker.py (CONCERN 4)
+  40. reports/daily_review.py update (shadow tracker integration)
+
+================================================================
+MODULE 38: core/instrument_cache.py + accounts.csv
+================================================================
+
+Purpose: Load multi-account registry + per-symbol lot_size
+and F&O metadata. Enables position_sizer to use real lot_size
+and adapter to route orders to the right account.
+
+LOCK (IC1-IC15):
+
+IC1 — Two new config files:
+
+  config/accounts.csv (one row per broking account):
+    account_id,broker,api_key_env,access_token_env,capital_share_pct,enabled
+    primary,zerodha,ZERODHA_API_KEY,ZERODHA_ACCESS_TOKEN,1.0,true
+    secondary,zerodha,ZERODHA_API_KEY_2,ZERODHA_ACCESS_TOKEN_2,0.0,false
+
+    api_key_env and access_token_env are ENV VAR NAMES (not
+    values). Resolver reads via os.environ.get().
+    capital_share_pct: how to split signals across accounts
+                       (must sum to 1.0 across enabled accounts).
+    enabled=false: account skipped entirely.
+
+  config/instruments.csv (per-symbol metadata):
+    symbol,exchange,instrument_token,lot_size,is_fno,tick_size
+    RELIANCE,NSE,738561,1,false,0.05
+    NIFTY25APR23000CE,NFO,12345,50,true,0.05
+    ...
+
+    instrument_token from Zerodha instruments master.
+    lot_size: 1 for equity; real lot for F&O.
+    is_fno: True for F&O, False for equity.
+    tick_size: for LIMIT price rounding.
+
+IC2 — instruments.csv bootstrapping:
+  Zerodha provides instruments dump via kite.instruments("NSE").
+  Add script: scripts/refresh_instruments.py
+  Run manually: fetches kite.instruments(), writes to
+  config/instruments.csv. Operator runs this daily (new F&O
+  contracts appear each expiry).
+  NOT called from main.py at startup (offline refresh model).
+
+IC3 — InstrumentCache class:
+  InstrumentCache(
+    instruments_csv_path: Path,
+    logger,
+  )
+  Loads CSV at construction. Builds two lookup dicts:
+    by_symbol: {symbol -> InstrumentRow}
+    by_token: {instrument_token -> InstrumentRow}
+
+  InstrumentRow (frozen dataclass):
+    symbol, exchange, instrument_token, lot_size,
+    is_fno, tick_size
+
+  API:
+    get_by_symbol(symbol) -> InstrumentRow
+      Raises InstrumentNotFoundError if missing.
+    get_by_token(token) -> InstrumentRow
+      Raises InstrumentNotFoundError if missing.
+    lot_size(symbol) -> int
+    is_fno(symbol) -> bool
+    tick_size(symbol) -> float
+    round_price(symbol, price) -> float
+      Rounds to nearest tick_size. Used by order_placer
+      for LIMIT prices.
+
+IC4 — New exception:
+  InstrumentNotFoundError(ConfigError, SEVERITY="ERROR")
+  Add to core/exceptions.py.
+
+IC5 — AccountRegistry class:
+  AccountRegistry(
+    accounts_csv_path: Path,
+    logger,
+  )
+  Loads CSV. Validates:
+    - At least 1 enabled account
+    - Sum of enabled capital_share_pct == 1.0 (tolerance 0.01)
+    - All referenced env vars must be set (log warning if
+      not set; don't raise — paper mode may not need real tokens)
+
+  AccountRow (frozen dataclass):
+    account_id, broker, api_key, access_token,
+    capital_share_pct, enabled
+    (api_key and access_token resolved from env at load time)
+
+  API:
+    get_enabled_accounts() -> list[AccountRow]
+    get_primary_account() -> AccountRow
+      First enabled account. Used in single-account mode.
+    get_account(account_id) -> AccountRow
+
+IC6 — signal_processor routing (for multi-account):
+  For v2 foundation: single-account ONLY.
+  AccountRegistry exists, returns primary account only.
+  Multi-account signal routing = v2.1 work.
+  But registry must load correctly now so v2.1 can extend
+  without schema changes.
+
+IC7 — position_sizer update:
+  PS signature currently takes lot_size as parameter
+  (from strategy.lot_size).
+  NEW: signal_processor calls
+    real_lot = instrument_cache.lot_size(symbol)
+    if strategy.lot_size > 1 and real_lot != strategy.lot_size:
+      log WARNING (strategy override mismatched)
+    Use real_lot for actual sizing.
+  For equity: instrument_cache returns 1, matches default.
+  For F&O: uses actual lot, strategy.lot_size can set a
+  multiplier (e.g., trade 2 lots -> strategy.lot_size=2*real_lot).
+
+  CORRECTION: Keep strategy.lot_size meaning "number of lots
+  to trade" (default 1). Final qty = strategy.lot_size *
+  instrument_cache.lot_size(symbol) * sizer's calculated units.
+  This makes equity (instrument lot_size=1) and F&O
+  (instrument lot_size=50) work uniformly.
+
+IC8 — order_placer update:
+  Round LIMIT prices to tick_size:
+    if order_type == "LIMIT":
+      price = instrument_cache.round_price(symbol, price)
+  sl_price and tgt_price similarly rounded.
+
+IC9 — adapter update:
+  Current ZerodhaAdapter accepts single kite_client.
+  Add optional: account_id parameter on place_order
+  (default to primary). For v2: ignored (single account).
+  For v2.1: routes to the kite_client for that account.
+  Signature extended but behavior unchanged for now.
+
+IC10 — Layer & deps:
+  Layer 2 (core/). InstrumentCache imports: stdlib (csv,
+  pathlib, dataclasses), core.exceptions, core.logger.
+  AccountRegistry imports: stdlib (csv, os, pathlib,
+  dataclasses), core.exceptions, core.logger.
+
+IC11 — main.py wiring:
+  Phase 0b (after config_loader.load_all):
+    instrument_cache = InstrumentCache(
+      Path(config_dir) / "instruments.csv", logger)
+    account_registry = AccountRegistry(
+      Path(config_dir) / "accounts.csv", logger)
+  Inject into position_sizer + order_placer + signal_processor.
+
+IC12 — scripts/refresh_instruments.py:
+  Standalone CLI.
+  Uses kiteconnect.KiteConnect to fetch instruments dump.
+  Filters to NSE + NFO + needed fields.
+  Writes config/instruments.csv atomically (.tmp + rename
+  per Foundation 3.2).
+  Logs to logs/refresh_instruments.log.
+  Exit 0 on success, 1 on failure.
+  Run: python scripts/refresh_instruments.py
+
+IC13 — Config validation (startup_checks addition):
+  Add to check_config_files_present: instruments.csv +
+  accounts.csv as REQUIRED.
+  If instruments.csv missing or empty: blocking startup
+  failure with message "Run scripts/refresh_instruments.py
+  first".
+
+IC14 — Testing:
+  tests/unit/test_instrument_cache.py:
+    - Load valid CSV -> all rows in both dicts
+    - Lookup by symbol returns InstrumentRow
+    - Lookup unknown symbol -> InstrumentNotFoundError
+    - Lookup by token works
+    - lot_size/is_fno/tick_size helpers correct
+    - round_price: 100.03 with tick 0.05 -> 100.05
+    - round_price: 100.02 with tick 0.05 -> 100.00
+    - Missing CSV -> ConfigMissingError
+    - Malformed CSV (missing column) -> ConfigSchemaError
+
+  tests/unit/test_account_registry.py:
+    - Load valid CSV -> all rows
+    - At least 1 enabled -> OK
+    - No enabled -> ConfigSchemaError
+    - Capital shares don't sum to 1.0 -> ConfigSchemaError
+    - Env var missing -> WARNING logged, row loads with
+      empty api_key (paper mode tolerant)
+    - get_primary_account returns first enabled
+    - get_account by id works
+
+  tests/unit/test_instruments_integration.py:
+    - position_sizer uses instrument lot_size (F&O lot=50,
+      strategy.lot_size=2 -> qty multiple of 100)
+    - order_placer rounds LIMIT price to tick
+    - Unknown symbol -> InstrumentNotFoundError at sizing
+
+IC15 — Stub CSVs for initial build:
+  config/instruments.csv — create with 5 equity samples
+    RELIANCE, TCS, INFY, HDFCBANK, SBIN
+    (all lot_size=1, is_fno=false, tick_size=0.05)
+    Operator runs refresh_instruments.py later for full dump.
+
+  config/accounts.csv — create with 1 primary account:
+    primary,zerodha,ZERODHA_API_KEY,ZERODHA_ACCESS_TOKEN,1.0,true
+
+BUILD STEPS (Module 38):
+1. Build core/instrument_cache.py (~200 lines)
+2. Build core/account_registry.py (~150 lines)
+3. Add InstrumentNotFoundError to core/exceptions.py
+   Update test_exceptions.py
+4. Create config/instruments.csv and config/accounts.csv stubs
+5. Build scripts/refresh_instruments.py (~120 lines)
+6. Extend utils/startup_checks.py for IC13 requirement
+7. Update capital/position_sizer.py per IC7
+   Update tests
+8. Update orders/order_placer.py per IC8
+   Update tests
+9. Update broker/zerodha_adapter.py per IC9 (optional
+   account_id param)
+10. Update signals/signal_processor.py to use
+    instrument_cache for lot_size lookup
+11. Update main.py wiring per IC11
+12. Build tests per IC14
+13. Re-run full suite. Expected: 1187 + ~40 new tests.
+
+================================================================
+MODULE 39: orders/shadow_tracker.py
+================================================================
+
+Per CONCERN 4 — multi-inning tracking.
+
+LOCK (SH1-SH15):
+
+SH1 — Inning dataclass:
+  Inning (frozen):
+    inning_number: int
+    trade_id: str
+    symbol: str
+    direction: str
+    entry_price: float
+    entry_ts: datetime
+    sl_price: float
+    tgt_price: float
+    exit_price: float | None
+    exit_ts: datetime | None
+    exit_reason: str | None    # "SL" | "TGT" | "EOD" | "OPEN"
+    duration_sec: int | None
+    pnl_pct: float | None
+    pnl_per_share: float | None
+    is_real: bool               # True only for inning 1
+
+SH2 — Constructor:
+  ShadowTracker(
+    state_store,
+    bus,                    # subscribe to PositionClosed
+    live_feed,              # subscribe to tick updates
+    market_windows,
+    time_authority,
+    notifier,               # telegram alerts per inning
+    logger,
+    max_innings=3,
+    alert_per_inning=True,
+  )
+
+SH3 — Event subscription:
+  On construction, bus.subscribe(PositionClosed,
+                                  self._on_position_closed)
+  Handler receives PositionClosed event:
+    payload has {trade_id, symbol, exit_price, realized_pnl,
+                  signal_id}
+    Look up trade details from state_store (direction,
+    sl_pct, tgt_pct from original signal's strategy).
+    Persist inning 1 to innings table with is_real=True,
+    exit_price = event.exit_price, exit_reason = derived
+    from trade.close_reason.
+    If inning 1 ended with TGT AND trade.close_reason !=
+    'EOD' AND still within market hours:
+      Start inning 2.
+
+SH4 — Starting a simulated inning:
+  _start_inning(prev_inning: Inning):
+    entry_price = prev_inning.exit_price
+    entry_ts = prev_inning.exit_ts
+    direction = prev_inning.direction
+    Compute sl_price and tgt_price:
+      Read original strategy from state_store via trade_id
+      -> signal_id -> scanner_name -> strategy
+      Apply strategy.sl_method and tgt_method to new entry_price
+      (same rules as real entry price derivation)
+    Persist to innings table with is_real=False,
+                                 exit_price=None,
+                                 exit_reason=None
+    Register symbol with live_feed for tick callbacks
+    (if not already tracked via other means)
+    Add (trade_id, inning_number) to _active_innings dict
+
+SH5 — Tick processing:
+  on_tick(tick: dict):
+    symbol = tick['symbol']  (or resolve via instrument_cache)
+    ltp = tick['last_price']
+    For each active inning matching this symbol:
+      Check HIT:
+        LONG: ltp <= sl_price -> exit reason=SL
+        LONG: ltp >= tgt_price -> exit reason=TGT
+        SHORT: ltp >= sl_price -> exit reason=SL
+        SHORT: ltp <= tgt_price -> exit reason=TGT
+      If HIT:
+        _close_inning(inning, ltp, exit_reason)
+
+SH6 — EOD handling:
+  Subscribe to EodSquareoffComplete event (add to core/events.py
+  if not already).
+  On EOD: for each active inning:
+    _close_inning(inning, current_ltp, "EOD")
+  No new innings started after EOD.
+
+SH7 — Closing an inning:
+  _close_inning(inning, exit_price, exit_reason):
+    Atomic under lock:
+      Update innings table: exit_price, exit_ts=now_ist,
+                             exit_reason, duration_sec,
+                             pnl_pct, pnl_per_share
+      Remove from _active_innings
+    If alert_per_inning: send telegram INFO with summary
+    If exit_reason in ("SL", "TGT") AND inning.inning_number
+       < max_innings AND market_windows.is_market_open(now):
+      _start_inning(inning)  # start next inning
+
+SH8 — Inning PnL:
+  LONG: pnl_per_share = exit_price - entry_price
+  SHORT: pnl_per_share = entry_price - exit_price
+  pnl_pct = pnl_per_share / entry_price * 100
+  For is_real=False innings: pnl is SIMULATED (theoretical).
+
+SH9 — Database schema:
+  New innings table in schema.sql:
+    id INTEGER PRIMARY KEY AUTOINCREMENT
+    trade_id TEXT NOT NULL
+    inning_number INTEGER NOT NULL
+    symbol TEXT NOT NULL
+    direction TEXT NOT NULL
+    entry_price REAL NOT NULL
+    entry_ts TEXT NOT NULL
+    sl_price REAL NOT NULL
+    tgt_price REAL NOT NULL
+    exit_price REAL
+    exit_ts TEXT
+    exit_reason TEXT
+    duration_sec INTEGER
+    pnl_pct REAL
+    pnl_per_share REAL
+    is_real INTEGER NOT NULL  -- SQLite bool as 0/1
+    UNIQUE(trade_id, inning_number)
+  Bump schema_version.
+
+SH10 — state_store helpers:
+  insert_inning(Inning) -> None
+  update_inning_close(trade_id, inning_number, exit_price,
+                       exit_ts, exit_reason, duration_sec,
+                       pnl_pct, pnl_per_share) -> None
+  get_innings_for_trade(trade_id) -> list[Inning]
+  get_innings_for_date(date_iso) -> list[Inning]
+  get_inning_summary_by_symbol_and_date(date_iso)
+    -> list[InningSummary]
+    InningSummary: one row per trade with all 3 innings
+    flattened into columns (for daily_review Module 40)
+
+SH11 — System config:
+  shadow_tracker:
+    enabled: bool (default true)
+    max_innings: int (default 3, validated 1-5)
+    alert_per_inning: bool (default true)
+  Update SystemConfig schema, yaml stub, test.
+
+SH12 — Layer & deps:
+  Layer 5 (orders/). Imports: stdlib, core.exceptions,
+  core.events, core.logger, core.time_authority,
+  core.state_store, data.live_feed, alerts.telegram_notifier.
+  Also core.instrument_cache (for symbol/token mapping).
+
+SH13 — Enabled flag:
+  If enabled=False at construction:
+    _on_position_closed no-op
+    No innings created
+    Persistence table still exists but empty
+
+SH14 — Thread safety:
+  _active_innings dict guarded by RLock.
+  Tick callback fires from live_feed consumer thread.
+  PositionClosed handler fires from event bus thread.
+  Both acquire RLock.
+
+SH15 — Testing:
+  tests/unit/test_shadow_tracker.py:
+    - PositionClosed -> inning 1 persisted with is_real=True
+    - Inning 1 TGT hit -> inning 2 auto-started
+    - Inning 2 SL hit -> inning 3 auto-started
+    - Inning 3 completes -> no inning 4 (max_innings=3)
+    - EOD fires -> active innings closed with exit_reason=EOD
+    - EOD fires -> no new innings started
+    - LONG: SL hit when ltp <= sl_price
+    - LONG: TGT hit when ltp >= tgt_price
+    - SHORT: SL hit when ltp >= sl_price
+    - SHORT: TGT hit when ltp <= tgt_price
+    - Inning 1 exit_reason=EOD -> no inning 2 (per SH3)
+    - enabled=False -> no innings created
+    - alert_per_inning=True -> notifier.send called per close
+    - alert_per_inning=False -> no notifier calls
+    - PnL calculation: LONG profit vs loss
+    - PnL calculation: SHORT profit vs loss
+    - is_real=True only for inning 1
+    - Thread safety: concurrent tick + PositionClosed
+    - Simulated inning re-uses same SL/TGT methodology as
+      original strategy (FIXED_PCT: same pct applied to new
+      entry_price)
+
+BUILD STEPS (Module 39):
+1. Add innings table + 4 helpers to state_store
+   Update test_state_store
+2. Extend SystemConfig per SH11
+3. Build orders/shadow_tracker.py (~400 lines)
+4. Wire into main.py:
+   shadow_tracker = ShadowTracker(store, bus, live_feed,
+                                    market_windows, time_auth,
+                                    notifier, logger, ...)
+   live_feed.register_callback(shadow_tracker.on_tick)
+5. Build tests per SH15
+6. Re-run full suite.
+
+================================================================
+MODULE 40: reports/daily_review.py update
+================================================================
+
+Add MULTI_INNING section per user request:
+  "one row per such stock to be tracked thru number of columns"
+
+LOCK (DR-U1-DR-U5):
+
+DR-U1 — New sheet/section name: "MULTI_INNING_TRACKING"
+
+DR-U2 — One row per trade. Columns:
+  trade_id
+  signal_id
+  symbol
+  direction
+  scanner_name
+  # INNING 1 (real)
+  i1_entry, i1_entry_ts
+  i1_sl, i1_tgt
+  i1_exit, i1_exit_ts, i1_exit_reason
+  i1_pnl_pct, i1_duration_min, i1_is_real
+  # INNING 2 (simulated, optional)
+  i2_entry, i2_entry_ts
+  i2_sl, i2_tgt
+  i2_exit, i2_exit_ts, i2_exit_reason
+  i2_pnl_pct, i2_duration_min, i2_is_real
+  # INNING 3 (simulated, optional)
+  i3_entry, i3_entry_ts
+  i3_sl, i3_tgt
+  i3_exit, i3_exit_ts, i3_exit_reason
+  i3_pnl_pct, i3_duration_min, i3_is_real
+  # Aggregate
+  total_innings
+  cumulative_simulated_pnl_pct  (sum of inning 2+ pnl_pct)
+  best_inning_pnl_pct
+  worst_inning_pnl_pct
+
+  Empty innings (trade had only 1 inning) show blank cells
+  in i2/i3 columns.
+
+DR-U3 — Data source:
+  state_store.get_inning_summary_by_symbol_and_date(date_iso)
+  Returns list of InningSummary dataclasses with all 3
+  innings flattened into fields (matches DR-U2 columns).
+
+DR-U4 — Summary section update:
+  Add to existing SUMMARY sheet:
+    - Total trades with multi-inning tracking: N
+    - Trades that hit TGT in inning 1: N
+    - Trades that would have hit TGT in inning 2: N
+      (simulated but informative)
+    - Trades that would have hit TGT in inning 3: N
+    - Simulated P&L (innings 2+): Rs X.XX
+    - Note: "Simulated innings are hypothetical tracking only;
+            no real orders placed."
+
+DR-U5 — MD format mirror:
+  The .md file includes the same section with pipe table.
+  Long tables acceptable; operator reads in editor.
+
+BUILD STEPS (Module 40):
+1. Update reports/daily_review.py to add MULTI_INNING_TRACKING
+   sheet/section
+2. Update tests/unit/test_daily_review.py with:
+   - Empty innings day -> section shows "No multi-inning data"
+   - 1 trade with 1 inning -> row with i2/i3 empty
+   - 1 trade with 3 innings -> row with all 9 inning columns
+     filled
+   - Aggregate calculations correct
+   - Summary section shows simulated P&L
+3. Re-run full suite.
+
+================================================================
+MEMORY UPDATES (per MH1)
+================================================================
+
+After each module green:
+  Module 38: locked IC1-IC15 under instrument_module: section
+  Module 39: locked SH1-SH15 under shadow_tracker: section
+  Module 40: locked DR-U1-DR-U5 appended to reports_module:
+
+Schema bumps tracked.
+Cross-module impacts documented.
+
+================================================================
+FINAL STATE AFTER ALL 3 MODULES
+================================================================
+
+Expected test count delta: ~80-100 new tests
+Total modules: 40
+Post-build: v2 foundation + multi-inning + multi-account ready
+
+Then paper trial can begin with real correctness guarantees.
+
+WINDOWS REMINDER: ASCII-only print() strings.

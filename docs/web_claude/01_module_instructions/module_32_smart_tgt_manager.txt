@@ -1,0 +1,370 @@
+================================================================
+MODULE 32: orders/smart_tgt_manager.py
+================================================================
+
+CONTEXT: 948/948 across 34 suites. smart_tgt_manager trails
+the SL of CO orders in favorable direction. Fires on candle
+close events. Fixed-step algorithm per S3.
+
+LOCKED DECISIONS REFERENCED:
+  G6      — Reconnect: discard partials, backfill, recompute
+            trail ONCE, no callback re-fire
+  P8_P13  — CO + LIMIT TGT; modify CO trigger_price (NOT
+            cancel-replace) for trail
+  LF7     — Do NOT re-fire smart_tgt callbacks for missed bars
+  S3      — smart_tgt_trail_trigger_pct, smart_tgt_trail_step_pct
+
+GAPS TO CLOSE (lock as new decisions alongside ST1-ST15):
+
+  GAP-A: Reconnect notification mechanism. live_feed has
+         single _on_reconnect_cb slot taken by candle_store.
+         Resolution: ST13 — main.py chains callbacks (no
+         live_feed change). Ordering: candle_store first
+         (to discard partials), then smart_tgt (to recompute).
+
+  GAP-B: No CO-leg lookup helper. Resolution: ST14 — add
+         state_store.get_co_entry_order_for_trade(trade_id)
+         that filters leg='ENTRY' variety='co'.
+
+  GAP-C: Trail state persistence. Resolution: ST15 — add
+         smart_tgt_state table for crash recovery. On
+         restart, smart_tgt reads its last known trail SL
+         per trade and resumes (subject to G5b-style
+         favorable-side check on startup).
+
+================================================================
+LOCK (ST1-ST15)
+================================================================
+
+ST1 — Purpose: Trail SL on open CO trades using candle close
+  data. Fixed-step algorithm. Modify CO trigger_price in
+  place (not cancel-replace per P8_P13). Ghost-SL-safe:
+  persist new SL to DB only AFTER broker confirms modification.
+
+ST2 — Constructor:
+  SmartTgtManager(
+    adapter,            # ZerodhaAdapter (modify_order)
+    state_store,        # for CO lookup + trail state persistence
+    candle_store,       # register_on_candle_close
+    logger,
+    quote_fn=None,      # optional, for on_reconnect startup check
+    enabled=True,       # master switch; if False, no-op everywhere
+  )
+  Register self._on_candle_close with candle_store at
+  construction. Unregister on stop().
+
+ST3 — Trade registration:
+  mgr.register_trade(
+    trade_id: str,
+    symbol: str,
+    instrument_token: int,
+    direction: str,         # LONG | SHORT
+    entry_price: float,
+    initial_sl: float,
+    qty: int,
+    trigger_pct: float,     # from strategy.smart_tgt_trail_trigger_pct
+    step_pct: float,        # from strategy.smart_tgt_trail_step_pct
+  ) -> None
+  Adds trade to internal _tracked dict keyed by trade_id.
+  Inserts row in smart_tgt_state table.
+  Raises ValueError if trade_id already registered.
+
+  mgr.unregister_trade(trade_id: str) -> bool
+  Removes from tracking. Called by order_monitor on exit
+  (COMPLETE/CANCELLED). Deletes row from smart_tgt_state.
+  Idempotent.
+
+ST4 — Trail algorithm (fixed-step):
+
+  Per candle close per tracked trade:
+    On each candle close for this symbol:
+      highest_favorable = max across all candles since
+        registration (for LONG) or min (for SHORT).
+      Tracked internally in _tracked dict as best_price.
+
+      distance_from_entry = abs(best_price - entry_price)
+      distance_pct = distance_from_entry / entry_price
+
+      if distance_pct < trigger_pct:
+        # Not yet qualified for trail
+        return
+
+      # Compute desired trail SL
+      steps_count = int((distance_pct - trigger_pct) / step_pct)
+
+      if direction == LONG:
+        new_sl = entry_price + (trigger_pct + steps_count * step_pct) * entry_price
+        # Only advance SL (never lower it)
+        if new_sl <= current_sl: return
+      else:  # SHORT
+        new_sl = entry_price - (trigger_pct + steps_count * step_pct) * entry_price
+        if new_sl >= current_sl: return
+
+      # New SL is favorable advance
+      _modify_co_sl(trade_id, new_sl)
+
+ST5 — Ghost SL fix (P8_P13):
+  _modify_co_sl(trade_id, new_sl):
+    1. Look up CO broker_order_id via
+       state_store.get_co_entry_order_for_trade(trade_id)
+    2. Call adapter.modify_order(broker_order_id=co_id,
+                                  trigger_price=new_sl)
+    3. Check ModifyResult.success.
+       If success:
+         Update _tracked[trade_id]['current_sl'] = new_sl
+         Update smart_tgt_state row: current_sl, trail_count+1,
+                                     last_trail_ts
+         Log INFO: trailed SL for trade_id, old->new
+       If failure:
+         DO NOT update _tracked or DB state.
+         Log ERROR with ModifyResult.reason.
+         Increment failure counter for this trade.
+         After 3 consecutive failures for same trade:
+           Log CRITICAL, fire on_critical_failure callback
+           (constructor-injected), keep trying next cycle.
+    Audit fix: internal state updated ONLY after broker confirms.
+    Fixes "Ghost SL" bug (state says trailed, broker didn't).
+
+ST6 — Callback contract with candle_store:
+  candle_store.register_on_candle_close(fn) fires fn(CandleData)
+  for EVERY candle (all symbols).
+  smart_tgt's _on_candle_close filters:
+    - Check _tracked for entries matching CandleData.symbol
+      (and/or instrument_token)
+    - If no tracked trade for this symbol: return
+    - For each matching trade: run trail algorithm
+  Fast path: dict lookup by instrument_token.
+
+ST7 — Reconnect protocol (G6 + LF7):
+  on_reconnect(reconnect_ts: datetime):
+    For each tracked trade:
+      1. Discard any in-memory "best_price" tracking
+         (candle_store already discarded partials)
+      2. Fetch candles since registration from candle_store
+         (get_candles(token, n=many))
+      3. Recompute best_price from those closed candles ONCE
+      4. Run trail algorithm ONCE based on new best_price
+      5. If trail triggers: _modify_co_sl()
+    Log WARNING with reconnect gap duration.
+    Do NOT re-fire per-bar callbacks for missed bars (LF7).
+    This is the single recompute G6 requires.
+
+ST8 — Startup recovery (crash-safe):
+  On start():
+    Read all rows from smart_tgt_state table.
+    For each row:
+      Repopulate _tracked dict.
+      Call _maybe_startup_recheck(trade_id):
+        Fetch current LTP via quote_fn (if provided).
+        If LTP is past current_sl on the wrong side:
+          Audit-defensive: trail SL is stale, broker may
+          have already triggered exit. Log CRITICAL, mark
+          trade for reconciler review. Do NOT modify CO.
+        Otherwise: resume normal trailing from current_sl.
+    quote_fn=None at construction: skip LTP check, resume
+    from stored state. Log WARNING.
+
+ST9 — Thread safety:
+  _tracked dict + candle callback + reconnect + startup
+  recovery all touch same state. Single threading.RLock.
+  candle_store invokes callback on its own thread —
+  _on_candle_close acquires lock.
+  register_trade / unregister_trade acquire lock.
+  on_reconnect acquires lock (long hold OK; reconnect
+  is rare).
+
+ST10 — Failure accounting:
+  Per-trade consecutive_modify_failures counter (in-memory).
+  3 consecutive -> CRITICAL + callback.
+  Successful modify resets counter to 0.
+  Transient broker failures don't halt system.
+
+ST11 — Lifecycle:
+  start() -> no-op beyond startup recovery (no own thread;
+             candle_store thread drives callbacks).
+             Subscribes to candle_store on_candle_close
+             (if not done at construction).
+  stop()  -> unregisters callback. Joins nothing (no own
+             thread). Clears _tracked. Does NOT clear
+             smart_tgt_state (restart must restore).
+
+ST12 — Enabled flag:
+  enabled=False at construction OR runtime disable():
+    register_trade: no-op (returns None, logs DEBUG)
+    _on_candle_close: no-op
+    unregister_trade: no-op
+    on_reconnect: no-op
+  Allows paper mode or emergency disable without stopping
+  order_placer.
+
+ST13 — Reconnect callback chaining (GAP-A resolution):
+  main.py owns the wiring. Single live_feed reconnect slot
+  holds a main-provided chain function:
+    def on_reconnect(ts):
+        candle_store.mark_reconnect(ts)
+        smart_tgt_manager.on_reconnect(ts)
+        # future hooks chain here
+  live_feed unchanged. No new dispatch mechanism. Document
+  in module docstring that on_reconnect must be called by
+  caller AFTER candle_store.mark_reconnect.
+
+ST14 — New state_store helper (GAP-B resolution):
+  Add:
+    get_co_entry_order_for_trade(trade_id: str) -> dict | None
+    SELECT * FROM orders
+    WHERE trade_id=? AND leg='ENTRY' AND variety='co'
+    LIMIT 1
+    Returns row dict or None.
+  Test: insert a CO entry order, verify helper returns it;
+  insert non-CO ENTRY, verify not returned; no rows -> None.
+
+ST15 — New state_store table (GAP-C resolution):
+  smart_tgt_state table:
+    trade_id TEXT PRIMARY KEY
+    symbol TEXT NOT NULL
+    instrument_token INTEGER NOT NULL
+    direction TEXT NOT NULL
+    entry_price REAL NOT NULL
+    initial_sl REAL NOT NULL
+    current_sl REAL NOT NULL
+    qty INTEGER NOT NULL
+    trigger_pct REAL NOT NULL
+    step_pct REAL NOT NULL
+    best_price REAL
+    trail_count INTEGER NOT NULL DEFAULT 0
+    last_trail_ts TEXT
+    registered_at TEXT NOT NULL
+  Bump schema_version. Add helpers:
+    insert_smart_tgt_state(...)
+    update_smart_tgt_state(trade_id, current_sl, trail_count,
+                           last_trail_ts, best_price)
+    delete_smart_tgt_state(trade_id)
+    get_all_smart_tgt_states() -> list[dict]
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Add smart_tgt_state table to schema.sql per ST15.
+   Bump schema_version. Add 4 helpers per ST14 + ST15.
+   Update test_state_store.py with tests for new table +
+   helpers.
+
+2. Build orders/smart_tgt_manager.py per ST1-ST15 (~350 lines).
+
+3. Build tests/unit/test_smart_tgt_manager.py covering:
+
+   REGISTRATION:
+   - register_trade adds to _tracked and inserts DB row
+   - Duplicate trade_id -> ValueError
+   - unregister_trade removes both
+   - unregister unknown trade_id -> False, no exception
+   - register when enabled=False -> no-op
+
+   TRAIL ALGORITHM (LONG):
+   - Price not yet at trigger -> no modify
+   - Price crosses trigger once -> 1 trail step applied
+   - Price advances by multiple steps -> SL jumps by
+     correct number of steps
+   - Price retraces after trail -> SL does NOT lower
+   - Current SL same as new target -> no modify call
+
+   TRAIL ALGORITHM (SHORT):
+   - Mirror of LONG: price falls trigger%, SL trails down
+   - SL never raised back up
+
+   GHOST SL FIX (ST5):
+   - adapter.modify_order success -> _tracked updated,
+     DB row updated, INFO logged
+   - adapter.modify_order failure -> _tracked NOT updated,
+     DB row NOT updated, ERROR logged
+   - 3 consecutive failures for same trade -> CRITICAL logged,
+     on_critical_failure callback fired
+   - Successful modify resets failure counter
+   - Failure for trade A does NOT affect trade B's counter
+
+   CANDLE CALLBACK:
+   - _on_candle_close filters by symbol/token
+   - No tracked trade for symbol -> return immediately
+   - Multiple tracked trades for same symbol -> all processed
+   - Candle close for unrelated symbol -> no modify calls
+
+   RECONNECT (G6 + LF7):
+   - on_reconnect discards best_price, recomputes from history
+   - on_reconnect fires trail ONCE per trade (not per candle)
+   - on_reconnect for trade with no price advance -> no modify
+   - on_reconnect with some trades past trigger -> those
+     get trailed
+   - Reconnect gap logged
+
+   STARTUP RECOVERY (ST8):
+   - start() reads smart_tgt_state rows
+   - _tracked repopulated from DB
+   - quote_fn provided: LTP check runs
+   - LTP past SL on wrong side -> CRITICAL logged, trade
+     flagged for reconciler, no CO modify
+   - LTP on favorable side -> resume trail
+   - quote_fn=None -> skip LTP check, WARNING logged
+
+   CO LOOKUP (ST14):
+   - get_co_entry_order_for_trade returns CO row
+   - Non-CO ENTRY row not returned
+   - No matching row -> None
+
+   THREAD SAFETY:
+   - Concurrent register + candle callback from 2 threads:
+     no races, state consistent
+   - Concurrent modify attempts for same trade from candle
+     + reconnect: serialized correctly (RLock)
+
+   ENABLED FLAG (ST12):
+   - enabled=False: register no-op
+   - enabled=False: candle callback no-op
+   - Runtime disable(): subsequent callbacks no-op
+
+   EDGE CASES:
+   - Trade with no matching CO broker_order_id -> log ERROR,
+     flag trade, do not retry indefinitely
+   - Trail triggers at exact boundary (distance_pct ==
+     trigger_pct): apply 0 steps, no modify
+   - Multiple candles in quick succession: each processed,
+     counter updated correctly
+
+   LIFECYCLE:
+   - start() registers candle callback exactly once
+   - stop() unregisters, clears _tracked, preserves DB state
+   - Restart after stop+start: _tracked repopulated from DB
+
+4. Re-run all 34 prior suites + new one. Report 35-row table.
+
+================================================================
+MEMORY UPDATE (per MH1)
+================================================================
+
+Store after green:
+  Module: orders/smart_tgt_manager.py
+  Tests: report actual
+  Locked: ST1-ST15 under orders_module: section (append)
+  Schema version: bumped
+  Cross-module: state_store (1 new table + 4 helpers,
+                1 new get_co_entry_order_for_trade helper)
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Use MockAdapter with controllable modify_order
+results. Use real candle_store with a simple test candle
+sequence. No real websocket in tests.
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+Module 33 = main.py orchestrator (wires every module;
+            applies ST13 reconnect chain; starts/stops
+            every subsystem)
+Module 34 = reports/daily_report (audit + analysis output)
+Module 35 = scripts/startup_checks, scripts/preflight_scanner
+
+Module 33 will be the largest integration module.
+Confirm no locked decisions exist for "main" or
+"orchestrator" before Module 33 instruction request.

@@ -1,0 +1,3067 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Trading System v2 — Locked Design Decisions
+# ──────────────────────────────────────────────────────────────────────────────
+# Single source of truth for every design decision made during the v2 design
+# review. Every entry here is referenced from the consolidated spec document.
+#
+# DO NOT modify this file casually. Each decision was made deliberately after
+# weighing alternatives. If a decision needs to change, document the reason
+# and the new alternatives considered.
+#
+# Format:
+#   <category>:
+#     <id>:
+#       title: short label
+#       decision: the locked answer
+#       rationale: why this won, in one or two sentences
+#       alternatives_considered: list of options that were rejected
+#       affects: list of modules/files this decision shapes
+#
+# ──────────────────────────────────────────────────────────────────────────────
+
+meta:
+  document_version: "1.0"
+  created: "2026-04-14"
+  total_decisions: 181
+  status: "LOCKED — consolidated spec is the authoritative interpretation"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G — V2 DESIGN GAPS (10 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+design_gaps:
+
+  G1:
+    title: "Broker reconciliation contract"
+    decision: "Hybrid cadence (every 30s + on every state-change event) + 6 checks (manual close / orphan adoption / healthy / partial close / position grew / orphan order) + 3-tier action policy (cosmetic→ignore, recoverable→auto-fix, unrecoverable→halt)"
+    rationale: "Periodic catches drift you didn't trigger; event-driven catches your own actions immediately. Six checks cover all possible (broker, local) state combinations. Three tiers prevent overreaction to noise and underreaction to real drift."
+    alternatives_considered:
+      - "30s periodic only with 6 checks + 3-tier action"
+      - "30s periodic only with 4 checks + halt-on-any-mismatch"
+    affects:
+      - "orders/order_reconciler.py"
+      - "core/state_store.py"
+      - "capital/fund_manager.py"
+
+  G2a:
+    title: "Three-ID lifecycle model"
+    decision: "signal_id assigned at webhook receipt (one per symbol per webhook); trade_id assigned at capital reservation success; order_id from broker on placement. signal_id → trade_id is 1:1 when committed; trade_id → order_id is 1:N (entry, SL, TGT, modifications)"
+    rationale: "Three different needs (audit, dedup, broker reference) require three different IDs. Conflating them is the root cause of the existing system's lack of traceability."
+    alternatives_considered:
+      - "Single trade_id assigned at webhook (insufficient for dedup)"
+      - "signal_id only, broker order_id reused as trade_id (loses lifecycle continuity)"
+    affects:
+      - "signals/webhook_receiver.py"
+      - "signals/signal_processor.py"
+      - "orders/order_manager.py"
+      - "core/state_store.py (signals/trades/orders tables)"
+
+  G2b:
+    title: "Scaling entry trade_id model (when implemented)"
+    decision: "Single trade_id with multiple legs. Each leg is a row in the orders table with leg_index. The trades row tracks total_qty_planned vs total_qty_filled."
+    rationale: "Scaling entries are conceptually one position with a blended entry. Per-leg trade_ids would defeat the purpose."
+    alternatives_considered:
+      - "One trade_id per leg (option β)"
+      - "trade_group_id + per-leg trade_id (option γ)"
+    affects:
+      - "orders/scaling_engine.py (v2.1, deferred)"
+
+  G3:
+    title: "Capital invariant enforcement"
+    decision: "Levels 1+2 implemented in the v2 codebase: Level 1 = anchored Python invariant check (margin_available + margin_reserved + margin_used = cash_floor + min(0, realized_intraday_pnl)) called inside every capital-mutating transaction; Level 2 = transactional capital_ledger writes wrapping every state change. Level 3 (broker drift detection) lives in G1's reconciler — not duplicated here."
+    rationale: "Anchored invariants catch drift bugs. Transactional ledger writes make it impossible to mutate capital without an audit trail. Avoiding duplication with G1 is the cleaner architecture."
+    alternatives_considered:
+      - "All 3 levels here, duplicating Level 3 with G1"
+      - "SQL trigger-based invariant (rejected: subtle bugs, hidden logic)"
+    affects:
+      - "capital/fund_manager.py"
+      - "core/state_store.py"
+
+  G4:
+    title: "Clock and time source"
+    decision: "Hybrid clock: VM clock as runtime source (all now() calls), broker clock validated periodically via existing API call timestamps. Four-tier skew thresholds: <2s normal; 2-5s warn; 5-30s alert + continue trading; >30s halt. Startup NTP check refuses to start if skew >30s."
+    rationale: "Per-call broker time is too slow. Pure VM clock is unsafe. Hybrid gets fast reads with cheap validation. Tiered thresholds avoid false halts on micro-drift."
+    alternatives_considered:
+      - "VM clock only + startup NTP (rejected: no runtime drift detection)"
+      - "Hybrid + log-only on skew (rejected: turns a safety check into a notification)"
+    affects:
+      - "core/time_authority.py"
+      - "every module that calls now()"
+
+  G5a:
+    title: "Four-scenario startup model"
+    decision: "Cold start (new trading day) / Warm restart (clean stop, same day) / Crash recovery (no clean shutdown marker) / Halt restart (kill_switch fired). Each scenario runs a different startup procedure. Detection via system_events table + kill_switch state + session_date comparison."
+    rationale: "These four scenarios have different correctness requirements. Treating them as one path is the existing system's biggest recovery bug source."
+    alternatives_considered:
+      - "Two scenarios (cold = new day, everything else = recovery)"
+    affects:
+      - "main.py"
+      - "utils/startup_checks.py"
+      - "orders/order_reconciler.py"
+
+  G5b:
+    title: "Crash recovery: orphan position with no broker SL"
+    decision: "Place fresh SL at last DB-known SL level, BUT only if current LTP is on the favorable side of that SL. If price has already crossed the SL on the wrong side, place an immediate MARKET exit instead of a fresh SL it would trip instantly."
+    rationale: "Defensive — assume the position is still tradeable when safe to do so, exit immediately when not."
+    alternatives_considered:
+      - "Always place fresh SL (rejected: can trip immediately)"
+      - "Always MARKET exit (rejected: takes unnecessary slippage)"
+      - "Halt and require manual decision (rejected: too operationally heavy)"
+    affects:
+      - "orders/order_reconciler.py"
+
+  G5c:
+    title: "Restart after kill_switch halt — manual --resume requirement"
+    decision: "Halt-type dependent. hard_kill ALWAYS requires manual --resume flag. soft_kill auto-resumes on next startup IF the original triggering condition has cleared (e.g., API now reachable, daily_loss reset because new day)."
+    rationale: "hard_kill is 'rules were broken' (manual review). soft_kill is 'transient condition' (self-healing when condition clears)."
+    alternatives_considered:
+      - "Always require --resume after any halt"
+      - "Always auto-resume"
+    affects:
+      - "utils/kill_switch.py"
+      - "main.py"
+
+  G6:
+    title: "Live feed reconnection and candle gap handling"
+    decision: "Detection via WebSocket events + 60s heartbeat. On gap detected: discard partially-built candles. Backfill the cache via REST historical API for missed minutes (don't re-fire smart_tgt callbacks for those bars). Recompute trail SL once on reconnect from current candle history. Alert if gap > 10 minutes."
+    rationale: "Smart TGT must not act on bars that already happened — that's making decisions in the past. But the cache needs the data so future calculations have correct context. Recompute-once handles the worst case where trail should have moved during the gap."
+    alternatives_considered:
+      - "WebSocket events only, no backfill (smart_tgt accepts the gap)"
+      - "Full backfill including firing callbacks on missed bars"
+    affects:
+      - "data/live_feed_manager.py"
+      - "orders/smart_tgt_manager.py"
+
+  G7:
+    title: "Broker rate limit handling"
+    decision: "Client-side token bucket per endpoint category (order: 8 burst/8/sec, quote: 1/1, historical: 2/2, margins: 8/8). Wraps every broker call. 4-step backoff on 429: 1s/5s/30s/soft_kill. Limits in config/broker_limits.yaml."
+    rationale: "Buckets prevent 429s by construction. Backoff handles the cases where buckets are mistuned. Soft_kill on persistent 429s catches systemic problems."
+    alternatives_considered:
+      - "Bucket only, no backoff"
+      - "Backoff only, no bucket"
+    affects:
+      - "broker/rate_limiter.py (new)"
+      - "broker/zerodha_adapter.py"
+
+  G8:
+    title: "Alert fallback (no single point of failure)"
+    decision: "Four alert tiers (INFO/WARN/ERROR/CRITICAL). INFO/WARN drop on Telegram failure. ERROR writes to failed_alerts.log on Telegram failure. CRITICAL ALWAYS writes a sentinel file at data_store/critical_alert_<id>.flag. A separate systemd timer runs scripts/alert_watcher.py every 60s — finds sentinel files and sends email via SMTP independently. Renames flag to .delivered on success."
+    rationale: "Telegram is single point of failure for alerts. The watcher pattern survives the trading process crashing because it's a separate process."
+    alternatives_considered:
+      - "Sentinel file only, no email watcher"
+      - "Inline email + Telegram in trading process"
+    affects:
+      - "alerts/telegram_notifier.py"
+      - "alerts/critical.py (new)"
+      - "scripts/alert_watcher.py (new)"
+
+  G9:
+    title: "Inter-module communication architecture"
+    decision: "Direct function calls everywhere by default. Tiny EventBus in core/events.py (~80 lines) reserved ONLY for 4 fan-out events: OrderFilled, PositionClosed, KillSwitchActivated, CapitalDriftDetected. Every other inter-module call is a direct import + call."
+    rationale: "Direct calls give debuggable stack traces 95% of the time. EventBus only earns its complexity on genuine fan-out (3+ subscribers reacting to the same event)."
+    alternatives_considered:
+      - "Full EventBus everywhere (rejected: unreadable stack traces, hidden coupling)"
+      - "No EventBus at all (close call, slightly more verbose for fan-out)"
+    affects:
+      - "core/events.py (new, minimal)"
+      - "every module's import structure"
+
+  G10:
+    title: "Scaling entry (40/30/30): build vs defer"
+    decision: "EntryEngine abstraction with entry_mode config field. FullEntryEngine implementation in v2 (single-shot only). ScalingEntryEngine reserved as sibling class for v2.1. Schema includes leg_index from day one (FULL always writes leg_index=0). Switching modes later is a config change + new class, no schema migration."
+    rationale: "Restarted 3 times — v2 needs to be smaller than instinct. The abstraction makes adding scaling later additive, not destructive. Live single-shot data is needed before deciding whether scaling is real edge."
+    alternatives_considered:
+      - "Build scaling in v2 (rejected: complexity compounds, audit count grows)"
+      - "Plain single-shot, no abstraction (rejected: future migration becomes refactor)"
+    affects:
+      - "orders/entry_engine.py (abstract)"
+      - "orders/full_entry_engine.py"
+      - "core/state_store.py (orders.leg_index column)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Q — PRODUCT-LEVEL CONFIRMATIONS (3 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+product:
+
+  Q1:
+    title: "max_open_positions value"
+    decision: "Configurable via config/system_config.yaml. Default value: 10."
+    rationale: "Operator should see this clearly, not have it buried as a constant. 10 matches user's actual risk appetite."
+    affects:
+      - "config/system_config.yaml"
+      - "capital/risk_engine.py"
+
+  Q2:
+    title: "Database and secrets encryption"
+    decision: "NO ENCRYPTION ANYWHERE in the system. Plain SQLite database. Plain text secrets in .env (never committed via .gitignore). This is a project-wide principle, not a per-component decision."
+    rationale: "SQLCipher and Fernet add operational pain (key management, debugging difficulty, backup encryption) for a system whose database contains nothing more sensitive than what's already in .env. The .env + .gitignore approach is sufficient."
+    alternatives_considered:
+      - "SQLCipher with key in .env"
+      - "Fernet for secrets, plain DB"
+    affects:
+      - "core/state_store.py"
+      - "utils/secrets_manager.py"
+      - "all secret loading code"
+
+  Q3:
+    title: "AI/LLM daily trade review"
+    decision: "Deferred to v2.1. Trade log structure in v2 will be designed to make later LLM integration a 50-line script."
+    rationale: "Orthogonal to live trading correctness. Build the structured trade log well in v2; bolt on LLM later."
+    affects:
+      - "reports/trade_logger.py (designed for future LLM consumption)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# P — ARCHITECTURE REVIEW POINTS (18 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+architecture_review:
+
+  P1:
+    title: "Trading hours window"
+    decision: "Entry order window: 09:30 - 13:30 IST. EOD square-off: 15:17 IST. All times sourced from core/market_windows.py — single source of truth, no hardcoded times anywhere else. Configurable via config/system_config.yaml."
+    rationale: "User explicitly specified 09:30-13:30 (avoids first 15min noise, avoids EOD chaos). 15:17 gives 3min buffer before Zerodha RMS auto-square-off at 15:20."
+    affects:
+      - "core/market_windows.py"
+      - "data/market_hours_guard.py"
+      - "orders/eod_squareoff.py"
+
+  P1_market_windows_api:
+    title: "market_windows.py function semantics"
+    decision: |
+      is_eod_squareoff_due(now: datetime) → bool
+        Returns True when now >= 15:17:00 IST for the same calendar day.
+        Caller is responsible for edge-triggering (calling repeatedly is safe — function
+        is pure/idempotent; eod_squareoff must track its own 'already fired' flag).
+
+      next_trading_day(date: date) → date
+        Walks forward from date+1 skipping weekends and NSE holidays (loaded from
+        config/nse_holidays_2026.yaml). Hard cap: raises ValueError if no trading day
+        found within 10 calendar days (catches misconfigured holiday file or
+        unexpected extended market closure).
+    rationale: |
+      is_eod_squareoff_due: pure function keeps market_windows stateless and testable.
+      Edge-triggering responsibility belongs to the caller (eod_squareoff.py), not to
+      a one-shot flag inside market_windows — that would be hidden state.
+      next_trading_day: 10-day cap prevents silent infinite loops on bad holiday config;
+      ValueError is the right signal (startup check should catch this before market open).
+    alternatives_considered:
+      - "is_eod_squareoff_due fires internal one-shot flag (rejected: hidden state, harder to test)"
+      - "next_trading_day returns None on cap exceeded (rejected: callers must check, easy to skip)"
+    affects:
+      - "core/market_windows.py"
+      - "orders/eod_squareoff.py (owns the 'already fired' edge-trigger flag)"
+
+  P2:
+    title: "Config Honor Principle"
+    decision: "Every numeric/boolean limit in config MUST have: (a) runtime check that enforces it, (b) Telegram alert when reached or breached, (c) daily report row showing whether it was hit. NO 'namesake' config values. New section in CLAUDE.md called 'Config Honor Principle'."
+    rationale: "Existing system has multiple config values that exist for documentation but aren't enforced (max_trades_per_day, etc.). v2 enforces this as a principle."
+    affects:
+      - "CLAUDE.md (new section)"
+      - "every module that reads config"
+
+  P3:
+    title: "Pre-check before adding/modifying anything"
+    decision: "Phase 0 of every code change: search the repo for the concept name and similar names; report what exists; only then propose the change. Promoted from Foundation Rule 3.3 to literal first step in CLAUDE.md."
+    rationale: "Existing system has dead app/ tree (38 stub files), parallel implementations (two fund_managers, two quality_scorers), and competing sizing paths. All caused by skipping the duplicate prevention check."
+    affects:
+      - "CLAUDE.md (Phase 0 mandate)"
+
+  P4:
+    title: "max_trades_per_day enforcement"
+    decision: "Hard limit. Telegram warning at 80% of limit. Blocking alert + signal rejection at 100%. Daily report row shows whether limit was hit. Same Config Honor Principle from P2."
+    rationale: "Currently namesake."
+    affects:
+      - "signals/signal_processor.py"
+      - "capital/risk_engine.py"
+
+  P5:
+    title: "max_open_positions and max_trades enforcement"
+    decision: "Same enforcement as P4. Both checks happen in capital/risk_engine.py, NOT in the broken paper_engine import path that exists today. Live mode and paper mode use the same code path."
+    rationale: "Currently the live mode position cap is silently disabled because the check imports from paper_engine."
+    affects:
+      - "capital/risk_engine.py"
+      - "signals/signal_processor.py"
+
+  P6:
+    title: "Re-entry duplicate definition"
+    decision: "Duplicate = same scanner_name AND same trigger_minute (1-minute resolution). Different scanner OR different minute = new signal, allowed through screening. Fingerprint = hash(scanner_name + symbol + triggered_at_minute). Stored in signals table; uniqueness enforced at INSERT."
+    rationale: "Chartink's 'send duplicate notifications' setting causes retries — these should be absorbed as duplicates. Different scanners or different minutes represent genuine new setups."
+    affects:
+      - "signals/webhook_receiver.py"
+      - "signals/signal_validator.py"
+      - "core/state_store.py (signals table unique index)"
+
+  P7a:
+    title: "Capital model: 3-balance with T+1 settlement"
+    decision: "Three balances tracked: cash_floor (broker-settled cash, withdrawable), realized_pnl_today (today's net P&L from closed trades, can be ±), margin_used (sum of qty × entry × 0.20 across open positions). Tradable balance = cash_floor + min(0, realized_pnl_today) — losses count today, profits don't until T+1. Charges deducted from realized_pnl, never from margin. NO margin_multiplier as a balance multiplier."
+    rationale: "Verified from Zerodha docs: intraday profits not tradable until T+1 settlement. Existing system's effective = cash × 5 model is broker-incorrect and produces silent over-allocation."
+    affects:
+      - "capital/fund_manager.py"
+      - "core/state_store.py (capital_snapshot, capital_ledger tables)"
+      - "capital/cost_calculator.py"
+
+  P8_P13:
+    title: "Order architecture: CO + LIMIT TGT with fallback"
+    decision: "Architecture B. CO order (built-in entry+SL bracket) + separate LIMIT TGT. Two broker order_ids per trade instead of three. order_protocol field per strategy YAML: 'CO_PLUS_TGT' default, 'LIMIT_TRIPLE' fallback when stock has CO blocked. Smart TGT modifies CO trigger_price for trail SL (not cancel-replace)."
+    rationale: "CO eliminates the entry-to-SL window race condition atomically. CO does NOT save margin (verified: 20% for both MIS and CO since Sept 2021), but the structural simplicity is worth it. Separate TGT keeps target enforced at broker (survives system crashes)."
+    alternatives_considered:
+      - "Architecture C — CO only, smart_tgt closes at TGT price (loses crash-safety on TGT)"
+      - "Architecture A — current LIMIT_TRIPLE (3 orders, more race conditions)"
+    affects:
+      - "orders/order_placer.py"
+      - "orders/smart_tgt_manager.py"
+      - "config/strategies/*.yaml (order_protocol field)"
+      - "broker/zerodha_adapter.py"
+
+  P11a:
+    title: "Pullback confirmation: price-based, per-strategy opt-in"
+    decision: "Price-based pullback wait, NOT time-based. Worker thread polls LTP every 5s. Fires entry only when price has retraced to entry_price ± tolerance. Tolerance configurable per strategy in strategy YAML (pullback_tolerance_pct). Hard timeout (configurable, default 180s). Only applies to strategies that opt in via pullback_wait: enabled in their YAML."
+    rationale: "Time-based wait blocked the signal queue. Price-based is more responsive. Per-strategy opt-in respects that some strategies (gap fade, first pullback) shouldn't wait."
+    affects:
+      - "orders/entry_gate.py"
+      - "config/strategies/*.yaml (pullback_wait section)"
+
+  P11b:
+    title: "Entry order fill timeout"
+    decision: "Hybrid timeout: order_fill_timeout: { limit: 60, market: 0 }. On timeout: cancel order, mark trade as FAILED (not PARTIAL). On partial fill at timeout: force-exit the filled portion at MARKET, mark trade as FULLY FAILED, release all reserved capital."
+    rationale: "All-or-nothing semantics. Partial fills create unclear risk math."
+    affects:
+      - "orders/order_placer.py"
+      - "config/system_config.yaml"
+
+  P12:
+    title: "Paper-live parity: charges and slippage"
+    decision: "Identical cost_calculator applied in both paper and live modes. All rates in config/broker_costs.yaml. Slippage configurable per stock liquidity tier in config/slippage_model.yaml (default 5bps for liquid, more for mid/small caps). Paper mode applies slippage to fills. Daily report rows match contract notes within rounding."
+    rationale: "Existing paper engine has zero cost or slippage simulation. Paper P&L is therefore fictional. P12 is non-negotiable correctness requirement."
+    affects:
+      - "capital/cost_calculator.py"
+      - "paper/paper_engine.py"
+      - "config/broker_costs.yaml"
+      - "config/slippage_model.yaml"
+
+  P14:
+    title: "Polling intervals: 30s → 15s"
+    decision: "order_monitor poll interval: 15s (down from 30s). order_reconciler poll interval: 15s (down from 30s). Both configurable in config/system_config.yaml."
+    rationale: "Faster orphan detection. Within Zerodha rate limits with G7 token bucket."
+    affects:
+      - "orders/order_monitor.py"
+      - "orders/order_reconciler.py"
+      - "config/system_config.yaml"
+
+  P15:
+    title: "Signal queue size: 200 → 300"
+    decision: "Default queue capacity raised to 300. Backpressure (HTTP 503) still fires at 80% capacity = 240."
+    rationale: "Bigger buffer before backpressure. No technical objection."
+    affects:
+      - "signals/signal_queue.py"
+      - "config/system_config.yaml"
+
+  P16:
+    title: "Complete signal handling visibility"
+    decision: "Every signal_id assigned at webhook gets a final status before the system 'forgets' it. Statuses: TRADED, REJECTED_DUP, REJECTED_EXPIRED, REJECTED_SCREEN, REJECTED_RISK, REJECTED_CAPITAL, REJECTED_KILL, REJECTED_GATE, REJECTED_MARKET_HOURS, REJECTED_MAX_TRADES, REJECTED_MAX_POSITIONS, DROPPED_IN_FLIGHT, DROPPED_QUEUE_FULL. Every status writes a row to signals table with timestamp and reason. Daily report has signal funnel sheet."
+    rationale: "Currently many signals vanish silently. Operator visibility is essential for debugging strategy drift."
+    affects:
+      - "signals/webhook_receiver.py"
+      - "signals/signal_processor.py"
+      - "core/state_store.py (signals table)"
+      - "reports/daily_review.py"
+
+  P17:
+    title: "Pre-flight scanner check"
+    decision: "Lightweight check at startup: (a) all 15 Chartink scanner URLs reachable via HTTP HEAD, (b) scan_webhook_map.yaml maps every scanner to a valid existing strategy YAML, (c) own webhook endpoint reachable via local /health curl, (d) no duplicate scanner names in scan_webhook_map.yaml. CRITICAL on any failure. NOT parsing Chartink scan conditions (too brittle)."
+    rationale: "Catches the most common failure modes (scanner deleted, URL changed, duplicate config, Flask not bound) without taking on Chartink HTML parsing brittleness."
+    affects:
+      - "utils/startup_checks.py"
+      - "scripts/preflight_scanner_check.py (new)"
+
+  P18:
+    title: "Secondary screener explicit pass/skip/drop"
+    decision: "Every signal entering the screener leaves with one of: PASSED, REJECTED_<step>, SKIPPED_<reason>. The <step> matches the 10 screener step names so funnel report shows which step kills most signals. NO silent drops or 'log and continue' on step exceptions."
+    rationale: "Currently a step exception bypasses the gating logic entirely (try/except continue). Funnel visibility is essential for tuning."
+    affects:
+      - "screening/secondary_screener.py"
+      - "core/state_store.py"
+      - "reports/daily_review.py"
+
+  P9a:
+    title: "secondary_screener scope: keep + fix bugs + add missing checks"
+    decision: "Keep all 10 current steps. Fix critical bugs: (a) exception bypass at line 121 (any step exception = REJECTED_STEP_ERROR), (b) SHORT direction blindness in step 3 (vwap) and _calculate_prices (entry trigger), (c) Step 1 'allow through' on insufficient data → REJECTED_INSUFFICIENT_DATA, (d) two competing sizing paths consolidated. ADD missing checks: (1) signal age check (reject if now - signal.triggered_at > 90s), (2) circuit state check via kite.quote() (reject if upper/lower circuit hit), (3) per-step latency tracking in debug log."
+    rationale: "Keep the trading-edge logic; fix the engineering bugs that make the gating unreliable."
+    affects:
+      - "screening/secondary_screener.py"
+      - "screening/step_executor.py (new)"
+
+  P9b:
+    title: "Screener score weights config-driven"
+    decision: "All weights, thresholds, and tier boundaries in config/scoring_weights.yaml. NO scattered constants in screener code. Hot-reload not required (restart loads new config)."
+    rationale: "Current weights are arbitrary integers (5, 10, 15, 8) scattered across functions. No documented reasoning. Config makes them tunable without code edits — essential for v2.1 A/B testing once live data is available."
+    affects:
+      - "screening/secondary_screener.py"
+      - "screening/quality_scorer.py"
+      - "config/scoring_weights.yaml (new)"
+
+  P10:
+    title: "position_sizer: 4-layer model with binding-layer logging"
+    decision: "Single position_sizer module (delete _calculate_qty in signal_processor). Four layers: L1 risk-based (risk_amount / sl_distance), L2 per-trade cap ((cash_floor × max_usage%) / max_trades), L3 portfolio risk cap ((portfolio_risk_remaining) / sl_distance), L4 margin cap ((tradable_balance × leverage) / entry_price). Final = min(L1,L2,L3,L4) × tier_multiplier × time_of_day_multiplier. Binding layer logged for every trade. Daily report shows binding layer distribution."
+    rationale: "L4 is the broker constraint that the existing 3-layer model misses. Binding-layer logging tells you which constraint is limiting your trading the most — actionable signal."
+    affects:
+      - "capital/position_sizer.py"
+      - "signals/signal_processor.py (calls position_sizer)"
+      - "reports/daily_review.py (binding layer sheet)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CROSS-CUTTING PRINCIPLES
+# ══════════════════════════════════════════════════════════════════════════════
+
+principles:
+
+  no_encryption:
+    statement: "No encryption anywhere in the system."
+    scope: "Database, secrets, logs, backups, files in transit between PC and VM (SSH key auth is not 'encryption of data', it's transport security and is allowed)."
+    rationale: "Q2 decision. Operational simplicity for a single-developer system whose data sensitivity is bounded by .env contents."
+
+  config_honor_principle:
+    statement: "Every limit in config must be enforced AND alerted AND reported."
+    scope: "All numeric, boolean, time, and threshold values in config/*.yaml."
+    rationale: "P2 decision. No 'namesake' config values."
+
+  broker_is_truth:
+    statement: "The broker is the source of truth for orders, positions, and capital. Local state is a cache, refreshed on every event, with invariants checked on every refresh."
+    scope: "All capital, position, and order tracking."
+    rationale: "Project-specific rule already documented; v2 actually implements it (existing system inverted it)."
+
+  fail_fast_no_silent:
+    statement: "Every exception must either be logged with full traceback AND raised, OR explicitly handled with documented recovery. NO bare except, NO try/except/log/continue patterns that swallow errors."
+    scope: "Every .py file."
+    rationale: "Foundation Rule 1.6 + Rule 4. Existing system has ~40 try/except/pass sites that produce silent data corruption."
+
+  pre_check_before_change:
+    statement: "Before adding or modifying any file/code, search the repo for the concept name and similar names. Report what exists. Only then propose the change."
+    scope: "Every code change in v2 development and beyond."
+    rationale: "P3 decision. Promoted Foundation Rule 3.3 to mandatory Phase 0."
+
+  identity_traceability:
+    statement: "Every log line and report row that involves a trade activity must carry signal_id, trade_id, and order_id (when applicable)."
+    scope: "All logging output, all trade-related database rows, all Telegram alerts referencing trades."
+    rationale: "Project-specific rule + G2 decision. Existing system has zero traceability — debugging a losing day requires this."
+
+# ══════════════════════════════════════════════════════════════════════════════
+# E — EXCEPTIONS MODULE DECISIONS (6 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+exceptions_module:
+
+  E1:
+    title: "Root exception class"
+    decision: "TradingSystemError(Exception) is the single root. Every custom exception in the system inherits from it. Callers can do `except TradingSystemError` to catch any system exception without importing sub-roots."
+    rationale: "Single catch-all root is standard practice and essential for main.py's top-level safety net."
+    alternatives_considered:
+      - "No root, catch by sub-root only (rejected: main.py needs one catch-all)"
+    affects:
+      - "core/exceptions.py"
+
+  E2:
+    title: "Severity tag on every exception class"
+    decision: "Every exception class declares a class-level attribute SEVERITY: str in {'INFO','WARN','ERROR','CRITICAL'}, aligned with G8 alert tiers. Default on TradingSystemError root is 'ERROR'. Leaf classes override where appropriate."
+    rationale: "Structured logging and alert routing need severity without inspecting the exception type. Putting it on the class (not the instance) means it's always present even if not passed at raise time."
+    alternatives_considered:
+      - "Pass severity as a constructor argument (rejected: too easy to forget; class-level is always present)"
+    affects:
+      - "core/exceptions.py"
+      - "core/logger.py (reads SEVERITY for structured log output)"
+
+  E3:
+    title: "Five sub-root hierarchy under TradingSystemError"
+    decision: |
+      Five sub-roots, each covering one domain:
+        ConfigError   — config_loader, schema validation, YAML errors
+        StateError    — state_store, capital invariants, persistence
+        BrokerError   — broker adapter, API calls, auth, order placement
+        TimeError     — time_authority (ClockSkewTooLarge lives here)
+        SignalError   — signal pipeline, dedup, screener, queue
+      Default SEVERITY per sub-root: ConfigError=ERROR, StateError=CRITICAL,
+      BrokerError=ERROR, TimeError=ERROR, SignalError=WARN.
+    rationale: "Five domains match the five areas where errors have meaningfully different recovery paths. StateError defaults CRITICAL because any persistence corruption requires immediate attention."
+    alternatives_considered:
+      - "Flat hierarchy under TradingSystemError only (rejected: no domain grouping, isinstance checks less useful)"
+    affects:
+      - "core/exceptions.py"
+
+  E4:
+    title: "Concrete exceptions seeded day-one"
+    decision: |
+      ConfigError   → ConfigSchemaError, ConfigMissingError
+      StateError    → CapitalInvariantViolation (CRITICAL), DedupViolation (WARN)
+      BrokerError   → OrderRejectedError, BrokerAuthError (CRITICAL), BrokerTimeoutError
+      TimeError     → ClockSkewTooLarge (CRITICAL)  [moved from time_authority.py]
+      SignalError   → SignalExpiredError, DuplicateSignalError
+    rationale: "These are the concrete exceptions already referenced across the locked decisions (G3, G6, P6, P1_market_windows_api, etc.). Seeding them on day one avoids ad-hoc exception definitions scattering across modules."
+    alternatives_considered:
+      - "Add exceptions only when first raised (rejected: leads to scattered definitions, inconsistent inheritance)"
+    affects:
+      - "core/exceptions.py"
+      - "core/time_authority.py (ClockSkewTooLarge removed, imported from here)"
+      - "capital/invariant.py (raises CapitalInvariantViolation)"
+
+  E5:
+    title: "Constructor contract: (message, **context)"
+    decision: "Every exception accepts (message: str, **context). The keyword args are stored as self.context dict. No positional args beyond message. Callers pass structured data as kwargs: e.g., ClockSkewTooLarge('...', skew_seconds=45.2)."
+    rationale: "self.context makes structured logging trivial — logger can serialize context as JSON fields without parsing the message string. **kwargs pattern is open to any future keys without changing signatures."
+    alternatives_considered:
+      - "Typed fields per exception class (rejected: verbose, requires schema changes to add fields)"
+      - "No structured context, message only (rejected: logger must parse strings to extract values)"
+    affects:
+      - "core/exceptions.py"
+      - "core/time_authority.py (raise site updated: skew_seconds moves to context kwarg)"
+
+  E6:
+    title: "No imports — Layer 0"
+    decision: "core/exceptions.py imports only Python stdlib. It does not import from any other module in this codebase. It is the lowest possible layer — everything else may import from it, it imports from nothing."
+    rationale: "Any import in exceptions.py creates a circular import risk. exceptions.py must be importable as the very first thing in any module."
+    alternatives_considered:
+      - "Import core/logger for auto-logging on construction (rejected: circular import with logger importing exceptions)"
+    affects:
+      - "core/exceptions.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EV — EVENTS MODULE DECISIONS (6 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+events_module:
+
+  EV1:
+    title: "Synchronous in-process dispatch"
+    decision: "bus.publish(event) invokes all subscribers in the same thread and returns when all are done. No queue, no async, no background thread. Keeps ~80 line budget. Async can be added later if needed."
+    rationale: "Simplest possible model. Debuggable stack traces. No threading complexity for a system that already runs single-threaded per the G9 decision."
+    alternatives_considered:
+      - "Async dispatch via asyncio (rejected: complexity cost for no current benefit)"
+      - "Background thread queue (rejected: ordering/error-propagation complexity)"
+    affects:
+      - "core/events.py"
+
+  EV2:
+    title: "Explicit registration: bus.subscribe(EventType, handler)"
+    decision: "No decorator. Explicit bus.subscribe() call at wiring time. Makes startup wiring grep-able and testable. Aligns with Boring Code Rule (Foundation 1.10)."
+    rationale: "Decorator-based registration hides wiring in arbitrary source files. Explicit calls make the subscription graph fully visible via grep."
+    alternatives_considered:
+      - "@bus.on(EventType) decorator (rejected: hides wiring, harder to grep)"
+    affects:
+      - "core/events.py"
+      - "main.py (wires subscriptions at startup)"
+
+  EV3:
+    title: "Full event envelope"
+    decision: |
+      Every event is a dataclass inheriting from base Event with four envelope fields:
+        event_id: str (uuid4 hex, auto-generated)
+        ts: datetime (IST, from time_authority.now_ist(), auto-generated)
+        source_module: str (caller-provided, e.g. "order_placer")
+        payload: dict (default empty; typed subclass fields preferred)
+      Concrete event subclasses add typed payload fields per EV6.
+      Aligns with G2a three-ID traceability (signal_id, trade_id, order_id in typed fields).
+    rationale: "Auto-generated IDs and timestamps remove error-prone boilerplate from every publish call. source_module gives instant subscriber-side context without inspecting the call stack."
+    alternatives_considered:
+      - "No envelope, raw dict events (rejected: no auto-ID, no traceability)"
+      - "Timestamp-only envelope without event_id (rejected: insufficient for dedup/logging)"
+    affects:
+      - "core/events.py"
+
+  EV4:
+    title: "Collect-all-errors-then-raise"
+    decision: "Bus invokes every subscriber for an event, captures exceptions in a list, logs each one, then raises a single EventDispatchError (in core/exceptions.py, sub of TradingSystemError, SEVERITY=ERROR) if any failed. No subscriber is skipped due to a sibling failing. Aligns with fail_fast_no_silent — failures are loud, but fan-out completes so partial state doesn't accumulate."
+    rationale: "Skipping later subscribers on a sibling failure creates partial state. Collecting all errors before raising gives complete failure information."
+    alternatives_considered:
+      - "Raise immediately on first subscriber failure (rejected: skips later subscribers)"
+      - "Swallow all errors and log (rejected: violates fail_fast_no_silent)"
+    affects:
+      - "core/events.py"
+      - "core/exceptions.py (EventDispatchError)"
+
+  EV5:
+    title: "No ordering guarantee across subscribers"
+    decision: "Subscribers for the same event_type are invoked in registration order, but this is NOT part of the contract. Subscribers must not depend on sibling subscriber side effects. Documented in module header."
+    rationale: "Making order a contract would constrain subscriber registration and make refactoring dangerous. Forcing independence is the correct design."
+    alternatives_considered:
+      - "Priority queue ordering (rejected: over-engineering, hides coupling)"
+    affects:
+      - "core/events.py"
+
+  EV6:
+    title: "Four event types seeded"
+    decision: |
+      Four event types seeded as dataclass subclasses of Event with typed payload fields:
+        OrderFilled: symbol, order_id, trade_id, signal_id, filled_qty, fill_price
+        PositionClosed: symbol, trade_id, signal_id, exit_price, realized_pnl
+        KillSwitchActivated: kill_type ("soft"|"hard"), reason
+        CapitalDriftDetected: expected, actual, delta
+      No others added speculatively (G9).
+    rationale: "Only events with 3+ real subscribers warrant the EventBus. These four are the only confirmed cases. Adding more speculatively creates hidden coupling without earned benefit."
+    alternatives_considered:
+      - "Generic dict-based events without typed subclasses (rejected: no IDE support, runtime errors)"
+      - "More event types speculatively (rejected: premature abstraction)"
+    affects:
+      - "core/events.py"
+      - "orders/order_monitor.py (subscribes to OrderFilled)"
+      - "capital/fund_manager.py (subscribes to OrderFilled, PositionClosed)"
+      - "utils/kill_switch.py (publishes KillSwitchActivated)"
+      - "orders/order_reconciler.py (publishes CapitalDriftDetected)"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OUT OF SCOPE FOR V2 (Explicitly deferred)
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OP-LM — ORDER PLACER LAST-MILE GAPS (3 decisions, locked 2026-04-16)
+# ══════════════════════════════════════════════════════════════════════════════
+# These decisions close gaps identified during reconciliation after the orders/
+# module was built from locked_decisions.yaml (G10, P8_P13, P11b). They patch
+# three correctness issues in order_placer.py, order_protocol_limit.py, and
+# order_protocol_co.py. Acknowledged per process rule: locked_decisions.yaml
+# is authoritative; conflicts with ad-hoc spec must be flagged, locked wins.
+# ══════════════════════════════════════════════════════════════════════════════
+
+orders_module:
+
+  OP-LM1:
+    title: "Kill-switch last-mile check before adapter.place_order()"
+    decision: |
+      Immediately before engine.execute() in OrderPlacer.place():
+        if kill_switch is not None and kill_switch.is_active("entry"):
+          → mark trade FAILED (update_trade_status)
+          → release capital reservation (fund_manager.release)
+          → raise OrderRejectedError("kill_switch_active_last_mile")
+          → adapter.place_order() is NEVER called
+      KillSwitch is injected at OrderPlacer construction (optional parameter,
+      default None = disabled). Aligns with Project Rule 13 (last-mile gate).
+    rationale: |
+      A kill_switch fired between capital reservation and order placement would
+      otherwise be bypassed. The check must be the last thing before the
+      adapter call so no code path can slip through between activation and gate.
+    alternatives_considered:
+      - "Check in signal_processor only (rejected: gap between reservation and placement)"
+      - "Check inside the protocol files (rejected: kill_switch is an OrderPlacer concern)"
+    affects:
+      - "orders/order_placer.py"
+      - "capital/kill_switch.py (injected, not modified)"
+
+  OP-LM2:
+    title: "Reservation release on every placement failure path"
+    decision: |
+      Every path in OrderPlacer.place() that cannot complete order placement
+      MUST call fund_manager.release(reservation_id, reason) before returning
+      or raising. Implemented via _handle_placement_failure() helper which:
+        (a) logs the exception with log_exception()
+        (b) calls order_manager.update_trade_status(trade_id, "FAILED")
+        (c) calls fund_manager.release(reservation_id, reason)
+      Covers: BrokerError from engine.execute(), soft failure (success=False),
+      and OP-LM1 kill_switch abort.
+    rationale: |
+      Any missed release leaks margin from the capital model permanently
+      (within the session). There is no background process to reclaim leaked
+      reservations. The helper centralises the cleanup so new paths cannot
+      accidentally omit it.
+    alternatives_considered:
+      - "Inline release at each except site (rejected: easy to miss; duplication)"
+    affects:
+      - "orders/order_placer.py (_handle_placement_failure)"
+
+  OP-LM3:
+    title: "Empty broker_order_id from adapter treated as placement failure"
+    decision: |
+      After every adapter.place_order() call in both protocol files, validate:
+        if not placed.broker_order_id:
+          raise OrderRejectedError("adapter returned empty broker_order_id for <LEG> order")
+      Scope by leg/protocol:
+        LIMIT_TRIPLE ENTRY: raise immediately (no orders placed)
+        LIMIT_TRIPLE SL:    cancel ENTRY best-effort, then raise
+        LIMIT_TRIPLE TGT:   raise (SL still standing; same as BrokerError on TGT)
+        CO_PLUS_TGT CO:     raise immediately (nothing placed)
+        CO_PLUS_TGT TGT:    soft success (return success=True, tgt_broker_order_id="")
+                             identical to OPC4 BrokerError on TGT path
+      Fixes Audit Issue #21.
+    rationale: |
+      Zerodha API has returned HTTP 200 with empty order_id during connectivity
+      degradation. Treating this as success allows the system to track a trade
+      with no recoverable broker reference, leading to reconciler confusion.
+      Validating at the protocol layer (not the adapter) keeps the adapter thin.
+    alternatives_considered:
+      - "Validate in ZerodhaAdapter.place_order() (rejected: adapter is thin by design)"
+      - "Validate in OrderPlacer after EntryResult (rejected: too late; partial state already exists)"
+    affects:
+      - "orders/order_protocol_limit.py"
+      - "orders/order_protocol_co.py"
+
+deferred_to_v2_1:
+
+  - feature: "Scaling entry (40/30/30 multi-leg)"
+    decision_ref: "G10"
+    note: "Schema and EntryEngine abstraction in v2; logic deferred"
+
+  - feature: "AI/LLM daily trade review"
+    decision_ref: "Q3"
+    note: "Trade log structured for later consumption"
+
+  - feature: "Backtesting harness"
+    decision_ref: "Earlier discussion"
+    note: "Build only after v2 is live and stable; otherwise risks false-confidence backtest"
+
+  - feature: "Multi-broker routing"
+    decision_ref: "Architectural"
+    note: "Broker abstraction in place, AngelOne adapter not built"
+
+  - feature: "SQLCipher / database encryption"
+    decision_ref: "Q2"
+    note: "Permanently deferred per project principle"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CL — CONFIG LOADER DECISIONS (6 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+config_loader:
+
+  CL1:
+    title: "load_all(config_dir) → AppConfig — module-level function, no singleton"
+    decision: "load_all(config_dir: Path = Path('config')) → AppConfig. Module-level function. No singleton. AppConfig is a Pydantic BaseModel holding all 8 sub-configs as typed fields plus file_hashes: dict[str, str]. main.py calls it once at startup, holds the result, and passes sub-configs as constructor parameters to each subsystem."
+    rationale: "Module-level functions are more grep-able and testable than singleton classes. No hidden global state. Every caller gets what it needs via explicit DI."
+    alternatives_considered:
+      - "ConfigLoader class singleton (rejected: hidden global state, harder to test with different config dirs)"
+      - "Module-level cached singleton via functools.cache (rejected: same hidden state problem)"
+    affects:
+      - "core/config_loader.py"
+      - "main.py (calls load_all at Phase 0b)"
+
+  CL2:
+    title: "Atomic load — all 8 files or nothing"
+    decision: "All 8 files must parse and validate. Any failure raises ConfigMissingError (file absent) or ConfigSchemaError (file present but invalid) immediately. No partial AppConfig is ever returned. No file is silently skipped."
+    rationale: "Partial config leaves the system in an indeterminate state. A startup failure is always better than runtime errors from missing config values."
+    alternatives_considered:
+      - "Load what exists, skip missing (rejected: violates fail_fast_no_silent, leads to runtime KeyError)"
+    affects:
+      - "core/config_loader.py"
+      - "core/exceptions.py (uses ConfigMissingError, ConfigSchemaError)"
+
+  CL3:
+    title: "Strict schemas — extra='forbid' on all Pydantic models"
+    decision: "Every Pydantic model in config_loader uses model_config = ConfigDict(extra='forbid'). Unknown keys in YAML raise ConfigSchemaError. This catches typos in config keys (e.g. 'max_open_positons') that would otherwise silently use a schema default."
+    rationale: "extra='allow' or extra='ignore' turns typos into silent failures. extra='forbid' is the only option consistent with Config Honor Principle (P2)."
+    alternatives_considered:
+      - "extra='ignore' (rejected: typos silently ignored)"
+      - "extra='allow' (rejected: unknown fields accepted, schema has no teeth)"
+    affects:
+      - "core/config_loader.py"
+
+  CL4:
+    title: "SHA-256 hash per file stored in AppConfig.file_hashes"
+    decision: "load_all() computes hashlib.sha256(raw_bytes).hexdigest() for each file and stores in AppConfig.file_hashes: dict[str, str] (filename → hex digest). Used by Phase 0b to detect config changes between restarts and queue a Telegram alert."
+    rationale: "Config drift between restarts is a real operational hazard. Hashing every file cheaply enables the detection. Raw bytes are hashed before YAML parse so hash reflects actual file content, not parsed representation."
+    alternatives_considered:
+      - "Hash concatenated content of all files as one hash (rejected: can't identify which file changed)"
+      - "Hash after YAML parse (rejected: normalizes formatting, misses whitespace/comment changes)"
+    affects:
+      - "core/config_loader.py"
+      - "main.py (Phase 0b compares to last_config_hash in state_store)"
+
+  CL5:
+    title: "No env-var interpolation, no includes, no anchors"
+    decision: "yaml.safe_load() is used (not yaml.full_load). YAML values are taken literally — no !include, no environment variable substitution. Values needing env vars go in .env and are read by the consumer module directly. YAML anchors/aliases (&anchor, *alias) are supported by safe_load but discouraged via documentation — any schema mismatch they cause is caught by extra='forbid'."
+    rationale: "Env-var interpolation in YAML is non-standard, surprising, and creates implicit dependencies between config loading and the environment. Consumer modules reading .env explicitly is grep-able. safe_load also blocks arbitrary Python object construction."
+    alternatives_considered:
+      - "PyYAML with custom Loader for ${VAR} syntax (rejected: non-standard, not grep-able)"
+      - "full_load (rejected: allows arbitrary Python object construction)"
+    affects:
+      - "core/config_loader.py"
+
+  CL6:
+    title: "All 8 schemas + AppConfig in one file for v2"
+    decision: "All Pydantic model classes (8 file schemas + AppConfig) are defined in core/config_loader.py. If the file exceeds 600 lines, split into core/config_schemas/ package with one file per config domain. Day-one file is well under 600 lines."
+    rationale: "One file is navigable on day one. Premature splitting adds import indirection with no benefit. The 600-line trigger gives a concrete split point that will never be hit by 8 small schemas."
+    alternatives_considered:
+      - "core/config_schemas/ package from day one (rejected: premature, 8 small schemas don't need it)"
+    affects:
+      - "core/config_loader.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# L — LOGGER MODULE DECISIONS (10 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+logger_module:
+
+  L1:
+    title: "Four log files: JSON for system/trades/reconciler, plain for debug"
+    decision: |
+      Four append-only daily log files in logs/:
+        system_YYYY-MM-DD.log      — JSON-lines, INFO+, all loggers (catch-all)
+        trades_YYYY-MM-DD.log      — JSON-lines, records carrying signal_id OR trade_id OR order_id
+        reconciler_YYYY-MM-DD.log  — JSON-lines, loggers starting with order_reconciler* or order_monitor*
+        debug_YYYY-MM-DD.log       — plain human-readable text, DEBUG+, all loggers
+      One record can land in multiple files (e.g., a trade log also lands in system + debug). Intended.
+    rationale: "debug log is read by a human during incidents; system/trades/reconciler are machine-processable and LLM-ready (Q3). JSON enables grep, jq, and future LLM review without parsing."
+    affects:
+      - "core/logger.py"
+
+  L2:
+    title: "TradeContext LoggerAdapter with bound IDs; bind_trade() factory"
+    decision: |
+      get_logger(name) → stdlib logging.Logger (no bound context).
+      bind_trade(log, *, signal_id=, trade_id=, order_id=) → TradeContext (LoggerAdapter subclass).
+      Bound non-None IDs appear in every log record as extra fields automatically.
+      Callers prefer the wrapper over inline extra={} on every call.
+    rationale: "LoggerAdapter is the stdlib-idiomatic way to bind context. Keeps caller code clean without introducing third-party libraries."
+    affects:
+      - "core/logger.py"
+
+  L3:
+    title: "Routing: by logger name prefix (reconciler) + extra-key marker (trades) + catch-all (system)"
+    decision: |
+      Routing is implemented via logging.Filter on each handler:
+        reconciler log: name.startswith(("order_reconciler", "order_monitor"))
+        trades log: record has signal_id OR trade_id OR order_id (getattr with None check)
+        system log: levelno >= INFO (catch-all — a record can also appear here)
+        debug log: no filter, all DEBUG+ records
+      A single record lands in multiple files. The timestamp + IDs are the source of truth, not the file.
+    affects:
+      - "core/logger.py"
+
+  L4:
+    title: "WARNING+ mirrored to stdout always; no config flag"
+    decision: "StreamHandler(sys.stdout) with level=WARNING attached to root logger by setup_logging(). DEBUG and INFO go to files only. No configuration flag needed — this is a trading process, not a web server."
+    affects:
+      - "core/logger.py"
+
+  L5:
+    title: "get_logger(name) → stdlib Logger"
+    decision: "from core.logger import get_logger; log = get_logger(__name__) returns a stdlib logging.Logger. Handlers are NOT attached by get_logger(); only setup_logging() attaches them."
+    affects:
+      - "core/logger.py"
+      - "every module that logs"
+
+  L6:
+    title: "Fresh files per setup_logging() call; append mode; today_ist() for filenames"
+    decision: "setup_logging() opens new FileHandlers using today_ist() from time_authority for the date string. Append mode — safe for same-day restarts. No TimedRotatingFileHandler. Single source of time (G4)."
+    affects:
+      - "core/logger.py"
+      - "core/time_authority.py (today_ist used here)"
+
+  L7:
+    title: "log_exception(log, exc) helper maps SEVERITY to log level"
+    decision: |
+      log_exception(log, exc):
+        TradingSystemError: level = {INFO→INFO, WARN→WARNING, ERROR→ERROR, CRITICAL→CRITICAL}[exc.SEVERITY]
+        Other exceptions: ERROR level, empty context
+      Always logs str(exc) with exc_info=(type(exc), exc, exc.__traceback__) and extra=exc.context.
+      Callers use this everywhere instead of inline logger.exception(...).
+    affects:
+      - "core/logger.py"
+
+  L8:
+    title: "setup_logging() creates logs/ if absent"
+    decision: "setup_logging(log_dir: Path = Path('logs')) calls log_dir.mkdir(parents=True, exist_ok=True) before opening any FileHandler. main.py calls setup_logging() once before any other module imports get_logger."
+    affects:
+      - "core/logger.py"
+      - "main.py (calls setup_logging at startup)"
+
+  L9:
+    title: "JSON line schema — fixed field order"
+    decision: |
+      Every JSON line has these fields in this order (omit if absent):
+        ts            ISO-8601 IST string with milliseconds
+        level         DEBUG | INFO | WARNING | ERROR | CRITICAL
+        logger        logger name
+        msg           formatted message string
+        signal_id     if in extra, else omitted
+        trade_id      if in extra, else omitted
+        order_id      if in extra, else omitted
+        symbol        if in extra, else omitted
+        <other extra> remaining extra fields in alphabetical order
+        exc_type      if exception, else omitted
+        exc_traceback if exception, multi-line string, else omitted
+      Serialized with json.dumps(ensure_ascii=False, separators=(',',':')).
+    affects:
+      - "core/logger.py (_JsonFormatter)"
+
+  L10:
+    title: "Duplicate-handler guard: get_logger caches; handlers only from setup_logging"
+    decision: |
+      get_logger(name) returns the cached Logger from a module-level dict _loggers.
+      Calling it twice with the same name returns the SAME Logger instance.
+      Handlers are attached ONLY by setup_logging(), never by get_logger().
+      setup_logging() removes handlers from the previous call (tracked in _active_handlers)
+      before attaching new ones. Prevents the duplicate-handler bug (audit Part 3.8).
+    affects:
+      - "core/logger.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ID — IDS MODULE (7 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+ids_module:
+
+  ID1:
+    title: "ID format: prefix + full UUID4 hex (36 chars total)"
+    decision: |
+      IDs use the format "{prefix}{uuid4_hex}" where uuid4_hex is the 32-char
+      lowercase hexadecimal UUID4 (no hyphens). Examples:
+        signal_id  → "sig_a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5"
+        trade_id   → "trd_a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5"
+        order_id   → "ord_a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5"
+    rationale: |
+      Prefix gives instant grep-ability in logs and makes the ID type self-evident.
+      UUID4 hex (32 chars) is collision-free across years of trading volume.
+      Timestamp lives in the log envelope (L9) and state_store rows — not in the ID.
+    alternatives_considered:
+      - "UUID4 hex only (32 chars) — rejected: no prefix, not grep-able by type"
+      - "Prefix + timestamp + counter — rejected: counter requires shared state; timestamp duplicates L9"
+    affects:
+      - "core/ids.py"
+      - "core/state_store.py (ID format at insert)"
+
+  ID2:
+    title: "Prefixes: sig_, trd_, ord_"
+    decision: |
+      signal_id  → prefix "sig_"
+      trade_id   → prefix "trd_"
+      order_id   → prefix "ord_" (internal order ID; broker's own ID stored separately as broker_order_id)
+    rationale: |
+      Three-char prefix plus underscore is short enough for log lines, unambiguous,
+      and distinct from any broker-assigned ID format.
+    alternatives_considered:
+      - "signal_, trade_, order_ (longer) — rejected: 4 extra chars per log line, no benefit"
+    affects:
+      - "core/ids.py"
+
+  ID3:
+    title: "Full 32-char UUID4 hex (no truncation)"
+    decision: |
+      The hex portion is the full 32-char UUID4 hex string (uuid.uuid4().hex).
+      No truncation.
+    rationale: |
+      Collision probability with 12-char truncation is ~1 in 2^48 (~2.8e14) — acceptable
+      for trading volume, but the extra 20 chars per log line is negligible and eliminates
+      any theoretical collision risk across years of operation.
+    alternatives_considered:
+      - "First 12 chars — rejected: unnecessary risk for trivial savings"
+    affects:
+      - "core/ids.py"
+
+  ID4:
+    title: "Generator API: three zero-arg module-level functions"
+    decision: |
+      Public API:
+        from core.ids import new_signal_id, new_trade_id, new_order_id
+      Each is a zero-argument function returning str.
+      No class, no singleton, no constructor injection.
+    rationale: |
+      Pure functions are the simplest possible interface. No state means no thread-safety
+      concerns. Boring Code Rule — no hidden machinery.
+    alternatives_considered:
+      - "IdGenerator class — rejected: adds complexity with no benefit for stateless generators"
+    affects:
+      - "core/ids.py"
+
+  ID5:
+    title: "Validation helpers: is_valid_{type}_id(s) -> bool"
+    decision: |
+      Three validation functions:
+        is_valid_signal_id(s: object) -> bool
+        is_valid_trade_id(s: object) -> bool
+        is_valid_order_id(s: object) -> bool
+      Each returns True iff s is a str matching the pattern "{prefix}[0-9a-f]{32}".
+      Accepts any object (returns False for None, int, etc. — never raises).
+      Used by state_store and any layer that must reject malformed IDs at insert time.
+    rationale: |
+      Centralises the regex in one place. Accepts object (not str) so callers can
+      pass raw DB values or untyped input without a try/except wrapper.
+    alternatives_considered:
+      - "Raise ValueError on invalid — rejected: validators that raise require try/except at every call site"
+    affects:
+      - "core/ids.py"
+      - "core/state_store.py"
+
+  ID6:
+    title: "No timestamp embedded in the ID"
+    decision: |
+      IDs contain no timestamp component. Timestamp lives in the log envelope (L9)
+      and in the state_store row's created_at column.
+    rationale: |
+      Embedding a timestamp creates a temptation to parse IDs for time, which violates
+      single-source-of-truth. The log envelope and DB rows are the authoritative time sources.
+    alternatives_considered:
+      - "Prefix + timestamp + counter — rejected: counter requires shared state; parsing IDs for time is an anti-pattern"
+    affects:
+      - "core/ids.py"
+
+  ID7:
+    title: "Layer 0: stdlib only (uuid, re), no imports from this codebase"
+    decision: |
+      core/ids.py imports only from the Python stdlib: uuid and re.
+      No imports from core.exceptions, core.logger, or any other module in this codebase.
+      Pure functions, no module-level state.
+    rationale: |
+      IDs are used everywhere. Putting them at Layer 0 (same as exceptions) prevents
+      circular imports. The module has no reason to log or raise custom exceptions.
+    alternatives_considered:
+      - "Import core.exceptions for validation errors — rejected: ID5 validators return bool; no exception needed"
+    affects:
+      - "core/ids.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RL — RATE LIMITER MODULE (10 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+rate_limiter_module:
+
+  RL1:
+    title: "Algorithm: token bucket per endpoint category"
+    decision: |
+      Client-side rate limiting uses the token bucket algorithm.
+      One independent bucket per endpoint category. Tokens are added continuously
+      at rate_per_sec; bucket is capped at burst (max capacity). Each API call
+      consumes 1 (or n) tokens. If insufficient tokens, the caller blocks until
+      enough tokens accumulate or max_wait_sec is exceeded.
+    rationale: |
+      Token bucket naturally handles burst traffic (up to capacity) while enforcing
+      a sustained rate ceiling. Matches Zerodha's published rate semantics better
+      than sliding or fixed windows.
+    alternatives_considered:
+      - "Sliding window — rejected: more complex, no burst handling"
+      - "Fixed window — rejected: thundering-herd at window boundary"
+    affects:
+      - "broker/rate_limiter.py"
+
+  RL2:
+    title: "Four endpoint categories: order, quote, historical, margins"
+    decision: |
+      Independent token buckets for: order, quote, historical, margins.
+      Config fields per category in broker_limits.yaml:
+        burst: int        — max tokens (burst capacity)
+        rate_per_sec: int — sustained refill rate (tokens/sec)
+      An unknown category raises ValueError immediately.
+    rationale: |
+      Categories match Zerodha's actual API groupings. Independent buckets prevent
+      a historical data burst from starving order placement.
+    alternatives_considered:
+      - "Single global bucket — rejected: inter-category interference"
+    affects:
+      - "broker/rate_limiter.py"
+      - "config/broker_limits.yaml"
+
+  RL3:
+    title: "acquire(category, n=1) -> None; blocks; raises BrokerRateLimitError on timeout"
+    decision: |
+      rate_limiter.acquire(category: str, n: int = 1) -> None
+      Blocks (sleeps) until n tokens are available, then consumes them.
+      Returns None on success.
+      Raises BrokerRateLimitError if max_wait_sec is exceeded before n tokens are available.
+      Raises ValueError immediately if category is unknown.
+      Raises BrokerRateLimitError immediately if n > bucket capacity (impossible to ever satisfy).
+    affects:
+      - "broker/rate_limiter.py"
+
+  RL4:
+    title: "max_wait_sec: global 30s default, passed at construction"
+    decision: |
+      RateLimiter accepts max_wait_sec: float = 30.0 as a constructor parameter.
+      Applied uniformly across all categories. Per-category override not implemented
+      (would require broker_limits.yaml schema change — deferred to v2.1 if needed).
+    rationale: |
+      30s is long enough to cover the full backoff_sequence_sec=[1,5,30] cycle before
+      soft_kill. A constructor parameter keeps the YAML schema simple.
+    affects:
+      - "broker/rate_limiter.py"
+
+  RL5:
+    title: "try_acquire(category, n=1) -> bool; non-blocking"
+    decision: |
+      rate_limiter.try_acquire(category: str, n: int = 1) -> bool
+      Returns True and consumes n tokens if available immediately; False otherwise.
+      Never blocks. Used by code paths that fail fast rather than wait.
+      Raises ValueError for unknown category.
+    affects:
+      - "broker/rate_limiter.py"
+
+  RL6:
+    title: "Backoff handled OUTSIDE rate_limiter; penalize(category, sleep_sec) freezes bucket"
+    decision: |
+      Backoff on broker 429 is handled by the broker adapter (zerodha_adapter.py),
+      which owns the retry loop and increments the backoff index.
+      rate_limiter exposes:
+        penalize(category: str, sleep_sec: float) -> None
+      which freezes the named bucket for sleep_sec seconds — try_acquire returns False
+      and acquire blocks for the freeze duration before re-attempting.
+      The RateLimiter itself does not catch or respond to HTTP 429; it only enforces limits.
+    rationale: |
+      Keeps rate_limiter pure (no HTTP knowledge). Adapter owns the retry state machine.
+      Boring Code Rule — each module does exactly one thing.
+    affects:
+      - "broker/rate_limiter.py"
+      - "broker/zerodha_adapter.py (adapter owns retry loop)"
+
+  RL7:
+    title: "Thread-safe: one threading.Lock per bucket"
+    decision: |
+      Each _Bucket holds its own threading.Lock. acquire(), try_acquire(), and penalize()
+      all acquire this lock for the duration of the token check/refill/consume operation.
+      No global lock — independent buckets can be used concurrently from different threads.
+    affects:
+      - "broker/rate_limiter.py"
+
+  RL8:
+    title: "Time source: time.monotonic() for refill arithmetic"
+    decision: |
+      Bucket refill calculations use time.monotonic(), not core.time_authority.now_ist().
+      This is the one place time_authority is bypassed — monotonic is immune to NTP jumps,
+      and refill arithmetic is duration-based, not wall-clock-based.
+    rationale: |
+      An NTP correction mid-session could cause a backward step in now_ist(), producing
+      negative elapsed time and incorrect token counts. monotonic() is guaranteed
+      non-decreasing and has nanosecond resolution.
+    alternatives_considered:
+      - "now_ist() — rejected: NTP jumps would corrupt elapsed-time calculations"
+    affects:
+      - "broker/rate_limiter.py"
+
+  RL9:
+    title: "New exception: BrokerRateLimitError(BrokerError, SEVERITY='WARN')"
+    decision: |
+      Add to core/exceptions.py:
+        class BrokerRateLimitError(BrokerError):
+            SEVERITY = "WARN"
+      Context kwargs: category, requested_tokens, available_tokens, waited_sec, max_wait_sec.
+      WARN (not ERROR) because rate limiting is an expected operational condition,
+      not a system failure.
+    affects:
+      - "core/exceptions.py"
+      - "broker/rate_limiter.py"
+
+  RL10:
+    title: "Layer 2 (broker/); imports threading, time, core.exceptions, core.config_loader, core.logger"
+    decision: |
+      broker/rate_limiter.py sits in Layer 2 (broker layer).
+      Imports: threading, time (stdlib); core.exceptions.BrokerRateLimitError;
+      core.config_loader.BrokerLimitsConfig (type annotation only, injected at construction);
+      core.logger.get_logger.
+      Does NOT import core.time_authority (RL8).
+    affects:
+      - "broker/rate_limiter.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CC — COST CALCULATOR MODULE (12 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+cost_calculator_module:
+
+  CC1:
+    title: "Scope: itemized transaction cost for a single order leg"
+    decision: |
+      CostCalculator computes: brokerage + STT + exchange_txn + GST + SEBI + stamp_duty.
+      Returns CostBreakdown (frozen dataclass) with all components + total + turnover.
+      No P&L, no slippage (handled separately by slippage_model.yaml consumers).
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC2:
+    title: "API: calculate_cost(side, qty, price, product, exchange='NSE') -> CostBreakdown"
+    decision: |
+      CostBreakdown is a frozen dataclass:
+        brokerage, stt, exchange_txn, gst, sebi, stamp_duty, total, turnover: float
+      All amounts in INR. turnover = qty * price.
+      Only exchange="NSE" is supported; ValueError for others (BSE deferred to v2.1).
+      ValueError for unknown side or product.
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC3:
+    title: "Brokerage rule: MIS/CO → min(flat, pct*turnover); CNC BUY → 0; CNC SELL → min(flat, pct*turnover)"
+    decision: |
+      MIS/CO (both sides): min(brokerage_flat_intraday, brokerage_pct_intraday/100 * turnover)
+      CNC BUY: 0 (delivery buy is free at Zerodha)
+      CNC SELL: min(brokerage_flat_intraday, brokerage_pct_intraday/100 * turnover)
+      Rates from ZerodhaRatesConfig.brokerage_flat_intraday and .brokerage_pct_intraday (NEW field).
+    affects:
+      - "broker/cost_calculator.py"
+      - "core/config_loader.py (ZerodhaRatesConfig)"
+      - "config/broker_costs.yaml"
+
+  CC4:
+    title: "STT: MIS/CO sell-only; CNC both sides"
+    decision: |
+      MIS/CO SELL: stt_sell_pct/100 * turnover
+      MIS/CO BUY:  0
+      CNC BUY:     stt_cnc_pct/100 * turnover  (NEW field in ZerodhaRatesConfig)
+      CNC SELL:    stt_cnc_pct/100 * turnover
+    affects:
+      - "broker/cost_calculator.py"
+      - "core/config_loader.py (ZerodhaRatesConfig)"
+      - "config/broker_costs.yaml"
+
+  CC5:
+    title: "Exchange transaction charges: read from exchange_txn_pct; NSE only"
+    decision: |
+      exchange_txn = exchange_txn_pct/100 * turnover
+      Applies to both BUY and SELL. Only NSE supported; ValueError for other exchanges.
+      Rate read from ZerodhaRatesConfig.exchange_txn_pct (already in schema).
+      Documented NSE rate: 0.00297% (0.0000297 as fraction).
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC6:
+    title: "GST: 18% on (brokerage + exchange_txn + sebi)"
+    decision: |
+      gst = gst_pct/100 * (brokerage + exchange_txn + sebi)
+      Applied to the rounded component values (CC10).
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC7:
+    title: "SEBI turnover fee: sebi_pct/100 * turnover"
+    decision: |
+      sebi = sebi_pct/100 * turnover
+      Documented rate: 0.0001% (₹10 per crore). Read from ZerodhaRatesConfig.sebi_pct.
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC8:
+    title: "Stamp duty: BUY side only; MIS/CO and CNC have different rates"
+    decision: |
+      SELL side: stamp_duty = 0 always.
+      MIS/CO BUY: stamp_duty_mis_buy_pct/100 * turnover  (RENAMED from stamp_duty_buy_pct)
+      CNC BUY:    stamp_duty_cnc_buy_pct/100 * turnover  (NEW field)
+      Documented rates: MIS 0.003%, CNC 0.015%.
+    affects:
+      - "broker/cost_calculator.py"
+      - "core/config_loader.py (ZerodhaRatesConfig: rename + add field)"
+      - "config/broker_costs.yaml"
+
+  CC9:
+    title: "All rates from injected BrokerCostsConfig; no hardcoded rates"
+    decision: |
+      Constructor: CostCalculator(costs: BrokerCostsConfig)
+      Every rate computation reads from costs.zerodha.*. Hardcoding any rate inside
+      cost_calculator.py is FORBIDDEN — a mutation test must produce different output.
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC10:
+    title: "Rounding: ROUND_HALF_UP per component; total = sum of rounded components"
+    decision: |
+      Each component rounded to 2 decimal places using decimal.ROUND_HALF_UP.
+      Internally uses decimal.Decimal (converted from float via str() to avoid FP error).
+      Returns float for each field.
+      total = sum of already-rounded components (not round(raw_sum)).
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC11:
+    title: "Layer 2 (broker/); imports: decimal, dataclasses, core.config_loader"
+    decision: |
+      broker/cost_calculator.py is Layer 2. Imports: stdlib (decimal, dataclasses);
+      core.config_loader.BrokerCostsConfig (type annotation, injected at construction).
+      No new exception class — ValueError for invalid side/product/exchange.
+    affects:
+      - "broker/cost_calculator.py"
+
+  CC12:
+    title: "total_round_trip_cost(qty, entry_price, exit_price, product) -> float convenience"
+    decision: |
+      Calls calculate_cost("BUY", qty, entry_price, product) +
+             calculate_cost("SELL", qty, exit_price, product).
+      Sums the two .total values. Used by paper_engine for realistic P&L (Project Rule 15).
+    affects:
+      - "broker/cost_calculator.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PR — PRODUCT RESOLVER MODULE (10 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+product_resolver_module:
+
+  PR1:
+    title: "Single source of truth for semantic intent -> broker product code"
+    decision: |
+      ProductResolver translates broker-agnostic semantic intents into
+      broker-specific product codes. Removes all hardcoded "MIS"/"CNC"/"CO"
+      strings from the codebase (audit Issue #29).
+    affects:
+      - "broker/product_resolver.py"
+
+  PR2:
+    title: "Four semantic intents: INTRADAY, DELIVERY, COVER_ORDER, BRACKET_ORDER"
+    decision: |
+      Valid intents (broker-agnostic):
+        INTRADAY      - auto-square-off same day, leveraged
+        DELIVERY      - overnight hold, full cash
+        COVER_ORDER   - intraday with mandatory SL, higher leverage
+        BRACKET_ORDER - intraday with SL+TGT bracket (may not be supported by all brokers)
+      resolve() raises ValueError for any other intent string.
+    affects:
+      - "broker/product_resolver.py"
+
+  PR3:
+    title: "Zerodha mappings from product_map YAML; BRACKET_ORDER empty = unsupported"
+    decision: |
+      Zerodha mapping (from system_config.yaml product_map.zerodha):
+        INTRADAY      -> "MIS"
+        DELIVERY      -> "CNC"
+        COVER_ORDER   -> "CO"
+        BRACKET_ORDER -> ""   (empty string = not supported; resolve() raises ProductNotSupportedError)
+      Future brokers added by extending the zerodha sibling key in the YAML.
+    affects:
+      - "broker/product_resolver.py"
+      - "config/system_config.yaml"
+
+  PR4:
+    title: "API: resolve(intent, broker='zerodha') -> str; raises on missing/empty mapping"
+    decision: |
+      resolver.resolve(intent: str, broker: str = "zerodha") -> str
+      Returns the broker-specific product code.
+      Raises ValueError if intent not in PR2 set.
+      Raises ProductNotSupportedError if broker not in map OR mapped value is empty/null/None.
+    affects:
+      - "broker/product_resolver.py"
+
+  PR5:
+    title: "Reverse lookup: intent_for(broker_code, broker='zerodha') -> str"
+    decision: |
+      resolver.intent_for(broker_code: str, broker: str = "zerodha") -> str
+      Returns the semantic intent for a given broker-specific code.
+      Used by order_reconciler to map broker positions back to system taxonomy.
+      Raises ValueError if code unknown for that broker.
+    affects:
+      - "broker/product_resolver.py"
+
+  PR6:
+    title: "Validate at construction: non-empty map; each broker entry must be dict"
+    decision: |
+      __init__(product_map: dict[str, dict[str, str]]) raises ValueError immediately if:
+        - product_map is empty
+        - any broker entry is not a dict
+      Raises loud at startup, not silently at first use (Project Rule 14).
+    affects:
+      - "broker/product_resolver.py"
+
+  PR7:
+    title: "New exception: ProductNotSupportedError(BrokerError, SEVERITY='ERROR')"
+    decision: |
+      Add to core/exceptions.py:
+        class ProductNotSupportedError(BrokerError):
+            SEVERITY = "ERROR"
+      context kwargs: intent, broker, available_intents.
+      Raised when a mapping is missing or the mapped value is empty/null.
+    affects:
+      - "core/exceptions.py"
+      - "broker/product_resolver.py"
+
+  PR8:
+    title: "SystemConfig.product_map: dict[str, dict[str, str]] (nested broker dict)"
+    decision: |
+      Replace old flat ProductMapConfig (intraday/co/positional) with:
+        product_map: dict[str, dict[str, str]]
+      Outer key = broker name ("zerodha"). Inner dict = intent -> code.
+      Allows adding future brokers without schema changes.
+      system_config.yaml updated to nested structure.
+      ProductMapConfig class removed from config_loader.py.
+    affects:
+      - "core/config_loader.py"
+      - "config/system_config.yaml"
+      - "tests/unit/test_config_loader.py"
+
+  PR9:
+    title: "Layer 2 (broker/); stdlib only + core.exceptions; product_map injected"
+    decision: |
+      broker/product_resolver.py imports only stdlib and core.exceptions.
+      No dependency on core.config_loader (caller extracts cfg.system.product_map
+      and injects the dict). Same injection pattern as market_windows.
+    affects:
+      - "broker/product_resolver.py"
+
+  PR10:
+    title: "No silent fallbacks: missing mapping raises immediately (Project Rule 14)"
+    decision: |
+      If a broker or intent is missing from the map, ProductNotSupportedError is raised.
+      No default product codes. No "MIS is probably right" logic.
+      Aligns with Project Rule 14 -- No Silent Fallbacks.
+    affects:
+      - "broker/product_resolver.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EOD — EOD SQUARE-OFF MODULE (12 decisions)
+# ══════════════════════════════════════════════════════════════════════════════
+
+eod_squareoff_module:
+
+  EOD1:
+    title: "Single class EodSquareoff; all side-effects via injected deps"
+    decision: |
+      One class EodSquareoff with constructor injecting: adapter, state_store,
+      fund_manager, state_machine, bus, market_windows, time_authority,
+      kill_switch, logger, order_monitor (optional), inter_order_delay_ms.
+      No global state; no direct imports of concrete broker code.
+    rationale: "Constructor injection makes the module fully unit-testable with mocks and keeps it decoupled from broker-specific implementations."
+    alternatives_considered:
+      - "Module-level functions with imported singletons"
+      - "Subclassing a base SquareoffManager"
+    affects:
+      - "orders/eod_squareoff.py"
+
+  EOD2:
+    title: "check_and_fire() is the scheduler-facing entry point; fire_now() for manual/test use"
+    decision: |
+      check_and_fire(now) applies all gates (is_eod_squareoff_due, holiday check,
+      already-fired flag). Returns True if fire was triggered, False otherwise.
+      fire_now(reason, triggered_by) bypasses all time/holiday gates; logs CRITICAL;
+      marks the already-fired flag. Both ultimately call _fire().
+    rationale: "Separating the gate check from the fire action enables deterministic testing of each gate condition independently."
+    alternatives_considered:
+      - "Single fire() method that does gate check + action"
+    affects:
+      - "orders/eod_squareoff.py"
+
+  EOD3:
+    title: "Per-date fired flag in-memory; restart recovery via eod_squareoff_log"
+    decision: |
+      _fired_for_date is a dict[str, bool] keyed by YYYY-MM-DD IST date string.
+      On construction, _check_restart_recovery() queries eod_squareoff_log:
+      if row exists for today, set flag (no re-fire); if no row but past EOD time
+      and before 15:30, run recovery _fire(); if no row and past 15:30, log CRITICAL.
+    rationale: "In-memory flag avoids DB roundtrip on every poll tick. Log-based recovery handles the crash-restart scenario without a separate recovery table."
+    alternatives_considered:
+      - "Always query DB on check_and_fire()"
+      - "Separate recovery_needed flag in kill_switch_state"
+    affects:
+      - "orders/eod_squareoff.py"
+      - "core/state_store.py"
+
+  EOD4:
+    title: "SOFT_KILL during EOD fire; conditional auto-resume"
+    decision: |
+      _fire() calls kill_switch.soft_kill() if not already SOFT_KILL or HARD_KILL,
+      and tracks whether WE set it (_we_set_soft_kill). After log insert and event
+      publish, if cfg.auto_resume_kill_switch is True AND _we_set_soft_kill is True,
+      call kill_switch.resume(). If operator had previously HARD_KILL'd, we do not
+      interfere.
+    rationale: "Prevents new orders during the sensitive exit window. Conditional resume avoids overriding an operator's deliberate kill."
+    alternatives_considered:
+      - "Always soft_kill without tracking who set it"
+      - "No kill switch interaction during EOD"
+    affects:
+      - "orders/eod_squareoff.py"
+      - "capital/kill_switch.py"
+
+  EOD5:
+    title: "Fire sequence: cancel pending ENTRY orders first, then exit OPEN positions"
+    decision: |
+      Step 1: get_pending_intraday_orders() -> for each: cancel_order + update
+      trades.status='CANCELLED' + release capital via fm.release(reservation_id).
+      Step 2: get_open_intraday_positions() -> for each: place MARKET exit order
+      (SELL for LONG, BUY for SHORT) + track with order_monitor + INSERT OR IGNORE
+      into orders (leg='EOD'). On any failure: log CRITICAL, _mark_exit_failed(),
+      continue (never abort the loop).
+    rationale: "Cancel-then-exit prevents double-counting. MARKET orders guarantee fill. Continue-on-failure ensures maximum positions are covered even if one order errors."
+    alternatives_considered:
+      - "Exit positions first, then cancel pending"
+      - "Abort loop on first failure"
+    affects:
+      - "orders/eod_squareoff.py"
+
+  EOD6:
+    title: "Exit side determined by trade.direction (LONG->SELL, SHORT->BUY)"
+    decision: |
+      For each open intraday position, exit_side = 'SELL' if direction == 'LONG'
+      else 'BUY'. Qty from qty_filled column. Order tagged EOD_SQUAREOFF.
+    rationale: "Direction is the canonical field for LONG/SHORT in the trades table; qty_filled is the actual quantity to exit."
+    alternatives_considered:
+      - "Infer direction from entry order transaction_type"
+    affects:
+      - "orders/eod_squareoff.py"
+
+  EOD7:
+    title: "Staggered exits: inter_order_delay_ms sleep between orders (not after last)"
+    decision: |
+      After each MARKET exit order placement (not after the last one), sleep
+      inter_order_delay_ms / 1000.0 seconds. Configured in system_config.yaml
+      under eod_squareoff.inter_order_delay_ms (0 <= x <= 5000).
+    rationale: "Staggered placement reduces broker rate-limit risk. Skipping the post-last sleep avoids unnecessary latency. Foundation Rule 3.7 deterministic ordering."
+    alternatives_considered:
+      - "Place all orders in parallel (async)"
+      - "Fixed 1s delay regardless of config"
+    affects:
+      - "orders/eod_squareoff.py"
+
+  EOD8:
+    title: "eod_squareoff_log table: one row per trading day, INSERT OR REPLACE"
+    decision: |
+      Schema table eod_squareoff_log with UNIQUE index on fired_date. Columns:
+      fired_date, fired_at, positions_attempted/succeeded/failed,
+      cancels_attempted/succeeded/failed, duration_sec.
+      INSERT OR REPLACE so recovery fire on same date overwrites the partial row.
+    rationale: "Single-row-per-date with OR REPLACE handles the crash-and-restart case cleanly without needing a separate 'recovery_complete' flag."
+    alternatives_considered:
+      - "Append-only log (multiple rows per date)"
+      - "Store in kill_switch_state payload"
+    affects:
+      - "core/schema.sql"
+      - "core/state_store.py"
+
+  EOD9:
+    title: "Restart recovery window: past EOD time and before 15:30"
+    decision: |
+      _check_restart_recovery() fires only if: no log row for today AND
+      now_ist().time() > eod_squareoff_time AND now_ist().time() < 15:30.
+      If past 15:30 and no log row: log CRITICAL 'EOD missed, broker RMS may have
+      auto-squared', no fire. The 15:30 hard stop is _MARKET_CLOSE_HARD_STOP.
+    rationale: "After 15:30 broker RMS auto-square-off should have fired; placing additional MARKET orders risks double-exit. Log CRITICAL to alert operator."
+    alternatives_considered:
+      - "Always fire recovery regardless of time"
+      - "15:20 hard stop (matches broker RMS time)"
+    affects:
+      - "orders/eod_squareoff.py"
+
+  EOD10:
+    title: "state_machine.transition() not called for cancelled ENTRY orders (deviation)"
+    decision: |
+      ENTRY order cancellations update trades.status='CANCELLED' directly in DB.
+      state_machine.transition() is NOT called because internal_order_id is not
+      stored in the orders table (OMgr3). The state machine will be updated on
+      the next order_monitor poll cycle when it detects the broker cancellation.
+    rationale: "internal_order_id is intentionally not persisted (OMgr3). Calling state_machine without it is impossible. Direct DB update is safe and auditable."
+    alternatives_considered:
+      - "Store internal_order_id in orders table (rejected: OMgr3)"
+      - "Look up internal_order_id from in-memory state machine dict"
+    affects:
+      - "orders/eod_squareoff.py"
+      - "orders/order_state_machine.py"
+
+  EOD11:
+    title: "reservation_id lookup via fm_ledger; not from trades table"
+    decision: |
+      Fund manager release requires reservation_id. The trades table has no
+      reservation_id column (FM6: reservations are in-memory + fm_ledger).
+      get_reservation_id_for_signal(signal_id) queries fm_ledger for the most
+      recent RESERVE row with matching signal_id.
+    rationale: "FM6 deliberately keeps reservation_id out of trades. The fm_ledger is the append-only source of truth for capital mutations."
+    alternatives_considered:
+      - "Add reservation_id column to trades table (rejected: violates FM6)"
+      - "Pass reservation_id through signal payload"
+    affects:
+      - "core/state_store.py"
+      - "orders/eod_squareoff.py"
+
+  EOD12:
+    title: "Config section eod_squareoff in system_config.yaml; EodSquareoffConfig model"
+    decision: |
+      system_config.yaml gains an eod_squareoff section with three fields:
+      inter_order_delay_ms (int, 0-5000), poll_interval_sec (int, >= 1),
+      auto_resume_kill_switch (bool). Validated by EodSquareoffConfig Pydantic model
+      with extra='forbid'. SystemConfig gains eod_squareoff: EodSquareoffConfig field.
+    rationale: "All numeric limits in system_config.yaml per the master config design. extra=forbid catches typos in config files early at startup."
+    alternatives_considered:
+      - "Hardcode defaults in EodSquareoff constructor"
+      - "Separate eod_squareoff.yaml file"
+    affects:
+      - "config/system_config.yaml"
+      - "core/config_loader.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CAPITAL MODULE — capital/invariant.py (10 decisions: INV1–INV10)
+# ══════════════════════════════════════════════════════════════════════════════
+
+capital_module:
+
+  INV1:
+    title: "Pure stateless assertion function; raises on breach, returns None on success"
+    decision: |
+      assert_capital_invariant() is a pure function with no side effects, no I/O,
+      no logging, and no state. It raises CapitalInvariantViolation on any breach
+      and returns None on success. The caller is responsible for logging and recovery.
+    rationale: "Purity makes the function trivially testable, thread-safe, and reusable without hidden coupling."
+    alternatives_considered:
+      - "Method on FundManager class (rejected: couples the check to a single caller)"
+      - "Return a bool instead of raising (rejected: callers could silently ignore failures)"
+    affects:
+      - "capital/invariant.py"
+      - "capital/fund_manager.py"
+
+  INV2:
+    title: "Invariant equation: LHS == RHS within 0.01 tolerance; profits deferred per P7a"
+    decision: |
+      LHS = margin_available + margin_reserved + margin_used
+      RHS = cash_floor + min(0, realized_pnl_today)
+      Tolerance = 0.01 (1 paise). Losses reduce RHS immediately; profits are
+      ignored until T+1 settlement (P7a). Violation if abs(LHS - RHS) > tolerance.
+    rationale: "The three partitions must always sum to the tradable base. Deferring profits prevents drawing on unsettled gains."
+    alternatives_considered:
+      - "Include profits in RHS immediately (rejected: violates P7a, unsafe intraday)"
+      - "Tolerance = 0.001 (rejected: floating-point noise causes spurious violations)"
+    affects:
+      - "capital/invariant.py"
+
+  INV3:
+    title: "Single public function: assert_capital_invariant()"
+    decision: |
+      The module exports exactly one public assertion function: assert_capital_invariant().
+      Helper functions compute_lhs, compute_rhs, compute_tradable_balance are also
+      exported (INV5) but the primary API is the single assert function.
+    rationale: "One entry point prevents callers from accidentally running only part of the invariant check."
+    alternatives_considered:
+      - "Separate check_lhs() and check_rhs() functions (rejected: callers could call one without the other)"
+    affects:
+      - "capital/invariant.py"
+
+  INV4:
+    title: "CapitalInvariantViolation context dict has exactly 12 fields"
+    decision: |
+      The exception context dict contains exactly these 12 fields:
+      bucket, mutation_type, reservation_id, margin_available, margin_reserved,
+      margin_used, cash_floor, realized_pnl_today, lhs, rhs, delta, tolerance.
+      No more, no fewer. The mutation_type field is overwritten with the violation
+      code (e.g., NEGATIVE_MARGIN_AVAILABLE) when a negative guard fires.
+    rationale: "Fixed schema allows downstream alert handlers to destructure the context without defensive checks."
+    alternatives_considered:
+      - "Freeform kwargs dict (rejected: no contract for consumers)"
+    affects:
+      - "capital/invariant.py"
+      - "core/exceptions.py"
+
+  INV5:
+    title: "Three exported helpers: compute_lhs, compute_rhs, compute_tradable_balance"
+    decision: |
+      compute_lhs(available, reserved, used) -> float: sum of three partitions.
+      compute_rhs(cash_floor, realized_pnl_today) -> float: cash_floor + min(0, pnl).
+      compute_tradable_balance(cash_floor, realized_pnl_today) -> float: identical to compute_rhs.
+      All three are exported for callers that need partial computations (e.g., UI display).
+    rationale: "Exposing the sub-computations avoids reimplementing the formula in callers and keeps the definition DRY."
+    alternatives_considered:
+      - "Inline all math in assert_capital_invariant only (rejected: callers cannot reuse formula)"
+    affects:
+      - "capital/invariant.py"
+
+  INV6:
+    title: "Negative balance guards: available, reserved, used, cash_floor must be >= -tolerance"
+    decision: |
+      Before the main invariant check, four negative guards run:
+      margin_available, margin_reserved, margin_used, and cash_floor must each be >= -tolerance.
+      realized_pnl_today is exempt (losses are valid per P7a).
+      A guard failure raises CapitalInvariantViolation with mutation_type set to the
+      violation code (e.g., NEGATIVE_MARGIN_AVAILABLE).
+    rationale: "Negative balances indicate a programming error or data corruption upstream. Catching them separately gives a cleaner error message than a raw invariant mismatch."
+    alternatives_considered:
+      - "Treat negative as just another invariant mismatch (rejected: loses the specific violation type)"
+      - "Guards only for available (rejected: reserved and used can also go negative from bugs)"
+    affects:
+      - "capital/invariant.py"
+
+  INV7:
+    title: "fund_manager.py FM11 refactored to delegate to assert_capital_invariant; behavior-preserving"
+    decision: |
+      FundManager._check_invariant() now calls assert_capital_invariant with
+      cash_floor=self._total and realized_pnl_today=0.0. This is the behavior-preserving
+      degenerate form: RHS = _total + min(0, 0) = _total, identical to the old inline
+      check (_avail + _reserved + _used == _total). fund_manager tracks _total as
+      already-settled capital, so passing pnl=0 is correct.
+    rationale: "The refactor must not change fund_manager behavior. Passing pnl=0 avoids a protocol mismatch between fund_manager's internal accounting and the general invariant formula."
+    alternatives_considered:
+      - "Pass cash_floor=initial_balance, realized_pnl=self._daily_pnl (rejected: would break profitable days — LHS=_total but RHS=initial+min(0,profit)=initial)"
+    affects:
+      - "capital/fund_manager.py"
+      - "capital/invariant.py"
+
+  INV8:
+    title: "Layer 3 (capital/); imports stdlib + core.exceptions only"
+    decision: |
+      capital/invariant.py is in Layer 3 and may only import from Python stdlib
+      and core.exceptions. It must not import state_store, logger, config_loader,
+      or any other application module. This keeps the assertion function usable
+      at all system layers without circular imports.
+    rationale: "A capital assertion that imports logging or config creates circular dependencies and prevents early-startup use."
+    alternatives_considered:
+      - "Import core.logger for violation logging (rejected: caller logs; INV1 says pure)"
+    affects:
+      - "capital/invariant.py"
+
+  INV9:
+    title: "Deterministic and thread-safe by virtue of being pure (no shared state, no I/O)"
+    decision: |
+      assert_capital_invariant() and all helpers are pure functions. They read only
+      their arguments, write nothing, and have no module-level mutable state. Thread
+      safety follows from purity — no locks needed.
+    rationale: "Multiple order threads may check the invariant concurrently during a busy trading session."
+    alternatives_considered:
+      - "Use a threading.Lock around the check (rejected: purity makes locking unnecessary)"
+    affects:
+      - "capital/invariant.py"
+
+  INV10:
+    title: "Caller logs after catching; invariant module does not log"
+    decision: |
+      assert_capital_invariant() raises but never logs. The caller (fund_manager,
+      future capital mutators) is responsible for calling log_exception() after catching
+      CapitalInvariantViolation, then invoking the on_critical callback, then re-raising.
+      This division keeps the invariant pure (INV1) and avoids duplicate log entries.
+    rationale: "If the invariant logged internally and the caller also logged, every violation would produce two log entries."
+    alternatives_considered:
+      - "Log inside assert_capital_invariant with an injected logger (rejected: violates INV1 purity)"
+    affects:
+      - "capital/invariant.py"
+      - "capital/fund_manager.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ALERTS MODULE — alerts/critical.py (10 decisions: CR1–CR10)
+# ══════════════════════════════════════════════════════════════════════════════
+
+alerts_module:
+
+  CR1:
+    title: "Pure sentinel writer. No email, no telegram, no logging."
+    decision: |
+      alerts/critical.py has a single responsibility: write sentinel files to disk.
+      It never sends email, never sends Telegram messages, and never calls the
+      logger (the logger may be unavailable during crash sequences). The caller
+      (telegram_notifier) logs separately after catching OSError from write_critical_sentinel.
+    rationale: "During a process crash the logger's file handler may be closed. Keeping
+      sentinel writes logger-free ensures they succeed even at the last moment before crash."
+    alternatives_considered:
+      - "Log from critical.py using a local print() (rejected: still fails if stdout is closed)"
+    affects:
+      - "alerts/critical.py"
+
+  CR2:
+    title: "Sentinel file format: path, id, atomic write, 8 JSON fields"
+    decision: |
+      Path: <sentinel_dir>/critical_alert_<id>.flag
+      id format: YYYYMMDD_HHMMSS_<8hex>
+      Atomic write (Foundation Rule 3.2): write to .tmp, fsync, rename to .flag.
+      JSON content (8 fields): id, ts (ISO IST), title (max 120 chars), body,
+      source_module, context (dict), hostname, pid.
+    rationale: "Atomic write prevents watcher from reading a partial file. 120-char title limit
+      maps cleanly to Telegram subject lines. hostname+pid allow root-cause attribution."
+    alternatives_considered:
+      - "Plain text format (rejected: unstructured, harder for watcher to parse)"
+      - "UUID-only id (rejected: timestamp prefix allows mtime-independent ordering)"
+    affects:
+      - "alerts/critical.py"
+
+  CR3:
+    title: "write_critical_sentinel() raises OSError on failure; returns Path"
+    decision: |
+      write_critical_sentinel(title, body, source_module, context, sentinel_dir) -> Path.
+      Raises OSError on any filesystem failure. Does NOT swallow exceptions.
+      Caller (telegram_notifier TG5) catches and logs the error then continues.
+    rationale: "Swallowing OSError would silently lose the sentinel. The caller must know
+      the write failed so it can log and attempt Telegram as last resort."
+    alternatives_considered:
+      - "Return None on failure (rejected: caller cannot distinguish success from silent fail)"
+    affects:
+      - "alerts/critical.py"
+      - "alerts/telegram_notifier.py"
+
+  CR4:
+    title: "sentinel_dir created with mkdir(parents=True, exist_ok=True)"
+    decision: |
+      If sentinel_dir does not exist at write time, it is created automatically.
+      This prevents failures on first run or after a clean install.
+    rationale: "The trading process must not crash on a missing directory during a CRITICAL alert."
+    alternatives_considered:
+      - "Require pre-created directory (rejected: fragile on new deployments)"
+    affects:
+      - "alerts/critical.py"
+
+  CR5:
+    title: "Sentinel file lifecycle: .flag -> .delivered or .failed"
+    decision: |
+      .flag      -- written by critical.py, awaiting delivery
+      .tmp       -- transient atomic-write artifact only (never left on disk)
+      .delivered -- renamed by alert_watcher after successful email send
+      .failed    -- renamed by alert_watcher after N retries exhausted
+      critical.py is a pure writer. It NEVER reads or modifies existing files.
+    rationale: "File extension as state machine. Watcher only scans *.flag; skips .delivered and
+      .failed automatically. No database needed for state tracking."
+    alternatives_considered:
+      - "State tracked in a JSON database (rejected: adds dependency, .flag approach is simpler)"
+    affects:
+      - "alerts/critical.py"
+      - "scripts/alert_watcher.py"
+
+  CR6:
+    title: "list_pending_sentinels() returns sorted *.flag list by mtime ascending"
+    decision: |
+      list_pending_sentinels(sentinel_dir) -> list[Path].
+      Returns only *.flag files, sorted by mtime ascending (oldest first).
+      .delivered, .failed, .tmp excluded. Returns empty list if dir absent.
+    rationale: "Oldest-first ordering ensures oldest critical alerts are emailed first during
+      a backlog (e.g. after SMTP outage). mtime sort is stable across restarts."
+    alternatives_considered:
+      - "Sort by filename (acceptable, but mtime more robust to clock drift in id)"
+    affects:
+      - "alerts/critical.py"
+      - "scripts/alert_watcher.py"
+
+  CR7:
+    title: "read_sentinel() raises ValueError on malformed JSON, OSError on unreadable"
+    decision: |
+      read_sentinel(path) -> dict. Raises ValueError (not json.JSONDecodeError)
+      on bad JSON. Raises OSError on filesystem failure. Watcher catches both and
+      marks the sentinel .failed with a reason string.
+    rationale: "Catching json.JSONDecodeError at the caller is verbose; ValueError is the
+      standard Python signal for 'bad data'. OSError keeps the IO contract clear."
+    alternatives_considered:
+      - "Return None on error (rejected: caller cannot distinguish missing from corrupt)"
+    affects:
+      - "alerts/critical.py"
+      - "scripts/alert_watcher.py"
+
+  CR8:
+    title: "mark_delivered() atomic rename .flag -> .delivered"
+    decision: |
+      mark_delivered(path) -> Path. Renames .flag to .delivered atomically.
+      Returns new path. Raises OSError if file is already gone (idempotency:
+      second call on same path raises — documented expected behavior).
+    rationale: "Atomic rename is the correct primitive. Idempotency failure (OSError on
+      second call) is correct: it means the file was already delivered, which is a
+      programming error the caller should know about."
+    alternatives_considered:
+      - "Return silently if file already gone (rejected: hides double-delivery bugs)"
+    affects:
+      - "alerts/critical.py"
+      - "scripts/alert_watcher.py"
+
+  CR9:
+    title: "mark_failed() renames to .failed AND writes sibling .reason file"
+    decision: |
+      mark_failed(path, reason) -> Path. Renames .flag to .failed AND writes a
+      sibling <stem>.reason file with the plain-text failure reason. Both writes
+      are needed: .failed for file-system state, .reason for operator inspection.
+    rationale: "Operators need to know WHY delivery was abandoned. A .reason file next to
+      the .failed file is visible without any tooling — just ls and cat."
+    alternatives_considered:
+      - "Embed reason inside .failed JSON (rejected: .failed file is the original sentinel
+        content; writing reason as separate sibling is cleaner)"
+    affects:
+      - "alerts/critical.py"
+      - "scripts/alert_watcher.py"
+
+  CR10:
+    title: "Layer 4 (alerts/). Imports: stdlib only."
+    decision: |
+      alerts/critical.py imports only Python stdlib (json, os, pathlib, socket,
+      datetime, uuid). It does NOT import logger, config_loader, state_store, or
+      any other application module. sentinel_dir is a parameter, not from config.
+    rationale: "A sentinel writer that imports the logger creates a circular dependency:
+      logger failure is exactly the scenario critical.py must survive."
+    alternatives_considered:
+      - "Import core.config_loader to read sentinel_dir (rejected: violates layer 4 isolation)"
+    affects:
+      - "alerts/critical.py"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ALERTS MODULE — alerts/telegram_notifier.py (12 decisions: TG1–TG12)
+# ══════════════════════════════════════════════════════════════════════════════
+
+  TG1:
+    title: "Tier-aware Telegram alert delivery. Single class: TelegramNotifier."
+    decision: |
+      One class handles all four alert tiers (INFO/WARN/ERROR/CRITICAL) with
+      tier-specific failure handling per G8. No separate classes per tier.
+    rationale: "One class makes tier routing explicit and auditable in a single file."
+    alternatives_considered:
+      - "Separate classes per tier (rejected: scattered G8 logic)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG2:
+    title: "Constructor: bot_token, chat_ids, failed_alerts_log_path, sentinel_dir, logger, timeout_sec, max_retries, paper_mode"
+    decision: |
+      TelegramNotifier(bot_token, chat_ids, failed_alerts_log_path, sentinel_dir,
+      logger, timeout_sec=5.0, max_retries=2, paper_mode=False).
+      All values sourced from system_config.yaml (TG12). paper_mode is per-instance.
+    rationale: "Dependency injection allows unit tests to provide a temp sentinel_dir
+      and a mock logger without touching real config."
+    alternatives_considered:
+      - "Class method that reads config directly (rejected: not testable without config files)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG3:
+    title: "send() returns SendResult dataclass with 6 fields"
+    decision: |
+      SendResult: success (bool), tier (str), delivered_to (list[str]),
+      failed_to (list[str]), sentinel_path (Path|None), failed_log_written (bool).
+      send() never raises (all exceptions caught internally).
+    rationale: "Caller needs structured result to log/audit. Raising on partial failure
+      would make INFO/WARN callers write complex try/except."
+    alternatives_considered:
+      - "Return bool (rejected: loses per-chat and sentinel information)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG4:
+    title: "Tier routing per G8: INFO/WARN drop on failure; ERROR writes log; CRITICAL writes sentinel first"
+    decision: |
+      INFO   -> attempt send; drop silently on failure
+      WARN   -> attempt send; drop silently on failure
+      ERROR  -> attempt send; on failure append JSON-line to failed_alerts.log
+      CRITICAL -> write sentinel FIRST (unconditional), then attempt send
+    rationale: "INFO/WARN failures are expected operational conditions. ERROR failures need
+      an audit trail. CRITICAL failures require guaranteed delivery via watcher."
+    alternatives_considered:
+      - "Write sentinel for ERROR too (rejected: over-engineering; email for CRITICAL only per G8)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG5:
+    title: "CRITICAL path: sentinel write first, Telegram second"
+    decision: |
+      Step 1: write_critical_sentinel() -- fire and note path.
+      Step 2: attempt Telegram send.
+      Step 3: return SendResult with sentinel_path populated regardless of Telegram outcome.
+      If sentinel write raises OSError: log.error(), attempt Telegram anyway, return
+      SendResult success=False. The last-ditch defense is Telegram when sentinel fails.
+    rationale: "Sentinel write first ensures the fallback path (watcher) is armed before
+      attempting the primary path (Telegram). If the process crashes between step 1 and
+      step 2, the watcher still delivers."
+    alternatives_considered:
+      - "Telegram first, sentinel on failure (rejected: process crash before sentinel write
+        loses the alert entirely)"
+    affects:
+      - "alerts/telegram_notifier.py"
+      - "alerts/critical.py"
+
+  TG6:
+    title: "HTTP retry logic: 429 sleep+retry-once; 5xx exponential backoff; 4xx permanent fail"
+    decision: |
+      POST to Bot API with timeout=timeout_sec.
+      HTTP 429: sleep min(Retry-After, 5s), retry once.
+      HTTP 5xx or requests.Timeout: retry up to max_retries with backoff 0.5s/1s.
+      HTTP 4xx (other than 429): permanent fail, no retry.
+      Per-chat tracking: delivered_to and failed_to lists.
+    rationale: "Telegram rate limits are expected in production. Exponential backoff prevents
+      thundering herd on 5xx. 4xx (bad token, bad chat_id) are permanent errors."
+    alternatives_considered:
+      - "Uniform backoff (rejected: less effective than exponential for 5xx recovery)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG7:
+    title: "Message format: HTML, [SEV] title header, 4096-char limit with truncation"
+    decision: |
+      Subject line: <b>[SEVERITY] title</b>
+      Body: HTML-escaped. Fields: Module, Time, Body, Context key/value lines.
+      Telegram 4096-char limit: body truncated with '...[truncated]' marker.
+      All user-supplied strings HTML-escaped via html.escape().
+    rationale: "HTML mode enables bold headers for quick scanning. Explicit truncation
+      marker prevents silent message corruption."
+    alternatives_considered:
+      - "Markdown mode (rejected: Telegram Markdown v1 has edge cases with special chars)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG8:
+    title: "failed_alerts.log: JSON-lines append-only; 8 fields per line"
+    decision: |
+      Format: one JSON object per line (JSON-lines).
+      Fields: ts, severity, title, body, source_module, context,
+      telegram_error, chat_ids_attempted.
+      Append-only. No rotation by notifier (operator uses logrotate).
+    rationale: "JSON-lines format is grep/jq-friendly for operator post-mortems.
+      8 fields match the SendResult context for full audit trail."
+    alternatives_considered:
+      - "CSV format (rejected: context dict cannot be CSV-encoded cleanly)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG9:
+    title: "paper_mode: no HTTP calls; CRITICAL still writes sentinel"
+    decision: |
+      If paper_mode=True: skip all requests.post() calls. Log INFO with message.
+      CRITICAL in paper_mode: still writes sentinel (so watcher can be tested).
+      SendResult.success=True, delivered_to=[] (paper delivery).
+    rationale: "paper_mode must be safe to enable in staging without causing SMTP/Telegram
+      noise. But sentinel writes should still happen so watcher integration tests work."
+    alternatives_considered:
+      - "paper_mode skips sentinel write too (rejected: watcher cannot be tested in paper mode)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG10:
+    title: "Constructor validation: empty token or chat_ids raises ValueError"
+    decision: |
+      bot_token must be non-empty (after strip()). chat_ids must be non-empty list.
+      Raises ValueError with descriptive message on either condition.
+      failed_alerts_log_path parent directory created if absent.
+    rationale: "Fail fast at construction time rather than at first send() call."
+    alternatives_considered:
+      - "Validate at send() time (rejected: construction-time errors are easier to debug)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG11:
+    title: "Layer 5 (alerts/). Imports: stdlib, requests, alerts.critical, core.time_authority."
+    decision: |
+      alerts/telegram_notifier.py may import: Python stdlib (json, html, time, pathlib),
+      requests (already installed as kiteconnect dep), alerts.critical
+      (write_critical_sentinel), core.time_authority (now_ist for timestamps).
+      Must NOT import state_store, fund_manager, or broker modules.
+    rationale: "Keeping imports narrow prevents circular dependencies when telegram_notifier
+      is called from deep in the order execution path."
+    alternatives_considered:
+      - "Import core.logger (rejected: notifier takes logger as constructor arg; cleaner)"
+    affects:
+      - "alerts/telegram_notifier.py"
+
+  TG12:
+    title: "System config additions: alerts.telegram + alerts.smtp + alerts top-level fields"
+    decision: |
+      New AlertsConfig section in SystemConfig with nested TelegramConfig and SmtpConfig.
+      TelegramConfig: bot_token, chat_ids, timeout_sec (>0), max_retries (>=0), paper_mode.
+      SmtpConfig: host, port (1-65535), use_tls, username, password, from_address,
+      to_addresses (non-empty), timeout_sec (>=1).
+      AlertsConfig top-level: failed_alerts_log_path, sentinel_dir, watcher_max_attempts (>=1),
+      watcher_lock_path, watcher_log_path.
+      All validators use extra='forbid'.
+    rationale: "Pydantic validation at startup catches misconfigured alert delivery before
+      trading begins. extra=forbid catches typos."
+    alternatives_considered:
+      - "Separate alerts.yaml config file (rejected: master config pattern established by CL6)"
+    affects:
+      - "core/config_loader.py"
+      - "config/system_config.yaml"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ALERTS MODULE — scripts/alert_watcher.py (11 decisions: AW1–AW11)
+# ══════════════════════════════════════════════════════════════════════════════
+
+  AW1:
+    title: "Standalone CLI script. Periodic invocation. Survives trading process crash."
+    decision: |
+      alert_watcher.py is a separate process, not a thread inside the trading process.
+      It is designed for periodic invocation by systemd timer (Linux) or Windows Task
+      Scheduler. NOT a daemon. Exits 0 after one processing pass.
+      Can run independently if the trading process has crashed.
+    rationale: "G8: watcher must survive trading process crash. A separate process provides
+      true isolation. One-shot invocation is simpler and more reliable than a daemon."
+    alternatives_considered:
+      - "Thread inside trading process (rejected: dies with the trading process)"
+      - "Long-running daemon (rejected: harder to manage, less reliable than timer-based)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW2:
+    title: "CLI: --config, --once, --dry-run flags"
+    decision: |
+      python scripts/alert_watcher.py [--config <path>] [--once] [--dry-run]
+      --config: path to config directory (default: project root config/)
+      --once: reserved for future loop mode; currently all runs are single-pass
+      --dry-run: log actions without sending email or renaming files
+    rationale: "--dry-run enables operator testing of the watcher without triggering
+      real email sends. --config enables test isolation."
+    alternatives_considered:
+      - "Environment variables for config (rejected: --config is more explicit)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW3:
+    title: "Lock file: pid stored; live pid exits 0; dead pid (stale) cleaned up"
+    decision: |
+      Lock path: alerts.watcher_lock_path (default: data_store/alert_watcher.lock).
+      Lock file content: PID of the owning process.
+      On startup: if lock exists and pid is alive -> exit 0 silently (contention).
+      If lock exists and pid is dead -> delete stale lock, proceed.
+      Lock released via try/finally on exit (always, even on exception).
+    rationale: "Prevents two simultaneous watcher invocations from double-sending emails
+      during overlapping timer firings."
+    alternatives_considered:
+      - "fcntl file locking (rejected: not portable to Windows)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW4:
+    title: "Processing loop: read -> send_email -> mark_delivered; SmtpError -> counter; OSError/ValueError -> .failed"
+    decision: |
+      for sentinel in list_pending_sentinels(sentinel_dir):
+        data = read_sentinel(sentinel)          # ValueError/OSError -> mark_failed("corrupt")
+        send_email(smtp_cfg, data, log)         # SmtpError -> increment counter
+        mark_delivered(sentinel)                # success
+      SmtpAuthError -> exit 2 immediately (no more sends possible).
+    rationale: "Separating corrupt-file errors (immediate .failed) from SMTP errors (retry
+      with counter) gives the right behavior: corrupt files waste no retry budget."
+    alternatives_considered:
+      - "Retry corrupt files (rejected: corrupt files will never self-heal)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW5:
+    title: "Attempt counter persisted in alert_watcher_attempts.json; pruned of non-pending files"
+    decision: |
+      Counter file: <sentinel_dir>/alert_watcher_attempts.json.
+      Format: {"<filename>": <count>}.
+      Loaded at start, saved at end. Atomic write (tmp+rename).
+      Pruned: entries for files no longer *.flag are removed from counter.
+    rationale: "Counter must survive watcher process restart. Pruning prevents the counter
+      file from growing unboundedly after delivered/failed files accumulate."
+    alternatives_considered:
+      - "Counter in memory only (rejected: lost on watcher restart)"
+      - "SQLite counter (rejected: adds dependency for a trivial counter)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW6:
+    title: "Email format: Subject=[SEV] title [host:pid]; Body=plain text; all sentinel fields"
+    decision: |
+      Subject: "[<severity>] <title> [<hostname>:<pid>]"
+      From/To from smtp config.
+      Body: plain text with all 8 sentinel fields (id, ts, severity, title, module,
+      hostname, pid, body, context key/value pairs).
+      Encoding: UTF-8.
+    rationale: "Plain text body is readable in any email client without HTML rendering.
+      hostname:pid in subject identifies the source machine during multi-host deployments."
+    alternatives_considered:
+      - "HTML email body (rejected: adds complexity; plain text is universally readable)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW7:
+    title: "SMTP config via alerts.smtp section; STARTTLS or SSL"
+    decision: |
+      smtp.use_tls=True -> SMTP + STARTTLS (port 587 default).
+      smtp.use_tls=False -> SMTP_SSL (port 465 typically).
+      Fields: host, port, use_tls, username, password, from_address,
+      to_addresses (list), timeout_sec.
+      Locked in TG12 (SmtpConfig Pydantic model with validators).
+    rationale: "STARTTLS on 587 is the modern standard. SSL on 465 provided for legacy
+      SMTP servers. Both paths covered by use_tls flag."
+    alternatives_considered:
+      - "Hard-code STARTTLS only (rejected: some ISPs block 587)"
+    affects:
+      - "scripts/alert_watcher.py"
+      - "core/config_loader.py"
+
+  AW8:
+    title: "Watcher's own log file: logs/alert_watcher.log; plain text; INFO/ERROR/CRITICAL levels"
+    decision: |
+      Log path: alerts.watcher_log_path (default: logs/alert_watcher.log).
+      Format: simple text lines (not JSON — easier for ops).
+      INFO for normal operations, ERROR for SMTP failures, CRITICAL for lock issues.
+      Log handler created on startup; file rotated by operator/logrotate.
+    rationale: "A separate log file isolates watcher operational logs from the trading
+      system's JSON structured log. Plain text is easier for ops quick-scan."
+    alternatives_considered:
+      - "Log to trading system's main log (rejected: separate process, different concern)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW9:
+    title: "Exit codes: 0=success/normal, 1=config error, 2=SMTP auth failure"
+    decision: |
+      0: success, no sentinels found, or lock contention (normal).
+      1: config error or missing config file.
+      2: SmtpAuthError (operator must fix credentials before watcher can deliver).
+      systemd can be configured to alert on exit code 2.
+    rationale: "Structured exit codes enable automated monitoring: exit 2 means immediate
+      operator action required; exit 1 means deployment issue."
+    alternatives_considered:
+      - "Exit 1 for all errors (rejected: conflates 'fix config' with 'fix credentials')"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW10:
+    title: "Layer 6 (scripts/). Imports: stdlib, alerts.critical, core.config_loader."
+    decision: |
+      scripts/alert_watcher.py may import: Python stdlib (smtplib, email.mime, json,
+      pathlib, argparse, os, sys, socket), alerts.critical (list_pending_sentinels,
+      read_sentinel, mark_delivered, mark_failed), core.config_loader (load_all).
+      Must NOT import core.state_store (database may be locked when watcher runs).
+    rationale: "Avoiding state_store ensures the watcher can process sentinels even if
+      the SQLite database is write-locked by the trading process."
+    alternatives_considered:
+      - "Import state_store for logging (rejected: DB lock contention risk)"
+    affects:
+      - "scripts/alert_watcher.py"
+
+  AW11:
+    title: "Config additions: alerts.smtp section + watcher_max_attempts/lock_path/log_path"
+    decision: |
+      alerts.watcher_max_attempts: int (>=1, default 5) -- max SMTP retries before .failed.
+      alerts.watcher_lock_path: str (default "data_store/alert_watcher.lock").
+      alerts.watcher_log_path: str (default "logs/alert_watcher.log").
+      alerts.smtp: SmtpConfig (see TG12 / AW7).
+      All fields validated by AlertsConfig Pydantic model (extra='forbid').
+    rationale: "All watcher parameters in system_config.yaml per master config pattern.
+      Operator can tune max_attempts without code changes."
+    alternatives_considered:
+      - "Hard-coded defaults only (rejected: violates Config Honor Principle P2)"
+    affects:
+      - "core/config_loader.py"
+      - "config/system_config.yaml"
+      - "scripts/alert_watcher.py"
+
+order_reconciler_module:
+  RC1:
+    title: "OrderReconciler class: start(), stop(), reconcile_once() public API"
+    decision: |
+      Class OrderReconciler in orders/order_reconciler.py.
+      Public methods: start() (startup reconcile + thread + event sub),
+      stop() (signal thread), reconcile_once() (lock-protected cycle, returns actions).
+    rationale: "Clean lifecycle; reconcile_once() is public for white-box testing (RC20)."
+    affects: ["orders/order_reconciler.py"]
+
+  RC2:
+    title: "Constructor injections for OrderReconciler"
+    decision: |
+      __init__ params: state_store, adapter (ZerodhaAdapter), fund_manager,
+      kill_switch, notifier (TelegramNotifier), bus (EventBus), logger,
+      cfg (OrderReconcilerConfig), quote_fn (Callable), broker_orders_fn=None.
+      OrderManager instantiated internally from state_store + logger.
+    rationale: "All dependencies injected for testability. broker_orders_fn=None
+      signals CHECK 6 should be skipped (adapter has no get_all_orders method)."
+    affects: ["orders/order_reconciler.py"]
+
+  RC3:
+    title: "Daemon poll thread fires every cfg.poll_interval_sec (P14 = 15s)"
+    decision: |
+      threading.Thread(daemon=True) started in start(). Uses threading.Event
+      for clean shutdown (stop() sets event; thread exits on next wakeup).
+    rationale: "Daemon thread means clean exit when main process terminates."
+    affects: ["orders/order_reconciler.py"]
+
+  RC4:
+    title: "Event-driven trigger via OrderStateChanged subscription"
+    decision: |
+      If cfg.enable_event_driven, subscribe OrderStateChanged; call reconcile_once()
+      on each event. Non-blocking: returns [] immediately if lock held (RC13).
+    rationale: "G1 hybrid cadence: event-driven for instant response + periodic
+      for drift that has no event source."
+    affects: ["orders/order_reconciler.py"]
+
+  RC5:
+    title: "Six reconciliation checks per cycle"
+    decision: |
+      (a) MANUAL_CLOSE  -- local OPEN/PARTIAL, broker has no position -> mark CLOSED_MANUAL
+      (b) ORPHAN_ADOPTION -- broker position, no local trade -> publish CapitalDriftDetected
+      (c) HEALTHY -- quantities match -> COSMETIC log (not persisted)
+      (d) PARTIAL_CLOSE -- local qty > broker qty -> update qty_filled
+      (e) POSITION_GREW -- broker qty > local qty -> publish CapitalDriftDetected
+      (f) ORPHAN_ORDER -- PENDING_FILL local order absent from broker open orders
+                          (only when broker_orders_fn is provided)
+    rationale: "Exhaustive coverage of all position-state mismatches (G1)."
+    affects: ["orders/order_reconciler.py"]
+
+  RC6:
+    title: "3-tier action policy: COSMETIC / RECOVERABLE / UNRECOVERABLE"
+    decision: |
+      COSMETIC: HEALTHY (no DB change, not logged).
+      RECOVERABLE: MANUAL_CLOSE, PARTIAL_CLOSE, CRASH_RECOVERY_SL (auto-corrected).
+      UNRECOVERABLE: ORPHAN_ADOPTION, POSITION_GREW, ORPHAN_ORDER, CAPITAL_DRIFT
+      (manual intervention required; CapitalDriftDetected published).
+    rationale: "G1 tiered policy. Operators only need to act on UNRECOVERABLE."
+    affects: ["orders/order_reconciler.py"]
+
+  RC7:
+    title: "G5b crash-recovery SL: place fresh SL-M or MARKET exit if SL absent"
+    decision: |
+      For each OPEN/PARTIAL trade with no active SL order (get_sl_order_for_trade
+      returns None): fetch LTP via quote_fn, then:
+        LONG:  LTP > sl_initial -> SL-M SELL at sl_initial
+               LTP <= sl_initial -> MARKET SELL (SL already breached)
+        SHORT: LTP < sl_initial -> SL-M BUY at sl_initial
+               LTP >= sl_initial -> MARKET BUY (SL already breached)
+      Order persisted via OrderManager.insert_order() after placement.
+    rationale: "G5b: no single point of failure for stop-loss protection."
+    affects: ["orders/order_reconciler.py"]
+
+  RC8:
+    title: "G3 Level 3 capital drift: adapter.get_margins().net vs fund_manager.total"
+    decision: |
+      Compare adapter.get_margins().net to fund_manager.get_snapshot().total.
+      If |actual - expected| > cfg.capital_drift_tolerance:
+        - Publish CapitalDriftDetected(expected, actual, delta)
+        - Send CRITICAL alert via TelegramNotifier (sentinel + Telegram)
+      Lives in reconciler, not fund_manager or invariant.py.
+    rationale: "G3 drift detection requires a broker API call; reconciler owns it."
+    affects: ["orders/order_reconciler.py"]
+
+  RC9:
+    title: "ReconciliationAction dataclass"
+    decision: |
+      Fields: check_name (str), tier (str), symbol (str), trade_id (Optional[str]),
+      description (str), action_taken (str), success (bool).
+      Non-COSMETIC actions are persisted to reconciliation_log (RC10).
+      reconcile_once() returns List[ReconciliationAction] for testing (RC20).
+    rationale: "Structured return type enables white-box testing and audit trail."
+    affects: ["orders/order_reconciler.py"]
+
+  RC10:
+    title: "Persist non-COSMETIC actions to reconciliation_log table"
+    decision: |
+      After each _reconcile() cycle, all ReconciliationActions with tier !=
+      'COSMETIC' are inserted via state_store.insert_reconciliation_log().
+      COSMETIC (HEALTHY) actions skipped to reduce DB noise.
+    rationale: "Full audit trail for RECOVERABLE/UNRECOVERABLE actions without
+      flooding the log with HEALTHY entries."
+    affects: ["orders/order_reconciler.py", "core/state_store.py"]
+
+  RC11:
+    title: "BrokerTimeoutError during any check: log WARNING, skip, continue"
+    decision: |
+      Each broker call (get_positions, get_margins, broker_orders_fn) is wrapped
+      in a try/except BrokerTimeoutError. On timeout: log WARNING and skip that
+      check only. The cycle continues with remaining checks.
+    rationale: "Transient network timeouts must not abort an entire reconcile cycle."
+    affects: ["orders/order_reconciler.py"]
+
+  RC12:
+    title: "BrokerAuthError: per-cycle counter; soft_kill on 3 consecutive cycles"
+    decision: |
+      Counter tracks consecutive reconcile cycles that had >= 1 BrokerAuthError
+      (not per-call). Counter incremented by 1 per cycle (not per auth-error call).
+      Counter resets to 0 if a cycle completes with no auth errors.
+      After 3 consecutive auth-error cycles: call kill_switch.soft_kill().
+    rationale: "Per-cycle counting avoids inflating the counter from multiple calls
+      within a single cycle. 3-cycle threshold tolerates brief auth failures."
+    affects: ["orders/order_reconciler.py"]
+
+  RC13:
+    title: "reconcile_once() is non-reentrant via Lock.acquire(blocking=False)"
+    decision: |
+      Lock acquired with blocking=False. If lock is held (another cycle running),
+      returns [] immediately with DEBUG log. Prevents concurrent reconcile cycles
+      from the poll thread and event-driven trigger racing.
+    rationale: "Idempotency: overlapping cycles could cause double-MANUAL_CLOSE etc."
+    affects: ["orders/order_reconciler.py"]
+
+  RC14:
+    title: "start() triggers startup reconciliation before poll thread begins"
+    decision: |
+      start() calls reconcile_once() synchronously before starting the daemon
+      thread. Ensures system is reconciled immediately on startup, not 15s later.
+    rationale: "Crash-recovery SL check (G5b) must run before the first trade tick."
+    affects: ["orders/order_reconciler.py"]
+
+  RC15:
+    title: "No paper-mode special-casing in reconciler"
+    decision: |
+      Paper mode behaviour owned by ZerodhaAdapter (returns [] for get_positions
+      in paper mode) and TelegramNotifier (skips HTTP in paper mode). Reconciler
+      is paper-mode agnostic.
+    rationale: "Single responsibility: reconciler should not duplicate adapter logic."
+    affects: ["orders/order_reconciler.py"]
+
+  RC16:
+    title: "Logger name must be 'order_reconciler' for L7 routing"
+    decision: |
+      get_logger('order_reconciler') or logging.getLogger('order_reconciler').
+      Name routes to trade_log per L7 logger hierarchy rules.
+    rationale: "Consistent with all other module loggers in the system."
+    affects: ["orders/order_reconciler.py"]
+
+  RC17:
+    title: "New config section: OrderReconcilerConfig (3 fields)"
+    decision: |
+      order_reconciler:
+        poll_interval_sec: int       # P14 = 15s; validated >= 1
+        capital_drift_tolerance: float  # G3 Level 3; validated >= 0.0
+        enable_event_driven: bool    # G1 hybrid cadence toggle
+      PollingConfig.order_reconciler_sec kept unchanged (existing usage).
+    rationale: "Separate section for reconciler-specific config per P2 principle."
+    affects: ["core/config_loader.py", "config/system_config.yaml"]
+
+  RC18:
+    title: "G5b order placement via adapter.place_order(); no order_placer import"
+    decision: |
+      Crash-recovery SL placed by calling adapter.place_order() directly.
+      Order persisted via OrderManager.insert_order() after successful placement.
+      No import from orders.order_placer to avoid circular dependencies.
+    rationale: "Avoids circular import; adapter.place_order() is the correct
+      low-level interface for emergency order placement."
+    affects: ["orders/order_reconciler.py"]
+
+  RC19:
+    title: "Schema v6: reconciliation_log table (TABLE 13)"
+    decision: |
+      TABLE 13: reconciliation_log(id, ts, check_name, tier, symbol, trade_id,
+      description, action_taken, success). Indexes on ts and trade_id.
+      Schema version bumped v5->v6.
+    rationale: "Audit trail for all non-COSMETIC reconciliation actions (RC10)."
+    affects: ["core/schema.sql", "core/state_store.py"]
+
+  RC20:
+    title: "reconcile_once() returns List[ReconciliationAction] for white-box testing"
+    decision: |
+      reconcile_once() returns the complete list of ReconciliationActions taken
+      in the cycle. Tests can assert on specific check names, tiers, and outcomes
+      without reading the DB.
+    rationale: "Enables deterministic unit testing without polling the DB."
+    affects: ["orders/order_reconciler.py", "tests/unit/test_order_reconciler.py"]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODULE 26: data/live_feed.py + data/candle_store.py (LF1-LF18)
+# ══════════════════════════════════════════════════════════════════════════════
+
+data_module:
+
+  LF1:
+    title: "LiveFeedManager: KiteTicker WebSocket manager purpose"
+    decision: |
+      data/live_feed.py exports LiveFeedManager. Manages KiteTicker WebSocket
+      connection, symbol subscriptions, and distributes LTP ticks to registered
+      callbacks via a bounded queue + single consumer thread (Audit 3.3: no
+      thread-per-callback).
+    rationale: "Single responsibility: WebSocket lifecycle and tick distribution."
+    affects: ["data/live_feed.py"]
+
+  LF2:
+    title: "LiveFeedManager constructor signature"
+    decision: |
+      LiveFeedManager(api_key: str, access_token: str, logger,
+        on_critical_failure=None, max_reconnect_attempts=10,
+        reconnect_delay_sec=5)
+      No state_store, no config_loader dependencies.
+    rationale: "Layer 3 (data/). Injected credentials; no DB/config coupling."
+    affects: ["data/live_feed.py"]
+
+  LF3:
+    title: "KiteTicker connection lifecycle"
+    decision: |
+      connect() starts KiteTicker with threaded=True; starts consumer daemon thread.
+      disconnect() calls ticker.close(); sets _connected=False; sets stop_event.
+      is_connected() returns bool _connected state.
+      On network disconnect: KiteTicker auto-reconnects with exponential backoff
+      up to max_reconnect_attempts. After max: fire on_critical_failure + log CRITICAL.
+      reconnect_max_tries and reconnect_max_delay passed to KiteTicker constructor.
+    rationale: "KiteTicker built-in reconnect handles backoff; we configure the limits."
+    affects: ["data/live_feed.py"]
+
+  LF4:
+    title: "Symbol subscription model"
+    decision: |
+      subscribe(instrument_tokens: list[int]) tracks in internal _subscribed set.
+      unsubscribe(instrument_tokens: list[int]) removes from _subscribed set.
+      Default tick mode: MODE_LTP. set_mode(tokens, mode) for overrides.
+      On reconnect (on_connect callback): auto-resubscribe all from _subscribed set.
+      subscribe() is idempotent: duplicate tokens not added twice.
+    rationale: "Auto-resubscribe on reconnect requires persistent _subscribed set."
+    affects: ["data/live_feed.py"]
+
+  LF5:
+    title: "Tick distribution via bounded queue + single consumer thread"
+    decision: |
+      on_ticks callback pushes to queue.Queue(maxsize=10000).
+      Single daemon consumer thread drains queue, invokes registered callbacks.
+      Queue full: drop oldest tick (get_nowait to evict), log WARNING, add new tick.
+      register_callback(fn) / unregister_callback(fn) for subscription management.
+      Callbacks are idempotent: register is no-op if already registered.
+    rationale: "Audit 3.3: no thread-per-callback. Bounded queue prevents OOM."
+    affects: ["data/live_feed.py"]
+
+  LF6:
+    title: "Normalized tick data contract"
+    decision: |
+      Each tick normalized to:
+        {instrument_token: int, last_price: float, timestamp: datetime|None,
+         volume: int|None}
+      exchange_timestamp preferred over timestamp field.
+      raw tick['ohlc'] (DAY's OHLC, NOT minute) is explicitly excluded from
+      the normalized tick to prevent accidental use in candle building.
+    rationale: "Audit 3.4: tick ohlc is day's range, not minute candle data."
+    affects: ["data/live_feed.py"]
+
+  LF7:
+    title: "G6 reconnect protocol"
+    decision: |
+      On _on_reconnect (first attempt per disconnect):
+        1. Notify candle_store via on_reconnect_cb(ts) - injected via
+           set_on_reconnect_callback(). Called ONCE per disconnect event
+           (_reconnect_notified flag prevents repeated calls).
+        2. Log WARNING with attempt count and gap duration.
+        3. If gap > 10 min: log CRITICAL + fire on_critical_failure.
+      Resubscription happens in _on_connect (successful reconnect).
+      G6: do NOT re-fire smart_tgt callbacks for missed bars.
+    rationale: "Gap > 10 min indicates systemic issue. CandleStore notified to discard partials."
+    affects: ["data/live_feed.py"]
+
+  LF8:
+    title: "LiveFeedManager layer and dependencies"
+    decision: |
+      Layer 3 (data/). Imports: kiteconnect (KiteTicker), stdlib (threading,
+      queue, datetime), core.time_authority. No state_store, no config_loader,
+      no broker adapter.
+    rationale: "Data layer should not depend on persistence or configuration."
+    affects: ["data/live_feed.py"]
+
+  LF9:
+    title: "CandleStore purpose"
+    decision: |
+      data/candle_store.py exports CandleStore. Builds minute OHLC candles from
+      LTP stream. Single source of truth for intraday candle data. Fixes two
+      audit issues: candle poisoning (Audit 3.4) and tick-dependent close.
+    rationale: "Separate candle logic from WebSocket logic; clean single responsibility."
+    affects: ["data/candle_store.py"]
+
+  LF10:
+    title: "CandleStore constructor signature"
+    decision: |
+      CandleStore(logger, candle_interval_sec=60)
+      start() begins clock timer thread. stop() stops it.
+      No KiteTicker dependency; receives ticks via on_tick() call.
+    rationale: "Decoupled from feed layer; injectable via callback."
+    affects: ["data/candle_store.py"]
+
+  LF11:
+    title: "Candle construction from LTP only (Audit 3.4)"
+    decision: |
+      on_tick(instrument_token: int, ltp: float, ts: datetime) accumulates:
+        open  = first LTP in window
+        high  = max(all LTPs in window)
+        low   = min(all LTPs in window)
+        close = last LTP in window
+        volume = 0 (unreliable from ticks; not tracked)
+      NEVER uses tick['ohlc'] (day's OHLC, not minute).
+    rationale: "Audit 3.4: exchange ohlc is day's range. LTP-only avoids candle poisoning."
+    affects: ["data/candle_store.py"]
+
+  LF12:
+    title: "Clock-based candle close (Audit 3.4)"
+    decision: |
+      Internal timer thread fires at candle_interval_sec wall-clock boundaries
+      (clock-aligned via time.time() // interval arithmetic).
+      On fire: close ALL symbols with any accumulated LTP in window.
+      Creates candle even for illiquid symbols (1 tick -> valid candle).
+      Fixes: candle close must NOT depend on next tick arrival.
+    rationale: "Audit 3.4: illiquid symbols would never close without clock-based close."
+    affects: ["data/candle_store.py"]
+
+  LF13:
+    title: "CandleData frozen dataclass and candle close callback"
+    decision: |
+      CandleData (frozen dataclass):
+        instrument_token: int, symbol: str, open: float, high: float,
+        low: float, close: float, volume: int, ts: datetime (IST, tz-aware),
+        interval_sec: int
+      register_on_candle_close(fn: Callable[[CandleData], None])
+      Callbacks fired outside lock to avoid deadlock.
+    rationale: "Frozen ensures immutability; ts is IST tz-aware for consistency."
+    affects: ["data/candle_store.py"]
+
+  LF14:
+    title: "In-memory candle history (deque, max 390)"
+    decision: |
+      get_candles(instrument_token, n=10) -> list[CandleData]
+      Per-symbol deque with maxlen=390 (1 full trading day of 1-min candles).
+      NOT persisted to disk.
+    rationale: "In-memory only; disk persistence out of scope for this layer."
+    affects: ["data/candle_store.py"]
+
+  LF15:
+    title: "Token-to-symbol mapping"
+    decision: |
+      set_token_map(dict[int, str]) injects mapping.
+      Token in map -> symbol populated. Token not in map -> symbol = str(token).
+    rationale: "Graceful degradation when mapping incomplete."
+    affects: ["data/candle_store.py"]
+
+  LF16:
+    title: "Reconnect handling in CandleStore"
+    decision: |
+      mark_reconnect(ts: datetime):
+        Discards ALL partially-built (unclosed) candles via _accum.clear().
+        Closed candles in _history are preserved.
+        Logs WARNING with count of discarded partials.
+      Called by LiveFeedManager's on_reconnect_cb.
+    rationale: "G6: partial candles during gap are unreliable; discard them."
+    affects: ["data/candle_store.py"]
+
+  LF17:
+    title: "Thread safety in CandleStore"
+    decision: |
+      Single threading.Lock guards _accum, _history, _token_map, _on_close_cbs.
+      _close_candles uses two short critical sections:
+        1. Snapshot + clear _accum (+ snapshot token_map)
+        2. Persist to _history + snapshot callbacks
+      Callbacks fired OUTSIDE lock to prevent deadlock.
+      No lock nesting anywhere.
+    rationale: "Single lock + callback-outside-lock is simplest correct design."
+    affects: ["data/candle_store.py"]
+
+  LF18:
+    title: "CandleStore layer and dependencies"
+    decision: |
+      Layer 3 (data/). Imports: stdlib only (threading, time, datetime,
+      collections.deque, dataclasses), core.time_authority.
+      No kiteconnect, no state_store, no config_loader.
+    rationale: "Pure data processing layer; no external dependencies."
+    affects: ["data/candle_store.py"]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MODULE 27: strategies/schema.py + strategies/loader.py (S1-S15)
+# ══════════════════════════════════════════════════════════════════════════════
+
+strategies_module:
+
+  S1:
+    title: "Strategy YAMLs are signal-agnostic"
+    decision: |
+      Strategy files define patterns (e.g., open_low_breakout_long), NOT symbols.
+      Symbol comes from Chartink scanner signal at runtime.
+      Scanner-to-strategy mapping is in config/scan_webhook_map.yaml.
+    rationale: "One pattern applies to many symbols; conflating them prevents reuse."
+    affects: ["config/strategies/*.yaml", "signals/webhook_receiver.py"]
+
+  S2:
+    title: "One YAML per Chartink scanner; flat directory layout"
+    decision: |
+      One YAML per scanner pattern. 15 files total.
+      Location: config/strategies/<name>.yaml (flat, no subdirs).
+      File naming: snake_case matching StrategyConfig.name field.
+    rationale: "Flat layout is simpler to glob and validate. Names are grep-able."
+    affects: ["config/strategies/*.yaml", "strategies/loader.py"]
+
+  S3:
+    title: "StrategyConfig complete field list"
+    decision: |
+      Fields (all required unless default noted):
+      Identity: name, display_name, description
+      Direction: direction (LONG|SHORT), intent (INTRADAY|DELIVERY),
+                 order_protocol (CO_PLUS_TGT|LIMIT_TRIPLE)
+      Entry: entry_method (MARKET|LIMIT), entry_offset_pct (default 0.0)
+      SL: sl_method (FIXED_PCT|ATR), sl_pct (default 0.0),
+          sl_atr_multiplier (1.5), sl_min_pct (0.003), sl_max_pct (0.05)
+      TGT: tgt_method (FIXED_PCT|RISK_REWARD|ATR), tgt_pct (0.0),
+           tgt_risk_reward (2.0), tgt_atr_multiplier (2.5)
+      SmartTGT: smart_tgt_enabled, smart_tgt_trail_trigger_pct (0.005),
+                smart_tgt_trail_step_pct (0.003)
+      Pullback: pullback_wait_enabled, pullback_wait_tolerance_pct (0.005),
+                pullback_wait_timeout_sec (180)
+      Screening: min_score (0=global), min_volume_surge (1.3),
+                 min_adr_pct (0.005), max_spread_pct (0.005)
+      Risk: max_risk_pct (0.0=global), lot_size (1)
+      Time: entry_start_time (09:30), entry_end_time (13:30),
+            active_days (all 5 weekdays)
+    rationale: "Complete field list makes every YAML self-documenting and grep-able."
+    affects: ["strategies/schema.py"]
+
+  S4:
+    title: "StrategyConfig validation rules"
+    decision: |
+      extra='forbid' (Project Rule 14).
+      direction IN (LONG, SHORT); intent IN (INTRADAY, DELIVERY);
+      order_protocol IN (CO_PLUS_TGT, LIMIT_TRIPLE);
+      entry_method IN (MARKET, LIMIT); sl_method IN (FIXED_PCT, ATR);
+      tgt_method IN (FIXED_PCT, RISK_REWARD, ATR).
+      sl_pct > 0 when sl_method=FIXED_PCT.
+      sl_min_pct <= sl_pct <= sl_max_pct when FIXED_PCT.
+      tgt_pct > 0 when tgt_method=FIXED_PCT.
+      entry_start_time < entry_end_time.
+      active_days subset of {MON,TUE,WED,THU,FRI}, non-empty.
+      lot_size >= 1. pullback_wait_timeout_sec >= 1.
+      Percentage float fields: > 0, < 1 (expressed as decimal).
+    rationale: "Strict validation at load time prevents invalid configs from reaching runtime."
+    affects: ["strategies/schema.py"]
+
+  S5:
+    title: "All fields present in every YAML (no omissions)"
+    decision: |
+      Every strategy YAML must explicitly declare all fields, including those
+      with sane defaults. No reliance on Pydantic defaults for absent keys.
+      Fields not used by a method (e.g., sl_pct for ATR strategies) are set
+      to their default placeholder values (0.0).
+    rationale: "YAMLs are self-documenting; grep-able; intent clear without code lookup."
+    affects: ["config/strategies/*.yaml"]
+
+  S6:
+    title: "Positional strategy differences from intraday"
+    decision: |
+      3 positional strategies differ from intraday defaults:
+        intent: DELIVERY
+        order_protocol: LIMIT_TRIPLE (CO not available for CNC)
+        sl_method: ATR, sl_atr_multiplier: 2.0
+        tgt_method: ATR, tgt_atr_multiplier: 3.0
+        smart_tgt_enabled: false
+        pullback_wait_enabled: false
+        entry_end_time: 14:30
+    rationale: "Positional trades use CNC (no CO), ATR-based risk (wider moves), longer entry window."
+    affects: ["config/strategies/positional_*.yaml"]
+
+  S7:
+    title: "SHORT strategy differences"
+    decision: |
+      6 SHORT strategies (gap_go_short, gap_fade_short, open_high_breakdown_short,
+      first_pullback_short, vwap_rejection_short, range_breakout_short) use
+      direction: SHORT. SL math is inverted in position_sizer (PS10).
+      All other params mirror their LONG counterparts.
+    rationale: "Symmetry: SHORT strategies are mirror patterns of LONG equivalents."
+    affects: ["config/strategies/*_short.yaml", "capital/position_sizer.py"]
+
+  S8:
+    title: "strategies/schema.py exports"
+    decision: |
+      StrategyConfig: Pydantic BaseModel with all fields.
+      validate_strategy(yaml_path: Path) -> StrategyConfig:
+        Loads YAML, validates, returns typed object.
+        Raises ConfigSchemaError on any failure.
+    rationale: "Thin public API; callers get ConfigSchemaError (not ValidationError) for uniformity."
+    affects: ["strategies/schema.py"]
+
+  S9:
+    title: "strategies/loader.py exports"
+    decision: |
+      StrategyLoader class with:
+        load_all_strategies(strategies_dir, scan_webhook_map_path=None)
+          -> dict[str, StrategyConfig]
+          Globs *.yaml, validates each. ANY invalid file -> ConfigSchemaError.
+          No partial loads.
+        get_strategy(name: str) -> StrategyConfig
+          Raises ConfigMissingError if not found.
+      Strategies loaded ONCE at startup; no hot reload.
+    rationale: "Fail-fast on invalid config; class encapsulates loaded state for get_strategy."
+    affects: ["strategies/loader.py"]
+
+  S10:
+    title: "scan_webhook_map cross-validation"
+    decision: |
+      During load_all_strategies: if scan_webhook_map_path is provided,
+      every strategy name referenced under scanners[*].strategy must exist
+      in the loaded dict. Missing strategy -> ConfigMissingError.
+      Supports both S14 format (dict with 'strategy' key) and legacy
+      format (scanner_name: strategy_name string).
+    rationale: "Catches misconfigured scanner-to-strategy mappings at startup, not runtime."
+    affects: ["strategies/loader.py", "config/scan_webhook_map.yaml"]
+
+  S11:
+    title: "strategies/ layer and dependencies"
+    decision: |
+      strategies/schema.py: Layer 2. Imports: pydantic, yaml, stdlib, core.exceptions.
+      strategies/loader.py: Layer 2. Imports: yaml, stdlib, core.exceptions,
+        strategies.schema.
+      No state_store, no broker, no data layer imports.
+    rationale: "Layer 2 is below broker/data. Pure config validation with no runtime deps."
+    affects: ["strategies/schema.py", "strategies/loader.py"]
+
+  S12:
+    title: "The 15 strategy YAML file names (locked)"
+    decision: |
+      INTRADAY LONG (6): open_low_breakout_long, first_pullback_long,
+        vwap_bounce_long, gap_go_long, gap_fade_long, range_breakout_long
+      INTRADAY SHORT (6): open_high_breakdown_short, first_pullback_short,
+        vwap_rejection_short, gap_go_short, gap_fade_short, range_breakout_short
+      POSITIONAL (3): positional_momentum_long, positional_sector_rotation,
+        positional_swing_long
+    rationale: "Names locked to prevent scan_webhook_map drift."
+    affects: ["config/strategies/*.yaml", "config/scan_webhook_map.yaml"]
+
+  S13:
+    title: "Per-category strategy parameter defaults"
+    decision: |
+      INTRADAY LONG/SHORT defaults:
+        sl_method: FIXED_PCT, sl_pct: 0.01, tgt_method: RISK_REWARD, rr: 2.0
+        smart_tgt_enabled: true, pullback_wait_enabled: true
+        EXCEPT gap_go, gap_fade, range_breakout: pullback_wait_enabled: false
+        gap_go: rr: 2.5 (higher); gap_fade: rr: 1.5 (lower, fade)
+        first_pullback: sl_pct: 0.015 (wider at pullback entry)
+        vwap_bounce/rejection: sl_pct: 0.008 (tighter, VWAP support)
+      POSITIONAL: See S6.
+    rationale: "Per-pattern differentiation reflects each setup's risk profile."
+    affects: ["config/strategies/*.yaml"]
+
+  S14:
+    title: "scan_webhook_map.yaml format"
+    decision: |
+      scanners:
+        <scanner_name>:
+          strategy: <strategy_name>     # matches StrategyConfig.name
+          chartink_url: <url>           # for P17 pre-flight check
+      All 15 scanners populated with placeholder Chartink URLs.
+    rationale: "Richer format supports P17 pre-flight URL validation."
+    affects: ["config/scan_webhook_map.yaml"]
+
+  S15:
+    title: "chartink_scanners.yaml format"
+    decision: |
+      scanners:
+        <scanner_name>: <full_chartink_url>
+      All 15 scanners populated with placeholder URLs.
+      URLs are placeholders; replace with actual Chartink screener URLs
+      once scanners are active.
+    rationale: "Simple name:url map for P17 HTTP HEAD pre-flight check."
+    affects: ["config/chartink_scanners.yaml"]
+
+screening_module:
+
+  QS1:
+    title: "QualityScorer purpose"
+    decision: |
+      QualityScorer computes a quality score (0-100) for a signal from
+      pre-computed step raw scores (0.0-1.0). Returns ScoreResult with
+      total_score, tier, passed, step_scores, missing_steps.
+      All weights/thresholds from ScoringConfig (scoring_weights.yaml).
+      NO inline constants (P9b).
+    rationale: "Clean separation: scorer only aggregates; screener decides pass/reject."
+    affects: ["screening/quality_scorer.py"]
+
+  QS2:
+    title: "QualityScorer constructor"
+    decision: "QualityScorer(weights: ScoringConfig, logger)"
+    rationale: "Weights injected at construction from already-loaded AppConfig."
+    affects: ["screening/quality_scorer.py"]
+
+  QS3:
+    title: "scorer.score() API"
+    decision: |
+      score(step_results: dict[str, float]) -> ScoreResult
+      Missing step -> 0.0 contribution + WARNING log + appears in missing_steps.
+    rationale: "Graceful handling of upstream step failures without crashing scorer."
+    affects: ["screening/quality_scorer.py"]
+
+  QS4:
+    title: "Scoring formula"
+    decision: |
+      weighted_score = raw_score * step_weight
+      total = sum(all weighted_scores), capped at 100.
+      step_scores[name] = int(round(raw * weight)).
+    rationale: "Simple weighted sum; cap prevents overflow from config tuning."
+    affects: ["screening/quality_scorer.py"]
+
+  QS5:
+    title: "Tier assignment"
+    decision: |
+      total >= high_score_threshold (80) -> HIGH
+      total >= medium_score_threshold (65) -> MEDIUM
+      else -> LOW
+      Thresholds from scoring_weights.yaml.
+    rationale: "Tier string passed to position_sizer which applies size multiplier (PS5)."
+    affects: ["screening/quality_scorer.py"]
+
+  QS7:
+    title: "Scorer does not apply size multipliers"
+    decision: |
+      Scorer returns tier string only.
+      position_sizer applies tier multipliers (PS5).
+      Clean separation of concerns.
+    rationale: "Avoids double-application of multipliers if scorer is called multiple times."
+    affects: ["screening/quality_scorer.py"]
+
+  QS8:
+    title: "QualityScorer layer and deps"
+    decision: "Layer 4 (screening/). Imports: stdlib, core.config_loader (type only), core.logger."
+    rationale: "No state_store, no broker access in scorer."
+    affects: ["screening/quality_scorer.py"]
+
+  QS9:
+    title: "QualityScorer determinism"
+    decision: "Pure function. Same step_results + same config -> same ScoreResult. Thread-safe."
+    rationale: "Scorer has no mutable state."
+    affects: ["screening/quality_scorer.py"]
+
+  SE1:
+    title: "StepExecutor purpose"
+    decision: |
+      Executes all 10 screening steps. Each step is a pure function
+      returning raw score (0.0-1.0). Captures exceptions per step.
+      run_all() never raises; returns all results including errors.
+    rationale: "Defensive: one step failure must not block the other 9."
+    affects: ["screening/step_executor.py"]
+
+  SE2:
+    title: "StepExecutor constructor"
+    decision: "StepExecutor(logger). Stateless. No config dependency."
+    rationale: "Thresholds injected per run_all() call from strategy config."
+    affects: ["screening/step_executor.py"]
+
+  SE3:
+    title: "run_all() API"
+    decision: |
+      run_all(signal, market_data, thresholds) -> StepExecutorResult
+      StepExecutorResult: step_results, step_statuses, rejected_at,
+      error_steps, latencies_ms.
+    rationale: "Full result set enables quality_scorer + secondary_screener decisions."
+    affects: ["screening/step_executor.py"]
+
+  SE4:
+    title: "The 10 step definitions"
+    decision: |
+      step_1_volume_surge: volume > avg_volume_20d * min_volume_surge; missing/0 avg -> 0.0
+      step_2_vwap_position: direction-aware (LONG: ltp>vwap; SHORT: ltp<vwap)
+      step_3_atr_filter: adr_pct = atr/ltp*100 >= min_adr_pct; missing/0 atr -> 0.0
+      step_4_rsi_range: LONG [40,80]; SHORT [20,60]; missing -> 0.5 neutral
+      step_5_price_action: body_pct = |ltp-open|/(day_high-day_low); score = min(1, body_pct*2)
+      step_6_sector_strength: sector present -> 1.0; missing -> 0.5 (placeholder for v2.1)
+      step_7_time_of_day: <15min->0.5; <60min->1.0; <180min->0.8; else->0.5
+      step_8_spread_check: spread_pct=(ask-bid)/ltp*100 <= max_spread_pct; missing->0.5
+      step_9_circuit_check: upper/lower_circuit->0.0; else->1.0
+      step_10_signal_age: <=30s->1.0; <=60s->0.5; >60s->0.0
+    rationale: "Audit-fixed step definitions (direction-aware vwap, avg_volume guard)."
+    affects: ["screening/step_executor.py"]
+
+  SE5:
+    title: "Exception handling per step"
+    decision: |
+      Each step wrapped in try/except. On exception:
+        step_results[name]=0.0, step_statuses[name]="ERROR",
+        error_steps.append(name), log ERROR with traceback.
+      run_all() does NOT raise. Caller decides to reject.
+    rationale: "Audit fix: no silent continue. All errors recorded explicitly."
+    affects: ["screening/step_executor.py"]
+
+  SE6:
+    title: "Per-step latency tracking"
+    decision: |
+      Each step timed with time.monotonic().
+      latencies_ms[step_name] = elapsed_ms.
+      Logged at DEBUG per step.
+    rationale: "P9a add: latency data enables future performance tuning."
+    affects: ["screening/step_executor.py"]
+
+  SE7:
+    title: "No short-circuit in run_all()"
+    decision: "All 10 steps always run. No short-circuit on first rejection."
+    rationale: "quality_scorer needs all 10 raw scores for weighted total."
+    affects: ["screening/step_executor.py"]
+
+  SE8:
+    title: "market_data contract"
+    decision: |
+      Keys: ltp, volume, vwap, atr, rsi, bid, ask, sector, circuit_state,
+      day_high, day_low, prev_close, avg_volume_20d, open.
+      Missing keys: per-step default (0.5 neutral or 0.0 reject).
+      NEVER raise on missing key.
+    rationale: "Market data may be partial during reconnects or illiquid periods."
+    affects: ["screening/step_executor.py"]
+
+  SE9:
+    title: "StepExecutor layer and deps"
+    decision: "Layer 4 (screening/). Imports: stdlib (time, datetime, dataclasses), core.logger, core.time_authority."
+    rationale: "No config_loader, no state_store, no broker access."
+    affects: ["screening/step_executor.py"]
+
+  SE10:
+    title: "StepExecutor determinism"
+    decision: "Same signal + market_data + thresholds + now_ist -> same result. now_ist is the only non-deterministic dependency."
+    rationale: "Enables deterministic testing via now_ist mock."
+    affects: ["screening/step_executor.py"]
+
+  SS1:
+    title: "SecondaryScreener purpose"
+    decision: |
+      Pure orchestration: takes signal + market data, runs step_executor,
+      scores via quality_scorer, returns typed ScreeningResult.
+      Writes result to state_store per P18 (PASSED/REJECTED_*/SKIPPED_*).
+    rationale: "Separation of orchestration from step logic and scoring."
+    affects: ["screening/secondary_screener.py"]
+
+  SS2:
+    title: "SecondaryScreener constructor"
+    decision: "SecondaryScreener(step_executor, quality_scorer, state_store, quote_fn, logger)"
+    rationale: "All dependencies injected; no broker import in screener layer."
+    affects: ["screening/secondary_screener.py"]
+
+  SS3:
+    title: "screen() API"
+    decision: |
+      screen(signal_id, symbol, scanner_name, trigger_price, triggered_at,
+             direction, intent, strategy, market_data=None) -> ScreeningResult
+      ScreeningResult: passed, status, score, tier, rejected_step,
+      step_results, step_statuses, error_steps, latencies_ms,
+      market_data_snapshot.
+    rationale: "Typed result enables downstream consumers without parsing status strings."
+    affects: ["screening/secondary_screener.py"]
+
+  SS4:
+    title: "Pipeline order"
+    decision: |
+      1. Fetch market data via quote_fn if not provided (SKIPPED_QUOTE_UNAVAILABLE on fail)
+      2. Build thresholds from strategy (min_volume_surge, min_adr_pct, max_spread_pct)
+      3. run_all() via step_executor
+      4. Error steps check -> REJECTED_STEP_ERROR (P9a fix a)
+      5. Score via quality_scorer
+      6. Apply per-strategy min_score override (0 = use global min_pass_score)
+      7. Signal age defense-in-depth check (REJECTED_SIGNAL_AGE if step_10=0.0)
+      8. PASSED
+    rationale: "Ordered pipeline with explicit rejection reasons for P18 audit."
+    affects: ["screening/secondary_screener.py"]
+
+  SS5:
+    title: "P18 persistence"
+    decision: |
+      After screen() completes: call update_signal_status(signal_id, status)
+      AND insert_screener_result(...) with score/tier/step_results/latencies JSON.
+      DB failures logged but never raised (don't crash signal pipeline).
+    rationale: "P18: every signal leaves with a visible status and analytics row."
+    affects: ["screening/secondary_screener.py", "core/state_store.py"]
+
+  SS6:
+    title: "screener_results table"
+    decision: |
+      Schema v7: TABLE 14 screener_results.
+      Columns: id, signal_id, score, tier, status, step_results (JSON TEXT),
+               latencies (JSON TEXT), market_data_snapshot (JSON TEXT), ts TEXT.
+      Indexes on signal_id, ts, status.
+    rationale: "Append-only screening analytics used by daily report."
+    affects: ["core/schema.sql", "core/state_store.py"]
+
+  SS7:
+    title: "Market data assembly from Quote"
+    decision: |
+      ltp=quote.last_price, bid, ask, volume from Quote.
+      vwap, atr, rsi, sector, day_high, day_low, prev_close, avg_volume_20d,
+      open set to None (v2); step_executor handles missing keys gracefully (SE8).
+      v2.1 will add data providers for these fields.
+    rationale: "Quote only provides tick data; derived fields deferred to v2.1."
+    affects: ["screening/secondary_screener.py"]
+
+  SS8:
+    title: "Circuit state detection"
+    decision: |
+      If Quote has upper_circuit_limit / lower_circuit_limit:
+        circuit_state = upper_circuit if ltp >= upper; lower_circuit if ltp <= lower.
+      If fields missing: circuit_state = "" (step_9 scores 1.0).
+    rationale: "Best-effort circuit detection from available Quote fields."
+    affects: ["screening/secondary_screener.py"]
+
+  SS10:
+    title: "Error handling"
+    decision: |
+      quote_fn failure: SKIPPED_QUOTE_UNAVAILABLE
+      step_executor exception (defense): SKIPPED_EXECUTOR_ERROR
+      quality_scorer exception: SKIPPED_SCORER_ERROR
+      state_store write failure: log ERROR, still return ScreeningResult
+    rationale: "SKIPPED vs REJECTED: SKIPPED means screener couldn't run (not the signal's fault)."
+    affects: ["screening/secondary_screener.py"]
+
+  SS12:
+    title: "SecondaryScreener layer and deps"
+    decision: "Layer 5. Imports: stdlib (json, dataclasses, traceback), screening.step_executor, screening.quality_scorer, core.state_store, core.logger, core.time_authority, strategies.schema. No broker import."
+    rationale: "quote_fn injected at construction to avoid broker coupling."
+    affects: ["screening/secondary_screener.py"]
+
+  SS13:
+    title: "Determinism"
+    decision: "Same signal + same market_data + same config -> same result. market_data is live so each real call is non-deterministic by nature."
+    rationale: "Enables deterministic testing by mocking now_ist and providing fixed market_data."
+    affects: ["screening/secondary_screener.py"]
+
+  SS14:
+    title: "signal_processor not wired yet"
+    decision: "signal_processor wiring deferred to Module 30 (integration wiring). secondary_screener is built and tested standalone."
+    rationale: "Avoid cross-module breakage during incremental build."
+    affects: ["screening/secondary_screener.py"]
+
+  SS_SCHEMA:
+    title: "Schema version bump"
+    decision: "schema.sql v6 -> v7. state_store.py EXPECTED_SCHEMA_VERSION 6 -> 7. New table: screener_results. New method: insert_screener_result()."
+    rationale: "Each new persistent table requires schema version bump for migration detection."
+    affects: ["core/schema.sql", "core/state_store.py"]
+
+audit_closeout:
+  title: "54-item audit closure status"
+  reference: "memory/audit_closeout_final.md"
+  completed_at: "2026-04-16"
+  totals:
+    fixed: 32
+    already_fixed: 6
+    verified_ok: 6
+    closed_by_design: 3
+    pending: 1
+    verify: 2
+    deferred: 8
+
+# ══════════════════════════════════════════════════════════════════════════════
+# END OF LOCKED DECISIONS
+# ══════════════════════════════════════════════════════════════════════════════

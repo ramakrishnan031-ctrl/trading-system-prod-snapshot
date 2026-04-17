@@ -1,0 +1,202 @@
+MODULE: capital/risk_engine.py
+
+CONTEXT: 359/359 green across 16 modules. Capital trio nearly
+complete. risk_engine = portfolio-level pre-trade gate.
+Sizer says HOW MANY; risk_engine says CAN WE TAKE THIS TRADE.
+Audit findings driving design: Issue #6 (no portfolio risk),
+Issue #20 (hardcoded 1% estimate disconnected from sizer),
+Schism between Risk Engine and Position Sizer.
+
+LOCK BEFORE BUILD:
+
+RE1 — Purpose: Single pre-trade approval gate. Validates a
+  proposed trade against ALL portfolio-level limits in one
+  atomic check. Returns approve/reject + reason. No state
+  mutation. No side effects. Pure decision function.
+
+RE2 — Audit fix: NO hardcoded 1% estimate.
+  risk_engine receives the SizingResult from position_sizer
+  and uses its ACTUAL margin_required and risk_amount.
+  Both modules see identical numbers. Schism eliminated.
+
+RE3 — Constructor:
+  RiskEngine(
+    fund_manager,             # for snapshot reads
+    state_store,              # for in-flight + open position counts
+    max_open_positions,       # int, from system_config
+    max_daily_trades,         # int, from system_config
+    max_sector_exposure_pct,  # float, from system_config
+    max_consecutive_losses,   # int, from system_config
+    daily_loss_limit_pct,     # float, from system_config
+    sector_lookup_fn,         # callable: symbol -> sector str
+    logger,
+  )
+  All limits from system_config.yaml.
+
+RE4 — API:
+  engine.approve(
+    symbol,
+    side,
+    intent,
+    sizing_result,        # SizingResult from position_sizer
+    signal_id,
+  ) -> ApprovalResult
+
+  ApprovalResult (frozen dataclass):
+    approved: bool
+    reason: str               # human-readable
+    failed_check: str         # which check rejected (or "")
+    checks_run: list[str]     # all checks executed in order
+    snapshot: dict            # capital + counts at decision time
+
+RE5 — Check sequence (lock; ordered, short-circuit on first fail):
+  1. KILL_SWITCH       — if active, reject immediately
+  2. SIZING_VALID      — sizing_result.success must be True
+  3. CAPITAL           — fund_manager bucket has margin_required
+  4. OPEN_POSITIONS    — count(open) + count(in_flight) < max
+  5. DAILY_TRADES      — count(today) < max_daily_trades
+  6. CONSECUTIVE_LOSSES — recent loss streak < max_consecutive_losses
+  7. DAILY_LOSS        — abs(daily_realized_pnl) < daily_loss_limit
+  8. SECTOR_EXPOSURE   — current sector exposure + this trade
+                          margin <= max_sector_exposure_pct * total
+  9. DUPLICATE_SYMBOL  — no existing open or in-flight position
+                          for same symbol
+  Each check is a method: _check_X(...) returning (passed: bool,
+  reason: str). approve() runs them in order.
+
+RE6 — Audit Issue #6 fix — sector concentration race:
+  SECTOR_EXPOSURE check counts BOTH open positions AND in-flight
+  reservations (queried from state_store). Audit flaw was
+  checking only open. In-flight = orders placed but not yet
+  filled. state_store query: SUM(margin) WHERE
+  status IN ('SUBMITTED','OPEN','PARTIAL') AND sector = ?
+
+RE7 — Audit Issue #6 fix — daily loss intra-trade check:
+  DAILY_LOSS check uses fund_manager.get_snapshot()
+  .daily_realized_pnl. risk_engine does NOT track unrealized
+  P&L (that's order_monitor's job during live position
+  monitoring). risk_engine is a GATE, not a monitor.
+
+RE8 — Kill switch integration:
+  KILL_SWITCH check calls injected kill_switch.is_active().
+  If kill_switch=None at construction, check skipped (logged
+  WARNING once at construction). Allows headless testing.
+  Constructor accepts optional kill_switch parameter.
+  AUDIT NOTE: This is the LAST-MILE kill switch check
+  (Project Rule 13). order_placer also re-checks immediately
+  before broker dispatch — that's defense in depth, not
+  duplication.
+
+RE9 — Sector lookup:
+  sector_lookup_fn(symbol) -> str. Caller injects (will be
+  populated from instrument cache later). For now, tests
+  inject lambda returning canned sectors. If lookup raises,
+  treat as sector "UNKNOWN" and log WARNING (do not reject).
+
+RE10 — Consecutive losses tracking:
+  Read from state_store: most recent N closed trades, count
+  trailing losses (net_pnl < -1e-6 per audit fix). Audit
+  flaw: was incrementing on net_pnl < 0, including breakeven.
+  Lock the < -1e-6 threshold.
+
+RE11 — Snapshot consistency:
+  All reads (fund_manager snapshot + state_store queries)
+  happen in approve() body. ApprovalResult.snapshot dict
+  records the exact values used:
+    {available_intraday, available_positional,
+     open_count, in_flight_count, daily_trades_count,
+     daily_realized_pnl, sector_exposure_pct,
+     consecutive_losses, kill_switch_active}
+  Used by daily report and post-mortem.
+
+RE12 — Approval logged but NOT persisted:
+  Logger writes INFO line with full ApprovalResult on every
+  call. state_store has signals.status field (already exists)
+  that caller updates after approve() returns. risk_engine
+  does NOT write to state_store. Pure read + decide.
+
+RE13 — System config additions:
+  Extend SystemConfig:
+    risk:
+      max_open_positions: int          (validated >= 1)
+      max_daily_trades: int            (validated >= 1)
+      max_sector_exposure_pct: float   (validated > 0, <= 1)
+      max_consecutive_losses: int      (validated >= 1)
+      daily_loss_limit_pct: float      (validated > 0, <= 1)
+  Update YAML stub. Re-run test_config_loader.
+
+RE14 — Layer & deps:
+  Layer 4 (capital/). Imports: stdlib, core.logger,
+  core.exceptions, capital.fund_manager (type),
+  capital.position_sizer (SizingResult type),
+  core.state_store (for queries). NO kill_switch import
+  (injected). NO event publication.
+
+RE15 — State store query helpers needed:
+  Add these methods to state_store (or inline SQL in risk_engine
+  — choose by cleanliness):
+    count_open_positions() -> int
+    count_in_flight_orders() -> int
+    count_trades_today(date_iso: str) -> int
+    sector_exposure(sector: str) -> float  # SUM margin in-flight + open
+    has_active_position(symbol: str) -> bool  # open OR in-flight
+    recent_trade_pnls(n: int) -> list[float]  # for streak calc
+  Recommend: add to state_store as named methods (cleaner,
+  testable). Update test_state_store.py.
+
+RE16 — Determinism:
+  Same fund_manager state + same state_store contents +
+  same inputs -> same ApprovalResult. No clock-dependent
+  decisions (date is read once, used consistently throughout).
+
+RE17 — NOT in scope:
+  - Capital reservation (caller does this AFTER approval)
+  - Order placement
+  - Position-level monitoring (order_monitor does this)
+  - Unrealized P&L tracking
+  risk_engine is a stateless gate.
+
+BUILD STEPS:
+
+1. Extend SystemConfig per RE13. Update YAML stub.
+   Re-run test_config_loader.
+
+2. Add 6 query helpers to core/state_store.py per RE15.
+   Update test_state_store.py with tests for each helper.
+   Re-run test_state_store.
+
+3. Build capital/risk_engine.py per RE1-RE17.
+
+4. Build tests/unit/test_risk_engine.py covering:
+   - approve() with all checks passing -> approved=True
+   - KILL_SWITCH active -> rejected, failed_check="KILL_SWITCH"
+   - kill_switch=None -> KILL_SWITCH check skipped (WARNING
+     logged once at construction)
+   - SIZING_VALID: sizing_result.success=False -> rejected
+   - CAPITAL: insufficient bucket capital -> rejected
+   - OPEN_POSITIONS: at limit -> rejected
+   - OPEN_POSITIONS: in-flight + open counted together
+   - DAILY_TRADES: at limit -> rejected
+   - CONSECUTIVE_LOSSES: streak at limit -> rejected
+   - CONSECUTIVE_LOSSES: breakeven trades NOT counted as loss
+     (regression for audit fix; net_pnl in [-1e-6, 0] not loss)
+   - DAILY_LOSS: at limit -> rejected
+   - SECTOR_EXPOSURE: at limit -> rejected
+   - SECTOR_EXPOSURE: counts in-flight + open (audit fix)
+   - DUPLICATE_SYMBOL: existing open position -> rejected
+   - DUPLICATE_SYMBOL: existing in-flight order -> rejected
+   - Check order: if 2 fail, first failing check wins reason
+   - Short-circuit: subsequent checks not run after first fail
+     (verify via checks_run list length)
+   - sector_lookup_fn raises -> sector="UNKNOWN", proceed
+   - ApprovalResult.snapshot has all 9 fields
+   - Audit regression: risk_engine and position_sizer use
+     IDENTICAL margin_required for the same trade (no schism)
+   - Determinism: same inputs twice -> identical result
+
+5. Re-run all 16 prior suites + new one. Report 17-row table.
+
+WINDOWS REMINDER: ASCII-only print() strings.
+TEST NOTE: Use in-memory SQLite for state_store fixtures.
+Inject canned sector_lookup_fn (e.g., {"RELIANCE":"ENERGY",
+"TCS":"IT"}.get).

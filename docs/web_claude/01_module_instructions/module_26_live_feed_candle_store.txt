@@ -1,0 +1,206 @@
+================================================================
+MODULE 26: data/live_feed.py + data/candle_store.py
+================================================================
+
+CONTEXT: 717/717 across 28 suites. This module unblocks
+smart_tgt_manager, screening/entry_gate, secondary_screener.
+
+BEFORE BUILDING — VERIFY:
+1. Read docs/locked_decisions.yaml for G6, any decision
+   referencing "live_feed", "tick", "candle", "feed", "websocket".
+2. Run: python -c "from kiteconnect import KiteTicker; print('OK')"
+3. If ANY locked decision contradicts LF* below, follow
+   locked_decisions.yaml and flag conflict to user.
+
+LOCKED DECISIONS REFERENCED:
+  G6   — Feed reconnect: discard partial candles, backfill,
+         alert if gap > 10 min
+  Audit 3.4 — Candle poisoning fix: build OHLC from LTP only
+  Audit 3.4 — Candle close via clock thread, not tick arrival
+  Audit 3.3 — Thread pool, not thread-per-callback
+
+================================================================
+data/live_feed.py (LF1-LF8)
+================================================================
+
+LF1 — Purpose: Manage KiteTicker websocket. Subscribe symbols,
+  receive ticks, distribute LTP to registered callbacks via
+  bounded queue + single consumer thread.
+
+LF2 — Constructor:
+  LiveFeedManager(
+    api_key: str,
+    access_token: str,
+    logger,
+    on_critical_failure=None,
+    max_reconnect_attempts=10,
+    reconnect_delay_sec=5,
+  )
+
+LF3 — Connection lifecycle:
+  connect() -> starts KiteTicker in background thread
+               (threaded=True).
+  disconnect() -> closes websocket cleanly via ticker.close().
+  is_connected() -> bool.
+  On disconnect (network): auto-reconnect with exponential
+  backoff up to max_reconnect_attempts. After max:
+  fire on_critical_failure, log CRITICAL.
+
+LF4 — Symbol subscription:
+  subscribe(instrument_tokens: list[int]) -> None
+  unsubscribe(instrument_tokens: list[int]) -> None
+  Internal _subscribed set tracks all active subscriptions.
+  On reconnect: auto-resubscribe all from _subscribed.
+  Mode: MODE_LTP default. set_mode(tokens, mode) for full.
+
+LF5 — Tick distribution (audit fix: NO thread-per-callback):
+  KiteTicker on_ticks callback pushes to bounded queue.Queue
+  (capacity 10000). Single daemon consumer thread drains queue,
+  invokes registered callbacks sequentially.
+  register_callback(fn: Callable[[list[dict]], None])
+  unregister_callback(fn)
+  Queue full: log WARNING, drop oldest tick.
+
+LF6 — Tick data contract:
+  {"instrument_token": int, "last_price": float,
+   "timestamp": datetime|None, "volume": int|None}
+  MODE_FULL adds "ohlc": {"open","high","low","close"} —
+  these are DAY's OHLC, NOT minute. Do NOT use for candles.
+
+LF7 — G6 reconnect protocol:
+  On reconnect:
+  1. Notify candle_store via on_reconnect callback (injected)
+  2. Log WARNING with gap duration
+  3. If gap > 10 min: fire on_critical_failure
+  4. Resubscribe all symbols from _subscribed
+  Do NOT re-fire smart_tgt callbacks for missed bars.
+
+LF8 — Layer & deps:
+  Layer 3 (data/). Imports: kiteconnect (KiteTicker), stdlib
+  (threading, queue, time, datetime), core.logger,
+  core.time_authority. NO state_store, NO config_loader.
+
+================================================================
+data/candle_store.py (LF9-LF18)
+================================================================
+
+LF9 — Purpose: Build minute OHLC candles from LTP stream.
+  Single source of truth for intraday candle data. Fixes
+  audit candle poisoning + tick-dependent close.
+
+LF10 — Constructor:
+  CandleStore(
+    logger,
+    candle_interval_sec=60,
+  )
+
+LF11 — Candle construction from LTP ONLY (audit fix):
+  on_tick(instrument_token: int, ltp: float, ts: datetime):
+    Bucket into current minute window per symbol.
+    open  = first LTP in window
+    high  = max(all LTPs)
+    low   = min(all LTPs)
+    close = last LTP
+    volume = 0 (not tracked from ticks — unreliable)
+    NEVER use exchange OHLC from tick["ohlc"].
+
+LF12 — Clock-based candle close (audit fix):
+  Internal timer thread fires every candle_interval_sec.
+  On fire: close current candle for ALL symbols with any
+  LTP in window. Creates candle even for illiquid symbols.
+  Fixes: "candle close depends on tick arrival".
+
+LF13 — Candle close callback:
+  register_on_candle_close(fn: Callable[[CandleData], None])
+  CandleData (frozen dataclass):
+    instrument_token: int
+    symbol: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+    ts: datetime  (IST candle close time)
+    interval_sec: int
+
+LF14 — Candle history:
+  get_candles(instrument_token, n=10) -> list[CandleData]
+  In-memory deque per symbol, max 390 candles (1 full day).
+  NOT persisted to disk.
+
+LF15 — Token-to-symbol map:
+  Injected via set_token_map(dict[int, str]).
+  Token not in map: symbol = str(instrument_token).
+
+LF16 — Reconnect handling:
+  mark_reconnect(ts: datetime):
+    Discard ALL partially-built (unclosed) candles.
+    Closed candles in history preserved.
+    Log WARNING with discard count.
+
+LF17 — Thread safety:
+  Single threading.Lock for _candles dict.
+  on_tick, timer close, get_candles all acquire same lock.
+  No nesting, no deadlock risk.
+
+LF18 — Layer & deps:
+  Layer 3 (data/). Imports: stdlib only (threading, time,
+  datetime, collections.deque, dataclasses),
+  core.time_authority, core.logger.
+
+================================================================
+BUILD STEPS
+================================================================
+
+1. Create data/ directory + data/__init__.py.
+
+2. Verify KiteTicker:
+     python -c "from kiteconnect import KiteTicker; print('OK')"
+   Report if fails. Do NOT install new packages without user.
+
+3. Build data/live_feed.py per LF1-LF8 (~200 lines).
+
+4. Build data/candle_store.py per LF9-LF18 (~250 lines).
+
+5. Build tests/unit/test_live_feed.py (~25 tests) covering:
+   - Constructor accepts api_key + access_token
+   - subscribe/unsubscribe modify _subscribed set
+   - register/unregister callback
+   - Simulated tick -> callback invoked (MockTicker)
+   - Queue full -> oldest dropped, WARNING logged
+   - Reconnect -> auto-resubscribe all symbols
+   - max_reconnect exceeded -> on_critical_failure fired
+   - is_connected() correct before/after lifecycle
+   - Thread safety: 100 concurrent sub/unsub from 5 threads
+   NOTE: Mock KiteTicker entirely. No real websocket.
+
+6. Build tests/unit/test_candle_store.py (~25 tests) covering:
+   - Single LTP -> candle O=H=L=C=LTP
+   - Multiple LTPs same minute -> O=first, H=max, L=min, C=last
+   - Timer fires -> candle closed, callback invoked
+   - Illiquid: 1 tick then timer -> valid candle
+   - No ticks in window -> no candle
+   - History: get_candles returns last N, capped at 390
+   - LTP-only: exchange OHLC in tick ignored (regression)
+   - Clock-based close: timer closes even without new tick
+   - mark_reconnect: partial discarded, history preserved
+   - mark_reconnect: WARNING logged with count
+   - Token-to-symbol map populates CandleData.symbol
+   - Missing token: symbol = str(token)
+   - Thread safety: 50 concurrent on_tick, no corruption
+   - Callback invoked once per candle per symbol
+   - CandleData fields: all present, correct types, IST tz
+
+7. Re-run all 28 prior suites + 2 new. Report 30-row table.
+
+================================================================
+MEMORY UPDATE (per MH1) — store after green:
+  Module: data/live_feed.py + data/candle_store.py
+  Tests: report actual
+  Locked: LF1-LF18 under data_module: section
+  Schema: unchanged
+  Cross-module: none
+  Deviations: list if any
+
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================

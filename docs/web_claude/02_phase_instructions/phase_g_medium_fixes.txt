@@ -1,0 +1,199 @@
+================================================================
+PHASE G — Medium Severity Fixes (14 items)
+================================================================
+
+Modules 38-40 complete (1344/1344 green). Only MEDIUM severity
+issues remain before Phase H (chaos tests) and Phase I (final
+verdict).
+
+PROCESS: Same as Phase C.
+  1. VERIFY each issue against current code
+     Triage: CONFIRMED / NOT_APPLICABLE / ALREADY_FIXED / UNCLEAR
+  2. Fix CONFIRMED items with regression tests
+  3. Report table: before / after test count, fix summary
+
+================================================================
+THE 14 MEDIUM ISSUES
+================================================================
+
+MED #1 — Audit 2 #21 — Log rotation
+  Status: ALREADY_FIXED in Phase C (HIGH #11 — RotatingFileHandler
+          50MB/5 backups). Mark as already done, skip.
+
+MED #2 — Audit 2 #23 — market_windows hardcoded
+         _NEXT_DAY_LOOKAHEAD_CAP = 10
+  File: core/market_windows.py
+  Issue: 11 consecutive holidays would raise ValueError.
+  Fix: Raise cap to 30 (still safe). OR make configurable
+       via system_config. Recommend: raise to 30, hardcoded.
+  Test: 11-holiday run no longer errors.
+
+MED #3 — Audit 2 #17 — openpyxl lazy import
+  Status: ALREADY_FIXED in Phase C (HIGH #10).
+  Skip.
+
+MED #4 — Audit 2 #29 — rate_limiter freeze doesn't auto-thaw
+  File: broker/rate_limiter.py
+  Issue: penalize() freezes bucket; no thaw logic.
+  Fix: When acquire() succeeds AFTER freeze expiry, log INFO
+       "rate limiter thawed" once. Freeze naturally expires
+       when self._frozen_until < now; ensure _seconds_until_ready
+       accounts for this correctly.
+       Also: check token refill during freeze period — if
+       refill logic pauses during freeze (intended), confirm.
+       If refill continues during freeze (bug), fix.
+  Test: penalize -> freeze_until set -> time passes -> acquire
+        succeeds AND freeze cleared AND INFO logged once.
+
+MED #5 — Audit 2 #5 — Schema migration
+  Status: DEFERRED to v2.1 per earlier decision.
+  Document in README: "If upgrading schema, delete
+  trading_system.db and reinitialize."
+  Action: Add line to README only. No code change.
+
+MED #6 — Audit 3 #11 — _derive_prices can produce negative prices
+  Status: ALREADY_FIXED in Phase B (BLOCKER #15).
+  Verify regression test still passes. Skip.
+
+MED #7 — Audit 3 #12 — order_placer persists hardcoded
+         "MIS"/"CNC" ignoring product_resolver
+  Status: ALREADY_FIXED in Phase C (HIGH #7).
+  Verify persistence path uses product_resolver now. Skip.
+
+MED #8 — Audit 3 #13 — position_sizer sl_distance can be zero
+  File: capital/position_sizer.py
+  Issue: if entry_price == sl_price, sl_distance == 0, later
+         division. Currently only logs warning.
+  Fix: Reject with SizingResult(success=False,
+        reason="SL_DISTANCE_ZERO"). Signal marked REJECTED
+        at signal_processor level.
+  Test: sl == entry -> SizingResult.success=False with
+        reason SL_DISTANCE_ZERO, no division attempted.
+
+MED #9 — Audit 3 #14 — risk_engine snapshot incomplete on
+         early rejection
+  File: capital/risk_engine.py
+  Issue: ApprovalResult.snapshot may be missing fields when
+         checks reject early.
+  Fix: Always populate all 9 snapshot fields before any
+       return path (success or failure). Use dict default
+       initialization at method entry.
+  Test: Reject on CHECK 1 -> snapshot has all 9 fields
+        (even if some are 0 or None).
+        Reject on CHECK 6 -> same, all fields populated.
+        Approve -> same.
+
+MED #10 — Audit 3 #15 — get_session_row returns None on first run;
+          session row written after startup
+  File: utils/startup_checks.py + main.py
+  Issue: First-run check_config_hash returns changed=False
+         correctly. But session row insertion timing means
+         a crash mid-startup leaves partial state.
+  Fix: Write session row EARLIER in main.py startup — after
+       Phase 0c scenario detection completes (before Phase
+       0e subsystem construction). So if startup crashes,
+       next run still sees session.session_date=today.
+       Cold start detection still works because kill_state
+       and last_shutdown_ts tell the story.
+  Test: Crash mid-startup -> restart -> session row exists
+        with today's date.
+
+MED #11 — Audit 2 #2 — Race in order_placer fill_map
+  File: orders/order_placer.py
+  Issue: _fill_map access — verify ALL paths under
+         self._fill_map_lock.
+  Fix: Grep self._fill_map references. Any not guarded by
+       lock: add lock scope.
+  Test: Concurrent place() + _on_order_filled stress test
+        verifies no race observable.
+
+MED #12 — Audit 2 #3 — ATR silent fallback
+  Status: Partially addressed in Phase C (HIGH #4 logs WARNING).
+  Additional: Add config flag
+    strategies.atr_fallback_mode: "WARN" | "HALT"
+  Default "WARN" for paper, operator switches to "HALT" for
+  live if desired.
+  File: core/config_loader.py + signals/signal_processor.py
+  Fix: Add flag to StrategiesGlobalConfig schema.
+       In _derive_prices, if method=ATR and data unavailable:
+         if mode == "HALT": return None (signal rejected
+                            with REJECTED_NO_ATR_DATA)
+         else: WARN and fall back (current behavior)
+  Test: HALT mode -> signal rejected.
+        WARN mode -> signal processed with warning.
+
+MED #13 — Audit 3 #18 — CO protocol returns success=True
+          even when TGT fails
+  File: orders/order_protocol_co.py
+  Issue: If CO places OK but TGT placement fails, result
+         shows success=True. Caller thinks both legs placed.
+  Fix: Return success=False if any leg fails.
+       Add failure_details listing which leg failed.
+       Caller (order_placer) already handles partial failure
+       by releasing reservation; this just makes the contract
+       honest.
+  Test: Mock adapter with CO success + TGT failure ->
+        result.success=False, failure_details names TGT.
+
+MED #14 — Audit 3 #20 — candle_store MAX_HISTORY = 390
+          too small for multi-day retention
+  File: data/candle_store.py
+  Issue: 390 = 6.5 * 60 min = one full day. On expiry days
+         market closes early but 390 still fits. Actual risk
+         is insufficient history for multi-day trail
+         calculation.
+  Assessment: For v2, 390 is enough (intraday focus, no
+         multi-day strategies live). Smart TGT uses
+         registration-time-forward candles only.
+  Fix: Change MAX_HISTORY to 500 (generous buffer, still
+       bounded). Add comment explaining why.
+       Alternative: Make configurable via system_config.
+       Recommend: bump to 500 hardcoded.
+  Test: Existing tests should pass; add one verifying
+        store accepts 400+ candles without eviction panic.
+
+================================================================
+BUILD PROCESS
+================================================================
+
+Step 1 — Triage ALL 14 issues. Report table with status for
+each. Items already fixed in earlier phases should be marked
+ALREADY_FIXED (verified not just assumed). Items deferred
+should be marked DEFERRED.
+
+Step 2 — Fix CONFIRMED items. Expected (excluding
+ALREADY_FIXED/DEFERRED):
+  - MED #2: market_windows cap
+  - MED #4: rate_limiter thaw
+  - MED #8: sl_distance zero rejection
+  - MED #9: risk_engine snapshot completeness
+  - MED #10: session row write timing
+  - MED #11: fill_map race audit
+  - MED #12: ATR fallback mode
+  - MED #13: CO protocol success semantics
+  - MED #14: MAX_HISTORY bump
+
+~9 fixes, ~15 new tests expected.
+
+Step 3 — Run full suite. Expected: 1344 + ~15 = ~1359.
+
+Step 4 — Report Phase G summary table.
+
+================================================================
+POST-PHASE-G
+================================================================
+
+After Phase G green, only 2 phases remain:
+  Phase H: Chaos test suite (integration tests with deliberate
+           failure injection, ~10 scenarios)
+  Phase I: Final fixed/deferred verdict for Rama
+
+Rama has requested: after Phase G, I (Web Claude) will give
+a consolidated list of what's fixed vs deferred to v2.1.
+
+Hold Phase H until Rama confirms direction after Phase G
+report.
+
+================================================================
+WINDOWS REMINDER: ASCII-only print() strings.
+================================================================

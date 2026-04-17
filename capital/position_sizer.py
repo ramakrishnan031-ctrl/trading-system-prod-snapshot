@@ -1,0 +1,356 @@
+"""
+capital/position_sizer.py -- Trading System v2
+
+Purpose:
+    Pure calculation of position size (qty) for a signal, given entry price,
+    SL price, risk parameters, and available capital from FundManager.
+    No state mutations, no side effects, no broker calls (PS1, PS13).
+
+Locked Design Decisions:
+    PS1  -- Pure calculation: no state, no side effects, no broker calls.
+    PS2  -- Risk-based sizing formula (see calculate() docstring).
+    PS3  -- Constructor: PositionSizer(fund_manager, leverage_map, ...).
+    PS4  -- API: calculate() -> SizingResult (frozen dataclass).
+    PS5  -- Tier multipliers: HIGH=1.0, MEDIUM=0.7, LOW=0.5.
+             Applied AFTER min(risk, capital, concentration), BEFORE lot_size.
+    PS6  -- Lot size rounding: qty = (qty // lot_size) * lot_size.
+             If result < lot_size: SizingResult(success=False, constraint=BELOW_MIN).
+    PS7  -- Bucket determination from intent; snapshot read from fund_manager.
+    PS8  -- Validation raises ValueError (programmer errors, not signal rejections).
+    PS9  -- SystemConfig.position_sizing added.
+    PS10 -- SL direction sanity: log WARNING only, calculation proceeds regardless.
+    PS11 -- Layer 4 (capital/). Deps: stdlib, core.logger, capital.fund_manager.
+    PS12 -- NOT in scope: risk engine, sector concentration, daily loss limit,
+             capital reservation (caller does reserve() after success).
+    PS13 -- Deterministic: same inputs + same snapshot -> same SizingResult.
+
+What This Module Does NOT Do:
+    - Does not reserve capital (caller calls fund_manager.reserve() after success)
+    - Does not check portfolio-level risk limits (risk_engine does that)
+    - Does not compute sector/industry concentration (separate module)
+    - Does not check daily loss limit (fund_manager tracks that)
+    - Does not introduce randomness or I/O
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from capital.fund_manager import FundManager
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VALID_INTENTS: frozenset[str] = frozenset(
+    {"INTRADAY", "COVER_ORDER", "BRACKET_ORDER", "DELIVERY"}
+)
+_INTRADAY_INTENTS: frozenset[str] = frozenset(
+    {"INTRADAY", "COVER_ORDER", "BRACKET_ORDER"}
+)
+_VALID_TIERS: frozenset[str] = frozenset({"HIGH", "MEDIUM", "LOW"})
+_VALID_SIDES: frozenset[str] = frozenset({"BUY", "SELL"})
+
+_DEFAULT_TIER_MULTIPLIERS: dict[str, float] = {
+    "HIGH": 1.0,
+    "MEDIUM": 0.7,
+    "LOW": 0.5,
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Return type
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class SizingResult:
+    """
+    Frozen result of a position sizing calculation (PS4).
+
+    Fields:
+        success:         True if a valid qty was computed.
+        qty:             Final quantity to trade (0 on failure).
+        margin_required: Capital to reserve = qty * (entry_price / leverage).
+        risk_amount:     Actual rupees at risk = qty * sl_distance.
+        bucket:          "intraday" | "positional" (PS7).
+        constraint:      What bound the qty:
+                           "RISK"          -- risk_per_trade_pct was the tightest limit
+                           "CAPITAL"       -- available bucket capital was tightest
+                           "CONCENTRATION" -- max_concentration_pct was tightest
+                           "BELOW_MIN"     -- tier/lot_size rounding made qty < minimum
+        reason:          Human-readable explanation (non-empty always).
+        breakdown:       Dict with all candidate qtys + tier multiplier for audit.
+    """
+    success: bool
+    qty: int
+    margin_required: float
+    risk_amount: float
+    bucket: str
+    constraint: str
+    reason: str
+    breakdown: dict
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PositionSizer
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PositionSizer:
+    """
+    Computes how many shares to trade for a signal (PS1-PS13).
+
+    Read-only access to FundManager (get_snapshot only). No writes.
+    Thread-safe: stateless beyond constructor arguments (PS13).
+
+    Usage::
+        sizer = PositionSizer(
+            fund_manager=fm,
+            leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, ...},
+            risk_per_trade_pct=0.01,
+            max_concentration_pct=0.10,
+        )
+        result = sizer.calculate("RELIANCE", "BUY", 2500.0, 2450.0, "INTRADAY")
+        if result.success:
+            reserve_result = fm.reserve(..., qty=result.qty, ...)
+    """
+
+    def __init__(
+        self,
+        fund_manager: "FundManager",
+        leverage_map: dict[str, float],
+        risk_per_trade_pct: float = 0.01,
+        max_concentration_pct: float = 0.10,
+        min_qty_threshold: int = 1,
+        tier_multipliers: Optional[dict[str, float]] = None,
+        logger=None,
+        instrument_cache=None,  # IC7: optional InstrumentCache for lot_size lookup
+    ) -> None:
+        self._fm = fund_manager
+        self._leverage_map = dict(leverage_map)
+        self._risk_per_trade_pct = risk_per_trade_pct
+        self._max_concentration_pct = max_concentration_pct
+        self._min_qty_threshold = min_qty_threshold
+        self._tier_multipliers = dict(tier_multipliers or _DEFAULT_TIER_MULTIPLIERS)
+        self._log = logger
+        self._instrument_cache = instrument_cache  # IC7
+
+    def calculate(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        sl_price: float,
+        intent: str,
+        score_tier: str = "MEDIUM",
+        lot_size: int = 1,
+    ) -> SizingResult:
+        """
+        Compute position size using risk-based formula (PS2).
+
+        Formula (all quantities floor()-truncated to integers):
+            risk_per_trade_rs      = total_capital * risk_per_trade_pct
+            sl_distance            = abs(entry_price - sl_price)
+            qty_by_risk            = floor(risk_per_trade_rs / sl_distance)
+
+            margin_per_share       = entry_price / leverage
+            qty_by_capital         = floor(avail_bucket / margin_per_share)
+
+            qty_by_concentration   = floor((total_capital * max_conc_pct) / entry_price)
+
+            raw_qty                = min(qty_by_risk, qty_by_capital, qty_by_concentration)
+            tiered_qty             = floor(raw_qty * tier_multiplier)
+            final_qty              = (tiered_qty // lot_size) * lot_size
+
+        Args:
+            symbol:      Trading symbol (used for logging only).
+            side:        "BUY" or "SELL" (PS8).
+            entry_price: Expected entry price per share (> 0).
+            sl_price:    Stop-loss price per share (> 0, != entry_price).
+            intent:      One of INTRADAY, COVER_ORDER, BRACKET_ORDER, DELIVERY.
+            score_tier:  Signal quality tier: "HIGH", "MEDIUM", or "LOW" (PS5).
+            lot_size:    Shares per lot. 1 for equity; F&O uses contract lot (PS6).
+
+        Returns:
+            SizingResult (always returned, never raises for sizing failures).
+
+        Raises:
+            ValueError: for programmer errors (PS8) — invalid entry_price,
+                        sl_price==entry_price, bad intent/tier/lot_size/side.
+        """
+        # IC7: resolve lot_size from instrument_cache if available and caller
+        # passed the default (1). Explicit non-1 values from caller take precedence.
+        if lot_size == 1 and self._instrument_cache is not None:
+            try:
+                lot_size = self._instrument_cache.lot_size(symbol)
+            except Exception:
+                pass  # InstrumentNotFoundError or missing cache -> keep default
+
+        # ── PS8: Input validation (programmer errors → ValueError) ────────────
+        if side not in _VALID_SIDES:
+            raise ValueError(
+                f"side must be 'BUY' or 'SELL', got {side!r}"
+            )
+        if entry_price <= 0:
+            raise ValueError(
+                f"entry_price must be > 0, got {entry_price}"
+            )
+        if sl_price <= 0:
+            raise ValueError(
+                f"sl_price must be > 0, got {sl_price}"
+            )
+        if intent not in _VALID_INTENTS:
+            raise ValueError(
+                f"intent {intent!r} not in valid set {sorted(_VALID_INTENTS)}"
+            )
+        if score_tier not in _VALID_TIERS:
+            raise ValueError(
+                f"score_tier {score_tier!r} not in {sorted(_VALID_TIERS)}"
+            )
+        if lot_size <= 0:
+            raise ValueError(
+                f"lot_size must be > 0, got {lot_size}"
+            )
+
+        # ── PS10: SL direction sanity (WARNING only, calc proceeds) ──────────
+        if side == "BUY" and sl_price > entry_price:
+            self._warn(
+                "position_sizer.sl_direction_warning",
+                {"side": side, "entry": entry_price, "sl": sl_price,
+                 "msg": "BUY sl_price > entry_price (SL should be below entry for BUY)"},
+            )
+        elif side == "SELL" and sl_price < entry_price:
+            self._warn(
+                "position_sizer.sl_direction_warning",
+                {"side": side, "entry": entry_price, "sl": sl_price,
+                 "msg": "SELL sl_price < entry_price (SL should be above entry for SELL)"},
+            )
+
+        # ── PS7: Bucket + snapshot ─────────────────────────────────────────────
+        bucket = "intraday" if intent in _INTRADAY_INTENTS else "positional"
+        snap = self._fm.get_snapshot()
+        total_capital = snap.total
+        avail = snap.intraday_avail if bucket == "intraday" else snap.positional_avail
+
+        # ── PS2: Three candidate quantities ───────────────────────────────────
+        leverage = self._leverage_map.get(intent, 1.0)
+        sl_distance = abs(entry_price - sl_price)
+
+        # MED #8: zero SL distance — graceful rejection, not programmer error.
+        # This can occur when sl_pct rounds entry_price * (1 ± pct) back to entry_price.
+        if sl_distance == 0.0:
+            return SizingResult(
+                success=False,
+                qty=0,
+                margin_required=0.0,
+                risk_amount=0.0,
+                bucket=bucket,
+                constraint="SL_DISTANCE_ZERO",
+                reason=(
+                    f"sl_price == entry_price ({entry_price}): zero SL distance "
+                    f"for {symbol}; cannot size position"
+                ),
+                breakdown={},
+            )
+
+        risk_rs = total_capital * self._risk_per_trade_pct
+        qty_by_risk = int(math.floor(risk_rs / sl_distance))
+
+        margin_per_share = entry_price / leverage
+        qty_by_capital = (
+            int(math.floor(avail / margin_per_share)) if margin_per_share > 0 else 0
+        )
+
+        qty_by_concentration = int(math.floor(
+            (total_capital * self._max_concentration_pct) / entry_price
+        ))
+
+        # Binding constraint: CAPITAL wins on tie (most conservative), then RISK
+        raw_qty = min(qty_by_risk, qty_by_capital, qty_by_concentration)
+        if qty_by_capital <= qty_by_risk and qty_by_capital <= qty_by_concentration:
+            constraint = "CAPITAL"
+        elif qty_by_risk <= qty_by_concentration:
+            constraint = "RISK"
+        else:
+            constraint = "CONCENTRATION"
+
+        # Build breakdown (PS4) — populated before any early exits
+        breakdown: dict = {
+            "qty_by_risk": qty_by_risk,
+            "qty_by_capital": qty_by_capital,
+            "qty_by_concentration": qty_by_concentration,
+            "raw_qty": raw_qty,
+            "tier_multiplier": self._tier_multipliers.get(score_tier, 1.0),
+        }
+
+        # Early exit: no quantity possible at all (capital/risk/conc exhausted)
+        if raw_qty <= 0:
+            reason = (
+                f"qty=0: {constraint} exhausted for {symbol} "
+                f"(risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+                f"conc_qty={qty_by_concentration})"
+            )
+            return SizingResult(
+                success=False,
+                qty=0,
+                margin_required=0.0,
+                risk_amount=0.0,
+                bucket=bucket,
+                constraint=constraint,
+                reason=reason,
+                breakdown=breakdown,
+            )
+
+        # ── PS5: Tier multiplier ───────────────────────────────────────────────
+        tier_mult = self._tier_multipliers.get(score_tier, 1.0)
+        tiered_qty = int(math.floor(raw_qty * tier_mult))
+        breakdown["tiered_qty"] = tiered_qty
+
+        # ── PS6: Lot size rounding ─────────────────────────────────────────────
+        final_qty = (tiered_qty // lot_size) * lot_size
+
+        if final_qty < lot_size or final_qty < self._min_qty_threshold:
+            reason = (
+                f"qty={final_qty} below minimum for {symbol}: "
+                f"tier={score_tier}({tier_mult}) lot_size={lot_size} "
+                f"min_threshold={self._min_qty_threshold} "
+                f"(risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+                f"conc_qty={qty_by_concentration} tiered={tiered_qty})"
+            )
+            return SizingResult(
+                success=False,
+                qty=0,
+                margin_required=0.0,
+                risk_amount=0.0,
+                bucket=bucket,
+                constraint="BELOW_MIN",
+                reason=reason,
+                breakdown=breakdown,
+            )
+
+        margin_required = final_qty * margin_per_share
+        risk_amount = final_qty * sl_distance
+
+        reason = (
+            f"{symbol} qty={final_qty} [{constraint}-bound tier={score_tier}({tier_mult})]: "
+            f"risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+            f"conc_qty={qty_by_concentration} lot_size={lot_size}"
+        )
+
+        return SizingResult(
+            success=True,
+            qty=final_qty,
+            margin_required=margin_required,
+            risk_amount=risk_amount,
+            bucket=bucket,
+            constraint=constraint,
+            reason=reason,
+            breakdown=breakdown,
+        )
+
+    # ── private ───────────────────────────────────────────────────────────────
+
+    def _warn(self, msg: str, extra: dict) -> None:
+        if self._log is not None:
+            self._log.warning(msg, extra=extra)

@@ -1,0 +1,483 @@
+================================================================
+MODULE 24: ALERTS SUBSYSTEM (TRIO)
+================================================================
+
+Build order (strict, due to data-flow dependency):
+  24a. alerts/critical.py        (sentinel writer, foundation)
+  24b. alerts/telegram_notifier.py (calls critical.py for CRITICAL tier)
+  24c. scripts/alert_watcher.py  (reads sentinel files)
+
+Each sub-module: build code + tests + green before next.
+At end: run all 23 prior + 3 new = 26 suites.
+
+LOCKED DECISIONS REFERENCED (verbatim from yaml):
+  G8 — Alert fallback (no single point of failure)
+  E2 — SEVERITY tag on every exception class
+  L7 — log_exception helper (severity -> log level mapping)
+  P2 — Config Honor Principle (limits get telegram alert at threshold)
+
+================================================================
+SUB-MODULE 24a — alerts/critical.py
+================================================================
+
+Per G8: "CRITICAL ALWAYS writes a sentinel file at
+data_store/critical_alert_<id>.flag"
+
+LOCK (CR1-CR10):
+
+CR1 — Purpose: Write sentinel files for CRITICAL alerts so a
+  separate watcher process can deliver them via email even
+  if the trading process crashes immediately after.
+  Single responsibility: file write. NO email, NO telegram,
+  NO logging beyond local prints (logger may be unavailable
+  during crash sequences).
+
+CR2 — Sentinel file format:
+  Path: <sentinel_dir>/critical_alert_<id>.flag
+  id format: timestamp_uuid (e.g. "20260415_152347_a3f5b8c2")
+  Atomic write per Foundation Rule 3.2:
+    Write to <path>.tmp first, fsync, rename to <path>.
+  Content: JSON with these fields (lock):
+    {
+      "id": str,
+      "ts": str (ISO IST),
+      "title": str (max 120 chars),
+      "body": str,
+      "source_module": str,
+      "context": dict (severity, exception_type, etc.),
+      "hostname": str,
+      "pid": int
+    }
+
+CR3 — Public API:
+  write_critical_sentinel(
+    title: str,
+    body: str,
+    source_module: str,
+    context: dict | None = None,
+    sentinel_dir: Path | str = "data_store",
+  ) -> Path  # returns the .flag path
+  Raises only OSError on filesystem failure. Does NOT swallow.
+  Caller (telegram_notifier) catches and logs separately.
+
+CR4 — Sentinel directory creation:
+  If sentinel_dir does not exist: mkdir(parents=True,
+  exist_ok=True). Atomicity not affected since rename is
+  same-directory.
+
+CR5 — File state lifecycle (lock):
+  .flag      — written by critical.py, awaiting delivery
+  .tmp       — transient, atomic-write artifact only
+  .delivered — renamed by alert_watcher after email success
+  .failed    — renamed by alert_watcher after N retries
+  critical.py NEVER reads or modifies existing files.
+  Pure writer.
+
+CR6 — list_pending_sentinels(sentinel_dir) -> list[Path]:
+  Helper used by watcher. Returns sorted list of *.flag files
+  (not .delivered, not .failed, not .tmp). Sorted by mtime
+  ascending so oldest delivered first.
+
+CR7 — read_sentinel(path) -> dict:
+  Helper used by watcher. Parses JSON contents. Raises
+  OSError or ValueError on bad file. Caller handles.
+
+CR8 — mark_delivered(path) -> Path:
+  Renames path to path with .flag replaced by .delivered.
+  Atomic. Returns new path.
+
+CR9 — mark_failed(path, reason: str) -> Path:
+  Renames to .failed AND writes a sibling .reason file with
+  failure detail. Atomic.
+
+CR10 — Layer & deps:
+  Layer 4 (alerts/). Imports: stdlib only (json, os, pathlib,
+  socket, datetime, uuid). NO logger (may not be available
+  during crash). NO config_loader (sentinel_dir is parameter).
+  Pure file IO.
+
+BUILD STEPS 24a:
+1. Create alerts/ directory + alerts/__init__.py.
+2. Create data_store/ directory if not exists (gitkeep).
+3. Build alerts/critical.py per CR1-CR10 (~120 lines).
+4. Build tests/unit/test_critical.py covering:
+   - write_critical_sentinel creates .flag with valid JSON
+   - All 8 fields per CR2 present in JSON
+   - id format matches timestamp_uuid pattern
+   - Atomic write: .tmp file does not exist after success
+   - sentinel_dir created if absent
+   - title > 120 chars truncated
+   - hostname populated from socket.gethostname()
+   - pid populated from os.getpid()
+   - list_pending_sentinels returns only .flag files
+   - list_pending_sentinels sorted by mtime ascending
+   - list_pending_sentinels excludes .delivered/.failed/.tmp
+   - read_sentinel parses valid JSON
+   - read_sentinel raises ValueError on malformed JSON
+   - mark_delivered renames .flag -> .delivered
+   - mark_delivered idempotency: calling twice raises (file
+     gone). Document as expected behavior.
+   - mark_failed renames .flag -> .failed AND writes .reason
+     sibling file
+   - mark_failed reason file contains the reason string
+   - 100 concurrent writes from 5 threads: all 100 .flag
+     files present, no corrupted JSON, no .tmp leftover
+   - Filesystem permission failure -> OSError raised, not
+     swallowed
+5. Run test_critical.py. Must be green before 24b.
+
+================================================================
+SUB-MODULE 24b — alerts/telegram_notifier.py
+================================================================
+
+Per G8: "Four alert tiers (INFO/WARN/ERROR/CRITICAL).
+INFO/WARN drop on Telegram failure. ERROR writes to
+failed_alerts.log on Telegram failure. CRITICAL ALWAYS writes
+a sentinel file [via critical.py]."
+
+LOCK (TG1-TG12):
+
+TG1 — Purpose: Send formatted alert messages to Telegram via
+  Bot API. Tier-aware failure handling per G8.
+
+TG2 — Constructor:
+  TelegramNotifier(
+    bot_token: str,
+    chat_ids: list[str],          # broadcast to multiple chats
+    failed_alerts_log_path: Path, # for ERROR tier fallback
+    sentinel_dir: Path,           # passed to critical.write_*
+    logger,
+    timeout_sec: float = 5.0,
+    max_retries: int = 2,         # for transient failures
+    paper_mode: bool = False,     # if True, log only, no HTTP
+  )
+  All values from system_config.yaml.
+
+TG3 — Public API:
+  notifier.send(
+    severity: str,        # "INFO" | "WARN" | "ERROR" | "CRITICAL"
+    title: str,
+    body: str,
+    source_module: str,
+    context: dict | None = None,
+  ) -> SendResult
+
+  SendResult: {success: bool, tier: str, delivered_to: list[str],
+               failed_to: list[str], sentinel_path: Path | None,
+               failed_log_written: bool}
+
+TG4 — Tier routing (lock per G8):
+  INFO   -> attempt send, drop silently on failure
+  WARN   -> attempt send, drop silently on failure
+  ERROR  -> attempt send, on failure write line to
+            failed_alerts.log (append, JSON-line format)
+  CRITICAL -> ALWAYS write sentinel via critical.py FIRST,
+              THEN attempt send. If send fails, sentinel
+              still ensures email delivery via watcher.
+              Sentinel write is unconditional and independent.
+
+TG5 — CRITICAL path ordering (lock):
+  1. critical.write_critical_sentinel(...) — fire and remember path
+  2. Attempt Telegram send
+  3. Return SendResult with sentinel_path populated regardless
+     of telegram outcome
+  If sentinel write itself fails: log .error via logger,
+  attempt telegram anyway, return SendResult success=False.
+  Last-ditch defense.
+
+TG6 — Telegram API call:
+  POST https://api.telegram.org/bot<token>/sendMessage
+  Payload: {"chat_id": <id>, "text": <formatted>,
+            "parse_mode": "HTML"}
+  Per chat_id, send separately. Track per-chat success/fail.
+  Use requests.post with timeout=timeout_sec.
+  On HTTP 429 (rate limit): respect Retry-After header,
+  sleep up to max(5s), retry once.
+  Other transient errors (timeout, 5xx): retry up to
+  max_retries with exponential backoff (0.5s, 1s).
+  4xx other than 429 -> permanent fail, no retry.
+
+TG7 — Message formatting:
+  Subject line: "[<SEVERITY>] <title>" (HTML-escaped)
+  Body: HTML-formatted with:
+    <b>Module:</b> source_module
+    <b>Time:</b> ts (IST)
+    <b>Body:</b>
+    body (escaped)
+    <b>Context:</b>
+    key: value lines from context dict
+  Telegram message limit 4096 chars: if formatted message
+  exceeds, truncate body and append "...[truncated]".
+
+TG8 — failed_alerts.log format (ERROR tier fallback):
+  JSON-line format:
+    {"ts": "<iso>", "severity": "ERROR", "title": "...",
+     "body": "...", "source_module": "...", "context": {...},
+     "telegram_error": "<reason>", "chat_ids_attempted": [...]}
+  Append-only. File rotation NOT done by notifier (operator
+  rotates manually or via logrotate).
+
+TG9 — paper_mode:
+  If True: skip all HTTP calls. Log INFO with the would-be
+  message via logger. Sentinel still written for CRITICAL
+  (so watcher tests work in paper mode). SendResult marks
+  success=True with delivered_to=[] (paper).
+
+TG10 — Token validation (constructor):
+  bot_token must be non-empty. chat_ids must be non-empty list.
+  failed_alerts_log_path parent dir created if absent.
+  Raises ValueError on invalid construction.
+
+TG11 — Layer & deps:
+  Layer 5 (alerts/, depends on alerts.critical and core).
+  Imports: stdlib (json, html, time, pathlib), requests,
+  alerts.critical (write_critical_sentinel),
+  core.logger (for paper_mode logging and sentinel-write
+  failures), core.time_authority (now_ist for ts).
+
+TG12 — System config additions:
+  telegram:
+    bot_token: str        (validated non-empty; from .env preferred)
+    chat_ids: list[str]   (validated non-empty)
+    timeout_sec: float    (default 5.0, validated > 0)
+    max_retries: int      (default 2, validated >= 0)
+    paper_mode: bool      (default false)
+  alerts:
+    failed_alerts_log_path: str (default "logs/failed_alerts.log")
+    sentinel_dir: str           (default "data_store")
+  Update YAML stub. Re-run test_config_loader.
+
+BUILD STEPS 24b:
+1. Extend SystemConfig per TG12. Update YAML stub.
+   Re-run test_config_loader.
+2. Build alerts/telegram_notifier.py per TG1-TG12 (~250 lines).
+3. Build tests/unit/test_telegram_notifier.py using
+   unittest.mock.patch on requests.post:
+   - Constructor validation: empty token -> ValueError
+   - Constructor validation: empty chat_ids -> ValueError
+   - INFO send success: requests.post called once per chat
+   - INFO send failure: drop silently, no exception, no log file
+   - WARN send failure: drop silently
+   - ERROR send success: no failed_alerts.log line written
+   - ERROR send failure: line appended to failed_alerts.log
+     with all 8 fields per TG8
+   - CRITICAL send success: sentinel still written FIRST
+   - CRITICAL send failure: sentinel still written, watcher
+     can pick up
+   - CRITICAL with sentinel write failure: logger.error called,
+     telegram still attempted
+   - Multi-chat: sends to all 3 chat_ids, tracks per-chat result
+   - One chat fails, others succeed: SendResult shows partial
+   - HTTP 429 with Retry-After: sleeps, retries once
+   - HTTP 500: retries up to max_retries with backoff
+   - HTTP 401 (auth): no retry, permanent fail
+   - HTTP 400 (bad request): no retry
+   - timeout (requests.Timeout exception): retried
+   - Message > 4096 chars: truncated with marker
+   - HTML escaping: <script> in body -> &lt;script&gt;
+   - Subject format: "[CRITICAL] <title>"
+   - paper_mode=True: no requests.post call at all
+   - paper_mode=True: CRITICAL still writes sentinel
+   - paper_mode=True: SendResult success=True
+   - Concurrent sends from 5 threads: no shared-state issues
+4. Run test_telegram_notifier.py. Must be green before 24c.
+
+================================================================
+SUB-MODULE 24c — scripts/alert_watcher.py
+================================================================
+
+Per G8: "A separate systemd timer runs scripts/alert_watcher.py
+every 60s — finds sentinel files and sends email via SMTP
+independently. Renames flag to .delivered on success."
+
+LOCK (AW1-AW10):
+
+AW1 — Purpose: Standalone CLI script that runs every N seconds
+  via systemd timer (or Windows Task Scheduler). Finds .flag
+  sentinels, sends email via SMTP, renames to .delivered or
+  .failed. Survives trading process crash.
+
+AW2 — CLI invocation:
+  python scripts/alert_watcher.py [--config <path>]
+                                  [--once]      # run one pass and exit
+                                  [--dry-run]   # log actions, don't send/rename
+  Default: reads config, processes all pending, exits.
+  Designed for periodic invocation by systemd timer / Task
+  Scheduler — NOT a long-running daemon.
+
+AW3 — Lock file (Foundation Rule 3.6):
+  Before processing: create data_store/alert_watcher.lock.
+  If lock exists and pid alive: exit 0 silently (previous
+  invocation still running, normal).
+  If lock exists but pid dead (stale): clean up, proceed.
+  Release lock on exit (always, even on exception).
+
+AW4 — Processing loop:
+  for sentinel in critical.list_pending_sentinels(sentinel_dir):
+    try:
+      data = critical.read_sentinel(sentinel)
+      send_email(smtp_config, data)
+      critical.mark_delivered(sentinel)
+    except SmtpError:
+      counter[sentinel] += 1
+      if counter[sentinel] >= max_attempts:
+        critical.mark_failed(sentinel, reason)
+      # else: leave .flag in place for next invocation
+    except (OSError, ValueError):
+      critical.mark_failed(sentinel, "corrupt sentinel")
+
+AW5 — Attempt counter persistence:
+  Counter stored in data_store/alert_watcher_attempts.json:
+    {"<sentinel_filename>": <count>, ...}
+  Loaded at start, saved at end. Atomic write.
+  Cleared entries for files no longer present (delivered/failed).
+
+AW6 — Email format (SMTP):
+  Subject: "[<SEVERITY>] <title> [<hostname>:<pid>]"
+  From: smtp.from_address
+  To: smtp.to_addresses (list)
+  Body: plain-text rendering of all sentinel JSON fields
+  Send via stdlib smtplib.SMTP_SSL or smtplib.SMTP+STARTTLS
+  per config.
+
+AW7 — SMTP config (in alerts: section):
+  smtp:
+    host: str
+    port: int (default 587)
+    use_tls: bool (default true)
+    username: str
+    password: str   (from env var preferred)
+    from_address: str
+    to_addresses: list[str]
+    timeout_sec: int (default 30)
+
+AW8 — Logging:
+  Watcher uses its OWN log file: logs/alert_watcher.log
+  Format: simple text lines (NOT JSON — easier for ops).
+  Levels: INFO for normal operations, ERROR for SMTP failures,
+  CRITICAL for stale lock conflicts.
+
+AW9 — Exit codes:
+  0 — success (or no sentinels found, or lock contention)
+  1 — config error / missing config
+  2 — SMTP authentication failure (operator must fix)
+  Used by systemd to alert operator on persistent issues.
+
+AW10 — Layer & deps:
+  Layer 6 (scripts/, depends on alerts/ and core/).
+  Imports: stdlib (smtplib, email.mime, json, pathlib,
+  argparse, os, sys, socket), alerts.critical
+  (list_pending_sentinels, read_sentinel, mark_delivered,
+  mark_failed), core.config_loader.
+  No state_store dependency (can run if DB locked).
+
+AW11 — System config additions:
+  alerts.smtp section per AW7.
+  alerts:
+    watcher_max_attempts: int  (default 5)
+    watcher_lock_path: str     (default "data_store/alert_watcher.lock")
+    watcher_log_path: str      (default "logs/alert_watcher.log")
+  Update YAML stub. Re-run test_config_loader.
+
+BUILD STEPS 24c:
+1. Extend SystemConfig per AW11. Update YAML stub.
+   Re-run test_config_loader.
+2. Create scripts/ directory + scripts/__init__.py if needed.
+3. Build scripts/alert_watcher.py per AW1-AW11 (~250 lines).
+   Make executable (shebang line: #!/usr/bin/env python).
+4. Build tests/unit/test_alert_watcher.py using mocked smtplib.SMTP:
+   - --once mode processes pending sentinels and exits 0
+   - --dry-run does not send, does not rename, logs actions
+   - No sentinels present: exit 0 silently
+   - Lock file created on start, removed on exit
+   - Existing lock with live pid: exit 0 without processing
+   - Existing lock with dead pid: stale, proceed
+   - SMTP send success: sentinel renamed to .delivered
+   - SMTP send failure: counter incremented, file remains .flag
+   - Counter reaches max_attempts: file renamed to .failed
+   - Counter persisted across invocations
+   - Counter cleared for files no longer present
+   - Corrupt sentinel JSON: marked .failed with reason
+   - Multiple sentinels processed in mtime order
+   - Email subject formatted with severity, title, hostname, pid
+   - Email body contains all sentinel fields
+   - Multiple recipients (to_addresses list)
+   - SMTP authentication failure: exit 2
+   - Config missing: exit 1
+   - Watcher's own log file written to logs/alert_watcher.log
+5. Run test_alert_watcher.py.
+
+================================================================
+INTEGRATION VERIFICATION
+================================================================
+
+After all 3 sub-modules built and individually green:
+
+1. Build tests/integration/test_alerts_pipeline.py covering
+   end-to-end:
+   - telegram_notifier.send(CRITICAL) writes sentinel
+   - alert_watcher --once finds the sentinel
+   - Mock SMTP success: sentinel renamed to .delivered
+   - Re-run watcher: no .flag files left, no double-send
+   - telegram failure + watcher email success: CRITICAL
+     delivered via fallback path (G8 design verified)
+
+2. Re-run all 23 prior + 3 new + 1 integration = 27 suites.
+   Report 27-row table.
+
+================================================================
+MEMORY UPDATES (per MH1)
+================================================================
+
+Store ONE memory entry per sub-module after each goes green:
+
+  Module: alerts/critical.py
+  Path: alerts/critical.py
+  Tests: ~22
+  Locked: CR1-CR10 under alerts_module: section
+  Cross-module: none (foundation)
+
+  Module: alerts/telegram_notifier.py
+  Path: alerts/telegram_notifier.py
+  Tests: ~25
+  Locked: TG1-TG12 under alerts_module: section
+  Cross-module: alerts.critical, config_loader extended,
+                logs/ directory used
+
+  Module: scripts/alert_watcher.py
+  Path: scripts/alert_watcher.py
+  Tests: ~18
+  Locked: AW1-AW11 under alerts_module: section
+  Cross-module: alerts.critical, config_loader extended,
+                data_store/ + logs/ used
+
+================================================================
+NOTES
+================================================================
+
+- All 3 modules required before alerts subsystem is complete.
+  Do NOT mark "alerts done" until 24c is green.
+- requests already in venv (kiteconnect dep). No new install.
+- smtplib is stdlib. No new install.
+- ASCII-only print() strings. HTML in telegram messages OK
+  (it's the message body, not console output).
+- Mock all network calls (telegram + SMTP) in unit tests.
+- Integration test uses mocked SMTP and a tmp sentinel_dir.
+
+================================================================
+NEXT MODULE PREVIEW
+================================================================
+
+After alerts trio green, next candidates (paste relevant
+locked decisions before instruction):
+  - orders/order_reconciler.py (G1, G5b, P14) — most complex
+    safety module remaining. All deps now exist after invariant
+    + alerts done.
+  - data/live_feed.py (unblocks smart_tgt + screening modules)
+  - strategies/loader.py + strategies/schema.py (unblocks
+    entry_gate)
+
+Recommend order_reconciler next. It's the most critical
+remaining safety net per audit.
+
+WINDOWS REMINDER: ASCII-only in __main__ runners.
