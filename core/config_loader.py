@@ -553,21 +553,25 @@ class ChartinkScannersConfig(BaseModel):
 # nse_holidays_2026.yaml — NseHolidaysConfig
 # ─────────────────────────────────────────────────────────────────────────────
 
+class HolidayEntry(BaseModel):
+    """One NSE holiday entry with date and descriptive name."""
+    model_config = ConfigDict(extra="forbid")
+    date: _date
+    name: str
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def _parse_iso_date(cls, v: object) -> _date:
+        if isinstance(v, str):
+            return _date.fromisoformat(v)
+        if isinstance(v, _date):
+            return v
+        raise ValueError(f"Expected YYYY-MM-DD string for date, got {v!r}")
+
+
 class NseHolidaysConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    holidays: list[str]   # "YYYY-MM-DD" strings; validated below
-
-    @field_validator("holidays", mode="after")
-    @classmethod
-    def _validate_date_format(cls, dates: list[str]) -> list[str]:
-        for entry in dates:
-            try:
-                _date.fromisoformat(entry)
-            except ValueError:
-                raise ValueError(
-                    f"Invalid date in nse_holidays: {entry!r} — expected YYYY-MM-DD"
-                )
-        return dates
+    holidays: list[HolidayEntry]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

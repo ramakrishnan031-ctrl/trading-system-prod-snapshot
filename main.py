@@ -179,8 +179,8 @@ def _build_kite_client(app_config):
 
 
 def _load_holidays(app_config) -> set:
-    """Convert NseHolidaysConfig string list to set[date] (MAIN20)."""
-    return {date.fromisoformat(d) for d in app_config.nse_holidays.holidays}
+    """Convert NseHolidaysConfig holidays to set[date] (MAIN20)."""
+    return {h.date for h in app_config.nse_holidays.holidays}
 
 
 def _make_paper_quote_provider():

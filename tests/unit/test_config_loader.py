@@ -41,6 +41,7 @@ from core.config_loader import (
     BrokerLimitsConfig,
     ChartinkScannersConfig,
     EodSquareoffConfig,
+    HolidayEntry,
     NseHolidaysConfig,
     ScanWebhookMapConfig,
     ScannerEntry,
@@ -246,9 +247,12 @@ scanners: {}
 
 _NSE_HOLIDAYS = """\
 holidays:
-  - "2026-01-26"
-  - "2026-08-15"
-  - "2026-12-25"
+  - date: "2026-01-26"
+    name: "Republic Day"
+  - date: "2026-08-15"
+    name: "Independence Day"
+  - date: "2026-12-25"
+    name: "Christmas"
 """
 
 # Ordered to match _CONFIG_FILES registry in config_loader
@@ -481,8 +485,9 @@ def test_nse_holidays_loaded_as_list() -> None:
         _write_stubs(d)
         cfg = load_all(d)
 
-    assert "2026-01-26" in cfg.nse_holidays.holidays
-    assert "2026-08-15" in cfg.nse_holidays.holidays
+    dates = {h.date.isoformat() for h in cfg.nse_holidays.holidays}
+    assert "2026-01-26" in dates
+    assert "2026-08-15" in dates
     assert len(cfg.nse_holidays.holidays) == 3
     print(f"  OK NseHolidaysConfig loaded {len(cfg.nse_holidays.holidays)} holidays")
 
@@ -857,6 +862,18 @@ def test_real_scan_webhook_map_yaml_loads() -> None:
     print(f"  OK Real scan_webhook_map.yaml: 15 scanners, all valid")
 
 
+def test_real_nse_holidays_yaml_loads() -> None:
+    """Load the real config/nse_holidays_2026.yaml directly to catch schema drift."""
+    project_root = Path(__file__).parent.parent.parent
+    raw = yaml.safe_load((project_root / "config" / "nse_holidays_2026.yaml").read_text())
+    cfg = NseHolidaysConfig.model_validate(raw)
+    assert len(cfg.holidays) == 15, f"Expected 15 holidays, got {len(cfg.holidays)}"
+    assert all(isinstance(h, HolidayEntry) for h in cfg.holidays)
+    assert all(h.date.year == 2026 for h in cfg.holidays)
+    assert any(h.name == "Republic Day" for h in cfg.holidays)
+    print(f"  OK Real nse_holidays_2026.yaml: {len(cfg.holidays)} holidays, all valid")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -896,6 +913,7 @@ def run_all_tests() -> int:
         test_shadow_tracker_max_innings_out_of_range,
         test_shadow_tracker_max_innings_min_boundary,
         test_real_scan_webhook_map_yaml_loads,
+        test_real_nse_holidays_yaml_loads,
     ]
 
     print("=" * 70)

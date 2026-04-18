@@ -26,6 +26,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import main as _main_module
+from core.config_loader import HolidayEntry
 from main import (
     VERSION,
     _parse_args,
@@ -100,7 +101,7 @@ def _make_mock_app_config():
     sys_cfg.alerts.sentinel_dir = "/tmp/sentinel"
     sys_cfg.product_map = {"zerodha": {"INTRADAY": "MIS", "DELIVERY": "CNC"}}
 
-    cfg.nse_holidays.holidays = ["2026-01-26"]
+    cfg.nse_holidays.holidays = [HolidayEntry(date=date(2026, 1, 26), name="Republic Day")]
     cfg.scoring = MagicMock()
     cfg.scan_webhook_map.scanners = {}
     cfg.chartink_scanners = MagicMock()
@@ -325,9 +326,12 @@ class TestParseArgs:
 
 class TestHelpers:
 
-    def test_load_holidays_converts_strings(self):
+    def test_load_holidays_returns_date_set(self):
         cfg = MagicMock()
-        cfg.nse_holidays.holidays = ["2026-01-26", "2026-08-15"]
+        cfg.nse_holidays.holidays = [
+            HolidayEntry(date=date(2026, 1, 26), name="Republic Day"),
+            HolidayEntry(date=date(2026, 8, 15), name="Independence Day"),
+        ]
         result = _load_holidays(cfg)
         assert date(2026, 1, 26) in result
         assert date(2026, 8, 15) in result
