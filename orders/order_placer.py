@@ -59,9 +59,11 @@ import logging
 import threading
 from typing import Dict, Final, Optional
 
+from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
+from core.config_loader import SmartTgtConfig
 from core.events import EventBus, OrderFilled
 from core.exceptions import BrokerError, OrderRejectedError
 from core.ids import new_trade_id
@@ -70,6 +72,7 @@ from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderManager
+from orders.smart_tgt_manager import SmartTgtManager
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -169,20 +172,33 @@ class OrderPlacer:
         fund_manager: FundManager,
         bus: EventBus,
         logger: logging.Logger,
+        order_monitor: OrderMonitor,
         rr_ratio: float = 2.0,
         default_order_protocol: str = "LIMIT_TRIPLE",
         kill_switch: Optional[KillSwitch] = None,
         product_resolver: Optional[ProductResolver] = None,
+        smart_tgt_manager: Optional[SmartTgtManager] = None,
+        smart_tgt_config: Optional[SmartTgtConfig] = None,
     ) -> None:
+        # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
+        if smart_tgt_manager is not None and smart_tgt_config is None:
+            raise ValueError(
+                "OrderPlacer: smart_tgt_manager was provided but smart_tgt_config "
+                "was not. CO_PLUS_TGT protocol needs trigger_pct/step_pct at fill "
+                "time; pass smart_tgt_config=<SmartTgtConfig(...)> or omit both."
+            )
         self._engine = entry_engine
         self._om = order_manager
         self._fm = fund_manager
         self._bus = bus
         self._log = logger
+        self._order_monitor = order_monitor  # BL-7b: required for A.3.c track() wiring
         self._rr_ratio = rr_ratio
         self._default_protocol = default_order_protocol
         self._kill_switch = kill_switch  # OP-LM1: may be None (disabled)
         self._product_resolver = product_resolver  # HIGH #7: use resolver for product codes
+        self._smart_tgt_manager = smart_tgt_manager  # BL-7b: None = SmartTgt disabled
+        self._smart_tgt_config = smart_tgt_config    # BL-7b: trigger_pct/step_pct source
         # IC8: injected by main.py after Module 38; None = no tick rounding
         self._instrument_cache = None  # set via set_instrument_cache()
 

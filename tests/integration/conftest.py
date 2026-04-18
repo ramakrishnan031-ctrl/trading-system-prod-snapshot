@@ -20,12 +20,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
 from broker.cost_calculator import CostCalculator
+from broker.order_monitor import OrderMonitor
 from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
@@ -260,6 +261,7 @@ def wired_system(tmp_path):
         fund_manager=fund_manager,
         bus=bus,
         logger=_logger("placer"),
+        order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b: DI stub for integration tests
         kill_switch=kill_switch,
     )
 

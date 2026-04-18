@@ -392,6 +392,32 @@ class ShadowTrackerConfig(BaseModel):
         return v
 
 
+class SmartTgtConfig(BaseModel):
+    """
+    BL-7b: deployment-wide defaults for SmartTgtManager trailing behavior.
+
+    Per-strategy overrides are intentionally NOT supported here — today all
+    intraday strategy YAMLs use identical values (trigger_pct=0.005,
+    step_pct=0.003). When a future requirement demands per-strategy trails,
+    add the override mechanism here rather than scattering YAML-reading logic
+    across the codebase.
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool              # master switch; if False, OrderPlacer skips register_trade
+    trigger_pct: float         # fraction of entry price before first SL trail fires
+    step_pct: float            # fraction of entry price per subsequent trail step
+
+    @field_validator("trigger_pct", "step_pct")
+    @classmethod
+    def _fraction(cls, v: float) -> float:
+        if not (0 < v < 1):
+            raise ValueError(
+                "must be a positive fraction < 1 "
+                "(e.g. 0.005 for 0.5%, NOT 5 for 5%)"
+            )
+        return v
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trading_hours: TradingHoursConfig
@@ -411,6 +437,7 @@ class SystemConfig(BaseModel):
     alerts: AlertsConfig                      # TG12/AW11: alert subsystem config
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
+    smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
 
 
 # ─────────────────────────────────────────────────────────────────────────────

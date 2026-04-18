@@ -48,6 +48,7 @@ from core.config_loader import (
     ScoringConfig,
     ShadowTrackerConfig,
     SlippageConfig,
+    SmartTgtConfig,
     SmtpConfig,
     SystemConfig,
     TelegramChannelConfig,
@@ -164,6 +165,10 @@ shadow_tracker:
   enabled: true
   max_innings: 3
   alert_per_inning: true
+smart_tgt:
+  enabled: true
+  trigger_pct: 0.005
+  step_pct: 0.003
 """
 
 _BROKER_COSTS = """\
@@ -902,6 +907,13 @@ def test_no_duplicate_config_keys() -> None:
     raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text())
     assert isinstance(raw, dict)
 
+    # BL-7b: master-switch names are deliberately shared across module blocks
+    # (shadow_tracker.enabled, smart_tgt.enabled, ...). BL-17's concern is
+    # ownership drift between blocks that claim to own the same concept
+    # (limits.max_open_positions vs risk.max_open_positions), not flag-name
+    # reuse for per-module on/off toggles.
+    _SHARED_FLAG_ALLOWLIST = {"enabled"}
+
     # Walk: key_name -> list[(block_name, value)]
     appearances: dict[str, list[tuple[str, object]]] = {}
     for block_name, block_body in raw.items():
@@ -910,6 +922,8 @@ def test_no_duplicate_config_keys() -> None:
         for child_key, child_val in block_body.items():
             # Ignore mappings and lists; we care about scalar duplication only
             if isinstance(child_val, (dict, list)):
+                continue
+            if child_key in _SHARED_FLAG_ALLOWLIST:
                 continue
             appearances.setdefault(child_key, []).append((block_name, child_val))
 

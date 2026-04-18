@@ -125,3 +125,8 @@ shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   enabled: true               # SH13: false = all handlers no-ops; table stays empty
   max_innings: 3              # SH4: total innings (1 real + up to 2 simulated)
   alert_per_inning: true      # SH7: send Telegram INFO on each inning close
+
+smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
+  enabled: true               # master switch; if false, OrderPlacer skips SmartTgt wiring
+  trigger_pct: 0.005          # arm trailing once price moves this fraction toward target (0.5%)
+  step_pct: 0.003             # trail step size once armed (0.3%)

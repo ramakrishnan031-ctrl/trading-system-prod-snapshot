@@ -983,8 +983,11 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         fund_manager=fund_manager,
         bus=event_bus,
         logger=get_logger("order_placer"),
+        order_monitor=order_monitor,              # BL-7b: enables A.3.c track() calls
         kill_switch=kill_switch,
-        product_resolver=product_resolver,  # HIGH #7: correct product codes in DB
+        product_resolver=product_resolver,        # HIGH #7: correct product codes in DB
+        smart_tgt_manager=smart_tgt,              # BL-7b: CO_PLUS_TGT trail wiring
+        smart_tgt_config=app_config.system.smart_tgt,  # BL-7b: trigger_pct/step_pct
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 

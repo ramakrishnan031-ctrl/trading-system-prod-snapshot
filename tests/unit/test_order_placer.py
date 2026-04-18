@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
+from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from broker.zerodha_adapter import PlacedOrder
 from core.events import EventBus, OrderFilled, OrderStatusChanged
@@ -626,6 +627,7 @@ class TestOrderPlacer:
             fund_manager=fm,
             bus=bus,
             logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
             rr_ratio=2.0,
             default_order_protocol=default_protocol,
         )
@@ -908,6 +910,7 @@ class TestKillSwitchLastMile:
                 fund_manager=fm,
                 bus=bus,
                 logger=_log(),
+                order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
                 kill_switch=ks,
             )
 
@@ -953,6 +956,7 @@ class TestKillSwitchLastMile:
             placer = OrderPlacer(
                 entry_engine=engine, order_manager=om,
                 fund_manager=fm, bus=bus, logger=_log(),
+                order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
                 kill_switch=ks,
             )
 
@@ -992,6 +996,7 @@ class TestReservationRelease:
             placer = OrderPlacer(
                 entry_engine=engine, order_manager=om,
                 fund_manager=fm, bus=bus, logger=_log(),
+                order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
             )
 
             with pytest.raises(BrokerError):
@@ -1125,6 +1130,7 @@ class TestProductResolverWiring:
             fund_manager=fm,
             bus=bus,
             logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
             rr_ratio=2.0,
             product_resolver=resolver,
         )
@@ -1312,7 +1318,7 @@ class TestBl12OrderStatusEventPipeline:
             assert row["qty_filled"] == 10
             assert row["avg_fill_price"] == pytest.approx(2510.0)
             store.close()
-            print("  OK BL-12: COMPLETE → orders.status=COMPLETE persisted")
+            print("  OK BL-12: COMPLETE -> orders.status=COMPLETE persisted")
 
     def test_order_monitor_cancelled_updates_orders_table_status(self) -> None:
         """CANCELLED transition → orders.status='CANCELLED'; qty_filled=0 when no partial."""
@@ -1333,7 +1339,7 @@ class TestBl12OrderStatusEventPipeline:
             assert row["qty_filled"] == 0
             assert row["avg_fill_price"] is None   # never filled
             store.close()
-            print("  OK BL-12: CANCELLED → orders.status=CANCELLED persisted")
+            print("  OK BL-12: CANCELLED -> orders.status=CANCELLED persisted")
 
     def test_order_monitor_rejected_updates_orders_table_status(self) -> None:
         """REJECTED maps to OSM FAILED → orders.status='FAILED'.
@@ -1354,7 +1360,7 @@ class TestBl12OrderStatusEventPipeline:
             )
             assert row["status"] == "FAILED"
             store.close()
-            print("  OK BL-12: REJECTED (OSM=FAILED) → orders.status=FAILED persisted")
+            print("  OK BL-12: REJECTED (OSM=FAILED) -> orders.status=FAILED persisted")
 
     def test_partial_fill_updates_qty_filled_in_orders_table(self) -> None:
         """PARTIAL transition → qty_filled reflects broker-reported partial qty."""
@@ -1376,7 +1382,7 @@ class TestBl12OrderStatusEventPipeline:
             assert row["qty_filled"] == 4
             assert row["avg_fill_price"] == pytest.approx(2505.0)
             store.close()
-            print("  OK BL-12: PARTIAL → qty_filled=4 persisted")
+            print("  OK BL-12: PARTIAL -> qty_filled=4 persisted")
 
     def test_order_manager_subscribes_to_order_status_changed(self) -> None:
         """OMgr10: when bus is provided, OM subscribes to OrderStatusChanged."""
@@ -1425,7 +1431,75 @@ class TestBl12OrderStatusEventPipeline:
             assert row["qty_filled"] == 0
             assert OrderStatusChanged not in bus._subscribers
             store.close()
-            print("  OK OMgr10: bus=None → no subscription, orders row untouched")
+            print("  OK OMgr10: bus=None -> no subscription, orders row untouched")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BL-7b: OrderPlacer dependency injection (order_monitor + smart_tgt + cfg)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl7bOrderPlacerDependencyInjection:
+    """
+    Locks the construction contract for the A.3.b wiring change:
+      - order_monitor is a required dependency (no default).
+      - smart_tgt_manager + smart_tgt_config are co-required (paired or neither).
+      - ValueError message must name both field names so operators can fix it.
+    """
+
+    def _minimal_kwargs(self) -> dict:
+        """Bare minimum kwargs to construct OrderPlacer (everything else default)."""
+        return dict(
+            entry_engine=MagicMock(spec=FullEntryEngine),
+            order_manager=MagicMock(spec=OrderManager),
+            fund_manager=MagicMock(),
+            bus=EventBus(),
+            logger=_log(),
+        )
+
+    def test_order_placer_stores_injected_order_monitor(self) -> None:
+        """order_monitor is injected and stored as attribute. (BL-7b)"""
+        monitor = MagicMock(spec=OrderMonitor)
+        placer = OrderPlacer(order_monitor=monitor, **self._minimal_kwargs())
+        assert placer._order_monitor is monitor
+        print("  OK BL-7b: order_monitor injected and stored")
+
+    def test_order_placer_accepts_none_smart_tgt_manager(self) -> None:
+        """Both smart_tgt params omitted → OK; attrs are None. (BL-7b)"""
+        placer = OrderPlacer(
+            order_monitor=MagicMock(spec=OrderMonitor),
+            **self._minimal_kwargs(),
+        )
+        assert placer._smart_tgt_manager is None
+        assert placer._smart_tgt_config is None
+        print("  OK BL-7b: smart_tgt_manager=None, smart_tgt_config=None is valid")
+
+    def test_order_placer_raises_when_smart_tgt_manager_without_config(self) -> None:
+        """smart_tgt_manager provided without smart_tgt_config → ValueError. (BL-7b)"""
+        from orders.smart_tgt_manager import SmartTgtManager
+        with pytest.raises(ValueError, match="smart_tgt_config"):
+            OrderPlacer(
+                order_monitor=MagicMock(spec=OrderMonitor),
+                smart_tgt_manager=MagicMock(spec=SmartTgtManager),
+                smart_tgt_config=None,
+                **self._minimal_kwargs(),
+            )
+        print("  OK BL-7b: guard raises ValueError naming smart_tgt_config")
+
+    def test_order_placer_accepts_smart_tgt_manager_with_config(self) -> None:
+        """Both smart_tgt params provided → OK; stored as attrs. (BL-7b)"""
+        from core.config_loader import SmartTgtConfig
+        from orders.smart_tgt_manager import SmartTgtManager
+        mgr = MagicMock(spec=SmartTgtManager)
+        cfg = SmartTgtConfig(enabled=True, trigger_pct=0.005, step_pct=0.003)
+        placer = OrderPlacer(
+            order_monitor=MagicMock(spec=OrderMonitor),
+            smart_tgt_manager=mgr,
+            smart_tgt_config=cfg,
+            **self._minimal_kwargs(),
+        )
+        assert placer._smart_tgt_manager is mgr
+        assert placer._smart_tgt_config is cfg
+        print("  OK BL-7b: smart_tgt_manager + smart_tgt_config both stored")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1493,6 +1567,11 @@ if __name__ == "__main__":
         TestBl12OrderStatusEventPipeline().test_partial_fill_updates_qty_filled_in_orders_table,
         TestBl12OrderStatusEventPipeline().test_order_manager_subscribes_to_order_status_changed,
         TestBl12OrderStatusEventPipeline().test_order_manager_bus_none_does_not_subscribe,
+        # BL-7b OrderPlacer dependency injection
+        TestBl7bOrderPlacerDependencyInjection().test_order_placer_stores_injected_order_monitor,
+        TestBl7bOrderPlacerDependencyInjection().test_order_placer_accepts_none_smart_tgt_manager,
+        TestBl7bOrderPlacerDependencyInjection().test_order_placer_raises_when_smart_tgt_manager_without_config,
+        TestBl7bOrderPlacerDependencyInjection().test_order_placer_accepts_smart_tgt_manager_with_config,
     ]
     passed = failed = 0
     for fn in tests:
