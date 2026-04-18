@@ -16,7 +16,7 @@ import logging
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -35,6 +35,7 @@ from core.time_authority import now_ist
 from orders.eod_squareoff import EodSquareoff, EodFireResult
 
 _IST = timezone(timedelta(hours=5, minutes=30), "IST")
+_FIXED_TEST_DATE = date(2026, 4, 20)  # Monday, trading day; pins tests off real-world weekday
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,9 +43,9 @@ _IST = timezone(timedelta(hours=5, minutes=30), "IST")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _ist(h: int, m: int, s: int = 0, d: Optional[datetime] = None) -> datetime:
-    """Build a timezone-aware IST datetime for a given H:M:S today."""
-    base = d or datetime.now(_IST)
-    return base.replace(hour=h, minute=m, second=s, microsecond=0)
+    """Build a timezone-aware IST datetime for a given H:M:S."""
+    base_date = d.date() if d is not None else _FIXED_TEST_DATE
+    return datetime(base_date.year, base_date.month, base_date.day, h, m, s, tzinfo=_IST)
 
 
 def _make_market_windows() -> MarketWindows:
@@ -119,7 +120,7 @@ def test_check_and_fire_at_eod_time_returns_true() -> None:
 
 
 def test_check_and_fire_on_holiday_returns_false() -> None:
-    today = datetime.now(_IST).date()
+    today = _FIXED_TEST_DATE
     eod, *_ = _make_eod(holidays={today})
     now = _ist(15, 17)
     result = eod.check_and_fire(now)
@@ -602,7 +603,8 @@ def test_fire_now_marks_fired_flag() -> None:
     store.get_eod_squareoff_log_for_date.return_value = None
 
     eod, adapter, fm, ks, bus, om = _make_eod(store=store)
-    eod.fire_now(reason="MANUAL", triggered_by="test")
+    with patch("orders.eod_squareoff.now_ist", return_value=_ist(9, 0)):
+        eod.fire_now(reason="MANUAL", triggered_by="test")
 
     # check_and_fire same day should return False
     result = eod.check_and_fire(_ist(15, 17))
@@ -633,7 +635,7 @@ def test_restart_with_log_row_no_fire() -> None:
     check_and_fire also returns False.
     """
     store = MagicMock(spec=StateStore)
-    today_str = datetime.now(_IST).date().isoformat()
+    today_str = _FIXED_TEST_DATE.isoformat()
     # Simulate existing log row with no failures
     existing_row = MagicMock()
     existing_row.__getitem__ = lambda self, key: {
@@ -645,7 +647,8 @@ def test_restart_with_log_row_no_fire() -> None:
     store.get_pending_intraday_orders.return_value = []
     store.get_open_intraday_positions.return_value = []
 
-    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+    with patch("orders.eod_squareoff.now_ist", return_value=_ist(9, 0)):
+        eod, adapter, fm, ks, bus, om = _make_eod(store=store)
 
     result = eod.check_and_fire(_ist(15, 17))
     assert result is False
