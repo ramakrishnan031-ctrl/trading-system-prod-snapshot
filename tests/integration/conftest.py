@@ -262,6 +262,7 @@ def wired_system(tmp_path):
         bus=bus,
         logger=_logger("placer"),
         order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b: DI stub for integration tests
+        cost_calculator=cost_calculator,  # BL-10a: reuse adapter's instance
         kill_switch=kill_switch,
     )
 

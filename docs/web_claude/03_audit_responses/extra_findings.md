@@ -41,3 +41,34 @@ Status: deferred to Phase E or later (post paper-trial). A.3.c (BL-7c) added
         legs too, not just ENTRY — but the gap itself is pre-existing
         (ENTRY leg had the same race before BL-7c).
 Discovered: Phase A, A.3.c pre-work grep review (finding S1)
+
+---
+
+## EF-3 — FundManager.release_used PnL formula was LONG-biased  [RESOLVED]
+
+File: capital/fund_manager.py::release_used
+Impact: pre-fix formula `pnl = (exit_price - entry_price) * exit_qty - costs`
+        silently produced sign-flipped PnL for every SHORT position. BL-7 had
+        kept _on_order_filled from ever running exits, so the bug was dormant —
+        A.3.d would have been the first caller to exercise it with real SHORT
+        prices. Six of 15 Chartink strategies are SHORT-only; 30-50% of fills
+        on any paper day would have posted inverted realized PnL to the daily
+        loss limit + reports.
+Severity: CRITICAL (mechanism defined, wiring missing; activates on first SHORT exit)
+Fix: SUB-STEP 0.5 of A.3.d.
+     - release_used now takes a required `direction: str` param (LONG|SHORT);
+       ValueError on anything else. `_VALID_DIRECTIONS: frozenset` constant added.
+     - Branch: LONG → (exit-entry)*qty; SHORT → (entry-exit)*qty; both minus costs.
+     - Docstring documents the sign convention explicitly.
+     - Caller updates: order_reconciler._check1_manual_close reads direction from
+       the trade row (sqlite3.Row indexing via try/except, with LONG fallback and
+       WARNING log). order_placer._handle_exit_fill passes direction from the
+       trade row (authoritative) or the cached fill_entry.direction (fallback).
+Tests added:
+  - test_fund_manager.py: test_release_used_short_profit, test_release_used_short_loss,
+    test_release_used_rejects_invalid_direction (+3)
+  - test_order_reconciler.py: direction kwarg asserted in MANUAL_CLOSE path
+  - test_order_placer.py::TestBl7dExitFillHandling::test_short_tgt_fill_gross_pnl_direction_correct
+    (regression guard)
+Status: RESOLVED in commit containing BL-7d+BL-10a
+Discovered: Phase A, A.3.d pre-work (verification grep of release_used callers)

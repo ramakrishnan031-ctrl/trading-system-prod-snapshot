@@ -408,6 +408,19 @@ class OrderReconciler:
         qty = trade["qty_filled"] or 0
         product = trade["product"]
         intent = _PRODUCT_TO_INTENT.get(product or "", "")
+        # EF-3: release_used now requires direction. Breakeven means the sign
+        # doesn't matter numerically, but the param is required. Fall back to
+        # LONG + WARN if the trade row is missing direction (row shouldn't exist).
+        try:
+            direction = trade["direction"] or "LONG"
+        except (KeyError, IndexError):
+            direction = "LONG"
+        if direction not in ("LONG", "SHORT"):
+            self._log.warning(
+                "check1: trade %s has unexpected direction %r; defaulting to LONG",
+                trade_id, direction,
+            )
+            direction = "LONG"
 
         if entry_price and float(entry_price) > 0 and qty > 0 and intent:
             try:
@@ -417,6 +430,7 @@ class OrderReconciler:
                     exit_qty=qty,
                     intent=intent,
                     entry_price=float(entry_price),
+                    direction=direction,
                     costs=0.0,
                 )
                 steps.append("capital_released(breakeven)")

@@ -28,6 +28,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
+from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from broker.zerodha_adapter import PlacedOrder
@@ -146,6 +147,7 @@ class _MockFundManager:
     def __init__(self) -> None:
         self.committed: List[dict] = []
         self.released: List[str] = []
+        self.released_used: List[dict] = []  # BL-10a
 
     def commit_to_used(self, reservation_id, actual_fill_price, actual_qty):
         self.committed.append({
@@ -156,6 +158,14 @@ class _MockFundManager:
 
     def release(self, reservation_id, reason=""):
         self.released.append(reservation_id)
+
+    def release_used(self, *, symbol, exit_price, exit_qty, intent,
+                     entry_price, direction, costs=0.0):
+        self.released_used.append({
+            "symbol": symbol, "exit_price": exit_price, "exit_qty": exit_qty,
+            "intent": intent, "entry_price": entry_price,
+            "direction": direction, "costs": costs,
+        })
 
 
 class _MockKillSwitch:
@@ -628,6 +638,7 @@ class TestOrderPlacer:
             bus=bus,
             logger=_log(),
             order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
+            cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
             rr_ratio=2.0,
             default_order_protocol=default_protocol,
         )
@@ -911,6 +922,7 @@ class TestKillSwitchLastMile:
                 bus=bus,
                 logger=_log(),
                 order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
+            cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
                 kill_switch=ks,
             )
 
@@ -957,6 +969,7 @@ class TestKillSwitchLastMile:
                 entry_engine=engine, order_manager=om,
                 fund_manager=fm, bus=bus, logger=_log(),
                 order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
+            cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
                 kill_switch=ks,
             )
 
@@ -997,6 +1010,7 @@ class TestReservationRelease:
                 entry_engine=engine, order_manager=om,
                 fund_manager=fm, bus=bus, logger=_log(),
                 order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
+            cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
             )
 
             with pytest.raises(BrokerError):
@@ -1131,6 +1145,7 @@ class TestProductResolverWiring:
             bus=bus,
             logger=_log(),
             order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
+            cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
             rr_ratio=2.0,
             product_resolver=resolver,
         )
@@ -1454,6 +1469,7 @@ class TestBl7bOrderPlacerDependencyInjection:
             fund_manager=MagicMock(),
             bus=EventBus(),
             logger=_log(),
+            cost_calculator=MagicMock(spec=CostCalculator),
         )
 
     def test_order_placer_stores_injected_order_monitor(self) -> None:
@@ -1501,6 +1517,17 @@ class TestBl7bOrderPlacerDependencyInjection:
         assert placer._smart_tgt_config is cfg
         print("  OK BL-7b: smart_tgt_manager + smart_tgt_config both stored")
 
+    def test_order_placer_requires_cost_calculator(self) -> None:
+        """cost_calculator is a REQUIRED ctor param — missing it raises TypeError. (BL-10a)"""
+        kwargs = self._minimal_kwargs()
+        kwargs.pop("cost_calculator")
+        with pytest.raises(TypeError, match="cost_calculator"):
+            OrderPlacer(
+                order_monitor=MagicMock(spec=OrderMonitor),
+                **kwargs,
+            )
+        print("  OK BL-10a: cost_calculator is required (TypeError on omission)")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BL-7c: OrderPlacer.track() wiring + interim _on_order_filled guard (A.3.c)
@@ -1542,6 +1569,7 @@ class TestBl7cOrderPlacerTrackingWiring:
             bus=bus,
             logger=_log(),
             order_monitor=monitor,
+            cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
             default_order_protocol=default_protocol,
         )
         return placer, monitor, adapter, store, fm, bus
@@ -1634,53 +1662,6 @@ class TestBl7cOrderPlacerTrackingWiring:
             store.close()
             print("  OK BL-7c: CO_PLUS_TGT skips SL track (2 legs only)")
 
-    def test_on_order_filled_guards_non_entry_legs(self) -> None:
-        """
-        A.3.c INTERIM TEST: This test guards the intermediate state where
-        SL/TGT fills are ignored. Remove or rewrite in A.3.d when the
-        split handler is wired.
-
-        Direct _fill_map write (no place() drive-through); assert the SL
-        entry survives a published OrderFilled and commit_to_used is NOT
-        called. (BL-7c)
-        """
-        with TemporaryDirectory() as tmp:
-            placer, _, _, store, fm, bus = self._build(Path(tmp))
-
-            # Direct injection: bypass place() entirely.
-            sl_entry = _FillEntry(
-                trade_id="trd_x",
-                reservation_id="res_x",
-                symbol="RELIANCE",
-                qty=10,
-                leg=_LEG_SL,
-                order_protocol="LIMIT_TRIPLE",
-                direction="LONG",
-            )
-            with placer._fill_map_lock:
-                placer._fill_map["sl_internal_id"] = sl_entry
-
-            bus.publish(OrderFilled(
-                source_module="test",
-                payload={},
-                internal_order_id="sl_internal_id",
-                broker_order_id="KITE_SL",
-                symbol="RELIANCE",
-                side="SELL",
-                avg_fill_price=2490.0,
-                filled_qty=10,
-                filled_at=now_ist().isoformat(),
-            ))
-
-            # Guard: SL entry must still be in _fill_map; no capital commit.
-            with placer._fill_map_lock:
-                assert "sl_internal_id" in placer._fill_map, \
-                    "A.3.c guard: SL _FillEntry must NOT be popped"
-            assert fm.committed == [], \
-                "A.3.c guard: commit_to_used must NOT fire for non-ENTRY legs"
-            store.close()
-            print("  OK BL-7c A.3.c INTERIM: SL fill ignored; _FillEntry preserved")
-
     def test_on_order_filled_still_handles_entry_leg(self) -> None:
         """ENTRY-leg fill still pops + commits capital end-to-end. (BL-7c regression)"""
         with TemporaryDirectory() as tmp:
@@ -1718,6 +1699,556 @@ class TestBl7cOrderPlacerTrackingWiring:
             assert fm.committed[0]["reservation_id"] == "res_entry_ok"
             store.close()
             print("  OK BL-7c: ENTRY fill path still handled (guard doesn't regress)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BL-7d SUB-STEP 3: smart_tgt.register_trade wiring in _handle_entry_fill
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl7dEntryFillSmartTgt:
+    """
+    Locks behavior for SUB-STEP 3 of A.3.d:
+      - CO_PLUS_TGT entry fill calls smart_tgt.register_trade with correct args.
+      - LIMIT_TRIPLE entry fill does NOT call register_trade (static SL at broker).
+      - smart_tgt_manager=None is a no-op (no crash, no register).
+    """
+
+    def _build(
+        self,
+        tmp_path: Path,
+        default_protocol: str,
+        smart_tgt_manager,
+        smart_tgt_config,
+    ):
+        from core.config_loader import SmartTgtConfig
+        store = _make_store(tmp_path)
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=default_protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),
+            cost_calculator=MagicMock(spec=CostCalculator),
+            default_order_protocol=default_protocol,
+            smart_tgt_manager=smart_tgt_manager,
+            smart_tgt_config=smart_tgt_config,
+        )
+        return placer, adapter, store, bus, om
+
+    def _cfg(self):
+        from core.config_loader import SmartTgtConfig
+        return SmartTgtConfig(enabled=True, trigger_pct=0.005, step_pct=0.003)
+
+    def test_co_entry_fill_registers_with_smart_tgt(self) -> None:
+        """CO_PLUS_TGT entry fill triggers smart_tgt.register_trade with trade_id + fill price."""
+        from orders.smart_tgt_manager import SmartTgtManager
+        mgr = MagicMock(spec=SmartTgtManager)
+        with TemporaryDirectory() as tmp:
+            placer, adapter, store, bus, om = self._build(
+                Path(tmp), "CO_PLUS_TGT", smart_tgt_manager=mgr, smart_tgt_config=self._cfg(),
+            )
+            sig_id = _seed_signal(store)
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2475.0,
+                intent="COVER_ORDER", signal_id=sig_id,
+                reservation_id="res_co_st",
+            )
+            entry_internal = adapter.placed[0]["internal_order_id"]
+
+            bus.publish(OrderFilled(
+                source_module="test", payload={},
+                internal_order_id=entry_internal,
+                broker_order_id="BROKER_ENTRY_CO",
+                symbol="RELIANCE", side="BUY",
+                avg_fill_price=2501.0, filled_qty=10,
+                filled_at=now_ist().isoformat(),
+            ))
+
+            mgr.register_trade.assert_called_once()
+            kwargs = mgr.register_trade.call_args.kwargs
+            assert kwargs["symbol"] == "RELIANCE"
+            assert kwargs["direction"] == "LONG"
+            assert kwargs["entry_price"] == 2501.0
+            assert kwargs["qty"] == 10
+            assert kwargs["initial_sl"] == 2475.0
+            assert kwargs["trigger_pct"] == 0.005
+            assert kwargs["step_pct"] == 0.003
+            store.close()
+            print("  OK BL-7d SUB-STEP 3: CO_PLUS_TGT entry fill -> register_trade called")
+
+    def test_limit_triple_entry_fill_skips_smart_tgt(self) -> None:
+        """LIMIT_TRIPLE has static SL; register_trade must NOT fire even when manager present."""
+        from orders.smart_tgt_manager import SmartTgtManager
+        mgr = MagicMock(spec=SmartTgtManager)
+        with TemporaryDirectory() as tmp:
+            placer, adapter, store, bus, om = self._build(
+                Path(tmp), "LIMIT_TRIPLE", smart_tgt_manager=mgr, smart_tgt_config=self._cfg(),
+            )
+            sig_id = _seed_signal(store)
+            placer.place(
+                symbol="TCS", side="BUY", qty=5,
+                entry_price=4000.0, sl_price=3950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_lt_st",
+            )
+            entry_internal = adapter.placed[0]["internal_order_id"]
+
+            bus.publish(OrderFilled(
+                source_module="test", payload={},
+                internal_order_id=entry_internal,
+                broker_order_id="BROKER_ENTRY_LT",
+                symbol="TCS", side="BUY",
+                avg_fill_price=4001.0, filled_qty=5,
+                filled_at=now_ist().isoformat(),
+            ))
+
+            mgr.register_trade.assert_not_called()
+            store.close()
+            print("  OK BL-7d SUB-STEP 3: LIMIT_TRIPLE entry fill -> register_trade NOT called")
+
+    def test_entry_fill_with_null_manager_is_noop(self) -> None:
+        """smart_tgt_manager=None: no crash, no register call, entry still processed."""
+        with TemporaryDirectory() as tmp:
+            placer, adapter, store, bus, om = self._build(
+                Path(tmp), "CO_PLUS_TGT", smart_tgt_manager=None, smart_tgt_config=None,
+            )
+            sig_id = _seed_signal(store)
+            placer.place(
+                symbol="SBIN", side="BUY", qty=2,
+                entry_price=600.0, sl_price=595.0,
+                intent="COVER_ORDER", signal_id=sig_id,
+                reservation_id="res_no_mgr",
+            )
+            entry_internal = adapter.placed[0]["internal_order_id"]
+
+            # Should not raise despite CO_PLUS_TGT protocol without a manager.
+            bus.publish(OrderFilled(
+                source_module="test", payload={},
+                internal_order_id=entry_internal,
+                broker_order_id="BROKER_ENTRY_NM",
+                symbol="SBIN", side="BUY",
+                avg_fill_price=600.5, filled_qty=2,
+                filled_at=now_ist().isoformat(),
+            ))
+
+            # Entry leg popped (happy-path entry handling not regressed).
+            with placer._fill_map_lock:
+                assert entry_internal not in placer._fill_map
+            store.close()
+            print("  OK BL-7d SUB-STEP 3: smart_tgt_manager=None is a no-op")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BL-7d + BL-10a: _handle_exit_fill via leg dispatcher
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl7dExitFillHandling:
+    """
+    Locks behavior for SUB-STEPs 4-5 of A.3.d (BL-7d + BL-10a):
+      - Dispatcher routes SL/TGT/EOD fills to _handle_exit_fill (not just ENTRY).
+      - close_trade called with correct exit_reason per leg (SL_HIT/TGT_HIT/EOD_SQUAREOFF).
+      - Direction-correct gross_pnl: LONG=(exit-entry)*qty, SHORT=(entry-exit)*qty.
+      - Round-trip charges computed via cost_calculator.total_round_trip_cost.
+      - fm.release_used called with direction + intent derived from protocol.
+      - PositionClosed event published with net pnl after close_trade persists.
+      - SmartTgtManager.unregister_trade fires for CO_PLUS_TGT only.
+      - _fill_map entry popped on exit-fill dispatch.
+      - Double-close (already CLOSED) is a WARNING + skip (no release, no publish).
+      - Missing trade row is CRITICAL + skip.
+    """
+
+    # ---- factories ----------------------------------------------------------
+
+    def _build(
+        self,
+        tmp_path: Path,
+        protocol: str = "LIMIT_TRIPLE",
+        smart_tgt_manager=None,
+    ):
+        """Build OrderPlacer with real store + OrderManager, mocked downstream deps."""
+        from core.config_loader import SmartTgtConfig
+        store = _make_store(tmp_path)
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        cost_calc = MagicMock(spec=CostCalculator)
+        cost_calc.total_round_trip_cost = MagicMock(return_value=25.0)
+
+        cfg = SmartTgtConfig(enabled=True, trigger_pct=0.005, step_pct=0.003) \
+            if smart_tgt_manager is not None else None
+
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),
+            cost_calculator=cost_calc,
+            default_order_protocol=protocol,
+            smart_tgt_manager=smart_tgt_manager,
+            smart_tgt_config=cfg,
+        )
+        return placer, adapter, store, bus, om, fm, cost_calc
+
+    def _seed_open_trade(
+        self,
+        store: StateStore,
+        om: OrderManager,
+        *,
+        direction: str = "LONG",
+        entry_fill: float = 2500.0,
+        qty: int = 10,
+        symbol: str = "RELIANCE",
+        sl: float = 2450.0,
+        tgt: float = 2600.0,
+        protocol: str = "LIMIT_TRIPLE",
+    ) -> tuple[str, str]:
+        """Create signal + trade + record_entry_fill (status=OPEN). Returns (sig_id, trade_id)."""
+        sig_id = _seed_signal(store)
+        side = "BUY" if direction == "LONG" else "SELL"
+        risk = abs(entry_fill - sl)
+        trade_id = om.create_trade(
+            signal_id=sig_id, symbol=symbol, direction=direction,
+            strategy="gap_go_long", sector=None, qty=qty,
+            entry_target_price=entry_fill, sl_initial=sl, tgt_initial=tgt,
+            order_protocol=protocol,
+            margin_reserved=entry_fill * qty * 0.20, risk_amount=risk * qty,
+        )
+        om.record_entry_fill(
+            trade_id=trade_id, avg_fill_price=entry_fill,
+            qty_filled=qty, filled_at=now_ist().isoformat(),
+        )
+        return sig_id, trade_id
+
+    def _inject_exit(
+        self,
+        placer: OrderPlacer,
+        *,
+        internal_id: str,
+        trade_id: str,
+        leg: str,
+        protocol: str,
+        symbol: str = "RELIANCE",
+        qty: int = 10,
+        direction: str = "LONG",
+    ) -> None:
+        """Directly add an exit-leg _FillEntry to the _fill_map (bypass place())."""
+        entry = _FillEntry(
+            trade_id=trade_id, reservation_id="res_exit",
+            symbol=symbol, qty=qty, leg=leg,
+            order_protocol=protocol, direction=direction,
+        )
+        with placer._fill_map_lock:
+            placer._fill_map[internal_id] = entry
+
+    def _publish_fill(
+        self, bus: EventBus, *, internal_id: str, price: float, qty: int,
+        side: str, symbol: str,
+    ) -> None:
+        bus.publish(OrderFilled(
+            source_module="test", payload={},
+            internal_order_id=internal_id,
+            broker_order_id=f"BRK_{internal_id}",
+            symbol=symbol, side=side,
+            avg_fill_price=price, filled_qty=qty,
+            filled_at=now_ist().isoformat(),
+        ))
+
+    # ---- tests --------------------------------------------------------------
+
+    def test_sl_fill_closes_trade_with_sl_hit(self) -> None:
+        """SL leg fill -> close_trade(exit_reason='SL_HIT'); status CLOSED."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(store, om)
+            self._inject_exit(
+                placer, internal_id="sl_x", trade_id=trade_id,
+                leg=_LEG_SL, protocol="LIMIT_TRIPLE",
+            )
+
+            self._publish_fill(bus, internal_id="sl_x", price=2450.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            row = om.get_trade(trade_id)
+            assert row["status"] == "CLOSED"
+            assert row["exit_reason"] == "SL_HIT"
+            assert row["exit_price"] == 2450.0
+            store.close()
+            print("  OK BL-7d: SL fill -> status=CLOSED, exit_reason=SL_HIT")
+
+    def test_tgt_fill_closes_trade_with_tgt_hit(self) -> None:
+        """TGT leg fill -> close_trade(exit_reason='TGT_HIT')."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(store, om)
+            self._inject_exit(
+                placer, internal_id="tgt_x", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="LIMIT_TRIPLE",
+            )
+
+            self._publish_fill(bus, internal_id="tgt_x", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            row = om.get_trade(trade_id)
+            assert row["status"] == "CLOSED"
+            assert row["exit_reason"] == "TGT_HIT"
+            store.close()
+            print("  OK BL-7d: TGT fill -> exit_reason=TGT_HIT")
+
+    def test_eod_fill_closes_trade_with_eod_squareoff(self) -> None:
+        """EOD leg fill -> close_trade(exit_reason='EOD_SQUAREOFF')."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(store, om)
+            self._inject_exit(
+                placer, internal_id="eod_x", trade_id=trade_id,
+                leg=_LEG_EOD, protocol="LIMIT_TRIPLE",
+            )
+
+            self._publish_fill(bus, internal_id="eod_x", price=2480.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            row = om.get_trade(trade_id)
+            assert row["exit_reason"] == "EOD_SQUAREOFF"
+            store.close()
+            print("  OK BL-7d: EOD fill -> exit_reason=EOD_SQUAREOFF")
+
+    def test_long_tgt_fill_gross_pnl_direction_correct(self) -> None:
+        """LONG TGT: gross_pnl = (exit-entry)*qty = (2600-2500)*10 = 1000."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(store, om, direction="LONG")
+            self._inject_exit(
+                placer, internal_id="tgt_l", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+
+            self._publish_fill(bus, internal_id="tgt_l", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            row = om.get_trade(trade_id)
+            assert row["gross_pnl"] == 1000.0, f"expected 1000, got {row['gross_pnl']}"
+            assert row["charges"] == 25.0
+            assert row["net_pnl"] == 975.0
+            store.close()
+            print("  OK BL-7d: LONG TGT gross_pnl=(exit-entry)*qty=1000, net=975")
+
+    def test_short_tgt_fill_gross_pnl_direction_correct(self) -> None:
+        """SHORT TGT: gross_pnl = (entry-exit)*qty = (2500-2400)*10 = 1000 (EF-3)."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(
+                store, om, direction="SHORT", entry_fill=2500.0, sl=2550.0, tgt=2400.0,
+            )
+            self._inject_exit(
+                placer, internal_id="tgt_s", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="LIMIT_TRIPLE", direction="SHORT",
+            )
+
+            self._publish_fill(bus, internal_id="tgt_s", price=2400.0,
+                               qty=10, side="BUY", symbol="RELIANCE")
+
+            row = om.get_trade(trade_id)
+            assert row["gross_pnl"] == 1000.0, (
+                f"SHORT PnL bug (EF-3 regression): expected 1000, got {row['gross_pnl']}"
+            )
+            store.close()
+            print("  OK BL-7d: SHORT TGT gross_pnl=(entry-exit)*qty=1000 (EF-3)")
+
+    def test_cost_calc_called_with_round_trip_args(self) -> None:
+        """cost_calculator.total_round_trip_cost receives qty/entry/exit/product."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, cost_calc = self._build(
+                Path(tmp), protocol="LIMIT_TRIPLE",
+            )
+            _, trade_id = self._seed_open_trade(store, om)
+            self._inject_exit(
+                placer, internal_id="cc_x", trade_id=trade_id,
+                leg=_LEG_SL, protocol="LIMIT_TRIPLE",
+            )
+
+            self._publish_fill(bus, internal_id="cc_x", price=2450.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            cost_calc.total_round_trip_cost.assert_called_once()
+            kwargs = cost_calc.total_round_trip_cost.call_args.kwargs
+            assert kwargs["qty"] == 10
+            assert kwargs["entry_price"] == 2500.0
+            assert kwargs["exit_price"] == 2450.0
+            assert kwargs["product"] == "MIS"  # LIMIT_TRIPLE -> MIS
+            store.close()
+            print("  OK BL-7d: cost_calc.total_round_trip_cost(qty, entry, exit, MIS)")
+
+    def test_release_used_called_with_direction_and_intent(self) -> None:
+        """fm.release_used gets direction=LONG|SHORT and intent derived from product."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(
+                Path(tmp), protocol="CO_PLUS_TGT",
+            )
+            _, trade_id = self._seed_open_trade(
+                store, om, direction="LONG", protocol="CO_PLUS_TGT",
+            )
+            self._inject_exit(
+                placer, internal_id="ru_x", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="CO_PLUS_TGT", direction="LONG",
+            )
+
+            self._publish_fill(bus, internal_id="ru_x", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            assert len(fm.released_used) == 1
+            call_kwargs = fm.released_used[0]
+            assert call_kwargs["symbol"] == "RELIANCE"
+            assert call_kwargs["direction"] == "LONG"
+            assert call_kwargs["intent"] == "COVER_ORDER"  # CO_PLUS_TGT -> CO -> COVER_ORDER
+            assert call_kwargs["entry_price"] == 2500.0
+            assert call_kwargs["exit_price"] == 2600.0
+            assert call_kwargs["costs"] == 25.0
+            store.close()
+            print("  OK BL-7d: fm.release_used(direction=LONG, intent=COVER_ORDER)")
+
+    def test_position_closed_published_with_net_pnl(self) -> None:
+        """bus publishes PositionClosed(realized_pnl=NET) after close_trade."""
+        from core.events import PositionClosed
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            sig_id, trade_id = self._seed_open_trade(store, om, direction="LONG")
+            self._inject_exit(
+                placer, internal_id="pc_x", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+            captured: List[PositionClosed] = []
+            bus.subscribe(PositionClosed, lambda e: captured.append(e))
+
+            self._publish_fill(bus, internal_id="pc_x", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            assert len(captured) == 1
+            ev = captured[0]
+            assert ev.trade_id == trade_id
+            assert ev.signal_id == sig_id
+            assert ev.symbol == "RELIANCE"
+            assert ev.exit_price == 2600.0
+            assert ev.realized_pnl == 975.0  # 1000 gross - 25 charges
+            store.close()
+            print("  OK BL-7d: PositionClosed published with net realized_pnl=975")
+
+    def test_smart_tgt_unregister_called_for_co_plus_tgt(self) -> None:
+        """CO_PLUS_TGT exit fill -> smart_tgt.unregister_trade(trade_id)."""
+        from orders.smart_tgt_manager import SmartTgtManager
+        mgr = MagicMock(spec=SmartTgtManager)
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(
+                Path(tmp), protocol="CO_PLUS_TGT", smart_tgt_manager=mgr,
+            )
+            _, trade_id = self._seed_open_trade(
+                store, om, direction="LONG", protocol="CO_PLUS_TGT",
+            )
+            self._inject_exit(
+                placer, internal_id="st_x", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="CO_PLUS_TGT", direction="LONG",
+            )
+
+            self._publish_fill(bus, internal_id="st_x", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            mgr.unregister_trade.assert_called_once_with(trade_id)
+            store.close()
+            print("  OK BL-7d: CO_PLUS_TGT exit -> smart_tgt.unregister_trade called")
+
+    def test_smart_tgt_unregister_skipped_for_limit_triple(self) -> None:
+        """LIMIT_TRIPLE exit -> unregister_trade NOT called (static SL, no registration)."""
+        from orders.smart_tgt_manager import SmartTgtManager
+        mgr = MagicMock(spec=SmartTgtManager)
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(
+                Path(tmp), protocol="LIMIT_TRIPLE", smart_tgt_manager=mgr,
+            )
+            _, trade_id = self._seed_open_trade(store, om)
+            self._inject_exit(
+                placer, internal_id="lt_x", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="LIMIT_TRIPLE",
+            )
+
+            self._publish_fill(bus, internal_id="lt_x", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            mgr.unregister_trade.assert_not_called()
+            store.close()
+            print("  OK BL-7d: LIMIT_TRIPLE exit -> unregister_trade NOT called")
+
+    def test_exit_fill_pops_fill_map_entry(self) -> None:
+        """After exit-fill dispatch, the _fill_map entry is removed."""
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(store, om)
+            self._inject_exit(
+                placer, internal_id="pop_x", trade_id=trade_id,
+                leg=_LEG_SL, protocol="LIMIT_TRIPLE",
+            )
+            with placer._fill_map_lock:
+                assert "pop_x" in placer._fill_map  # precondition
+
+            self._publish_fill(bus, internal_id="pop_x", price=2450.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            with placer._fill_map_lock:
+                assert "pop_x" not in placer._fill_map
+            store.close()
+            print("  OK BL-7d: exit-fill pops _fill_map entry")
+
+    def test_double_close_is_warning_and_skip(self) -> None:
+        """Re-firing an exit fill on an already-CLOSED trade: no release, no publish."""
+        from core.events import PositionClosed
+        with TemporaryDirectory() as tmp:
+            placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
+            _, trade_id = self._seed_open_trade(store, om)
+
+            # First close
+            self._inject_exit(
+                placer, internal_id="d1", trade_id=trade_id,
+                leg=_LEG_SL, protocol="LIMIT_TRIPLE",
+            )
+            self._publish_fill(bus, internal_id="d1", price=2450.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+            assert om.get_trade(trade_id)["status"] == "CLOSED"
+            assert len(fm.released_used) == 1  # first close released
+
+            # Second close attempt on already-CLOSED trade
+            captured: List[PositionClosed] = []
+            bus.subscribe(PositionClosed, lambda e: captured.append(e))
+            self._inject_exit(
+                placer, internal_id="d2", trade_id=trade_id,
+                leg=_LEG_TGT, protocol="LIMIT_TRIPLE",
+            )
+            self._publish_fill(bus, internal_id="d2", price=2600.0,
+                               qty=10, side="SELL", symbol="RELIANCE")
+
+            # release_used NOT called again; no PositionClosed emitted
+            assert len(fm.released_used) == 1, "double-close must NOT call release_used"
+            assert captured == [], "double-close must NOT publish PositionClosed"
+            store.close()
+            print("  OK BL-7d: double-close -> no release, no publish (WARN + skip)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1790,12 +2321,28 @@ if __name__ == "__main__":
         TestBl7bOrderPlacerDependencyInjection().test_order_placer_accepts_none_smart_tgt_manager,
         TestBl7bOrderPlacerDependencyInjection().test_order_placer_raises_when_smart_tgt_manager_without_config,
         TestBl7bOrderPlacerDependencyInjection().test_order_placer_accepts_smart_tgt_manager_with_config,
+        TestBl7bOrderPlacerDependencyInjection().test_order_placer_requires_cost_calculator,
+        TestBl7dEntryFillSmartTgt().test_co_entry_fill_registers_with_smart_tgt,
+        TestBl7dEntryFillSmartTgt().test_limit_triple_entry_fill_skips_smart_tgt,
+        TestBl7dEntryFillSmartTgt().test_entry_fill_with_null_manager_is_noop,
         # BL-7c OrderPlacer.track() wiring (A.3.c)
         TestBl7cOrderPlacerTrackingWiring().test_place_entry_calls_order_monitor_track_for_entry_leg,
         TestBl7cOrderPlacerTrackingWiring().test_place_entry_tracks_all_three_legs_for_limit_triple,
         TestBl7cOrderPlacerTrackingWiring().test_co_protocol_skips_sl_track,
-        TestBl7cOrderPlacerTrackingWiring().test_on_order_filled_guards_non_entry_legs,
         TestBl7cOrderPlacerTrackingWiring().test_on_order_filled_still_handles_entry_leg,
+        # BL-7d + BL-10a exit-fill handling (A.3.d)
+        TestBl7dExitFillHandling().test_sl_fill_closes_trade_with_sl_hit,
+        TestBl7dExitFillHandling().test_tgt_fill_closes_trade_with_tgt_hit,
+        TestBl7dExitFillHandling().test_eod_fill_closes_trade_with_eod_squareoff,
+        TestBl7dExitFillHandling().test_long_tgt_fill_gross_pnl_direction_correct,
+        TestBl7dExitFillHandling().test_short_tgt_fill_gross_pnl_direction_correct,
+        TestBl7dExitFillHandling().test_cost_calc_called_with_round_trip_args,
+        TestBl7dExitFillHandling().test_release_used_called_with_direction_and_intent,
+        TestBl7dExitFillHandling().test_position_closed_published_with_net_pnl,
+        TestBl7dExitFillHandling().test_smart_tgt_unregister_called_for_co_plus_tgt,
+        TestBl7dExitFillHandling().test_smart_tgt_unregister_skipped_for_limit_triple,
+        TestBl7dExitFillHandling().test_exit_fill_pops_fill_map_entry,
+        TestBl7dExitFillHandling().test_double_close_is_warning_and_skip,
     ]
     passed = failed = 0
     for fn in tests:

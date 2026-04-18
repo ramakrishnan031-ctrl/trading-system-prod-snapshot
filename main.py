@@ -984,6 +984,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         bus=event_bus,
         logger=get_logger("order_placer"),
         order_monitor=order_monitor,              # BL-7b: enables A.3.c track() calls
+        cost_calculator=cost_calculator,          # BL-10a: exit-path cost computation
         kill_switch=kill_switch,
         product_resolver=product_resolver,        # HIGH #7: correct product codes in DB
         smart_tgt_manager=smart_tgt,              # BL-7b: CO_PLUS_TGT trail wiring

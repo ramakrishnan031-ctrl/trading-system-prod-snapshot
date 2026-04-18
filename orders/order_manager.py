@@ -39,12 +39,26 @@ What This Module Does NOT Do:
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Final, List, Optional
 
 from core.events import EventBus, OrderStatusChanged
 from core.ids import new_trade_id
 from core.state_store import StateStore
 from core.time_authority import now_ist
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# exit_reason taxonomy (BL-10a)
+#
+# Written to trades.exit_reason by close_trade(). Shadow_tracker and
+# daily_review consume this field; unknown values collapse to "EOD" in
+# shadow_tracker's reason_map. The frozenset below is the canonical set
+# any new caller must use.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VALID_EXIT_REASONS: Final[frozenset[str]] = frozenset({
+    "TGT_HIT", "SL_HIT", "MANUAL_CLOSE", "EOD_SQUAREOFF",
+})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +267,89 @@ class OrderManager:
                 "qty_filled": qty_filled,
             },
         )
+
+    def close_trade(
+        self,
+        *,
+        trade_id: str,
+        exit_price: float,
+        exit_qty: int,
+        exit_reason: str,
+        gross_pnl: float,
+        charges: float,
+    ) -> Dict:
+        """
+        Finalize a trade on exit fill (BL-10a).
+
+        Writes exit_time, exit_price, exit_reason, gross_pnl, charges,
+        net_pnl=gross_pnl-charges, and sets status='CLOSED' in one transaction.
+
+        Args:
+            trade_id:    trade to close.
+            exit_price:  fill price of the closing order.
+            exit_qty:    shares closed (for ledger consistency; schema stores
+                         qty_filled from entry, not from exit).
+            exit_reason: must be in _VALID_EXIT_REASONS.
+            gross_pnl:   direction-aware gross PnL computed by the caller.
+            charges:     total round-trip broker costs.
+
+        Returns:
+            The updated trades row as a dict (read back after UPDATE, so the
+            return value reflects persisted state, not caller input).
+
+        Raises:
+            ValueError: exit_reason not in taxonomy; trade_id not found; or
+                        trade is already CLOSED (double-close guard).
+        """
+        if exit_reason not in _VALID_EXIT_REASONS:
+            raise ValueError(
+                f"close_trade.exit_reason must be one of "
+                f"{sorted(_VALID_EXIT_REASONS)}, got {exit_reason!r}"
+            )
+
+        existing = self.get_trade(trade_id)
+        if existing is None:
+            raise ValueError(f"close_trade: trade {trade_id!r} not found")
+        if existing.get("status") == "CLOSED":
+            raise ValueError(
+                f"close_trade: trade {trade_id!r} is already CLOSED "
+                f"(exit_time={existing.get('exit_time')!r}); "
+                f"refusing to overwrite"
+            )
+
+        net_pnl = gross_pnl - charges
+        now = now_ist().isoformat()
+        with self._store.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET status     = 'CLOSED',
+                    exit_time  = ?,
+                    exit_price = ?,
+                    exit_reason= ?,
+                    gross_pnl  = ?,
+                    charges    = ?,
+                    net_pnl    = ?,
+                    updated_at = ?
+                WHERE trade_id = ?
+                """,
+                (now, exit_price, exit_reason,
+                 gross_pnl, charges, net_pnl,
+                 now, trade_id),
+            )
+        self._log.info(
+            "trade_closed",
+            extra={
+                "trade_id": trade_id,
+                "exit_price": exit_price,
+                "exit_qty": exit_qty,
+                "exit_reason": exit_reason,
+                "gross_pnl": gross_pnl,
+                "charges": charges,
+                "net_pnl": net_pnl,
+            },
+        )
+        return self.get_trade(trade_id)  # read-back for caller (persisted truth)
 
     def update_trade_status(self, trade_id: str, status: str) -> None:
         """Update trades.status + updated_at. (OMgr5)"""

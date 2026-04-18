@@ -342,6 +342,8 @@ def test_check1_manual_close_releases_capital(tmp_path: Path) -> None:
     assert call_kwargs.kwargs["entry_price"] == 1500.0   # breakeven
     assert call_kwargs.kwargs["exit_qty"] == 5
     assert call_kwargs.kwargs["costs"] == 0.0
+    # EF-3: reconciler reads direction from the trade row (default LONG here)
+    assert call_kwargs.kwargs["direction"] == "LONG"
 
     store.close()
     print("  OK CHECK1 MANUAL_CLOSE: release_used called with breakeven exit=entry")

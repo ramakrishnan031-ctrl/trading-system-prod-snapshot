@@ -44,7 +44,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Final, Optional
 
 from capital.invariant import assert_capital_invariant
 from core.events import CapitalDriftDetected, EventBus
@@ -60,6 +60,10 @@ from core.time_authority import now_ist
 _INTRADAY_INTENTS: frozenset[str] = frozenset({"INTRADAY", "COVER_ORDER", "BRACKET_ORDER"})
 _POSITIONAL_INTENTS: frozenset[str] = frozenset({"DELIVERY"})
 _ALL_INTENTS: frozenset[str] = _INTRADAY_INTENTS | _POSITIONAL_INTENTS
+
+# EF-3: release_used now requires `direction` to compute PnL correctly.
+# LONG profits when exit > entry; SHORT profits when exit < entry.
+_VALID_DIRECTIONS: Final[frozenset[str]] = frozenset({"LONG", "SHORT"})
 
 _INTRADAY_BUCKET = "intraday"
 _POSITIONAL_BUCKET = "positional"
@@ -464,6 +468,7 @@ class FundManager:
         exit_qty: int,
         intent: str,
         entry_price: float,
+        direction: str,
         costs: float = 0.0,
     ) -> ReleaseResult:
         """
@@ -475,11 +480,29 @@ class FundManager:
             exit_qty:    number of shares closed
             intent:      original intent (determines bucket and leverage)
             entry_price: original entry price (for PnL calculation)
+            direction:   "LONG" | "SHORT" — required for direction-correct PnL.
             costs:       total transaction costs (passed by caller)
 
+        PnL sign convention (EF-3):
+            LONG  profit = exit > entry  (close above cost)
+            SHORT profit = exit < entry  (cover below sell price)
+
+        Both produce positive pnl_delta when profitable and negative when
+        losing. The daily_realized_pnl aggregate is therefore direction-
+        agnostic by construction. Prior to EF-3 this method was LONG-only,
+        which silently inverted SHORT PnL; caught during A.3.d pre-work
+        because BL-7 had kept _on_order_filled from ever firing on exits,
+        so no caller had exercised non-breakeven SHORT prices before.
+
         Raises:
+            ValueError: direction not in {LONG, SHORT}.
             CapitalInvariantViolation: invariant fails post-mutation.
         """
+        if direction not in _VALID_DIRECTIONS:
+            raise ValueError(
+                f"release_used: direction must be one of "
+                f"{sorted(_VALID_DIRECTIONS)}, got {direction!r}"
+            )
         with self._lock:
             self._assert_initialized()
             bucket = self._bucket_for_intent(intent)
@@ -487,10 +510,13 @@ class FundManager:
             # Exit price may differ; always release the entry margin from used.
             margin = required_margin(exit_qty, entry_price, intent, self._leverage_map)
 
-            # Gross PnL for LONG: (exit - entry) * qty; for SELL it's inverted
-            # fund_manager is PnL-sign-agnostic: caller passes gross values.
-            # Simple model: pnl = (exit_price - entry_price) * exit_qty - costs
-            pnl = (exit_price - entry_price) * exit_qty - costs
+            # EF-3: direction-aware gross PnL. LONG: (exit-entry)*qty.
+            # SHORT: (entry-exit)*qty. Subtract costs for net PnL.
+            if direction == "LONG":
+                gross_pnl = (exit_price - entry_price) * exit_qty
+            else:  # SHORT
+                gross_pnl = (entry_price - exit_price) * exit_qty
+            pnl = gross_pnl - costs
 
             avail_before = self._bucket_avail(bucket)
             self._bucket_deduct_used(bucket, margin)

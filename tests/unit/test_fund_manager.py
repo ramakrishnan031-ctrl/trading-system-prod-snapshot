@@ -309,7 +309,7 @@ def test_release_used_profit_increases_available_and_pnl() -> None:
         result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
         fm.commit_to_used(result.reservation_id, 500.0, 100)
         # Exit at 510 -> PnL = (510-500)*100 = 1000
-        release = fm.release_used("RELIANCE", 510.0, 100, "INTRADAY", 500.0, costs=0.0)
+        release = fm.release_used("RELIANCE", 510.0, 100, "INTRADAY", 500.0, "LONG", costs=0.0)
         assert abs(release.pnl_delta - 1_000.0) < 0.01
         snap = fm.get_snapshot()
         assert abs(snap.daily_realized_pnl - 1_000.0) < 0.01
@@ -327,12 +327,58 @@ def test_release_used_loss_decreases_daily_pnl() -> None:
         result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
         fm.commit_to_used(result.reservation_id, 500.0, 100)
         # Exit at 490 -> loss = (490-500)*100 = -1000
-        release = fm.release_used("RELIANCE", 490.0, 100, "INTRADAY", 500.0, costs=0.0)
+        release = fm.release_used("RELIANCE", 490.0, 100, "INTRADAY", 500.0, "LONG", costs=0.0)
         assert abs(release.pnl_delta - (-1_000.0)) < 0.01
         snap = fm.get_snapshot()
         assert abs(snap.daily_realized_pnl - (-1_000.0)) < 0.01
         store.close()
     print("  OK release_used loss -> daily_pnl decreases (FM7)")
+
+
+def test_release_used_short_profit() -> None:
+    """EF-3: SHORT profits when exit < entry. pnl_delta must be positive."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
+        fm.commit_to_used(result.reservation_id, 500.0, 100)
+        # SHORT: entry 500, cover at 490 -> profit = (500-490)*100 = 1000
+        release = fm.release_used("RELIANCE", 490.0, 100, "INTRADAY", 500.0, "SHORT", costs=0.0)
+        assert abs(release.pnl_delta - 1_000.0) < 0.01
+        snap = fm.get_snapshot()
+        assert abs(snap.daily_realized_pnl - 1_000.0) < 0.01
+        store.close()
+    print("  OK release_used SHORT profit -> positive pnl_delta (EF-3)")
+
+
+def test_release_used_short_loss() -> None:
+    """EF-3: SHORT loses when exit > entry. pnl_delta must be negative."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
+        fm.commit_to_used(result.reservation_id, 500.0, 100)
+        # SHORT: entry 500, cover at 510 -> loss = (500-510)*100 = -1000
+        release = fm.release_used("RELIANCE", 510.0, 100, "INTRADAY", 500.0, "SHORT", costs=0.0)
+        assert abs(release.pnl_delta - (-1_000.0)) < 0.01
+        snap = fm.get_snapshot()
+        assert abs(snap.daily_realized_pnl - (-1_000.0)) < 0.01
+        store.close()
+    print("  OK release_used SHORT loss -> negative pnl_delta (EF-3)")
+
+
+def test_release_used_rejects_invalid_direction() -> None:
+    """EF-3: direction must be LONG or SHORT. Typos and empty string rejected."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
+        fm.commit_to_used(result.reservation_id, 500.0, 100)
+        import pytest as _pytest
+        with _pytest.raises(ValueError, match="direction must be one of"):
+            fm.release_used("RELIANCE", 510.0, 100, "INTRADAY", 500.0, "BOGUS", costs=0.0)
+        store.close()
+    print("  OK release_used rejects invalid direction (EF-3)")
 
 
 def test_daily_loss_limit_breach_fires_callback() -> None:
@@ -346,7 +392,7 @@ def test_daily_loss_limit_breach_fires_callback() -> None:
         result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
         fm.commit_to_used(result.reservation_id, 500.0, 100)
         # Loss > daily_loss_limit (500)
-        fm.release_used("RELIANCE", 490.0, 100, "INTRADAY", 500.0, costs=0.0)
+        fm.release_used("RELIANCE", 490.0, 100, "INTRADAY", 500.0, "LONG", costs=0.0)
         assert len(breach_calls) == 1
         store.close()
     print("  OK daily_loss_limit breach -> on_daily_loss_breach fired (FM7)")
@@ -546,7 +592,7 @@ def test_reset_daily_pnl_zeroes_pnl_leaves_reserved_used() -> None:
         # Build up some state
         result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
         fm.commit_to_used(result.reservation_id, 500.0, 100)
-        fm.release_used("RELIANCE", 510.0, 100, "INTRADAY", 500.0, costs=0.0)
+        fm.release_used("RELIANCE", 510.0, 100, "INTRADAY", 500.0, "LONG", costs=0.0)
         snap_before = fm.get_snapshot()
         assert snap_before.daily_realized_pnl > 0
 
@@ -663,6 +709,9 @@ def run_all_tests() -> int:
         test_commit_partial_fill_excess_returns_to_available,
         test_release_used_profit_increases_available_and_pnl,
         test_release_used_loss_decreases_daily_pnl,
+        test_release_used_short_profit,
+        test_release_used_short_loss,
+        test_release_used_rejects_invalid_direction,
         test_daily_loss_limit_breach_fires_callback,
         test_sync_from_broker_updates_total_recomputes_available,
         test_sync_from_broker_does_not_touch_reserved_or_used,

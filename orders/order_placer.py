@@ -59,12 +59,13 @@ import logging
 import threading
 from typing import Dict, Final, Optional
 
+from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from core.config_loader import SmartTgtConfig
-from core.events import EventBus, OrderFilled
+from core.events import EventBus, OrderFilled, PositionClosed
 from core.exceptions import BrokerError, OrderRejectedError
 from core.ids import new_trade_id
 from core.logger import log_exception
@@ -94,6 +95,29 @@ _LEG_SL:    Final[str] = "SL"
 _LEG_TGT:   Final[str] = "TGT"
 _LEG_EOD:   Final[str] = "EOD"
 _VALID_LEGS: frozenset[str] = frozenset({_LEG_ENTRY, _LEG_SL, _LEG_TGT, _LEG_EOD})
+
+# BL-7d: exit-leg → OrderManager.close_trade exit_reason taxonomy.
+# Must match orders.order_manager._VALID_EXIT_REASONS.
+_LEG_TO_EXIT_REASON: Final[Dict[str, str]] = {
+    _LEG_SL:  "SL_HIT",
+    _LEG_TGT: "TGT_HIT",
+    _LEG_EOD: "EOD_SQUAREOFF",
+}
+
+# BL-10a: order_protocol → broker product code, used to derive product for
+# CostCalculator and intent for FundManager.release_used on exit. The trades
+# table does not persist product/intent, so we recover them from the protocol
+# cached on _FillEntry. Keep in lockstep with order_reconciler._PRODUCT_TO_INTENT.
+_PROTOCOL_TO_PRODUCT: Final[Dict[str, str]] = {
+    "CO_PLUS_TGT":  "CO",
+    "LIMIT_TRIPLE": "MIS",
+}
+_PRODUCT_TO_INTENT: Final[Dict[str, str]] = {
+    "MIS":  "INTRADAY",
+    "CO":   "COVER_ORDER",
+    "CNC":  "DELIVERY",
+    "NRML": "DELIVERY",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,6 +197,7 @@ class OrderPlacer:
         bus: EventBus,
         logger: logging.Logger,
         order_monitor: OrderMonitor,
+        cost_calculator: CostCalculator,
         rr_ratio: float = 2.0,
         default_order_protocol: str = "LIMIT_TRIPLE",
         kill_switch: Optional[KillSwitch] = None,
@@ -193,6 +218,7 @@ class OrderPlacer:
         self._bus = bus
         self._log = logger
         self._order_monitor = order_monitor  # BL-7b: required for A.3.c track() wiring
+        self._cost_calculator = cost_calculator  # BL-10a: exit-path cost computation
         self._rr_ratio = rr_ratio
         self._default_protocol = default_order_protocol
         self._kill_switch = kill_switch  # OP-LM1: may be None (disabled)
@@ -417,15 +443,12 @@ class OrderPlacer:
 
     def _on_order_filled(self, event: OrderFilled) -> None:
         """
-        Handle OrderFilled event (OP6). Commit capital, update trade status.
+        Handle OrderFilled event (OP6 + BL-7d).
 
-        Called from order_monitor's poll thread; must be thread-safe (OP8).
+        Dispatches on fill_entry.leg to the appropriate handler. Called from
+        order_monitor's poll thread; must be thread-safe (OP8).
         """
         internal_id = event.internal_order_id
-        # BL-7c / A.3.c interim: peek-only. SL/TGT/EOD fills are now visible
-        # in _fill_map (they got there via track() wiring), but handling them
-        # is A.3.d's job. Until then, only the ENTRY leg pops + proceeds; the
-        # other legs are short-circuited and stay in _fill_map.
         with self._fill_map_lock:
             fill_entry = self._fill_map.get(internal_id)
 
@@ -433,13 +456,22 @@ class OrderPlacer:
             # Not our trade (could be from another component or already handled)
             return
 
-        # TODO(A.3.d): replace guard below with dispatcher:
-        #   if fill_entry.leg == _LEG_ENTRY: self._handle_entry_fill(...)
-        #   elif fill_entry.leg in (_LEG_SL, _LEG_TGT, _LEG_EOD):
-        #       self._handle_exit_fill(...)
-        if fill_entry.leg != _LEG_ENTRY:
-            return
+        # BL-7d: dispatch on leg. _VALID_LEGS enforced at _FillEntry construction.
+        if fill_entry.leg == _LEG_ENTRY:
+            self._handle_entry_fill(event, fill_entry)
+        else:
+            self._handle_exit_fill(event, fill_entry)
 
+    def _handle_entry_fill(self, event: OrderFilled, fill_entry: "_FillEntry") -> None:
+        """
+        Commit capital reservation and record entry fill in DB (BL-7d).
+
+        Pops the entry row from _fill_map. Safe to call once per internal_id.
+        Exceptions in commit_to_used / record_entry_fill are logged but not
+        re-raised: the trade is open at the broker; the reconciler is the
+        backstop for capital/DB drift.
+        """
+        internal_id = event.internal_order_id
         with self._fill_map_lock:
             self._fill_map.pop(internal_id, None)
 
@@ -486,6 +518,219 @@ class OrderPlacer:
                 "order_placer.record_fill_failed",
                 extra={"trade_id": trade_id},
             )
+
+        # BL-7d: register CO_PLUS_TGT trades with SmartTgtManager for SL trailing.
+        # LIMIT_TRIPLE legs have static SL orders already at the broker; CO
+        # legs have a CO_TRIGGER that needs server-side trail updates.
+        if (
+            fill_entry.order_protocol == "CO_PLUS_TGT"
+            and self._smart_tgt_manager is not None
+            and self._smart_tgt_config is not None
+        ):
+            try:
+                trade_row = self._om.get_trade(trade_id)
+                if trade_row is None:
+                    raise RuntimeError(f"trade {trade_id!r} vanished before register")
+                initial_sl = float(trade_row["sl_initial"])
+                token = 0
+                if self._instrument_cache is not None:
+                    try:
+                        token = self._instrument_cache.get_by_symbol(
+                            fill_entry.symbol
+                        ).instrument_token
+                    except Exception:
+                        token = 0  # cache miss; smart_tgt tolerates 0 (LTP lookup fallback)
+                self._smart_tgt_manager.register_trade(
+                    trade_id=trade_id,
+                    symbol=fill_entry.symbol,
+                    instrument_token=token,
+                    direction=fill_entry.direction,
+                    entry_price=event.avg_fill_price,
+                    initial_sl=initial_sl,
+                    qty=event.filled_qty,
+                    trigger_pct=self._smart_tgt_config.trigger_pct,
+                    step_pct=self._smart_tgt_config.step_pct,
+                )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "order_placer.smart_tgt_register_failed",
+                    extra={"trade_id": trade_id, "symbol": fill_entry.symbol,
+                           "error": str(exc)},
+                )
+                # Do NOT re-raise: trade is open; reconciler + manual ops as backstop
+
+    def _handle_exit_fill(self, event: OrderFilled, fill_entry: "_FillEntry") -> None:
+        """
+        Close the trade and release used capital on SL/TGT/EOD fill (BL-7d + BL-10a).
+
+        Pops the _fill_map entry, computes direction-aware gross PnL and
+        round-trip charges, finalizes the trade row (OrderManager.close_trade),
+        releases used capital (FundManager.release_used), publishes
+        PositionClosed, and unregisters from SmartTgtManager when applicable.
+
+        Failure policy:
+            - _VALID_LEGS already excludes ENTRY; caller guarantees exit leg.
+            - get_trade returning None is unrecoverable: log CRITICAL and return
+              (no close, no release). Reconciler is the backstop.
+            - close_trade raising ValueError("already CLOSED") means a double-fire
+              (e.g. OCO SL+TGT race): log WARNING, skip release_used + publish.
+            - release_used, publish, unregister failures are logged but not
+              re-raised. The trade is closed at the broker; the reconciler
+              catches capital/state drift.
+        """
+        internal_id = event.internal_order_id
+        with self._fill_map_lock:
+            self._fill_map.pop(internal_id, None)
+
+        trade_id = fill_entry.trade_id
+        exit_reason = _LEG_TO_EXIT_REASON[fill_entry.leg]  # KeyError → programmer bug
+
+        self._log.info(
+            "order_placer.exit_fill_received",
+            extra={
+                "trade_id": trade_id,
+                "internal_order_id": internal_id,
+                "broker_order_id": event.broker_order_id,
+                "leg": fill_entry.leg,
+                "exit_reason": exit_reason,
+                "avg_fill_price": event.avg_fill_price,
+                "filled_qty": event.filled_qty,
+            },
+        )
+
+        trade_row = self._om.get_trade(trade_id)
+        if trade_row is None:
+            self._log.critical(
+                "order_placer.exit_fill_trade_missing",
+                extra={"trade_id": trade_id, "internal_order_id": internal_id},
+            )
+            return
+
+        signal_id = trade_row.get("signal_id") or ""
+        entry_price = float(trade_row.get("entry_actual_price") or 0.0)
+        direction = trade_row.get("direction") or fill_entry.direction
+
+        # Derive product/intent from the cached order_protocol. The trades table
+        # does not persist product; protocol is authoritative at fill time.
+        product = _PROTOCOL_TO_PRODUCT.get(fill_entry.order_protocol, "")
+        if not product:
+            self._log.warning(
+                "order_placer.exit_fill_unknown_protocol",
+                extra={
+                    "trade_id": trade_id,
+                    "order_protocol": fill_entry.order_protocol,
+                },
+            )
+            product = "MIS"  # safe default: intraday
+        intent = _PRODUCT_TO_INTENT.get(product, "INTRADAY")
+
+        exit_price = float(event.avg_fill_price)
+        exit_qty = int(event.filled_qty)
+
+        # BL-10a: round-trip charges via CostCalculator.
+        try:
+            charges = self._cost_calculator.total_round_trip_cost(
+                qty=exit_qty,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                product=product,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.cost_calc_failed",
+                extra={"trade_id": trade_id, "product": product},
+            )
+            charges = 0.0
+
+        # Direction-correct gross PnL (EF-3).
+        if direction == "LONG":
+            gross_pnl = (exit_price - entry_price) * exit_qty
+        else:  # SHORT
+            gross_pnl = (entry_price - exit_price) * exit_qty
+
+        # BL-10a: close_trade first (authoritative DB state + double-close guard).
+        try:
+            closed_row = self._om.close_trade(
+                trade_id=trade_id,
+                exit_price=exit_price,
+                exit_qty=exit_qty,
+                exit_reason=exit_reason,
+                gross_pnl=gross_pnl,
+                charges=charges,
+            )
+        except ValueError as exc:
+            # Double-close (e.g. OCO race): DB already CLOSED, capital already released.
+            self._log.warning(
+                "order_placer.exit_fill_already_closed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            return
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.close_trade_failed",
+                extra={"trade_id": trade_id, "exit_reason": exit_reason},
+            )
+            return
+
+        net_pnl = (closed_row or {}).get("net_pnl", gross_pnl - charges)
+
+        # Release used capital. reservation_id is not meaningful here; release_used
+        # uses symbol+intent bucket for accounting (not the reservation ledger).
+        try:
+            self._fm.release_used(
+                symbol=fill_entry.symbol,
+                exit_price=exit_price,
+                exit_qty=exit_qty,
+                intent=intent,
+                entry_price=entry_price,
+                direction=direction,
+                costs=charges,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.release_used_failed",
+                extra={
+                    "trade_id": trade_id, "symbol": fill_entry.symbol,
+                    "intent": intent, "direction": direction,
+                },
+            )
+            # Continue: trade is CLOSED in DB; reconciler's CAPITAL_DRIFT check is the backstop.
+
+        # BL-10a: publish PositionClosed for subscribers (shadow_tracker, alerts).
+        # realized_pnl uses NET (after charges), consistent with reports.
+        try:
+            self._bus.publish(PositionClosed(
+                source_module="order_placer",
+                symbol=fill_entry.symbol,
+                trade_id=trade_id,
+                signal_id=signal_id,
+                exit_price=exit_price,
+                realized_pnl=float(net_pnl),
+            ))
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.publish_position_closed_failed",
+                extra={"trade_id": trade_id},
+            )
+
+        # Unregister from SmartTgtManager for CO_PLUS_TGT (idempotent; no-op otherwise).
+        if (
+            fill_entry.order_protocol == "CO_PLUS_TGT"
+            and self._smart_tgt_manager is not None
+        ):
+            try:
+                self._smart_tgt_manager.unregister_trade(trade_id)
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.smart_tgt_unregister_failed",
+                    extra={"trade_id": trade_id},
+                )
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
