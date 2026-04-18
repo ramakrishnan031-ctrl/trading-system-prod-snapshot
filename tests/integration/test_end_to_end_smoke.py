@@ -29,6 +29,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.events import OrderFilled, PositionClosed
+
 from tests.integration.conftest import (
     MOCK_TRIGGERED_AT,
     SCANNER_NAME,
@@ -512,3 +514,276 @@ class TestScenario7ReconcilerManualClose:
         )
         assert log_rows, "Expected reconciliation_log row after MANUAL_CLOSE"
         assert log_rows[0]["check_name"] == "MANUAL_CLOSE"
+
+
+# ---------------------------------------------------------------------------
+# A.3.g — Phase A exit gate: full-lifecycle capital accounting (LONG + SHORT)
+# ---------------------------------------------------------------------------
+
+def _seed_signal_row(ctx: SystemContext, signal_id: str, symbol: str) -> None:
+    """Insert a minimal signal row; satisfies trades.signal_id FK on create_trade."""
+    with ctx.store.transaction() as cur:
+        cur.execute(
+            """INSERT OR IGNORE INTO signals
+               (signal_id, symbol, scanner, strategy,
+                triggered_at, received_at, expires_at,
+                status, fingerprint, fingerprint_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (signal_id, symbol, "vwap_bounce_long", "vwap_bounce_long",
+             "2026-04-15 09:45:00", "2026-04-15 09:45:00", "2026-04-15 09:46:00",
+             "PROCESSED", f"fp_{signal_id}", "2026-04-15"),
+        )
+
+
+def _drive_full_lifecycle(
+    ctx: SystemContext,
+    *,
+    symbol: str,
+    side: str,
+    qty: int,
+    entry_price: float,
+    sl_price: float,
+) -> dict:
+    """
+    Drive a complete paper-mode trade lifecycle synchronously.
+
+    Reserves capital, calls order_placer.place() (which places all three legs
+    through the real LimitTripleProtocol + adapter path), then manually
+    publishes OrderFilled for the ENTRY leg and then for the TGT leg.
+
+    With paper_auto_fill_delay_sec=60.0 the adapter's synth threads sleep
+    well past test teardown, so the publishes here are the only ones that
+    reach the _fill_map before it is drained. No thread-race.
+
+    Returns a dict with trade_id, initial/final snapshots, tgt price, and
+    the captured PositionClosed event for downstream assertions.
+    """
+    signal_id = f"sig_{symbol.lower()}_phaseA"
+    _seed_signal_row(ctx, signal_id, symbol)
+
+    initial = ctx.fund_manager.get_snapshot()
+
+    reserve_result = ctx.fund_manager.reserve(
+        symbol=symbol, qty=qty, price=entry_price,
+        intent="INTRADAY", signal_id=signal_id,
+    )
+    assert reserve_result.success, f"reserve failed: {reserve_result.reason_if_failed}"
+    reservation_id = reserve_result.reservation_id
+
+    # Subscribe BEFORE place so we can't miss the PositionClosed later.
+    captured: list[PositionClosed] = []
+    ctx.bus.subscribe(PositionClosed, lambda ev: captured.append(ev))
+
+    # place() creates the trade row, places entry+SL+TGT, and registers all
+    # three legs in _fill_map. With delay=60s the synth threads are asleep.
+    ctx.order_placer.place(
+        symbol=symbol,
+        side=side,
+        qty=qty,
+        entry_price=entry_price,
+        sl_price=sl_price,
+        intent="INTRADAY",
+        signal_id=signal_id,
+        reservation_id=reservation_id,
+    )
+
+    # Pull the entry / TGT internal_order_ids from the placer's _fill_map.
+    # Three rows expected for LIMIT_TRIPLE: ENTRY, SL, TGT.
+    with ctx.order_placer._fill_map_lock:
+        entry_iid = next(
+            iid for iid, fe in ctx.order_placer._fill_map.items()
+            if fe.leg == "ENTRY"
+        )
+        tgt_iid = next(
+            iid for iid, fe in ctx.order_placer._fill_map.items()
+            if fe.leg == "TGT"
+        )
+        # Resolve the tgt price the placer actually used (OP3 computes it
+        # internally from entry+sl+rr when the caller doesn't override).
+        trade_id = ctx.order_placer._fill_map[entry_iid].trade_id
+
+    trade_row = ctx.order_manager.get_trade(trade_id)
+    assert trade_row is not None, "trade row missing after place()"
+    tgt_price = float(trade_row["tgt_initial"])
+    direction = trade_row["direction"]
+
+    # ── ENTRY fill ──────────────────────────────────────────────────────────
+    ctx.bus.publish(OrderFilled(
+        source_module="integration_test",
+        internal_order_id=entry_iid,
+        broker_order_id=f"PAPER_ENTRY_{symbol}",
+        symbol=symbol,
+        side=side,
+        filled_qty=qty,
+        avg_fill_price=entry_price,
+        expected_price=entry_price,
+        slippage_pct=0.0,
+        filled_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+    ))
+
+    # After entry commit: status=OPEN, capital moved reserved→used.
+    opened = ctx.order_manager.get_trade(trade_id)
+    assert opened["status"] == "OPEN", f"expected OPEN, got {opened['status']!r}"
+
+    after_entry = ctx.fund_manager.get_snapshot()
+
+    # ── TGT fill (exit) ─────────────────────────────────────────────────────
+    exit_side = "SELL" if side == "BUY" else "BUY"
+    ctx.bus.publish(OrderFilled(
+        source_module="integration_test",
+        internal_order_id=tgt_iid,
+        broker_order_id=f"PAPER_TGT_{symbol}",
+        symbol=symbol,
+        side=exit_side,
+        filled_qty=qty,
+        avg_fill_price=tgt_price,
+        expected_price=tgt_price,
+        slippage_pct=0.0,
+        filled_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+    ))
+
+    closed = ctx.order_manager.get_trade(trade_id)
+    assert closed["status"] == "CLOSED", f"expected CLOSED, got {closed['status']!r}"
+
+    final = ctx.fund_manager.get_snapshot()
+
+    return {
+        "trade_id": trade_id,
+        "direction": direction,
+        "tgt_price": tgt_price,
+        "initial": initial,
+        "after_entry": after_entry,
+        "final": final,
+        "closed_row": closed,
+        "captured_close": captured,
+    }
+
+
+@pytest.mark.parametrize(
+    "wired_system",
+    [{"paper_auto_fill_delay_sec": 60.0}],
+    indirect=True,
+)
+class TestPhaseAExitGate:
+    """
+    A.3.g — Phase A exit gate.
+
+    Full-lifecycle paper-mode integration test exercising every module wired
+    in Phase A:
+        - BL-7 spine (entry→commit, exit→release via _handle_entry_fill /
+          _handle_exit_fill, dispatch on _LEG_* taxonomy)
+        - BL-10a/BL-10b dual publishers of PositionClosed
+        - BL-12 / BL-14 OrderManager.close_trade + direction-aware PnL
+        - H-20 / ZA16a paper adapter synth path (here parameterised to 60s
+          so the test publishes OrderFilled itself — deterministic, no
+          thread scheduling races)
+        - EF-3 direction-aware release_used (locked by the SHORT variant)
+
+    Option 1 determinism: delay=60s keeps the adapter's synth threads asleep
+    until well past test teardown, so the only OrderFilled events that reach
+    OrderPlacer._fill_map are the ones published by this test. Without the
+    override, three daemon threads (ENTRY+SL+TGT) would fire in parallel and
+    race the manual publishes -- producing an intermittent test that teaches
+    engineers to ignore flakes.
+    """
+
+    def test_long_happy_path_full_lifecycle_capital_accounting(self, wired_system):
+        ctx = wired_system
+        symbol = "RELIANCE"
+        side = "BUY"
+        qty = 10
+        entry_price = 100.0
+        sl_price = 98.0  # TGT = 100 + (100-98)*2 = 104.0
+
+        out = _drive_full_lifecycle(
+            ctx, symbol=symbol, side=side, qty=qty,
+            entry_price=entry_price, sl_price=sl_price,
+        )
+
+        assert out["direction"] == "LONG"
+        assert out["tgt_price"] == pytest.approx(104.0)
+
+        # Capital invariants: full cycle returns reserved & used to zero.
+        initial = out["initial"]
+        after_entry = out["after_entry"]
+        final = out["final"]
+
+        assert initial.intraday_reserved == 0.0
+        assert initial.intraday_used == 0.0
+
+        # Post-entry: margin moved from reserved to used (delta should match).
+        assert after_entry.intraday_reserved == pytest.approx(0.0)
+        assert after_entry.intraday_used == pytest.approx(200.0)
+        # margin = qty*entry_price/leverage = 10*100/5 = 200
+
+        # Post-exit: everything released.
+        assert final.intraday_reserved == pytest.approx(0.0)
+        assert final.intraday_used == pytest.approx(0.0)
+
+        # LONG TGT > entry → positive gross PnL; net after charges.
+        gross = (out["tgt_price"] - entry_price) * qty
+        assert out["closed_row"]["gross_pnl"] == pytest.approx(gross)
+        assert final.daily_realized_pnl > 0.0, (
+            "LONG profitable exit must increase daily_realized_pnl"
+        )
+
+        # PositionClosed published by order_placer (BL-10a).
+        assert len(out["captured_close"]) == 1, (
+            f"expected exactly one PositionClosed, got {len(out['captured_close'])}"
+        )
+        ev = out["captured_close"][0]
+        assert ev.trade_id == out["trade_id"]
+        assert ev.symbol == symbol
+        assert ev.exit_price == pytest.approx(out["tgt_price"])
+
+        # Kill switch never tripped during a clean happy path.
+        assert not ctx.kill_switch.is_active("entry")
+
+    def test_short_happy_path_locks_ef3_direction_aware_release(self, wired_system):
+        """
+        SHORT variant — locks EF-3 at integration level.
+
+        Pre-EF-3, release_used computed gross_pnl = (exit - entry) * qty
+        unconditionally. A profitable SHORT (cover below entry) would then
+        register as a LOSS and push daily_realized_pnl negative, silently
+        wrong for every SHORT trade. This test asserts the post-EF-3
+        invariant: TGT hit on a SHORT produces positive daily_realized_pnl.
+        """
+        ctx = wired_system
+        symbol = "INFY"
+        side = "SELL"
+        qty = 10
+        entry_price = 100.0
+        sl_price = 102.0   # SL above entry for SHORT
+        # OP3 SHORT TGT: tgt = entry - (sl - entry) * rr = 100 - 2*2 = 96.0
+
+        out = _drive_full_lifecycle(
+            ctx, symbol=symbol, side=side, qty=qty,
+            entry_price=entry_price, sl_price=sl_price,
+        )
+
+        assert out["direction"] == "SHORT"
+        assert out["tgt_price"] == pytest.approx(96.0)
+
+        final = out["final"]
+        assert final.intraday_reserved == pytest.approx(0.0)
+        assert final.intraday_used == pytest.approx(0.0)
+
+        # EF-3 assertion: SHORT profit = (entry - exit) * qty > 0.
+        expected_gross = (entry_price - out["tgt_price"]) * qty
+        assert expected_gross > 0, "test setup bug: SHORT TGT should be profitable"
+        assert out["closed_row"]["gross_pnl"] == pytest.approx(expected_gross), (
+            "SHORT gross_pnl must be direction-aware (EF-3)"
+        )
+        assert final.daily_realized_pnl > 0.0, (
+            "SHORT profitable exit must increase daily_realized_pnl "
+            "(pre-EF-3 this was silently negative)"
+        )
+
+        # PositionClosed published (BL-10a) with the correct direction's sign.
+        assert len(out["captured_close"]) == 1
+        ev = out["captured_close"][0]
+        assert ev.trade_id == out["trade_id"]
+        assert ev.realized_pnl > 0.0, (
+            "PositionClosed.realized_pnl must reflect EF-3 direction sign"
+        )

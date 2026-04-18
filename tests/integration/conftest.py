@@ -125,6 +125,11 @@ class SystemContext:
     adapter: ZerodhaAdapter
     strategies: dict
     bus: EventBus
+    # A.3.g: expose order chain so exit-gate tests can drive place() directly
+    # without going through the webhook path, and inspect state_machine state.
+    order_placer: OrderPlacer
+    order_manager: OrderManager
+    state_machine: OrderStateMachine
 
 
 # ---------------------------------------------------------------------------
@@ -132,13 +137,25 @@ class SystemContext:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def wired_system(tmp_path):
+def wired_system(request, tmp_path):
     """
     Full paper-mode system wired in a temp SQLite DB.
 
     Lifecycle: patches applied → signal_processor.start() → yield ctx →
                signal_processor.stop() → patches removed → store closed.
+
+    Indirect parametrization (A.3.g): tests can override adapter behavior via
+    ``@pytest.mark.parametrize("wired_system", [{...}], indirect=True)``.
+    Supported keys:
+        paper_auto_fill_delay_sec (float, default 0.05): ZerodhaAdapter's
+            ZA16a synth delay. The Phase A exit-gate test uses 60.0 to
+            suppress the synth thread so it can publish OrderFilled
+            deterministically itself (avoids thread-scheduling races).
     """
+    _param = getattr(request, "param", None) or {}
+    _paper_auto_fill_delay_sec = float(
+        _param.get("paper_auto_fill_delay_sec", 0.05)
+    )
     # ── State store ──────────────────────────────────────────────────────────
     store = StateStore(str(tmp_path / "it_test.db"))
 
@@ -175,6 +192,10 @@ def wired_system(tmp_path):
         paper_mode=True,
         paper_capital=PAPER_CAPITAL,
         quote_provider=sim_kite.get_quote_fn(),
+        # A.3.g: wire bus so ZA16a can publish OrderFilled. Existing Scenarios
+        # 1-7 don't subscribe to OrderFilled so they ignore synth publishes.
+        bus=bus,
+        paper_auto_fill_delay_sec=_paper_auto_fill_delay_sec,
     )
 
     # ── Capital layer ────────────────────────────────────────────────────────
@@ -326,6 +347,9 @@ def wired_system(tmp_path):
         adapter=adapter,
         strategies=strategies,
         bus=bus,
+        order_placer=order_placer,
+        order_manager=order_manager,
+        state_machine=state_machine,
     )
 
     yield ctx
