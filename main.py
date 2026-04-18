@@ -975,6 +975,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     order_manager = OrderManager(
         state_store=store,
         logger=get_logger("order_manager"),
+        bus=event_bus,  # BL-12: subscribes to OrderStatusChanged
     )
     order_placer = OrderPlacer(
         entry_engine=full_engine,

@@ -30,7 +30,7 @@ import pytest
 
 from broker.product_resolver import ProductResolver
 from broker.zerodha_adapter import PlacedOrder
-from core.events import EventBus, OrderFilled
+from core.events import EventBus, OrderFilled, OrderStatusChanged
 from core.exceptions import BrokerAuthError, BrokerError, OrderRejectedError
 from core.ids import new_signal_id
 from core.state_store import StateStore
@@ -1150,6 +1150,223 @@ class TestProductResolverWiring:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-12 — OrderStatusChanged event pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl12OrderStatusEventPipeline:
+    """
+    End-to-end tests for BL-12: OrderMonitor publishes OrderStatusChanged on
+    every successful OSM transition; OrderManager (subscribed to the bus)
+    updates the orders table. Covers COMPLETE/CANCELLED/REJECTED/PARTIAL.
+    Uses real DB, real OrderManager, real OrderMonitor, real EventBus.
+    """
+
+    @staticmethod
+    def _seed_trade_and_order(
+        store: StateStore,
+        broker_order_id: str,
+        qty: int = 10,
+        entry_price: float = 2500.0,
+    ) -> str:
+        """Seed a trade + one ENTRY order row so update_order_status has a row to hit."""
+        sig_id = _seed_signal(store)
+        om = OrderManager(store, _log())  # bus=None; seed-only helper
+        trade_id = om.create_trade(
+            signal_id=sig_id, symbol="RELIANCE", direction="LONG",
+            strategy="gap_go_long", sector=None, qty=qty,
+            entry_target_price=entry_price,
+            sl_initial=entry_price - 50.0,
+            tgt_initial=entry_price + 100.0,
+            order_protocol="LIMIT_TRIPLE", margin_reserved=entry_price * qty,
+            risk_amount=50.0 * qty,
+        )
+        om.insert_order(
+            trade_id=trade_id, broker_order_id=broker_order_id,
+            leg="ENTRY", transaction_type="BUY",
+            order_type="LIMIT", product="MIS", variety="regular",
+            qty_requested=qty, price=entry_price,
+        )
+        return trade_id
+
+    @staticmethod
+    def _make_pipeline(store: StateStore) -> tuple[OrderManager, Any, Any, EventBus]:
+        """Build real OM (subscribed) + OSM + Monitor on a shared bus."""
+        from broker.order_monitor import OrderMonitor
+        from broker.order_state_machine import OrderStateMachine
+
+        bus = EventBus()
+        om = OrderManager(store, _log(), bus=bus)   # bus-wired: subscribes
+        osm = OrderStateMachine(bus=bus)
+
+        class _Adapter:
+            def get_order_history(self, _): return []
+            def cancel_order(self, _): ...
+
+        monitor = OrderMonitor(
+            adapter=_Adapter(),
+            state_machine=osm,
+            bus=bus,
+            logger=_log(),
+            poll_interval_sec=1,
+            fill_timeout_sec=60,
+        )
+        return om, osm, monitor, bus
+
+    @staticmethod
+    def _track(monitor: Any, osm: Any, internal_id: str, broker_id: str,
+               qty: int = 10, filled_qty: int = 0, avg_price: float = 0.0) -> None:
+        osm.register(internal_id)
+        osm.transition(internal_id, "SUBMITTED")
+        monitor.track(
+            internal_order_id=internal_id, broker_order_id=broker_id,
+            symbol="RELIANCE", side="BUY", qty=qty,
+            expected_price=2500.0, placed_at=now_ist(),
+        )
+        # Pre-populate fill data on the watch entry (monitor's poll would do this)
+        entry = monitor._watched[internal_id]
+        entry.filled_qty = filled_qty
+        entry.avg_fill_price = avg_price
+
+    def test_order_monitor_complete_updates_orders_table_status(self) -> None:
+        """COMPLETE transition → orders.status='COMPLETE' with qty/avg_price persisted."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            self._seed_trade_and_order(store, "KITE001")
+            om, osm, monitor, _ = self._make_pipeline(store)
+            # Re-subscribe: _make_pipeline's om isn't the seeding one — verify here
+            self._track(monitor, osm, "ord_c1", "KITE001",
+                        qty=10, filled_qty=10, avg_price=2510.0)
+            # Walk OSM: SUBMITTED -> OPEN -> COMPLETE
+            monitor._safe_transition("ord_c1", "OPEN",
+                                     entry=monitor._watched["ord_c1"])
+            monitor._safe_transition("ord_c1", "COMPLETE",
+                                     entry=monitor._watched["ord_c1"])
+            row = store.fetch_one(
+                "SELECT status, qty_filled, avg_fill_price FROM orders WHERE order_id = ?",
+                ("KITE001",),
+            )
+            assert row is not None
+            assert row["status"] == "COMPLETE"
+            assert row["qty_filled"] == 10
+            assert row["avg_fill_price"] == pytest.approx(2510.0)
+            store.close()
+            print("  OK BL-12: COMPLETE → orders.status=COMPLETE persisted")
+
+    def test_order_monitor_cancelled_updates_orders_table_status(self) -> None:
+        """CANCELLED transition → orders.status='CANCELLED'; qty_filled=0 when no partial."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            self._seed_trade_and_order(store, "KITE002")
+            om, osm, monitor, _ = self._make_pipeline(store)
+            self._track(monitor, osm, "ord_x1", "KITE002")
+            monitor._safe_transition("ord_x1", "OPEN",
+                                     entry=monitor._watched["ord_x1"])
+            monitor._safe_transition("ord_x1", "CANCELLED",
+                                     entry=monitor._watched["ord_x1"])
+            row = store.fetch_one(
+                "SELECT status, qty_filled, avg_fill_price FROM orders WHERE order_id = ?",
+                ("KITE002",),
+            )
+            assert row["status"] == "CANCELLED"
+            assert row["qty_filled"] == 0
+            assert row["avg_fill_price"] is None   # never filled
+            store.close()
+            print("  OK BL-12: CANCELLED → orders.status=CANCELLED persisted")
+
+    def test_order_monitor_rejected_updates_orders_table_status(self) -> None:
+        """REJECTED maps to OSM FAILED → orders.status='FAILED'.
+
+        (OSM is authoritative; rejected broker orders land in the FAILED
+        terminal state, which is what persists to the orders table.)
+        """
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            self._seed_trade_and_order(store, "KITE003")
+            om, osm, monitor, _ = self._make_pipeline(store)
+            self._track(monitor, osm, "ord_r1", "KITE003")
+            # REJECTED broker status -> _handle_terminal with osm_state="FAILED"
+            monitor._safe_transition("ord_r1", "FAILED",
+                                     entry=monitor._watched["ord_r1"])
+            row = store.fetch_one(
+                "SELECT status FROM orders WHERE order_id = ?", ("KITE003",),
+            )
+            assert row["status"] == "FAILED"
+            store.close()
+            print("  OK BL-12: REJECTED (OSM=FAILED) → orders.status=FAILED persisted")
+
+    def test_partial_fill_updates_qty_filled_in_orders_table(self) -> None:
+        """PARTIAL transition → qty_filled reflects broker-reported partial qty."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            self._seed_trade_and_order(store, "KITE004", qty=10)
+            om, osm, monitor, _ = self._make_pipeline(store)
+            self._track(monitor, osm, "ord_p1", "KITE004",
+                        qty=10, filled_qty=4, avg_price=2505.0)
+            monitor._safe_transition("ord_p1", "OPEN",
+                                     entry=monitor._watched["ord_p1"])
+            monitor._safe_transition("ord_p1", "PARTIAL",
+                                     entry=monitor._watched["ord_p1"])
+            row = store.fetch_one(
+                "SELECT status, qty_filled, avg_fill_price FROM orders WHERE order_id = ?",
+                ("KITE004",),
+            )
+            assert row["status"] == "PARTIAL"
+            assert row["qty_filled"] == 4
+            assert row["avg_fill_price"] == pytest.approx(2505.0)
+            store.close()
+            print("  OK BL-12: PARTIAL → qty_filled=4 persisted")
+
+    def test_order_manager_subscribes_to_order_status_changed(self) -> None:
+        """OMgr10: when bus is provided, OM subscribes to OrderStatusChanged."""
+        bus = EventBus()
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            self._seed_trade_and_order(store, "KITE_SUB")
+            om = OrderManager(store, _log(), bus=bus)
+            # Publish directly; handler must write to DB
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id="ord_sub",
+                broker_order_id="KITE_SUB", status="COMPLETE",
+                qty_filled=10, avg_fill_price=2510.0,
+            ))
+            row = store.fetch_one(
+                "SELECT status, qty_filled FROM orders WHERE order_id = ?",
+                ("KITE_SUB",),
+            )
+            assert row["status"] == "COMPLETE"
+            assert row["qty_filled"] == 10
+            # And the bus actually has a subscriber registered for this type
+            assert len(bus._subscribers.get(OrderStatusChanged, [])) == 1
+            store.close()
+            print("  OK OMgr10: bus-wired OM subscribes and persists snapshot")
+
+    def test_order_manager_bus_none_does_not_subscribe(self) -> None:
+        """Standalone mode (bus=None): no subscription, publishing elsewhere is a no-op for this instance."""
+        bus = EventBus()
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            self._seed_trade_and_order(store, "KITE_NONE")
+            # Construct WITHOUT bus
+            _ = OrderManager(store, _log(), bus=None)
+            # A separately published event on some OTHER bus must not update DB
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id="ord_n1",
+                broker_order_id="KITE_NONE", status="COMPLETE",
+                qty_filled=7, avg_fill_price=2500.0,
+            ))
+            row = store.fetch_one(
+                "SELECT status, qty_filled FROM orders WHERE order_id = ?",
+                ("KITE_NONE",),
+            )
+            # Row untouched -- still at PENDING (insert_order default)
+            assert row["status"] == "PENDING"
+            assert row["qty_filled"] == 0
+            assert OrderStatusChanged not in bus._subscribers
+            store.close()
+            print("  OK OMgr10: bus=None → no subscription, orders row untouched")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1203,6 +1420,13 @@ if __name__ == "__main__":
         TestEmptyBrokerOrderId().test_co_empty_tgt_id_is_failure,
         # ProductResolverWiring
         TestProductResolverWiring().test_intraday_uses_mis_from_resolver,
+        # BL-12 OrderStatusChanged event pipeline
+        TestBl12OrderStatusEventPipeline().test_order_monitor_complete_updates_orders_table_status,
+        TestBl12OrderStatusEventPipeline().test_order_monitor_cancelled_updates_orders_table_status,
+        TestBl12OrderStatusEventPipeline().test_order_monitor_rejected_updates_orders_table_status,
+        TestBl12OrderStatusEventPipeline().test_partial_fill_updates_qty_filled_in_orders_table,
+        TestBl12OrderStatusEventPipeline().test_order_manager_subscribes_to_order_status_changed,
+        TestBl12OrderStatusEventPipeline().test_order_manager_bus_none_does_not_subscribe,
     ]
     passed = failed = 0
     for fn in tests:

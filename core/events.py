@@ -28,6 +28,10 @@ Locked Design Decisions:
            Published on every successful state transition.
     EV8 — EodSquareoffComplete added for eod_squareoff (EOD5).
            Published after the full EOD fire sequence completes.
+    EV9 — OrderStatusChanged added for broker-authoritative status snapshots
+           (BL-12). Published by order_monitor on every successful OSM
+           transition; consumed by order_manager to update the `orders`
+           table. Distinct from OrderStateChanged (internal OSM transitions).
 
 What This Module Does NOT Do:
     - Does not use queues, threads, or async (see EV1)
@@ -41,7 +45,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Optional
 
 from core.exceptions import EventDispatchError
 from core.time_authority import now_ist
@@ -174,6 +178,35 @@ class OrderStateChanged(Event):
     order_id: str = ""
     from_state: str = ""
     to_state: str = ""
+
+
+@dataclass
+class OrderStatusChanged(Event):
+    """
+    Broker-authoritative order status snapshot (EV9, BL-12).
+
+    Published by order_monitor on every successful OSM transition; consumed
+    by order_manager to persist the broker-reported snapshot into the
+    `orders` table (status/qty_filled/avg_fill_price columns).
+
+    Distinct from OrderStateChanged: that event carries pure OSM transition
+    semantics; this one carries broker fill data at the moment of transition.
+
+    Fields:
+        internal_order_id: ord_<hex32> from core.ids
+        broker_order_id:   broker-assigned id; PK of the orders table row
+        status:            orders.status value (OPEN/PARTIAL/COMPLETE/
+                           CANCELLED/REJECTED/FAILED)
+        qty_filled:        cumulative fill qty at time of transition (0 if
+                           no fill yet, e.g. on initial OPEN)
+        avg_fill_price:    broker-reported avg fill price; None if no fill
+                           yet (e.g. on OPEN / CANCELLED-before-fill)
+    """
+    internal_order_id: str = ""
+    broker_order_id: str = ""
+    status: str = ""
+    qty_filled: int = 0
+    avg_fill_price: Optional[float] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

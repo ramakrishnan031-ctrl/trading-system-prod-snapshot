@@ -23,20 +23,25 @@ Locked Design Decisions:
              signals.trade_id = trade_id.
     OMgr7 -- get_trade(trade_id) → dict | None. Returns sqlite3.Row as dict.
     OMgr8 -- get_orders_for_trade(trade_id) → list[dict].
-    OMgr9 -- Layer 5 (orders/). Imports: core/state_store, core/ids,
-             core/time_authority, core/logger.
+    OMgr9  -- Layer 5 (orders/). Imports: core/state_store, core/ids,
+              core/time_authority, core/logger.
+    OMgr10 -- Optional EventBus subscription (BL-12). When constructed with
+              bus=<EventBus>, subscribes to OrderStatusChanged and persists
+              the broker-reported snapshot via update_order_status(). Pass
+              bus=None for standalone instances (e.g. inside reconciler)
+              that should not react to events.
 
 What This Module Does NOT Do:
     - Does not compute tgt_price, sl_price, margin, or risk amounts
     - Does not call fund_manager or any capital module
     - Does not emit events
-    - Does not subscribe to events
 """
 from __future__ import annotations
 
 import logging
 from typing import Dict, List, Optional
 
+from core.events import EventBus, OrderStatusChanged
 from core.ids import new_trade_id
 from core.state_store import StateStore
 from core.time_authority import now_ist
@@ -54,9 +59,51 @@ class OrderManager:
     Callers supply every value; this class does no arithmetic.
     """
 
-    def __init__(self, state_store: StateStore, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        state_store: StateStore,
+        logger: logging.Logger,
+        bus: Optional[EventBus] = None,
+    ) -> None:
+        """
+        Args:
+            state_store: StateStore for DB access.
+            logger:      Module logger.
+            bus:         If provided, subscribes to OrderStatusChanged and
+                         updates the orders table on every broker-reported
+                         status change (OMgr10 / BL-12). Pass None for
+                         standalone instances (e.g. inside reconciler) that
+                         should not react to events.
+        """
         self._store = state_store
         self._log = logger
+        self._bus = bus
+        if bus is not None:
+            bus.subscribe(OrderStatusChanged, self._on_order_status_changed)
+
+    # ── event handlers (OMgr10 / BL-12) ───────────────────────────────────────
+
+    def _on_order_status_changed(self, event: OrderStatusChanged) -> None:
+        """
+        Persist the broker-reported status snapshot to the orders table.
+        Swallows exceptions — a DB write failure must not crash order_monitor
+        (EventBus propagates subscriber exceptions back to the publisher).
+        """
+        try:
+            self.update_order_status(
+                broker_order_id=event.broker_order_id,
+                status=event.status,
+                qty_filled=event.qty_filled,
+                avg_fill_price=event.avg_fill_price,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "order_manager.on_order_status_changed_failed",
+                extra={"internal_order_id": event.internal_order_id,
+                       "broker_order_id": event.broker_order_id,
+                       "status": event.status,
+                       "error": str(exc)},
+            )
 
     # ── write methods ─────────────────────────────────────────────────────────
 

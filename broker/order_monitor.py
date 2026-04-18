@@ -44,7 +44,7 @@ from typing import Callable, Optional
 
 from broker.order_state_machine import TERMINAL_STATES, OrderStateMachine
 from broker.zerodha_adapter import ZerodhaAdapter
-from core.events import EventBus, OrderFilled
+from core.events import EventBus, OrderFilled, OrderStatusChanged
 from core.exceptions import BrokerAuthError, BrokerTimeoutError, InvalidTransitionError
 from core.logger import log_exception
 from core.time_authority import now_ist
@@ -341,7 +341,7 @@ class OrderMonitor:
 
     def _handle_open(self, entry: _WatchEntry, now: datetime) -> None:
         """Transition to OPEN; check fill timeout."""
-        self._safe_transition(entry.internal_order_id, "OPEN")
+        self._safe_transition(entry.internal_order_id, "OPEN", entry=entry)
         self._check_fill_timeout(entry, now)
 
     def _handle_partial(
@@ -359,7 +359,7 @@ class OrderMonitor:
                 extra={"internal_order_id": entry.internal_order_id,
                        "filled_qty": filled_qty, "avg_price": avg_price},
             )
-        self._safe_transition(entry.internal_order_id, "PARTIAL")
+        self._safe_transition(entry.internal_order_id, "PARTIAL", entry=entry)
         # No OrderFilled on PARTIAL -- only on COMPLETE (OM8)
 
     def _handle_complete(
@@ -373,7 +373,7 @@ class OrderMonitor:
         final_qty = filled_qty if filled_qty > 0 else entry.qty
         final_price = avg_price if avg_price > 0 else entry.expected_price
 
-        transitioned = self._safe_transition(entry.internal_order_id, "COMPLETE")
+        transitioned = self._safe_transition(entry.internal_order_id, "COMPLETE", entry=entry)
         if not transitioned:
             return   # already terminal; idempotent (OM12)
 
@@ -405,7 +405,7 @@ class OrderMonitor:
 
     def _handle_terminal(self, entry: _WatchEntry, osm_state: str) -> None:
         """Transition to a terminal state and remove from watch."""
-        self._safe_transition(entry.internal_order_id, osm_state)
+        self._safe_transition(entry.internal_order_id, osm_state, entry=entry)
         self.untrack(entry.internal_order_id)
 
     # ── fill timeout (OM7) ────────────────────────────────────────────────────
@@ -432,7 +432,7 @@ class OrderMonitor:
                 "order_monitor.timeout_cancelled",
                 extra={"internal_order_id": entry.internal_order_id},
             )
-            self._safe_transition(entry.internal_order_id, "CANCELLED")
+            self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
             self.untrack(entry.internal_order_id)
         else:
             # Cancel failed -- orphaned order (OM7 CRITICAL path)
@@ -442,21 +442,31 @@ class OrderMonitor:
                        "broker_order_id": entry.broker_order_id,
                        "cancel_reason": result.reason},
             )
-            self._safe_transition(entry.internal_order_id, "FAILED")
+            self._safe_transition(entry.internal_order_id, "FAILED", entry=entry)
             self.untrack(entry.internal_order_id)
             if self._on_orphan is not None:
                 self._on_orphan(entry.internal_order_id, entry.broker_order_id)
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _safe_transition(self, internal_order_id: str, to_state: str) -> bool:
+    def _safe_transition(
+        self,
+        internal_order_id: str,
+        to_state: str,
+        entry: Optional[_WatchEntry] = None,
+    ) -> bool:
         """
         Attempt OSM transition. Returns True on success, False if already
         in that state or terminal (OM12: InvalidTransitionError caught).
+
+        BL-12: on successful transition, publishes OrderStatusChanged with a
+        broker-authoritative snapshot (broker_order_id / qty_filled /
+        avg_fill_price pulled from `entry`). If `entry` is None (unexpected —
+        all current call sites pass it), publishes with sentinel defaults
+        and logs DEBUG rather than failing the transition.
         """
         try:
             self._osm.transition(internal_order_id, to_state)
-            return True
         except InvalidTransitionError as exc:
             # Already COMPLETE, or illegal transition -- not an error (OM12)
             self._log.debug(
@@ -469,3 +479,40 @@ class OrderMonitor:
         except ValueError:
             # order_id not in OSM (untracked race) -- ignore
             return False
+
+        # BL-12: publish broker-status snapshot. Any failure here is logged
+        # but does not reverse the transition (OSM is authoritative).
+        try:
+            if entry is None:
+                self._log.debug(
+                    "order_monitor.status_changed_without_entry",
+                    extra={"internal_order_id": internal_order_id,
+                           "to_state": to_state},
+                )
+                broker_order_id = ""
+                qty_filled = 0
+                avg_fill_price: Optional[float] = None
+            else:
+                broker_order_id = entry.broker_order_id
+                qty_filled = entry.filled_qty
+                avg_fill_price = (
+                    entry.avg_fill_price if entry.avg_fill_price > 0.0 else None
+                )
+
+            self._bus.publish(OrderStatusChanged(
+                source_module="order_monitor",
+                internal_order_id=internal_order_id,
+                broker_order_id=broker_order_id,
+                status=to_state,
+                qty_filled=qty_filled,
+                avg_fill_price=avg_fill_price,
+            ))
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "order_monitor.status_changed_publish_failed",
+                extra={"internal_order_id": internal_order_id,
+                       "to_state": to_state,
+                       "error": str(exc)},
+            )
+
+        return True
