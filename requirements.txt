@@ -8,3 +8,4 @@ pydantic==2.13.0       # CL3: strict schema validation (extra="forbid")
 kiteconnect>=4.2.0
 flask>=3.0               # WR2: webhook HTTP server
 openpyxl>=3.1            # DR5: daily_review .xlsx output
+python-dotenv>=1.2.2     # runtime .env loading (SU19)

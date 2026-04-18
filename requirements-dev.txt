@@ -1,0 +1,8 @@
+# Trading System v2 — development dependencies (tests, coverage)
+# Install: pip install -r requirements-dev.txt
+# Production VMs should NOT install this file.
+
+-r requirements.txt
+
+pytest>=9.0.3
+pytest-cov>=7.1.0
