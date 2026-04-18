@@ -694,6 +694,25 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
 
     required_secrets = ["ZERODHA_API_KEY", "ZERODHA_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
 
+    # BL-20: pre-load InstrumentCache so run_all_startup_checks can enforce
+    # a minimum row count (guards against startup on a stub/stale CSV).
+    # A load failure is handled two ways:
+    #   - file missing: check_config_files_present will block with
+    #     "missing_config_files"
+    #   - file present but corrupt: log + pass None → check blocks with
+    #     "instrument_cache_too_small"
+    instrument_cache: Optional[InstrumentCache] = None
+    try:
+        instrument_cache = InstrumentCache.load(config_dir / "instruments.csv")
+        _log.info(
+            "InstrumentCache loaded: %d instruments", instrument_cache.count()
+        )
+    except Exception as exc:
+        _log.error(
+            "InstrumentCache pre-load failed: %s "
+            "(startup_checks will surface the root cause)", exc
+        )
+
     report = run_all_startup_checks(
         state_store=store,
         kill_switch=kill_switch,
@@ -708,6 +727,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         required_secrets=required_secrets,
         config_dir=config_dir,
         logger=_log,
+        instrument_cache=instrument_cache,  # BL-20
     )
 
     if args.dry_run:
@@ -723,15 +743,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         )
         return 3
 
-    # ── Phase 0e-pre: Load instrument + account data (Module 38) ────────────
-    try:
-        instrument_cache = InstrumentCache.load(config_dir / "instruments.csv")
-        _log.info(
-            "InstrumentCache loaded: %d instruments", instrument_cache.count()
-        )
-    except Exception as exc:
-        _log.critical("Failed to load instruments.csv: %s", exc)
-        return 3
+    # BL-20: startup_checks passed, so instrument_cache is non-None and
+    # >= min_instrument_rows. Fallthrough guard for type-checkers.
+    assert instrument_cache is not None
 
     try:
         account_registry = AccountRegistry.load(config_dir / "accounts.csv")

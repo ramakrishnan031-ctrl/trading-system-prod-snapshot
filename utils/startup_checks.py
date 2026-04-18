@@ -145,6 +145,7 @@ class StartupReport:
     market_holiday:      bool
     missing_secrets:     List[str]
     missing_config_files: List[str]
+    instrument_cache_count: Optional[int] = None  # BL-20: None if check skipped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -668,6 +669,51 @@ def check_market_holiday_today(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-20 -- Instrument cache size guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_instrument_cache_size(
+    instrument_cache,          # duck-typed: only requires .count() -> int
+    logger,
+    min_rows: int = 1000,
+) -> Tuple[bool, int]:
+    """
+    Return (passed, actual_count).
+
+    Audit BL-20: the repo previously shipped a stub instruments.csv with
+    ~20 rows; the signal pipeline silently dropped any symbol not in the
+    cache, so nearly every scanner signal was rejected. A healthy full
+    NSE universe contains ~2500-3000 rows. This check blocks startup if
+    the loaded cache is too thin to be useful, forcing the operator to
+    re-run `scripts/refresh_instruments.py` before trading.
+
+    Duck-typed on purpose: any object exposing ``.count() -> int`` works,
+    which keeps startup_checks free of a hard import of InstrumentCache
+    (SC13: Layer 6, injected deps).
+    """
+    if instrument_cache is None:
+        logger.warning(
+            "check_instrument_cache_size: cache is None (load failed or skipped)"
+        )
+        return (False, 0)
+
+    count = int(instrument_cache.count())
+    if count < min_rows:
+        logger.warning(
+            "check_instrument_cache_size: FAIL count=%d < min_rows=%d "
+            "(re-run scripts/refresh_instruments.py)",
+            count, min_rows,
+        )
+        return (False, count)
+
+    logger.info(
+        "check_instrument_cache_size: OK count=%d >= min_rows=%d",
+        count, min_rows,
+    )
+    return (True, count)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SC11 -- Secret env var presence check
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -707,6 +753,8 @@ def run_all_startup_checks(
     required_secrets: List[str],
     config_dir: Path,
     logger,
+    instrument_cache=None,             # BL-20: optional; skip check if None
+    min_instrument_rows: int = 1000,   # BL-20
 ) -> StartupReport:
     """
     Run all startup checks and return an aggregate StartupReport (SC12).
@@ -720,6 +768,8 @@ def run_all_startup_checks(
       6. Market holiday (warning only)
       7. Scanner connectivity (warning only; skipped on COLD scenario)
       8. Webhook endpoint (skipped if webhook_url is None)
+      9. Instrument cache size (blocking; skipped if instrument_cache is None
+         — caller is expected to have handled load failure separately) (BL-20)
 
     Collects ALL results before returning -- does NOT abort on first failure.
     Caller reads ok=False and blocking_failures to decide terminal action.
@@ -781,6 +831,15 @@ def run_all_startup_checks(
             webhook_url, http_fetcher_fn, logger
         )
 
+    # 9. Instrument cache size (BL-20)
+    instrument_cache_count: Optional[int] = None
+    if instrument_cache is not None:
+        passed, instrument_cache_count = check_instrument_cache_size(
+            instrument_cache, logger, min_rows=min_instrument_rows
+        )
+        if not passed:
+            blocking_failures.append("instrument_cache_too_small")
+
     ok = len(blocking_failures) == 0
 
     if ok:
@@ -806,4 +865,5 @@ def run_all_startup_checks(
         market_holiday=is_holiday,
         missing_secrets=missing_secrets,
         missing_config_files=missing_config,
+        instrument_cache_count=instrument_cache_count,  # BL-20
     )

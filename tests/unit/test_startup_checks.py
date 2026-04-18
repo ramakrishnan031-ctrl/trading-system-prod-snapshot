@@ -1035,6 +1035,111 @@ def test_run_all_cold_skips_scanner_check(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# check_instrument_cache_size tests (BL-20)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _FakeCache:
+    """Duck-typed instrument_cache: exposes .count() -> int."""
+    def __init__(self, n: int) -> None:
+        self._n = n
+    def count(self) -> int:
+        return self._n
+
+
+def test_check_instrument_cache_size_passes_at_threshold(tmp_path: Path) -> None:
+    """Exactly min_rows -> passed=True (BL-20)."""
+    from utils.startup_checks import check_instrument_cache_size
+    log = _CapturingLogger()
+    passed, count = check_instrument_cache_size(_FakeCache(1000), log, min_rows=1000)
+    assert passed is True
+    assert count == 1000
+    print("  OK cache_size: at-threshold passes")
+
+
+def test_check_instrument_cache_size_fails_below_threshold(tmp_path: Path) -> None:
+    """Below min_rows -> passed=False (BL-20)."""
+    from utils.startup_checks import check_instrument_cache_size
+    log = _CapturingLogger()
+    passed, count = check_instrument_cache_size(_FakeCache(5), log, min_rows=1000)
+    assert passed is False
+    assert count == 5
+    print("  OK cache_size: below-threshold fails")
+
+
+def test_check_instrument_cache_size_none_returns_false(tmp_path: Path) -> None:
+    """None cache (load failed) -> passed=False, count=0 (BL-20)."""
+    from utils.startup_checks import check_instrument_cache_size
+    log = _CapturingLogger()
+    passed, count = check_instrument_cache_size(None, log, min_rows=1000)
+    assert passed is False
+    assert count == 0
+    print("  OK cache_size: None cache fails")
+
+
+def test_check_instrument_cache_size_custom_min_rows(tmp_path: Path) -> None:
+    """Custom min_rows is honoured (BL-20)."""
+    from utils.startup_checks import check_instrument_cache_size
+    log = _CapturingLogger()
+    passed, _ = check_instrument_cache_size(_FakeCache(50), log, min_rows=10)
+    assert passed is True
+    passed2, _ = check_instrument_cache_size(_FakeCache(50), log, min_rows=100)
+    assert passed2 is False
+    print("  OK cache_size: custom min_rows honoured")
+
+
+def test_run_all_blocks_if_instrument_cache_too_small(tmp_path: Path) -> None:
+    """Tiny cache -> ok=False, 'instrument_cache_too_small' in blocking (BL-20)."""
+    kwargs, store, env_key = _base_run_args(tmp_path)
+    store_ref = kwargs.pop("_store_ref")
+    kwargs.pop("_env_key")
+    kwargs["instrument_cache"] = _FakeCache(5)
+    kwargs["min_instrument_rows"] = 1000
+    try:
+        report = run_all_startup_checks(**kwargs)
+        assert report.ok is False
+        assert "instrument_cache_too_small" in report.blocking_failures
+        assert report.instrument_cache_count == 5
+        print("  OK run_all: tiny instrument cache blocks")
+    finally:
+        os.environ.pop(env_key, None)
+        store_ref.close()
+
+
+def test_run_all_passes_with_healthy_instrument_cache(tmp_path: Path) -> None:
+    """Healthy cache (>= min_rows) -> ok=True, count populated (BL-20)."""
+    kwargs, store, env_key = _base_run_args(tmp_path)
+    store_ref = kwargs.pop("_store_ref")
+    kwargs.pop("_env_key")
+    kwargs["instrument_cache"] = _FakeCache(2800)
+    kwargs["min_instrument_rows"] = 1000
+    try:
+        report = run_all_startup_checks(**kwargs)
+        assert report.ok is True
+        assert "instrument_cache_too_small" not in report.blocking_failures
+        assert report.instrument_cache_count == 2800
+        print("  OK run_all: healthy instrument cache passes")
+    finally:
+        os.environ.pop(env_key, None)
+        store_ref.close()
+
+
+def test_run_all_skips_instrument_cache_when_none(tmp_path: Path) -> None:
+    """instrument_cache=None (default) -> check skipped, count=None (BL-20)."""
+    kwargs, store, env_key = _base_run_args(tmp_path)
+    store_ref = kwargs.pop("_store_ref")
+    kwargs.pop("_env_key")
+    # Do NOT pass instrument_cache -- default None -> check skipped
+    try:
+        report = run_all_startup_checks(**kwargs)
+        assert "instrument_cache_too_small" not in report.blocking_failures
+        assert report.instrument_cache_count is None
+        print("  OK run_all: None cache skips check")
+    finally:
+        os.environ.pop(env_key, None)
+        store_ref.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1092,6 +1197,14 @@ def run_all_tests() -> int:
         test_run_all_report_contains_all_sub_results,
         test_run_all_market_holiday_warns,
         test_run_all_cold_skips_scanner_check,
+        # check_instrument_cache_size (BL-20)
+        test_check_instrument_cache_size_passes_at_threshold,
+        test_check_instrument_cache_size_fails_below_threshold,
+        test_check_instrument_cache_size_none_returns_false,
+        test_check_instrument_cache_size_custom_min_rows,
+        test_run_all_blocks_if_instrument_cache_too_small,
+        test_run_all_passes_with_healthy_instrument_cache,
+        test_run_all_skips_instrument_cache_when_none,
     ]
 
     print("=" * 70)
