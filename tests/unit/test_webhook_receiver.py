@@ -738,6 +738,93 @@ def test_performance_100_posts_under_5_seconds():
 
 
 # ---------------------------------------------------------------------------
+# BL-18: construction guard for config.webhook.require_hmac
+# ---------------------------------------------------------------------------
+
+def _make_config_with_require_hmac(require_hmac: bool):
+    """Return a config object shaped like SystemConfig, with webhook.require_hmac."""
+    cfg = _make_config()
+    cfg.webhook = types.SimpleNamespace(
+        bind_host="127.0.0.1",
+        bind_port=5000,
+        require_hmac=require_hmac,
+    )
+    return cfg
+
+
+def _bl18_build(config, secret):
+    """Construct WebhookReceiver with given config + secret (bypasses _make_receiver
+    which would inject a default config without the webhook attribute)."""
+    import pytest  # noqa: F401 - only for raises in tests below
+    sq = queue.Queue(maxsize=20)
+    td = tempfile.mkdtemp()
+    store = StateStore(Path(td) / "test.db")
+    return WebhookReceiver(
+        sq, store, config,
+        _MockMarketWindows(entry_allowed=True),
+        _MockKillSwitch(active=False),
+        _NullLogger(),
+        secret_token=secret,
+    )
+
+
+def test_bl18_require_hmac_true_no_secret_raises():
+    """require_hmac=True + secret_token=None -> ValueError at construction (BL-18)."""
+    import pytest
+    cfg = _make_config_with_require_hmac(True)
+    with pytest.raises(ValueError, match="require_hmac"):
+        _bl18_build(cfg, None)
+    print("  OK BL-18: require_hmac=True + no secret raises")
+
+
+def test_bl18_require_hmac_true_empty_secret_raises():
+    """require_hmac=True + secret_token='' -> ValueError (BL-18: falsy check)."""
+    import pytest
+    cfg = _make_config_with_require_hmac(True)
+    with pytest.raises(ValueError, match="require_hmac"):
+        _bl18_build(cfg, "")
+    print("  OK BL-18: require_hmac=True + empty secret raises")
+
+
+def test_bl18_require_hmac_true_with_secret_ok():
+    """require_hmac=True + secret set -> construction succeeds (BL-18)."""
+    cfg = _make_config_with_require_hmac(True)
+    receiver = _bl18_build(cfg, "real-secret")
+    assert receiver is not None
+    print("  OK BL-18: require_hmac=True + secret succeeds")
+
+
+def test_bl18_require_hmac_false_no_secret_ok():
+    """require_hmac=False -> permissive; no secret is fine (BL-18)."""
+    cfg = _make_config_with_require_hmac(False)
+    receiver = _bl18_build(cfg, None)
+    assert receiver is not None
+    print("  OK BL-18: require_hmac=False + no secret succeeds")
+
+
+def test_bl18_nested_appconfig_shape_resolved():
+    """AppConfig shape (config.system.webhook.require_hmac) is resolved (BL-18)."""
+    import pytest
+    cfg = _make_config()  # flat, no .webhook
+    cfg.system = types.SimpleNamespace(
+        webhook=types.SimpleNamespace(
+            bind_host="127.0.0.1", bind_port=5000, require_hmac=True
+        )
+    )
+    with pytest.raises(ValueError, match="require_hmac"):
+        _bl18_build(cfg, None)
+    print("  OK BL-18: nested AppConfig shape resolved")
+
+
+def test_bl18_no_webhook_attr_permissive():
+    """Missing webhook attr (legacy/test fixtures) -> permissive (BL-18)."""
+    cfg = _make_config()  # no .webhook, no .system.webhook
+    receiver = _bl18_build(cfg, None)
+    assert receiver is not None
+    print("  OK BL-18: no webhook attr is permissive")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (no pytest dependency)
 # ---------------------------------------------------------------------------
 
@@ -774,6 +861,13 @@ def run_all_tests() -> int:
         test_webhook_audit_row_written_for_every_post,
         test_concurrent_posts_queue_consistent,
         test_performance_100_posts_under_5_seconds,
+        # BL-18: construction guard for config.webhook.require_hmac
+        test_bl18_require_hmac_true_no_secret_raises,
+        test_bl18_require_hmac_true_empty_secret_raises,
+        test_bl18_require_hmac_true_with_secret_ok,
+        test_bl18_require_hmac_false_no_secret_ok,
+        test_bl18_nested_appconfig_shape_resolved,
+        test_bl18_no_webhook_attr_permissive,
     ]
 
     print("=" * 70)

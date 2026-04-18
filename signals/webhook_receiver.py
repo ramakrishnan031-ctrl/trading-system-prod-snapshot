@@ -75,6 +75,27 @@ class WebhookReceiver:
         logger: Any,
         secret_token: Optional[str] = None,
     ) -> None:
+        # BL-18: if the deployed config declares require_hmac=True, refuse to
+        # construct without a secret. Prevents silent downgrade where config
+        # claims HMAC is enforced but the receiver silently accepts unsigned
+        # requests because secret_token was None.
+        #
+        # Shape-tolerant resolution: production passes AppConfig (has .system
+        # .webhook.require_hmac), tests pass a flat SimpleNamespace (may or
+        # may not have .webhook). Absent -> treated as non-strict.
+        _webhook_cfg = getattr(config, "webhook", None)
+        if _webhook_cfg is None:
+            _system_cfg = getattr(config, "system", None)
+            if _system_cfg is not None:
+                _webhook_cfg = getattr(_system_cfg, "webhook", None)
+        _require_hmac = bool(getattr(_webhook_cfg, "require_hmac", False))
+        if _require_hmac and not secret_token:
+            raise ValueError(
+                "WebhookReceiver: config.webhook.require_hmac=True but "
+                "secret_token is empty. Set WEBHOOK_SECRET env var or "
+                "flip require_hmac to False for non-prod deployments."
+            )
+
         self._queue = signal_queue
         self._store = state_store
         self._config = config
