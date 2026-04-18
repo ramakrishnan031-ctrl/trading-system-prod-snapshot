@@ -66,10 +66,6 @@ trading_hours:
   entry_start: "09:30"
   entry_end: "13:30"
   eod_squareoff_time: "15:17"
-limits:
-  max_open_positions: 10
-  max_trades_per_day: 20
-  daily_loss_limit_pct: 2.0
 signal_queue:
   capacity: 300
   backpressure_pct: 0.80
@@ -314,8 +310,6 @@ def test_system_config_values_match_stubs() -> None:
         _write_stubs(d)
         cfg = load_all(d)
 
-    assert cfg.system.limits.max_open_positions == 10
-    assert cfg.system.limits.max_trades_per_day == 20
     assert cfg.system.signal_queue.capacity == 300
     assert cfg.system.signal_queue.backpressure_pct == 0.80
     assert cfg.system.polling.order_monitor_sec == 15
@@ -874,6 +868,76 @@ def test_real_nse_holidays_yaml_loads() -> None:
     print(f"  OK Real nse_holidays_2026.yaml: {len(cfg.holidays)} holidays, all valid")
 
 
+def test_system_config_has_no_limits_block() -> None:
+    """
+    BL-17 regression guard: the dead `limits:` block must not return.
+    Its fields were duplicates of `risk:` (max_open_positions,
+    daily_loss_limit_pct), nothing read from it, and one duplicated key
+    held a different value (limits.daily_loss_limit_pct=2.0 vs
+    risk.daily_loss_limit_pct=0.05) — a silent trap for anyone who edited
+    the wrong block.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text())
+    assert isinstance(raw, dict), "system_config.yaml root must be a mapping"
+    assert "limits" not in raw, (
+        "system_config.yaml must not contain a top-level `limits:` block "
+        "(BL-17). Use `risk:` for portfolio-level limits."
+    )
+    print("  OK BL-17: system_config.yaml has no `limits:` block")
+
+
+def test_no_duplicate_config_keys() -> None:
+    """
+    BL-17 regression guard: for any key name that appears under more than
+    one top-level block in system_config.yaml, the values must differ.
+    Equal values across two blocks are a sign of a copy/paste drift like
+    the BL-17 pair limits.max_open_positions=10 / risk.max_open_positions=10
+    which silently disagreed on ownership.
+
+    Different values are allowed (e.g. `poll_interval_sec` legitimately
+    differs across polling/order_monitor/eod_squareoff/order_reconciler).
+    """
+    project_root = Path(__file__).parent.parent.parent
+    raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text())
+    assert isinstance(raw, dict)
+
+    # Walk: key_name -> list[(block_name, value)]
+    appearances: dict[str, list[tuple[str, object]]] = {}
+    for block_name, block_body in raw.items():
+        if not isinstance(block_body, dict):
+            continue
+        for child_key, child_val in block_body.items():
+            # Ignore mappings and lists; we care about scalar duplication only
+            if isinstance(child_val, (dict, list)):
+                continue
+            appearances.setdefault(child_key, []).append((block_name, child_val))
+
+    collisions: list[str] = []
+    for key_name, sites in appearances.items():
+        if len(sites) < 2:
+            continue
+        # Group by value; any value that appears in >1 block is a collision
+        by_value: dict[object, list[str]] = {}
+        for block_name, val in sites:
+            by_value.setdefault(val, []).append(block_name)
+        for val, blocks in by_value.items():
+            if len(blocks) > 1:
+                collisions.append(
+                    f"key `{key_name}` with value `{val!r}` appears under "
+                    f"blocks {blocks}"
+                )
+
+    assert not collisions, (
+        "system_config.yaml has duplicate (key, value) pairs across "
+        "top-level blocks (BL-17 class): " + "; ".join(collisions)
+    )
+    print(
+        f"  OK BL-17: no duplicate (key, value) pairs across "
+        f"{len([k for k, v in raw.items() if isinstance(v, dict)])} top-level blocks"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -914,6 +978,8 @@ def run_all_tests() -> int:
         test_shadow_tracker_max_innings_min_boundary,
         test_real_scan_webhook_map_yaml_loads,
         test_real_nse_holidays_yaml_loads,
+        test_system_config_has_no_limits_block,
+        test_no_duplicate_config_keys,
     ]
 
     print("=" * 70)

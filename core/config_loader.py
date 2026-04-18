@@ -65,13 +65,6 @@ class TradingHoursConfig(BaseModel):
     eod_squareoff_time: str    # "HH:MM" IST — square-off trigger (P1)
 
 
-class LimitsConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    max_open_positions: int        # hard cap, enforced in risk_engine (Q1, P5)
-    max_trades_per_day: int        # hard cap, warn at 80%, block at 100% (P4)
-    daily_loss_limit_pct: float    # % of cash_floor; soft_kill on breach
-
-
 class SignalQueueConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     capacity: int              # max signals in queue (P15 default: 300)
@@ -402,7 +395,6 @@ class ShadowTrackerConfig(BaseModel):
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trading_hours: TradingHoursConfig
-    limits: LimitsConfig
     signal_queue: SignalQueueConfig
     polling: PollingConfig
     order_fill_timeout: OrderFillTimeoutConfig
