@@ -542,9 +542,10 @@ class ShadowTracker:
                 f"real={inning.is_real}"
             )
             self._notifier.send(
-                tier="INFO",
+                severity="INFO",
                 title=f"Inning {inning.inning_number} | {inning.symbol}",
-                message=msg,
+                body=msg,
+                source_module="shadow_tracker",
             )
         except Exception as exc:
             self._log.error(

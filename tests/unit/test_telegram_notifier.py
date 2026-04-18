@@ -517,6 +517,34 @@ class TestChannelWhitelist(unittest.TestCase):
 
 
 # ==============================================================================
+# BL-14: signature regression test
+# ==============================================================================
+
+class TestBl14SendSignatureLocked(unittest.TestCase):
+    """Audit BL-14: lock TelegramNotifier.send() parameter names so callers
+    passing tier=/source=/message= get caught at test time, not runtime."""
+
+    def test_send_signature_parameter_names_locked(self):
+        import inspect
+        sig = inspect.signature(TelegramNotifier.send)
+        params = list(sig.parameters.keys())
+        # self + 5 declared args in exact order
+        self.assertEqual(
+            params,
+            ["self", "severity", "title", "body", "source_module", "context"],
+            f"TelegramNotifier.send signature drifted: {params}. "
+            "If this is intentional, update ALL callers (main.py, eod_squareoff, "
+            "shadow_tracker, order_reconciler) in the same commit.",
+        )
+
+    def test_send_context_has_default_none(self):
+        import inspect
+        sig = inspect.signature(TelegramNotifier.send)
+        ctx = sig.parameters["context"]
+        self.assertIs(ctx.default, None)
+
+
+# ==============================================================================
 # Standalone runner
 # ==============================================================================
 
@@ -567,6 +595,9 @@ def run_all_tests() -> int:
         TestChannelWhitelist("test_disabled_channel_no_http_call"),
         TestChannelWhitelist("test_missing_env_var_for_enabled_channel_warns_and_skips"),
         TestChannelWhitelist("test_all_channels_disabled_paper_mode_no_sends"),
+        # BL-14 signature lock
+        TestBl14SendSignatureLocked("test_send_signature_parameter_names_locked"),
+        TestBl14SendSignatureLocked("test_send_context_has_default_none"),
     ]
 
     suite = unittest.TestSuite(tests)

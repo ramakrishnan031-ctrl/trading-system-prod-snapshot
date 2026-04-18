@@ -263,10 +263,10 @@ def _make_critical_failure_cb(kill_switch: KillSwitch, notifier: Optional[Telegr
         if notifier is not None:
             try:
                 notifier.send(
-                    tier="CRITICAL",
+                    severity="CRITICAL",
                     title="Critical failure",
                     body=f"{source}: {reason}",
-                    source="main",
+                    source_module="main",
                 )
             except Exception as ne:
                 _log.error("notifier.send failed in critical callback: %s", ne)
@@ -282,10 +282,10 @@ def _make_orphan_cb(kill_switch: KillSwitch, notifier: Optional[TelegramNotifier
         if notifier is not None:
             try:
                 notifier.send(
-                    tier="CRITICAL",
+                    severity="CRITICAL",
                     title="Orphan order detected",
                     body=f"order_id={order_id} reason={reason}",
-                    source="main",
+                    source_module="main",
                 )
             except Exception as ne:
                 _log.error("notifier.send failed in orphan callback: %s", ne)
@@ -395,10 +395,10 @@ def _shutdown(
         _log.error("candle_store.stop error: %s", exc)
     try:
         notifier.send(
-            tier="INFO",
+            severity="INFO",
             title="System stopping",
             body=f"Version {VERSION}",
-            source="main",
+            source_module="main",
         )
     except Exception as exc:
         _log.error("notifier.send at shutdown: %s", exc)
@@ -828,10 +828,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         )
         try:
             notifier.send(
-                tier="WARN",
+                severity="WARN",
                 title="Config files changed since last session",
                 body=f"Changed: {hash_result.changed_files}",
-                source="main",
+                source_module="main",
             )
         except Exception as exc:
             _log.error("Config diff alert failed: %s", exc)
@@ -1158,10 +1158,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     )
     try:
         notifier.send(
-            tier="INFO",
+            severity="INFO",
             title="System started",
             body=f"Scenario: {scenario.value}. Mode: {args.mode}.",
-            source="main",
+            source_module="main",
         )
     except Exception as exc:
         _log.error("Startup notification failed: %s", exc)

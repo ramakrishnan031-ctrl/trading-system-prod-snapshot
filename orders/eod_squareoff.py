@@ -608,10 +608,10 @@ class EodSquareoff:
                     )
                     try:
                         self._notifier.send(
-                            tier="CRITICAL",
+                            severity="CRITICAL",
                             title="EOD squareoff MISSED — open positions remain",
                             body=body,
-                            source="eod_squareoff",
+                            source_module="eod_squareoff",
                         )
                     except Exception as exc:
                         self._log.error("EOD_SKIPPED_LATE notifier.send failed: %s", exc)

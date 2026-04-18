@@ -901,7 +901,7 @@ def test_eod9_skipped_late_writes_event_and_alerts() -> None:
     """
     Section 3 / EOD9 visibility regression: when system restarts after 15:30
     with open positions, EOD_SKIPPED_LATE system_event must be written and
-    notifier.send called with tier=CRITICAL.  No fire must occur.
+    notifier.send called with severity=CRITICAL.  No fire must occur.
     """
     store = MagicMock(spec=StateStore)
     # Simulate log row missing (no prior fire today)
@@ -952,7 +952,7 @@ def test_eod9_skipped_late_writes_event_and_alerts() -> None:
     # Assert CRITICAL alert sent
     notifier.send.assert_called_once()
     send_kwargs = notifier.send.call_args.kwargs
-    assert send_kwargs.get("tier") == "CRITICAL"
+    assert send_kwargs.get("severity") == "CRITICAL"
 
     # Assert no broker orders were placed (EOD9: no fire)
     adapter.place_order.assert_not_called()

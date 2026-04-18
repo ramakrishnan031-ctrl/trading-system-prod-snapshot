@@ -61,8 +61,15 @@ class _FakeNotifier:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def send(self, tier: str, title: str = "", message: str = "") -> None:
-        self.calls.append({"tier": tier, "title": title, "message": message})
+    def send(self, severity: str, title: str = "", body: str = "",
+             source_module: str = "", context: dict | None = None) -> None:
+        self.calls.append({
+            "severity": severity,
+            "title": title,
+            "body": body,
+            "source_module": source_module,
+            "context": context,
+        })
 
 
 class _FakeLiveFeed:
@@ -886,10 +893,10 @@ def test_alerts_on_inning_close(tmp_path: Path) -> None:
 
     assert len(notifier.calls) >= 1
     call = notifier.calls[0]
-    assert call["tier"] == "INFO"
-    assert "RELIANCE" in call["message"]
-    assert "inning_number" in call["message"].lower() or "1" in call["message"]
-    print(f"  OK alert sent on inning close (tier={call['tier']})")
+    assert call["severity"] == "INFO"
+    assert "RELIANCE" in call["body"]
+    assert "inning_number" in call["body"].lower() or "1" in call["body"]
+    print(f"  OK alert sent on inning close (severity={call['severity']})")
     store.close()
 
 
@@ -937,7 +944,7 @@ def test_alert_contains_symbol_and_pnl(tmp_path: Path) -> None:
     ))
 
     assert len(notifier.calls) >= 1
-    msg = notifier.calls[0]["message"]
+    msg = notifier.calls[0]["body"]
     assert "RELIANCE" in msg
     assert "2500" in msg or "2600" in msg  # entry or exit price
     assert "%" in msg                       # pnl_pct

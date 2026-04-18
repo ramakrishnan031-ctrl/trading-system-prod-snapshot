@@ -379,7 +379,7 @@ class TestCallbacks:
         cb = _make_critical_failure_cb(ks, notifier)
         cb("live_feed", "connection dropped")
         notifier.send.assert_called_once()
-        assert notifier.send.call_args[1]["tier"] == "CRITICAL"
+        assert notifier.send.call_args[1]["severity"] == "CRITICAL"
 
     def test_critical_failure_no_notifier_safe(self):
         ks = _make_mock_kill_switch()
@@ -394,7 +394,7 @@ class TestCallbacks:
         cb("ord_abc", "never filled")
         ks.soft_kill.assert_called_once()
         notifier.send.assert_called_once()
-        assert notifier.send.call_args[1]["tier"] == "CRITICAL"
+        assert notifier.send.call_args[1]["severity"] == "CRITICAL"
 
     def test_gate_release_price_hit_calls_continue_from_gate(self):
         sp = MagicMock(name="SignalProcessor")
@@ -525,7 +525,7 @@ class TestMainPhaseSequencing:
         assert rc == 0
         warn_calls = [
             c for c in notifier.send.call_args_list
-            if c[1].get("tier") == "WARN"
+            if c[1].get("severity") == "WARN"
         ]
         assert len(warn_calls) >= 1
 
@@ -681,7 +681,7 @@ class TestStartSequence:
         _run(extra={"TelegramNotifier": MagicMock(return_value=notifier)})
         info_starts = [
             c for c in notifier.send.call_args_list
-            if c[1].get("tier") == "INFO" and "started" in c[1].get("title", "").lower()
+            if c[1].get("severity") == "INFO" and "started" in c[1].get("title", "").lower()
         ]
         assert len(info_starts) >= 1
 
