@@ -68,8 +68,10 @@ from core.events import (
     CapitalDriftDetected,
     EventBus,
     OrderStateChanged,
+    PositionClosed,  # BL-10b: out-of-band closure notification
 )
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
+from core.logger import log_exception
 from core.state_store import StateStore
 from orders.order_manager import OrderManager
 
@@ -424,7 +426,7 @@ class OrderReconciler:
 
         if entry_price and float(entry_price) > 0 and qty > 0 and intent:
             try:
-                self._fm.release_used(
+                release_result = self._fm.release_used(
                     symbol=symbol,
                     exit_price=float(entry_price),
                     exit_qty=qty,
@@ -439,7 +441,35 @@ class OrderReconciler:
                     "check1: release_used failed for %s: %s", trade_id, exc
                 )
                 steps.append(f"capital_release FAILED: {exc}")
+            else:
+                # BL-10b: out-of-band closure event. source_module distinguishes
+                # from order_placer-originated events. exit_price is the entry
+                # price (breakeven proxy) because the close happened outside our
+                # visibility -- we do not know the real broker fill price.
+                # Publish is gated on release_used success so the event stays
+                # consistent with the capital ledger (realized_pnl == pnl_delta).
+                try:
+                    self._bus.publish(PositionClosed(
+                        source_module="order_reconciler",
+                        symbol=symbol,
+                        trade_id=trade_id,
+                        signal_id=trade["signal_id"] or "",
+                        exit_price=float(entry_price),
+                        realized_pnl=float(release_result.pnl_delta),
+                    ))
+                    steps.append("position_closed_published")
+                except Exception as exc:
+                    log_exception(self._log, exc)
+                    self._log.error(
+                        "reconciler.manual_close_publish_position_closed_failed",
+                        extra={"trade_id": trade_id, "symbol": symbol},
+                    )
         elif not intent:
+            # BL-10b: intentionally do not publish PositionClosed here. If
+            # entry_price/intent is missing we cannot construct a truthful
+            # event; shadow_tracker would receive inaccurate realized_pnl.
+            # The WARN log below already surfaces the anomaly to operators;
+            # adding a fabricated event would be worse than silence.
             self._log.warning(
                 "check1: unknown product %r for %s; skipping capital release",
                 product, trade_id,

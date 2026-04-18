@@ -32,7 +32,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.events import CapitalDriftDetected, EventBus, OrderStateChanged
+from core.events import CapitalDriftDetected, EventBus, OrderStateChanged, PositionClosed
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
 from core.state_store import StateStore
 from orders.order_reconciler import OrderReconciler, ReconciliationAction
@@ -347,6 +347,233 @@ def test_check1_manual_close_releases_capital(tmp_path: Path) -> None:
 
     store.close()
     print("  OK CHECK1 MANUAL_CLOSE: release_used called with breakeven exit=entry")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BL-10b: MANUAL_CLOSE publishes PositionClosed (out-of-band closure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _stub_release_result(pnl_delta: float = 0.0):
+    """Build a minimal release_used return value supporting .pnl_delta."""
+    res = MagicMock()
+    res.pnl_delta = pnl_delta
+    res.margin_released = 10_000.0
+    res.bucket = "intraday"
+    res.reservation_id = "res_stub"
+    return res
+
+
+def test_manual_close_publishes_position_closed(tmp_path: Path) -> None:
+    """BL-10b: MANUAL_CLOSE emits PositionClosed so shadow_tracker learns about it."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="INFY", status="OPEN",
+                  qty_filled=5, entry_actual_price=1500.0)
+    _insert_order(store, "ord1", "t1", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
+
+    bus = EventBus()
+    received: List[PositionClosed] = []
+    bus.subscribe(PositionClosed, received.append)
+
+    rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
+    rec.reconcile_once()
+
+    assert len(received) == 1, f"expected 1 PositionClosed, got {len(received)}"
+    ev = received[0]
+    assert ev.trade_id == "t1"
+    assert ev.symbol == "INFY"
+    assert ev.signal_id == "sig_t1"
+    store.close()
+    print("  OK BL-10b: MANUAL_CLOSE publishes PositionClosed")
+
+
+def test_manual_close_position_closed_has_breakeven_exit_price(tmp_path: Path) -> None:
+    """BL-10b: exit_price==entry_price (breakeven proxy, no real fill price known)."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_bkv", symbol="INFY", status="OPEN",
+                  qty_filled=5, entry_actual_price=1500.0)
+    _insert_order(store, "ord_bkv", "t_bkv", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
+
+    bus = EventBus()
+    received: List[PositionClosed] = []
+    bus.subscribe(PositionClosed, received.append)
+
+    rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
+    rec.reconcile_once()
+
+    assert len(received) == 1
+    assert received[0].exit_price == 1500.0, (
+        "breakeven proxy: exit_price must equal entry_actual_price"
+    )
+    assert received[0].realized_pnl == 0.0, (
+        "breakeven (costs=0): realized_pnl must be 0"
+    )
+    store.close()
+    print("  OK BL-10b: PositionClosed.exit_price == entry (breakeven proxy)")
+
+
+def test_manual_close_publish_failure_does_not_raise(tmp_path: Path) -> None:
+    """BL-10b: a subscriber raising must not break the reconciler cycle."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_pf", symbol="INFY", status="OPEN",
+                  qty_filled=5, entry_actual_price=1500.0)
+    _insert_order(store, "ord_pf", "t_pf", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
+
+    bus = EventBus()
+
+    def _boom(ev):
+        raise RuntimeError("subscriber exploded")
+
+    bus.subscribe(PositionClosed, _boom)
+
+    rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
+    actions = rec.reconcile_once()  # must not raise
+
+    # Trade still CLOSED in DB, release_used still called
+    fm.release_used.assert_called_once()
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t_pf",))
+    assert row["status"] == "CLOSED_MANUAL"
+    # MANUAL_CLOSE action present
+    assert any(a.check_name == "MANUAL_CLOSE" for a in actions)
+    store.close()
+    print("  OK BL-10b: publish failure is logged + swallowed (non-fatal)")
+
+
+def test_manual_close_position_closed_source_module_is_reconciler(tmp_path: Path) -> None:
+    """BL-10b: source_module='order_reconciler' separates telemetry from order_placer."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_src", symbol="INFY", status="OPEN",
+                  qty_filled=5, entry_actual_price=1500.0)
+    _insert_order(store, "ord_src", "t_src", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
+
+    bus = EventBus()
+    received: List[PositionClosed] = []
+    bus.subscribe(PositionClosed, received.append)
+
+    rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
+    rec.reconcile_once()
+
+    assert len(received) == 1
+    assert received[0].source_module == "order_reconciler", (
+        "telemetry separation: must NOT claim to originate from order_placer"
+    )
+    store.close()
+    print("  OK BL-10b: source_module='order_reconciler' (telemetry separation)")
+
+
+def test_manual_close_for_short_publishes_position_closed(tmp_path: Path) -> None:
+    """BL-10b: SHORT MANUAL_CLOSE also publishes; direction routed to release_used (EF-3)."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_sh", symbol="INFY", direction="SHORT",
+                  status="OPEN", qty_filled=5, entry_actual_price=1500.0)
+    _insert_order(store, "ord_sh", "t_sh", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.release_used.return_value = _stub_release_result(pnl_delta=0.0)
+
+    bus = EventBus()
+    received: List[PositionClosed] = []
+    bus.subscribe(PositionClosed, received.append)
+
+    rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
+    rec.reconcile_once()
+
+    # EF-3: direction must be forwarded as SHORT
+    fm.release_used.assert_called_once()
+    assert fm.release_used.call_args.kwargs["direction"] == "SHORT"
+    # PositionClosed still emits (breakeven => realized_pnl=0)
+    assert len(received) == 1
+    assert received[0].trade_id == "t_sh"
+    store.close()
+    print("  OK BL-10b: SHORT MANUAL_CLOSE publishes + routes direction (EF-3)")
+
+
+def test_manual_close_skips_publish_when_entry_price_missing(tmp_path: Path) -> None:
+    """
+    BL-10b: when capital-release is skipped (missing entry_price/intent), the
+    reconciler must NOT fabricate a PositionClosed event. Publishing with the
+    planned target price would broadcast an unexecuted number to shadow_tracker.
+    WARN log is the operator-visible signal; silence on the bus is intentional.
+    """
+    store = _make_store(tmp_path)
+    # entry_actual_price=0.0 => capital-release branch is skipped
+    _insert_trade(store, "t_miss", symbol="INFY", status="OPEN",
+                  qty_filled=5, entry_actual_price=0.0)
+    _insert_order(store, "ord_miss", "t_miss", leg="ENTRY",
+                  product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    received: List[PositionClosed] = []
+    bus.subscribe(PositionClosed, received.append)
+
+    rec = _make_reconciler(store, adapter=adapter, bus=bus, fund_manager=fm)
+    rec.reconcile_once()
+
+    # Release was skipped, publish was skipped
+    fm.release_used.assert_not_called()
+    assert received == [], (
+        "design lock: do NOT publish PositionClosed when capital-release is skipped"
+    )
+    # Trade still marked CLOSED_MANUAL (mark_trade_manually_closed ran)
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t_miss",))
+    assert row["status"] == "CLOSED_MANUAL"
+    store.close()
+    print("  OK BL-10b: skips publish when capital-release is skipped (design lock)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1165,6 +1392,13 @@ def run_all_tests() -> int:
         # CHECK 1: MANUAL_CLOSE
         test_check1_manual_close,
         test_check1_manual_close_releases_capital,
+        # BL-10b: MANUAL_CLOSE publishes PositionClosed
+        test_manual_close_publishes_position_closed,
+        test_manual_close_position_closed_has_breakeven_exit_price,
+        test_manual_close_publish_failure_does_not_raise,
+        test_manual_close_position_closed_source_module_is_reconciler,
+        test_manual_close_for_short_publishes_position_closed,
+        test_manual_close_skips_publish_when_entry_price_missing,
         # CHECK 2: ORPHAN_ADOPTION
         test_check2_orphan_adoption,
         # CHECK 4: PARTIAL_CLOSE
