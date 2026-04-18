@@ -58,7 +58,7 @@ def _mock_store(signals=None, trades=None, orders=None, ledger=None,
     store.get_signals_for_date.return_value       = signals or []
     store.get_trades_for_date.return_value        = trades or []
     store.get_orders_for_date.return_value        = orders or []
-    store.get_capital_ledger_for_date.return_value = ledger or []
+    store.get_fm_ledger_for_date.return_value = ledger or []
     store.get_system_events_for_date.return_value = events or []
     store.get_reconciliation_log_for_date.return_value = recon or []
     store.get_screener_results_for_date.return_value = screener or []
@@ -187,7 +187,7 @@ def _sample_ledger():
     return {
         "ledger_id":     1,
         "ts":            f"{_TODAY}T09:15:10+05:30",
-        "mutation_type": "RESERVE",
+        "entry_type":    "RESERVE",
         "amount":        5000.0,
         "bucket":        "intraday",
         "balance_before": 50000.0,
@@ -195,6 +195,12 @@ def _sample_ledger():
         "signal_id":     "sig-1",
         "reservation_id": "resv-abc",
         "reason":        None,
+        "session_id":    "fm_testsession",
+        "direction":     None,
+        "trade_id":      None,
+        "margin_delta":  5000.0,
+        "pnl_delta":     0.0,
+        "costs":         0.0,
     }
 
 
@@ -529,7 +535,7 @@ class TestReadOnly:
 
         store.get_signals_for_date.assert_called_once_with("2026-03-15")
         store.get_trades_for_date.assert_called_once_with("2026-03-15")
-        store.get_capital_ledger_for_date.assert_called_once_with("2026-03-15")
+        store.get_fm_ledger_for_date.assert_called_once_with("2026-03-15")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -586,8 +592,8 @@ class TestStateStoreHelpers:
         assert len(rows) == 1
         assert rows[0]["event_type"] == "STARTUP"
 
-    def test_get_capital_ledger_for_date_empty(self, store):
-        rows = store.get_capital_ledger_for_date("2026-04-16")
+    def test_get_fm_ledger_for_date_empty(self, store):
+        rows = store.get_fm_ledger_for_date("2026-04-16")
         assert rows == []
 
     def test_get_trades_for_date_empty(self, store):

@@ -23,7 +23,11 @@ Locked Design Decisions:
     FM9  -- sync_from_broker(balance): sets total, recomputes available.
              NEVER subtracts used from broker balance (audit double-deduction fix).
     FM10 -- Every mutation writes to fm_ledger (state_store) in same txn.
-             If write fails, mutation is rolled back.
+             BL-5: ledger row is written BEFORE the in-memory mutation
+             (write-ahead logging). If the app crashes between the INSERT
+             and the bucket update, rehydrate replays fm_ledger to rebuild
+             in-memory state. If the ledger INSERT itself raises, the
+             mutation is skipped and the caller sees the exception.
     FM11 -- Invariant violation raises CapitalInvariantViolation (CRITICAL).
     FM12 -- Constructor validates bucket pcts sum to 1.0 and leverage_map
              covers all 4 intents.
@@ -225,6 +229,14 @@ class FundManager:
 
         self._lock = threading.RLock()
 
+        # BL-5: per-instance session id, stamped on every fm_ledger row so
+        # restart audits can partition mutations by FundManager lifetime.
+        self._session_id = "fm_" + uuid.uuid4().hex[:12]
+        self._log.info(
+            "fund_manager.session_start",
+            extra={"session_id": self._session_id},
+        )
+
         # Capital state (FM1, FM3) -- set by initialize()
         self._total: float = 0.0
 
@@ -253,6 +265,17 @@ class FundManager:
         Must be called exactly once before any reserve/release.
         """
         with self._lock:
+            ts = now_ist().isoformat()
+            # BL-5: ledger row first (write-ahead), then in-memory mutation.
+            self._write_ledger(
+                ts=ts,
+                entry_type="INIT",
+                amount=broker_balance,
+                bucket="both",
+                balance_before=0.0,
+                balance_after=broker_balance,
+                reason=f"initialize with broker_balance={broker_balance}",
+            )
             self._total = broker_balance
             self._intraday_avail = broker_balance * self._intraday_pct
             self._intraday_reserved = 0.0
@@ -263,18 +286,6 @@ class FundManager:
             self._daily_pnl = 0.0
             self._initialized = True
 
-            ts = now_ist().isoformat()
-            self._write_ledger(
-                ts=ts,
-                mutation_type="INIT",
-                amount=broker_balance,
-                bucket="both",
-                balance_before=0.0,
-                balance_after=broker_balance,
-                signal_id=None,
-                reservation_id=None,
-                reason=f"initialize with broker_balance={broker_balance}",
-            )
             self._log.info(
                 "fund_manager.initialize",
                 extra={"total": broker_balance,
@@ -318,14 +329,30 @@ class FundManager:
                     ),
                 )
 
-            # Atomic mutation
+            # BL-5: write-ahead. Project the post-mutation balance, write the
+            # ledger row first, then execute the in-memory mutation.
             rid = uuid.uuid4().hex[:16]
+            ts = now_ist().isoformat()
+            projected_after = avail_before - margin
+            self._write_ledger(
+                ts=ts,
+                entry_type="RESERVE",
+                amount=margin,
+                bucket=bucket,
+                balance_before=avail_before,
+                balance_after=projected_after,
+                signal_id=signal_id,
+                reservation_id=rid,
+                reason=f"{symbol} qty={qty} @ {price} intent={intent}",
+                margin_delta=+margin,
+            )
+
+            # In-memory mutation (caught up to the ledger)
             self._bucket_deduct_avail(bucket, margin)
             self._bucket_add_reserved(bucket, margin)
 
             self._check_invariant("reserve", rid)
 
-            ts = now_ist().isoformat()
             res = _Reservation(
                 reservation_id=rid,
                 symbol=symbol,
@@ -338,18 +365,6 @@ class FundManager:
                 ts=ts,
             )
             self._reservations[rid] = res
-
-            self._write_ledger(
-                ts=ts,
-                mutation_type="RESERVE",
-                amount=margin,
-                bucket=bucket,
-                balance_before=avail_before,
-                balance_after=self._bucket_avail(bucket),
-                signal_id=signal_id,
-                reservation_id=rid,
-                reason=f"{symbol} qty={qty} @ {price} intent={intent}",
-            )
 
             return ReservationResult(
                 success=True,
@@ -372,28 +387,33 @@ class FundManager:
         """
         with self._lock:
             self._assert_initialized()
-            res = self._reservations.pop(reservation_id, None)
+            # Peek (not pop) — BL-5 write-ahead commits before in-memory change.
+            res = self._reservations.get(reservation_id)
             if res is None:
                 return False   # FM5: idempotent
 
             avail_before = self._bucket_avail(res.bucket)
+            projected_after = avail_before + res.margin
+            ts = now_ist().isoformat()
+            self._write_ledger(
+                ts=ts,
+                entry_type="RELEASE",
+                amount=-res.margin,
+                bucket=res.bucket,
+                balance_before=avail_before,
+                balance_after=projected_after,
+                signal_id=res.signal_id,
+                reservation_id=reservation_id,
+                reason=reason or "released",
+                margin_delta=-res.margin,
+            )
+
+            # In-memory mutation (caught up to the ledger)
+            del self._reservations[reservation_id]
             self._bucket_add_avail(res.bucket, res.margin)
             self._bucket_deduct_reserved(res.bucket, res.margin)
 
             self._check_invariant("release", reservation_id)
-
-            ts = now_ist().isoformat()
-            self._write_ledger(
-                ts=ts,
-                mutation_type="RELEASE",
-                amount=-res.margin,
-                bucket=res.bucket,
-                balance_before=avail_before,
-                balance_after=self._bucket_avail(res.bucket),
-                signal_id=res.signal_id,
-                reservation_id=reservation_id,
-                reason=reason or "released",
-            )
             return True
 
     def commit_to_used(
@@ -428,7 +448,33 @@ class FundManager:
             )
             excess = max(0.0, res.margin - actual_margin)
 
-            # reserved -> used for actual; excess -> available
+            # BL-5: ledger row first. COMMIT is a bucket-internal reshape
+            # (reserved -> used, optional excess -> avail), so margin_delta=0
+            # (no net change to the sum of reserved+used from this bucket's POV
+            # when there is no excess; the excess path adds to avail not to
+            # the reserved+used pair, so the "in-flight" margin decreases by
+            # `excess`). We use amount=actual_margin for audit continuity and
+            # balance_before/after reflect the AVAILABLE balance in `bucket`.
+            avail_before = self._bucket_avail(res.bucket)
+            projected_after = avail_before + excess
+            ts = now_ist().isoformat()
+            self._write_ledger(
+                ts=ts,
+                entry_type="COMMIT",
+                amount=actual_margin,
+                bucket=res.bucket,
+                balance_before=avail_before,
+                balance_after=projected_after,
+                signal_id=res.signal_id,
+                reservation_id=reservation_id,
+                reason=(
+                    f"fill: qty={actual_qty} price={actual_fill_price} "
+                    f"excess_returned={excess:.2f}"
+                ),
+                margin_delta=0.0,
+            )
+
+            # In-memory mutation: reserved -> used for actual; excess -> available
             self._bucket_deduct_reserved(res.bucket, res.margin)
             self._bucket_add_used(res.bucket, actual_margin)
             if excess > 0:
@@ -439,21 +485,6 @@ class FundManager:
             # Remove reservation (fully consumed)
             del self._reservations[reservation_id]
 
-            ts = now_ist().isoformat()
-            self._write_ledger(
-                ts=ts,
-                mutation_type="COMMIT",
-                amount=actual_margin,
-                bucket=res.bucket,
-                balance_before=res.margin,
-                balance_after=actual_margin,
-                signal_id=res.signal_id,
-                reservation_id=reservation_id,
-                reason=(
-                    f"fill: qty={actual_qty} price={actual_fill_price} "
-                    f"excess_returned={excess:.2f}"
-                ),
-            )
             return CommitResult(
                 reservation_id=reservation_id,
                 actual_margin=actual_margin,
@@ -519,6 +550,31 @@ class FundManager:
             pnl = gross_pnl - costs
 
             avail_before = self._bucket_avail(bucket)
+            projected_after = avail_before + margin + pnl
+
+            # BL-5: write-ahead. Record the intended mutation first; replay
+            # via rehydrate uses direction + pnl_delta + costs to rebuild
+            # the same end state (EF-3 direction correctness carries into
+            # the ledger).
+            ts = now_ist().isoformat()
+            self._write_ledger(
+                ts=ts,
+                entry_type="RELEASE_USED",
+                amount=-margin,
+                bucket=bucket,
+                balance_before=avail_before,
+                balance_after=projected_after,
+                reason=(
+                    f"{symbol} exit: qty={exit_qty} price={exit_price} "
+                    f"pnl={pnl:.2f} costs={costs:.2f}"
+                ),
+                direction=direction,
+                margin_delta=-margin,
+                pnl_delta=pnl,
+                costs=costs,
+            )
+
+            # In-memory mutation (caught up to the ledger)
             self._bucket_deduct_used(bucket, margin)
             self._bucket_add_avail(bucket, margin + pnl)
             # PnL changes total capital (FM2 invariant: avail+res+used==total)
@@ -537,21 +593,6 @@ class FundManager:
                 if self._on_loss_breach is not None:
                     self._on_loss_breach()
 
-            ts = now_ist().isoformat()
-            self._write_ledger(
-                ts=ts,
-                mutation_type="RELEASE_USED",
-                amount=-margin,
-                bucket=bucket,
-                balance_before=avail_before,
-                balance_after=self._bucket_avail(bucket),
-                signal_id=None,
-                reservation_id=None,
-                reason=(
-                    f"{symbol} exit: qty={exit_qty} price={exit_price} "
-                    f"pnl={pnl:.2f} costs={costs:.2f}"
-                ),
-            )
             return ReleaseResult(
                 reservation_id="",
                 margin_released=margin,
@@ -571,11 +612,25 @@ class FundManager:
         with self._lock:
             self._assert_initialized()
             old_total = self._total
-            self._total = broker_balance
 
+            # BL-5: write-ahead. SYNC recomputes bucket availables from the
+            # authoritative broker balance; the ledger row records the
+            # total-level delta so rehydrate can distinguish a sync event
+            # from a reservation / release.
+            ts = now_ist().isoformat()
+            self._write_ledger(
+                ts=ts,
+                entry_type="SYNC",
+                amount=broker_balance - old_total,
+                bucket="both",
+                balance_before=old_total,
+                balance_after=broker_balance,
+                reason=f"broker sync: {old_total:.2f} -> {broker_balance:.2f}",
+            )
+
+            # In-memory mutation
+            self._total = broker_balance
             # Recompute available = total - reserved - used, split by bucket pct
-            # The broker balance is total; we recompute available within each bucket.
-            # Bucket totals scale with the new total proportionally.
             intraday_total = broker_balance * self._intraday_pct
             positional_total = broker_balance * self._positional_pct
 
@@ -584,19 +639,6 @@ class FundManager:
             )
             self._positional_avail = max(
                 0.0, positional_total - self._positional_reserved - self._positional_used
-            )
-
-            ts = now_ist().isoformat()
-            self._write_ledger(
-                ts=ts,
-                mutation_type="SYNC",
-                amount=broker_balance - old_total,
-                bucket="both",
-                balance_before=old_total,
-                balance_after=broker_balance,
-                signal_id=None,
-                reservation_id=None,
-                reason=f"broker sync: {old_total:.2f} -> {broker_balance:.2f}",
             )
             self._log.info(
                 "fund_manager.sync_from_broker",
@@ -632,19 +674,19 @@ class FundManager:
         """Reset daily realized PnL to 0 at EOD. reserved/used NOT reset (FM14)."""
         with self._lock:
             old_pnl = self._daily_pnl
-            self._daily_pnl = 0.0
             ts = now_ist().isoformat()
+            # BL-5: ledger first, then zero-out
             self._write_ledger(
                 ts=ts,
-                mutation_type="RESET_PNL",
+                entry_type="RESET_PNL",
                 amount=0.0,
                 bucket="both",
                 balance_before=old_pnl,
                 balance_after=0.0,
-                signal_id=None,
-                reservation_id=None,
                 reason=f"EOD reset: previous pnl={old_pnl:.2f}",
+                pnl_delta=-old_pnl,
             )
+            self._daily_pnl = 0.0
             self._log.info(
                 "fund_manager.reset_daily_pnl",
                 extra={"previous_pnl": old_pnl},
@@ -737,38 +779,56 @@ class FundManager:
                 self._on_critical(str(exc))
             raise
 
-    # ── ledger write (FM10) ───────────────────────────────────────────────────
+    # ── ledger write (FM10 / BL-5 write-ahead) ────────────────────────────────
 
     def _write_ledger(
         self,
+        *,
         ts: str,
-        mutation_type: str,
+        entry_type: str,
         amount: float,
         bucket: str,
         balance_before: float,
         balance_after: float,
-        signal_id: Optional[str],
-        reservation_id: Optional[str],
-        reason: Optional[str],
+        signal_id: Optional[str] = None,
+        reservation_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        direction: Optional[str] = None,
+        trade_id: Optional[str] = None,
+        margin_delta: float = 0.0,
+        pnl_delta: float = 0.0,
+        costs: float = 0.0,
     ) -> None:
         """
-        Write one row to fm_ledger inside a transaction (FM10).
-        If the write fails, the exception propagates to the caller,
-        which must roll back the in-memory mutation.
+        Write one row to fm_ledger inside a transaction (FM10 / BL-5).
+
+        BL-5 contract: this is a WRITE-AHEAD entry. Callers invoke it BEFORE
+        mutating in-memory bucket state. The row persists the intent; the
+        in-memory mutation catches up next. If this INSERT raises, the caller
+        skips the mutation (propagates the exception). If this INSERT succeeds
+        and the mutation crashes before completing, rehydrate (B.2) replays
+        fm_ledger rows to rebuild in-memory state.
+
+        entry_type is validated by a CHECK constraint in the schema; an
+        unknown value raises sqlite3.IntegrityError at INSERT time.
         """
         try:
             with self._store.transaction() as cur:
                 cur.execute(
                     """
                     INSERT INTO fm_ledger
-                        (ts, mutation_type, amount, bucket,
+                        (ts, entry_type, amount, bucket,
                          balance_before, balance_after,
-                         signal_id, reservation_id, reason)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         signal_id, reservation_id, reason,
+                         session_id, direction, trade_id,
+                         margin_delta, pnl_delta, costs)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (ts, mutation_type, amount, bucket,
+                    (ts, entry_type, amount, bucket,
                      balance_before, balance_after,
-                     signal_id, reservation_id, reason),
+                     signal_id, reservation_id, reason,
+                     self._session_id, direction, trade_id,
+                     margin_delta, pnl_delta, costs),
                 )
         except Exception as exc:
             log_exception(self._log, exc)

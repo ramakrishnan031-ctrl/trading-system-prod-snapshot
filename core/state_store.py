@@ -68,7 +68,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 9
+EXPECTED_SCHEMA_VERSION = 10
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -513,7 +513,7 @@ class StateStore:
             """
             SELECT reservation_id FROM fm_ledger
             WHERE signal_id = ?
-              AND mutation_type = 'RESERVE'
+              AND entry_type = 'RESERVE'
               AND reservation_id IS NOT NULL
             ORDER BY ledger_id DESC
             LIMIT 1
@@ -945,8 +945,14 @@ class StateStore:
         )
         return [dict(r) for r in rows]
 
-    def get_capital_ledger_for_date(self, date_iso: str) -> List[dict]:
-        """Return all fm_ledger rows for date_iso (DR8)."""
+    def get_fm_ledger_for_date(self, date_iso: str) -> List[dict]:
+        """
+        Return all fm_ledger rows for date_iso (DR8).
+
+        BL-5: renamed from get_capital_ledger_for_date (the original name was
+        a misnomer — the underlying query was always against fm_ledger, and
+        the legacy capital_ledger table was never written).
+        """
         rows = self.fetch_all(
             "SELECT * FROM fm_ledger WHERE DATE(ts) = ?",
             (date_iso,),

@@ -80,18 +80,26 @@ def insert_test_signal(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_schema_creates_all_tables(tmpdir: Path) -> None:
-    """All 15 tables must exist after initialization (incl. smart_tgt_state v8)."""
+    """All expected tables must exist after initialization.
+
+    BL-5 (v10): capital_ledger removed (was dead; never written). Also
+    asserts capital_ledger is NOT present — this is the dead-table
+    retirement guard.
+    """
     store = make_store(tmpdir)
     expected = {
         "schema_meta", "signals", "trades", "orders",
-        "capital_snapshot", "capital_ledger", "system_events", "session",
+        "capital_snapshot", "system_events", "session",
         "fm_ledger", "kill_switch_state", "webhook_audit", "eod_squareoff_log",
         "reconciliation_log", "screener_results", "smart_tgt_state",
+        "innings",
     }
     actual = set(store.table_names())
     missing = expected - actual
     assert not missing, f"Missing tables: {missing}"
-    print(f"  OK All {len(expected)} tables created (incl. smart_tgt_state v8)")
+    assert "capital_ledger" not in actual, \
+        "capital_ledger must not be present post-BL-5 (v10 retirement)"
+    print(f"  OK All {len(expected)} tables created; capital_ledger retired (v10)")
     store.close()
 
 
@@ -765,7 +773,7 @@ def test_get_reservation_id_for_signal(tmp_path: Path) -> None:
         cur.execute(
             """
             INSERT INTO fm_ledger
-              (ts, mutation_type, amount, bucket, balance_before, balance_after,
+              (ts, entry_type, amount, bucket, balance_before, balance_after,
                signal_id, reservation_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -781,7 +789,7 @@ def test_get_reservation_id_for_signal(tmp_path: Path) -> None:
         cur.execute(
             """
             INSERT INTO fm_ledger
-              (ts, mutation_type, amount, bucket, balance_before, balance_after,
+              (ts, entry_type, amount, bucket, balance_before, balance_after,
                signal_id, reservation_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,

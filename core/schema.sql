@@ -214,40 +214,15 @@ CREATE TABLE IF NOT EXISTS capital_snapshot (
 );
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 6: capital_ledger
--- Append-only audit trail of every capital movement. NEVER UPDATE OR DELETE
--- a row in this table — only INSERT. Each row records the operation and the
--- snapshot AFTER the operation completed (so you can reconstruct the timeline).
---
--- The invariant_passed column is set by the application BEFORE insert: if
--- the capital invariant check fails, the transaction is rolled back AND
--- this row never gets written. If a row exists with invariant_passed = 0,
--- it means we wrote it for diagnostic purposes (manual recovery scenarios).
---
--- Decision refs: G3 (invariant levels 1+2)
+-- TABLE 6: (removed v10)
+-- The legacy capital_ledger table was never written to; FundManager audits
+-- capital mutations via fm_ledger (Table 9). BL-5 (v10) retires
+-- capital_ledger entirely and extends fm_ledger with write-ahead semantics.
+-- No CREATE statement here on purpose. Drop handled below for upgrade path.
 -- ═════════════════════════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS capital_ledger (
-    ledger_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp           TEXT NOT NULL,
-    operation           TEXT NOT NULL,               -- RESERVE/RELEASE/DEPLOY/RETURN/PNL_REALIZED/CHARGE/T1_SETTLE/SYNC
-    amount              REAL NOT NULL,               -- positive or negative
-    trade_id            TEXT,                        -- nullable; null for SYNC/T1_SETTLE
-    
-    -- Snapshot of capital state AFTER this operation completed
-    cash_floor_after          REAL NOT NULL,
-    realized_pnl_after        REAL NOT NULL,
-    margin_used_after         REAL NOT NULL,
-    margin_reserved_after     REAL NOT NULL,
-    
-    invariant_passed    INTEGER NOT NULL,            -- 1 = passed; 0 = diagnostic only
-    notes               TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_ledger_trade_id
-    ON capital_ledger(trade_id);
-
-CREATE INDEX IF NOT EXISTS idx_ledger_timestamp
-    ON capital_ledger(timestamp);
+DROP TABLE IF EXISTS capital_ledger;
+DROP INDEX IF EXISTS idx_ledger_trade_id;
+DROP INDEX IF EXISTS idx_ledger_timestamp;
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 7: system_events
@@ -320,24 +295,41 @@ CREATE TABLE IF NOT EXISTS session (
 );
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 9: fm_ledger
--- Append-only audit trail for FundManager capital mutations (FM10).
+-- TABLE 9: fm_ledger  (BL-5: write-ahead capital ledger — v10)
+-- Append-only write-ahead log for FundManager capital mutations (FM10).
 -- One row per atomic capital operation. NEVER UPDATE OR DELETE a row.
 -- Covers both intraday and positional buckets independently.
 --
--- Decision refs: FM1-FM16 (capital/ layer), G3 (invariant auditing)
+-- BL-5 contract (v10):
+--   * The row is written BEFORE the in-memory state mutation (write-ahead).
+--   * If the app crashes between INSERT and mutation, rehydrate (B.2 / BL-1)
+--     replays fm_ledger rows to rebuild in-memory state.
+--   * entry_type is a closed enum (CHECK) — catches typos at INSERT time.
+--   * session_id correlates rows to a FundManager instance across restarts.
+--
+-- Decision refs: FM1-FM16 (capital/ layer), G3 (invariant auditing), BL-5 (WAL)
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS fm_ledger (
     ledger_id           INTEGER PRIMARY KEY AUTOINCREMENT,
     ts                  TEXT NOT NULL,               -- ISO-8601 IST
-    mutation_type       TEXT NOT NULL,               -- RESERVE/RELEASE/COMMIT/RELEASE_USED/SYNC/INIT/RESET_PNL
+    entry_type          TEXT NOT NULL                -- BL-5: enum, was mutation_type
+                        CHECK (entry_type IN
+                               ('INIT','RESERVE','RELEASE','COMMIT',
+                                'RELEASE_USED','SYNC','RESET_PNL')),
     amount              REAL NOT NULL,               -- positive = into reserved/used; negative = release
     bucket              TEXT NOT NULL,               -- 'intraday' | 'positional' | 'both'
     balance_before      REAL NOT NULL,               -- available before mutation (bucket-scoped)
     balance_after       REAL NOT NULL,               -- available after mutation (bucket-scoped)
     signal_id           TEXT,                        -- nullable; set on RESERVE from a signal
     reservation_id      TEXT,                        -- nullable; set on RESERVE/RELEASE/COMMIT
-    reason              TEXT                         -- free text; required on RELEASE (cancelled/rejected)
+    reason              TEXT,                        -- free text; required on RELEASE (cancelled/rejected)
+    -- BL-5 additions (v10):
+    session_id          TEXT,                        -- correlates rows to a FundManager instance
+    direction           TEXT,                        -- 'LONG' | 'SHORT' | NULL (set on RELEASE_USED; EF-3)
+    trade_id            TEXT,                        -- nullable; set on COMMIT/RELEASE_USED when known
+    margin_delta        REAL NOT NULL DEFAULT 0.0,   -- signed margin movement (+reserve, -release/release_used)
+    pnl_delta           REAL NOT NULL DEFAULT 0.0,   -- realized PnL change (nonzero on RELEASE_USED only)
+    costs               REAL NOT NULL DEFAULT 0.0    -- transaction costs (nonzero on RELEASE_USED only)
 );
 
 CREATE INDEX IF NOT EXISTS idx_fm_ledger_ts
@@ -345,6 +337,9 @@ CREATE INDEX IF NOT EXISTS idx_fm_ledger_ts
 
 CREATE INDEX IF NOT EXISTS idx_fm_ledger_reservation_id
     ON fm_ledger(reservation_id);
+
+CREATE INDEX IF NOT EXISTS idx_fm_ledger_session_id
+    ON fm_ledger(session_id);
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 10: kill_switch_state
@@ -537,14 +532,17 @@ CREATE INDEX IF NOT EXISTS idx_innings_date
     ON innings(substr(entry_ts, 1, 10));
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v8 -> v9
+-- SCHEMA VERSION BUMP: v9 -> v10
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '9');
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '10');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v8  (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v10 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
---                    v9: +innings)
+--                    v9: +innings;
+--                    v10: -capital_ledger (dead); fm_ledger becomes write-ahead
+--                          + entry_type CHECK + session_id/direction/trade_id/
+--                          margin_delta/pnl_delta/costs columns)
 -- ─────────────────────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ Sections (9):
     3. SCREENER_ANALYTICS — per-step rejections, tier dist, latencies (P18)
     4. TRADES             — per-trade row with P&L breakdown
     5. ORDERS             — per-order row with broker IDs and legs
-    6. CAPITAL_LEDGER     — every fm_ledger mutation today
+    6. CAPITAL_LEDGER     — every fm_ledger entry today (BL-5 write-ahead log)
     7. SYSTEM_EVENTS      — kill-switch, reconciliation, lifecycle events
     8. ALERTS_SENT        — placeholder (no Telegram read-back in v2)
     9. MULTI_INNING_TRACKING — 36-col per-trade multi-inning simulation (DR-U1)
@@ -446,7 +446,7 @@ class DailyReviewGenerator:
         signals          = self._store.get_signals_for_date(date_iso)
         trades           = self._store.get_trades_for_date(date_iso)
         orders           = self._store.get_orders_for_date(date_iso)
-        capital_ledger   = self._store.get_capital_ledger_for_date(date_iso)
+        fm_ledger        = self._store.get_fm_ledger_for_date(date_iso)
         system_events    = self._store.get_system_events_for_date(date_iso)
         recon_log        = self._store.get_reconciliation_log_for_date(date_iso)
         screener_results = self._store.get_screener_results_for_date(date_iso)
@@ -480,7 +480,7 @@ class DailyReviewGenerator:
             "analytics":       analytics,
             "trades":          trades,
             "orders":          orders,
-            "capital_ledger":  capital_ledger,
+            "fm_ledger":       fm_ledger,
             "system_events":   system_events,
             "recon_log":       recon_log,
             "screener_results": screener_results,
@@ -571,12 +571,16 @@ class DailyReviewGenerator:
         self._xlsx_sheet(wb, "ORDERS", headers, rows)
 
     def _xlsx_capital(self, wb, data: dict) -> None:
+        # BL-5: fm_ledger extended with entry_type (was mutation_type),
+        # session_id, direction, trade_id, margin_delta, pnl_delta, costs.
         headers = [
-            "ledger_id", "ts", "mutation_type", "amount", "bucket",
+            "ledger_id", "ts", "entry_type", "amount", "bucket",
             "balance_before", "balance_after",
             "signal_id", "reservation_id", "reason",
+            "session_id", "direction", "trade_id",
+            "margin_delta", "pnl_delta", "costs",
         ]
-        rows = [[r.get(h) for h in headers] for r in data["capital_ledger"]]
+        rows = [[r.get(h) for h in headers] for r in data["fm_ledger"]]
         self._xlsx_sheet(wb, "CAPITAL_LEDGER", headers, rows)
 
     def _xlsx_system(self, wb, data: dict) -> None:
@@ -707,9 +711,9 @@ class DailyReviewGenerator:
 
     def _md_capital(self, lines: List[str], data: dict) -> None:
         lines.append("## 6. Capital Ledger\n")
-        headers = ["ts", "mutation_type", "amount", "bucket",
+        headers = ["ts", "entry_type", "amount", "bucket",
                    "balance_before", "balance_after", "reservation_id"]
-        rows = [[r.get(h) for h in headers] for r in data["capital_ledger"]]
+        rows = [[r.get(h) for h in headers] for r in data["fm_ledger"]]
         self._md_table(lines, headers, rows)
 
     def _md_system(self, lines: List[str], data: dict) -> None:

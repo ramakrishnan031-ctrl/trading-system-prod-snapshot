@@ -107,7 +107,7 @@ def test_initialize_writes_ledger_row() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = _make_store(Path(tmp))
         fm = _initialized_fm(store, balance=100_000.0)
-        rows = store.fetch_all("SELECT * FROM fm_ledger WHERE mutation_type = 'INIT'")
+        rows = store.fetch_all("SELECT * FROM fm_ledger WHERE entry_type = 'INIT'")
         assert len(rows) == 1
         assert rows[0]["amount"] == 100_000.0
         assert rows[0]["bucket"] == "both"
@@ -198,7 +198,7 @@ def test_reserve_writes_ledger_row() -> None:
         store = _make_store(Path(tmp))
         fm = _initialized_fm(store, balance=100_000.0)
         result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", "sig_003")
-        rows = store.fetch_all("SELECT * FROM fm_ledger WHERE mutation_type = 'RESERVE'")
+        rows = store.fetch_all("SELECT * FROM fm_ledger WHERE entry_type = 'RESERVE'")
         assert len(rows) == 1
         assert rows[0]["reservation_id"] == result.reservation_id
         assert rows[0]["signal_id"] == "sig_003"
@@ -687,6 +687,235 @@ def test_thread_safety_100_concurrent_reserve_release() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-5 Tests -- write-ahead capital ledger (Phase B.1)
+# ─────────────────────────────────────────────────────────────────────────────
+# These tests pin the new semantics introduced in commit BL-5:
+#   * fm_ledger.mutation_type -> fm_ledger.entry_type (with CHECK constraint)
+#   * Ledger row is written BEFORE the in-memory mutation (write-ahead)
+#   * New columns: session_id, direction, trade_id, margin_delta, pnl_delta, costs
+#   * Dead capital_ledger table is removed from schema
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bl5_write_ahead_ledger_row_precedes_state_mutation() -> None:
+    """BL-5: if the in-memory mutation raises, the ledger row still exists.
+
+    Simulate a catastrophic mid-mutation failure by monkey-patching the bucket
+    deduction helper to raise AFTER _write_ledger has committed. The contract
+    says: rehydrate from fm_ledger is how we recover, so the ledger row must
+    already be durable at the point of the crash.
+    """
+    import sqlite3
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+
+        # Force the in-memory mutation to blow up POST-ledger.
+        def _boom(bucket, amount):   # noqa: ARG001
+            raise RuntimeError("simulated mid-mutation crash")
+        fm._bucket_deduct_avail = _boom   # type: ignore[assignment]
+
+        raised = False
+        try:
+            fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", "sig_wal")
+        except RuntimeError:
+            raised = True
+        assert raised, "Patched mutation must raise"
+
+        # Ledger row exists for the RESERVE intent even though mutation failed.
+        rows = store.fetch_all(
+            "SELECT * FROM fm_ledger WHERE entry_type = 'RESERVE'"
+        )
+        assert len(rows) == 1, (
+            f"RESERVE row must be durable pre-mutation; found {len(rows)}"
+        )
+        assert rows[0]["signal_id"] == "sig_wal"
+        # Bucket state unchanged (mutation aborted before applying).
+        snap = fm.get_snapshot()
+        assert abs(snap.intraday_avail - 70_000.0) < 0.01
+        assert snap.intraday_reserved == 0.0
+        store.close()
+    print("  OK BL-5: ledger row precedes state mutation (write-ahead contract)")
+
+
+def test_bl5_session_id_in_every_ledger_row() -> None:
+    """BL-5: every fm_ledger row carries the FundManager instance's session_id."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        expected = fm._session_id   # stamped in __init__
+        assert expected.startswith("fm_") and len(expected) == 3 + 12
+
+        r = fm.reserve("RELIANCE", 10, 500.0, "INTRADAY", "sig_ses")
+        fm.commit_to_used(r.reservation_id, 500.0, 10)
+        fm.release_used(
+            symbol="RELIANCE", exit_price=510.0, exit_qty=10,
+            intent="INTRADAY", entry_price=500.0, direction="LONG", costs=0.0,
+        )
+
+        rows = store.fetch_all("SELECT session_id FROM fm_ledger ORDER BY ledger_id")
+        assert len(rows) >= 4   # INIT + RESERVE + COMMIT + RELEASE_USED
+        for r in rows:
+            assert r["session_id"] == expected, (
+                f"Expected session_id={expected!r}, got {r['session_id']!r}"
+            )
+        store.close()
+    print("  OK BL-5: session_id stamped on every fm_ledger row")
+
+
+def test_bl5_entry_type_check_constraint_rejects_bogus_value() -> None:
+    """BL-5: schema-level CHECK constraint rejects unknown entry_type."""
+    import sqlite3
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        raised = False
+        try:
+            with store.transaction() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO fm_ledger
+                        (ts, entry_type, amount, bucket,
+                         balance_before, balance_after, session_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("2026-04-19T09:15:00+05:30", "BOGUS", 0.0,
+                     "intraday", 0.0, 0.0, "fm_test"),
+                )
+        except sqlite3.IntegrityError:
+            raised = True
+        assert raised, "CHECK constraint must reject unknown entry_type"
+        store.close()
+    print("  OK BL-5: entry_type CHECK rejects bogus values (typo safety)")
+
+
+def test_bl5_margin_delta_positive_on_reserve() -> None:
+    """BL-5: RESERVE rows carry +margin in margin_delta."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", "sig_md")   # margin = 10000
+        row = store.fetch_one(
+            "SELECT margin_delta FROM fm_ledger WHERE entry_type = 'RESERVE'"
+        )
+        assert row is not None
+        assert abs(row["margin_delta"] - 10_000.0) < 0.01, (
+            f"Expected margin_delta=+10000, got {row['margin_delta']}"
+        )
+        store.close()
+    print("  OK BL-5: RESERVE margin_delta = +margin")
+
+
+def test_bl5_margin_delta_negative_on_release_used() -> None:
+    """BL-5: RELEASE_USED rows carry -margin in margin_delta."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        r = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", "sig_mdneg")
+        fm.commit_to_used(r.reservation_id, 500.0, 100)   # actual_margin = 10000
+        fm.release_used(
+            symbol="RELIANCE", exit_price=520.0, exit_qty=100,
+            intent="INTRADAY", entry_price=500.0, direction="LONG", costs=0.0,
+        )
+        row = store.fetch_one(
+            "SELECT margin_delta FROM fm_ledger WHERE entry_type = 'RELEASE_USED'"
+        )
+        assert row is not None
+        assert abs(row["margin_delta"] + 10_000.0) < 0.01, (
+            f"Expected margin_delta=-10000, got {row['margin_delta']}"
+        )
+        store.close()
+    print("  OK BL-5: RELEASE_USED margin_delta = -margin")
+
+
+def test_bl5_pnl_delta_positive_on_long_profit() -> None:
+    """BL-5: RELEASE_USED pnl_delta reflects LONG gross_pnl - costs (EF-3)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        r = fm.reserve("RELIANCE", 10, 500.0, "INTRADAY", "sig_pnl_long")
+        fm.commit_to_used(r.reservation_id, 500.0, 10)
+        # LONG: (exit-entry)*qty - costs = (510-500)*10 - 5 = 95
+        fm.release_used(
+            symbol="RELIANCE", exit_price=510.0, exit_qty=10,
+            intent="INTRADAY", entry_price=500.0, direction="LONG", costs=5.0,
+        )
+        row = store.fetch_one(
+            "SELECT pnl_delta, costs, direction "
+            "FROM fm_ledger WHERE entry_type = 'RELEASE_USED'"
+        )
+        assert row is not None
+        assert abs(row["pnl_delta"] - 95.0) < 0.01, row["pnl_delta"]
+        assert abs(row["costs"] - 5.0) < 0.01, row["costs"]
+        assert row["direction"] == "LONG"
+        store.close()
+    print("  OK BL-5: LONG pnl_delta = (exit-entry)*qty - costs")
+
+
+def test_bl5_pnl_delta_positive_on_short_profit() -> None:
+    """BL-5: RELEASE_USED pnl_delta for SHORT uses (entry-exit)*qty (EF-3 lock)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        r = fm.reserve("RELIANCE", 10, 500.0, "INTRADAY", "sig_pnl_short")
+        fm.commit_to_used(r.reservation_id, 500.0, 10)
+        # SHORT: (entry-exit)*qty - costs = (500-490)*10 - 3 = 97
+        fm.release_used(
+            symbol="RELIANCE", exit_price=490.0, exit_qty=10,
+            intent="INTRADAY", entry_price=500.0, direction="SHORT", costs=3.0,
+        )
+        row = store.fetch_one(
+            "SELECT pnl_delta, direction "
+            "FROM fm_ledger WHERE entry_type = 'RELEASE_USED'"
+        )
+        assert row is not None
+        assert abs(row["pnl_delta"] - 97.0) < 0.01, row["pnl_delta"]
+        assert row["direction"] == "SHORT"
+        store.close()
+    print("  OK BL-5: SHORT pnl_delta = (entry-exit)*qty - costs (EF-3)")
+
+
+def test_bl5_direction_null_on_non_release_used_entries() -> None:
+    """BL-5: direction is NULL on RESERVE/RELEASE/COMMIT/INIT (only set on RELEASE_USED)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        r = fm.reserve("RELIANCE", 10, 500.0, "INTRADAY", "sig_dir_null")
+        fm.commit_to_used(r.reservation_id, 500.0, 10)
+        rows = store.fetch_all(
+            "SELECT entry_type, direction FROM fm_ledger "
+            "WHERE entry_type IN ('INIT', 'RESERVE', 'COMMIT')"
+        )
+        assert len(rows) == 3
+        for row in rows:
+            assert row["direction"] is None, (
+                f"Expected direction=NULL for {row['entry_type']!r}, "
+                f"got {row['direction']!r}"
+            )
+        store.close()
+    print("  OK BL-5: direction NULL on non-RELEASE_USED entries")
+
+
+def test_bl5_dead_capital_ledger_table_is_removed() -> None:
+    """BL-5: legacy capital_ledger table is gone from schema v10."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        row = store.fetch_one(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'capital_ledger'"
+        )
+        assert row is None, (
+            "capital_ledger table must not exist post-BL-5 (schema v10)"
+        )
+        # Confirm fm_ledger *is* present as its replacement.
+        row2 = store.fetch_one(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'fm_ledger'"
+        )
+        assert row2 is not None
+        store.close()
+    print("  OK BL-5: dead capital_ledger table removed; fm_ledger remains")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -725,6 +954,16 @@ def run_all_tests() -> int:
         test_reset_daily_pnl_zeroes_pnl_leaves_reserved_used,
         test_ledger_write_failure_rolls_back_mutation,
         test_thread_safety_100_concurrent_reserve_release,
+        # BL-5 additions (Phase B.1 write-ahead ledger)
+        test_bl5_write_ahead_ledger_row_precedes_state_mutation,
+        test_bl5_session_id_in_every_ledger_row,
+        test_bl5_entry_type_check_constraint_rejects_bogus_value,
+        test_bl5_margin_delta_positive_on_reserve,
+        test_bl5_margin_delta_negative_on_release_used,
+        test_bl5_pnl_delta_positive_on_long_profit,
+        test_bl5_pnl_delta_positive_on_short_profit,
+        test_bl5_direction_null_on_non_release_used_entries,
+        test_bl5_dead_capital_ledger_table_is_removed,
     ]
 
     print("=" * 70)
