@@ -31,19 +31,53 @@ Locked Design Decisions:
     ZA14 -- Layer 3. Imports: kiteconnect, stdlib, core.*, broker layer 2.
     ZA15 -- kiteconnect>=5.1.0 installed in venv.
     ZA16 -- Adapter does NOT publish events (state machine does via OSM7).
+            [LIVE MODE ONLY -- see ZA16a for the paper-mode carve-out.]
+    ZA16a -- Paper-mode exception (H-20): in paper mode the adapter
+            synthesizes BOTH the OSM SUBMITTED->COMPLETE transition AND
+            the OrderFilled event publish, after a configurable delay.
+            This is the ONE place the adapter publishes to the event bus.
+
+            Rationale: paper mode mocks the entire broker + polling
+            surface. There is no kite broker to return fill history and
+            no order_monitor poll loop to drive OrderFilled. If the
+            adapter did not synthesize the fill, paper mode would sit
+            at SUBMITTED forever and the downstream pipeline
+            (commit_to_used, close_trade, release_used, PositionClosed,
+            shadow_tracker) would be silently untested. Pre-H-20 this
+            made paper trials a false-positive green: the first leg
+            placed and nothing downstream ever ran.
+
+            Mechanics: _paper_place_order spawns a daemon thread that
+            sleeps PaperConfig.auto_fill_delay_sec (default 0.5s),
+            transitions OSM SUBMITTED->COMPLETE, then publishes
+            OrderFilled with avg_fill_price = the limit price (slippage
+            0). Delay mimics real broker fill latency.
+
+            Live mode remains unchanged: order_monitor polls the real
+            broker, detects COMPLETE, transitions OSM, and publishes
+            OrderFilled as specified by OM1/OM6.
+
+            Guard: the synth path fires ONLY when self._paper is True
+            AND self._bus is not None. Live mode never takes this
+            branch; any future refactor that allows the live path to
+            publish is a regression against ZA16. A runtime assertion
+            inside _synth_fill logs CRITICAL and returns without
+            publishing if invoked with self._paper == False.
     ZA17 -- place_order accepts optional trigger_price (required for SL/SL-M)
             and optional variety (default "regular"; use "co" for Cover Orders).
             Both are backward-compatible optional params.
 
 What This Module Does NOT Do:
     - Does not retry failed calls (ZA11 -- caller owns retry)
-    - Does not publish OrderFilled events (order_monitor's job)
+    - Does not publish OrderFilled events in LIVE mode (order_monitor's job).
+      Paper mode is the ZA16a carve-out; see above.
     - Does not read config files directly (all deps injected)
     - Does not import kiteconnect in any other module
 """
 from __future__ import annotations
 
 import socket
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -56,6 +90,7 @@ from broker.cost_calculator import CostCalculator
 from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
+from core.events import EventBus, OrderFilled
 from core.exceptions import (
     BrokerAuthError,
     BrokerError,
@@ -253,6 +288,8 @@ class ZerodhaAdapter:
         paper_capital: float = 100_000.0,
         quote_provider: Optional[Callable[[list[str]], dict[str, Quote]]] = None,
         account_id: Optional[str] = None,          # IC9: reserved for v2.1 multi-account
+        bus: Optional[EventBus] = None,            # ZA16a: paper mode publishes OrderFilled
+        paper_auto_fill_delay_sec: float = 0.5,    # ZA16a: daemon-thread synth delay
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -264,6 +301,18 @@ class ZerodhaAdapter:
         self._paper_capital = paper_capital
         self._quote_provider = quote_provider
         self._account_id = account_id  # IC9: no-op for v2 single-account
+        self._bus = bus
+        self._paper_auto_fill_delay_sec = paper_auto_fill_delay_sec
+        # ZA16a: paper needs bus to publish synthesized OrderFilled. If paper
+        # is on but bus is None we degrade safely (state reaches COMPLETE via
+        # synth thread; no event) and log a warning. main.py wires bus in
+        # non-degraded mode; tests can skip bus to exercise paper without
+        # event plumbing.
+        if self._paper and self._bus is None:
+            self._log.warning(
+                "zerodha_adapter paper_mode with bus=None -- OrderFilled "
+                "will NOT be published (ZA16a synth degrades to OSM-only)"
+            )
 
     # ── public methods ────────────────────────────────────────────────────────
 
@@ -820,9 +869,27 @@ class ZerodhaAdapter:
         trigger_price: float = 0.0,
         variety: str = "regular",
     ) -> PlacedOrder:
-        """Simulate order placement in paper mode (ZA10)."""
+        """
+        Simulate order placement in paper mode (ZA10 + ZA16a).
+
+        Returns SUBMITTED immediately; spawns a daemon thread that
+        transitions to COMPLETE and publishes OrderFilled after
+        paper_auto_fill_delay_sec. See ZA16a rationale in module docstring.
+        """
         fake_broker_id = "PAPER_" + uuid.uuid4().hex[:12].upper()
         self._osm.transition(internal_id, "SUBMITTED")
+
+        # ZA16a: paper mode synthesizes the broker fill that live mode
+        # receives from order_monitor. Fire the synth off the thread so
+        # place_order returns immediately like the live path does.
+        thread = threading.Thread(
+            target=self._synth_fill,
+            name=f"paper_synth_{internal_id}",
+            args=(internal_id, fake_broker_id, symbol, side, qty, price),
+            daemon=True,
+        )
+        thread.start()
+
         return PlacedOrder(
             internal_order_id=internal_id,
             broker_order_id=fake_broker_id,
@@ -837,3 +904,84 @@ class ZerodhaAdapter:
             trigger_price=trigger_price,
             variety=variety,
         )
+
+    def _synth_fill(
+        self,
+        internal_id: str,
+        broker_order_id: str,
+        symbol: str,
+        side: str,
+        qty: int,
+        price: float,
+    ) -> None:
+        """
+        ZA16a: paper-mode fill synthesizer.
+
+        Sleeps paper_auto_fill_delay_sec, transitions OSM SUBMITTED->COMPLETE,
+        publishes OrderFilled. Runs on a daemon thread. Must NEVER fire in
+        live mode -- runtime guard logs CRITICAL and returns if self._paper
+        is False (belt-and-braces against a future refactor accidentally
+        invoking this from live code; ZA16 regression guard).
+        """
+        # ZA16a guard: live mode must never take this path.
+        if not self._paper:
+            self._log.critical(
+                "zerodha_adapter._synth_fill invoked in live mode -- "
+                "ZA16a violation, aborting without publish",
+                extra={"internal_order_id": internal_id,
+                       "broker_order_id": broker_order_id, "symbol": symbol},
+            )
+            return
+
+        try:
+            delay = max(0.0, self._paper_auto_fill_delay_sec)
+            if delay > 0:
+                time.sleep(delay)
+
+            # OSM transition: SUBMITTED -> COMPLETE (legal per OSM2).
+            try:
+                self._osm.transition(internal_id, "COMPLETE")
+            except InvalidTransitionError:
+                # Already terminal (e.g., cancelled between place and synth).
+                # Idempotent: do not publish a spurious fill.
+                self._log.info(
+                    "paper_synth: OSM already terminal, skip publish",
+                    extra={"internal_order_id": internal_id,
+                           "broker_order_id": broker_order_id},
+                )
+                return
+
+            if self._bus is None:
+                # Degraded mode warned at ctor time. State reached COMPLETE;
+                # downstream will not see OrderFilled. Tests hit this path.
+                return
+
+            filled_at = now_ist()
+            self._bus.publish(
+                OrderFilled(
+                    source_module="zerodha_adapter_paper",
+                    internal_order_id=internal_id,
+                    broker_order_id=broker_order_id,
+                    symbol=symbol,
+                    side=side,
+                    filled_qty=qty,
+                    avg_fill_price=price,     # paper: no slippage, fill at limit
+                    expected_price=price,
+                    slippage_pct=0.0,
+                    filled_at=filled_at.isoformat(),
+                )
+            )
+            self._log.info(
+                "paper_synth: OrderFilled published",
+                extra={"internal_order_id": internal_id,
+                       "broker_order_id": broker_order_id,
+                       "symbol": symbol, "qty": qty, "price": price},
+            )
+        except Exception as exc:  # noqa: BLE001 -- thread must not propagate
+            log_exception(self._log, exc)
+            self._log.error(
+                "paper_synth: unhandled exception",
+                extra={"internal_order_id": internal_id,
+                       "broker_order_id": broker_order_id,
+                       "error": str(exc)},
+            )

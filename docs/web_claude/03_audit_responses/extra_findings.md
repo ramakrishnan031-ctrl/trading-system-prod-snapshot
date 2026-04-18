@@ -72,3 +72,27 @@ Tests added:
     (regression guard)
 Status: RESOLVED in commit containing BL-7d+BL-10a
 Discovered: Phase A, A.3.d pre-work (verification grep of release_used callers)
+
+---
+
+## EF-4 — paper_capital is not a declared SystemConfig field
+
+File: main.py (getattr(app_config.system, "paper_capital", 500_000.0))
+     core/config_loader.py::SystemConfig (field missing)
+Impact: paper_capital is fetched from SystemConfig via getattr() with a
+        500_000.0 default. A typo or missing YAML key silently falls back
+        to 500k with no Pydantic validation and no CONFIG_DIFF audit trail.
+        Every other SystemConfig value is declared as a typed Pydantic field
+        with extra="forbid"; this one slipped through.
+Severity: MEDIUM (operational footgun, not capital-corruption). Paper-only
+          so live PnL is not affected. Still: a configuration key the operator
+          cannot actually misspell into a visible error is an anti-pattern
+          for this system.
+Fix size: small -- add `paper_capital: float` to SystemConfig (or fold into
+         PaperConfig alongside auto_fill_delay_sec). Remove the getattr in
+         main.py. Add to system_config.yaml paper: block.
+Status: DEFERRED to Phase E. Tempting to bundle with H-20 (A.3.f) since we
+        are already adding PaperConfig, but out of scope: A.3.f's PaperConfig
+        holds only auto_fill_delay_sec. Expanding scope here would delay
+        Phase A closeout.
+Discovered: Phase A, A.3.f pre-work (grep of paper_mode/is_paper in main.py)

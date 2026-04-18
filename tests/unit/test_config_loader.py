@@ -169,6 +169,8 @@ smart_tgt:
   enabled: true
   trigger_pct: 0.005
   step_pct: 0.003
+paper:
+  auto_fill_delay_sec: 0.5
 """
 
 _BROKER_COSTS = """\

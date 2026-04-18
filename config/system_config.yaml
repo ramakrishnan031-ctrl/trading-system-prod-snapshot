@@ -130,3 +130,6 @@ smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
   enabled: true               # master switch; if false, OrderPlacer skips SmartTgt wiring
   trigger_pct: 0.005          # arm trailing once price moves this fraction toward target (0.5%)
   step_pct: 0.003             # trail step size once armed (0.3%)
+
+paper:                        # H-20/ZA16a: paper-mode fill synthesis
+  auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)

@@ -392,6 +392,30 @@ class ShadowTrackerConfig(BaseModel):
         return v
 
 
+class PaperConfig(BaseModel):
+    """
+    H-20 / ZA16a: paper-mode fill synthesis settings.
+
+    auto_fill_delay_sec: seconds to wait after place_order before the
+        paper adapter's daemon thread transitions OSM SUBMITTED->COMPLETE
+        and publishes OrderFilled. Default 0.5s mimics typical broker
+        fill latency; set to 0 for synchronous-feel tests.
+    """
+    model_config = ConfigDict(extra="forbid")
+    auto_fill_delay_sec: float = 0.5  # >= 0; 0 = fire on next scheduler tick
+
+    @field_validator("auto_fill_delay_sec")
+    @classmethod
+    def _validate_delay(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"auto_fill_delay_sec must be >= 0, got {v!r}")
+        if v > 10.0:
+            raise ValueError(
+                f"auto_fill_delay_sec must be <= 10.0 (sanity cap), got {v!r}"
+            )
+        return v
+
+
 class SmartTgtConfig(BaseModel):
     """
     BL-7b: deployment-wide defaults for SmartTgtManager trailing behavior.
@@ -438,6 +462,7 @@ class SystemConfig(BaseModel):
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
+    paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis
 
 
 # ─────────────────────────────────────────────────────────────────────────────

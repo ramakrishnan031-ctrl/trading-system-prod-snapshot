@@ -55,6 +55,7 @@ from broker.zerodha_adapter import (
 from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
+from core.events import EventBus, OrderFilled
 from core.exceptions import (
     BrokerAuthError,
     BrokerTimeoutError,
@@ -170,6 +171,8 @@ def _make_adapter(
     paper: bool = False,
     paper_capital: float = 100_000.0,
     quote_provider=None,
+    bus: Any = None,
+    paper_auto_fill_delay_sec: float = 0.05,  # tests use a short default
 ) -> tuple[ZerodhaAdapter, MockKite, RateLimiter, OrderStateMachine, Any]:
     """Return (adapter, kite, rl, osm, logger)."""
     from broker.cost_calculator import CostCalculator
@@ -189,6 +192,8 @@ def _make_adapter(
         paper_mode=paper,
         paper_capital=paper_capital,
         quote_provider=quote_provider,
+        bus=bus,
+        paper_auto_fill_delay_sec=paper_auto_fill_delay_sec,
     )
     return adapter, kite, rl, osm, logger
 
@@ -694,6 +699,234 @@ def test_exception_logged_before_reraise() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tests -- H-20 / ZA16a: paper adapter synthesizes OrderFilled after delay
+#
+# ZA16a carves out paper mode as the ONE place the adapter publishes events,
+# because paper has no real broker and no order_monitor poll loop. Live mode
+# must never take this branch (see test_live_mode_place_order_does_NOT_publish
+# _order_filled regression guard below).
+# ─────────────────────────────────────────────────────────────────────────────
+
+import time as _time_for_h20_tests  # avoid shadowing name "time" higher up
+
+
+def _wait_for_events(captured: list, expected_count: int,
+                     timeout_sec: float = 2.0, poll_sec: float = 0.01) -> bool:
+    """Spin until captured has expected_count events or timeout. Returns True on success."""
+    deadline = _time_for_h20_tests.monotonic() + timeout_sec
+    while _time_for_h20_tests.monotonic() < deadline:
+        if len(captured) >= expected_count:
+            return True
+        _time_for_h20_tests.sleep(poll_sec)
+    return len(captured) >= expected_count
+
+
+def test_za16a_paper_place_order_returns_submitted_synchronously() -> None:
+    """Return value stays SUBMITTED immediately; synth fires async (regression of existing behavior)."""
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus,
+                                          paper_auto_fill_delay_sec=0.5)
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    # Synchronous return path unchanged -- still SUBMITTED
+    assert result.status == "SUBMITTED"
+    # OSM may already be COMPLETE if the machine is lightning fast, but
+    # on a 0.5s delay it should still be SUBMITTED at this instant.
+    state_immediately = osm.current_state(result.internal_order_id)
+    assert state_immediately == "SUBMITTED", (
+        f"expected SUBMITTED right after return, got {state_immediately}"
+    )
+    print("  OK ZA16a: place_order returns SUBMITTED synchronously (H-20)")
+
+
+def test_za16a_paper_publishes_order_filled_after_delay() -> None:
+    """After the configured delay the bus gets an OrderFilled and OSM is COMPLETE."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus,
+                                          paper_auto_fill_delay_sec=0.05)
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=2.0), (
+        f"OrderFilled never published in time; got {len(captured)} events"
+    )
+    assert len(captured) == 1
+    assert osm.current_state(result.internal_order_id) == "COMPLETE"
+    print("  OK ZA16a: OrderFilled published + OSM COMPLETE after delay (H-20)")
+
+
+def test_za16a_paper_order_filled_payload_fields_populated() -> None:
+    """Synthesized OrderFilled must have all OM6 fields set correctly."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(paper=True, bus=bus,
+                                        paper_auto_fill_delay_sec=0.02)
+    result = adapter.place_order(
+        symbol="INFY", side="SELL", qty=7, price=1500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    ev = captured[0]
+    assert ev.source_module == "zerodha_adapter_paper"
+    assert ev.internal_order_id == result.internal_order_id
+    assert ev.broker_order_id == result.broker_order_id
+    assert ev.symbol == "INFY"
+    assert ev.side == "SELL"
+    assert ev.filled_qty == 7
+    assert ev.avg_fill_price == 1500.0       # paper fills at limit price
+    assert ev.expected_price == 1500.0
+    assert ev.slippage_pct == 0.0            # paper: zero slippage
+    assert ev.filled_at, "filled_at must be ISO timestamp, got empty"
+    print("  OK ZA16a: OrderFilled payload fully populated (H-20)")
+
+
+def test_za16a_paper_delay_is_actually_observed() -> None:
+    """Event does not land before the delay elapses."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    delay = 0.3
+    adapter, _, _, _, _ = _make_adapter(paper=True, bus=bus,
+                                        paper_auto_fill_delay_sec=delay)
+    start = _time_for_h20_tests.monotonic()
+    adapter.place_order(
+        symbol="TCS", side="BUY", qty=1, price=100.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    # Check well before the delay -- event must NOT be present yet
+    _time_for_h20_tests.sleep(0.05)
+    assert len(captured) == 0, (
+        f"event arrived too early (0.05s of 0.3s delay), got {len(captured)}"
+    )
+    # Now wait for it
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    elapsed = _time_for_h20_tests.monotonic() - start
+    assert elapsed >= delay * 0.9, (
+        f"event arrived before delay elapsed: {elapsed:.3f}s < {delay:.3f}s"
+    )
+    print("  OK ZA16a: delay actually elapsed before publish (H-20)")
+
+
+def test_za16a_paper_zero_delay_fires_quickly() -> None:
+    """delay=0 still works (no sleep), event lands promptly."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus,
+                                          paper_auto_fill_delay_sec=0.0)
+    result = adapter.place_order(
+        symbol="HDFC", side="BUY", qty=1, price=500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    assert _wait_for_events(captured, 1, timeout_sec=1.0)
+    assert osm.current_state(result.internal_order_id) == "COMPLETE"
+    print("  OK ZA16a: zero delay still fires synth (H-20)")
+
+
+def test_za16a_paper_multiple_orders_each_get_filled() -> None:
+    """Place N orders; expect N OrderFilled events."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus,
+                                          paper_auto_fill_delay_sec=0.02)
+    placed_ids = []
+    for i in range(3):
+        r = adapter.place_order(
+            symbol=f"SYM{i}", side="BUY", qty=1 + i, price=100.0 + i,
+            order_type="LIMIT", intent="INTRADAY",
+        )
+        placed_ids.append(r.internal_order_id)
+
+    assert _wait_for_events(captured, 3, timeout_sec=2.0), (
+        f"expected 3 OrderFilled, got {len(captured)}"
+    )
+    for oid in placed_ids:
+        assert osm.current_state(oid) == "COMPLETE", (
+            f"{oid} not COMPLETE after synth"
+        )
+    # Each symbol got its own event
+    symbols_fired = {e.symbol for e in captured}
+    assert symbols_fired == {"SYM0", "SYM1", "SYM2"}
+    print("  OK ZA16a: N orders -> N OrderFilled events, each reaches COMPLETE (H-20)")
+
+
+def test_za16a_paper_bus_none_degrades_gracefully_no_publish() -> None:
+    """bus=None (tests without event plumbing): OSM still reaches COMPLETE; no publish."""
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=None,
+                                          paper_auto_fill_delay_sec=0.02)
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=1, price=100.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    # Wait long enough for the synth thread to run
+    _time_for_h20_tests.sleep(0.2)
+    assert osm.current_state(result.internal_order_id) == "COMPLETE"
+    print("  OK ZA16a: bus=None degrades to OSM-only synth (H-20)")
+
+
+def test_za16a_paper_synth_thread_is_daemon() -> None:
+    """Spawned thread must be daemon so process shutdown is unblocked."""
+    import threading as _threading
+
+    # Enumerate threads before/after; new thread should have daemon=True.
+    threads_before = set(_threading.enumerate())
+    bus = EventBus()
+    adapter, _, _, _, _ = _make_adapter(paper=True, bus=bus,
+                                        paper_auto_fill_delay_sec=0.5)
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=1, price=100.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    # Grab the synth thread -- named paper_synth_<internal_id>
+    new_threads = set(_threading.enumerate()) - threads_before
+    synth_threads = [t for t in new_threads if t.name.startswith("paper_synth_")]
+    assert synth_threads, "no paper_synth_* thread spawned"
+    for t in synth_threads:
+        assert t.daemon, f"thread {t.name} is not a daemon"
+    print("  OK ZA16a: synth thread is daemon (H-20)")
+
+
+def test_live_mode_place_order_does_NOT_publish_order_filled() -> None:
+    """
+    ZA16 regression guard: the live path must never publish OrderFilled from
+    the adapter. order_monitor is the only live-mode publisher.
+    """
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    # paper=False, bus wired so IF live mode ever published we would see it.
+    adapter, _, _, osm, _ = _make_adapter(paper=False, bus=bus)
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    # Wait longer than any reasonable synth delay -- still zero events.
+    _time_for_h20_tests.sleep(0.3)
+    assert len(captured) == 0, (
+        f"ZA16 violation: live mode published {len(captured)} OrderFilled event(s)"
+    )
+    # OSM remains SUBMITTED in live mode (order_monitor, not adapter, drives COMPLETE).
+    assert osm.current_state(result.internal_order_id) == "SUBMITTED"
+    print("  OK ZA16 regression guard: live mode does NOT publish OrderFilled")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -726,6 +959,16 @@ def run_all_tests() -> int:
         test_rate_limiter_not_called_on_validation_error,
         test_place_order_logs_entry_and_exit,
         test_exception_logged_before_reraise,
+        # H-20 / ZA16a (8 positive + 1 regression guard)
+        test_za16a_paper_place_order_returns_submitted_synchronously,
+        test_za16a_paper_publishes_order_filled_after_delay,
+        test_za16a_paper_order_filled_payload_fields_populated,
+        test_za16a_paper_delay_is_actually_observed,
+        test_za16a_paper_zero_delay_fires_quickly,
+        test_za16a_paper_multiple_orders_each_get_filled,
+        test_za16a_paper_bus_none_degrades_gracefully_no_publish,
+        test_za16a_paper_synth_thread_is_daemon,
+        test_live_mode_place_order_does_NOT_publish_order_filled,
     ]
 
     print("=" * 70)

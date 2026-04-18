@@ -690,6 +690,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         # NotImplementedError.  A simple passthrough using the Kite HTTP API
         # is sufficient for paper; live mode ignores this kwarg entirely.
         quote_provider=(_make_paper_quote_provider() if is_paper else None),
+        # H-20 / ZA16a: paper needs the bus to publish synthesized
+        # OrderFilled. Live adapter ignores these kwargs.
+        bus=event_bus,
+        paper_auto_fill_delay_sec=app_config.system.paper.auto_fill_delay_sec,
     )
 
     required_secrets = ["ZERODHA_API_KEY", "ZERODHA_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
