@@ -328,20 +328,81 @@ class OrderPlacer:
         # ── Persist order rows ─────────────────────────────────────────────
         self._persist_entry_orders(trade_id, result, symbol, qty, side, intent)
 
-        # ── Register for fill tracking (OP5) ───────────────────────────────
-        entry_internal = result.entry_internal_id
-        if entry_internal:
-            fill_entry = _FillEntry(
-                trade_id=trade_id,
-                reservation_id=reservation_id,
+        # ── Register for fill tracking (OP5) + monitor (BL-7c / A.3.c) ─────
+        # track() + _fill_map write happens per leg. ENTRY always; SL only
+        # for LIMIT_TRIPLE (CO bundles SL at broker side); TGT when present.
+        # Empty broker_order_id → skip (handles soft-fail legs gracefully).
+        exit_side = "SELL" if side == "BUY" else "BUY"
+        now = now_ist()  # shared across all 3 legs (one broker placement)
+
+        if result.entry_internal_id and result.entry_broker_order_id:
+            self._order_monitor.track(
+                internal_order_id=result.entry_internal_id,
+                broker_order_id=result.entry_broker_order_id,
                 symbol=symbol,
+                side=side,
                 qty=qty,
-                leg=_LEG_ENTRY,
-                order_protocol=order_protocol,
-                direction=direction,
+                expected_price=entry_price,
+                placed_at=now,
             )
             with self._fill_map_lock:
-                self._fill_map[entry_internal] = fill_entry
+                self._fill_map[result.entry_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=reservation_id,
+                    symbol=symbol,
+                    qty=qty,
+                    leg=_LEG_ENTRY,
+                    order_protocol=order_protocol,
+                    direction=direction,
+                )
+
+        # SL leg — CO_PLUS_TGT has SL bundled into the CO at broker side.
+        if (
+            result.order_protocol != "CO_PLUS_TGT"
+            and result.sl_internal_id
+            and result.sl_broker_order_id
+        ):
+            self._order_monitor.track(
+                internal_order_id=result.sl_internal_id,
+                broker_order_id=result.sl_broker_order_id,
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                expected_price=sl_price,
+                placed_at=now,
+            )
+            with self._fill_map_lock:
+                self._fill_map[result.sl_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=reservation_id,
+                    symbol=symbol,
+                    qty=qty,
+                    leg=_LEG_SL,
+                    order_protocol=order_protocol,
+                    direction=direction,
+                )
+
+        # TGT leg — both LIMIT_TRIPLE and CO_PLUS_TGT place a separate TGT order.
+        if result.tgt_internal_id and result.tgt_broker_order_id:
+            self._order_monitor.track(
+                internal_order_id=result.tgt_internal_id,
+                broker_order_id=result.tgt_broker_order_id,
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                expected_price=tgt_price,
+                placed_at=now,
+            )
+            with self._fill_map_lock:
+                self._fill_map[result.tgt_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=reservation_id,
+                    symbol=symbol,
+                    qty=qty,
+                    leg=_LEG_TGT,
+                    order_protocol=order_protocol,
+                    direction=direction,
+                )
 
         self._log.info(
             "order_placer.place_complete",
@@ -361,12 +422,26 @@ class OrderPlacer:
         Called from order_monitor's poll thread; must be thread-safe (OP8).
         """
         internal_id = event.internal_order_id
+        # BL-7c / A.3.c interim: peek-only. SL/TGT/EOD fills are now visible
+        # in _fill_map (they got there via track() wiring), but handling them
+        # is A.3.d's job. Until then, only the ENTRY leg pops + proceeds; the
+        # other legs are short-circuited and stay in _fill_map.
         with self._fill_map_lock:
-            fill_entry = self._fill_map.pop(internal_id, None)
+            fill_entry = self._fill_map.get(internal_id)
 
         if fill_entry is None:
             # Not our trade (could be from another component or already handled)
             return
+
+        # TODO(A.3.d): replace guard below with dispatcher:
+        #   if fill_entry.leg == _LEG_ENTRY: self._handle_entry_fill(...)
+        #   elif fill_entry.leg in (_LEG_SL, _LEG_TGT, _LEG_EOD):
+        #       self._handle_exit_fill(...)
+        if fill_entry.leg != _LEG_ENTRY:
+            return
+
+        with self._fill_map_lock:
+            self._fill_map.pop(internal_id, None)
 
         trade_id = fill_entry.trade_id
         reservation_id = fill_entry.reservation_id

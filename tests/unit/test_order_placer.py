@@ -1503,6 +1503,224 @@ class TestBl7bOrderPlacerDependencyInjection:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-7c: OrderPlacer.track() wiring + interim _on_order_filled guard (A.3.c)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl7cOrderPlacerTrackingWiring:
+    """
+    Locks behavior for A.3.c:
+      - place() calls order_monitor.track() once per placed leg (ENTRY always,
+        SL only for LIMIT_TRIPLE, TGT when present).
+      - _fill_map gets one entry per tracked leg with correct leg + sides.
+      - _on_order_filled peeks-only; non-ENTRY legs stay in _fill_map and
+        do NOT commit capital until A.3.d wires the split dispatcher.
+      - ENTRY-leg fills are still handled end-to-end (guard regression).
+    """
+
+    def _build(
+        self,
+        tmp_path: Path,
+        default_protocol: str = "LIMIT_TRIPLE",
+    ):
+        """Build a real placer wired to a MagicMock OrderMonitor + MockAdapter."""
+        store = _make_store(tmp_path)
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=default_protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        monitor = MagicMock(spec=OrderMonitor)
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=monitor,
+            default_order_protocol=default_protocol,
+        )
+        return placer, monitor, adapter, store, fm, bus
+
+    def test_place_entry_calls_order_monitor_track_for_entry_leg(self) -> None:
+        """LIMIT_TRIPLE place() -> track() called 3x; _fill_map has 3 legs. (BL-7c)"""
+        with TemporaryDirectory() as tmp:
+            placer, monitor, adapter, store, _, _ = self._build(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_e",
+            )
+
+            # 3 track() calls: entry, SL, TGT
+            assert monitor.track.call_count == 3, (
+                f"expected 3 track() calls, got {monitor.track.call_count}"
+            )
+
+            # Collect legs from _fill_map
+            with placer._fill_map_lock:
+                legs = sorted(e.leg for e in placer._fill_map.values())
+            assert legs == [_LEG_ENTRY, _LEG_SL, _LEG_TGT], (
+                f"expected ENTRY/SL/TGT legs, got {legs}"
+            )
+            store.close()
+            print("  OK BL-7c: LIMIT_TRIPLE place() tracks all 3 legs")
+
+    def test_place_entry_tracks_all_three_legs_for_limit_triple(self) -> None:
+        """LIMIT_TRIPLE: entry side = signal side; SL/TGT sides inverted. (BL-7c)"""
+        with TemporaryDirectory() as tmp:
+            placer, monitor, adapter, store, _, _ = self._build(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="TCS", side="BUY", qty=5,
+                entry_price=4000.0, sl_price=3950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_sides",
+            )
+
+            # Build per-leg side lookup from _fill_map (leg -> side inferred via direction/exit)
+            # Easier: inspect the actual track() calls directly.
+            sides_by_leg: Dict[str, str] = {}
+            with placer._fill_map_lock:
+                for internal_id, entry in placer._fill_map.items():
+                    # Find the track() call whose internal_order_id matches
+                    for call_args in monitor.track.call_args_list:
+                        if call_args.kwargs.get("internal_order_id") == internal_id:
+                            sides_by_leg[entry.leg] = call_args.kwargs["side"]
+                            break
+
+            assert sides_by_leg[_LEG_ENTRY] == "BUY"
+            assert sides_by_leg[_LEG_SL] == "SELL"
+            assert sides_by_leg[_LEG_TGT] == "SELL"
+            store.close()
+            print("  OK BL-7c: LIMIT_TRIPLE track sides ENTRY=BUY, SL/TGT=SELL")
+
+    def test_co_protocol_skips_sl_track(self) -> None:
+        """CO_PLUS_TGT: sl_broker_order_id empty -> track called 2x; no SL _FillEntry. (BL-7c)"""
+        with TemporaryDirectory() as tmp:
+            placer, monitor, adapter, store, _, _ = self._build(
+                Path(tmp), default_protocol="CO_PLUS_TGT"
+            )
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="INFY", side="BUY", qty=8,
+                entry_price=1800.0, sl_price=1780.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_co",
+            )
+
+            # Only ENTRY + TGT tracked
+            assert monitor.track.call_count == 2, (
+                f"CO: expected 2 track() calls, got {monitor.track.call_count}"
+            )
+
+            with placer._fill_map_lock:
+                legs = sorted(e.leg for e in placer._fill_map.values())
+            assert legs == [_LEG_ENTRY, _LEG_TGT], (
+                f"CO: expected ENTRY+TGT in _fill_map, got {legs}"
+            )
+            # No SL track ever happened
+            for call_args in monitor.track.call_args_list:
+                assert call_args.kwargs.get("side") != "__NEVER__"  # sanity
+            store.close()
+            print("  OK BL-7c: CO_PLUS_TGT skips SL track (2 legs only)")
+
+    def test_on_order_filled_guards_non_entry_legs(self) -> None:
+        """
+        A.3.c INTERIM TEST: This test guards the intermediate state where
+        SL/TGT fills are ignored. Remove or rewrite in A.3.d when the
+        split handler is wired.
+
+        Direct _fill_map write (no place() drive-through); assert the SL
+        entry survives a published OrderFilled and commit_to_used is NOT
+        called. (BL-7c)
+        """
+        with TemporaryDirectory() as tmp:
+            placer, _, _, store, fm, bus = self._build(Path(tmp))
+
+            # Direct injection: bypass place() entirely.
+            sl_entry = _FillEntry(
+                trade_id="trd_x",
+                reservation_id="res_x",
+                symbol="RELIANCE",
+                qty=10,
+                leg=_LEG_SL,
+                order_protocol="LIMIT_TRIPLE",
+                direction="LONG",
+            )
+            with placer._fill_map_lock:
+                placer._fill_map["sl_internal_id"] = sl_entry
+
+            bus.publish(OrderFilled(
+                source_module="test",
+                payload={},
+                internal_order_id="sl_internal_id",
+                broker_order_id="KITE_SL",
+                symbol="RELIANCE",
+                side="SELL",
+                avg_fill_price=2490.0,
+                filled_qty=10,
+                filled_at=now_ist().isoformat(),
+            ))
+
+            # Guard: SL entry must still be in _fill_map; no capital commit.
+            with placer._fill_map_lock:
+                assert "sl_internal_id" in placer._fill_map, \
+                    "A.3.c guard: SL _FillEntry must NOT be popped"
+            assert fm.committed == [], \
+                "A.3.c guard: commit_to_used must NOT fire for non-ENTRY legs"
+            store.close()
+            print("  OK BL-7c A.3.c INTERIM: SL fill ignored; _FillEntry preserved")
+
+    def test_on_order_filled_still_handles_entry_leg(self) -> None:
+        """ENTRY-leg fill still pops + commits capital end-to-end. (BL-7c regression)"""
+        with TemporaryDirectory() as tmp:
+            placer, _, adapter, store, fm, bus = self._build(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="SBIN", side="BUY", qty=2,
+                entry_price=600.0, sl_price=590.0,
+                intent="INTRDAY" if False else "INTRADAY",
+                signal_id=sig_id,
+                reservation_id="res_entry_ok",
+            )
+
+            # Find the entry leg's internal_id (it's the first placed order — LIMIT_TRIPLE).
+            entry_internal = adapter.placed[0]["internal_order_id"]
+
+            bus.publish(OrderFilled(
+                source_module="test",
+                payload={},
+                internal_order_id=entry_internal,
+                broker_order_id="BROKER_ENTRY",
+                symbol="SBIN",
+                side="BUY",
+                avg_fill_price=601.0,
+                filled_qty=2,
+                filled_at=now_ist().isoformat(),
+            ))
+
+            # Entry popped from _fill_map; capital committed.
+            with placer._fill_map_lock:
+                assert entry_internal not in placer._fill_map
+            assert len(fm.committed) == 1, \
+                f"expected 1 commit, got {len(fm.committed)}"
+            assert fm.committed[0]["reservation_id"] == "res_entry_ok"
+            store.close()
+            print("  OK BL-7c: ENTRY fill path still handled (guard doesn't regress)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1572,6 +1790,12 @@ if __name__ == "__main__":
         TestBl7bOrderPlacerDependencyInjection().test_order_placer_accepts_none_smart_tgt_manager,
         TestBl7bOrderPlacerDependencyInjection().test_order_placer_raises_when_smart_tgt_manager_without_config,
         TestBl7bOrderPlacerDependencyInjection().test_order_placer_accepts_smart_tgt_manager_with_config,
+        # BL-7c OrderPlacer.track() wiring (A.3.c)
+        TestBl7cOrderPlacerTrackingWiring().test_place_entry_calls_order_monitor_track_for_entry_leg,
+        TestBl7cOrderPlacerTrackingWiring().test_place_entry_tracks_all_three_legs_for_limit_triple,
+        TestBl7cOrderPlacerTrackingWiring().test_co_protocol_skips_sl_track,
+        TestBl7cOrderPlacerTrackingWiring().test_on_order_filled_guards_non_entry_legs,
+        TestBl7cOrderPlacerTrackingWiring().test_on_order_filled_still_handles_entry_leg,
     ]
     passed = failed = 0
     for fn in tests:
