@@ -329,7 +329,7 @@ class SignalProcessor:
                 )
             strategy_name = (
                 map_entry.get("strategy") if isinstance(map_entry, dict)
-                else str(map_entry)
+                else getattr(map_entry, "strategy", str(map_entry))
             )
             if strategy_name is None:
                 raise _PipelineReject(

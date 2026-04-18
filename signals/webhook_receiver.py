@@ -179,7 +179,7 @@ class WebhookReceiver:
                 return jsonify({"error": "HMAC signature mismatch"}), 401
 
         # WR4: scanner_name must be in scan_webhook_map
-        known_scanners: dict[str, str] = self._config.scan_webhook_map.scanners
+        known_scanners: dict[str, Any] = self._config.scan_webhook_map.scanners
         if scanner_name not in known_scanners:
             return jsonify({"error": f"Unknown scanner: {scanner_name!r}"}), 404
 

@@ -29,6 +29,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.config_loader import (
@@ -41,6 +43,7 @@ from core.config_loader import (
     EodSquareoffConfig,
     NseHolidaysConfig,
     ScanWebhookMapConfig,
+    ScannerEntry,
     ScoringConfig,
     ShadowTrackerConfig,
     SlippageConfig,
@@ -839,6 +842,21 @@ def test_shadow_tracker_max_innings_min_boundary() -> None:
     print("  OK ShadowTrackerConfig max_innings=1 is valid")
 
 
+def test_real_scan_webhook_map_yaml_loads() -> None:
+    """Load the real config/scan_webhook_map.yaml directly to catch schema drift."""
+    project_root = Path(__file__).parent.parent.parent
+    raw = yaml.safe_load((project_root / "config" / "scan_webhook_map.yaml").read_text())
+    cfg = ScanWebhookMapConfig.model_validate(raw)
+    assert len(cfg.scanners) == 15, f"Expected 15 scanners, got {len(cfg.scanners)}"
+    for name, entry in cfg.scanners.items():
+        assert isinstance(entry, ScannerEntry), f"Scanner {name!r} entry not ScannerEntry"
+        assert entry.strategy, f"Scanner {name!r} has empty strategy"
+        assert entry.chartink_url.startswith("https://"), (
+            f"Scanner {name!r} chartink_url not https: {entry.chartink_url!r}"
+        )
+    print(f"  OK Real scan_webhook_map.yaml: 15 scanners, all valid")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -877,6 +895,7 @@ def run_all_tests() -> int:
         test_shadow_tracker_disabled,
         test_shadow_tracker_max_innings_out_of_range,
         test_shadow_tracker_max_innings_min_boundary,
+        test_real_scan_webhook_map_yaml_loads,
     ]
 
     print("=" * 70)

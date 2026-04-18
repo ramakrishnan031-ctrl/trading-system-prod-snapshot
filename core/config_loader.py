@@ -518,10 +518,24 @@ class ScoringConfig(BaseModel):
 # Locked: P17 (no duplicate scanner names; every name maps to a valid strategy YAML)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class ScanWebhookMapConfig(BaseModel):
-    """Maps Chartink scanner names to strategy YAML filenames."""
+class ScannerEntry(BaseModel):
+    """One scanner → strategy mapping entry (S14 format)."""
     model_config = ConfigDict(extra="forbid")
-    scanners: dict[str, str]   # scanner_name → strategy YAML path (relative to config/)
+    strategy: str
+    chartink_url: str
+
+    @field_validator("chartink_url")
+    @classmethod
+    def url_must_be_http(cls, v: str) -> str:
+        if not v.startswith(("http://", "https://")):
+            raise ValueError(f"chartink_url must be http(s): {v}")
+        return v
+
+
+class ScanWebhookMapConfig(BaseModel):
+    """Maps Chartink scanner names to ScannerEntry (strategy + chartink_url)."""
+    model_config = ConfigDict(extra="forbid")
+    scanners: dict[str, ScannerEntry]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
