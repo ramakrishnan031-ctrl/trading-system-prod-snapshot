@@ -194,6 +194,9 @@ class SignalProcessorConfig(BaseModel):
     # "WARN" (default) = log WARNING and fall back to FIXED_PCT.
     # "HALT" = reject the signal with REJECTED_NO_ATR_DATA.
     atr_fallback_mode: Literal["WARN", "HALT"] = "WARN"
+    # BL-16: minimum target distance as fraction of entry. Guards against
+    # degenerate configs that would produce target == entry (guaranteed loss).
+    tgt_min_pct: float = 0.003
 
     @field_validator("worker_count")
     @classmethod
@@ -214,6 +217,13 @@ class SignalProcessorConfig(BaseModel):
     def _validate_timeout(cls, v: int) -> int:
         if v < 1:
             raise ValueError("pipeline_timeout_sec must be >= 1")
+        return v
+
+    @field_validator("tgt_min_pct")
+    @classmethod
+    def _validate_tgt_min_pct(cls, v: float) -> float:
+        if not (0 < v < 1):
+            raise ValueError("tgt_min_pct must be > 0 and < 1")
         return v
 
 

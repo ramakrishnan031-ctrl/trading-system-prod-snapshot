@@ -124,6 +124,7 @@ class SignalProcessor:
         signal_expiry_sec: int = 60,
         instrument_cache=None,              # IC: optional InstrumentCache for lot_size/sector
         atr_fallback_mode: str = "WARN",   # MED #12: "WARN" or "HALT"
+        tgt_min_pct: float = 0.003,        # BL-16: guard against degenerate target == entry
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -145,6 +146,7 @@ class SignalProcessor:
         self._signal_expiry_sec = signal_expiry_sec
         self._instrument_cache = instrument_cache  # IC: Module 38
         self._atr_fallback_mode: str = atr_fallback_mode  # MED #12
+        self._tgt_min_pct: float = float(tgt_min_pct)     # BL-16
 
         # Lifecycle
         self._running = False
@@ -651,19 +653,30 @@ class SignalProcessor:
         if tgt_method == "FIXED_PCT":
             tgt_pct = float(strategy.tgt_pct)
             if direction == "LONG":
-                return entry * (1.0 + tgt_pct)
+                tgt_price = entry * (1.0 + tgt_pct)
             else:
-                return entry * (1.0 - tgt_pct)
-
-        if tgt_method == "RISK_REWARD":
+                tgt_price = entry * (1.0 - tgt_pct)
+        elif tgt_method == "RISK_REWARD":
             sl_distance = abs(entry - sl)
             ratio = float(strategy.tgt_risk_reward)
             if direction == "LONG":
-                return entry + sl_distance * ratio
+                tgt_price = entry + sl_distance * ratio
             else:
-                return entry - sl_distance * ratio
+                tgt_price = entry - sl_distance * ratio
+        else:
+            raise ValueError(f"Unknown tgt_method: {tgt_method!r}")
 
-        raise ValueError(f"Unknown tgt_method: {tgt_method!r}")
+        # BL-16: guard against degenerate target (e.g. FIXED_PCT with tgt_pct=0.0
+        # or RISK_REWARD with zero sl_distance) that would make tgt == entry.
+        if entry > 0 and abs(tgt_price - entry) / entry < self._tgt_min_pct:
+            raise _PipelineReject(
+                "TGT_DISTANCE_TOO_SMALL",
+                f"target distance {abs(tgt_price - entry) / entry:.5f} < "
+                f"tgt_min_pct {self._tgt_min_pct:.5f} "
+                f"(method={tgt_method}, entry={entry}, tgt={tgt_price})",
+            )
+
+        return tgt_price
 
     # ------------------------------------------------------------------
     # Screener stats helper (SPW9)

@@ -1068,6 +1068,73 @@ def test_atr_fallback_mode_warn_still_falls_back():
     print(f"  OK atr_fallback_mode=WARN keeps fallback behavior, sl={sl} (MED #12)")
 
 
+def test_derive_target_rejects_zero_distance():
+    """BL-16: degenerate tgt_pct=0 (target == entry) must raise _PipelineReject."""
+    from signals.signal_processor import _PipelineReject
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", tgt_method="FIXED_PCT", tgt_pct=0.0)
+    raised = False
+    try:
+        proc._derive_target(1000.0, 980.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "TGT_DISTANCE_TOO_SMALL", (
+            f"Unexpected check: {exc.check}"
+        )
+    assert raised, "tgt_pct=0 must raise _PipelineReject(TGT_DISTANCE_TOO_SMALL)"
+    print("  OK BL-16: FIXED_PCT tgt_pct=0 -> TGT_DISTANCE_TOO_SMALL")
+
+
+def test_derive_target_rejects_target_below_min_pct():
+    """BL-16: FIXED_PCT with tgt below tgt_min_pct threshold is rejected."""
+    from signals.signal_processor import _PipelineReject
+    proc, _, _ = _make_proc()
+    # tgt_pct=0.001 (0.1%) < default tgt_min_pct=0.003 (0.3%)
+    strategy = _MockStrategy(direction="LONG", tgt_method="FIXED_PCT", tgt_pct=0.001)
+    raised = False
+    try:
+        proc._derive_target(1000.0, 980.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "TGT_DISTANCE_TOO_SMALL"
+    assert raised, "tgt_pct=0.001 < tgt_min_pct=0.003 must be rejected"
+    print("  OK BL-16: FIXED_PCT tgt_pct<tgt_min_pct -> TGT_DISTANCE_TOO_SMALL")
+
+
+def test_positional_tgt_not_equal_entry_price():
+    """
+    BL-16: each positional strategy YAML must produce target != entry when
+    run through the real _derive_target pipeline. With RISK_REWARD + ratio 2
+    and an sl distance of 2%, target distance = 4% (well above tgt_min_pct).
+    """
+    from strategies.schema import validate_strategy
+    proc, _, _ = _make_proc()
+    yaml_dir = Path(__file__).parent.parent.parent / "config" / "strategies"
+    entry = 1000.0
+    sl_long = entry * (1.0 - 0.02)  # 2% below entry (LONG)
+    for name in [
+        "positional_momentum_long",
+        "positional_sector_rotation",
+        "positional_swing_long",
+    ]:
+        cfg = validate_strategy(yaml_dir / f"{name}.yaml")
+        tgt = proc._derive_target(entry, sl_long, cfg)
+        distance_pct = abs(tgt - entry) / entry
+        assert tgt != entry, f"{name}: target equals entry (guaranteed loss)"
+        assert distance_pct >= proc._tgt_min_pct, (
+            f"{name}: target distance {distance_pct:.5f} below "
+            f"tgt_min_pct {proc._tgt_min_pct:.5f}"
+        )
+        # RISK_REWARD with ratio 2 and sl_distance 2% -> tgt distance 4%
+        assert abs(distance_pct - 0.04) < 1e-9, (
+            f"{name}: expected RISK_REWARD distance 4%, got {distance_pct:.5f}"
+        )
+        print(
+            f"  OK BL-16: {name} entry={entry} sl={sl_long} -> tgt={tgt:.2f} "
+            f"(dist={distance_pct * 100:.2f}%)"
+        )
+
+
 def test_tgt_price_passed_to_order_placer():
     """tgt_price computed by processor is passed to order_placer.place()."""
     store, _ = _make_store()
@@ -1493,6 +1560,9 @@ def run_all_tests() -> int:
         test_atr_fallback_mode_halt_sl_raises_pipeline_reject,
         test_atr_fallback_mode_halt_tgt_raises_pipeline_reject,
         test_atr_fallback_mode_warn_still_falls_back,
+        test_derive_target_rejects_zero_distance,
+        test_derive_target_rejects_target_below_min_pct,
+        test_positional_tgt_not_equal_entry_price,
         test_tgt_price_passed_to_order_placer,
         test_5_workers_process_5_signals_concurrently,
         test_100_signals_complete_in_reasonable_time,

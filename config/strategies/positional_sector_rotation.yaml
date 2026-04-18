@@ -19,7 +19,7 @@ sl_atr_multiplier: 2.0
 sl_min_pct: 0.005
 sl_max_pct: 0.08
 
-tgt_method: "ATR"
+tgt_method: "RISK_REWARD"
 tgt_pct: 0.0
 tgt_risk_reward: 2.0
 tgt_atr_multiplier: 3.0

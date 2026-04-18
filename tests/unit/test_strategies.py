@@ -414,7 +414,14 @@ def test_short_strategy_direction() -> None:
 
 
 def test_positional_strategy_fields() -> None:
-    """S6: DELIVERY, LIMIT_TRIPLE, ATR-based, no smart_tgt, entry_end 14:30."""
+    """
+    S6: DELIVERY, LIMIT_TRIPLE, ATR-based SL, RISK_REWARD TGT, no smart_tgt,
+    entry_end 14:30.
+
+    BL-16: tgt_method changed from "ATR" to "RISK_REWARD" because the ATR
+    branch in signal_processor._derive_target falls back to FIXED_PCT which,
+    with tgt_pct=0.0, produces target == entry (guaranteed loss).
+    """
     from strategies.loader import StrategyLoader
     loader = StrategyLoader()
     loader.load_all_strategies(_STRATEGIES_DIR)
@@ -423,11 +430,12 @@ def test_positional_strategy_fields() -> None:
         assert cfg.intent == "DELIVERY", "%s intent should be DELIVERY" % name
         assert cfg.order_protocol == "LIMIT_TRIPLE", "%s should use LIMIT_TRIPLE" % name
         assert cfg.sl_method == "ATR", "%s should use ATR SL" % name
-        assert cfg.tgt_method == "ATR", "%s should use ATR TGT" % name
+        assert cfg.tgt_method == "RISK_REWARD", "%s should use RISK_REWARD TGT (BL-16)" % name
+        assert cfg.tgt_risk_reward > 0, "%s tgt_risk_reward must be > 0" % name
         assert cfg.smart_tgt_enabled is False, "%s smart_tgt should be disabled" % name
         assert cfg.pullback_wait_enabled is False, "%s pullback_wait should be disabled" % name
         assert cfg.entry_end_time == "14:30", "%s entry_end should be 14:30" % name
-    print("  OK positional_strategy_fields: all 3 DELIVERY strategies verified")
+    print("  OK positional_strategy_fields: all 3 DELIVERY strategies verified (BL-16)")
 
 
 def test_all_15_yaml_files_validate() -> None:

@@ -1037,6 +1037,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         drain_poll_sec=sp_cfg.drain_poll_sec,
         instrument_cache=instrument_cache,  # IC: lot_size/sector lookup
         atr_fallback_mode=sp_cfg.atr_fallback_mode,  # MED #12
+        tgt_min_pct=sp_cfg.tgt_min_pct,              # BL-16
     )
 
     entry_gate = EntryGate(

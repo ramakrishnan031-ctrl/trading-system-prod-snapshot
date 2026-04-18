@@ -82,6 +82,7 @@ signal_processor:             # SP15 — worker pool settings
   worker_count: 5             # ThreadPoolExecutor workers (1-50)
   drain_poll_sec: 0.1         # queue poll interval when empty
   pipeline_timeout_sec: 30    # hard per-signal processing deadline
+  tgt_min_pct: 0.003          # BL-16: reject signal if target distance < 0.3% of entry
 
 kill_switch:                  # KS7 — auto-trip settings
   api_failure_threshold: 3    # consecutive API failures before auto soft_kill (>= 1)
