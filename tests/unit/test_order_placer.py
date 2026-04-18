@@ -38,7 +38,15 @@ from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderManager
-from orders.order_placer import OrderPlacer
+from orders.order_placer import (
+    OrderPlacer,
+    _FillEntry,
+    _LEG_ENTRY,
+    _LEG_SL,
+    _LEG_TGT,
+    _LEG_EOD,
+    _VALID_LEGS,
+)
 from orders.order_protocol_co import CoPlusTgtProtocol
 from orders.order_protocol_limit import LimitTripleProtocol
 
@@ -1150,6 +1158,60 @@ class TestProductResolverWiring:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-7a — _FillEntry leg taxonomy lockdown
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl7aFillEntryLegTaxonomy:
+    """
+    BL-7a: _FillEntry validates leg ∈ {ENTRY, SL, TGT, EOD} and exposes
+    order_protocol + direction for branching in the split fill handler (BL-7d).
+    """
+
+    def test_fill_entry_rejects_invalid_leg(self) -> None:
+        """Constructor must reject leg values outside _VALID_LEGS."""
+        try:
+            _FillEntry(
+                trade_id="trd_x", reservation_id="res_x", symbol="RELIANCE",
+                qty=1, leg="BOGUS",
+                order_protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+        except ValueError as exc:
+            assert "BOGUS" in str(exc)
+            assert "ENTRY" in str(exc)  # lists valid set
+            print("  OK _FillEntry rejects invalid leg (BL-7a)")
+            return
+        raise AssertionError("Expected ValueError on invalid leg")
+
+    def test_fill_entry_accepts_all_valid_legs(self) -> None:
+        """All four valid legs construct cleanly."""
+        for leg in (_LEG_ENTRY, _LEG_SL, _LEG_TGT, _LEG_EOD):
+            fe = _FillEntry(
+                trade_id="trd_x", reservation_id="res_x", symbol="RELIANCE",
+                qty=1, leg=leg,
+                order_protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+            assert fe.leg == leg
+        assert _VALID_LEGS == frozenset({"ENTRY", "SL", "TGT", "EOD"})
+        print("  OK _FillEntry accepts all 4 valid legs (BL-7a)")
+
+    def test_fill_entry_stores_order_protocol_and_direction(self) -> None:
+        """New fields order_protocol + direction persist on the entry."""
+        fe = _FillEntry(
+            trade_id="trd_abc", reservation_id="res_123", symbol="HDFC",
+            qty=5, leg=_LEG_ENTRY,
+            order_protocol="CO_PLUS_TGT", direction="SHORT",
+        )
+        assert fe.trade_id == "trd_abc"
+        assert fe.reservation_id == "res_123"
+        assert fe.symbol == "HDFC"
+        assert fe.qty == 5
+        assert fe.leg == "ENTRY"
+        assert fe.order_protocol == "CO_PLUS_TGT"
+        assert fe.direction == "SHORT"
+        print("  OK _FillEntry stores order_protocol + direction (BL-7a)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BL-12 — OrderStatusChanged event pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1420,6 +1482,10 @@ if __name__ == "__main__":
         TestEmptyBrokerOrderId().test_co_empty_tgt_id_is_failure,
         # ProductResolverWiring
         TestProductResolverWiring().test_intraday_uses_mis_from_resolver,
+        # BL-7a _FillEntry leg taxonomy
+        TestBl7aFillEntryLegTaxonomy().test_fill_entry_rejects_invalid_leg,
+        TestBl7aFillEntryLegTaxonomy().test_fill_entry_accepts_all_valid_legs,
+        TestBl7aFillEntryLegTaxonomy().test_fill_entry_stores_order_protocol_and_direction,
         # BL-12 OrderStatusChanged event pipeline
         TestBl12OrderStatusEventPipeline().test_order_monitor_complete_updates_orders_table_status,
         TestBl12OrderStatusEventPipeline().test_order_monitor_cancelled_updates_orders_table_status,

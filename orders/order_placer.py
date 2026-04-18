@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict, Optional
+from typing import Dict, Final, Optional
 
 from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
@@ -73,11 +73,47 @@ from orders.order_manager import OrderManager
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Leg taxonomy (BL-7a)
+#
+# The `leg` field on _FillEntry routes OrderFilled events to the correct
+# handler inside _on_order_filled:
+#
+#     ENTRY       → _handle_entry_fill  (commit capital, open position)
+#     SL/TGT/EOD  → _handle_exit_fill   (release capital, close position)
+#
+# (The split handler is wired in BL-7d; A.3.c guards non-ENTRY legs.)
+# EOD is reserved for eod_squareoff-originated tracks; it is a valid value
+# today even though eod_squareoff does not currently populate _fill_map.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LEG_ENTRY: Final[str] = "ENTRY"
+_LEG_SL:    Final[str] = "SL"
+_LEG_TGT:   Final[str] = "TGT"
+_LEG_EOD:   Final[str] = "EOD"
+_VALID_LEGS: frozenset[str] = frozenset({_LEG_ENTRY, _LEG_SL, _LEG_TGT, _LEG_EOD})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Internal fill-map entry
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _FillEntry:
-    __slots__ = ("trade_id", "reservation_id", "symbol", "qty", "leg")
+    """
+    One row in OrderPlacer._fill_map, keyed by internal_order_id.
+
+    `leg` drives routing in _on_order_filled (see Leg taxonomy above).
+    `order_protocol` / `direction` are cached here so entry-fill handling
+    can branch (e.g. register with SmartTgtManager only for CO_PLUS_TGT)
+    without a DB round-trip on every fill.
+
+    Invariants:
+        leg ∈ _VALID_LEGS; constructor raises ValueError otherwise.
+    """
+
+    __slots__ = (
+        "trade_id", "reservation_id", "symbol", "qty", "leg",
+        "order_protocol", "direction",
+    )
 
     def __init__(
         self,
@@ -86,12 +122,21 @@ class _FillEntry:
         symbol: str,
         qty: int,
         leg: str,
+        order_protocol: str,
+        direction: str,
     ) -> None:
+        if leg not in _VALID_LEGS:
+            raise ValueError(
+                f"_FillEntry.leg must be one of {sorted(_VALID_LEGS)}, "
+                f"got {leg!r}"
+            )
         self.trade_id = trade_id
         self.reservation_id = reservation_id
         self.symbol = symbol
         self.qty = qty
         self.leg = leg
+        self.order_protocol = order_protocol
+        self.direction = direction
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -275,7 +320,9 @@ class OrderPlacer:
                 reservation_id=reservation_id,
                 symbol=symbol,
                 qty=qty,
-                leg="ENTRY",
+                leg=_LEG_ENTRY,
+                order_protocol=order_protocol,
+                direction=direction,
             )
             with self._fill_map_lock:
                 self._fill_map[entry_internal] = fill_entry
