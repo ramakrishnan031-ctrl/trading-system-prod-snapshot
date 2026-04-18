@@ -1,0 +1,212 @@
+================================================================
+FIX: ScanWebhookMapConfig schema mismatch
+================================================================
+
+Step 2 report YELLOW. Fix this before Step 3.
+
+PROBLEM:
+  Real config/scan_webhook_map.yaml format:
+    open_low_breakout_long:
+      strategy: open_low_breakout_long
+      chartink_url: "https://chartink.com/screener/..."
+
+  Current schema ScanWebhookMapConfig.scanners: dict[str, str]
+  This expects { scanner_name: strategy_name } plain string.
+
+  Real YAML has { scanner_name: { strategy, chartink_url } }.
+  Pydantic validation fails with 15 errors.
+
+  Tests didn't catch because test fixture used simplified
+  {scanner: strategy} form — classic test stub / prod config
+  divergence.
+
+================================================================
+THE FIX
+================================================================
+
+STEP 1 — BEFORE CHANGING ANYTHING, verify:
+
+  a. Read real YAML structure:
+       cat config/scan_webhook_map.yaml | head -30
+
+  b. Check locked decisions for P17 / S14 references:
+       grep -n -A 5 "scan_webhook_map\|P17\|S14" docs/locked_decisions.yaml
+
+  c. Find where ScanWebhookMapConfig is defined:
+       grep -rn "ScanWebhookMapConfig\|scan_webhook_map" core/
+
+  d. Find every consumer of scanners dict:
+       grep -rn "scanners\[" . --include="*.py"
+       grep -rn "\.scanners\." . --include="*.py"
+       grep -rn "scan_webhook_map" . --include="*.py" | head
+
+  This tells you the full impact surface.
+
+================================================================
+STEP 2 — ADD ScannerEntry dataclass
+================================================================
+
+In core/config_loader.py (or wherever SchemaWebhookMapConfig
+lives):
+
+  class ScannerEntry(BaseModel):
+      strategy: str
+      chartink_url: str
+
+      @field_validator('chartink_url')
+      @classmethod
+      def url_must_be_http(cls, v: str) -> str:
+          if not v.startswith(('http://', 'https://')):
+              raise ValueError(f"chartink_url must be http(s): {v}")
+          return v
+
+  class ScanWebhookMapConfig(BaseModel):
+      scanners: dict[str, ScannerEntry]
+
+================================================================
+STEP 3 — UPDATE CONSUMERS
+================================================================
+
+Anywhere code currently does:
+  strategy_name = cfg.scanners[scan_name]
+
+Change to:
+  strategy_name = cfg.scanners[scan_name].strategy
+
+If any code wants the URL (unlikely in hot path but possible
+for logging or preflight):
+  url = cfg.scanners[scan_name].chartink_url
+
+Check these typical call sites:
+  signals/signal_processor.py
+  signals/webhook_receiver.py
+  scripts/preflight_scanner_check.py
+  Anywhere scan_name -> strategy lookup occurs
+
+================================================================
+STEP 4 — UPDATE TESTS
+================================================================
+
+Fix the test fixture to match production shape:
+
+  Before (tests/unit/test_config_loader.py or similar):
+    scan_webhook_map:
+      scanners:
+        scanner_a: strategy_a
+        scanner_b: strategy_b
+
+  After:
+    scan_webhook_map:
+      scanners:
+        scanner_a:
+          strategy: strategy_a
+          chartink_url: "https://chartink.com/screener/scanner-a"
+        scanner_b:
+          strategy: strategy_b
+          chartink_url: "https://chartink.com/screener/scanner-b"
+
+Add a NEW test that loads the ACTUAL production YAML:
+
+  def test_real_scan_webhook_map_yaml_loads():
+      """Loads the REAL config/scan_webhook_map.yaml to catch
+      schema drift between tests and production."""
+      cfg = load_all("config/")
+      assert len(cfg.scan_webhook_map.scanners) == 15
+      for name, entry in cfg.scan_webhook_map.scanners.items():
+          assert entry.strategy
+          assert entry.chartink_url.startswith("https://")
+
+This test is your safety net. Every future config change will
+be caught.
+
+================================================================
+STEP 5 — VERIFY
+================================================================
+
+  1. Full suite green:
+       python -m pytest tests/ -q --tb=short 2>&1 | tail -10
+     Expect 1411/1411 (or more if new test added).
+
+  2. Real YAML loads:
+       python -c "from core.config_loader import load_all; \
+         cfg = load_all('config/'); \
+         print('Scanners:', len(cfg.scan_webhook_map.scanners)); \
+         first = next(iter(cfg.scan_webhook_map.scanners.values())); \
+         print('First entry:', first.strategy, first.chartink_url)"
+     Expect: 15 scanners printed, no errors.
+
+  3. Re-run holiday guard test:
+       python main.py --interactive
+     Expect: same clean weekend block as Step 2F.
+
+================================================================
+STEP 6 — COMMIT + PUSH
+================================================================
+
+  git add -A
+  git commit -m "Fix ScanWebhookMapConfig to support {strategy, chartink_url} entries
+
+Schema accepted plain string per scanner; real YAML has nested
+dict (strategy + chartink_url per locked P17/S14). Added
+ScannerEntry dataclass, updated consumers, added real-YAML
+regression test to prevent future drift."
+  git push vm main
+
+Confirm post-receive hook output.
+
+================================================================
+STEP 7 — VERIFY ON VM
+================================================================
+
+  ssh trading-vm
+  cd ~/trading-system  # venv auto-activates
+
+  python -m pytest tests/ -q --tb=no 2>&1 | tail -5
+  # Expect 1411+ green on VM too
+
+  python -c "from core.config_loader import load_all; \
+      cfg = load_all('config/'); \
+      print('VM scanners:', len(cfg.scan_webhook_map.scanners))"
+  # Expect 15
+
+================================================================
+REPORT
+================================================================
+
+---
+SCHEMA FIX COMPLETE
+
+Files changed:
+  - [file]: ScannerEntry added, ScanWebhookMapConfig updated
+  - [consumers]: N call sites updated to .strategy access
+  - tests/unit/test_config_loader.py: fixture updated + real-YAML test added
+
+Test suite:
+  Before: 1411 passed
+  After: [XXXX] passed
+  Delta: [+N new tests]
+
+Real YAML load:
+  Scanners count: 15
+  All valid: YES
+
+VM verification:
+  Pytest on VM: [XXXX] passed
+  Real YAML load on VM: OK
+
+Commit: [hash]
+Push: SUCCESS
+
+Ready for Step 3: YES
+---
+
+================================================================
+DO NOT DO IN THIS FIX
+================================================================
+
+- Do NOT modify config/scan_webhook_map.yaml (real YAML is
+  authoritative; fix schema instead)
+- Do NOT change locked decisions (P17/S14 are correct)
+- Do NOT break other consumers (touch only the schema + strict
+  call sites)
+- Do NOT add new features; minimum-change fix only

@@ -1,0 +1,108 @@
+================================================================
+FIX: test_eod_squareoff.py weekend flakiness
+================================================================
+
+Fix the 22 test failures before Step 2.
+
+RATIONALE:
+Tests should be deterministic regardless of real-world date.
+Using datetime.now() as base is a design flaw. Pin to a
+known-good weekday.
+
+================================================================
+THE FIX
+================================================================
+
+In tests/unit/test_eod_squareoff.py, locate the _ist() helper
+(or equivalent function used to construct "today" timestamps).
+
+Current (bad):
+  def _ist(hour=15, minute=30):
+      now = datetime.now(_IST)
+      return now.replace(hour=hour, minute=minute, ...)
+
+Change to:
+  _FIXED_TEST_DATE = date(2026, 4, 20)  # Monday, a trading day
+  
+  def _ist(hour=15, minute=30):
+      return datetime.combine(
+          _FIXED_TEST_DATE,
+          time(hour, minute, 0),
+          tzinfo=_IST
+      )
+
+Or minimally invasive variant:
+  def _ist(hour=15, minute=30):
+      # Pin to a known weekday (Monday 2026-04-20) so tests
+      # pass regardless of real-world day of week
+      base = date(2026, 4, 20)
+      return datetime(base.year, base.month, base.day,
+                      hour, minute, 0, tzinfo=_IST)
+
+Choose the variant that matches existing style in the file.
+
+================================================================
+CHECKS BEFORE COMMIT
+================================================================
+
+1. Pick 2026-04-20 (Monday, trading day, not in
+   nse_holidays_2026.yaml).
+
+2. Verify no other helper in same file has the same bug
+   (grep for datetime.now inside tests/unit/test_eod_squareoff.py).
+   Fix all instances consistently.
+
+3. Run the affected file only:
+     python -m pytest tests/unit/test_eod_squareoff.py -q
+   Expected: all pass.
+
+4. Run full suite:
+     python -m pytest tests/ -q --tb=no 2>&1 | tail -5
+   Expected: 1411/1411 passed.
+
+5. Run twice more to confirm determinism:
+     python -m pytest tests/unit/test_eod_squareoff.py -q
+     python -m pytest tests/unit/test_eod_squareoff.py -q
+   Both should pass with identical output.
+
+================================================================
+COMMIT + PUSH
+================================================================
+
+  git add tests/unit/test_eod_squareoff.py
+  git commit -m "Fix test_eod_squareoff weekend flakiness - pin _ist() to Monday 2026-04-20"
+  git push vm main
+
+Confirm post-receive hook output.
+
+================================================================
+REPORT
+================================================================
+
+---
+WEEKEND TEST FIX — COMPLETE
+
+Files changed: tests/unit/test_eod_squareoff.py
+Helpers patched: [list names, e.g., _ist()]
+Instances fixed: [count]
+
+Test results:
+  test_eod_squareoff.py: XX/XX passed
+  Full suite: 1411/1411 passed
+  Deterministic rerun: SUCCESS
+
+Commit: [hash]
+Push: SUCCESS
+
+Ready for Step 2: YES
+---
+
+================================================================
+DO NOT DO IN THIS FIX
+================================================================
+
+- Do NOT change any production code (orders/eod_squareoff.py etc.)
+- Do NOT change other test files
+- Do NOT touch fixtures unless they have the same bug
+- Minimum-change principle: fix only the weekend bug,
+  nothing else

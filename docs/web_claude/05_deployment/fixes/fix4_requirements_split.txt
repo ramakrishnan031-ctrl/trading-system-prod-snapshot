@@ -1,0 +1,147 @@
+================================================================
+MINI-TASK: Add missing deps to requirements.txt
+================================================================
+
+During Step 4a you identified pytest, pytest-cov, python-dotenv
+are on VM venv but not in requirements.txt. Fix it so fresh
+installs are reproducible.
+
+================================================================
+DECISIONS
+================================================================
+
+Approach: Split into two files — runtime vs dev.
+
+  requirements.txt        -> production runtime only
+                             (Flask, kiteconnect, pydantic,
+                              PyYAML, python-dotenv, openpyxl)
+  requirements-dev.txt    -> adds pytest + pytest-cov
+                             (for test suite, not needed in prod)
+
+python-dotenv: MUST be in requirements.txt (runtime loads .env).
+pytest/pytest-cov: requirements-dev.txt only (tests don't run
+                   in production).
+
+================================================================
+STEP 1 — UPDATE requirements.txt
+================================================================
+
+Add python-dotenv to runtime deps.
+
+  cd D:/Projects/trading-system
+  
+  # Check current content first
+  cat requirements.txt
+
+Add this line (preserve existing pins):
+  python-dotenv>=1.0.0
+
+Verify the additions match what's installed:
+  ssh trading-vm "source ~/trading-system/venv/bin/activate && \
+      pip show python-dotenv | grep Version"
+
+Use at least the same version as installed.
+
+================================================================
+STEP 2 — CREATE requirements-dev.txt
+================================================================
+
+Create a new file for dev deps:
+
+  cat > requirements-dev.txt << 'EOF'
+# Development dependencies (tests, coverage)
+# Install: pip install -r requirements-dev.txt
+# Production VMs should NOT install this file.
+
+-r requirements.txt
+
+pytest>=9.0.0
+pytest-cov>=7.0.0
+EOF
+
+The `-r requirements.txt` line means "also include everything
+from requirements.txt" — so `pip install -r requirements-dev.txt`
+gets both runtime + dev deps.
+
+================================================================
+STEP 3 — VERIFY ON BOTH SIDES
+================================================================
+
+On PC:
+  cat requirements.txt
+  cat requirements-dev.txt
+  
+  # Simulate a fresh dev install (just parse, don't install):
+  pip install --dry-run -r requirements-dev.txt 2>&1 | head
+
+On VM (after push):
+  ssh trading-vm "cd ~/trading-system && source venv/bin/activate && \
+      pip install -r requirements-dev.txt 2>&1 | tail -5"
+  # Expected: 'Requirement already satisfied' for all packages
+  # (nothing new to install since venv already has them)
+
+================================================================
+STEP 4 — COMMIT + PUSH
+================================================================
+
+  git add requirements.txt requirements-dev.txt
+  git commit -m "Add python-dotenv to runtime, split dev deps to requirements-dev.txt
+
+Production runtime needs python-dotenv (.env loading).
+pytest and pytest-cov moved to requirements-dev.txt; not needed
+on production VMs.
+
+Ensures fresh VM installs via 'pip install -r requirements.txt'
+include all runtime dependencies."
+
+  git push vm main
+
+================================================================
+STEP 5 — VERIFY TESTS STILL RUN
+================================================================
+
+On VM:
+  ssh trading-vm "cd ~/trading-system && source venv/bin/activate && \
+      python -m pytest tests/ -q --tb=no 2>&1 | tail -5"
+
+Expected: 1413 passed.
+
+On PC:
+  cd D:/Projects/trading-system
+  python -m pytest tests/ -q --tb=no 2>&1 | tail -5
+
+Expected: 1413 passed.
+
+================================================================
+REPORT
+================================================================
+
+---
+REQUIREMENTS SPLIT — COMPLETE
+
+Files changed:
+  requirements.txt: added python-dotenv>=X.Y.Z
+  requirements-dev.txt: NEW (pytest, pytest-cov)
+
+Verification:
+  pip install --dry-run check: OK
+  VM re-install idempotent: YES (all already satisfied)
+
+Tests:
+  PC: 1413 passed
+  VM: 1413 passed
+
+Commit: [hash]
+Push: SUCCESS
+
+Ready for Monday paper session: YES
+---
+
+================================================================
+DO NOT DO
+================================================================
+
+- Do NOT add pytest/pytest-cov to requirements.txt
+  (keep them in -dev only; systemd service never runs tests)
+- Do NOT upgrade pinned versions unless necessary
+- Do NOT touch .env

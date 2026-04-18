@@ -1,0 +1,402 @@
+================================================================
+STEP 3 of 5 — Systemd Service + Firewall
+For: VS Code Claude (executes from Rama's PC)
+================================================================
+
+CONTEXT:
+
+Step 1 GREEN (VM + bare repo).
+Step 2 GREEN (venv + 1413 tests).
+2 schema drifts fixed. Production configs now pass pydantic.
+
+Step 3 goals:
+  - Create systemd service for main.py (non-interactive mode)
+  - Configure to auto-start on boot, auto-restart on crash
+  - Separate systemd unit for alert_watcher.py (sentinel checker)
+  - Open firewall port 5000 for Chartink webhooks
+  - Set up cron job for 05:00 IST token cleanup
+  - Verify: start, stop, status, logs, restart behavior
+
+Step 3 does NOT cover:
+  - Actually running in paper mode for a session (Monday)
+  - Zerodha login / token management (Monday)
+  - Refresh instruments (Monday)
+  - Live mode (Step 5 playbook)
+
+================================================================
+IMPORTANT: SYSTEMD VS INTERACTIVE
+================================================================
+
+main.py has TWO modes:
+  - Interactive (--interactive): prompts for account, mode, etc.
+    Rama runs this Monday morning for first paper session.
+  - Non-interactive (no flag): uses primary account from
+    accounts.csv, reads existing token file, no prompts.
+    This is what systemd will run.
+
+Systemd will invoke:
+  python main.py --mode paper
+  (OR --mode live for live sessions — Rama's manual override
+   when ready; default service is paper)
+
+Systemd will NOT use --interactive. That defeats the purpose.
+
+================================================================
+3A — FIREWALL: OPEN PORT 5000
+================================================================
+
+Currently ufw has only port 22 open.
+
+SSH into VM:
+  ssh trading-vm
+
+Open port 5000 (webhook receiver, HMAC-validated):
+
+  sudo ufw allow 5000/tcp comment 'Chartink webhook'
+  sudo ufw status verbose
+
+Expected output includes:
+  5000/tcp      ALLOW       Anywhere    # Chartink webhook
+
+Also open Oracle Cloud security list for TCP 5000:
+  This is done in Oracle Cloud console, NOT via SSH.
+  Rama must do this manually:
+    Oracle Cloud Console -> VCN -> Security Lists ->
+    Default Security List -> Add Ingress Rule:
+      Source Type: CIDR
+      Source CIDR: 0.0.0.0/0
+      IP Protocol: TCP
+      Destination Port Range: 5000
+      Description: Chartink webhook
+
+  Flag this in your report — you cannot do it via SSH.
+
+================================================================
+3B — SYSTEMD UNIT: trading-system.service
+================================================================
+
+Create unit file:
+  sudo tee /etc/systemd/system/trading-system.service > /dev/null << 'EOF'
+[Unit]
+Description=Trading System v2 (paper/live mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-system
+Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
+EnvironmentFile=/home/ubuntu/trading-system/.env
+
+# Default mode: paper. To run live, use:
+#   sudo systemctl edit trading-system
+# and override ExecStart with --mode live
+ExecStart=/home/ubuntu/trading-system/venv/bin/python \
+    /home/ubuntu/trading-system/main.py --mode paper
+
+# Send SIGINT on stop so main.py's Ctrl+C handler runs
+# (clean shutdown, SHUTDOWN event, DB flush)
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+# Logging to journal (journalctl -u trading-system)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-system
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+Reload systemd:
+  sudo systemctl daemon-reload
+
+Verify unit loads cleanly:
+  sudo systemctl status trading-system.service
+  # Expected: loaded (not active yet; that's correct)
+
+================================================================
+3C — SYSTEMD UNIT: alert-watcher.service
+================================================================
+
+alert_watcher.py checks sentinel files and sends critical
+alerts. Separate service because:
+  - Runs independently of main (even if main crashes,
+    alerts still fire for failed sentinel clears)
+  - Different restart policy (always-on, not just market hours)
+
+Create unit file:
+  sudo tee /etc/systemd/system/alert-watcher.service > /dev/null << 'EOF'
+[Unit]
+Description=Trading System - Alert Watcher (sentinel monitor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-system
+Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
+EnvironmentFile=/home/ubuntu/trading-system/.env
+ExecStart=/home/ubuntu/trading-system/venv/bin/python \
+    /home/ubuntu/trading-system/scripts/alert_watcher.py
+
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alert-watcher
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+Reload:
+  sudo systemctl daemon-reload
+
+================================================================
+3D — CRON JOB: 05:00 IST TOKEN CLEANUP
+================================================================
+
+Each day at 05:00 IST, delete yesterday's Zerodha token so
+system forces fresh login when operator runs zerodha_login.py
+on PC + SCPs new token.
+
+Edit crontab for ubuntu user:
+  crontab -e
+
+Add line:
+  0 5 * * 1-5 rm -f /home/ubuntu/trading-system/data_store/session/zerodha_token.json
+
+(1-5 = Monday-Friday. Cron uses system timezone, which is
+ Asia/Kolkata as set in Step 1.)
+
+Verify:
+  crontab -l
+
+Test cron entry syntax (dry-run; do not actually run the rm):
+  systemctl status cron
+  # Should be active
+
+================================================================
+3E — VERIFY SYSTEMD UNITS (do NOT start services yet)
+================================================================
+
+Today is Saturday. If you START the service now, the holiday
+guard will block startup cleanly and systemd will record
+"success" exit. That's fine to test once, but don't ENABLE
+on boot yet — Monday's manual first run is the paper trial
+gate.
+
+Instead:
+
+  1. Syntax check:
+       sudo systemctl status trading-system.service
+       # Expected: loaded, inactive (dead)
+
+  2. Dry-run start ONCE, then stop:
+       sudo systemctl start trading-system.service
+       sleep 5
+       sudo systemctl status trading-system.service
+       # Expected: active (running) OR inactive (dead) with exit
+       # code 0 if holiday guard triggered
+       
+       sudo journalctl -u trading-system -n 30 --no-pager
+       # Expected: holiday block message (Saturday), then
+       # "Main process exited, code=exited, status=0/SUCCESS"
+       
+       sudo systemctl stop trading-system.service
+
+  3. Check alert-watcher dry-run:
+       sudo systemctl start alert-watcher.service
+       sleep 5
+       sudo systemctl status alert-watcher.service
+       # Expected: active (running) -- this one doesn't have
+       # a holiday guard, runs continuously
+
+       sudo journalctl -u alert-watcher -n 30 --no-pager
+       # Expected: startup log lines, no errors
+
+       sudo systemctl stop alert-watcher.service
+
+  4. Do NOT enable on boot yet:
+       # sudo systemctl enable trading-system.service  # SKIP
+       # sudo systemctl enable alert-watcher.service   # SKIP
+     
+     Rama will enable these Monday morning after first
+     successful manual interactive run.
+
+================================================================
+3F — LOG LOCATIONS
+================================================================
+
+Document for Rama's reference. VS Code Claude: verify these
+paths exist (or will exist on first run).
+
+  System logs (from main.py):
+    /home/ubuntu/trading-system/logs/system.log
+    /home/ubuntu/trading-system/logs/trades.log
+    /home/ubuntu/trading-system/logs/reconciler.log
+
+  Journal logs (from systemd):
+    sudo journalctl -u trading-system -f          # follow live
+    sudo journalctl -u alert-watcher -f           # follow live
+    sudo journalctl -u trading-system --since today
+
+  Reports (daily):
+    /home/ubuntu/trading-system/reports/daily/YYYY-MM-DD/
+
+================================================================
+3G — CREATE HELPER SCRIPT (OPTIONAL BUT USEFUL)
+================================================================
+
+Create small helper for Rama to quickly check status:
+
+  cat > /home/ubuntu/trading-system/scripts/status.sh << 'EOF'
+#!/bin/bash
+# Quick status check for trading system services
+echo "===== trading-system ====="
+systemctl status trading-system --no-pager | head -10
+echo ""
+echo "===== alert-watcher ====="
+systemctl status alert-watcher --no-pager | head -10
+echo ""
+echo "===== Recent trading-system logs ====="
+journalctl -u trading-system -n 15 --no-pager
+echo ""
+echo "===== Kill switch status ====="
+ls -la ~/trading-system/data_store/session/ 2>/dev/null | grep kill || echo "  no kill sentinel"
+echo ""
+echo "===== Today's reports ====="
+ls ~/trading-system/reports/daily/$(date +%Y-%m-%d)/ 2>/dev/null || echo "  no reports yet today"
+EOF
+  chmod +x /home/ubuntu/trading-system/scripts/status.sh
+
+Rama can run: `~/trading-system/scripts/status.sh` anytime.
+
+(Don't commit this — it's operator-local. Or commit if Rama
+wants; harmless either way.)
+
+================================================================
+3H — REPORT
+================================================================
+
+---
+STEP 3 SYSTEMD + FIREWALL — COMPLETE
+
+Firewall:
+  ufw port 5000: OPEN
+  Oracle Cloud security list: [RAMA MUST ADD MANUALLY — flag]
+
+Systemd units:
+  /etc/systemd/system/trading-system.service: created
+  /etc/systemd/system/alert-watcher.service: created
+  daemon-reload: SUCCESS
+
+trading-system dry-run start:
+  Exit status: [integer from journalctl]
+  Holiday block triggered: [YES/NO] (YES expected on Saturday)
+  Journal log excerpt: [paste last 5 lines]
+
+alert-watcher dry-run start:
+  Active: [YES/NO]
+  Errors in journal: [NO expected]
+  Journal log excerpt: [paste last 5 lines]
+
+Cron:
+  crontab -l output: [paste]
+  cron daemon active: YES
+
+Both services: STOPPED after test (not enabled on boot)
+
+Status helper script: [created / skipped]
+
+Issues encountered: [list or "none"]
+Verification status: [GREEN / YELLOW / RED]
+
+NEXT: Await Step 4 from Rama (verify restart + logs).
+---
+
+================================================================
+DO NOT DO IN STEP 3
+================================================================
+
+- Do NOT `systemctl enable` either service (Rama does Monday
+  after first successful manual run)
+- Do NOT start services and leave them running
+- Do NOT run zerodha_login.py
+- Do NOT attempt live mode
+- Do NOT modify main.py or any python source to accommodate
+  systemd (the services should work with current non-interactive
+  mode as-is)
+- Do NOT commit .env or token files
+- Do NOT add Oracle Cloud security list rule via SSH
+  (that's console-only; flag for Rama)
+
+================================================================
+TROUBLESHOOTING
+================================================================
+
+systemctl start fails with "Failed to start":
+  sudo journalctl -u trading-system -n 50 --no-pager
+  Look for ImportError, permission denied, or missing .env vars.
+
+"EnvironmentFile=... not found":
+  Verify: ls -la /home/ubuntu/trading-system/.env
+  Permissions must allow service user (ubuntu) to read.
+
+"Active: activating (auto-restart)" loop:
+  Service crashes too fast. Check journal for real error.
+  StartLimitBurst=3 means after 3 failures in 300s, systemd
+  stops trying. Good.
+
+Holiday guard doesn't fire:
+  Check timezone on VM: timedatectl
+  Must show Asia/Kolkata. If UTC, redo Step 1C.
+
+ufw allow doesn't stick:
+  sudo ufw status
+  If disabled: sudo ufw enable
+
+================================================================
+EXPECTED DURATION
+================================================================
+
+3A (firewall):              2 min
+3B (main service unit):     3 min
+3C (watcher service unit):  2 min
+3D (cron):                  2 min
+3E (dry-run verify):        3 min
+3F (log locations doc):     1 min
+3G (status helper):         2 min
+3H (report):                3 min
+---
+Total: 15-20 min
+
+================================================================
+END OF STEP 3 INSTRUCTION
+================================================================

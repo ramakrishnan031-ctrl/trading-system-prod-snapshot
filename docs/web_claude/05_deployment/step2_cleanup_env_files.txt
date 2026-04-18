@@ -1,0 +1,216 @@
+================================================================
+CLEANUP INSTRUCTION — Before Step 2 proceeds
+================================================================
+
+Rama has THREE env-related files on his PC in an inconsistent
+state. Audit and clean up before Step 2.
+
+ALSO: You reported "22 pre-existing failures in
+test_eod_squareoff.py" but earlier we were at 1411/1411 green
+for the entire suite. Investigate this regression.
+
+================================================================
+PART A — .env FILE CLEANUP
+================================================================
+
+Current state on PC at D:\Projects\trading-system\:
+
+  .env          -- OLD single-account template
+                   (ZERODHA_API_KEY without account suffix)
+                   DOES NOT match current accounts.csv schema
+
+  env           -- Stray file WITH REAL CREDENTIALS filled in
+                   (ZERODHA_API_KEY_LFL836=pvahsvuu3xjsefc7 etc.)
+                   Correct content, wrong filename
+
+  .env.example  -- Old single-account template
+                   Needs update to match new schema
+
+STEP A1 — Verify the 3 files on disk:
+  ls -la D:/Projects/trading-system/.env*
+  ls -la D:/Projects/trading-system/env
+
+STEP A2 — Show Rama what's in each (sanitized first line
+  only per file, to confirm contents):
+  head -1 D:/Projects/trading-system/.env
+  head -1 D:/Projects/trading-system/env
+  head -1 D:/Projects/trading-system/.env.example
+
+STEP A3 — Take action:
+
+  1. Rename env (no dot) to .env (overwrite old one):
+     mv D:/Projects/trading-system/env D:/Projects/trading-system/.env
+     
+     Windows equivalent if mv doesn't work:
+       del .env
+       ren env .env
+
+  2. Delete the old-schema .env.example, replace with new
+     template. Create new .env.example with placeholders:
+
+     cat > D:/Projects/trading-system/.env.example << 'EOF'
+# ============================================================
+# Trading System v2 -- Environment Variables Template
+# ============================================================
+# Copy this file to .env and fill in real values.
+# NEVER commit .env to git.
+# ============================================================
+#
+# Access tokens come from data_store/session/zerodha_token.json
+# (regenerated daily via scripts/zerodha_login.py).
+# No ACCESS_TOKEN in this file.
+# ============================================================
+
+# --- Zerodha LFL836 (Kandasamy) -- PRIMARY ---
+ZERODHA_API_KEY_LFL836=FILL_YOUR_API_KEY
+ZERODHA_API_SECRET_LFL836=FILL_YOUR_API_SECRET
+ZERODHA_TOTP_LFL836=FILL_YOUR_TOTP_SECRET
+
+# --- Zerodha DR6114 (Ramakrishnan) -- DISABLED ---
+ZERODHA_API_KEY_DR6114=FILL_WHEN_READY
+ZERODHA_API_SECRET_DR6114=FILL_WHEN_READY
+ZERODHA_TOTP_DR6114=FILL_WHEN_READY
+
+# --- Zerodha D351962 (Dhanalakshmi) -- DISABLED ---
+ZERODHA_API_KEY_D351962=FILL_WHEN_READY
+ZERODHA_API_SECRET_D351962=FILL_WHEN_READY
+ZERODHA_TOTP_D351962=FILL_WHEN_READY
+
+# --- Zerodha ZA004 (Placeholder) -- DISABLED ---
+ZERODHA_API_KEY_ZA004=FILL_WHEN_READY
+ZERODHA_API_SECRET_ZA004=FILL_WHEN_READY
+ZERODHA_TOTP_ZA004=FILL_WHEN_READY
+
+# --- Zerodha ZA005 (Placeholder) -- DISABLED ---
+ZERODHA_API_KEY_ZA005=FILL_WHEN_READY
+ZERODHA_API_SECRET_ZA005=FILL_WHEN_READY
+ZERODHA_TOTP_ZA005=FILL_WHEN_READY
+
+# --- Telegram Alerts ---
+TELEGRAM_BOT_TOKEN=FILL_YOUR_BOT_TOKEN
+TELEGRAM_CHANNEL_PRIMARY=FILL_CHANNEL_ID_1
+TELEGRAM_CHANNEL_SECONDARY=FILL_CHANNEL_ID_2
+TELEGRAM_PERSONAL_CHAT_ID=FILL_YOUR_PERSONAL_ID
+
+# --- Webhook Security ---
+# Generate ONCE: python -c "import secrets; print(secrets.token_hex(32))"
+# Use SAME value in Chartink webhook config. Do NOT regenerate.
+WEBHOOK_SECRET=FILL_GENERATE_ONCE_AND_KEEP
+EOF
+
+  3. Verify .gitignore excludes .env (should already):
+     grep -x '\.env' D:/Projects/trading-system/.gitignore
+
+STEP A4 — Verify final state:
+  ls -la D:/Projects/trading-system/.env*
+  ls -la D:/Projects/trading-system/env 2>&1
+  
+  Expected:
+    .env          -- exists, has real creds (but NOT in git)
+    .env.example  -- exists, updated template (will be committed)
+    env           -- does NOT exist (renamed to .env)
+
+STEP A5 — Commit the .env.example update:
+  cd D:/Projects/trading-system
+  git add .env.example
+  git commit -m "Update .env.example to 5-account schema"
+  git push vm main
+
+STEP A6 — Confirm .env is NOT staged / tracked:
+  git status .env
+  git ls-files .env
+  Both should indicate .env is NOT tracked.
+
+================================================================
+PART B — TEST REGRESSION INVESTIGATION
+================================================================
+
+Your Step 1 report and memory claimed 1411/1411 green.
+Your cleanup report claims "22 pre-existing failures in
+test_eod_squareoff.py".
+
+These contradict. One of the following is true:
+
+  (a) Test failures existed before Step 1 too -- verify by
+      checking git log for test changes since 1411 milestone
+  (b) Something regressed between "1411 green" and now
+  (c) You're running tests against stale cache / wrong dir
+
+STEP B1 — Run the full suite and report exact number:
+  cd D:/Projects/trading-system
+  python -m pytest tests/ -q --tb=no 2>&1 | tail -10
+
+  Report: XXX passed, XX failed (or all passed).
+
+STEP B2 — If failures exist, inspect first 3:
+  python -m pytest tests/unit/test_eod_squareoff.py -v --tb=short 2>&1 | head -80
+
+STEP B3 — Check if test file or its deps changed recently:
+  git log --oneline -10 -- tests/unit/test_eod_squareoff.py
+  git log --oneline -10 -- orders/eod_squareoff.py
+
+STEP B4 — If tests were genuinely green at 1411 milestone,
+  bisect to find regression:
+  git log --oneline bcf03b5..HEAD
+
+  That's the commit range since v2 foundation commit.
+
+STEP B5 — Report findings to Rama:
+  - Exact test count now: XXXX/1411
+  - If regressed: which commit introduced it
+  - If not regressed: why earlier claim was wrong
+
+DO NOT attempt to fix test failures yet. Just diagnose and
+report. Fix comes after Rama decides priority.
+
+================================================================
+PART C — REPORT BACK
+================================================================
+
+Format:
+
+---
+CLEANUP REPORT
+
+A1 — File audit:
+  .env first line: [header comment]
+  env first line: [header comment or "does not exist"]
+  .env.example first line: [header comment]
+
+A3 — Actions taken:
+  env -> .env rename: [SUCCESS/FAIL]
+  .env.example update: [SUCCESS/FAIL]
+  
+A4 — Final file state:
+  .env exists: [YES/NO]
+  .env size: [bytes]
+  env exists: [should be NO]
+  .env.example matches new template: [YES/NO]
+
+A5 — Commit:
+  Commit hash: [hash]
+  Push to VM: [SUCCESS/FAIL]
+  Post-receive output: [paste]
+
+A6 — .env isolation:
+  .env tracked: [NO expected]
+  .env in .gitignore: [YES expected]
+
+B — Test regression:
+  Current pass count: [X/1411]
+  Failure count: [Y]
+  Root cause: [explanation]
+  Regression introduced in commit: [hash or "not a regression"]
+
+Issues / questions for Rama: [list]
+Ready to proceed with Step 2: [YES/NO]
+---
+
+================================================================
+DO NOT DO IN THIS CLEANUP
+================================================================
+
+- Do NOT SCP .env to VM yet (Step 2A will do that)
+- Do NOT create venv on VM (Step 2B)
+- Do NOT fix test failures (Rama decides priority after Part B)
+- Do NOT rotate Zerodha credentials (Rama handles Monday)

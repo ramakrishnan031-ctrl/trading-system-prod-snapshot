@@ -1,0 +1,348 @@
+================================================================
+STEP 2 of 5 — VM Venv + First Manual Run
+For: VS Code Claude (executes from Rama's PC)
+================================================================
+
+CONTEXT:
+
+Step 1 GREEN (VM bootstrapped, bare repo wired, first push done).
+Cleanup done (.env + accounts.csv corrected).
+Weekend test bug fixed. 1411/1411 green on PC at commit 06e0d6c.
+
+Step 2 goals:
+  - Transfer .env securely (NOT via git)
+  - Create venv on VM with Python 3.14.3
+  - Install requirements.txt
+  - Auto-activate venv on SSH login (Rama's request)
+  - Run full test suite on VM -- verify 1411/1411 green
+  - Attempt first interactive startup
+    (today is Saturday 18-Apr-2026; holiday guard will block
+     startup cleanly -- EXPECTED behavior, proves guard works)
+
+Step 2 does NOT cover:
+  - Zerodha login (needs market day, Rama runs Monday)
+  - systemd service (Step 3)
+  - Firewall port 5000 (later step)
+  - NSE reference data refresh (Monday task)
+
+================================================================
+SHELL REMINDER
+================================================================
+
+Git Bash cannot reach Windows ssh-agent. All SSH commands must
+use /c/Windows/System32/OpenSSH/ssh.exe (configured in Step 1).
+
+For SCP, same rule: use /c/Windows/System32/OpenSSH/scp.exe
+
+================================================================
+2A -- SECURE .env TRANSFER (PC -> VM)
+================================================================
+
+The .env file contains real credentials. NEVER commit it.
+Transfer via SCP only.
+
+First verify .env exists on PC:
+  ls -la D:/Projects/trading-system/.env
+
+Expected: approx 3341 bytes (5-account schema, real creds filled).
+
+If missing or zero-byte: STOP. Tell Rama to fill it.
+
+Confirm VM target directory exists:
+  ssh trading-vm "ls -la ~/trading-system/"
+
+Transfer .env:
+  scp D:/Projects/trading-system/.env \
+      trading-vm:/home/ubuntu/trading-system/.env
+
+Verify on VM:
+  ssh trading-vm "ls -la ~/trading-system/.env && wc -l ~/trading-system/.env"
+
+Set strict permissions (owner-only read):
+  ssh trading-vm "chmod 600 ~/trading-system/.env"
+
+Verify permissions:
+  ssh trading-vm "ls -la ~/trading-system/.env"
+  # Expected: -rw------- 1 ubuntu ubuntu ... .env
+
+================================================================
+2B -- CREATE VENV ON VM
+================================================================
+
+SSH into VM and run:
+
+  ssh trading-vm
+  cd ~/trading-system
+
+  # Ensure Python 3.14 is active
+  python --version
+  # Expected: Python 3.14.3
+
+  # Create venv
+  python -m venv venv
+
+  # Activate and verify
+  source venv/bin/activate
+  python --version
+  # Expected: Python 3.14.3 (from venv)
+  which python
+  # Expected: /home/ubuntu/trading-system/venv/bin/python
+
+  # Upgrade pip
+  pip install --upgrade pip setuptools wheel
+
+================================================================
+2C -- INSTALL REQUIREMENTS
+================================================================
+
+Still inside venv on VM:
+
+  pip install -r requirements.txt
+
+  # Expected duration: 3-8 minutes on ARM
+  # Most packages have ARM wheels; if any compile from source
+  # (rare), may take longer
+
+  # Verify key packages:
+  pip show flask kiteconnect pydantic pyyaml pytest
+
+  pip list | wc -l
+  # Ballpark: 40-80 packages
+
+================================================================
+2D -- AUTO-ACTIVATE VENV ON SSH LOGIN
+================================================================
+
+Append to ~/.bashrc on VM so venv activates automatically
+when Rama SSHs in:
+
+  cat >> ~/.bashrc << 'EOF'
+
+# Auto-activate trading-system venv on login
+if [ -f ~/trading-system/venv/bin/activate ]; then
+    source ~/trading-system/venv/bin/activate
+    cd ~/trading-system
+fi
+EOF
+
+Test: exit SSH and reconnect:
+
+  exit
+
+Then:
+  ssh trading-vm
+
+On successful connect, prompt should show:
+  (venv) ubuntu@trading-system:~/trading-system$
+
+If venv doesn't auto-activate:
+  - Check: ssh trading-vm "tail -20 ~/.bashrc"
+  - Verify no syntax errors
+  - Check: ssh trading-vm "ls ~/trading-system/venv/bin/activate"
+
+================================================================
+2E -- RUN TEST SUITE ON VM
+================================================================
+
+Critical proof point: 1411/1411 must pass on VM same as PC.
+
+ssh to VM (venv auto-activates), then:
+
+  cd ~/trading-system
+  python -m pytest tests/ -q 2>&1 | tail -10
+
+Expected:
+  .... (long line of dots, possible s for skips)
+  1411 passed in XXs
+
+If any test fails:
+  - Capture the failure output
+  - Common causes on fresh VM:
+    a) Missing dependency (pip install failed silently)
+    b) Platform-specific assumption (Windows vs Linux path)
+    c) Timezone edge case
+  - Report to Rama. Do NOT proceed.
+
+================================================================
+2F -- HOLIDAY GUARD PROOF TEST
+================================================================
+
+Today is Saturday 18-Apr-2026 on VM (confirm with `date` first).
+
+Attempt interactive startup:
+
+  python main.py --interactive
+
+Expected behavior on Saturday:
+
+  Holiday guard blocks startup with output (approximately):
+    ============================================================
+      Market closed today: 18-Apr-2026 (Saturday)
+      Next trading day: 20-Apr-2026 (Monday)
+      System not started. No logs created.
+    ============================================================
+  Process exits with code 0.
+
+After the test, verify logs/ was NOT created (holiday guard
+prevented log creation):
+  ls -la logs/ 2>/dev/null || echo "no logs directory (correct)"
+
+If it DID proceed past the holiday guard:
+  - The holiday guard is broken
+  - Capture output and report immediately
+  - Do NOT proceed
+
+================================================================
+2G -- CONFIG / DATA SANITY
+================================================================
+
+Check state_store can initialize:
+
+  python -c "from core.state_store import StateStore; \
+      ss = StateStore('data_store/test.db'); \
+      print('StateStore OK, schema version:', ss.get_schema_version())"
+
+Clean up:
+  rm -f data_store/test.db data_store/test.db-journal
+
+Check all YAML configs load:
+
+  python -c "from core.config_loader import load_all; \
+      cfg = load_all('config/'); print('Configs loaded:', type(cfg).__name__)"
+
+If any config errors: report specific YAML file + error line.
+
+Verify Telegram bot reachable (optional, skip if bot token
+not yet set in .env):
+
+  python -c "
+  import os, requests
+  token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+  if token and not token.startswith('FILL'):
+      r = requests.get(f'https://api.telegram.org/bot{token}/getMe', timeout=5)
+      print('Telegram:', r.json().get('result', {}).get('username', 'failed'))
+  else:
+      print('Telegram: skipped (token not set or placeholder)')
+  "
+
+================================================================
+2H -- REPORT
+================================================================
+
+Report back to Rama in this format:
+
+---
+STEP 2 VENV + MANUAL RUN -- COMPLETE
+
+.env transfer:
+  PC .env size: [bytes]
+  VM .env size: [bytes]
+  VM .env permissions: [ls -la output]
+
+Venv creation:
+  Python version in venv: [version]
+  Venv path: [absolute path]
+
+Requirements install:
+  Total packages installed: [count]
+  Key package versions:
+    flask: [version]
+    kiteconnect: [version]
+    pydantic: [version]
+    pytest: [version]
+
+Auto-activate on login:
+  SSH prompt shows (venv): [YES/NO]
+  ~/.bashrc updated: [YES/NO]
+
+Test suite:
+  Total tests: [1411]
+  Passed: [XXXX]
+  Failed: [0 expected]
+  Duration: [XX seconds]
+
+Holiday guard test:
+  Today on VM (date/day): [output of date]
+  main.py --interactive result: [blocked correctly / proceeded / error]
+  Exit code: [integer]
+  logs/ created: [YES/NO] (NO expected on weekend)
+
+Config sanity:
+  state_store init: [OK / ERROR]
+  config_loader: [OK / ERROR]
+  Telegram reachability: [bot name / skipped]
+
+Issues encountered: [list or "none"]
+Verification status: [GREEN / YELLOW / RED]
+
+NEXT: Await Step 3 from Rama (systemd service).
+---
+
+================================================================
+DO NOT DO IN STEP 2
+================================================================
+
+- Do NOT create systemd service (Step 3)
+- Do NOT run zerodha_login.py (needs market day + browser,
+  Rama runs Monday morning)
+- Do NOT run refresh_instruments.py (needs Zerodha token)
+- Do NOT open firewall port 5000 (later)
+- Do NOT set up cron for token cleanup (Step 3/4)
+- Do NOT attempt live mode (not ready)
+
+================================================================
+TROUBLESHOOTING
+================================================================
+
+requirements.txt install fails on kiteconnect or similar:
+  ARM wheel may be missing. Check:
+    pip install --verbose kiteconnect
+  If compilation fails, ensure build deps installed:
+    sudo apt install python3.14-dev libffi-dev libssl-dev
+
+pytest discovers zero tests:
+  cd ~/trading-system
+  ls tests/   # must have subfolders
+  Ensure PYTHONPATH not set to something weird:
+    unset PYTHONPATH
+  Re-run.
+
+Test failure: ImportError: cannot import X:
+  pip install missing package manually
+  Add to requirements.txt on PC, commit, push to regenerate
+
+Test failure: no such file or directory: config/...:
+  Git push may have missed a file. Verify:
+    ssh trading-vm "ls config/"
+  If missing, push again from PC.
+
+main.py --interactive crashes immediately (not the holiday block):
+  Check: .env loaded correctly?
+    ssh trading-vm "source venv/bin/activate && \
+      python -c 'import os; print(bool(os.environ.get(\"TELEGRAM_BOT_TOKEN\")))'"
+  Should print True. If False, .env not loading.
+
+Holiday guard doesn't trigger on Saturday:
+  Check timezone: ssh trading-vm "timedatectl"
+  Must show Asia/Kolkata.
+  Check date: ssh trading-vm "date"
+  Must show Saturday.
+
+================================================================
+EXPECTED DURATION
+================================================================
+
+2A (SCP .env):              1 min
+2B (venv create):           1 min
+2C (pip install):           3-8 min
+2D (bashrc auto-activate):  2 min
+2E (pytest run):            2-5 min
+2F (main.py test):          1 min
+2G (config sanity):         2 min
+2H (report):                3 min
+---
+Total: 15-25 min
+
+================================================================
+END OF STEP 2 INSTRUCTION
+================================================================

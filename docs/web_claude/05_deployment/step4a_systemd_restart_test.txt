@@ -1,0 +1,491 @@
+================================================================
+STEP 4a of 5 — Systemd Restart + Log Verification Test
+For: VS Code Claude (executes from Rama's PC)
+================================================================
+
+CONTEXT:
+
+Step 3 GREEN. Services configured but not enabled.
+Today is Saturday — no market. Perfect day to test systemd
+restart behavior under controlled conditions.
+
+Step 4a goal:
+  Prove systemd handles the lifecycle correctly:
+    - SIGINT delivers clean shutdown (Ctrl+C path)
+    - Kill -9 triggers auto-restart (Restart=on-failure)
+    - Restart budget works (3 fails in 300s stops retry)
+    - Log rotation doesn't break runtime
+    - Journal captures all events
+
+Step 4a does NOT cover:
+  - Actual market trading (Monday)
+  - Zerodha API calls
+  - Enabling services on boot (Monday, post first-session)
+
+IMPORTANT: Holiday guard blocks main.py startup on Saturday.
+This makes restart testing tricky — main.py exits with code 0
+before we can test crash-restart. We need to work around this.
+
+================================================================
+4a-PRE — REMOVE STRAY uvicorn
+================================================================
+
+Rama accidentally installed uvicorn via pip. Clean it:
+
+  ssh trading-vm
+  cd ~/trading-system
+  source venv/bin/activate
+  pip uninstall -y uvicorn h11
+  pip freeze > /tmp/installed.txt
+  
+  # Report anything in venv not in requirements.txt:
+  comm -23 <(sort /tmp/installed.txt) <(sort requirements.txt) | head
+
+If any extras remain: list them. Don't remove without asking
+Rama (some like pytest + python-dotenv are legitimate additions
+he should permanently add to requirements.txt).
+
+================================================================
+4a-A — TESTING APPROACH (read first)
+================================================================
+
+Since holiday guard exits cleanly on Saturday, we cannot
+test systemd restart using real main.py. We need a
+temporary test harness.
+
+Plan:
+  1. Temporarily override the systemd unit's ExecStart
+     to run a "long-running test script" that:
+       - Prints heartbeat every 2 seconds
+       - Responds to SIGINT with graceful shutdown
+       - Can be force-killed to simulate crash
+  2. Run the 4 scenarios (clean stop, crash restart, 
+     restart budget, journal capture)
+  3. Revert to real main.py ExecStart when done
+
+Test script bypasses holiday guard entirely. It's NOT a
+real startup — it's a systemd behavior probe.
+
+================================================================
+4a-B — CREATE TEMPORARY TEST HARNESS
+================================================================
+
+Create temporary test script on VM:
+
+  cat > /home/ubuntu/trading-system/scripts/systemd_test_harness.py << 'EOF'
+"""
+Temporary test harness for Step 4a.
+Simulates a long-running service that:
+  - Prints heartbeat (tests journal capture)
+  - Handles SIGINT gracefully (tests clean stop)
+  - Can be force-killed (tests Restart=on-failure)
+Delete this file after Step 4a complete.
+"""
+import signal
+import sys
+import time
+from datetime import datetime
+
+_shutdown = False
+
+def handle_sigint(signum, frame):
+    global _shutdown
+    print(f"[{datetime.now().isoformat()}] SIGINT received, "
+          "shutting down cleanly")
+    _shutdown = True
+
+signal.signal(signal.SIGINT, handle_sigint)
+signal.signal(signal.SIGTERM, handle_sigint)
+
+print(f"[{datetime.now().isoformat()}] Harness started, PID={os.getpid() if (__import__('os')) else 'unknown'}")
+
+import os
+print(f"[{datetime.now().isoformat()}] Harness started, PID={os.getpid()}")
+sys.stdout.flush()
+
+tick = 0
+while not _shutdown:
+    tick += 1
+    print(f"[{datetime.now().isoformat()}] heartbeat {tick}")
+    sys.stdout.flush()
+    # Small sleeps so SIGINT is responsive
+    for _ in range(20):
+        if _shutdown:
+            break
+        time.sleep(0.1)
+
+print(f"[{datetime.now().isoformat()}] Clean exit (tick={tick})")
+sys.stdout.flush()
+sys.exit(0)
+EOF
+
+Fix the redundant print (cleaner version):
+
+  cat > /home/ubuntu/trading-system/scripts/systemd_test_harness.py << 'EOF'
+"""
+Temporary test harness for Step 4a.
+Delete after Step 4a complete.
+"""
+import os
+import signal
+import sys
+import time
+from datetime import datetime
+
+_shutdown = False
+
+def handle_sig(signum, frame):
+    global _shutdown
+    print(f"[{datetime.now().isoformat()}] Signal {signum} received, shutting down")
+    sys.stdout.flush()
+    _shutdown = True
+
+signal.signal(signal.SIGINT, handle_sig)
+signal.signal(signal.SIGTERM, handle_sig)
+
+print(f"[{datetime.now().isoformat()}] Harness started PID={os.getpid()}")
+sys.stdout.flush()
+
+tick = 0
+while not _shutdown:
+    tick += 1
+    print(f"[{datetime.now().isoformat()}] heartbeat {tick}")
+    sys.stdout.flush()
+    for _ in range(20):
+        if _shutdown:
+            break
+        time.sleep(0.1)
+
+print(f"[{datetime.now().isoformat()}] Clean exit tick={tick}")
+sys.stdout.flush()
+sys.exit(0)
+EOF
+
+Quick sanity run (just to verify syntax):
+
+  python scripts/systemd_test_harness.py &
+  HARNESS_PID=$!
+  sleep 3
+  kill -INT $HARNESS_PID
+  wait $HARNESS_PID
+  echo "Exit: $?"
+
+Expected: heartbeat 1, 2; then "Signal 2 received"; then exit 0.
+
+================================================================
+4a-C — TEMPORARILY OVERRIDE SYSTEMD UNIT
+================================================================
+
+Use systemd drop-in override (preserves original unit):
+
+  sudo mkdir -p /etc/systemd/system/trading-system.service.d
+  sudo tee /etc/systemd/system/trading-system.service.d/test-override.conf > /dev/null << 'EOF'
+[Service]
+# STEP 4a TEST OVERRIDE — REMOVE AFTER TEST COMPLETE
+ExecStart=
+ExecStart=/home/ubuntu/trading-system/venv/bin/python /home/ubuntu/trading-system/scripts/systemd_test_harness.py
+EOF
+
+  sudo systemctl daemon-reload
+
+Verify override active:
+
+  sudo systemctl cat trading-system.service | grep -A1 "test-override"
+
+Expected: shows the override file path and ExecStart pointing
+to systemd_test_harness.py.
+
+================================================================
+4a-D — SCENARIO 1: CLEAN STOP (SIGINT path)
+================================================================
+
+  sudo systemctl start trading-system.service
+  sleep 5
+  
+  # Verify running
+  sudo systemctl status trading-system.service --no-pager | head -10
+
+Expected: Active: active (running), 2-3 heartbeat lines in
+Main PID tasks.
+
+  sudo journalctl -u trading-system --since "10 seconds ago" --no-pager
+  # Should show: Harness started + heartbeat 1, 2, 3
+
+  # Clean stop (sends SIGINT per our unit's KillSignal)
+  sudo systemctl stop trading-system.service
+  sleep 2
+  
+  sudo journalctl -u trading-system -n 10 --no-pager
+
+Expected log sequence:
+  heartbeat N
+  Signal 2 received, shutting down
+  Clean exit tick=N
+  trading-system.service: Deactivated successfully.
+
+Key check: Did systemd send SIGINT (not SIGTERM)? Our unit has
+KillSignal=SIGINT. The harness logs "Signal 2" = SIGINT.
+
+If logs show "Signal 15" = SIGTERM: KillSignal config broken.
+
+================================================================
+4a-E — SCENARIO 2: CRASH RESTART (Restart=on-failure)
+================================================================
+
+  sudo systemctl start trading-system.service
+  sleep 3
+
+  # Find PID
+  PID=$(systemctl show --property MainPID --value trading-system.service)
+  echo "MainPID: $PID"
+
+  # Force kill (SIGKILL, simulates crash)
+  sudo kill -9 $PID
+  
+  # systemd should restart after RestartSec=10
+  sleep 15
+  
+  sudo systemctl status trading-system.service --no-pager | head -10
+
+Expected: Active: active (running), new PID different from
+old, "(Restarting X of 3)" not present (first restart, budget
+still available).
+
+  sudo journalctl -u trading-system --since "30 seconds ago" --no-pager | grep -E "Started|Main process|Failed"
+
+Expected sequence:
+  Started trading-system.service
+  heartbeat entries
+  Main process exited, code=killed, status=9/KILL
+  (wait 10s)
+  Started trading-system.service  (second start)
+  new heartbeat entries
+
+  # Stop cleanly
+  sudo systemctl stop trading-system.service
+
+================================================================
+4a-F — SCENARIO 3: RESTART BUDGET EXHAUSTION
+================================================================
+
+Per our unit: StartLimitIntervalSec=300, StartLimitBurst=3.
+Three failures in 5 min -> systemd stops trying to restart.
+
+Test: crash 3 times quickly.
+
+  # Start + crash 3 times in rapid succession
+  for i in 1 2 3; do
+      sudo systemctl start trading-system.service
+      sleep 2
+      PID=$(systemctl show --property MainPID --value trading-system.service)
+      echo "Crash attempt $i: PID=$PID"
+      sudo kill -9 $PID
+      sleep 12  # slightly more than RestartSec=10
+  done
+
+  # 4th automatic restart should be suppressed
+  sleep 5
+  sudo systemctl status trading-system.service --no-pager | head -15
+
+Expected: "Active: failed" OR "Active: activating (auto-restart)"
+that STAYS in that state until budget resets.
+
+  sudo journalctl -u trading-system --since "2 minutes ago" --no-pager | grep -E "Start request|Failed|exceeded"
+
+Expected: includes "Start request repeated too quickly" or
+"Failed with result 'start-limit-hit'" after 3rd crash.
+
+  # Reset to continue testing
+  sudo systemctl reset-failed trading-system.service
+  sudo systemctl stop trading-system.service
+
+================================================================
+4a-G — SCENARIO 4: JOURNAL LOG INSPECTION
+================================================================
+
+Verify all events are captured cleanly.
+
+  # Full journal for today
+  sudo journalctl -u trading-system --since today --no-pager | wc -l
+  # Should be substantial (40+ lines from all scenarios)
+  
+  # Journal disk usage
+  sudo journalctl --disk-usage
+  # Report result
+  
+  # Can we tail? (simulate monitoring)
+  sudo journalctl -u trading-system -n 5 --no-pager
+
+Expected: formatted log entries with timestamps, no errors
+about truncation or corruption.
+
+================================================================
+4a-H — REVERT OVERRIDE (CRITICAL)
+================================================================
+
+Remove the test override so real main.py runs on Monday:
+
+  sudo rm /etc/systemd/system/trading-system.service.d/test-override.conf
+  sudo rmdir /etc/systemd/system/trading-system.service.d
+  sudo systemctl daemon-reload
+
+Verify ExecStart reverted:
+
+  sudo systemctl cat trading-system.service | grep ExecStart
+
+Expected: only the original line pointing to main.py --mode paper.
+NO override line remaining.
+
+Also delete the test harness:
+
+  rm /home/ubuntu/trading-system/scripts/systemd_test_harness.py
+
+Final sanity: start real main.py via systemd one more time
+(should hit holiday guard and exit 0 cleanly):
+
+  sudo systemctl start trading-system.service
+  sleep 5
+  sudo systemctl status trading-system.service --no-pager | head -5
+  # Expected: Active: inactive (dead) with exit 0
+
+  sudo journalctl -u trading-system -n 10 --no-pager
+  # Expected: Market closed message, clean exit
+
+  # Services stay STOPPED (not enabled on boot)
+  sudo systemctl stop trading-system.service 2>/dev/null || true
+
+================================================================
+4a-I — ALERT WATCHER: SHORT LIFECYCLE TEST
+================================================================
+
+alert_watcher is one-shot (AW1). Restart=always polls every 10s.
+
+Quick test: start, let it cycle 3 times, stop, count journal
+entries.
+
+  sudo systemctl start alert-watcher.service
+  sleep 35   # allow 3+ cycles
+  sudo systemctl stop alert-watcher.service
+  sleep 2
+  
+  sudo journalctl -u alert-watcher --since "1 minute ago" --no-pager | tail -30
+  # Should show 3+ "started" and 3+ "Deactivated" pairs
+
+Expected: clean start/stop cycles, no errors, no crash loops.
+
+================================================================
+4a-J — REPORT
+================================================================
+
+---
+STEP 4a SYSTEMD RESTART + LOG TEST — COMPLETE
+
+Pre-cleanup:
+  uvicorn removed: [YES/NO]
+  Extra packages in venv (not in requirements.txt): [list]
+
+Test harness:
+  Created: YES
+  Sanity run: OK (exit 0 on SIGINT)
+
+Override applied + reverted:
+  Applied: YES
+  Reverted: YES (verified no drop-in remains)
+
+Scenario 1 (Clean stop via SIGINT):
+  KillSignal=SIGINT delivered: [YES/NO]
+  Harness logged Signal 2: [YES/NO]
+  Clean exit: [YES/NO]
+  
+Scenario 2 (Crash -> auto-restart):
+  Crash detected (exit code 9): [YES/NO]
+  Auto-restart after RestartSec=10: [YES/NO]
+  New PID differs from old: [YES/NO]
+
+Scenario 3 (Restart budget exhaustion):
+  Budget triggered after 3 crashes: [YES/NO]
+  Final state: [active (running) / failed / auto-restart stuck]
+  reset-failed worked: [YES/NO]
+
+Scenario 4 (Journal capture):
+  Total journal lines today: [count]
+  Journal disk usage: [MB]
+  Tail works: [YES/NO]
+
+Revert verification:
+  Test override file removed: YES
+  systemctl cat shows only original ExecStart: YES
+  Test harness script deleted: YES
+
+Final sanity (real main.py via systemd):
+  Holiday block fired: [YES/NO]
+  Exit code: [0 expected]
+  No auto-restart loop: [YES/NO] (on-failure shouldn't trigger for exit 0)
+
+Alert watcher lifecycle:
+  3+ clean cycles in 35s: [YES/NO]
+  No errors: [YES/NO]
+
+Issues encountered: [list or "none"]
+Verification status: [GREEN / YELLOW / RED]
+
+NEXT: Monday morning paper session (Step 4b).
+---
+
+================================================================
+DO NOT DO IN STEP 4a
+================================================================
+
+- Do NOT enable services on boot (Rama does Monday)
+- Do NOT commit the test harness to git (it's deleted
+  before end of step)
+- Do NOT modify main.py or any production code
+- Do NOT run zerodha_login.py or any market-facing script
+- Do NOT touch .env
+- Do NOT leave override file in place (verify H section)
+
+================================================================
+TROUBLESHOOTING
+================================================================
+
+"Unknown key name 'KillSignal'":
+  Unlikely; it's standard. Check: systemctl --version
+  Should be >= 230.
+
+Harness exits immediately:
+  Check: journalctl -u trading-system -n 20
+  Look for ImportError or Python syntax error.
+
+"reset-failed" doesn't clear state:
+  sudo systemctl daemon-reload
+  Try again.
+
+Journal disk usage very high:
+  Normal for a VM with fresh journal. Not a concern.
+  To limit: journalctl --vacuum-time=7d or edit
+  /etc/systemd/journald.conf (not our scope).
+
+Alert watcher doesn't cycle:
+  Check: journalctl -u alert-watcher -n 20
+  If stuck "activating": script has import error.
+
+================================================================
+EXPECTED DURATION
+================================================================
+
+Pre-cleanup (uvicorn):  2 min
+4a-B (harness):         3 min
+4a-C (override):        2 min
+4a-D (clean stop):      2 min
+4a-E (crash restart):   3 min
+4a-F (budget):          4 min
+4a-G (journal):         2 min
+4a-H (revert):          3 min
+4a-I (alert watcher):   2 min
+4a-J (report):          3 min
+---
+Total: 25-30 min
+
+================================================================
+END OF STEP 4a INSTRUCTION
+================================================================

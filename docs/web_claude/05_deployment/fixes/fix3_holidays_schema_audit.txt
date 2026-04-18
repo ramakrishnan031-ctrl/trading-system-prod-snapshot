@@ -1,0 +1,227 @@
+================================================================
+FIX: nse_holidays_2026.yaml schema drift +
+     full config schema audit
+================================================================
+
+Nice catch on the drift. Before Step 3, fix this and sweep
+the rest of the config schemas to catch any remaining drift.
+
+Two drifts in one day (scan_webhook_map + nse_holidays) =
+time for a systematic audit, not piecemeal fixes.
+
+================================================================
+PART A — FIX nse_holidays_2026.yaml SCHEMA
+================================================================
+
+STEP A1 — Investigate current state:
+
+  a. Show real YAML structure:
+       head -25 config/nse_holidays_2026.yaml
+
+  b. Show current schema for holidays:
+       grep -n -A 10 "class.*[Hh]oliday\|nse_holidays" core/config_loader.py
+
+  c. Find consumers:
+       grep -rn "holidays" . --include="*.py" | grep -v test | grep -v __pycache__
+       grep -rn "is_trading_day\|is_holiday" . --include="*.py" | head
+
+  d. Check utils/holiday_guard.py — confirm it uses its own
+     parser (mini YAML read per SU6) and does NOT use
+     config_loader. If it does: keep that independence
+     (runs before logger).
+
+STEP A2 — Add HolidayEntry dataclass:
+
+  In core/config_loader.py (or wherever holidays schema lives):
+
+    from datetime import date
+
+    class HolidayEntry(BaseModel):
+        date: date
+        name: str
+
+        @field_validator('date', mode='before')
+        @classmethod
+        def parse_iso_date(cls, v):
+            if isinstance(v, str):
+                return date.fromisoformat(v)
+            return v
+
+    class NseHolidaysConfig(BaseModel):
+        holidays: list[HolidayEntry]
+
+  (Adjust class names to match existing conventions in
+   config_loader.py — check the real structure first.)
+
+STEP A3 — Update consumers:
+
+  Anywhere code does:
+    if today_iso in cfg.nse_holidays.holidays:  # OLD (string list)
+
+  Change to:
+    if any(h.date == today for h in cfg.nse_holidays.holidays):
+
+  Or add a helper method on NseHolidaysConfig:
+    def is_holiday(self, d: date) -> bool:
+        return any(h.date == d for h in self.holidays)
+
+  Then: cfg.nse_holidays.is_holiday(today)
+
+  holiday_guard.py: CHECK IF IT USES CONFIG_LOADER.
+  If no (uses its own mini-parser): LEAVE IT ALONE. It's by
+  design (runs before logger setup per SU6).
+  If yes: update it too.
+
+STEP A4 — Update tests:
+  - Update fixture in test_config_loader.py to use
+    {date, name} dicts
+  - Add regression test that loads the REAL production YAML:
+
+    def test_real_nse_holidays_yaml_loads():
+        """Loads real config/nse_holidays_2026.yaml to catch
+        schema drift."""
+        # Use same pattern as test_real_scan_webhook_map_yaml_loads
+        path = Path("config/nse_holidays_2026.yaml")
+        raw = yaml.safe_load(path.read_text())
+        cfg = NseHolidaysConfig(**raw)
+        assert len(cfg.holidays) == 15
+        assert all(h.date.year == 2026 for h in cfg.holidays)
+        assert any(h.name == "Republic Day" for h in cfg.holidays)
+
+================================================================
+PART B — FULL CONFIG SCHEMA DRIFT AUDIT
+================================================================
+
+To prevent finding a third drift in production next week,
+audit every config file against its schema NOW.
+
+STEP B1 — List all config YAML files:
+  ls config/*.yaml config/**/*.yaml
+
+Expected (at minimum):
+  config/system_config.yaml
+  config/broker_limits.yaml
+  config/broker_costs.yaml
+  config/slippage_model.yaml
+  config/scoring_weights.yaml
+  config/scan_webhook_map.yaml          (just fixed)
+  config/chartink_scanners.yaml
+  config/nse_holidays_2026.yaml         (fixing in Part A)
+  config/strategies/*.yaml              (15 files)
+
+STEP B2 — For EACH YAML file, do this:
+
+  1. Read the real file (head 30 lines enough):
+       head -30 config/FILENAME.yaml
+
+  2. Find its corresponding schema class:
+       grep -n "class.*Config" core/config_loader.py
+
+  3. Load the real file directly with pydantic:
+       python -c "
+       import yaml
+       from pathlib import Path
+       from core.config_loader import SCHEMA_CLASS
+       raw = yaml.safe_load(Path('config/FILENAME.yaml').read_text())
+       try:
+           cfg = SCHEMA_CLASS(**raw)
+           print(f'OK: {type(cfg).__name__}')
+       except Exception as e:
+           print(f'DRIFT: {e}')
+       "
+
+  4. Also try full load_all():
+       python -c "from core.config_loader import load_all; \
+           cfg = load_all('config/'); print('load_all OK')"
+
+  Report any failures.
+
+STEP B3 — For each drift found, add a regression test:
+  test_real_<name>_yaml_loads()
+  
+  Pattern (each file should have ONE of these):
+
+    def test_real_<name>_yaml_loads():
+        path = Path("config/<name>.yaml")
+        raw = yaml.safe_load(path.read_text())
+        cfg = <ConfigClass>(**raw)
+        assert <some_invariant>
+
+STEP B4 — Fix each drift using same approach as Part A:
+  Add proper dataclass, update schema, update consumers,
+  update tests.
+
+================================================================
+STEP C — VERIFY + COMMIT
+================================================================
+
+  1. Full suite:
+       python -m pytest tests/ -q --tb=no 2>&1 | tail -5
+     Expect: 1412 + N new regression tests, all green.
+
+  2. Real load_all from project root:
+       python -c "from core.config_loader import load_all; \
+           cfg = load_all('config/'); print('All configs loaded')"
+     Expect: prints "All configs loaded", no errors.
+
+  3. Re-run main.py --interactive on PC:
+       python main.py --interactive
+     Expect: holiday block message (Saturday still).
+
+  4. Commit:
+       git add -A
+       git commit -m "Fix config schema drift: nse_holidays + full audit
+
+Added HolidayEntry dataclass and updated NseHolidaysConfig
+to match real YAML shape ({date, name} dicts).
+
+Audited all config YAMLs against their schemas; fixed [N]
+drifts found. Added test_real_*_yaml_loads regression tests
+for each config file to prevent future drift."
+
+  5. Push:
+       git push vm main
+
+  6. Verify on VM:
+       ssh trading-vm "cd ~/trading-system && source venv/bin/activate && \
+           python -m pytest tests/ -q --tb=no 2>&1 | tail -5"
+
+================================================================
+REPORT
+================================================================
+
+---
+SCHEMA AUDIT + FIX COMPLETE
+
+Part A — nse_holidays fix:
+  HolidayEntry added: YES
+  Consumers updated: [count]
+  Regression test added: YES
+
+Part B — Full audit:
+  Config files audited: [count]
+  Drifts found: [list each or "none beyond nse_holidays"]
+  Drifts fixed: [list]
+  Regression tests added: [count]
+
+Test suite:
+  Before: 1412
+  After: [XXXX]
+
+VM verification: [XXXX] passed
+
+Commit: [hash]
+Push: SUCCESS
+
+Ready for Step 3: YES
+---
+
+================================================================
+DO NOT DO IN THIS FIX
+================================================================
+
+- Do NOT change holiday_guard.py unless it currently uses
+  config_loader (it shouldn't — independence is by design)
+- Do NOT modify any YAML file in config/ (real YAMLs are
+  authoritative; fix schemas instead)
+- Do NOT add features; fix only drifts found
