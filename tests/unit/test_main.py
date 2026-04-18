@@ -545,6 +545,51 @@ class TestMainPhaseSequencing:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4b. BL-15: WEBHOOK_SECRET required in live mode, not in paper
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl15WebhookSecretRequired:
+    """Audit BL-15: live mode must validate HMAC on every webhook, which
+    requires WEBHOOK_SECRET to be set. Paper stays permissive."""
+
+    @staticmethod
+    def _capture_startup_call():
+        captured = {}
+        def _sideeffect(*args, **kwargs):
+            captured.update(kwargs)
+            return MagicMock(ok=True, blocking_failures=[], warnings=[])
+        return captured, _sideeffect
+
+    def test_live_mode_adds_webhook_secret_to_required_secrets(self):
+        captured, sideeffect = self._capture_startup_call()
+        rc = _run(argv=["--mode", "live"], extra={
+            "run_all_startup_checks": MagicMock(side_effect=sideeffect),
+        })
+        assert rc == 0
+        assert "WEBHOOK_SECRET" in captured["required_secrets"]
+
+    def test_paper_mode_does_not_require_webhook_secret(self):
+        captured, sideeffect = self._capture_startup_call()
+        rc = _run(argv=["--mode", "paper"], extra={
+            "run_all_startup_checks": MagicMock(side_effect=sideeffect),
+        })
+        assert rc == 0
+        assert "WEBHOOK_SECRET" not in captured["required_secrets"]
+
+    def test_live_mode_keeps_original_secrets(self):
+        """BL-15 must append, not replace -- other keys stay required."""
+        captured, sideeffect = self._capture_startup_call()
+        _run(argv=["--mode", "live"], extra={
+            "run_all_startup_checks": MagicMock(side_effect=sideeffect),
+        })
+        required = captured["required_secrets"]
+        assert "ZERODHA_API_KEY" in required
+        assert "ZERODHA_ACCESS_TOKEN" in required
+        assert "TELEGRAM_BOT_TOKEN" in required
+        assert "WEBHOOK_SECRET" in required
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 5. Subsystem wiring (MAIN8-MAIN9)
 # ─────────────────────────────────────────────────────────────────────────────
 

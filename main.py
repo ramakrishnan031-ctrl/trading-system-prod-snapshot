@@ -693,6 +693,11 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     )
 
     required_secrets = ["ZERODHA_API_KEY", "ZERODHA_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
+    # BL-15: in live mode the webhook must validate HMAC on every inbound
+    # request, which requires a shared secret. Paper stays permissive so
+    # the operator can POST test payloads with curl without fuss.
+    if not is_paper:
+        required_secrets.append("WEBHOOK_SECRET")
 
     # BL-20: pre-load InstrumentCache so run_all_startup_checks can enforce
     # a minimum row count (guards against startup on a stub/stale CSV).
