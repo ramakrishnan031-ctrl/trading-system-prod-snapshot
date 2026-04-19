@@ -683,8 +683,11 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         kite_client = _build_kite_client(app_config)
 
     is_paper = (args.mode == "paper")
-    paper_capital = getattr(app_config.system, "paper_capital", 500_000.0)
-
+    # EF-4: adapter constructed with provisional paper_capital=0.0. The real
+    # value is late-bound via broker_adapter.set_paper_capital() after
+    # account selection completes (see block below the interactive/
+    # non-interactive branch). Do NOT read get_margins() in paper mode
+    # before the late-bind call.
     broker_adapter = ZerodhaAdapter(
         kite_client=kite_client,
         rate_limiter=rate_limiter,
@@ -693,7 +696,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         state_machine=state_machine,
         logger=get_logger("zerodha_adapter"),
         paper_mode=is_paper,
-        paper_capital=paper_capital,
+        paper_capital=0.0,
         # paper mode needs a quote_provider so get_quote() doesn't raise
         # NotImplementedError.  A simple passthrough using the Kite HTTP API
         # is sufficient for paper; live mode ignores this kwarg entirely.
@@ -811,6 +814,18 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # Inject resolved access_token into env so existing broker/feed code can read it
     if _access_token:
         os.environ["ZERODHA_ACCESS_TOKEN"] = _access_token
+
+    # EF-4: recompute is_paper -- args.mode may have flipped during the
+    # interactive mode selection above; any prior is_paper reading is now
+    # stale. Every downstream read (set_paper_capital, notifier paper_mode,
+    # SU19 capital branch) must use this refreshed value.
+    is_paper = (args.mode == "paper")
+
+    # EF-4: late-bind adapter paper_capital to the selected account's value.
+    # Single source of truth = AccountRow.paper_capital (accounts.csv). No-op
+    # in live mode (adapter.get_margins() reads real broker margins there).
+    if is_paper:
+        broker_adapter.set_paper_capital(selected_account.paper_capital)
 
     # ── Phase 0e: Construct subsystems (MAIN8) ───────────────────────────────
     alert_cfg = app_config.system.alerts

@@ -544,6 +544,67 @@ def test_paper_mode_get_margins_returns_paper_capital() -> None:
     print("  OK paper mode get_margins returns paper_capital (ZA10)")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EF-4: set_paper_capital late-bind
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_ef4_set_paper_capital_updates_value() -> None:
+    """EF-4: setter updates _paper_capital; get_margins reflects new value."""
+    adapter, _, _, _, _ = _make_adapter(paper=True, paper_capital=0.0)
+    # Pre-bind: provisional value; get_margins returns it unchanged.
+    pre = adapter.get_margins()
+    assert pre.net == 0.0
+    # Late-bind (the pattern main.py uses after account selection).
+    adapter.set_paper_capital(5_000_000.0)
+    post = adapter.get_margins()
+    assert post.net == 5_000_000.0
+    assert post.available == 5_000_000.0
+    assert post.used == 0.0
+    print("  OK EF-4 set_paper_capital updates value; get_margins reflects it")
+
+
+def test_ef4_set_paper_capital_rejects_nonpositive() -> None:
+    """EF-4: setter rejects <=0 with ValueError (validation in the setter)."""
+    adapter, _, _, _, _ = _make_adapter(paper=True, paper_capital=0.0)
+    for bad in (0.0, -1.0, -5_000_000.0):
+        raised = False
+        try:
+            adapter.set_paper_capital(bad)
+        except ValueError:
+            raised = True
+        assert raised, f"Expected ValueError for value={bad!r}"
+    # Positive values succeed.
+    adapter.set_paper_capital(100.0)
+    assert adapter.get_margins().net == 100.0
+    print("  OK EF-4 set_paper_capital rejects 0/negative; accepts positive")
+
+
+def test_ef4_set_paper_capital_noop_in_live() -> None:
+    """EF-4: setter is a silent no-op in live mode (doesn't raise, no mutation)."""
+    adapter, _, _, _, _ = _make_adapter(paper=False)
+    before = adapter._paper_capital  # live mode stores whatever was passed
+    # Should NOT raise even on a negative value (guard is before the check).
+    adapter.set_paper_capital(5_000_000.0)
+    adapter.set_paper_capital(-100.0)
+    assert adapter._paper_capital == before
+    print("  OK EF-4 set_paper_capital is no-op in live mode")
+
+
+def test_ef4_no_paper_capital_getattr_in_main() -> None:
+    """EF-4: regression guard -- the pre-SU19 getattr pattern must not
+    return to main.py. Source-level string check."""
+    from pathlib import Path
+    main_src = Path(__file__).parent.parent.parent / "main.py"
+    text = main_src.read_text(encoding="utf-8")
+    bad = 'getattr(app_config.system, "paper_capital"'
+    assert bad not in text, (
+        f"EF-4 REGRESSION: {bad!r} pattern re-appeared in main.py. "
+        "paper_capital must be late-bound via broker_adapter.set_paper_capital()."
+    )
+    print("  OK EF-4 getattr(app_config.system, 'paper_capital'...) absent from main.py")
+
+
 def test_paper_mode_get_quote_raises_not_implemented_without_provider() -> None:
     adapter, _, _, _, _ = _make_adapter(paper=True)
     raised = False
@@ -1195,6 +1256,11 @@ def run_all_tests() -> int:
         test_bl6_429_attempt_counter_exponential_delays,
         test_bl6_429_successful_call_resets_counter,
         test_bl6_non_429_error_does_not_penalize,
+        # EF-4 (Phase E.7): set_paper_capital late-bind
+        test_ef4_set_paper_capital_updates_value,
+        test_ef4_set_paper_capital_rejects_nonpositive,
+        test_ef4_set_paper_capital_noop_in_live,
+        test_ef4_no_paper_capital_getattr_in_main,
     ]
 
     print("=" * 70)

@@ -75,27 +75,42 @@ Discovered: Phase A, A.3.d pre-work (verification grep of release_used callers)
 
 ---
 
-## EF-4 — paper_capital is not a declared SystemConfig field
+## EF-4 — paper_capital is not a declared SystemConfig field  [RESOLVED]
 
 File: main.py (getattr(app_config.system, "paper_capital", 500_000.0))
      core/config_loader.py::SystemConfig (field missing)
-Impact: paper_capital is fetched from SystemConfig via getattr() with a
-        500_000.0 default. A typo or missing YAML key silently falls back
-        to 500k with no Pydantic validation and no CONFIG_DIFF audit trail.
-        Every other SystemConfig value is declared as a typed Pydantic field
-        with extra="forbid"; this one slipped through.
+Impact: paper_capital was fetched from SystemConfig via getattr() with a
+        500_000.0 default. This ghost config key was absent from YAML and
+        always defaulted to 500k, while AccountRow.paper_capital (from
+        accounts.csv, typically 5_000_000) was the authoritative value set
+        by SU19 (Module 41). Two silently-diverging sources of truth: the
+        adapter's get_margins() returned 500k (stale getattr default) while
+        FundManager / SU19 operated on AccountRow.paper_capital. Paper-only
+        divergence, but it would have fed stale values into the G3 reconciler
+        drift check (see EF-7) and into the pre-flight capital banner.
 Severity: MEDIUM (operational footgun, not capital-corruption). Paper-only
-          so live PnL is not affected. Still: a configuration key the operator
-          cannot actually misspell into a visible error is an anti-pattern
-          for this system.
-Fix size: small -- add `paper_capital: float` to SystemConfig (or fold into
-         PaperConfig alongside auto_fill_delay_sec). Remove the getattr in
-         main.py. Add to system_config.yaml paper: block.
-Status: DEFERRED to Phase E. Tempting to bundle with H-20 (A.3.f) since we
-        are already adding PaperConfig, but out of scope: A.3.f's PaperConfig
-        holds only auto_fill_delay_sec. Expanding scope here would delay
-        Phase A closeout.
+          so live PnL is not affected. But the divergence itself masked EF-7.
+Fix (E.7 consolidation — setter-based late-bind):
+     - Added `ZerodhaAdapter.set_paper_capital(value)` method with validation
+       (`value > 0`) and live-mode no-op.
+     - main.py: adapter constructed with provisional `paper_capital=0.0`,
+       value late-bound via `broker_adapter.set_paper_capital(
+       selected_account.paper_capital)` AFTER account selection completes
+       (post `_interactive_confirm_live` branch).
+     - is_paper re-evaluated after the interactive block (args.mode may have
+       flipped between paper and live during the confirm flow).
+     - getattr(app_config.system, "paper_capital", ...) deleted from main.py.
+     - AccountRow.paper_capital (core/account_registry.py:61, AR11-validated)
+       is now the single source of truth.
+Tests added (4, in test_zerodha_adapter.py):
+  - test_ef4_set_paper_capital_updates_value — setter mutates _paper_capital
+  - test_ef4_set_paper_capital_rejects_nonpositive — 0.0, -1.0, -5M → ValueError
+  - test_ef4_set_paper_capital_noop_in_live — live mode ignores setter calls
+  - test_ef4_no_paper_capital_getattr_in_main — grep-style guard against
+    regression (reads main.py as text, asserts the getattr substring absent)
+Status: RESOLVED in E.7 commit.
 Discovered: Phase A, A.3.f pre-work (grep of paper_mode/is_paper in main.py)
+Closed: Phase E, E.7 commit (2026-04-19)
 
 ---
 
@@ -186,4 +201,37 @@ Status: DEFERRED. Filed 2026-04-19 at E.6 landing. Paper-only quirk;
         actually filled.
 Discovered: Phase E, E.6 pre-work (EF-2 test-harness design for paper
             synth mock parity)
+
+---
+
+## EF-7 — G3 reconciler drift check read stale paper capital  [AUTO-RESOLVED by E.7]
+
+File: orders/order_reconciler.py::_g3_capital_drift
+     broker/zerodha_adapter.py::get_margins (paper-mode branch)
+Impact: The G3 capital-drift reconciler check compares FundManager state
+        against `adapter.get_margins()["equity"]["net"]`. In paper mode,
+        before E.7 that value was the adapter's `_paper_capital`, which was
+        bound at constructor time from the getattr(app_config.system,
+        "paper_capital", 500_000.0) default — NOT from
+        AccountRow.paper_capital (the post-SU19 authoritative value,
+        typically 5_000_000). Result: on every G3 tick in paper mode, the
+        reconciler compared FundManager's view of a 5M account against a
+        500k adapter number and would have emitted spurious
+        `capital_drift` escalations — or worse, masked a real drift by
+        showing a consistent stale value.
+Severity: HIGH latent (paper-trial would have produced alert noise within
+          minutes; live mode unaffected since adapter.get_margins() reads
+          real Kite margins).
+Fix: AUTO-RESOLVED by E.7 setter consolidation. Once main.py calls
+     `broker_adapter.set_paper_capital(selected_account.paper_capital)`
+     after account selection, the adapter's `_paper_capital` and
+     FundManager's capital both derive from the same AccountRow source,
+     eliminating the divergence. No reconciler code change needed.
+Tests: covered indirectly by the EF-4 test set — the setter-update test
+       guarantees get_margins() reflects AccountRow.paper_capital, which
+       is what G3 consumes.
+Status: AUTO-RESOLVED by E.7 (no standalone commit).
+Discovered: Phase E, E.7 pre-work (grep of get_margins callers while
+            designing the EF-4 setter approach)
+Closed: Phase E, E.7 commit (2026-04-19)
 

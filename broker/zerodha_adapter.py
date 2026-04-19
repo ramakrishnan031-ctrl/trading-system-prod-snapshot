@@ -689,6 +689,34 @@ class ZerodhaAdapter:
         )
         return positions
 
+    def set_paper_capital(self, value: float) -> None:
+        """
+        EF-4: late-bind paper_capital once AccountRegistry has resolved the
+        selected account.
+
+        Must be called in paper mode before any code path that reads
+        get_margins() (fund_manager.initialize, reconciler G3 check, banner
+        display). No-op in live mode (live reads real broker margins).
+
+        Replaces the pre-SU19 getattr(app_config.system, "paper_capital", ...)
+        pattern at main.py that read a ghost config key absent from YAML and
+        always defaulted to 500_000 while AccountRow.paper_capital (from
+        accounts.csv, typically 5_000_000) was the authoritative value. This
+        setter binds the adapter's paper_capital to AccountRow.paper_capital
+        after account selection completes -- single source of truth.
+        """
+        if not self._paper:
+            return
+        if value <= 0:
+            raise ValueError(
+                f"paper_capital must be > 0, got {value!r}"
+            )
+        self._paper_capital = value
+        self._log.info(
+            "adapter.set_paper_capital bound",
+            extra={"method": "set_paper_capital", "value": value},
+        )
+
     def get_margins(self) -> MarginInfo:
         """Return equity margin info from kite."""
         t0 = time.monotonic()
