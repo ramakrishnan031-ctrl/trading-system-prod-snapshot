@@ -37,6 +37,9 @@ clock:
   alert_skew_sec: 5.0         # G4 tier 2: Telegram alert, continue trading
   halt_skew_sec: 30.0         # G4 tier 3: fire on_critical_skew -> soft_kill
   startup_max_skew_sec: 30.0  # G4: refuse to start if startup skew exceeds this
+  probe:                      # BL-21: periodic driver for record_broker_skew
+    enabled: true
+    probe_interval_sec: 60    # how often to call adapter.get_server_time()
 
 order_monitor:                # OM14
   poll_interval_sec: 2        # poll broker every 2s for fill updates (>= 1)

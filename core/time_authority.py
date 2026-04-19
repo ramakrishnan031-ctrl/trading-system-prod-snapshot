@@ -154,14 +154,24 @@ def configure(
 # Public API — Skew Detection (called by broker adapter, Layer 3)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def record_broker_skew(broker_timestamp: datetime) -> SkewResult:
+def record_broker_skew(
+    broker_timestamp: datetime,
+    local_ref_ts: Optional[datetime] = None,
+) -> SkewResult:
     """
     Record a skew observation from a broker API response timestamp.
-    Called by broker/zerodha_adapter.py after every broker call.
+    Called by broker/zerodha_adapter.py after every broker call, or by
+    broker/clock_skew_probe.py on a periodic schedule (BL-21).
 
     Args:
         broker_timestamp: datetime (timezone-aware) from the broker response.
                           If naive, assumed to be IST.
+        local_ref_ts:     optional local datetime to compare broker_timestamp
+                          against. If None (default), uses now_ist() at call
+                          time (legacy behavior). Callers that have measured
+                          RTT should pass the mid-point of the round trip to
+                          remove latency bias from the skew measurement
+                          (BL-21). If naive, assumed IST.
 
     Returns:
         SkewResult with current skew, average, tier, and whether callback fired.
@@ -170,7 +180,13 @@ def record_broker_skew(broker_timestamp: datetime) -> SkewResult:
     if broker_timestamp.tzinfo is None:
         broker_timestamp = broker_timestamp.replace(tzinfo=_IST)
 
-    local_now = now_ist()
+    if local_ref_ts is None:
+        local_now = now_ist()
+    else:
+        local_now = (
+            local_ref_ts.replace(tzinfo=_IST)
+            if local_ref_ts.tzinfo is None else local_ref_ts
+        )
     skew_sec = (broker_timestamp - local_now).total_seconds()
 
     # Callbacks to fire AFTER releasing the lock

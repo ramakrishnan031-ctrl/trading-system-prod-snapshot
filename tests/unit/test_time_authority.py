@@ -230,6 +230,36 @@ def test_halt_not_fired_when_average_below_threshold() -> None:
 # Tests — Naive timestamp handling
 # ─────────────────────────────────────────────────────────────────────────────
 
+def test_record_skew_local_ref_ts_kwarg_backward_compat() -> None:
+    """
+    BL-21: record_broker_skew gained an optional local_ref_ts kwarg for
+    mid-point round-trip correction. Existing callers (no kwarg) must
+    continue to behave exactly as before -- local reference is now_ist()
+    at call time.
+    """
+    setup()
+    broker_ts = broker_ts_offset(1.5)
+
+    # Legacy call: positional arg only, no local_ref_ts. Should fall back
+    # to now_ist() internally. Skew should be ~1.5s (broker ahead).
+    result_legacy = record_broker_skew(broker_ts)
+    assert 1.0 < result_legacy.skew_sec < 2.0, (
+        f"Legacy path broken: skew={result_legacy.skew_sec}"
+    )
+
+    # Explicit local_ref_ts at +1.5s => skew ~0 (we align ref with broker).
+    ref_aligned = broker_ts
+    result_mid = record_broker_skew(broker_ts, local_ref_ts=ref_aligned)
+    assert abs(result_mid.skew_sec) < 0.1, (
+        f"local_ref_ts kwarg not honored: skew={result_mid.skew_sec}"
+    )
+    print(
+        "  OK BL-21: local_ref_ts kwarg backward-compatible "
+        f"(legacy skew={result_legacy.skew_sec:+.2f}s, "
+        f"aligned skew={result_mid.skew_sec:+.3f}s)"
+    )
+
+
 def test_naive_broker_timestamp_treated_as_ist() -> None:
     setup()
     # Build a naive (no tzinfo) IST wall-clock timestamp ~1s ahead of now_ist().
@@ -358,6 +388,7 @@ def run_all_tests() -> int:
         test_halt_tier_requires_min_samples,
         test_halt_tier_fires_with_enough_samples,
         test_halt_not_fired_when_average_below_threshold,
+        test_record_skew_local_ref_ts_kwarg_backward_compat,
         test_naive_broker_timestamp_treated_as_ist,
         test_concurrent_skew_recordings,
         test_reset_clears_all_state,

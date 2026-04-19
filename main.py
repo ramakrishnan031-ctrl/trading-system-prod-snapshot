@@ -37,6 +37,7 @@ from typing import Optional
 
 import core.time_authority as time_authority
 from alerts.telegram_notifier import TelegramNotifier
+from broker.clock_skew_probe import BrokerClockSkewProbe
 from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
 from broker.order_state_machine import OrderStateMachine
@@ -353,6 +354,7 @@ def _shutdown(
     candle_store: CandleStore,
     notifier: TelegramNotifier,
     store: StateStore,
+    clock_skew_probe: Optional[BrokerClockSkewProbe] = None,
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
     _log.info("Shutdown initiated")
@@ -377,6 +379,11 @@ def _shutdown(
         order_monitor.stop()
     except Exception as exc:
         _log.error("order_monitor.stop error: %s", exc)
+    if clock_skew_probe is not None:
+        try:
+            clock_skew_probe.stop()
+        except Exception as exc:
+            _log.error("clock_skew_probe.stop error: %s", exc)
     try:
         live_feed.disconnect()
     except Exception as exc:
@@ -1129,6 +1136,21 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         store.close()
         return 1
 
+    # BL-21 / D.2: periodic broker clock skew probe.
+    # Thin driver over time_authority.record_broker_skew(); skipped in paper
+    # mode (adapter.get_server_time() returns local time in paper, so skew
+    # would always be ~0).
+    clock_skew_probe: Optional[BrokerClockSkewProbe] = None
+    if not is_paper:
+        clock_skew_probe = BrokerClockSkewProbe(
+            adapter=broker_adapter,
+            time_authority=time_authority,
+            config=app_config.system.clock.probe,
+            logger=get_logger("clock_skew_probe"),
+        )
+    else:
+        _log.info("clock_skew_probe skipped in paper mode")
+
     # ── Phase 0g: Start subsystems (MAIN11) ─────────────────────────────────
     # candle_store.start() BEFORE live_feed.connect() (BLOCKER #2 fix)
     candle_store.start()
@@ -1137,6 +1159,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     live_feed.connect()
     order_monitor.start()
     order_reconciler.start()
+    if clock_skew_probe is not None:
+        clock_skew_probe.start()
     # signal_processor BEFORE entry_gate (BLOCKER #5 fix): gate may call
     # continue_from_gate() immediately on release; workers must be ready.
     signal_processor.start()
@@ -1227,6 +1251,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         candle_store=candle_store,
         notifier=notifier,
         store=store,
+        clock_skew_probe=clock_skew_probe,
     )
     return 0
 

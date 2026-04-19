@@ -84,12 +84,27 @@ class OrderFillTimeoutConfig(BaseModel):
     market_sec: int   # MARKET order timeout; 0 = no wait (P11b)
 
 
+class ClockSkewProbeConfig(BaseModel):
+    """BL-21: periodic broker clock skew probe driver."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    probe_interval_sec: int = 60
+
+    @field_validator("probe_interval_sec")
+    @classmethod
+    def _probe_interval_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("probe_interval_sec must be > 0")
+        return v
+
+
 class ClockConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     warn_skew_sec: float         # G4 tier: log warning only
     alert_skew_sec: float        # G4 tier: Telegram alert, continue trading
     halt_skew_sec: float         # G4 tier: fire on_critical_skew callback -> soft_kill
     startup_max_skew_sec: float  # G4: refuse to start if startup skew exceeds this
+    probe: ClockSkewProbeConfig = Field(default_factory=ClockSkewProbeConfig)  # BL-21
 
 
 class LeverageMapConfig(BaseModel):
