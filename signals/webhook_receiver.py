@@ -110,6 +110,11 @@ class WebhookReceiver:
         self._in_flight_lock = threading.Lock()
         self._in_flight_timeout_sec: float = 300.0  # 5 min hard eviction
 
+        # H-16: set during graceful shutdown to reject new webhooks with 503
+        # before signal_processor is stopped. In-flight requests drain
+        # naturally; only NEW requests see the flag.
+        self._shutting_down = threading.Event()
+
         # HIGH #9: background sweeper evicts stuck in_flight entries
         self._sweeper_stop = threading.Event()
         self._sweeper_thread = threading.Thread(
@@ -159,6 +164,15 @@ class WebhookReceiver:
         source_ip: str = request.remote_addr or "unknown"
         raw_body: bytes = request.get_data()
         payload_size: int = len(raw_body)
+
+        # H-16: reject NEW requests during graceful shutdown. In-flight
+        # requests continue to completion; only newly arriving ones get 503.
+        if self._shutting_down.is_set():
+            duration_ms = int((time.monotonic() - start_mono) * 1000)
+            self._write_audit(
+                scanner_name, source_ip, payload_size, 503, 0, 0, duration_ms,
+            )
+            return jsonify({"error": "Service shutting down; retry later"}), 503
 
         response_code = 500
         accepted_count = 0
@@ -320,10 +334,14 @@ class WebhookReceiver:
         if age_sec > expiry_sec:
             return {"symbol": symbol, "status": "EXPIRED"}
 
-        # WR17: in-flight check (symbol already being processed downstream)
-        with self._in_flight_lock:
-            if symbol in self._in_flight:
-                return {"symbol": symbol, "status": "IN_PROCESS"}
+        # M-1: atomically claim the symbol as in-flight. Closes the TOCTOU
+        # gap where the legacy check-then-add admitted concurrent same-symbol
+        # signals with DIFFERENT fingerprints (e.g., different minute-rollup)
+        # that would both pass the in_flight check and both get enqueued.
+        # From here every reject path MUST release; every accepted path lets
+        # signal_processor release at completion via release_in_flight().
+        if not self._claim_in_flight(symbol):
+            return {"symbol": symbol, "status": "IN_PROCESS"}
 
         # WR7: compute dedup fingerprint at minute precision
         minute_str = triggered_at.strftime("%Y-%m-%d %H:%M")
@@ -336,6 +354,8 @@ class WebhookReceiver:
             (fingerprint, today_iso),
         )
         if existing is not None:
+            # Release the claim since we did not enqueue anything downstream
+            self._release_in_flight(symbol)
             return {"symbol": symbol, "status": "DUPLICATE"}
 
         # WR9: insert signal row, then push to queue
@@ -361,6 +381,7 @@ class WebhookReceiver:
                 )
         except sqlite3.IntegrityError:
             # Race: another concurrent request inserted same fingerprint first
+            self._release_in_flight(symbol)
             return {"symbol": symbol, "status": "DUPLICATE"}
 
         # Push to signal_queue
@@ -377,13 +398,31 @@ class WebhookReceiver:
                     )
             except Exception as upd_exc:
                 self._log.error(f"Failed to mark QUEUE_FULL for {signal_id}: {upd_exc}")
+            self._release_in_flight(symbol)
             return {"symbol": symbol, "status": "QUEUE_FULL"}
 
-        # Add to in-flight dict AFTER successful enqueue (WR17)
-        with self._in_flight_lock:
-            self._in_flight[symbol] = time.monotonic()
-
+        # Claim already recorded atomically above; signal_processor will
+        # release on completion.
         return {"symbol": symbol, "status": "ACCEPTED", "signal_id": signal_id}
+
+    def _claim_in_flight(self, symbol: str) -> bool:
+        """
+        M-1: atomically claim `symbol` as in-flight. Returns True if newly
+        claimed; False if already present. Caller MUST call
+        _release_in_flight(symbol) on any reject path after a successful
+        claim (DUPLICATE / QUEUE_FULL / IntegrityError). On accepted path,
+        signal_processor's release_in_flight() handles cleanup.
+        """
+        with self._in_flight_lock:
+            if symbol in self._in_flight:
+                return False
+            self._in_flight[symbol] = time.monotonic()
+            return True
+
+    def _release_in_flight(self, symbol: str) -> None:
+        """Internal: remove symbol from the in-flight dict (M-1)."""
+        with self._in_flight_lock:
+            self._in_flight.pop(symbol, None)
 
     # ------------------------------------------------------------------
     # In-flight management (WR17)
@@ -436,9 +475,16 @@ class WebhookReceiver:
     # ------------------------------------------------------------------
 
     def stop(self) -> None:
-        """Graceful shutdown hook. Called by main.py shutdown handler."""
+        """
+        Graceful shutdown hook. Called by main.py shutdown handler BEFORE
+        signal_processor.stop() so new webhooks see 503 while in-flight
+        requests drain naturally (H-16).
+        """
+        self._shutting_down.set()
         self._sweeper_stop.set()
-        self._log.info("WebhookReceiver.stop() called; shutting down")
+        self._log.info(
+            "WebhookReceiver.stop() called; new requests will return 503"
+        )
 
     # ------------------------------------------------------------------
     # In-flight sweeper (HIGH #9)

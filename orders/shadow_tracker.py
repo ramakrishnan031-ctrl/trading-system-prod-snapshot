@@ -456,7 +456,11 @@ class ShadowTracker:
 
         exit_ts_str = now.isoformat()
 
-        # Update DB + remove from active under lock
+        # Update DB + remove from active under lock.
+        # H-13: on DB failure we do NOT pop and we do NOT cascade. The inning
+        # stays in _active_innings so a later tick (or the reconciler) can
+        # pick it up and try again. Progressing state on a failed DB write
+        # would leave memory and DB divergent and could double-cascade.
         with self._lock:
             try:
                 self._store.update_inning_close(
@@ -471,10 +475,12 @@ class ShadowTracker:
                 )
             except Exception as exc:
                 self._log.error(
-                    "shadow_tracker: update_inning_close failed for trade_id=%s "
-                    "inning=%d: %s",
-                    inning.trade_id, inning.inning_number, exc,
+                    "SHADOW_INNING_CLOSE_DB_FAILED: leaving inning in active "
+                    "set for reconciler recovery. trade_id=%s inning=%d "
+                    "exit_reason=%s error=%s",
+                    inning.trade_id, inning.inning_number, exit_reason, exc,
                 )
+                return
             self._active_innings.pop(inning.trade_id, None)
 
         self._log.info(

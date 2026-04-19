@@ -1380,14 +1380,19 @@ def test_concurrent_shutdown_cleans_up():
 
 def test_derive_prices_negative_entry_raises():
     """
-    BLOCKER #15 regression: entry_price <= 0 raises ValueError.
+    BLOCKER #15 regression: entry_price <= 0 short-circuits the pipeline.
     A strategy with entry_offset_pct >= 1.0 on a LONG would produce entry <= 0.
+    E.4 M-4: upgraded from ValueError to _PipelineReject(INVALID_DERIVED_PRICE)
+    so the signal is categorized as REJECTED, not PLACEMENT_FAILED.
     """
+    from signals.signal_processor import _PipelineReject
     proc, _, _ = _make_proc()
     strategy = _MockStrategy(direction="LONG", entry_method="LIMIT",
                               entry_offset_pct=1.0, sl_pct=0.02)
-    with pytest.raises(ValueError, match="entry_price="):
+    with pytest.raises(_PipelineReject) as excinfo:
         proc._derive_prices(trigger_price=100.0, strategy=strategy)
+    assert excinfo.value.check == "INVALID_DERIVED_PRICE"
+    assert "entry_price=" in excinfo.value.reason
 
 
 def test_continue_from_gate_uses_side_not_direction():

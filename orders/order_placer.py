@@ -344,6 +344,8 @@ class OrderPlacer:
         )
 
         # OP4: create trade row FIRST (status=PENDING_FILL)
+        # EF-5: thread reservation_id so the trades row records which fm_ledger
+        # reservation funded it; simplifies rehydrate and audit.
         trade_id = self._om.create_trade(
             signal_id=signal_id,
             symbol=symbol,
@@ -357,6 +359,7 @@ class OrderPlacer:
             order_protocol=order_protocol,
             margin_reserved=margin_reserved,
             risk_amount=risk_amount,
+            reservation_id=reservation_id,
         )
 
         # Link signal → trade

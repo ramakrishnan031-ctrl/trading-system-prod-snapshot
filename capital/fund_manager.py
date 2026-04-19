@@ -1045,9 +1045,16 @@ class FundManager:
             })
             return False
 
-        # EF-5: two-hop lookup. The trades table lacks a reservation_id
-        # column; we resolve via the most recent RESERVE row for this signal.
-        rid = self._store.get_reservation_id_for_signal(signal_id)
+        # EF-5: prefer the reservation_id column on trades (populated from
+        # order_placer.place via order_manager.create_trade). Fall back to
+        # the two-hop lookup (signal_id -> first RESERVE row in fm_ledger)
+        # for pre-EF-5 trade rows where the column is NULL.
+        try:
+            rid = trade["reservation_id"]
+        except (KeyError, IndexError):
+            rid = None
+        if not rid:
+            rid = self._store.get_reservation_id_for_signal(signal_id)
         if rid is None:
             anomalies.append({
                 "trade_id": trade_id,

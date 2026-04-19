@@ -137,10 +137,22 @@ class EodSquareoff:
         # Track whether WE set soft_kill (so we can resume safely)
         self._we_set_soft_kill: bool = False
 
-        # EOD9: on construction, check if EOD already ran today with failures
-        self._check_restart_recovery()
+        # H-7: _check_restart_recovery() DEFERRED to post_wire_init(). It can
+        # recovery-fire, which publishes EodSquareoffComplete on the bus; if
+        # we fired in __init__ the bus would have no subscribers yet (main.py
+        # wires bus.subscribe AFTER constructing EodSquareoff). Caller MUST
+        # call post_wire_init() once all bus subscriptions are in place.
 
     # ── public API ────────────────────────────────────────────────────────────
+
+    def post_wire_init(self) -> None:
+        """
+        H-7: Finalize init after the caller has wired all bus subscriptions.
+        Runs the EOD9 restart-recovery check, which may publish
+        EodSquareoffComplete; calling this before subscribers are registered
+        would silently drop the event.
+        """
+        self._check_restart_recovery()
 
     def check_and_fire(self, now: datetime) -> bool:
         """
@@ -242,6 +254,28 @@ class EodSquareoff:
 
         self._log.info("EOD square-off triggered for %s", fired_date_str)
 
+        # M-3 (write-ahead): mark IN_PROGRESS before doing anything. A crash
+        # between here and the COMPLETE update leaves the row IN_PROGRESS,
+        # which _check_restart_recovery() treats as "recover". Recovery of a
+        # recovery that also fails stays IN_PROGRESS and alerts the operator
+        # (no auto-retry loop).
+        try:
+            self._store.insert_eod_squareoff_log_start(
+                fired_date=fired_date_str,
+                fired_at=fired_at.isoformat(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Log but proceed: we'd rather do the squareoff than abort it
+            # because we couldn't write the write-ahead row. The final
+            # COMPLETE update will INSERT OR REPLACE via the helper below
+            # (insert_eod_squareoff_log), so state is still durable.
+            log_exception(self._log, exc)
+            self._log.error(
+                "EOD_WRITEAHEAD_FAILED: proceeding with squareoff; "
+                "fired_date=%s error=%s",
+                fired_date_str, exc,
+            )
+
         # Step 2: soft_kill to block new entries during square-off (EOD5)
         self._we_set_soft_kill = False
         if not self._ks.is_active("any"):
@@ -272,18 +306,45 @@ class EodSquareoff:
             duration_sec,
         )
 
-        # Step 8: persist to eod_squareoff_log (EOD8)
-        self._store.insert_eod_squareoff_log(
-            fired_date=fired_date_str,
-            fired_at=fired_at.isoformat(),
-            positions_attempted=p_attempted,
-            positions_succeeded=p_succeeded,
-            positions_failed=p_failed,
-            cancels_attempted=c_attempted,
-            cancels_succeeded=c_succeeded,
-            cancels_failed=c_failed,
-            duration_sec=duration_sec,
-        )
+        # Step 8: persist final counts to eod_squareoff_log (EOD8)
+        # M-3: transition the write-ahead IN_PROGRESS row to COMPLETE. If the
+        # write-ahead INSERT at _fire() start failed for any reason, fall back
+        # to insert_eod_squareoff_log (which INSERT OR REPLACE covers the gap).
+        completed_at_iso = now_ist().isoformat()
+        try:
+            self._store.update_eod_squareoff_log_complete(
+                fired_date=fired_date_str,
+                positions_attempted=p_attempted,
+                positions_succeeded=p_succeeded,
+                positions_failed=p_failed,
+                cancels_attempted=c_attempted,
+                cancels_succeeded=c_succeeded,
+                cancels_failed=c_failed,
+                duration_sec=duration_sec,
+                completed_at=completed_at_iso,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            # Fall back: single-shot write if UPDATE failed (e.g., row missing
+            # because write-ahead also failed). Guarantees we always have a
+            # COMPLETE row for this date.
+            try:
+                self._store.insert_eod_squareoff_log(
+                    fired_date=fired_date_str,
+                    fired_at=fired_at.isoformat(),
+                    positions_attempted=p_attempted,
+                    positions_succeeded=p_succeeded,
+                    positions_failed=p_failed,
+                    cancels_attempted=c_attempted,
+                    cancels_succeeded=c_succeeded,
+                    cancels_failed=c_failed,
+                    duration_sec=duration_sec,
+                )
+            except Exception as exc2:  # noqa: BLE001
+                self._log.critical(
+                    "EOD_LOG_PERSIST_FAILED: fired_date=%s error1=%s error2=%s",
+                    fired_date_str, exc, exc2,
+                )
 
         # Step 6: publish EodSquareoffComplete event (EOD5)
         try:
@@ -535,12 +596,13 @@ class EodSquareoff:
 
     def _check_restart_recovery(self) -> None:
         """
-        EOD9: on construction, check today's eod_squareoff_log.
-        - If a row exists with failures, log WARNING (reconciler handles it).
-        - If no row AND now is past EOD time AND before 15:30, fire once.
-        - If no row AND now is past 15:30, log CRITICAL but do NOT fire.
-        - If a row already exists (even with failures), set _fired_for_date to
-          prevent check_and_fire() from double-firing.
+        EOD9 (post_wire_init): inspect today's eod_squareoff_log.
+
+        M-3 write-ahead semantics:
+          - status=COMPLETE  -> already done today; skip.
+          - status=IN_PROGRESS -> prior fire crashed; recover (fire again).
+          - no row AND past EOD time AND before 15:30 -> recovery fire.
+          - no row AND past 15:30 -> CRITICAL alert, do not fire.
         """
         now = now_ist()
         today_str = now.date().isoformat()
@@ -549,17 +611,70 @@ class EodSquareoff:
         row = self._store.get_eod_squareoff_log_for_date(today_str)
 
         if row is not None:
-            # EOD already ran today; mark fired so check_and_fire stays quiet
-            self._fired_for_date[today_date] = True
-            if row["positions_failed"] > 0 or row["cancels_failed"] > 0:
-                self._log.warning(
-                    "EOD ran today (%s) but had failures "
-                    "(positions_failed=%d cancels_failed=%d); "
-                    "reconciler should handle residual positions",
-                    today_str,
-                    row["positions_failed"],
-                    row["cancels_failed"],
+            # Row-key schema_meta pragma: 'status' column exists in v11+. For
+            # backwards compat with rows written pre-v11, default to COMPLETE
+            # if the column is missing or NULL.
+            try:
+                status = row["status"]
+            except (IndexError, KeyError):
+                status = "COMPLETE"
+            if status is None:
+                status = "COMPLETE"
+
+            if status == "COMPLETE":
+                # EOD already finished today; mark fired so check_and_fire stays quiet
+                self._fired_for_date[today_date] = True
+                if row["positions_failed"] > 0 or row["cancels_failed"] > 0:
+                    self._log.warning(
+                        "EOD ran today (%s) but had failures "
+                        "(positions_failed=%d cancels_failed=%d); "
+                        "reconciler should handle residual positions",
+                        today_str,
+                        row["positions_failed"],
+                        row["cancels_failed"],
+                    )
+                return
+
+            # status == IN_PROGRESS: prior fire crashed mid-execution.
+            # Execute recovery fire; if IT also fails the row stays IN_PROGRESS
+            # (via the write-ahead at _fire start) so a human operator notices.
+            self._log.critical(
+                "EOD_RECOVERY_FROM_IN_PROGRESS: prior fire on %s crashed "
+                "mid-execution (status=IN_PROGRESS). Recovering.",
+                today_str,
+            )
+            with self._lock:
+                self._fired_for_date[today_date] = True
+            try:
+                self._fire(now, recovery_fire=True)
+            except Exception as exc:  # noqa: BLE001
+                # Row remains IN_PROGRESS -> operator alert path is the
+                # CRITICAL log + optional notifier below. Do NOT reset
+                # _fired_for_date: we don't want a polling loop to retry
+                # the same broken path.
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "EOD_RECOVERY_FAILED: fired_date=%s status remains "
+                    "IN_PROGRESS; manual intervention required. error=%s",
+                    today_str, exc,
                 )
+                if self._notifier is not None:
+                    try:
+                        self._notifier.send(
+                            severity="CRITICAL",
+                            title="EOD recovery FAILED",
+                            body=(
+                                f"EOD squareoff recovery on {today_str} "
+                                f"raised: {exc}. Row remains IN_PROGRESS. "
+                                f"Manual intervention required."
+                            ),
+                            source_module="eod_squareoff",
+                        )
+                    except Exception as notif_exc:  # noqa: BLE001
+                        self._log.error(
+                            "EOD_RECOVERY_FAILED notifier.send failed: %s",
+                            notif_exc,
+                        )
             return
 
         # No log row for today — check if we should auto-fire

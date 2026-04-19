@@ -354,10 +354,19 @@ def _shutdown(
     candle_store: CandleStore,
     notifier: TelegramNotifier,
     store: StateStore,
+    webhook_receiver: Optional[WebhookReceiver] = None,
     clock_skew_probe: Optional[BrokerClockSkewProbe] = None,
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
     _log.info("Shutdown initiated")
+    # H-16: stop webhook_receiver FIRST so new webhooks return 503. In-flight
+    # requests drain naturally; signal_processor stop below still works on
+    # queued items.
+    if webhook_receiver is not None:
+        try:
+            webhook_receiver.stop()
+        except Exception as exc:
+            _log.error("webhook_receiver.stop error: %s", exc)
     try:
         signal_proc.stop()
     except Exception as exc:
@@ -1123,6 +1132,11 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # Note: fund_manager has no on_order_filled/on_position_closed handlers;
     # order_reconciler subscribes OrderStateChanged internally in start() (RC4).
 
+    # H-7: finalize EOD init now that bus subscriptions are registered.
+    # _check_restart_recovery() runs here (deferred from EodSquareoff.__init__);
+    # if it recovery-fires, the EodSquareoffComplete publish reaches subscribers.
+    eod.post_wire_init()
+
     # ── Phase 0f: Startup reconciliation (MAIN10, RC14) ─────────────────────
     recon_actions = order_reconciler.reconcile_once()
     if recon_actions:
@@ -1251,6 +1265,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         candle_store=candle_store,
         notifier=notifier,
         store=store,
+        webhook_receiver=webhook_receiver,
         clock_skew_probe=clock_skew_probe,
     )
     return 0

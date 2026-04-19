@@ -509,7 +509,7 @@ def test_fund_manager_not_called_for_position_exits() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_eod_squareoff_log_row_written() -> None:
-    """eod_squareoff_log row inserted after fire (EOD8)."""
+    """eod_squareoff_log write-ahead row + COMPLETE update after fire (EOD8 + M-3)."""
     store = MagicMock(spec=StateStore)
     store.get_pending_intraday_orders.return_value = []
     store.get_open_intraday_positions.return_value = []
@@ -518,8 +518,10 @@ def test_eod_squareoff_log_row_written() -> None:
     eod, adapter, fm, ks, bus, om = _make_eod(store=store)
     eod.check_and_fire(_ist(15, 17))
 
-    store.insert_eod_squareoff_log.assert_called_once()
-    kwargs = store.insert_eod_squareoff_log.call_args[1]
+    # E.4 M-3: two-step write-ahead. Start writes IN_PROGRESS; Complete writes counts.
+    store.insert_eod_squareoff_log_start.assert_called_once()
+    store.update_eod_squareoff_log_complete.assert_called_once()
+    kwargs = store.update_eod_squareoff_log_complete.call_args[1]
     assert kwargs["positions_attempted"] == 0
     assert kwargs["cancels_attempted"] == 0
 
@@ -547,7 +549,8 @@ def test_eod_squareoff_log_counts_correct() -> None:
 
     eod.check_and_fire(_ist(15, 17))
 
-    kwargs = store.insert_eod_squareoff_log.call_args[1]
+    # E.4 M-3: final counts land on update_eod_squareoff_log_complete (not insert)
+    kwargs = store.update_eod_squareoff_log_complete.call_args[1]
     assert kwargs["cancels_attempted"] == 2
     assert kwargs["cancels_succeeded"] == 1
     assert kwargs["cancels_failed"] == 1
@@ -649,6 +652,8 @@ def test_restart_with_log_row_no_fire() -> None:
 
     with patch("orders.eod_squareoff.now_ist", return_value=_ist(9, 0)):
         eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+        # H-7: recovery check now deferred to post_wire_init()
+        eod.post_wire_init()
 
     result = eod.check_and_fire(_ist(15, 17))
     assert result is False
@@ -941,6 +946,8 @@ def test_eod9_skipped_late_writes_event_and_alerts() -> None:
             logger=logger,
             notifier=notifier,
         )
+        # H-7: recovery check now deferred to post_wire_init()
+        eod.post_wire_init()
 
     # Assert EOD_SKIPPED_LATE system_event was written
     store.insert_system_event.assert_called_once()

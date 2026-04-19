@@ -567,11 +567,17 @@ class SignalProcessor:
                 entry_price = trigger_price * (1.0 + offset)
 
         if entry_price <= 0:
-            raise ValueError(
-                f"_derive_prices: entry_price={entry_price:.4f} <= 0 "
-                f"(trigger={trigger_price}, offset={strategy.entry_offset_pct}, "
-                f"method={strategy.entry_method}). "
-                f"Check strategy.entry_offset_pct < 1.0."
+            # M-4: invalid derived input is a rejection, not a placement failure.
+            # Emits REJECTED_INVALID_DERIVED_PRICE rather than PLACEMENT_FAILED.
+            raise _PipelineReject(
+                "INVALID_DERIVED_PRICE",
+                (
+                    f"entry_price={entry_price:.4f} <= 0 "
+                    f"(trigger={trigger_price}, "
+                    f"offset={strategy.entry_offset_pct}, "
+                    f"method={strategy.entry_method}). "
+                    f"Check strategy.entry_offset_pct < 1.0."
+                ),
             )
 
         # --- SL price ---
@@ -594,7 +600,12 @@ class SignalProcessor:
             else:
                 sl_price = entry_price * (1.0 + sl_pct)
         else:
-            raise ValueError(f"Unknown sl_method: {sl_method!r}")
+            # M-4: unknown sl_method is a configuration error, not a broker
+            # failure. Categorize as rejection.
+            raise _PipelineReject(
+                "INVALID_DERIVED_PRICE",
+                f"Unknown sl_method: {sl_method!r}",
+            )
 
         # --- Bounds enforcement ---
         sl_distance = abs(entry_price - sl_price)

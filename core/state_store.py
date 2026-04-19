@@ -71,7 +71,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 10
+EXPECTED_SCHEMA_VERSION = 11
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -584,6 +584,10 @@ class StateStore:
         Insert (or replace) the eod_squareoff_log row for fired_date (EOD8).
         Uses INSERT OR REPLACE so a recovery-fire on the same date overwrites
         the failed original row.
+
+        Single-shot write: status defaults to COMPLETE and completed_at is set
+        to fired_at. For write-ahead use insert_eod_squareoff_log_start() +
+        update_eod_squareoff_log_complete() instead (M-3).
         """
         with self.transaction() as cur:
             cur.execute(
@@ -591,14 +595,74 @@ class StateStore:
                 INSERT OR REPLACE INTO eod_squareoff_log
                   (fired_date, fired_at, positions_attempted, positions_succeeded,
                    positions_failed, cancels_attempted, cancels_succeeded,
-                   cancels_failed, duration_sec)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   cancels_failed, duration_sec, status, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'COMPLETE', ?)
                 """,
                 (
                     fired_date, fired_at,
                     positions_attempted, positions_succeeded, positions_failed,
                     cancels_attempted, cancels_succeeded, cancels_failed,
-                    duration_sec,
+                    duration_sec, fired_at,
+                ),
+            )
+
+    def insert_eod_squareoff_log_start(
+        self,
+        fired_date: str,
+        fired_at: str,
+    ) -> None:
+        """
+        M-3 write-ahead: insert an IN_PROGRESS row at the start of an EOD fire.
+        Zero counts, NULL completed_at. INSERT OR REPLACE so a retry after a
+        crash overwrites the prior IN_PROGRESS row for the same date.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO eod_squareoff_log
+                  (fired_date, fired_at, positions_attempted, positions_succeeded,
+                   positions_failed, cancels_attempted, cancels_succeeded,
+                   cancels_failed, duration_sec, status, completed_at)
+                VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0.0, 'IN_PROGRESS', NULL)
+                """,
+                (fired_date, fired_at),
+            )
+
+    def update_eod_squareoff_log_complete(
+        self,
+        fired_date: str,
+        positions_attempted: int,
+        positions_succeeded: int,
+        positions_failed: int,
+        cancels_attempted: int,
+        cancels_succeeded: int,
+        cancels_failed: int,
+        duration_sec: float,
+        completed_at: str,
+    ) -> None:
+        """
+        M-3 write-ahead: transition an IN_PROGRESS row to COMPLETE with final
+        counts + completed_at. Called after a successful fire.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE eod_squareoff_log
+                   SET positions_attempted = ?,
+                       positions_succeeded = ?,
+                       positions_failed    = ?,
+                       cancels_attempted   = ?,
+                       cancels_succeeded   = ?,
+                       cancels_failed      = ?,
+                       duration_sec        = ?,
+                       status              = 'COMPLETE',
+                       completed_at        = ?
+                 WHERE fired_date = ?
+                """,
+                (
+                    positions_attempted, positions_succeeded, positions_failed,
+                    cancels_attempted, cancels_succeeded, cancels_failed,
+                    duration_sec, completed_at, fired_date,
                 ),
             )
 
@@ -650,6 +714,7 @@ class StateStore:
                 t.sl_initial,
                 t.entry_target_price,
                 t.entry_actual_price,
+                t.reservation_id,
                 o.product,
                 o.order_id AS entry_broker_order_id
             FROM trades t

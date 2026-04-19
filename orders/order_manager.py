@@ -169,11 +169,15 @@ class OrderManager:
         order_protocol: str,    # "CO_PLUS_TGT" | "LIMIT_TRIPLE"
         margin_reserved: float,
         risk_amount: float,
+        reservation_id: Optional[str] = None,  # EF-5
     ) -> str:
         """
         Insert a new trade row with status=PENDING_FILL. Returns trade_id.
 
         OMgr2: trade_id is assigned here via new_trade_id().
+        EF-5: reservation_id is the fm_ledger reservation that funded this
+        trade. Nullable for callers predating the column (recovered trades
+        via reconciler). Populated by order_placer from the signal pipeline.
         """
         trade_id = new_trade_id()
         now = now_ist().isoformat()
@@ -187,7 +191,8 @@ class OrderManager:
                     sl_initial, tgt_initial,
                     margin_reserved, risk_amount,
                     created_at, updated_at,
-                    status, entry_mode, order_protocol, recovered_flag
+                    status, entry_mode, order_protocol, recovered_flag,
+                    reservation_id
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, 0,
@@ -195,7 +200,8 @@ class OrderManager:
                     ?, ?,
                     ?, ?,
                     ?, ?,
-                    'PENDING_FILL', 'FULL', ?, 0
+                    'PENDING_FILL', 'FULL', ?, 0,
+                    ?
                 )
                 """,
                 (
@@ -206,6 +212,7 @@ class OrderManager:
                     margin_reserved, risk_amount,
                     now, now,
                     order_protocol,
+                    reservation_id,
                 ),
             )
         self._log.info(

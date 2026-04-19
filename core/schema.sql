@@ -117,9 +117,14 @@ CREATE TABLE IF NOT EXISTS trades (
     recovered_flag      INTEGER NOT NULL DEFAULT 0,  -- 1 if reconstructed during crash recovery
     entry_mode          TEXT NOT NULL DEFAULT 'FULL',-- FULL | SCALE (v2.1)
     order_protocol      TEXT NOT NULL,               -- CO_PLUS_TGT | LIMIT_TRIPLE
-    
+
+    -- v11 (E.4 / EF-5): capital reservation that funds this trade. Nullable
+    -- for historical / recovered trades that predate the column. Populated
+    -- at create_trade() time from signal_processor's reservation.
+    reservation_id      TEXT,                        -- FK to fm_ledger.reservation_id (not enforced)
+
     updated_at          TEXT NOT NULL,
-    
+
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
 );
 
@@ -407,7 +412,14 @@ CREATE TABLE IF NOT EXISTS eod_squareoff_log (
     cancels_attempted       INTEGER NOT NULL DEFAULT 0,
     cancels_succeeded       INTEGER NOT NULL DEFAULT 0,
     cancels_failed          INTEGER NOT NULL DEFAULT 0,
-    duration_sec            REAL NOT NULL DEFAULT 0.0
+    duration_sec            REAL NOT NULL DEFAULT 0.0,
+    -- v11 (E.4 / M-3): write-ahead status. IN_PROGRESS row is written at
+    -- fire start; UPDATE to COMPLETE after squareoff finishes. Restart
+    -- recovery distinguishes: IN_PROGRESS -> crash mid-fire, re-run
+    -- recovery; COMPLETE -> already done today, skip. Recovery failure
+    -- leaves row IN_PROGRESS so the operator is alerted (no auto-retry).
+    status                  TEXT NOT NULL DEFAULT 'COMPLETE',  -- IN_PROGRESS | COMPLETE
+    completed_at            TEXT                     -- ISO-8601 IST; NULL until COMPLETE
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_eod_squareoff_log_date
@@ -532,17 +544,19 @@ CREATE INDEX IF NOT EXISTS idx_innings_date
     ON innings(substr(entry_ts, 1, 10));
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v9 -> v10
+-- SCHEMA VERSION BUMP: v10 -> v11
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '10');
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '11');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v10 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v11 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
 --                    v9: +innings;
 --                    v10: -capital_ledger (dead); fm_ledger becomes write-ahead
 --                          + entry_type CHECK + session_id/direction/trade_id/
---                          margin_delta/pnl_delta/costs columns)
+--                          margin_delta/pnl_delta/costs columns;
+--                    v11: +eod_squareoff_log.status/completed_at (M-3 write-
+--                          ahead); +trades.reservation_id (EF-5 capital flow))
 -- ─────────────────────────────────────────────────────────────────────────────
