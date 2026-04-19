@@ -859,6 +859,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         on_daily_loss_breach=lambda: kill_switch.soft_kill(
             reason="daily_loss_limit_breached", triggered_by="fund_manager"
         ),
+        kill_switch=kill_switch,  # FM19 / BL-9: invariant violations -> hard_kill
     )
     # SU19: paper mode uses configured paper_capital; live uses broker margins
     if args.mode == "paper":
@@ -871,8 +872,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # state matches persisted state on a warm start. On a cold/clean start
     # there are no open trades and this is a no-op. CapitalStateInconsistent
     # signals that the persisted history itself is internally inconsistent
-    # and trading cannot resume safely; we exit with a distinct code (2) so
-    # ops can see the cause without parsing logs.
+    # and trading cannot resume safely; we exit with code 3 (startup check
+    # failure) so ops can distinguish this from the generic unexpected-
+    # exception path (code 2).
     try:
         _rehydrate_summary = fund_manager.rehydrate_from_open_trades()
         _log.info(
@@ -882,7 +884,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     except CapitalStateInconsistent:
         _log.critical("capital_state_inconsistent", exc_info=True)
         store.close()
-        return 2
+        return 3
 
     ps_cfg = app_config.system.position_sizing
     position_sizer = PositionSizer(

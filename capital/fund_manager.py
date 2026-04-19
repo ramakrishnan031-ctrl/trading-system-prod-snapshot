@@ -48,6 +48,15 @@ Locked Design Decisions:
              CapitalStateInconsistent (distinct from CapitalInvariantViolation
              so callers can distinguish startup-replay corruption from a live
              mid-mutation invariant break).
+    FM19 -- BL-9: optional kill_switch dependency. _check_invariant calls
+             kill_switch.hard_kill BEFORE the existing on_critical_failure
+             callback and BEFORE re-raising, so a provably corrupted bin-card
+             state cancels open orders immediately rather than just blocking
+             new ones. hard_kill is wrapped in its own try/except -- if the
+             kill path itself fails, the invariant exception still propagates
+             (belt-and-braces). kill_switch=None degrades gracefully: the
+             existing on_critical_failure path still runs (soft_kill wiring
+             remains available for other critical-signal callers).
 
 What This Module Does NOT Do:
     - Does not size positions (capital/position_sizer.py)
@@ -60,7 +69,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Final, Optional
+from typing import TYPE_CHECKING, Any, Callable, Final, Optional
 
 from capital.invariant import assert_capital_invariant
 from core.events import CapitalDriftDetected, EventBus
@@ -68,6 +77,9 @@ from core.exceptions import CapitalInvariantViolation, CapitalStateInconsistent
 from core.logger import log_exception
 from core.state_store import StateStore
 from core.time_authority import now_ist
+
+if TYPE_CHECKING:
+    from capital.kill_switch import KillSwitch
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -218,6 +230,7 @@ class FundManager:
         leverage_map: Optional[dict[str, float]] = None,
         on_daily_loss_breach: Optional[Callable[[], None]] = None,
         on_critical_failure: Optional[Callable[[str], None]] = None,
+        kill_switch: Optional["KillSwitch"] = None,
     ) -> None:
         # FM12: validate constructor arguments
         if leverage_map is None:
@@ -249,6 +262,7 @@ class FundManager:
         self._leverage_map = dict(leverage_map)
         self._on_loss_breach = on_daily_loss_breach
         self._on_critical = on_critical_failure
+        self._kill_switch = kill_switch  # FM19 / BL-9
 
         self._lock = threading.RLock()
 
@@ -1126,7 +1140,15 @@ class FundManager:
         fund_manager tracks _total directly (initial broker balance +/- all PnL).
         Passes cash_floor=self._total and realized_pnl_today=0.0 so that
         compute_rhs returns _total unchanged — equivalent to the previous
-        inline check. On-critical callback fires before re-raise (FM11).
+        inline check.
+
+        On violation (FM11 + FM19 / BL-9):
+          1. hard_kill first (if kill_switch wired) -- cancels in-flight orders
+             immediately; wrapped in its own try/except so the original
+             invariant exception always propagates even if the kill path fails.
+          2. on_critical_failure callback next (legacy soft-kill / notifier
+             wiring for other critical-signal callers; unchanged).
+          3. raise last -- callers always see CapitalInvariantViolation.
         """
         total_avail = self._intraday_avail + self._positional_avail
         total_reserved = self._intraday_reserved + self._positional_reserved
@@ -1145,8 +1167,33 @@ class FundManager:
             )
         except CapitalInvariantViolation as exc:
             log_exception(self._log, exc)
+            # FM19 / BL-9: hard_kill FIRST -- provably corrupted capital state
+            # warrants immediate order cancellation, not just a soft block.
+            if self._kill_switch is not None:
+                try:
+                    self._kill_switch.hard_kill(
+                        reason=f"capital_invariant_violated: {exc}",
+                        triggered_by="fund_manager._check_invariant",
+                    )
+                except Exception as kse:
+                    self._log.critical(
+                        "kill_switch.hard_kill failed during invariant violation",
+                        extra={"kill_error": str(kse)},
+                    )
+            else:
+                self._log.critical(
+                    "invariant violation with kill_switch=None; "
+                    "on_critical_failure path (if wired) still runs"
+                )
+            # Legacy soft-kill / notifier wiring (unchanged).
             if self._on_critical is not None:
-                self._on_critical(str(exc))
+                try:
+                    self._on_critical(str(exc))
+                except Exception as cbe:
+                    self._log.error(
+                        "on_critical_failure callback raised",
+                        extra={"error": str(cbe)},
+                    )
             raise
 
     # ── ledger write (FM10 / BL-5 write-ahead) ────────────────────────────────

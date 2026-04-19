@@ -14,6 +14,7 @@ import logging
 import tempfile
 import threading
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -57,6 +58,7 @@ def _make_fm(
     leverage_map: dict | None = None,
     on_loss_breach=None,
     on_critical=None,
+    kill_switch=None,
 ) -> FundManager:
     bus = EventBus()
     logger = logging.getLogger("test_fm")
@@ -70,7 +72,26 @@ def _make_fm(
         leverage_map=leverage_map or _DEFAULT_LEVERAGE,
         on_daily_loss_breach=on_loss_breach,
         on_critical_failure=on_critical,
+        kill_switch=kill_switch,
     )
+
+
+class _FakeKillSwitch:
+    """Records hard_kill invocations for BL-9 invariant-violation tests."""
+
+    def __init__(self, raise_on_hard_kill: Optional[Exception] = None) -> None:
+        self.hard_kill_calls: list[dict] = []
+        self.soft_kill_calls: list[dict] = []
+        self._raise_on_hard_kill = raise_on_hard_kill
+
+    def hard_kill(self, reason: str, triggered_by: str = "system"):
+        self.hard_kill_calls.append({"reason": reason, "triggered_by": triggered_by})
+        if self._raise_on_hard_kill is not None:
+            raise self._raise_on_hard_kill
+        return None  # CancellationReport in real class; tests only check call metadata
+
+    def soft_kill(self, reason: str, triggered_by: str = "system"):
+        self.soft_kill_calls.append({"reason": reason, "triggered_by": triggered_by})
 
 
 def _initialized_fm(
@@ -1408,6 +1429,216 @@ def test_rehydrate_uses_qty_filled_over_planned() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-9 / FM19 Tests -- invariant violation triggers KillSwitch.hard_kill
+# Contract:
+#   * When kill_switch is wired AND _check_invariant detects a bin-card
+#     violation on any of the 4 mutation paths (reserve, release,
+#     commit_to_used, release_used), kill_switch.hard_kill fires BEFORE
+#     the CapitalInvariantViolation exception propagates.
+#   * The existing on_critical_failure callback must still fire alongside
+#     hard_kill (defense in depth, preserves soft-kill semantics for other
+#     callers).
+#   * hard_kill failure (exception from inside hard_kill) does NOT swallow
+#     the invariant exception -- belt-and-braces inner try/except.
+#   * kill_switch=None degrades gracefully: exception still propagates, no
+#     AttributeError, on_critical_failure (if wired) still fires.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _trigger_reserve_then_corrupt(fm: FundManager) -> None:
+    """Reserve once, then inject phantom capital so the next invariant
+    check in any mutation path will fail."""
+    result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_x")
+    assert result.success
+    with fm._lock:
+        fm._intraday_avail += 50_000.0  # breaks avail+reserved+used==total
+
+
+def test_bl9_invariant_violation_on_reserve_fires_hard_kill() -> None:
+    """reserve() path: corrupt state, then reserve again -> hard_kill fires."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        _trigger_reserve_then_corrupt(fm)
+
+        raised = False
+        try:
+            fm.reserve("INFY", 10, 500.0, "INTRADAY", signal_id="sig_y")
+        except CapitalInvariantViolation:
+            raised = True
+
+        assert raised, "Expected CapitalInvariantViolation"
+        assert len(ks.hard_kill_calls) == 1, (
+            f"Expected exactly 1 hard_kill call, got {len(ks.hard_kill_calls)}"
+        )
+        call = ks.hard_kill_calls[0]
+        assert "capital_invariant_violated" in call["reason"]
+        assert call["triggered_by"] == "fund_manager._check_invariant"
+        store.close()
+    print("  OK invariant violation on reserve() path fires kill_switch.hard_kill (BL-9)")
+
+
+def test_bl9_invariant_violation_on_release_fires_hard_kill() -> None:
+    """release() path: corrupt state after reserve, then release -> hard_kill fires."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_r")
+        assert res.success
+        with fm._lock:
+            fm._intraday_avail += 50_000.0  # corrupt
+
+        raised = False
+        try:
+            fm.release(res.reservation_id, reason="test")
+        except CapitalInvariantViolation:
+            raised = True
+
+        assert raised, "Expected CapitalInvariantViolation on release path"
+        assert len(ks.hard_kill_calls) == 1
+        assert "capital_invariant_violated" in ks.hard_kill_calls[0]["reason"]
+        store.close()
+    print("  OK invariant violation on release() path fires kill_switch.hard_kill (BL-9)")
+
+
+def test_bl9_invariant_violation_on_commit_fires_hard_kill() -> None:
+    """commit_to_used() path: corrupt between reserve and commit -> hard_kill fires."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_c")
+        assert res.success
+        with fm._lock:
+            fm._intraday_avail += 50_000.0  # corrupt
+
+        raised = False
+        try:
+            fm.commit_to_used(res.reservation_id, actual_fill_price=500.0, actual_qty=100)
+        except CapitalInvariantViolation:
+            raised = True
+
+        assert raised, "Expected CapitalInvariantViolation on commit path"
+        assert len(ks.hard_kill_calls) == 1
+        store.close()
+    print("  OK invariant violation on commit_to_used() path fires kill_switch.hard_kill (BL-9)")
+
+
+def test_bl9_invariant_violation_on_release_used_fires_hard_kill() -> None:
+    """release_used() path: reserve+commit, corrupt, then release_used -> hard_kill fires."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_u")
+        assert res.success
+        fm.commit_to_used(res.reservation_id, actual_fill_price=500.0, actual_qty=100)
+        with fm._lock:
+            fm._intraday_avail += 50_000.0  # corrupt after commit
+
+        raised = False
+        try:
+            fm.release_used(
+                symbol="RELIANCE",
+                exit_price=505.0,
+                exit_qty=100,
+                intent="INTRADAY",
+                entry_price=500.0,
+                direction="LONG",
+                costs=0.0,
+            )
+        except CapitalInvariantViolation:
+            raised = True
+
+        assert raised, "Expected CapitalInvariantViolation on release_used path"
+        assert len(ks.hard_kill_calls) == 1
+        store.close()
+    print("  OK invariant violation on release_used() path fires kill_switch.hard_kill (BL-9)")
+
+
+def test_bl9_hard_kill_exception_does_not_swallow_invariant_violation() -> None:
+    """If kill_switch.hard_kill itself raises, CapitalInvariantViolation must
+    still propagate to the caller (belt-and-braces)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch(raise_on_hard_kill=RuntimeError("kill engine down"))
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        _trigger_reserve_then_corrupt(fm)
+
+        raised_type = None
+        try:
+            fm.reserve("INFY", 10, 500.0, "INTRADAY", signal_id="sig_y")
+        except CapitalInvariantViolation:
+            raised_type = "CapitalInvariantViolation"
+        except RuntimeError:
+            raised_type = "RuntimeError"
+
+        assert raised_type == "CapitalInvariantViolation", (
+            f"Expected CapitalInvariantViolation to propagate, got {raised_type}"
+        )
+        assert len(ks.hard_kill_calls) == 1, "hard_kill must have been called"
+        store.close()
+    print("  OK hard_kill failure does NOT swallow CapitalInvariantViolation (BL-9 belt-and-braces)")
+
+
+def test_bl9_invariant_violation_still_fires_on_critical_callback() -> None:
+    """Regression guard: when BOTH kill_switch and on_critical_failure are
+    wired, a violation must trigger BOTH -- preserves legacy callback path."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        critical_calls: list[str] = []
+        fm = _initialized_fm(
+            store, balance=100_000.0,
+            kill_switch=ks,
+            on_critical=critical_calls.append,
+        )
+        _trigger_reserve_then_corrupt(fm)
+
+        try:
+            fm.reserve("INFY", 10, 500.0, "INTRADAY", signal_id="sig_y")
+        except CapitalInvariantViolation:
+            pass
+
+        assert len(ks.hard_kill_calls) == 1, "hard_kill must fire"
+        assert len(critical_calls) == 1, "on_critical_failure must also fire"
+        store.close()
+    print("  OK invariant violation fires BOTH hard_kill and on_critical_failure (BL-9 defense in depth)")
+
+
+def test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully() -> None:
+    """kill_switch=None (default): violation must still raise and still fire
+    on_critical_failure -- no AttributeError from calling None.hard_kill."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        critical_calls: list[str] = []
+        fm = _initialized_fm(
+            store, balance=100_000.0,
+            kill_switch=None,  # explicit; also the default
+            on_critical=critical_calls.append,
+        )
+        _trigger_reserve_then_corrupt(fm)
+
+        raised = False
+        try:
+            fm.reserve("INFY", 10, 500.0, "INTRADAY", signal_id="sig_y")
+        except CapitalInvariantViolation:
+            raised = True
+        except AttributeError as e:  # pragma: no cover -- defensive
+            raise AssertionError(
+                f"kill_switch=None must not trigger AttributeError: {e}"
+            )
+
+        assert raised, "Expected CapitalInvariantViolation"
+        assert len(critical_calls) == 1, (
+            "on_critical_failure must still fire even when kill_switch=None"
+        )
+        store.close()
+    print("  OK kill_switch=None degrades gracefully; on_critical_failure still fires (BL-9)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1471,6 +1702,14 @@ def run_all_tests() -> int:
         test_rehydrate_ignores_prior_days_pnl,
         test_rehydrate_uses_entry_actual_price_over_target,
         test_rehydrate_uses_qty_filled_over_planned,
+        # BL-9 additions (Phase B.3 invariant -> hard_kill)
+        test_bl9_invariant_violation_on_reserve_fires_hard_kill,
+        test_bl9_invariant_violation_on_release_fires_hard_kill,
+        test_bl9_invariant_violation_on_commit_fires_hard_kill,
+        test_bl9_invariant_violation_on_release_used_fires_hard_kill,
+        test_bl9_hard_kill_exception_does_not_swallow_invariant_violation,
+        test_bl9_invariant_violation_still_fires_on_critical_callback,
+        test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully,
     ]
 
     print("=" * 70)
