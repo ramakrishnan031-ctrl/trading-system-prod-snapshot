@@ -678,6 +678,25 @@ class TestCliMode:
         ])
         assert rc == 1
 
+    def test_f1_daily_review_generate_exception_exits_2(self, tmp_path, capsys):
+        """F.1: generate() exception -> stderr + exit 2 (not crash)."""
+        with patch("core.state_store.StateStore") as MockStore, \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch.object(
+                 DailyReviewGenerator, "generate",
+                 side_effect=RuntimeError("boom"),
+             ):
+            MockStore.return_value = _mock_store()
+            rc = main([
+                "--date", _TODAY,
+                "--output-dir", str(tmp_path),
+                "--format", "md",
+                "--db", "dummy.db",
+            ])
+        assert rc == 2
+        captured = capsys.readouterr()
+        assert "boom" in captured.err or "RuntimeError" in captured.err
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DR-U1/DR-U2: _pivot_innings_to_trade_rows

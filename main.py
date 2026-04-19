@@ -77,8 +77,10 @@ from signals.webhook_receiver import WebhookReceiver
 from strategies.loader import StrategyLoader
 from utils.holiday_guard import is_trading_day, next_trading_day
 from utils.startup_checks import (
+    StartupCheckFailed,
     StartupScenario,
     check_config_hash,
+    check_paper_capital_consistency,
     check_webhook_endpoint,
     detect_startup_scenario,
     run_all_startup_checks,
@@ -892,6 +894,23 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     else:
         _startup_capital = broker_adapter.get_margins().net
     fund_manager.initialize(_startup_capital)
+
+    # F.1 / EF-7: paper-mode regression guard. Post-E.7, adapter.get_margins()
+    # and fund_manager.total both derive from AccountRow.paper_capital and must
+    # match exactly. Diverges only if the setter path has regressed (e.g.,
+    # set_paper_capital not called, main.py re-ordered). Fail fast before the
+    # event loop starts to avoid a flood of G3 capital_drift alerts.
+    try:
+        check_paper_capital_consistency(
+            fund_manager=fund_manager,
+            broker_adapter=broker_adapter,
+            is_paper=is_paper,
+            logger=_log,
+        )
+    except StartupCheckFailed as exc:
+        _log.critical("ef7_startup_check_failed: %s", exc)
+        store.close()
+        return 3
 
     # BL-1 / FM18: replay fm_ledger + trades + orders so in-memory capital
     # state matches persisted state on a warm start. On a cold/clean start

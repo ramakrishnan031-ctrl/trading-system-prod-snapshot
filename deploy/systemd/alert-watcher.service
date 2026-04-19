@@ -1,0 +1,32 @@
+[Unit]
+Description=Trading System - Alert Watcher (sentinel monitor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-system
+Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
+EnvironmentFile=/home/ubuntu/trading-system/.env
+ExecStart=/home/ubuntu/trading-system/venv/bin/python \
+    /home/ubuntu/trading-system/scripts/alert_watcher.py
+
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alert-watcher
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

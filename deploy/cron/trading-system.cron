@@ -1,0 +1,19 @@
+# F.1 cron schedule for Trading System v2 (operator: ubuntu@VM).
+#
+# Install via `crontab -e`. The system timezone on the VM is Asia/Kolkata
+# (IST, +0530) -- all schedule times below are IST.
+#
+# This file is canonical. Any live-crontab divergence should be audited
+# against this committed copy.
+
+# ── 01:00 IST | nightly SQLite .backup (safe during DB activity) ─────────────
+0 1 * * * sqlite3 /home/ubuntu/trading-system/data_store/trading_system.db ".backup /home/ubuntu/trading-system/data_store/backups/trading_system-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/trading-system/logs/cron-db-backup.log 2>&1
+
+# ── 02:00 IST | 7-day rolling cleanup of backup files ────────────────────────
+0 2 * * * find /home/ubuntu/trading-system/data_store/backups -name "trading_system-*.db" -mtime +7 -delete >> /home/ubuntu/trading-system/logs/cron-db-backup.log 2>&1
+
+# ── 05:00 IST Mon-Fri | daily token cleanup (forces fresh zerodha_login) ─────
+0 5 * * 1-5 rm -f /home/ubuntu/trading-system/data_store/session/zerodha_token.json
+
+# ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
+0 18 * * 0 cd /home/ubuntu/trading-system && venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1

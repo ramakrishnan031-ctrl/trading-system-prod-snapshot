@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from core.exceptions import ClockSkewTooLarge
 from core.state_store import StateStore
 from utils.startup_checks import (
+    StartupCheckFailed,
     StartupScenario,
     StartupScenarioResult,
     ClockCheckResult,
@@ -43,6 +44,7 @@ from utils.startup_checks import (
     detect_startup_scenario,
     check_clock_skew,
     check_config_hash,
+    check_paper_capital_consistency,
     check_scanner_connectivity,
     check_webhook_endpoint,
     check_config_files_present,
@@ -1140,6 +1142,71 @@ def test_run_all_skips_instrument_cache_when_none(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# F.1 / EF-7 -- check_paper_capital_consistency (paper-mode regression guard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_f1_ef7_startup_check_fires_on_divergence(tmp_path: Path) -> None:
+    """Paper mode with adapter.net != fm.total -> StartupCheckFailed raised."""
+    fm = MagicMock()
+    fm.total = 50_000.0
+    adapter = MagicMock()
+    adapter.get_margins.return_value = MagicMock(net=500_000.0)  # stale 500k
+    logger = MagicMock()
+
+    try:
+        check_paper_capital_consistency(fm, adapter, is_paper=True, logger=logger)
+    except StartupCheckFailed as exc:
+        assert "50000" in str(exc) or "50_000" in str(exc).replace(",", "") or \
+               "50000.00" in str(exc)
+        assert "500000" in str(exc).replace(",", "") or "500_000" in str(exc)
+        # CRITICAL log with grep tag
+        critical_calls = [c for c in logger.critical.call_args_list
+                          if "EF7_STARTUP_CHECK_DIVERGENCE" in str(c)]
+        assert len(critical_calls) == 1
+        print("  OK EF-7 startup check fires on divergence")
+        return
+    raise AssertionError(
+        "check_paper_capital_consistency did not raise on adapter/fm divergence"
+    )
+
+
+def test_f1_ef7_startup_check_passes_on_match(tmp_path: Path) -> None:
+    """Paper mode with adapter.net == fm.total -> no raise, info log emitted."""
+    fm = MagicMock()
+    fm.total = 50_000.0
+    adapter = MagicMock()
+    adapter.get_margins.return_value = MagicMock(net=50_000.0)
+    logger = MagicMock()
+
+    check_paper_capital_consistency(fm, adapter, is_paper=True, logger=logger)
+
+    logger.critical.assert_not_called()
+    info_calls = [c for c in logger.info.call_args_list
+                  if "check_paper_capital_consistency: OK" in str(c)]
+    assert len(info_calls) == 1
+    print("  OK EF-7 startup check passes on exact match")
+
+
+def test_f1_ef7_startup_check_noop_in_live_mode(tmp_path: Path) -> None:
+    """Live mode -> check short-circuits BEFORE calling adapter.get_margins."""
+    fm = MagicMock()
+    fm.total = 50_000.0
+    adapter = MagicMock()
+    # Force adapter.get_margins to raise if called -- would fail the test.
+    adapter.get_margins.side_effect = AssertionError(
+        "get_margins must not be called in live mode (no-op)"
+    )
+    logger = MagicMock()
+
+    check_paper_capital_consistency(fm, adapter, is_paper=False, logger=logger)
+
+    adapter.get_margins.assert_not_called()
+    logger.critical.assert_not_called()
+    logger.info.assert_not_called()
+    print("  OK EF-7 startup check is a no-op in live mode")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1205,6 +1272,10 @@ def run_all_tests() -> int:
         test_run_all_blocks_if_instrument_cache_too_small,
         test_run_all_passes_with_healthy_instrument_cache,
         test_run_all_skips_instrument_cache_when_none,
+        # check_paper_capital_consistency (F.1 / EF-7)
+        test_f1_ef7_startup_check_fires_on_divergence,
+        test_f1_ef7_startup_check_passes_on_match,
+        test_f1_ef7_startup_check_noop_in_live_mode,
     ]
 
     print("=" * 70)

@@ -372,6 +372,32 @@ def test_get_enabled_accounts_empty_if_all_disabled(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# F.1 / H-26 -- production accounts.csv has paper_capital = 50_000 (live-match)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_f1_accounts_csv_paper_capital_50k(tmp_path: Path) -> None:
+    """
+    Load the real production config/accounts.csv and assert LFL836's
+    paper_capital is 50_000.0. Guards against an accidental bump back up to
+    5_000_000 that would break the paper-trial <-> live calibration match
+    (H-26). No tmp file -- reads the real repo file.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    csv_path = repo_root / "config" / "accounts.csv"
+    assert csv_path.exists(), f"production accounts.csv missing at {csv_path}"
+
+    registry = AccountRegistry.load(csv_path)
+    lfl = registry.get("LFL836")
+    assert lfl.paper_capital == 50_000.0, (
+        f"F.1/H-26: LFL836.paper_capital must equal 50_000 (live-match); "
+        f"got {lfl.paper_capital!r}"
+    )
+    assert lfl.enabled is True
+    assert lfl.is_primary is True
+    print("  OK F.1: accounts.csv LFL836 paper_capital = 50_000")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -406,6 +432,7 @@ if __name__ == "__main__":
         test_paper_capital_zero_for_disabled_ok,
         test_get_enabled_accounts_returns_only_enabled,
         test_get_enabled_accounts_empty_if_all_disabled,
+        test_f1_accounts_csv_paper_capital_50k,
     ]
 
     passed = failed = 0

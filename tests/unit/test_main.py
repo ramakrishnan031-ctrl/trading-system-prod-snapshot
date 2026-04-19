@@ -162,7 +162,7 @@ def _make_mock_account_registry():
     mock_acct.is_primary = True
     mock_acct.api_key_env = "ZERODHA_API_KEY"
     mock_acct.api_secret_env = "ZERODHA_API_SECRET"
-    mock_acct.paper_capital = 5_000_000.0
+    mock_acct.paper_capital = 50_000.0
     mock_acct.enabled = True
 
     mock_reg = MagicMock()
@@ -182,8 +182,13 @@ def _make_all_patches(extra=None):
     reconciler_mock = MagicMock()
     reconciler_mock.reconcile_once.return_value = []
     adapter_mock = MagicMock()
-    adapter_mock.get_margins.return_value = MagicMock(net=100000.0)
+    # F.1 / H-26 + EF-7: adapter net must match paper_capital (50k) so the
+    # EF-7 startup consistency check passes in the default fixture.
+    adapter_mock.get_margins.return_value = MagicMock(net=50_000.0)
     adapter_mock.get_quote = MagicMock()
+    # F.1 / EF-7: fund_manager.total must be numeric and match adapter.net.
+    fund_manager_mock = MagicMock()
+    fund_manager_mock.total = 50_000.0
 
     ta_mock = _make_mock_time_authority()
 
@@ -214,7 +219,7 @@ def _make_all_patches(extra=None):
         "CostCalculator": MagicMock(return_value=MagicMock()),
         "ZerodhaAdapter": MagicMock(return_value=adapter_mock),
         "TelegramNotifier": MagicMock(return_value=MagicMock()),
-        "FundManager": MagicMock(return_value=MagicMock()),
+        "FundManager": MagicMock(return_value=fund_manager_mock),
         "PositionSizer": MagicMock(return_value=MagicMock()),
         "RiskEngine": MagicMock(return_value=MagicMock()),
         "LiveFeedManager": MagicMock(return_value=MagicMock()),
@@ -597,10 +602,12 @@ class TestSubsystemWiring:
         assert bus_mock.subscribe.call_count >= 2
 
     def test_fund_manager_initialized_with_paper_capital(self):
-        # SU19: paper mode uses selected_account.paper_capital, not broker net
+        # SU19: paper mode uses selected_account.paper_capital, not broker net.
+        # F.1 / H-26: paper_capital is 50_000 (matches live start) -- fixture mirrors.
         fm_mock = MagicMock()
+        fm_mock.total = 50_000.0  # F.1 / EF-7: satisfy consistency check
         _run(extra={"FundManager": MagicMock(return_value=fm_mock)})
-        fm_mock.initialize.assert_called_once_with(5_000_000.0)
+        fm_mock.initialize.assert_called_once_with(50_000.0)
 
     def test_live_feed_reconnect_chain_wired(self):
         lf_mock = MagicMock()
@@ -610,7 +617,8 @@ class TestSubsystemWiring:
     def test_paper_mode_skips_kite_client_build(self):
         build_kite = MagicMock()
         adapter_cls = MagicMock(return_value=MagicMock(**{
-            "get_margins.return_value": MagicMock(net=100000.0),
+            # F.1 / EF-7: align with paper_capital so EF-7 check passes.
+            "get_margins.return_value": MagicMock(net=50_000.0),
             "get_quote": MagicMock(),
         }))
         _run(extra={"ZerodhaAdapter": adapter_cls, "_build_kite_client": build_kite})

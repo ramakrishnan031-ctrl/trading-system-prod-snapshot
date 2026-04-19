@@ -11,8 +11,8 @@ order:
   rate_per_sec: 8   # Refill rate (8 per second sustained)
 
 quote:
-  burst: 1
-  rate_per_sec: 1
+  burst: 3          # H-24 / F.1: bumped from 1 to relax quote serialization under burst
+  rate_per_sec: 3
 
 historical:
   burst: 2

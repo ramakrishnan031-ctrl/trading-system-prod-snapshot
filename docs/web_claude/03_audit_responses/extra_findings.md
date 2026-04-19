@@ -235,3 +235,33 @@ Discovered: Phase E, E.7 pre-work (grep of get_margins callers while
             designing the EF-4 setter approach)
 Closed: Phase E, E.7 commit (2026-04-19)
 
+---
+
+## FUTURE-1 — auto-start trading-system.service on token arrival  [DEFERRED]
+
+File: deploy/systemd/trading-system.service (no .path unit today)
+     scripts/copy_token_to_vm.bat (manual SCP from PC)
+Impact: operator workflow today is:
+         1. PC: python scripts/zerodha_login.py --account LFL836
+         2. PC: scripts/copy_token_to_vm.bat  (manual double-click)
+         3. VM: ssh in + sudo systemctl start trading-system.service
+        Step 3 is manual. Green-light considered adding a systemd .path
+        unit watching the token file so the service auto-starts when the
+        token arrives, closing the loop to "PC push -> VM auto-start."
+Severity: LOW (operator-convenience, not capital/correctness). Day-1 of
+          paper trial is hands-on anyway, so the manual step is fine.
+Fix size: small (new .path unit + possibly an idempotency wrapper to
+         avoid restarting a running service on re-push).
+Status: DEFERRED. Three variants surfaced during F.1 pre-work:
+        (a) .path unit with PathChanged + idempotency guard,
+        (b) .timer unit with fixed 09:00 IST kickoff (relies on token
+            being on VM by then),
+        (c) continue manual.
+        Variant selection needs real paper-trial observations (how
+        often does the operator re-push mid-session? does a restart
+        mid-session corrupt in-flight orders? etc.). Choose after Week 1
+        paper trial surfaces the operational pattern.
+Discovered: Phase F, F.1 pre-work (headless token-handoff mechanism
+            analysis)
+Filed: 2026-04-19
+

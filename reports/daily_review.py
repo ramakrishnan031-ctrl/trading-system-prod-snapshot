@@ -777,8 +777,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--db",
         metavar="PATH",
-        default="data/trading.db",
-        help="Path to SQLite database (default: data/trading.db).",
+        default="data_store/trading_system.db",
+        help="Path to SQLite database (default: data_store/trading_system.db).",
+    )
+    parser.add_argument(
+        "--unattended",
+        action="store_true",
+        help="Suppress stdout decoration (for systemd journal / cron).",
     )
     return parser.parse_args(argv)
 
@@ -814,12 +819,21 @@ def main(argv=None) -> int:
 
     formats = ["xlsx", "md"] if args.fmt == "both" else [args.fmt]
     generator = DailyReviewGenerator(store, time_authority, log)
-    paths = generator.generate(date_iso, Path(args.output_dir), formats)
+    try:
+        paths = generator.generate(date_iso, Path(args.output_dir), formats)
+    except Exception as exc:
+        print(
+            f"ERROR: daily_review.generate failed: {exc}",
+            file=sys.stderr,
+        )
+        log.exception("daily_review.generate failed")
+        return 2
 
-    if paths.xlsx_path:
-        print(f"xlsx: {paths.xlsx_path}")
-    if paths.md_path:
-        print(f"md:   {paths.md_path}")
+    if not args.unattended:
+        if paths.xlsx_path:
+            print(f"xlsx: {paths.xlsx_path}")
+        if paths.md_path:
+            print(f"md:   {paths.md_path}")
     return 0
 
 

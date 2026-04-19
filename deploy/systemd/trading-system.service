@@ -1,0 +1,43 @@
+[Unit]
+Description=Trading System v2 (paper/live mode)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/trading-system
+Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
+EnvironmentFile=/home/ubuntu/trading-system/.env
+
+# Default mode: paper. To run live, use:
+#   sudo systemctl edit trading-system
+# and override ExecStart with --mode live
+ExecStart=/home/ubuntu/trading-system/venv/bin/python \
+    /home/ubuntu/trading-system/main.py --mode paper
+
+# Send SIGINT on stop so main.py's Ctrl+C handler runs
+# (clean shutdown, SHUTDOWN event, DB flush)
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# Restart policy (3 restarts per 5 min window; matches step3 deployment)
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+# Logging to journal (journalctl -u trading-system)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-system
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+# F.1 logrotate config for Trading System v2.
+#
+# RETENTION-ONLY policy.
+#
+# The app writes per-day JSON/plain log files via core/logger.py using Python's
+# RotatingFileHandler (50 MB, 5 backups per file). Rotation is owned by the
+# Python process. logrotate only handles retention -- deleting files older
+# than 30 days so the logs/ directory does not grow unbounded.
+#
+# Do NOT enable `rotate`, `compress`, or `copytruncate`: each would race
+# Python's in-process rotation and corrupt or double-rotate files.
+#
+# Install path: /etc/logrotate.d/trading-system
+
+/home/ubuntu/trading-system/logs/*.log
+/home/ubuntu/trading-system/logs/*.log.*
+/home/ubuntu/trading-system/logs/cron-*.log
+{
+    daily
+    missingok
+    notifempty
+    maxage 30
+    rotate 0
+    nocompress
+    nocopytruncate
+    noolddir
+    nosharedscripts
+}

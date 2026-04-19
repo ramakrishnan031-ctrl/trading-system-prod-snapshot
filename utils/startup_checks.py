@@ -717,6 +717,65 @@ def check_instrument_cache_size(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# F.1 / EF-7 -- paper_capital regression guard (post-E.7 setter consolidation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StartupCheckFailed(Exception):
+    """Raised by a startup check when the detected state is unsafe to run."""
+
+
+def check_paper_capital_consistency(
+    fund_manager,
+    broker_adapter,
+    is_paper: bool,
+    logger,
+    tolerance: float = 0.01,
+) -> None:
+    """
+    Paper-mode regression guard: verify adapter.get_margins().net == fm.total.
+
+    After E.7 wired broker_adapter.set_paper_capital() from AccountRow, both
+    the adapter and the FundManager derive paper capital from the same source.
+    They MUST match at startup. Any divergence indicates a regression (e.g.,
+    main.py re-ordered, setter not called, adapter constructed after this
+    check) -- catch it loudly before the event loop starts.
+
+    No-op in live mode: adapter.get_margins() reads real broker margins which
+    will not match fm.total exactly (intraday float, pending orders, etc.).
+
+    Raises StartupCheckFailed on divergence. The G3 reconciler would catch
+    this later via CapitalDriftDetected, but that path is minutes-to-cycles
+    slow and emits a flood of noise during paper trial -- fail fast here.
+    """
+    if not is_paper:
+        return
+
+    margins = broker_adapter.get_margins()
+    adapter_net = float(margins.net)
+    fm_total = float(fund_manager.total)
+    delta = abs(adapter_net - fm_total)
+
+    if delta > tolerance:
+        logger.critical(
+            "EF7_STARTUP_CHECK_DIVERGENCE adapter=%.4f fm=%.4f delta=%.4f "
+            "tolerance=%.4f",
+            adapter_net, fm_total, delta, tolerance,
+        )
+        raise StartupCheckFailed(
+            f"paper_capital divergence at startup: adapter.get_margins().net="
+            f"{adapter_net:.2f} vs fund_manager.total={fm_total:.2f} "
+            f"(delta={delta:.2f} > tolerance={tolerance:.2f}). "
+            f"Regression in the E.7 setter path -- inspect main.py ordering "
+            f"around broker_adapter.set_paper_capital()."
+        )
+
+    logger.info(
+        "check_paper_capital_consistency: OK adapter=%.2f fm=%.2f delta=%.4f",
+        adapter_net, fm_total, delta,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SC11 -- Secret env var presence check
 # ─────────────────────────────────────────────────────────────────────────────
 
