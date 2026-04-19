@@ -48,7 +48,7 @@ from pathlib import Path
 import yaml
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from core.exceptions import ConfigMissingError, ConfigSchemaError
 
@@ -562,6 +562,63 @@ class TimeoutsConfig(BaseModel):
     read_sec: int      # response read timeout (ZA12)
 
 
+class RateLimitBackoffConfig(BaseModel):
+    """
+    BL-6: exponential backoff applied to rate_limiter.penalize() when the
+    broker returns HTTP 429. Distinct from backoff_sequence_sec (G7), which
+    is the soft-kill escalation ladder for sustained rate-limit failure.
+
+    The schedule used on attempt N (0-indexed, per-category):
+        delay_sec = min(max_delay_sec, initial_delay_sec * multiplier**N)
+                    + uniform(-jitter_sec, +jitter_sec)
+
+    Jitter decorrelates concurrent callers that would otherwise all penalize
+    and retry on identical schedules. max_placer_retries is the hard cap
+    on placer-level retries (BL-19) before BrokerRateLimit429Error propagates.
+    """
+    model_config = ConfigDict(extra="forbid")
+    initial_delay_sec: float = 0.2
+    max_delay_sec: float = 5.0
+    max_placer_retries: int = 3
+    multiplier: float = 2.0
+    jitter_sec: float = 0.05
+
+    @field_validator("initial_delay_sec", "max_delay_sec", "jitter_sec")
+    @classmethod
+    def _non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"rate_limit_backoff delay must be >= 0, got {v!r}")
+        return v
+
+    @field_validator("multiplier")
+    @classmethod
+    def _multiplier_ge_one(cls, v: float) -> float:
+        if v < 1.0:
+            raise ValueError(
+                f"rate_limit_backoff.multiplier must be >= 1.0 "
+                f"(exponential growth, not decay), got {v!r}"
+            )
+        return v
+
+    @field_validator("max_placer_retries")
+    @classmethod
+    def _non_negative_int(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(
+                f"rate_limit_backoff.max_placer_retries must be >= 0, got {v!r}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_delays(self) -> "RateLimitBackoffConfig":
+        if self.max_delay_sec < self.initial_delay_sec:
+            raise ValueError(
+                f"rate_limit_backoff.max_delay_sec ({self.max_delay_sec}) "
+                f"must be >= initial_delay_sec ({self.initial_delay_sec})"
+            )
+        return self
+
+
 class BrokerLimitsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     order: TokenBucketConfig
@@ -570,6 +627,10 @@ class BrokerLimitsConfig(BaseModel):
     margins: TokenBucketConfig
     backoff_sequence_sec: list[int]   # G7: 1s / 5s / 30s before soft_kill
     timeouts: TimeoutsConfig          # ZA12: kiteconnect HTTP timeouts
+    # BL-6: 429 exponential backoff (default applied if yaml omits the block)
+    rate_limit_backoff: RateLimitBackoffConfig = Field(
+        default_factory=RateLimitBackoffConfig
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

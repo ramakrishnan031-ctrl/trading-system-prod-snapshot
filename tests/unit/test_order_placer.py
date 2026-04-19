@@ -33,7 +33,13 @@ from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from broker.zerodha_adapter import PlacedOrder
 from core.events import EventBus, OrderFilled, OrderStatusChanged
-from core.exceptions import BrokerAuthError, BrokerError, OrderRejectedError
+from core.exceptions import (
+    BrokerAuthError,
+    BrokerError,
+    BrokerRateLimit429Error,
+    BrokerTimeoutError,
+    OrderRejectedError,
+)
 from core.ids import new_signal_id
 from core.state_store import StateStore
 from core.time_authority import now_ist
@@ -2736,6 +2742,277 @@ class TestBl8AtomicPersist:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-19: OrderPlacer retry loop scoped to BrokerRateLimit429Error (Phase D.1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBl19PlacerRateLimitRetry:
+    """
+    BL-19: placer.place() retries ONLY BrokerRateLimit429Error up to
+    rate_limit_backoff.max_placer_retries. No caller-side sleep -- the
+    adapter's rate_limiter.penalize() freeze is the backoff pacing, which
+    the next iteration's acquire() call respects. Non-429 BrokerError
+    subclasses still get a single attempt (ZA11 / OP7).
+    """
+
+    def _make_placer_with_mock_engine(
+        self,
+        tmp_path: Path,
+        engine_side_effect,
+        max_placer_retries: int = 3,
+    ):
+        """Build a placer with a mocked entry engine whose .execute has the
+        given side_effect. Returns (placer, store, fm, bus, om, engine_mock)."""
+        from core.config_loader import RateLimitBackoffConfig
+        store = _make_store(tmp_path)
+        engine_mock = MagicMock(spec=FullEntryEngine)
+        engine_mock.execute.side_effect = engine_side_effect
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        placer = OrderPlacer(
+            entry_engine=engine_mock,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),
+            cost_calculator=MagicMock(spec=CostCalculator),
+            rr_ratio=2.0,
+            default_order_protocol="LIMIT_TRIPLE",
+            rate_limit_backoff=RateLimitBackoffConfig(
+                max_placer_retries=max_placer_retries,
+                initial_delay_sec=0.01,   # tiny so the test stays fast even
+                max_delay_sec=0.05,       # if any real penalize path fires
+                jitter_sec=0.0,
+            ),
+        )
+        return placer, store, fm, bus, om, engine_mock
+
+    def _ok_entry_result(self) -> EntryResult:
+        """Build a minimal successful EntryResult."""
+        return EntryResult(
+            success=True,
+            order_protocol="LIMIT_TRIPLE",
+            entry_internal_id="oid_entry_ok",
+            entry_broker_order_id="BROKER_E_1",
+            sl_internal_id="oid_sl_ok",
+            sl_broker_order_id="BROKER_S_1",
+            tgt_internal_id="oid_tgt_ok",
+            tgt_broker_order_id="BROKER_T_1",
+            rejection_reason="",
+        )
+
+    def test_placer_retries_on_429_up_to_max(self) -> None:
+        """429 raised twice then success -> engine.execute called 3 times, trade OPEN."""
+        import gc
+        with TemporaryDirectory() as tmp:
+            store = None
+            try:
+                side_effects = [
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.01, attempt=1,
+                    ),
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.02, attempt=2,
+                    ),
+                    self._ok_entry_result(),
+                ]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=3,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_bl19_retry",
+                )
+
+                assert engine_mock.execute.call_count == 3, (
+                    f"Expected 3 engine calls (2 retries + success), "
+                    f"got {engine_mock.execute.call_count}"
+                )
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert len(rows) == 1
+                assert rows[0]["status"] == "PENDING_FILL", (
+                    f"Expected PENDING_FILL after successful retry, "
+                    f"got {rows[0]['status']}"
+                )
+                assert fm.released == [], (
+                    f"Reservation should not be released on successful retry, "
+                    f"got released={fm.released}"
+                )
+                print("  OK BL-19: placer retries 2x on 429 then succeeds (3 engine calls)")
+            finally:
+                if store is not None:
+                    store.close()
+                gc.collect()
+
+    def test_placer_gives_up_after_max_retries_and_propagates(self) -> None:
+        """All attempts 429 -> engine called max_retries+1 times, FAILED + release."""
+        import gc
+        with TemporaryDirectory() as tmp:
+            store = None
+            try:
+                max_retries = 3
+                side_effects = [
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.01, attempt=n + 1,
+                    )
+                    for n in range(max_retries + 1)
+                ]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=max_retries,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                with pytest.raises(BrokerRateLimit429Error):
+                    placer.place(
+                        symbol="RELIANCE", side="BUY", qty=10,
+                        entry_price=2500.0, sl_price=2450.0,
+                        intent="INTRADAY", signal_id=sig_id,
+                        reservation_id="res_bl19_exhaust",
+                    )
+
+                assert engine_mock.execute.call_count == max_retries + 1, (
+                    f"Expected {max_retries + 1} engine calls (initial + {max_retries} "
+                    f"retries), got {engine_mock.execute.call_count}"
+                )
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert len(rows) == 1
+                assert rows[0]["status"] == "FAILED", (
+                    f"Expected FAILED after 429 exhaustion, got {rows[0]['status']}"
+                )
+                assert "res_bl19_exhaust" in fm.released, (
+                    f"Expected reservation released on 429 exhaustion, "
+                    f"got released={fm.released}"
+                )
+                print("  OK BL-19: placer gives up after max retries, trade FAILED + release")
+            finally:
+                if store is not None:
+                    store.close()
+                gc.collect()
+
+    def test_placer_does_not_retry_other_broker_errors(self) -> None:
+        """BrokerTimeoutError -> engine called ONCE, error propagates (ZA11 / OP7)."""
+        import gc
+        with TemporaryDirectory() as tmp:
+            store = None
+            try:
+                side_effects = [BrokerTimeoutError("network timeout")]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=3,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                with pytest.raises(BrokerTimeoutError):
+                    placer.place(
+                        symbol="RELIANCE", side="BUY", qty=10,
+                        entry_price=2500.0, sl_price=2450.0,
+                        intent="INTRADAY", signal_id=sig_id,
+                        reservation_id="res_bl19_noretry",
+                    )
+
+                assert engine_mock.execute.call_count == 1, (
+                    f"Non-429 BrokerError MUST get a single attempt (ZA11 / OP7), "
+                    f"got {engine_mock.execute.call_count} calls"
+                )
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert rows[0]["status"] == "FAILED"
+                assert "res_bl19_noretry" in fm.released
+                print("  OK BL-19: non-429 BrokerError gets single attempt, no retry")
+            finally:
+                if store is not None:
+                    store.close()
+                gc.collect()
+
+    def test_placer_retry_does_not_sleep_directly(self) -> None:
+        """
+        Path A invariant: the placer retry loop does NOT sleep. Backoff is
+        delivered by the adapter's rate_limiter.penalize() freeze, which the
+        next iteration's acquire() honors. If a future refactor adds a
+        time.sleep() to the placer retry, this test fails.
+        """
+        import gc
+        import orders.order_placer as op_mod
+
+        with TemporaryDirectory() as tmp:
+            store = None
+            original_sleep = None
+            try:
+                side_effects = [
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.01, attempt=1,
+                    ),
+                    self._ok_entry_result(),
+                ]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=3,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                sleep_calls: list[float] = []
+                if hasattr(op_mod, "time"):
+                    original_sleep = op_mod.time.sleep
+
+                    def spy_sleep(sec: float) -> None:
+                        sleep_calls.append(sec)
+                        original_sleep(sec)
+
+                    op_mod.time.sleep = spy_sleep  # type: ignore[assignment]
+
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_bl19_nosleep",
+                )
+
+                assert engine_mock.execute.call_count == 2
+                assert sleep_calls == [], (
+                    f"Path A invariant violated: placer retry slept {sleep_calls}. "
+                    f"Backoff must come from rate_limiter.penalize, not caller sleep."
+                )
+                print(
+                    "  OK BL-19: placer retry does NOT call time.sleep "
+                    "(Path A: backoff via rate_limiter.penalize freeze)"
+                )
+            finally:
+                if hasattr(op_mod, "time") and original_sleep is not None:
+                    op_mod.time.sleep = original_sleep  # type: ignore[assignment]
+                if store is not None:
+                    store.close()
+                gc.collect()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2837,6 +3114,11 @@ if __name__ == "__main__":
         TestBl8AtomicPersist().test_limit_triple_sl_fail_protocol_cleanup_not_double_cancelled,
         TestBl8AtomicPersist().test_cancel_order_returning_false_does_not_abort_cleanup,
         TestBl8AtomicPersist().test_protocol_reject_only_does_not_fire_hard_kill,
+        # BL-19 / Phase D.1 placer rate-limit retry loop
+        TestBl19PlacerRateLimitRetry().test_placer_retries_on_429_up_to_max,
+        TestBl19PlacerRateLimitRetry().test_placer_gives_up_after_max_retries_and_propagates,
+        TestBl19PlacerRateLimitRetry().test_placer_does_not_retry_other_broker_errors,
+        TestBl19PlacerRateLimitRetry().test_placer_retry_does_not_sleep_directly,
     ]
     passed = failed = 0
     for fn in tests:

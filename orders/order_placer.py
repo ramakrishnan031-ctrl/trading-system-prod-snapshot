@@ -80,6 +80,25 @@ BL-8 (locked 2026-04-19, Phase C.2):
                reconciler was the primary recovery; post-BL-8 the reconciler
                is a backstop.
 
+BL-19 (locked 2026-04-19, Phase D.1):
+    OP-BL19a -- place() wraps self._engine.execute in a retry loop scoped
+                ONLY to BrokerRateLimit429Error. Other BrokerError subclasses
+                still get a single attempt (ZA11 / OP7). The retry is narrow
+                by design: a general retry would invite "retry everything"
+                pattern creep.
+    OP-BL19b -- The retry loop does NOT sleep. The adapter (BL-6) has
+                already called rate_limiter.penalize() before raising the
+                429, so the next iteration's acquire() blocks until the
+                bucket thaws. That is the backoff pacing.
+    OP-BL19c -- Max retries = rate_limit_backoff.max_placer_retries
+                (default 3). On exhaustion, propagates via the existing
+                _handle_placement_failure (FAILED + release + optional
+                hard_kill -- identical to any other BrokerError).
+    OP-BL19d -- Safe w.r.t. duplicate orders: each protocol raise cancels
+                any in-flight legs it placed (LimitTriple cancels ENTRY on
+                SL fail; CoPlusTgt has no inter-leg state on raise), so
+                re-executing the protocol does not produce duplicates.
+
 What This Module Does NOT Do:
     - Does not implement SL modification (smart_tgt_manager's job)
     - Does not implement EOD exit (eod_squareoff's job)
@@ -98,9 +117,9 @@ from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
-from core.config_loader import SmartTgtConfig
+from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
 from core.events import EventBus, OrderFilled, PositionClosed
-from core.exceptions import BrokerError, OrderRejectedError
+from core.exceptions import BrokerError, BrokerRateLimit429Error, OrderRejectedError
 from core.ids import new_trade_id
 from core.logger import log_exception
 from core.time_authority import now_ist
@@ -238,6 +257,7 @@ class OrderPlacer:
         product_resolver: Optional[ProductResolver] = None,
         smart_tgt_manager: Optional[SmartTgtManager] = None,
         smart_tgt_config: Optional[SmartTgtConfig] = None,
+        rate_limit_backoff: Optional[RateLimitBackoffConfig] = None,  # BL-19
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -259,6 +279,10 @@ class OrderPlacer:
         self._product_resolver = product_resolver  # HIGH #7: use resolver for product codes
         self._smart_tgt_manager = smart_tgt_manager  # BL-7b: None = SmartTgt disabled
         self._smart_tgt_config = smart_tgt_config    # BL-7b: trigger_pct/step_pct source
+        # BL-19: 429 retry policy. Defaults apply if caller omits the config.
+        self._rl_backoff: RateLimitBackoffConfig = (
+            rate_limit_backoff or RateLimitBackoffConfig()
+        )
         # IC8: injected by main.py after Module 38; None = no tick rounding
         self._instrument_cache = None  # set via set_instrument_cache()
 
@@ -355,28 +379,69 @@ class OrderPlacer:
             raise ks_exc
 
         # ── Place entry orders ─────────────────────────────────────────────
+        # BL-19: retry the engine only on BrokerRateLimit429Error. On each
+        # raise, the protocol has already cancelled any legs it placed (OP7 /
+        # OP-BL8e), so re-executing is safe w.r.t. duplicate orders. The
+        # adapter already called rate_limiter.penalize() before raising the
+        # 429, so the next attempt's acquire() blocks until the bucket thaws --
+        # that IS the backoff pacing; we never sleep directly here.
+        # Non-429 BrokerErrors still get one attempt per ZA11 / OP7.
+        max_429_retries = self._rl_backoff.max_placer_retries
         result: Optional[EntryResult] = None
-        try:
-            result = self._engine.execute(
-                symbol=symbol,
-                side=side,
-                qty=qty,
-                entry_price=entry_price,
-                sl_price=sl_price,
-                tgt_price=tgt_price,
-                intent=intent,
-                trade_id=trade_id,
-                order_protocol=order_protocol,
-            )
-        except BrokerError as exc:
-            # OP7 + OP-BL8e: protocol raised. The protocol's own cleanup
-            # already cancelled any in-flight legs (LimitTriple cancels ENTRY
-            # on SL fail; CoPlusTgt has no inter-leg state on raise). Capital
-            # tracking is intact, so NO hard_kill -- just FAILED + release.
-            self._handle_placement_failure(
-                trade_id, reservation_id, signal_id, exc
-            )
-            raise
+        for attempt in range(max_429_retries + 1):
+            try:
+                result = self._engine.execute(
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    entry_price=entry_price,
+                    sl_price=sl_price,
+                    tgt_price=tgt_price,
+                    intent=intent,
+                    trade_id=trade_id,
+                    order_protocol=order_protocol,
+                )
+                break  # success
+            except BrokerRateLimit429Error as rl_exc:
+                if attempt == max_429_retries:
+                    # BL-19: exhausted -- same cleanup as any BrokerError
+                    self._log.error(
+                        "order_placer.429_retries_exhausted",
+                        extra={
+                            "attempts": attempt + 1,
+                            "trade_id": trade_id,
+                            "signal_id": signal_id,
+                            "operation": rl_exc.context.get("operation"),
+                            "last_delay_sec": rl_exc.context.get("delay_sec"),
+                        },
+                    )
+                    self._handle_placement_failure(
+                        trade_id, reservation_id, signal_id, rl_exc
+                    )
+                    raise
+                self._log.warning(
+                    "order_placer.429_retry",
+                    extra={
+                        "attempt": attempt + 1,
+                        "max_retries": max_429_retries,
+                        "delay_sec": rl_exc.context.get("delay_sec"),
+                        "operation": rl_exc.context.get("operation"),
+                        "trade_id": trade_id,
+                        "signal_id": signal_id,
+                    },
+                )
+                # continue loop -- next iteration's acquire() blocks on the
+                # frozen bucket, delivering the backoff without caller sleep.
+            except BrokerError as exc:
+                # OP7 + OP-BL8e + ZA11: non-429 BrokerError = single attempt.
+                # The protocol's own cleanup already cancelled any in-flight
+                # legs (LimitTriple cancels ENTRY on SL fail; CoPlusTgt has
+                # no inter-leg state on raise). Capital tracking is intact,
+                # so NO hard_kill -- just FAILED + release.
+                self._handle_placement_failure(
+                    trade_id, reservation_id, signal_id, exc
+                )
+                raise
 
         if not result.success:
             # OP-BL8f: soft failure (CoPlusTgt: CO live, TGT dead). Cancel the

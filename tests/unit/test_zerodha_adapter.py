@@ -58,6 +58,8 @@ from broker.rate_limiter import RateLimiter
 from core.events import EventBus, OrderFilled
 from core.exceptions import (
     BrokerAuthError,
+    BrokerError,
+    BrokerRateLimit429Error,
     BrokerTimeoutError,
     OrderRejectedError,
     ProductNotSupportedError,
@@ -927,6 +929,224 @@ def test_live_mode_place_order_does_NOT_publish_order_filled() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-6: broker 429 detection + penalize + typed exception (Phase D.1)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_429_exc():
+    """Build a kiteconnect-shaped exception with HTTP status 429."""
+    from kiteconnect import exceptions as kex
+    exc = kex.NetworkException("Too Many Requests")
+    exc.code = 429
+    return exc
+
+
+def test_bl6_429_raises_broker_rate_limit_429_error() -> None:
+    """HTTP 429 from broker -> BrokerRateLimit429Error (not OrderRejectedError)."""
+    kite = MockKite()
+    kite.place_order_exc = _make_429_exc()
+    adapter, _, _, _, _ = _make_adapter(kite=kite)
+
+    raised: BrokerRateLimit429Error | None = None
+    try:
+        adapter.place_order(
+            symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+            order_type="LIMIT", intent="INTRADAY",
+        )
+    except BrokerRateLimit429Error as exc:
+        raised = exc
+
+    assert raised is not None, "Expected BrokerRateLimit429Error"
+    # Also verify it is a BrokerError (retry policies can catch the super)
+    assert isinstance(raised, BrokerError)
+    print("  OK BL-6: HTTP 429 -> BrokerRateLimit429Error (distinct from OrderRejected)")
+
+
+def test_bl6_429_calls_penalize_on_rate_limiter() -> None:
+    """Adapter must call rate_limiter.penalize() with the correct category."""
+    kite = MockKite()
+    kite.place_order_exc = _make_429_exc()
+    adapter, _, rl, _, _ = _make_adapter(kite=kite)
+
+    # Spy on the live RateLimiter's penalize
+    original_penalize = rl.penalize
+    calls: list[tuple[str, float]] = []
+
+    def spy_penalize(category: str, sleep_sec: float) -> None:
+        calls.append((category, sleep_sec))
+        original_penalize(category, sleep_sec)
+
+    rl.penalize = spy_penalize  # type: ignore[assignment]
+
+    try:
+        adapter.place_order(
+            symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+            order_type="LIMIT", intent="INTRADAY",
+        )
+    except BrokerRateLimit429Error:
+        pass
+
+    assert len(calls) == 1, f"Expected exactly 1 penalize call, got {len(calls)}"
+    category, delay = calls[0]
+    assert category == "order", f"Expected category 'order', got {category!r}"
+    assert delay > 0, f"Expected positive penalize delay, got {delay}"
+    print("  OK BL-6: penalize called with category='order' and positive delay")
+
+
+def test_bl6_429_attempt_counter_exponential_delays() -> None:
+    """Three consecutive 429s -> delays roughly 0.2s, 0.4s, 0.8s (within jitter)."""
+    kite = MockKite()
+    kite.place_order_exc = _make_429_exc()
+    adapter, _, rl, _, _ = _make_adapter(kite=kite)
+
+    observed: list[float] = []
+    original_penalize = rl.penalize
+
+    def spy_penalize(category: str, sleep_sec: float) -> None:
+        observed.append(sleep_sec)
+        original_penalize(category, sleep_sec)
+
+    rl.penalize = spy_penalize  # type: ignore[assignment]
+
+    # Use the adapter's live backoff config so we can compute expected ranges
+    cfg = adapter._rl_backoff  # type: ignore[attr-defined]
+
+    for _ in range(3):
+        try:
+            adapter.place_order(
+                symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+                order_type="LIMIT", intent="INTRADAY",
+            )
+        except BrokerRateLimit429Error:
+            pass
+
+    assert len(observed) == 3, f"Expected 3 penalize calls, got {len(observed)}"
+
+    # Expected bases (before jitter): initial * multiplier**attempt
+    expected = [
+        min(cfg.max_delay_sec, cfg.initial_delay_sec * (cfg.multiplier ** n))
+        for n in range(3)
+    ]
+    for i, (actual, exp) in enumerate(zip(observed, expected)):
+        low, high = exp - cfg.jitter_sec, exp + cfg.jitter_sec
+        assert low <= actual <= high, (
+            f"Attempt {i+1}: delay {actual} not in [{low}, {high}] "
+            f"(expected base {exp} +/- jitter {cfg.jitter_sec})"
+        )
+    # Exponential growth: each delay must strictly exceed the previous AT LEAST
+    # by (multiplier-1)*initial - 2*jitter. With defaults that's 0.1 minimum.
+    for i in range(1, 3):
+        assert observed[i] > observed[i - 1], (
+            f"Delays not monotonically increasing: {observed}"
+        )
+    print("  OK BL-6: per-category attempt counter drives exponential delays")
+
+
+def test_bl6_429_successful_call_resets_counter() -> None:
+    """After a successful call, next 429 should restart at initial_delay (counter reset)."""
+    kite = MockKite()
+    kite.place_order_exc = _make_429_exc()
+    adapter, _, rl, _, _ = _make_adapter(kite=kite)
+
+    observed: list[float] = []
+    original_penalize = rl.penalize
+
+    def spy_penalize(category: str, sleep_sec: float) -> None:
+        observed.append(sleep_sec)
+        original_penalize(category, sleep_sec)
+
+    rl.penalize = spy_penalize  # type: ignore[assignment]
+
+    # Fire two 429s -> counter at 2, delays ~0.2 and ~0.4
+    for _ in range(2):
+        try:
+            adapter.place_order(
+                symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+                order_type="LIMIT", intent="INTRADAY",
+            )
+        except BrokerRateLimit429Error:
+            pass
+
+    # Now simulate bucket thaw + successful call
+    kite.place_order_exc = None
+    # Clear the frozen bucket so acquire() does not block (tests run fast).
+    # A quick way: directly reset the bucket via the limiter's internal state.
+    # We rely on the reset happening after successful kite.place_order.
+    # However, the rate_limiter bucket is still frozen from the last penalize,
+    # so acquire() will block. Set max_wait generous enough or thaw manually.
+    # Simplest: allow a fresh limiter by reconstructing the adapter with a new rl.
+    # Instead, we use the bucket's internal method to skip the freeze:
+    for bucket in rl._buckets.values():  # type: ignore[attr-defined]
+        bucket._frozen_until = 0.0  # clear freeze for the test
+
+    # Successful call resets the counter
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    # Fire ONE more 429: delay should match attempt-0 (initial_delay +/- jitter)
+    kite.place_order_exc = _make_429_exc()
+    # Thaw buckets again before the new 429 tries to acquire
+    for bucket in rl._buckets.values():  # type: ignore[attr-defined]
+        bucket._frozen_until = 0.0
+
+    try:
+        adapter.place_order(
+            symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+            order_type="LIMIT", intent="INTRADAY",
+        )
+    except BrokerRateLimit429Error:
+        pass
+
+    cfg = adapter._rl_backoff  # type: ignore[attr-defined]
+    last = observed[-1]
+    low = cfg.initial_delay_sec - cfg.jitter_sec
+    high = cfg.initial_delay_sec + cfg.jitter_sec
+    assert low <= last <= high, (
+        f"After reset, first 429 delay {last} not in initial_delay range "
+        f"[{low}, {high}] -- counter was not reset by successful call"
+    )
+    print("  OK BL-6: successful call resets per-category 429 attempt counter")
+
+
+def test_bl6_non_429_error_does_not_penalize() -> None:
+    """kiteconnect exceptions without code=429 must NOT call penalize."""
+    from kiteconnect import exceptions as kex
+    kite = MockKite()
+    # NetworkException with code=500 is a plain timeout, not a rate limit
+    generic_exc = kex.NetworkException("server error")
+    generic_exc.code = 500
+    kite.place_order_exc = generic_exc
+    adapter, _, rl, _, _ = _make_adapter(kite=kite)
+
+    calls: list[tuple[str, float]] = []
+    original_penalize = rl.penalize
+
+    def spy_penalize(category: str, sleep_sec: float) -> None:
+        calls.append((category, sleep_sec))
+        original_penalize(category, sleep_sec)
+
+    rl.penalize = spy_penalize  # type: ignore[assignment]
+
+    raised = None
+    try:
+        adapter.place_order(
+            symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+            order_type="LIMIT", intent="INTRADAY",
+        )
+    except BrokerTimeoutError as exc:
+        raised = exc
+    except BrokerRateLimit429Error:
+        raise AssertionError(
+            "Non-429 error should NOT be translated to BrokerRateLimit429Error"
+        )
+
+    assert raised is not None, "Expected BrokerTimeoutError for non-429 NetworkException"
+    assert calls == [], f"penalize should NOT be called for non-429, got {calls}"
+    print("  OK BL-6: non-429 error flows through normal translation, no penalize")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -969,6 +1189,12 @@ def run_all_tests() -> int:
         test_za16a_paper_bus_none_degrades_gracefully_no_publish,
         test_za16a_paper_synth_thread_is_daemon,
         test_live_mode_place_order_does_NOT_publish_order_filled,
+        # BL-6 (Phase D.1): broker 429 detection + penalize + typed exception
+        test_bl6_429_raises_broker_rate_limit_429_error,
+        test_bl6_429_calls_penalize_on_rate_limiter,
+        test_bl6_429_attempt_counter_exponential_delays,
+        test_bl6_429_successful_call_resets_counter,
+        test_bl6_non_429_error_does_not_penalize,
     ]
 
     print("=" * 70)

@@ -31,3 +31,10 @@ backoff_sequence_sec:   # G7: 4-step backoff on 429 response
 timeouts:             # ZA12: kiteconnect HTTP timeouts
   connect_sec: 5      # TCP connection timeout
   read_sec: 10        # response read timeout
+
+rate_limit_backoff:        # BL-6: exponential backoff on broker HTTP 429
+  initial_delay_sec: 0.2   # first 429 -> ~0.2s bucket freeze (plus jitter)
+  max_delay_sec: 5.0       # cap on computed delay regardless of attempt count
+  max_placer_retries: 3    # BL-19: OrderPlacer retry cap for 429-only failures
+  multiplier: 2.0          # exponential base: 0.2s, 0.4s, 0.8s, 1.6s, ...
+  jitter_sec: 0.05         # +/- uniform jitter to decorrelate concurrent callers

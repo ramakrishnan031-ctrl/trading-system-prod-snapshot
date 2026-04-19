@@ -67,6 +67,26 @@ Locked Design Decisions:
             and optional variety (default "regular"; use "co" for Cover Orders).
             Both are backward-compatible optional params.
 
+BL-6 (locked 2026-04-19, Phase D.1):
+    Adapter detects broker HTTP 429 via getattr(exc, "code", None) == 429 and
+    translates it to BrokerRateLimit429Error (distinct from client-side
+    BrokerRateLimitError). Before raising, the adapter calls
+    rate_limiter.penalize(category, delay) to freeze the bucket for an
+    exponential delay derived from a per-category attempt counter
+    (initial 0.2s, multiplier 2, max 5.0s, +/- 0.05s jitter). The counter
+    resets after any successful call in the same category. ZA11 stays
+    intact: the adapter does NOT retry, does NOT sleep -- it raises and
+    exits. The caller (OrderPlacer, BL-19) owns retry. On the next
+    attempt, rate_limiter.acquire() blocks until the bucket thaws, which
+    is the backoff pacing.
+
+    Detection branch: kiteconnect raises typed exceptions with a .code
+    attribute set from the HTTP status. 429 can surface via
+    kex.NetworkException, kex.GeneralException, or any other exception
+    carrying .code == 429. _is_429() inspects the attribute without
+    depending on the concrete exception class, so future SDK changes that
+    add a dedicated type stay correctly classified.
+
 What This Module Does NOT Do:
     - Does not retry failed calls (ZA11 -- caller owns retry)
     - Does not publish OrderFilled events in LIVE mode (order_monitor's job).
@@ -76,6 +96,7 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
+import random
 import socket
 import threading
 import time
@@ -90,10 +111,12 @@ from broker.cost_calculator import CostCalculator
 from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
+from core.config_loader import RateLimitBackoffConfig
 from core.events import EventBus, OrderFilled
 from core.exceptions import (
     BrokerAuthError,
     BrokerError,
+    BrokerRateLimit429Error,
     BrokerTimeoutError,
     InvalidTransitionError,
     OrderRejectedError,
@@ -290,6 +313,7 @@ class ZerodhaAdapter:
         account_id: Optional[str] = None,          # IC9: reserved for v2.1 multi-account
         bus: Optional[EventBus] = None,            # ZA16a: paper mode publishes OrderFilled
         paper_auto_fill_delay_sec: float = 0.5,    # ZA16a: daemon-thread synth delay
+        rate_limit_backoff: Optional[RateLimitBackoffConfig] = None,  # BL-6
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -303,6 +327,14 @@ class ZerodhaAdapter:
         self._account_id = account_id  # IC9: no-op for v2 single-account
         self._bus = bus
         self._paper_auto_fill_delay_sec = paper_auto_fill_delay_sec
+        # BL-6: 429 backoff state. Per-category counter drives exponential delay;
+        # resets when any call in the category succeeds. Lock guards increments
+        # across threads (order_placer, order_monitor, reconciler can all race).
+        self._rl_backoff: RateLimitBackoffConfig = (
+            rate_limit_backoff or RateLimitBackoffConfig()
+        )
+        self._429_attempts: dict[str, int] = {}
+        self._429_lock: threading.Lock = threading.Lock()
         # ZA16a: paper needs bus to publish synthesized OrderFilled. If paper
         # is on but bus is None we degrade safely (state reaches COMPLETE via
         # synth thread; no event) and log a warning. main.py wires bus in
@@ -413,7 +445,10 @@ class ZerodhaAdapter:
                 self._osm.transition(internal_id, "FAILED")
             except InvalidTransitionError:
                 pass  # already failed; ignore double-fault
-            raise _translate_kite_exception(exc, context, self._log) from exc
+            raise self._translate_broker_exception(exc, context, "place_order") from exc
+
+        # BL-6: success in "order" category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["place_order"])
 
         # ZA7: successful placement -> SUBMITTED
         self._osm.transition(internal_id, "SUBMITTED")
@@ -580,9 +615,12 @@ class ZerodhaAdapter:
         try:
             raw = self._kite.order_history(order_id=broker_order_id)
         except Exception as exc:
-            raise _translate_kite_exception(
-                exc, {"broker_order_id": broker_order_id}, self._log
+            raise self._translate_broker_exception(
+                exc, {"broker_order_id": broker_order_id}, "get_order_history"
             ) from exc
+
+        # BL-6: success in category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["get_order_history"])
 
         entries = [
             OrderHistoryEntry(
@@ -625,7 +663,10 @@ class ZerodhaAdapter:
         try:
             raw = self._kite.positions()
         except Exception as exc:
-            raise _translate_kite_exception(exc, {}, self._log) from exc
+            raise self._translate_broker_exception(exc, {}, "get_positions") from exc
+
+        # BL-6: success in category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["get_positions"])
 
         # kite returns {"day": [...], "net": [...]} — use "net" for open positions
         net = raw.get("net", []) if isinstance(raw, dict) else []
@@ -676,7 +717,10 @@ class ZerodhaAdapter:
         try:
             raw = self._kite.margins(segment="equity")
         except Exception as exc:
-            raise _translate_kite_exception(exc, {}, self._log) from exc
+            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+
+        # BL-6: success in category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
 
         equity = raw.get("equity", {}) if isinstance(raw, dict) else {}
         info = MarginInfo(
@@ -714,7 +758,9 @@ class ZerodhaAdapter:
             self._rl.acquire(_CATEGORY_MAP["get_margins"])
             self._kite.margins(segment="equity")
         except Exception as exc:
-            raise _translate_kite_exception(exc, {}, self._log) from exc
+            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+        # BL-6: success in category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
         return now_ist()
 
     def get_quote(self, symbols: list[str]) -> dict[str, Quote]:
@@ -751,9 +797,12 @@ class ZerodhaAdapter:
         try:
             raw = self._kite.quote(*instrument_keys)
         except Exception as exc:
-            raise _translate_kite_exception(
-                exc, {"symbols": symbols}, self._log
+            raise self._translate_broker_exception(
+                exc, {"symbols": symbols}, "get_quote"
             ) from exc
+
+        # BL-6: success in category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["get_quote"])
 
         ts = now_ist()
         quotes: dict[str, Quote] = {}
@@ -803,7 +852,11 @@ class ZerodhaAdapter:
             self._rl.acquire(_CATEGORY_MAP["get_margins"])  # reuse quota bucket
             all_orders = self._kite.orders()
         except Exception as exc:
-            raise _translate_kite_exception(exc, {}, self._log) from exc
+            # BL-6: tag operation as get_margins (the reused quota category)
+            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+
+        # BL-6: success in category -> reset its 429 attempt counter
+        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
 
         open_statuses = {"OPEN", "TRIGGER PENDING"}
         return [
@@ -820,6 +873,95 @@ class ZerodhaAdapter:
         ]
 
     # ── private helpers ───────────────────────────────────────────────────────
+
+    # ── BL-6: 429 handling ────────────────────────────────────────────────────
+    #
+    # kiteconnect surfaces HTTP 429 on its exception classes via .code (see
+    # kex.KiteException.code -- set from the upstream HTTP response). Empirically
+    # the SDK wraps 429 into either kex.NetworkException (transport-shaped) or
+    # kex.GeneralException (API-shaped), so we inspect .code regardless of the
+    # concrete type. If the SDK starts exposing a more specific type in a
+    # future release, add it to the detection branch below.
+    #
+    # ZA11 (adapter does not retry) stays intact: _translate_broker_exception
+    # computes the backoff delay, calls rate_limiter.penalize() to freeze the
+    # bucket, and RAISES BrokerRateLimit429Error. It does NOT sleep and does
+    # NOT loop. The caller (OrderPlacer, per BL-19) owns retry -- its next
+    # acquire() call blocks until the bucket thaws, which is the backoff pacing.
+
+    def _is_429(self, exc: Exception) -> bool:
+        """BL-6: classify a kiteconnect exception as a broker-side HTTP 429."""
+        return getattr(exc, "code", None) == 429
+
+    def _compute_429_backoff_delay(self, category: str) -> tuple[float, int]:
+        """
+        BL-6: compute next penalize() duration for this category and increment
+        the per-category 429 attempt counter.
+
+        Returns (delay_sec, attempt_number_1_indexed).
+        """
+        cfg = self._rl_backoff
+        with self._429_lock:
+            prior = self._429_attempts.get(category, 0)
+            self._429_attempts[category] = prior + 1
+        base = cfg.initial_delay_sec * (cfg.multiplier ** prior)
+        capped = min(base, cfg.max_delay_sec)
+        jitter = (
+            random.uniform(-cfg.jitter_sec, cfg.jitter_sec)
+            if cfg.jitter_sec > 0 else 0.0
+        )
+        delay = max(0.0, capped + jitter)
+        return delay, prior + 1
+
+    def _reset_429_attempts(self, category: str) -> None:
+        """BL-6: reset per-category 429 counter after a successful call."""
+        with self._429_lock:
+            self._429_attempts.pop(category, None)
+
+    def _translate_broker_exception(
+        self,
+        exc: Exception,
+        context: dict[str, object],
+        operation: str,
+    ) -> BrokerError:
+        """
+        BL-6: instance-aware wrapper over _translate_kite_exception.
+
+        If the exception carries HTTP status 429, call rate_limiter.penalize()
+        to freeze the bucket and return a typed BrokerRateLimit429Error.
+        Otherwise fall through to the module-level generic translator
+        (TokenException -> BrokerAuthError, NetworkException -> BrokerTimeout,
+        etc. -- ZA5 taxonomy unchanged).
+
+        ZA11 intact: this method does NOT retry, does NOT sleep.
+        """
+        if self._is_429(exc):
+            category = _CATEGORY_MAP.get(operation, "order")
+            delay, attempt = self._compute_429_backoff_delay(category)
+            try:
+                self._rl.penalize(category, delay)
+            except ValueError as pz_exc:
+                # unknown category from the operation map -- log and raise
+                # without penalize; caller still sees BrokerRateLimit429Error
+                self._log.error(
+                    "zerodha_adapter.penalize_unknown_category",
+                    extra={"operation": operation, "category": category,
+                           "error": str(pz_exc)},
+                )
+            self._log.warning(
+                "zerodha_adapter.broker_429",
+                extra={"operation": operation, "category": category,
+                       "attempt": attempt, "delay_sec": delay,
+                       **context},
+            )
+            return BrokerRateLimit429Error(
+                f"broker 429 on {operation}",
+                operation=operation,
+                category=category,
+                delay_sec=delay,
+                attempt=attempt,
+            )
+        return _translate_kite_exception(exc, context, self._log)
 
     def _validate_place_order(
         self,

@@ -221,6 +221,29 @@ class BrokerRateLimitError(BrokerError):
     SEVERITY: str = "WARN"
 
 
+class BrokerRateLimit429Error(BrokerError):
+    """
+    Broker returned HTTP 429 Too Many Requests. (BL-6)
+
+    Distinct from BrokerRateLimitError, which signals client-side bucket
+    exhaustion (pre-emptive; never reached the broker). This class is raised
+    when we DID reach the broker and got a 429 back, meaning our client-side
+    estimate was slightly off or the broker tightened limits mid-session.
+
+    The adapter that raises this has ALREADY called rate_limiter.penalize() to
+    freeze the bucket for delay_sec; callers that retry will naturally wait
+    out the freeze via acquire() on the next attempt. No caller-side sleep
+    is required or recommended.
+
+    Useful context kwargs:
+        operation (str): the adapter method that was called (e.g. "place_order")
+        category (str): rate_limiter category ("order" / "margins" / ...)
+        delay_sec (float): the penalize duration applied to the bucket
+        attempt (int): 1-indexed 429 attempt count for this category
+    """
+    SEVERITY: str = "WARN"
+
+
 class InvalidTransitionError(BrokerError):
     """
     An illegal order state transition was attempted. (OSM3, OSM4, OSM6)

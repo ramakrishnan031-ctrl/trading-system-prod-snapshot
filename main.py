@@ -686,6 +686,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         # OrderFilled. Live adapter ignores these kwargs.
         bus=event_bus,
         paper_auto_fill_delay_sec=app_config.system.paper.auto_fill_delay_sec,
+        # BL-6: 429 exponential backoff config (lives under broker_limits.yaml)
+        rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,
     )
 
     required_secrets = ["ZERODHA_API_KEY", "ZERODHA_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
@@ -1004,6 +1006,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         product_resolver=product_resolver,        # HIGH #7: correct product codes in DB
         smart_tgt_manager=smart_tgt,              # BL-7b: CO_PLUS_TGT trail wiring
         smart_tgt_config=app_config.system.smart_tgt,  # BL-7b: trigger_pct/step_pct
+        rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,  # BL-19
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 
