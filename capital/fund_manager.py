@@ -688,6 +688,25 @@ class FundManager:
                     delta=delta,
                 ))
 
+    def get_live_reservations(self) -> dict[str, "_Reservation"]:
+        """
+        Return a locked snapshot copy of live reservations (BL-3).
+
+        Used by OrderReconciler._check7_capital_accounting_drift to verify
+        that fund_manager's in-memory _reservations dict still matches the
+        signed sum of fm_ledger margin_delta rows for each rid.
+
+        Returns a SHALLOW copy of self._reservations under the lock; the
+        _Reservation dataclasses themselves are not deep-copied because they
+        are treated as immutable in this codebase. Mutating the returned
+        dict has no effect on FundManager state.
+
+        Full _Reservation objects (not just margins) are returned so future
+        checks can verify symbol/qty/intent without a signature change.
+        """
+        with self._lock:
+            return dict(self._reservations)
+
     def get_snapshot(self) -> CapitalSnapshot:
         """Return a frozen, consistent point-in-time view of capital state (FM8)."""
         with self._lock:

@@ -1639,6 +1639,59 @@ def test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully() -> 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-3 / Phase B.5: get_live_reservations accessor
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bl3_get_live_reservations_returns_locked_snapshot_copy() -> None:
+    """
+    BL-3: get_live_reservations() returns a copy of _reservations under
+    self._lock so OrderReconciler._check7 can iterate without races.
+
+    Asserts:
+      - Returns full _Reservation objects (not just margins) -- needed for
+        symbol/qty in ReconciliationAction.description.
+      - Mutating the returned dict does NOT affect FundManager state.
+      - Released reservations disappear from the snapshot.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+
+        r1 = fm.reserve("RELIANCE", 10, 500.0, "INTRADAY", "sig_a")
+        r2 = fm.reserve("INFY", 5, 1500.0, "INTRADAY", "sig_b")
+        assert r1.success and r2.success
+
+        snap = fm.get_live_reservations()
+        assert isinstance(snap, dict)
+        assert set(snap.keys()) == {r1.reservation_id, r2.reservation_id}
+
+        # Full _Reservation objects (refinement #2): symbol/qty are present.
+        res_r1 = snap[r1.reservation_id]
+        assert res_r1.symbol == "RELIANCE"
+        assert res_r1.qty == 10
+        assert res_r1.intent == "INTRADAY"
+        assert abs(res_r1.margin - 1_000.0) < 0.01  # 10 * 500 / 5x leverage
+
+        # Mutation of returned dict does NOT propagate.
+        snap.pop(r1.reservation_id)
+        snap["fake_rid"] = res_r1
+        snap_again = fm.get_live_reservations()
+        assert r1.reservation_id in snap_again, (
+            "snapshot mutation must not affect FundManager state"
+        )
+        assert "fake_rid" not in snap_again
+
+        # Released reservation falls out of snapshot.
+        fm.release(r1.reservation_id, reason="test")
+        snap3 = fm.get_live_reservations()
+        assert r1.reservation_id not in snap3
+        assert r2.reservation_id in snap3
+
+        store.close()
+    print("  OK get_live_reservations: full objects, locked copy, drops released (BL-3)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1710,6 +1763,8 @@ def run_all_tests() -> int:
         test_bl9_hard_kill_exception_does_not_swallow_invariant_violation,
         test_bl9_invariant_violation_still_fires_on_critical_callback,
         test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully,
+        # BL-3 additions (Phase B.5 self-check accessor)
+        test_bl3_get_live_reservations_returns_locked_snapshot_copy,
     ]
 
     print("=" * 70)

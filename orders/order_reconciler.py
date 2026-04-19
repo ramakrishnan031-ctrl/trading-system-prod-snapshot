@@ -347,6 +347,15 @@ class OrderReconciler:
         if cap_act is not None:
             actions.append(cap_act)
 
+        # CHECK 7: CAPITAL_ACCOUNTING_DRIFT (BL-3) -- fm vs fm_ledger
+        try:
+            actions.extend(self._check7_capital_accounting_drift())
+        except Exception as exc:
+            self._log.error(
+                "_check7_capital_accounting_drift unhandled error: %s",
+                exc, exc_info=True,
+            )
+
         # RC12: update consecutive auth-error counter once per cycle
         self._finalise_auth_counter(had_auth_error=bool(cycle_auth_errors))
 
@@ -902,3 +911,90 @@ class OrderReconciler:
             action_taken="CapitalDriftDetected published; CRITICAL alert sent",
             success=True,
         )
+
+    # ── CHECK 7: CAPITAL_ACCOUNTING_DRIFT (BL-3) ──────────────────────────────
+
+    def _check7_capital_accounting_drift(self) -> List[ReconciliationAction]:
+        """
+        BL-3: verify FundManager._reservations matches the signed sum of
+        fm_ledger margin_delta rows for each live reservation.
+
+        Iterates fund_manager.get_live_reservations() (snapshot copy) and for
+        each rid compares _Reservation.margin against
+        StateStore.sum_fm_ledger_margin_delta(rid). If |delta| exceeds
+        cfg.capital_drift_tolerance, publishes one CapitalDriftDetected per
+        drifting rid with source_module="fund_manager_self_check" and
+        emits one ReconciliationAction.
+
+        Direction: unidirectional (fm -> ledger) only. Orphan detection
+        (rids in ledger but not in fm._reservations) is deferred to Phase E.
+
+        delta = fm_margin - ledger_sum (signed; CapitalDriftHandler abs()es it).
+
+        Per-reservation reporting (not aggregated): each drifting rid gets
+        its own event + action so ops can grep the trail by reservation_id.
+        """
+        actions: List[ReconciliationAction] = []
+        try:
+            live = self._fm.get_live_reservations()
+        except Exception as exc:
+            self._log.error(
+                "_check7_capital_accounting_drift: get_live_reservations failed: %s",
+                exc, exc_info=True,
+            )
+            return actions
+
+        tolerance = self._cfg.capital_drift_tolerance
+
+        for rid, res in live.items():
+            try:
+                ledger_sum = self._store.sum_fm_ledger_margin_delta(rid)
+            except Exception as exc:
+                self._log.error(
+                    "_check7: sum_fm_ledger_margin_delta(%s) failed: %s",
+                    rid, exc, exc_info=True,
+                )
+                continue
+
+            fm_margin = res.margin
+            delta = fm_margin - ledger_sum
+            if abs(delta) <= tolerance:
+                continue
+
+            self._log.error(
+                "BL-3 CAPITAL_ACCOUNTING_DRIFT rid=%s symbol=%s "
+                "fm_margin=%.2f ledger_sum=%.2f delta=%.2f tolerance=%.2f",
+                rid, res.symbol, fm_margin, ledger_sum, delta, tolerance,
+            )
+
+            try:
+                self._bus.publish(CapitalDriftDetected(
+                    source_module="fund_manager_self_check",
+                    expected=fm_margin,
+                    actual=ledger_sum,
+                    delta=delta,
+                ))
+            except Exception as exc:
+                self._log.error(
+                    "_check7: publish CapitalDriftDetected failed for rid=%s: %s",
+                    rid, exc,
+                )
+
+            actions.append(ReconciliationAction(
+                check_name="CAPITAL_ACCOUNTING_DRIFT",
+                tier="UNRECOVERABLE",
+                symbol=res.symbol,
+                trade_id=None,
+                description=(
+                    f"rid={rid} symbol={res.symbol} fm_margin={fm_margin:.2f} "
+                    f"ledger_sum={ledger_sum:.2f} delta={delta:.2f} "
+                    f"exceeds tolerance={tolerance:.2f}"
+                ),
+                action_taken=(
+                    "CapitalDriftDetected published "
+                    "(source=fund_manager_self_check)"
+                ),
+                success=True,
+            ))
+
+        return actions

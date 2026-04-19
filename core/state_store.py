@@ -503,6 +503,35 @@ class StateStore:
             """
         )
 
+    def sum_fm_ledger_margin_delta(self, reservation_id: str) -> float:
+        """
+        Sum margin_delta for all ledger rows of a given reservation_id (BL-3).
+
+        For a live reservation: sum equals the current reserved margin (only
+        RESERVE has fired, contributing +margin).
+        For a closed reservation: sum is 0 (RESERVE +margin and RELEASE /
+        RELEASE_USED -margin net out exactly), but the rid will not appear in
+        FundManager._reservations either -- so BL-3's iteration over live
+        reservations naturally skips closed ones.
+
+        No entry_type filter is needed; the signed nature of margin_delta
+        handles the accounting correctly. DO NOT add a filter here without
+        first confirming what BL-3 needs -- a filter would break the
+        invariant that sum-of-deltas == current-reserved-margin.
+
+        Returns 0.0 if the reservation_id has no rows (caller treats this as
+        a drift signal of magnitude == fm_margin).
+        """
+        row = self.fetch_one(
+            """
+            SELECT COALESCE(SUM(margin_delta), 0.0) AS s
+            FROM fm_ledger
+            WHERE reservation_id = ?
+            """,
+            (reservation_id,),
+        )
+        return float(row["s"]) if row is not None else 0.0
+
     def get_reservation_id_for_signal(self, signal_id: str) -> Optional[str]:
         """
         Return the most recent active reservation_id for a signal_id by

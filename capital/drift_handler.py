@@ -31,10 +31,13 @@ Locked Design Decisions:
              LOG_ONLY -- log_only <= |delta| < soft_kill       CRITICAL log only
              SOFT     -- soft_kill <= |delta| < hard_kill      soft_kill + log
              HARD     -- hard_kill <= |delta|                  hard_kill + log
-    DH4 -- Consecutive-cycle escalation. Persistent LOG_ONLY drift on
-           fund_manager events auto-bumps to SOFT after N cycles. Counter
-           is strictly fund_manager-scoped: non-escalating events (CHECK5
-           etc.) do NOT reset or increment it.
+    DH4 -- Consecutive-cycle escalation. Persistent LOG_ONLY drift on an
+           escalating source auto-bumps to SOFT after N cycles. Counter is
+           ESCALATING-SOURCE-SCOPED: non-escalating events (CHECK5 etc.)
+           do NOT reset or increment it. Both escalating sources
+           (fund_manager FM9 and fund_manager_self_check BL-3) share the
+           same counter -- intentional, since concurrent drift on both
+           surfaces is strictly worse than drift on one.
     DH5 -- Optional kill_switch (matches FM19 / BL-9 pattern). If None,
            escalation still computes the tier but logs CRITICAL that
            escalation is impossible. Unit tests can inject None; production
@@ -60,7 +63,8 @@ if TYPE_CHECKING:
 
 
 _ESCALATING_SOURCES: Final[frozenset[str]] = frozenset({
-    "fund_manager",
+    "fund_manager",            # FM9 sync_from_broker (broker vs local total)
+    "fund_manager_self_check", # BL-3 OrderReconciler._check7 (fm vs fm_ledger)
 })
 # Tier constants -- string literals used in logs and tests; centralised here.
 TIER_NOISE: Final[str] = "NOISE"
@@ -82,10 +86,20 @@ class CapitalDriftHandler:
         self._config = config
         self._kill_switch = kill_switch
         self._log = logger or logging.getLogger(__name__)
-        # DH4: fund_manager-scoped counter; reconciler events never touch it.
+        # DH4: escalating-source-scoped counter; non-escalating reconciler
+        # events (CHECK5 POSITION_GREW etc.) never touch it. Both escalating
+        # sources (fund_manager, fund_manager_self_check) share this counter.
         self._consecutive_log_only_cycles = 0
 
     # ── public handler ──────────────────────────────────────────────────────
+
+    def get_consecutive_cycles(self) -> int:
+        """
+        Read-only accessor for the fund_manager-scoped consecutive
+        log-only-tier counter (DH4). Used by integration tests to assert
+        that escalation wiring is live end-to-end.
+        """
+        return self._consecutive_log_only_cycles
 
     def on_drift(self, event: CapitalDriftDetected) -> None:
         """

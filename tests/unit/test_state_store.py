@@ -1608,6 +1608,91 @@ def test_get_inning_summary_by_date_filters_date(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-3 / Phase B.5: sum_fm_ledger_margin_delta helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bl3_sum_fm_ledger_margin_delta_unknown_rid_returns_zero(
+    tmp_path: Path,
+) -> None:
+    """
+    BL-3: sum_fm_ledger_margin_delta() returns 0.0 for an unknown
+    reservation_id. The caller (BL-3 _check7) treats this as a drift
+    signal: if fm_margin > 0 but ledger_sum == 0, the delta == fm_margin
+    and it will publish CapitalDriftDetected.
+    """
+    store = StateStore(tmp_path / "test.db")
+    result = store.sum_fm_ledger_margin_delta("rid_does_not_exist")
+    assert result == 0.0
+    assert isinstance(result, float)
+    print("  OK sum_fm_ledger_margin_delta returns 0.0 for unknown rid (BL-3)")
+    store.close()
+
+
+def test_bl3_sum_fm_ledger_margin_delta_sums_signed(tmp_path: Path) -> None:
+    """
+    BL-3: sum_fm_ledger_margin_delta() sums signed margin_delta with NO
+    entry_type filter (load-bearing per the docstring).
+
+    Live reservation: only RESERVE row -> sum == +reserved margin.
+    Closed reservation: RESERVE +m and RELEASE -m net to 0.
+    Multiple RELEASE rows for the same rid (defensive): sum still nets.
+    """
+    store = StateStore(tmp_path / "test.db")
+    rid_live = "rid_live_001"
+    rid_closed = "rid_closed_002"
+
+    # Live: just RESERVE
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO fm_ledger
+              (ts, entry_type, amount, bucket, balance_before, balance_after,
+               signal_id, reservation_id, margin_delta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-04-19T09:30:00+05:30", "RESERVE", 1000.0,
+             "intraday", 70_000.0, 69_000.0, "sig_a", rid_live, 1000.0),
+        )
+
+    assert store.sum_fm_ledger_margin_delta(rid_live) == 1000.0
+
+    # Closed: RESERVE then RELEASE_USED with equal magnitude
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO fm_ledger
+              (ts, entry_type, amount, bucket, balance_before, balance_after,
+               signal_id, reservation_id, margin_delta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-04-19T09:31:00+05:30", "RESERVE", 500.0,
+             "intraday", 69_000.0, 68_500.0, "sig_b", rid_closed, 500.0),
+        )
+        cur.execute(
+            """
+            INSERT INTO fm_ledger
+              (ts, entry_type, amount, bucket, balance_before, balance_after,
+               signal_id, reservation_id, margin_delta, pnl_delta, direction)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("2026-04-19T10:00:00+05:30", "RELEASE_USED", -500.0,
+             "intraday", 68_500.0, 69_100.0, "sig_b", rid_closed,
+             -500.0, 100.0, "LONG"),
+        )
+
+    # Closed reservation: RESERVE(+500) + RELEASE_USED(-500) = 0.
+    # No entry_type filter: would have been wrong if we filtered out
+    # RELEASE_USED -- the +500 RESERVE would remain and report drift.
+    assert store.sum_fm_ledger_margin_delta(rid_closed) == 0.0
+
+    # The "live" rid is unchanged by the closed-rid inserts.
+    assert store.sum_fm_ledger_margin_delta(rid_live) == 1000.0
+
+    print("  OK sum_fm_ledger_margin_delta sums signed; no entry_type filter (BL-3)")
+    store.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1689,6 +1774,9 @@ def run_all_tests() -> int:
         test_get_inning_summary_by_date_one_inning,
         test_get_inning_summary_by_date_three_innings,
         test_get_inning_summary_by_date_filters_date,
+        # BL-3 / Phase B.5: sum_fm_ledger_margin_delta helper
+        test_bl3_sum_fm_ledger_margin_delta_unknown_rid_returns_zero,
+        test_bl3_sum_fm_ledger_margin_delta_sums_signed,
     ]
 
     print("=" * 70)

@@ -358,6 +358,60 @@ def test_drift_handler_config_validation() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-3 source-module additions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fund_manager_self_check_source_escalates() -> None:
+    """
+    BL-3: source_module="fund_manager_self_check" is an escalating source
+    (added alongside FM9's "fund_manager"). Drift in HARD tier from this
+    source must invoke kill_switch.hard_kill the same as FM9 events.
+    """
+    ks = _FakeKillSwitch()
+    h = _make_handler(kill_switch=ks)
+
+    evt = CapitalDriftDetected(
+        source_module="fund_manager_self_check",
+        expected=5_000.0,
+        actual=2_000.0,
+        delta=-3_000.0,  # |delta|=3000 -> HARD tier
+    )
+    h.on_drift(evt)
+
+    assert len(ks.hard_kill_calls) == 1, (
+        "fund_manager_self_check HARD tier must trigger hard_kill"
+    )
+    assert "fund_manager_self_check" in ks.hard_kill_calls[0]["reason"], (
+        "kill reason must surface the publisher"
+    )
+    print("  OK fund_manager_self_check escalates HARD via kill_switch (BL-3)")
+
+
+def test_escalating_sources_frozenset_contents() -> None:
+    """
+    BL-3 regression guard: _ESCALATING_SOURCES must contain BOTH
+    "fund_manager" (FM9) and "fund_manager_self_check" (BL-3).
+
+    If a future commit removes either, the BL-3 self-check publisher
+    will silently degrade to INFO logs and capital accounting drift
+    would no longer escalate. Static set assertion guards against drift.
+    """
+    assert "fund_manager" in _ESCALATING_SOURCES, (
+        "FM9 publisher must remain in _ESCALATING_SOURCES (BL-2)"
+    )
+    assert "fund_manager_self_check" in _ESCALATING_SOURCES, (
+        "BL-3 self-check publisher must be in _ESCALATING_SOURCES"
+    )
+    # Defensive: order_reconciler-sourced events must NOT escalate; their
+    # delta semantics differ (CHECK5 is integer share qty), so escalation
+    # there would catastrophically misfire.
+    assert "order_reconciler" not in _ESCALATING_SOURCES, (
+        "G3 / CHECK5 delta semantics differ; must not escalate (BL-2 DH1)"
+    )
+    print("  OK _ESCALATING_SOURCES = {fund_manager, fund_manager_self_check} (BL-3)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -383,6 +437,8 @@ def run_all_tests() -> int:
         test_subscriber_exception_does_not_propagate,
         test_kill_switch_none_logs_escalation_impossible,
         test_drift_handler_config_validation,
+        test_fund_manager_self_check_source_escalates,
+        test_escalating_sources_frozenset_contents,
     ]
 
     print("=" * 70)

@@ -1380,6 +1380,289 @@ def test_reconcile_empty_db_returns_empty(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-3 / Phase B.5: CAPITAL_ACCOUNTING_DRIFT (_check7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class _FakeReservation:
+    """Duck-typed stand-in for capital.fund_manager._Reservation.
+
+    _check7 uses only .margin and .symbol; the other fields are unused but
+    kept name-compatible for future extensions.
+    """
+    reservation_id: str
+    symbol: str
+    margin: float
+    qty: int = 10
+    price: float = 100.0
+    intent: str = "INTRADAY"
+    bucket: str = "intraday"
+    signal_id: Optional[str] = None
+    ts: str = "2026-04-19T09:30:00+05:30"
+
+
+def _seed_fm_ledger_row(
+    store: StateStore,
+    reservation_id: str,
+    margin_delta: float,
+    entry_type: str = "RESERVE",
+    signal_id: Optional[str] = "sig_seed",
+    ts: str = "2026-04-19T09:30:00+05:30",
+) -> None:
+    """Insert one fm_ledger row directly for BL-3 tests."""
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO fm_ledger
+              (ts, entry_type, amount, bucket, balance_before, balance_after,
+               signal_id, reservation_id, margin_delta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ts, entry_type, margin_delta, "intraday",
+             70_000.0, 70_000.0 - margin_delta, signal_id,
+             reservation_id, margin_delta),
+        )
+
+
+def test_bl3_check7_no_drift_when_fm_matches_ledger(tmp_path: Path) -> None:
+    """BL-3: when fm.margin == sum(margin_delta), no action and no event."""
+    store = _make_store(tmp_path)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.get_live_reservations.return_value = {
+        "rid_ok": _FakeReservation(
+            reservation_id="rid_ok", symbol="RELIANCE", margin=1_000.0,
+        ),
+    }
+    _seed_fm_ledger_row(store, "rid_ok", 1_000.0)
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+
+    rec = _make_reconciler(store, fund_manager=fm, bus=bus,
+                           capital_drift_tolerance=1.0)
+    actions = rec.reconcile_once()
+
+    drift_actions = [a for a in actions if a.check_name == "CAPITAL_ACCOUNTING_DRIFT"]
+    assert drift_actions == []
+    assert received == []
+    store.close()
+    print("  OK _check7 clean: fm matches ledger -> no action, no event (BL-3)")
+
+
+def test_bl3_check7_single_rid_drift_publishes_and_emits_action(
+    tmp_path: Path,
+) -> None:
+    """
+    BL-3: single drifting rid -> exactly one CapitalDriftDetected (with
+    source_module='fund_manager_self_check') + one ReconciliationAction.
+    """
+    store = _make_store(tmp_path)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.get_live_reservations.return_value = {
+        "rid_drift": _FakeReservation(
+            reservation_id="rid_drift", symbol="INFY", margin=1_500.0,
+        ),
+    }
+    # Ledger disagrees: ledger_sum = 1000, fm says 1500 -> delta = +500
+    _seed_fm_ledger_row(store, "rid_drift", 1_000.0)
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+
+    rec = _make_reconciler(store, fund_manager=fm, bus=bus,
+                           capital_drift_tolerance=1.0)
+    actions = rec.reconcile_once()
+
+    drift_actions = [a for a in actions if a.check_name == "CAPITAL_ACCOUNTING_DRIFT"]
+    assert len(drift_actions) == 1
+    act = drift_actions[0]
+    assert act.tier == "UNRECOVERABLE"
+    assert act.trade_id is None   # account-level
+    assert act.symbol == "INFY"
+    assert "rid_drift" in act.description
+    assert act.success is True
+
+    assert len(received) == 1
+    ev = received[0]
+    assert ev.source_module == "fund_manager_self_check"
+    assert abs(ev.expected - 1_500.0) < 0.01   # fm_margin
+    assert abs(ev.actual - 1_000.0) < 0.01     # ledger_sum
+    assert abs(ev.delta - 500.0) < 0.01        # signed (fm - ledger)
+    store.close()
+    print("  OK _check7 single drift: event + action with self_check source (BL-3)")
+
+
+def test_bl3_check7_multiple_drifts_per_reservation_reporting(
+    tmp_path: Path,
+) -> None:
+    """
+    BL-3: two drifting rids -> two events + two actions (not aggregated).
+    Per-reservation reporting so ops can grep by reservation_id.
+    """
+    store = _make_store(tmp_path)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.get_live_reservations.return_value = {
+        "rid_a": _FakeReservation("rid_a", "RELIANCE", 1_000.0),
+        "rid_b": _FakeReservation("rid_b", "TCS", 2_000.0),
+        "rid_ok": _FakeReservation("rid_ok", "INFY", 500.0),
+    }
+    _seed_fm_ledger_row(store, "rid_a", 800.0)   # drift 200
+    _seed_fm_ledger_row(store, "rid_b", 1_500.0) # drift 500
+    _seed_fm_ledger_row(store, "rid_ok", 500.0)  # clean
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+
+    rec = _make_reconciler(store, fund_manager=fm, bus=bus,
+                           capital_drift_tolerance=10.0)
+    actions = rec.reconcile_once()
+
+    drift_actions = [a for a in actions if a.check_name == "CAPITAL_ACCOUNTING_DRIFT"]
+    assert len(drift_actions) == 2
+    symbols = {a.symbol for a in drift_actions}
+    assert symbols == {"RELIANCE", "TCS"}, (
+        f"expected drifts for RELIANCE and TCS only; got {symbols}"
+    )
+
+    assert len(received) == 2
+    sources = {e.source_module for e in received}
+    assert sources == {"fund_manager_self_check"}
+
+    # Rid_ok must NOT appear in any action.
+    for a in drift_actions:
+        assert "rid_ok" not in a.description
+    store.close()
+    print("  OK _check7 multi-rid: per-reservation events/actions (BL-3)")
+
+
+def test_bl3_check7_sub_tolerance_drift_ignored(tmp_path: Path) -> None:
+    """
+    BL-3: drift within capital_drift_tolerance is ignored (symmetry with G3).
+    Prevents floating-point noise from triggering escalation.
+    """
+    store = _make_store(tmp_path)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    fm.get_live_reservations.return_value = {
+        "rid_tiny": _FakeReservation("rid_tiny", "RELIANCE", 1_000.50),
+    }
+    _seed_fm_ledger_row(store, "rid_tiny", 1_000.0)  # drift 0.50 <= 1.0
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+
+    rec = _make_reconciler(store, fund_manager=fm, bus=bus,
+                           capital_drift_tolerance=1.0)
+    actions = rec.reconcile_once()
+
+    drift_actions = [a for a in actions if a.check_name == "CAPITAL_ACCOUNTING_DRIFT"]
+    assert drift_actions == []
+    assert received == []
+    store.close()
+    print("  OK _check7 sub-tolerance: 0.50 <= 1.0 tolerance ignored (BL-3)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BL-3 integration smoke: real fm + reconciler + handler; counter increments
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bl3_integration_check7_to_drift_handler_counter_increments(
+    tmp_path: Path,
+) -> None:
+    """
+    BL-3 end-to-end smoke: wire real FundManager + real OrderReconciler +
+    real CapitalDriftHandler on a live EventBus. Corrupt fm_ledger to create
+    a drift between fm._reservations and ledger. Run reconcile_once().
+
+    Asserts:
+      - CapitalDriftDetected with source_module='fund_manager_self_check'
+        reaches the handler (proof of subscription wiring).
+      - Handler's consecutive_log_only_cycles counter increments from 0
+        to 1 (proof that source-module filter ACCEPTS the new source and
+        that escalation wiring is live end-to-end).
+
+    If a future commit drops 'fund_manager_self_check' from
+    _ESCALATING_SOURCES, the counter will NOT increment and this test
+    fails loudly -- preventing silent degradation to INFO-level logs.
+    """
+    import logging
+    from capital.drift_handler import CapitalDriftHandler
+    from capital.fund_manager import FundManager
+    from core.config_loader import DriftHandlerConfig
+
+    store = _make_store(tmp_path)
+    bus = EventBus()
+
+    fm = FundManager(
+        state_store=store,
+        bus=bus,
+        logger=logging.getLogger("fm_bl3_smoke"),
+        intraday_bucket_pct=0.70,
+        positional_bucket_pct=0.30,
+        daily_loss_limit=10_000.0,
+        kill_switch=None,
+    )
+    fm.initialize(broker_balance=100_000.0)
+    result = fm.reserve("RELIANCE", 10, 500.0, "INTRADAY", signal_id="sig_smoke")
+    assert result.success
+    rid = result.reservation_id
+    # After reserve: ledger has one RESERVE row (+1000). fm._reservations[rid].margin = 1000.
+    # Corrupt: add a second RESERVE-like row for the same rid to create +500 drift.
+    _seed_fm_ledger_row(store, rid, 500.0, entry_type="RESERVE",
+                        signal_id="sig_smoke",
+                        ts="2026-04-19T09:31:00+05:30")
+    # Now ledger_sum = 1500 but fm_margin = 1000 -> delta = -500.
+    # abs(500) > tolerance(1.0) -> publish. abs(500) in [250, 1000) -> LOG_ONLY tier.
+
+    handler = CapitalDriftHandler(
+        config=DriftHandlerConfig(
+            log_only_threshold_rs=250.0,
+            soft_kill_threshold_rs=1_000.0,
+            hard_kill_threshold_rs=2_500.0,
+            consecutive_cycles_before_escalate=3,
+        ),
+        kill_switch=None,
+        logger=logging.getLogger("drift_handler_smoke"),
+    )
+    bus.subscribe(CapitalDriftDetected, handler.on_drift)
+
+    assert handler.get_consecutive_cycles() == 0, "counter starts at 0"
+
+    rec = _make_reconciler(store, fund_manager=fm, bus=bus,
+                           capital_drift_tolerance=1.0)
+    actions = rec.reconcile_once()
+
+    drift_actions = [a for a in actions if a.check_name == "CAPITAL_ACCOUNTING_DRIFT"]
+    assert len(drift_actions) == 1, (
+        f"expected 1 CAPITAL_ACCOUNTING_DRIFT action; got {len(drift_actions)}"
+    )
+    # THE key assertion: handler actually received the event AND its
+    # source-module filter accepted it (if filter rejected, counter would
+    # stay at 0 and wiring would be silently broken).
+    assert handler.get_consecutive_cycles() == 1, (
+        "drift_handler counter must increment to 1 on first LOG_ONLY drift "
+        "from fund_manager_self_check -- proves end-to-end wiring is live"
+    )
+    store.close()
+    print("  OK BL-3 end-to-end: reconciler -> bus -> handler; counter=1 (BL-3)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1436,6 +1719,12 @@ def run_all_tests() -> int:
         test_manual_close_idempotent,
         # Empty state
         test_reconcile_empty_db_returns_empty,
+        # BL-3 / Phase B.5: CAPITAL_ACCOUNTING_DRIFT
+        test_bl3_check7_no_drift_when_fm_matches_ledger,
+        test_bl3_check7_single_rid_drift_publishes_and_emits_action,
+        test_bl3_check7_multiple_drifts_per_reservation_reporting,
+        test_bl3_check7_sub_tolerance_drift_ignored,
+        test_bl3_integration_check7_to_drift_handler_counter_increments,
     ]
 
     print("=" * 70)
