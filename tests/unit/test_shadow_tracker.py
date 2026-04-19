@@ -48,6 +48,9 @@ class _FakeTimeAuthority:
     def now_ist(self) -> datetime:
         return self._ts
 
+    def today_ist(self) -> str:
+        return self._ts.strftime("%Y-%m-%d")
+
 
 class _FakeMarketWindows:
     def __init__(self, is_open: bool = True) -> None:
@@ -1124,6 +1127,220 @@ def test_concurrent_ticks_two_threads(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-13: EOD guard (restart persistence + per-IST-date idempotency)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _insert_eod_log(store: StateStore, date_iso: str) -> None:
+    """Simulate upstream eod_squareoff writing its log row for date_iso."""
+    store.insert_eod_squareoff_log(
+        fired_date=date_iso,
+        fired_at=f"{date_iso}T15:17:00",
+        positions_attempted=0, positions_succeeded=0, positions_failed=0,
+        cancels_attempted=0, cancels_succeeded=0, cancels_failed=0,
+        duration_sec=0.0,
+    )
+
+
+def test_bl13_eod_fires_once_on_first_event(tmp_path: Path) -> None:
+    """First EodSquareoffComplete sets _eod_fired=True and _eod_fired_date=today."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    tracker = _make_tracker(store, bus)
+    assert tracker._eod_fired is False
+    assert tracker._eod_fired_date is None
+
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+
+    assert tracker._eod_fired is True
+    assert tracker._eod_fired_date == "2026-04-16"
+    print("  OK first EOD event marks bool + date")
+    store.close()
+
+
+def test_bl13_second_event_same_day_is_noop(tmp_path: Path) -> None:
+    """Second EodSquareoffComplete same day: guard trips; innings not re-closed."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    strategies = {"strategy1": _MockStrategy(direction="LONG")}
+    cache = _MockInstrumentCache({738561: "RELIANCE"})
+    tracker = _make_tracker(store, bus, strategies=strategies, instrument_cache=cache)
+
+    _seed_signal(store, "sig_dup")
+    _seed_trade(store, "t_dup", "sig_dup", exit_reason="TGT_HIT", exit_price=2600.0)
+    bus.publish(PositionClosed(
+        source_module="test", trade_id="t_dup", symbol="RELIANCE",
+        signal_id="sig_dup", exit_price=2600.0, realized_pnl=0.0,
+    ))
+    # Inning 2 now active; fire first EOD -> closes inning 2 as EOD
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+    first_exit_ts = store.get_innings_for_trade("t_dup")[1]["exit_ts"]
+    assert store.get_innings_for_trade("t_dup")[1]["exit_reason"] == "EOD"
+
+    # Second same-day event: guard must trip; no re-close
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+    second_exit_ts = store.get_innings_for_trade("t_dup")[1]["exit_ts"]
+    assert second_exit_ts == first_exit_ts, \
+        "exit_ts should not change on duplicate EOD"
+    print("  OK second same-day EOD is noop")
+    store.close()
+
+
+def test_bl13_new_day_event_processes_normally(tmp_path: Path) -> None:
+    """After date change, new EOD event updates _eod_fired_date (guard not frozen to D0)."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    ta = _FakeTimeAuthority(datetime(2026, 4, 16, 10, 30, 0))
+    mw = _FakeMarketWindows()
+    lf = _FakeLiveFeed()
+    tracker = ShadowTracker(
+        state_store=store, bus=bus, live_feed=lf,
+        market_windows=mw, time_authority=ta,
+    )
+
+    # Day 1 EOD
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+    assert tracker._eod_fired_date == "2026-04-16"
+
+    # Advance date in time_authority (simulates clock rollover without restart)
+    ta._ts = datetime(2026, 4, 17, 10, 30, 0)
+
+    # Day 2 EOD: guard sees different today; handler runs and updates date
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-17"))
+    assert tracker._eod_fired_date == "2026-04-17"
+    print("  OK new-day EOD updates _eod_fired_date (per-IST-date guard)")
+    store.close()
+
+
+def test_bl13_mark_persists_across_restart(tmp_path: Path) -> None:
+    """Restart after upstream EOD: tracker2 restores _eod_fired from eod_squareoff_log."""
+    store = StateStore(tmp_path / "test.db")
+    bus1 = EventBus()
+    tracker1 = _make_tracker(store, bus1)
+    assert tracker1._eod_fired is False
+
+    # Upstream wrote the log row (mark-before-fire ordering)
+    today_iso = tracker1._today_ist()
+    _insert_eod_log(store, today_iso)
+
+    # Simulated restart: new bus, new tracker, same DB
+    bus2 = EventBus()
+    tracker2 = _make_tracker(store, bus2)
+    assert tracker2._eod_fired is True
+    assert tracker2._eod_fired_date == today_iso
+    print("  OK mark persists across restart via eod_squareoff_log")
+    store.close()
+
+
+def test_bl13_post_eod_restart_blocks_cascade(tmp_path: Path) -> None:
+    """Post-EOD restart: inning 1 created but cascade to inning 2 blocked."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    # Pre-seed eod_squareoff_log before tracker constructed
+    _insert_eod_log(store, "2026-04-16")
+
+    strategies = {"strategy1": _MockStrategy(direction="LONG")}
+    cache = _MockInstrumentCache({738561: "RELIANCE"})
+    tracker = _make_tracker(store, bus, strategies=strategies, instrument_cache=cache)
+    assert tracker._eod_fired is True
+    assert tracker._eod_fired_date == "2026-04-16"
+
+    _seed_signal(store, "sig_post")
+    _seed_trade(store, "t_post", "sig_post", exit_reason="TGT_HIT", exit_price=2600.0)
+    bus.publish(PositionClosed(
+        source_module="test", trade_id="t_post", symbol="RELIANCE",
+        signal_id="sig_post", exit_price=2600.0, realized_pnl=0.0,
+    ))
+    innings = store.get_innings_for_trade("t_post")
+    assert len(innings) == 1, f"Expected only inning 1, got {len(innings)}"
+    print("  OK post-EOD restart blocks cascade to inning 2")
+    store.close()
+
+
+def test_bl13_no_log_row_startup_leaves_eod_fired_false(tmp_path: Path) -> None:
+    """No eod_squareoff_log row on startup: defaults False/None."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    tracker = _make_tracker(store, bus)
+    assert tracker._eod_fired is False
+    assert tracker._eod_fired_date is None
+    print("  OK no-row startup defaults to False/None")
+    store.close()
+
+
+def test_bl13_guard_uses_ist_date(tmp_path: Path) -> None:
+    """Guard uses time_authority.today_ist() (IST), not event.fired_date or UTC."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    tracker = _make_tracker(store, bus)
+    # _FakeTimeAuthority.today_ist() returns "2026-04-16"; event carries a different date
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="1999-12-31"))
+    assert tracker._eod_fired_date == "2026-04-16", \
+        "guard must use time_authority.today_ist(), not event.fired_date"
+    print("  OK guard uses time_authority.today_ist() (IST-aware)")
+    store.close()
+
+
+def test_bl13_log_row_query_failure_degrades_gracefully(tmp_path: Path) -> None:
+    """Startup query raises: ShadowTracker constructs, logs error, runs with _eod_fired=False."""
+    real_store = StateStore(tmp_path / "test.db")
+
+    class _FailingStore:
+        """Proxies StateStore but raises on get_eod_squareoff_log_for_date."""
+        def __init__(self, real):
+            self._real = real
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+        def get_eod_squareoff_log_for_date(self, date_iso: str):
+            raise RuntimeError("simulated DB failure")
+
+    failing_store = _FailingStore(real_store)
+    bus = EventBus()
+    mock_logger = MagicMock()
+    ta = _FakeTimeAuthority()
+    mw = _FakeMarketWindows()
+    lf = _FakeLiveFeed()
+
+    # Must not raise
+    tracker = ShadowTracker(
+        state_store=failing_store, bus=bus, live_feed=lf,
+        market_windows=mw, time_authority=ta, logger=mock_logger,
+    )
+
+    assert tracker._eod_fired is False
+    assert tracker._eod_fired_date is None
+    assert mock_logger.error.called, "expected logger.error on degraded startup"
+    print("  OK query failure degrades gracefully (no crash, logged, False state)")
+    real_store.close()
+
+
+def test_bl13_idempotency_guard_works_without_startup_restore(tmp_path: Path) -> None:
+    """In-process double-publish (no restart): guard still trips on second call."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    strategies = {"strategy1": _MockStrategy(direction="LONG")}
+    cache = _MockInstrumentCache({738561: "RELIANCE"})
+    tracker = _make_tracker(store, bus, strategies=strategies, instrument_cache=cache)
+    assert tracker._eod_fired_date is None   # no startup restore
+
+    _seed_signal(store, "sig_inproc")
+    _seed_trade(store, "t_inproc", "sig_inproc", exit_reason="TGT_HIT", exit_price=2600.0)
+    bus.publish(PositionClosed(
+        source_module="test", trade_id="t_inproc", symbol="RELIANCE",
+        signal_id="sig_inproc", exit_price=2600.0, realized_pnl=0.0,
+    ))
+    # First EOD closes inning 2 normally
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+    ex1 = store.get_innings_for_trade("t_inproc")[1]["exit_ts"]
+
+    # Second EOD in-process: guard trips even though no restart occurred
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+    ex2 = store.get_innings_for_trade("t_inproc")[1]["exit_ts"]
+    assert ex1 == ex2, "exit_ts should not change on in-process duplicate EOD"
+    print("  OK in-process double-publish is idempotent (no restart required)")
+    store.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1169,6 +1386,15 @@ if __name__ == "__main__":
         test_is_real_flags,
         test_concurrent_position_closed_and_tick,
         test_concurrent_ticks_two_threads,
+        test_bl13_eod_fires_once_on_first_event,
+        test_bl13_second_event_same_day_is_noop,
+        test_bl13_new_day_event_processes_normally,
+        test_bl13_mark_persists_across_restart,
+        test_bl13_post_eod_restart_blocks_cascade,
+        test_bl13_no_log_row_startup_leaves_eod_fired_false,
+        test_bl13_guard_uses_ist_date,
+        test_bl13_log_row_query_failure_degrades_gracefully,
+        test_bl13_idempotency_guard_works_without_startup_restore,
     ]
 
     passed = failed = 0

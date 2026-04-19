@@ -50,7 +50,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from core.events import EodSquareoffComplete, EventBus, PositionClosed
-from core.time_authority import now_ist
+from core.logger import log_exception
+from core.time_authority import now_ist, today_ist
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -149,7 +150,39 @@ class ShadowTracker:
         self._last_price: Dict[str, float] = {}
 
         # Set to True when EodSquareoffComplete fires; no new innings after EOD.
+        # BL-13: _eod_fired_date holds the YYYY-MM-DD string of the day the
+        # bool was set. Persisted across restarts by reading the eod_squareoff_log
+        # row for today on construction. Protects the 13-min post-EOD-pre-close
+        # restart window from a stale PositionClosed cascading to a simulated
+        # second inning after the market has already squared off.
         self._eod_fired: bool = False
+        self._eod_fired_date: Optional[str] = None
+
+        # BL-13: restore _eod_fired from eod_squareoff_log if EOD already ran today.
+        # Graceful-degrade on query failure: log and run with _eod_fired=False.
+        # Mark-before-fire ordering is enforced upstream in eod_squareoff.py:
+        # the log row is inserted BEFORE EodSquareoffComplete is published, so a
+        # restart that sees the row is guaranteed to have missed the event.
+        today_iso = self._today_ist()
+        try:
+            log_row = self._store.get_eod_squareoff_log_for_date(today_iso)
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "shadow_tracker: eod_squareoff_log query failed on startup; "
+                "running in degraded mode (_eod_fired=False) for %s",
+                today_iso,
+            )
+            log_row = None
+
+        if log_row is not None:
+            self._eod_fired = True
+            self._eod_fired_date = today_iso
+            self._log.info(
+                "shadow_tracker: restored _eod_fired from "
+                "eod_squareoff_log for %s",
+                today_iso,
+            )
 
         # Subscribe to events (SH3, SH8)
         bus.subscribe(PositionClosed, self._on_position_closed)
@@ -306,12 +339,27 @@ class ShadowTracker:
     def _on_eod_complete(self, event: EodSquareoffComplete) -> None:
         """
         Handle EodSquareoffComplete: close all remaining active innings (SH8).
+
+        BL-13: Idempotent per IST date. If _eod_fired_date already equals
+        today, this is a duplicate event (either in-process re-publish or
+        a post-restart replay) and we skip without closing innings again.
         """
         if not self._enabled:
             return
 
+        today_iso = self._today_ist()
+        if self._eod_fired_date == today_iso:
+            self._log.info(
+                "shadow_tracker: EOD already fired today (%s), skipping",
+                today_iso,
+            )
+            return
+
         with self._lock:
+            # Mark first (belt-and-braces: even if close loop raises below,
+            # a later duplicate event still hits the guard above).
             self._eod_fired = True
+            self._eod_fired_date = today_iso
             active_copy = list(self._active_innings.values())
 
         for ing in active_copy:
@@ -560,6 +608,12 @@ class ShadowTracker:
         if hasattr(self._time_authority, "now_ist"):
             return self._time_authority.now_ist()
         return now_ist()
+
+    def _today_ist(self) -> str:
+        """Return today's date as YYYY-MM-DD in IST (BL-13)."""
+        if hasattr(self._time_authority, "today_ist"):
+            return self._time_authority.today_ist()
+        return today_ist()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
