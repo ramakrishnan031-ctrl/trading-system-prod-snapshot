@@ -133,3 +133,12 @@ smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
 
 paper:                        # H-20/ZA16a: paper-mode fill synthesis
   auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)
+
+drift_handler:                # BL-2: capital drift escalation
+  # Absolute rupee thresholds, scaled for paper trial (~Rs50k).
+  # Revisit for live-scale capital; consider percentage-based
+  # thresholds if account size grows significantly.
+  log_only_threshold_rs: 250.0
+  soft_kill_threshold_rs: 1000.0
+  hard_kill_threshold_rs: 2500.0
+  consecutive_cycles_before_escalate: 3

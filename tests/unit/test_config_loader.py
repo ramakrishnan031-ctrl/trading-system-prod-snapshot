@@ -171,6 +171,11 @@ smart_tgt:
   step_pct: 0.003
 paper:
   auto_fill_delay_sec: 0.5
+drift_handler:
+  log_only_threshold_rs: 250.0
+  soft_kill_threshold_rs: 1000.0
+  hard_kill_threshold_rs: 2500.0
+  consecutive_cycles_before_escalate: 3
 """
 
 _BROKER_COSTS = """\

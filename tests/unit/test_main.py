@@ -36,7 +36,6 @@ from main import (
     _make_orphan_cb,
     _make_gate_release_cb,
     _log_kill_switch_event,
-    _log_capital_drift_event,
 )
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -418,10 +417,6 @@ class TestCallbacks:
     def test_log_kill_switch_event_no_exception(self):
         ev = MagicMock(previous_state="INACTIVE", new_state="SOFT_KILL", reason="test")
         _log_kill_switch_event(ev)  # must not raise
-
-    def test_log_capital_drift_event_no_exception(self):
-        ev = MagicMock(expected=100000.0, actual=95000.0, delta=5000.0)
-        _log_capital_drift_event(ev)  # must not raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────

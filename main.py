@@ -43,6 +43,7 @@ from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
 from broker.zerodha_adapter import ZerodhaAdapter
+from capital.drift_handler import CapitalDriftHandler
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from capital.position_sizer import PositionSizer
@@ -334,15 +335,6 @@ def _log_kill_switch_event(event) -> None:
         getattr(event, "previous_state", "?"),
         getattr(event, "new_state", "?"),
         getattr(event, "reason", ""),
-    )
-
-
-def _log_capital_drift_event(event) -> None:
-    _log.warning(
-        "CapitalDriftDetected: expected=%.2f actual=%.2f delta=%.2f",
-        getattr(event, "expected", 0),
-        getattr(event, "actual", 0),
-        getattr(event, "delta", 0),
     )
 
 
@@ -1106,7 +1098,18 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
 
     # ── Phase 0e: Event bus subscriptions (MAIN9) ────────────────────────────
     event_bus.subscribe(KillSwitchActivated, _log_kill_switch_event)
-    event_bus.subscribe(CapitalDriftDetected, _log_capital_drift_event)
+
+    # BL-2: CapitalDriftDetected handler with tiered escalation. Replaces the
+    # legacy _log_capital_drift_event WARNING stub. Only fund_manager-sourced
+    # events trigger kill_switch escalation; reconciler-sourced events log at
+    # INFO (they have their own escalation paths).
+    drift_handler = CapitalDriftHandler(
+        config=app_config.system.drift_handler,
+        kill_switch=kill_switch,
+        logger=get_logger("drift_handler"),
+    )
+    event_bus.subscribe(CapitalDriftDetected, drift_handler.on_drift)
+    _log.info("capital drift handler subscribed (BL-2)")
     # Note: fund_manager has no on_order_filled/on_position_closed handlers;
     # order_reconciler subscribes OrderStateChanged internally in start() (RC4).
 

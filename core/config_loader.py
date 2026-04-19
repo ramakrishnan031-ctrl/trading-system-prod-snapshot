@@ -48,7 +48,7 @@ from pathlib import Path
 import yaml
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from core.exceptions import ConfigMissingError, ConfigSchemaError
 
@@ -442,6 +442,62 @@ class SmartTgtConfig(BaseModel):
         return v
 
 
+class DriftHandlerConfig(BaseModel):
+    """
+    BL-2: CapitalDriftHandler escalation thresholds (absolute rupee values).
+
+    Absolute thresholds chosen over percentage-based for three reasons:
+    (a) CapitalDriftDetected.delta is emitted in rupees by the escalating
+        publisher (fund_manager.sync_from_broker / FM9), so thresholds can
+        compare directly without division;
+    (b) existing reconciler config (capital_drift_tolerance) is also
+        absolute -- symmetry avoids mental mode-switching;
+    (c) paper-trial scale (~Rs50k) makes percentage and absolute
+        equivalent; revisit when live-account scale demands it.
+
+    consecutive_cycles_before_escalate: a log-only drift that persists
+    across this many consecutive fund_manager events auto-escalates to
+    soft_kill. Reconciler-sourced events do NOT reset or increment this
+    counter (the counter is fund_manager-scoped).
+    """
+    model_config = ConfigDict(extra="forbid")
+    log_only_threshold_rs: float = 250.0       # below this = NOISE; at/above = LOG_ONLY
+    soft_kill_threshold_rs: float = 1_000.0    # at/above this = SOFT kill tier
+    hard_kill_threshold_rs: float = 2_500.0    # at/above this = HARD kill tier
+    consecutive_cycles_before_escalate: int = 3
+
+    @field_validator("log_only_threshold_rs", "soft_kill_threshold_rs",
+                     "hard_kill_threshold_rs")
+    @classmethod
+    def _positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"drift threshold must be > 0, got {v!r}")
+        return v
+
+    @field_validator("consecutive_cycles_before_escalate")
+    @classmethod
+    def _positive_cycles(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError(
+                f"consecutive_cycles_before_escalate must be >= 1, got {v!r}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_ordering(self) -> "DriftHandlerConfig":
+        if not (self.log_only_threshold_rs
+                < self.soft_kill_threshold_rs
+                < self.hard_kill_threshold_rs):
+            raise ValueError(
+                "drift thresholds must satisfy "
+                "log_only < soft_kill < hard_kill "
+                f"(got log_only={self.log_only_threshold_rs}, "
+                f"soft_kill={self.soft_kill_threshold_rs}, "
+                f"hard_kill={self.hard_kill_threshold_rs})"
+            )
+        return self
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trading_hours: TradingHoursConfig
@@ -463,6 +519,7 @@ class SystemConfig(BaseModel):
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis
+    drift_handler: DriftHandlerConfig         # BL-2: drift escalation policy
 
 
 # ─────────────────────────────────────────────────────────────────────────────
