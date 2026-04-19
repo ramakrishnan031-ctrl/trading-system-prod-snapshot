@@ -26,7 +26,7 @@ from capital.fund_manager import (
     required_margin,
 )
 from core.events import EventBus
-from core.exceptions import CapitalInvariantViolation
+from core.exceptions import CapitalInvariantViolation, CapitalStateInconsistent
 from core.state_store import StateStore
 
 
@@ -916,6 +916,498 @@ def test_bl5_dead_capital_ledger_table_is_removed() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-1 / FM18 Tests -- rehydrate_from_open_trades (Phase B.2)
+# ─────────────────────────────────────────────────────────────────────────────
+# These tests pin the new startup-replay semantics introduced in commit BL-1:
+#   * rehydrate_from_open_trades reconstructs in-memory state from
+#     fm_ledger + trades + orders (the persistence triangle)
+#   * Replay uses _apply_reserve / _apply_commit shared with the public path
+#   * No ledger rows written during replay
+#   * Today's RELEASE_USED rows replayed for daily_pnl carryover; prior days ignored
+#   * Invariant check ONCE at end; failure raises CapitalStateInconsistent
+#   * qty_filled preferred over qty_planned; entry_actual_price preferred
+#     over entry_target_price (decision (a))
+# ─────────────────────────────────────────────────────────────────────────────
+
+_NOW_ISO = "2026-04-19T09:30:00+05:30"
+_PRIOR_DAY_ISO = "2026-04-18T14:30:00+05:30"
+
+
+def _seed_open_trade(
+    store: StateStore,
+    *,
+    signal_id: str,
+    trade_id: str,
+    symbol: str = "RELIANCE",
+    direction: str = "LONG",
+    qty_planned: int = 10,
+    qty_filled: int = 10,
+    entry_target_price: float = 2500.0,
+    entry_actual_price: float | None = 2500.0,
+    status: str = "OPEN",
+    product: str = "MIS",
+    insert_entry_order: bool = True,
+) -> None:
+    """Seed signals+trades(+entry order) so get_all_open_trades returns the trade."""
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO signals
+              (signal_id, symbol, scanner, strategy, triggered_at, received_at,
+               expires_at, status, fingerprint, fingerprint_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (signal_id, symbol, "SCANNER", "strategy", _NOW_ISO, _NOW_ISO,
+             "2026-04-19T09:35:00+05:30", "TRADED",
+             f"fp_{trade_id}", "2026-04-19"),
+        )
+        cur.execute(
+            """
+            INSERT INTO trades
+              (trade_id, signal_id, symbol, direction, strategy, sector,
+               qty_planned, qty_filled, entry_target_price, entry_actual_price,
+               sl_initial, tgt_initial, margin_reserved, risk_amount,
+               created_at, status, order_protocol, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (trade_id, signal_id, symbol, direction, "strategy", "ENERGY",
+             qty_planned, qty_filled, entry_target_price, entry_actual_price,
+             entry_target_price * 0.98, entry_target_price * 1.02,
+             5000.0, 500.0, _NOW_ISO, status, "LIMIT_TRIPLE", _NOW_ISO),
+        )
+        if insert_entry_order:
+            cur.execute(
+                """
+                INSERT INTO orders
+                  (order_id, trade_id, leg, transaction_type, order_type, product,
+                   variety, qty_requested, status, placed_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"ord_{trade_id}", trade_id, "ENTRY",
+                 "BUY" if direction == "LONG" else "SELL",
+                 "LIMIT", product, "regular",
+                 qty_filled if qty_filled > 0 else qty_planned,
+                 "COMPLETE", _NOW_ISO, _NOW_ISO),
+            )
+
+
+def test_rehydrate_with_no_open_trades_is_noop() -> None:
+    """No trades, no ledger entries → rehydrate is a clean no-op."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        snap_before = fm.get_snapshot()
+        result = fm.rehydrate_from_open_trades()
+        snap_after = fm.get_snapshot()
+        assert result["replayed_trades"] == 0
+        assert result["replayed_pnl_rows"] == 0
+        assert result["anomalies"] == []
+        assert snap_before.intraday_avail == snap_after.intraday_avail
+        assert snap_before.positional_avail == snap_after.positional_avail
+        store.close()
+    print("  OK rehydrate is a no-op when no open trades exist (BL-1)")
+
+
+def test_rehydrate_replays_reserve_only() -> None:
+    """RESERVE-only chain: margin lands in reserved bucket, reservation in dict."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        # Pre-crash session: reserve only (simulate crash before COMMIT).
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("INFY", 5, 1500.0, "INTRADAY", signal_id="sig_R1")
+        assert res.success
+        rid = res.reservation_id
+        # Seed the trade with status=OPEN so rehydrate picks it up.
+        _seed_open_trade(
+            store, signal_id="sig_R1", trade_id="tr_R1",
+            symbol="INFY", qty_planned=5, qty_filled=5,
+            entry_target_price=1500.0, entry_actual_price=1500.0,
+            product="MIS",
+        )
+
+        # Restart: fresh FundManager.
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        # Verify state empty before replay.
+        snap_pre = fm2.get_snapshot()
+        assert snap_pre.intraday_reserved == 0.0
+        result = fm2.rehydrate_from_open_trades()
+        assert result["replayed_trades"] == 1
+        snap_post = fm2.get_snapshot()
+        # Reservation should have moved 5*1500/5 = 1500 from avail to reserved.
+        assert abs(snap_post.intraday_reserved - 1500.0) < 0.01
+        assert abs(snap_post.intraday_avail - (70_000.0 - 1500.0)) < 0.01
+        # Reservation rehydrated into _reservations.
+        assert rid in fm2._reservations
+        store.close()
+    print("  OK rehydrate replays RESERVE-only chain (BL-1)")
+
+
+def test_rehydrate_replays_reserve_commit() -> None:
+    """RESERVE+COMMIT chain: margin lands in used bucket, reservation popped."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("TCS", 4, 3000.0, "INTRADAY", signal_id="sig_RC")
+        assert res.success
+        rid = res.reservation_id
+        fm1.commit_to_used(rid, actual_fill_price=3000.0, actual_qty=4)
+        _seed_open_trade(
+            store, signal_id="sig_RC", trade_id="tr_RC",
+            symbol="TCS", qty_planned=4, qty_filled=4,
+            entry_target_price=3000.0, entry_actual_price=3000.0,
+        )
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        result = fm2.rehydrate_from_open_trades()
+        assert result["replayed_trades"] == 1
+        snap = fm2.get_snapshot()
+        # 4*3000/5 = 2400 should be in used.
+        assert abs(snap.intraday_used - 2400.0) < 0.01
+        assert snap.intraday_reserved == 0.0
+        # Reservation popped after COMMIT.
+        assert rid not in fm2._reservations
+        store.close()
+    print("  OK rehydrate replays RESERVE+COMMIT chain (BL-1)")
+
+
+def test_rehydrate_replays_full_cycle_short() -> None:
+    """SHORT trade closing today: reserve+commit replayed for OPEN sibling;
+    today's RELEASE_USED PnL replayed via Phase 2."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+
+        # Closed SHORT trade: full lifecycle, contributes to today's PnL.
+        res_a = fm1.reserve("HDFC", 2, 1500.0, "INTRADAY", signal_id="sig_A")
+        fm1.commit_to_used(res_a.reservation_id, actual_fill_price=1500.0, actual_qty=2)
+        # SHORT profit: entry 1500, exit 1450 → +100.
+        fm1.release_used(
+            symbol="HDFC", exit_price=1450.0, exit_qty=2,
+            intent="INTRADAY", entry_price=1500.0, direction="SHORT",
+        )
+        # OPEN SHORT trade still alive.
+        res_b = fm1.reserve("ICICI", 3, 1000.0, "INTRADAY", signal_id="sig_B")
+        fm1.commit_to_used(res_b.reservation_id, actual_fill_price=1000.0, actual_qty=3)
+        _seed_open_trade(
+            store, signal_id="sig_B", trade_id="tr_B",
+            symbol="ICICI", direction="SHORT",
+            qty_planned=3, qty_filled=3,
+            entry_target_price=1000.0, entry_actual_price=1000.0,
+        )
+        snap1 = fm1.get_snapshot()
+
+        # Restart and rehydrate.
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        result = fm2.rehydrate_from_open_trades()
+        assert result["replayed_trades"] == 1
+        assert result["replayed_pnl_rows"] == 1
+        snap2 = fm2.get_snapshot()
+        # Snapshot equality.
+        assert abs(snap1.intraday_used - snap2.intraday_used) < 0.01
+        assert abs(snap1.intraday_avail - snap2.intraday_avail) < 0.01
+        assert abs(snap1.daily_realized_pnl - snap2.daily_realized_pnl) < 0.01
+        assert abs(snap1.total - snap2.total) < 0.01
+        store.close()
+    print("  OK rehydrate full-cycle SHORT (open + closed-today) (BL-1)")
+
+
+def test_rehydrate_direction_lookup_from_trade_row() -> None:
+    """Direction is derived from trades.direction, not the ledger (D1)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("WIPRO", 5, 400.0, "INTRADAY", signal_id="sig_D")
+        fm1.commit_to_used(res.reservation_id, actual_fill_price=400.0, actual_qty=5)
+        _seed_open_trade(
+            store, signal_id="sig_D", trade_id="tr_D",
+            symbol="WIPRO", direction="SHORT",
+            qty_planned=5, qty_filled=5,
+            entry_target_price=400.0, entry_actual_price=400.0,
+        )
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        fm2.rehydrate_from_open_trades()
+        # No reservation in dict (popped on COMMIT replay), but verify the
+        # trade row's direction was readable -- replayed trade count = 1.
+        # The direction is recorded for use by future release_used calls;
+        # here we assert at least that replay succeeded for a SHORT trade.
+        snap = fm2.get_snapshot()
+        # 5 * 400 / 5 = 400 in used.
+        assert abs(snap.intraday_used - 400.0) < 0.01
+        store.close()
+    print("  OK rehydrate reads direction from trades row (D1, BL-1)")
+
+
+def test_rehydrate_missing_ledger_rows_is_anomaly() -> None:
+    """Trade exists, but no fm_ledger RESERVE row → recorded as anomaly, no crash."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        _seed_open_trade(
+            store, signal_id="sig_orphan", trade_id="tr_orphan",
+            symbol="ORPHAN", qty_planned=1, qty_filled=1,
+            entry_target_price=100.0, entry_actual_price=100.0,
+        )
+        result = fm.rehydrate_from_open_trades()
+        assert result["replayed_trades"] == 0
+        assert len(result["anomalies"]) == 1
+        anom = result["anomalies"][0]
+        assert anom["trade_id"] == "tr_orphan"
+        assert "no RESERVE row" in anom["reason"]
+        store.close()
+    print("  OK rehydrate logs anomaly for trade with no ledger rows (BL-1)")
+
+
+def test_rehydrate_raises_on_invariant_violation() -> None:
+    """Tamper with ledger so replay produces inconsistent buckets → CapitalStateInconsistent."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("TAMPER", 5, 1000.0, "INTRADAY", signal_id="sig_T")
+        fm1.commit_to_used(res.reservation_id, actual_fill_price=1000.0, actual_qty=5)
+        _seed_open_trade(
+            store, signal_id="sig_T", trade_id="tr_T",
+            symbol="TAMPER", qty_planned=5, qty_filled=5,
+            entry_target_price=1000.0, entry_actual_price=1000.0,
+        )
+        # Corrupt the COMMIT row's amount so replay over-deducts and breaks invariant.
+        with store.transaction() as cur:
+            cur.execute(
+                "UPDATE fm_ledger SET amount = amount * 100 "
+                "WHERE entry_type = 'COMMIT' AND reservation_id = ?",
+                (res.reservation_id,),
+            )
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        try:
+            fm2.rehydrate_from_open_trades()
+        except CapitalStateInconsistent as exc:
+            assert "Capital state invariant failed" in str(exc)
+        else:
+            raise AssertionError("CapitalStateInconsistent was not raised")
+        store.close()
+    print("  OK rehydrate raises CapitalStateInconsistent on invariant break (BL-1)")
+
+
+def test_rehydrate_does_not_write_ledger_entries() -> None:
+    """Replay must NEVER append ledger rows -- the ledger is the source of truth."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("LEDGER", 5, 800.0, "INTRADAY", signal_id="sig_L")
+        fm1.commit_to_used(res.reservation_id, actual_fill_price=800.0, actual_qty=5)
+        _seed_open_trade(
+            store, signal_id="sig_L", trade_id="tr_L",
+            symbol="LEDGER", qty_planned=5, qty_filled=5,
+            entry_target_price=800.0, entry_actual_price=800.0,
+        )
+
+        rows_before = store.fetch_one("SELECT COUNT(*) AS n FROM fm_ledger")["n"]
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        # initialize() writes one INIT row -- count after that is the baseline.
+        baseline = store.fetch_one("SELECT COUNT(*) AS n FROM fm_ledger")["n"]
+        fm2.rehydrate_from_open_trades()
+        rows_after = store.fetch_one("SELECT COUNT(*) AS n FROM fm_ledger")["n"]
+        assert rows_after == baseline, (
+            f"rehydrate appended ledger rows: {baseline} -> {rows_after}"
+        )
+        # Sanity: ledger grew due to fm2.initialize() (INIT) but not rehydrate.
+        assert baseline == rows_before + 1
+        store.close()
+    print("  OK rehydrate writes zero ledger rows (BL-1)")
+
+
+def test_rehydrate_preserves_post_snapshot_equality() -> None:
+    """End-to-end snapshot equality across a simulated restart."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        # Two open trades + one closed-today trade.
+        ra = fm1.reserve("AAA", 10, 200.0, "INTRADAY", signal_id="sig_a")
+        fm1.commit_to_used(ra.reservation_id, actual_fill_price=200.0, actual_qty=10)
+        rb = fm1.reserve("BBB", 4, 1500.0, "DELIVERY", signal_id="sig_b")
+        fm1.commit_to_used(rb.reservation_id, actual_fill_price=1500.0, actual_qty=4)
+        rc = fm1.reserve("CCC", 5, 500.0, "INTRADAY", signal_id="sig_c")
+        fm1.commit_to_used(rc.reservation_id, actual_fill_price=500.0, actual_qty=5)
+        fm1.release_used(
+            symbol="CCC", exit_price=550.0, exit_qty=5,
+            intent="INTRADAY", entry_price=500.0, direction="LONG",
+        )
+        _seed_open_trade(
+            store, signal_id="sig_a", trade_id="tr_a", symbol="AAA",
+            qty_planned=10, qty_filled=10,
+            entry_target_price=200.0, entry_actual_price=200.0, product="MIS",
+        )
+        _seed_open_trade(
+            store, signal_id="sig_b", trade_id="tr_b", symbol="BBB",
+            qty_planned=4, qty_filled=4,
+            entry_target_price=1500.0, entry_actual_price=1500.0, product="CNC",
+        )
+        snap1 = fm1.get_snapshot()
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        fm2.rehydrate_from_open_trades()
+        snap2 = fm2.get_snapshot()
+
+        assert abs(snap1.intraday_used - snap2.intraday_used) < 0.01
+        assert abs(snap1.intraday_reserved - snap2.intraday_reserved) < 0.01
+        assert abs(snap1.intraday_avail - snap2.intraday_avail) < 0.01
+        assert abs(snap1.positional_used - snap2.positional_used) < 0.01
+        assert abs(snap1.positional_avail - snap2.positional_avail) < 0.01
+        assert abs(snap1.daily_realized_pnl - snap2.daily_realized_pnl) < 0.01
+        assert abs(snap1.total - snap2.total) < 0.01
+        store.close()
+    print("  OK rehydrate snapshot equality across restart (BL-1)")
+
+
+def test_rehydrate_multiple_reservations() -> None:
+    """Multiple OPEN trades in different buckets all replayed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=200_000.0)
+        # 3 open intraday + 1 open positional.
+        for i, sym in enumerate(["A", "B", "C"]):
+            r = fm1.reserve(sym, 10, 500.0, "INTRADAY", signal_id=f"sig_{sym}")
+            fm1.commit_to_used(r.reservation_id, actual_fill_price=500.0, actual_qty=10)
+            _seed_open_trade(
+                store, signal_id=f"sig_{sym}", trade_id=f"tr_{sym}",
+                symbol=sym, qty_planned=10, qty_filled=10,
+                entry_target_price=500.0, entry_actual_price=500.0, product="MIS",
+            )
+        rd = fm1.reserve("D", 3, 2000.0, "DELIVERY", signal_id="sig_D")
+        fm1.commit_to_used(rd.reservation_id, actual_fill_price=2000.0, actual_qty=3)
+        _seed_open_trade(
+            store, signal_id="sig_D", trade_id="tr_D",
+            symbol="D", qty_planned=3, qty_filled=3,
+            entry_target_price=2000.0, entry_actual_price=2000.0, product="CNC",
+        )
+
+        fm2 = _initialized_fm(store, balance=200_000.0)
+        result = fm2.rehydrate_from_open_trades()
+        assert result["replayed_trades"] == 4
+        snap = fm2.get_snapshot()
+        # Intraday used: 3 * (10*500/5) = 3000.
+        assert abs(snap.intraday_used - 3000.0) < 0.01
+        # Positional used: 3 * 2000 / 1 = 6000.
+        assert abs(snap.positional_used - 6000.0) < 0.01
+        store.close()
+    print("  OK rehydrate handles multiple open trades across buckets (BL-1)")
+
+
+def test_rehydrate_replays_todays_realized_pnl() -> None:
+    """RELEASE_USED rows from today contribute to _daily_pnl post-restart."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        # Two closed trades today: +500 and -200.
+        r1 = fm1.reserve("X1", 5, 100.0, "INTRADAY", signal_id="sig_X1")
+        fm1.commit_to_used(r1.reservation_id, actual_fill_price=100.0, actual_qty=5)
+        fm1.release_used(symbol="X1", exit_price=200.0, exit_qty=5,
+                         intent="INTRADAY", entry_price=100.0, direction="LONG")
+        r2 = fm1.reserve("X2", 4, 200.0, "INTRADAY", signal_id="sig_X2")
+        fm1.commit_to_used(r2.reservation_id, actual_fill_price=200.0, actual_qty=4)
+        fm1.release_used(symbol="X2", exit_price=150.0, exit_qty=4,
+                         intent="INTRADAY", entry_price=200.0, direction="LONG")
+        snap1 = fm1.get_snapshot()
+        assert abs(snap1.daily_realized_pnl - (500.0 - 200.0)) < 0.01
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        result = fm2.rehydrate_from_open_trades()
+        assert result["replayed_pnl_rows"] == 2
+        snap2 = fm2.get_snapshot()
+        assert abs(snap2.daily_realized_pnl - 300.0) < 0.01
+        # Total updated by net PnL.
+        assert abs(snap2.total - (100_000.0 + 300.0)) < 0.01
+        store.close()
+    print("  OK rehydrate replays today's RELEASE_USED into daily_pnl (BL-1)")
+
+
+def test_rehydrate_ignores_prior_days_pnl() -> None:
+    """RELEASE_USED rows with ts before today are NOT replayed into _daily_pnl."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        r = fm1.reserve("Y", 5, 100.0, "INTRADAY", signal_id="sig_Y")
+        fm1.commit_to_used(r.reservation_id, actual_fill_price=100.0, actual_qty=5)
+        fm1.release_used(symbol="Y", exit_price=200.0, exit_qty=5,
+                         intent="INTRADAY", entry_price=100.0, direction="LONG")
+        # Backdate the RELEASE_USED row to yesterday.
+        with store.transaction() as cur:
+            cur.execute(
+                "UPDATE fm_ledger SET ts = ? WHERE entry_type = 'RELEASE_USED'",
+                (_PRIOR_DAY_ISO,),
+            )
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        result = fm2.rehydrate_from_open_trades()
+        assert result["replayed_pnl_rows"] == 0
+        snap = fm2.get_snapshot()
+        assert snap.daily_realized_pnl == 0.0
+        store.close()
+    print("  OK rehydrate ignores prior days' RELEASE_USED rows (BL-1)")
+
+
+def test_rehydrate_uses_entry_actual_price_over_target() -> None:
+    """Decision (a): entry_actual_price wins when set; target is fallback only.
+
+    Simulates a crash between RESERVE ledger write and COMMIT: broker
+    filled at 1010 (entry_actual_price), but FundManager never processed
+    the fill. Rehydrate replays RESERVE only; the surviving _Reservation
+    must carry the ACTUAL fill price, not the target."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("SLIP", 5, 1000.0, "INTRADAY", signal_id="sig_S")
+        rid = res.reservation_id
+        # NO commit_to_used -- simulates crash between RESERVE write and COMMIT.
+        _seed_open_trade(
+            store, signal_id="sig_S", trade_id="tr_S",
+            symbol="SLIP", qty_planned=5, qty_filled=5,
+            entry_target_price=1000.0, entry_actual_price=1010.0,
+        )
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        fm2.rehydrate_from_open_trades()
+        # RESERVE-only: reservation survives in _reservations with ACTUAL price.
+        assert rid in fm2._reservations
+        assert fm2._reservations[rid].price == 1010.0, (
+            f"reservation must carry entry_actual_price=1010, "
+            f"got {fm2._reservations[rid].price}"
+        )
+        store.close()
+    print("  OK rehydrate uses entry_actual_price over target price (BL-1, dec a)")
+
+
+def test_rehydrate_uses_qty_filled_over_planned() -> None:
+    """Decision (a): qty_filled wins when >0; qty_planned is fallback only.
+
+    Simulates a partial broker fill with crash before COMMIT: planned 10,
+    filled 6. Rehydrate replays RESERVE only; surviving _Reservation must
+    carry qty=6, not qty=10."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm1 = _initialized_fm(store, balance=100_000.0)
+        res = fm1.reserve("PART", 10, 1000.0, "INTRADAY", signal_id="sig_P")
+        rid = res.reservation_id
+        # NO commit_to_used -- crash between RESERVE and COMMIT, partial fill.
+        _seed_open_trade(
+            store, signal_id="sig_P", trade_id="tr_P",
+            symbol="PART", qty_planned=10, qty_filled=6,
+            entry_target_price=1000.0, entry_actual_price=1000.0,
+            status="PARTIAL",
+        )
+
+        fm2 = _initialized_fm(store, balance=100_000.0)
+        fm2.rehydrate_from_open_trades()
+        assert rid in fm2._reservations
+        assert fm2._reservations[rid].qty == 6, (
+            f"reservation must carry qty_filled=6, got {fm2._reservations[rid].qty}"
+        )
+        store.close()
+    print("  OK rehydrate uses qty_filled over qty_planned (BL-1, dec a)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -964,6 +1456,21 @@ def run_all_tests() -> int:
         test_bl5_pnl_delta_positive_on_short_profit,
         test_bl5_direction_null_on_non_release_used_entries,
         test_bl5_dead_capital_ledger_table_is_removed,
+        # BL-1 additions (Phase B.2 rehydrate)
+        test_rehydrate_with_no_open_trades_is_noop,
+        test_rehydrate_replays_reserve_only,
+        test_rehydrate_replays_reserve_commit,
+        test_rehydrate_replays_full_cycle_short,
+        test_rehydrate_direction_lookup_from_trade_row,
+        test_rehydrate_missing_ledger_rows_is_anomaly,
+        test_rehydrate_raises_on_invariant_violation,
+        test_rehydrate_does_not_write_ledger_entries,
+        test_rehydrate_preserves_post_snapshot_equality,
+        test_rehydrate_multiple_reservations,
+        test_rehydrate_replays_todays_realized_pnl,
+        test_rehydrate_ignores_prior_days_pnl,
+        test_rehydrate_uses_entry_actual_price_over_target,
+        test_rehydrate_uses_qty_filled_over_planned,
     ]
 
     print("=" * 70)

@@ -96,3 +96,30 @@ Status: DEFERRED to Phase E. Tempting to bundle with H-20 (A.3.f) since we
         holds only auto_fill_delay_sec. Expanding scope here would delay
         Phase A closeout.
 Discovered: Phase A, A.3.f pre-work (grep of paper_mode/is_paper in main.py)
+
+---
+
+## EF-5 — trades table lacks reservation_id column; linkage is a two-hop query
+
+File: core/schema.sql (trades table definition)
+      core/state_store.py::get_reservation_id_for_signal
+      capital/fund_manager.py::_replay_open_trade (BL-1 consumer)
+Impact: To resolve an OPEN trade to its live FundManager reservation, the
+        rehydrate path (BL-1) must go trade.signal_id -> fm_ledger RESERVE
+        row (ORDER BY ledger_id DESC LIMIT 1) -> reservation_id. This
+        two-hop works because the most-recent RESERVE for a signal is
+        authoritative (retries CANCEL earlier ones), but it is a schema-
+        level design shortcut that was fine before rehydrate existed --
+        nothing else in the system needed the trade -> reservation lookup.
+Severity: MEDIUM (operational complexity, not correctness). Replay is
+          correct as-is; adding the column would collapse the two-hop
+          into a single column access and simplify anomaly reporting.
+Fix size: small schema change (trades.reservation_id TEXT nullable), plus
+         a backfill query for existing rows (SELECT latest RESERVE per
+         signal_id). OrderManager would populate it at capital-reservation
+         time; rehydrate would read it directly.
+Status: DEFERRED. Not in scope for B.2 / Phase B -- would add schema
+        churn to an already-load-bearing commit. Revisit in Phase E or
+        a dedicated schema-cleanup commit.
+Discovered: Phase B, B.2 pre-work (rehydrate reservation_id lookup design)
+

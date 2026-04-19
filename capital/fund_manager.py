@@ -36,6 +36,18 @@ Locked Design Decisions:
     FM15 -- Layer 3 (capital/). Imports: stdlib + core.*.
     FM16 -- SystemConfig.capital added.
     FM17 -- NOT in scope: position sizing, risk per trade, cost deduction.
+    FM18 -- BL-1: rehydrate_from_open_trades reconstructs in-memory state
+             from the persistence triangle (fm_ledger + trades + orders) on
+             startup. Uses _apply_reserve / _apply_release / _apply_commit
+             pure-mutation helpers shared with the public reserve / release
+             / commit_to_used paths -- public methods orchestrate (validate
+             -> ledger -> apply -> invariant), replay invokes _apply* without
+             writing the ledger back. Invariant is checked ONCE at the end
+             of replay (not per step), since intermediate states between
+             RESERVE and COMMIT are momentarily unusual. Failure raises
+             CapitalStateInconsistent (distinct from CapitalInvariantViolation
+             so callers can distinguish startup-replay corruption from a live
+             mid-mutation invariant break).
 
 What This Module Does NOT Do:
     - Does not size positions (capital/position_sizer.py)
@@ -48,11 +60,11 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Callable, Final, Optional
+from typing import Any, Callable, Final, Optional
 
 from capital.invariant import assert_capital_invariant
 from core.events import CapitalDriftDetected, EventBus
-from core.exceptions import CapitalInvariantViolation
+from core.exceptions import CapitalInvariantViolation, CapitalStateInconsistent
 from core.logger import log_exception
 from core.state_store import StateStore
 from core.time_authority import now_ist
@@ -73,6 +85,17 @@ _INTRADAY_BUCKET = "intraday"
 _POSITIONAL_BUCKET = "positional"
 
 _INVARIANT_TOLERANCE = 0.01   # 1 paise tolerance for float rounding
+
+# BL-1 / FM18: orders.product -> semantic intent for rehydrate replay.
+# CO is COVER_ORDER (intraday-bucketed); MIS is plain INTRADAY; CNC and NRML
+# are deliverable holdings (positional bucket). Anything outside this map
+# falls through to a bucket-derived inference; see _replay_open_trade.
+_PRODUCT_TO_INTENT: Final[dict[str, str]] = {
+    "MIS": "INTRADAY",
+    "CO": "COVER_ORDER",
+    "CNC": "DELIVERY",
+    "NRML": "DELIVERY",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -347,24 +370,22 @@ class FundManager:
                 margin_delta=+margin,
             )
 
-            # In-memory mutation (caught up to the ledger)
-            self._bucket_deduct_avail(bucket, margin)
-            self._bucket_add_reserved(bucket, margin)
-
-            self._check_invariant("reserve", rid)
-
-            res = _Reservation(
-                reservation_id=rid,
+            # FM18: pure mutation via shared helper (used by both this public
+            # path and rehydrate replay). Public path: ledger then apply then
+            # invariant. Replay path: apply only (no ledger, no invariant).
+            self._apply_reserve(
+                rid=rid,
+                bucket=bucket,
+                margin=margin,
                 symbol=symbol,
                 qty=qty,
                 price=price,
                 intent=intent,
-                margin=margin,
-                bucket=bucket,
                 signal_id=signal_id,
                 ts=ts,
             )
-            self._reservations[rid] = res
+
+            self._check_invariant("reserve", rid)
 
             return ReservationResult(
                 success=True,
@@ -408,10 +429,9 @@ class FundManager:
                 margin_delta=-res.margin,
             )
 
-            # In-memory mutation (caught up to the ledger)
-            del self._reservations[reservation_id]
-            self._bucket_add_avail(res.bucket, res.margin)
-            self._bucket_deduct_reserved(res.bucket, res.margin)
+            # FM18: pure mutation via shared helper (used by both this public
+            # path and rehydrate replay).
+            self._apply_release(reservation_id)
 
             self._check_invariant("release", reservation_id)
             return True
@@ -474,16 +494,15 @@ class FundManager:
                 margin_delta=0.0,
             )
 
-            # In-memory mutation: reserved -> used for actual; excess -> available
-            self._bucket_deduct_reserved(res.bucket, res.margin)
-            self._bucket_add_used(res.bucket, actual_margin)
-            if excess > 0:
-                self._bucket_add_avail(res.bucket, excess)
+            # FM18: pure mutation via shared helper (used by both this public
+            # path and rehydrate replay).
+            self._apply_commit(
+                reservation_id=reservation_id,
+                actual_margin=actual_margin,
+                excess=excess,
+            )
 
             self._check_invariant("commit_to_used", reservation_id)
-
-            # Remove reservation (fully consumed)
-            del self._reservations[reservation_id]
 
             return CommitResult(
                 reservation_id=reservation_id,
@@ -691,6 +710,357 @@ class FundManager:
                 "fund_manager.reset_daily_pnl",
                 extra={"previous_pnl": old_pnl},
             )
+
+    # ── BL-1 / FM18: rehydrate (startup replay) ──────────────────────────────
+
+    def rehydrate_from_open_trades(
+        self,
+        start_of_today_iso: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Reconstruct in-memory capital state from the persistence triangle:
+        fm_ledger (capital transitions) + trades (position identity) +
+        orders (entry product). Called once at startup, AFTER initialize().
+
+        Walks every OPEN/PARTIAL trade, looks up its reservation_id via
+        signal_id -> first RESERVE row in fm_ledger, then replays the
+        ordered RESERVE/COMMIT chain for that reservation through
+        _apply_reserve / _apply_commit -- the same mutation helpers the
+        public reserve()/commit_to_used() use, but WITHOUT writing the
+        ledger back (that's where the data came from).
+
+        Symbol/qty/price/intent are sourced from trades + orders, not the
+        ledger -- see EF-5 for why the ledger lacks those columns by design
+        (each table owns what it owns).
+
+        After per-trade replay, today's RELEASE_USED rows are walked to
+        rebuild daily_realized_pnl + total. That step ONLY adjusts PnL/total;
+        it does NOT touch buckets (the closed trades whose RELEASE_USED rows
+        these are weren't replayed in Phase 1, so their bucket movements
+        already cancel out).
+
+        The bin-card invariant is checked ONCE at the end. Per-step
+        invariants would false-positive on legitimately-mid-flight states.
+        On failure, raises CapitalStateInconsistent (NOT
+        CapitalInvariantViolation -- callers can distinguish startup-replay
+        corruption from a live mutation invariant break).
+
+        Args:
+            start_of_today_iso: ISO-8601 IST timestamp; floor of today used
+                for PnL carryover. Defaults to today 00:00:00 IST.
+
+        Returns:
+            dict with keys:
+                replayed_trades:   number of open trades replayed
+                replayed_pnl_rows: number of RELEASE_USED rows applied for daily_pnl
+                anomalies:         list of {trade_id, signal_id?, reason}
+                                   for trades skipped due to data gaps
+
+        Raises:
+            CapitalStateInconsistent: invariant fails after replay completes.
+            RuntimeError: if not initialized.
+        """
+        with self._lock:
+            self._assert_initialized()
+
+            if start_of_today_iso is None:
+                today = now_ist()
+                start_of_today_iso = today.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).isoformat()
+
+            anomalies: list[dict[str, Any]] = []
+            replayed_trades = 0
+
+            # Phase 1: per-open-trade replay
+            open_trades = self._store.get_all_open_trades()
+            for trade in open_trades:
+                if self._replay_open_trade(trade, anomalies):
+                    replayed_trades += 1
+
+            # Phase 2: today's realized-PnL carryover. For each CLOSED trade
+            # (whose RESERVE+COMMIT were NOT replayed in Phase 1 because the
+            # trade is not open), we apply only the *net* effect of the full
+            # lifecycle: bucket avail += pnl, _total += pnl, _daily_pnl += pnl.
+            # The -margin/+margin legs of the CLOSED lifecycle cancel to zero,
+            # so we don't touch reserved/used here.
+            pnl_rows = self._store.fetch_all(
+                """
+                SELECT pnl_delta, bucket FROM fm_ledger
+                WHERE entry_type = 'RELEASE_USED'
+                  AND ts >= ?
+                  AND pnl_delta != 0
+                ORDER BY ledger_id ASC
+                """,
+                (start_of_today_iso,),
+            )
+            replayed_pnl_rows = 0
+            for row in pnl_rows:
+                pnl = float(row["pnl_delta"])
+                bucket = row["bucket"]
+                self._bucket_add_avail(bucket, pnl)
+                self._daily_pnl += pnl
+                self._total += pnl
+                replayed_pnl_rows += 1
+
+            # Phase 3: invariant check ONCE (FM18). Wrap to distinguish
+            # startup-replay corruption from a live mid-mutation break.
+            try:
+                self._check_invariant("rehydrate", "BL-1")
+            except CapitalInvariantViolation as exc:
+                raise CapitalStateInconsistent(
+                    f"Capital state invariant failed after rehydrate: {exc}",
+                    anomalies=anomalies,
+                    replayed_trades=replayed_trades,
+                    replayed_pnl_rows=replayed_pnl_rows,
+                ) from exc
+
+            self._log.info(
+                "fund_manager.rehydrate_complete",
+                extra={
+                    "replayed_trades": replayed_trades,
+                    "replayed_pnl_rows": replayed_pnl_rows,
+                    "anomaly_count": len(anomalies),
+                    "daily_pnl": self._daily_pnl,
+                    "total": self._total,
+                },
+            )
+            for a in anomalies:
+                self._log.warning("fund_manager.rehydrate_anomaly", extra=a)
+
+            return {
+                "replayed_trades": replayed_trades,
+                "replayed_pnl_rows": replayed_pnl_rows,
+                "anomalies": anomalies,
+            }
+
+    def _replay_open_trade(
+        self,
+        trade: Any,
+        anomalies: list[dict[str, Any]],
+    ) -> bool:
+        """
+        Replay one open trade's RESERVE+COMMIT ledger chain. Returns True if
+        anything was applied; False if the trade was skipped as an anomaly.
+
+        Per BL-1 spec, ONLY RESERVE and COMMIT are replayed for an OPEN/
+        PARTIAL trade -- those are the only entries that produce a coherent
+        end state for an open position. RELEASE / RELEASE_USED rows in the
+        chain would imply the trade should not be open; they're noted as
+        anomalies but not applied (Phase 2 handles RELEASE_USED for
+        closed-trade PnL carryover separately).
+        """
+        trade_id = trade["trade_id"]
+        signal_id = trade["signal_id"]
+
+        if signal_id is None:
+            anomalies.append({
+                "trade_id": trade_id,
+                "reason": "trade.signal_id is NULL",
+            })
+            return False
+
+        # EF-5: two-hop lookup. The trades table lacks a reservation_id
+        # column; we resolve via the most recent RESERVE row for this signal.
+        rid = self._store.get_reservation_id_for_signal(signal_id)
+        if rid is None:
+            anomalies.append({
+                "trade_id": trade_id,
+                "signal_id": signal_id,
+                "reason": "no RESERVE row in fm_ledger for this signal_id",
+            })
+            return False
+
+        # Fetch the ledger chain for this reservation, in INSERT order.
+        rows = self._store.fetch_all(
+            """
+            SELECT ledger_id, ts, entry_type, amount, bucket,
+                   balance_before, balance_after, signal_id,
+                   reservation_id, margin_delta, pnl_delta
+            FROM fm_ledger
+            WHERE reservation_id = ?
+            ORDER BY ledger_id ASC
+            """,
+            (rid,),
+        )
+        if not rows:
+            anomalies.append({
+                "trade_id": trade_id,
+                "signal_id": signal_id,
+                "reservation_id": rid,
+                "reason": "reservation_id present in lookup but no ledger rows found",
+            })
+            return False
+
+        # Decision (a): symbol/qty/price/intent come from trades + orders.
+        symbol = trade["symbol"]
+
+        qty_filled = int(trade["qty_filled"] or 0)
+        if qty_filled > 0:
+            qty = qty_filled
+        else:
+            qty = int(trade["qty_planned"])
+            self._log.warning(
+                "fund_manager.rehydrate_qty_fallback",
+                extra={
+                    "trade_id": trade_id,
+                    "qty_filled": qty_filled,
+                    "qty_planned": qty,
+                    "reason": "qty_filled=0; trade placed but unfilled at crash",
+                },
+            )
+
+        entry_actual = trade["entry_actual_price"]
+        if entry_actual is not None and float(entry_actual) != 0.0:
+            price = float(entry_actual)
+        else:
+            price = float(trade["entry_target_price"])
+            self._log.warning(
+                "fund_manager.rehydrate_price_fallback",
+                extra={
+                    "trade_id": trade_id,
+                    "entry_actual_price": entry_actual,
+                    "entry_target_price": price,
+                    "reason": "entry_actual_price unset; using target as fallback",
+                },
+            )
+
+        product = trade["product"]
+        intent = _PRODUCT_TO_INTENT.get(product) if product else None
+        if intent is None:
+            # Pathological: no ENTRY order row, or product not in map.
+            # Fall back to bucket of the first RESERVE row.
+            first_reserve = next(
+                (r for r in rows if r["entry_type"] == "RESERVE"), None
+            )
+            if first_reserve is None:
+                anomalies.append({
+                    "trade_id": trade_id,
+                    "signal_id": signal_id,
+                    "reservation_id": rid,
+                    "reason": (
+                        f"no entry order product mapping (product={product!r}) "
+                        f"and no RESERVE row to infer bucket from"
+                    ),
+                })
+                return False
+            bucket = first_reserve["bucket"]
+            intent = "INTRADAY" if bucket == _INTRADAY_BUCKET else "DELIVERY"
+            self._log.warning(
+                "fund_manager.rehydrate_intent_fallback",
+                extra={
+                    "trade_id": trade_id,
+                    "product": product,
+                    "fallback_intent": intent,
+                    "fallback_bucket": bucket,
+                },
+            )
+
+        # Replay loop: apply only RESERVE + COMMIT.
+        applied_any = False
+        saw_reserve = False
+        for row in rows:
+            et = row["entry_type"]
+            bucket = row["bucket"]
+            if et == "RESERVE":
+                if saw_reserve:
+                    continue   # second RESERVE for same rid -- skip
+                self._apply_reserve(
+                    rid=rid,
+                    bucket=bucket,
+                    margin=float(row["amount"]),
+                    symbol=symbol,
+                    qty=qty,
+                    price=price,
+                    intent=intent,
+                    signal_id=signal_id,
+                    ts=row["ts"],
+                )
+                saw_reserve = True
+                applied_any = True
+            elif et == "COMMIT":
+                if not saw_reserve:
+                    anomalies.append({
+                        "trade_id": trade_id,
+                        "reservation_id": rid,
+                        "reason": "COMMIT ledger row precedes RESERVE",
+                    })
+                    continue
+                actual_margin = float(row["amount"])
+                excess = float(row["balance_after"]) - float(row["balance_before"])
+                self._apply_commit(
+                    reservation_id=rid,
+                    actual_margin=actual_margin,
+                    excess=excess,
+                )
+                applied_any = True
+            else:
+                # RELEASE / RELEASE_USED / etc. on an OPEN trade -- pathological.
+                anomalies.append({
+                    "trade_id": trade_id,
+                    "reservation_id": rid,
+                    "ledger_id": row["ledger_id"],
+                    "reason": (
+                        f"unexpected entry_type={et!r} in chain for "
+                        f"OPEN/PARTIAL trade; not applied"
+                    ),
+                })
+
+        return applied_any
+
+    # ── _apply_* helpers (FM18 / BL-1) ────────────────────────────────────────
+    # Pure mutation helpers shared by public methods (after ledger write) and
+    # rehydrate replay (without ledger write). NEITHER writes the ledger NOR
+    # checks the invariant; the orchestrating caller is responsible for both.
+
+    def _apply_reserve(
+        self,
+        *,
+        rid: str,
+        bucket: str,
+        margin: float,
+        symbol: str,
+        qty: int,
+        price: float,
+        intent: str,
+        signal_id: Optional[str],
+        ts: str,
+    ) -> None:
+        """Move margin from avail to reserved; record the reservation."""
+        self._bucket_deduct_avail(bucket, margin)
+        self._bucket_add_reserved(bucket, margin)
+        self._reservations[rid] = _Reservation(
+            reservation_id=rid,
+            symbol=symbol,
+            qty=qty,
+            price=price,
+            intent=intent,
+            margin=margin,
+            bucket=bucket,
+            signal_id=signal_id,
+            ts=ts,
+        )
+
+    def _apply_release(self, reservation_id: str) -> None:
+        """Pop reservation; restore margin to avail; deduct from reserved."""
+        res = self._reservations.pop(reservation_id)
+        self._bucket_add_avail(res.bucket, res.margin)
+        self._bucket_deduct_reserved(res.bucket, res.margin)
+
+    def _apply_commit(
+        self,
+        *,
+        reservation_id: str,
+        actual_margin: float,
+        excess: float,
+    ) -> None:
+        """Pop reservation; deduct full reserved; add actual to used; excess
+        (if any) returns to avail."""
+        res = self._reservations.pop(reservation_id)
+        self._bucket_deduct_reserved(res.bucket, res.margin)
+        self._bucket_add_used(res.bucket, actual_margin)
+        if excess > 0:
+            self._bucket_add_avail(res.bucket, excess)
 
     # ── bucket helpers ────────────────────────────────────────────────────────
 

@@ -594,10 +594,12 @@ class StateStore:
         """
         Return all trades with status OPEN or PARTIAL, regardless of product.
 
-        Each row includes trade_id, signal_id, symbol, direction, qty_filled,
-        status, sl_initial, entry_actual_price, product, entry_broker_order_id.
-        Used by order_reconciler for position-level drift detection (G1 checks
-        1-5). Sorted by symbol (Foundation Rule 3.7).
+        Each row includes trade_id, signal_id, symbol, direction, qty_planned,
+        qty_filled, status, sl_initial, entry_target_price, entry_actual_price,
+        product, entry_broker_order_id. Used by order_reconciler for position-
+        level drift detection (G1 checks 1-5) and by FundManager.rehydrate_
+        from_open_trades for capital replay (BL-1). Sorted by symbol
+        (Foundation Rule 3.7).
         """
         return self.fetch_all(
             """
@@ -606,9 +608,11 @@ class StateStore:
                 t.signal_id,
                 t.symbol,
                 t.direction,
+                t.qty_planned,
                 t.qty_filled,
                 t.status,
                 t.sl_initial,
+                t.entry_target_price,
                 t.entry_actual_price,
                 o.product,
                 o.order_id AS entry_broker_order_id

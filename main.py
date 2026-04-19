@@ -50,7 +50,7 @@ from capital.risk_engine import RiskEngine
 from core.account_registry import AccountRegistry
 from core.config_loader import load_all
 from core.events import EventBus, CapitalDriftDetected, KillSwitchActivated
-from core.exceptions import TradingSystemError
+from core.exceptions import CapitalStateInconsistent, TradingSystemError
 from core.instrument_cache import InstrumentCache
 from core.logger import get_logger, setup_logging
 from core.market_windows import MarketWindows
@@ -866,6 +866,23 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     else:
         _startup_capital = broker_adapter.get_margins().net
     fund_manager.initialize(_startup_capital)
+
+    # BL-1 / FM18: replay fm_ledger + trades + orders so in-memory capital
+    # state matches persisted state on a warm start. On a cold/clean start
+    # there are no open trades and this is a no-op. CapitalStateInconsistent
+    # signals that the persisted history itself is internally inconsistent
+    # and trading cannot resume safely; we exit with a distinct code (2) so
+    # ops can see the cause without parsing logs.
+    try:
+        _rehydrate_summary = fund_manager.rehydrate_from_open_trades()
+        _log.info(
+            "fund_manager.rehydrated",
+            extra=_rehydrate_summary,
+        )
+    except CapitalStateInconsistent:
+        _log.critical("capital_state_inconsistent", exc_info=True)
+        store.close()
+        return 2
 
     ps_cfg = app_config.system.position_sizing
     position_sizer = PositionSizer(

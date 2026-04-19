@@ -102,6 +102,26 @@ class CapitalInvariantViolation(StateError):
     SEVERITY: str = "CRITICAL"
 
 
+class CapitalStateInconsistent(StateError):
+    """
+    Capital state replay during startup rehydrate completed, but the resulting
+    bin-card invariant did not hold (BL-1).
+
+    Raised by FundManager.rehydrate_from_open_trades after replaying open
+    trades + today's RELEASE_USED rows. Distinct from CapitalInvariantViolation
+    (which fires inside a live mutation): this signals the persisted history
+    itself is internally inconsistent and trading cannot resume safely.
+
+    Useful context kwargs:
+        expected (float): rhs of the invariant
+        actual (float): lhs of the invariant
+        delta (float): actual - expected
+        anomalies (list[dict]): per-trade anomalies recorded during replay
+                                 (missing ledger rows, NULL signal_id, etc.)
+    """
+    SEVERITY: str = "CRITICAL"
+
+
 class DedupViolation(StateError):
     """
     A duplicate signal INSERT was attempted against the signals table's
