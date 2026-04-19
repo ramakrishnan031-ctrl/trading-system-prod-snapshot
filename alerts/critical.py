@@ -38,6 +38,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from core.time_authority import now_ist
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 _TITLE_MAX = 120
 
@@ -75,7 +77,7 @@ def write_critical_sentinel(
     sentinel_dir = Path(sentinel_dir)
     sentinel_dir.mkdir(parents=True, exist_ok=True)  # CR4
 
-    now = datetime.now(_IST)
+    now = now_ist()
     uid = uuid.uuid4().hex[:8]
     sentinel_id = f"{now.strftime('%Y%m%d_%H%M%S')}_{uid}"
 

@@ -61,6 +61,9 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _now_ist_iso() -> str:
+    # H-17 SKIP: state_store sits below time_authority in the layering; importing
+    # core.time_authority here would invert the dependency direction. Leaving as
+    # datetime.now(_IST) is the deliberate exemption.
     return datetime.now(_IST).isoformat()
 
 

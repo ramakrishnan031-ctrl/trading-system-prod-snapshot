@@ -43,11 +43,13 @@ from typing import Any, Dict, List, Optional
 import openpyxl
 from openpyxl.styles import Font
 
+from core.time_authority import now_ist
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _now_ist_date() -> str:
-    return datetime.now(_IST).strftime("%Y-%m-%d")
+    return now_ist().strftime("%Y-%m-%d")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

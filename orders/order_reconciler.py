@@ -73,6 +73,7 @@ from core.events import (
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
 from core.logger import log_exception
 from core.state_store import StateStore
+from core.time_authority import now_ist
 from orders.order_manager import OrderManager
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -251,7 +252,7 @@ class OrderReconciler:
             self._auth_error_count = 0
 
     def _now_ist(self) -> str:
-        return datetime.now(_IST).isoformat()
+        return now_ist().isoformat()
 
     # ── Core reconcile cycle ──────────────────────────────────────────────────
 

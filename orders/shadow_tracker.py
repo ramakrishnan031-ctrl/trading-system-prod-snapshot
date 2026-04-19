@@ -714,14 +714,14 @@ def _derive_sl_tgt_from_strategy(
 def _parse_ts(ts_str: str) -> datetime:
     """Parse ISO-8601 string to datetime. Returns naive IST if tz-aware."""
     if not ts_str:
-        return datetime.now(_IST)
+        return now_ist()
     try:
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is not None:
             dt = dt.astimezone(_IST).replace(tzinfo=None)
         return dt
     except (ValueError, TypeError):
-        return datetime.now(_IST).replace(tzinfo=None)
+        return now_ist().replace(tzinfo=None)
 
 
 def _make_naive(now: datetime, ts: datetime) -> datetime:

@@ -624,6 +624,9 @@ def check_config_files_present(
 
     The nse_holidays file uses the current calendar year.
     """
+    # H-17 SKIP: this check runs before time_authority is constructed (pre-init
+    # config-file presence gate). datetime.now().year is sufficient for picking
+    # nse_holidays_<year>.yaml and cannot depend on time_authority.
     current_year = datetime.now().year
     required = _REQUIRED_CONFIG_FILES_STATIC + [
         f"nse_holidays_{current_year}.yaml",

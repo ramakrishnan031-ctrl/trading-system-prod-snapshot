@@ -53,6 +53,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, List, Optional, TYPE_CHECKING
 
+from core.time_authority import now_ist
+
 if TYPE_CHECKING:
     from capital.fund_manager import FundManager, CapitalSnapshot
     from capital.position_sizer import SizingResult
@@ -188,7 +190,7 @@ class RiskEngine:
             checks_run list, and snapshot dict.
         """
         # Read date once (RE16: no repeated clock reads within a single call)
-        today = datetime.now(tz=_IST).date().isoformat()
+        today = now_ist().date().isoformat()
 
         # ── Read all state upfront for snapshot consistency (RE11) ────────────
         snap = self._fm.get_snapshot()
