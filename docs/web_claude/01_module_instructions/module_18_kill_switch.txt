@@ -56,11 +56,6 @@ KS6 — Public API:
     intent="exit"  -> True only if HARD_KILL
     intent="any"   -> True if either kill mode
 
-  is_active_for_dispatch() -> bool
-    Convenience: returns True if HARD_KILL (last-mile gate
-    per Project Rule 13). Called immediately before broker
-    dispatch in order_placer.
-
   current_state() -> KillState (enum value)
   status() -> dict {state, reason, triggered_at, triggered_by}
 
@@ -168,7 +163,6 @@ BUILD STEPS:
    - is_active("entry") true on SOFT_KILL and HARD_KILL
    - is_active("exit") true only on HARD_KILL
    - is_active("any") true on either
-   - is_active_for_dispatch() true only on HARD_KILL
    - soft_kill() persists state, publishes event, logs CRITICAL
    - soft_kill() when already SOFT_KILL -> no-op (DEBUG log)
    - soft_kill() when HARD_KILL -> WARNING, no downgrade

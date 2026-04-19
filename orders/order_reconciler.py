@@ -71,7 +71,7 @@ from core.events import (
     PositionClosed,  # BL-10b: out-of-band closure notification
 )
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
-from core.logger import log_exception
+from core.logger import bind_trade, log_exception
 from core.state_store import StateStore
 from core.time_authority import now_ist
 from orders.order_manager import OrderManager
@@ -420,6 +420,7 @@ class OrderReconciler:
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
+        log = bind_trade(self._log, trade_id=trade_id)
         success = True
         steps: List[str] = []
 
@@ -427,7 +428,7 @@ class OrderReconciler:
             self._store.mark_trade_manually_closed(trade_id)
             steps.append("mark_trade_manually_closed")
         except Exception as exc:
-            self._log.error(
+            log.error(
                 "check1: mark_trade_manually_closed failed for %s: %s", trade_id, exc
             )
             success = False
@@ -446,7 +447,7 @@ class OrderReconciler:
         except (KeyError, IndexError):
             direction = "LONG"
         if direction not in ("LONG", "SHORT"):
-            self._log.warning(
+            log.warning(
                 "check1: trade %s has unexpected direction %r; defaulting to LONG",
                 trade_id, direction,
             )
@@ -465,7 +466,7 @@ class OrderReconciler:
                 )
                 steps.append("capital_released(breakeven)")
             except Exception as exc:
-                self._log.warning(
+                log.warning(
                     "check1: release_used failed for %s: %s", trade_id, exc
                 )
                 steps.append(f"capital_release FAILED: {exc}")
@@ -487,8 +488,8 @@ class OrderReconciler:
                     ))
                     steps.append("position_closed_published")
                 except Exception as exc:
-                    log_exception(self._log, exc)
-                    self._log.error(
+                    log_exception(log, exc)
+                    log.error(
                         "reconciler.manual_close_publish_position_closed_failed",
                         extra={"trade_id": trade_id, "symbol": symbol},
                     )
@@ -498,12 +499,12 @@ class OrderReconciler:
             # event; shadow_tracker would receive inaccurate realized_pnl.
             # The WARN log below already surfaces the anomaly to operators;
             # adding a fabricated event would be worse than silence.
-            self._log.warning(
+            log.warning(
                 "check1: unknown product %r for %s; skipping capital release",
                 product, trade_id,
             )
 
-        self._log.warning(
+        log.warning(
             "CHECK1 MANUAL_CLOSE: trade_id=%s symbol=%s "
             "local=OPEN/PARTIAL broker=no_position",
             trade_id, symbol,
@@ -570,6 +571,7 @@ class OrderReconciler:
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
+        log = bind_trade(self._log, trade_id=trade_id)
         local_qty = trade["qty_filled"] or 0
         success = True
 
@@ -580,12 +582,12 @@ class OrderReconciler:
                     (broker_qty, self._now_ist(), trade_id),
                 )
         except Exception as exc:
-            self._log.error(
+            log.error(
                 "check4: update qty_filled failed for %s: %s", trade_id, exc
             )
             success = False
 
-        self._log.warning(
+        log.warning(
             "CHECK4 PARTIAL_CLOSE: trade_id=%s %s local_qty=%d broker_qty=%d",
             trade_id, symbol, local_qty, broker_qty,
         )
@@ -613,8 +615,9 @@ class OrderReconciler:
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
+        log = bind_trade(self._log, trade_id=trade_id)
 
-        self._log.error(
+        log.error(
             "CHECK5 POSITION_GREW: trade_id=%s %s local_qty=%d broker_qty=%d",
             trade_id, symbol, local_qty, broker_qty,
         )
@@ -626,7 +629,7 @@ class OrderReconciler:
                 delta=float(broker_qty - local_qty),
             ))
         except Exception as exc:
-            self._log.error("check5: publish CapitalDriftDetected failed: %s", exc)
+            log.error("check5: publish CapitalDriftDetected failed: %s", exc)
 
         return ReconciliationAction(
             check_name="POSITION_GREW",
@@ -696,6 +699,7 @@ class OrderReconciler:
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
+        log = bind_trade(self._log, trade_id=trade_id)
         direction = trade["direction"]   # "LONG" | "SHORT"
         sl_price = trade["sl_initial"]
         qty = trade["qty_filled"] or 0
@@ -707,7 +711,7 @@ class OrderReconciler:
 
         sl_price = float(sl_price)
 
-        self._log.warning(
+        log.warning(
             "G5b CRASH_RECOVERY_SL: trade_id=%s %s %s "
             "has no active SL order — placing recovery order",
             trade_id, symbol, direction,
@@ -718,7 +722,7 @@ class OrderReconciler:
             quotes = self._quote_fn([symbol])
             ltp = quotes[symbol].last_price if symbol in quotes else None
         except Exception as exc:
-            self._log.error("G5b: quote_fn failed for %s: %s", symbol, exc)
+            log.error("G5b: quote_fn failed for %s: %s", symbol, exc)
             return ReconciliationAction(
                 check_name="CRASH_RECOVERY_SL",
                 tier="RECOVERABLE",
@@ -730,7 +734,7 @@ class OrderReconciler:
             )
 
         if ltp is None:
-            self._log.warning(
+            log.warning(
                 "G5b: no LTP available for %s; cannot place recovery SL", symbol
             )
             return None
@@ -793,7 +797,7 @@ class OrderReconciler:
                 price=0.0,
                 trigger_price=trigger,
             )
-            self._log.warning(
+            log.warning(
                 "G5b: placed %s %s for trade_id=%s broker_order_id=%s",
                 order_type, side, trade_id, placed.broker_order_id,
             )
@@ -810,7 +814,7 @@ class OrderReconciler:
                 success=True,
             )
         except BrokerTimeoutError as exc:
-            self._log.error(
+            log.error(
                 "G5b: place_order timed out for trade_id=%s: %s", trade_id, exc
             )
             return ReconciliationAction(
@@ -823,7 +827,7 @@ class OrderReconciler:
                 success=False,
             )
         except BrokerAuthError as exc:
-            self._log.error("G5b: place_order auth error for trade_id=%s: %s", trade_id, exc)
+            log.error("G5b: place_order auth error for trade_id=%s: %s", trade_id, exc)
             return ReconciliationAction(
                 check_name="CRASH_RECOVERY_SL",
                 tier="RECOVERABLE",
@@ -834,7 +838,7 @@ class OrderReconciler:
                 success=False,
             )
         except Exception as exc:
-            self._log.error(
+            log.error(
                 "G5b: place_order failed for trade_id=%s: %s",
                 trade_id, exc, exc_info=True,
             )
@@ -1060,6 +1064,7 @@ class OrderReconciler:
             trade_id = row["trade_id"]
             symbol = row["symbol"]
             local_sl = float(row["current_sl"])
+            log = bind_trade(self._log, trade_id=trade_id)
 
             co_row = self._store.get_co_entry_order_for_trade(trade_id)
             if co_row is None:
@@ -1077,7 +1082,7 @@ class OrderReconciler:
             if abs(delta) <= tolerance_rs:
                 continue
 
-            self._log.critical(
+            log.critical(
                 "CO_SL_DRIFT_DETECTED trade_id=%s symbol=%s "
                 "local_sl=%.4f broker_trigger=%.4f delta=%.4f",
                 trade_id, symbol, local_sl, broker_trigger, delta,

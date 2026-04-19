@@ -10,7 +10,6 @@ Coverage:
   - is_active("entry") true on SOFT_KILL and HARD_KILL (KS6)
   - is_active("exit") true only on HARD_KILL (KS6)
   - is_active("any") true on either kill mode (KS6)
-  - is_active_for_dispatch() true only on HARD_KILL (KS6, Project Rule 13)
   - soft_kill() persists state, publishes event, logs CRITICAL (KS6, KS8, KS9)
   - soft_kill() when already SOFT_KILL -> no-op (DEBUG log) (KS6)
   - soft_kill() when HARD_KILL -> WARNING, no downgrade (KS6)
@@ -241,22 +240,6 @@ def test_is_active_any(tmp_path: Path) -> None:
     ks.soft_kill("test", "test")
     assert ks.is_active("any")
     print("  OK is_active('any') True on SOFT_KILL")
-    store.close()
-
-
-def test_is_active_for_dispatch(tmp_path: Path) -> None:
-    """is_active_for_dispatch(): True ONLY on HARD_KILL (Project Rule 13)."""
-    store = _make_store(tmp_path)
-    ks, _, _ = _make_ks(store)
-    assert not ks.is_active_for_dispatch()
-
-    ks.soft_kill("test", "test")
-    assert not ks.is_active_for_dispatch(), "SOFT_KILL must NOT block dispatch"
-
-    ks.resume("clear", "operator")
-    ks.hard_kill("test", "test")
-    assert ks.is_active_for_dispatch(), "HARD_KILL must block dispatch"
-    print("  OK is_active_for_dispatch() True only on HARD_KILL")
     store.close()
 
 
@@ -661,7 +644,6 @@ def run_all_tests() -> int:
         test_is_active_entry,
         test_is_active_exit,
         test_is_active_any,
-        test_is_active_for_dispatch,
         test_soft_kill_persists_publishes_logs_critical,
         test_soft_kill_idempotent_noop,
         test_soft_kill_ignored_when_hard_kill,

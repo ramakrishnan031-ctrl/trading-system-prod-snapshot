@@ -390,14 +390,30 @@ class StateStore:
 
     def count_trades_today(self, date_iso: str) -> int:
         """
-        Count all trades created on the given IST date (YYYY-MM-DD).
+        Count trade rows created on the given IST date (YYYY-MM-DD).
         Matches against SUBSTR(created_at, 1, 10) — works with ISO-8601 IST
         strings stored in the DB (e.g., "2026-04-14T09:30:00+05:30").
-        Used by risk_engine DAILY_TRADES check (RE5).
+        Counts one row per trade (not per signal); a signal that is dropped
+        pre-trade is not counted here. Used by risk_engine DAILY_TRADES check
+        (RE5).
         """
         row = self.fetch_one(
             "SELECT COUNT(*) AS n FROM trades "
             "WHERE SUBSTR(created_at, 1, 10) = ?",
+            (date_iso,),
+        )
+        return int(row["n"]) if row else 0
+
+    def count_signals_today(self, date_iso: str) -> int:
+        """
+        Count all signal rows received on the given IST date (YYYY-MM-DD).
+        Matches against SUBSTR(received_at, 1, 10) — mirrors the
+        count_trades_today pattern. Counts every signal (including dropped
+        and rejected), which is a superset of count_trades_today.
+        """
+        row = self.fetch_one(
+            "SELECT COUNT(*) AS n FROM signals "
+            "WHERE SUBSTR(received_at, 1, 10) = ?",
             (date_iso,),
         )
         return int(row["n"]) if row else 0

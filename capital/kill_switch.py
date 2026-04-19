@@ -21,9 +21,9 @@ Locked Design Decisions:
     KS5  -- Constructor: KillSwitch(state_store, bus, logger,
             on_hard_kill_cancel_fn=None, api_failure_threshold=3,
             enable_auto_trip=True).
-    KS6  -- Public API: is_active(intent), is_active_for_dispatch(),
-            current_state(), status(), soft_kill(), hard_kill(),
-            resume(), record_api_failure(), record_success().
+    KS6  -- Public API: is_active(intent), current_state(), status(),
+            soft_kill(), hard_kill(), resume(), record_api_failure(),
+            record_success().
     KS7  -- Auto-trip: api_failure_threshold consecutive failures trigger
             soft_kill(). Disabled when enable_auto_trip=False.
     KS8  -- KillSwitchActivated event on every state change including
@@ -168,14 +168,6 @@ class KillSwitch:
                 raise ValueError(
                     f"Unknown intent {intent!r}. Must be 'entry', 'exit', or 'any'."
                 )
-
-    def is_active_for_dispatch(self) -> bool:
-        """
-        Last-mile gate: return True if HARD_KILL (KS6, Project Rule 13).
-        Called immediately before broker dispatch in order_placer.
-        """
-        with self._lock:
-            return self._state == KillState.HARD_KILL
 
     def current_state(self) -> KillState:
         """Return the current KillState enum value."""
