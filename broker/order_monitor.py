@@ -86,6 +86,46 @@ _KITE_STATUS_REJECTED = {"REJECTED"}
 # Slippage calculation (OM9)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _OrphanTickCache:
+    """
+    Tick-local cache for ``adapter.get_open_orders()`` results (H-15).
+
+    Populated lazily on the first orphan candidate within a reconcile tick --
+    if no orders hit the 3-empty threshold, no broker call is made. If
+    multiple candidates fire in the same tick, the single fetch is reused.
+
+    After a fetch attempt:
+        - ``self.fetched`` becomes True
+        - ``self.broker_open_ids`` = ``set[str]`` on success
+        - ``self.broker_open_ids`` = ``None`` on failure (fail-safe sentinel)
+    """
+    __slots__ = ("_adapter", "_log", "fetched", "broker_open_ids")
+
+    def __init__(self, adapter: ZerodhaAdapter, log: logging.Logger) -> None:
+        self._adapter = adapter
+        self._log = log
+        self.fetched: bool = False
+        self.broker_open_ids: Optional[set[str]] = None
+
+    def get_broker_open_ids(self) -> Optional[set[str]]:
+        if self.fetched:
+            return self.broker_open_ids
+        self.fetched = True
+        try:
+            orders = self._adapter.get_open_orders()
+            self.broker_open_ids = {
+                str(o.get("order_id", "")) for o in orders if o.get("order_id")
+            }
+        except Exception as exc:  # noqa: BLE001 - cache-level best-effort
+            log_exception(self._log, exc)
+            self._log.warning(
+                "order_monitor.get_open_orders_failed_failsafe",
+                extra={"error": str(exc)},
+            )
+            self.broker_open_ids = None  # fail-safe sentinel
+        return self.broker_open_ids
+
+
 def _calc_slippage_pct(side: str, avg_fill: float, expected: float) -> float:
     """
     Positive slippage_pct = unfavorable fill (paid more / received less).
@@ -247,14 +287,25 @@ class OrderMonitor:
         with self._lock:
             snapshot = dict(self._watched)   # copy under lock (OM10)
 
+        # H-15: tick-local cache for orphan second-source verification via
+        # adapter.get_open_orders(). Populated lazily on the first orphan
+        # candidate; if no orphans fire, no broker call. Reused across
+        # multiple candidates within the same tick to avoid rate-limit
+        # pressure (shared get_margins quota bucket in the adapter).
+        tick_cache = _OrphanTickCache(self._adapter, self._log)
+
         for internal_id, entry in snapshot.items():
             # Skip if already removed (concurrent untrack)
             with self._lock:
                 if internal_id not in self._watched:
                     continue
-            self._process_order(entry)
+            self._process_order(entry, tick_cache=tick_cache)
 
-    def _process_order(self, entry: _WatchEntry) -> None:
+    def _process_order(
+        self,
+        entry: _WatchEntry,
+        tick_cache: Optional[_OrphanTickCache] = None,
+    ) -> None:
         """Fetch order history, apply status transition, handle timeouts."""
         try:
             history = self._adapter.get_order_history(entry.broker_order_id)
@@ -293,17 +344,54 @@ class OrderMonitor:
             # After 3 consecutive empties treat as orphan — broker may have lost it.
             entry.empty_history_count += 1
             if entry.empty_history_count >= 3:
-                self._log.warning(
-                    "order_monitor.empty_history_orphan",
-                    extra={
-                        "broker_order_id": entry.broker_order_id,
-                        "symbol": entry.symbol,
-                        "consecutive_empty": entry.empty_history_count,
-                    },
+                # H-15: second-source verification via get_open_orders before
+                # firing. If the broker reports this order as still open, the
+                # empty get_order_history is a transient broker-side anomaly,
+                # not a lost order -- reset the counter and do NOT fire orphan.
+                # Direct test calls to _process_order(entry) pass tick_cache=None
+                # and get a fresh single-use cache (no batching, but correct).
+                cache = tick_cache if tick_cache is not None else _OrphanTickCache(
+                    self._adapter, self._log,
                 )
-                if self._on_orphan is not None:
-                    self._on_orphan(entry.internal_order_id, entry.broker_order_id)
-                self.untrack(entry.internal_order_id)
+                broker_open_ids = cache.get_broker_open_ids()
+                if broker_open_ids is None:
+                    # Fail-safe: could not verify via second source; treat as
+                    # orphan to match pre-H-15 behaviour. Better to fire a
+                    # false-positive orphan callback (reservation released,
+                    # manual review) than miss a real orphan.
+                    self._log.warning(
+                        "order_monitor.empty_history_orphan_unverified",
+                        extra={
+                            "broker_order_id": entry.broker_order_id,
+                            "symbol": entry.symbol,
+                            "consecutive_empty": entry.empty_history_count,
+                        },
+                    )
+                    self._fire_orphan(entry)
+                elif entry.broker_order_id in broker_open_ids:
+                    # False positive: order is alive at the broker; reset the
+                    # counter and keep polling. Do NOT fire orphan.
+                    self._log.info(
+                        "order_monitor.empty_history_false_positive",
+                        extra={
+                            "broker_order_id": entry.broker_order_id,
+                            "symbol": entry.symbol,
+                            "consecutive_empty": entry.empty_history_count,
+                        },
+                    )
+                    entry.empty_history_count = 0
+                else:
+                    # Confirmed orphan: broker-side order list does not include
+                    # this broker_order_id. Fire callback + untrack.
+                    self._log.warning(
+                        "order_monitor.empty_history_orphan_confirmed",
+                        extra={
+                            "broker_order_id": entry.broker_order_id,
+                            "symbol": entry.symbol,
+                            "consecutive_empty": entry.empty_history_count,
+                        },
+                    )
+                    self._fire_orphan(entry)
             return
         # Non-empty history: reset the empty counter
         entry.empty_history_count = 0
@@ -338,6 +426,12 @@ class OrderMonitor:
             )
 
     # ── status handlers ───────────────────────────────────────────────────────
+
+    def _fire_orphan(self, entry: _WatchEntry) -> None:
+        """H-15: fire orphan callback and untrack (shared by all orphan paths)."""
+        if self._on_orphan is not None:
+            self._on_orphan(entry.internal_order_id, entry.broker_order_id)
+        self.untrack(entry.internal_order_id)
 
     def _handle_open(self, entry: _WatchEntry, now: datetime) -> None:
         """Transition to OPEN; check fill timeout."""

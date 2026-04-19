@@ -357,6 +357,24 @@ class OrderReconciler:
                 exc, exc_info=True,
             )
 
+        # CHECK 8: CO_SL_DRIFT (M-2) -- alert-only; compares broker CO
+        # trigger_price against SmartTgtManager-tracked current_sl. MUST NOT
+        # call adapter.modify_order in this check -- auto-repair is deferred
+        # pending paper-trial data on genuine drift frequency.
+        try:
+            actions.extend(self._check8_co_sl_drift())
+        except BrokerTimeoutError:
+            self._log.warning(
+                "order_reconciler: check8 get_open_orders timed out; skipping (RC11)"
+            )
+        except BrokerAuthError:
+            self._note_auth_error(cycle_auth_errors)
+        except Exception as exc:
+            self._log.error(
+                "_check8_co_sl_drift unhandled error: %s",
+                exc, exc_info=True,
+            )
+
         # RC12: update consecutive auth-error counter once per cycle
         self._finalise_auth_counter(had_auth_error=bool(cycle_auth_errors))
 
@@ -995,6 +1013,86 @@ class OrderReconciler:
                     "CapitalDriftDetected published "
                     "(source=fund_manager_self_check)"
                 ),
+                success=True,
+            ))
+
+        return actions
+
+    # ── CHECK 8: CO_SL_DRIFT (M-2) ────────────────────────────────────────────
+
+    def _check8_co_sl_drift(self) -> List[ReconciliationAction]:
+        """
+        M-2: Compare locally-tracked CO SL trigger (smart_tgt_state.current_sl)
+        against the broker's live CO trigger_price for each SmartTgtManager
+        tracked trade.
+
+        Alert-only by design. On drift:
+          - Log CRITICAL with grep tag ``CO_SL_DRIFT_DETECTED`` (alert_watcher
+            relays to Telegram).
+          - Return ``ReconciliationAction(check_name="CO_SL_DRIFT",
+            tier="RECOVERABLE", action_taken="alert_only")``.
+
+        MUST NOT call ``adapter.modify_order`` in this check. Auto-repair is
+        deferred to Phase F or later, pending paper-trial data on how often
+        genuine drift occurs and how it manifests (broker-side re-hoist vs
+        local state lag). First cut observes only.
+
+        Skips entirely when there are no smart_tgt_state rows (the common case
+        outside a live session). Broker errors propagate to the caller so the
+        standard RC11/RC12 policy handles them.
+        """
+        actions: List[ReconciliationAction] = []
+
+        tracked_states = self._store.get_all_smart_tgt_states()
+        if not tracked_states:
+            return actions
+
+        broker_open = self._adapter.get_open_orders()
+        broker_triggers = {
+            str(o.get("order_id", "")): float(o.get("trigger_price", 0.0))
+            for o in (broker_open or [])
+            if o.get("order_id")
+        }
+
+        tolerance_rs = 0.01   # 1 paise; CO trigger is a price, not a rupee sum
+
+        for row in tracked_states:
+            trade_id = row["trade_id"]
+            symbol = row["symbol"]
+            local_sl = float(row["current_sl"])
+
+            co_row = self._store.get_co_entry_order_for_trade(trade_id)
+            if co_row is None:
+                continue   # not a CO trade, or already closed; not _check8's concern
+            co_order_id = str(co_row["order_id"] or "")
+            if not co_order_id:
+                continue
+
+            broker_trigger = broker_triggers.get(co_order_id)
+            if broker_trigger is None:
+                # CO not in broker's open-orders list; CHECK 6 handles orphans.
+                continue
+
+            delta = broker_trigger - local_sl
+            if abs(delta) <= tolerance_rs:
+                continue
+
+            self._log.critical(
+                "CO_SL_DRIFT_DETECTED trade_id=%s symbol=%s "
+                "local_sl=%.4f broker_trigger=%.4f delta=%.4f",
+                trade_id, symbol, local_sl, broker_trigger, delta,
+            )
+            actions.append(ReconciliationAction(
+                check_name="CO_SL_DRIFT",
+                tier="RECOVERABLE",
+                symbol=symbol,
+                trade_id=trade_id,
+                description=(
+                    f"CO SL trigger drift: local_sl={local_sl:.4f} "
+                    f"broker_trigger={broker_trigger:.4f} "
+                    f"delta={delta:.4f} tolerance={tolerance_rs:.4f}"
+                ),
+                action_taken="alert_only",
                 success=True,
             ))
 

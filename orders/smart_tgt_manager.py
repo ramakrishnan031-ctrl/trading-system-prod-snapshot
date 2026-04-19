@@ -443,6 +443,15 @@ class SmartTgtManager:
                 f"SmartTgtManager: trailed SL for {trade_id} ({symbol}) "
                 f"{old_sl:.4f} -> {new_sl:.4f} (trail #{trail_count})"
             )
+            # H-6: DB persist runs AFTER broker modify_order succeeded AND after
+            # memory mutation. On DB failure we do NOT roll memory back:
+            # broker already has new_sl, and memory must mirror broker to
+            # avoid a no-op re-trail on the next candle close. The trail is
+            # a ratcheting operation (LONG SL only moves up, SHORT only down),
+            # so a post-restart rehydrate from stale DB would at worst cause
+            # one wasted broker modify -- never an incorrect SL. The grep tag
+            # below (SMART_TGT_TRAIL_DB_PERSIST_FAILED) lets ops notice and
+            # investigate before the next restart.
             try:
                 self._state_store.update_smart_tgt_state(
                     trade_id=trade_id,
@@ -453,8 +462,14 @@ class SmartTgtManager:
                 )
             except Exception as exc:
                 self._log.error(
-                    f"SmartTgtManager: DB update failed for {trade_id}: {exc}"
+                    "SMART_TGT_TRAIL_DB_PERSIST_FAILED: memory+broker "
+                    "remain consistent at new_sl; DB still holds old_sl. "
+                    f"trade_id={trade_id} symbol={symbol} "
+                    f"old_sl={old_sl:.4f} new_sl={new_sl:.4f} "
+                    f"trail_count={trail_count} error={exc}\n"
+                    f"{traceback.format_exc()}"
                 )
+                # Do NOT roll back memory; do NOT re-raise. See comment above.
 
         else:  # modify failed
             with self._lock:

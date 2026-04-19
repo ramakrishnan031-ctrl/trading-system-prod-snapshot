@@ -837,14 +837,19 @@ class ZerodhaAdapter:
         """
         Return all broker-side orders that are OPEN or TRIGGER PENDING.
 
-        Used by order_reconciler CHECK 6 (ORPHAN_ORDER) to detect orders that
-        exist at the broker but have no corresponding local trade row.
+        Used by:
+            - order_reconciler CHECK 6 (ORPHAN_ORDER): detect orders that
+              exist at the broker but have no corresponding local trade row.
+            - order_reconciler CHECK 8 (CO_SL_DRIFT, M-2): compare broker-side
+              CO trigger_price against SmartTgtManager-tracked current_sl.
+            - order_monitor orphan second-source check (H-15): verify tracked
+              broker_order_ids still exist before firing orphan callbacks.
 
         In paper mode returns [] (no real broker orders).
 
         Returns:
-            List of dicts with at minimum: {"order_id": str, "symbol": str,
-            "status": str, "transaction_type": str}.
+            List of dicts with keys: ``order_id``, ``symbol``, ``status``,
+            ``transaction_type``, ``quantity``, ``price``, ``trigger_price``.
         """
         if self._paper:
             return []
@@ -867,6 +872,9 @@ class ZerodhaAdapter:
                 "transaction_type": o.get("transaction_type", ""),
                 "quantity": o.get("quantity", 0),
                 "price": o.get("price", 0.0),
+                # M-2: trigger_price included so order_reconciler CHECK 8
+                # can compare broker-side CO SL trigger against local current_sl.
+                "trigger_price": o.get("trigger_price", 0.0),
             }
             for o in (all_orders or [])
             if o.get("status", "").upper() in open_statuses

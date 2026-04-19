@@ -49,6 +49,13 @@ class MockAdapter:
         self.cancel_reason = ""
         self.history_exc: Exception | None = None
         self.cancel_calls: list[str] = []
+        # H-15 mock parity: get_open_orders is called for orphan verification.
+        # Default (None) returns empty list -> broker confirms absent ->
+        # confirmed orphan. Override by setting open_orders_response to a list
+        # of dicts or open_orders_exc to an Exception.
+        self.open_orders_response: list[dict] | None = None
+        self.open_orders_exc: Exception | None = None
+        self.open_orders_calls: int = 0
 
     def get_order_history(self, broker_order_id: str) -> list[OrderHistoryEntry]:
         if self.history_exc is not None:
@@ -67,6 +74,13 @@ class MockAdapter:
             success=self.cancel_success,
             reason=self.cancel_reason,
         )
+
+    def get_open_orders(self) -> list[dict]:
+        """H-15 mock parity: mirrors ZerodhaAdapter.get_open_orders."""
+        self.open_orders_calls += 1
+        if self.open_orders_exc is not None:
+            raise self.open_orders_exc
+        return list(self.open_orders_response or [])
 
 
 def _entry(status: str, filled_qty: int = 0, avg_price: float = 0.0) -> OrderHistoryEntry:

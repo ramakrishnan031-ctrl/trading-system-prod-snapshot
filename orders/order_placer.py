@@ -360,11 +360,26 @@ class OrderPlacer:
         )
 
         # Link signal → trade
+        # H-21 / M-5: link_signal_trade runs BEFORE _engine.execute(), so no
+        # broker orders exist at link-failure time. Pre-E.3 this path
+        # swallow-and-continued ("reconciler can fix the link later") -- but a
+        # broker position with no origin-signal linkage breaks audit traceability
+        # and makes reconciler CHECK 2 classify it as ORPHAN_ADOPTION. Apply the
+        # BL-8 hard-fail pattern with broker_order_ids=() (nothing to cancel):
+        # release the reservation, mark trade FAILED, raise. signal_processor's
+        # outer except will mark the signal PLACEMENT_FAILED -- no orphan trade
+        # row, no orphan broker position.
         try:
             self._om.link_signal_trade(signal_id, trade_id)
         except Exception as exc:
-            log_exception(self._log, exc)
-            # Non-fatal: continue; reconciler can fix the link later
+            self._handle_placement_failure(
+                trade_id, reservation_id, signal_id, exc,
+                broker_order_ids=(),
+            )
+            raise OrderRejectedError(
+                f"link_signal_trade failed: {exc}",
+                trade_id=trade_id, signal_id=signal_id, symbol=symbol,
+            ) from exc
 
         self._log.info(
             "order_placer.place_start",
