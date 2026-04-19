@@ -63,8 +63,9 @@ if TYPE_CHECKING:
 
 
 _ESCALATING_SOURCES: Final[frozenset[str]] = frozenset({
-    "fund_manager",            # FM9 sync_from_broker (broker vs local total)
-    "fund_manager_self_check", # BL-3 OrderReconciler._check7 (fm vs fm_ledger)
+    "fund_manager",                  # FM9 sync_from_broker (broker vs local total)
+    "fund_manager_self_check",       # BL-3 OrderReconciler._check7 (fm vs fm_ledger)
+    "fund_manager_bucket_overflow",  # H-1 / E.2 sync bucket goes negative
 })
 # Tier constants -- string literals used in logs and tests; centralised here.
 TIER_NOISE: Final[str] = "NOISE"

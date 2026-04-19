@@ -309,8 +309,22 @@ class FundManager:
         Set total capital from first broker sync, split into buckets (FM13).
         Writes INIT row to fm_ledger.
         Must be called exactly once before any reserve/release.
+
+        H-4: double-initialize guard. A second call would write a second INIT
+        row (with balance_before=0.0 -- corrupt) and silently zero existing
+        reservations/used. WARNING + no-op is safer than silently destroying
+        live capital state.
         """
         with self._lock:
+            if self._initialized:
+                self._log.warning(
+                    "fund_manager.initialize called again; no-op (H-4 guard)",
+                    extra={
+                        "existing_total": self._total,
+                        "ignored_balance": broker_balance,
+                    },
+                )
+                return
             ts = now_ist().isoformat()
             # BL-5: ledger row first (write-ahead), then in-memory mutation.
             self._write_ledger(
@@ -338,6 +352,30 @@ class FundManager:
                        "intraday_avail": self._intraday_avail,
                        "positional_avail": self._positional_avail},
             )
+
+    def required_margin(
+        self,
+        qty: int,
+        price: float,
+        intent: str,
+    ) -> float:
+        """
+        Public margin-compute using the FM's leverage map (H-3).
+
+        Thin wrapper over the module-level required_margin() free function so
+        callers (e.g. order_placer for trades.margin_reserved metadata) do not
+        reach into self._leverage_map and do not need to know leverage internals.
+
+        Args:
+            qty:    number of shares
+            price:  order price per share
+            intent: semantic product intent (INTRADAY, DELIVERY, COVER_ORDER, ...)
+
+        Returns:
+            Required margin in rupees. Intents absent from _leverage_map fall
+            back to 1.0x via required_margin()'s .get() default (FM4).
+        """
+        return required_margin(qty, price, intent, self._leverage_map)
 
     def reserve(
         self,
@@ -739,18 +777,23 @@ class FundManager:
             intraday_total = broker_balance * self._intraday_pct
             positional_total = broker_balance * self._positional_pct
 
-            self._intraday_avail = max(
-                0.0, intraday_total - self._intraday_reserved - self._intraday_used
+            # H-1: silent max(0.0, ...) clamps removed. sync_from_broker was the
+            # only mutator skipping _check_invariant; bucket overflow (broker
+            # total shrinks below reserved+used on a bucket) was silently
+            # masked. Now surfaces as CapitalInvariantViolation via the
+            # per-bucket INV6 guard added to _check_invariant.
+            self._intraday_avail = (
+                intraday_total - self._intraday_reserved - self._intraday_used
             )
-            self._positional_avail = max(
-                0.0, positional_total - self._positional_reserved - self._positional_used
+            self._positional_avail = (
+                positional_total - self._positional_reserved - self._positional_used
             )
             self._log.info(
                 "fund_manager.sync_from_broker",
                 extra={"old_total": old_total, "new_total": broker_balance},
             )
 
-            # Publish CapitalDriftDetected if significant change (FM9)
+            # Publish CapitalDriftDetected if significant TOTAL change (FM9)
             delta = broker_balance - old_total
             if abs(delta) > 1.0:
                 self._bus.publish(CapitalDriftDetected(
@@ -759,6 +802,43 @@ class FundManager:
                     actual=broker_balance,
                     delta=delta,
                 ))
+
+            # H-1: detect bucket overflow (either bucket went negative after
+            # sync). Publish drift BEFORE _check_invariant fires -- the
+            # invariant path calls hard_kill and raises, which would
+            # short-circuit the publish if ordered after.
+            bucket_overflow = (
+                self._intraday_avail < -_INVARIANT_TOLERANCE
+                or self._positional_avail < -_INVARIANT_TOLERANCE
+            )
+            if bucket_overflow:
+                # Most-negative bucket gives the rupee magnitude for BL-2
+                # tiering; drift_handler routes escalating sources by
+                # source_module (fund_manager_bucket_overflow is a new
+                # escalating source, added to _ESCALATING_SOURCES).
+                gap = min(self._intraday_avail, self._positional_avail)
+                # H-1: publish drift event for telemetry; _check_invariant
+                # below will fire hard_kill via BL-9. drift_handler will
+                # receive this event AND observe the hard_kill state; its
+                # escalation ladder is idempotent wrt already-HARD_KILL
+                # state, so both paths can fire without conflict.
+                try:
+                    self._bus.publish(CapitalDriftDetected(
+                        source_module="fund_manager_bucket_overflow",
+                        expected=0.0,   # buckets should never go negative
+                        actual=gap,     # most-negative bucket available
+                        delta=abs(gap), # rupee magnitude for BL-2 tiering
+                    ))
+                except Exception as pub_exc:
+                    self._log.error(
+                        "fund_manager.publish_bucket_overflow_drift_failed: %s",
+                        pub_exc,
+                    )
+
+            # H-1: invariant check now runs on every sync. Per-bucket INV6
+            # guard fires CapitalInvariantViolation on bucket overflow;
+            # BL-9 hard_kill fires before the raise.
+            self._check_invariant("sync_from_broker", self._session_id)
 
     def get_live_reservations(self) -> dict[str, "_Reservation"]:
         """
@@ -1245,6 +1325,36 @@ class FundManager:
         total_reserved = self._intraday_reserved + self._positional_reserved
         total_used = self._intraday_used + self._positional_used
         try:
+            # H-1: per-bucket INV6 guard. Global sum check alone can hide
+            # bucket overflow (one bucket negative, other positive enough to
+            # offset, sum passes). Checking each bucket against its cap
+            # surfaces NEGATIVE_MARGIN_AVAILABLE when reserved+used exceeds
+            # the bucket's share of _total (e.g. after sync_from_broker
+            # shrinks the broker balance).
+            if self._intraday_avail < -_INVARIANT_TOLERANCE:
+                assert_capital_invariant(
+                    margin_available=self._intraday_avail,
+                    margin_reserved=self._intraday_reserved,
+                    margin_used=self._intraday_used,
+                    cash_floor=self._total * self._intraday_pct,
+                    realized_pnl_today=0.0,
+                    bucket="intraday",
+                    mutation_type=mutation_type,
+                    reservation_id=context_id,
+                    tolerance=_INVARIANT_TOLERANCE,
+                )
+            if self._positional_avail < -_INVARIANT_TOLERANCE:
+                assert_capital_invariant(
+                    margin_available=self._positional_avail,
+                    margin_reserved=self._positional_reserved,
+                    margin_used=self._positional_used,
+                    cash_floor=self._total * self._positional_pct,
+                    realized_pnl_today=0.0,
+                    bucket="positional",
+                    mutation_type=mutation_type,
+                    reservation_id=context_id,
+                    tolerance=_INVARIANT_TOLERANCE,
+                )
             assert_capital_invariant(
                 margin_available=total_avail,
                 margin_reserved=total_reserved,

@@ -276,7 +276,11 @@ class StateStore:
         conn = self._get_conn()
         cur = conn.cursor()
         try:
-            cur.execute("BEGIN")
+            # H-5: BEGIN IMMEDIATE acquires a RESERVED lock at transaction
+            # start, serializing writers cleanly. Plain BEGIN (SQLite DEFERRED)
+            # defers locking until the first write, which can deadlock when
+            # two writers upgrade concurrently. Readers are unaffected.
+            cur.execute("BEGIN IMMEDIATE")
             yield cur
             cur.execute("COMMIT")
         except Exception:

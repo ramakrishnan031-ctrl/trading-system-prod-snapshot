@@ -334,7 +334,14 @@ class OrderPlacer:
         # OP4: compute trade fields
         direction = "LONG" if side == "BUY" else "SHORT"
         risk_amount = abs(entry_price - sl_price) * qty
-        margin_reserved = entry_price * qty * 0.20  # standard intraday margin
+        # H-3: use FundManager's leverage-aware compute instead of a hardcoded
+        # 0.20 (coincidentally correct for INTRADAY 5x only; wrong for
+        # DELIVERY 1x / COVER_ORDER 6x / etc.). No cross-module private
+        # attribute access -- FundManager.required_margin() encapsulates its
+        # leverage map internally.
+        margin_reserved = self._fm.required_margin(
+            qty=qty, price=entry_price, intent=intent,
+        )
 
         # OP4: create trade row FIRST (status=PENDING_FILL)
         trade_id = self._om.create_trade(

@@ -150,6 +150,16 @@ class _MockAdapter:
 class _MockFundManager:
     """Minimal FundManager mock."""
 
+    # Mirrors the default leverage map used by FundManager so required_margin
+    # stays behavior-compatible when order_placer migrates off the 0.20
+    # hardcode (E.2 / H-3).
+    _LEVERAGE_MAP = {
+        "INTRADAY": 5.0,
+        "COVER_ORDER": 6.0,
+        "DELIVERY": 1.0,
+        "BRACKET_ORDER": 5.0,
+    }
+
     def __init__(self) -> None:
         self.committed: List[dict] = []
         self.released: List[str] = []
@@ -172,6 +182,11 @@ class _MockFundManager:
             "intent": intent, "entry_price": entry_price,
             "direction": direction, "costs": costs,
         })
+
+    def required_margin(self, qty: int, price: float, intent: str) -> float:
+        """H-3: mirror FundManager.required_margin signature for order_placer."""
+        leverage = self._LEVERAGE_MAP.get(intent, 1.0)
+        return (qty * price) / leverage
 
 
 class _MockKillSwitch:
