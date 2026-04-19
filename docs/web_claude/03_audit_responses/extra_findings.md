@@ -123,3 +123,67 @@ Status: DEFERRED. Not in scope for B.2 / Phase B -- would add schema
         a dedicated schema-cleanup commit.
 Discovered: Phase B, B.2 pre-work (rehydrate reservation_id lookup design)
 
+---
+
+## EF-6 — orders-row status cleanup on FAILED-trade path
+
+File: orders/order_placer.py::_handle_placement_failure (broker_order_ids branch)
+      core/state_store.py (no update_order_status_to_cancelled helper exists)
+Impact: When _handle_placement_failure fires via the EF-2 cleanup path (or the
+        pre-existing BL-8 persist-failure path with broker_order_ids supplied),
+        the broker orders get cancelled via adapter.cancel_order() and capital
+        gets released, but the orders rows already inserted by
+        _persist_entry_orders are left with their pre-cancel status (typically
+        OPEN or NEW). The trade row transitions to FAILED, but the per-leg
+        orders rows misleadingly show active status. Reports (daily_review.py
+        MULTI_INNING_TRACKING sheet, anomaly reports) reading the orders table
+        for that trade_id will show phantom-active legs until a reconciler
+        sweep rewrites them via MANUAL_CLOSE or similar.
+Severity: LOW (cosmetic / reporting). Capital tracking is correct, broker
+          state is correct, trade row status is correct. Only the per-leg
+          orders-row status is stale. Does not cause downstream logic to
+          fire because the trade is already FAILED and the monitor has no
+          coverage (EF-2 cleanup untracked them; BL-8 never tracked them).
+Fix size: small — add state_store.update_order_status(internal_id, status,
+         reason) or similar, and have _handle_placement_failure call it for
+         each broker_order_id after cancel_order() returns. Needs a status
+         value choice (CANCELLED? FAILED_TO_TRACK?) and a schema audit to
+         confirm it's in the existing CHECK constraint.
+Status: DEFERRED. Filed 2026-04-19 at E.6 landing. Revisit when the orders
+        table schema gets its next structural pass, or when reporting
+        accuracy becomes a paper-trial follow-up. Not urgent for paper cut.
+Discovered: Phase E, E.6 pre-work (EF-2 track-failure cleanup design)
+
+---
+
+## EF-6a — paper-mode synth-fill race vs cancel
+
+File: broker/zerodha_adapter.py (ZA16a paper synth thread)
+      orders/order_placer.py::_handle_placement_failure (cancel_order loop)
+Impact: In paper mode, place_order spawns a daemon thread that sleeps
+        paper_auto_fill_delay_sec (default 0.5s) and then publishes
+        OrderFilled for that broker_order_id. When _handle_placement_failure
+        iterates broker_order_ids and calls cancel_order() on each, there
+        is a race where the synth thread may publish OrderFilled between
+        _persist_entry_orders returning and cancel_order() completing.
+        Because EF-2 cleanup pops the _fill_map entry before cancelling,
+        the published OrderFilled will hit OrderPlacer with no _fill_map
+        entry (silent drop via the existing "unknown internal_id" branch)
+        -- capital stays consistent, but the EF-2 log line "cancelled
+        broker_order_ids" is misleading if a fill beat the cancel.
+Severity: LOW (paper-mode-only; live broker cancellations are synchronous
+          via Kite API and do not have this synth-thread quirk). No capital
+          or state corruption risk.
+Fix size: small -- either (a) flag the broker order as "cancel_pending"
+         in a paper-side set before calling cancel_order(), have the synth
+         thread check the flag before publishing; or (b) cancel_order() in
+         paper mode raises if the synth thread has already fired (currently
+         it returns success regardless). Option (b) is cleaner but requires
+         threading coordination primitives in the paper adapter path.
+Status: DEFERRED. Filed 2026-04-19 at E.6 landing. Paper-only quirk;
+        will not survive into live. Revisit if paper-trial produces
+        confusing logs where EF-2 cleanup claims to cancel orders that
+        actually filled.
+Discovered: Phase E, E.6 pre-work (EF-2 test-harness design for paper
+            synth mock parity)
+

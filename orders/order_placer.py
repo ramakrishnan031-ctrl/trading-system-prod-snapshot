@@ -99,6 +99,39 @@ BL-19 (locked 2026-04-19, Phase D.1):
                 SL fail; CoPlusTgt has no inter-leg state on raise), so
                 re-executing the protocol does not produce duplicates.
 
+EF-2 (locked 2026-04-19, Phase E.6):
+    OP-EF2a -- The 3-leg track()+_fill_map loop that runs AFTER
+               _persist_entry_orders is wrapped in a try/except. If
+               order_monitor.track() raises (duplicate internal_id
+               ValueError today, any future failure mode tomorrow),
+               broker orders are live + DB rows exist + monitor coverage
+               is partial. Cleanup runs:
+                 1. Pop any _fill_map entries this trade added pre-raise.
+                 2. untrack() every successfully-tracked leg (idempotent).
+                 3. Emit CRITICAL log with grep tag EF2_TRACK_FAILURE_CLEANUP.
+                 4. Delegate to _handle_placement_failure (BL-8 helper):
+                    cancel broker orders + mark trade FAILED + release
+                    reservation.
+                 5. Propagate the original exception to signal_processor.
+    OP-EF2b -- Does NOT fire kill_switch.hard_kill. Capital tracking stays
+               consistent (cancel-or-log-CRITICAL + release reservation).
+               This is "protocol-only failure" class per OP-BL8e; hard_kill
+               is reserved for DB/broker drift scenarios (BL-4/BL-8/BL-9).
+               Documented inline so future maintainers do not "helpfully
+               add hard_kill for symmetry."
+    OP-EF2c -- Trigger today is near-impossible (new_order_id uses UUID4,
+               collision probability ~0). The gap is kept closed anyway:
+               symmetric to BL-8's persist-failure gap; cheap defense for
+               any future failure-mode addition (new _FillEntry ctor
+               validation, new track() precondition, etc.).
+    OP-EF2d -- The greenlight-framed race ("fill arrives before _fill_map
+               populated") is NOT addressed. Live mode is poll-based
+               (delayed-discovery, bounded by poll_interval_sec; tolerable).
+               Paper production mode has a 10x safety margin at
+               auto_fill_delay_sec=0.5 (synth fires at T+500ms; main thread
+               populates _fill_map by T+50ms). Not production-reachable;
+               no quarantine queue needed.
+
 What This Module Does NOT Do:
     - Does not implement SL modification (smart_tgt_manager's job)
     - Does not implement EOD exit (eod_squareoff's job)
@@ -532,77 +565,141 @@ class OrderPlacer:
         # track() + _fill_map write happens per leg. ENTRY always; SL only
         # for LIMIT_TRIPLE (CO bundles SL at broker side); TGT when present.
         # Empty broker_order_id → skip (handles soft-fail legs gracefully).
+        #
+        # OP-EF2a (Phase E.6): wrap in try/except. Symmetric to BL-8's
+        # persist-failure cleanup -- if track() raises after persist
+        # succeeded, broker orders are live + DB rows exist + monitor
+        # coverage is partial. Roll back _fill_map + untrack + delegate
+        # to _handle_placement_failure. Trigger is near-impossible today
+        # (UUID4 collision) but the gap is real; see module docstring.
         exit_side = "SELL" if side == "BUY" else "BUY"
         now = now_ist()  # shared across all 3 legs (one broker placement)
+        successfully_tracked: List[str] = []
 
-        if result.entry_internal_id and result.entry_broker_order_id:
-            self._order_monitor.track(
-                internal_order_id=result.entry_internal_id,
-                broker_order_id=result.entry_broker_order_id,
-                symbol=symbol,
-                side=side,
-                qty=qty,
-                expected_price=entry_price,
-                placed_at=now,
-            )
-            with self._fill_map_lock:
-                self._fill_map[result.entry_internal_id] = _FillEntry(
-                    trade_id=trade_id,
-                    reservation_id=reservation_id,
+        try:
+            if result.entry_internal_id and result.entry_broker_order_id:
+                self._order_monitor.track(
+                    internal_order_id=result.entry_internal_id,
+                    broker_order_id=result.entry_broker_order_id,
                     symbol=symbol,
+                    side=side,
                     qty=qty,
-                    leg=_LEG_ENTRY,
-                    order_protocol=order_protocol,
-                    direction=direction,
+                    expected_price=entry_price,
+                    placed_at=now,
                 )
+                with self._fill_map_lock:
+                    self._fill_map[result.entry_internal_id] = _FillEntry(
+                        trade_id=trade_id,
+                        reservation_id=reservation_id,
+                        symbol=symbol,
+                        qty=qty,
+                        leg=_LEG_ENTRY,
+                        order_protocol=order_protocol,
+                        direction=direction,
+                    )
+                successfully_tracked.append(result.entry_internal_id)
 
-        # SL leg — CO_PLUS_TGT has SL bundled into the CO at broker side.
-        if (
-            result.order_protocol != "CO_PLUS_TGT"
-            and result.sl_internal_id
-            and result.sl_broker_order_id
-        ):
-            self._order_monitor.track(
-                internal_order_id=result.sl_internal_id,
-                broker_order_id=result.sl_broker_order_id,
-                symbol=symbol,
-                side=exit_side,
-                qty=qty,
-                expected_price=sl_price,
-                placed_at=now,
-            )
-            with self._fill_map_lock:
-                self._fill_map[result.sl_internal_id] = _FillEntry(
-                    trade_id=trade_id,
-                    reservation_id=reservation_id,
+            # SL leg — CO_PLUS_TGT has SL bundled into the CO at broker side.
+            if (
+                result.order_protocol != "CO_PLUS_TGT"
+                and result.sl_internal_id
+                and result.sl_broker_order_id
+            ):
+                self._order_monitor.track(
+                    internal_order_id=result.sl_internal_id,
+                    broker_order_id=result.sl_broker_order_id,
                     symbol=symbol,
+                    side=exit_side,
                     qty=qty,
-                    leg=_LEG_SL,
-                    order_protocol=order_protocol,
-                    direction=direction,
+                    expected_price=sl_price,
+                    placed_at=now,
                 )
+                with self._fill_map_lock:
+                    self._fill_map[result.sl_internal_id] = _FillEntry(
+                        trade_id=trade_id,
+                        reservation_id=reservation_id,
+                        symbol=symbol,
+                        qty=qty,
+                        leg=_LEG_SL,
+                        order_protocol=order_protocol,
+                        direction=direction,
+                    )
+                successfully_tracked.append(result.sl_internal_id)
 
-        # TGT leg — both LIMIT_TRIPLE and CO_PLUS_TGT place a separate TGT order.
-        if result.tgt_internal_id and result.tgt_broker_order_id:
-            self._order_monitor.track(
-                internal_order_id=result.tgt_internal_id,
-                broker_order_id=result.tgt_broker_order_id,
-                symbol=symbol,
-                side=exit_side,
-                qty=qty,
-                expected_price=tgt_price,
-                placed_at=now,
-            )
-            with self._fill_map_lock:
-                self._fill_map[result.tgt_internal_id] = _FillEntry(
-                    trade_id=trade_id,
-                    reservation_id=reservation_id,
+            # TGT leg — both LIMIT_TRIPLE and CO_PLUS_TGT place a separate TGT order.
+            if result.tgt_internal_id and result.tgt_broker_order_id:
+                self._order_monitor.track(
+                    internal_order_id=result.tgt_internal_id,
+                    broker_order_id=result.tgt_broker_order_id,
                     symbol=symbol,
+                    side=exit_side,
                     qty=qty,
-                    leg=_LEG_TGT,
-                    order_protocol=order_protocol,
-                    direction=direction,
+                    expected_price=tgt_price,
+                    placed_at=now,
                 )
+                with self._fill_map_lock:
+                    self._fill_map[result.tgt_internal_id] = _FillEntry(
+                        trade_id=trade_id,
+                        reservation_id=reservation_id,
+                        symbol=symbol,
+                        qty=qty,
+                        leg=_LEG_TGT,
+                        order_protocol=order_protocol,
+                        direction=direction,
+                    )
+                successfully_tracked.append(result.tgt_internal_id)
+        except Exception as track_exc:
+            # OP-EF2a/OP-EF2b: track() raised after _persist_entry_orders
+            # succeeded. Broker has orders; DB has rows; monitor coverage
+            # is partial. Clean up (pop _fill_map entries, untrack any
+            # successful legs) then delegate to _handle_placement_failure
+            # for broker cancel + trade FAILED + reservation release.
+            #
+            # Do NOT fire hard_kill here. Capital tracking remains
+            # consistent (cancel-or-log + release-reservation). This is
+            # "protocol-only failure" class per OP-BL8e; hard_kill is
+            # reserved for DB/broker drift scenarios (BL-4/BL-8/BL-9
+            # paths). Documented so future maintainers do not "helpfully
+            # add hard_kill here for symmetry."
+            with self._fill_map_lock:
+                for iid in successfully_tracked:
+                    self._fill_map.pop(iid, None)
+            for iid in successfully_tracked:
+                try:
+                    self._order_monitor.untrack(iid)
+                except Exception as untrack_exc:  # noqa: BLE001
+                    log_exception(self._log, untrack_exc)
+                    self._log.error(
+                        "order_placer.untrack_during_cleanup_failed",
+                        extra={"internal_order_id": iid,
+                               "error": str(untrack_exc)},
+                    )
+
+            all_broker_ids = [
+                bid for bid in (
+                    result.entry_broker_order_id,
+                    result.sl_broker_order_id,
+                    result.tgt_broker_order_id,
+                ) if bid
+            ]
+            self._log.critical(
+                "order_placer.ef2_track_failure_cleanup "
+                "EF2_TRACK_FAILURE_CLEANUP: track() raised after "
+                "_persist_entry_orders success; rolling back",
+                extra={
+                    "trade_id": trade_id,
+                    "error": str(track_exc),
+                    "error_type": type(track_exc).__name__,
+                    "legs_successfully_tracked": successfully_tracked,
+                    "broker_order_ids_to_cancel": all_broker_ids,
+                },
+            )
+
+            self._handle_placement_failure(
+                trade_id, reservation_id, signal_id, track_exc,
+                broker_order_ids=all_broker_ids,
+            )
+            raise  # propagate to signal_processor
 
         self._log.info(
             "order_placer.place_complete",

@@ -2757,6 +2757,294 @@ class TestBl8AtomicPersist:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# EF-2 / Phase E.6 — track-failure cleanup symmetric to BL-8 persist-failure
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEf2TrackFailureCleanup:
+    """
+    OP-EF2a-d: if order_monitor.track() raises after _persist_entry_orders
+    succeeds, OrderPlacer.place() must:
+      1. Pop any _fill_map entries for this trade that were added pre-raise.
+      2. untrack() every successfully-tracked leg (idempotent).
+      3. Emit CRITICAL log with grep tag EF2_TRACK_FAILURE_CLEANUP.
+      4. Delegate to _handle_placement_failure for broker cancel + trade
+         FAILED + reservation release.
+      5. NOT fire hard_kill (capital tracking stays consistent -- protocol
+         -only failure class per OP-BL8e).
+      6. Propagate the original exception to signal_processor.
+    """
+
+    def _make_placer(
+        self,
+        tmp_path: Path,
+        *,
+        track_side_effect,
+        kill_switch=None,
+        default_protocol: str = "LIMIT_TRIPLE",
+    ):
+        """
+        Build a placer with a MagicMock OrderMonitor whose .track() has the
+        given side_effect and a real _MockAdapter whose cancel_order succeeds.
+        Returns (placer, store, fm, bus, adapter, om, monitor).
+        """
+        store = _make_store(tmp_path)
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=default_protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        monitor = MagicMock(spec=OrderMonitor)
+        monitor.track.side_effect = track_side_effect
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=monitor,
+            cost_calculator=MagicMock(spec=CostCalculator),
+            rr_ratio=2.0,
+            default_order_protocol=default_protocol,
+            kill_switch=kill_switch,
+        )
+        return placer, store, fm, bus, adapter, om, monitor
+
+    # --- Test 1 -----------------------------------------------------------
+
+    def test_ef2_track_raises_on_entry_leg_full_cleanup(self) -> None:
+        """
+        EF-2: track() raises on FIRST leg (ENTRY). Nothing was successfully
+        tracked. Verify cleanup handles empty successfully_tracked list.
+        """
+        import io
+        with TemporaryDirectory() as tmp:
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, adapter, om, monitor = self._make_placer(
+                Path(tmp),
+                track_side_effect=ValueError("boom: duplicate internal_id"),
+                kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            # Capture CRITICAL logs for the grep tag assertion
+            log_buf = io.StringIO()
+            handler = logging.StreamHandler(log_buf)
+            handler.setLevel(logging.CRITICAL)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+            target_logger = logging.getLogger("test_order_placer")
+            target_logger.addHandler(handler)
+            target_logger.setLevel(logging.CRITICAL)
+
+            try:
+                with pytest.raises(ValueError, match="boom: duplicate internal_id"):
+                    placer.place(
+                        symbol="RELIANCE", side="BUY", qty=10,
+                        entry_price=2500.0, sl_price=2450.0,
+                        intent="INTRADAY", signal_id=sig_id,
+                        reservation_id="res_ef2_entry_fail",
+                    )
+
+                # No _fill_map entries for this trade
+                with placer._fill_map_lock:
+                    assert placer._fill_map == {}, (
+                        f"expected empty _fill_map; got {placer._fill_map!r}"
+                    )
+
+                # untrack NOT called (nothing to untrack)
+                assert monitor.untrack.call_count == 0, (
+                    f"expected 0 untrack calls; got {monitor.untrack.call_count}"
+                )
+
+                # adapter.cancel_order called for ALL 3 broker IDs placed
+                placed_broker_ids = sorted(p["broker_order_id"] for p in adapter.placed)
+                assert sorted(adapter.cancelled) == placed_broker_ids, (
+                    f"expected cancel for all 3 placed IDs; "
+                    f"placed={placed_broker_ids}; cancelled={adapter.cancelled}"
+                )
+
+                # Trade FAILED, reservation released
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert len(rows) == 1
+                assert rows[0]["status"] == "FAILED"
+                assert "res_ef2_entry_fail" in fm.released
+
+                # CRITICAL grep tag present
+                logs = log_buf.getvalue()
+                assert "EF2_TRACK_FAILURE_CLEANUP" in logs, (
+                    f"missing EF2 grep tag in CRITICAL logs:\n{logs}"
+                )
+
+                # hard_kill NOT called
+                assert ks.hard_kill_calls == [], (
+                    f"EF-2 MUST NOT fire hard_kill (protocol-only failure class); "
+                    f"got {ks.hard_kill_calls}"
+                )
+            finally:
+                target_logger.removeHandler(handler)
+                store.close()
+            print("  OK EF-2: entry-leg track raise -> full cleanup, no hard_kill")
+
+    # --- Test 2 -----------------------------------------------------------
+
+    def test_ef2_track_raises_mid_loop_partial_cleanup(self) -> None:
+        """
+        EF-2: track() succeeds on ENTRY, raises on SL (partial population).
+        Verify ENTRY's _fill_map entry is removed and untrack called for ENTRY.
+        """
+        import io
+        with TemporaryDirectory() as tmp:
+            ks = _RecordingKillSwitch()
+            # ENTRY succeeds, SL raises, TGT never called
+            placer, store, fm, bus, adapter, om, monitor = self._make_placer(
+                Path(tmp),
+                track_side_effect=[None, ValueError("boom on SL")],
+                kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            log_buf = io.StringIO()
+            handler = logging.StreamHandler(log_buf)
+            handler.setLevel(logging.CRITICAL)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+            target_logger = logging.getLogger("test_order_placer")
+            target_logger.addHandler(handler)
+            target_logger.setLevel(logging.CRITICAL)
+
+            try:
+                with pytest.raises(ValueError, match="boom on SL"):
+                    placer.place(
+                        symbol="RELIANCE", side="BUY", qty=10,
+                        entry_price=2500.0, sl_price=2450.0,
+                        intent="INTRADAY", signal_id=sig_id,
+                        reservation_id="res_ef2_sl_fail",
+                    )
+
+                # _fill_map empty: ENTRY entry was popped during cleanup
+                with placer._fill_map_lock:
+                    assert placer._fill_map == {}, (
+                        f"ENTRY _fill_map entry must be popped during cleanup; "
+                        f"got {placer._fill_map!r}"
+                    )
+
+                # track() called 2x (ENTRY ok, SL raises). TGT not reached.
+                assert monitor.track.call_count == 2, (
+                    f"expected 2 track calls (ENTRY ok + SL raise); "
+                    f"got {monitor.track.call_count}"
+                )
+
+                # untrack called exactly once (for ENTRY).
+                # NOTE: SL's track() raised before the _fill_map write, so SL
+                # was never "successfully_tracked" -- no untrack for SL.
+                assert monitor.untrack.call_count == 1, (
+                    f"expected 1 untrack call (ENTRY only); "
+                    f"got {monitor.untrack.call_count}"
+                )
+                # And it was for the ENTRY internal_id
+                entry_iid = adapter.placed[0]["internal_order_id"]
+                monitor.untrack.assert_called_once_with(entry_iid)
+
+                # adapter.cancel_order called for ALL 3 placed broker IDs
+                placed_broker_ids = sorted(p["broker_order_id"] for p in adapter.placed)
+                assert sorted(adapter.cancelled) == placed_broker_ids, (
+                    f"expected cancel for all 3 placed IDs; "
+                    f"placed={placed_broker_ids}; cancelled={adapter.cancelled}"
+                )
+
+                # Trade FAILED, reservation released
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert rows[0]["status"] == "FAILED"
+                assert "res_ef2_sl_fail" in fm.released
+
+                # CRITICAL grep tag; legs_successfully_tracked field populated
+                logs = log_buf.getvalue()
+                assert "EF2_TRACK_FAILURE_CLEANUP" in logs
+
+                # hard_kill NOT called
+                assert ks.hard_kill_calls == [], (
+                    f"EF-2 MUST NOT fire hard_kill; got {ks.hard_kill_calls}"
+                )
+            finally:
+                target_logger.removeHandler(handler)
+                store.close()
+            print("  OK EF-2: partial-tracked cleanup -> untrack(ENTRY) only, no hard_kill")
+
+    # --- Test 3 -----------------------------------------------------------
+
+    def test_ef2_track_success_unchanged_behavior(self) -> None:
+        """
+        EF-2 regression guard: happy path unchanged. All 3 legs tracked,
+        no cleanup, no cancel_order, no CRITICAL log, no exception.
+        """
+        import io
+        with TemporaryDirectory() as tmp:
+            ks = _RecordingKillSwitch()
+            # track() returns None for every call -- normal success
+            placer, store, fm, bus, adapter, om, monitor = self._make_placer(
+                Path(tmp),
+                track_side_effect=None,
+                kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            log_buf = io.StringIO()
+            handler = logging.StreamHandler(log_buf)
+            handler.setLevel(logging.CRITICAL)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+            target_logger = logging.getLogger("test_order_placer")
+            target_logger.addHandler(handler)
+            target_logger.setLevel(logging.CRITICAL)
+
+            try:
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_ef2_happy",
+                )
+
+                # All 3 legs in _fill_map
+                with placer._fill_map_lock:
+                    legs = sorted(e.leg for e in placer._fill_map.values())
+                assert legs == [_LEG_ENTRY, _LEG_SL, _LEG_TGT], (
+                    f"expected ENTRY/SL/TGT in _fill_map; got {legs}"
+                )
+
+                # 3 track calls, 0 untrack, 0 cancel_order
+                assert monitor.track.call_count == 3
+                assert monitor.untrack.call_count == 0
+                assert adapter.cancelled == []
+
+                # Trade in PENDING_FILL (not FAILED)
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert rows[0]["status"] == "PENDING_FILL"
+                assert fm.released == []
+
+                # No CRITICAL grep tag (no EF-2 cleanup ran)
+                logs = log_buf.getvalue()
+                assert "EF2_TRACK_FAILURE_CLEANUP" not in logs, (
+                    f"happy path must NOT emit EF-2 grep tag; logs:\n{logs}"
+                )
+
+                # hard_kill NOT called
+                assert ks.hard_kill_calls == []
+            finally:
+                target_logger.removeHandler(handler)
+                store.close()
+            print("  OK EF-2: happy path regression -- no cleanup, no grep tag")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BL-19: OrderPlacer retry loop scoped to BrokerRateLimit429Error (Phase D.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3129,6 +3417,10 @@ if __name__ == "__main__":
         TestBl8AtomicPersist().test_limit_triple_sl_fail_protocol_cleanup_not_double_cancelled,
         TestBl8AtomicPersist().test_cancel_order_returning_false_does_not_abort_cleanup,
         TestBl8AtomicPersist().test_protocol_reject_only_does_not_fire_hard_kill,
+        # EF-2 / Phase E.6 track-failure cleanup
+        TestEf2TrackFailureCleanup().test_ef2_track_raises_on_entry_leg_full_cleanup,
+        TestEf2TrackFailureCleanup().test_ef2_track_raises_mid_loop_partial_cleanup,
+        TestEf2TrackFailureCleanup().test_ef2_track_success_unchanged_behavior,
         # BL-19 / Phase D.1 placer rate-limit retry loop
         TestBl19PlacerRateLimitRetry().test_placer_retries_on_429_up_to_max,
         TestBl19PlacerRateLimitRetry().test_placer_gives_up_after_max_retries_and_propagates,
