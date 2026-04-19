@@ -29,8 +29,10 @@ Locked Design Decisions:
     OPC3 -- TGT side = opposite of signal side, order_type="LIMIT".
     OPC4 -- If CO placement fails: raise immediately, do not place TGT.
             If TGT fails after CO: log ERROR (position at risk, no TGT);
-            return success=True with tgt_broker_order_id="" so caller can
-            handle (e.g. set up smart_tgt fallback).
+            return success=False surfacing the CO broker_order_id via
+            entry_broker_order_id so the caller (OrderPlacer, BL-8) can
+            cancel the live CO before marking the trade FAILED. Reconciler
+            is the backstop, not the primary recovery path.
     OPC5 -- sl_broker_order_id="" in EntryResult (SL is inside CO bracket).
     OPC6 -- Layer 5 (orders/). Imports broker/zerodha_adapter, orders/entry_engine.
     OPC7 -- order_protocol = "CO_PLUS_TGT".
@@ -142,11 +144,12 @@ class CoPlusTgtProtocol(EntryEngine):
                 tag=order_tag,
             )
         except BrokerError as exc:
-            # MED #13: TGT failed after CO placed.
-            # CO may be live in the market; return success=False so caller
-            # releases the reservation and marks trade FAILED.
-            # The CO order itself must be reconciled (order_reconciler handles
-            # orphaned CO orders on next startup).
+            # BL-8: TGT failed after CO placed. CO is live in the market;
+            # return success=False with the CO broker_order_id surfaced so the
+            # caller (OrderPlacer) can cancel it. Pre-BL-8 the CO was left
+            # live and the reconciler was expected to adopt it as an orphan
+            # position. Post-BL-8 reconciler is still a backstop, but the
+            # primary recovery path is cancel-before-FAILED in OrderPlacer.
             log_exception(self._log, exc)
             self._log.error(
                 "co_plus_tgt.tgt_failed_co_is_live",

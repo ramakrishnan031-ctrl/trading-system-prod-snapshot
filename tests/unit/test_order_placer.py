@@ -2252,6 +2252,490 @@ class TestBl7dExitFillHandling:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-8 / Phase C.2 — atomic persist + broker-order cleanup
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _AdapterCancelFails:
+    """Adapter mock whose cancel_order returns success=False (or raises)."""
+
+    def __init__(self, raise_on_cancel: bool = False) -> None:
+        from broker.zerodha_adapter import CancelResult  # noqa: F401
+        self._raise = raise_on_cancel
+        self._call_count = 0
+        self.placed: List[dict] = []
+        self.cancelled: List[str] = []
+
+    def place_order(self, symbol, side, qty, price, order_type, intent,
+                    tag=None, trigger_price=0.0, variety="regular"):
+        self._call_count += 1
+        po = _placed_order(symbol=symbol, side=side)
+        self.placed.append({
+            "symbol": symbol, "side": side,
+            "broker_order_id": po.broker_order_id,
+            "internal_order_id": po.internal_order_id,
+        })
+        return po
+
+    def cancel_order(self, broker_order_id: str):
+        from broker.zerodha_adapter import CancelResult
+        self.cancelled.append(broker_order_id)
+        if self._raise:
+            raise RuntimeError("simulated cancel transport failure")
+        return CancelResult(
+            broker_order_id=broker_order_id,
+            success=False,
+            reason="simulated broker cancel rejection",
+        )
+
+
+class _RecordingKillSwitch:
+    """KillSwitch mock that records hard_kill calls."""
+
+    def __init__(self) -> None:
+        self._active = False
+        self.hard_kill_calls: List[dict] = []
+
+    def is_active(self, intent: str = "entry") -> bool:
+        return self._active
+
+    def hard_kill(self, *, reason: str, triggered_by: str) -> None:
+        self.hard_kill_calls.append(
+            {"reason": reason, "triggered_by": triggered_by}
+        )
+
+
+class TestBl8AtomicPersist:
+    """
+    BL-8 / Phase C.2: atomic _persist_entry_orders + cancel-on-failure +
+    hard_kill on DB-persist-after-broker-success.
+    """
+
+    def _make_placer(
+        self,
+        tmp_path,
+        adapter=None,
+        kill_switch=None,
+        default_protocol="LIMIT_TRIPLE",
+    ):
+        store = _make_store(tmp_path)
+        if adapter is None:
+            adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=default_protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),
+            cost_calculator=MagicMock(spec=CostCalculator),
+            rr_ratio=2.0,
+            default_order_protocol=default_protocol,
+            kill_switch=kill_switch,
+        )
+        return placer, store, fm, bus, adapter, om
+
+    # --- Test 1 -----------------------------------------------------------
+
+    def test_happy_path_no_cancellation_no_hard_kill(self) -> None:
+        """BL-8: happy path persists 3 rows; no cancels; no hard_kill."""
+        with TemporaryDirectory() as tmp:
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, adapter, om = self._make_placer(
+                Path(tmp), kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_happy",
+            )
+
+            assert len(adapter.placed) == 3
+            assert adapter.cancelled == []
+            assert ks.hard_kill_calls == []
+
+            rows = store.fetch_all("SELECT * FROM orders WHERE trade_id IN "
+                                    "(SELECT trade_id FROM trades WHERE signal_id = ?)",
+                                    (sig_id,))
+            assert len(rows) == 3
+            store.close()
+            print("  OK BL-8: happy path -> 3 rows, no cancel, no hard_kill")
+
+    # --- Test 2 -----------------------------------------------------------
+
+    def test_persist_atomic_all_or_nothing(self) -> None:
+        """OMgr11: insert_orders_atomic rolls back if any row fails."""
+        from orders.order_manager import OrderInsertSpec
+        with TemporaryDirectory() as tmp:
+            store = _make_store(Path(tmp))
+            sig_id = _seed_signal(store)
+            om = OrderManager(store, _log())
+            trade_id = om.create_trade(
+                signal_id=sig_id, symbol="ZZZ", direction="LONG",
+                strategy="x", sector=None, qty=1,
+                entry_target_price=10.0, sl_initial=9.0, tgt_initial=12.0,
+                order_protocol="LIMIT_TRIPLE", margin_reserved=10.0,
+                risk_amount=1.0,
+            )
+
+            specs = [
+                OrderInsertSpec(
+                    broker_order_id="OK_ENTRY", leg="ENTRY",
+                    transaction_type="BUY", order_type="LIMIT",
+                    product="MIS", variety="regular", qty_requested=1,
+                ),
+                OrderInsertSpec(
+                    broker_order_id="OK_ENTRY",  # PK collision -> 2nd INSERT fails
+                    leg="SL",
+                    transaction_type="SELL", order_type="SL-M",
+                    product="MIS", variety="regular", qty_requested=1,
+                ),
+            ]
+
+            with pytest.raises(Exception):
+                om.insert_orders_atomic(trade_id, specs)
+
+            rows = store.fetch_all(
+                "SELECT * FROM orders WHERE trade_id = ?", (trade_id,)
+            )
+            assert len(rows) == 0, (
+                "atomic batch must roll back: even the first INSERT must NOT "
+                "be visible if a later one failed"
+            )
+            store.close()
+            print("  OK BL-8: insert_orders_atomic rolls back all on partial failure")
+
+    # --- Test 3 -----------------------------------------------------------
+
+    def test_db_persist_failure_after_broker_success_cancels_all(self) -> None:
+        """BL-8: DB persist failure after broker success -> all 3 cancelled."""
+        with TemporaryDirectory() as tmp:
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, adapter, om = self._make_placer(
+                Path(tmp), kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            cancelled_ids: List[str] = []
+
+            def _boom(trade_id, specs):
+                # Capture broker IDs the placer would have cancelled
+                for s in specs:
+                    cancelled_ids.append(s.broker_order_id)
+                raise RuntimeError("simulated DB write failure")
+
+            om.insert_orders_atomic = _boom  # type: ignore[assignment]
+
+            with pytest.raises(RuntimeError, match="simulated DB write failure"):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_persist_fail",
+                )
+
+            # All 3 broker-placed IDs cancelled by OrderPlacer
+            assert sorted(adapter.cancelled) == sorted(cancelled_ids), (
+                f"expected adapter.cancelled to match the 3 placed IDs; "
+                f"got cancelled={adapter.cancelled} vs placed={cancelled_ids}"
+            )
+            assert "res_persist_fail" in fm.released
+            store.close()
+            print("  OK BL-8: DB-persist failure -> all broker orders cancelled")
+
+    # --- Test 4 -----------------------------------------------------------
+
+    def test_db_persist_failure_after_broker_success_fires_hard_kill(self) -> None:
+        """BL-8: DB persist failure after broker success -> hard_kill fires."""
+        with TemporaryDirectory() as tmp:
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, adapter, om = self._make_placer(
+                Path(tmp), kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            def _boom(trade_id, specs):
+                raise RuntimeError("DB unavailable")
+            om.insert_orders_atomic = _boom  # type: ignore[assignment]
+
+            with pytest.raises(RuntimeError, match="DB unavailable"):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_hk",
+                )
+
+            assert len(ks.hard_kill_calls) >= 1, (
+                "DB-persist-after-broker-success MUST fire kill_switch.hard_kill"
+            )
+            call0 = ks.hard_kill_calls[0]
+            assert call0["triggered_by"] == "order_placer.place"
+            assert "persist_entry_orders failed after broker success" in call0["reason"]
+            store.close()
+            print("  OK BL-8: DB-persist failure -> hard_kill fires")
+
+    # --- Test 5 -----------------------------------------------------------
+
+    def test_cancel_failure_during_cleanup_critical_logged_grep_tag(self) -> None:
+        """BL-8: cancel_order returning success=False -> CRITICAL log w/ grep tag."""
+        import io
+        with TemporaryDirectory() as tmp:
+            adapter = _AdapterCancelFails(raise_on_cancel=False)
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, _adapter, om = self._make_placer(
+                Path(tmp), adapter=adapter, kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            # Capture CRITICAL logs
+            log_buf = io.StringIO()
+            handler = logging.StreamHandler(log_buf)
+            handler.setLevel(logging.CRITICAL)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+            target_logger = logging.getLogger("test_order_placer")
+            target_logger.addHandler(handler)
+            target_logger.setLevel(logging.CRITICAL)
+
+            try:
+                def _boom(trade_id, specs):
+                    raise RuntimeError("DB write failed")
+                om.insert_orders_atomic = _boom  # type: ignore[assignment]
+
+                with pytest.raises(RuntimeError):
+                    placer.place(
+                        symbol="RELIANCE", side="BUY", qty=10,
+                        entry_price=2500.0, sl_price=2450.0,
+                        intent="INTRADAY", signal_id=sig_id,
+                        reservation_id="res_cancel_fail",
+                    )
+
+                logs = log_buf.getvalue()
+                assert "CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED" in logs, (
+                    f"missing grep-friendly CRITICAL tag in logs:\n{logs}"
+                )
+                # Cleanup should NOT abort: all 3 placed IDs attempted
+                assert len(adapter.cancelled) == 3
+            finally:
+                target_logger.removeHandler(handler)
+            store.close()
+            print("  OK BL-8: cancel-rejected -> CRITICAL grep tag, cleanup continues")
+
+    # --- Test 6 -----------------------------------------------------------
+
+    def test_co_plus_tgt_soft_fail_cancels_co(self) -> None:
+        """OP-BL8f: CoPlusTgt soft-fail (CO live, TGT dead) cancels the CO."""
+        with TemporaryDirectory() as tmp:
+            # adapter that succeeds on CO place and FAILS on TGT place
+            class _COSuccessTGTFail:
+                def __init__(self):
+                    self._n = 0
+                    self.placed: List[dict] = []
+                    self.cancelled: List[str] = []
+
+                def place_order(self, symbol, side, qty, price, order_type,
+                                intent, tag=None, trigger_price=0.0,
+                                variety="regular"):
+                    self._n += 1
+                    if self._n == 1:
+                        po = _placed_order(symbol=symbol, side=side,
+                                            broker_id="CO_LIVE_123")
+                        self.placed.append({"role": "CO",
+                                             "broker_order_id": po.broker_order_id})
+                        return po
+                    raise BrokerError("simulated TGT broker rejection")
+
+                def cancel_order(self, broker_order_id: str):
+                    from broker.zerodha_adapter import CancelResult
+                    self.cancelled.append(broker_order_id)
+                    return CancelResult(
+                        broker_order_id=broker_order_id,
+                        success=True, reason="",
+                    )
+
+            adapter = _COSuccessTGTFail()
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, _adapter, om = self._make_placer(
+                Path(tmp), adapter=adapter, kill_switch=ks,
+                default_protocol="CO_PLUS_TGT",
+            )
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(BrokerError):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_co_soft",
+                )
+
+            assert "CO_LIVE_123" in adapter.cancelled, (
+                "CoPlusTgt soft-fail MUST cancel the live CO via OrderPlacer; "
+                f"got cancelled={adapter.cancelled}"
+            )
+            assert "res_co_soft" in fm.released
+            # Soft-fail is NOT a DB-persist-after-broker-success path; no hard_kill
+            assert ks.hard_kill_calls == [], (
+                "soft-fail w/ successful cleanup must NOT fire hard_kill"
+            )
+            store.close()
+            print("  OK BL-8: CoPlusTgt soft-fail cancels CO; no hard_kill")
+
+    # --- Test 7 -----------------------------------------------------------
+
+    def test_limit_triple_sl_fail_protocol_cleanup_not_double_cancelled(self) -> None:
+        """BL-8: LimitTriple SL-fail protocol cancels ENTRY internally;
+        OrderPlacer must NOT double-cancel (BrokerError path passes no IDs)."""
+        with TemporaryDirectory() as tmp:
+            class _SLFailAdapter:
+                def __init__(self):
+                    self._n = 0
+                    self.placed: List[dict] = []
+                    self.cancelled: List[str] = []
+
+                def place_order(self, symbol, side, qty, price, order_type,
+                                intent, tag=None, trigger_price=0.0,
+                                variety="regular"):
+                    self._n += 1
+                    if self._n == 1:  # ENTRY succeeds
+                        po = _placed_order(symbol=symbol, side=side,
+                                            broker_id="ENTRY_LIVE_X")
+                        self.placed.append({"role": "ENTRY",
+                                             "broker_order_id": po.broker_order_id})
+                        return po
+                    raise BrokerError("simulated SL broker rejection")
+
+                def cancel_order(self, broker_order_id: str):
+                    from broker.zerodha_adapter import CancelResult
+                    self.cancelled.append(broker_order_id)
+                    return CancelResult(
+                        broker_order_id=broker_order_id,
+                        success=True, reason="",
+                    )
+
+            adapter = _SLFailAdapter()
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, _adapter, om = self._make_placer(
+                Path(tmp), adapter=adapter, kill_switch=ks,
+                default_protocol="LIMIT_TRIPLE",
+            )
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(BrokerError):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_sl_fail",
+                )
+
+            # Protocol cancelled ENTRY (1 call). OrderPlacer must NOT add a 2nd.
+            assert adapter.cancelled == ["ENTRY_LIVE_X"], (
+                "BrokerError path must pass NO broker_order_ids -- protocol "
+                "already cancelled ENTRY internally; OrderPlacer must not "
+                "double-cancel. Got: " + repr(adapter.cancelled)
+            )
+            assert "res_sl_fail" in fm.released
+            assert ks.hard_kill_calls == [], "BrokerError path must NOT hard_kill"
+            store.close()
+            print("  OK BL-8: LimitTriple SL-fail -> single cancel by protocol, "
+                  "no double-cancel")
+
+    # --- Test 8 -----------------------------------------------------------
+
+    def test_cancel_order_returning_false_does_not_abort_cleanup(self) -> None:
+        """BL-8: cancel rejection on order #1 must not stop cancel of orders #2,#3."""
+        with TemporaryDirectory() as tmp:
+            adapter = _AdapterCancelFails(raise_on_cancel=False)
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, _adapter, om = self._make_placer(
+                Path(tmp), adapter=adapter, kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            def _boom(trade_id, specs):
+                raise RuntimeError("DB down")
+            om.insert_orders_atomic = _boom  # type: ignore[assignment]
+
+            with pytest.raises(RuntimeError):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_cancel_continue",
+                )
+
+            assert len(adapter.cancelled) == 3, (
+                "cancel rejection on one order must NOT abort cancel for "
+                "the remaining orders. Got: " + repr(adapter.cancelled)
+            )
+            assert "res_cancel_continue" in fm.released  # release still runs
+            store.close()
+            print("  OK BL-8: cancel rejection does not abort remaining cleanup")
+
+    # --- Test 9 -----------------------------------------------------------
+
+    def test_protocol_reject_only_does_not_fire_hard_kill(self) -> None:
+        """BL-8 scope boundary: protocol rejects entry cleanly -> no hard_kill.
+        Capital tracking is intact (no broker orders live)."""
+        with TemporaryDirectory() as tmp:
+            class _EntryRejectAdapter:
+                def __init__(self):
+                    self.placed: List[dict] = []
+                    self.cancelled: List[str] = []
+
+                def place_order(self, *a, **k):
+                    raise BrokerError("entry cleanly rejected")
+
+                def cancel_order(self, broker_order_id: str):
+                    from broker.zerodha_adapter import CancelResult
+                    self.cancelled.append(broker_order_id)
+                    return CancelResult(
+                        broker_order_id=broker_order_id,
+                        success=True, reason="",
+                    )
+
+            adapter = _EntryRejectAdapter()
+            ks = _RecordingKillSwitch()
+            placer, store, fm, bus, _adapter, om = self._make_placer(
+                Path(tmp), adapter=adapter, kill_switch=ks,
+            )
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(BrokerError):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_protocol_only",
+                )
+
+            # Scope boundary: protocol-only failure must NOT fire hard_kill
+            assert ks.hard_kill_calls == [], (
+                "BL-8 scope boundary VIOLATED: protocol-only failure (no broker "
+                "orders accepted) MUST NOT fire kill_switch.hard_kill. "
+                f"Got: {ks.hard_kill_calls}"
+            )
+            assert adapter.cancelled == [], (
+                "no broker orders were placed -> nothing to cancel"
+            )
+            assert "res_protocol_only" in fm.released
+            store.close()
+            print("  OK BL-8: scope boundary -- protocol-only fail does NOT hard_kill")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2343,6 +2827,16 @@ if __name__ == "__main__":
         TestBl7dExitFillHandling().test_smart_tgt_unregister_skipped_for_limit_triple,
         TestBl7dExitFillHandling().test_exit_fill_pops_fill_map_entry,
         TestBl7dExitFillHandling().test_double_close_is_warning_and_skip,
+        # BL-8 / Phase C.2 atomic persist + cancel-on-failure + hard_kill
+        TestBl8AtomicPersist().test_happy_path_no_cancellation_no_hard_kill,
+        TestBl8AtomicPersist().test_persist_atomic_all_or_nothing,
+        TestBl8AtomicPersist().test_db_persist_failure_after_broker_success_cancels_all,
+        TestBl8AtomicPersist().test_db_persist_failure_after_broker_success_fires_hard_kill,
+        TestBl8AtomicPersist().test_cancel_failure_during_cleanup_critical_logged_grep_tag,
+        TestBl8AtomicPersist().test_co_plus_tgt_soft_fail_cancels_co,
+        TestBl8AtomicPersist().test_limit_triple_sl_fail_protocol_cleanup_not_double_cancelled,
+        TestBl8AtomicPersist().test_cancel_order_returning_false_does_not_abort_cleanup,
+        TestBl8AtomicPersist().test_protocol_reject_only_does_not_fire_hard_kill,
     ]
     passed = failed = 0
     for fn in tests:

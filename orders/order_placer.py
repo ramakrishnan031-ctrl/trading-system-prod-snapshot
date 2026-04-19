@@ -46,6 +46,40 @@ Last-Mile Gaps (locked 2026-04-16):
               files (order_protocol_limit.py, order_protocol_co.py) immediately
               after each adapter.place_order() call. Raises OrderRejectedError.
 
+BL-8 (locked 2026-04-19, Phase C.2):
+    OP-BL8a -- _persist_entry_orders is ATOMIC. Uses
+               OrderManager.insert_orders_atomic so all ENTRY/SL/TGT INSERTs
+               commit together or none do. Pre-BL-8 the helper did three
+               separate INSERTs and SWALLOWED any exception ("reconciler
+               will rebuild from broker state"). That swallow was the
+               silent-failure mode BL-8 closes -- reconciler is a backstop,
+               not a primary recovery mechanism.
+    OP-BL8b -- _persist_entry_orders now PROPAGATES exceptions. The caller
+               (place()) catches, cancels every broker order it placed via
+               _cancel_broker_orders, then routes through
+               _handle_placement_failure to mark the trade FAILED + release
+               the reservation, then fires kill_switch.hard_kill (capital
+               tracking has broken: orders live at broker, no DB rows).
+    OP-BL8c -- _handle_placement_failure accepts an optional
+               broker_order_ids: Iterable[str] = (). When non-empty, runs
+               _cancel_broker_orders before the existing FAILED+release
+               flow. Single cleanup orchestrator for every failure path.
+    OP-BL8d -- _cancel_broker_orders is best-effort. It iterates the IDs,
+               calls adapter.cancel_order for each, and on result.success=False
+               (or unexpected exception) logs CRITICAL with the grep-friendly
+               tag CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED. It does NOT
+               abort cleanup for the remaining orders.
+    OP-BL8e -- hard_kill ONLY fires when DB persist fails AFTER broker
+               accepted orders. Protocol-only failures (broker rejected
+               cleanly) and CoPlusTgt soft failures (CO live, TGT dead) do
+               NOT fire hard_kill: the protocol or place() already cancelled
+               the broker side, so capital tracking is intact.
+    OP-BL8f -- CoPlusTgt soft-failure path (success=False with CO live) now
+               passes the live broker_order_ids to _handle_placement_failure
+               so the CO is cancelled. Pre-BL-8 the CO was left live and the
+               reconciler was the primary recovery; post-BL-8 the reconciler
+               is a backstop.
+
 What This Module Does NOT Do:
     - Does not implement SL modification (smart_tgt_manager's job)
     - Does not implement EOD exit (eod_squareoff's job)
@@ -57,7 +91,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict, Final, Optional
+from typing import Dict, Final, Iterable, List, Optional
 
 from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
@@ -72,7 +106,7 @@ from core.logger import log_exception
 from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
-from orders.order_manager import OrderManager
+from orders.order_manager import OrderInsertSpec, OrderManager
 from orders.smart_tgt_manager import SmartTgtManager
 
 
@@ -335,24 +369,74 @@ class OrderPlacer:
                 order_protocol=order_protocol,
             )
         except BrokerError as exc:
-            # OP7: hard broker failure → mark trade FAILED, release capital
+            # OP7 + OP-BL8e: protocol raised. The protocol's own cleanup
+            # already cancelled any in-flight legs (LimitTriple cancels ENTRY
+            # on SL fail; CoPlusTgt has no inter-leg state on raise). Capital
+            # tracking is intact, so NO hard_kill -- just FAILED + release.
             self._handle_placement_failure(
                 trade_id, reservation_id, signal_id, exc
             )
             raise
 
         if not result.success:
-            # Soft failure
+            # OP-BL8f: soft failure (CoPlusTgt: CO live, TGT dead). Cancel the
+            # CO via _handle_placement_failure(broker_order_ids=...) so the
+            # reconciler is a backstop, not the primary recovery path.
             soft_err = BrokerError(
                 f"Entry engine returned success=False: {result.rejection_reason}"
             )
+            soft_ids = [
+                bid for bid in (
+                    result.entry_broker_order_id,
+                    result.sl_broker_order_id,
+                    result.tgt_broker_order_id,
+                ) if bid
+            ]
             self._handle_placement_failure(
-                trade_id, reservation_id, signal_id, soft_err
+                trade_id, reservation_id, signal_id, soft_err,
+                broker_order_ids=soft_ids,
             )
             raise soft_err
 
-        # ── Persist order rows ─────────────────────────────────────────────
-        self._persist_entry_orders(trade_id, result, symbol, qty, side, intent)
+        # ── Persist order rows (OP-BL8a/b) ────────────────────────────────
+        try:
+            self._persist_entry_orders(trade_id, result, symbol, qty, side, intent)
+        except Exception as persist_exc:
+            # OP-BL8b/e: broker accepted orders but DB write failed. Capital
+            # tracking is broken (orders live, no DB rows). Cancel everything
+            # we just placed, mark FAILED, release reservation, then fire
+            # kill_switch.hard_kill -- this is a capital-tracking breakdown
+            # the reconciler cannot detect (no DB rows to compare against).
+            placed_ids = [
+                bid for bid in (
+                    result.entry_broker_order_id,
+                    result.sl_broker_order_id,
+                    result.tgt_broker_order_id,
+                ) if bid
+            ]
+            self._handle_placement_failure(
+                trade_id, reservation_id, signal_id, persist_exc,
+                broker_order_ids=placed_ids,
+            )
+            if self._kill_switch is not None:
+                try:
+                    self._kill_switch.hard_kill(
+                        reason=(
+                            f"persist_entry_orders failed after broker success: "
+                            f"{type(persist_exc).__name__}: {persist_exc}"
+                        ),
+                        triggered_by="order_placer.place",
+                    )
+                except Exception as kse:
+                    log_exception(self._log, kse)
+                    self._log.critical(
+                        "order_placer.hard_kill_failed",
+                        extra={
+                            "trade_id": trade_id,
+                            "kill_error": str(kse),
+                        },
+                    )
+            raise
 
         # ── Register for fill tracking (OP5) + monitor (BL-7c / A.3.c) ─────
         # track() + _fill_map write happens per leg. ENTRY always; SL only
@@ -772,9 +856,30 @@ class OrderPlacer:
         reservation_id: str,
         signal_id: str,
         exc: Exception,
+        broker_order_ids: Iterable[str] = (),
     ) -> None:
-        """OP7: mark trade FAILED, release capital reservation."""
+        """
+        OP7 + OP-BL8c: cancel any live broker orders, mark trade FAILED,
+        release capital reservation.
+
+        Each step is best-effort with its own try/except. Cancellation is
+        first because once we've decided to roll back, leaving live orders
+        at the broker is the worst outcome.
+
+        broker_order_ids defaults to () so the kill_switch and protocol-only
+        failure paths (where no orders made it to the broker) call this
+        method exactly the way they used to.
+        """
         log_exception(self._log, exc)
+
+        # OP-BL8c: cancel any broker orders that were placed before the failure
+        ids = [bid for bid in broker_order_ids if bid]
+        if ids:
+            self._cancel_broker_orders(
+                ids,
+                reason=f"placement_failure: {type(exc).__name__}",
+            )
+
         try:
             self._om.update_trade_status(trade_id, "FAILED")
         except Exception as db_exc:
@@ -783,6 +888,67 @@ class OrderPlacer:
             self._fm.release(reservation_id, f"placement_failed: {exc}")
         except Exception as cap_exc:
             log_exception(self._log, cap_exc)
+
+    def _cancel_broker_orders(
+        self,
+        broker_order_ids: List[str],
+        reason: str,
+    ) -> None:
+        """
+        OP-BL8d: best-effort cancel each broker order.
+
+        On adapter rejection (CancelResult.success=False) or unexpected
+        exception, log CRITICAL with the grep-friendly tag
+        ``CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED`` and continue to the
+        next ID. Never raises; cleanup must reach the FAILED+release stage
+        regardless of cancel outcome.
+        """
+        # The adapter lives on the protocol objects, not on OrderPlacer; reach
+        # through the engine. Both protocols share the same adapter instance.
+        adapter = getattr(self._engine, "_co", None)
+        adapter = getattr(adapter, "_adapter", None) if adapter is not None else None
+        if adapter is None:
+            adapter = getattr(getattr(self._engine, "_limit", None), "_adapter", None)
+        if adapter is None:
+            self._log.critical(
+                "order_placer.cancel_no_adapter CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED",
+                extra={
+                    "broker_order_ids": broker_order_ids,
+                    "reason": reason,
+                    "detail": "no adapter reachable from engine; orders likely orphaned",
+                },
+            )
+            return
+
+        for bid in broker_order_ids:
+            try:
+                result = adapter.cancel_order(bid)
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "order_placer.cancel_raised CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED",
+                    extra={
+                        "broker_order_id": bid,
+                        "reason": reason,
+                        "error": str(exc),
+                    },
+                )
+                continue
+
+            if not getattr(result, "success", False):
+                self._log.critical(
+                    "order_placer.cancel_rejected CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED",
+                    extra={
+                        "broker_order_id": bid,
+                        "reason": reason,
+                        "broker_reason": getattr(result, "reason", ""),
+                    },
+                )
+            else:
+                self._log.info(
+                    "order_placer.cancel_ok",
+                    extra={"broker_order_id": bid, "reason": reason},
+                )
 
     def _persist_entry_orders(
         self,
@@ -793,7 +959,16 @@ class OrderPlacer:
         side: str,
         intent: str,
     ) -> None:
-        """Persist order rows to DB after successful placement."""
+        """
+        Persist order rows to DB after successful placement (OP-BL8a/OP-BL8b).
+
+        Builds an OrderInsertSpec list for whichever legs have a broker_order_id
+        and hands the batch to OrderManager.insert_orders_atomic so every row
+        commits together or none do.
+
+        On exception this method PROPAGATES (post-BL-8). place() catches and
+        runs the cancel-broker-orders + FAILED + release + hard_kill cleanup.
+        """
         exit_side = "SELL" if side == "BUY" else "BUY"
 
         # HIGH #7: resolve product code via injected resolver; fallback map if not injected
@@ -806,56 +981,44 @@ class OrderPlacer:
             product = "MIS" if intent == "INTRADAY" else "CNC"
         co_variety = "co" if result.order_protocol == "CO_PLUS_TGT" else "regular"
 
-        try:
-            # ENTRY order
-            if result.entry_broker_order_id:
-                self._om.insert_order(
-                    trade_id=trade_id,
-                    broker_order_id=result.entry_broker_order_id,
-                    leg="ENTRY",
-                    transaction_type=side,
-                    order_type="SL" if result.order_protocol == "CO_PLUS_TGT" else "LIMIT",
-                    product=product,
-                    variety=co_variety,
-                    qty_requested=qty,
-                    price=0.0,  # will be updated on fill
-                    leg_index=0,
-                )
+        specs: List[OrderInsertSpec] = []
 
-            # SL order (LIMIT_TRIPLE only)
-            if result.sl_broker_order_id:
-                self._om.insert_order(
-                    trade_id=trade_id,
-                    broker_order_id=result.sl_broker_order_id,
-                    leg="SL",
-                    transaction_type=exit_side,
-                    order_type="SL-M",
-                    product=product,
-                    variety="regular",
-                    qty_requested=qty,
-                    price=0.0,
-                    leg_index=0,
-                )
+        if result.entry_broker_order_id:
+            specs.append(OrderInsertSpec(
+                broker_order_id=result.entry_broker_order_id,
+                leg="ENTRY",
+                transaction_type=side,
+                order_type="SL" if result.order_protocol == "CO_PLUS_TGT" else "LIMIT",
+                product=product,
+                variety=co_variety,
+                qty_requested=qty,
+            ))
 
-            # TGT order
-            if result.tgt_broker_order_id:
-                self._om.insert_order(
-                    trade_id=trade_id,
-                    broker_order_id=result.tgt_broker_order_id,
-                    leg="TGT",
-                    transaction_type=exit_side,
-                    order_type="LIMIT",
-                    product=product,
-                    variety="regular",
-                    qty_requested=qty,
-                    price=0.0,  # will be updated on fill
-                    leg_index=0,
-                )
-        except Exception as exc:
-            # DB write failure is non-fatal for order placement;
-            # reconciler will rebuild from broker state.
-            log_exception(self._log, exc)
-            self._log.error(
-                "order_placer.persist_orders_failed",
-                extra={"trade_id": trade_id},
-            )
+        # SL order (LIMIT_TRIPLE only)
+        if result.sl_broker_order_id:
+            specs.append(OrderInsertSpec(
+                broker_order_id=result.sl_broker_order_id,
+                leg="SL",
+                transaction_type=exit_side,
+                order_type="SL-M",
+                product=product,
+                variety="regular",
+                qty_requested=qty,
+            ))
+
+        # TGT order
+        if result.tgt_broker_order_id:
+            specs.append(OrderInsertSpec(
+                broker_order_id=result.tgt_broker_order_id,
+                leg="TGT",
+                transaction_type=exit_side,
+                order_type="LIMIT",
+                product=product,
+                variety="regular",
+                qty_requested=qty,
+            ))
+
+        # OP-BL8a: atomic batch INSERT. Exceptions propagate; place() handles
+        # cleanup (cancel broker orders, mark FAILED, release reservation,
+        # fire hard_kill).
+        self._om.insert_orders_atomic(trade_id, specs)

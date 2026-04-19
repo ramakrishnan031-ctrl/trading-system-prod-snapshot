@@ -30,6 +30,14 @@ Locked Design Decisions:
               the broker-reported snapshot via update_order_status(). Pass
               bus=None for standalone instances (e.g. inside reconciler)
               that should not react to events.
+    OMgr11 -- insert_orders_atomic(trade_id, specs) (BL-8). Wraps an entire
+              entry-sequence (ENTRY + SL + TGT) in ONE state_store.transaction.
+              Either every row commits or none do. Used by order_placer to
+              close the silent-DB-failure window where partial persistence
+              left the broker and the DB inconsistent. Per
+              StateStore.transaction docstring, nested transactions are NOT
+              supported -- callers must not wrap this method in their own
+              transaction block.
 
 What This Module Does NOT Do:
     - Does not compute tgt_price, sl_price, margin, or risk amounts
@@ -39,12 +47,37 @@ What This Module Does NOT Do:
 from __future__ import annotations
 
 import logging
-from typing import Dict, Final, List, Optional
+from dataclasses import dataclass
+from typing import Dict, Final, List, Optional, Sequence
 
 from core.events import EventBus, OrderStatusChanged
 from core.ids import new_trade_id
 from core.state_store import StateStore
 from core.time_authority import now_ist
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OrderInsertSpec (BL-8 / OMgr11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class OrderInsertSpec:
+    """
+    One row spec for OrderManager.insert_orders_atomic (BL-8).
+
+    Mirrors the kwargs of insert_order; bundled so the caller can hand
+    the atomic-batch method a single list whose semantics are obvious.
+    """
+    broker_order_id: str
+    leg: str               # "ENTRY" | "SL" | "TGT" | "EOD" | "CANCEL"
+    transaction_type: str  # "BUY" | "SELL"
+    order_type: str        # "LIMIT" | "MARKET" | "SL-M" | "SL"
+    product: str           # broker product code e.g. "MIS"
+    variety: str           # "regular" | "co"
+    qty_requested: int
+    price: float = 0.0
+    trigger_price: float = 0.0
+    leg_index: int = 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -233,6 +266,60 @@ class OrderManager:
                     now, now,
                 ),
             )
+
+    def insert_orders_atomic(
+        self,
+        trade_id: str,
+        order_specs: Sequence[OrderInsertSpec],
+    ) -> None:
+        """
+        BL-8 / OMgr11: atomically insert all order rows for an entry sequence.
+
+        Either every row commits or none do. If any INSERT raises, the
+        transaction rolls back and the exception propagates so the caller
+        (order_placer) can cancel the corresponding broker orders.
+
+        Use insert_order() for single-row inserts on non-entry-sequence paths.
+        This method is specifically for the entry-sequence case where partial
+        persistence leaves the broker and the DB inconsistent.
+
+        StateStore.transaction does NOT support nesting -- callers MUST NOT
+        wrap this method in their own transaction block.
+        """
+        if not order_specs:
+            return
+        now = now_ist().isoformat()
+        with self._store.transaction() as cur:
+            for spec in order_specs:
+                cur.execute(
+                    """
+                    INSERT INTO orders (
+                        order_id, trade_id,
+                        leg, leg_index,
+                        transaction_type, order_type, product, variety,
+                        qty_requested, price, trigger_price,
+                        status, qty_filled, avg_fill_price,
+                        placed_at, updated_at
+                    ) VALUES (
+                        ?, ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        'PENDING', 0, NULL,
+                        ?, ?
+                    )
+                    """,
+                    (
+                        spec.broker_order_id, trade_id,
+                        spec.leg, spec.leg_index,
+                        spec.transaction_type, spec.order_type,
+                        spec.product, spec.variety,
+                        spec.qty_requested,
+                        spec.price if spec.price > 0 else None,
+                        spec.trigger_price if spec.trigger_price > 0 else None,
+                        now, now,
+                    ),
+                )
 
     def record_entry_fill(
         self,
