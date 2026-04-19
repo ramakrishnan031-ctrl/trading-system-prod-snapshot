@@ -1503,7 +1503,14 @@ def test_bl9_invariant_violation_on_release_fires_hard_kill() -> None:
 
 
 def test_bl9_invariant_violation_on_commit_fires_hard_kill() -> None:
-    """commit_to_used() path: corrupt between reserve and commit -> hard_kill fires."""
+    """commit_to_used() path: corrupt between reserve and commit -> hard_kill fires.
+
+    Asserts >=1 rather than ==1: after BL-4 (Phase C.1) wrapped
+    commit_to_used in its own hard-kill handler, this path fires hard_kill
+    from BL-9 (_check_invariant) AND again from BL-4's outer wrapper.
+    hard_kill is idempotent per the kill_switch state machine so double-fire
+    is safe. The precise count is an implementation detail.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         store = _make_store(Path(tmp))
         ks = _FakeKillSwitch()
@@ -1520,9 +1527,11 @@ def test_bl9_invariant_violation_on_commit_fires_hard_kill() -> None:
             raised = True
 
         assert raised, "Expected CapitalInvariantViolation on commit path"
-        assert len(ks.hard_kill_calls) == 1
+        assert len(ks.hard_kill_calls) >= 1, (
+            f"hard_kill must fire at least once; got {len(ks.hard_kill_calls)}"
+        )
         store.close()
-    print("  OK invariant violation on commit_to_used() path fires kill_switch.hard_kill (BL-9)")
+    print("  OK invariant violation on commit_to_used() path fires kill_switch.hard_kill (BL-9+BL-4)")
 
 
 def test_bl9_invariant_violation_on_release_used_fires_hard_kill() -> None:
@@ -1692,6 +1701,275 @@ def test_bl3_get_live_reservations_returns_locked_snapshot_copy() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BL-4 / Phase C.1 Tests -- commit_to_used failure triggers hard_kill
+# Contract:
+#   * Any exception raised inside commit_to_used (unknown reservation,
+#     ledger-write failure, apply-mutation failure, invariant violation)
+#     fires kill_switch.hard_kill BEFORE re-raising the original exception.
+#   * Hard-kill policy is SPECIFIC to commit_to_used; reserve()/release_used()
+#     keep existing error policies (not retested here -- BL-9 covers those).
+#   * BL-4's outer handler does NOT invoke on_critical_failure. That callback
+#     stays narrow to BL-9 (_check_invariant) semantics.
+#   * Double-fire on invariant violation (BL-9 from _check_invariant, BL-4
+#     from the outer wrapper) is safe because kill_switch.hard_kill is
+#     idempotent per its state machine. Test asserts >=1, NOT ==2, so a
+#     future refactor that consolidates or short-circuits doesn't regress.
+#   * kill_switch=None degrades gracefully: CRITICAL logs, no AttributeError,
+#     original exception still propagates.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bl4_commit_to_used_normal_path_no_hard_kill() -> None:
+    """Regression guard: happy-path reserve+commit does NOT fire hard_kill."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_ok")
+        assert res.success
+
+        result = fm.commit_to_used(res.reservation_id, 500.0, 100)
+        assert result.reservation_id == res.reservation_id
+        assert len(ks.hard_kill_calls) == 0, (
+            f"hard_kill must NOT fire on happy path; got {len(ks.hard_kill_calls)}"
+        )
+        store.close()
+    print("  OK BL-4: normal commit_to_used path does NOT fire hard_kill")
+
+
+def test_bl4_commit_to_used_ledger_write_failure_triggers_hard_kill() -> None:
+    """_write_ledger raises -> hard_kill fires, original exception re-raised."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_lw")
+        assert res.success
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("ledger corrupt")
+        fm._write_ledger = boom
+
+        raised_type = None
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except RuntimeError as e:
+            raised_type = "RuntimeError"
+            assert "ledger corrupt" in str(e)
+
+        assert raised_type == "RuntimeError"
+        assert len(ks.hard_kill_calls) == 1, (
+            f"hard_kill must fire exactly once for ledger failure; "
+            f"got {len(ks.hard_kill_calls)}"
+        )
+        call = ks.hard_kill_calls[0]
+        assert "commit_to_used failed" in call["reason"]
+        assert call["triggered_by"] == "fund_manager.commit_to_used"
+        store.close()
+    print("  OK BL-4: ledger-write failure fires hard_kill + re-raises")
+
+
+def test_bl4_commit_to_used_apply_failure_triggers_hard_kill() -> None:
+    """_apply_commit raises -> hard_kill fires, original exception re-raised."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_ap")
+        assert res.success
+
+        def boom(*args, **kwargs):
+            raise ValueError("apply broken")
+        fm._apply_commit = boom
+
+        raised_type = None
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except ValueError as e:
+            raised_type = "ValueError"
+            assert "apply broken" in str(e)
+
+        assert raised_type == "ValueError"
+        assert len(ks.hard_kill_calls) == 1
+        assert "commit_to_used failed" in ks.hard_kill_calls[0]["reason"]
+        store.close()
+    print("  OK BL-4: apply-mutation failure fires hard_kill + re-raises")
+
+
+def test_bl4_commit_to_used_invariant_failure_still_triggers_bl4_hard_kill() -> None:
+    """
+    Invariant violation inside commit_to_used: BL-9 fires hard_kill from
+    _check_invariant, and BL-4's outer wrapper may also fire. Lock the
+    at-least-once semantic (>=1), NOT the exact count. A future refactor
+    that consolidates/short-circuits shouldn't break this test.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_inv")
+        assert res.success
+        with fm._lock:
+            fm._intraday_avail += 50_000.0  # corrupt
+
+        raised = False
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except CapitalInvariantViolation:
+            raised = True
+
+        assert raised, "CapitalInvariantViolation must propagate"
+        assert len(ks.hard_kill_calls) >= 1, (
+            f"hard_kill must fire at least once on invariant violation; "
+            f"got {len(ks.hard_kill_calls)}"
+        )
+        # Exact count may be 1 (inner short-circuits outer) or 2 (both fire).
+        # Both behaviors are acceptable; hard_kill is idempotent.
+        store.close()
+    print("  OK BL-4: invariant violation fires hard_kill (>=1, impl-agnostic)")
+
+
+def test_bl4_commit_to_used_hard_kill_called_before_reraise() -> None:
+    """
+    Ordering: hard_kill fires BEFORE the exception reaches the caller.
+    Check the kill-call count at the moment we catch the exception.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_ord")
+        assert res.success
+
+        def boom(*args, **kwargs):
+            raise ValueError("apply broken")
+        fm._apply_commit = boom
+
+        hk_count_at_catch: Optional[int] = None
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except ValueError:
+            hk_count_at_catch = len(ks.hard_kill_calls)
+
+        assert hk_count_at_catch == 1, (
+            f"hard_kill must have fired BEFORE ValueError reached caller; "
+            f"got call_count={hk_count_at_catch} at catch time"
+        )
+        store.close()
+    print("  OK BL-4: hard_kill fires BEFORE re-raise (ordering)")
+
+
+def test_bl4_commit_to_used_with_kill_switch_none_logs_no_crash() -> None:
+    """
+    kill_switch=None: CRITICAL log "escalation not possible", original
+    exception still re-raised, no AttributeError on None.hard_kill.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=None)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_none")
+        assert res.success
+
+        def boom(*args, **kwargs):
+            raise ValueError("apply broken")
+        fm._apply_commit = boom
+
+        raised_type = None
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except AttributeError as e:  # pragma: no cover
+            raise AssertionError(
+                f"kill_switch=None must not cause AttributeError: {e}"
+            )
+        except ValueError:
+            raised_type = "ValueError"
+
+        assert raised_type == "ValueError", (
+            f"Expected ValueError to propagate; got {raised_type}"
+        )
+        store.close()
+    print("  OK BL-4: kill_switch=None degrades (logs, no crash, re-raises)")
+
+
+def test_bl4_commit_to_used_kill_switch_failure_still_reraises_original() -> None:
+    """
+    kill_switch.hard_kill itself raises: the ORIGINAL exception (from
+    _apply_commit) must still propagate to the caller, not the kill-engine
+    exception. Belt-and-braces.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch(raise_on_hard_kill=RuntimeError("kill engine down"))
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_kf")
+        assert res.success
+
+        def boom(*args, **kwargs):
+            raise ValueError("apply broken")
+        fm._apply_commit = boom
+
+        raised_type = None
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except ValueError:
+            raised_type = "ValueError"
+        except RuntimeError:
+            raised_type = "RuntimeError"
+
+        assert raised_type == "ValueError", (
+            f"Expected original ValueError to propagate, not RuntimeError "
+            f"from kill_switch; got {raised_type}"
+        )
+        assert len(ks.hard_kill_calls) == 1, "hard_kill must have been attempted"
+        store.close()
+    print("  OK BL-4: kill_switch failure does NOT swallow original exception")
+
+
+def test_bl4_commit_to_used_bl4_handler_does_not_fire_on_critical_callback() -> None:
+    """
+    BL-4's outer handler fires hard_kill only. The on_critical_failure
+    callback (wired for _check_invariant per BL-9) is NOT invoked from
+    BL-4's catch block -- forcing a non-invariant failure (apply raises)
+    must leave on_critical untouched.
+
+    Rationale: on_critical was designed for invariant-level issues. A
+    ledger/apply failure doesn't necessarily mean an invariant is broken
+    (the state may never have been mutated). Keeping on_critical narrow
+    to BL-9 preserves its semantic. Future maintainers might be tempted
+    to "clean this up" by invoking the callback from BL-4 too; this test
+    prevents that drift.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        critical_calls: list[str] = []
+        fm = _initialized_fm(
+            store, balance=100_000.0,
+            kill_switch=ks,
+            on_critical=critical_calls.append,
+        )
+        res = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY", signal_id="sig_nc")
+        assert res.success
+
+        # Force _apply_commit to raise -- NOT an invariant violation
+        def boom(*args, **kwargs):
+            raise ValueError("apply broken")
+        fm._apply_commit = boom
+
+        try:
+            fm.commit_to_used(res.reservation_id, 500.0, 100)
+        except ValueError:
+            pass
+
+        assert len(ks.hard_kill_calls) == 1, "hard_kill must fire"
+        assert len(critical_calls) == 0, (
+            "on_critical_failure must NOT fire from BL-4's outer handler "
+            f"(narrow to BL-9 scope); got {len(critical_calls)} calls"
+        )
+        store.close()
+    print("  OK BL-4: outer handler does NOT fire on_critical (narrow to BL-9)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1765,6 +2043,15 @@ def run_all_tests() -> int:
         test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully,
         # BL-3 additions (Phase B.5 self-check accessor)
         test_bl3_get_live_reservations_returns_locked_snapshot_copy,
+        # BL-4 additions (Phase C.1 commit_to_used failure -> hard_kill)
+        test_bl4_commit_to_used_normal_path_no_hard_kill,
+        test_bl4_commit_to_used_ledger_write_failure_triggers_hard_kill,
+        test_bl4_commit_to_used_apply_failure_triggers_hard_kill,
+        test_bl4_commit_to_used_invariant_failure_still_triggers_bl4_hard_kill,
+        test_bl4_commit_to_used_hard_kill_called_before_reraise,
+        test_bl4_commit_to_used_with_kill_switch_none_logs_no_crash,
+        test_bl4_commit_to_used_kill_switch_failure_still_reraises_original,
+        test_bl4_commit_to_used_bl4_handler_does_not_fire_on_critical_callback,
     ]
 
     print("=" * 70)

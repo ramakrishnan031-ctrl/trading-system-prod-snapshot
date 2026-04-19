@@ -57,6 +57,15 @@ Locked Design Decisions:
              (belt-and-braces). kill_switch=None degrades gracefully: the
              existing on_critical_failure path still runs (soft_kill wiring
              remains available for other critical-signal callers).
+    FM20 -- BL-4 (Phase C.1): commit_to_used wraps its entire body in a
+             hard-kill handler. Any exception (unknown reservation, ledger
+             failure, apply failure, invariant violation) fires
+             kill_switch.hard_kill before re-raising the original. Unlike
+             BL-9, this handler does NOT invoke on_critical_failure -- the
+             callback stays narrow to invariant-violation semantics.
+             Scope: commit_to_used only; reserve() and release_used() keep
+             their existing (recoverable / reconciler-backstopped) error
+             policies.
 
 What This Module Does NOT Do:
     - Does not size positions (capital/position_sizer.py)
@@ -460,70 +469,133 @@ class FundManager:
         Move margin from reserved to used on order fill (FM5).
         Handles partial fills: excess margin returns to available.
 
+        BL-4 (Phase C.1): ANY exception raised inside this method (unknown
+        reservation, ledger-write failure, apply-mutation failure, invariant
+        violation) implies the broker has confirmed the fill but capital
+        accounting is inconsistent -- an unrecoverable state. Before re-
+        raising, the method fires kill_switch.hard_kill() so callers cannot
+        accidentally swallow the corruption by catching Exception broadly
+        (OrderPlacer._handle_entry_fill does exactly that today).
+
+        Scoping note: this hard-kill policy is SPECIFIC to commit_to_used.
+        reserve() failures are recoverable via signal rejection.
+        release_used() failures keep the existing swallow+reconciler backstop
+        (the position has already been realized at broker; capital cleanup
+        proceeds out-of-band). Widening this pattern to other mutators
+        requires its own test matrix per-method.
+
         Args:
             reservation_id:   from reserve().
             actual_fill_price: the actual fill price (may differ from reserved).
             actual_qty:        filled quantity (may be < reserved qty).
 
         Raises:
-            ValueError: reservation_id unknown.
-            CapitalInvariantViolation: invariant fails post-mutation.
+            ValueError: reservation_id unknown (then also fires hard_kill).
+            CapitalInvariantViolation: invariant fails post-mutation (BL-9
+                fires hard_kill inside _check_invariant; BL-4's outer handler
+                may fire it again -- hard_kill is idempotent).
+            Any other exception from ledger/apply is re-raised (also after
+                hard_kill has fired).
         """
-        with self._lock:
-            self._assert_initialized()
-            res = self._reservations.get(reservation_id)
-            if res is None:
-                raise ValueError(
-                    f"reservation_id {reservation_id!r} not found in active reservations"
+        try:
+            with self._lock:
+                self._assert_initialized()
+                res = self._reservations.get(reservation_id)
+                if res is None:
+                    raise ValueError(
+                        f"reservation_id {reservation_id!r} not found in active reservations"
+                    )
+
+                actual_margin = required_margin(
+                    actual_qty, actual_fill_price, res.intent, self._leverage_map
+                )
+                excess = max(0.0, res.margin - actual_margin)
+
+                # BL-5: ledger row first. COMMIT is a bucket-internal reshape
+                # (reserved -> used, optional excess -> avail), so margin_delta=0
+                # (no net change to the sum of reserved+used from this bucket's POV
+                # when there is no excess; the excess path adds to avail not to
+                # the reserved+used pair, so the "in-flight" margin decreases by
+                # `excess`). We use amount=actual_margin for audit continuity and
+                # balance_before/after reflect the AVAILABLE balance in `bucket`.
+                avail_before = self._bucket_avail(res.bucket)
+                projected_after = avail_before + excess
+                ts = now_ist().isoformat()
+                self._write_ledger(
+                    ts=ts,
+                    entry_type="COMMIT",
+                    amount=actual_margin,
+                    bucket=res.bucket,
+                    balance_before=avail_before,
+                    balance_after=projected_after,
+                    signal_id=res.signal_id,
+                    reservation_id=reservation_id,
+                    reason=(
+                        f"fill: qty={actual_qty} price={actual_fill_price} "
+                        f"excess_returned={excess:.2f}"
+                    ),
+                    margin_delta=0.0,
                 )
 
-            actual_margin = required_margin(
-                actual_qty, actual_fill_price, res.intent, self._leverage_map
-            )
-            excess = max(0.0, res.margin - actual_margin)
+                # FM18: pure mutation via shared helper (used by both this public
+                # path and rehydrate replay).
+                self._apply_commit(
+                    reservation_id=reservation_id,
+                    actual_margin=actual_margin,
+                    excess=excess,
+                )
 
-            # BL-5: ledger row first. COMMIT is a bucket-internal reshape
-            # (reserved -> used, optional excess -> avail), so margin_delta=0
-            # (no net change to the sum of reserved+used from this bucket's POV
-            # when there is no excess; the excess path adds to avail not to
-            # the reserved+used pair, so the "in-flight" margin decreases by
-            # `excess`). We use amount=actual_margin for audit continuity and
-            # balance_before/after reflect the AVAILABLE balance in `bucket`.
-            avail_before = self._bucket_avail(res.bucket)
-            projected_after = avail_before + excess
-            ts = now_ist().isoformat()
-            self._write_ledger(
-                ts=ts,
-                entry_type="COMMIT",
-                amount=actual_margin,
-                bucket=res.bucket,
-                balance_before=avail_before,
-                balance_after=projected_after,
-                signal_id=res.signal_id,
-                reservation_id=reservation_id,
-                reason=(
-                    f"fill: qty={actual_qty} price={actual_fill_price} "
-                    f"excess_returned={excess:.2f}"
-                ),
-                margin_delta=0.0,
-            )
+                self._check_invariant("commit_to_used", reservation_id)
 
-            # FM18: pure mutation via shared helper (used by both this public
-            # path and rehydrate replay).
-            self._apply_commit(
-                reservation_id=reservation_id,
-                actual_margin=actual_margin,
-                excess=excess,
+                return CommitResult(
+                    reservation_id=reservation_id,
+                    actual_margin=actual_margin,
+                    excess_returned=excess,
+                    bucket=res.bucket,
+                )
+        except Exception as exc:
+            # BL-4 (Phase C.1): commit_to_used failure implies broker-
+            # confirmed fill but capital state inconsistent. Trip hard_kill
+            # before re-raising so callers that catch Exception broadly
+            # (e.g. OrderPlacer._handle_entry_fill) cannot swallow corruption.
+            # Pattern mirrors BL-9 (_check_invariant); hard_kill is
+            # idempotent per kill_switch state machine so double-fire from
+            # BL-9 + BL-4 on an invariant violation is safe.
+            # BL-4 does NOT invoke on_critical_failure (stays narrow to
+            # BL-9 semantic; a ledger/apply failure is not necessarily an
+            # invariant breach).
+            reason = (
+                f"commit_to_used failed for reservation_id="
+                f"{reservation_id}: {exc}"
             )
-
-            self._check_invariant("commit_to_used", reservation_id)
-
-            return CommitResult(
-                reservation_id=reservation_id,
-                actual_margin=actual_margin,
-                excess_returned=excess,
-                bucket=res.bucket,
+            self._log.critical(
+                "commit_to_used_failed_hard_kill",
+                extra={
+                    "reservation_id": reservation_id,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "actual_fill_price": actual_fill_price,
+                    "actual_qty": actual_qty,
+                },
             )
+            if self._kill_switch is not None:
+                try:
+                    self._kill_switch.hard_kill(
+                        reason=reason,
+                        triggered_by="fund_manager.commit_to_used",
+                    )
+                except Exception as kse:
+                    log_exception(self._log, kse)
+                    self._log.critical(
+                        "commit_to_used: kill_switch.hard_kill ALSO failed",
+                        extra={"kill_error": str(kse)},
+                    )
+            else:
+                self._log.critical(
+                    "commit_to_used failed with kill_switch=None; "
+                    "escalation not possible"
+                )
+            raise
 
     def release_used(
         self,

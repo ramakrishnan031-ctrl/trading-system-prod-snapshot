@@ -502,7 +502,13 @@ class OrderPlacer:
                 "order_placer.commit_capital_failed",
                 extra={"trade_id": trade_id, "reservation_id": reservation_id},
             )
-            # Continue: trade is open, capital state may be wrong; reconciler will fix
+            # Post-BL-4 (Phase C.1): commit_to_used has already fired
+            # kill_switch.hard_kill before re-raising, so the system is
+            # halting new orders and cancelling in-flight ones. This catch
+            # block still runs to attach trade_id/reservation_id context
+            # to the logs, but the "continue" below is effectively a
+            # wind-down -- nothing new can be placed. DB recording of the
+            # fill still proceeds so the trade row matches broker truth.
 
         # Record fill in DB
         try:
