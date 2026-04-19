@@ -516,6 +516,156 @@ def test_thread_safety_concurrent_subscribe_unsubscribe() -> None:
 
 
 # ---------------------------------------------------------------------------
+# BL-11 / Phase C.3 — _on_connect re-subscribe error handling
+#
+# Core behavior (local _subscribed set, re-subscribe on _on_connect,
+# MODE_LTP restoration, thread safety) already locked by:
+#   test_subscribe_adds_to_subscribed_set
+#   test_unsubscribe_removes_from_subscribed_set
+#   test_reconnect_resubscribes_all_tokens
+#   test_subscribe_idempotent
+# These BL-11 tests add the error-handling + grep-tag + token-count logging
+# locks.
+# ---------------------------------------------------------------------------
+
+def test_on_connect_first_call_with_empty_set_is_noop() -> None:
+    """BL-11: first connect with empty _subscribed -> ticker.subscribe not called."""
+    feed, ticker, _ = _make_and_connect()
+    try:
+        # _make_and_connect already called ws.on_connect once during connect().
+        # With no subscribes before connect, ticker.subscribe must NOT have fired.
+        ticker.subscribe.assert_not_called()
+        ticker.set_mode.assert_not_called()
+    finally:
+        feed.disconnect()
+    print("  OK BL-11: empty _subscribed on _on_connect is a no-op")
+
+
+def test_on_connect_re_subscribe_failure_logs_critical_no_raise() -> None:
+    """BL-11: ws.subscribe raising on reconnect -> CRITICAL + no-propagate."""
+    feed, ticker, logger = _make_and_connect()
+    try:
+        feed.subscribe([111, 222])
+        ticker.subscribe.reset_mock()
+        ticker.set_mode.reset_mock()
+
+        # Make ws.subscribe explode on the next call (simulated reconnect
+        # where broker transiently rejects)
+        ticker.subscribe.side_effect = RuntimeError(
+            "simulated broker rejection during reconnect"
+        )
+
+        # Simulate a reconnect: on_connect fires again -- must NOT raise.
+        try:
+            ticker.on_connect(ticker, {})
+        except Exception as exc:  # pragma: no cover - defensive
+            raise AssertionError(
+                "BL-11: _on_connect MUST NOT propagate re-subscribe "
+                "failures into the ticker thread. Got: %r" % exc
+            )
+
+        # CRITICAL log must fire with the grep-friendly tag
+        logger.critical.assert_called()
+        critical_args = [str(c) for c in logger.critical.call_args_list]
+        joined = " ".join(critical_args)
+        assert "re-subscribe after connect FAILED" in joined, (
+            "BL-11: missing grep-friendly CRITICAL tag "
+            "'re-subscribe after connect FAILED'. Logs: " + joined
+        )
+    finally:
+        feed.disconnect()
+    print("  OK BL-11: re-subscribe failure -> CRITICAL grep tag, no propagate")
+
+
+def test_multiple_reconnects_still_re_subscribe_correctly() -> None:
+    """BL-11: three _on_connect firings -> ticker.subscribe called 3 times."""
+    feed, ticker, _ = _make_and_connect()
+    try:
+        feed.subscribe([301, 302, 303])
+        ticker.subscribe.reset_mock()
+        ticker.set_mode.reset_mock()
+
+        # Simulate three reconnects
+        ticker.fire_close()
+        ticker.on_connect(ticker, {})   # reconnect #1
+        ticker.fire_close()
+        ticker.on_connect(ticker, {})   # reconnect #2
+        ticker.fire_close()
+        ticker.on_connect(ticker, {})   # reconnect #3
+
+        assert ticker.subscribe.call_count == 3, (
+            "BL-11: three _on_connect firings must produce three subscribe "
+            "calls. Got: %d" % ticker.subscribe.call_count
+        )
+        # Every call carries the full token set
+        for call in ticker.subscribe.call_args_list:
+            tokens = set(call[0][0])
+            assert tokens == {301, 302, 303}, (
+                "BL-11: each re-subscribe must carry the full tracked set. "
+                "Got: %r" % tokens
+            )
+    finally:
+        feed.disconnect()
+    print("  OK BL-11: multiple reconnects each re-subscribe full set")
+
+
+def test_subscribe_during_disconnected_state_adds_to_set_for_later() -> None:
+    """BL-11: subscribe before connect -> _subscribed populated; _on_connect pushes."""
+    ticker = MockTicker("k", "t")
+    with patch("data.live_feed.KiteTicker", return_value=ticker):
+        from data.live_feed import LiveFeedManager
+        logger = _make_logger()
+        feed = LiveFeedManager(
+            api_key="k", access_token="t", logger=logger,
+        )
+
+    # Subscribe BEFORE connect -- must populate the set without calling ticker
+    feed.subscribe([701, 702, 703])
+    assert feed._subscribed == {701, 702, 703}
+    ticker.subscribe.assert_not_called()
+
+    # Now "connect" by firing _on_connect directly -- must push the set
+    feed._ticker = ticker
+    ticker.on_connect = feed._on_connect
+    ticker.on_connect(ticker, {})
+
+    ticker.subscribe.assert_called_once()
+    pushed = set(ticker.subscribe.call_args[0][0])
+    assert pushed == {701, 702, 703}, (
+        "BL-11: subscriptions made while disconnected must be re-pushed "
+        "by the next _on_connect. Pushed: %r" % pushed
+    )
+    print("  OK BL-11: subscribe-while-disconnected preserved for next connect")
+
+
+def test_on_connect_logs_re_subscribe_token_count() -> None:
+    """BL-11: INFO log carries the re-subscribe token count."""
+    feed, ticker, logger = _make_and_connect()
+    try:
+        feed.subscribe([501, 502, 503, 504])
+        logger.info.reset_mock()
+
+        # Simulate reconnect
+        ticker.fire_close()
+        ticker.on_connect(ticker, {})
+
+        # Scan info calls for the token-count message
+        info_msgs = " ".join(
+            str(c) for c in logger.info.call_args_list
+        )
+        assert "re-subscribing to" in info_msgs, (
+            "BL-11: INFO log must enumerate the re-subscribe token count. "
+            "Got: " + info_msgs
+        )
+        assert "4" in info_msgs, (
+            "BL-11: token count (4) missing from INFO log. Got: " + info_msgs
+        )
+    finally:
+        feed.disconnect()
+    print("  OK BL-11: INFO log carries re-subscribe token count")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -547,6 +697,12 @@ def run_all_tests() -> int:
         test_subscribe_calls_ticker_when_connected,
         test_subscribe_does_not_call_ticker_when_disconnected,
         test_thread_safety_concurrent_subscribe_unsubscribe,
+        # BL-11 / Phase C.3
+        test_on_connect_first_call_with_empty_set_is_noop,
+        test_on_connect_re_subscribe_failure_logs_critical_no_raise,
+        test_multiple_reconnects_still_re_subscribe_correctly,
+        test_subscribe_during_disconnected_state_adds_to_set_for_later,
+        test_on_connect_logs_re_subscribe_token_count,
     ]
 
     passed = 0

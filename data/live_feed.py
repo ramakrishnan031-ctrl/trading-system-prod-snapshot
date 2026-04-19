@@ -16,6 +16,7 @@ from typing import Callable, List, Optional, Set
 
 from kiteconnect import KiteTicker
 
+from core.logger import log_exception
 from core.time_authority import now_ist
 
 
@@ -164,15 +165,46 @@ class LiveFeedManager:
                 )
 
     def _on_connect(self, ws, response) -> None:
-        """LF3: Successful connection. Resubscribe all tracked tokens."""
+        """LF3 + BL-11: Successful connection. Re-subscribe all tracked tokens.
+
+        BL-11: the re-subscribe call is wrapped in try/except. A broker
+        rejection or transient failure during reconnect must NOT propagate
+        into the kiteconnect ticker thread (which would crash it and leave
+        the feed silently dead). On failure, log CRITICAL with the
+        grep-friendly tag ``re-subscribe after connect FAILED`` and let the
+        next _on_connect cycle retry.
+
+        First-connect with an empty _subscribed is a no-op (nothing to push
+        yet). Every subsequent _on_connect re-pushes the full set.
+        """
         self._connected = True
         self._reconnect_notified = False
         self._log.info("LiveFeedManager: connected to KiteTicker")
         with self._lock:
             tokens = list(self._subscribed)
-        if tokens:
+        if not tokens:
+            return
+        # BL-11: enumerate the re-subscribe size so ops can grep
+        # "re-subscribing to N tokens after connect" during incident triage.
+        self._log.info(
+            "live_feed: re-subscribing to %d tokens after connect",
+            len(tokens),
+            extra={"token_count": len(tokens), "tokens": sorted(tokens)},
+        )
+        try:
             ws.subscribe(tokens)
             ws.set_mode(KiteTicker.MODE_LTP, tokens)
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "live_feed: re-subscribe after connect FAILED; feed is live "
+                "but no ticks will flow (will retry on next _on_connect)",
+                extra={
+                    "token_count": len(tokens),
+                    "tokens": sorted(tokens),
+                    "error": str(exc),
+                },
+            )
 
     def _on_close(self, ws, code, reason) -> None:
         """LF3: Connection closed. Record disconnect time for gap tracking."""
