@@ -180,6 +180,7 @@ class RateLimiter:
         bucket = self._get_bucket(category)
 
         # Immediate rejection: n can never be satisfied by this bucket.
+        # _capacity is read-only; safe to access without lock
         if n > bucket._capacity:
             raise BrokerRateLimitError(
                 f"Requested {n} token(s) exceeds bucket capacity {bucket._capacity} "

@@ -27,7 +27,7 @@ Locked Design Decisions:
     CR8  -- mark_delivered(path) -> Path: atomic rename .flag -> .delivered.
     CR9  -- mark_failed(path, reason) -> Path: rename to .failed AND write
             sibling <stem>.reason with failure detail.
-    CR10 -- Layer 4 (alerts/). Imports: stdlib only.
+    CR10 -- Layer 4 (alerts/). Imports: stdlib and core.time_authority.
 """
 from __future__ import annotations
 

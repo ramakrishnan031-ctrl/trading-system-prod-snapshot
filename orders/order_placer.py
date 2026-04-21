@@ -1158,14 +1158,10 @@ class OrderPlacer:
         """
         exit_side = "SELL" if side == "BUY" else "BUY"
 
-        # HIGH #7: resolve product code via injected resolver; fallback map if not injected
-        if self._product_resolver is not None:
-            try:
-                product = self._product_resolver.resolve(intent)
-            except Exception:
-                product = "MIS" if intent == "INTRADAY" else "CNC"
-        else:
-            product = "MIS" if intent == "INTRADAY" else "CNC"
+        # HIGH #7: product code must come from injected resolver; no hardcoded fallback.
+        if self._product_resolver is None:
+            raise RuntimeError("OrderPlacer requires product_resolver")
+        product = self._product_resolver.resolve(intent)
         co_variety = "co" if result.order_protocol == "CO_PLUS_TGT" else "regular"
 
         specs: List[OrderInsertSpec] = []

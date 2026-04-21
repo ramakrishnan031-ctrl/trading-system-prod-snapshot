@@ -29,6 +29,9 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 _KITE_LOGIN_URL = "https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
@@ -82,7 +85,7 @@ def exchange_request_token(
     timeout_sec: float = 10.0,
 ) -> str:
     """
-    Exchange request_token for access_token via Kite API (SU10e).
+    Exchange request_token for access_token via Kite API (SU10f).
 
     Returns:
         access_token string on success.

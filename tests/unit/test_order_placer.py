@@ -67,6 +67,13 @@ def _log() -> logging.Logger:
     return logging.getLogger("test_order_placer")
 
 
+def _default_resolver() -> ProductResolver:
+    """Default ProductResolver for OrderPlacer construction in unit tests (HIGH #7)."""
+    return ProductResolver({
+        "zerodha": {"INTRADAY": "MIS", "DELIVERY": "CNC", "COVER_ORDER": "CO"}
+    })
+
+
 def _make_store(tmp_path: Path) -> StateStore:
     db = tmp_path / "test.db"
     schema = Path("core/schema.sql")
@@ -662,6 +669,7 @@ class TestOrderPlacer:
             cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
             rr_ratio=2.0,
             default_order_protocol=default_protocol,
+            product_resolver=_default_resolver(),
         )
         return placer, store, fm, bus, adapter, om
 
@@ -945,6 +953,7 @@ class TestKillSwitchLastMile:
                 order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
             cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
                 kill_switch=ks,
+                product_resolver=_default_resolver(),
             )
 
             with pytest.raises(OrderRejectedError, match="kill_switch_active_last_mile"):
@@ -992,6 +1001,7 @@ class TestKillSwitchLastMile:
                 order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
             cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
                 kill_switch=ks,
+                product_resolver=_default_resolver(),
             )
 
             placer.place(
@@ -1032,6 +1042,7 @@ class TestReservationRelease:
                 fund_manager=fm, bus=bus, logger=_log(),
                 order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b
             cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
+                product_resolver=_default_resolver(),
             )
 
             with pytest.raises(BrokerError):
@@ -1491,6 +1502,7 @@ class TestBl7bOrderPlacerDependencyInjection:
             bus=EventBus(),
             logger=_log(),
             cost_calculator=MagicMock(spec=CostCalculator),
+            product_resolver=_default_resolver(),
         )
 
     def test_order_placer_stores_injected_order_monitor(self) -> None:
@@ -1592,6 +1604,7 @@ class TestBl7cOrderPlacerTrackingWiring:
             order_monitor=monitor,
             cost_calculator=MagicMock(spec=CostCalculator),  # BL-10a
             default_order_protocol=default_protocol,
+            product_resolver=_default_resolver(),
         )
         return placer, monitor, adapter, store, fm, bus
 
@@ -1764,6 +1777,7 @@ class TestBl7dEntryFillSmartTgt:
             default_order_protocol=default_protocol,
             smart_tgt_manager=smart_tgt_manager,
             smart_tgt_config=smart_tgt_config,
+            product_resolver=_default_resolver(),
         )
         return placer, adapter, store, bus, om
 
@@ -1928,6 +1942,7 @@ class TestBl7dExitFillHandling:
             default_order_protocol=protocol,
             smart_tgt_manager=smart_tgt_manager,
             smart_tgt_config=cfg,
+            product_resolver=_default_resolver(),
         )
         return placer, adapter, store, bus, om, fm, cost_calc
 
@@ -2361,6 +2376,7 @@ class TestBl8AtomicPersist:
             rr_ratio=2.0,
             default_order_protocol=default_protocol,
             kill_switch=kill_switch,
+            product_resolver=_default_resolver(),
         )
         return placer, store, fm, bus, adapter, om
 
@@ -2811,6 +2827,7 @@ class TestEf2TrackFailureCleanup:
             rr_ratio=2.0,
             default_order_protocol=default_protocol,
             kill_switch=kill_switch,
+            product_resolver=_default_resolver(),
         )
         return placer, store, fm, bus, adapter, om, monitor
 
@@ -3088,6 +3105,7 @@ class TestBl19PlacerRateLimitRetry:
                 max_delay_sec=0.05,       # if any real penalize path fires
                 jitter_sec=0.0,
             ),
+            product_resolver=_default_resolver(),
         )
         return placer, store, fm, bus, om, engine_mock
 

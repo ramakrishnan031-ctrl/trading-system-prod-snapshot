@@ -64,6 +64,12 @@ class EntryResult:
     order_protocol: str = ""
     rejection_reason: str = ""
 
+    def __post_init__(self):
+        if self.success and not self.entry_broker_order_id:
+            raise ValueError("success=True requires non-empty entry_broker_order_id")
+        if self.success and not self.order_protocol:
+            raise ValueError("success=True requires non-empty order_protocol")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Abstract base

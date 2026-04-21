@@ -98,8 +98,11 @@ def _load_yaml_config(filename: str, schema_cls):
 def _make_webhook_config(scanner_names):
     """Build a duck-typed config object for WebhookReceiver."""
     cfg = types.SimpleNamespace()
-    cfg.signal_queue = types.SimpleNamespace(
-        capacity=300, backpressure_pct=0.80, expiry_sec=60
+    # WebhookReceiver reads signal_queue under .system (matches AppConfig shape)
+    cfg.system = types.SimpleNamespace(
+        signal_queue=types.SimpleNamespace(
+            capacity=300, backpressure_pct=0.80, expiry_sec=60
+        )
     )
     # WebhookReceiver only checks `scanner_name in known_scanners` (key presence)
     cfg.scan_webhook_map = types.SimpleNamespace(
@@ -285,6 +288,7 @@ def wired_system(request, tmp_path):
         order_monitor=MagicMock(spec=OrderMonitor),  # BL-7b: DI stub for integration tests
         cost_calculator=cost_calculator,  # BL-10a: reuse adapter's instance
         kill_switch=kill_switch,
+        product_resolver=product_resolver,  # required after audit FIX 4 (no hardcoded fallback)
     )
 
     # ── Signal processing ─────────────────────────────────────────────────────

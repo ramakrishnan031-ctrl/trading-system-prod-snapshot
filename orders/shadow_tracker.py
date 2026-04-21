@@ -52,6 +52,7 @@ from typing import Dict, List, Optional
 from core.events import EodSquareoffComplete, EventBus, PositionClosed
 from core.logger import log_exception
 from core.time_authority import now_ist, today_ist
+from orders.order_reconciler import _PRODUCT_TO_INTENT  # noqa: F401 — exposed for cross-module consistency
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -348,7 +349,7 @@ class ShadowTracker:
             return
 
         today_iso = self._today_ist()
-        if self._eod_fired_date == today_iso:
+        if self._eod_fired_date is not None and self._eod_fired_date == today_iso:
             self._log.info(
                 "shadow_tracker: EOD already fired today (%s), skipping",
                 today_iso,

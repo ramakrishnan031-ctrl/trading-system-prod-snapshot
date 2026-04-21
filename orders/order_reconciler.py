@@ -79,6 +79,7 @@ from orders.order_manager import OrderManager
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 # Broker product code -> fund_manager intent (for capital release on MANUAL_CLOSE)
+# Note: _PRODUCT_TO_INTENT is also imported by shadow_tracker.py
 _PRODUCT_TO_INTENT: Dict[str, str] = {
     "MIS": "INTRADAY",
     "CO": "COVER_ORDER",

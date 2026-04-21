@@ -64,10 +64,12 @@ def _make_config(capacity=20, bp_pct=0.8, expiry=60,
     if scanners is None:
         scanners = {"gap_go_long": "strategies/gap_go_long.yaml"}
     cfg = types.SimpleNamespace()
-    cfg.signal_queue = types.SimpleNamespace(
-        capacity=capacity,
-        backpressure_pct=bp_pct,
-        expiry_sec=expiry,
+    cfg.system = types.SimpleNamespace(
+        signal_queue=types.SimpleNamespace(
+            capacity=capacity,
+            backpressure_pct=bp_pct,
+            expiry_sec=expiry,
+        )
     )
     cfg.scan_webhook_map = types.SimpleNamespace(scanners=scanners)
     return cfg

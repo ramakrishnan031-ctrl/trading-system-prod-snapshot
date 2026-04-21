@@ -40,10 +40,18 @@ class LiveFeedManager:
         on_critical_failure: Optional[Callable[[str], None]] = None,
         max_reconnect_attempts: int = 10,
         reconnect_delay_sec: int = 5,
+        paper_mode: bool = False,
     ) -> None:
         # LF2
         self._api_key = api_key
         self._access_token = access_token
+        self._paper_mode = paper_mode
+        logger.info(
+            "LiveFeedManager init: paper_mode=%s api_key=%s... token=%s...",
+            paper_mode,
+            api_key[:6] if api_key else "EMPTY",
+            access_token[:10] if access_token else "EMPTY",
+        )
         self._log = logger
         self._on_critical_failure = on_critical_failure
         self._max_reconnect_attempts = max_reconnect_attempts
@@ -74,6 +82,9 @@ class LiveFeedManager:
 
     def connect(self) -> None:
         """LF3: Start consumer thread and KiteTicker in background thread."""
+        if self._paper_mode:
+            self._log.info("LiveFeedManager: paper mode — skipping WebSocket connection")
+            return
         self._stop_event.clear()
         self._consumer_thread = threading.Thread(
             target=self._consume_ticks,

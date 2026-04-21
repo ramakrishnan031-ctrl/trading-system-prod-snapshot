@@ -411,6 +411,12 @@ class OrderManager:
                 f"refusing to overwrite"
             )
 
+        if exit_qty != existing.get("qty_filled", 0):
+            self._log.warning(
+                "close_trade: partial exit (exit_qty=%d, entry_qty=%d)",
+                exit_qty, existing.get("qty_filled", 0)
+            )
+
         net_pnl = gross_pnl - charges
         now = now_ist().isoformat()
         with self._store.transaction() as cur:

@@ -98,6 +98,7 @@ class TelegramNotifier:
         max_retries: int = 2,
         paper_mode: bool = False,
         channels: list[ChannelConfig] | None = None,
+        send_in_paper_mode: bool = False,
     ) -> None:
         """
         Construct a TelegramNotifier (TG2).
@@ -128,6 +129,12 @@ class TelegramNotifier:
         self._timeout = timeout_sec
         self._max_retries = max_retries
         self._paper_mode = paper_mode
+        self._send_in_paper_mode = send_in_paper_mode
+
+        if chat_ids and channels:
+            self._log.warning(
+                "Both chat_ids and channels provided; channels will be used (legacy chat_ids ignored)"
+            )
 
         # Ensure failed_alerts_log parent directory exists (TG10)
         self._failed_log.parent.mkdir(parents=True, exist_ok=True)
@@ -178,8 +185,8 @@ class TelegramNotifier:
         """CRITICAL: write sentinel first, then attempt Telegram (TG5)."""
         sentinel_path: Path | None = None
 
-        if self._paper_mode:
-            # paper_mode: still write sentinel but skip HTTP (TG9)
+        if self._paper_mode and not self._send_in_paper_mode:
+            # paper_mode with alerts suppressed: still write sentinel but skip HTTP (TG9)
             try:
                 sentinel_path = write_critical_sentinel(
                     title=title, body=body,
@@ -230,7 +237,7 @@ class TelegramNotifier:
         context: dict,
     ) -> SendResult:
         """ERROR: attempt Telegram; write failed_alerts.log on failure (TG4, TG8)."""
-        if self._paper_mode:
+        if self._paper_mode and not self._send_in_paper_mode:
             self._log.info("[ERROR][paper_mode] %s -- %s", title, body)
             return SendResult(success=True, tier="ERROR", delivered_to=[])
 
@@ -265,7 +272,7 @@ class TelegramNotifier:
         context: dict,
     ) -> SendResult:
         """INFO/WARN: attempt send; drop silently on failure (TG4)."""
-        if self._paper_mode:
+        if self._paper_mode and not self._send_in_paper_mode:
             self._log.info("[%s][paper_mode] %s -- %s", severity, title, body)
             return SendResult(success=True, tier=severity, delivered_to=[])
 

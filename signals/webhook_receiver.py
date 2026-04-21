@@ -138,7 +138,7 @@ class WebhookReceiver:
         def health():
             ks_active = bool(receiver._ks.is_active()) if receiver._ks else False
             q_size = receiver._queue.qsize()
-            q_cap = receiver._config.signal_queue.capacity
+            q_cap = receiver._config.system.signal_queue.capacity
             return jsonify({
                 "status": "ok",
                 "kill_switch_active": ks_active,
@@ -199,19 +199,27 @@ class WebhookReceiver:
             )
 
     def _process_request(self, scanner_name: str, raw_body: bytes):
-        sq_cfg = self._config.signal_queue
+        sq_cfg = self._config.system.signal_queue
 
-        # WR8: HMAC validation (when secret configured)
+        # WR8: auth validation (when secret configured)
+        # Two accepted methods (tried in order):
+        #   1. X-Webhook-Signature: sha256=<hex>  — HMAC over raw body
+        #   2. ?token=<secret>                    — query-param bearer (Chartink-compatible)
         if self._secret:
             sig_header: str = request.headers.get("X-Webhook-Signature", "")
-            if not sig_header.startswith("sha256="):
-                return jsonify({"error": "Missing or malformed X-Webhook-Signature header"}), 401
-            provided_hex = sig_header[7:]
-            expected_hex = _hmac.new(
-                self._secret.encode(), raw_body, hashlib.sha256
-            ).hexdigest()
-            if not _hmac.compare_digest(provided_hex, expected_hex):
-                return jsonify({"error": "HMAC signature mismatch"}), 401
+            token_param: str = request.args.get("token", "")
+            if sig_header.startswith("sha256="):
+                provided_hex = sig_header[7:]
+                expected_hex = _hmac.new(
+                    self._secret.encode(), raw_body, hashlib.sha256
+                ).hexdigest()
+                if not _hmac.compare_digest(provided_hex, expected_hex):
+                    return jsonify({"error": "HMAC signature mismatch"}), 401
+            elif token_param:
+                if not _hmac.compare_digest(token_param, self._secret):
+                    return jsonify({"error": "Invalid token"}), 401
+            else:
+                return jsonify({"error": "Missing auth: provide X-Webhook-Signature header or ?token= param"}), 401
 
         # WR4: scanner_name must be in scan_webhook_map
         known_scanners: dict[str, Any] = self._config.scan_webhook_map.scanners

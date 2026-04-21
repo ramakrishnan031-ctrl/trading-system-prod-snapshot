@@ -1174,6 +1174,7 @@ def test_f1_ef7_startup_check_passes_on_match(tmp_path: Path) -> None:
     """Paper mode with adapter.net == fm.total -> no raise, info log emitted."""
     fm = MagicMock()
     fm.total = 50_000.0
+    fm.get_snapshot.return_value = MagicMock(total=50_000.0)
     adapter = MagicMock()
     adapter.get_margins.return_value = MagicMock(net=50_000.0)
     logger = MagicMock()

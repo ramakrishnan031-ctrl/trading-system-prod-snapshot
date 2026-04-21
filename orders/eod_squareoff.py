@@ -65,9 +65,6 @@ if TYPE_CHECKING:
 # Result types
 # ─────────────────────────────────────────────────────────────────────────────
 
-_MARKET_CLOSE_HARD_STOP = datetime.strptime("15:30", "%H:%M").time()
-
-
 @dataclass(frozen=True)
 class EodFireResult:
     """Summary result from a single EOD fire (EOD5, EOD10)."""
@@ -116,6 +113,7 @@ class EodSquareoff:
         order_monitor: Optional["OrderMonitor"] = None,
         inter_order_delay_ms: int = 500,
         notifier: Optional[object] = None,  # TelegramNotifier; for EOD9 SKIPPED_LATE alert
+        market_close: str = "15:30",        # IST HH:MM; hard stop for recovery fire
     ) -> None:
         self._adapter = adapter
         self._store = state_store
@@ -129,6 +127,7 @@ class EodSquareoff:
         self._order_monitor = order_monitor
         self._inter_order_delay_sec = inter_order_delay_ms / 1000.0
         self._notifier = notifier
+        self._market_close_time = datetime.strptime(market_close, "%H:%M").time()
 
         # EOD3: per-date "already fired" flag
         self._fired_for_date: dict[date, bool] = {}
@@ -684,12 +683,12 @@ class EodSquareoff:
         if self._mw.is_trading_holiday(now):
             return  # Holiday; EOD not applicable
 
-        if now.time() > _MARKET_CLOSE_HARD_STOP:
+        if now.time() > self._market_close_time:
             self._log.critical(
                 "EOD squareoff was NOT fired today (%s) and it is past market close "
                 "(%s). Manual intervention required.",
                 today_str,
-                _MARKET_CLOSE_HARD_STOP.strftime("%H:%M"),
+                self._market_close_time.strftime("%H:%M"),
             )
             # EOD9 visibility: check if open positions remain; write event + alert
             try:

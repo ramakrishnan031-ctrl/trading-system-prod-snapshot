@@ -67,9 +67,9 @@ def _make_mock_app_config():
     sys_cfg.position_sizing.risk_per_trade_pct = 0.01
     sys_cfg.position_sizing.max_concentration_pct = 0.10
     sys_cfg.position_sizing.min_qty_threshold = 1
-    sys_cfg.position_sizing.tier_multipliers.A = 1.0
-    sys_cfg.position_sizing.tier_multipliers.B = 0.8
-    sys_cfg.position_sizing.tier_multipliers.C = 0.6
+    sys_cfg.position_sizing.tier_multipliers.HIGH = 1.0
+    sys_cfg.position_sizing.tier_multipliers.MEDIUM = 0.70
+    sys_cfg.position_sizing.tier_multipliers.LOW = 0.50
     sys_cfg.risk.max_open_positions = 5
     sys_cfg.risk.max_daily_trades = 20
     sys_cfg.risk.max_sector_exposure_pct = 0.3
@@ -187,8 +187,10 @@ def _make_all_patches(extra=None):
     adapter_mock.get_margins.return_value = MagicMock(net=50_000.0)
     adapter_mock.get_quote = MagicMock()
     # F.1 / EF-7: fund_manager.total must be numeric and match adapter.net.
+    # check_paper_capital_consistency() reads fund_manager.get_snapshot().total.
     fund_manager_mock = MagicMock()
     fund_manager_mock.total = 50_000.0
+    fund_manager_mock.get_snapshot.return_value = MagicMock(total=50_000.0)
 
     ta_mock = _make_mock_time_authority()
 
@@ -577,14 +579,19 @@ class TestBl15WebhookSecretRequired:
         assert "WEBHOOK_SECRET" not in captured["required_secrets"]
 
     def test_live_mode_keeps_original_secrets(self):
-        """BL-15 must append, not replace -- other keys stay required."""
+        """BL-15 must append, not replace -- other keys stay required.
+
+        Post account-registry refactor: API key/secret env vars are namespaced
+        by account_id (e.g. ZERODHA_API_KEY_LFL836). TELEGRAM_BOT_TOKEN and
+        WEBHOOK_SECRET remain shared globals.
+        """
         captured, sideeffect = self._capture_startup_call()
         _run(argv=["--mode", "live"], extra={
             "run_all_startup_checks": MagicMock(side_effect=sideeffect),
         })
         required = captured["required_secrets"]
-        assert "ZERODHA_API_KEY" in required
-        assert "ZERODHA_ACCESS_TOKEN" in required
+        assert any(k.startswith("ZERODHA_API_KEY_") for k in required)
+        assert any(k.startswith("ZERODHA_API_SECRET_") for k in required)
         assert "TELEGRAM_BOT_TOKEN" in required
         assert "WEBHOOK_SECRET" in required
 

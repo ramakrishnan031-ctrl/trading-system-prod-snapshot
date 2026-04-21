@@ -63,6 +63,7 @@ class TradingHoursConfig(BaseModel):
     entry_start: str           # "HH:MM" IST — entry window opens (P1)
     entry_end: str             # "HH:MM" IST — entry window closes (P1)
     eod_squareoff_time: str    # "HH:MM" IST — square-off trigger (P1)
+    market_close: str = "15:30"  # "HH:MM" IST — NSE regular-session close
 
 
 class SignalQueueConfig(BaseModel):
@@ -342,6 +343,7 @@ class TelegramChannelConfig(BaseModel):
 class TelegramConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bot_token_env: str = "TELEGRAM_BOT_TOKEN"  # env var holding the Bot API token
+    telegram_alerts_in_paper_mode: bool = True  # if True, send real Telegram alerts in paper mode
     channels: list[TelegramChannelConfig]        # whitelist of known channels
     personal_chat_id_env: str = ""               # reserved for v2.1 bot commands; zero sends
     whitelist_only: bool = True                  # if True, only listed+enabled channels receive msgs

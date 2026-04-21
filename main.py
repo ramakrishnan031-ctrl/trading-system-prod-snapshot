@@ -711,7 +711,23 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,
     )
 
-    required_secrets = ["ZERODHA_API_KEY", "ZERODHA_ACCESS_TOKEN", "TELEGRAM_BOT_TOKEN"]
+    try:
+        account_registry = AccountRegistry.load(config_dir / "accounts.csv")
+        _log.info(
+            "AccountRegistry loaded: %d accounts (primary: %s)",
+            account_registry.count(),
+            account_registry.primary().account_id,
+        )
+    except Exception as exc:
+        _log.critical("Failed to load accounts.csv: %s", exc)
+        return 3
+
+    _primary_id = account_registry.primary().account_id
+    required_secrets = [
+        f"ZERODHA_API_KEY_{_primary_id}",
+        f"ZERODHA_API_SECRET_{_primary_id}",
+        "TELEGRAM_BOT_TOKEN",
+    ]
     # BL-15: in live mode the webhook must validate HMAC on every inbound
     # request, which requires a shared secret. Paper stays permissive so
     # the operator can POST test payloads with curl without fuss.
@@ -770,17 +786,6 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # BL-20: startup_checks passed, so instrument_cache is non-None and
     # >= min_instrument_rows. Fallthrough guard for type-checkers.
     assert instrument_cache is not None
-
-    try:
-        account_registry = AccountRegistry.load(config_dir / "accounts.csv")
-        _log.info(
-            "AccountRegistry loaded: %d accounts (primary: %s)",
-            account_registry.count(),
-            account_registry.primary().account_id,
-        )
-    except Exception as exc:
-        _log.critical("Failed to load accounts.csv: %s", exc)
-        return 3
 
     # ── Account selection + token handling (SU4, SU8-SU14) ──────────────────
     _token_path = Path("data_store/session/zerodha_token.json")
@@ -848,6 +853,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         sentinel_dir=alert_cfg.sentinel_dir,
         logger=get_logger("telegram_notifier"),
         paper_mode=(args.mode == "paper"),
+        send_in_paper_mode=tg_cfg.telegram_alerts_in_paper_mode,
     )
 
     # Alert operator about config hash change now that notifier is ready
@@ -938,9 +944,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         max_concentration_pct=ps_cfg.max_concentration_pct,
         min_qty_threshold=ps_cfg.min_qty_threshold,
         tier_multipliers={
-            "A": ps_cfg.tier_multipliers.A,
-            "B": ps_cfg.tier_multipliers.B,
-            "C": ps_cfg.tier_multipliers.C,
+            "HIGH": ps_cfg.tier_multipliers.HIGH,
+            "MEDIUM": ps_cfg.tier_multipliers.MEDIUM,
+            "LOW": ps_cfg.tier_multipliers.LOW,
         },
         logger=get_logger("position_sizer"),
         instrument_cache=instrument_cache,  # IC7: lot_size from cache
@@ -962,12 +968,13 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     )
 
     live_feed = LiveFeedManager(
-        api_key=os.environ.get("ZERODHA_API_KEY", ""),
+        api_key=os.environ.get(selected_account.api_key_env, ""),
         access_token=os.environ.get("ZERODHA_ACCESS_TOKEN", ""),
         on_critical_failure=lambda reason: _make_critical_failure_cb(kill_switch, notifier)(
             "live_feed", reason
         ),
         logger=get_logger("live_feed"),
+        paper_mode=is_paper,
     )
 
     candle_store = CandleStore(
@@ -1103,6 +1110,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         logger=get_logger("eod_squareoff"),
         order_monitor=order_monitor,
         inter_order_delay_ms=app_config.system.eod_squareoff.inter_order_delay_ms,
+        market_close=app_config.system.trading_hours.market_close,
     )
 
     signal_queue: queue.Queue = queue.Queue(

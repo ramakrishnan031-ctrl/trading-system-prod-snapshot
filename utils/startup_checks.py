@@ -752,7 +752,7 @@ def check_paper_capital_consistency(
 
     margins = broker_adapter.get_margins()
     adapter_net = float(margins.net)
-    fm_total = float(fund_manager.total)
+    fm_total = float(fund_manager.get_snapshot().total)
     delta = abs(adapter_net - fm_total)
 
     if delta > tolerance:

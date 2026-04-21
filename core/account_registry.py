@@ -186,7 +186,16 @@ class AccountRegistry:
                 primary_count=len(primary_rows),
             )
 
-        return cls(rows)
+        registry = cls(rows)
+
+        # v2.1 readiness: capital_share_pct must sum to 1.0 across enabled
+        # accounts when more than one is enabled.
+        if len(registry.get_enabled_accounts()) > 1:
+            total_share = sum(a.capital_share_pct for a in registry.get_enabled_accounts())
+            if abs(total_share - 1.0) > 1e-6:
+                raise ConfigSchemaError(f"capital_share_pct sum = {total_share}, expected 1.0")
+
+        return registry
 
     # ── public API ─────────────────────────────────────────────────────────────
 
