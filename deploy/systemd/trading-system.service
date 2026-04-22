@@ -9,24 +9,30 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/trading-system
 Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/ubuntu/trading-system/.env
 
 # Default mode: paper. To run live, use:
 #   sudo systemctl edit trading-system
 # and override ExecStart with --mode live
+#
+# Headless (no --interactive): account+mode auto-select to
+# primary account (LFL836) + paper. stdin from /dev/null so
+# any accidental prompt fails fast instead of hanging.
 ExecStart=/home/ubuntu/trading-system/venv/bin/python \
     /home/ubuntu/trading-system/main.py --mode paper
+StandardInput=null
 
 # Send SIGINT on stop so main.py's Ctrl+C handler runs
 # (clean shutdown, SHUTDOWN event, DB flush)
 KillSignal=SIGINT
 TimeoutStopSec=30
 
-# Restart policy (3 restarts per 5 min window; matches step3 deployment)
-Restart=on-failure
+# Restart policy: always restart on any exit (including clean).
+# token-watcher handles the "wait for fresh token" gating so an
+# always-restart loop will not hammer with a stale token.
+Restart=always
 RestartSec=10
-StartLimitIntervalSec=300
-StartLimitBurst=3
 
 # Logging to journal (journalctl -u trading-system)
 StandardOutput=journal
