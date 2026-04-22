@@ -521,26 +521,25 @@ def _interactive_select_mode(account, input_fn=input):
     return "paper"
 
 
-def _interactive_confirm_live(account, broker_adapter, input_fn=input):
+def _interactive_confirm(account, mode, input_fn=input):
     """
-    Show live confirmation screen and require exact phrase (SU12).
-    Returns broker net capital on confirm. Exits 7 on wrong phrase.
+    Unified confirm screen for both paper and live modes (SU12).
+    Shows account + mode summary; y/n to proceed. Exits 7 on 'n'.
     """
-    margins = broker_adapter.get_margins()
-    capital = margins.net
     print()
-    print("  *** LIVE MODE SELECTED ***")
+    print("  ─" * 30)
+    print("  Confirm startup:")
     print()
-    print(f"  Account:        {account.account_id} ({account.label})")
-    print(f"  Broker capital: Rs {capital:,.2f}")
+    print(f"  Account : {account.account_id}  ({account.label})")
+    print(f"  Mode    : {mode.upper()}")
+    if mode == "live":
+        print()
+        print("  WARNING: Real money will be traded.")
     print()
-    print("  WARNING: Real money will be traded.")
-    print()
-    phrase = input_fn("  Type 'CONFIRM LIVE' to proceed: ").strip()
-    if phrase != "CONFIRM LIVE":
-        print("  Live confirmation cancelled.")
+    raw = input_fn("  Proceed? [y/n]: ").strip().lower()
+    if raw != "y":
+        print("  Startup cancelled.")
         sys.exit(7)
-    return capital
 
 
 def _print_welcome_banner(account, mode, capital, today):
@@ -792,7 +791,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     _access_token: Optional[str] = None
 
     if getattr(args, "interactive", False):
-        # Interactive flow: SU7 banner, account picker, token, mode, capital
+        # Interactive flow: account → mode → confirm → login (SU7-SU13)
         print("=" * 60)
         print("  TRADING SYSTEM v2 -- INTERACTIVE STARTUP")
         print("=" * 60)
@@ -800,11 +799,12 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         print(f"  Today: {today.strftime('%d-%b-%Y (%A)')} -- Trading day")
         print()
         selected_account = _interactive_select_account(account_registry)
+        # Mode selection overrides --mode if interactive
+        args.mode = _interactive_select_mode(selected_account)
+        _interactive_confirm(selected_account, args.mode)
         _access_token = _interactive_check_or_login(
             selected_account, _token_path, today
         )
-        # Mode selection overrides --mode if interactive
-        args.mode = _interactive_select_mode(selected_account)
     else:
         # Non-interactive (SU14): use primary account
         selected_account = account_registry.primary()

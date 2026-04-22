@@ -150,29 +150,42 @@ def test_mode_selection_live():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SU12: Live confirmation
+# SU12: Unified confirm screen
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_live_confirmation_exact_phrase_proceeds():
-    """'CONFIRM LIVE' returns broker capital."""
+def test_confirm_paper_y_proceeds():
+    """'y' on paper confirm does not exit."""
     acct = _make_account()
-    broker = MagicMock()
-    broker.get_margins.return_value = MagicMock(net=245000.0)
-    capital = _main_module._interactive_confirm_live(
-        acct, broker, input_fn=lambda _: "CONFIRM LIVE"
-    )
-    assert capital == 245000.0
+    _main_module._interactive_confirm(acct, "paper", input_fn=lambda _: "y")
 
 
-def test_live_confirmation_wrong_phrase_exits_7():
-    """Wrong confirmation phrase causes sys.exit(7) (SU15)."""
+def test_confirm_live_y_proceeds():
+    """'y' on live confirm does not exit."""
     acct = _make_account()
-    broker = MagicMock()
-    broker.get_margins.return_value = MagicMock(net=100000.0)
+    _main_module._interactive_confirm(acct, "live", input_fn=lambda _: "y")
+
+
+def test_confirm_n_exits_7():
+    """'n' causes sys.exit(7) for both modes."""
+    acct = _make_account()
     with pytest.raises(SystemExit) as exc_info:
-        _main_module._interactive_confirm_live(
-            acct, broker, input_fn=lambda _: "yes"
-        )
+        _main_module._interactive_confirm(acct, "paper", input_fn=lambda _: "n")
+    assert exc_info.value.code == 7
+
+
+def test_confirm_live_n_exits_7():
+    """'n' on live confirm exits 7."""
+    acct = _make_account()
+    with pytest.raises(SystemExit) as exc_info:
+        _main_module._interactive_confirm(acct, "live", input_fn=lambda _: "n")
+    assert exc_info.value.code == 7
+
+
+def test_confirm_empty_exits_7():
+    """Empty input (Enter) also cancels — not a default-yes."""
+    acct = _make_account()
+    with pytest.raises(SystemExit) as exc_info:
+        _main_module._interactive_confirm(acct, "paper", input_fn=lambda _: "")
     assert exc_info.value.code == 7
 
 
