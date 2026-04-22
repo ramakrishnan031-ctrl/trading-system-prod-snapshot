@@ -151,7 +151,7 @@ from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
-from core.events import EventBus, OrderFilled, PositionClosed
+from core.events import EventBus, OrderFilled, OrderStatusChanged, PositionClosed
 from core.exceptions import BrokerError, BrokerRateLimit429Error, OrderRejectedError
 from core.ids import new_trade_id
 from core.logger import log_exception
@@ -325,6 +325,11 @@ class OrderPlacer:
 
         # OP6: subscribe to OrderFilled
         self._bus.subscribe(OrderFilled, self._on_order_filled)
+        # Audit #7: also subscribe to OrderStatusChanged to catch the
+        # partial-fill-then-cancel gap. OrderFilled only fires on COMPLETE
+        # (OM8); a CANCELLED / REJECTED / FAILED terminal with qty_filled > 0
+        # would otherwise leave the reservation un-committed.
+        self._bus.subscribe(OrderStatusChanged, self._on_order_status_changed)
 
     def set_instrument_cache(self, cache) -> None:
         """Wire InstrumentCache for IC8 tick-size rounding (called from main.py)."""
@@ -733,6 +738,105 @@ class OrderPlacer:
         else:
             self._handle_exit_fill(event, fill_entry)
 
+    def _on_order_status_changed(self, event: OrderStatusChanged) -> None:
+        """
+        Audit #7: close the partial-fill-then-cancel gap.
+
+        OrderFilled fires only on COMPLETE (OM8). When an entry order is
+        CANCELLED / REJECTED / FAILED with qty_filled > 0 the position
+        exists at the broker but:
+          - the capital reservation is never committed (FundManager still
+            holds the full margin reserved), and
+          - the trades row is never marked OPEN (record_entry_fill is not
+            called by _handle_entry_fill because no OrderFilled arrives).
+
+        This handler fills that gap for ENTRY legs by calling commit_to_used
+        with actual_qty=qty_filled — FundManager.commit_to_used handles the
+        excess return automatically (unfilled portion flows reserved →
+        available). Record the partial entry so the trade row reflects the
+        real broker state (status=OPEN, qty_filled=partial).
+
+        Exit-leg partial-cancels (SL/TGT/EOD) are logged and skipped: those
+        legs have different capital accounting (release_used, not
+        commit_to_used) and the scope of Audit #7 is entry-side only.
+
+        Idempotency: pops from _fill_map atomically, so OrderStatusChanged
+        and OrderFilled cannot double-commit even when both fire in quick
+        succession; whichever pops first wins.
+        """
+        status = (event.status or "").upper()
+        if status not in ("CANCELLED", "REJECTED", "FAILED"):
+            return
+        if event.qty_filled <= 0:
+            return
+
+        internal_id = event.internal_order_id
+        with self._fill_map_lock:
+            fill_entry = self._fill_map.pop(internal_id, None)
+        if fill_entry is None:
+            return
+
+        if fill_entry.leg != _LEG_ENTRY:
+            self._log.warning(
+                "order_placer.partial_cancel_exit_leg_skipped",
+                extra={
+                    "internal_order_id": internal_id,
+                    "trade_id": fill_entry.trade_id,
+                    "leg": fill_entry.leg,
+                    "status": status,
+                    "qty_filled": event.qty_filled,
+                },
+            )
+            return
+
+        avg_price = float(event.avg_fill_price or 0.0)
+        self._log.warning(
+            "order_placer.partial_entry_cancelled",
+            extra={
+                "trade_id": fill_entry.trade_id,
+                "internal_order_id": internal_id,
+                "status": status,
+                "qty_filled": event.qty_filled,
+                "qty_requested": fill_entry.qty,
+                "avg_fill_price": avg_price,
+            },
+        )
+
+        # Commit partial fill: commit_to_used returns the excess margin
+        # (corresponding to the unfilled qty) to available automatically.
+        try:
+            self._fm.commit_to_used(
+                reservation_id=fill_entry.reservation_id,
+                actual_fill_price=avg_price,
+                actual_qty=event.qty_filled,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.partial_commit_failed",
+                extra={
+                    "trade_id": fill_entry.trade_id,
+                    "reservation_id": fill_entry.reservation_id,
+                },
+            )
+            # commit_to_used has already fired hard_kill (BL-4); continue to
+            # record the DB fill so trade row matches broker truth.
+
+        # Record partial entry fill in DB (sets status=OPEN).
+        try:
+            self._om.record_entry_fill(
+                trade_id=fill_entry.trade_id,
+                avg_fill_price=avg_price,
+                qty_filled=event.qty_filled,
+                filled_at=now_ist().isoformat(),
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.partial_record_fill_failed",
+                extra={"trade_id": fill_entry.trade_id},
+            )
+
     def _handle_entry_fill(self, event: OrderFilled, fill_entry: "_FillEntry") -> None:
         """
         Commit capital reservation and record entry fill in DB (BL-7d).
@@ -954,6 +1058,25 @@ class OrderPlacer:
 
         net_pnl = (closed_row or {}).get("net_pnl", gross_pnl - charges)
 
+        # Audit #5: OCO — cancel the sibling exit leg so a late fill can't
+        # re-open a naked position after we've already claimed the exit.
+        # Runs after close_trade (which guards against double-exit) and
+        # before release_used (so a sibling fill racing this cancel still
+        # finds the trade CLOSED and short-circuits via the double-close
+        # warning path).
+        try:
+            self._cancel_oco_siblings(
+                trade_id=trade_id,
+                except_broker_order_id=event.broker_order_id,
+                order_protocol=fill_entry.order_protocol,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.oco_sibling_cancel_failed",
+                extra={"trade_id": trade_id},
+            )
+
         # Release used capital. reservation_id is not meaningful here; release_used
         # uses symbol+intent bucket for accounting (not the reservation ledger).
         try:
@@ -1075,6 +1198,114 @@ class OrderPlacer:
             self._fm.release(reservation_id, f"placement_failed: {exc}")
         except Exception as cap_exc:
             log_exception(self._log, cap_exc)
+
+    def _cancel_oco_siblings(
+        self,
+        trade_id: str,
+        except_broker_order_id: str,
+        order_protocol: str,
+    ) -> None:
+        """
+        Audit #5: cancel any open sibling exit legs after one side fills.
+
+        Traverses orders for `trade_id` and cancels every row that:
+          * has a broker_order_id,
+          * is not the current fill (except_broker_order_id),
+          * is not already terminal, and
+          * represents an exit leg (SL/TGT) OR a CO bracket ENTRY (variety=co).
+
+        The CO-bracket special case: CO_PLUS_TGT has no separate SL row; the
+        SL lives inside the CO bracket. Cancelling the CO entry (variety=co)
+        when the separate TGT LIMIT has filled is how we collapse the inner
+        SL after the fact.
+
+        Best-effort: a failed cancel logs but does not raise -- the
+        reconciler picks up any orphans.
+        """
+        try:
+            rows = self._om.get_orders_for_trade(trade_id)
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.oco_get_orders_failed",
+                extra={"trade_id": trade_id},
+            )
+            return
+
+        adapter = self._resolve_adapter()
+        if adapter is None:
+            self._log.critical(
+                "order_placer.oco_no_adapter "
+                "CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED",
+                extra={"trade_id": trade_id},
+            )
+            return
+
+        terminal = {"COMPLETE", "CANCELLED", "REJECTED", "FAILED"}
+        for row in rows:
+            bid = row.get("order_id") or ""
+            if not bid or bid == except_broker_order_id:
+                continue
+            leg = (row.get("leg") or "").upper()
+            status = (row.get("status") or "").upper()
+            variety = row.get("variety") or "regular"
+
+            # CO bracket ENTRY: cancel to collapse the inner SL even when
+            # the ENTRY's own status is COMPLETE (the bracket stays live).
+            if leg == "ENTRY":
+                if order_protocol != "CO_PLUS_TGT" or variety != "co":
+                    continue
+            else:
+                if leg not in ("SL", "TGT"):
+                    continue
+                if status in terminal:
+                    continue
+
+            try:
+                result = adapter.cancel_order(bid, variety=variety)
+            except Exception as exc:  # noqa: BLE001 - best-effort
+                log_exception(self._log, exc)
+                self._log.warning(
+                    "order_placer.oco_sibling_cancel_raised",
+                    extra={
+                        "trade_id": trade_id,
+                        "broker_order_id": bid,
+                        "leg": leg,
+                        "variety": variety,
+                        "error": str(exc),
+                    },
+                )
+                continue
+
+            if not getattr(result, "success", False):
+                self._log.warning(
+                    "order_placer.oco_sibling_cancel_rejected",
+                    extra={
+                        "trade_id": trade_id,
+                        "broker_order_id": bid,
+                        "leg": leg,
+                        "variety": variety,
+                        "reason": getattr(result, "reason", ""),
+                    },
+                )
+            else:
+                self._log.info(
+                    "order_placer.oco_sibling_cancel_ok",
+                    extra={
+                        "trade_id": trade_id,
+                        "broker_order_id": bid,
+                        "leg": leg,
+                        "variety": variety,
+                    },
+                )
+
+    def _resolve_adapter(self):
+        """Reach through the engine to the shared broker adapter."""
+        adapter = getattr(self._engine, "_co", None)
+        adapter = getattr(adapter, "_adapter", None) if adapter is not None else None
+        if adapter is None:
+            adapter = getattr(getattr(self._engine, "_limit", None), "_adapter", None)
+        return adapter
 
     def _cancel_broker_orders(
         self,

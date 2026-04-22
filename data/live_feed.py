@@ -155,9 +155,25 @@ class LiveFeedManager:
     def _on_ticks(self, ws, ticks: list) -> None:
         """LF5: Normalize ticks and push to bounded queue. Drop oldest if full."""
         for raw in ticks:
+            # Audit #20: extract top-of-book bid/ask when depth is present
+            # (MODE_FULL). shadow_tracker uses these for SL simulation to
+            # avoid LTP-at-ask optimism. Missing depth falls back to 0.0
+            # and shadow_tracker reverts to LTP-based checks.
+            bid = 0.0
+            ask = 0.0
+            depth = raw.get("depth") or {}
+            if depth:
+                buys = depth.get("buy") or []
+                sells = depth.get("sell") or []
+                if buys:
+                    bid = float(buys[0].get("price", 0.0) or 0.0)
+                if sells:
+                    ask = float(sells[0].get("price", 0.0) or 0.0)
             tick = {
                 "instrument_token": raw.get("instrument_token"),
                 "last_price": float(raw.get("last_price", 0.0)),
+                "bid": bid,
+                "ask": ask,
                 "timestamp": raw.get("exchange_timestamp") or raw.get("timestamp"),
                 "volume": raw.get("volume_traded"),
             }

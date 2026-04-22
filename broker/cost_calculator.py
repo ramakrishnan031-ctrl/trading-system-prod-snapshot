@@ -108,6 +108,12 @@ class CostCalculator:
     def __init__(self, costs: BrokerCostsConfig) -> None:
         self._z = costs.zerodha   # ZerodhaRatesConfig
 
+    # Audit #13: FNO STT rates (sell-side only, on premium for options,
+    # on notional for futures). Values are statutory defaults; promote to
+    # config when FNO trading is enabled in production.
+    _STT_FUTURES_SELL_PCT = 0.02   # 0.02% on sell turnover
+    _STT_OPTIONS_SELL_PCT = 0.10   # 0.10% on sell premium
+
     def calculate_cost(
         self,
         side: str,
@@ -115,6 +121,8 @@ class CostCalculator:
         price: float,
         product: str,
         exchange: str = "NSE",
+        is_fno: bool = False,
+        fno_kind: str = "FUTURES",
     ) -> CostBreakdown:
         """
         Compute itemized transaction cost for one order leg.
@@ -125,12 +133,19 @@ class CostCalculator:
             price:    execution price per share (must be > 0)
             product:  "MIS" | "CO" | "CNC"
             exchange: only "NSE" is supported (CC5)
+            is_fno:   Audit #13 — when True, STT/stamp-duty use FNO rates
+                      instead of the cash-equity rates. Prevents phantom
+                      equity taxes on options/futures that would otherwise
+                      trip invariant checks (HARD_KILL).
+            fno_kind: "FUTURES" (default) or "OPTIONS". Only consulted when
+                      is_fno=True. Options STT is on premium, futures on
+                      notional.
 
         Returns:
             CostBreakdown with all components rounded to 2dp and total = sum of components.
 
         Raises:
-            ValueError: unknown side, product, or exchange.
+            ValueError: unknown side, product, exchange, or fno_kind.
         """
         if side not in ("BUY", "SELL"):
             raise ValueError(f"Invalid side: {side!r}. Must be 'BUY' or 'SELL'.")
@@ -140,6 +155,10 @@ class CostCalculator:
             raise ValueError(
                 f"Unsupported exchange: {exchange!r}. "
                 "Only 'NSE' is currently supported (BSE deferred to v2.1)."
+            )
+        if is_fno and fno_kind not in ("FUTURES", "OPTIONS"):
+            raise ValueError(
+                f"Invalid fno_kind: {fno_kind!r}. Must be 'FUTURES' or 'OPTIONS'."
             )
 
         z = self._z
@@ -153,8 +172,18 @@ class CostCalculator:
             # CNC BUY → free (CC3)
             brokerage_d = _r2(Decimal("0"))
 
-        # ── STT (CC4) ─────────────────────────────────────────────────────────
-        if product in ("MIS", "CO"):
+        # ── STT (CC4 + Audit #13) ────────────────────────────────────────────
+        if is_fno:
+            if side == "SELL":
+                rate_pct = (
+                    self._STT_OPTIONS_SELL_PCT
+                    if fno_kind == "OPTIONS"
+                    else self._STT_FUTURES_SELL_PCT
+                )
+                stt_d = _r2(_d(rate_pct) / _d("100") * turnover_d)
+            else:
+                stt_d = _r2(Decimal("0"))
+        elif product in ("MIS", "CO"):
             stt_d = _r2(
                 _d(z.stt_sell_pct) / _d("100") * turnover_d
                 if side == "SELL"
@@ -205,15 +234,27 @@ class CostCalculator:
         exit_price: float,
         product: str,
         exchange: str = "NSE",
+        is_fno: bool = False,
+        fno_kind: str = "FUTURES",
     ) -> float:
         """
         Total cost of a complete trade: BUY entry + SELL exit (CC12).
 
         Used by the paper engine for realistic P&L accounting (Project Rule 15).
 
+        Args:
+            is_fno / fno_kind: Audit #13 — propagated to both legs so paper
+                P&L reflects FNO statutory rates when trading derivatives.
+
         Returns:
             Sum of calculate_cost("BUY", ...).total + calculate_cost("SELL", ...).total
         """
-        buy  = self.calculate_cost("BUY",  qty, entry_price, product, exchange)
-        sell = self.calculate_cost("SELL", qty, exit_price,  product, exchange)
+        buy  = self.calculate_cost(
+            "BUY",  qty, entry_price, product, exchange,
+            is_fno=is_fno, fno_kind=fno_kind,
+        )
+        sell = self.calculate_cost(
+            "SELL", qty, exit_price,  product, exchange,
+            is_fno=is_fno, fno_kind=fno_kind,
+        )
         return buy.total + sell.total

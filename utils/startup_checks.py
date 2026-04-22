@@ -291,6 +291,42 @@ def detect_startup_scenario(
             detection_details=details,
         )
     else:
+        # Audit #17: before classifying as CRASH, check if EOD squareoff
+        # completed for today. If the operator stopped the process AFTER
+        # the square-off but BEFORE the SHUTDOWN event was written, there
+        # is no crash -- the system ran its end-of-day sequence and is
+        # safe to resume as WARM.
+        eod_row = None
+        try:
+            eod_row = state_store.get_eod_squareoff_log_for_date(
+                today_date.isoformat()
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "startup_scenario: eod_squareoff_log lookup failed: %s", exc
+            )
+
+        if eod_row is not None and (eod_row["status"] or "").upper() == "COMPLETE":
+            details = {
+                "reason": "eod_squareoff_complete_no_shutdown_marker",
+                "eod_fired_at": eod_row["fired_at"],
+                "eod_completed_at": eod_row["completed_at"],
+            }
+            logger.info(
+                "startup_scenario=WARM: EOD squareoff COMPLETE for today "
+                "(fired_at=%s); treating missing SHUTDOWN event as clean stop",
+                eod_row["fired_at"],
+            )
+            return StartupScenarioResult(
+                scenario=StartupScenario.WARM,
+                session_date_previous=prev_date,
+                kill_state=ks_state_str,
+                kill_reason=ks_reason,
+                shutdown_marker_found=False,
+                last_shutdown_ts=_parse_ts(eod_row["completed_at"]),
+                detection_details=details,
+            )
+
         details = {
             "reason": "no_shutdown_marker",
             "session_date": prev_date_str,

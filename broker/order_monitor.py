@@ -213,9 +213,18 @@ class OrderMonitor:
         """
         Add an order to the watch list (OM3).
 
+        Audit #10: MARKET orders are placed with price=0.0, so callers
+        pass expected_price=0.0 and every MARKET fill logs slippage=0%,
+        poisoning analytics. When expected_price<=0 we fetch the symbol's
+        current LTP via the adapter and use that as the slippage baseline.
+        On any fetch failure we fall back to 0.0 (preserves existing
+        behaviour -- worst case the original zero-slippage row).
+
         Raises:
             ValueError: internal_order_id already being watched.
         """
+        if expected_price <= 0.0:
+            expected_price = self._ltp_expected_fallback(symbol)
         with self._lock:
             if internal_order_id in self._watched:
                 raise ValueError(
@@ -236,6 +245,112 @@ class OrderMonitor:
                    "broker_order_id": broker_order_id,
                    "symbol": symbol},
         )
+
+    def _ltp_expected_fallback(self, symbol: str) -> float:
+        """
+        Audit #10: return a sensible `expected_price` for a MARKET order.
+
+        MARKET legs are placed with price=0.0 so the incoming
+        expected_price is 0.0. Use the symbol's current LTP as the
+        slippage baseline. Any failure (rate limit, paper mode without a
+        quote_provider, empty response) returns 0.0 -- identical to the
+        pre-fix behaviour, so slippage analytics simply skip the row.
+        """
+        try:
+            quotes = self._adapter.get_quote([symbol])
+        except Exception as exc:  # noqa: BLE001 - best-effort analytics helper
+            self._log.debug(
+                "order_monitor.ltp_fallback_failed",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            return 0.0
+        quote = (quotes or {}).get(symbol)
+        if quote is None:
+            return 0.0
+        last_price = float(getattr(quote, "last_price", 0.0) or 0.0)
+        return last_price if last_price > 0.0 else 0.0
+
+    def rehydrate_from_store(self, state_store) -> int:
+        """
+        Audit #21: reload _watched from persisted non-terminal orders.
+
+        On crash-restart _watched is empty, so in-flight orders are not
+        polled until the reconciler's slower cycle catches them. This
+        repopulates the watch list directly from the orders table so poll
+        coverage resumes immediately at start().
+
+        Uses broker_order_id as the synthetic internal_order_id because
+        the original ord_-prefixed id from new_order_id() is not
+        persisted. The reconciler remains the authoritative backstop for
+        capital/DB drift; this method simply restores fill-polling.
+
+        Returns the number of orders rehydrated.
+        """
+        try:
+            rows = state_store.get_open_orders_for_rehydration()
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "order_monitor rehydrate: fetch failed: %s", exc
+            )
+            return 0
+
+        rehydrated = 0
+        for row in rows:
+            broker_order_id = row["order_id"]
+            if not broker_order_id:
+                continue
+            synthetic_internal = broker_order_id
+            with self._lock:
+                if synthetic_internal in self._watched:
+                    continue
+
+            # Register in OSM so _safe_transition publishes events when
+            # fills come in. Register raises ValueError if already known
+            # (idempotent retry after partial rehydrate).
+            try:
+                self._osm.register(synthetic_internal)
+            except ValueError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                self._log.warning(
+                    "order_monitor rehydrate: OSM register failed "
+                    "broker_order_id=%s error=%s",
+                    broker_order_id, exc,
+                )
+
+            # Bring OSM forward to the persisted status so the first
+            # poll's transition does not go PENDING → COMPLETE (illegal).
+            status = (row["status"] or "").upper()
+            if status in ("OPEN", "PARTIAL", "TRIGGER_PENDING", "SUBMITTED"):
+                try:
+                    self._osm.transition(synthetic_internal, status)
+                except Exception:  # noqa: BLE001 - already in target state etc.
+                    pass
+
+            placed_at_str = row["placed_at"] or ""
+            try:
+                placed_at = datetime.fromisoformat(placed_at_str)
+            except Exception:  # noqa: BLE001
+                placed_at = now_ist()
+
+            entry = _WatchEntry(
+                internal_order_id=synthetic_internal,
+                broker_order_id=broker_order_id,
+                symbol=row["symbol"] or "",
+                side=row["transaction_type"] or "",
+                qty=int(row["qty_requested"] or 0),
+                expected_price=float(row["price"] or 0.0),
+                placed_at=placed_at,
+            )
+            with self._lock:
+                self._watched[synthetic_internal] = entry
+            rehydrated += 1
+
+        self._log.info(
+            "order_monitor rehydrated %d orders from state_store",
+            rehydrated,
+        )
+        return rehydrated
 
     def untrack(self, internal_order_id: str) -> None:
         """Remove an order from the watch list (OM15). No-op if not present."""

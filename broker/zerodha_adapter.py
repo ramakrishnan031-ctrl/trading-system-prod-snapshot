@@ -475,17 +475,26 @@ class ZerodhaAdapter:
         )
         return result
 
-    def cancel_order(self, broker_order_id: str) -> CancelResult:
+    def cancel_order(
+        self,
+        broker_order_id: str,
+        variety: str = "regular",
+    ) -> CancelResult:
         """
         Cancel an open order. Returns CancelResult; does not raise on
         kite-level rejection (returns success=False instead). State machine
         transition is the CALLER's responsibility after inspecting the result.
+
+        Audit #5: accepts `variety` so callers can cancel CO bracket orders
+        (variety="co") in addition to regular orders. Default stays "regular"
+        for existing callers.
         """
         t0 = time.monotonic()
         self._log.info(
             "cancel_order call_start",
             extra={"method": "cancel_order",
-                   "broker_order_id": broker_order_id},
+                   "broker_order_id": broker_order_id,
+                   "variety": variety},
         )
 
         if self._paper:
@@ -504,7 +513,7 @@ class ZerodhaAdapter:
 
         try:
             self._kite.cancel_order(
-                variety="regular",
+                variety=variety,
                 order_id=broker_order_id,
             )
             result = CancelResult(

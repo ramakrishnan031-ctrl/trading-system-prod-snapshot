@@ -165,9 +165,19 @@ class OrderReconciler:
         # Startup reconcile before trading begins
         self.reconcile_once()
 
-        # RC4: subscribe OrderStateChanged for event-driven re-checks
+        # Audit #12: the event-driven trigger (RC4) has been disabled.
+        # Every OSM transition previously funnelled through reconcile_once(),
+        # and a burst of fills (CANCELLED+REJECTED+COMPLETE across a dozen
+        # orders within a few hundred ms) spiked the adapter to ~18 REST
+        # calls in a 500ms window, tripping 429s and freezing the poll
+        # thread. The daemon poll alone is sufficient (G1 hybrid collapses
+        # to pure polling). Config flag left in place for rollback but
+        # now forced to no-op.
         if self._cfg.enable_event_driven:
-            self._bus.subscribe(OrderStateChanged, self._on_order_state_changed)
+            self._log.info(
+                "order_reconciler: enable_event_driven=True ignored "
+                "(Audit #12 disables OrderStateChanged subscription)"
+            )
 
         # Start daemon poll thread (RC3)
         self._stop_event.clear()

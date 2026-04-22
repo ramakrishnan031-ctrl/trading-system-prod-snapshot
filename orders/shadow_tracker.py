@@ -220,6 +220,10 @@ class ShadowTracker:
             return
 
         ltp: float = float(tick["last_price"])
+        # Audit #20: bid/ask when present; 0.0 means "not available" →
+        # _check_hit falls back to LTP.
+        bid: float = float(tick.get("bid", 0.0) or 0.0)
+        ask: float = float(tick.get("ask", 0.0) or 0.0)
 
         # Track last price for EOD fallback
         with self._lock:
@@ -233,7 +237,7 @@ class ShadowTracker:
 
         # Process hits outside lock to avoid holding lock during DB writes
         for ing in matching:
-            hit = _check_hit(ing, ltp)
+            hit = _check_hit(ing, ltp, bid=bid, ask=ask)
             if hit:
                 self._close_inning(ing, ltp, hit)
 
@@ -627,21 +631,35 @@ class ShadowTracker:
 # Module-level helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _check_hit(inning: Inning, ltp: float) -> Optional[str]:
+def _check_hit(
+    inning: Inning,
+    ltp: float,
+    *,
+    bid: float = 0.0,
+    ask: float = 0.0,
+) -> Optional[str]:
     """
     Return "SL", "TGT", or None based on current price vs. inning thresholds (SH6).
 
-    LONG:  SL when ltp <= sl_price; TGT when ltp >= tgt_price.
-    SHORT: SL when ltp >= sl_price; TGT when ltp <= tgt_price.
-    Boundary: ltp == threshold counts as a hit.
+    Audit #20: SL simulation uses the fill-side of the book when depth is
+    available. A LONG position exits on the bid (where we'd sell); SHORT
+    exits on the ask (where we'd cover). Using LTP over-optimistically
+    delays simulated stops. When bid/ask are 0.0 (unavailable) we fall
+    back to LTP -- preserves prior behaviour.
+
+    LONG:  SL when (bid or ltp) <= sl_price; TGT when ltp >= tgt_price.
+    SHORT: SL when (ask or ltp) >= sl_price; TGT when ltp <= tgt_price.
+    Boundary: == threshold counts as a hit.
     """
     if inning.direction == "LONG":
-        if ltp <= inning.sl_price:
+        sl_ref = bid if bid > 0.0 else ltp
+        if sl_ref <= inning.sl_price:
             return "SL"
         if ltp >= inning.tgt_price:
             return "TGT"
     else:  # SHORT
-        if ltp >= inning.sl_price:
+        sl_ref = ask if ask > 0.0 else ltp
+        if sl_ref >= inning.sl_price:
             return "SL"
         if ltp <= inning.tgt_price:
             return "TGT"

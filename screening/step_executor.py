@@ -25,15 +25,17 @@ class StepExecutorResult:
     latencies_ms: dict      # step_name -> float ms
 
 
-# Market open time in IST
-_MARKET_OPEN = dt_time(9, 15)
+# Default market-open time in IST. Kept as a fallback for callers that do
+# not inject market_open via the StepExecutor constructor. Audit #18:
+# special sessions (muhurat, etc.) must be able to override via config.
+_DEFAULT_MARKET_OPEN = dt_time(9, 15)
 
 
-def _minutes_since_open(now: datetime) -> float:
-    """Minutes elapsed since 09:15 IST."""
+def _minutes_since_open(now: datetime, market_open: dt_time) -> float:
+    """Minutes elapsed since market_open (IST)."""
     open_today = now.replace(
-        hour=_MARKET_OPEN.hour,
-        minute=_MARKET_OPEN.minute,
+        hour=market_open.hour,
+        minute=market_open.minute,
         second=0,
         microsecond=0,
     )
@@ -51,8 +53,12 @@ class StepExecutor:
     SE8: Missing market_data keys use per-step defaults (0.0 or 0.5).
     """
 
-    def __init__(self, logger) -> None:
+    def __init__(self, logger, market_open: dt_time | None = None) -> None:
         self._logger = logger
+        # Audit #18: read market_open from config when provided; fall back
+        # to the IST default so existing callers (tests, migrations) keep
+        # working without code changes.
+        self._market_open = market_open if market_open is not None else _DEFAULT_MARKET_OPEN
 
     # -------------------------------------------------------------------------
     # Public API
@@ -202,8 +208,8 @@ class StepExecutor:
     def _step_7_time_of_day(
         self, signal: dict, md: dict, thr: dict, direction: str
     ) -> float:
-        """Entry time quality based on minutes since 09:15 IST."""
-        mins = _minutes_since_open(now_ist())
+        """Entry time quality based on minutes since market open (IST)."""
+        mins = _minutes_since_open(now_ist(), self._market_open)
         if mins < 15:
             return 0.5   # too early
         if mins < 60:

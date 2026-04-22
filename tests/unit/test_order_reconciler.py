@@ -1254,7 +1254,15 @@ def test_rc13_concurrent_cycle_returns_empty(tmp_path: Path) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_rc4_order_state_changed_triggers_reconcile(tmp_path: Path) -> None:
-    """RC4: OrderStateChanged event triggers reconcile_once()."""
+    """
+    Audit #12: OrderStateChanged no longer triggers reconcile.
+
+    Contract reversal — the reconciler is now daemon-poll only; the
+    event subscription was removed to prevent reconcile storms when
+    bursts of state transitions hit the bus. The flag
+    `enable_event_driven=True` is retained for backwards-compat config
+    loading but ignored at runtime.
+    """
     store = _make_store(tmp_path)
 
     adapter = MagicMock()
@@ -1273,22 +1281,20 @@ def test_rc4_order_state_changed_triggers_reconcile(tmp_path: Path) -> None:
 
     initial_calls = adapter.get_positions.call_count
 
-    # Publish OrderStateChanged event
     bus.publish(OrderStateChanged(source_module="test", order_id="ord_1", from_state="PENDING", to_state="COMPLETE"))
-    # Give event a moment to process (synchronous bus, so it's immediate)
 
     time.sleep(0.05)
     final_calls = adapter.get_positions.call_count
 
     rec.stop()
 
-    assert final_calls > initial_calls, (
-        f"get_positions should be called more after OrderStateChanged; "
+    assert final_calls == initial_calls, (
+        f"Audit #12: get_positions must NOT be called after OrderStateChanged; "
         f"initial={initial_calls}, final={final_calls}"
     )
 
     store.close()
-    print("  OK RC4: OrderStateChanged event triggers reconcile_once()")
+    print("  OK RC4: OrderStateChanged does NOT trigger reconcile (Audit #12)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

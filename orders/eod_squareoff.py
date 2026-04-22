@@ -292,8 +292,20 @@ class EodSquareoff:
         # Step 3: cancel pending intraday entry orders (EOD5)
         c_attempted, c_succeeded, c_failed = self._cancel_pending_entries()
 
+        # Step 3b (Audit #6): cancel pending SL/TGT legs for open positions
+        # BEFORE firing MARKET exits. If we don't, a late TGT/SL fill after
+        # the MARKET squareoff re-opens a naked reverse position overnight.
+        # Failures here are logged but do not abort Step 4 -- the MARKET
+        # exit still runs so positions don't ride through the gap.
+        ec_attempted, ec_succeeded, ec_failed = self._cancel_pending_exit_legs()
+        c_attempted  += ec_attempted
+        c_succeeded  += ec_succeeded
+        c_failed     += ec_failed
+
         # Step 4: exit open intraday positions (EOD5)
-        p_attempted, p_succeeded, p_failed = self._exit_open_positions(now)
+        p_attempted, p_succeeded, p_failed = self._exit_open_positions(
+            now, recovery_fire=recovery_fire,
+        )
 
         duration_sec = time.monotonic() - start_ts
 
@@ -476,7 +488,92 @@ class EodSquareoff:
 
         return attempted, succeeded, failed
 
-    def _exit_open_positions(self, now: datetime) -> tuple[int, int, int]:
+    def _cancel_pending_exit_legs(self) -> tuple[int, int, int]:
+        """
+        Audit #6: cancel live SL/TGT legs for all open intraday positions.
+
+        The MARKET squareoff in Step 4 only closes the position; it does not
+        touch the exit-leg orders waiting at the broker. If one of those
+        legs later triggers, it places a fresh order in the opposite
+        direction of the (now closed) position, leaving a naked overnight
+        position. Cancelling them here is the fix.
+
+        Returns (attempted, succeeded, failed). Per-row failures are logged
+        CRITICAL but do not abort the iteration or the EOD sequence.
+        """
+        try:
+            rows = self._store.get_pending_exit_orders_for_open_positions()
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.critical(
+                "EOD exit-leg fetch failed; skipping pre-cancel step; error=%s",
+                exc,
+            )
+            return (0, 0, 0)
+
+        attempted = len(rows)
+        succeeded = 0
+        failed = 0
+
+        for row in rows:
+            trade_id = row["trade_id"]
+            symbol = row["symbol"]
+            leg = row["leg"]
+            variety = row["variety"] or "regular"
+            broker_order_id = row["order_id"]
+
+            try:
+                result = self._adapter.cancel_order(
+                    broker_order_id, variety=variety
+                )
+                if not result.success:
+                    self._log.critical(
+                        "EOD exit-leg cancel failed: trade_id=%s symbol=%s "
+                        "leg=%s broker_order_id=%s reason=%s",
+                        trade_id, symbol, leg, broker_order_id, result.reason,
+                    )
+                    failed += 1
+                    continue
+
+                now_ts = now_ist().isoformat()
+                with self._store.transaction() as cur:
+                    cur.execute(
+                        "UPDATE orders SET status = 'CANCELLED', updated_at = ? "
+                        "WHERE order_id = ?",
+                        (now_ts, broker_order_id),
+                    )
+
+                succeeded += 1
+                self._log.info(
+                    "EOD exit-leg cancel OK: trade_id=%s symbol=%s "
+                    "leg=%s broker_order_id=%s",
+                    trade_id, symbol, leg, broker_order_id,
+                )
+            except BrokerError as exc:
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "EOD exit-leg cancel BrokerError: trade_id=%s "
+                    "symbol=%s leg=%s broker_order_id=%s",
+                    trade_id, symbol, leg, broker_order_id,
+                )
+                failed += 1
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "EOD exit-leg cancel unexpected error: trade_id=%s "
+                    "symbol=%s leg=%s",
+                    trade_id, symbol, leg,
+                )
+                failed += 1
+
+        return attempted, succeeded, failed
+
+    def _exit_open_positions(
+        self,
+        now: datetime,
+        *,
+        recovery_fire: bool = False,
+    ) -> tuple[int, int, int]:
         """
         Place MARKET exit orders for all open intraday positions.
         Returns (attempted, succeeded, failed).
@@ -487,8 +584,42 @@ class EodSquareoff:
           - Hand off to order_monitor (if injected)
           - Delay inter_order_delay_sec between orders (audit EOD5)
           - On failure: log CRITICAL, mark EOD_EXIT_FAILED in DB (EOD5 step 4d)
+
+        Audit #14: recovery_fire=True cross-checks broker truth via
+        adapter.get_positions() first. Only trades whose symbol still
+        appears open at the broker get a MARKET exit. This is the fix for
+        the RMS-already-squared race: if the broker's RMS auto-squared us
+        while we were down, our DB still says OPEN but the position does
+        not exist -- a MARKET SELL here would open a naked short overnight.
         """
         rows = self._store.get_open_intraday_positions()
+
+        # Audit #14: in recovery mode, trim rows to what the broker still
+        # reports as open. Fallback to the DB view on any broker fetch
+        # failure (prefer over-squaring an already-closed position to
+        # letting a live position ride overnight -- same policy as the
+        # original EOD5).
+        if recovery_fire:
+            try:
+                broker_positions = self._adapter.get_positions()
+                open_symbols = {
+                    p.symbol for p in broker_positions if int(p.qty) != 0
+                }
+                before = len(rows)
+                rows = [r for r in rows if r["symbol"] in open_symbols]
+                self._log.info(
+                    "EOD recovery: broker-position filter kept %d/%d trades "
+                    "(broker open symbols=%d)",
+                    len(rows), before, len(open_symbols),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "EOD recovery: get_positions failed; falling back to DB "
+                    "view for exits; error=%s",
+                    exc,
+                )
+
         attempted = len(rows)
         succeeded = 0
         failed = 0

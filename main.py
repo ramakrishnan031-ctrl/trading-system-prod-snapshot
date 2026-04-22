@@ -1016,6 +1016,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         quote_fn=broker_adapter.get_quote,
         enabled=True,
     )
+    smart_tgt.set_instrument_cache(instrument_cache)  # Audit #8: tick rounding on SL trail
 
     # Reconnect chain (ST13, MAIN8 step 11)
     live_feed.set_on_reconnect_callback(
@@ -1089,7 +1090,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         weights=app_config.scoring,
         logger=get_logger("quality_scorer"),
     )
-    step_executor = StepExecutor(logger=get_logger("step_executor"))
+    step_executor = StepExecutor(
+        logger=get_logger("step_executor"),
+        market_open=market_windows.market_open,  # Audit #18
+    )
     screener = SecondaryScreener(
         step_executor=step_executor,
         quality_scorer=scorer,
@@ -1213,6 +1217,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # BLOCKER #11: wire token map so CandleStore can resolve instrument_token -> symbol
     candle_store.set_token_map(instrument_cache.token_map())
     live_feed.connect()
+    order_monitor.rehydrate_from_store(store)  # Audit #21
     order_monitor.start()
     order_reconciler.start()
     if clock_skew_probe is not None:

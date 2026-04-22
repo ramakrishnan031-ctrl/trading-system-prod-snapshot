@@ -47,6 +47,7 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
+import math
 import threading
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -102,9 +103,19 @@ class SmartTgtManager:
         self._tracked: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.RLock()
 
+        # Audit #8: instrument_cache wired via set_instrument_cache() after
+        # construction (same pattern as OrderPlacer/IC8). Used to snap the
+        # trailed SL to a valid tick before modify_order so the broker does
+        # not reject every update with "invalid trigger_price".
+        self._instrument_cache = None
+
         # ST2: register callback at construction (if enabled)
         if enabled:
             candle_store.register_on_candle_close(self._on_candle_close)
+
+    def set_instrument_cache(self, cache) -> None:
+        """Audit #8: wire InstrumentCache for tick_size lookup (LONG/SHORT SL rounding)."""
+        self._instrument_cache = cache
 
     # ------------------------------------------------------------------
     # Lifecycle (ST11)
@@ -386,6 +397,11 @@ class SmartTgtManager:
         ST5: Modify CO trigger_price at broker. Update internal state and DB
         ONLY after broker confirms (Ghost SL fix -- never pre-update state).
         Failure tracked per-trade; 3 consecutive -> CRITICAL + callback.
+
+        Audit #8: round new_sl to tick_size before broker call. Directional
+        round (ceil for LONG, floor for SHORT) so tick-snap always tightens
+        SL -- never retreats below current_sl. If rounding collapses the
+        advance to a no-op, skip the modify silently.
         """
         # ST14: look up CO broker_order_id
         co_row = self._state_store.get_co_entry_order_for_trade(trade_id)
@@ -401,6 +417,20 @@ class SmartTgtManager:
             return
 
         co_order_id = co_row["order_id"]
+
+        # Audit #8: snap new_sl to tick_size (directional round)
+        with self._lock:
+            info = self._tracked.get(trade_id)
+            if info is None:
+                return
+            symbol = info["symbol"]
+            direction = info["direction"]
+            current_sl = info["current_sl"]
+        new_sl = self._round_sl_to_tick(symbol, new_sl, direction)
+        if direction == "LONG" and new_sl <= current_sl:
+            return
+        if direction == "SHORT" and new_sl >= current_sl:
+            return
 
         # Broker call (outside lock -- may be slow)
         try:
@@ -486,6 +516,27 @@ class SmartTgtManager:
                 f"(failure {failures}/{_MAX_CONSECUTIVE_FAILURES})"
             )
             self._maybe_fire_critical(trade_id, symbol, failures, result.reason)
+
+    def _round_sl_to_tick(self, symbol: str, raw_sl: float, direction: str) -> float:
+        """
+        Audit #8: snap raw_sl to a valid tick.
+
+        LONG trail tightens SL upward: use ceil so rounded_sl >= raw_sl
+        (never weakens the advance). SHORT trail tightens SL downward: use
+        floor so rounded_sl <= raw_sl. Returns raw_sl unchanged if no
+        instrument_cache is wired or tick lookup fails.
+        """
+        if self._instrument_cache is None:
+            return raw_sl
+        try:
+            tick = self._instrument_cache.tick_size(symbol)
+            if tick <= 0:
+                return raw_sl
+            if direction == "LONG":
+                return round(math.ceil(raw_sl / tick) * tick, 10)
+            return round(math.floor(raw_sl / tick) * tick, 10)
+        except Exception:
+            return raw_sl
 
     def _maybe_fire_critical(
         self, trade_id: str, symbol: str, failures: int, reason: str

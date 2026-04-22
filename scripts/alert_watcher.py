@@ -37,6 +37,7 @@ import os
 import smtplib
 import socket
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -256,6 +257,11 @@ def run_once(
     log.info("Found %d pending sentinel(s).", len(pending))
     auth_error_exit = False
 
+    # Audit #15: parse + dry-run handling serially; fan out SMTP network I/O
+    # (the slow part) via ThreadPoolExecutor. File renames and counter updates
+    # run on the caller thread after each future completes to keep the
+    # attempt counter JSON single-writer.
+    to_send: list[tuple[Path, dict]] = []
     for sentinel_path in pending:
         fname = sentinel_path.name
 
@@ -274,28 +280,51 @@ def run_once(
             log.info("[dry-run] Would send email for %s", fname)
             continue
 
-        try:
-            _send_email(smtp_cfg, data, log)
-            mark_delivered(sentinel_path)
-            counters.pop(fname, None)
-            log.info("Delivered %s -> .delivered", fname)
+        to_send.append((sentinel_path, data))
 
-        except SmtpAuthError as exc:
-            log.error("SMTP auth failure: %s", exc)
-            auth_error_exit = True
-            break  # no point continuing; all sends will fail
-
-        except SmtpError as exc:
-            count = counters.get(fname, 0) + 1
-            counters[fname] = count
-            log.error("SMTP error for %s (attempt %d/%d): %s", fname, count, max_attempts, exc)
-            if count >= max_attempts:
+    if to_send:
+        max_workers = min(8, len(to_send))
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="alert-smtp"
+        ) as pool:
+            future_to_path = {
+                pool.submit(_send_email, smtp_cfg, data, log): path
+                for path, data in to_send
+            }
+            for future in as_completed(future_to_path):
+                sentinel_path = future_to_path[future]
+                fname = sentinel_path.name
                 try:
-                    mark_failed(sentinel_path, str(exc))
+                    future.result()
+                    mark_delivered(sentinel_path)
                     counters.pop(fname, None)
-                    log.error("Abandoned %s after %d attempts -> .failed", fname, max_attempts)
-                except OSError:
-                    pass
+                    log.info("Delivered %s -> .delivered", fname)
+
+                except SmtpAuthError as exc:
+                    log.error("SMTP auth failure: %s", exc)
+                    auth_error_exit = True
+                    # Let remaining futures finish (cancellation is best-effort
+                    # and SMTP sockets are already in flight); we'll exit 2.
+                    for pending_future in future_to_path:
+                        pending_future.cancel()
+
+                except SmtpError as exc:
+                    count = counters.get(fname, 0) + 1
+                    counters[fname] = count
+                    log.error(
+                        "SMTP error for %s (attempt %d/%d): %s",
+                        fname, count, max_attempts, exc,
+                    )
+                    if count >= max_attempts:
+                        try:
+                            mark_failed(sentinel_path, str(exc))
+                            counters.pop(fname, None)
+                            log.error(
+                                "Abandoned %s after %d attempts -> .failed",
+                                fname, max_attempts,
+                            )
+                        except OSError:
+                            pass
 
     # Prune entries for files no longer pending
     counters = _prune_attempts(counters, sentinel_dir)

@@ -499,6 +499,69 @@ class StateStore:
             """
         )
 
+    def get_open_orders_for_rehydration(self) -> List[sqlite3.Row]:
+        """
+        Return non-terminal orders that need fill polling on startup
+        (Audit #21). Joined with the trades table so the caller gets the
+        symbol without a second query.
+
+        Row fields: order_id, status, transaction_type, qty_requested,
+            price, placed_at, symbol.
+        """
+        return self.fetch_all(
+            """
+            SELECT
+                o.order_id,
+                o.status,
+                o.transaction_type,
+                o.qty_requested,
+                o.price,
+                o.placed_at,
+                t.symbol
+            FROM orders o
+            JOIN trades t
+              ON t.trade_id = o.trade_id
+            WHERE o.status IN ('PENDING', 'SUBMITTED', 'OPEN', 'PARTIAL',
+                               'TRIGGER_PENDING')
+            ORDER BY o.placed_at
+            """
+        )
+
+    def get_pending_exit_orders_for_open_positions(self) -> List[sqlite3.Row]:
+        """
+        Return non-terminal SL/TGT orders for trades whose ENTRY is filled
+        (status OPEN or PARTIAL) and whose product is intraday (MIS/CO).
+
+        Used by eod_squareoff Step 3b (Audit #6): these exit legs must be
+        cancelled BEFORE the MARKET squareoff fires, otherwise a late
+        TGT/SL fill after the MARKET exit opens a naked reverse position.
+
+        Row fields: trade_id, symbol, leg, variety, order_id
+            (order_id is the broker_order_id; see orders.order_id PK).
+        Sorted by symbol (Foundation Rule 3.7).
+        """
+        return self.fetch_all(
+            """
+            SELECT
+                t.trade_id,
+                t.symbol,
+                o.leg,
+                o.variety,
+                o.order_id
+            FROM trades t
+            JOIN orders o
+              ON o.trade_id = t.trade_id
+            JOIN orders e
+              ON e.trade_id = t.trade_id
+             AND e.leg = 'ENTRY'
+            WHERE t.status IN ('OPEN', 'PARTIAL')
+              AND e.product IN ('MIS', 'CO')
+              AND o.leg IN ('SL', 'TGT')
+              AND o.status NOT IN ('COMPLETE', 'CANCELLED', 'REJECTED', 'FAILED')
+            ORDER BY t.symbol, o.leg
+            """
+        )
+
     def get_open_intraday_positions(self) -> List[sqlite3.Row]:
         """
         Return trades with status OPEN or PARTIAL whose ENTRY leg has an
