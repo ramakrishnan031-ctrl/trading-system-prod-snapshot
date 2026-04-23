@@ -291,6 +291,8 @@ class OrderPlacer:
         smart_tgt_manager: Optional[SmartTgtManager] = None,
         smart_tgt_config: Optional[SmartTgtConfig] = None,
         rate_limit_backoff: Optional[RateLimitBackoffConfig] = None,  # BL-19
+        notifier: Optional[object] = None,   # TelegramNotifier; optional
+        mode: str = "LIVE",                   # session mode label for alert title
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -318,6 +320,9 @@ class OrderPlacer:
         )
         # IC8: injected by main.py after Module 38; None = no tick rounding
         self._instrument_cache = None  # set via set_instrument_cache()
+        # Telegram alerts (optional): wiring for ORDER PLACED / TGT HIT / SL HIT
+        self._notifier = notifier
+        self._mode = mode
 
         # OP5: internal_order_id → _FillEntry
         self._fill_map: Dict[str, _FillEntry] = {}
@@ -715,6 +720,33 @@ class OrderPlacer:
             },
         )
 
+        # Telegram alert: ORDER PLACED (optional; never crash on notifier failure)
+        if self._notifier is not None:
+            try:
+                now_hm = now_ist().strftime("%H:%M")
+                smart_on = (
+                    self._smart_tgt_manager is not None
+                    and self._smart_tgt_config is not None
+                    and getattr(self._smart_tgt_config, "enabled", False)
+                )
+                smart_line = (
+                    "Smart TGT monitoring: ACTIVE (FIXED mode)"
+                    if smart_on else "Smart TGT monitoring: disabled"
+                )
+                body = (
+                    f"Fill: ₹{entry_price:,.2f} | Qty: {qty} | {now_hm} IST\n"
+                    f"SL-M: ₹{sl_price:,.2f} ✓ | TGT: ₹{tgt_price:,.2f} ✓\n"
+                    f"{smart_line}"
+                )
+                self._notifier.send(
+                    severity="INFO",
+                    title=f"[{self._mode}] ✅ ORDER PLACED — {symbol}",
+                    body=body,
+                    source_module="order_placer",
+                )
+            except Exception as exc:
+                self._log.error("order_placer: place notifier.send failed: %s", exc)
+
     # ── event handler ─────────────────────────────────────────────────────────
 
     def _on_order_filled(self, event: OrderFilled) -> None:
@@ -1057,6 +1089,33 @@ class OrderPlacer:
             return
 
         net_pnl = (closed_row or {}).get("net_pnl", gross_pnl - charges)
+
+        # Telegram alert: TARGET HIT / STOP LOSS HIT (optional).
+        # EOD exits are intentionally excluded — covered by EOD DAILY SUMMARY.
+        if self._notifier is not None and exit_reason in ("TGT_HIT", "SL_HIT"):
+            try:
+                if exit_reason == "TGT_HIT":
+                    emoji = "🎯"
+                    title_word = "TARGET HIT"
+                    pnl_sign = "+"
+                else:
+                    emoji = "🔴"
+                    title_word = "STOP LOSS HIT"
+                    pnl_sign = "+" if net_pnl >= 0 else "-"
+                body = (
+                    f"Exit: ₹{float(exit_price):,.2f} | Direction: {direction}\n"
+                    f"Net P&L: {pnl_sign}₹{abs(float(net_pnl)):,.2f}"
+                )
+                self._notifier.send(
+                    severity="INFO",
+                    title=f"[{self._mode}] {emoji} {title_word} — {fill_entry.symbol}",
+                    body=body,
+                    source_module="order_placer",
+                )
+            except Exception as exc:
+                self._log.error(
+                    "order_placer: exit_fill notifier.send failed: %s", exc
+                )
 
         # Audit #5: OCO — cancel the sibling exit leg so a late fill can't
         # re-open a naked position after we've already claimed the exit.

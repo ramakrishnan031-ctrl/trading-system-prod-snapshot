@@ -126,6 +126,8 @@ class KillSwitch:
         on_hard_kill_cancel_fn: Optional[Callable[[], object]] = None,
         api_failure_threshold: int = 3,
         enable_auto_trip: bool = True,
+        notifier: Optional[object] = None,   # TelegramNotifier; optional
+        mode: str = "LIVE",                   # session mode label for alert title
     ) -> None:
         self._store = state_store
         self._bus = bus
@@ -133,6 +135,8 @@ class KillSwitch:
         self._cancel_fn = on_hard_kill_cancel_fn
         self._threshold = api_failure_threshold
         self._auto_trip = enable_auto_trip
+        self._notifier = notifier
+        self._mode = mode
 
         # KS4: RLock allows same-thread reentrant acquisition (deadlock fix).
         self._lock = threading.RLock()
@@ -146,6 +150,23 @@ class KillSwitch:
 
         # KS3: recover persisted state on startup (Audit Issue #18 fix)
         self._load_state_from_store()
+
+    def set_notifier(
+        self,
+        notifier: Optional[object],
+        mode: Optional[str] = None,
+    ) -> None:
+        """Wire TelegramNotifier after construction.
+
+        main.py builds KillSwitch BEFORE the notifier (notifier needs config
+        that is loaded after KS is used by startup checks). This setter lets
+        main wire the notifier after it is constructed so soft_kill alerts
+        can still fire. ``mode`` may also be refreshed here since interactive
+        startup can change args.mode after KS construction.
+        """
+        self._notifier = notifier
+        if mode is not None:
+            self._mode = mode
 
     # ─────────────────────────────────────────────────────────────────────────
     # Read API (KS6, KS10, KS12)
@@ -244,6 +265,21 @@ class KillSwitch:
         self._log.critical(
             "SOFT_KILL ACTIVATED reason=%s triggered_by=%s", reason, triggered_by
         )
+
+        # Telegram alert (optional; never crash on notifier failure)
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="WARN",
+                    title=f"[{self._mode}] ⚠️ SOFT KILL ACTIVATED",
+                    body=(
+                        f"Reason: {reason}\n"
+                        "New signals: BLOCKED | Open positions: managed to SL/TGT/EOD"
+                    ),
+                    source_module="kill_switch",
+                )
+            except Exception as exc:
+                self._log.error("kill_switch: soft_kill notifier.send failed: %s", exc)
 
     def hard_kill(
         self, reason: str, triggered_by: str = "system"

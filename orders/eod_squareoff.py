@@ -114,6 +114,7 @@ class EodSquareoff:
         inter_order_delay_ms: int = 500,
         notifier: Optional[object] = None,  # TelegramNotifier; for EOD9 SKIPPED_LATE alert
         market_close: str = "15:30",        # IST HH:MM; hard stop for recovery fire
+        mode: str = "LIVE",                 # session mode label for alert titles
     ) -> None:
         self._adapter = adapter
         self._store = state_store
@@ -128,6 +129,7 @@ class EodSquareoff:
         self._inter_order_delay_sec = inter_order_delay_ms / 1000.0
         self._notifier = notifier
         self._market_close_time = datetime.strptime(market_close, "%H:%M").time()
+        self._mode = mode
 
         # EOD3: per-date "already fired" flag
         self._fired_for_date: dict[date, bool] = {}
@@ -403,7 +405,140 @@ class EodSquareoff:
             duration_sec=duration_sec,
             recovery_fire=recovery_fire,
         )
+
+        # Telegram alert: EOD DAILY SUMMARY (optional; never crash).
+        if self._notifier is not None:
+            try:
+                self._send_daily_summary(fired_date_str)
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.error("EOD daily summary alert failed: %s", exc)
+
         return result
+
+    # ------------------------------------------------------------------
+    # Daily summary (new)
+    # ------------------------------------------------------------------
+
+    def _send_daily_summary(self, date_str: str) -> None:
+        """Build and send the EOD daily summary Telegram alert.
+
+        Pulls closed trades for date_str from the trades table and reports
+        net P&L, win rate, best/worst trade, strategy breakdown, and a
+        rough Smart TGT split derived from order_protocol.
+        """
+        try:
+            all_trades = self._store.get_trades_for_date(date_str)
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("EOD_DAILY_SUMMARY fetch failed: %s", exc)
+            return
+
+        closed = [
+            t for t in all_trades
+            if (t.get("status") == "CLOSED") and (t.get("net_pnl") is not None)
+        ]
+
+        if not closed:
+            body = (
+                "\nNo closed trades today.\n"
+                f"Attempted today: {len(all_trades)}"
+            )
+            self._notifier.send(
+                severity="INFO",
+                title=f"[{self._mode}] 📊 DAILY SUMMARY — {date_str}",
+                body=body,
+                source_module="eod_squareoff",
+            )
+            return
+
+        total_pnl = sum(float(t["net_pnl"]) for t in closed)
+        wins = [t for t in closed if float(t["net_pnl"]) > 0]
+        losses = [t for t in closed if float(t["net_pnl"]) <= 0]
+        win_n = len(wins)
+        loss_n = len(losses)
+        total_n = len(closed)
+        win_rate_pct = (win_n / total_n * 100.0) if total_n else 0.0
+
+        best = max(closed, key=lambda t: float(t["net_pnl"]))
+        worst = min(closed, key=lambda t: float(t["net_pnl"]))
+
+        best_pnl = float(best["net_pnl"])
+        worst_pnl = float(worst["net_pnl"])
+        best_reason = best.get("exit_reason") or "—"
+        worst_reason = worst.get("exit_reason") or "—"
+
+        # Avg R = avg of (net_pnl / risk_amount) across closed trades.
+        r_values = []
+        for t in closed:
+            risk = t.get("risk_amount")
+            try:
+                risk_f = float(risk) if risk is not None else 0.0
+            except Exception:
+                risk_f = 0.0
+            if risk_f > 0:
+                r_values.append(float(t["net_pnl"]) / risk_f)
+        avg_r = (sum(r_values) / len(r_values)) if r_values else 0.0
+
+        # Capital used = sum of margin_reserved for closed trades.
+        capital_used = 0.0
+        for t in closed:
+            mr = t.get("margin_reserved")
+            try:
+                capital_used += float(mr) if mr is not None else 0.0
+            except Exception:
+                pass
+
+        # Strategy breakdown.
+        strat_stats: dict = {}
+        for t in closed:
+            name = t.get("strategy") or "unknown"
+            entry = strat_stats.setdefault(
+                name, {"trades": 0, "wins": 0, "pnl": 0.0}
+            )
+            entry["trades"] += 1
+            if float(t["net_pnl"]) > 0:
+                entry["wins"] += 1
+            entry["pnl"] += float(t["net_pnl"])
+
+        # Smart TGT bucket breakdown: CO_PLUS_TGT = TRAIL-eligible, rest = FIXED.
+        trail_n = sum(1 for t in closed if t.get("order_protocol") == "CO_PLUS_TGT")
+        fixed_n = total_n - trail_n
+        defend_n = 0   # not implemented
+
+        pnl_sign = "+" if total_pnl >= 0 else "-"
+        best_sign = "+" if best_pnl >= 0 else "-"
+        worst_sign = "+" if worst_pnl >= 0 else "-"
+
+        lines = [
+            "",
+            f"P&L: {pnl_sign}₹{abs(total_pnl):,.2f} | "
+            f"Win rate: {win_rate_pct:.1f}% ({win_n}W {loss_n}L)",
+            f"Best:  {best.get('symbol', '?')} "
+            f"{best_sign}₹{abs(best_pnl):,.2f} ({best_reason})",
+            f"Worst: {worst.get('symbol', '?')} "
+            f"{worst_sign}₹{abs(worst_pnl):,.2f} ({worst_reason})",
+            f"Avg R: {avg_r:+.2f} | Capital used: ₹{capital_used:,.2f}",
+            "",
+            "Strategies:",
+        ]
+        for name, s in strat_stats.items():
+            s_wr = (s["wins"] / s["trades"] * 100.0) if s["trades"] else 0.0
+            s_sign = "+" if s["pnl"] >= 0 else "-"
+            lines.append(
+                f"  {name} {s['trades']}T {s_wr:.0f}%WR "
+                f"{s_sign}₹{abs(s['pnl']):,.2f}"
+            )
+        lines.append("")
+        lines.append(
+            f"Smart TGT: FIXED={fixed_n} TRAIL={trail_n} DEFEND={defend_n}"
+        )
+
+        self._notifier.send(
+            severity="INFO",
+            title=f"[{self._mode}] 📊 DAILY SUMMARY — {date_str}",
+            body="\n".join(lines),
+            source_module="eod_squareoff",
+        )
 
     def _cancel_pending_entries(self) -> tuple[int, int, int]:
         """
@@ -792,11 +927,10 @@ class EodSquareoff:
                     try:
                         self._notifier.send(
                             severity="CRITICAL",
-                            title="EOD recovery FAILED",
+                            title=f"[{self._mode}] 🚨 EOD Recovery Failed",
                             body=(
-                                f"EOD squareoff recovery on {today_str} "
-                                f"raised: {exc}. Row remains IN_PROGRESS. "
-                                f"Manual intervention required."
+                                f"Date: {today_str} | Error: {exc}\n"
+                                "Action: Manual intervention required."
                             ),
                             source_module="eod_squareoff",
                         )
@@ -846,15 +980,21 @@ class EodSquareoff:
                     self._log.error("EOD_SKIPPED_LATE event write failed: %s", exc)
 
                 if self._notifier is not None:
+                    symbols_str = (
+                        ", ".join(symbols) if isinstance(symbols, (list, tuple))
+                        else str(symbols)
+                    )
                     body = (
-                        f"System restarted after 15:30 with "
-                        f"{open_count} open position(s): {symbols}. "
-                        f"Broker RMS will auto-squareoff. Review trades manually tomorrow."
+                        f"Symbols: {symbols_str}\n"
+                        "Broker RMS will auto-squareoff. Review tomorrow."
                     )
                     try:
                         self._notifier.send(
                             severity="CRITICAL",
-                            title="EOD squareoff MISSED — open positions remain",
+                            title=(
+                                f"[{self._mode}] 🚨 EOD Squareoff Missed — "
+                                "Open Positions Remain"
+                            ),
                             body=body,
                             source_module="eod_squareoff",
                         )

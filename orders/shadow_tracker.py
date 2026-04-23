@@ -129,6 +129,7 @@ class ShadowTracker:
         max_innings: int = 3,
         alert_per_inning: bool = True,
         enabled: bool = True,
+        mode: str = "LIVE",                # session mode label for alert title
     ) -> None:
         self._store = state_store
         self._bus = bus
@@ -141,6 +142,7 @@ class ShadowTracker:
         self._max_innings = max_innings
         self._alert_per_inning = alert_per_inning
         self._enabled = enabled
+        self._mode = mode
 
         # Active simulated innings (inning_number >= 2). Keyed by trade_id.
         # Only one active inning per trade at any time (SH14).
@@ -590,20 +592,53 @@ class ShadowTracker:
         if self._notifier is None:
             return
         try:
-            pnl_str = f"{inning.pnl_pct:+.2f}%" if inning.pnl_pct is not None else "n/a"
-            msg = (
-                f"Inning {inning.inning_number} closed: {inning.symbol} "
-                f"({inning.direction}) "
-                f"entry={inning.entry_price:.2f} "
-                f"exit={inning.exit_price:.2f} "
-                f"reason={inning.exit_reason} "
-                f"pnl={pnl_str} "
-                f"real={inning.is_real}"
+            reason = (inning.exit_reason or "CLOSED").upper()
+            if reason == "TGT":
+                emoji = "🎯"
+            elif reason == "SL":
+                emoji = "🔴"
+            else:
+                emoji = "🔵"
+
+            # Total ₹ P&L requires qty_filled — best-effort lookup
+            total_pnl = None
+            try:
+                rows = self._store.fetch_all(
+                    "SELECT qty_filled FROM trades WHERE trade_id = ?",
+                    (inning.trade_id,),
+                )
+                if rows and inning.pnl_per_share is not None:
+                    qty = int(rows[0]["qty_filled"] or 0)
+                    total_pnl = float(inning.pnl_per_share) * qty
+            except Exception:  # noqa: BLE001
+                total_pnl = None
+
+            if total_pnl is not None:
+                sign = "+" if total_pnl >= 0 else "-"
+                pnl_rupees = f"{sign}₹{abs(total_pnl):,.2f}"
+            else:
+                pnl_rupees = "n/a"
+            pnl_pct_str = (
+                f"{inning.pnl_pct:+.2f}%"
+                if inning.pnl_pct is not None else "n/a"
+            )
+            exit_price_str = (
+                f"₹{float(inning.exit_price):,.2f}"
+                if inning.exit_price is not None else "n/a"
+            )
+
+            title = (
+                f"[{self._mode}] {emoji} {reason} — {inning.symbol}"
+            )
+            body = (
+                f"Exit: {exit_price_str} | Direction: {inning.direction}\n"
+                f"P&L: {pnl_rupees} ({pnl_pct_str}) | "
+                f"Inning: {inning.inning_number}"
             )
             self._notifier.send(
                 severity="INFO",
-                title=f"Inning {inning.inning_number} | {inning.symbol}",
-                body=msg,
+                title=title,
+                body=body,
                 source_module="shadow_tracker",
             )
         except Exception as exc:

@@ -689,9 +689,11 @@ class TestStartSequence:
     def test_startup_info_notification_sent(self):
         notifier = MagicMock()
         _run(extra={"TelegramNotifier": MagicMock(return_value=notifier)})
+        # New format: title is "[MODE] 🚀 System Active | MODE Mode"
         info_starts = [
             c for c in notifier.send.call_args_list
-            if c[1].get("severity") == "INFO" and "started" in c[1].get("title", "").lower()
+            if c[1].get("severity") == "INFO"
+            and "system active" in c[1].get("title", "").lower()
         ]
         assert len(info_starts) >= 1
 

@@ -897,8 +897,9 @@ def test_alerts_on_inning_close(tmp_path: Path) -> None:
     assert len(notifier.calls) >= 1
     call = notifier.calls[0]
     assert call["severity"] == "INFO"
-    assert "RELIANCE" in call["body"]
-    assert "inning_number" in call["body"].lower() or "1" in call["body"]
+    # New format: symbol is in title, not body
+    assert "RELIANCE" in call["title"]
+    assert "Inning: 1" in call["body"]
     print(f"  OK alert sent on inning close (severity={call['severity']})")
     store.close()
 
@@ -947,9 +948,13 @@ def test_alert_contains_symbol_and_pnl(tmp_path: Path) -> None:
     ))
 
     assert len(notifier.calls) >= 1
-    msg = notifier.calls[0]["body"]
-    assert "RELIANCE" in msg
-    assert "2500" in msg or "2600" in msg  # entry or exit price
+    call0 = notifier.calls[0]
+    title = call0["title"]
+    msg = call0["body"]
+    # New format: symbol in title; body has exit price and pnl_pct
+    assert "RELIANCE" in title
+    # Price shown with comma-formatting (₹2,600.00)
+    assert "2,600" in msg or "2600" in msg or "2,500" in msg or "2500" in msg
     assert "%" in msg                       # pnl_pct
     print("  OK alert message contains required fields")
     store.close()

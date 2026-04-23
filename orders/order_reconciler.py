@@ -138,6 +138,7 @@ class OrderReconciler:
         cfg: OrderReconcilerConfig,
         quote_fn: Callable[[List[str]], dict],
         broker_orders_fn: Optional[Callable[[], list]] = None,
+        mode: str = "LIVE",      # session mode label for alert title
     ) -> None:
         self._store = state_store
         self._adapter = adapter
@@ -149,6 +150,7 @@ class OrderReconciler:
         self._cfg = cfg
         self._quote_fn = quote_fn
         self._broker_orders_fn = broker_orders_fn
+        self._mode = mode
         self._order_mgr = OrderManager(state_store, logger)
 
         self._lock = threading.Lock()
@@ -916,11 +918,12 @@ class OrderReconciler:
         try:
             self._notifier.send(
                 severity="CRITICAL",
-                title="Capital Drift Detected",
+                title=f"[{self._mode}] ⚠️ Capital Drift Detected",
                 body=(
-                    f"Broker capital ({actual:.2f}) differs from local "
-                    f"({expected:.2f}) by {delta:.2f}, "
-                    f"exceeding tolerance {self._cfg.capital_drift_tolerance:.2f}."
+                    f"Broker: ₹{float(actual):,.2f} | "
+                    f"Local: ₹{float(expected):,.2f}\n"
+                    f"Delta: ₹{float(delta):,.2f} "
+                    f"(tolerance: ₹{float(self._cfg.capital_drift_tolerance):,.2f})"
                 ),
                 source_module="order_reconciler",
                 context={

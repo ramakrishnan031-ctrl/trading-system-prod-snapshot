@@ -258,7 +258,11 @@ def _print_status(store: StateStore, kill_switch: KillSwitch,
 # Callbacks (MAIN18)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_critical_failure_cb(kill_switch: KillSwitch, notifier: Optional[TelegramNotifier]):
+def _make_critical_failure_cb(
+    kill_switch: KillSwitch,
+    notifier: Optional[TelegramNotifier],
+    mode: str = "LIVE",
+):
     def _on_critical_failure(source: str, reason: str) -> None:
         _log.critical("Critical failure from %s: %s", source, reason)
         kill_switch.soft_kill(
@@ -268,8 +272,11 @@ def _make_critical_failure_cb(kill_switch: KillSwitch, notifier: Optional[Telegr
             try:
                 notifier.send(
                     severity="CRITICAL",
-                    title="Critical failure",
-                    body=f"{source}: {reason}",
+                    title=f"[{mode}] 🚨 Critical Failure",
+                    body=(
+                        f"Source: {source}\n"
+                        f"Reason: {reason}"
+                    ),
                     source_module="main",
                 )
             except Exception as ne:
@@ -277,7 +284,11 @@ def _make_critical_failure_cb(kill_switch: KillSwitch, notifier: Optional[Telegr
     return _on_critical_failure
 
 
-def _make_orphan_cb(kill_switch: KillSwitch, notifier: Optional[TelegramNotifier]):
+def _make_orphan_cb(
+    kill_switch: KillSwitch,
+    notifier: Optional[TelegramNotifier],
+    mode: str = "LIVE",
+):
     def _on_orphan(order_id: str, reason: str) -> None:
         _log.critical("Orphan order %s: %s", order_id, reason)
         kill_switch.soft_kill(
@@ -287,8 +298,11 @@ def _make_orphan_cb(kill_switch: KillSwitch, notifier: Optional[TelegramNotifier
             try:
                 notifier.send(
                     severity="CRITICAL",
-                    title="Orphan order detected",
-                    body=f"order_id={order_id} reason={reason}",
+                    title=f"[{mode}] 🚨 Orphan Order Detected",
+                    body=(
+                        f"Order ID: {order_id} | Reason: {reason}\n"
+                        "Action: Soft kill triggered."
+                    ),
                     source_module="main",
                 )
             except Exception as ne:
@@ -358,6 +372,7 @@ def _shutdown(
     store: StateStore,
     webhook_receiver: Optional[WebhookReceiver] = None,
     clock_skew_probe: Optional[BrokerClockSkewProbe] = None,
+    mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
     _log.info("Shutdown initiated")
@@ -404,10 +419,11 @@ def _shutdown(
     except Exception as exc:
         _log.error("candle_store.stop error: %s", exc)
     try:
+        _hhmm = time_authority.now_ist().strftime("%H:%M")
         notifier.send(
             severity="INFO",
-            title="System stopping",
-            body=f"Version {VERSION}",
+            title=f"[{mode}] 🛑 System Stopping",
+            body=f"Version: {VERSION} | {_hhmm} IST",
             source_module="main",
         )
     except Exception as exc:
@@ -609,12 +625,16 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     store = StateStore(Path("data_store/trading_system.db"))
     event_bus = EventBus()
 
+    # Session mode label used for all Telegram alert titles: "[PAPER]"/"[LIVE]"
+    mode_label = str(args.mode or "live").upper()
+
     kill_switch = KillSwitch(
         store,
         event_bus,
         get_logger("kill_switch"),
         api_failure_threshold=app_config.system.kill_switch.api_failure_threshold,
         enable_auto_trip=app_config.system.kill_switch.enable_auto_trip,
+        mode=mode_label,
     )
 
     # TimeAuthority needs kill_switch for the critical-skew callback
@@ -856,6 +876,12 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         send_in_paper_mode=tg_cfg.telegram_alerts_in_paper_mode,
     )
 
+    # Refresh mode label — interactive startup may have changed args.mode.
+    mode_label = str(args.mode or "live").upper()
+    # Wire notifier to kill_switch (built before notifier existed) so soft_kill
+    # alerts reach Telegram.
+    kill_switch.set_notifier(notifier, mode=mode_label)
+
     # Alert operator about config hash change now that notifier is ready
     if config_hash_changed:
         store.insert_system_event(
@@ -864,10 +890,15 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
             details=json.dumps({"changed_files": hash_result.changed_files}),
         )
         try:
+            changed = hash_result.changed_files
+            files_str = (
+                ", ".join(changed) if isinstance(changed, (list, tuple))
+                else str(changed)
+            )
             notifier.send(
                 severity="WARN",
-                title="Config files changed since last session",
-                body=f"Changed: {hash_result.changed_files}",
+                title=f"[{mode_label}] ⚠️ Config Changed Since Last Session",
+                body=f"Files: {files_str}",
                 source_module="main",
             )
         except Exception as exc:
@@ -970,9 +1001,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     live_feed = LiveFeedManager(
         api_key=os.environ.get(selected_account.api_key_env, ""),
         access_token=os.environ.get("ZERODHA_ACCESS_TOKEN", ""),
-        on_critical_failure=lambda reason: _make_critical_failure_cb(kill_switch, notifier)(
-            "live_feed", reason
-        ),
+        on_critical_failure=lambda reason: _make_critical_failure_cb(
+            kill_switch, notifier, mode_label
+        )("live_feed", reason),
         logger=get_logger("live_feed"),
         paper_mode=is_paper,
     )
@@ -994,6 +1025,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         max_innings=sh_cfg.max_innings,
         alert_per_inning=sh_cfg.alert_per_inning,
         enabled=sh_cfg.enabled,
+        mode=mode_label,
     )
 
     # Wire instrument_cache for token->symbol resolution (SH5)
@@ -1031,7 +1063,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         logger=get_logger("order_monitor"),
         poll_interval_sec=om_cfg.poll_interval_sec,
         fill_timeout_sec=om_cfg.fill_timeout_sec,
-        on_orphan_callback=_make_orphan_cb(kill_switch, notifier),
+        on_orphan_callback=_make_orphan_cb(kill_switch, notifier, mode_label),
     )
 
     co_protocol = CoPlusTgtProtocol(
@@ -1065,6 +1097,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         smart_tgt_manager=smart_tgt,              # BL-7b: CO_PLUS_TGT trail wiring
         smart_tgt_config=app_config.system.smart_tgt,  # BL-7b: trigger_pct/step_pct
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,  # BL-19
+        notifier=notifier,
+        mode=mode_label,
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 
@@ -1080,6 +1114,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         cfg=rc_cfg,
         quote_fn=broker_adapter.get_quote,
         broker_orders_fn=broker_adapter.get_open_orders,
+        mode=mode_label,
     )
 
     strategies_dir = config_dir / "strategies"
@@ -1115,6 +1150,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         order_monitor=order_monitor,
         inter_order_delay_ms=app_config.system.eod_squareoff.inter_order_delay_ms,
         market_close=app_config.system.trading_hours.market_close,
+        notifier=notifier,
+        mode=mode_label,
     )
 
     signal_queue: queue.Queue = queue.Queue(
@@ -1142,6 +1179,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         instrument_cache=instrument_cache,  # IC: lot_size/sector lookup
         atr_fallback_mode=sp_cfg.atr_fallback_mode,  # MED #12
         tgt_min_pct=sp_cfg.tgt_min_pct,              # BL-16
+        notifier=notifier,
+        mode=mode_label,
     )
 
     entry_gate = EntryGate(
@@ -1276,10 +1315,24 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         now_iso=now_iso,
     )
     try:
+        _hhmm = time_authority.now_ist().strftime("%H:%M")
+        try:
+            _market_state = (
+                "OPEN"
+                if market_windows.is_market_open(time_authority.now_ist())
+                else "CLOSED"
+            )
+        except Exception:
+            _market_state = "UNKNOWN"
         notifier.send(
             severity="INFO",
-            title="System started",
-            body=f"Scenario: {scenario.value}. Mode: {args.mode}.",
+            title=f"[{mode_label}] 🚀 System Active | {mode_label} Mode",
+            body=(
+                f"Account: {selected_account.account_id} (ZERODHA)\n"
+                f"Capital: ₹{float(_startup_capital):,.0f} | "
+                f"Market: {_market_state}\n"
+                f"{_hhmm} IST"
+            ),
             source_module="main",
         )
     except Exception as exc:
@@ -1314,6 +1367,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         store=store,
         webhook_receiver=webhook_receiver,
         clock_skew_probe=clock_skew_probe,
+        mode=mode_label,
     )
     return 0
 

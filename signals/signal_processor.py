@@ -125,6 +125,8 @@ class SignalProcessor:
         instrument_cache=None,              # IC: optional InstrumentCache for lot_size/sector
         atr_fallback_mode: str = "WARN",   # MED #12: "WARN" or "HALT"
         tgt_min_pct: float = 0.003,        # BL-16: guard against degenerate target == entry
+        notifier=None,                      # TelegramNotifier; optional
+        mode: str = "LIVE",                 # session mode label for alert title
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -147,6 +149,8 @@ class SignalProcessor:
         self._instrument_cache = instrument_cache  # IC: Module 38
         self._atr_fallback_mode: str = atr_fallback_mode  # MED #12
         self._tgt_min_pct: float = float(tgt_min_pct)     # BL-16
+        self._notifier = notifier                          # Telegram alerts (optional)
+        self._mode = mode                                  # session mode label
 
         # Lifecycle
         self._running = False
@@ -277,6 +281,53 @@ class SignalProcessor:
         finally:
             with self._active_lock:
                 self._active_workers -= 1
+
+    # ------------------------------------------------------------------
+    # Telegram alert helper (new)
+    # ------------------------------------------------------------------
+
+    def _emit_signal_alert(
+        self,
+        *,
+        symbol: str,
+        strategy_name: str,
+        score,                      # int | None
+        entry_price: float,
+        sl_price: float,
+        tgt_price: float,
+        qty: int,
+        direction: str,             # "LONG" | "SHORT" | "BUY" | "SELL"
+    ) -> None:
+        """Send INTRADAY SIGNAL telegram alert (optional; never crash)."""
+        if self._notifier is None:
+            return
+        try:
+            risk_amt = abs(float(entry_price) - float(sl_price)) * int(qty)
+            capital_at_risk = float(entry_price) * int(qty)
+            risk_pct = (risk_amt / capital_at_risk * 100.0) if capital_at_risk else 0.0
+            est_profit = abs(float(tgt_price) - float(entry_price)) * int(qty)
+            score_str = f"{int(score)}/100" if score is not None else "N/A"
+            body = (
+                f"Strategy: {strategy_name} | Score: {score_str}\n"
+                f"Priority rank: #1 of 1 candidates | SIP: NO\n"
+                f"Entry: ₹{float(entry_price):,.2f} (LIMIT) | "
+                f"SL: ₹{float(sl_price):,.2f} | "
+                f"TGT: ₹{float(tgt_price):,.2f}\n"
+                f"Qty: {int(qty)} | Risk: ₹{risk_amt:,.2f} ({risk_pct:.1f}%) | "
+                f"Est. net TGT: +₹{est_profit:,.2f}\n"
+                f"Smart TGT: enabled | Timeout: 10 min"
+            )
+            self._notifier.send(
+                severity="INFO",
+                title=f"[{self._mode}] 🟢 INTRADAY SIGNAL — {symbol}",
+                body=body,
+                source_module="signal_processor",
+            )
+        except Exception as exc:
+            self._log.error(
+                "signal_processor: signal-alert notifier.send failed for %s: %s",
+                symbol, exc,
+            )
 
     # ------------------------------------------------------------------
     # Core pipeline (SP6, SPW3)
@@ -462,6 +513,18 @@ class SignalProcessor:
 
             # Derive target price (SPW5, SPW6)
             tgt_price = self._derive_target(entry_price, sl_price, strategy_obj)
+
+            # Telegram alert: INTRADAY SIGNAL (fires before order placement)
+            self._emit_signal_alert(
+                symbol=symbol,
+                strategy_name=strategy_name,
+                score=screen_result.score,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                tgt_price=tgt_price,
+                qty=sizing.qty,
+                direction=strategy_obj.direction,
+            )
 
             try:
                 self._placer.place(
@@ -826,6 +889,18 @@ class SignalProcessor:
                 with self._stats_lock:
                     self._stats["processed_no_placer"] += 1
                 return
+
+            # Telegram alert: INTRADAY SIGNAL (gate-release path — score unavailable)
+            self._emit_signal_alert(
+                symbol=symbol,
+                strategy_name=strategy_name,
+                score=None,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                tgt_price=tgt_price,
+                qty=sizing.qty,
+                direction=direction,
+            )
 
             try:
                 self._placer.place(
