@@ -400,14 +400,22 @@ class TestOrderManager:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestLimitTripleProtocol:
+    """
+    Two-phase LIMIT_TRIPLE (naked-short fix 2.1 + DELIVERY SL branch 3.4):
+      Phase 1 — execute() places ENTRY LIMIT only.
+      Phase 2 — place_exits() places SL + TGT on exit side at the ACTUAL
+                filled qty. Called by OrderPlacer on ENTRY fill.
+    """
 
     def _make_proto(self, adapter=None):
         if adapter is None:
             adapter = _MockAdapter()
         return LimitTripleProtocol(adapter=adapter, logger=_log()), adapter
 
-    def test_happy_path_places_three_orders(self) -> None:
-        """Happy path: 3 orders placed (ENTRY LIMIT, SL SL-M, TGT LIMIT). (OPL1)"""
+    # ── Phase 1: execute() ────────────────────────────────────────────────────
+
+    def test_execute_places_entry_only(self) -> None:
+        """execute() places ENTRY LIMIT only; SL/TGT are deferred. (OPL1)"""
         proto, adapter = self._make_proto()
         result = proto.execute(
             symbol="RELIANCE", side="BUY", qty=10,
@@ -417,37 +425,20 @@ class TestLimitTripleProtocol:
         assert result.success
         assert result.order_protocol == "LIMIT_TRIPLE"
         assert result.entry_broker_order_id
-        assert result.sl_broker_order_id
-        assert result.tgt_broker_order_id
-        assert len(adapter.placed) == 3
-        # ENTRY: LIMIT BUY
+        assert result.entry_internal_id
+        # Naked-short fix: SL + TGT fields are empty; deferred to place_exits()
+        assert result.sl_broker_order_id == ""
+        assert result.tgt_broker_order_id == ""
+        assert result.sl_internal_id == ""
+        assert result.tgt_internal_id == ""
+        # Only ENTRY hit the broker
+        assert len(adapter.placed) == 1
         assert adapter.placed[0]["order_type"] == "LIMIT"
         assert adapter.placed[0]["side"] == "BUY"
-        # SL: SL-M SELL, trigger=sl_price
-        assert adapter.placed[1]["order_type"] == "SL-M"
-        assert adapter.placed[1]["side"] == "SELL"
-        assert adapter.placed[1]["trigger_price"] == pytest.approx(2450.0)
-        # TGT: LIMIT SELL
-        assert adapter.placed[2]["order_type"] == "LIMIT"
-        assert adapter.placed[2]["side"] == "SELL"
-        print("  OK LIMIT_TRIPLE happy path: 3 orders, correct types/sides (OPL1)")
+        print("  OK Phase 1: execute() places ENTRY LIMIT only (OPL1 / 2.1)")
 
-    def test_short_trade_uses_correct_exit_sides(self) -> None:
-        """SHORT trade: SL and TGT are BUY orders (closing side). (OPL2)"""
-        proto, adapter = self._make_proto()
-        result = proto.execute(
-            symbol="NIFTY", side="SELL", qty=5,
-            entry_price=22000.0, sl_price=22200.0, tgt_price=21600.0,
-            intent="INTRADAY", trade_id="trd_short",
-        )
-        assert result.success
-        assert adapter.placed[0]["side"] == "SELL"  # entry
-        assert adapter.placed[1]["side"] == "BUY"   # SL
-        assert adapter.placed[2]["side"] == "BUY"   # TGT
-        print("  OK LIMIT_TRIPLE short trade: exit orders are BUY (OPL2)")
-
-    def test_entry_failure_raises_no_sl_placed(self) -> None:
-        """Entry failure -> BrokerError raised; SL/TGT not placed. (OPL3)"""
+    def test_execute_entry_failure_raises(self) -> None:
+        """ENTRY failure -> BrokerError; nothing placed. (OPL3)"""
         adapter = _MockAdapter(raises=OrderRejectedError("rejected"))
         proto = LimitTripleProtocol(adapter=adapter, logger=_log())
         with pytest.raises(BrokerError):
@@ -457,39 +448,112 @@ class TestLimitTripleProtocol:
                 intent="INTRADAY", trade_id="trd_fail",
             )
         assert len(adapter.placed) == 0
-        print("  OK entry failure -> BrokerError, 0 orders placed (OPL3)")
+        print("  OK Phase 1: ENTRY failure -> BrokerError, 0 orders placed (OPL3)")
 
-    def test_sl_failure_cancels_entry(self) -> None:
-        """SL failure -> entry is cancelled best-effort; BrokerError raised. (OPL3)"""
-        # First call (ENTRY) succeeds; second call (SL) fails
+    # ── Phase 2: place_exits() — INTRADAY SL-M ───────────────────────────────
+
+    def test_place_exits_intraday_uses_sl_m(self) -> None:
+        """INTRADAY place_exits: SL leg is SL-M with trigger_price only. (OPL7)"""
+        proto, adapter = self._make_proto()
+        legs = proto.place_exits(
+            symbol="RELIANCE", entry_side="BUY", qty=10,
+            sl_price=2450.0, tgt_price=2600.0,
+            intent="INTRADAY", trade_id="trd_itd",
+        )
+        # 2 orders placed (SL + TGT)
+        assert len(adapter.placed) == 2
+        sl, tgt = adapter.placed[0], adapter.placed[1]
+        assert sl["order_type"] == "SL-M"
+        assert sl["side"] == "SELL"
+        assert sl["trigger_price"] == pytest.approx(2450.0)
+        assert sl["price"] == pytest.approx(0.0)  # SL-M has no limit
+        assert tgt["order_type"] == "LIMIT"
+        assert tgt["side"] == "SELL"
+        assert tgt["price"] == pytest.approx(2600.0)
+        assert legs.sl_order_type == "SL-M"
+        assert legs.sl_broker_order_id
+        assert legs.tgt_broker_order_id
+        print("  OK Phase 2 INTRADAY: SL-M (trigger only) + LIMIT TGT (OPL7)")
+
+    # ── Phase 2: place_exits() — DELIVERY SL ─────────────────────────────────
+
+    def test_place_exits_delivery_uses_sl_not_sl_m(self) -> None:
+        """DELIVERY place_exits: SL leg is SL with explicit price. (OPL7 / 3.4)
+
+        Zerodha rejects SL-M on CNC products; use SL with
+        price = trigger_price (tight limit, explicit).
+        """
+        proto, adapter = self._make_proto()
+        legs = proto.place_exits(
+            symbol="RELIANCE", entry_side="BUY", qty=10,
+            sl_price=2450.0, tgt_price=2600.0,
+            intent="DELIVERY", trade_id="trd_cnc",
+        )
+        sl, tgt = adapter.placed[0], adapter.placed[1]
+        assert sl["order_type"] == "SL"             # not SL-M
+        assert sl["trigger_price"] == pytest.approx(2450.0)
+        assert sl["price"] == pytest.approx(2450.0)  # explicit limit
+        assert tgt["order_type"] == "LIMIT"
+        assert legs.sl_order_type == "SL"
+        print("  OK Phase 2 DELIVERY: SL with explicit price=trigger (OPL7 / 3.4)")
+
+    def test_place_exits_short_uses_correct_exit_sides(self) -> None:
+        """SHORT place_exits: SL and TGT are BUY orders (closing side). (OPL2)"""
+        proto, adapter = self._make_proto()
+        proto.place_exits(
+            symbol="NIFTY", entry_side="SELL", qty=5,
+            sl_price=22200.0, tgt_price=21600.0,
+            intent="INTRADAY", trade_id="trd_short",
+        )
+        assert adapter.placed[0]["side"] == "BUY"   # SL (exit of SHORT)
+        assert adapter.placed[1]["side"] == "BUY"   # TGT (exit of SHORT)
+        print("  OK Phase 2 SHORT: exit orders are BUY (OPL2)")
+
+    def test_place_exits_sizes_to_filled_qty(self) -> None:
+        """Naked-short fix: SL/TGT use the ACTUAL filled qty, not entry qty. (2.1)"""
+        proto, adapter = self._make_proto()
+        proto.place_exits(
+            symbol="RELIANCE", entry_side="BUY",
+            qty=100,   # simulate partial fill: ENTRY was 1000 qty, only 100 filled
+            sl_price=2450.0, tgt_price=2600.0,
+            intent="INTRADAY", trade_id="trd_partial",
+        )
+        assert adapter.placed[0]["qty"] == 100, \
+            "SL leg must use filled qty (not original entry qty)"
+        assert adapter.placed[1]["qty"] == 100, \
+            "TGT leg must use filled qty (not original entry qty)"
+        print("  OK Phase 2: SL/TGT sized to filled qty, not entry qty (2.1)")
+
+    def test_place_exits_sl_failure_raises_no_tgt(self) -> None:
+        """SL failure -> BrokerError; TGT not attempted. (OPL3)"""
+        # First call (SL) fails
         adapter = _MockAdapter(raises=OrderRejectedError("sl rejected"),
+                               fail_on_call=1)
+        proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        with pytest.raises(BrokerError):
+            proto.place_exits(
+                symbol="SBIN", entry_side="BUY", qty=5,
+                sl_price=585.0, tgt_price=630.0,
+                intent="INTRADAY", trade_id="trd_sl_fail",
+            )
+        assert len(adapter.placed) == 0, "SL failed; no legs placed"
+        print("  OK Phase 2: SL failure -> raises, no TGT attempted (OPL3)")
+
+    def test_place_exits_tgt_failure_raises_sl_still_standing(self) -> None:
+        """TGT failure -> raises; SL still standing. (OPL3)"""
+        # Second call (TGT) fails; SL (first call) succeeds
+        adapter = _MockAdapter(raises=OrderRejectedError("tgt rejected"),
                                fail_on_call=2)
         proto = LimitTripleProtocol(adapter=adapter, logger=_log())
         with pytest.raises(BrokerError):
-            proto.execute(
-                symbol="SBIN", side="BUY", qty=5,
-                entry_price=600.0, sl_price=585.0, tgt_price=630.0,
-                intent="INTRADAY", trade_id="trd_sl_fail",
-            )
-        assert len(adapter.placed) == 1   # only ENTRY was placed
-        assert len(adapter.cancelled) == 1  # ENTRY was cancelled
-        print("  OK SL failure -> entry cancelled (OPL3)")
-
-    def test_tgt_failure_raises_sl_still_standing(self) -> None:
-        """TGT failure -> raises BrokerError; SL still standing. (OPL3)"""
-        # Third call (TGT) fails
-        adapter = _MockAdapter(raises=OrderRejectedError("tgt rejected"),
-                               fail_on_call=3)
-        proto = LimitTripleProtocol(adapter=adapter, logger=_log())
-        with pytest.raises(BrokerError):
-            proto.execute(
-                symbol="HDFC", side="BUY", qty=3,
-                entry_price=1600.0, sl_price=1580.0, tgt_price=1640.0,
+            proto.place_exits(
+                symbol="HDFC", entry_side="BUY", qty=3,
+                sl_price=1580.0, tgt_price=1640.0,
                 intent="INTRADAY", trade_id="trd_tgt_fail",
             )
-        assert len(adapter.placed) == 2   # ENTRY + SL placed, TGT failed
-        assert len(adapter.cancelled) == 0  # SL stands
-        print("  OK TGT failure -> SL still standing (OPL3)")
+        assert len(adapter.placed) == 1   # only SL placed, TGT failed
+        assert len(adapter.cancelled) == 0  # SL stands (caller handles)
+        print("  OK Phase 2: TGT failure -> SL stands, raises (OPL3)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -587,7 +651,11 @@ class TestFullEntryEngine:
         return engine, adapter
 
     def test_routes_limit_triple(self) -> None:
-        """order_protocol='LIMIT_TRIPLE' routes to LimitTripleProtocol. (FEE2)"""
+        """order_protocol='LIMIT_TRIPLE' routes to LimitTripleProtocol. (FEE2)
+
+        Post naked-short fix (2.1): execute places ENTRY only; SL + TGT are
+        deferred to place_deferred_exits at fill time.
+        """
         engine, adapter = self._make_engine()
         result = engine.execute(
             symbol="RELIANCE", side="BUY", qty=5,
@@ -597,8 +665,8 @@ class TestFullEntryEngine:
         )
         assert result.success
         assert result.order_protocol == "LIMIT_TRIPLE"
-        assert len(adapter.placed) == 3
-        print("  OK routes LIMIT_TRIPLE -> 3 orders (FEE2)")
+        assert len(adapter.placed) == 1   # ENTRY only; exits deferred
+        print("  OK routes LIMIT_TRIPLE -> 1 ENTRY (FEE2 / 2.1)")
 
     def test_routes_co_plus_tgt(self) -> None:
         """order_protocol='CO_PLUS_TGT' routes to CoPlusTgtProtocol. (FEE2)"""
@@ -627,7 +695,10 @@ class TestFullEntryEngine:
         print("  OK unknown protocol -> ValueError (FEE2)")
 
     def test_default_protocol_used_when_not_provided(self) -> None:
-        """Empty order_protocol uses default_protocol. (FEE2)"""
+        """Empty order_protocol uses default_protocol. (FEE2)
+
+        Post 2.1: LIMIT_TRIPLE default places ENTRY only; exits deferred.
+        """
         engine, adapter = self._make_engine(default="LIMIT_TRIPLE")
         result = engine.execute(
             symbol="WIPRO", side="BUY", qty=3,
@@ -636,8 +707,41 @@ class TestFullEntryEngine:
             order_protocol="",   # uses default
         )
         assert result.order_protocol == "LIMIT_TRIPLE"
-        assert len(adapter.placed) == 3
+        assert len(adapter.placed) == 1   # ENTRY only; exits deferred
         print("  OK empty protocol uses default (FEE2)")
+
+    def test_place_deferred_exits_routes_limit_triple(self) -> None:
+        """place_deferred_exits routes to LimitTripleProtocol.place_exits. (2.1)"""
+        engine, adapter = self._make_engine()
+        # ENTRY first so we have 1 prior call on the adapter
+        engine.execute(
+            symbol="RELIANCE", side="BUY", qty=5,
+            entry_price=2500.0, sl_price=2450.0, tgt_price=2600.0,
+            intent="INTRADAY", trade_id="trd_defer",
+            order_protocol="LIMIT_TRIPLE",
+        )
+        legs = engine.place_deferred_exits(
+            order_protocol="LIMIT_TRIPLE",
+            symbol="RELIANCE", entry_side="BUY", qty=5,
+            sl_price=2450.0, tgt_price=2600.0,
+            intent="INTRADAY", trade_id="trd_defer",
+        )
+        assert legs.sl_broker_order_id
+        assert legs.tgt_broker_order_id
+        assert len(adapter.placed) == 3  # ENTRY + SL + TGT after both phases
+        print("  OK place_deferred_exits routes to LIMIT_TRIPLE (2.1)")
+
+    def test_place_deferred_exits_rejects_non_limit_triple(self) -> None:
+        """place_deferred_exits raises ValueError for CO_PLUS_TGT. (2.1)"""
+        engine, _ = self._make_engine()
+        with pytest.raises(ValueError, match="only supports LIMIT_TRIPLE"):
+            engine.place_deferred_exits(
+                order_protocol="CO_PLUS_TGT",
+                symbol="X", entry_side="BUY", qty=1,
+                sl_price=1.0, tgt_price=2.0,
+                intent="INTRADAY", trade_id="trd_x",
+            )
+        print("  OK place_deferred_exits rejects CO_PLUS_TGT (2.1)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -674,7 +778,11 @@ class TestOrderPlacer:
         return placer, store, fm, bus, adapter, om
 
     def test_happy_path_creates_trade_and_places_orders(self) -> None:
-        """Happy path: trade row created, 3 orders placed (LIMIT_TRIPLE). (OP1-OP4)"""
+        """Happy path: trade row created, ENTRY placed (LIMIT_TRIPLE). (OP1-OP4 / 2.1)
+
+        Post naked-short fix: place() places ENTRY only; SL + TGT are placed
+        by _handle_entry_fill on OrderFilled.
+        """
         with TemporaryDirectory() as tmp:
             placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
@@ -686,8 +794,10 @@ class TestOrderPlacer:
                 reservation_id="res_abc123",
             )
 
-            # 3 broker orders placed
-            assert len(adapter.placed) == 3
+            # ENTRY only at place() time (2.1); exits deferred to fill
+            assert len(adapter.placed) == 1
+            assert adapter.placed[0]["order_type"] == "LIMIT"
+            assert adapter.placed[0]["side"] == "BUY"
 
             # Trade row in DB
             rows = store.fetch_all("SELECT * FROM trades WHERE signal_id = ?", (sig_id,))
@@ -698,7 +808,7 @@ class TestOrderPlacer:
             assert trade["direction"] == "LONG"
             assert trade["order_protocol"] == "LIMIT_TRIPLE"
             store.close()
-            print("  OK happy path: trade + 3 orders placed (OP1-OP4)")
+            print("  OK happy path: trade + ENTRY placed (OP1-OP4 / 2.1)")
 
     def test_tgt_computed_from_rr_ratio(self) -> None:
         """tgt_price = entry + (entry - sl) * rr_ratio for LONG. (OP3)"""
@@ -1011,7 +1121,8 @@ class TestKillSwitchLastMile:
                 reservation_id="res_ks_ok",
             )
 
-            assert len(adapter.placed) == 3  # LIMIT_TRIPLE: all 3 placed
+            # Post 2.1: LIMIT_TRIPLE places ENTRY only; exits deferred to fill.
+            assert len(adapter.placed) == 1
             store.close()
             print("  OK kill_switch inactive -> placement proceeds (OP-LM1 negative)")
 
@@ -1111,18 +1222,22 @@ class TestEmptyBrokerOrderId:
         print("  OK empty entry broker_order_id -> OrderRejectedError (OP-LM3 ENTRY)")
 
     def test_limit_triple_empty_sl_id_raises(self) -> None:
-        """LIMIT_TRIPLE: empty broker_order_id on SL -> OrderRejectedError + entry cancelled. (OP-LM3)"""
-        adapter = _MockAdapterEmptyBrokerId(empty_on_call=2)
+        """LIMIT_TRIPLE: empty broker_order_id on SL -> OrderRejectedError. (OP-LM3 / 2.1)
+
+        Post naked-short fix: SL is placed in place_exits() after ENTRY fill,
+        not inside execute(). The OP-LM3 empty-broker-id check lives on the
+        place_exits path; the caller (OrderPlacer._place_limit_triple_exits)
+        escalates to hard_kill.
+        """
+        adapter = _MockAdapterEmptyBrokerId(empty_on_call=1)  # SL is first call in place_exits
         proto = LimitTripleProtocol(adapter=adapter, logger=_log())
         with pytest.raises(OrderRejectedError, match="empty broker_order_id"):
-            proto.execute(
-                symbol="SBIN", side="BUY", qty=5,
-                entry_price=600.0, sl_price=585.0, tgt_price=630.0,
+            proto.place_exits(
+                symbol="SBIN", entry_side="BUY", qty=5,
+                sl_price=585.0, tgt_price=630.0,
                 intent="INTRADAY", trade_id="trd_lm3_sl",
             )
-        # Entry was placed (call 1) and should have been cancelled
-        assert len(adapter.cancelled) == 1
-        print("  OK empty SL broker_order_id -> OrderRejectedError + entry cancelled (OP-LM3 SL)")
+        print("  OK empty SL broker_order_id -> OrderRejectedError (OP-LM3 SL / 2.1)")
 
     def test_co_empty_co_id_raises(self) -> None:
         """CO_PLUS_TGT: empty broker_order_id on CO -> OrderRejectedError. (OP-LM3)"""
@@ -1609,9 +1724,9 @@ class TestBl7cOrderPlacerTrackingWiring:
         return placer, monitor, adapter, store, fm, bus
 
     def test_place_entry_calls_order_monitor_track_for_entry_leg(self) -> None:
-        """LIMIT_TRIPLE place() -> track() called 3x; _fill_map has 3 legs. (BL-7c)"""
+        """LIMIT_TRIPLE place() -> track() called 1x (ENTRY); SL+TGT tracked on fill. (BL-7c / 2.1)"""
         with TemporaryDirectory() as tmp:
-            placer, monitor, adapter, store, _, _ = self._build(Path(tmp))
+            placer, monitor, adapter, store, _, bus = self._build(Path(tmp))
             sig_id = _seed_signal(store)
 
             placer.place(
@@ -1621,24 +1736,43 @@ class TestBl7cOrderPlacerTrackingWiring:
                 reservation_id="res_e",
             )
 
-            # 3 track() calls: entry, SL, TGT
-            assert monitor.track.call_count == 3, (
-                f"expected 3 track() calls, got {monitor.track.call_count}"
+            # Post 2.1: ENTRY tracked immediately; SL + TGT deferred to fill
+            assert monitor.track.call_count == 1, (
+                f"expected 1 track() call for ENTRY, got {monitor.track.call_count}"
             )
 
-            # Collect legs from _fill_map
             with placer._fill_map_lock:
                 legs = sorted(e.leg for e in placer._fill_map.values())
-            assert legs == [_LEG_ENTRY, _LEG_SL, _LEG_TGT], (
-                f"expected ENTRY/SL/TGT legs, got {legs}"
+            assert legs == [_LEG_ENTRY], f"expected ENTRY only, got {legs}"
+
+            # Now fire OrderFilled → SL + TGT get placed and tracked
+            entry_iid = adapter.placed[0]["internal_order_id"]
+            bus.publish(OrderFilled(
+                source_module="test", payload={},
+                internal_order_id=entry_iid,
+                broker_order_id=adapter.placed[0]["broker_order_id"],
+                symbol="RELIANCE", side="BUY",
+                avg_fill_price=2500.0, filled_qty=10,
+                filled_at=now_ist().isoformat(),
+            ))
+
+            # SL + TGT now tracked; total = 3 placed, 3 tracked
+            assert monitor.track.call_count == 3, (
+                f"after fill: expected 3 track() calls (ENTRY + SL + TGT), "
+                f"got {monitor.track.call_count}"
+            )
+            with placer._fill_map_lock:
+                legs_after = sorted(e.leg for e in placer._fill_map.values())
+            assert legs_after == [_LEG_SL, _LEG_TGT], (
+                f"after fill: ENTRY popped, SL+TGT in _fill_map; got {legs_after}"
             )
             store.close()
-            print("  OK BL-7c: LIMIT_TRIPLE place() tracks all 3 legs")
+            print("  OK BL-7c: LIMIT_TRIPLE tracks ENTRY on place(), SL+TGT on fill (2.1)")
 
     def test_place_entry_tracks_all_three_legs_for_limit_triple(self) -> None:
-        """LIMIT_TRIPLE: entry side = signal side; SL/TGT sides inverted. (BL-7c)"""
+        """LIMIT_TRIPLE: entry side = signal side; SL/TGT sides inverted after fill. (BL-7c / 2.1)"""
         with TemporaryDirectory() as tmp:
-            placer, monitor, adapter, store, _, _ = self._build(Path(tmp))
+            placer, monitor, adapter, store, _, bus = self._build(Path(tmp))
             sig_id = _seed_signal(store)
 
             placer.place(
@@ -1648,22 +1782,29 @@ class TestBl7cOrderPlacerTrackingWiring:
                 reservation_id="res_sides",
             )
 
-            # Build per-leg side lookup from _fill_map (leg -> side inferred via direction/exit)
-            # Easier: inspect the actual track() calls directly.
-            sides_by_leg: Dict[str, str] = {}
-            with placer._fill_map_lock:
-                for internal_id, entry in placer._fill_map.items():
-                    # Find the track() call whose internal_order_id matches
-                    for call_args in monitor.track.call_args_list:
-                        if call_args.kwargs.get("internal_order_id") == internal_id:
-                            sides_by_leg[entry.leg] = call_args.kwargs["side"]
-                            break
+            # Fire fill so SL + TGT are placed + tracked
+            entry_iid = adapter.placed[0]["internal_order_id"]
+            bus.publish(OrderFilled(
+                source_module="test", payload={},
+                internal_order_id=entry_iid,
+                broker_order_id=adapter.placed[0]["broker_order_id"],
+                symbol="TCS", side="BUY",
+                avg_fill_price=4000.0, filled_qty=5,
+                filled_at=now_ist().isoformat(),
+            ))
 
-            assert sides_by_leg[_LEG_ENTRY] == "BUY"
-            assert sides_by_leg[_LEG_SL] == "SELL"
-            assert sides_by_leg[_LEG_TGT] == "SELL"
+            # Inspect track() calls — ENTRY BUY, SL+TGT SELL
+            sides_by_internal: Dict[str, str] = {}
+            for call_args in monitor.track.call_args_list:
+                sides_by_internal[call_args.kwargs["internal_order_id"]] = \
+                    call_args.kwargs["side"]
+
+            # ENTRY = first placed order; SL + TGT = placements 2 and 3
+            assert sides_by_internal[adapter.placed[0]["internal_order_id"]] == "BUY"
+            assert sides_by_internal[adapter.placed[1]["internal_order_id"]] == "SELL"
+            assert sides_by_internal[adapter.placed[2]["internal_order_id"]] == "SELL"
             store.close()
-            print("  OK BL-7c: LIMIT_TRIPLE track sides ENTRY=BUY, SL/TGT=SELL")
+            print("  OK BL-7c: LIMIT_TRIPLE track sides ENTRY=BUY, SL/TGT=SELL (2.1)")
 
     def test_co_protocol_skips_sl_track(self) -> None:
         """CO_PLUS_TGT: sl_broker_order_id empty -> track called 2x; no SL _FillEntry. (BL-7c)"""
@@ -2383,7 +2524,11 @@ class TestBl8AtomicPersist:
     # --- Test 1 -----------------------------------------------------------
 
     def test_happy_path_no_cancellation_no_hard_kill(self) -> None:
-        """BL-8: happy path persists 3 rows; no cancels; no hard_kill."""
+        """BL-8: happy path persists 1 ENTRY row at place() time; no cancels; no hard_kill.
+
+        Post 2.1: LIMIT_TRIPLE places ENTRY only at place(); SL + TGT are
+        placed + persisted by _handle_entry_fill on OrderFilled.
+        """
         with TemporaryDirectory() as tmp:
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, adapter, om = self._make_placer(
@@ -2398,16 +2543,16 @@ class TestBl8AtomicPersist:
                 reservation_id="res_happy",
             )
 
-            assert len(adapter.placed) == 3
+            assert len(adapter.placed) == 1  # ENTRY only pre-fill (2.1)
             assert adapter.cancelled == []
             assert ks.hard_kill_calls == []
 
             rows = store.fetch_all("SELECT * FROM orders WHERE trade_id IN "
                                     "(SELECT trade_id FROM trades WHERE signal_id = ?)",
                                     (sig_id,))
-            assert len(rows) == 3
+            assert len(rows) == 1, "ENTRY row persisted at place() time"
             store.close()
-            print("  OK BL-8: happy path -> 3 rows, no cancel, no hard_kill")
+            print("  OK BL-8: happy path -> 1 ENTRY row pre-fill, no cancel, no hard_kill (2.1)")
 
     # --- Test 2 -----------------------------------------------------------
 
@@ -2562,12 +2707,13 @@ class TestBl8AtomicPersist:
                 assert "CANCEL_FAILED_MANUAL_INTERVENTION_REQUIRED" in logs, (
                     f"missing grep-friendly CRITICAL tag in logs:\n{logs}"
                 )
-                # Cleanup should NOT abort: all 3 placed IDs attempted
-                assert len(adapter.cancelled) == 3
+                # Post 2.1: LIMIT_TRIPLE places ENTRY only at place(); only
+                # 1 broker id to cancel on persist-failure.
+                assert len(adapter.cancelled) == 1
             finally:
                 target_logger.removeHandler(handler)
             store.close()
-            print("  OK BL-8: cancel-rejected -> CRITICAL grep tag, cleanup continues")
+            print("  OK BL-8: cancel-rejected -> CRITICAL grep tag, cleanup continues (2.1)")
 
     # --- Test 6 -----------------------------------------------------------
 
@@ -2631,11 +2777,13 @@ class TestBl8AtomicPersist:
 
     # --- Test 7 -----------------------------------------------------------
 
-    def test_limit_triple_sl_fail_protocol_cleanup_not_double_cancelled(self) -> None:
-        """BL-8: LimitTriple SL-fail protocol cancels ENTRY internally;
-        OrderPlacer must NOT double-cancel (BrokerError path passes no IDs)."""
+    def test_limit_triple_sl_fail_post_fill_escalates_hard_kill(self) -> None:
+        """Post 2.1: SL failure happens in place_exits() AFTER ENTRY fills.
+        Position is live with no SL -> fire kill_switch.hard_kill with the
+        LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED grep tag."""
+        import io
         with TemporaryDirectory() as tmp:
-            class _SLFailAdapter:
+            class _SLFailOnPlaceExits:
                 def __init__(self):
                     self._n = 0
                     self.placed: List[dict] = []
@@ -2645,15 +2793,16 @@ class TestBl8AtomicPersist:
                                 intent, tag=None, trigger_price=0.0,
                                 variety="regular"):
                     self._n += 1
-                    if self._n == 1:  # ENTRY succeeds
+                    # ENTRY (call 1) succeeds; SL (call 2, first in place_exits) fails.
+                    if self._n == 1:
                         po = _placed_order(symbol=symbol, side=side,
                                             broker_id="ENTRY_LIVE_X")
                         self.placed.append({"role": "ENTRY",
                                              "broker_order_id": po.broker_order_id})
                         return po
-                    raise BrokerError("simulated SL broker rejection")
+                    raise BrokerError("simulated SL broker rejection on place_exits")
 
-                def cancel_order(self, broker_order_id: str):
+                def cancel_order(self, broker_order_id: str, variety="regular"):
                     from broker.zerodha_adapter import CancelResult
                     self.cancelled.append(broker_order_id)
                     return CancelResult(
@@ -2661,7 +2810,7 @@ class TestBl8AtomicPersist:
                         success=True, reason="",
                     )
 
-            adapter = _SLFailAdapter()
+            adapter = _SLFailOnPlaceExits()
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, _adapter, om = self._make_placer(
                 Path(tmp), adapter=adapter, kill_switch=ks,
@@ -2669,25 +2818,51 @@ class TestBl8AtomicPersist:
             )
             sig_id = _seed_signal(store)
 
-            with pytest.raises(BrokerError):
+            log_buf = io.StringIO()
+            handler = logging.StreamHandler(log_buf)
+            handler.setLevel(logging.CRITICAL)
+            handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+            target_logger = logging.getLogger("test_order_placer")
+            target_logger.addHandler(handler)
+            target_logger.setLevel(logging.CRITICAL)
+
+            try:
+                # place() succeeds (ENTRY placed)
                 placer.place(
                     symbol="RELIANCE", side="BUY", qty=10,
                     entry_price=2500.0, sl_price=2450.0,
                     intent="INTRADAY", signal_id=sig_id,
-                    reservation_id="res_sl_fail",
+                    reservation_id="res_sl_fail_post_fill",
                 )
+                # Now fire ENTRY fill → place_exits raises → hard_kill fires
+                entry_iid = adapter.placed[0]["broker_order_id"]
+                # Find the actual internal_id by inspecting adapter's PlacedOrder
+                # (we use the internal_id from the _fill_map)
+                with placer._fill_map_lock:
+                    entry_internal = next(iter(placer._fill_map.keys()))
+                bus.publish(OrderFilled(
+                    source_module="test", payload={},
+                    internal_order_id=entry_internal,
+                    broker_order_id=entry_iid,
+                    symbol="RELIANCE", side="BUY",
+                    avg_fill_price=2500.0, filled_qty=10,
+                    filled_at=now_ist().isoformat(),
+                ))
 
-            # Protocol cancelled ENTRY (1 call). OrderPlacer must NOT add a 2nd.
-            assert adapter.cancelled == ["ENTRY_LIVE_X"], (
-                "BrokerError path must pass NO broker_order_ids -- protocol "
-                "already cancelled ENTRY internally; OrderPlacer must not "
-                "double-cancel. Got: " + repr(adapter.cancelled)
-            )
-            assert "res_sl_fail" in fm.released
-            assert ks.hard_kill_calls == [], "BrokerError path must NOT hard_kill"
+                # Position is live with no SL → hard_kill fired
+                assert len(ks.hard_kill_calls) == 1, (
+                    "SL placement failure after ENTRY fill must fire hard_kill"
+                )
+                assert "LIMIT_TRIPLE exits failed" in ks.hard_kill_calls[0]["reason"]
+
+                logs = log_buf.getvalue()
+                assert "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED" in logs, (
+                    f"missing grep-friendly CRITICAL tag; logs:\n{logs}"
+                )
+            finally:
+                target_logger.removeHandler(handler)
             store.close()
-            print("  OK BL-8: LimitTriple SL-fail -> single cancel by protocol, "
-                  "no double-cancel")
+            print("  OK 2.1: SL fail on place_exits -> hard_kill + grep tag (position unprotected)")
 
     # --- Test 8 -----------------------------------------------------------
 
@@ -2713,13 +2888,15 @@ class TestBl8AtomicPersist:
                     reservation_id="res_cancel_continue",
                 )
 
-            assert len(adapter.cancelled) == 3, (
-                "cancel rejection on one order must NOT abort cancel for "
-                "the remaining orders. Got: " + repr(adapter.cancelled)
+            # Post 2.1: LIMIT_TRIPLE places ENTRY only at place(); only
+            # 1 broker id to cancel on persist-failure.
+            assert len(adapter.cancelled) == 1, (
+                "cancel rejection must NOT abort cleanup. Got: "
+                + repr(adapter.cancelled)
             )
             assert "res_cancel_continue" in fm.released  # release still runs
             store.close()
-            print("  OK BL-8: cancel rejection does not abort remaining cleanup")
+            print("  OK BL-8: cancel rejection does not abort cleanup (2.1)")
 
     # --- Test 9 -----------------------------------------------------------
 
@@ -2910,19 +3087,26 @@ class TestEf2TrackFailureCleanup:
 
     # --- Test 2 -----------------------------------------------------------
 
-    def test_ef2_track_raises_mid_loop_partial_cleanup(self) -> None:
+    def test_ef2_co_plus_tgt_track_raises_mid_loop_partial_cleanup(self) -> None:
         """
-        EF-2: track() succeeds on ENTRY, raises on SL (partial population).
-        Verify ENTRY's _fill_map entry is removed and untrack called for ENTRY.
+        EF-2 (CO_PLUS_TGT): place() tracks CO ENTRY then TGT. First track succeeds
+        (ENTRY), second raises (TGT). Verify ENTRY _fill_map entry is removed
+        and untrack called for ENTRY.
+
+        Post 2.1, LIMIT_TRIPLE only tracks one leg (ENTRY) at place() time, so
+        the mid-loop partial-failure scenario is only reachable via CO_PLUS_TGT
+        (which tracks ENTRY + TGT). LIMIT_TRIPLE's track-failure semantics are
+        covered by test_ef2_track_raises_on_entry_leg_full_cleanup.
         """
         import io
         with TemporaryDirectory() as tmp:
             ks = _RecordingKillSwitch()
-            # ENTRY succeeds, SL raises, TGT never called
+            # ENTRY succeeds, TGT raises
             placer, store, fm, bus, adapter, om, monitor = self._make_placer(
                 Path(tmp),
-                track_side_effect=[None, ValueError("boom on SL")],
+                track_side_effect=[None, ValueError("boom on TGT")],
                 kill_switch=ks,
+                default_protocol="CO_PLUS_TGT",
             )
             sig_id = _seed_signal(store)
 
@@ -2935,12 +3119,12 @@ class TestEf2TrackFailureCleanup:
             target_logger.setLevel(logging.CRITICAL)
 
             try:
-                with pytest.raises(ValueError, match="boom on SL"):
+                with pytest.raises(ValueError, match="boom on TGT"):
                     placer.place(
                         symbol="RELIANCE", side="BUY", qty=10,
                         entry_price=2500.0, sl_price=2450.0,
                         intent="INTRADAY", signal_id=sig_id,
-                        reservation_id="res_ef2_sl_fail",
+                        reservation_id="res_ef2_tgt_fail",
                     )
 
                 # _fill_map empty: ENTRY entry was popped during cleanup
@@ -2950,49 +3134,37 @@ class TestEf2TrackFailureCleanup:
                         f"got {placer._fill_map!r}"
                     )
 
-                # track() called 2x (ENTRY ok, SL raises). TGT not reached.
+                # track() called 2x (ENTRY ok, TGT raises)
                 assert monitor.track.call_count == 2, (
-                    f"expected 2 track calls (ENTRY ok + SL raise); "
+                    f"expected 2 track calls (ENTRY ok + TGT raise); "
                     f"got {monitor.track.call_count}"
                 )
 
-                # untrack called exactly once (for ENTRY).
-                # NOTE: SL's track() raised before the _fill_map write, so SL
-                # was never "successfully_tracked" -- no untrack for SL.
+                # untrack called exactly once (for ENTRY)
                 assert monitor.untrack.call_count == 1, (
                     f"expected 1 untrack call (ENTRY only); "
                     f"got {monitor.untrack.call_count}"
                 )
-                # And it was for the ENTRY internal_id
                 entry_iid = adapter.placed[0]["internal_order_id"]
                 monitor.untrack.assert_called_once_with(entry_iid)
 
-                # adapter.cancel_order called for ALL 3 placed broker IDs
+                # adapter.cancel_order called for both placed broker IDs (CO + TGT)
                 placed_broker_ids = sorted(p["broker_order_id"] for p in adapter.placed)
-                assert sorted(adapter.cancelled) == placed_broker_ids, (
-                    f"expected cancel for all 3 placed IDs; "
-                    f"placed={placed_broker_ids}; cancelled={adapter.cancelled}"
-                )
+                assert sorted(adapter.cancelled) == placed_broker_ids
 
-                # Trade FAILED, reservation released
                 rows = store.fetch_all(
                     "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
                 )
                 assert rows[0]["status"] == "FAILED"
-                assert "res_ef2_sl_fail" in fm.released
+                assert "res_ef2_tgt_fail" in fm.released
 
-                # CRITICAL grep tag; legs_successfully_tracked field populated
                 logs = log_buf.getvalue()
                 assert "EF2_TRACK_FAILURE_CLEANUP" in logs
-
-                # hard_kill NOT called
-                assert ks.hard_kill_calls == [], (
-                    f"EF-2 MUST NOT fire hard_kill; got {ks.hard_kill_calls}"
-                )
+                assert ks.hard_kill_calls == []
             finally:
                 target_logger.removeHandler(handler)
                 store.close()
-            print("  OK EF-2: partial-tracked cleanup -> untrack(ENTRY) only, no hard_kill")
+            print("  OK EF-2 (CO_PLUS_TGT): partial-tracked cleanup -> untrack(ENTRY), no hard_kill")
 
     # --- Test 3 -----------------------------------------------------------
 
@@ -3028,15 +3200,15 @@ class TestEf2TrackFailureCleanup:
                     reservation_id="res_ef2_happy",
                 )
 
-                # All 3 legs in _fill_map
+                # Post 2.1: LIMIT_TRIPLE tracks only ENTRY at place() time.
                 with placer._fill_map_lock:
                     legs = sorted(e.leg for e in placer._fill_map.values())
-                assert legs == [_LEG_ENTRY, _LEG_SL, _LEG_TGT], (
-                    f"expected ENTRY/SL/TGT in _fill_map; got {legs}"
+                assert legs == [_LEG_ENTRY], (
+                    f"expected ENTRY only in _fill_map; got {legs}"
                 )
 
-                # 3 track calls, 0 untrack, 0 cancel_order
-                assert monitor.track.call_count == 3
+                # 1 track call, 0 untrack, 0 cancel_order
+                assert monitor.track.call_count == 1
                 assert monitor.untrack.call_count == 0
                 assert adapter.cancelled == []
 
@@ -3058,7 +3230,122 @@ class TestEf2TrackFailureCleanup:
             finally:
                 target_logger.removeHandler(handler)
                 store.close()
-            print("  OK EF-2: happy path regression -- no cleanup, no grep tag")
+            print("  OK EF-2: happy path regression -- 1 track, no cleanup, no grep tag (2.1)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OP-AR1 / Audit 1.1 — Atomic registration: _fill_map insert BEFORE track()
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAtomicRegistration:
+    """
+    Audit 1.1 / OP-AR1: per leg, _fill_map insert MUST happen BEFORE
+    order_monitor.track(). The poll thread can fire OrderFilled microseconds
+    after track() returns; if _fill_map is still empty the fill becomes a
+    ghost. Cleanup on track-failure pops the just-inserted _fill_map row.
+    """
+
+    def _make_placer(
+        self,
+        tmp_path: Path,
+        *,
+        track_side_effect=None,
+        default_protocol: str = "LIMIT_TRIPLE",
+    ):
+        store = _make_store(tmp_path)
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=default_protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        monitor = MagicMock(spec=OrderMonitor)
+        monitor.track.side_effect = track_side_effect
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=monitor,
+            cost_calculator=MagicMock(spec=CostCalculator),
+            rr_ratio=2.0,
+            default_order_protocol=default_protocol,
+            kill_switch=_RecordingKillSwitch(),
+            product_resolver=_default_resolver(),
+        )
+        return placer, store, adapter, monitor
+
+    def test_fill_map_populated_before_track_invoked(self) -> None:
+        """
+        OP-AR1: at the moment _order_monitor.track() is called, the
+        corresponding internal_order_id MUST already be in _fill_map.
+        This is the regression guard for the ghost-entry race.
+        """
+        with TemporaryDirectory() as tmp:
+            placer, store, adapter, monitor = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            seen_in_fill_map: list[bool] = []
+
+            def _spy_track(internal_order_id, **_kw):
+                # Inspect _fill_map state at the precise moment track is called
+                with placer._fill_map_lock:
+                    seen_in_fill_map.append(internal_order_id in placer._fill_map)
+
+            monitor.track.side_effect = _spy_track
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_ar1_happy",
+            )
+
+            # Post 2.1: LIMIT_TRIPLE place() tracks ENTRY only (1 leg).
+            assert monitor.track.call_count == 1, (
+                f"expected 1 track call (ENTRY); got {monitor.track.call_count}"
+            )
+            assert seen_in_fill_map == [True], (
+                f"OP-AR1 violated: _fill_map missing entry at track-time; "
+                f"saw {seen_in_fill_map!r}"
+            )
+            store.close()
+        print("  OK OP-AR1: _fill_map populated BEFORE track() per leg (1.1)")
+
+    def test_track_failure_pops_inserted_fill_map_entry(self) -> None:
+        """
+        OP-AR2: track() raises after _fill_map insert. Cleanup MUST pop the
+        inserted entry; otherwise a stale _fill_map row leaks. This is the
+        difference between OP-AR1 and the pre-fix code: previously the
+        insert would not have happened yet, so no pop was needed.
+        """
+        with TemporaryDirectory() as tmp:
+            placer, store, adapter, monitor = self._make_placer(
+                Path(tmp),
+                track_side_effect=ValueError("boom: duplicate watch"),
+            )
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(ValueError, match="duplicate watch"):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_ar1_track_fail",
+                )
+
+            with placer._fill_map_lock:
+                assert placer._fill_map == {}, (
+                    f"OP-AR2 violated: _fill_map row leaked after track() "
+                    f"raised; got {placer._fill_map!r}"
+                )
+            store.close()
+        print("  OK OP-AR2: track() raise pops the just-inserted _fill_map row (1.1)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3439,6 +3726,9 @@ if __name__ == "__main__":
         TestEf2TrackFailureCleanup().test_ef2_track_raises_on_entry_leg_full_cleanup,
         TestEf2TrackFailureCleanup().test_ef2_track_raises_mid_loop_partial_cleanup,
         TestEf2TrackFailureCleanup().test_ef2_track_success_unchanged_behavior,
+        # OP-AR1 / Audit 1.1 atomic registration
+        TestAtomicRegistration().test_fill_map_populated_before_track_invoked,
+        TestAtomicRegistration().test_track_failure_pops_inserted_fill_map_entry,
         # BL-19 / Phase D.1 placer rate-limit retry loop
         TestBl19PlacerRateLimitRetry().test_placer_retries_on_429_up_to_max,
         TestBl19PlacerRateLimitRetry().test_placer_gives_up_after_max_retries_and_propagates,

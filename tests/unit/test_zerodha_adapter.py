@@ -175,6 +175,9 @@ def _make_adapter(
     quote_provider=None,
     bus: Any = None,
     paper_auto_fill_delay_sec: float = 0.05,  # tests use a short default
+    paper_ltp_gating_enabled: bool = False,
+    paper_ltp_gating_max_wait_sec: float = 1.0,  # short for tests
+    paper_ltp_gating_poll_sec: float = 0.05,
 ) -> tuple[ZerodhaAdapter, MockKite, RateLimiter, OrderStateMachine, Any]:
     """Return (adapter, kite, rl, osm, logger)."""
     from broker.cost_calculator import CostCalculator
@@ -196,6 +199,9 @@ def _make_adapter(
         quote_provider=quote_provider,
         bus=bus,
         paper_auto_fill_delay_sec=paper_auto_fill_delay_sec,
+        paper_ltp_gating_enabled=paper_ltp_gating_enabled,
+        paper_ltp_gating_max_wait_sec=paper_ltp_gating_max_wait_sec,
+        paper_ltp_gating_poll_sec=paper_ltp_gating_poll_sec,
     )
     return adapter, kite, rl, osm, logger
 
@@ -987,6 +993,197 @@ def test_live_mode_place_order_does_NOT_publish_order_filled() -> None:
     # OSM remains SUBMITTED in live mode (order_monitor, not adapter, drives COMPLETE).
     assert osm.current_state(result.internal_order_id) == "SUBMITTED"
     print("  OK ZA16 regression guard: live mode does NOT publish OrderFilled")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit 6.2 — paper synth-fill LTP gating
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _ltp_provider(prices: dict[str, float]):
+    """Test helper: return a quote_provider that yields the given LTPs."""
+    from core.time_authority import now_ist
+
+    def _provider(symbols):
+        out = {}
+        for s in symbols:
+            if s in prices:
+                out[s] = Quote(symbol=s, last_price=prices[s], bid=prices[s] - 0.05,
+                               ask=prices[s] + 0.05, volume=1000, ts=now_ist())
+        return out
+    return _provider
+
+
+def test_audit62_limit_buy_fills_when_ltp_at_or_below_limit() -> None:
+    """LTP-gated LIMIT BUY fills when LTP <= price (fills at LTP)."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.5,
+        paper_ltp_gating_poll_sec=0.02,
+        quote_provider=_ltp_provider({"RELIANCE": 2495.0}),
+    )
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    ev = captured[0]
+    # Filled at LTP (favourable to buyer); slippage reflects ltp-vs-limit.
+    assert ev.avg_fill_price == 2495.0
+    assert ev.expected_price == 2500.0
+    print("  OK 6.2: LIMIT BUY fills when LTP <= price (fill@LTP, expected@limit)")
+
+
+def test_audit62_limit_buy_does_not_fill_when_ltp_above_limit() -> None:
+    """LTP-gated LIMIT BUY does NOT fill when LTP stays above price."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.2,   # short max-wait
+        paper_ltp_gating_poll_sec=0.02,
+        quote_provider=_ltp_provider({"RELIANCE": 2510.0}),  # above limit
+    )
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    # Wait past max_wait + poll cycle
+    _time_for_h20_tests.sleep(0.4)
+    assert len(captured) == 0, (
+        f"6.2 violated: LIMIT BUY filled despite LTP above limit; got {captured}"
+    )
+    # Order stays SUBMITTED (no synthesised completion)
+    assert osm.current_state(result.internal_order_id) == "SUBMITTED"
+    print("  OK 6.2: LIMIT BUY does NOT fill when LTP > price (stays SUBMITTED)")
+
+
+def test_audit62_limit_sell_fills_when_ltp_at_or_above_limit() -> None:
+    """LTP-gated LIMIT SELL fills when LTP >= price (fills at LTP)."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.5,
+        paper_ltp_gating_poll_sec=0.02,
+        quote_provider=_ltp_provider({"INFY": 1505.0}),
+    )
+    adapter.place_order(
+        symbol="INFY", side="SELL", qty=5, price=1500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    ev = captured[0]
+    assert ev.avg_fill_price == 1505.0   # better-than-limit fill
+    print("  OK 6.2: LIMIT SELL fills when LTP >= price (fill@LTP)")
+
+
+def test_audit62_market_fills_at_ltp() -> None:
+    """LTP-gated MARKET fills at LTP (one-shot, no poll loop)."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        quote_provider=_ltp_provider({"TCS": 3300.0}),
+    )
+    adapter.place_order(
+        symbol="TCS", side="BUY", qty=2, price=0.0,    # MARKET = price 0
+        order_type="MARKET", intent="INTRADAY",
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=1.0)
+    assert captured[0].avg_fill_price == 3300.0
+    print("  OK 6.2: MARKET fills at LTP")
+
+
+def test_audit62_sl_m_buy_fills_when_ltp_crosses_trigger_upward() -> None:
+    """SL-M BUY fires when LTP >= trigger_price (stop-buy)."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.5,
+        paper_ltp_gating_poll_sec=0.02,
+        quote_provider=_ltp_provider({"HDFC": 1800.0}),  # at/above trigger
+    )
+    adapter.place_order(
+        symbol="HDFC", side="BUY", qty=1, price=0.0,
+        order_type="SL-M", intent="INTRADAY",
+        trigger_price=1795.0,
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    assert captured[0].avg_fill_price == 1800.0   # SL-M fills at LTP
+    print("  OK 6.2: SL-M BUY fills when LTP >= trigger_price")
+
+
+def test_audit62_gating_disabled_preserves_legacy_behaviour() -> None:
+    """gating_enabled=False (default for tests): LIMIT fills unconditionally at price."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    # No quote_provider, no LTP, gating off -- legacy auto-fill at price.
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=False,
+    )
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=1.0)
+    assert captured[0].avg_fill_price == 2500.0
+    assert captured[0].slippage_pct == 0.0
+    print("  OK 6.2: gating disabled -> legacy auto-fill at price (regression guard)")
+
+
+def test_audit62_satisfies_condition_pure_helper() -> None:
+    """Pure helper _ltp_satisfies_condition returns expected fill price or None."""
+    fn = ZerodhaAdapter._ltp_satisfies_condition
+    # LIMIT BUY
+    assert fn(side="BUY",  order_type="LIMIT", price=100.0, trigger_price=0.0, ltp=99.0)  == 99.0
+    assert fn(side="BUY",  order_type="LIMIT", price=100.0, trigger_price=0.0, ltp=101.0) is None
+    assert fn(side="BUY",  order_type="LIMIT", price=100.0, trigger_price=0.0, ltp=100.0) == 100.0
+    # LIMIT SELL
+    assert fn(side="SELL", order_type="LIMIT", price=100.0, trigger_price=0.0, ltp=101.0) == 101.0
+    assert fn(side="SELL", order_type="LIMIT", price=100.0, trigger_price=0.0, ltp=99.0)  is None
+    # SL-M BUY (stop-buy)
+    assert fn(side="BUY",  order_type="SL-M", price=0.0, trigger_price=110.0, ltp=110.0) == 110.0
+    assert fn(side="BUY",  order_type="SL-M", price=0.0, trigger_price=110.0, ltp=109.0) is None
+    # SL-M SELL (stop-sell)
+    assert fn(side="SELL", order_type="SL-M", price=0.0, trigger_price=90.0, ltp=89.0)   == 89.0
+    assert fn(side="SELL", order_type="SL-M", price=0.0, trigger_price=90.0, ltp=91.0)   is None
+    # SL BUY (stop-buy with limit cap)
+    assert fn(side="BUY",  order_type="SL", price=112.0, trigger_price=110.0, ltp=110.5) == 110.5
+    assert fn(side="BUY",  order_type="SL", price=112.0, trigger_price=110.0, ltp=109.0) is None
+    print("  OK 6.2: _ltp_satisfies_condition returns correct fill / None across order types")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

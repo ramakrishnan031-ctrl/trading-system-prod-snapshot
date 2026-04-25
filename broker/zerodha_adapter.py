@@ -314,6 +314,11 @@ class ZerodhaAdapter:
         bus: Optional[EventBus] = None,            # ZA16a: paper mode publishes OrderFilled
         paper_auto_fill_delay_sec: float = 0.5,    # ZA16a: daemon-thread synth delay
         rate_limit_backoff: Optional[RateLimitBackoffConfig] = None,  # BL-6
+        # Audit 6.2: paper LTP-gating (default OFF -- existing tests behave
+        # as before; production paper YAML enables it).
+        paper_ltp_gating_enabled: bool = False,
+        paper_ltp_gating_max_wait_sec: float = 60.0,
+        paper_ltp_gating_poll_sec: float = 0.5,
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -327,6 +332,10 @@ class ZerodhaAdapter:
         self._account_id = account_id  # IC9: no-op for v2 single-account
         self._bus = bus
         self._paper_auto_fill_delay_sec = paper_auto_fill_delay_sec
+        # Audit 6.2: paper LTP-gating settings (no-op when paper_mode=False)
+        self._paper_ltp_gating_enabled = paper_ltp_gating_enabled
+        self._paper_ltp_gating_max_wait_sec = paper_ltp_gating_max_wait_sec
+        self._paper_ltp_gating_poll_sec = paper_ltp_gating_poll_sec
         # BL-6: 429 backoff state. Per-category counter drives exponential delay;
         # resets when any call in the category succeeds. Lock guards increments
         # across threads (order_placer, order_monitor, reconciler can all race).
@@ -1072,7 +1081,8 @@ class ZerodhaAdapter:
         thread = threading.Thread(
             target=self._synth_fill,
             name=f"paper_synth_{internal_id}",
-            args=(internal_id, fake_broker_id, symbol, side, qty, price),
+            args=(internal_id, fake_broker_id, symbol, side, qty, price,
+                  order_type, trigger_price),
             daemon=True,
         )
         thread.start()
@@ -1100,6 +1110,8 @@ class ZerodhaAdapter:
         side: str,
         qty: int,
         price: float,
+        order_type: str = "LIMIT",
+        trigger_price: float = 0.0,
     ) -> None:
         """
         ZA16a: paper-mode fill synthesizer.
@@ -1109,6 +1121,24 @@ class ZerodhaAdapter:
         live mode -- runtime guard logs CRITICAL and returns if self._paper
         is False (belt-and-braces against a future refactor accidentally
         invoking this from live code; ZA16 regression guard).
+
+        Audit 6.2 (LTP-gating): when paper_ltp_gating_enabled=True the
+        synthesizer no longer fills LIMIT/SL/SL-M orders unconditionally.
+        It polls quote_provider() up to ltp_gating_max_wait_sec and only
+        fires OrderFilled when LTP has crossed the order condition:
+          - LIMIT BUY  : LTP <= price          fill at min(LTP, price)
+          - LIMIT SELL : LTP >= price          fill at max(LTP, price)
+          - SL-M BUY   : LTP >= trigger_price  fill at LTP
+          - SL-M SELL  : LTP <= trigger_price  fill at LTP
+          - SL  BUY    : LTP >= trigger_price  fill at min(LTP, price)
+          - SL  SELL   : LTP <= trigger_price  fill at max(LTP, price)
+          - MARKET     : fill at LTP after delay (or `price` if LTP unavail)
+        If max_wait elapses without a crossing, OSM stays SUBMITTED and
+        no OrderFilled is published -- equivalent to a real broker leaving
+        the order pending. order_timeout / EOD cleanup deals with stragglers.
+
+        When ltp_gating_enabled=False (default for tests) behaviour is
+        identical to pre-fix: sleep + always fill at `price`.
         """
         # ZA16a guard: live mode must never take this path.
         if not self._paper:
@@ -1124,6 +1154,30 @@ class ZerodhaAdapter:
             delay = max(0.0, self._paper_auto_fill_delay_sec)
             if delay > 0:
                 time.sleep(delay)
+
+            # Audit 6.2: LTP-gated fill computation.
+            if self._paper_ltp_gating_enabled:
+                fill_price = self._compute_ltp_gated_fill_price(
+                    symbol=symbol,
+                    side=side,
+                    order_type=order_type,
+                    price=price,
+                    trigger_price=trigger_price,
+                )
+                if fill_price is None:
+                    # No LTP crossing within the bounded poll horizon. Leave
+                    # OSM at SUBMITTED so order_timeout/EOD handles cleanup.
+                    self._log.info(
+                        "paper_synth: LTP-gating timeout, no fill",
+                        extra={"internal_order_id": internal_id,
+                               "broker_order_id": broker_order_id,
+                               "symbol": symbol, "order_type": order_type,
+                               "price": price, "trigger_price": trigger_price},
+                    )
+                    return
+            else:
+                # Legacy behaviour: always fill at the requested price.
+                fill_price = price
 
             # OSM transition: SUBMITTED -> COMPLETE (legal per OSM2).
             try:
@@ -1144,6 +1198,14 @@ class ZerodhaAdapter:
                 return
 
             filled_at = now_ist()
+            # expected_price is the order condition (limit/trigger), not LTP,
+            # so slippage analytics measure (fill - expected) like live mode.
+            expected_for_slippage = price if price > 0 else trigger_price
+            slippage_pct = 0.0
+            if expected_for_slippage > 0 and fill_price != expected_for_slippage:
+                slippage_pct = (
+                    (fill_price - expected_for_slippage) / expected_for_slippage
+                )
             self._bus.publish(
                 OrderFilled(
                     source_module="zerodha_adapter_paper",
@@ -1152,9 +1214,9 @@ class ZerodhaAdapter:
                     symbol=symbol,
                     side=side,
                     filled_qty=qty,
-                    avg_fill_price=price,     # paper: no slippage, fill at limit
-                    expected_price=price,
-                    slippage_pct=0.0,
+                    avg_fill_price=fill_price,
+                    expected_price=expected_for_slippage or fill_price,
+                    slippage_pct=slippage_pct,
                     filled_at=filled_at.isoformat(),
                 )
             )
@@ -1162,7 +1224,9 @@ class ZerodhaAdapter:
                 "paper_synth: OrderFilled published",
                 extra={"internal_order_id": internal_id,
                        "broker_order_id": broker_order_id,
-                       "symbol": symbol, "qty": qty, "price": price},
+                       "symbol": symbol, "qty": qty, "fill_price": fill_price,
+                       "order_type": order_type,
+                       "ltp_gated": self._paper_ltp_gating_enabled},
             )
         except Exception as exc:  # noqa: BLE001 -- thread must not propagate
             log_exception(self._log, exc)
@@ -1172,3 +1236,97 @@ class ZerodhaAdapter:
                        "broker_order_id": broker_order_id,
                        "error": str(exc)},
             )
+
+    def _compute_ltp_gated_fill_price(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        price: float,
+        trigger_price: float,
+    ) -> Optional[float]:
+        """
+        Audit 6.2: poll LTP and return the synth fill price when the order
+        condition is satisfied, or None if max_wait elapses with no crossing.
+
+        MARKET fills immediately at LTP (or `price` if LTP unavailable).
+        LIMIT/SL/SL-M poll quote_provider every ltp_gating_poll_sec for up
+        to ltp_gating_max_wait_sec.
+
+        Returns:
+            fill price >= 0.0 on a synthesizable fill, or None to skip.
+        """
+        # MARKET: one-shot. Fall back to `price` if no LTP (test fixtures
+        # without quote_provider; deviation from spec but safer than 0.0).
+        if order_type == "MARKET":
+            ltp = self._fetch_ltp(symbol)
+            return ltp if ltp > 0 else price
+
+        deadline = time.monotonic() + max(0.0, self._paper_ltp_gating_max_wait_sec)
+        poll = max(0.01, self._paper_ltp_gating_poll_sec)
+
+        while True:
+            ltp = self._fetch_ltp(symbol)
+            if ltp > 0:
+                fill = self._ltp_satisfies_condition(
+                    side=side, order_type=order_type,
+                    price=price, trigger_price=trigger_price, ltp=ltp,
+                )
+                if fill is not None:
+                    return fill
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(poll)
+
+    @staticmethod
+    def _ltp_satisfies_condition(
+        side: str,
+        order_type: str,
+        price: float,
+        trigger_price: float,
+        ltp: float,
+    ) -> Optional[float]:
+        """
+        Audit 6.2 helper: if LTP satisfies the order condition, return the
+        synth fill price; else None. Pure function -- ltp passed in.
+        """
+        if order_type == "LIMIT":
+            if side == "BUY" and ltp <= price:
+                return min(ltp, price)
+            if side == "SELL" and ltp >= price:
+                return max(ltp, price)
+            return None
+        if order_type == "SL-M":
+            if side == "BUY" and ltp >= trigger_price:
+                return ltp
+            if side == "SELL" and ltp <= trigger_price:
+                return ltp
+            return None
+        if order_type == "SL":
+            if side == "BUY" and ltp >= trigger_price:
+                return min(ltp, price) if price > 0 else ltp
+            if side == "SELL" and ltp <= trigger_price:
+                return max(ltp, price) if price > 0 else ltp
+            return None
+        # Unknown order_type -- do not gate; behave like legacy auto-fill.
+        return price
+
+    def _fetch_ltp(self, symbol: str) -> float:
+        """
+        Audit 6.2 helper: return latest LTP for symbol, or 0.0 on failure.
+        Failure is non-fatal -- caller falls back to legacy behaviour.
+        """
+        if self._quote_provider is None:
+            return 0.0
+        try:
+            quotes = self._quote_provider([symbol])
+        except Exception as exc:  # noqa: BLE001 -- best-effort LTP probe
+            self._log.debug(
+                "paper_synth.ltp_fetch_failed",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            return 0.0
+        quote = (quotes or {}).get(symbol)
+        if quote is None:
+            return 0.0
+        return float(getattr(quote, "last_price", 0.0) or 0.0)

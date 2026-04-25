@@ -302,6 +302,9 @@ def _open_position_row(
     symbol: str = "RELIANCE",
     direction: str = "LONG",
     qty_filled: int = 10,
+    order_protocol: str = "LIMIT_TRIPLE",
+    entry_broker_order_id: str = "",
+    entry_variety: str = "regular",
 ) -> MagicMock:
     row = MagicMock()
     row.__getitem__ = lambda self, key: {
@@ -310,6 +313,9 @@ def _open_position_row(
         "symbol": symbol,
         "direction": direction,
         "qty_filled": qty_filled,
+        "order_protocol": order_protocol,
+        "entry_broker_order_id": entry_broker_order_id,
+        "entry_variety": entry_variety,
     }[key]
     return row
 
@@ -435,6 +441,90 @@ def test_inter_order_delay_applied() -> None:
 
     # Only ONE sleep between the TWO orders (not after the last)
     mock_sleep.assert_called_once_with(0.2)
+
+
+def test_co_position_exited_via_cancel_order_variety_co() -> None:
+    """Audit 3.1: CO positions are squared off by cancelling the CO bracket
+    (variety='co'), NOT by placing a reverse MARKET. Zerodha forbids MARKET
+    exits for live CO orders and auto-squares at 15:20 with a ₹50+GST penalty."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row(
+            "trd_co", "sig_co", "RELIANCE", "LONG", 10,
+            order_protocol="CO_PLUS_TGT",
+            entry_broker_order_id="CO_ENTRY_KITE_123",
+            entry_variety="co",
+        ),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+    adapter.cancel_order.return_value = CancelResult(
+        broker_order_id="CO_ENTRY_KITE_123", success=True, reason=""
+    )
+
+    eod.check_and_fire(_ist(15, 17))
+
+    # CO path: cancel_order(variety="co") was called; NO reverse MARKET placed.
+    adapter.cancel_order.assert_called_once_with("CO_ENTRY_KITE_123", variety="co")
+    adapter.place_order.assert_not_called()
+
+
+def test_co_cancel_rejected_marks_exit_failed() -> None:
+    """Audit 3.1: CO cancel rejection marks trade EOD_EXIT_FAILED and logs
+    CRITICAL with the CO_SQUAREOFF_CANCEL_REJECTED grep tag."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row(
+            "trd_co_fail", "sig_co_fail", "HDFC", "SHORT", 5,
+            order_protocol="CO_PLUS_TGT",
+            entry_broker_order_id="CO_ENTRY_KITE_999",
+            entry_variety="co",
+        ),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+    adapter.cancel_order.return_value = CancelResult(
+        broker_order_id="CO_ENTRY_KITE_999", success=False, reason="already filled"
+    )
+
+    eod.check_and_fire(_ist(15, 17))
+
+    adapter.cancel_order.assert_called_once()
+    adapter.place_order.assert_not_called()
+    # Final counts: 1 attempted, 0 succeeded, 1 failed
+    kwargs = store.update_eod_squareoff_log_complete.call_args[1]
+    assert kwargs["positions_attempted"] == 1
+    assert kwargs["positions_succeeded"] == 0
+    assert kwargs["positions_failed"] == 1
+
+
+def test_limit_triple_position_still_uses_reverse_market() -> None:
+    """Audit 3.1 regression: non-CO (LIMIT_TRIPLE / MIS) trades continue to
+    use reverse MARKET as before."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row(
+            "trd_mis", "sig_mis", "TCS", "LONG", 3,
+            order_protocol="LIMIT_TRIPLE",
+            entry_broker_order_id="ENTRY_MIS_1",
+            entry_variety="regular",
+        ),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+    adapter.place_order.return_value = _placed_order(symbol="TCS", side="SELL", qty=3)
+
+    eod.check_and_fire(_ist(15, 17))
+
+    # MIS path: reverse MARKET placed; CO cancel NOT called.
+    adapter.place_order.assert_called_once()
+    adapter.cancel_order.assert_not_called()
 
 
 def test_exit_broker_exception_marks_exit_failed_continues() -> None:

@@ -417,9 +417,24 @@ class PaperConfig(BaseModel):
         paper adapter's daemon thread transitions OSM SUBMITTED->COMPLETE
         and publishes OrderFilled. Default 0.5s mimics typical broker
         fill latency; set to 0 for synchronous-feel tests.
+
+    ltp_gating_enabled: Audit 2.2 / 6.2 (locked 2026-04-24). When True,
+        paper LIMIT/SL/SL-M orders only synthesise a fill when LTP has
+        crossed the order condition. Pre-fix every LIMIT filled
+        unconditionally, inflating paper P&L. Default False here so
+        existing test fixtures keep working; production paper YAML sets
+        True so the paper trial reflects realistic fills.
+    ltp_gating_max_wait_sec: bounded poll horizon for LIMIT/SL synth.
+        After this window without an LTP crossing, the order stays
+        SUBMITTED (no synth-fill); the broker-equivalent behaviour is
+        "still pending until cancelled" which order_timeout/EOD cleans up.
+    ltp_gating_poll_sec: cadence at which the synth thread re-queries LTP.
     """
     model_config = ConfigDict(extra="forbid")
     auto_fill_delay_sec: float = 0.5  # >= 0; 0 = fire on next scheduler tick
+    ltp_gating_enabled: bool = False
+    ltp_gating_max_wait_sec: float = 60.0
+    ltp_gating_poll_sec: float = 0.5
 
     @field_validator("auto_fill_delay_sec")
     @classmethod
@@ -429,6 +444,28 @@ class PaperConfig(BaseModel):
         if v > 10.0:
             raise ValueError(
                 f"auto_fill_delay_sec must be <= 10.0 (sanity cap), got {v!r}"
+            )
+        return v
+
+    @field_validator("ltp_gating_max_wait_sec")
+    @classmethod
+    def _validate_max_wait(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"ltp_gating_max_wait_sec must be >= 0, got {v!r}")
+        if v > 3600.0:
+            raise ValueError(
+                f"ltp_gating_max_wait_sec must be <= 3600 (1h sanity cap), got {v!r}"
+            )
+        return v
+
+    @field_validator("ltp_gating_poll_sec")
+    @classmethod
+    def _validate_poll(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError(f"ltp_gating_poll_sec must be > 0, got {v!r}")
+        if v > 30.0:
+            raise ValueError(
+                f"ltp_gating_poll_sec must be <= 30 (sanity cap), got {v!r}"
             )
         return v
 

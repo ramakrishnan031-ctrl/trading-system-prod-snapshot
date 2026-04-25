@@ -512,6 +512,92 @@ def test_importable_from_capital_invariant() -> None:
 
 
 # ------------------------------------------------------------------------------
+# INV7 / Audit 2.2 -- Float-drift Option B
+# ------------------------------------------------------------------------------
+
+def test_inv7_sub_paise_drift_does_not_raise() -> None:
+    """
+    INV7: an accumulated IEEE-754 drift below 0.5 paise (rounds to 0)
+    must NOT raise. Pre-fix, lhs - rhs = 1e-13 would still pass tolerance,
+    but the simulated post-many-ops drift below explicitly demonstrates the
+    OPT-B comparison: round-to-paise on each side then compare.
+    """
+    # Construct a drift in the noise floor; round() collapses both sides
+    # to the same paise, so abs(delta) == 0.
+    drift = sum(0.1 for _ in range(10)) - 1.0  # classic 0.1 + 0.1 ... noise
+    # drift is ~1.1e-16, below 0.005, so rounds to 0.
+    assert_capital_invariant(
+        margin_available=100_000.00 + drift,
+        margin_reserved=0.0,
+        margin_used=0.0,
+        cash_floor=100_000.00,
+        realized_pnl_today=0.0,
+    )
+    print(f"  OK INV7: sub-paise drift {drift!r} ignored (Audit 2.2 / Option B)")
+
+
+def test_inv7_half_paise_drift_passes() -> None:
+    """
+    INV7: a 0.004 (less than half-paise) drift on either side rounds away
+    and passes. This is the critical post-Option-B behaviour: pre-fix the
+    raw subtraction left abs(delta)=0.004 inside tolerance, but a series
+    of such drifts could compound to 0.011 and breach. Post-fix each side
+    is independently rounded to paise so the drift cannot accumulate.
+    """
+    assert_capital_invariant(
+        margin_available=99_999.996,   # rounds to 100_000.00
+        margin_reserved=0.0,
+        margin_used=0.0,
+        cash_floor=100_000.00,
+        realized_pnl_today=0.0,
+    )
+    print("  OK INV7: half-paise drift rounds away (Audit 2.2 / Option B)")
+
+
+def test_inv7_rupee_breach_still_raises() -> None:
+    """
+    INV7 regression: a real 1-rupee discrepancy MUST still raise. Rounding
+    to paise must not weaken detection of genuine accounting errors.
+    """
+    try:
+        assert_capital_invariant(
+            margin_available=99_999.00,    # 1 rupee short
+            margin_reserved=0.0,
+            margin_used=0.0,
+            cash_floor=100_000.00,
+            realized_pnl_today=0.0,
+        )
+    except CapitalInvariantViolation as exc:
+        # Both sides rounded; delta should be exactly -1.00 (no float noise)
+        assert abs(exc.context["delta"] + 1.0) < 1e-9, (
+            f"expected delta == -1.00 after rounding; got {exc.context['delta']}"
+        )
+        print(
+            f"  OK INV7: 1-rupee breach still raises with delta={exc.context['delta']:.2f} "
+            "(Audit 2.2 regression guard)"
+        )
+        return
+    raise AssertionError("expected CapitalInvariantViolation for 1-rupee shortfall")
+
+
+def test_inv7_negative_guard_ignores_sub_paise_negative() -> None:
+    """
+    INV7: a -1e-15 spurious negative on margin_available (arithmetic noise)
+    must NOT trigger NEGATIVE_MARGIN_AVAILABLE. The guard now rounds to
+    paise before the negative check so logical zero is treated as zero.
+    """
+    spurious_negative = -1e-15
+    assert_capital_invariant(
+        margin_available=spurious_negative,
+        margin_reserved=0.0,
+        margin_used=100_000.00,
+        cash_floor=100_000.00,
+        realized_pnl_today=0.0,
+    )
+    print("  OK INV7: spurious -1e-15 on margin_available no longer trips NEGATIVE_* (Audit 2.2)")
+
+
+# ------------------------------------------------------------------------------
 # Standalone runner
 # ------------------------------------------------------------------------------
 
@@ -545,6 +631,11 @@ def run_all_tests() -> int:
         test_pure_same_inputs_same_result,
         test_thread_safe_50_concurrent_calls,
         test_importable_from_capital_invariant,
+        # INV7 / Audit 2.2 -- float-drift Option B
+        test_inv7_sub_paise_drift_does_not_raise,
+        test_inv7_half_paise_drift_passes,
+        test_inv7_rupee_breach_still_raises,
+        test_inv7_negative_guard_ignores_sub_paise_negative,
     ]
 
     print("=" * 70)

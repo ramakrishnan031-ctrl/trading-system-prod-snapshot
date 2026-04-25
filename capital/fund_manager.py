@@ -304,6 +304,25 @@ class FundManager:
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    @property
+    def portfolio_lock(self):
+        """
+        Audit 1.2 / Portfolio Lock: expose the internal RLock for callers
+        that need approve+reserve to be a single critical section.
+
+        signal_processor wraps RiskEngine.approve + FundManager.reserve in
+        `with fm.portfolio_lock:` so two concurrent signals targeting the
+        same sector/bucket cannot both pass approve and then both reserve.
+        Without the lock, sector-exposure / max-positions checks race
+        against concurrent reserves -- a 20%-cap sector can overshoot
+        because both signals saw "19% before me" and both reserved.
+
+        It is an RLock, so reserve()/release() (which take the same lock
+        internally) can be called by code holding portfolio_lock without
+        deadlock.
+        """
+        return self._lock
+
     def initialize(self, broker_balance: float) -> None:
         """
         Set total capital from first broker sync, split into buckets (FM13).

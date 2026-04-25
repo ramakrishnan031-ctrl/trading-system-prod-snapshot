@@ -764,70 +764,151 @@ class EodSquareoff:
             symbol = row["symbol"]
             direction = row["direction"]
             qty = row["qty_filled"]
+            order_protocol = (row["order_protocol"] or "").upper()
+            entry_broker_id = row["entry_broker_order_id"] or ""
+            entry_variety = (row["entry_variety"] or "regular").lower()
+
+            # Audit 3.1: CO positions cannot be squared off with a reverse
+            # MARKET -- Zerodha rejects and auto-squares at 15:20 with a
+            # ₹50+GST penalty. The correct path is cancel_order(variety="co")
+            # on the CO entry bracket; the broker collapses the bracket and
+            # closes the position at market.
+            is_co = (order_protocol == "CO_PLUS_TGT") and (entry_variety == "co")
 
             # Determine exit side: LONG position -> SELL exit; SHORT -> BUY
             exit_side = "SELL" if direction == "LONG" else "BUY"
 
             try:
-                placed = self._adapter.place_order(
-                    symbol=symbol,
-                    side=exit_side,
-                    qty=qty,
-                    price=0.0,          # MARKET order
-                    order_type="MARKET",
-                    intent="INTRADAY",
-                    tag="EOD_SQUAREOFF",
-                )
+                if is_co:
+                    if not entry_broker_id:
+                        # Defensive: a CO trade with no ENTRY broker_order_id
+                        # cannot be cancelled -- fall through to MARKET reverse
+                        # (the broker will likely reject; we'll mark the trade
+                        # EOD_EXIT_FAILED and let reconciler pick up the pieces).
+                        self._log.critical(
+                            "EOD CO cancel: no entry_broker_order_id for "
+                            "CO_PLUS_TGT trade; CO_SQUAREOFF_NO_BROKER_ID "
+                            "trade_id=%s symbol=%s",
+                            trade_id, symbol,
+                        )
+                        raise BrokerError(
+                            f"CO trade {trade_id} has no entry_broker_order_id"
+                        )
 
-                # Register exit order with state_machine (EOD5 step 4c)
-                # The adapter already registered it via ZA7; state_machine
-                # tracks it by internal_order_id
-                internal_oid = placed.internal_order_id
+                    # Cancel the CO bracket -- broker exits the position.
+                    cancel_result = self._adapter.cancel_order(
+                        entry_broker_id, variety="co",
+                    )
+                    if not getattr(cancel_result, "success", False):
+                        reason = getattr(cancel_result, "reason", "") or "rejected"
+                        self._log.critical(
+                            "EOD CO cancel rejected by broker: "
+                            "CO_SQUAREOFF_CANCEL_REJECTED "
+                            "trade_id=%s symbol=%s broker_order_id=%s reason=%s",
+                            trade_id, symbol, entry_broker_id, reason,
+                        )
+                        self._mark_exit_failed(trade_id)
+                        failed += 1
+                    else:
+                        # Record the cancel as the EOD exit marker in orders
+                        # table (single CANCEL leg row). order_monitor will
+                        # pick up CANCELLED + qty_filled=0 on poll OR
+                        # CANCELLED-with-partial-fill which flows through
+                        # _on_order_status_changed (Audit #7) to release
+                        # capital.
+                        now_str = now_ist().isoformat()
+                        try:
+                            with self._store.transaction() as cur:
+                                cur.execute(
+                                    """
+                                    INSERT OR IGNORE INTO orders
+                                      (order_id, trade_id, leg, leg_index,
+                                       transaction_type, order_type, product, variety,
+                                       qty_requested, price, trigger_price,
+                                       status, qty_filled, avg_fill_price,
+                                       placed_at, updated_at)
+                                    VALUES (?, ?, 'EOD', 0, ?, 'CANCEL', 'CO', 'co',
+                                            ?, NULL, NULL, 'OPEN', 0, NULL, ?, ?)
+                                    """,
+                                    (
+                                        f"{entry_broker_id}_CO_CANCEL", trade_id,
+                                        exit_side, qty, now_str, now_str,
+                                    ),
+                                )
+                        except Exception as db_exc:  # noqa: BLE001
+                            log_exception(self._log, db_exc)
+                            self._log.warning(
+                                "EOD CO cancel: DB record insert failed "
+                                "(cancel already issued to broker) trade_id=%s",
+                                trade_id,
+                            )
+                        succeeded += 1
+                        self._log.info(
+                            "EOD CO cancel OK: trade_id=%s symbol=%s "
+                            "broker_order_id=%s (variety=co)",
+                            trade_id, symbol, entry_broker_id,
+                        )
+                    # Fall through to inter-order delay.
 
-                # Hand off to order_monitor for fill tracking (EOD7)
-                if self._order_monitor is not None:
-                    self._order_monitor.track(
-                        internal_order_id=internal_oid,
-                        broker_order_id=placed.broker_order_id,
+                else:
+                    # MIS / LIMIT_TRIPLE: reverse MARKET as before.
+                    placed = self._adapter.place_order(
                         symbol=symbol,
                         side=exit_side,
                         qty=qty,
-                        expected_price=placed.price,
-                        placed_at=placed.ts,
+                        price=0.0,          # MARKET order
+                        order_type="MARKET",
+                        intent="INTRADAY",
+                        tag="EOD_SQUAREOFF",
                     )
 
-                # Record EOD exit order in orders table
-                with self._store.transaction() as cur:
-                    cur.execute(
-                        """
-                        INSERT OR IGNORE INTO orders
-                          (order_id, trade_id, leg, leg_index,
-                           transaction_type, order_type, product, variety,
-                           qty_requested, price, trigger_price,
-                           status, qty_filled, avg_fill_price,
-                           placed_at, updated_at)
-                        VALUES (?, ?, 'EOD', 0, ?, 'MARKET', 'MIS', 'regular',
-                                ?, NULL, NULL, 'OPEN', 0, NULL, ?, ?)
-                        """,
-                        (
-                            placed.broker_order_id, trade_id,
-                            exit_side, qty,
-                            placed.ts.isoformat(), placed.ts.isoformat(),
-                        ),
-                    )
+                    # Register exit order with state_machine (EOD5 step 4c)
+                    internal_oid = placed.internal_order_id
 
-                succeeded += 1
-                self._log.info(
-                    "EOD exit OK: trade_id=%s symbol=%s side=%s qty=%d "
-                    "broker_order_id=%s",
-                    trade_id, symbol, exit_side, qty, placed.broker_order_id,
-                )
+                    # Hand off to order_monitor for fill tracking (EOD7)
+                    if self._order_monitor is not None:
+                        self._order_monitor.track(
+                            internal_order_id=internal_oid,
+                            broker_order_id=placed.broker_order_id,
+                            symbol=symbol,
+                            side=exit_side,
+                            qty=qty,
+                            expected_price=placed.price,
+                            placed_at=placed.ts,
+                        )
+
+                    # Record EOD exit order in orders table
+                    with self._store.transaction() as cur:
+                        cur.execute(
+                            """
+                            INSERT OR IGNORE INTO orders
+                              (order_id, trade_id, leg, leg_index,
+                               transaction_type, order_type, product, variety,
+                               qty_requested, price, trigger_price,
+                               status, qty_filled, avg_fill_price,
+                               placed_at, updated_at)
+                            VALUES (?, ?, 'EOD', 0, ?, 'MARKET', 'MIS', 'regular',
+                                    ?, NULL, NULL, 'OPEN', 0, NULL, ?, ?)
+                            """,
+                            (
+                                placed.broker_order_id, trade_id,
+                                exit_side, qty,
+                                placed.ts.isoformat(), placed.ts.isoformat(),
+                            ),
+                        )
+
+                    succeeded += 1
+                    self._log.info(
+                        "EOD exit OK: trade_id=%s symbol=%s side=%s qty=%d "
+                        "broker_order_id=%s",
+                        trade_id, symbol, exit_side, qty, placed.broker_order_id,
+                    )
 
             except BrokerError as exc:
                 log_exception(self._log, exc)
                 self._log.critical(
-                    "EOD exit BrokerError: trade_id=%s symbol=%s qty=%d",
-                    trade_id, symbol, qty,
+                    "EOD exit BrokerError: trade_id=%s symbol=%s qty=%d is_co=%s",
+                    trade_id, symbol, qty, is_co,
                 )
                 # Mark position as EOD_EXIT_FAILED in state_store (EOD5 step 4d)
                 self._mark_exit_failed(trade_id)

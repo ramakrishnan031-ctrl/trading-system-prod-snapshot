@@ -587,19 +587,14 @@ def _drive_full_lifecycle(
         reservation_id=reservation_id,
     )
 
-    # Pull the entry / TGT internal_order_ids from the placer's _fill_map.
-    # Three rows expected for LIMIT_TRIPLE: ENTRY, SL, TGT.
+    # Post naked-short fix (2.1): LIMIT_TRIPLE.execute() places ENTRY only;
+    # SL + TGT are placed by _handle_entry_fill on OrderFilled(ENTRY). So at
+    # this point _fill_map has ONE row (ENTRY); TGT appears after we publish.
     with ctx.order_placer._fill_map_lock:
         entry_iid = next(
             iid for iid, fe in ctx.order_placer._fill_map.items()
             if fe.leg == "ENTRY"
         )
-        tgt_iid = next(
-            iid for iid, fe in ctx.order_placer._fill_map.items()
-            if fe.leg == "TGT"
-        )
-        # Resolve the tgt price the placer actually used (OP3 computes it
-        # internally from entry+sl+rr when the caller doesn't override).
         trade_id = ctx.order_placer._fill_map[entry_iid].trade_id
 
     trade_row = ctx.order_manager.get_trade(trade_id)
@@ -608,6 +603,8 @@ def _drive_full_lifecycle(
     direction = trade_row["direction"]
 
     # ── ENTRY fill ──────────────────────────────────────────────────────────
+    # This fires _handle_entry_fill which calls place_deferred_exits →
+    # SL + TGT are now placed + tracked + in _fill_map.
     ctx.bus.publish(OrderFilled(
         source_module="integration_test",
         internal_order_id=entry_iid,
@@ -626,6 +623,13 @@ def _drive_full_lifecycle(
     assert opened["status"] == "OPEN", f"expected OPEN, got {opened['status']!r}"
 
     after_entry = ctx.fund_manager.get_snapshot()
+
+    # NOW the TGT leg exists in _fill_map (placed by _handle_entry_fill).
+    with ctx.order_placer._fill_map_lock:
+        tgt_iid = next(
+            iid for iid, fe in ctx.order_placer._fill_map.items()
+            if fe.leg == "TGT"
+        )
 
     # ── TGT fill (exit) ─────────────────────────────────────────────────────
     exit_side = "SELL" if side == "BUY" else "BUY"

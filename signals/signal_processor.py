@@ -460,39 +460,44 @@ class SignalProcessor:
                 raise _PipelineReject(f"SIZING_{sizing.constraint}", sizing.reason)
 
             # ----------------------------------------------------------
-            # Step 6: Risk approval
+            # Steps 6-7: Risk approval + Capital reservation
+            # Audit 1.2 / Portfolio Lock: approve + reserve must be a single
+            # critical section. Two concurrent signals on the same sector or
+            # bucket would otherwise both pass risk_engine.approve (which
+            # reads existing exposure) and then both fm.reserve, overshooting
+            # max_sector_exposure_pct / max_open_positions. RLock so reserve()
+            # re-entering self._fm._lock is safe.
             # ----------------------------------------------------------
-            try:
-                approval = self._risk.approve(
-                    symbol, side, strategy_obj.intent, sizing, signal_id
-                )
-            except BrokerError as be:
-                if self._ks:
-                    self._ks.record_api_failure()
-                raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
+            with self._fm.portfolio_lock:
+                try:
+                    approval = self._risk.approve(
+                        symbol, side, strategy_obj.intent, sizing, signal_id
+                    )
+                except BrokerError as be:
+                    if self._ks:
+                        self._ks.record_api_failure()
+                    raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
 
-            if not approval.approved:
-                raise _PipelineReject(approval.failed_check, approval.reason)
+                if not approval.approved:
+                    raise _PipelineReject(approval.failed_check, approval.reason)
 
-            # ----------------------------------------------------------
-            # Step 7: Capital reservation
-            # ----------------------------------------------------------
-            try:
-                reservation = self._fm.reserve(
-                    symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id
-                )
-            except BrokerError as be:
-                if self._ks:
-                    self._ks.record_api_failure()
-                raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
+                try:
+                    reservation = self._fm.reserve(
+                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id
+                    )
+                except BrokerError as be:
+                    if self._ks:
+                        self._ks.record_api_failure()
+                    raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
 
-            if not reservation.success:
-                raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
+                if not reservation.success:
+                    raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
 
-            reservation_id = reservation.reservation_id
+                reservation_id = reservation.reservation_id
 
-            # SP9: signal reserved
-            self._store.update_signal_status(signal_id, "RESERVED")
+                # SP9: signal reserved (kept inside the lock so the SQL row
+                # appears atomically with the reservation entry).
+                self._store.update_signal_status(signal_id, "RESERVED")
 
             # ----------------------------------------------------------
             # Step 8: Order placement (SP16: optional)
@@ -843,34 +848,37 @@ class SignalProcessor:
             if not sizing.success:
                 raise _PipelineReject(f"SIZING_{sizing.constraint}", sizing.reason)
 
-            # Step 6: Risk approval
-            try:
-                approval = self._risk.approve(
-                    symbol, side, strategy_obj.intent, sizing, signal_id
-                )
-            except BrokerError as be:
-                if self._ks:
-                    self._ks.record_api_failure()
-                raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
+            # Steps 6-7: Risk approval + Capital reservation
+            # Audit 1.2 / Portfolio Lock: see continue_from_gate counterpart in
+            # _process_one for rationale. Same critical section here so
+            # gate-released signals do not race against direct webhook signals.
+            with self._fm.portfolio_lock:
+                try:
+                    approval = self._risk.approve(
+                        symbol, side, strategy_obj.intent, sizing, signal_id
+                    )
+                except BrokerError as be:
+                    if self._ks:
+                        self._ks.record_api_failure()
+                    raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
 
-            if not approval.approved:
-                raise _PipelineReject(approval.failed_check, approval.reason)
+                if not approval.approved:
+                    raise _PipelineReject(approval.failed_check, approval.reason)
 
-            # Step 7: Capital reservation
-            try:
-                reservation = self._fm.reserve(
-                    symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id
-                )
-            except BrokerError as be:
-                if self._ks:
-                    self._ks.record_api_failure()
-                raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
+                try:
+                    reservation = self._fm.reserve(
+                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id
+                    )
+                except BrokerError as be:
+                    if self._ks:
+                        self._ks.record_api_failure()
+                    raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
 
-            if not reservation.success:
-                raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
+                if not reservation.success:
+                    raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
 
-            reservation_id = reservation.reservation_id
-            self._store.update_signal_status(signal_id, "RESERVED")
+                reservation_id = reservation.reservation_id
+                self._store.update_signal_status(signal_id, "RESERVED")
 
             # Step 8: Order placement (optional)
             if self._placer is None:

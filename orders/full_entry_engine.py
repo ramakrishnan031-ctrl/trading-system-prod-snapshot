@@ -28,7 +28,7 @@ import logging
 
 from orders.entry_engine import EntryEngine, EntryResult
 from orders.order_protocol_co import CoPlusTgtProtocol
-from orders.order_protocol_limit import LimitTripleProtocol
+from orders.order_protocol_limit import ExitLegsResult, LimitTripleProtocol
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,5 +106,47 @@ class FullEntryEngine(EntryEngine):
         return selected.execute(
             symbol=symbol, side=side, qty=qty,
             entry_price=entry_price, sl_price=sl_price, tgt_price=tgt_price,
+            intent=intent, trade_id=trade_id, tag=tag,
+        )
+
+    def place_deferred_exits(
+        self,
+        *,
+        order_protocol: str,
+        symbol: str,
+        entry_side: str,
+        qty: int,
+        sl_price: float,
+        tgt_price: float,
+        intent: str,
+        trade_id: str,
+        tag: str = "",
+    ) -> ExitLegsResult:
+        """
+        Place SL + TGT for LIMIT_TRIPLE AFTER ENTRY fill (naked-short fix 2.1).
+
+        Routes to LimitTripleProtocol.place_exits; rejects any other protocol
+        since only LIMIT_TRIPLE uses the two-phase flow. CO_PLUS_TGT has SL
+        embedded in the CO bracket (no deferred-exit concept).
+
+        Raises:
+            ValueError if order_protocol is not "LIMIT_TRIPLE".
+            BrokerError on broker-side failure (SL or TGT).
+        """
+        if order_protocol != "LIMIT_TRIPLE":
+            raise ValueError(
+                f"place_deferred_exits only supports LIMIT_TRIPLE, got {order_protocol!r}"
+            )
+        self._log.info(
+            "full_entry_engine.place_deferred_exits",
+            extra={
+                "trade_id": trade_id, "symbol": symbol, "entry_side": entry_side,
+                "qty": qty, "sl_price": sl_price, "tgt_price": tgt_price,
+                "intent": intent, "protocol": order_protocol,
+            },
+        )
+        return self._limit.place_exits(
+            symbol=symbol, entry_side=entry_side, qty=qty,
+            sl_price=sl_price, tgt_price=tgt_price,
             intent=intent, trade_id=trade_id, tag=tag,
         )

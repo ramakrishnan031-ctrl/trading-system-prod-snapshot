@@ -99,6 +99,44 @@ BL-19 (locked 2026-04-19, Phase D.1):
                 SL fail; CoPlusTgt has no inter-leg state on raise), so
                 re-executing the protocol does not produce duplicates.
 
+Naked-Short Fix (locked 2026-04-24, Phase A/2.1 + 3.4):
+    OP-NS1 -- LIMIT_TRIPLE is two-phase. engine.execute places ENTRY only;
+              SL + TGT are DEFERRED to fill time via engine.place_deferred_exits
+              at the ACTUAL filled qty (event.filled_qty), not the requested
+              qty. Closes the naked-short window where ENTRY partial-fills
+              (e.g. 100/1000) and TGT executes at 1000 producing a 900 short.
+    OP-NS2 -- _handle_entry_fill (COMPLETE path) places exits AFTER
+              commit_to_used + record_entry_fill. Order: commit → record →
+              exits → smart_tgt register. commit-first so capital accounting
+              matches broker truth even if exits placement raises.
+    OP-NS3 -- _on_order_status_changed (partial-cancel path, Audit #7) ALSO
+              places exits for any non-zero qty_filled. Pre-NS1 the Audit #7
+              path committed capital but never placed SL/TGT; the pre-NS1
+              protocol had already placed them at requested qty — which WAS
+              the naked-short bug. Post-NS1 both paths are symmetric: fill →
+              commit → record → place_exits.
+    OP-NS4 -- DELIVERY intent uses SL order_type (price = trigger_price);
+              INTRADAY uses SL-M. Zerodha rejects SL-M on CNC. Branch lives
+              inside LimitTripleProtocol.place_exits (OPL7).
+    OP-NS5 -- On exit placement failure AFTER ENTRY fill: position is live
+              with no SL. This is a capital-safety breach. Fire
+              kill_switch.hard_kill with grep tag
+              LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED. Do NOT re-raise
+              inside the event handler; reconciler is the backstop.
+
+Atomic Registration Fix (locked 2026-04-24, Phase A/1.1):
+    OP-AR1 -- Per leg, _fill_map insert MUST happen BEFORE order_monitor.track().
+              Pre-fix: track() added the order to _watched first; the poll
+              thread could fire OrderFilled within microseconds and look up
+              _fill_map[internal_id] -> empty -> ghost-entry. Post-fix:
+              _fill_map is populated first; track() second; cleanup on
+              track-failure pops the just-inserted _fill_map row in
+              addition to rolling back successfully_tracked legs.
+    OP-AR2 -- successfully_inserted (separate from successfully_tracked)
+              tracks _fill_map inserts so the OP-EF2a cleanup path can pop
+              both the tracked-AND-inserted set and the inserted-but-not-
+              yet-tracked entry that triggered the raise.
+
 EF-2 (locked 2026-04-19, Phase E.6):
     OP-EF2a -- The 3-leg track()+_fill_map loop that runs AFTER
                _persist_entry_orders is wrapped in a try/except. If
@@ -219,6 +257,12 @@ class _FillEntry:
     can branch (e.g. register with SmartTgtManager only for CO_PLUS_TGT)
     without a DB round-trip on every fill.
 
+    Naked-short fix (2.1): for LIMIT_TRIPLE, the ENTRY leg also caches
+    `side`, `sl_price`, `tgt_price`, `intent` so the fill handler can
+    place SL + TGT via FullEntryEngine.place_deferred_exits without a
+    DB round-trip. On exit legs these fields are populated for symmetry
+    but not consulted.
+
     Invariants:
         leg ∈ _VALID_LEGS; constructor raises ValueError otherwise.
     """
@@ -226,6 +270,7 @@ class _FillEntry:
     __slots__ = (
         "trade_id", "reservation_id", "symbol", "qty", "leg",
         "order_protocol", "direction",
+        "side", "sl_price", "tgt_price", "intent",
     )
 
     def __init__(
@@ -237,6 +282,10 @@ class _FillEntry:
         leg: str,
         order_protocol: str,
         direction: str,
+        side: str = "",
+        sl_price: float = 0.0,
+        tgt_price: float = 0.0,
+        intent: str = "",
     ) -> None:
         if leg not in _VALID_LEGS:
             raise ValueError(
@@ -250,6 +299,10 @@ class _FillEntry:
         self.leg = leg
         self.order_protocol = order_protocol
         self.direction = direction
+        self.side = side
+        self.sl_price = sl_price
+        self.tgt_price = tgt_price
+        self.intent = intent
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -585,18 +638,18 @@ class OrderPlacer:
         exit_side = "SELL" if side == "BUY" else "BUY"
         now = now_ist()  # shared across all 3 legs (one broker placement)
         successfully_tracked: List[str] = []
+        # OP-AR2: separate set of internal_ids inserted into _fill_map but not
+        # yet handed to order_monitor.track(). On track() failure the cleanup
+        # path must pop these too, otherwise a stale _fill_map row leaks.
+        successfully_inserted: List[str] = []
 
         try:
+            # OP-AR1 (atomic registration): insert _fill_map BEFORE track().
+            # The order_monitor poll thread can fire OrderFilled microseconds
+            # after track() returns; if _fill_map is still empty at that point
+            # the fill becomes a ghost entry. Insert-then-track closes the
+            # window because OrderFilled handlers always look up _fill_map.
             if result.entry_internal_id and result.entry_broker_order_id:
-                self._order_monitor.track(
-                    internal_order_id=result.entry_internal_id,
-                    broker_order_id=result.entry_broker_order_id,
-                    symbol=symbol,
-                    side=side,
-                    qty=qty,
-                    expected_price=entry_price,
-                    placed_at=now,
-                )
                 with self._fill_map_lock:
                     self._fill_map[result.entry_internal_id] = _FillEntry(
                         trade_id=trade_id,
@@ -606,7 +659,23 @@ class OrderPlacer:
                         leg=_LEG_ENTRY,
                         order_protocol=order_protocol,
                         direction=direction,
+                        # Naked-short fix (2.1): cache exit params for deferred
+                        # place_exits() on LIMIT_TRIPLE ENTRY fill.
+                        side=side,
+                        sl_price=sl_price,
+                        tgt_price=tgt_price,
+                        intent=intent,
                     )
+                successfully_inserted.append(result.entry_internal_id)
+                self._order_monitor.track(
+                    internal_order_id=result.entry_internal_id,
+                    broker_order_id=result.entry_broker_order_id,
+                    symbol=symbol,
+                    side=side,
+                    qty=qty,
+                    expected_price=entry_price,
+                    placed_at=now,
+                )
                 successfully_tracked.append(result.entry_internal_id)
 
             # SL leg — CO_PLUS_TGT has SL bundled into the CO at broker side.
@@ -615,15 +684,6 @@ class OrderPlacer:
                 and result.sl_internal_id
                 and result.sl_broker_order_id
             ):
-                self._order_monitor.track(
-                    internal_order_id=result.sl_internal_id,
-                    broker_order_id=result.sl_broker_order_id,
-                    symbol=symbol,
-                    side=exit_side,
-                    qty=qty,
-                    expected_price=sl_price,
-                    placed_at=now,
-                )
                 with self._fill_map_lock:
                     self._fill_map[result.sl_internal_id] = _FillEntry(
                         trade_id=trade_id,
@@ -634,19 +694,20 @@ class OrderPlacer:
                         order_protocol=order_protocol,
                         direction=direction,
                     )
+                successfully_inserted.append(result.sl_internal_id)
+                self._order_monitor.track(
+                    internal_order_id=result.sl_internal_id,
+                    broker_order_id=result.sl_broker_order_id,
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=qty,
+                    expected_price=sl_price,
+                    placed_at=now,
+                )
                 successfully_tracked.append(result.sl_internal_id)
 
             # TGT leg — both LIMIT_TRIPLE and CO_PLUS_TGT place a separate TGT order.
             if result.tgt_internal_id and result.tgt_broker_order_id:
-                self._order_monitor.track(
-                    internal_order_id=result.tgt_internal_id,
-                    broker_order_id=result.tgt_broker_order_id,
-                    symbol=symbol,
-                    side=exit_side,
-                    qty=qty,
-                    expected_price=tgt_price,
-                    placed_at=now,
-                )
                 with self._fill_map_lock:
                     self._fill_map[result.tgt_internal_id] = _FillEntry(
                         trade_id=trade_id,
@@ -657,6 +718,16 @@ class OrderPlacer:
                         order_protocol=order_protocol,
                         direction=direction,
                     )
+                successfully_inserted.append(result.tgt_internal_id)
+                self._order_monitor.track(
+                    internal_order_id=result.tgt_internal_id,
+                    broker_order_id=result.tgt_broker_order_id,
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=qty,
+                    expected_price=tgt_price,
+                    placed_at=now,
+                )
                 successfully_tracked.append(result.tgt_internal_id)
         except Exception as track_exc:
             # OP-EF2a/OP-EF2b: track() raised after _persist_entry_orders
@@ -671,8 +742,12 @@ class OrderPlacer:
             # reserved for DB/broker drift scenarios (BL-4/BL-8/BL-9
             # paths). Documented so future maintainers do not "helpfully
             # add hard_kill here for symmetry."
+            # OP-AR2: pop everything we inserted (superset of tracked).
+            # successfully_inserted always >= successfully_tracked because the
+            # _fill_map insert precedes track() per leg; on track() raise the
+            # current leg is in inserted but not tracked.
             with self._fill_map_lock:
-                for iid in successfully_tracked:
+                for iid in successfully_inserted:
                     self._fill_map.pop(iid, None)
             for iid in successfully_tracked:
                 try:
@@ -869,6 +944,18 @@ class OrderPlacer:
                 extra={"trade_id": fill_entry.trade_id},
             )
 
+        # Naked-short fix (2.1): LIMIT_TRIPLE partial-fill-then-cancel leaves
+        # a live position (event.qty_filled > 0) with no SL/TGT placed yet.
+        # Place them now at the actual filled qty. Same helper as the happy
+        # path in _handle_entry_fill.
+        if fill_entry.order_protocol == "LIMIT_TRIPLE":
+            self._place_limit_triple_exits(
+                trade_id=fill_entry.trade_id,
+                fill_entry=fill_entry,
+                qty_filled=int(event.qty_filled),
+                reason="partial_entry_cancelled",
+            )
+
     def _handle_entry_fill(self, event: OrderFilled, fill_entry: "_FillEntry") -> None:
         """
         Commit capital reservation and record entry fill in DB (BL-7d).
@@ -930,6 +1017,17 @@ class OrderPlacer:
             self._log.error(
                 "order_placer.record_fill_failed",
                 extra={"trade_id": trade_id},
+            )
+
+        # Naked-short fix (2.1): for LIMIT_TRIPLE, SL + TGT are DEFERRED to fill
+        # time. Place them now at the ACTUAL filled qty (not the requested qty).
+        # CO_PLUS_TGT has SL inside the bracket; nothing to defer.
+        if fill_entry.order_protocol == "LIMIT_TRIPLE":
+            self._place_limit_triple_exits(
+                trade_id=trade_id,
+                fill_entry=fill_entry,
+                qty_filled=int(event.filled_qty),
+                reason="entry_fill",
             )
 
         # BL-7d: register CO_PLUS_TGT trades with SmartTgtManager for SL trailing.
@@ -1192,6 +1290,247 @@ class OrderPlacer:
                 )
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _place_limit_triple_exits(
+        self,
+        *,
+        trade_id: str,
+        fill_entry: "_FillEntry",
+        qty_filled: int,
+        reason: str,
+    ) -> None:
+        """
+        Naked-short fix (2.1): place SL + TGT for a LIMIT_TRIPLE trade AFTER
+        the ENTRY has filled (COMPLETE or partial-then-cancelled).
+
+        Called from _handle_entry_fill (COMPLETE) and _on_order_status_changed
+        (partial cancel with qty_filled > 0). Both paths reach here with the
+        ENTRY already committed to capital and recorded in DB.
+
+        qty_filled is the ACTUAL filled qty, not the requested qty. Sizing
+        SL/TGT to the filled qty is the core of the naked-short fix: a
+        partial fill of 100 shares produces SL+TGT at 100, never at 1000.
+
+        Failure policy:
+          - qty_filled ≤ 0 → skip (nothing to protect).
+          - place_deferred_exits raises BrokerError → position is live with
+            NO SL. This is a capital-protection breach. Fire kill_switch.hard_kill
+            (if injected) and log CRITICAL with grep tag
+            LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED. Do NOT re-raise:
+            we are inside an event handler; the reconciler is the backstop.
+          - TGT succeeded after SL failure is not possible (place_exits places
+            SL first; on SL failure, TGT is not attempted). If the protocol
+            raises, either nothing or only SL is placed.
+          - Persist/track failures AFTER broker ack: cancel the broker orders
+            best-effort, hard_kill, do not re-raise.
+        """
+        if qty_filled <= 0:
+            self._log.warning(
+                "order_placer.limit_triple_exits_skipped_zero_qty",
+                extra={"trade_id": trade_id, "reason": reason},
+            )
+            return
+
+        try:
+            legs = self._engine.place_deferred_exits(
+                order_protocol="LIMIT_TRIPLE",
+                symbol=fill_entry.symbol,
+                entry_side=fill_entry.side,
+                qty=qty_filled,
+                sl_price=fill_entry.sl_price,
+                tgt_price=fill_entry.tgt_price,
+                intent=fill_entry.intent,
+                trade_id=trade_id,
+                tag=trade_id,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.limit_triple_exits_failed "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED: "
+                "ENTRY filled but SL/TGT placement raised; position has no protection",
+                extra={
+                    "trade_id": trade_id,
+                    "symbol": fill_entry.symbol,
+                    "qty_filled": qty_filled,
+                    "sl_price": fill_entry.sl_price,
+                    "tgt_price": fill_entry.tgt_price,
+                    "intent": fill_entry.intent,
+                    "reason": reason,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # Persist SL + TGT rows atomically. Use product derived from intent
+        # (same as _persist_entry_orders).
+        if self._product_resolver is None:
+            # Should never happen — OrderPlacer constructor could allow it
+            # for tests, but _persist_entry_orders also asserts this. Log
+            # CRITICAL so the exits-placed-but-not-persisted state is surfaced.
+            self._log.critical(
+                "order_placer.limit_triple_exits_no_product_resolver "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED",
+                extra={"trade_id": trade_id},
+            )
+            self._fire_hard_kill_for_unprotected_position(
+                trade_id,
+                RuntimeError("product_resolver missing; cannot persist exit legs"),
+            )
+            return
+
+        product = self._product_resolver.resolve(fill_entry.intent)
+        exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+        specs: List[OrderInsertSpec] = [
+            OrderInsertSpec(
+                broker_order_id=legs.sl_broker_order_id,
+                leg="SL",
+                transaction_type=exit_side,
+                order_type=legs.sl_order_type,   # "SL-M" (INTRADAY) or "SL" (DELIVERY)
+                product=product,
+                variety="regular",
+                qty_requested=qty_filled,
+                price=legs.sl_price,
+                trigger_price=legs.sl_trigger_price,
+            ),
+            OrderInsertSpec(
+                broker_order_id=legs.tgt_broker_order_id,
+                leg="TGT",
+                transaction_type=exit_side,
+                order_type="LIMIT",
+                product=product,
+                variety="regular",
+                qty_requested=qty_filled,
+                price=legs.tgt_price,
+            ),
+        ]
+
+        broker_ids_to_cancel: List[str] = [
+            legs.sl_broker_order_id, legs.tgt_broker_order_id,
+        ]
+
+        try:
+            self._om.insert_orders_atomic(trade_id, specs)
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.limit_triple_exits_persist_failed "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED: "
+                "SL/TGT placed at broker but DB persist failed; cancelling legs",
+                extra={
+                    "trade_id": trade_id,
+                    "broker_order_ids": broker_ids_to_cancel,
+                    "error": str(exc),
+                },
+            )
+            self._cancel_broker_orders(
+                broker_ids_to_cancel,
+                reason=f"limit_triple_exits_persist_failed: {type(exc).__name__}",
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # OP-AR1 (atomic registration): _fill_map insert FIRST, track() SECOND
+        # for each leg. Symmetric to the place() flow above.
+        now = now_ist()
+        try:
+            with self._fill_map_lock:
+                self._fill_map[legs.sl_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
+                    symbol=fill_entry.symbol,
+                    qty=qty_filled,
+                    leg=_LEG_SL,
+                    order_protocol="LIMIT_TRIPLE",
+                    direction=fill_entry.direction,
+                )
+            self._order_monitor.track(
+                internal_order_id=legs.sl_internal_id,
+                broker_order_id=legs.sl_broker_order_id,
+                symbol=fill_entry.symbol,
+                side=exit_side,
+                qty=qty_filled,
+                expected_price=legs.sl_trigger_price,
+                placed_at=now,
+            )
+
+            with self._fill_map_lock:
+                self._fill_map[legs.tgt_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
+                    symbol=fill_entry.symbol,
+                    qty=qty_filled,
+                    leg=_LEG_TGT,
+                    order_protocol="LIMIT_TRIPLE",
+                    direction=fill_entry.direction,
+                )
+            self._order_monitor.track(
+                internal_order_id=legs.tgt_internal_id,
+                broker_order_id=legs.tgt_broker_order_id,
+                symbol=fill_entry.symbol,
+                side=exit_side,
+                qty=qty_filled,
+                expected_price=legs.tgt_price,
+                placed_at=now,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.limit_triple_exits_track_failed "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED: "
+                "SL/TGT persisted but track() failed; exits may not update DB on fill",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            # Do NOT cancel here: persistence succeeded and reconciler will
+            # catch any monitor coverage gap on the next cycle. Escalate
+            # since the condition is unexpected.
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        self._log.info(
+            "order_placer.limit_triple_exits_placed",
+            extra={
+                "trade_id": trade_id,
+                "symbol": fill_entry.symbol,
+                "qty_filled": qty_filled,
+                "sl_broker_id": legs.sl_broker_order_id,
+                "sl_order_type": legs.sl_order_type,
+                "tgt_broker_id": legs.tgt_broker_order_id,
+                "reason": reason,
+            },
+        )
+
+    def _fire_hard_kill_for_unprotected_position(
+        self, trade_id: str, exc: Exception,
+    ) -> None:
+        """
+        Escalate: a LIMIT_TRIPLE position is live with broken SL/TGT protection.
+        This is exactly the capital-safety condition kill_switch.hard_kill exists
+        for. Best-effort — any failure fires a CRITICAL log and returns.
+        """
+        if self._kill_switch is None:
+            self._log.critical(
+                "order_placer.hard_kill_not_configured "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            return
+        try:
+            self._kill_switch.hard_kill(
+                reason=(
+                    f"LIMIT_TRIPLE exits failed after ENTRY filled: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                triggered_by="order_placer._place_limit_triple_exits",
+            )
+        except Exception as kse:
+            log_exception(self._log, kse)
+            self._log.critical(
+                "order_placer.hard_kill_failed",
+                extra={"trade_id": trade_id, "kill_error": str(kse)},
+            )
 
     def _round_to_tick(self, symbol: str, price: float) -> float:
         """

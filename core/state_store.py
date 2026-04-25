@@ -566,8 +566,13 @@ class StateStore:
         """
         Return trades with status OPEN or PARTIAL whose ENTRY leg has an
         intraday product (MIS or CO). Each row includes:
-            trade_id, signal_id, symbol, direction, qty_filled
-        Used by eod_squareoff to place MARKET exit orders (EOD5, EOD6).
+            trade_id, signal_id, symbol, direction, qty_filled,
+            order_protocol, entry_broker_order_id, entry_variety
+        Used by eod_squareoff (EOD5, EOD6) to either place a MARKET reverse
+        exit (MIS / LIMIT_TRIPLE) or cancel the CO bracket via
+        adapter.cancel_order(variety="co") (audit 3.1 — Zerodha forbids
+        reverse MARKET for a live CO and auto-squares at 15:20 with a
+        ₹50+GST penalty per position).
         Results sorted by symbol (Foundation Rule 3.7 deterministic order).
         """
         return self.fetch_all(
@@ -577,7 +582,10 @@ class StateStore:
                 t.signal_id,
                 t.symbol,
                 t.direction,
-                t.qty_filled
+                t.qty_filled,
+                t.order_protocol,
+                o.order_id  AS entry_broker_order_id,
+                o.variety   AS entry_variety
             FROM trades t
             JOIN orders o
               ON o.trade_id = t.trade_id

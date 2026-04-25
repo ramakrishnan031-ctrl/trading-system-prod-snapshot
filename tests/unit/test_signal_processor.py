@@ -197,6 +197,15 @@ class _MockFundManager:
         self._reserve_result = reserve_result or _ReservationResult(success=True)
         self._raise = raise_exc
         self.released: List[str] = []
+        # Audit 1.2: signal_processor wraps approve+reserve in
+        # `with fm.portfolio_lock:`. Production FundManager exposes its
+        # internal RLock via this property; mocks return any object that
+        # supports __enter__/__exit__.
+        self._lock = threading.RLock()
+
+    @property
+    def portfolio_lock(self):
+        return self._lock
 
     def reserve(self, symbol, qty, price, intent, signal_id=None):
         if self._raise:
@@ -1167,19 +1176,27 @@ def test_tgt_price_passed_to_order_placer():
 # ---------------------------------------------------------------------------
 
 def test_5_workers_process_5_signals_concurrently():
-    """5 signals submitted together complete faster than 5 * sleep_time (parallelism)."""
+    """
+    5 signals submitted together complete in parallel through the screen
+    + sizing stages. Audit 1.2 / Portfolio Lock serialises approve+reserve,
+    so the barrier must sit BEFORE approve (we put it in the sizer) to
+    prove worker parallelism. If the barrier were inside approve, all 5
+    workers would queue on fm.portfolio_lock and the test would deadlock.
+    """
     barrier = threading.Barrier(5, timeout=5.0)
     processed_order = []
     lock = threading.Lock()
 
-    class _SlowRisk(_MockRiskEngine):
-        def approve(self, symbol, direction, intent, sizing, signal_id):
+    class _SlowSizer(_MockPositionSizer):
+        def calculate(self, symbol, direction, entry_price, sl_price, intent,
+                      score_tier="MEDIUM", lot_size=1):
             barrier.wait()
             with lock:
                 processed_order.append(symbol)
-            return _ApprovalResult(approved=True)
+            return _SizingResult(success=True, qty=10, margin_required=10000.0,
+                                 risk_amount=500.0)
 
-    proc, sq, store = _make_proc(risk=_SlowRisk(), worker_count=5)
+    proc, sq, store = _make_proc(sizer=_SlowSizer(), worker_count=5)
     proc.start()
 
     symbols = [f"SYM{i}" for i in range(5)]
@@ -1189,7 +1206,55 @@ def test_5_workers_process_5_signals_concurrently():
     proc.stop()
 
     assert len(processed_order) == 5, f"Expected 5 processed, got {len(processed_order)}"
-    print(f"  OK 5 signals processed concurrently (barrier passed): {processed_order}")
+    print(f"  OK 5 signals processed concurrently (barrier passed pre-approve): {processed_order}")
+
+
+def test_portfolio_lock_serialises_approve_and_reserve():
+    """
+    Audit 1.2 / Portfolio Lock: risk_engine.approve + fund_manager.reserve
+    must be a single critical section so two concurrent signals on the
+    same sector/bucket cannot both pass approve and then both reserve.
+    Asserts that no two workers hold approve concurrently after the lock.
+    """
+    in_approve = 0
+    max_concurrent = 0
+    counter_lock = threading.Lock()
+    enter_event = threading.Event()
+    release_event = threading.Event()
+
+    class _ConcurrencyTrackingRisk(_MockRiskEngine):
+        def approve(self, symbol, direction, intent, sizing, signal_id):
+            nonlocal in_approve, max_concurrent
+            with counter_lock:
+                in_approve += 1
+                if in_approve > max_concurrent:
+                    max_concurrent = in_approve
+            enter_event.set()
+            # Hold inside approve briefly so a racing worker would overlap
+            # if portfolio_lock weren't serialising. release_event fires
+            # after we've measured concurrency.
+            release_event.wait(timeout=2.0)
+            with counter_lock:
+                in_approve -= 1
+            return _ApprovalResult(approved=True)
+
+    proc, sq, store = _make_proc(
+        risk=_ConcurrencyTrackingRisk(), worker_count=5,
+    )
+    proc.start()
+    for i in range(5):
+        sq.put((f"sig_{i:03d}", "gap_go_long", f"SYM{i}", 1000.0, datetime.now()))
+
+    # Let one worker enter approve, then unblock everyone.
+    enter_event.wait(timeout=2.0)
+    release_event.set()
+    proc.stop()
+
+    assert max_concurrent == 1, (
+        f"portfolio_lock failed: {max_concurrent} workers were inside approve "
+        f"concurrently; expected serialisation (1)"
+    )
+    print(f"  OK portfolio_lock serialised approve (max concurrent={max_concurrent})")
 
 
 def test_100_signals_complete_in_reasonable_time():

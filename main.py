@@ -726,6 +726,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         # OrderFilled. Live adapter ignores these kwargs.
         bus=event_bus,
         paper_auto_fill_delay_sec=app_config.system.paper.auto_fill_delay_sec,
+        # Audit 6.2: paper LTP-gating settings
+        paper_ltp_gating_enabled=app_config.system.paper.ltp_gating_enabled,
+        paper_ltp_gating_max_wait_sec=app_config.system.paper.ltp_gating_max_wait_sec,
+        paper_ltp_gating_poll_sec=app_config.system.paper.ltp_gating_poll_sec,
         # BL-6: 429 exponential backoff config (lives under broker_limits.yaml)
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,
     )

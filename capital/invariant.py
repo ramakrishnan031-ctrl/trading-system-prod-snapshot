@@ -22,6 +22,15 @@ Locked Design Decisions:
             compute_tradable_balance.
     INV6 -- Negative balance guards: available, reserved, used, cash_floor
             must each be >= -tolerance. realized_pnl_today may be negative.
+    INV7 -- Float-Drift Fix Option B (Audit 2.2, locked 2026-04-24): both
+            sides of the invariant comparison are rounded to 2 dp (paise)
+            BEFORE comparing to tolerance. IEEE-754 arithmetic accumulates
+            ~1e-14 error per op; over hundreds of trades that drift can
+            cross the 0.01 tolerance window even when the ledger is logically
+            consistent. Rounding to paise (the actual unit in which broker
+            reports money) eliminates this drift without converting the
+            ledger to Decimal end-to-end. Negative-balance guards round the
+            field value too, so a -1e-15 spurious negative is treated as 0.
     INV8 -- Layer 3 (capital/). Imports: stdlib + core.exceptions only.
     INV9 -- Deterministic, thread-safe by virtue of being pure (no shared
             state, no I/O).
@@ -168,9 +177,13 @@ def assert_capital_invariant(
         cash_floor, realized_pnl_today, tolerance,
     )
 
-    # -- INV2: main invariant check --------------------------------------------
-    lhs = compute_lhs(margin_available, margin_reserved, margin_used)
-    rhs = compute_rhs(cash_floor, realized_pnl_today)
+    # -- INV2 + INV7: main invariant check (round to paise before compare) -----
+    # Float-drift fix Option B: round to 2 dp so accumulated IEEE-754 noise
+    # below 1 paise cannot push abs(delta) past tolerance. Money is paise-
+    # quantised at the broker; sub-paise differences are arithmetic noise,
+    # not real discrepancies.
+    lhs = round(compute_lhs(margin_available, margin_reserved, margin_used), 2)
+    rhs = round(compute_rhs(cash_floor, realized_pnl_today), 2)
     delta = lhs - rhs
 
     if abs(delta) > tolerance:
@@ -209,8 +222,13 @@ def _guard_non_negative(
     realized_pnl_today: float,
     tolerance: float,
 ) -> None:
-    """Raise CapitalInvariantViolation if value < -tolerance (INV6)."""
-    if value >= -tolerance:
+    """Raise CapitalInvariantViolation if value < -tolerance (INV6 + INV7).
+
+    INV7: round value to 2 dp before the negative check. A spurious
+    -1e-15 from arithmetic noise is logically zero; rounding to paise
+    avoids false NEGATIVE_* violations on otherwise-consistent ledgers.
+    """
+    if round(value, 2) >= -tolerance:
         return
     violation = f"NEGATIVE_{field_name.upper()}"
     lhs = compute_lhs(margin_available, margin_reserved, margin_used)
