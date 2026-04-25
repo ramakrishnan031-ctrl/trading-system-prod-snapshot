@@ -204,3 +204,58 @@ idempotency guard, `.timer` unit with fixed 09:00 IST kickoff, or keep
 manual). The choice should be informed by actual operational patterns
 observed during Week 1 of paper trial. Tracked as FUTURE-1 in
 `docs/web_claude/03_audit_responses/extra_findings.md`.
+
+---
+
+## 7. NTP — slew mode required (Phase D / Audit 6.4)
+
+`core/time_authority.py` issues every wall-clock read via `now_ist()` and
+`candle_store.py` uses those timestamps for candle `close_ts`. If the
+system clock takes a discontinuous **step** mid-session, candle ordering
+and gate timeouts can briefly invert. The cheap mitigation is to require
+NTP to operate in **slew mode** (gradual frequency adjustment) rather
+than step mode.
+
+### VM (Oracle Cloud, systemd-timesyncd)
+
+`systemd-timesyncd` slews drift < 1s by default. Verify it is the active
+time source on the VM:
+
+```bash
+ssh trading-vm 'timedatectl status'
+# Expect:
+#   System clock synchronized: yes
+#   NTP service: active
+```
+
+If `chronyd` or `ntpd` was installed instead, ensure step mode is
+disabled. For chronyd, in `/etc/chrony/chrony.conf`:
+
+```
+# Allow slewing for offsets up to 1s; never step at runtime.
+makestep 1.0 -1
+```
+
+`-1` as the second argument disables stepping after the initial sync.
+
+### PC (Windows, paper trial)
+
+Windows Time service (`w32time`) defaults to slew within 128ms and step
+beyond. Paper trial runs on the PC, so confirm `w32time` is healthy
+before each session:
+
+```cmd
+w32tm /query /status
+w32tm /query /source
+```
+
+If a step is unavoidable (e.g. laptop sleep/wake spans a large drift),
+restart the trading-system process before the next entry-window opens.
+
+### Why this is INFO and not a code change
+
+Per the audit closure (`docs/web_claude/03_audit_responses/deep_system_audit_2026-04-24_closure.md`
+Section 6.4): on a tuned server the step risk is rare and bounded.
+Adding a `time.monotonic()` fallback inside `time_authority` would force
+a refactor across every consumer of `now_ist()` for marginal benefit.
+The deployment-side mitigation is sufficient.

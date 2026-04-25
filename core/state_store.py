@@ -147,8 +147,19 @@ class StateStore:
     
     # ─────────────────────────────────────────────────────────────────────────
     # Connection management (per-thread)
+    #
+    # Phase D / Audit 4.3 (closed as INFO, no code change):
+    # The audit flagged threading.local() as a "connection memory leak" on
+    # the assumption that workers are created and destroyed per-task. In v2
+    # all SQL-touching workers run inside ThreadPoolExecutor pools (sized
+    # in low single digits — signal_processor max 5, entry_gate worker
+    # pool, smart_tgt_manager max 2). Pool threads are recycled, so the
+    # per-thread sqlite3 connection count is bounded by the sum of pool
+    # sizes — typically <= 12 connections for the whole process lifetime.
+    # That is a bounded pool, not an unbounded leak. See the closure doc
+    # for the full rationale. Leaving threading.local() in place.
     # ─────────────────────────────────────────────────────────────────────────
-    
+
     def _get_conn(self) -> sqlite3.Connection:
         """
         Return the connection for the calling thread, creating one if needed.
