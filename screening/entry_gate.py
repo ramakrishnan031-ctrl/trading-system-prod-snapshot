@@ -138,10 +138,23 @@ class EntryGate:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Launch poll thread and worker pool."""
+        """Launch poll thread and worker pool.
+
+        Audit 4.4: rehydrates the watchlist from gate_state BEFORE the poll
+        loop spins up. A mid-session restart therefore resumes watching the
+        same signals at the same prices/timeouts they had before the crash.
+        """
         if self._running:
             self._log.warning("EntryGate.start() called while already running")
             return
+
+        # Audit 4.4: rehydrate before starting the poll loop.
+        rehydrated = self.rehydrate_from_gate_state()
+        if rehydrated > 0:
+            self._log.info(
+                f"EntryGate.rehydrate: {rehydrated} entries restored from gate_state"
+            )
+
         self._stop_event.clear()
         self._executor = ThreadPoolExecutor(
             max_workers=self._worker_count,
@@ -158,6 +171,68 @@ class EntryGate:
             f"EntryGate started: poll_interval={self._poll_interval_sec}s "
             f"workers={self._worker_count}"
         )
+
+    def rehydrate_from_gate_state(self) -> int:
+        """
+        Audit 4.4: read every persisted gate_state row, reconstruct WatchEntry,
+        and add to in-memory _watchlist. Returns the number of entries
+        restored. Mirrors FundManager.rehydrate_from_open_trades.
+
+        Skips rows whose signal_id is already in _watchlist (idempotent).
+        Skips rows that fail to parse (logged WARNING).
+        """
+        import json
+        try:
+            rows = self._state_store.get_all_gate_state()
+        except Exception as exc:
+            self._log.error(f"EntryGate.rehydrate: get_all_gate_state failed: {exc}")
+            return 0
+
+        restored = 0
+        for row in rows:
+            signal_id = row.get("signal_id")
+            try:
+                added_at_str = row["added_at"]
+                # added_at is stored naive IST per signal_processor convention;
+                # accept either naive or aware ISO strings.
+                added_at = datetime.fromisoformat(added_at_str)
+                if added_at.tzinfo is not None:
+                    added_at = added_at.astimezone(_IST).replace(tzinfo=None)
+
+                extras_json = row.get("extras_json")
+                extras = json.loads(extras_json) if extras_json else {}
+
+                entry = WatchEntry(
+                    signal_id=signal_id,
+                    symbol=row["symbol"],
+                    direction=row["direction"],
+                    trigger_price=float(row["trigger_price"]),
+                    entry_price=float(row["entry_price"]),
+                    sl_price=float(row["sl_price"]),
+                    tgt_price=float(row["tgt_price"]),
+                    tolerance_pct=float(row["tolerance_pct"]),
+                    timeout_sec=int(row["timeout_sec"]),
+                    strategy_name=row["strategy_name"],
+                    tier=row["tier"],
+                    scanner_name=row["scanner_name"],
+                    intent=row["intent"],
+                    added_at=added_at,
+                    extras=extras,
+                )
+            except Exception as exc:
+                self._log.warning(
+                    f"EntryGate.rehydrate: skipping malformed row "
+                    f"signal_id={signal_id}: {exc}"
+                )
+                continue
+
+            with self._lock:
+                if entry.signal_id in self._watchlist:
+                    continue   # idempotent
+                self._watchlist[entry.signal_id] = entry
+            restored += 1
+
+        return restored
 
     def stop(self) -> None:
         """Signal shutdown and join within 5s."""
@@ -184,6 +259,11 @@ class EntryGate:
         Add WatchEntry to watchlist.
         Raises ValueError if signal_id already present (EG11).
         Works regardless of running state (gate need not be started yet).
+
+        Audit 4.4: also persists to gate_state and updates signals.status to
+        GATE_WAITING so a mid-session restart can rehydrate the watchlist.
+        Persistence errors are logged but do not abort the add (the in-memory
+        watchlist remains the source of truth for the running session).
         """
         with self._lock:
             if entry.signal_id in self._watchlist:
@@ -191,11 +271,47 @@ class EntryGate:
                     f"signal_id {entry.signal_id!r} already in watchlist"
                 )
             self._watchlist[entry.signal_id] = entry
+
+        # Audit 4.4: persist for rehydrate. Best-effort; errors don't abort.
+        try:
+            self._persist_gate_state(entry)
+            self._state_store.update_signal_status(entry.signal_id, "GATE_WAITING")
+        except Exception as exc:
+            self._log.error(
+                f"EntryGate: gate_state persist failed for {entry.signal_id} "
+                f"(in-memory add still applies): {exc}"
+            )
+
         self._log.info(
             f"EntryGate.add: {entry.signal_id} ({entry.symbol}) "
             f"dir={entry.direction} entry={entry.entry_price} "
             f"tol={entry.tolerance_pct:.4f} timeout={entry.timeout_sec}s"
         )
+
+    def _persist_gate_state(self, entry: WatchEntry) -> None:
+        """Audit 4.4: persist a WatchEntry to gate_state for rehydrate."""
+        import json
+        added_iso = (
+            entry.added_at.isoformat()
+            if entry.added_at is not None else now_ist().isoformat()
+        )
+        self._state_store.insert_gate_state({
+            "signal_id":     entry.signal_id,
+            "symbol":        entry.symbol,
+            "direction":     entry.direction,
+            "trigger_price": entry.trigger_price,
+            "entry_price":   entry.entry_price,
+            "sl_price":      entry.sl_price,
+            "tgt_price":     entry.tgt_price,
+            "tolerance_pct": entry.tolerance_pct,
+            "timeout_sec":   entry.timeout_sec,
+            "strategy_name": entry.strategy_name,
+            "tier":          entry.tier,
+            "scanner_name":  entry.scanner_name,
+            "intent":        entry.intent,
+            "added_at":      added_iso,
+            "extras_json":   json.dumps(entry.extras) if entry.extras else None,
+        })
 
     def remove(self, signal_id: str) -> bool:
         """
@@ -359,6 +475,15 @@ class EntryGate:
             self._log.error(
                 f"EntryGate: state_store.update_signal_status failed "
                 f"for {signal_id} (reason={reason}): {exc}\n{traceback.format_exc()}"
+            )
+
+        # Audit 4.4: clear the rehydrate row so a future restart does not
+        # resurrect a released signal.
+        try:
+            self._state_store.delete_gate_state(signal_id)
+        except Exception as exc:
+            self._log.error(
+                f"EntryGate: gate_state delete failed for {signal_id}: {exc}"
             )
 
         # EG7 step 4: log

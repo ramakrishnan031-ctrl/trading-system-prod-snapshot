@@ -41,6 +41,10 @@ class LiveFeedManager:
         max_reconnect_attempts: int = 10,
         reconnect_delay_sec: int = 5,
         paper_mode: bool = False,
+        # B.6 / Audit 12: tick-age watchdog (live mode only).
+        tick_stale_threshold_sec: int = 30,
+        watchdog_check_interval_sec: int = 10,
+        market_windows=None,
     ) -> None:
         # LF2
         self._api_key = api_key
@@ -76,6 +80,24 @@ class LiveFeedManager:
         # LF7: candle_store reconnect notifier
         self._on_reconnect_cb: Optional[Callable[[datetime], None]] = None
 
+        # B.6 / Audit 12: tick-age watchdog state.
+        # KiteTicker can present as connected (no on_close fired) yet stop
+        # delivering ticks (half-open socket / silent broker drop). Without a
+        # watchdog the system silently misses entries until reconcile/EOD
+        # surfaces it. The watchdog samples _last_tick_at every
+        # watchdog_check_interval_sec; if no tick arrived for
+        # tick_stale_threshold_sec during market hours, force a reconnect
+        # via ticker.close() (which triggers _on_close + the kiteconnect
+        # auto-reconnect path). Critical alert fires ONCE per stale episode
+        # (cleared when ticks resume).
+        self._tick_stale_threshold_sec = int(tick_stale_threshold_sec)
+        self._watchdog_check_interval_sec = int(watchdog_check_interval_sec)
+        self._market_windows = market_windows
+        self._last_tick_at: Optional[datetime] = None
+        self._last_tick_lock = threading.Lock()
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdog_alert_fired: bool = False
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
@@ -92,6 +114,8 @@ class LiveFeedManager:
             name="live-feed-consumer",
         )
         self._consumer_thread.start()
+        # B.6 / Audit 12: start tick-age watchdog (live mode only).
+        self._start_watchdog()
         self._ticker = self._create_ticker()
         self._ticker.connect(threaded=True)
 
@@ -104,6 +128,12 @@ class LiveFeedManager:
             except Exception:
                 pass
         self._connected = False
+        # B.6: join watchdog thread on shutdown (best-effort, bounded wait).
+        if self._watchdog_thread is not None:
+            self._watchdog_thread.join(
+                timeout=self._watchdog_check_interval_sec + 1
+            )
+            self._watchdog_thread = None
 
     def is_connected(self) -> bool:
         """LF3: Return current connection state."""
@@ -154,6 +184,18 @@ class LiveFeedManager:
 
     def _on_ticks(self, ws, ticks: list) -> None:
         """LF5: Normalize ticks and push to bounded queue. Drop oldest if full."""
+        # B.6 / Audit 12: stamp last-tick time on every batch so the watchdog
+        # can spot a silent feed. now_ist() returns aware datetime; cheap.
+        if ticks:
+            with self._last_tick_lock:
+                self._last_tick_at = now_ist()
+                if self._watchdog_alert_fired:
+                    # Ticks resumed -> clear so the next stale episode can
+                    # alert again.
+                    self._watchdog_alert_fired = False
+                    self._log.info(
+                        "LiveFeedManager: ticks resumed; watchdog alert cleared"
+                    )
         for raw in ticks:
             # Audit #20: extract top-of-book bid/ask when depth is present
             # (MODE_FULL). shadow_tracker uses these for SL simulation to
@@ -334,3 +376,108 @@ class LiveFeedManager:
                         )
             except queue.Empty:
                 continue
+
+    # ------------------------------------------------------------------ #
+    # B.6 / Audit 12 — tick-age watchdog
+    # ------------------------------------------------------------------ #
+
+    def tick_age_seconds(self) -> Optional[float]:
+        """B.6: seconds since the last tick was observed; None if no tick yet."""
+        with self._last_tick_lock:
+            last = self._last_tick_at
+        if last is None:
+            return None
+        return (now_ist() - last).total_seconds()
+
+    def _start_watchdog(self) -> None:
+        """B.6: launch the watchdog thread (live mode only)."""
+        if self._paper_mode:
+            return
+        if self._watchdog_thread is not None and self._watchdog_thread.is_alive():
+            return
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            daemon=True,
+            name="live-feed-watchdog",
+        )
+        self._watchdog_thread.start()
+        self._log.info(
+            "LiveFeedManager: watchdog started (stale_threshold=%ds, check=%ds)",
+            self._tick_stale_threshold_sec, self._watchdog_check_interval_sec,
+        )
+
+    def _watchdog_loop(self) -> None:
+        """B.6 / Audit 12: detect a half-open feed.
+
+        Sleeps in small increments so stop_event can break us out promptly.
+        Checks tick age every watchdog_check_interval_sec; if a tick has
+        not arrived in tick_stale_threshold_sec AND the market windows
+        (when wired) say we are inside the entry window, fire ONE critical
+        alert and force-close the ticker so kiteconnect's auto-reconnect
+        machinery rebuilds the socket.
+        """
+        # Wait for the first tick before arming. Otherwise startup before
+        # any subscription would immediately trip the watchdog.
+        while not self._stop_event.is_set():
+            with self._last_tick_lock:
+                if self._last_tick_at is not None:
+                    break
+            self._stop_event.wait(timeout=1.0)
+
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=self._watchdog_check_interval_sec)
+            if self._stop_event.is_set():
+                return
+
+            # Skip when paper-mode somehow flipped or we never connected.
+            if self._paper_mode or not self._connected:
+                continue
+
+            # Skip when outside market hours so off-session restarts do
+            # not keep firing alerts.
+            if self._market_windows is not None:
+                try:
+                    if not self._market_windows.is_entry_allowed(now_ist()):
+                        continue
+                except Exception as exc:
+                    self._log.warning(
+                        "LiveFeedManager.watchdog: market_windows.is_entry_allowed "
+                        "raised %s; treating as in-window (fail-open on hours check)",
+                        exc,
+                    )
+
+            age = self.tick_age_seconds()
+            if age is None or age < self._tick_stale_threshold_sec:
+                continue
+
+            if self._watchdog_alert_fired:
+                # Already alerted for this stale episode; wait for ticks to
+                # resume (which clears the flag) before alerting again.
+                continue
+
+            self._watchdog_alert_fired = True
+            self._log.critical(
+                "LiveFeedManager watchdog: no tick for %.1fs (threshold=%ds); "
+                "forcing reconnect", age, self._tick_stale_threshold_sec,
+            )
+            if self._on_critical_failure is not None:
+                try:
+                    self._on_critical_failure(
+                        f"tick-age watchdog: no tick for {age:.0f}s "
+                        f"(threshold={self._tick_stale_threshold_sec}s)"
+                    )
+                except Exception as exc:
+                    self._log.error(
+                        "LiveFeedManager watchdog: on_critical_failure raised: %s",
+                        exc,
+                    )
+            # Force-reconnect: close() triggers _on_close + KiteTicker's
+            # auto-reconnect path which then re-subscribes via _on_connect.
+            ticker = self._ticker
+            if ticker is not None:
+                try:
+                    ticker.close()
+                except Exception as exc:
+                    self._log.error(
+                        "LiveFeedManager watchdog: ticker.close raised: %s", exc,
+                    )

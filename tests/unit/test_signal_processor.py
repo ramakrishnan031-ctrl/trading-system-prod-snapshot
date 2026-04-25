@@ -333,6 +333,7 @@ def _make_proc(
     worker_count=3,
     drain_poll_sec=0.02,
     signal_expiry_sec=60,
+    shadow_tracker=None,
 ):
     if sq is None:
         sq = queue.Queue(maxsize=100)
@@ -379,6 +380,7 @@ def _make_proc(
         worker_count=worker_count,
         drain_poll_sec=drain_poll_sec,
         signal_expiry_sec=signal_expiry_sec,
+        shadow_tracker=shadow_tracker,
     )
     return proc, sq, store
 
@@ -1584,6 +1586,87 @@ def test_continue_from_gate_short_converts_to_sell():
 
 
 # ---------------------------------------------------------------------------
+# B.5 / Audit 5.1 — shadow-tracker re-entry guard
+# ---------------------------------------------------------------------------
+
+class _StubShadowTracker:
+    """Minimal shadow-tracker stub: is_tracking() returns True for symbols
+    in the seeded set; raises if `raise_on` is set."""
+
+    def __init__(self, tracking=None, raise_on=None):
+        self._tracking = set(tracking or ())
+        self._raise_on = raise_on
+
+    def is_tracking(self, symbol: str) -> bool:
+        if self._raise_on and symbol == self._raise_on:
+            raise RuntimeError("simulated shadow_tracker failure")
+        return symbol in self._tracking
+
+
+def test_b5_shadow_inning_active_rejects_signal() -> None:
+    """Audit 5.1: signal for symbol with active shadow inning is rejected."""
+    store, _ = _make_store()
+    sig_id = "sig_b5_act_001"
+    _insert_queued_signal(store, sig_id)
+
+    sh = _StubShadowTracker(tracking={"RELIANCE"})
+    proc, _, _ = _make_proc(store=store, shadow_tracker=sh)
+    _run_one(proc, _now_tup(sig_id, symbol="RELIANCE"), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_SHADOW_INNING_ACTIVE")
+    print("  OK B.5 shadow inning active -> REJECTED_SHADOW_INNING_ACTIVE")
+
+
+def test_b5_no_shadow_inning_proceeds() -> None:
+    """B.5: a symbol NOT in shadow_tracker proceeds normally through pipeline."""
+    store, _ = _make_store()
+    sig_id = "sig_b5_unr_001"
+    _insert_queued_signal(store, sig_id)
+
+    sh = _StubShadowTracker(tracking={"INFY"})  # different symbol
+    proc, _, _ = _make_proc(
+        store=store, shadow_tracker=sh, placer=_MockOrderPlacer(),
+    )
+    _run_one(proc, _now_tup(sig_id, symbol="RELIANCE"), store=store)
+    row = store.fetch_one(
+        "SELECT status FROM signals WHERE signal_id = ?", (sig_id,),
+    )
+    assert row is not None and row["status"] == "PROCESSED", (
+        f"Expected PROCESSED; got {row and row['status']!r}"
+    )
+    print("  OK B.5 unrelated shadow inning -> signal proceeds")
+
+
+def test_b5_no_shadow_tracker_wired_proceeds() -> None:
+    """B.5 fail-open: no shadow_tracker injected -> guard is skipped."""
+    store, _ = _make_store()
+    sig_id = "sig_b5_none_001"
+    _insert_queued_signal(store, sig_id)
+
+    proc, _, _ = _make_proc(
+        store=store, shadow_tracker=None, placer=_MockOrderPlacer(),
+    )
+    _run_one(proc, _now_tup(sig_id, symbol="RELIANCE"), store=store)
+    row = store.fetch_one(
+        "SELECT status FROM signals WHERE signal_id = ?", (sig_id,),
+    )
+    assert row is not None and row["status"] == "PROCESSED"
+    print("  OK B.5 no shadow_tracker wired -> proceeds (fail-open)")
+
+
+def test_b5_is_tracking_raises_fails_closed() -> None:
+    """B.5 fail-closed: is_tracking() raising must REJECT the signal, not pass it."""
+    store, _ = _make_store()
+    sig_id = "sig_b5_err_001"
+    _insert_queued_signal(store, sig_id)
+
+    sh = _StubShadowTracker(raise_on="RELIANCE")
+    proc, _, _ = _make_proc(store=store, shadow_tracker=sh)
+    _run_one(proc, _now_tup(sig_id, symbol="RELIANCE"), store=store)
+    _assert_rejected(store, sig_id, "REJECTED_SHADOW_TRACKER_ERROR")
+    print("  OK B.5 is_tracking exception -> REJECTED_SHADOW_TRACKER_ERROR")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
 
@@ -1643,6 +1726,11 @@ def run_all_tests() -> int:
         test_broker_error_in_sizer_calls_record_failure,
         test_broker_error_in_risk_calls_record_failure,
         test_concurrent_shutdown_cleans_up,
+        # B.5 / Audit 5.1 — shadow-tracker re-entry guard
+        test_b5_shadow_inning_active_rejects_signal,
+        test_b5_no_shadow_inning_proceeds,
+        test_b5_no_shadow_tracker_wired_proceeds,
+        test_b5_is_tracking_raises_fails_closed,
     ]
 
     print("=" * 70)

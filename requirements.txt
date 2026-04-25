@@ -7,5 +7,6 @@ pyyaml==6.0.3          # CL5: yaml.safe_load for all YAML files
 pydantic==2.13.0       # CL3: strict schema validation (extra="forbid")
 kiteconnect==5.1.0     # Audit #11: pin; Kite SDK API compat
 flask==3.1.3           # WR2: webhook HTTP server
+waitress==3.0.2        # B.3 / Audit 6.5: production WSGI server (replaces app.run)
 openpyxl==3.1.5        # DR5: daily_review .xlsx output
 python-dotenv==1.2.2   # runtime .env loading (SU19)

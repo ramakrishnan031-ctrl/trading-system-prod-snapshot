@@ -543,13 +543,45 @@ CREATE INDEX IF NOT EXISTS idx_innings_trade
 CREATE INDEX IF NOT EXISTS idx_innings_date
     ON innings(substr(entry_ts, 1, 10));
 
--- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v10 -> v11
--- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '11');
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 16: gate_state  (Audit 4.4)
+-- One row per signal currently held in the EntryGate. Persisted so that a
+-- mid-session restart can rehydrate the in-memory _watchlist and resume
+-- watching at the same prices/timeouts. Mirrors the FundManager
+-- rehydrate_from_open_trades pattern.
+--
+-- Lifecycle: written on entry_gate.add(); deleted on entry_gate._release().
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS gate_state (
+    signal_id        TEXT PRIMARY KEY,
+    symbol           TEXT NOT NULL,
+    direction        TEXT NOT NULL,         -- LONG | SHORT
+    trigger_price    REAL NOT NULL,
+    entry_price      REAL NOT NULL,
+    sl_price         REAL NOT NULL,
+    tgt_price        REAL NOT NULL,
+    tolerance_pct    REAL NOT NULL,
+    timeout_sec      INTEGER NOT NULL,
+    strategy_name    TEXT NOT NULL,
+    tier             TEXT NOT NULL,
+    scanner_name     TEXT NOT NULL,
+    intent           TEXT NOT NULL,
+    added_at         TEXT NOT NULL,         -- naive IST ISO-8601
+    extras_json      TEXT,                  -- nullable JSON blob
+
+    FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_state_added_at
+    ON gate_state(added_at);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v11 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- SCHEMA VERSION BUMP: v11 -> v12
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '12');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- END OF SCHEMA v12 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -558,5 +590,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '11');
 --                          + entry_type CHECK + session_id/direction/trade_id/
 --                          margin_delta/pnl_delta/costs columns;
 --                    v11: +eod_squareoff_log.status/completed_at (M-3 write-
---                          ahead); +trades.reservation_id (EF-5 capital flow))
+--                          ahead); +trades.reservation_id (EF-5 capital flow);
+--                    v12: +gate_state (Audit 4.4 — entry-gate rehydration))
 -- ─────────────────────────────────────────────────────────────────────────────

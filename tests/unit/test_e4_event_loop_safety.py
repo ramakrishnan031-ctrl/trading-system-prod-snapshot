@@ -649,7 +649,9 @@ def test_schema_v11_has_status_column(tmp_path: Path) -> None:
     # schema_meta version check
     row = store.fetch_one("SELECT value FROM schema_meta WHERE key='schema_version'")
     assert row is not None
-    assert int(row["value"]) == EXPECTED_SCHEMA_VERSION == 11
+    # v12 added gate_state (Audit 4.4); the v11 columns asserted below are
+    # unchanged. Test name kept for grep continuity.
+    assert int(row["value"]) == EXPECTED_SCHEMA_VERSION
 
     # Column existence
     cols = {

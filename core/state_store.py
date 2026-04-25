@@ -71,7 +71,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 11
+EXPECTED_SCHEMA_VERSION = 12
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1325,6 +1325,51 @@ class StateStore:
             """,
             (date_iso,),
         )
+        return [dict(r) for r in rows]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # gate_state helpers (Audit 4.4 — entry-gate rehydration)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def insert_gate_state(self, entry: dict) -> None:
+        """
+        Persist an EntryGate WatchEntry. Idempotent INSERT OR REPLACE so a
+        re-add of the same signal_id (e.g., after a crash mid-add) does not
+        raise. The caller is expected to pass the WatchEntry as a dict.
+        """
+        keys = (
+            "signal_id", "symbol", "direction", "trigger_price",
+            "entry_price", "sl_price", "tgt_price",
+            "tolerance_pct", "timeout_sec",
+            "strategy_name", "tier", "scanner_name", "intent",
+            "added_at", "extras_json",
+        )
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO gate_state
+                  (signal_id, symbol, direction, trigger_price,
+                   entry_price, sl_price, tgt_price,
+                   tolerance_pct, timeout_sec,
+                   strategy_name, tier, scanner_name, intent,
+                   added_at, extras_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                tuple(entry.get(k) for k in keys),
+            )
+
+    def delete_gate_state(self, signal_id: str) -> None:
+        """Remove a gate_state row. Idempotent: missing row is a no-op."""
+        with self.transaction() as cur:
+            cur.execute(
+                "DELETE FROM gate_state WHERE signal_id = ?", (signal_id,),
+            )
+
+    def get_all_gate_state(self) -> list[dict]:
+        """Return every persisted gate_state row as a list of dicts."""
+        with self.transaction() as cur:
+            cur.execute("SELECT * FROM gate_state ORDER BY added_at ASC")
+            rows = cur.fetchall()
         return [dict(r) for r in rows]
 
     def __repr__(self) -> str:

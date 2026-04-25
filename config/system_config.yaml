@@ -91,6 +91,9 @@ eod_squareoff:                # EOD12 — EOD square-off settings
   inter_order_delay_ms: 500   # ms delay between successive MARKET exit orders (>= 0, <= 5000)
   poll_interval_sec: 5        # scheduler poll cadence; passed to start_polling() (>= 1)
   auto_resume_kill_switch: true  # if true, resume SOFT_KILL after EOD fire completes
+  exit_protocol: "LIMIT_THEN_MARKET"  # Audit 3.3 — aggressive LIMIT, MARKET fallback
+  limit_aggressive_pct: 0.01  # LTP ± 1% for the initial exit limit
+  limit_grace_sec: 120        # seconds to wait before promoting unfilled LIMITs to MARKET
 
 alerts:                       # TG12/AW11 — alert subsystem settings
   failed_alerts_log_path: "logs/failed_alerts.log"

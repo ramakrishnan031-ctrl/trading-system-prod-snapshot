@@ -197,6 +197,24 @@ class ShadowTracker:
         """Wire InstrumentCache for token->symbol lookup in on_tick (SH5)."""
         self._instrument_cache = cache
 
+    def is_tracking(self, symbol: str) -> bool:
+        """
+        B.5 / Audit 5.1: True if a simulated inning (>=2) is currently active
+        for `symbol`. Used by signal_processor to skip new entries on a
+        symbol whose previous inning is still simulating, preventing
+        overlapping real + shadow positions on the same instrument.
+
+        Cheap O(N) over active innings (N is bounded by max open trades,
+        typically <= 30). No I/O, no broker calls.
+        """
+        if not self._enabled:
+            return False
+        with self._lock:
+            for ing in self._active_innings.values():
+                if ing.symbol == symbol:
+                    return True
+        return False
+
     def on_tick(self, tick: dict) -> None:
         """
         Process one live tick. Called on live_feed consumer thread (SH5).

@@ -50,6 +50,7 @@ from __future__ import annotations
 import math
 import threading
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -91,6 +92,7 @@ class SmartTgtManager:
         quote_fn: Optional[Callable] = None,
         enabled: bool = True,
         on_critical_failure: Optional[Callable[[str, str], None]] = None,
+        async_modify: bool = False,
     ) -> None:
         self._adapter = adapter
         self._state_store = state_store
@@ -108,6 +110,24 @@ class SmartTgtManager:
         # trailed SL to a valid tick before modify_order so the broker does
         # not reject every update with "invalid trigger_price".
         self._instrument_cache = None
+
+        # B.4 / Audit 5.4: optional async path for adapter.modify_order so the
+        # candle-close consumer thread is not blocked by N * ~100ms HTTP
+        # serial calls. Opt-in via async_modify=True so legacy callers and
+        # the existing test suite keep their synchronous semantics; main.py
+        # wires async_modify=True in production.
+        #
+        # Newest-wins coalesce: _pending_modify[trade_id] always stores the
+        # most-recent target SL; older worker tasks pop nothing and exit.
+        self._async_modify = bool(async_modify)
+        self._modify_executor: Optional[ThreadPoolExecutor] = None
+        self._pending_modify: Dict[str, float] = {}
+        self._pending_lock = threading.Lock()
+        self._inflight_futures: List[Any] = []
+        if self._async_modify:
+            self._modify_executor = ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="smart-tgt-modify",
+            )
 
         # ST2: register callback at construction (if enabled)
         if enabled:
@@ -170,10 +190,22 @@ class SmartTgtManager:
         """
         ST11: Unregister candle callback; clear _tracked in memory.
         Does NOT touch smart_tgt_state DB (preserved for restart).
+
+        B.4 / Audit 5.4: drain + shut down the modify executor (if async
+        path is enabled). wait=True with a short timeout so any in-flight
+        broker modify completes and the broker / DB stay consistent.
         """
         self._candle_store.unregister_on_candle_close(self._on_candle_close)
+        if self._modify_executor is not None:
+            self._flush_inflight(timeout_sec=5.0)
+            try:
+                self._modify_executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
         with self._lock:
             self._tracked.clear()
+        with self._pending_lock:
+            self._pending_modify.clear()
         self._log.info("SmartTgtManager stopped")
 
     def disable(self) -> None:
@@ -348,7 +380,81 @@ class SmartTgtManager:
             target_sl = self._compute_target_sl(info)
 
         if target_sl is not None:
+            # B.4 / Audit 5.4: hand off to executor when async_modify is on,
+            # otherwise call synchronously (legacy path used by tests).
+            if self._async_modify and self._modify_executor is not None:
+                self._submit_modify(trade_id, target_sl)
+            else:
+                self._modify_co_sl(trade_id, target_sl)
+
+    def _submit_modify(self, trade_id: str, target_sl: float) -> None:
+        """
+        B.4 / Audit 5.4: newest-wins coalesce of modify_order requests.
+
+        Why: candle_store fires _on_candle_close serially across all
+        tracked trades. With N trades all needing a trail on the same
+        candle close, the legacy synchronous path stacks N * ~100ms HTTP
+        calls on the consumer thread, causing later candle closes to back
+        up. The executor parallelises 2-wide and the pending dict ensures
+        only the latest target SL ever hits the broker per trade.
+
+        Coalesce semantics:
+          - _pending_modify[trade_id] is set/overwritten with the newest target.
+          - A worker task is submitted on every call. When the task runs it
+            atomically pops the current pending value. Older tasks for the
+            same trade thus pop nothing (None) and exit cheaply.
+          - Net result: O(N) workers spawned, but at most one broker call
+            per trade per drain cycle, always for the most recent target.
+        """
+        with self._pending_lock:
+            self._pending_modify[trade_id] = target_sl
+        try:
+            fut = self._modify_executor.submit(self._drain_modify, trade_id)
+            self._inflight_futures.append(fut)
+            # Trim completed futures so the list does not grow without bound.
+            self._inflight_futures = [
+                f for f in self._inflight_futures if not f.done()
+            ]
+        except RuntimeError:
+            # Executor already shut down (stop() was called). Drop the
+            # request silently; the modify will replay on next candle
+            # close after restart, or be picked up by reconciler.
+            with self._pending_lock:
+                self._pending_modify.pop(trade_id, None)
+
+    def _drain_modify(self, trade_id: str) -> None:
+        """
+        B.4 worker: pop the latest pending target and run _modify_co_sl.
+        Earlier workers for the same trade_id no-op once the dict is empty.
+        """
+        with self._pending_lock:
+            target_sl = self._pending_modify.pop(trade_id, None)
+        if target_sl is None:
+            return
+        try:
             self._modify_co_sl(trade_id, target_sl)
+        except Exception as exc:
+            # _modify_co_sl handles its own errors; this is the absolute
+            # last-line guard so a worker exception never propagates into
+            # the executor and kills the thread.
+            self._log.error(
+                f"SmartTgtManager._drain_modify: unhandled error for "
+                f"{trade_id}: {exc}\n{traceback.format_exc()}"
+            )
+
+    def _flush_inflight(self, timeout_sec: float = 5.0) -> None:
+        """
+        B.4 / Audit 5.4: wait for any in-flight async modify workers to
+        finish. Used by stop() to drain before shutdown and by tests to
+        synchronise on the executor.
+        """
+        from concurrent.futures import wait as _futures_wait
+        futures = list(self._inflight_futures)
+        if futures:
+            _futures_wait(futures, timeout=timeout_sec)
+        self._inflight_futures = [
+            f for f in self._inflight_futures if not f.done()
+        ]
 
     def _compute_target_sl(self, info: dict) -> Optional[float]:
         """

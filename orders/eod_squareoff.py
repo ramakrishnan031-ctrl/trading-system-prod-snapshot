@@ -115,6 +115,10 @@ class EodSquareoff:
         notifier: Optional[object] = None,  # TelegramNotifier; for EOD9 SKIPPED_LATE alert
         market_close: str = "15:30",        # IST HH:MM; hard stop for recovery fire
         mode: str = "LIVE",                 # session mode label for alert titles
+        # Audit 3.3 + 5.2 (Phase B / B.1): EOD exit protocol
+        exit_protocol: str = "MARKET",
+        limit_aggressive_pct: float = 0.01,
+        limit_grace_sec: float = 120.0,
     ) -> None:
         self._adapter = adapter
         self._store = state_store
@@ -130,6 +134,10 @@ class EodSquareoff:
         self._notifier = notifier
         self._market_close_time = datetime.strptime(market_close, "%H:%M").time()
         self._mode = mode
+        # Audit 3.3 + 5.2: EOD exit protocol
+        self._exit_protocol = exit_protocol
+        self._limit_aggressive_pct = limit_aggressive_pct
+        self._limit_grace_sec = limit_grace_sec
 
         # EOD3: per-date "already fired" flag
         self._fired_for_date: dict[date, bool] = {}
@@ -710,54 +718,99 @@ class EodSquareoff:
         recovery_fire: bool = False,
     ) -> tuple[int, int, int]:
         """
-        Place MARKET exit orders for all open intraday positions.
+        Place exit orders for all open intraday positions.
         Returns (attempted, succeeded, failed).
 
         For each position (sorted by symbol per Foundation 3.7):
-          - Place MARKET order in opposite direction
-          - Register new exit order with state_machine
+          - CO bracket: cancel_order(variety="co") (Audit 3.1).
+          - MIS / LIMIT_TRIPLE:
+              * exit_protocol == "MARKET" (legacy): place MARKET exit.
+              * exit_protocol == "LIMIT_THEN_MARKET" (Audit 3.3, default):
+                  Phase 1: aggressive LIMIT (LTP +/- limit_aggressive_pct).
+                  Phase 2 (after limit_grace_sec): query broker for
+                  still-open positions; cancel residual LIMIT and place
+                  MARKET for the remaining qty. This caps the 15:17
+                  liquidity-vacuum slippage at the configured pct while
+                  the auto-square at 15:20 is still avoided.
+          - Register exit order with state_machine
           - Hand off to order_monitor (if injected)
           - Delay inter_order_delay_sec between orders (audit EOD5)
           - On failure: log CRITICAL, mark EOD_EXIT_FAILED in DB (EOD5 step 4d)
 
-        Audit #14: recovery_fire=True cross-checks broker truth via
-        adapter.get_positions() first. Only trades whose symbol still
-        appears open at the broker get a MARKET exit. This is the fix for
-        the RMS-already-squared race: if the broker's RMS auto-squared us
-        while we were down, our DB still says OPEN but the position does
-        not exist -- a MARKET SELL here would open a naked short overnight.
+        Audit 5.2 (broker-authoritative qty): regardless of recovery_fire,
+        we fetch adapter.get_positions() upfront and override row qty with
+        the broker's truth. The DB row may be stale because a partial fill
+        (PARTIAL fills get committed via Audit #7) hasn't been ingested
+        yet. The broker is authoritative; on broker-fetch failure we fall
+        back to the DB qty (better to over-square than to ride overnight).
+
+        Audit #14: recovery_fire=True trims rows to what the broker still
+        reports as open. (RMS auto-square race; see prior comment.)
         """
         rows = self._store.get_open_intraday_positions()
 
+        # Audit 5.2: fetch broker positions ONCE upfront. Used for
+        # (a) authoritative qty (always) and (b) recovery-mode filter.
+        # On failure: skip both filter and qty override (legacy behaviour).
+        # broker_qty=None signals "fetch failed -> trust DB"; {} signals
+        # "fetch ok, no positions -> all DB rows are stale-closed".
+        broker_qty: Optional[dict[str, int]] = None
+        try:
+            broker_positions = self._adapter.get_positions()
+            broker_qty = {
+                p.symbol: abs(int(p.qty))
+                for p in broker_positions
+                if int(p.qty) != 0
+            }
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.critical(
+                "EOD: get_positions failed; falling back to DB view for "
+                "qty + recovery filter; error=%s",
+                exc,
+            )
+
         # Audit #14: in recovery mode, trim rows to what the broker still
-        # reports as open. Fallback to the DB view on any broker fetch
-        # failure (prefer over-squaring an already-closed position to
-        # letting a live position ride overnight -- same policy as the
-        # original EOD5).
-        if recovery_fire:
-            try:
-                broker_positions = self._adapter.get_positions()
-                open_symbols = {
-                    p.symbol for p in broker_positions if int(p.qty) != 0
-                }
-                before = len(rows)
-                rows = [r for r in rows if r["symbol"] in open_symbols]
-                self._log.info(
-                    "EOD recovery: broker-position filter kept %d/%d trades "
-                    "(broker open symbols=%d)",
-                    len(rows), before, len(open_symbols),
-                )
-            except Exception as exc:  # noqa: BLE001
-                log_exception(self._log, exc)
-                self._log.critical(
-                    "EOD recovery: get_positions failed; falling back to DB "
-                    "view for exits; error=%s",
-                    exc,
-                )
+        # reports as open. Skip filter only when fetch failed (broker_qty
+        # is None); fetch-ok-with-no-open-symbols correctly trims to [].
+        if recovery_fire and broker_qty is not None:
+            before = len(rows)
+            rows = [r for r in rows if r["symbol"] in broker_qty]
+            self._log.info(
+                "EOD recovery: broker-position filter kept %d/%d trades "
+                "(broker open symbols=%d)",
+                len(rows), before, len(broker_qty),
+            )
 
         attempted = len(rows)
         succeeded = 0
         failed = 0
+        # Audit 3.3: track placed LIMITs so the post-grace MARKET sweep can
+        # cancel them and re-fire as MARKET. {trade_id: (broker_order_id,
+        # symbol, exit_side, requested_qty)}.
+        pending_limits: dict[str, tuple[str, str, str, int]] = {}
+
+        # Audit 3.3: batch-fetch LTPs for the LIMIT branch. One call covers
+        # all MIS/LIMIT_TRIPLE symbols. CO symbols are present too -- harmless
+        # extra symbols, the dict lookup just goes unused. On failure (whole
+        # call raises or returns partial) we fall back per-symbol to MARKET.
+        ltp_map: dict[str, float] = {}
+        if self._exit_protocol == "LIMIT_THEN_MARKET" and rows:
+            ltp_symbols = sorted({r["symbol"] for r in rows})
+            try:
+                quotes = self._adapter.get_quote(ltp_symbols)
+                ltp_map = {
+                    sym: float(q.last_price)
+                    for sym, q in (quotes or {}).items()
+                    if float(getattr(q, "last_price", 0.0)) > 0
+                }
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "EOD: get_quote failed; falling back to MARKET for all "
+                    "exits this fire; error=%s",
+                    exc,
+                )
 
         for i, row in enumerate(rows):
             trade_id = row["trade_id"]
@@ -851,18 +904,66 @@ class EodSquareoff:
                     # Fall through to inter-order delay.
 
                 else:
-                    # MIS / LIMIT_TRIPLE: reverse MARKET as before.
+                    # MIS / LIMIT_TRIPLE branch.
+                    #
+                    # Audit 5.2: prefer broker truth for qty. The DB row may
+                    # reflect a stale qty if a partial fill hasn't been
+                    # ingested yet; broker positions are authoritative.
+                    # broker_qty is None only on fetch-failure; in that case
+                    # we fall back to the DB qty.
+                    if broker_qty is None:
+                        use_qty = qty
+                    else:
+                        use_qty = broker_qty.get(symbol, 0)
+                    if use_qty <= 0:
+                        # Broker shows position already closed -- nothing to
+                        # exit. Skip without marking failed.
+                        self._log.info(
+                            "EOD exit skip: trade_id=%s symbol=%s broker shows "
+                            "qty=0 (already closed)",
+                            trade_id, symbol,
+                        )
+                        # Don't increment succeeded/failed; just skip.
+                        if i < len(rows) - 1 and self._inter_order_delay_sec > 0:
+                            time.sleep(self._inter_order_delay_sec)
+                        continue
+
+                    # Audit 3.3: select order_type/price by protocol.
+                    if self._exit_protocol == "LIMIT_THEN_MARKET":
+                        ltp = ltp_map.get(symbol, 0.0)
+                        if ltp > 0:
+                            if exit_side == "SELL":
+                                limit_px = round(
+                                    ltp * (1.0 - self._limit_aggressive_pct), 2
+                                )
+                            else:  # BUY
+                                limit_px = round(
+                                    ltp * (1.0 + self._limit_aggressive_pct), 2
+                                )
+                            order_type = "LIMIT"
+                            price = limit_px
+                        else:
+                            # No LTP -> fall back to MARKET for this symbol
+                            self._log.warning(
+                                "EOD: no LTP for %s, falling back to MARKET",
+                                symbol,
+                            )
+                            order_type = "MARKET"
+                            price = 0.0
+                    else:
+                        order_type = "MARKET"
+                        price = 0.0
+
                     placed = self._adapter.place_order(
                         symbol=symbol,
                         side=exit_side,
-                        qty=qty,
-                        price=0.0,          # MARKET order
-                        order_type="MARKET",
+                        qty=use_qty,
+                        price=price,
+                        order_type=order_type,
                         intent="INTRADAY",
                         tag="EOD_SQUAREOFF",
                     )
 
-                    # Register exit order with state_machine (EOD5 step 4c)
                     internal_oid = placed.internal_order_id
 
                     # Hand off to order_monitor for fill tracking (EOD7)
@@ -872,12 +973,19 @@ class EodSquareoff:
                             broker_order_id=placed.broker_order_id,
                             symbol=symbol,
                             side=exit_side,
-                            qty=qty,
+                            qty=use_qty,
                             expected_price=placed.price,
                             placed_at=placed.ts,
                         )
 
+                    # Audit 3.3: track LIMITs for the post-grace promotion sweep.
+                    if order_type == "LIMIT":
+                        pending_limits[trade_id] = (
+                            placed.broker_order_id, symbol, exit_side, use_qty,
+                        )
+
                     # Record EOD exit order in orders table
+                    db_price = price if order_type == "LIMIT" else None
                     with self._store.transaction() as cur:
                         cur.execute(
                             """
@@ -887,12 +995,12 @@ class EodSquareoff:
                                qty_requested, price, trigger_price,
                                status, qty_filled, avg_fill_price,
                                placed_at, updated_at)
-                            VALUES (?, ?, 'EOD', 0, ?, 'MARKET', 'MIS', 'regular',
-                                    ?, NULL, NULL, 'OPEN', 0, NULL, ?, ?)
+                            VALUES (?, ?, 'EOD', 0, ?, ?, 'MIS', 'regular',
+                                    ?, ?, NULL, 'OPEN', 0, NULL, ?, ?)
                             """,
                             (
                                 placed.broker_order_id, trade_id,
-                                exit_side, qty,
+                                exit_side, order_type, use_qty, db_price,
                                 placed.ts.isoformat(), placed.ts.isoformat(),
                             ),
                         )
@@ -900,8 +1008,9 @@ class EodSquareoff:
                     succeeded += 1
                     self._log.info(
                         "EOD exit OK: trade_id=%s symbol=%s side=%s qty=%d "
-                        "broker_order_id=%s",
-                        trade_id, symbol, exit_side, qty, placed.broker_order_id,
+                        "type=%s price=%s broker_order_id=%s",
+                        trade_id, symbol, exit_side, use_qty,
+                        order_type, price, placed.broker_order_id,
                     )
 
             except BrokerError as exc:
@@ -926,7 +1035,165 @@ class EodSquareoff:
             if i < len(rows) - 1 and self._inter_order_delay_sec > 0:
                 time.sleep(self._inter_order_delay_sec)
 
+        # Audit 3.3 phase-2: promote unfilled LIMITs to MARKET after grace.
+        # Single sleep (not per-symbol) so the grace window is bounded by
+        # limit_grace_sec rather than N * grace. Skip if no LIMITs were
+        # placed (e.g., legacy MARKET protocol or get_quote failed).
+        if pending_limits:
+            self._log.info(
+                "EOD phase-2: %d LIMIT order(s) pending; sleeping %.1fs grace "
+                "before MARKET promotion sweep",
+                len(pending_limits), self._limit_grace_sec,
+            )
+            if self._limit_grace_sec > 0:
+                time.sleep(self._limit_grace_sec)
+
+            promoted, promote_failed = self._promote_limits_to_market(
+                pending_limits
+            )
+            if promote_failed:
+                # Each promote-failure means the LIMIT was cancelled but the
+                # MARKET fallback could not be placed. Move those trades from
+                # succeeded -> failed for the summary.
+                succeeded -= promote_failed
+                failed += promote_failed
+            self._log.info(
+                "EOD phase-2 sweep done: promoted=%d failed=%d",
+                promoted, promote_failed,
+            )
+
         return attempted, succeeded, failed
+
+    def _promote_limits_to_market(
+        self,
+        pending_limits: dict[str, tuple[str, str, str, int]],
+    ) -> tuple[int, int]:
+        """
+        Audit 3.3 phase-2: for each trade_id whose phase-1 LIMIT is still
+        open at the broker, cancel the LIMIT and place a MARKET for the
+        remaining qty.
+
+        Returns (promoted_count, failed_count).
+          - promoted_count: trades where MARKET fallback was placed OK.
+          - failed_count: trades where MARKET fallback could not be placed
+            (LIMIT cancel issued; trade marked EOD_EXIT_FAILED).
+
+        Trades whose LIMIT fully filled during the grace window are skipped
+        (broker shows qty=0); they do not count as promoted or failed.
+        """
+        # Re-fetch broker positions to discover what is still open.
+        try:
+            broker_positions = self._adapter.get_positions()
+            current_qty = {
+                p.symbol: abs(int(p.qty))
+                for p in broker_positions
+                if int(p.qty) != 0
+            }
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.critical(
+                "EOD phase-2: get_positions failed; cannot promote unfilled "
+                "LIMITs; error=%s",
+                exc,
+            )
+            # Cannot tell which are still open; leave LIMITs in place. The
+            # 15:20 RMS auto-square will close them (with the ~50 INR penalty)
+            # but capital safety is preserved. Don't reclassify counts.
+            return 0, 0
+
+        promoted = 0
+        promote_failed = 0
+        items = list(pending_limits.items())
+        for j, (trade_id, (broker_oid, symbol, exit_side, requested_qty)) in enumerate(items):
+            remaining = current_qty.get(symbol, 0)
+            if remaining <= 0:
+                # LIMIT fully filled during grace window. Nothing to do.
+                self._log.info(
+                    "EOD phase-2: trade_id=%s symbol=%s LIMIT filled in "
+                    "grace window (broker qty=0)",
+                    trade_id, symbol,
+                )
+                continue
+
+            # Cancel the residual LIMIT, then place MARKET for what's left.
+            try:
+                cancel_res = self._adapter.cancel_order(broker_oid)
+                if not getattr(cancel_res, "success", False):
+                    reason = getattr(cancel_res, "reason", "") or "rejected"
+                    self._log.warning(
+                        "EOD phase-2: cancel residual LIMIT rejected "
+                        "trade_id=%s broker_oid=%s reason=%s -- proceeding "
+                        "with MARKET anyway",
+                        trade_id, broker_oid, reason,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.warning(
+                    "EOD phase-2: cancel raised trade_id=%s broker_oid=%s "
+                    "error=%s -- proceeding with MARKET anyway",
+                    trade_id, broker_oid, exc,
+                )
+
+            try:
+                placed = self._adapter.place_order(
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=remaining,
+                    price=0.0,
+                    order_type="MARKET",
+                    intent="INTRADAY",
+                    tag="EOD_SQUAREOFF",
+                )
+                if self._order_monitor is not None:
+                    self._order_monitor.track(
+                        internal_order_id=placed.internal_order_id,
+                        broker_order_id=placed.broker_order_id,
+                        symbol=symbol,
+                        side=exit_side,
+                        qty=remaining,
+                        expected_price=placed.price,
+                        placed_at=placed.ts,
+                    )
+                with self._store.transaction() as cur:
+                    cur.execute(
+                        """
+                        INSERT OR IGNORE INTO orders
+                          (order_id, trade_id, leg, leg_index,
+                           transaction_type, order_type, product, variety,
+                           qty_requested, price, trigger_price,
+                           status, qty_filled, avg_fill_price,
+                           placed_at, updated_at)
+                        VALUES (?, ?, 'EOD', 1, ?, 'MARKET', 'MIS', 'regular',
+                                ?, NULL, NULL, 'OPEN', 0, NULL, ?, ?)
+                        """,
+                        (
+                            placed.broker_order_id, trade_id,
+                            exit_side, remaining,
+                            placed.ts.isoformat(), placed.ts.isoformat(),
+                        ),
+                    )
+                promoted += 1
+                self._log.info(
+                    "EOD phase-2: promoted to MARKET trade_id=%s symbol=%s "
+                    "side=%s qty=%d broker_oid=%s",
+                    trade_id, symbol, exit_side, remaining, placed.broker_order_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "EOD phase-2: MARKET fallback FAILED trade_id=%s "
+                    "symbol=%s qty=%d -- position will be RMS-auto-squared "
+                    "at 15:20; error=%s",
+                    trade_id, symbol, remaining, exc,
+                )
+                self._mark_exit_failed(trade_id)
+                promote_failed += 1
+
+            # Inter-order delay between MARKET promotions.
+            if j < len(items) - 1 and self._inter_order_delay_sec > 0:
+                time.sleep(self._inter_order_delay_sec)
+
+        return promoted, promote_failed
 
     def _mark_exit_failed(self, trade_id: str) -> None:
         """Update exit_reason to EOD_EXIT_FAILED for a trade that could not be exited."""

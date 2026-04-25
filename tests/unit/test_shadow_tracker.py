@@ -1318,6 +1318,51 @@ def test_bl13_log_row_query_failure_degrades_gracefully(tmp_path: Path) -> None:
     real_store.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# B.5 / Audit 5.1 — is_tracking() public API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_b5_is_tracking_true_when_simulated_inning_active(tmp_path: Path) -> None:
+    """B.5: is_tracking(symbol) returns True after a TGT cascade kicks off
+    inning 2 on that symbol."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    strategies = {"strategy1": _MockStrategy(direction="LONG")}
+    tracker = _make_tracker(store, bus, strategies=strategies)
+
+    assert tracker.is_tracking("RELIANCE") is False, "no innings yet"
+
+    _seed_signal(store, "sig_b5_tr")
+    _seed_trade(store, "t_b5_tr", "sig_b5_tr", exit_reason="TGT_HIT", exit_price=2600.0)
+    bus.publish(PositionClosed(
+        source_module="test", trade_id="t_b5_tr", symbol="RELIANCE",
+        signal_id="sig_b5_tr", exit_price=2600.0, realized_pnl=0.0,
+    ))
+
+    assert tracker.is_tracking("RELIANCE") is True, (
+        "after cascade, is_tracking should report active simulated inning"
+    )
+    assert tracker.is_tracking("INFY") is False, (
+        "is_tracking must be symbol-scoped"
+    )
+    print("  OK B.5 is_tracking True for active simulated symbol")
+    store.close()
+
+
+def test_b5_is_tracking_false_when_disabled(tmp_path: Path) -> None:
+    """B.5: is_tracking() short-circuits to False when tracker is disabled."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    strategies = {"strategy1": _MockStrategy(direction="LONG")}
+    tracker = _make_tracker(store, bus, strategies=strategies, enabled=False)
+    # Even if we manually shove an inning in (simulating leftover state),
+    # is_tracking returns False because the module is disabled.
+    tracker._active_innings["fake"] = type("_I", (), {"symbol": "RELIANCE"})()
+    assert tracker.is_tracking("RELIANCE") is False
+    print("  OK B.5 is_tracking False when disabled")
+    store.close()
+
+
 def test_bl13_idempotency_guard_works_without_startup_restore(tmp_path: Path) -> None:
     """In-process double-publish (no restart): guard still trips on second call."""
     store = StateStore(tmp_path / "test.db")
@@ -1400,6 +1445,9 @@ if __name__ == "__main__":
         test_bl13_guard_uses_ist_date,
         test_bl13_log_row_query_failure_degrades_gracefully,
         test_bl13_idempotency_guard_works_without_startup_restore,
+        # B.5 / Audit 5.1 — is_tracking() public API
+        test_b5_is_tracking_true_when_simulated_inning_active,
+        test_b5_is_tracking_false_when_disabled,
     ]
 
     passed = failed = 0

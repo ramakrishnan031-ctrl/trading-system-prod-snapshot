@@ -984,6 +984,153 @@ def test_poll_loop_releases_timeout():
 
 
 # ---------------------------------------------------------------------------
+# Audit 4.4 (B.2) — gate_state rehydrate
+# ---------------------------------------------------------------------------
+
+def _make_real_store() -> "StateStore":
+    """Build a real StateStore on a temp DB for rehydrate tests."""
+    import tempfile
+    from core.state_store import StateStore
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    return StateStore(db_path=Path(tmp.name))
+
+
+def _seed_signal_row(store, signal_id: str, symbol: str = "RELIANCE") -> None:
+    """gate_state.signal_id is a FK on signals(signal_id); seed a parent row."""
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO signals
+              (signal_id, symbol, scanner, strategy, triggered_at, received_at,
+               expires_at, status, fingerprint, fingerprint_date)
+            VALUES (?, ?, 'test_scanner', 'test_strategy',
+                    '2026-04-25T09:30:00', '2026-04-25T09:30:00',
+                    '2026-04-25T15:30:00', 'NEW',
+                    ?, '2026-04-25')
+            """,
+            (signal_id, symbol, f"fp_{signal_id}"),
+        )
+
+
+def test_b2_add_persists_gate_state_row() -> None:
+    """Audit 4.4: gate.add() writes a gate_state row with all WatchEntry fields."""
+    store = _make_real_store()
+    _seed_signal_row(store, "sig_b2_add")
+    gate, _, _ = _make_gate(store=store)
+    entry = _make_entry(signal_id="sig_b2_add", symbol="RELIANCE")
+    gate.add(entry)
+
+    rows = store.get_all_gate_state()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["signal_id"] == "sig_b2_add"
+    assert r["symbol"] == "RELIANCE"
+    assert r["direction"] == entry.direction
+    assert float(r["entry_price"]) == entry.entry_price
+    assert float(r["sl_price"]) == entry.sl_price
+    assert float(r["tgt_price"]) == entry.tgt_price
+
+
+def test_b2_release_deletes_gate_state_row() -> None:
+    """Audit 4.4: gate._release() deletes the gate_state row."""
+    store = _make_real_store()
+    _seed_signal_row(store, "sig_b2_rel")
+    gate, _, _ = _make_gate(store=store)
+    entry = _make_entry(signal_id="sig_b2_rel")
+    gate.add(entry)
+    assert len(store.get_all_gate_state()) == 1
+
+    gate._release(entry, "PRICE_HIT")
+    assert len(store.get_all_gate_state()) == 0
+
+
+def test_b2_rehydrate_restores_watchlist() -> None:
+    """Audit 4.4: rehydrate_from_gate_state() reconstructs WatchEntry from DB."""
+    store = _make_real_store()
+    _seed_signal_row(store, "sig_b2_re_001", "RELIANCE")
+    _seed_signal_row(store, "sig_b2_re_002", "INFY")
+
+    # First gate: add 2 entries (writes to gate_state).
+    gate1, _, _ = _make_gate(store=store)
+    e1 = _make_entry(signal_id="sig_b2_re_001", symbol="RELIANCE")
+    e2 = _make_entry(signal_id="sig_b2_re_002", symbol="INFY",
+                     direction="SHORT")
+    gate1.add(e1)
+    gate1.add(e2)
+
+    # New gate (simulates restart): rehydrate.
+    gate2, _, _ = _make_gate(store=store)
+    assert gate2.size() == 0
+    restored = gate2.rehydrate_from_gate_state()
+    assert restored == 2
+    assert gate2.size() == 2
+
+    wl = {e.signal_id: e for e in gate2.watchlist()}
+    assert "sig_b2_re_001" in wl
+    assert "sig_b2_re_002" in wl
+    assert wl["sig_b2_re_001"].symbol == "RELIANCE"
+    assert wl["sig_b2_re_002"].direction == "SHORT"
+    # Naive IST round-trip preserved
+    assert wl["sig_b2_re_001"].added_at.tzinfo is None
+
+
+def test_b2_rehydrate_idempotent() -> None:
+    """Audit 4.4: rehydrating twice does not duplicate entries."""
+    store = _make_real_store()
+    _seed_signal_row(store, "sig_b2_idem")
+    gate1, _, _ = _make_gate(store=store)
+    gate1.add(_make_entry(signal_id="sig_b2_idem"))
+
+    gate2, _, _ = _make_gate(store=store)
+    n1 = gate2.rehydrate_from_gate_state()
+    n2 = gate2.rehydrate_from_gate_state()
+    assert n1 == 1
+    assert n2 == 0   # second call is idempotent
+    assert gate2.size() == 1
+
+
+def test_b2_rehydrate_called_by_start() -> None:
+    """Audit 4.4: start() calls rehydrate before launching poll loop."""
+    store = _make_real_store()
+    _seed_signal_row(store, "sig_b2_start")
+    gate1, _, _ = _make_gate(store=store)
+    gate1.add(_make_entry(signal_id="sig_b2_start"))
+
+    gate2, _, _ = _make_gate(store=store)
+    gate2.start()
+    try:
+        assert gate2.size() == 1
+    finally:
+        gate2.stop()
+
+
+def test_b2_rehydrate_skips_malformed_row() -> None:
+    """Audit 4.4: a malformed row is logged and skipped, others survive."""
+    store = _make_real_store()
+    _seed_signal_row(store, "sig_b2_good")
+    _seed_signal_row(store, "sig_b2_bad")
+
+    gate1, _, _ = _make_gate(store=store)
+    gate1.add(_make_entry(signal_id="sig_b2_good"))
+    gate1.add(_make_entry(signal_id="sig_b2_bad"))
+
+    # Corrupt one row's added_at.
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE gate_state SET added_at = 'not-a-date' WHERE signal_id = ?",
+            ("sig_b2_bad",),
+        )
+
+    gate2, _, _ = _make_gate(store=store)
+    restored = gate2.rehydrate_from_gate_state()
+    assert restored == 1   # only the good row
+    wl = gate2.watchlist()
+    assert len(wl) == 1
+    assert wl[0].signal_id == "sig_b2_good"
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
 
@@ -1035,6 +1182,13 @@ def run_all_tests() -> int:
         test_100_entries_all_polled,
         test_poll_loop_releases_price_hit,
         test_poll_loop_releases_timeout,
+        # Audit 4.4 (B.2) — gate_state rehydrate
+        test_b2_add_persists_gate_state_row,
+        test_b2_release_deletes_gate_state_row,
+        test_b2_rehydrate_restores_watchlist,
+        test_b2_rehydrate_idempotent,
+        test_b2_rehydrate_called_by_start,
+        test_b2_rehydrate_skips_malformed_row,
     ]
 
     print("=" * 70)

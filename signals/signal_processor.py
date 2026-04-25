@@ -127,6 +127,7 @@ class SignalProcessor:
         tgt_min_pct: float = 0.003,        # BL-16: guard against degenerate target == entry
         notifier=None,                      # TelegramNotifier; optional
         mode: str = "LIVE",                 # session mode label for alert title
+        shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -151,6 +152,7 @@ class SignalProcessor:
         self._tgt_min_pct: float = float(tgt_min_pct)     # BL-16
         self._notifier = notifier                          # Telegram alerts (optional)
         self._mode = mode                                  # session mode label
+        self._shadow_tracker = shadow_tracker              # B.5 / Audit 5.1
 
         # Lifecycle
         self._running = False
@@ -370,6 +372,35 @@ class SignalProcessor:
                     "EXPIRED",
                     f"Signal age {age_sec:.1f}s > expiry {self._signal_expiry_sec}s",
                 )
+
+            # B.5 / Audit 5.1: shadow-tracker re-entry guard.
+            # symbol_lock blocks re-entry while a real trade is OPEN, but
+            # shadow tracking is a second inning on a CLOSED trade -- the
+            # symbol_lock has already been released. Without this gate, a
+            # new real signal on the same symbol would create overlapping
+            # real + simulated positions. is_tracking() is in-memory and
+            # cheap (no I/O); fail-open if shadow_tracker is not wired.
+            if self._shadow_tracker is not None:
+                try:
+                    if self._shadow_tracker.is_tracking(symbol):
+                        raise _PipelineReject(
+                            "SHADOW_INNING_ACTIVE",
+                            f"Symbol {symbol} has an active shadow inning; "
+                            f"skip new entry to avoid overlapping real+simulated trades",
+                        )
+                except _PipelineReject:
+                    raise
+                except Exception as exc:
+                    # Defensive: an exception inside is_tracking must NOT
+                    # silently approve. Log and fail-closed (skip signal).
+                    self._log.error(
+                        f"shadow_tracker.is_tracking raised for {symbol}: {exc}; "
+                        f"failing closed (skipping signal)"
+                    )
+                    raise _PipelineReject(
+                        "SHADOW_TRACKER_ERROR",
+                        f"shadow_tracker.is_tracking raised: {exc}",
+                    )
 
             # ----------------------------------------------------------
             # Step 2: Strategy lookup (SPW3)

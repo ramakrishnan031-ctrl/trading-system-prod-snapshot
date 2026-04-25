@@ -1010,6 +1010,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         )("live_feed", reason),
         logger=get_logger("live_feed"),
         paper_mode=is_paper,
+        # B.6 / Audit 12: tick-age watchdog gated on market hours so the
+        # alert does not flap pre-open / post-close.
+        market_windows=market_windows,
     )
 
     candle_store = CandleStore(
@@ -1051,6 +1054,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         logger=get_logger("smart_tgt_manager"),
         quote_fn=broker_adapter.get_quote,
         enabled=True,
+        # B.4 / Audit 5.4: production wires async modify so the candle-close
+        # consumer thread is not blocked by per-trade broker HTTP roundtrips.
+        async_modify=True,
     )
     smart_tgt.set_instrument_cache(instrument_cache)  # Audit #8: tick rounding on SL trail
 
@@ -1156,6 +1162,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         market_close=app_config.system.trading_hours.market_close,
         notifier=notifier,
         mode=mode_label,
+        # Audit 3.3 + 5.2: EOD LIMIT_THEN_MARKET protocol controls
+        exit_protocol=app_config.system.eod_squareoff.exit_protocol,
+        limit_aggressive_pct=app_config.system.eod_squareoff.limit_aggressive_pct,
+        limit_grace_sec=app_config.system.eod_squareoff.limit_grace_sec,
     )
 
     signal_queue: queue.Queue = queue.Queue(
@@ -1185,6 +1195,10 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         tgt_min_pct=sp_cfg.tgt_min_pct,              # BL-16
         notifier=notifier,
         mode=mode_label,
+        # B.5 / Audit 5.1: re-entry guard. Skips a new signal whose symbol
+        # has an active simulated inning (real trade closed, shadow inning
+        # still running) so real + shadow positions never overlap.
+        shadow_tracker=shadow_tracker,
     )
 
     entry_gate = EntryGate(
@@ -1272,13 +1286,19 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     smart_tgt.start()
 
     wh_cfg = app_config.system.webhook
+    # Audit 6.5 / B.3: Waitress production WSGI server replaces Flask's
+    # dev server. Werkzeug's app.run drops connections under burst load
+    # (Chartink can fan out 50+ signals in a sub-second window). Waitress
+    # is pure-Python, no C deps, Windows-friendly.
+    from waitress import serve as _waitress_serve
     webhook_thread = threading.Thread(
-        target=webhook_receiver.app.run,
+        target=_waitress_serve,
+        args=(webhook_receiver.app,),
         kwargs={
             "host": wh_cfg.bind_host,
             "port": wh_cfg.bind_port,
-            "threaded": True,
-            "use_reloader": False,
+            "threads": 8,
+            "connection_limit": 100,
         },
         name="webhook-server",
         daemon=True,

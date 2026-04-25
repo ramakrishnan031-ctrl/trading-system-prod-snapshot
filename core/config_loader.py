@@ -248,6 +248,10 @@ class EodSquareoffConfig(BaseModel):
     inter_order_delay_ms: int   # EOD12: ms delay between exit orders (>= 0, <= 5000)
     poll_interval_sec: int      # EOD12: scheduler poll cadence in seconds (>= 1)
     auto_resume_kill_switch: bool  # EOD12: if True, resume soft_kill after EOD fire
+    # Audit 3.3 + 5.2 (locked 2026-04-25): EOD exit protocol controls
+    exit_protocol: str = "MARKET"            # "MARKET" (legacy) | "LIMIT_THEN_MARKET"
+    limit_aggressive_pct: float = 0.01       # LTP +/- this for SELL/BUY exit limits
+    limit_grace_sec: float = 120.0           # wait before promoting unfilled LIMITs to MARKET
 
     @field_validator("inter_order_delay_ms")
     @classmethod
@@ -261,6 +265,32 @@ class EodSquareoffConfig(BaseModel):
     def _validate_poll(cls, v: int) -> int:
         if v < 1:
             raise ValueError("poll_interval_sec must be >= 1")
+        return v
+
+    @field_validator("exit_protocol")
+    @classmethod
+    def _validate_exit_protocol(cls, v: str) -> str:
+        allowed = {"MARKET", "LIMIT_THEN_MARKET"}
+        if v not in allowed:
+            raise ValueError(f"exit_protocol must be one of {allowed}, got {v!r}")
+        return v
+
+    @field_validator("limit_aggressive_pct")
+    @classmethod
+    def _validate_limit_pct(cls, v: float) -> float:
+        if not (0.0 < v <= 0.10):
+            raise ValueError(
+                f"limit_aggressive_pct must be in (0, 0.10] (max 10% slippage budget); got {v!r}"
+            )
+        return v
+
+    @field_validator("limit_grace_sec")
+    @classmethod
+    def _validate_grace(cls, v: float) -> float:
+        if not (0.0 <= v <= 300.0):
+            raise ValueError(
+                f"limit_grace_sec must be in [0, 300] (5-min sanity cap); got {v!r}"
+            )
         return v
 
 

@@ -1139,6 +1139,149 @@ def test_restart_after_stop_repopulates_tracked() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# B.4 / Audit 5.4 — async modify executor + newest-wins coalesce
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_gate_async(
+    co_orders: Optional[Dict] = None,
+    adapter_success: bool = True,
+    on_critical_failure=None,
+) -> tuple:
+    """Variant of _make_gate that turns on the B.4 async-modify executor."""
+    adapter = _MockAdapter(default_success=adapter_success)
+    store = _MockStateStore(
+        co_orders=co_orders if co_orders is not None else _default_co_orders()
+    )
+    cs = _MockCandleStore()
+    log = _CapturingLogger()
+    mgr = SmartTgtManager(
+        adapter=adapter,
+        state_store=store,
+        candle_store=cs,
+        logger=log,
+        enabled=True,
+        on_critical_failure=on_critical_failure,
+        async_modify=True,
+    )
+    return mgr, adapter, store, cs, log
+
+
+def test_b4_async_modify_eventually_calls_broker() -> None:
+    """B.4: with async_modify=True, modify_order is invoked via executor."""
+    mgr, adapter, _, cs, _ = _make_gate_async()
+    _register(mgr)
+
+    cs.fire_candle(_make_candle(high=1010.0))
+    mgr._flush_inflight(timeout_sec=2.0)
+
+    assert len(adapter.calls) == 1, (
+        f"async path expected 1 broker call, got {len(adapter.calls)}"
+    )
+    assert adapter.calls[0]["broker_order_id"] == _CO_ORDER_ID
+    print("  OK B.4 async: modify_order called once via executor")
+
+
+def test_b4_coalesce_newest_target_wins() -> None:
+    """
+    B.4 coalesce primitive: stack multiple pending modifies for the same
+    trade BEFORE any worker drains, then drain three times. The first drain
+    pops the newest value (overwritten in the dict), the next two find an
+    empty dict and exit. Net: 1 broker call carrying the latest target.
+    """
+    mgr, adapter, _, _, _ = _make_gate_async()
+    _register(mgr)
+
+    # Manually stack three overwriting pending values, simulating what
+    # would happen if three rapid candles fired before any worker ran.
+    with mgr._pending_lock:
+        mgr._pending_modify["trade_001"] = 985.0
+        mgr._pending_modify["trade_001"] = 990.0
+        mgr._pending_modify["trade_001"] = 995.0
+
+    # Three workers in succession: only the first finds a value.
+    mgr._drain_modify("trade_001")
+    mgr._drain_modify("trade_001")
+    mgr._drain_modify("trade_001")
+
+    assert len(adapter.calls) == 1, (
+        f"coalesce broken: 3 stacked modifies -> {len(adapter.calls)} broker "
+        f"calls, expected 1"
+    )
+    # The single broker call must carry the newest target (995.0).
+    assert abs(adapter.calls[0]["trigger_price"] - 995.0) < 1e-9
+    assert mgr._pending_modify == {}, "pending dict not drained"
+    print("  OK B.4 coalesce: 3 stacked targets -> 1 broker call @ newest")
+
+
+def test_b4_executor_failure_is_swallowed_after_shutdown() -> None:
+    """
+    B.4: submitting after stop() must not raise. The pending dict gets
+    cleared and the request is dropped silently (reconciler / next restart
+    will catch up).
+    """
+    mgr, adapter, _, cs, _ = _make_gate_async()
+    _register(mgr)
+    mgr.stop()
+
+    # Force a candle fire path post-shutdown by re-firing the registered
+    # callback directly. _on_candle_close is a no-op when _enabled is True
+    # but stop() does not flip _enabled, so the path will reach
+    # _submit_modify and gracefully handle RuntimeError from submit.
+    cs.fire_candle(_make_candle(high=1010.0))
+
+    # Call _submit_modify directly to also exercise the shutdown branch.
+    mgr._submit_modify("trade_001", 999.99)
+    assert "trade_001" not in mgr._pending_modify
+    print("  OK B.4 shutdown: post-stop submit is silently dropped")
+
+
+def test_b4_drain_with_empty_pending_is_noop() -> None:
+    """
+    B.4: a worker that finds an empty pending dict (because an earlier
+    worker already drained it) must exit without calling modify_order.
+    """
+    mgr, adapter, _, cs, _ = _make_gate_async()
+    _register(mgr)
+
+    # No pending entry -> _drain_modify must be a no-op.
+    mgr._drain_modify("trade_001")
+    assert len(adapter.calls) == 0, "stale worker called modify_order"
+    print("  OK B.4 drain: empty pending -> no broker call")
+
+
+def test_b4_stop_drains_inflight_before_shutdown() -> None:
+    """
+    B.4: stop() waits for any in-flight modify before shutting down so the
+    broker / DB do not diverge. We block the worker briefly and verify the
+    DB row was updated before stop() returns.
+    """
+    mgr, adapter, store, cs, _ = _make_gate_async()
+    _register(mgr)
+
+    started = threading.Event()
+    real_modify = adapter.modify_order
+
+    def slow_modify(*args, **kwargs):
+        started.set()
+        time.sleep(0.05)
+        return real_modify(*args, **kwargs)
+
+    adapter.modify_order = slow_modify  # type: ignore
+
+    cs.fire_candle(_make_candle(high=1010.0))
+    started.wait(timeout=2.0)
+    mgr.stop()
+
+    # After stop() returns, the in-flight modify must have completed and
+    # written its DB row. (broker call already counted by adapter.calls)
+    assert len(adapter.calls) == 1
+    assert len(store.update_calls) == 1, (
+        "stop() did not wait for in-flight modify; DB row missing"
+    )
+    print("  OK B.4 stop: drained 1 in-flight modify before shutdown")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1202,6 +1345,12 @@ def run_all_tests() -> int:
         test_start_registers_callback_exactly_once,
         test_stop_unregisters_and_clears_tracked,
         test_restart_after_stop_repopulates_tracked,
+        # B.4 / Audit 5.4 -- async modify executor + coalesce
+        test_b4_async_modify_eventually_calls_broker,
+        test_b4_coalesce_newest_target_wins,
+        test_b4_executor_failure_is_swallowed_after_shutdown,
+        test_b4_drain_with_empty_pending_is_noop,
+        test_b4_stop_drains_inflight_before_shutdown,
     ]
 
     print("=" * 70)

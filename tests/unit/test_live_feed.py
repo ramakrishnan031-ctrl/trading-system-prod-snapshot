@@ -666,6 +666,162 @@ def test_on_connect_logs_re_subscribe_token_count() -> None:
 
 
 # ---------------------------------------------------------------------------
+# B.6 / Audit 12 — tick-age watchdog
+# ---------------------------------------------------------------------------
+
+class _AlwaysOpenWindows:
+    """MarketWindows stub that always says we're inside the entry window."""
+    def is_entry_allowed(self, _now):
+        return True
+
+
+class _AlwaysClosedWindows:
+    """MarketWindows stub that always says we're outside the entry window."""
+    def is_entry_allowed(self, _now):
+        return False
+
+
+def _make_feed_with_watchdog(
+    threshold_sec=1,
+    check_interval_sec=1,
+    market_windows=None,
+    on_critical=None,
+):
+    """Build a LiveFeedManager wired for watchdog testing (live mode)."""
+    from data.live_feed import LiveFeedManager
+    logger = _make_logger()
+    feed = LiveFeedManager(
+        api_key="k",
+        access_token="t",
+        logger=logger,
+        on_critical_failure=on_critical,
+        paper_mode=False,
+        tick_stale_threshold_sec=threshold_sec,
+        watchdog_check_interval_sec=check_interval_sec,
+        market_windows=market_windows,
+    )
+    return feed, logger
+
+
+def test_b6_tick_age_returns_none_before_first_tick() -> None:
+    """B.6: tick_age_seconds() is None until the first tick lands."""
+    feed, _ = _make_feed_with_watchdog()
+    assert feed.tick_age_seconds() is None
+    print("  OK B.6 tick_age None before any tick")
+
+
+def test_b6_tick_age_updates_on_tick() -> None:
+    """B.6: a tick batch sets _last_tick_at; tick_age_seconds() ~ 0."""
+    feed, _ = _make_feed_with_watchdog()
+    feed._on_ticks(None, [{"instrument_token": 1, "last_price": 100.0}])
+    age = feed.tick_age_seconds()
+    assert age is not None and 0 <= age < 1.0, f"unexpected age={age!r}"
+    print(f"  OK B.6 tick_age {age:.3f}s after tick")
+
+
+def test_b6_watchdog_skips_in_paper_mode() -> None:
+    """B.6: paper_mode=True must not start a watchdog thread."""
+    from data.live_feed import LiveFeedManager
+    feed = LiveFeedManager(
+        api_key="k", access_token="t", logger=_make_logger(),
+        paper_mode=True,
+        tick_stale_threshold_sec=1, watchdog_check_interval_sec=1,
+    )
+    feed.connect()
+    assert feed._watchdog_thread is None, "watchdog must not start in paper mode"
+    print("  OK B.6 paper mode skips watchdog")
+
+
+def test_b6_watchdog_fires_critical_when_ticks_stale() -> None:
+    """B.6 main path: stale feed -> critical alert + ticker.close()."""
+    critical_calls = []
+    feed, logger = _make_feed_with_watchdog(
+        threshold_sec=1, check_interval_sec=1,
+        market_windows=_AlwaysOpenWindows(),
+        on_critical=lambda reason: critical_calls.append(reason),
+    )
+    ticker = MockTicker("k", "t")
+    feed._ticker = ticker
+    feed._connected = True
+
+    # Seed a tick so the watchdog arms (it waits for the first tick before
+    # checking), then let time elapse past the threshold.
+    feed._on_ticks(None, [{"instrument_token": 1, "last_price": 100.0}])
+    feed._start_watchdog()
+
+    deadline = time.time() + 4.0
+    while time.time() < deadline and not critical_calls:
+        time.sleep(0.1)
+
+    feed._stop_event.set()
+    feed.disconnect()
+
+    assert critical_calls, (
+        f"watchdog did not fire critical within deadline; "
+        f"alert_fired={feed._watchdog_alert_fired} age={feed.tick_age_seconds()}"
+    )
+    assert "watchdog" in critical_calls[0].lower()
+    assert ticker.close.called, "ticker.close() must be invoked to force reconnect"
+    print(f"  OK B.6 watchdog fired: {critical_calls[0]!r}")
+
+
+def test_b6_watchdog_skips_outside_market_hours() -> None:
+    """B.6: watchdog stays quiet when market_windows says outside hours."""
+    critical_calls = []
+    feed, _ = _make_feed_with_watchdog(
+        threshold_sec=1, check_interval_sec=1,
+        market_windows=_AlwaysClosedWindows(),
+        on_critical=lambda reason: critical_calls.append(reason),
+    )
+    ticker = MockTicker("k", "t")
+    feed._ticker = ticker
+    feed._connected = True
+
+    feed._on_ticks(None, [{"instrument_token": 1, "last_price": 100.0}])
+    feed._start_watchdog()
+    time.sleep(2.5)
+
+    # Check watchdog state BEFORE disconnect (which itself calls ticker.close).
+    assert not critical_calls, (
+        f"watchdog fired outside market hours: {critical_calls!r}"
+    )
+    assert feed._watchdog_alert_fired is False, (
+        "watchdog should not flag stale outside market hours"
+    )
+    close_calls_before_disconnect = ticker.close.call_count
+
+    feed._stop_event.set()
+    feed.disconnect()
+
+    assert close_calls_before_disconnect == 0, (
+        f"ticker.close() called {close_calls_before_disconnect} times by "
+        f"watchdog while market closed"
+    )
+    print("  OK B.6 watchdog silent outside market hours")
+
+
+def test_b6_watchdog_alert_clears_on_tick_resume() -> None:
+    """
+    B.6: once the watchdog fires for a stale episode, a new tick must
+    reset _watchdog_alert_fired so the next stale episode can re-alert.
+    """
+    feed, logger = _make_feed_with_watchdog(
+        threshold_sec=1, check_interval_sec=1,
+        market_windows=_AlwaysOpenWindows(),
+    )
+    ticker = MockTicker("k", "t")
+    feed._ticker = ticker
+    feed._connected = True
+    feed._watchdog_alert_fired = True   # simulate prior alert
+
+    feed._on_ticks(None, [{"instrument_token": 1, "last_price": 100.0}])
+    assert feed._watchdog_alert_fired is False, (
+        "tick arrival should clear watchdog_alert_fired"
+    )
+    print("  OK B.6 alert cleared on tick resume")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -703,6 +859,13 @@ def run_all_tests() -> int:
         test_multiple_reconnects_still_re_subscribe_correctly,
         test_subscribe_during_disconnected_state_adds_to_set_for_later,
         test_on_connect_logs_re_subscribe_token_count,
+        # B.6 / Audit 12 — tick-age watchdog
+        test_b6_tick_age_returns_none_before_first_tick,
+        test_b6_tick_age_updates_on_tick,
+        test_b6_watchdog_skips_in_paper_mode,
+        test_b6_watchdog_fires_critical_when_ticks_stale,
+        test_b6_watchdog_skips_outside_market_hours,
+        test_b6_watchdog_alert_clears_on_tick_resume,
     ]
 
     passed = 0
