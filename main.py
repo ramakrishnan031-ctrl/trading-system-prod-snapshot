@@ -842,6 +842,24 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
             _token_data = load_token(_token_path)
             _access_token = _token_data["access_token"]
 
+    # I.4 (2026-04-25): pin the broker contract. AccountRow.broker is read
+    # from accounts.csv but never validated downstream -- if the CSV gets
+    # "Zerodha", "ICICI", "Upstox", or any typo, the system silently goes
+    # on to instantiate ZerodhaAdapter and dies with a cryptic later error.
+    # Fail fast with a helpful message instead.
+    _broker = (selected_account.broker or "").strip().lower()
+    if _broker != "zerodha":
+        _log.critical(
+            "main.unsupported_broker",
+            extra={"account_id": selected_account.account_id, "broker": selected_account.broker},
+        )
+        print(
+            f"\n[FATAL] account {selected_account.account_id!r} has "
+            f"broker={selected_account.broker!r}; only 'zerodha' is "
+            f"supported in this build. Edit config/accounts.csv and retry.\n"
+        )
+        return 9
+
     # Inject resolved access_token into env so existing broker/feed code can read it
     if _access_token:
         os.environ["ZERODHA_ACCESS_TOKEN"] = _access_token

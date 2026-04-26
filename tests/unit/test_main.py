@@ -547,6 +547,62 @@ class TestMainPhaseSequencing:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 4a. I.4 / 2026-04-25 audit: validate selected_account.broker == "zerodha"
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestI4BrokerValidation:
+    """I.4: AccountRow.broker is read from accounts.csv but never validated
+    downstream. A typo (e.g. 'Zerodha' with capital Z, or 'icici') would
+    silently route through the Zerodha adapter and die with a cryptic
+    later error. main() now exits 9 with a helpful message."""
+
+    def _registry_with_broker(self, broker: str):
+        """Build an account registry mock whose primary().broker is `broker`."""
+        mock_acct = MagicMock()
+        mock_acct.account_id = "TEST123"
+        mock_acct.broker = broker
+        mock_acct.label = "Test"
+        mock_acct.is_primary = True
+        mock_acct.api_key_env = "ZERODHA_API_KEY"
+        mock_acct.api_secret_env = "ZERODHA_API_SECRET"
+        mock_acct.paper_capital = 50_000.0
+        mock_acct.enabled = True
+        mock_reg = MagicMock()
+        mock_reg.primary.return_value = mock_acct
+        mock_reg.count.return_value = 1
+        mock_reg.get_enabled_accounts.return_value = [mock_acct]
+        return mock_reg
+
+    def test_unsupported_broker_returns_9(self):
+        rc = _run(extra={
+            "AccountRegistry": MagicMock(**{
+                "load.return_value": self._registry_with_broker("upstox")
+            }),
+        })
+        assert rc == 9, f"Expected exit 9 for upstox broker, got {rc}"
+
+    def test_capital_z_zerodha_normalized_and_accepted(self):
+        """I.4: case-insensitive comparison; 'Zerodha' (capital Z) accepted."""
+        rc = _run(extra={
+            "AccountRegistry": MagicMock(**{
+                "load.return_value": self._registry_with_broker("Zerodha")
+            }),
+        })
+        assert rc == 0, f"Expected exit 0 for 'Zerodha', got {rc}"
+
+    def test_empty_broker_returns_9(self):
+        """I.4: empty/whitespace broker rejected (catches accidentally
+        blank cell in accounts.csv)."""
+        rc = _run(extra={
+            "AccountRegistry": MagicMock(**{
+                "load.return_value": self._registry_with_broker("")
+            }),
+        })
+        assert rc == 9
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 4b. BL-15: WEBHOOK_SECRET required in live mode, not in paper
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -595,6 +595,15 @@ class StateStore:
         adapter.cancel_order(variety="co") (audit 3.1 — Zerodha forbids
         reverse MARKET for a live CO and auto-squares at 15:20 with a
         ₹50+GST penalty per position).
+
+        B.3 (2026-04-25): qty_filled > 0 added to WHERE clause. A trade
+        can be in status OPEN/PARTIAL with qty_filled=0 if the status was
+        flipped before any fill arrived (race window or recovery edge
+        case). Without this filter, EOD would attempt a MARKET reverse on
+        a zero-qty position; broker would reject but the attempt wastes
+        an order quota tick. Belt-and-braces with E.5's broker-position
+        filter (which trims by adapter.get_positions()), but cheaper.
+
         Results sorted by symbol (Foundation Rule 3.7 deterministic order).
         """
         return self.fetch_all(
@@ -613,6 +622,7 @@ class StateStore:
               ON o.trade_id = t.trade_id
              AND o.leg = 'ENTRY'
             WHERE t.status IN ('OPEN', 'PARTIAL')
+              AND t.qty_filled > 0
               AND o.product IN ('MIS', 'CO')
             GROUP BY t.trade_id
             ORDER BY t.symbol

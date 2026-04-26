@@ -300,7 +300,8 @@ class TestHttpFetcher:
 
     def test_fetcher_returns_none_on_network_error(self):
         snippets = {}
-        fetcher = _mod._make_capturing_fetcher(snippets)
+        # A.4: inject no-op sleep_fn so the retry path doesn't slow tests.
+        fetcher = _mod._make_capturing_fetcher(snippets, sleep_fn=lambda _: None)
 
         with patch.object(_mod.requests, "get",
                           side_effect=_mod.requests.RequestException("conn refused")):
@@ -323,3 +324,85 @@ class TestHttpFetcher:
             called_with["timeout"] = mock_get.call_args[1]["timeout"]
 
         assert called_with["timeout"] == 7
+
+
+# ---------------------------------------------------------------------------
+# A.4 / 2026-04-25 audit — retry on transient HTTP failures
+# ---------------------------------------------------------------------------
+
+
+class TestA4RetryOnTransientFailure:
+    """A.4: a single network blip causing a false-failure prompts the
+    operator to cancel trading. Up to _PREFLIGHT_RETRIES retries with
+    backoff turn most transient failures into success."""
+
+    def test_a4_retries_on_network_error_then_succeeds(self):
+        snippets = {}
+        sleep_calls = []
+        fetcher = _mod._make_capturing_fetcher(
+            snippets, sleep_fn=lambda s: sleep_calls.append(s)
+        )
+        # First two attempts raise, third succeeds.
+        good_resp = MagicMock()
+        good_resp.status_code = 200
+        good_resp.text = "ok"
+        side_effects = [
+            _mod.requests.RequestException("blip 1"),
+            _mod.requests.RequestException("blip 2"),
+            good_resp,
+        ]
+        with patch.object(_mod.requests, "get", side_effect=side_effects):
+            status, body = fetcher("https://example.com", 5.0)
+
+        assert status == 200, f"third attempt should succeed; got {status}"
+        assert len(sleep_calls) == 2, (
+            f"expected 2 sleeps between 3 attempts; got {sleep_calls}"
+        )
+
+    def test_a4_retries_on_5xx_then_succeeds(self):
+        snippets = {}
+        sleep_calls = []
+        fetcher = _mod._make_capturing_fetcher(
+            snippets, sleep_fn=lambda s: sleep_calls.append(s)
+        )
+        bad_resp = MagicMock(); bad_resp.status_code = 503; bad_resp.text = "err"
+        good_resp = MagicMock(); good_resp.status_code = 200; good_resp.text = "ok"
+        with patch.object(
+            _mod.requests, "get", side_effect=[bad_resp, good_resp]
+        ):
+            status, _ = fetcher("https://example.com", 5.0)
+        assert status == 200
+        assert len(sleep_calls) == 1
+
+    def test_a4_does_not_retry_on_4xx(self):
+        """A 4xx (e.g. 404 bad URL) is operator config -- retrying wastes
+        time. Return immediately so the operator sees the real fault."""
+        snippets = {}
+        sleep_calls = []
+        fetcher = _mod._make_capturing_fetcher(
+            snippets, sleep_fn=lambda s: sleep_calls.append(s)
+        )
+        bad_resp = MagicMock(); bad_resp.status_code = 404; bad_resp.text = "nf"
+        with patch.object(_mod.requests, "get", return_value=bad_resp) as mock_get:
+            status, _ = fetcher("https://example.com", 5.0)
+        assert status == 404
+        assert sleep_calls == []
+        assert mock_get.call_count == 1, (
+            f"4xx must not retry; got {mock_get.call_count} attempts"
+        )
+
+    def test_a4_gives_up_after_max_retries_returns_none(self):
+        snippets = {}
+        sleep_calls = []
+        fetcher = _mod._make_capturing_fetcher(
+            snippets, sleep_fn=lambda s: sleep_calls.append(s)
+        )
+        with patch.object(
+            _mod.requests, "get",
+            side_effect=_mod.requests.RequestException("perma down"),
+        ):
+            status, detail = fetcher("https://example.com", 5.0)
+        assert status is None
+        # _PREFLIGHT_RETRIES = 2 -> 3 total attempts -> 2 sleeps
+        assert len(sleep_calls) == _mod._PREFLIGHT_RETRIES
+        assert "perma down" in detail

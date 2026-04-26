@@ -107,6 +107,39 @@ sudo logrotate -d /etc/logrotate.d/trading-system
 EOF
 ```
 
+### 3.2b .env (secrets) — required before first run
+
+I.5 (2026-04-25): the systemd units assume a `.env` file at
+`/home/ubuntu/trading-system/.env` containing the secrets
+(`ZERODHA_API_KEY_*`, `ZERODHA_API_SECRET_*`, `TELEGRAM_BOT_TOKEN`,
+`WEBHOOK_SECRET`, `ALERT_SMTP_PASSWORD`, etc). Without it the service
+will start but every broker/notify call fails with a cryptic
+`KeyError` at first contact.
+
+**Pull from your local repo (do not commit secrets):**
+
+```bash
+# Create on your laptop first if you don't have one already (template
+# in repo: .env.example -- copy and fill in real values, then ship).
+scp -i ~/.ssh/trading_vm_secure \
+    .env \
+    ubuntu@80.225.198.195:/home/ubuntu/trading-system/.env
+
+ssh trading-vm 'chmod 600 /home/ubuntu/trading-system/.env'
+```
+
+Verify systemd can read it (the unit file must reference it via
+`EnvironmentFile=`):
+
+```bash
+ssh trading-vm 'sudo systemctl cat trading-system.service | grep -i environment'
+# Expect: EnvironmentFile=/home/ubuntu/trading-system/.env
+```
+
+If the systemd unit lacks the `EnvironmentFile=` line, edit
+`deploy/systemd/trading-system.service`, redo the diff in §2, and
+re-deploy via §3.1.
+
 ### 3.3 cron (ubuntu user)
 
 ```bash

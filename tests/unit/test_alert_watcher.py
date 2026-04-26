@@ -251,6 +251,31 @@ class TestSmtpFailureHandling(unittest.TestCase):
         result = run_once(cfg, log=_null_log())
         self.assertEqual(result, 2)
 
+    @patch("scripts.alert_watcher._SMTP_TASK_TIMEOUT_SEC", 0.3)
+    @patch("scripts.alert_watcher._send_email")
+    def test_a2_smtp_send_timeout_increments_counter(self, mock_send):
+        """A.2 (2026-04-25): a stuck _send_email (sleeping past the
+        per-task timeout) is treated like an SmtpError and increments
+        the retry counter rather than hanging the watcher pass."""
+        def _stuck_send(smtp_cfg, data, log):
+            time.sleep(2.0)  # > _SMTP_TASK_TIMEOUT_SEC (0.3s)
+
+        mock_send.side_effect = _stuck_send
+        cfg = _make_cfg(self.tmpdir, max_attempts=3)
+        sentinel_dir = Path(cfg.system.alerts.sentinel_dir)
+        p = _write_sentinel(sentinel_dir)
+
+        result = run_once(cfg, log=_null_log())
+        # Watcher returns 0 (timeout is recoverable, not auth fail).
+        self.assertEqual(result, 0)
+        # Sentinel still .flag (will retry next pass).
+        self.assertTrue(p.exists(), "sentinel must remain on timeout")
+        counter_path = sentinel_dir / "alert_watcher_attempts.json"
+        counters = _load_attempts(counter_path)
+        self.assertEqual(counters.get(p.name, 0), 1, (
+            "A.2: timeout must increment retry counter exactly once"
+        ))
+
 
 # ==============================================================================
 # TestCorruptSentinel

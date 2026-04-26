@@ -788,10 +788,17 @@ class ZerodhaAdapter:
         Return an approximate broker server timestamp for clock-skew checks (G4).
 
         Paper mode: returns now_ist() directly (local clock is the reference).
-        Live mode:  makes a lightweight margins API call to verify connectivity,
+        Live mode:  makes a lightweight quote API call to verify connectivity,
                     then returns now_ist() after the round-trip.  This gives an
                     approximation of the broker server time (within one RTT).
                     A future improvement would parse response headers or use NTP.
+
+        D.3 (2026-04-25): switched from kite.margins() (consumes the
+        "margins" rate-limit bucket alongside reconciler at 15s and
+        order_monitor at 2s) to kite.quote(["NSE:NIFTY 50"]) which uses
+        the "quote" bucket. Frees margins capacity (burst=1, 1/sec) for
+        the reconciler/order_monitor hot paths and avoids starvation
+        when the probe runs every 60s.
 
         Raises a broker exception if the live API call fails, so the caller
         (check_clock_skew) can return passed=False instead of swallowing the
@@ -801,12 +808,14 @@ class ZerodhaAdapter:
             return now_ist()
         # Live: ping broker to validate connectivity; raises on failure
         try:
-            self._rl.acquire(_CATEGORY_MAP["get_margins"])
-            self._kite.margins(segment="equity")
+            self._rl.acquire(_CATEGORY_MAP["get_quote"])
+            # NIFTY 50 is the canonical liquid index quote, always available
+            # during market hours and a tiny payload. Errors propagate.
+            self._kite.quote(["NSE:NIFTY 50"])
         except Exception as exc:
-            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+            raise self._translate_broker_exception(exc, {}, "get_quote") from exc
         # BL-6: success in category -> reset its 429 attempt counter
-        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
+        self._reset_429_attempts(_CATEGORY_MAP["get_quote"])
         return now_ist()
 
     def get_quote(self, symbols: list[str]) -> dict[str, Quote]:

@@ -37,7 +37,15 @@ import os
 import smtplib
 import socket
 import sys
+import concurrent.futures as _futures  # A.2: TimeoutError exception class
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# A.2 (2026-04-25): hard wall-time bound on a single SMTP batch. Stuck
+# tasks past this deadline are cancelled best-effort and treated as
+# recoverable timeouts (counter increment, retry next pass). Tunable
+# for tests; production value caps a watcher pass so a Gmail rate-limit
+# window cannot stall the next pass.
+_SMTP_TASK_TIMEOUT_SEC: float = 30.0
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -297,7 +305,19 @@ def run_once(
                 pool.submit(_send_email, smtp_cfg, data, log): path
                 for path, data in to_send
             }
-            for future in as_completed(future_to_path):
+            # A.2 (2026-04-25): bound the wall time spent waiting on
+            # futures. Pre-fix, a stuck SMTP connection (Gmail rate-limit,
+            # network blackhole) would hang the worker thread until the
+            # smtplib timeout fires (often default 60s+) and block the
+            # watcher's next pass. We use _futures.wait with a hard batch
+            # timeout: futures still pending past the deadline are cancelled
+            # best-effort and treated as recoverable SmtpError-equivalent
+            # (counter increments; sentinel stays .flag for next pass).
+            done, not_done = _futures.wait(
+                list(future_to_path.keys()),
+                timeout=_SMTP_TASK_TIMEOUT_SEC,
+            )
+            for future in done:
                 sentinel_path = future_to_path[future]
                 fname = sentinel_path.name
                 try:
@@ -331,6 +351,32 @@ def run_once(
                             )
                         except OSError:
                             pass
+
+            # A.2: any future still pending past _SMTP_TASK_TIMEOUT_SEC is a
+            # stuck send. Cancel best-effort; the underlying SMTP socket may
+            # still be held by the worker thread until the smtplib socket
+            # timeout fires, but we stop waiting on it and the watcher pass
+            # proceeds. Treat as recoverable so the retry ladder applies.
+            for future in not_done:
+                future.cancel()
+                sentinel_path = future_to_path[future]
+                fname = sentinel_path.name
+                count = counters.get(fname, 0) + 1
+                counters[fname] = count
+                log.error(
+                    "SMTP timeout for %s (attempt %d/%d): send exceeded "
+                    "%.1fs -- likely a stuck connection",
+                    fname, count, max_attempts, _SMTP_TASK_TIMEOUT_SEC,
+                )
+                if count >= max_attempts:
+                    try:
+                        mark_failed(
+                            sentinel_path,
+                            f"timeout after {max_attempts} attempts",
+                        )
+                        counters.pop(fname, None)
+                    except OSError:
+                        pass
 
     # Prune entries for files no longer pending
     counters = _prune_attempts(counters, sentinel_dir)

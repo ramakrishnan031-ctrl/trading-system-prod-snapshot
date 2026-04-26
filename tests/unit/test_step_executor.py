@@ -249,6 +249,35 @@ def test_step4_rsi_missing_returns_neutral():
     assert result.step_results["rsi_range"] == 0.5
 
 
+def test_i3_step4_rsi_negative_treated_as_missing():
+    """I.3 (2026-04-25): rsi < 0 (malformed feed: -1 placeholder) returns
+    neutral 0.5, not 0.0. Pre-fix the LONG band check would silently grade
+    the signal as 0.0 (out of band), masking the data quality issue."""
+    ex = _make_executor()
+    md = _base_market_data()
+    md["rsi"] = -1.0
+    result = ex.run_all(_base_signal(direction="LONG"), md, _base_thresholds())
+    assert result.step_results["rsi_range"] == 0.5
+
+
+def test_i3_step4_rsi_above_100_treated_as_missing():
+    """I.3: rsi > 100 (malformed feed: 999 placeholder) returns 0.5."""
+    ex = _make_executor()
+    md = _base_market_data()
+    md["rsi"] = 999.0
+    result = ex.run_all(_base_signal(direction="SHORT"), md, _base_thresholds())
+    assert result.step_results["rsi_range"] == 0.5
+
+
+def test_i3_step4_rsi_non_numeric_treated_as_missing():
+    """I.3: rsi=str (malformed feed) returns 0.5 rather than crashing."""
+    ex = _make_executor()
+    md = _base_market_data()
+    md["rsi"] = "N/A"
+    result = ex.run_all(_base_signal(), md, _base_thresholds())
+    assert result.step_results["rsi_range"] == 0.5
+
+
 # ---------------------------------------------------------------------------
 # Step 5: price_action
 # ---------------------------------------------------------------------------

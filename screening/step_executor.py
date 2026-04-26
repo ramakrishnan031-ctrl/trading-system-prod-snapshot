@@ -176,14 +176,37 @@ class StepExecutor:
     def _step_4_rsi_range(
         self, signal: dict, md: dict, thr: dict, direction: str
     ) -> float:
-        """RSI in acceptable range per direction. Missing -> 0.5 (neutral)."""
+        """RSI in acceptable range per direction. Missing -> 0.5 (neutral).
+
+        I.3 (2026-04-25): treat out-of-range RSI (< 0 or > 100) as missing
+        rather than scoring it normally. Malformed market-data feeds have
+        been observed to emit -1 / 101 / 999 placeholders for "no value";
+        feeding them through the LONG-band check would silently grade the
+        signal as 0.0 (out of band) when neutral 0.5 (missing) is the
+        correct interpretation. Logs a warning so the data quality issue
+        surfaces in postmortems rather than masking it as a screening fail.
+        """
         rsi = md.get("rsi")
         if rsi is None:
             return 0.5
+        try:
+            rsi_f = float(rsi)
+        except (TypeError, ValueError):
+            self._logger.warning(
+                "step_4_rsi_range: rsi=%r is not numeric; treating as missing", rsi
+            )
+            return 0.5
+        if rsi_f < 0.0 or rsi_f > 100.0:
+            self._logger.warning(
+                "step_4_rsi_range: rsi=%s outside [0,100]; treating as missing "
+                "(symbol=%s, scanner=%s)",
+                rsi_f, signal.get("symbol"), signal.get("scanner"),
+            )
+            return 0.5
         if direction == "LONG":
-            return 1.0 if 40.0 <= rsi <= 80.0 else 0.0
+            return 1.0 if 40.0 <= rsi_f <= 80.0 else 0.0
         else:  # SHORT
-            return 1.0 if 20.0 <= rsi <= 60.0 else 0.0
+            return 1.0 if 20.0 <= rsi_f <= 60.0 else 0.0
 
     def _step_5_price_action(
         self, signal: dict, md: dict, thr: dict, direction: str

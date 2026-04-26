@@ -347,14 +347,23 @@ def insert_test_trade(
     net_pnl: float | None = None,
     created_date: str = "2026-04-14",
     exit_time: str | None = None,
+    qty_filled: int | None = None,
 ) -> None:
     """
     Insert a signal row + trade row into the store.
     The signal FK must exist before the trade can be inserted.
     Unique fingerprint is derived from trade_id to avoid index conflicts.
+
+    B.3 (2026-04-25): qty_filled is now status-aware.
+    PENDING_FILL/PENDING_CANCEL -> 0, others -> qty_planned (=10).
+    Override via the qty_filled kwarg when a test needs a specific value
+    (e.g. testing the qty_filled > 0 filter in get_open_intraday_positions
+    with a degenerate OPEN+qty_filled=0 row).
     """
     sig_id = f"sig_{trade_id}"
     created_at = f"{created_date}T09:30:00+05:30"
+    if qty_filled is None:
+        qty_filled = 0 if status in ("PENDING_FILL", "PENDING_CANCEL") else 10
     with store.transaction() as cur:
         cur.execute(
             """
@@ -381,7 +390,7 @@ def insert_test_trade(
             """,
             (
                 trade_id, sig_id, symbol, "LONG", "strategy", sector,
-                10, 0, 2500.0, 2450.0, 2600.0,
+                10, qty_filled, 2500.0, 2450.0, 2600.0,
                 margin_reserved, 500.0, created_at,
                 status, "LIMIT_TRIPLE", created_at,
                 net_pnl, exit_time,
@@ -757,6 +766,32 @@ def test_get_open_intraday_positions_open_partial_only(tmp_path: Path) -> None:
     symbols = {r["symbol"] for r in rows}
     assert symbols == {"RELIANCE", "INFY"}, f"Expected RELIANCE+INFY, got {symbols}"
     print(f"  OK get_open_intraday_positions: {len(rows)} rows (OPEN+PARTIAL, MIS+CO only)")
+    store.close()
+
+
+def test_b3_get_open_intraday_positions_excludes_qty_filled_zero(tmp_path: Path) -> None:
+    """B.3 (2026-04-25): an OPEN trade with qty_filled=0 (race window /
+    recovery edge case) is not a real position. Excluded so EOD does not
+    attempt a MARKET reverse on a zero-qty row."""
+    store = StateStore(tmp_path / "test.db")
+
+    # OPEN + MIS + qty_filled=10 -> included
+    insert_test_trade(
+        store, "t_real", symbol="RELIANCE", status="OPEN", qty_filled=10,
+    )
+    insert_test_order(store, "ord_real", "t_real", leg="ENTRY", product="MIS")
+
+    # OPEN + MIS + qty_filled=0 -> excluded by B.3 filter
+    insert_test_trade(
+        store, "t_phantom", symbol="INFY", status="OPEN", qty_filled=0,
+    )
+    insert_test_order(store, "ord_phantom", "t_phantom", leg="ENTRY", product="MIS")
+
+    rows = store.get_open_intraday_positions()
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "RELIANCE"
+    assert rows[0]["qty_filled"] == 10
+    print("  OK B.3: phantom OPEN+qty_filled=0 trade excluded")
     store.close()
 
 
@@ -1730,6 +1765,7 @@ def run_all_tests() -> int:
         test_get_pending_intraday_orders_mis_co_only,
         test_get_open_intraday_positions_empty,
         test_get_open_intraday_positions_open_partial_only,
+        test_b3_get_open_intraday_positions_excludes_qty_filled_zero,
         test_get_reservation_id_for_signal,
         test_get_eod_squareoff_log_returns_none_when_absent,
         test_insert_and_get_eod_squareoff_log,

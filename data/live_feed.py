@@ -50,11 +50,16 @@ class LiveFeedManager:
         self._api_key = api_key
         self._access_token = access_token
         self._paper_mode = paper_mode
+        # G.2 (2026-04-25): never log even a prefix of the API key or access
+        # token. Logs are read by support, cloud providers, and anyone with
+        # incident access; even 6 chars narrows the brute-force search space
+        # for an attacker who already has the secret length and Kite's
+        # generation policy. Booleans are sufficient for boot diagnostics.
         logger.info(
-            "LiveFeedManager init: paper_mode=%s api_key=%s... token=%s...",
+            "LiveFeedManager init: paper_mode=%s api_key_set=%s token_set=%s",
             paper_mode,
-            api_key[:6] if api_key else "EMPTY",
-            access_token[:10] if access_token else "EMPTY",
+            bool(api_key),
+            bool(access_token),
         )
         self._log = logger
         self._on_critical_failure = on_critical_failure

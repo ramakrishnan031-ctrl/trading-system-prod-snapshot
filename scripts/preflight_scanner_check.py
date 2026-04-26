@@ -64,26 +64,58 @@ def _parse_args(argv=None) -> argparse.Namespace:
 _HEADERS = {"User-Agent": "TradingSystem/2.0 preflight-check"}
 _SNIPPET_LEN = 300
 
+# A.4 (2026-04-25): retry policy for transient HTTP failures. Operator runs
+# this script before every trading day, so a single network blip causing a
+# false-failure prompts cancelling trading -- expensive. Two retries with
+# 1s linear backoff turns most transient failures into success without
+# materially slowing a real-failure case (3 attempts * 10s timeout = 30s).
+# 4xx responses (config errors -- bad URL) are NOT retried; only network
+# exceptions and 5xx are eligible.
+_PREFLIGHT_RETRIES = 2          # i.e. up to 3 attempts total
+_PREFLIGHT_RETRY_BACKOFF_SEC = 1.0
+
 
 def _make_capturing_fetcher(
     snippets: Dict[str, str],
     timeout_override: Optional[int] = None,
+    sleep_fn=None,
 ):
     """
     Return http_fetcher_fn compatible with check_scanner_connectivity.
     Captures response snippets keyed by URL so --verbose can display them
     without re-fetching (PF5, PF6).
+
+    A.4: tolerates transient failures with up to _PREFLIGHT_RETRIES retries.
+    sleep_fn is injected for tests so they don't actually wait.
     """
+    if sleep_fn is None:
+        import time as _time
+        sleep_fn = _time.sleep
+
     def _fetch(url: str, timeout: float) -> Tuple[Optional[int], str]:
         t = timeout_override if timeout_override is not None else timeout
-        try:
-            resp = requests.get(url, headers=_HEADERS, timeout=t)
-            snippet = resp.text[:_SNIPPET_LEN] if resp.text else ""
-            snippets[url] = snippet
-            return resp.status_code, snippet
-        except requests.RequestException as exc:
-            snippets[url] = ""
-            return None, str(exc)
+        last_status: Optional[int] = None
+        last_detail: str = ""
+        for attempt in range(_PREFLIGHT_RETRIES + 1):
+            try:
+                resp = requests.get(url, headers=_HEADERS, timeout=t)
+                snippet = resp.text[:_SNIPPET_LEN] if resp.text else ""
+                snippets[url] = snippet
+                # 4xx is operator config (bad URL): no retry.
+                # 5xx is server-side: retry within budget.
+                if 500 <= resp.status_code < 600 and attempt < _PREFLIGHT_RETRIES:
+                    last_status, last_detail = resp.status_code, snippet
+                    sleep_fn(_PREFLIGHT_RETRY_BACKOFF_SEC)
+                    continue
+                return resp.status_code, snippet
+            except requests.RequestException as exc:
+                last_status, last_detail = None, str(exc)
+                snippets[url] = ""
+                if attempt < _PREFLIGHT_RETRIES:
+                    sleep_fn(_PREFLIGHT_RETRY_BACKOFF_SEC)
+                    continue
+                return None, str(exc)
+        return last_status, last_detail
 
     return _fetch
 
