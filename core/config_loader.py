@@ -63,7 +63,39 @@ class TradingHoursConfig(BaseModel):
     entry_start: str           # "HH:MM" IST — entry window opens (P1)
     entry_end: str             # "HH:MM" IST — entry window closes (P1)
     eod_squareoff_time: str    # "HH:MM" IST — square-off trigger (P1)
+    market_open: str = "09:15"   # "HH:MM" IST — NSE regular-session open
     market_close: str = "15:30"  # "HH:MM" IST — NSE regular-session close
+
+    @model_validator(mode="after")
+    def _validate_window_ordering(self) -> "TradingHoursConfig":
+        """
+        2026-04-26 audit CFG-1: catch operator typos that would otherwise
+        silently shrink (or invert) the entry window. P1 mandates
+        entry_start < entry_end and market_open <= entry_start
+        and entry_end <= eod_squareoff_time <= market_close.
+        """
+        from datetime import time as _time
+
+        def _hhmm(s: str) -> _time:
+            h, m = s.split(":")
+            return _time(int(h), int(m))
+
+        mo = _hhmm(self.market_open)
+        es = _hhmm(self.entry_start)
+        ee = _hhmm(self.entry_end)
+        eod = _hhmm(self.eod_squareoff_time)
+        mc = _hhmm(self.market_close)
+        if not (mo <= es < ee <= eod <= mc):
+            raise ValueError(
+                "trading_hours ordering violation; require "
+                "market_open <= entry_start < entry_end <= "
+                "eod_squareoff_time <= market_close, got "
+                f"market_open={self.market_open}, entry_start={self.entry_start}, "
+                f"entry_end={self.entry_end}, "
+                f"eod_squareoff_time={self.eod_squareoff_time}, "
+                f"market_close={self.market_close}"
+            )
+        return self
 
 
 class SignalQueueConfig(BaseModel):

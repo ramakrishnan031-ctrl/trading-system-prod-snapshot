@@ -769,6 +769,47 @@ def test_extra_nested_key_raises_config_schema_error() -> None:
     print("  OK Extra nested key raises ConfigSchemaError (extra='forbid' on sub-models)")
 
 
+def test_trading_hours_inverted_window_rejected() -> None:
+    """
+    CFG-1 (2026-04-26 audit): TradingHoursConfig must reject YAML where
+    entry_start >= entry_end (or any other ordering violation against P1).
+    """
+    bad = _SYSTEM_CONFIG.replace(
+        'entry_start: "09:30"\n  entry_end: "13:30"',
+        'entry_start: "13:30"\n  entry_end: "09:30"',
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        _write_stubs(d, overrides={"system_config.yaml": bad})
+
+        raised = False
+        try:
+            load_all(d)
+        except ConfigSchemaError:
+            raised = True
+    assert raised, "Expected ConfigSchemaError for inverted entry window"
+    print("  OK Inverted entry window rejected by TradingHoursConfig (CFG-1)")
+
+
+def test_trading_hours_namesake_09_25_no_longer_in_yaml() -> None:
+    """
+    CFG-1 pin: the production system_config.yaml must declare
+    entry_start=09:30 (P1), not the prior 09:25 namesake. This test
+    reads the on-disk YAML directly and asserts the canonical values.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    raw = yaml.safe_load(
+        (project_root / "config" / "system_config.yaml").read_text()
+    )
+    th = raw.get("trading_hours", {})
+    assert th.get("entry_start") == "09:30", \
+        f"Expected 09:30 per P1, got {th.get('entry_start')}"
+    assert th.get("entry_end") == "13:30", \
+        f"Expected 13:30 per P1, got {th.get('entry_end')}"
+    assert th.get("eod_squareoff_time") == "15:17"
+    print("  OK Production YAML trading_hours match P1 (09:30/13:30/15:17)")
+
+
 def test_invalid_date_in_nse_holidays_raises_config_schema_error() -> None:
     bad_dates = "holidays:\n  - '2026-01-26'\n  - 'not-a-date'\n"
 
@@ -1065,6 +1106,8 @@ def run_all_tests() -> int:
         test_config_schema_error_context_has_filename,
         test_config_schema_error_is_trading_system_error,
         test_extra_nested_key_raises_config_schema_error,
+        test_trading_hours_inverted_window_rejected,
+        test_trading_hours_namesake_09_25_no_longer_in_yaml,
         test_invalid_date_in_nse_holidays_raises_config_schema_error,
         test_file_hashes_populated_for_all_8_files,
         test_file_hashes_are_64_char_hex_strings,

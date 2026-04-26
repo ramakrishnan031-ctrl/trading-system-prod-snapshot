@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as _time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -218,6 +218,12 @@ def _make_paper_quote_provider():
         }
 
     return _provider
+
+
+def _parse_hhmm(s: str) -> _time:
+    """Parse 'HH:MM' (validated upstream by TradingHoursConfig) into a time."""
+    h, m = s.split(":")
+    return _time(int(h), int(m))
 
 
 def _write_session(store: StateStore, session_date: str, mode: str,
@@ -689,7 +695,15 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
 
     # ── Phase 0d: Startup checks (MAIN7) ────────────────────────────────────
     holidays = _load_holidays(app_config)
-    market_windows = MarketWindows(holidays=holidays)
+    th = app_config.system.trading_hours
+    market_windows = MarketWindows(
+        entry_start=_parse_hhmm(th.entry_start),
+        entry_end=_parse_hhmm(th.entry_end),
+        market_open=_parse_hhmm(th.market_open),
+        market_close=_parse_hhmm(th.market_close),
+        eod_squareoff=_parse_hhmm(th.eod_squareoff_time),
+        holidays=holidays,
+    )
 
     # Build broker adapter early for clock check (paper mode skips live calls)
     state_machine = OrderStateMachine()

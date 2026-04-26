@@ -51,6 +51,11 @@ def _make_mock_app_config():
     cfg.file_hashes = {"system_config.yaml": "abc123"}
 
     sys_cfg = cfg.system
+    sys_cfg.trading_hours.entry_start = "09:30"
+    sys_cfg.trading_hours.entry_end = "13:30"
+    sys_cfg.trading_hours.eod_squareoff_time = "15:17"
+    sys_cfg.trading_hours.market_open = "09:15"
+    sys_cfg.trading_hours.market_close = "15:30"
     sys_cfg.kill_switch.api_failure_threshold = 3
     sys_cfg.kill_switch.enable_auto_trip = True
     sys_cfg.clock.warn_skew_sec = 2.0
