@@ -221,19 +221,19 @@ def _make_paper_quote_provider():
 
 
 def _write_session(store: StateStore, session_date: str, mode: str,
-                   kill_state: str, config_hash: str, now_iso: str) -> None:
+                   config_hash: str, now_iso: str) -> None:
     """INSERT OR REPLACE the single session row (id=1)."""
     with store.transaction() as cur:
         cur.execute(
             """
             INSERT OR REPLACE INTO session
                 (id, session_date, account_id, broker, mode, trade_type,
-                 kill_state, last_config_hash, session_start, last_updated)
+                 last_config_hash, session_start, last_updated)
             VALUES
-                (1, ?, 'default', ?, ?, 'INTRADAY', ?, ?, ?, ?)
+                (1, ?, 'default', ?, ?, 'INTRADAY', ?, ?, ?)
             """,
             (session_date, mode if mode == "paper" else "zerodha",
-             mode.upper(), kill_state, config_hash, now_iso, now_iso),
+             mode.upper(), config_hash, now_iso, now_iso),
         )
 
 
@@ -678,12 +678,11 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # MED #10: Write session row early — before any crash-prone Phase 0d/0e code.
     # If startup crashes mid-way, the next run will still find a session row with
     # today's date, so cold-start detection remains correct.
-    # The Phase 0h call below will UPDATE this row with final kill_state/config_hash.
+    # The Phase 0h call below will UPDATE this row with the final config_hash.
     _write_session(
         store=store,
         session_date=today_iso,
         mode=args.mode,
-        kill_state=kill_switch.current_state().value,
         config_hash=json.dumps(app_config.file_hashes),
         now_iso=time_authority.now_ist_iso(),
     )
@@ -1358,7 +1357,6 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         store=store,
         session_date=today_iso,
         mode=args.mode,
-        kill_state=kill_switch.current_state().value,
         config_hash=json.dumps(app_config.file_hashes),
         now_iso=now_iso,
     )

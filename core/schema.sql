@@ -269,31 +269,24 @@ CREATE INDEX IF NOT EXISTS idx_events_type
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS session (
     id                  INTEGER PRIMARY KEY CHECK (id = 1),
-    
+
     -- Identity
     session_date        TEXT NOT NULL,               -- YYYY-MM-DD IST
     account_id          TEXT NOT NULL,
     broker              TEXT NOT NULL,
     mode                TEXT NOT NULL,               -- PAPER | LIVE
     trade_type          TEXT NOT NULL,               -- INTRADAY | POSITIONAL
-    
-    -- Kill switch state (here for atomicity with capital)
-    kill_state          TEXT NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE/PAUSED/HARD_KILLED
-    kill_reason         TEXT,
-    kill_time           TEXT,
-    kill_type           TEXT,                        -- soft | hard
-    
-    -- Carry-forward daily stats
-    yesterday_pnl       REAL DEFAULT 0,
-    yesterday_wins      INTEGER DEFAULT 0,
-    yesterday_losses    INTEGER DEFAULT 0,
-    
-    -- Today's running counters
-    consecutive_losses  INTEGER DEFAULT 0,
-    
+
+    -- 2026-04-26 audit CFG-7 dropped session.kill_state / kill_reason /
+    -- kill_time / kill_type. The kill_switch_state table is the single
+    -- source of truth (KS3). Audit NSK-1 also dropped yesterday_pnl /
+    -- yesterday_wins / yesterday_losses / consecutive_losses; the values
+    -- were never written, and risk_engine recomputes consecutive_losses
+    -- from recent_trade_pnls() each cycle.
+
     -- Config tracking (G4 startup hash diff)
     last_config_hash    TEXT,
-    
+
     -- Lifecycle
     session_start       TEXT NOT NULL,
     last_updated        TEXT NOT NULL
@@ -576,12 +569,12 @@ CREATE INDEX IF NOT EXISTS idx_gate_state_added_at
     ON gate_state(added_at);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v11 -> v12
+-- SCHEMA VERSION BUMP: v12 -> v13
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '12');
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '13');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v12 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v13 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -591,5 +584,8 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '12');
 --                          margin_delta/pnl_delta/costs columns;
 --                    v11: +eod_squareoff_log.status/completed_at (M-3 write-
 --                          ahead); +trades.reservation_id (EF-5 capital flow);
---                    v12: +gate_state (Audit 4.4 — entry-gate rehydration))
+--                    v12: +gate_state (Audit 4.4 — entry-gate rehydration);
+--                    v13: -session.kill_state/kill_reason/kill_time/kill_type
+--                          (CFG-7); -session.yesterday_pnl/wins/losses
+--                          /consecutive_losses (NSK-1) — 2026-04-26 audit)
 -- ─────────────────────────────────────────────────────────────────────────────

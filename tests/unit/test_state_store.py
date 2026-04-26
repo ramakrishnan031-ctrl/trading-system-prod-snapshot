@@ -1377,9 +1377,9 @@ def test_get_session_row_returns_row(tmp_path: Path) -> None:
         cur.execute(
             """
             INSERT INTO session (id, session_date, account_id, broker, mode,
-                trade_type, kill_state, session_start, last_updated)
+                trade_type, session_start, last_updated)
             VALUES (1, '2026-04-16', 'ACC123', 'zerodha', 'PAPER',
-                'INTRADAY', 'ACTIVE', '2026-04-16T09:00:00+05:30',
+                'INTRADAY', '2026-04-16T09:00:00+05:30',
                 '2026-04-16T09:00:00+05:30')
             """
         )

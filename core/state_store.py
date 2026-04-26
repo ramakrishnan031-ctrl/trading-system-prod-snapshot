@@ -71,7 +71,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 12
+EXPECTED_SCHEMA_VERSION = 13
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

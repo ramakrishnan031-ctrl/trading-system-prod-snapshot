@@ -157,17 +157,24 @@ def _make_broker_adapter(server_time: Optional[datetime] = None,
 
 def _seed_session(store: StateStore, session_date: str,
                   kill_state: str = "ACTIVE") -> None:
-    """Insert a minimal session row into the store."""
+    """
+    Insert a minimal session row into the store.
+
+    The kill_state argument is retained for backwards-compatible call sites
+    but is no longer persisted — CFG-7 (2026-04-26 audit) removed the
+    session.kill_state column. The kill_switch_state table is canonical.
+    """
+    _ = kill_state
     with store.transaction() as cur:
         cur.execute(
             """
             INSERT OR REPLACE INTO session
               (id, session_date, account_id, broker, mode,
-               trade_type, kill_state, session_start, last_updated)
+               trade_type, session_start, last_updated)
             VALUES (1, ?, 'ACC1', 'zerodha', 'PAPER',
-                    'INTRADAY', ?, ?, ?)
+                    'INTRADAY', ?, ?)
             """,
-            (session_date, kill_state,
+            (session_date,
              session_date + "T09:00:00+05:30",
              session_date + "T09:00:00+05:30"),
         )
