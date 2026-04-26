@@ -73,12 +73,6 @@ class SignalQueueConfig(BaseModel):
     expiry_sec: int            # WR6: reject signal older than this many seconds (default 60)
 
 
-class PollingConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    order_monitor_sec: int       # order_monitor poll interval in seconds (P14)
-    order_reconciler_sec: int    # reconciler poll interval in seconds (P14)
-
-
 class OrderFillTimeoutConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     limit_sec: int    # LIMIT order fill timeout; cancel + FAILED on expiry (P11b)
@@ -621,7 +615,6 @@ class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trading_hours: TradingHoursConfig
     signal_queue: SignalQueueConfig
-    polling: PollingConfig
     order_fill_timeout: OrderFillTimeoutConfig
     product_map: dict[str, dict[str, str]]  # broker -> {INTENT -> code} (PR8)
     clock: ClockConfig

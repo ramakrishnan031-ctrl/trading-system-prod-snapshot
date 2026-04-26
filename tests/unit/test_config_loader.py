@@ -71,9 +71,6 @@ signal_queue:
   capacity: 300
   backpressure_pct: 0.80
   expiry_sec: 60
-polling:
-  order_monitor_sec: 15
-  order_reconciler_sec: 15
 order_fill_timeout:
   limit_sec: 60
   market_sec: 0
@@ -324,7 +321,6 @@ def test_system_config_values_match_stubs() -> None:
 
     assert cfg.system.signal_queue.capacity == 300
     assert cfg.system.signal_queue.backpressure_pct == 0.80
-    assert cfg.system.polling.order_monitor_sec == 15
     assert cfg.system.trading_hours.entry_start == "09:30"
     assert cfg.system.trading_hours.eod_squareoff_time == "15:17"
     assert cfg.system.product_map["zerodha"]["INTRADAY"] == "MIS"
@@ -989,7 +985,7 @@ def test_no_duplicate_config_keys() -> None:
     which silently disagreed on ownership.
 
     Different values are allowed (e.g. `poll_interval_sec` legitimately
-    differs across polling/order_monitor/eod_squareoff/order_reconciler).
+    differs across order_monitor/eod_squareoff/order_reconciler).
     """
     project_root = Path(__file__).parent.parent.parent
     raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text())
