@@ -393,6 +393,74 @@ class OrderPlacer:
         """Wire InstrumentCache for IC8 tick-size rounding (called from main.py)."""
         self._instrument_cache = cache
 
+    def rehydrate_fill_map(self, state_store) -> int:
+        """
+        B.1 (2026-04-25): Repopulate _fill_map with non-terminal SL/TGT/EOD exit
+        legs of open trades after restart.
+
+        Without this, when OrderMonitor.rehydrate_from_store re-tracks an
+        exit leg and a fill arrives, _on_order_filled looks up the
+        broker-order-id-keyed _fill_map and finds nothing -- so
+        _handle_exit_fill is never called and the trade never closes in DB
+        (release_used + PositionClosed never fire either).
+
+        Keying mirrors OrderMonitor.rehydrate_from_store: we use
+        broker_order_id as the synthetic internal_order_id since the
+        original ord_-prefixed id from new_order_id() is not persisted, and
+        OrderFilled events for rehydrated legs carry broker_order_id as
+        internal_order_id.
+
+        ENTRY legs are intentionally skipped: their reservation_id is gone
+        post-restart and capital state is reconstructed by
+        fund_manager.rehydrate_from_open_trades. Re-entering ENTRY into
+        _fill_map would route post-restart fills to _handle_entry_fill,
+        which would call commit_to_used with an unknown reservation_id.
+
+        reservation_id on the rehydrated _FillEntry is left empty:
+        _handle_exit_fill does not consult it (release_used keys on
+        symbol+intent, not the reservation ledger).
+
+        Returns the number of entries inserted.
+        """
+        try:
+            rows = state_store.get_open_orders_for_rehydration()
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.rehydrate_fill_map_fetch_failed",
+                extra={"error": str(exc)},
+            )
+            return 0
+
+        rehydrated = 0
+        with self._fill_map_lock:
+            for row in rows:
+                broker_order_id = row["order_id"]
+                if not broker_order_id:
+                    continue
+                leg = (row["leg"] or "").upper()
+                if leg not in (_LEG_SL, _LEG_TGT, _LEG_EOD):
+                    continue
+                if broker_order_id in self._fill_map:
+                    continue
+
+                self._fill_map[broker_order_id] = _FillEntry(
+                    trade_id=row["trade_id"] or "",
+                    reservation_id="",  # see docstring
+                    symbol=row["symbol"] or "",
+                    qty=int(row["qty_requested"] or 0),
+                    leg=leg,
+                    order_protocol=(row["order_protocol"] or "").upper(),
+                    direction=row["direction"] or "",
+                )
+                rehydrated += 1
+
+        self._log.info(
+            "order_placer.rehydrate_fill_map",
+            extra={"rehydrated": rehydrated},
+        )
+        return rehydrated
+
     # ── public interface ──────────────────────────────────────────────────────
 
     def place(

@@ -1282,6 +1282,118 @@ def test_b4_stop_drains_inflight_before_shutdown() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# D.1 / 2026-04-25 audit — rate-limit modify_order against "order" bucket
+# Trailing N CO orders at a minute boundary can burst past Zerodha's
+# 10-orders/sec quota. SmartTgtManager now accepts an optional RateLimiter
+# and acquires before every modify call so trail paces alongside fresh
+# placements/cancels owned by OrderPlacer.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class _SpyRateLimiter:
+    """Records acquire() calls; can be configured to raise on Nth call."""
+
+    def __init__(self, raise_on_call: int = -1, exc: Exception = None) -> None:
+        self.calls: List[str] = []
+        self._raise_on = raise_on_call
+        self._exc = exc or RuntimeError("rate limit timeout")
+
+    def acquire(self, category: str, *args, **kwargs) -> None:
+        self.calls.append(category)
+        if self._raise_on >= 0 and len(self.calls) - 1 == self._raise_on:
+            raise self._exc
+
+
+def _make_gate_with_rl(rl) -> tuple:
+    """Variant of _make_gate that wires a rate_limiter."""
+    adapter = _MockAdapter(default_success=True)
+    store = _MockStateStore(co_orders=_default_co_orders())
+    cs = _MockCandleStore()
+    log = _CapturingLogger()
+    mgr = SmartTgtManager(
+        adapter=adapter, state_store=store, candle_store=cs,
+        logger=log, enabled=True, rate_limiter=rl,
+    )
+    return mgr, adapter, store, cs, log
+
+
+def test_d1_rate_limiter_acquired_before_modify() -> None:
+    """D.1: when rate_limiter is wired, _modify_co_sl calls
+    acquire('order') exactly once per modify, BEFORE adapter.modify_order."""
+    rl = _SpyRateLimiter()
+    mgr, adapter, _, cs, _ = _make_gate_with_rl(rl)
+    _register(mgr)
+
+    cs.fire_candle(_make_candle(high=1010.0))
+
+    assert rl.calls == ["order"], (
+        f"expected one acquire('order') before modify, got {rl.calls}"
+    )
+    assert len(adapter.calls) == 1, (
+        f"expected 1 broker modify after acquire, got {len(adapter.calls)}"
+    )
+    print("  OK D.1: acquire('order') fires once before adapter.modify_order")
+
+
+def test_d1_rate_limiter_acquire_raises_skips_modify() -> None:
+    """D.1: when rate_limiter.acquire raises (timeout, kill state, etc.),
+    the trail tick is skipped — adapter.modify_order is NOT called and
+    consecutive_failures is NOT incremented (we never reached the broker,
+    so it's not a broker failure)."""
+    rl = _SpyRateLimiter(raise_on_call=0, exc=RuntimeError("rl timeout"))
+    mgr, adapter, _, cs, _ = _make_gate_with_rl(rl)
+    _register(mgr)
+
+    cs.fire_candle(_make_candle(high=1010.0))
+
+    assert rl.calls == ["order"]
+    assert len(adapter.calls) == 0, (
+        "modify_order must be skipped when rate limiter rejects"
+    )
+    info = mgr._tracked["trade_001"]
+    assert info["consecutive_failures"] == 0, (
+        "rl-skip is not a broker failure -- counter must stay zero so the "
+        "3-strike critical path is not falsely tripped by quota pressure"
+    )
+    print("  OK D.1: rl acquire raise -> skip modify, no failure increment")
+
+
+def test_d1_no_rate_limiter_keeps_legacy_behavior() -> None:
+    """D.1: rate_limiter=None (default) preserves the pre-fix code path.
+    Existing test suite constructs SmartTgtManager without RL; this test
+    pins that backwards-compat contract."""
+    mgr, adapter, _, cs, _ = _make_gate()  # no rate_limiter wired
+    _register(mgr)
+
+    cs.fire_candle(_make_candle(high=1010.0))
+
+    assert len(adapter.calls) == 1
+    print("  OK D.1: rate_limiter=None -> legacy behavior preserved")
+
+
+def test_d1_acquire_called_per_modify_across_multiple_steps() -> None:
+    """D.1: each successive trail step takes one acquire token. With
+    multiple step crossings, count must equal modify_order count."""
+    rl = _SpyRateLimiter()
+    mgr, adapter, _, cs, _ = _make_gate_with_rl(rl)
+    _register(mgr)
+
+    cs.fire_candle(_make_candle(high=1010.0))   # crosses trigger
+    cs.fire_candle(_make_candle(high=1015.0))   # one more step
+    cs.fire_candle(_make_candle(high=1020.0))   # another step
+
+    assert len(rl.calls) == len(adapter.calls), (
+        f"acquire/modify count mismatch: rl={len(rl.calls)}, "
+        f"broker={len(adapter.calls)}"
+    )
+    assert all(c == "order" for c in rl.calls)
+    print(
+        f"  OK D.1: {len(rl.calls)} trail steps -> {len(rl.calls)} "
+        f"acquire('order') calls, all paced"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1351,6 +1463,11 @@ def run_all_tests() -> int:
         test_b4_executor_failure_is_swallowed_after_shutdown,
         test_b4_drain_with_empty_pending_is_noop,
         test_b4_stop_drains_inflight_before_shutdown,
+        # D.1 / 2026-04-25 audit — rate-limit modify_order
+        test_d1_rate_limiter_acquired_before_modify,
+        test_d1_rate_limiter_acquire_raises_skips_modify,
+        test_d1_no_rate_limiter_keeps_legacy_behavior,
+        test_d1_acquire_called_per_modify_across_multiple_steps,
     ]
 
     print("=" * 70)

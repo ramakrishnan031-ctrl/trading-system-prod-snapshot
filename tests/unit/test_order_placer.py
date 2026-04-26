@@ -3620,6 +3620,215 @@ class TestBl19PlacerRateLimitRetry:
                 gc.collect()
 
 
+class TestRehydrateFillMap:
+    """
+    B.1 (2026-04-25): OrderPlacer.rehydrate_fill_map repopulates _fill_map
+    for non-terminal SL/TGT/EOD exit legs of open trades after restart.
+    Without it, post-restart exit fills route to a missing _fill_map entry
+    and the trade never closes in DB.
+    """
+
+    def _seed_open_trade_with_legs(
+        self,
+        store: StateStore,
+        sig_id: str,
+        *,
+        protocol: str = "LIMIT_TRIPLE",
+        direction: str = "LONG",
+        entry_status: str = "COMPLETE",
+        sl_status: str = "TRIGGER_PENDING",
+        tgt_status: str = "OPEN",
+        sl_broker_id: str = "BROKER_SL_REH",
+        tgt_broker_id: str = "BROKER_TGT_REH",
+        entry_broker_id: str = "BROKER_E_REH",
+    ) -> str:
+        """Seed one OPEN trade with ENTRY (filled) + SL + TGT orders.
+        Returns trade_id."""
+        om = OrderManager(store, _log())
+        trade_id = om.create_trade(
+            signal_id=sig_id,
+            symbol="RELIANCE",
+            direction=direction,
+            strategy="gap_go_long",
+            sector="ENERGY",
+            qty=10,
+            entry_target_price=2500.0,
+            sl_initial=2450.0,
+            tgt_initial=2600.0,
+            order_protocol=protocol,
+            margin_reserved=5000.0,
+            risk_amount=500.0,
+            reservation_id="res_orig",
+        )
+        om.insert_order(
+            trade_id=trade_id, broker_order_id=entry_broker_id,
+            leg="ENTRY", transaction_type="BUY", order_type="LIMIT",
+            product="MIS", variety="regular", qty_requested=10, price=2500.0,
+        )
+        om.insert_order(
+            trade_id=trade_id, broker_order_id=sl_broker_id,
+            leg="SL", transaction_type="SELL", order_type="SL-M",
+            product="MIS", variety="regular", qty_requested=10,
+            price=0.0, trigger_price=2450.0,
+        )
+        om.insert_order(
+            trade_id=trade_id, broker_order_id=tgt_broker_id,
+            leg="TGT", transaction_type="SELL", order_type="LIMIT",
+            product="MIS", variety="regular", qty_requested=10, price=2600.0,
+        )
+        om.record_entry_fill(
+            trade_id=trade_id, avg_fill_price=2500.0,
+            qty_filled=10, filled_at=now_ist().isoformat(),
+        )
+        # Mark ENTRY terminal, leave SL/TGT non-terminal as configured.
+        with store.transaction() as cur:
+            cur.execute(
+                "UPDATE orders SET status=? WHERE order_id=?",
+                (entry_status, entry_broker_id),
+            )
+            cur.execute(
+                "UPDATE orders SET status=? WHERE order_id=?",
+                (sl_status, sl_broker_id),
+            )
+            cur.execute(
+                "UPDATE orders SET status=? WHERE order_id=?",
+                (tgt_status, tgt_broker_id),
+            )
+        return trade_id
+
+    def _make_placer(self, store: StateStore) -> OrderPlacer:
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol="LIMIT_TRIPLE",
+        )
+        om = OrderManager(store, _log())
+        return OrderPlacer(
+            entry_engine=engine, order_manager=om,
+            fund_manager=_MockFundManager(), bus=EventBus(), logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),
+            cost_calculator=MagicMock(spec=CostCalculator),
+            rr_ratio=2.0, default_order_protocol="LIMIT_TRIPLE",
+            product_resolver=_default_resolver(),
+        )
+
+    def test_rehydrates_sl_and_tgt_skips_terminal_entry(self) -> None:
+        """B.1: SL+TGT inserted into _fill_map; ENTRY (terminal) skipped."""
+        with TemporaryDirectory() as tmp:
+            store = _make_store(Path(tmp))
+            sig_id = _seed_signal(store)
+            self._seed_open_trade_with_legs(store, sig_id)
+            placer = self._make_placer(store)
+
+            n = placer.rehydrate_fill_map(store)
+
+            assert n == 2, f"expected 2 (SL+TGT), got {n}"
+            assert "BROKER_SL_REH" in placer._fill_map
+            assert "BROKER_TGT_REH" in placer._fill_map
+            # ENTRY status='COMPLETE' is terminal so the query excludes it
+            # entirely; this asserts the filter, not the leg-skip code path.
+            assert "BROKER_E_REH" not in placer._fill_map
+            store.close()
+            print("  OK B.1: SL+TGT rehydrated, terminal ENTRY excluded")
+
+    def test_skips_entry_leg_even_if_non_terminal(self) -> None:
+        """B.1: leg=ENTRY is intentionally skipped even if order is non-terminal.
+        reservation_id is gone post-restart; FundManager.rehydrate_from_open_trades
+        owns capital reconstruction. Routing the post-restart fill through
+        _handle_entry_fill would call commit_to_used with an unknown rid."""
+        with TemporaryDirectory() as tmp:
+            store = _make_store(Path(tmp))
+            sig_id = _seed_signal(store)
+            self._seed_open_trade_with_legs(
+                store, sig_id, entry_status="OPEN",  # non-terminal
+            )
+            placer = self._make_placer(store)
+
+            placer.rehydrate_fill_map(store)
+
+            assert "BROKER_E_REH" not in placer._fill_map, (
+                "ENTRY leg must NEVER be rehydrated; see rehydrate_fill_map "
+                "docstring — capital is rebuilt by FundManager.rehydrate."
+            )
+            store.close()
+            print("  OK B.1: ENTRY leg skipped even when non-terminal")
+
+    def test_rehydrated_entries_have_correct_fields(self) -> None:
+        """B.1: _FillEntry carries trade_id/symbol/qty/leg/protocol/direction
+        from the joined query; reservation_id is empty by design."""
+        with TemporaryDirectory() as tmp:
+            store = _make_store(Path(tmp))
+            sig_id = _seed_signal(store)
+            trade_id = self._seed_open_trade_with_legs(
+                store, sig_id, protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+            placer = self._make_placer(store)
+
+            placer.rehydrate_fill_map(store)
+            sl_entry = placer._fill_map["BROKER_SL_REH"]
+            tgt_entry = placer._fill_map["BROKER_TGT_REH"]
+
+            assert sl_entry.trade_id == trade_id
+            assert sl_entry.symbol == "RELIANCE"
+            assert sl_entry.qty == 10
+            assert sl_entry.leg == _LEG_SL
+            assert sl_entry.order_protocol == "LIMIT_TRIPLE"
+            assert sl_entry.direction == "LONG"
+            assert sl_entry.reservation_id == "", (
+                "reservation_id is intentionally empty post-restart; "
+                "release_used keys on symbol+intent, not the ledger."
+            )
+            assert tgt_entry.leg == _LEG_TGT
+            assert tgt_entry.order_protocol == "LIMIT_TRIPLE"
+            store.close()
+            print("  OK B.1: rehydrated _FillEntry has correct fields")
+
+    def test_does_not_overwrite_existing_fill_map_entries(self) -> None:
+        """B.1: rehydrate is idempotent — if the broker_order_id is already
+        in _fill_map (e.g. live OrderPlacer.place ran before rehydrate is
+        called twice), the live entry is preserved."""
+        with TemporaryDirectory() as tmp:
+            store = _make_store(Path(tmp))
+            sig_id = _seed_signal(store)
+            self._seed_open_trade_with_legs(store, sig_id)
+            placer = self._make_placer(store)
+
+            existing = _FillEntry(
+                trade_id="trd_live", reservation_id="res_live",
+                symbol="RELIANCE", qty=99, leg=_LEG_SL,
+                order_protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+            placer._fill_map["BROKER_SL_REH"] = existing
+
+            n = placer.rehydrate_fill_map(store)
+
+            assert placer._fill_map["BROKER_SL_REH"] is existing
+            assert placer._fill_map["BROKER_SL_REH"].reservation_id == "res_live"
+            assert n == 1, "only TGT should be inserted; existing SL preserved"
+            store.close()
+            print("  OK B.1: rehydrate does not clobber existing entries")
+
+    def test_state_store_fetch_failure_returns_zero_no_raise(self) -> None:
+        """B.1: defensive — if state_store query raises, log and return 0
+        rather than crashing main.py boot."""
+        with TemporaryDirectory() as tmp:
+            store = _make_store(Path(tmp))
+            placer = self._make_placer(store)
+
+            broken = MagicMock()
+            broken.get_open_orders_for_rehydration.side_effect = RuntimeError(
+                "db locked"
+            )
+
+            n = placer.rehydrate_fill_map(broken)
+            assert n == 0
+            assert placer._fill_map == {}
+            store.close()
+            print("  OK B.1: fetch failure logs and returns 0")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3734,6 +3943,12 @@ if __name__ == "__main__":
         TestBl19PlacerRateLimitRetry().test_placer_gives_up_after_max_retries_and_propagates,
         TestBl19PlacerRateLimitRetry().test_placer_does_not_retry_other_broker_errors,
         TestBl19PlacerRateLimitRetry().test_placer_retry_does_not_sleep_directly,
+        # B.1 / 2026-04-25 audit — rehydrate_fill_map for SL/TGT/EOD legs
+        TestRehydrateFillMap().test_rehydrates_sl_and_tgt_skips_terminal_entry,
+        TestRehydrateFillMap().test_skips_entry_leg_even_if_non_terminal,
+        TestRehydrateFillMap().test_rehydrated_entries_have_correct_fields,
+        TestRehydrateFillMap().test_does_not_overwrite_existing_fill_map_entries,
+        TestRehydrateFillMap().test_state_store_fetch_failure_returns_zero_no_raise,
     ]
     passed = failed = 0
     for fn in tests:

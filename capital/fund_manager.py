@@ -465,15 +465,28 @@ class FundManager:
                 ts=ts,
             )
 
-            self._check_invariant("reserve", rid)
+            # C.1: capture violation, defer hard_kill to after lock release.
+            try:
+                self._check_invariant("reserve", rid)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+            else:
+                _violation = None
 
-            return ReservationResult(
-                success=True,
-                reservation_id=rid,
-                margin=margin,
-                bucket=bucket,
-                reason_if_failed="",
-            )
+            if _violation is None:
+                _result = ReservationResult(
+                    success=True,
+                    reservation_id=rid,
+                    margin=margin,
+                    bucket=bucket,
+                    reason_if_failed="",
+                )
+
+        # Outside lock
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+        return _result
 
     def release(self, reservation_id: str, reason: str = "") -> bool:
         """
@@ -513,8 +526,19 @@ class FundManager:
             # path and rehydrate replay).
             self._apply_release(reservation_id)
 
-            self._check_invariant("release", reservation_id)
-            return True
+            # C.1: capture violation, defer hard_kill to after lock release.
+            try:
+                self._check_invariant("release", reservation_id)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+            else:
+                _violation = None
+
+        # Outside lock
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+        return True
 
     def commit_to_used(
         self,
@@ -611,6 +635,15 @@ class FundManager:
                     bucket=res.bucket,
                 )
         except Exception as exc:
+            # C.1: lock is released by `with` __exit__ before this handler
+            # runs, so kill_switch.hard_kill below is safe (no deadlock).
+            # Invariant violations also flow through _handle_invariant_violation
+            # to preserve on_critical_failure dispatch (previously done from
+            # inside _check_invariant). hard_kill is idempotent at the
+            # kill_switch state machine so the BL-4 commit-specific kill
+            # below remains safe to fire alongside.
+            if isinstance(exc, CapitalInvariantViolation):
+                self._handle_invariant_violation(exc)
             # BL-4 (Phase C.1): commit_to_used failure implies broker-
             # confirmed fill but capital state inconsistent. Trip hard_kill
             # before re-raising so callers that catch Exception broadly
@@ -743,24 +776,38 @@ class FundManager:
             self._total += pnl
             self._daily_pnl += pnl
 
-            self._check_invariant("release_used", symbol)
+            # C.1: capture violation, defer hard_kill to after lock release.
+            try:
+                self._check_invariant("release_used", symbol)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+                _result = None
+            else:
+                _violation = None
+                # FM7: check daily loss limit after updating PnL (existing
+                # behavior: only runs when invariant was OK; on violation
+                # the state is corrupt and the loss check is moot).
+                if self._daily_pnl <= -self._daily_loss_limit:
+                    self._log.critical(
+                        "fund_manager.daily_loss_breach",
+                        extra={"daily_pnl": self._daily_pnl,
+                               "limit": self._daily_loss_limit},
+                    )
+                    if self._on_loss_breach is not None:
+                        self._on_loss_breach()
 
-            # FM7: check daily loss limit after updating PnL
-            if self._daily_pnl <= -self._daily_loss_limit:
-                self._log.critical(
-                    "fund_manager.daily_loss_breach",
-                    extra={"daily_pnl": self._daily_pnl,
-                           "limit": self._daily_loss_limit},
+                _result = ReleaseResult(
+                    reservation_id="",
+                    margin_released=margin,
+                    bucket=bucket,
+                    pnl_delta=pnl,
                 )
-                if self._on_loss_breach is not None:
-                    self._on_loss_breach()
 
-            return ReleaseResult(
-                reservation_id="",
-                margin_released=margin,
-                bucket=bucket,
-                pnl_delta=pnl,
-            )
+        # Outside lock
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+        return _result
 
     def sync_from_broker(self, broker_balance: float) -> None:
         """
@@ -812,10 +859,17 @@ class FundManager:
                 extra={"old_total": old_total, "new_total": broker_balance},
             )
 
-            # Publish CapitalDriftDetected if significant TOTAL change (FM9)
+            # C.1 (2026-04-25): collect drift events to publish AFTER lock
+            # release. Publishing inside the capital lock can deadlock if a
+            # subscriber blocks on a downstream resource (kill_switch,
+            # rate_limiter, broker call) while another thread holds that
+            # resource and waits on the capital lock.
+            _pending_publishes: list[CapitalDriftDetected] = []
+
+            # CapitalDriftDetected if significant TOTAL change (FM9)
             delta = broker_balance - old_total
             if abs(delta) > 1.0:
-                self._bus.publish(CapitalDriftDetected(
+                _pending_publishes.append(CapitalDriftDetected(
                     source_module="fund_manager",
                     expected=old_total,
                     actual=broker_balance,
@@ -823,9 +877,8 @@ class FundManager:
                 ))
 
             # H-1: detect bucket overflow (either bucket went negative after
-            # sync). Publish drift BEFORE _check_invariant fires -- the
-            # invariant path calls hard_kill and raises, which would
-            # short-circuit the publish if ordered after.
+            # sync). Capture BEFORE _check_invariant fires -- the invariant
+            # path raises and would short-circuit the append if ordered after.
             bucket_overflow = (
                 self._intraday_avail < -_INVARIANT_TOLERANCE
                 or self._positional_avail < -_INVARIANT_TOLERANCE
@@ -836,28 +889,36 @@ class FundManager:
                 # source_module (fund_manager_bucket_overflow is a new
                 # escalating source, added to _ESCALATING_SOURCES).
                 gap = min(self._intraday_avail, self._positional_avail)
-                # H-1: publish drift event for telemetry; _check_invariant
-                # below will fire hard_kill via BL-9. drift_handler will
-                # receive this event AND observe the hard_kill state; its
-                # escalation ladder is idempotent wrt already-HARD_KILL
-                # state, so both paths can fire without conflict.
-                try:
-                    self._bus.publish(CapitalDriftDetected(
-                        source_module="fund_manager_bucket_overflow",
-                        expected=0.0,   # buckets should never go negative
-                        actual=gap,     # most-negative bucket available
-                        delta=abs(gap), # rupee magnitude for BL-2 tiering
-                    ))
-                except Exception as pub_exc:
-                    self._log.error(
-                        "fund_manager.publish_bucket_overflow_drift_failed: %s",
-                        pub_exc,
-                    )
+                _pending_publishes.append(CapitalDriftDetected(
+                    source_module="fund_manager_bucket_overflow",
+                    expected=0.0,   # buckets should never go negative
+                    actual=gap,     # most-negative bucket available
+                    delta=abs(gap), # rupee magnitude for BL-2 tiering
+                ))
 
             # H-1: invariant check now runs on every sync. Per-bucket INV6
-            # guard fires CapitalInvariantViolation on bucket overflow;
-            # BL-9 hard_kill fires before the raise.
-            self._check_invariant("sync_from_broker", self._session_id)
+            # guard fires CapitalInvariantViolation on bucket overflow.
+            # C.1: capture violation, defer hard_kill to after lock release.
+            try:
+                self._check_invariant("sync_from_broker", self._session_id)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+            else:
+                _violation = None
+
+        # Outside lock: publish events first, then dispatch violation.
+        for evt in _pending_publishes:
+            try:
+                self._bus.publish(evt)
+            except Exception as pub_exc:
+                self._log.error(
+                    "fund_manager.publish_drift_failed: %s",
+                    pub_exc,
+                )
+
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
 
     def get_live_reservations(self) -> dict[str, "_Reservation"]:
         """
@@ -1009,34 +1070,43 @@ class FundManager:
 
             # Phase 3: invariant check ONCE (FM18). Wrap to distinguish
             # startup-replay corruption from a live mid-mutation break.
+            # C.1 (2026-04-25): capture violation, defer hard_kill+on_critical
+            # to after lock release.
             try:
                 self._check_invariant("rehydrate", "BL-1")
             except CapitalInvariantViolation as exc:
-                raise CapitalStateInconsistent(
-                    f"Capital state invariant failed after rehydrate: {exc}",
-                    anomalies=anomalies,
-                    replayed_trades=replayed_trades,
-                    replayed_pnl_rows=replayed_pnl_rows,
-                ) from exc
+                _violation = exc
+            else:
+                _violation = None
 
-            self._log.info(
-                "fund_manager.rehydrate_complete",
-                extra={
-                    "replayed_trades": replayed_trades,
-                    "replayed_pnl_rows": replayed_pnl_rows,
-                    "anomaly_count": len(anomalies),
-                    "daily_pnl": self._daily_pnl,
-                    "total": self._total,
-                },
-            )
-            for a in anomalies:
-                self._log.warning("fund_manager.rehydrate_anomaly", extra=a)
+        # Outside lock
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise CapitalStateInconsistent(
+                f"Capital state invariant failed after rehydrate: {_violation}",
+                anomalies=anomalies,
+                replayed_trades=replayed_trades,
+                replayed_pnl_rows=replayed_pnl_rows,
+            ) from _violation
 
-            return {
+        self._log.info(
+            "fund_manager.rehydrate_complete",
+            extra={
                 "replayed_trades": replayed_trades,
                 "replayed_pnl_rows": replayed_pnl_rows,
-                "anomalies": anomalies,
-            }
+                "anomaly_count": len(anomalies),
+                "daily_pnl": self._daily_pnl,
+                "total": self._total,
+            },
+        )
+        for a in anomalies:
+            self._log.warning("fund_manager.rehydrate_anomaly", extra=a)
+
+        return {
+            "replayed_trades": replayed_trades,
+            "replayed_pnl_rows": replayed_pnl_rows,
+            "anomalies": anomalies,
+        }
 
     def _replay_open_trade(
         self,
@@ -1339,13 +1409,14 @@ class FundManager:
         compute_rhs returns _total unchanged — equivalent to the previous
         inline check.
 
-        On violation (FM11 + FM19 / BL-9):
-          1. hard_kill first (if kill_switch wired) -- cancels in-flight orders
-             immediately; wrapped in its own try/except so the original
-             invariant exception always propagates even if the kill path fails.
-          2. on_critical_failure callback next (legacy soft-kill / notifier
-             wiring for other critical-signal callers; unchanged).
-          3. raise last -- callers always see CapitalInvariantViolation.
+        C.1 (2026-04-25): on violation, this method ONLY raises
+        CapitalInvariantViolation. It no longer fires hard_kill or
+        on_critical inline; those are deferred to the public mutator that
+        catches the exception OUTSIDE its `with self._lock` block (via
+        _handle_invariant_violation). Holding the capital lock during
+        kill_switch.hard_kill could deadlock if kill_switch's downstream
+        (logging, broker cancel, rate_limiter) blocks while another thread
+        waits on the capital lock.
         """
         total_avail = self._intraday_avail + self._positional_avail
         total_reserved = self._intraday_reserved + self._positional_reserved
@@ -1394,34 +1465,52 @@ class FundManager:
             )
         except CapitalInvariantViolation as exc:
             log_exception(self._log, exc)
-            # FM19 / BL-9: hard_kill FIRST -- provably corrupted capital state
-            # warrants immediate order cancellation, not just a soft block.
-            if self._kill_switch is not None:
-                try:
-                    self._kill_switch.hard_kill(
-                        reason=f"capital_invariant_violated: {exc}",
-                        triggered_by="fund_manager._check_invariant",
-                    )
-                except Exception as kse:
-                    self._log.critical(
-                        "kill_switch.hard_kill failed during invariant violation",
-                        extra={"kill_error": str(kse)},
-                    )
-            else:
-                self._log.critical(
-                    "invariant violation with kill_switch=None; "
-                    "on_critical_failure path (if wired) still runs"
-                )
-            # Legacy soft-kill / notifier wiring (unchanged).
-            if self._on_critical is not None:
-                try:
-                    self._on_critical(str(exc))
-                except Exception as cbe:
-                    self._log.error(
-                        "on_critical_failure callback raised",
-                        extra={"error": str(cbe)},
-                    )
+            # C.1: hard_kill / on_critical moved to _handle_invariant_violation,
+            # invoked by the public mutator AFTER lock release. Just re-raise
+            # so the caller's lock-scoped try/except can capture and defer.
             raise
+
+    def _handle_invariant_violation(
+        self, exc: CapitalInvariantViolation
+    ) -> None:
+        """
+        C.1 (2026-04-25): side-effect dispatch for an invariant violation.
+        MUST be called with the capital lock RELEASED -- holding the lock
+        during kill_switch.hard_kill risks deadlock if the kill path blocks
+        on rate_limiter while another capital-mutating thread waits on the
+        lock.
+
+        Mirrors the behavior previously inlined in _check_invariant's catch:
+          1. kill_switch.hard_kill (if wired)
+          2. on_critical_failure callback (if wired)
+
+        Both wrapped in best-effort try/except so the caller can always
+        re-raise the original CapitalInvariantViolation cleanly.
+        """
+        if self._kill_switch is not None:
+            try:
+                self._kill_switch.hard_kill(
+                    reason=f"capital_invariant_violated: {exc}",
+                    triggered_by="fund_manager._check_invariant",
+                )
+            except Exception as kse:
+                self._log.critical(
+                    "kill_switch.hard_kill failed during invariant violation",
+                    extra={"kill_error": str(kse)},
+                )
+        else:
+            self._log.critical(
+                "invariant violation with kill_switch=None; "
+                "on_critical_failure path (if wired) still runs"
+            )
+        if self._on_critical is not None:
+            try:
+                self._on_critical(str(exc))
+            except Exception as cbe:
+                self._log.error(
+                    "on_critical_failure callback raised",
+                    extra={"error": str(cbe)},
+                )
 
     # ── ledger write (FM10 / BL-5 write-ahead) ────────────────────────────────
 

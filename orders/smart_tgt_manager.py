@@ -93,6 +93,7 @@ class SmartTgtManager:
         enabled: bool = True,
         on_critical_failure: Optional[Callable[[str, str], None]] = None,
         async_modify: bool = False,
+        rate_limiter: Optional[Any] = None,
     ) -> None:
         self._adapter = adapter
         self._state_store = state_store
@@ -101,6 +102,12 @@ class SmartTgtManager:
         self._quote_fn = quote_fn
         self._enabled = enabled
         self._on_critical_failure = on_critical_failure
+        # D.1 (2026-04-25): trailing N CO orders at minute boundary can burst
+        # past Zerodha's order quota and trigger 429. Acquire from the "order"
+        # bucket before every modify_order call so the trail paces itself
+        # alongside fresh placements/cancels owned by OrderPlacer. Optional
+        # to keep the existing test suite (which constructs without RL) green.
+        self._rl = rate_limiter
 
         self._tracked: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.RLock()
@@ -537,6 +544,21 @@ class SmartTgtManager:
             return
         if direction == "SHORT" and new_sl >= current_sl:
             return
+
+        # D.1: rate-limit modify_order against the "order" bucket. acquire()
+        # blocks until a token is available; on timeout (BrokerRateLimitError)
+        # we skip this trail tick and let the next candle close retry. The
+        # ratchet semantics (LONG SL only moves up, SHORT only down) make
+        # skipping a tick safe; new_sl is recomputed next candle anyway.
+        if self._rl is not None:
+            try:
+                self._rl.acquire("order")
+            except Exception as rl_exc:
+                self._log.warning(
+                    f"SmartTgtManager: rate limiter acquire raised for "
+                    f"{trade_id}; skipping trail to {new_sl:.4f}: {rl_exc}"
+                )
+                return
 
         # Broker call (outside lock -- may be slow)
         try:

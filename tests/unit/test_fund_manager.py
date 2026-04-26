@@ -1648,6 +1648,116 @@ def test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully() -> 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# C.1 / 2026-04-25 audit: hard_kill must run with capital lock RELEASED.
+#
+# Pre-fix, _check_invariant called kill_switch.hard_kill from inside the
+# `with self._lock:` block. If hard_kill (or one of its downstreams --
+# rate_limiter.acquire, broker cancel) blocked while another thread was
+# waiting on fm._lock, the system would deadlock.
+#
+# Post-fix, public mutators catch CapitalInvariantViolation, release the
+# lock by exiting the `with` block, then dispatch to
+# _handle_invariant_violation. This regression test proves it: from inside
+# hard_kill we spawn a helper thread that takes fm._lock; the helper must
+# acquire immediately (the original thread no longer holds it).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_c1_hard_kill_runs_with_lock_released() -> None:
+    """C.1 deadlock regression: when hard_kill fires, fm._lock must be
+    free for other threads to acquire. RLock blocks cross-thread acquire
+    even if the holding thread is the same caller, so this discriminates
+    pre-fix (lock held -- helper times out) from post-fix (lock free)."""
+    import threading as _t
+    import time as _time
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+
+        helper_acquired = _t.Event()
+
+        class _LockProbingKillSwitch:
+            def __init__(self, fm_ref_box: list) -> None:
+                self.hard_kill_calls: list[dict] = []
+                self._fm_box = fm_ref_box
+
+            def hard_kill(self, reason: str, triggered_by: str = "system"):
+                self.hard_kill_calls.append({"reason": reason})
+                fm_ref = self._fm_box[0]
+
+                def _probe():
+                    # Acquire fm._lock from another thread. RLock semantics:
+                    # this BLOCKS if any other thread holds the lock, even
+                    # if it is the same RLock instance.
+                    with fm_ref._lock:
+                        helper_acquired.set()
+
+                t = _t.Thread(target=_probe, daemon=True)
+                t.start()
+                # Generous timeout to weed out flakes; pre-fix this would
+                # block until the calling mutator exits its `with self._lock`
+                # block, which is AFTER hard_kill returns -- so the helper
+                # would never acquire while we're inside hard_kill.
+                t.join(timeout=2.0)
+                return None
+
+        fm_box: list = [None]
+        ks = _LockProbingKillSwitch(fm_box)
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        fm_box[0] = fm
+
+        _trigger_reserve_then_corrupt(fm)
+
+        try:
+            fm.reserve("INFY", 10, 500.0, "INTRADAY", signal_id="sig_c1")
+        except CapitalInvariantViolation:
+            pass
+
+        assert len(ks.hard_kill_calls) == 1
+        assert helper_acquired.is_set(), (
+            "C.1 regression: helper thread could not acquire fm._lock while "
+            "hard_kill was running. Lock is still held by mutator -- "
+            "hard_kill is at risk of deadlocking on rate_limiter / broker."
+        )
+        store.close()
+    print("  OK C.1: hard_kill runs with fm._lock released (no deadlock window)")
+
+
+def test_c1_handle_invariant_violation_called_only_after_lock_release() -> None:
+    """C.1: _handle_invariant_violation is the dispatch surface; verify
+    it is NEVER invoked while the calling thread still holds the lock.
+    This guards the structural contract of the refactor."""
+    import threading as _t
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        ks = _FakeKillSwitch()
+        fm = _initialized_fm(store, balance=100_000.0, kill_switch=ks)
+        _trigger_reserve_then_corrupt(fm)
+
+        observed_lock_held: list[bool] = []
+        original = fm._handle_invariant_violation
+
+        def _spy(exc):
+            # RLock._is_owned() returns True iff THIS thread holds the lock.
+            observed_lock_held.append(fm._lock._is_owned())  # type: ignore[attr-defined]
+            return original(exc)
+
+        fm._handle_invariant_violation = _spy  # type: ignore[assignment]
+
+        try:
+            fm.reserve("INFY", 10, 500.0, "INTRADAY", signal_id="sig_c1b")
+        except CapitalInvariantViolation:
+            pass
+
+        assert observed_lock_held == [False], (
+            f"C.1 contract violated: _handle_invariant_violation observed "
+            f"lock-owned={observed_lock_held}; expected [False]"
+        )
+        store.close()
+    print("  OK C.1: _handle_invariant_violation runs outside lock (structural contract)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BL-3 / Phase B.5: get_live_reservations accessor
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2041,6 +2151,9 @@ def run_all_tests() -> int:
         test_bl9_hard_kill_exception_does_not_swallow_invariant_violation,
         test_bl9_invariant_violation_still_fires_on_critical_callback,
         test_bl9_invariant_violation_with_kill_switch_none_degrades_gracefully,
+        # C.1 / 2026-04-25 audit (deadlock fix: hard_kill outside lock)
+        test_c1_hard_kill_runs_with_lock_released,
+        test_c1_handle_invariant_violation_called_only_after_lock_release,
         # BL-3 additions (Phase B.5 self-check accessor)
         test_bl3_get_live_reservations_returns_locked_snapshot_copy,
         # BL-4 additions (Phase C.1 commit_to_used failure -> hard_kill)

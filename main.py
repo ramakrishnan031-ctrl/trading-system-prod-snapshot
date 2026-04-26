@@ -1057,6 +1057,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         # B.4 / Audit 5.4: production wires async modify so the candle-close
         # consumer thread is not blocked by per-trade broker HTTP roundtrips.
         async_modify=True,
+        # D.1 (2026-04-25): trail bursts share the same "order" bucket as
+        # fresh placements; pass the same RateLimiter so they pace together.
+        rate_limiter=rate_limiter,
     )
     smart_tgt.set_instrument_cache(instrument_cache)  # Audit #8: tick rounding on SL trail
 
@@ -1275,6 +1278,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     candle_store.set_token_map(instrument_cache.token_map())
     live_feed.connect()
     order_monitor.rehydrate_from_store(store)  # Audit #21
+    # B.1 (2026-04-25): repopulate OrderPlacer._fill_map for SL/TGT/EOD
+    # exit legs so a post-restart exit fill closes the trade in DB.
+    order_placer.rehydrate_fill_map(store)
     order_monitor.start()
     order_reconciler.start()
     if clock_skew_probe is not None:

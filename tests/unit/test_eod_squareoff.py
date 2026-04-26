@@ -1490,6 +1490,136 @@ def test_b1_legacy_market_protocol_unchanged() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# E.5 / 2026-04-25 audit — broker-position filter applies on every fire
+#
+# Pre-fix the upfront filter only ran when recovery_fire=True. A regular
+# fire could still hit the per-symbol broker_qty.get(symbol, 0) skip, but
+# without the explicit "naked short prevention" warn log. E.5 promotes the
+# filter to ALL fires so:
+#   (a) the safety log surface is identical between regular and recovery,
+#   (b) the LIMIT phase doesn't waste a get_quote burst on stale symbols.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_e5_regular_fire_logs_naked_short_warning_for_stale_db_row() -> None:
+    """E.5: on a non-recovery fire, when broker reports the symbol absent,
+    the upfront filter logs a WARNING with the naked-short rationale and
+    no MARKET order is placed."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row("trd_a", "sig_a", "RELIANCE", "LONG", 10),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    adapter = MagicMock()
+    # Broker reports a different symbol than the DB has -> RELIANCE is stale.
+    adapter.get_positions.return_value = [_position("OTHER", 5)]
+    fm = MagicMock(); fm.release.return_value = True
+    ks = MagicMock()
+    ks.is_active.return_value = False
+    ks.current_state.return_value = KillState.INACTIVE
+    bus = MagicMock(spec=EventBus)
+    osm = OrderStateMachine(bus=None)
+    om = MagicMock()
+
+    captured = logging.getLogger("test_eod_e5_warn")
+    handler_records: list[logging.LogRecord] = []
+
+    class _RecHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            handler_records.append(record)
+
+    rec_handler = _RecHandler(level=logging.WARNING)
+    captured.addHandler(rec_handler)
+    captured.setLevel(logging.WARNING)
+
+    try:
+        eod = EodSquareoff(
+            adapter=adapter, state_store=store, fund_manager=fm,
+            state_machine=osm, bus=bus, market_windows=_make_market_windows(),
+            time_authority=None, kill_switch=ks, logger=captured,
+            order_monitor=om, inter_order_delay_ms=0,
+            exit_protocol="MARKET",
+        )
+        # Regular fire (recovery_fire defaults to False on first call).
+        eod.check_and_fire(_ist(15, 17))
+
+        adapter.place_order.assert_not_called()
+
+        warns = [r for r in handler_records if r.levelno == logging.WARNING]
+        msgs = [r.getMessage() for r in warns]
+        naked_short_warns = [
+            m for m in msgs
+            if "RELIANCE" in m and "naked short" in m
+            and "recovery_fire=False" in m
+        ]
+        assert naked_short_warns, (
+            f"Expected naked-short WARN on regular fire; got {msgs}"
+        )
+    finally:
+        captured.removeHandler(rec_handler)
+
+
+def test_e5_filter_log_carries_recovery_flag() -> None:
+    """E.5: the summary INFO log records the recovery_fire flag so post-
+    incident review can tell which path filtered. Pin the contract."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row("trd_a", "sig_a", "RELIANCE", "LONG", 10),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_position("RELIANCE", 10)]  # match
+    adapter.place_order.return_value = _placed_order(
+        symbol="RELIANCE", side="SELL", qty=10,
+    )
+    fm = MagicMock(); fm.release.return_value = True
+    ks = MagicMock()
+    ks.is_active.return_value = False
+    ks.current_state.return_value = KillState.INACTIVE
+    bus = MagicMock(spec=EventBus)
+    osm = OrderStateMachine(bus=None)
+    om = MagicMock()
+
+    captured = logging.getLogger("test_eod_e5_info")
+    handler_records: list[logging.LogRecord] = []
+
+    class _RecHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            handler_records.append(record)
+
+    rec_handler = _RecHandler(level=logging.INFO)
+    captured.addHandler(rec_handler)
+    captured.setLevel(logging.INFO)
+
+    try:
+        eod = EodSquareoff(
+            adapter=adapter, state_store=store, fund_manager=fm,
+            state_machine=osm, bus=bus, market_windows=_make_market_windows(),
+            time_authority=None, kill_switch=ks, logger=captured,
+            order_monitor=om, inter_order_delay_ms=0,
+            exit_protocol="MARKET",
+        )
+        eod.check_and_fire(_ist(15, 17))
+
+        infos = [r for r in handler_records if r.levelno == logging.INFO]
+        msgs = [r.getMessage() for r in infos]
+        filter_logs = [
+            m for m in msgs
+            if "broker-position filter" in m and "recovery_fire=False" in m
+        ]
+        assert filter_logs, (
+            f"Expected filter INFO log on regular fire with "
+            f"recovery_fire=False; got {msgs}"
+        )
+    finally:
+        captured.removeHandler(rec_handler)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1549,6 +1679,9 @@ if __name__ == "__main__":
         test_b1_get_positions_failure_falls_back_to_db_qty,
         test_b1_phase2_market_failure_marks_failed,
         test_b1_legacy_market_protocol_unchanged,
+        # E.5 / 2026-04-25 audit — broker-position filter on every fire
+        test_e5_regular_fire_logs_naked_short_warning_for_stale_db_row,
+        test_e5_filter_log_carries_recovery_flag,
     ]
 
     passed = 0

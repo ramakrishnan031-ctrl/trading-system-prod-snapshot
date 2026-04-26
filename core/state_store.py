@@ -517,7 +517,14 @@ class StateStore:
         symbol without a second query.
 
         Row fields: order_id, status, transaction_type, qty_requested,
-            price, placed_at, symbol.
+            price, placed_at, symbol, trade_id, leg, order_protocol,
+            direction.
+
+        B.1 (2026-04-25): leg/trade_id/order_protocol/direction added so
+        OrderPlacer.rehydrate_fill_map can repopulate _fill_map for SL/TGT/EOD
+        legs after restart. Without those columns a non-terminal exit fill
+        landing post-restart would dispatch to a missing _fill_map entry and
+        silently fail to close the trade.
         """
         return self.fetch_all(
             """
@@ -528,7 +535,11 @@ class StateStore:
                 o.qty_requested,
                 o.price,
                 o.placed_at,
-                t.symbol
+                t.symbol,
+                o.trade_id,
+                o.leg,
+                t.order_protocol,
+                t.direction
             FROM orders o
             JOIN trades t
               ON t.trade_id = o.trade_id

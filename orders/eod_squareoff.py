@@ -770,16 +770,30 @@ class EodSquareoff:
                 exc,
             )
 
-        # Audit #14: in recovery mode, trim rows to what the broker still
-        # reports as open. Skip filter only when fetch failed (broker_qty
-        # is None); fetch-ok-with-no-open-symbols correctly trims to [].
-        if recovery_fire and broker_qty is not None:
+        # E.5 (2026-04-25): broker-position filter applies to ALL fires, not
+        # just recovery_fire. If a position has been closed by RMS or by an
+        # earlier exit fill we did not yet ingest, the DB row is stale and
+        # firing a MARKET reverse on it creates a naked short. The recovery
+        # comment below remains accurate for that path; the filter is now
+        # also a guard against this stale-DB-row class on the regular fire.
+        # Skip the filter only when fetch failed (broker_qty is None);
+        # fetch-ok-with-no-open-symbols correctly trims to [].
+        if broker_qty is not None:
             before = len(rows)
+            skipped = [r["symbol"] for r in rows if r["symbol"] not in broker_qty]
             rows = [r for r in rows if r["symbol"] in broker_qty]
+            for sym in skipped:
+                self._log.warning(
+                    "EOD: skipping symbol %s — broker reports zero/missing "
+                    "position (likely closed by RMS or earlier exit fill); "
+                    "MARKET reverse would create a naked short. "
+                    "recovery_fire=%s",
+                    sym, recovery_fire,
+                )
             self._log.info(
-                "EOD recovery: broker-position filter kept %d/%d trades "
-                "(broker open symbols=%d)",
-                len(rows), before, len(broker_qty),
+                "EOD: broker-position filter kept %d/%d trades "
+                "(broker open symbols=%d, recovery_fire=%s)",
+                len(rows), before, len(broker_qty), recovery_fire,
             )
 
         attempted = len(rows)
