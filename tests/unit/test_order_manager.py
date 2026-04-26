@@ -187,6 +187,110 @@ def test_close_trade_rejects_double_close(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# E.2 / 2026-04-25 audit — gross_pnl sanity bound (10x entry_value)
+#
+# A bug in _handle_exit_fill or cost_calculator producing gross_pnl ~= 1e9
+# would corrupt fund_manager.daily_realized_pnl and cascade hard_kill /
+# on_critical via a phantom invariant trip. close_trade now rejects an
+# implausibly large |gross_pnl| (> 10x entry_value) and logs CRITICAL
+# rather than writing the poisoned value into the trades table.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _seed_open_trade(store: StateStore, om: OrderManager) -> str:
+    """As _seed_trade but also records entry fill so entry_actual_price
+    is populated and the E.2 guard has a meaningful entry_value."""
+    trade_id = _seed_trade(store, om)
+    om.record_entry_fill(
+        trade_id=trade_id, avg_fill_price=2500.0,
+        qty_filled=10, filled_at="2026-04-16T09:35:00+05:30",
+    )
+    return trade_id
+
+
+def test_e2_gross_pnl_within_10x_entry_value_accepted(tmp_path: Path) -> None:
+    """E.2: |gross_pnl| <= 10x entry_value (entry=2500, qty=10 -> 25000;
+    ceiling=250000) closes the trade normally."""
+    store = _make_store(tmp_path)
+    om = _make_om(store)
+    trade_id = _seed_open_trade(store, om)
+
+    # 100% notional (gross_pnl=25000) is plausible for a tail intraday
+    # outcome and well under the 250000 ceiling.
+    row = om.close_trade(
+        trade_id=trade_id, exit_price=5000.0, exit_qty=10,
+        exit_reason="TGT_HIT", gross_pnl=25_000.0, charges=50.0,
+    )
+    assert row["status"] == "CLOSED"
+    assert row["gross_pnl"] == 25_000.0
+    store.close()
+    print("  OK E.2: gross_pnl=100% notional accepted (well under 10x ceiling)")
+
+
+def test_e2_gross_pnl_exceeds_10x_entry_value_rejected(tmp_path: Path) -> None:
+    """E.2: |gross_pnl| > 10x entry_value raises ValueError, logs CRITICAL,
+    and does NOT mutate the trade row."""
+    store = _make_store(tmp_path)
+    om = _make_om(store)
+    trade_id = _seed_open_trade(store, om)
+
+    # entry_value = 2500 * 10 = 25000; ceiling = 250000.
+    # gross_pnl = 1e7 = 10x ceiling -> reject.
+    with pytest.raises(ValueError, match="exceeds 10x entry_value"):
+        om.close_trade(
+            trade_id=trade_id, exit_price=2510.0, exit_qty=10,
+            exit_reason="TGT_HIT", gross_pnl=10_000_000.0, charges=50.0,
+        )
+
+    # Trade row must be unchanged: still OPEN, no exit_time, no gross_pnl.
+    existing = om.get_trade(trade_id)
+    assert existing["status"] == "OPEN"
+    assert existing["exit_time"] is None
+    assert existing["gross_pnl"] is None or existing["gross_pnl"] == 0
+    store.close()
+    print("  OK E.2: implausible gross_pnl rejected, trade row unchanged")
+
+
+def test_e2_negative_implausible_gross_pnl_also_rejected(tmp_path: Path) -> None:
+    """E.2: large negative gross_pnl (e.g. -1e9 from sign-flipped overflow)
+    rejected on |gross_pnl| basis."""
+    store = _make_store(tmp_path)
+    om = _make_om(store)
+    trade_id = _seed_open_trade(store, om)
+
+    with pytest.raises(ValueError, match="exceeds 10x entry_value"):
+        om.close_trade(
+            trade_id=trade_id, exit_price=100.0, exit_qty=10,
+            exit_reason="SL_HIT", gross_pnl=-1_000_000.0, charges=50.0,
+        )
+    store.close()
+    print("  OK E.2: negative implausible gross_pnl rejected (|.| guard)")
+
+
+def test_e2_skipped_when_entry_actual_price_missing(tmp_path: Path) -> None:
+    """E.2: if entry_actual_price is NULL (entry never filled), skip the
+    sanity bound rather than crash on None arithmetic. Defensive: the
+    upstream invariant is that close_trade only runs after an entry fill,
+    but a misfired close still shouldn't blow up here."""
+    store = _make_store(tmp_path)
+    om = _make_om(store)
+    # PENDING_FILL trade: no record_entry_fill called -> entry_actual_price NULL.
+    trade_id = _seed_trade(store, om)
+
+    row = om.close_trade(
+        trade_id=trade_id, exit_price=2550.0, exit_qty=10,
+        exit_reason="MANUAL_CLOSE", gross_pnl=999_999_999.0, charges=0.0,
+    )
+    # The bound is skipped (entry_actual_price=None), so the close succeeds.
+    # This is intentional defense-in-depth: the absent-entry case can't
+    # compute a meaningful ceiling, and crashing here would mask the more
+    # interesting upstream bug (closing a never-filled trade).
+    assert row["status"] == "CLOSED"
+    store.close()
+    print("  OK E.2: bound skipped when entry_actual_price is NULL")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -199,6 +303,11 @@ def run_all_tests() -> int:
         test_close_trade_rejects_invalid_exit_reason,
         test_close_trade_rejects_unknown_trade_id,
         test_close_trade_rejects_double_close,
+        # E.2 / 2026-04-25 audit -- gross_pnl sanity bound
+        test_e2_gross_pnl_within_10x_entry_value_accepted,
+        test_e2_gross_pnl_exceeds_10x_entry_value_rejected,
+        test_e2_negative_implausible_gross_pnl_also_rejected,
+        test_e2_skipped_when_entry_actual_price_missing,
     ]
 
     print("=" * 70)

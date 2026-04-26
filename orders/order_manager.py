@@ -417,6 +417,40 @@ class OrderManager:
                 exit_qty, existing.get("qty_filled", 0)
             )
 
+        # E.2 (2026-04-25): sanity-bound gross_pnl. A bug in _handle_exit_fill
+        # (or upstream cost computation) producing gross_pnl ~= 1e9 would
+        # corrupt fund_manager.daily_realized_pnl, trip the daily-loss
+        # invariant on a phantom magnitude, and cascade hard_kill / on_critical.
+        # 10x entry_value is a loose-but-finite ceiling: ±100% intraday
+        # (notional) is a tail outcome; ±1000% is computationally impossible
+        # in a single trade and indicates either a unit-confusion (pct vs
+        # rupees) or an integer overflow upstream. Raise rather than write
+        # poisoned PnL into the trades table.
+        entry_actual_price = existing.get("entry_actual_price")
+        entry_qty_filled = existing.get("qty_filled") or 0
+        if entry_actual_price is not None and entry_qty_filled > 0:
+            entry_value = float(entry_actual_price) * float(entry_qty_filled)
+            ceiling = entry_value * 10.0
+            if entry_value > 0 and abs(gross_pnl) > ceiling:
+                self._log.critical(
+                    "close_trade.gross_pnl_implausible",
+                    extra={
+                        "trade_id": trade_id,
+                        "gross_pnl": gross_pnl,
+                        "entry_value": entry_value,
+                        "ceiling_10x": ceiling,
+                        "exit_price": exit_price,
+                        "exit_qty": exit_qty,
+                        "exit_reason": exit_reason,
+                    },
+                )
+                raise ValueError(
+                    f"close_trade: gross_pnl={gross_pnl:.2f} exceeds 10x "
+                    f"entry_value={entry_value:.2f} (ceiling={ceiling:.2f}). "
+                    f"Refusing to write poisoned PnL for trade {trade_id!r}; "
+                    f"upstream cost / fill computation likely broken."
+                )
+
         net_pnl = gross_pnl - charges
         now = now_ist().isoformat()
         with self._store.transaction() as cur:

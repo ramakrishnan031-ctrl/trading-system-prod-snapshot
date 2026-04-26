@@ -399,6 +399,87 @@ def test_alerts_config_values_match_stubs() -> None:
     print("  OK AlertsConfig values match stub YAML (TG12, AW11)")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# G.3 / 2026-04-25 audit — SMTP password from env var
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_g3_smtp_resolved_password_prefers_env_var() -> None:
+    """G.3: when password_env is set, resolved_password() reads os.environ
+    and ignores the plaintext password field."""
+    import os
+    smtp = SmtpConfig(
+        host="smtp.example.com", port=587, use_tls=True,
+        username="u", password="ignored-plaintext",
+        password_env="G3_TEST_SMTP_PASSWORD",
+        from_address="from@example.com",
+        to_addresses=["to@example.com"], timeout_sec=10,
+    )
+    os.environ["G3_TEST_SMTP_PASSWORD"] = "from-env-var"
+    try:
+        assert smtp.resolved_password() == "from-env-var"
+    finally:
+        del os.environ["G3_TEST_SMTP_PASSWORD"]
+    print("  OK G.3: resolved_password() reads password_env first")
+
+
+def test_g3_smtp_resolved_password_falls_back_to_plaintext() -> None:
+    """G.3: when password_env is unset (dev/test config), resolved_password()
+    returns the plaintext password field."""
+    smtp = SmtpConfig(
+        host="smtp.example.com", port=587, use_tls=True,
+        username="u", password="dev-plaintext",
+        from_address="from@example.com",
+        to_addresses=["to@example.com"], timeout_sec=10,
+    )
+    assert smtp.resolved_password() == "dev-plaintext"
+    print("  OK G.3: resolved_password() falls back to plaintext when password_env empty")
+
+
+def test_g3_smtp_password_env_set_but_var_missing_raises() -> None:
+    """G.3: password_env names a missing/empty env var -> fail-fast at
+    resolution time. Catches the case where the operator forgot to export
+    the var on a fresh VM before alert_watcher starts."""
+    import os
+    smtp = SmtpConfig(
+        host="smtp.example.com", port=587, use_tls=True,
+        username="u", password="",
+        password_env="G3_TEST_NOT_EXPORTED",
+        from_address="from@example.com",
+        to_addresses=["to@example.com"], timeout_sec=10,
+    )
+    # Make sure it really isn't set.
+    os.environ.pop("G3_TEST_NOT_EXPORTED", None)
+
+    raised = False
+    try:
+        smtp.resolved_password()
+    except ValueError as exc:
+        raised = True
+        assert "G3_TEST_NOT_EXPORTED" in str(exc)
+    assert raised, "Expected ValueError for missing env var"
+    print("  OK G.3: missing env var raises at resolved_password()")
+
+
+def test_g3_smtp_neither_password_nor_env_raises_at_construct() -> None:
+    """G.3: model validator rejects a config that has neither plaintext nor
+    env var — catches accidental empty stanzas at YAML load time."""
+    raised = False
+    try:
+        SmtpConfig(
+            host="smtp.example.com", port=587, use_tls=True,
+            username="u", password="",
+            password_env="",
+            from_address="from@example.com",
+            to_addresses=["to@example.com"], timeout_sec=10,
+        )
+    except Exception as exc:  # pydantic ValidationError wraps ValueError
+        raised = True
+        assert "password" in str(exc).lower()
+    assert raised, "Expected validation error"
+    print("  OK G.3: empty password + empty password_env rejected at construct")
+
+
 def test_order_reconciler_config_values_match_stubs() -> None:
     """OrderReconcilerConfig parses correctly from stub YAML (RC17)."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -970,6 +1051,11 @@ def run_all_tests() -> int:
         test_system_config_values_match_stubs,
         test_eod_squareoff_config_values_match_stubs,
         test_alerts_config_values_match_stubs,
+        # G.3 / 2026-04-25 audit -- SMTP password from env var
+        test_g3_smtp_resolved_password_prefers_env_var,
+        test_g3_smtp_resolved_password_falls_back_to_plaintext,
+        test_g3_smtp_password_env_set_but_var_missing_raises,
+        test_g3_smtp_neither_password_nor_env_raises_at_construct,
         test_order_reconciler_config_values_match_stubs,
         test_broker_costs_values_match_stubs,
         test_broker_limits_values_match_stubs,

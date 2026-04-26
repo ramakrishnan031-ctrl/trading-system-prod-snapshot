@@ -827,6 +827,96 @@ def test_bl18_no_webhook_attr_permissive():
 
 
 # ---------------------------------------------------------------------------
+# G.1 / 2026-04-25 audit: require_hmac=True disables token-param fallback.
+# Pre-fix, a request with ?token=<secret> but no X-Webhook-Signature header
+# was accepted via the elif token_param branch even when require_hmac=True
+# (which is meant to mean "HMAC ONLY"). Tokens in URL are logged by nginx
+# and weaker than HMAC over the body.
+# ---------------------------------------------------------------------------
+
+def test_g1_require_hmac_true_rejects_token_only_request():
+    """G.1: require_hmac=True + ?token=secret + no HMAC header -> 401."""
+    cfg = _make_config_with_require_hmac(True)
+    receiver = _bl18_build(cfg, "real-secret")
+    payload = _valid_payload()
+
+    with receiver.app.test_client() as client:
+        resp = client.post(
+            "/webhook/gap_go_long?token=real-secret",
+            json=payload,
+        )
+
+    assert resp.status_code == 401
+    body = resp.get_json() or {}
+    assert "HMAC signature required" in body.get("error", ""), (
+        f"Expected HMAC-required error, got {body!r}"
+    )
+    print("  OK G.1: require_hmac=True rejects token-only request")
+
+
+def test_g1_require_hmac_true_accepts_valid_hmac():
+    """G.1 regression: require_hmac=True still accepts a valid HMAC -> 200."""
+    secret = "real-secret"
+    cfg = _make_config_with_require_hmac(True)
+    receiver = _bl18_build(cfg, secret)
+    body = json.dumps(_valid_payload()).encode()
+    sig = _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    with receiver.app.test_client() as client:
+        resp = client.post(
+            "/webhook/gap_go_long",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Webhook-Signature": f"sha256={sig}",
+            },
+        )
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.data!r}"
+    print("  OK G.1: require_hmac=True still accepts valid HMAC")
+
+
+def test_g1_require_hmac_false_keeps_legacy_token_path():
+    """G.1: require_hmac=False (or absent) preserves the Chartink-compatible
+    token-in-URL path. This is the pin for back-compat in legacy deployments."""
+    cfg = _make_config_with_require_hmac(False)
+    receiver = _bl18_build(cfg, "real-secret")
+
+    with receiver.app.test_client() as client:
+        resp = client.post(
+            "/webhook/gap_go_long?token=real-secret",
+            json=_valid_payload(),
+        )
+
+    assert resp.status_code == 200, (
+        f"require_hmac=False must still allow token; got "
+        f"{resp.status_code}: {resp.data!r}"
+    )
+    print("  OK G.1: require_hmac=False keeps token-param fallback")
+
+
+def test_g1_require_hmac_true_rejects_invalid_hmac_does_not_fall_through():
+    """G.1: require_hmac=True + invalid HMAC + valid token -> 401 (HMAC
+    mismatch), never falls through to token check. Pin existing behavior."""
+    cfg = _make_config_with_require_hmac(True)
+    receiver = _bl18_build(cfg, "real-secret")
+
+    with receiver.app.test_client() as client:
+        resp = client.post(
+            "/webhook/gap_go_long?token=real-secret",
+            json=_valid_payload(),
+            headers={"X-Webhook-Signature": "sha256=deadbeef"},
+        )
+
+    assert resp.status_code == 401
+    body = resp.get_json() or {}
+    # Either HMAC mismatch OR HMAC required is acceptable; what must NOT
+    # happen is the token-fallback path letting the request through.
+    assert resp.status_code != 200
+    print("  OK G.1: invalid HMAC + valid token still 401 (no fallthrough)")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (no pytest dependency)
 # ---------------------------------------------------------------------------
 
@@ -870,6 +960,11 @@ def run_all_tests() -> int:
         test_bl18_require_hmac_false_no_secret_ok,
         test_bl18_nested_appconfig_shape_resolved,
         test_bl18_no_webhook_attr_permissive,
+        # G.1 / 2026-04-25 audit -- require_hmac disables token fallback
+        test_g1_require_hmac_true_rejects_token_only_request,
+        test_g1_require_hmac_true_accepts_valid_hmac,
+        test_g1_require_hmac_false_keeps_legacy_token_path,
+        test_g1_require_hmac_true_rejects_invalid_hmac_does_not_fall_through,
     ]
 
     print("=" * 70)

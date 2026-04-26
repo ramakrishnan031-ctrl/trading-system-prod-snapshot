@@ -118,7 +118,13 @@ alerts:                       # TG12/AW11 — alert subsystem settings
     port: 587
     use_tls: true
     username: "alerts@example.com"
-    password: "app-password-here"
+    # G.3 (2026-04-25): password is read from the env var named here at
+    # alert_watcher boot. Plaintext `password:` field is no longer set in
+    # this committed config; if you need it for local-only testing, override
+    # it in a non-committed config_overrides file. Production: set
+    # ALERT_SMTP_PASSWORD on the alert_watcher host (systemd EnvironmentFile
+    # or the user shell rc).
+    password_env: "ALERT_SMTP_PASSWORD"
     from_address: "alerts@example.com"
     to_addresses:
       - "operator@example.com"

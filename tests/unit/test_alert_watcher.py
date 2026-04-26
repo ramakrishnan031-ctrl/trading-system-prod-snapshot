@@ -45,6 +45,11 @@ def _make_cfg(tmpdir: Path, max_attempts: int = 3) -> MagicMock:
     smtp_cfg.use_tls = True
     smtp_cfg.username = "user"
     smtp_cfg.password = "pass"
+    smtp_cfg.password_env = ""
+    # G.3: alert_watcher resolves the password via this method, not the
+    # plaintext attribute. The MagicMock default would return a MagicMock
+    # object, breaking smtplib.login(); set an explicit return.
+    smtp_cfg.resolved_password.return_value = "pass"
     smtp_cfg.from_address = "from@test.com"
     smtp_cfg.to_addresses = ["to@test.com", "ops@test.com"]
     smtp_cfg.timeout_sec = 10

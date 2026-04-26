@@ -103,6 +103,11 @@ class WebhookReceiver:
         self._ks = kill_switch
         self._log = logger
         self._secret = secret_token
+        # G.1 (2026-04-25): persist for request-time enforcement. When True
+        # the token-param fallback is disabled -- HMAC is the sole accepted
+        # auth surface (token in URL is logged by nginx and weaker than
+        # HMAC over the body).
+        self._require_hmac = _require_hmac
 
         # WR17: in-flight symbol set (thread-safe)
         # HIGH #9: dict[symbol, enqueue_monotonic] for timeout sweeping
@@ -202,9 +207,14 @@ class WebhookReceiver:
         sq_cfg = self._config.system.signal_queue
 
         # WR8: auth validation (when secret configured)
-        # Two accepted methods (tried in order):
+        # Accepted methods:
         #   1. X-Webhook-Signature: sha256=<hex>  — HMAC over raw body
-        #   2. ?token=<secret>                    — query-param bearer (Chartink-compatible)
+        #   2. ?token=<secret>                    — query-param bearer
+        #      (Chartink-compatible; ONLY accepted when require_hmac=False)
+        # G.1 (2026-04-25): when require_hmac=True the token-param path is
+        # disabled. Tokens in URL are logged by nginx and weaker than HMAC
+        # over the body; allowing token fallback in a "strict HMAC" deploy
+        # contradicts the config's stated security posture.
         if self._secret:
             sig_header: str = request.headers.get("X-Webhook-Signature", "")
             token_param: str = request.args.get("token", "")
@@ -215,6 +225,14 @@ class WebhookReceiver:
                 ).hexdigest()
                 if not _hmac.compare_digest(provided_hex, expected_hex):
                     return jsonify({"error": "HMAC signature mismatch"}), 401
+            elif self._require_hmac:
+                # G.1: HMAC required, no signature header -> reject. Do not
+                # consult token_param; deployments that flip require_hmac=True
+                # have explicitly opted out of the legacy token fallback.
+                return jsonify({
+                    "error": "HMAC signature required (require_hmac=True); "
+                             "token param is not accepted"
+                }), 401
             elif token_param:
                 if not _hmac.compare_digest(token_param, self._secret):
                     return jsonify({"error": "Invalid token"}), 401

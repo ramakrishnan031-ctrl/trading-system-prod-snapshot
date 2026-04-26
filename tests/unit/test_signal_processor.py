@@ -951,6 +951,73 @@ def test_derive_prices_atr_fallback_warns():
     print(f"  OK ATR fallback -> FIXED_PCT, sl={sl}, warning logged")
 
 
+def test_e1_atr_fallback_with_zero_sl_pct_rejects():
+    """E.1 (2026-04-25): sl_method=ATR + sl_pct=0.0 (e.g.
+    positional_momentum_long.yaml) falls back to FIXED_PCT but the
+    fallback has no usable sl distance. Pre-fix the bounds enforcement
+    silently widened to sl_min_pct, masking the missing ATR input.
+    Post-fix: explicit rejection with REJECTED_ZERO_SL so the operator
+    notices the YAML is incomplete (set positive sl_pct fallback or
+    implement ATR)."""
+    log = _NullLogger()
+    proc, _, _ = _make_proc(logger=log)
+    strategy = _MockStrategy(
+        name="positional_momentum_long_v1",
+        direction="LONG", sl_method="ATR", sl_pct=0.0,
+    )
+    from signals.signal_processor import _PipelineReject
+    raised = False
+    try:
+        proc._derive_prices(1000.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "ZERO_SL", f"Expected ZERO_SL, got {exc.check}"
+        assert "FIXED_PCT" in exc.reason
+        assert "positional_momentum_long_v1" in exc.reason
+    assert raised, "Expected _PipelineReject(ZERO_SL) on ATR + sl_pct=0.0"
+    print("  OK E.1: ATR fallback + sl_pct=0.0 -> REJECTED_ZERO_SL")
+
+
+def test_e1_fixed_pct_with_zero_sl_pct_rejects():
+    """E.1: defense in depth -- if a strategy somehow lands here with
+    sl_method=FIXED_PCT and sl_pct=0.0 (schema validator should catch this
+    at YAML load, but a malformed in-memory _MockStrategy or future bug
+    must still trip the rejection in the pricing path)."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(
+        name="bad_strategy_v1", direction="LONG",
+        sl_method="FIXED_PCT", sl_pct=0.0,
+    )
+    from signals.signal_processor import _PipelineReject
+    raised = False
+    try:
+        proc._derive_prices(1000.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "ZERO_SL"
+    assert raised
+    print("  OK E.1: FIXED_PCT + sl_pct=0.0 (defense in depth) -> ZERO_SL")
+
+
+def test_e1_negative_sl_pct_also_rejected():
+    """E.1: sl_pct < 0 yields negative or above-entry SL (catastrophic).
+    Reject with the same gate."""
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(
+        name="negative_sl_v1", direction="LONG",
+        sl_method="FIXED_PCT", sl_pct=-0.01,
+    )
+    from signals.signal_processor import _PipelineReject
+    raised = False
+    try:
+        proc._derive_prices(1000.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "ZERO_SL"
+    assert raised
+    print("  OK E.1: negative sl_pct rejected (sl_pct <= 0 guard)")
+
+
 def test_derive_prices_sl_min_pct_enforced():
     """SL too tight (sl_distance_pct < sl_min_pct) -> adjusted, WARNING logged."""
     log = _NullLogger()
@@ -1703,6 +1770,9 @@ def run_all_tests() -> int:
         test_derive_prices_sl_long,
         test_derive_prices_sl_short,
         test_derive_prices_atr_fallback_warns,
+        test_e1_atr_fallback_with_zero_sl_pct_rejects,
+        test_e1_fixed_pct_with_zero_sl_pct_rejects,
+        test_e1_negative_sl_pct_also_rejected,
         test_derive_prices_sl_min_pct_enforced,
         test_derive_prices_sl_max_pct_enforced,
         test_derive_target_fixed_pct_long,

@@ -336,7 +336,14 @@ class SmtpConfig(BaseModel):
     port: int                     # AW7: SMTP port (default 587)
     use_tls: bool                 # AW7: if True use STARTTLS
     username: str                 # AW7: SMTP auth username
-    password: str                 # AW7: SMTP auth password (use env var in prod)
+    password: str = ""            # G.3: plaintext fallback ONLY for tests/dev;
+                                  # production must use password_env. Empty
+                                  # default lets YAML omit the field entirely
+                                  # when password_env is set.
+    password_env: str = ""        # G.3 (2026-04-25): name of env var holding
+                                  # the SMTP password. Resolved at boot via
+                                  # SmtpConfig.resolved_password(). Mirrors the
+                                  # *_env convention used for telegram tokens.
     from_address: str             # AW7: envelope From address
     to_addresses: list[str]       # AW7: list of recipient addresses
     timeout_sec: int              # AW7: SMTP connection timeout in seconds
@@ -361,6 +368,34 @@ class SmtpConfig(BaseModel):
         if not v:
             raise ValueError("to_addresses must not be empty")
         return v
+
+    @model_validator(mode="after")
+    def _validate_password_source(self) -> "SmtpConfig":
+        # G.3: at least one password source must be set. We keep this loose
+        # (does not require password_env in non-prod) but the resolver below
+        # will fail at runtime if neither yields a value.
+        if not self.password and not self.password_env:
+            raise ValueError(
+                "SmtpConfig: either password (dev/test) or password_env "
+                "(production) must be set."
+            )
+        return self
+
+    def resolved_password(self) -> str:
+        """G.3: return the SMTP password, preferring env var. Raises
+        ValueError when password_env is set but the env var is unset/empty
+        (fail-fast at alert_watcher boot rather than at first send)."""
+        import os
+        if self.password_env:
+            val = os.environ.get(self.password_env, "")
+            if not val:
+                raise ValueError(
+                    f"SmtpConfig.password_env={self.password_env!r} is set "
+                    f"but the env var is empty. Export it on the alert_watcher "
+                    f"host (e.g. via systemd EnvironmentFile)."
+                )
+            return val
+        return self.password
 
 
 class TelegramChannelConfig(BaseModel):

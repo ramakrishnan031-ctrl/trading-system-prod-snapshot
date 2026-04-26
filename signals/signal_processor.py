@@ -694,6 +694,27 @@ class SignalProcessor:
 
         if sl_method == "FIXED_PCT":
             sl_pct = float(strategy.sl_pct)
+            # E.1 (2026-04-25): explicit reject when sl_pct == 0 in the
+            # FIXED_PCT branch. Strategy schema validates sl_pct > 0 only
+            # when sl_method=FIXED_PCT in the YAML; ATR strategies declare
+            # sl_pct=0.0 (legitimately, since ATR computes the SL). When
+            # ATR is unavailable and we fall back to FIXED_PCT, sl_pct is
+            # still 0.0 -- the bounds-enforcement step below would silently
+            # widen sl_distance to sl_min_pct, masking the missing ATR
+            # input. Reject explicitly so the operator notices the YAML
+            # is incomplete (e.g. add a non-zero sl_pct fallback for
+            # FIXED_PCT, or implement ATR).
+            if sl_pct <= 0.0:
+                raise _PipelineReject(
+                    "ZERO_SL",
+                    (
+                        f"sl_pct={sl_pct} in FIXED_PCT branch "
+                        f"(strategy={strategy.name}, direction={direction}). "
+                        f"Likely cause: sl_method=ATR with sl_pct=0.0 fell "
+                        f"back to FIXED_PCT and has no usable SL distance. "
+                        f"Set a positive sl_pct fallback in the strategy YAML."
+                    ),
+                )
             if direction == "LONG":
                 sl_price = entry_price * (1.0 - sl_pct)
             else:

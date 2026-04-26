@@ -195,7 +195,13 @@ def _send_email(smtp_cfg, data: dict, log: logging.Logger) -> None:
             server = smtplib.SMTP_SSL(smtp_cfg.host, smtp_cfg.port, timeout=smtp_cfg.timeout_sec)
 
         try:
-            server.login(smtp_cfg.username, smtp_cfg.password)
+            # G.3 (2026-04-25): resolve password via env var when password_env
+            # is configured; falls back to plaintext password (dev/test only).
+            # Resolution can raise ValueError if the env var is unset; the
+            # outer except clauses categorize that as SmtpError so the watcher
+            # exits with the expected code path rather than crashing.
+            password = smtp_cfg.resolved_password()
+            server.login(smtp_cfg.username, password)
             server.sendmail(smtp_cfg.from_address, smtp_cfg.to_addresses, msg.as_string())
         finally:
             server.quit()
