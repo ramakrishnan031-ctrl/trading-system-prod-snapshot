@@ -73,12 +73,6 @@ class SignalQueueConfig(BaseModel):
     expiry_sec: int            # WR6: reject signal older than this many seconds (default 60)
 
 
-class OrderFillTimeoutConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    limit_sec: int    # LIMIT order fill timeout; cancel + FAILED on expiry (P11b)
-    market_sec: int   # MARKET order timeout; 0 = no wait (P11b)
-
-
 class ClockSkewProbeConfig(BaseModel):
     """BL-21: periodic broker clock skew probe driver."""
     model_config = ConfigDict(extra="forbid")
@@ -615,7 +609,6 @@ class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trading_hours: TradingHoursConfig
     signal_queue: SignalQueueConfig
-    order_fill_timeout: OrderFillTimeoutConfig
     product_map: dict[str, dict[str, str]]  # broker -> {INTENT -> code} (PR8)
     clock: ClockConfig
     order_monitor: OrderMonitorConfig         # OM14

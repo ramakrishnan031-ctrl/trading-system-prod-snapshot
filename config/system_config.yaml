@@ -18,10 +18,6 @@ signal_queue:
   backpressure_pct: 0.80      # 503 threshold = capacity * backpressure_pct (P15)
   expiry_sec: 60              # WR6: reject signal older than this many seconds
 
-order_fill_timeout:
-  limit_sec: 60               # LIMIT order fill timeout; cancel + mark FAILED on expiry (P11b)
-  market_sec: 0               # MARKET order: no wait needed (P11b)
-
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:
     INTRADAY: "MIS"           # Margin Intraday Squareoff (PR3)

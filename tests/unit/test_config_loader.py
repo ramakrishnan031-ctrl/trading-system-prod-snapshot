@@ -71,9 +71,6 @@ signal_queue:
   capacity: 300
   backpressure_pct: 0.80
   expiry_sec: 60
-order_fill_timeout:
-  limit_sec: 60
-  market_sec: 0
 product_map:
   zerodha:
     INTRADAY: "MIS"
