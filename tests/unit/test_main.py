@@ -79,7 +79,6 @@ def _make_mock_app_config():
     sys_cfg.order_monitor.fill_timeout_sec = 60
     sys_cfg.order_reconciler.poll_interval_sec = 15
     sys_cfg.order_reconciler.capital_drift_tolerance = 500.0
-    sys_cfg.order_reconciler.enable_event_driven = True
     sys_cfg.signal_processor.worker_count = 3
     sys_cfg.signal_processor.drain_poll_sec = 0.1
     sys_cfg.eod_squareoff.poll_interval_sec = 5

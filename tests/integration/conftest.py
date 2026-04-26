@@ -183,7 +183,7 @@ def wired_system(request, tmp_path):
     broker_costs = _load_yaml_config("broker_costs.yaml", BrokerCostsConfig)
     cost_calculator = CostCalculator(broker_costs)
 
-    state_machine = OrderStateMachine(bus=bus)
+    state_machine = OrderStateMachine()
 
     adapter = ZerodhaAdapter(
         kite_client=None,   # never called in paper mode

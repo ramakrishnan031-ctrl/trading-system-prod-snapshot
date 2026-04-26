@@ -413,7 +413,6 @@ class OrderReconcilerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     poll_interval_sec: int        # RC17: periodic reconciliation cadence (P14 = 15s)
     capital_drift_tolerance: float  # RC17: max acceptable broker/local capital delta
-    enable_event_driven: bool     # RC17: subscribe OrderStateChanged for instant checks
 
     @field_validator("poll_interval_sec")
     @classmethod

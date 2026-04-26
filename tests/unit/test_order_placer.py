@@ -1426,7 +1426,7 @@ class TestBl12OrderStatusEventPipeline:
 
         bus = EventBus()
         om = OrderManager(store, _log(), bus=bus)   # bus-wired: subscribes
-        osm = OrderStateMachine(bus=bus)
+        osm = OrderStateMachine()
 
         class _Adapter:
             def get_order_history(self, _): return []

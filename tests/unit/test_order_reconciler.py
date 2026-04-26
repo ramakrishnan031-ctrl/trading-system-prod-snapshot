@@ -9,7 +9,6 @@ Coverage:
   - G5b crash-recovery SL: 4 direction×condition cases + placement failure
   - G3 capital drift: drift > tolerance and within tolerance
   - Lifecycle: start/stop, startup reconciliation (RC14)
-  - Hybrid cadence: event-driven via OrderStateChanged (RC4)
   - Error handling: BrokerTimeoutError skips check (RC11);
     3x BrokerAuthError → soft_kill (RC12)
   - reconcile_once() non-reentrant (RC13)
@@ -32,7 +31,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from core.events import CapitalDriftDetected, EventBus, OrderStateChanged, PositionClosed
+from core.events import CapitalDriftDetected, EventBus, PositionClosed
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
 from core.state_store import StateStore
 from orders.order_reconciler import OrderReconciler, ReconciliationAction
@@ -169,7 +168,6 @@ def _make_reconciler(
     broker_orders_fn=None,
     poll_interval_sec: int = 60,
     capital_drift_tolerance: float = 50.0,
-    enable_event_driven: bool = True,
 ) -> OrderReconciler:
     """Build an OrderReconciler with sensible mock defaults."""
     import logging
@@ -202,7 +200,6 @@ def _make_reconciler(
     cfg = OrderReconcilerConfig(
         poll_interval_sec=poll_interval_sec,
         capital_drift_tolerance=capital_drift_tolerance,
-        enable_event_driven=enable_event_driven,
     )
 
     logger = logging.getLogger("order_reconciler")
@@ -1250,54 +1247,6 @@ def test_rc13_concurrent_cycle_returns_empty(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RC4: event-driven reconciliation
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_rc4_order_state_changed_triggers_reconcile(tmp_path: Path) -> None:
-    """
-    Audit #12: OrderStateChanged no longer triggers reconcile.
-
-    Contract reversal — the reconciler is now daemon-poll only; the
-    event subscription was removed to prevent reconcile storms when
-    bursts of state transitions hit the bus. The flag
-    `enable_event_driven=True` is retained for backwards-compat config
-    loading but ignored at runtime.
-    """
-    store = _make_store(tmp_path)
-
-    adapter = MagicMock()
-    adapter.get_positions.return_value = []
-    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
-
-    fm = MagicMock()
-    snap = MagicMock(); snap.total = 100_000.0
-    fm.get_snapshot.return_value = snap
-
-    bus = EventBus()
-
-    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
-                           enable_event_driven=True)
-    rec.start()
-
-    initial_calls = adapter.get_positions.call_count
-
-    bus.publish(OrderStateChanged(source_module="test", order_id="ord_1", from_state="PENDING", to_state="COMPLETE"))
-
-    time.sleep(0.05)
-    final_calls = adapter.get_positions.call_count
-
-    rec.stop()
-
-    assert final_calls == initial_calls, (
-        f"Audit #12: get_positions must NOT be called after OrderStateChanged; "
-        f"initial={initial_calls}, final={final_calls}"
-    )
-
-    store.close()
-    print("  OK RC4: OrderStateChanged does NOT trigger reconcile (Audit #12)")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # RC14: startup reconciliation
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1314,7 +1263,7 @@ def test_rc14_startup_reconciliation(tmp_path: Path) -> None:
     fm.get_snapshot.return_value = snap
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm,
-                           poll_interval_sec=60, enable_event_driven=False)
+                           poll_interval_sec=60)
 
     assert adapter.get_positions.call_count == 0, "No calls before start()"
     rec.start()

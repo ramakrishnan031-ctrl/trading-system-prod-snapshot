@@ -154,7 +154,6 @@ alerts:
 order_reconciler:
   poll_interval_sec: 15
   capital_drift_tolerance: 50.0
-  enable_event_driven: true
 shadow_tracker:
   enabled: true
   max_innings: 3
@@ -483,7 +482,6 @@ def test_order_reconciler_config_values_match_stubs() -> None:
     assert isinstance(cfg.system.order_reconciler, OrderReconcilerConfig)
     assert cfg.system.order_reconciler.poll_interval_sec == 15
     assert cfg.system.order_reconciler.capital_drift_tolerance == 50.0
-    assert cfg.system.order_reconciler.enable_event_driven is True
     print("  OK OrderReconcilerConfig values match stub YAML (RC17)")
 
 

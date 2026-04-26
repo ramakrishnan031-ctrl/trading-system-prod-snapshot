@@ -11,8 +11,11 @@ RC2  — Constructor injections: state_store, adapter, fund_manager, kill_switch
         notifier (TelegramNotifier), bus (EventBus), logger, cfg
         (OrderReconcilerConfig), quote_fn, broker_orders_fn=None.
 RC3  — Daemon poll thread fires every cfg.poll_interval_sec (P14 = 15 s).
-RC4  — If cfg.enable_event_driven, subscribe OrderStateChanged; call
-        reconcile_once() on each event. Non-blocking (skips if locked).
+RC4  — RETIRED. Previously subscribed OrderStateChanged for event-driven
+        kicks. Audit #12 disabled at runtime (rate-limit pressure under
+        bursts of OSM transitions); 2026-04-26 audit DEAD-1/CFG-4 removed
+        the subscriber method and the enable_event_driven config flag.
+        Reconciliation is daemon-poll only.
 RC5  — Six reconciliation checks per cycle:
           (a) MANUAL_CLOSE  — local OPEN/PARTIAL, broker has no position
           (b) ORPHAN_ADOPTION — broker position, no local trade
@@ -45,7 +48,7 @@ RC15 — No paper-mode special-casing in reconciler; paper behaviour is owned
         by the adapter and TelegramNotifier.
 RC16 — Logger name must be "order_reconciler" so L7 routing applies.
 RC17 — Config section: OrderReconcilerConfig (poll_interval_sec,
-        capital_drift_tolerance, enable_event_driven).
+        capital_drift_tolerance).
 RC18 — G5b order placement calls adapter.place_order() directly; no import
         from orders.order_placer.
 RC19 — reconciliation_log table added in schema v6 (TABLE 13).
@@ -67,7 +70,6 @@ from core.config_loader import OrderReconcilerConfig
 from core.events import (
     CapitalDriftDetected,
     EventBus,
-    OrderStateChanged,
     PositionClosed,  # BL-10b: out-of-band closure notification
 )
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
@@ -108,8 +110,9 @@ class OrderReconciler:
     """
     Reconciles local trade state against the live broker state (RC1-RC20).
 
-    Combines a 15-second daemon poll thread (P14) with optional event-driven
-    triggering on OrderStateChanged (G1 hybrid cadence).
+    Pure 15-second daemon poll thread (P14). Audit #12 disabled the
+    optional event-driven trigger; the subscriber and the
+    enable_event_driven flag were removed by the 2026-04-26 audit.
 
     Usage::
 
@@ -167,20 +170,6 @@ class OrderReconciler:
         # Startup reconcile before trading begins
         self.reconcile_once()
 
-        # Audit #12: the event-driven trigger (RC4) has been disabled.
-        # Every OSM transition previously funnelled through reconcile_once(),
-        # and a burst of fills (CANCELLED+REJECTED+COMPLETE across a dozen
-        # orders within a few hundred ms) spiked the adapter to ~18 REST
-        # calls in a 500ms window, tripping 429s and freezing the poll
-        # thread. The daemon poll alone is sufficient (G1 hybrid collapses
-        # to pure polling). Config flag left in place for rollback but
-        # now forced to no-op.
-        if self._cfg.enable_event_driven:
-            self._log.info(
-                "order_reconciler: enable_event_driven=True ignored "
-                "(Audit #12 disables OrderStateChanged subscription)"
-            )
-
         # Start daemon poll thread (RC3)
         self._stop_event.clear()
         self._thread = threading.Thread(
@@ -190,9 +179,8 @@ class OrderReconciler:
         )
         self._thread.start()
         self._log.info(
-            "order_reconciler started (poll_interval=%ds, event_driven=%s)",
+            "order_reconciler started (poll_interval=%ds)",
             self._cfg.poll_interval_sec,
-            self._cfg.enable_event_driven,
         )
 
     def stop(self) -> None:
@@ -222,10 +210,6 @@ class OrderReconciler:
             self._lock.release()
 
     # ── Private helpers ───────────────────────────────────────────────────────
-
-    def _on_order_state_changed(self, evt: OrderStateChanged) -> None:
-        """RC4: event-driven trigger; non-blocking."""
-        self.reconcile_once()
 
     def _poll_loop(self) -> None:
         """Daemon thread body: sleep poll_interval_sec then reconcile."""

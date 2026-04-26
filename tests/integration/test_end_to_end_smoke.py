@@ -465,7 +465,6 @@ class TestScenario7ReconcilerManualClose:
         rc_cfg = OrderReconcilerConfig(
             poll_interval_sec=15,
             capital_drift_tolerance=50.0,
-            enable_event_driven=False,
         )
         return OrderReconciler(
             state_store=ctx.store,

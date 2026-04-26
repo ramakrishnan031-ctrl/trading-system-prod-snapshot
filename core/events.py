@@ -24,14 +24,17 @@ Locked Design Decisions:
     EV6 — Four event types seeded: OrderFilled, PositionClosed,
            KillSwitchActivated, CapitalDriftDetected. No others added
            speculatively.
-    EV7 — OrderStateChanged added for order_state_machine (OSM7).
-           Published on every successful state transition.
+    EV7 — RETIRED. OrderStateChanged was published on every OSM transition
+           but had no production subscriber after Audit #12 disabled the
+           order_reconciler subscription. 2026-04-26 audit DEAD-2 removed
+           the event class and the OSM publish call. Re-add only alongside
+           a real subscriber.
     EV8 — EodSquareoffComplete added for eod_squareoff (EOD5).
            Published after the full EOD fire sequence completes.
     EV9 — OrderStatusChanged added for broker-authoritative status snapshots
            (BL-12). Published by order_monitor on every successful OSM
            transition; consumed by order_manager to update the `orders`
-           table. Distinct from OrderStateChanged (internal OSM transitions).
+           table.
 
 What This Module Does NOT Do:
     - Does not use queues, threads, or async (see EV1)
@@ -164,23 +167,6 @@ class EodSquareoffComplete(Event):
 
 
 @dataclass
-class OrderStateChanged(Event):
-    """
-    An order transitioned from one state to another in the state machine (OSM7).
-    Published on every successful transition; not published on failed transitions.
-
-    Fields:
-        order_id:   internal order identifier (ord_ prefix)
-        from_state: state before the transition
-        to_state:   state after the transition
-        ts:         IST timestamp of the transition (auto-populated via Event base)
-    """
-    order_id: str = ""
-    from_state: str = ""
-    to_state: str = ""
-
-
-@dataclass
 class OrderStatusChanged(Event):
     """
     Broker-authoritative order status snapshot (EV9, BL-12).
@@ -188,9 +174,6 @@ class OrderStatusChanged(Event):
     Published by order_monitor on every successful OSM transition; consumed
     by order_manager to persist the broker-reported snapshot into the
     `orders` table (status/qty_filled/avg_fill_price columns).
-
-    Distinct from OrderStateChanged: that event carries pure OSM transition
-    semantics; this one carries broker fill data at the moment of transition.
 
     Fields:
         internal_order_id: ord_<hex32> from core.ids

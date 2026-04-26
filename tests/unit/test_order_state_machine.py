@@ -16,9 +16,8 @@ Validates broker/order_state_machine.py against OSM1-OSM14:
   - FAILED -> anything -> InvalidTransitionError (OSM4)
   - EXPIRED -> anything -> InvalidTransitionError (OSM4)
   - All 4 terminal states reject same-state self-loop (OSM4)
-  - Successful transition publishes OrderStateChanged event (OSM7)
-  - Failed transition does NOT publish event (OSM7)
-  - bus=None -> no event, no error (OSM7)
+  - Successful transition updates current_state (OSM3)
+  - Failed transition leaves state unchanged (OSM3)
   - is_terminal() correct for all 8 states (OSM13)
   - allowed_transitions() returns correct list per state (OSM13)
   - Thread safety: 50 registrations + transitions from 5 threads (OSM5)
@@ -44,7 +43,6 @@ from broker.order_state_machine import (
     allowed_transitions,
     is_terminal,
 )
-from core.events import EventBus, OrderStateChanged
 from core.exceptions import InvalidTransitionError
 
 
@@ -53,11 +51,13 @@ from core.exceptions import InvalidTransitionError
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_osm(with_bus: bool = False):
-    """Return (osm, bus) or (osm, None)."""
-    if with_bus:
-        bus = EventBus()
-        return OrderStateMachine(bus=bus), bus
-    return OrderStateMachine(bus=None), None
+    """
+    Returns (osm, None). The legacy `with_bus` flag is preserved to keep the
+    existing callers in this file readable, but is now ignored — DEAD-2
+    (2026-04-26 audit) removed OSM event publishing.
+    """
+    _ = with_bus  # accepted but ignored; OSM no longer publishes events
+    return OrderStateMachine(), None
 
 
 def _reg(osm: OrderStateMachine, order_id: str = "ord_test") -> str:
@@ -242,71 +242,42 @@ def test_all_four_terminal_states_reject_same_state() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tests -- event publishing (OSM7)
+# Tests -- transition behavior
+# (formerly OSM7 event-publishing tests; rewritten as state assertions per
+#  TST-1 of the 2026-04-26 audit, after DEAD-2 removed OrderStateChanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_successful_transition_publishes_event() -> None:
-    osm, bus = _make_osm(with_bus=True)
-    received: list[OrderStateChanged] = []
-    bus.subscribe(OrderStateChanged, received.append)  # type: ignore[arg-type]
-
+def test_successful_transition_updates_state() -> None:
+    osm, _ = _make_osm()
     osm.register("ord_001")
     osm.transition("ord_001", "SUBMITTED")
-
-    assert len(received) == 1
-    evt = received[0]
-    assert isinstance(evt, OrderStateChanged)
-    assert evt.order_id == "ord_001"
-    assert evt.from_state == "PENDING"
-    assert evt.to_state == "SUBMITTED"
-    assert evt.source_module == "order_state_machine"
-    print("  OK Successful transition publishes OrderStateChanged event (OSM7)")
+    assert osm.current_state("ord_001") == "SUBMITTED"
+    print("  OK Successful transition updates current_state (OSM3)")
 
 
-def test_failed_transition_does_not_publish_event() -> None:
-    osm, bus = _make_osm(with_bus=True)
-    received: list[OrderStateChanged] = []
-    bus.subscribe(OrderStateChanged, received.append)  # type: ignore[arg-type]
-
+def test_failed_transition_leaves_state_unchanged() -> None:
+    osm, _ = _make_osm()
     osm.register("ord_001")
     try:
         osm.transition("ord_001", "OPEN")   # PENDING -> OPEN is illegal
     except InvalidTransitionError:
         pass
-
-    assert len(received) == 0, "No event should be published on failed transition"
-    print("  OK Failed transition does NOT publish event (OSM7)")
-
-
-def test_bus_none_no_event_no_error() -> None:
-    """bus=None: transitions work normally, no event publishing, no AttributeError."""
-    osm, _ = _make_osm(with_bus=False)
-    osm.register("ord_001")
-    osm.transition("ord_001", "SUBMITTED")   # must not raise
-    assert osm.current_state("ord_001") == "SUBMITTED"
-    print("  OK bus=None: transition succeeds silently (OSM7)")
+    assert osm.current_state("ord_001") == "PENDING"
+    print("  OK Failed transition leaves state unchanged (OSM3)")
 
 
-def test_multiple_transitions_publish_multiple_events() -> None:
-    osm, bus = _make_osm(with_bus=True)
-    received: list[OrderStateChanged] = []
-    bus.subscribe(OrderStateChanged, received.append)  # type: ignore[arg-type]
-
+def test_multiple_transitions_walk_through_states() -> None:
+    osm, _ = _make_osm()
     osm.register("ord_001")
     osm.transition("ord_001", "SUBMITTED")
+    assert osm.current_state("ord_001") == "SUBMITTED"
     osm.transition("ord_001", "OPEN")
+    assert osm.current_state("ord_001") == "OPEN"
     osm.transition("ord_001", "PARTIAL")
+    assert osm.current_state("ord_001") == "PARTIAL"
     osm.transition("ord_001", "COMPLETE")
-
-    assert len(received) == 4
-    states = [(e.from_state, e.to_state) for e in received]
-    assert states == [
-        ("PENDING", "SUBMITTED"),
-        ("SUBMITTED", "OPEN"),
-        ("OPEN", "PARTIAL"),
-        ("PARTIAL", "COMPLETE"),
-    ]
-    print("  OK 4 transitions publish 4 events in order (OSM7)")
+    assert osm.current_state("ord_001") == "COMPLETE"
+    print("  OK 4 transitions advance state through PENDING->...->COMPLETE")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

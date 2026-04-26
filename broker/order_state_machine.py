@@ -3,8 +3,7 @@ broker/order_state_machine.py — Trading System v2
 
 Purpose:
     Thread-safe in-memory order state machine. Owns all order state
-    transitions and publishes OrderStateChanged events on every successful
-    move. Single source of truth for live order lifecycle.
+    transitions for live order lifecycle. Single source of truth.
 
 Locked Design Decisions:
     OSM1  -- States (8): PENDING, SUBMITTED, OPEN, PARTIAL, COMPLETE,
@@ -29,12 +28,13 @@ Locked Design Decisions:
              All public methods acquire the lock.
     OSM6  -- InvalidTransitionError (BrokerError, SEVERITY="ERROR").
              context: {order_id, from_state, to_state, allowed_next_states}.
-    OSM7  -- On every successful transition, publishes OrderStateChanged event
-             via injected EventBus. If bus is None, no publish (headless mode).
+    OSM7  -- RETIRED. Previously published OrderStateChanged on every
+             transition. 2026-04-26 audit DEAD-2 removed the publish call;
+             the event had no production subscriber after Audit #12.
     OSM8  -- current_state(order_id) -> str. Raises ValueError if unknown.
     OSM9  -- register(order_id) initializes order in PENDING. Raises
              ValueError if already registered.
-    OSM10 -- Layer 2 (broker/). Imports: stdlib + core.exceptions + core.events.
+    OSM10 -- Layer 2 (broker/). Imports: stdlib + core.exceptions.
     OSM11 -- No persistence. In-memory only.
     OSM12 -- InvalidTransitionError context: order_id, from_state, to_state,
              allowed_next_states (list).
@@ -52,9 +52,7 @@ What This Module Does NOT Do:
 from __future__ import annotations
 
 import threading
-from typing import Optional
 
-from core.events import EventBus, OrderStateChanged
 from core.exceptions import InvalidTransitionError
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,25 +125,16 @@ class OrderStateMachine:
     """
     Thread-safe in-memory order state machine.
 
-    Constructed once at startup and shared across threads. The injected
-    EventBus is optional — pass None for headless/test usage where event
-    publishing is not needed.
+    Constructed once at startup and shared across threads.
 
     Usage::
-        bus = EventBus()
-        osm = OrderStateMachine(bus=bus)
+        osm = OrderStateMachine()
         osm.register("ord_abc123")
         osm.transition("ord_abc123", "SUBMITTED")
         state = osm.current_state("ord_abc123")   # -> "SUBMITTED"
     """
 
-    def __init__(self, bus: Optional[EventBus] = None) -> None:
-        """
-        Args:
-            bus: EventBus to publish OrderStateChanged events on each successful
-                 transition. Pass None to disable event publishing (OSM7).
-        """
-        self._bus: Optional[EventBus] = bus
+    def __init__(self) -> None:
         self._states: dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -174,7 +163,6 @@ class OrderStateMachine:
         Move order_id to to_state if the transition is valid (OSM3).
 
         Reads the current state internally — caller never passes from_state.
-        On success, publishes OrderStateChanged via the injected bus (OSM7).
 
         Args:
             order_id: registered order identifier.
@@ -205,18 +193,6 @@ class OrderStateMachine:
                 )
 
             self._states[order_id] = to_state
-
-        # Publish outside the lock — bus subscribers must not call back into
-        # this machine (would deadlock), but we still hold no lock here.
-        if self._bus is not None:
-            self._bus.publish(
-                OrderStateChanged(
-                    source_module="order_state_machine",
-                    order_id=order_id,
-                    from_state=from_state,
-                    to_state=to_state,
-                )
-            )
 
     def current_state(self, order_id: str) -> str:
         """

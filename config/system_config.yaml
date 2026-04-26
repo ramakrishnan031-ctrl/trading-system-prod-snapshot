@@ -125,7 +125,6 @@ alerts:                       # TG12/AW11 — alert subsystem settings
 order_reconciler:             # RC17 — reconciler tuning
   poll_interval_sec: 15       # P14: 15-second periodic cadence
   capital_drift_tolerance: 50.0  # G3 Level 3: alert if broker/local delta > Rs50
-  enable_event_driven: true   # G1: subscribe OrderStateChanged for instant re-check
 
 shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   enabled: true               # SH13: false = all handlers no-ops; table stays empty

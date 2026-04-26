@@ -693,7 +693,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     market_windows = MarketWindows(holidays=holidays)
 
     # Build broker adapter early for clock check (paper mode skips live calls)
-    state_machine = OrderStateMachine(bus=event_bus)
+    state_machine = OrderStateMachine()
     rate_limiter = RateLimiter(app_config.broker_limits)
     product_resolver = ProductResolver(app_config.system.product_map)
     cost_calculator = CostCalculator(app_config.broker_costs)
@@ -1253,8 +1253,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     )
     event_bus.subscribe(CapitalDriftDetected, drift_handler.on_drift)
     _log.info("capital drift handler subscribed (BL-2)")
-    # Note: fund_manager has no on_order_filled/on_position_closed handlers;
-    # order_reconciler subscribes OrderStateChanged internally in start() (RC4).
+    # Note: fund_manager has no on_order_filled/on_position_closed handlers.
+    # The reconciler is daemon-poll only (RC4 retired by 2026-04-26 audit).
 
     # H-7: finalize EOD init now that bus subscriptions are registered.
     # _check_restart_recovery() runs here (deferred from EodSquareoff.__init__);

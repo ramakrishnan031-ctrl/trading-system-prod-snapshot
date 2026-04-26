@@ -77,7 +77,7 @@ def _make_eod(
     ks.current_state.return_value = KillState.INACTIVE
 
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     mw = _make_market_windows()
     if holidays:
         mw = MarketWindows(holidays=holidays)
@@ -965,7 +965,7 @@ def test_cancel_pending_entries_updates_order_row_status() -> None:
         ks.current_state.return_value = KillState.INACTIVE
         bus = MagicMock(spec=EventBus)
         from broker.order_state_machine import OrderStateMachine
-        osm = OrderStateMachine(bus=None)
+        osm = OrderStateMachine()
 
         eod = EodSquareoff(
             adapter=adapter,
@@ -1015,7 +1015,7 @@ def test_eod9_skipped_late_writes_event_and_alerts() -> None:
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     mw = _make_market_windows()
     import logging
     logger = logging.getLogger("test_eod9_skipped")
@@ -1099,7 +1099,7 @@ def _make_eod_limit(
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     om = MagicMock()
     logger = logging.getLogger("test_eod_limit")
 
@@ -1279,7 +1279,7 @@ def test_b1_audit_5_2_broker_qty_overrides_db_qty() -> None:
         ks.is_active.return_value = False
         ks.current_state.return_value = KillState.INACTIVE
         bus = MagicMock(spec=EventBus)
-        osm = OrderStateMachine(bus=None)
+        osm = OrderStateMachine()
         om = MagicMock()
         logger = logging.getLogger("test_eod_5_2")
         eod = EodSquareoff(
@@ -1316,7 +1316,7 @@ def test_b1_audit_5_2_broker_qty_zero_skips_exit() -> None:
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     om = MagicMock()
     logger = logging.getLogger("test_eod_5_2_zero")
     eod = EodSquareoff(
@@ -1395,7 +1395,7 @@ def test_b1_get_positions_failure_falls_back_to_db_qty() -> None:
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     om = MagicMock()
     logger = logging.getLogger("test_eod_5_2_fail")
     eod = EodSquareoff(
@@ -1466,7 +1466,7 @@ def test_b1_legacy_market_protocol_unchanged() -> None:
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     om = MagicMock()
     logger = logging.getLogger("test_eod_legacy")
     eod = EodSquareoff(
@@ -1520,7 +1520,7 @@ def test_e5_regular_fire_logs_naked_short_warning_for_stale_db_row() -> None:
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     om = MagicMock()
 
     captured = logging.getLogger("test_eod_e5_warn")
@@ -1581,7 +1581,7 @@ def test_e5_filter_log_carries_recovery_flag() -> None:
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     om = MagicMock()
 
     captured = logging.getLogger("test_eod_e5_info")

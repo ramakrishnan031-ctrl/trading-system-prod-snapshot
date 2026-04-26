@@ -29,7 +29,6 @@ from core.events import (
     EventBus,
     KillSwitchActivated,
     OrderFilled,
-    OrderStateChanged,
     PositionClosed,
 )
 from core.exceptions import EventDispatchError, TradingSystemError
@@ -339,7 +338,7 @@ def test_subscribe_accepts_valid_event_subclass() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Tests -- OrderStateChanged (EV7, OSM7)
+# Tests -- typed event fields
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_order_filled_om6_fields() -> None:
@@ -365,24 +364,6 @@ def test_order_filled_om6_fields() -> None:
     assert e.slippage_pct == 0.4
     assert e.filled_at == "2026-04-15T10:30:00+05:30"
     print("  OK OrderFilled OM6 fields verified (OM6)")
-
-
-def test_order_state_changed_typed_fields() -> None:
-    """OrderStateChanged instantiates with correct typed fields (EV7)."""
-    evt = OrderStateChanged(
-        source_module="order_state_machine",
-        order_id="ord_abc123",
-        from_state="PENDING",
-        to_state="SUBMITTED",
-    )
-    assert isinstance(evt, Event)
-    assert evt.source_module == "order_state_machine"
-    assert evt.order_id == "ord_abc123"
-    assert evt.from_state == "PENDING"
-    assert evt.to_state == "SUBMITTED"
-    assert isinstance(evt.event_id, str) and len(evt.event_id) == 32
-    assert isinstance(evt.ts, datetime)
-    print("  OK OrderStateChanged typed fields and Event envelope verified (EV7)")
 
 
 def test_eod_squareoff_complete_typed_fields() -> None:

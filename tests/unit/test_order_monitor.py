@@ -106,7 +106,7 @@ def _make_monitor(
     on_critical=None,
 ) -> tuple[OrderMonitor, MockAdapter, OrderStateMachine, EventBus]:
     adapter = adapter or MockAdapter()
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     bus = EventBus()
     logger = logging.getLogger("test_monitor")
     monitor = OrderMonitor(

@@ -185,7 +185,7 @@ def _make_adapter(
     rl = RateLimiter(_BROKER_LIMITS_CFG, max_wait_sec=5.0)
     pr = ProductResolver(_PRODUCT_MAP)
     cc = CostCalculator(_BROKER_COSTS_CFG)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     logger = logging.getLogger("test_adapter")
     adapter = ZerodhaAdapter(
         kite_client=kite,

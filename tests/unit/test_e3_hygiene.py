@@ -448,7 +448,7 @@ class _H15Adapter:
 
 
 def _make_monitor_for_h15(adapter: _H15Adapter, on_orphan=None):
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     bus = EventBus()
     log = logging.getLogger("test_h15")
     monitor = OrderMonitor(
@@ -629,7 +629,6 @@ def _make_reconciler_for_m2(store: StateStore, adapter):
     cfg = OrderReconcilerConfig(
         poll_interval_sec=60,
         capital_drift_tolerance=50.0,
-        enable_event_driven=False,
     )
     bus = EventBus()
     fm = MagicMock()

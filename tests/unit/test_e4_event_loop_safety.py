@@ -89,7 +89,7 @@ def _build_eod(
     ks.is_active.return_value = False
     ks.current_state.return_value = KillState.INACTIVE
     bus = MagicMock(spec=EventBus)
-    osm = OrderStateMachine(bus=None)
+    osm = OrderStateMachine()
     mw = MarketWindows()
     logger = logging.getLogger("test_e4")
 
