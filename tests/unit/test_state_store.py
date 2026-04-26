@@ -113,6 +113,20 @@ def test_schema_version_matches_expected(tmpdir: Path) -> None:
     store.close()
 
 
+def test_state_store_exceptions_inherit_from_trading_system_error() -> None:
+    """
+    EXC-1 (2026-04-26 audit): StateStoreError + leaves must be catchable
+    by `except TradingSystemError` so the top-level safety net in main.py
+    handles state corruption with structured logging (E1, E3).
+    """
+    from core.exceptions import StateError, TradingSystemError
+
+    assert issubclass(StateStoreError, StateError)
+    assert issubclass(StateStoreError, TradingSystemError)
+    assert issubclass(SchemaVersionMismatch, TradingSystemError)
+    print("  OK StateStoreError chain inherits from TradingSystemError (EXC-1)")
+
+
 def test_schema_initialization_is_idempotent(tmpdir: Path) -> None:
     """Re-opening the same DB must not error or duplicate tables."""
     store1 = make_store(tmpdir)
@@ -1736,6 +1750,7 @@ def run_all_tests() -> int:
     tests = [
         test_schema_creates_all_tables,
         test_schema_version_matches_expected,
+        test_state_store_exceptions_inherit_from_trading_system_error,
         test_schema_initialization_is_idempotent,
         test_transaction_commit_persists_data,
         test_transaction_rollback_on_exception,

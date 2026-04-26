@@ -57,6 +57,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Iterator, List, Optional, Tuple
 
+from core.exceptions import StateError
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -89,8 +91,14 @@ _CONNECTION_PRAGMAS = (
 # Exceptions
 # ─────────────────────────────────────────────────────────────────────────────
 
-class StateStoreError(Exception):
-    """Base exception for state_store errors."""
+class StateStoreError(StateError):
+    """
+    Base exception for state_store errors.
+
+    Inherits from core.exceptions.StateError so the top-level
+    `except TradingSystemError` safety net in main.py catches schema /
+    transaction failures (E1, E3). 2026-04-26 audit EXC-1.
+    """
 
 
 class SchemaVersionMismatch(StateStoreError):

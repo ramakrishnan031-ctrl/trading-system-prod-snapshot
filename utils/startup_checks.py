@@ -46,7 +46,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from core.exceptions import ClockSkewTooLarge
+from core.exceptions import ClockSkewTooLarge, ConfigError
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -756,8 +756,14 @@ def check_instrument_cache_size(
 # F.1 / EF-7 -- paper_capital regression guard (post-E.7 setter consolidation)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class StartupCheckFailed(Exception):
-    """Raised by a startup check when the detected state is unsafe to run."""
+class StartupCheckFailed(ConfigError):
+    """
+    Raised by a startup check when the detected state is unsafe to run.
+
+    Inherits from core.exceptions.ConfigError (E1, E3) so the top-level
+    `except TradingSystemError` safety net in main.py catches startup /
+    readiness failures with structured logging. 2026-04-26 audit EXC-2.
+    """
 
 
 def check_paper_capital_consistency(

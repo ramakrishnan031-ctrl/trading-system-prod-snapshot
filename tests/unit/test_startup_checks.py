@@ -355,6 +355,19 @@ def test_detect_crash_no_shutdown(tmp_path: Path) -> None:
     store.close()
 
 
+def test_startup_check_failed_inherits_from_trading_system_error() -> None:
+    """
+    EXC-2 (2026-04-26 audit): StartupCheckFailed must inherit from
+    ConfigError (and transitively TradingSystemError) so the top-level
+    safety net in main.py catches startup readiness failures.
+    """
+    from core.exceptions import ConfigError, TradingSystemError
+
+    assert issubclass(StartupCheckFailed, ConfigError)
+    assert issubclass(StartupCheckFailed, TradingSystemError)
+    print("  OK StartupCheckFailed inherits from ConfigError/TradingSystemError (EXC-2)")
+
+
 def test_scenario_result_fields_populated(tmp_path: Path) -> None:
     """StartupScenarioResult has all required fields populated (SC3)."""
     store = _make_store(tmp_path)
@@ -1228,6 +1241,7 @@ def run_all_tests() -> int:
         test_detect_warm_soft_kill_previous_day_with_shutdown,
         test_detect_warm_shutdown_found,
         test_detect_crash_no_shutdown,
+        test_startup_check_failed_inherits_from_trading_system_error,
         test_scenario_result_fields_populated,
         # check_clock_skew (SC5)
         test_clock_skew_within_tolerance_passes,
