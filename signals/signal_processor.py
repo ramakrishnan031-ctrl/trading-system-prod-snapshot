@@ -427,6 +427,16 @@ class SignalProcessor:
                     f"Strategy {strategy_name!r} not in loaded strategies",
                 )
 
+            # CFG-5 (2026-04-26 audit): per-strategy entry-window enforcement.
+            # The global window passed above; now check the narrower
+            # strategy YAML window (e.g. gap_fade_long cuts off at 11:30).
+            if not self._mw.is_entry_allowed_for_strategy(now, strategy_obj):
+                raise _PipelineReject(
+                    "OUTSIDE_ENTRY_WINDOW",
+                    f"Outside per-strategy entry window "
+                    f"({strategy_obj.entry_start_time}-{strategy_obj.entry_end_time})",
+                )
+
             # ----------------------------------------------------------
             # Step 3: Secondary screening (SPW3, P18)
             # Screener writes signal status (PASSED / REJECTED_<step>).
@@ -868,6 +878,14 @@ class SignalProcessor:
                 raise _PipelineReject(
                     "UNKNOWN_STRATEGY",
                     f"Strategy {strategy_name!r} not in loaded strategies",
+                )
+
+            # CFG-5 (2026-04-26 audit): per-strategy entry-window enforcement.
+            if not self._mw.is_entry_allowed_for_strategy(now, strategy_obj):
+                raise _PipelineReject(
+                    "OUTSIDE_ENTRY_WINDOW",
+                    f"Outside per-strategy entry window "
+                    f"({strategy_obj.entry_start_time}-{strategy_obj.entry_end_time})",
                 )
 
             entry_price = entry.entry_price  # type: ignore[attr-defined]

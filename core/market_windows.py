@@ -98,6 +98,31 @@ class MarketWindows:
         t = now.time()
         return self.entry_start <= t < self.entry_end
 
+    def is_entry_allowed_for_strategy(
+        self, now: datetime, strategy
+    ) -> bool:
+        """
+        True if `now` is within BOTH the global entry window (P1) AND the
+        per-strategy entry window declared in the strategy YAML
+        (entry_start_time / entry_end_time, S14).
+
+        2026-04-26 audit CFG-5: previously only the global window was
+        enforced; per-strategy times were namesake. Strategies like
+        gap_fade_long.yaml declare narrower cutoffs (e.g. 11:30) and rely
+        on this check. `strategy` is a StrategyConfig with `entry_start_time`
+        and `entry_end_time` "HH:MM" strings; defaults are 09:30 / 13:30.
+        """
+        if not self.is_entry_allowed(now):
+            return False
+        try:
+            sh, sm = (int(x) for x in strategy.entry_start_time.split(":"))
+            eh, em = (int(x) for x in strategy.entry_end_time.split(":"))
+        except (AttributeError, ValueError):
+            # Strategy missing or malformed times — fall back to global.
+            return True
+        t = now.time()
+        return time(sh, sm) <= t < time(eh, em)
+
     # -- EOD square-off ----------------------------------------------------
 
     def is_eod_squareoff_due(self, now: datetime) -> bool:

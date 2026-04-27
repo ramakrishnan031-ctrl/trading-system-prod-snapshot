@@ -108,6 +108,36 @@ def test_is_eod_squareoff_due_before_and_after():
     assert mw.is_eod_squareoff_due(TRADING_DAY(15, 25)) is True
 
 
+def test_is_entry_allowed_for_strategy_narrower_window():
+    """
+    CFG-5 (2026-04-26 audit): per-strategy entry window must compose with
+    the global window. A strategy declaring 09:30-11:30 must reject 12:00
+    even though the global window allows it.
+    """
+    class _Strat:
+        entry_start_time = "09:30"
+        entry_end_time = "11:30"
+    mw = MarketWindows()
+    s = _Strat()
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(10, 0), s) is True
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(11, 30), s) is False
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(12, 0), s) is False
+    # Outside global window -> always False even if inside per-strategy.
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(9, 0), s) is False
+
+
+def test_is_entry_allowed_for_strategy_default_matches_global():
+    """If a strategy uses the default 09:30-13:30, behavior matches global."""
+    class _Strat:
+        entry_start_time = "09:30"
+        entry_end_time = "13:30"
+    mw = MarketWindows()
+    s = _Strat()
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(10, 0), s) is True
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(13, 29, 59), s) is True
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(13, 30), s) is False
+
+
 def test_is_eod_squareoff_due_holiday_or_weekend():
     mw = MarketWindows(holidays={date(2026, 4, 15)})
     # Holiday -> never due.
@@ -239,6 +269,8 @@ TESTS = [
     test_is_entry_allowed_window,
     test_is_entry_allowed_boundaries,
     test_is_entry_allowed_weekend_and_holiday,
+    test_is_entry_allowed_for_strategy_narrower_window,
+    test_is_entry_allowed_for_strategy_default_matches_global,
     test_is_eod_squareoff_due_before_and_after,
     test_is_eod_squareoff_due_holiday_or_weekend,
     test_eod_squareoff_time_preserves_tz_and_date,

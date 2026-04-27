@@ -260,6 +260,10 @@ class _MockMarketWindows:
     def is_entry_allowed(self, now):
         return self._allowed
 
+    def is_entry_allowed_for_strategy(self, now, strategy):
+        # CFG-5 (2026-04-26 audit): mocks delegate per-strategy to global.
+        return self._allowed
+
 
 class _MockBus:
     def publish(self, event):
