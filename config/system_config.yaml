@@ -66,7 +66,13 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   daily_loss_limit_pct: 0.05  # 5% of total capital daily loss limit (> 0, <= 1)
 
 webhook:                      # WR14 — HTTP server settings
-  bind_host: "127.0.0.1"     # interface to bind
+  bind_host: "0.0.0.0"        # 2026-04-27: bind all interfaces so the VM
+                              # can accept Chartink webhooks routed via
+                              # ngrok/external. Loopback-only (127.0.0.1)
+                              # is the safer default; the all-interfaces
+                              # bind here relies on require_hmac=true plus
+                              # firewall/security-group restrictions to
+                              # constrain the actual reachable surface.
   bind_port: 5000             # port to listen on
   require_hmac: true          # production must validate HMAC
 
