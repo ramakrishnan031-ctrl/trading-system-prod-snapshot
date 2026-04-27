@@ -1,0 +1,52 @@
+#!/bin/bash
+# Source-of-truth for the bare repo's post-receive hook.
+#
+# Live location on VM: /home/ubuntu/trading-system.git/hooks/post-receive
+# When this file changes, the VM hook must be updated to match — either
+# manually (cp deploy/post-receive ~/trading-system.git/hooks/post-receive
+# && chmod +x ...) or via deploy/install_vm_services.sh.
+#
+# What it does on every push to main:
+#   1. Checks out the new commit into /home/ubuntu/trading-system.
+#   2. Restores execute bits on scripts/*.py and scripts/*.sh.
+#   3. Runs pip install -r requirements.txt against the venv so the
+#      runtime environment stays in sync with the code (added 2026-04-27
+#      after a missing waitress dep caused a systemd crash loop).
+#
+# pip install is soft-fail: a pip error does NOT abort the hook — the
+# checkout has already happened and the operator should not be left
+# without code on disk. The failure is loud (logged + printed to the
+# pusher's terminal) so it cannot be missed.
+
+set -e
+
+CHECKOUT=/home/ubuntu/trading-system
+GIT_DIR=/home/ubuntu/trading-system.git
+VENV=/home/ubuntu/trading-system/venv
+LOG=/home/ubuntu/post-receive.log
+
+ts() { date '+%Y-%m-%d %H:%M:%S IST'; }
+
+echo "[$(ts)] post-receive: start" >> "$LOG"
+git --work-tree="$CHECKOUT" --git-dir="$GIT_DIR" checkout -f main >> "$LOG" 2>&1
+
+# Preserve execute bits on scripts
+chmod +x "$CHECKOUT"/scripts/*.py 2>/dev/null || true
+chmod +x "$CHECKOUT"/scripts/*.sh 2>/dev/null || true
+
+# Sync venv with requirements.txt. Idempotent; pip is fast on a no-op.
+# Soft-fail so a transient pip error doesn't leave the operator without
+# the code change they just pushed.
+echo "[$(ts)] post-receive: pip install -r requirements.txt" >> "$LOG"
+if "$VENV"/bin/pip install -r "$CHECKOUT"/requirements.txt \
+        --quiet --disable-pip-version-check >> "$LOG" 2>&1; then
+    echo "[$(ts)] post-receive: pip install OK" >> "$LOG"
+    echo "[$(ts)] pip install: OK"
+else
+    rc=$?
+    echo "[$(ts)] post-receive: pip install FAILED rc=$rc" >> "$LOG"
+    echo "[$(ts)] WARNING: pip install FAILED (rc=$rc) -- inspect $LOG"
+fi
+
+echo "[$(ts)] post-receive: updated $CHECKOUT" >> "$LOG"
+echo "[$(ts)] Checkout updated on VM"
