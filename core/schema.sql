@@ -537,7 +537,7 @@ CREATE INDEX IF NOT EXISTS idx_innings_date
     ON innings(substr(entry_ts, 1, 10));
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 16: gate_state  (Audit 4.4)
+-- TABLE 17: gate_state  (Audit 4.4)
 -- One row per signal currently held in the EntryGate. Persisted so that a
 -- mid-session restart can rehydrate the in-memory _watchlist and resume
 -- watching at the same prices/timeouts. Mirrors the FundManager

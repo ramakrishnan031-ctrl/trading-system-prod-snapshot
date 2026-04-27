@@ -126,8 +126,10 @@ class MarketWindows:
     # -- EOD square-off ----------------------------------------------------
 
     def is_eod_squareoff_due(self, now: datetime) -> bool:
-        """Pure check: True if current time is at/after EOD square-off
-        on a trading day. Caller owns the 'already fired today' flag.
+        """True if `now.time()` >= the configured EOD square-off time
+        (P1 default 15:17 IST; configurable via system_config.yaml's
+        trading_hours.eod_squareoff_time per CFG-1) on a trading day.
+        Caller owns the 'already fired today' edge-trigger flag.
         """
         if self.is_trading_holiday(now):
             return False

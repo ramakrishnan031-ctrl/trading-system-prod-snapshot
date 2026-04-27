@@ -454,7 +454,7 @@ class FundManager:
             # path and rehydrate replay). Public path: ledger then apply then
             # invariant. Replay path: apply only (no ledger, no invariant).
             self._apply_reserve(
-                rid=rid,
+                reservation_id=rid,    # NM-4: local `rid` is a tight-scope alias
                 bucket=bucket,
                 margin=margin,
                 symbol=symbol,
@@ -1247,7 +1247,7 @@ class FundManager:
                 if saw_reserve:
                     continue   # second RESERVE for same rid -- skip
                 self._apply_reserve(
-                    rid=rid,
+                    reservation_id=rid,    # NM-4: local `rid` is a tight-scope alias
                     bucket=bucket,
                     margin=float(row["amount"]),
                     symbol=symbol,
@@ -1297,7 +1297,7 @@ class FundManager:
     def _apply_reserve(
         self,
         *,
-        rid: str,
+        reservation_id: str,
         bucket: str,
         margin: float,
         symbol: str,
@@ -1307,11 +1307,15 @@ class FundManager:
         signal_id: Optional[str],
         ts: str,
     ) -> None:
-        """Move margin from avail to reserved; record the reservation."""
+        """Move margin from avail to reserved; record the reservation.
+
+        NM-4 (2026-04-26 audit): param renamed rid -> reservation_id so all
+        three _apply_* helpers use the same canonical name.
+        """
         self._bucket_deduct_avail(bucket, margin)
         self._bucket_add_reserved(bucket, margin)
-        self._reservations[rid] = _Reservation(
-            reservation_id=rid,
+        self._reservations[reservation_id] = _Reservation(
+            reservation_id=reservation_id,
             symbol=symbol,
             qty=qty,
             price=price,
