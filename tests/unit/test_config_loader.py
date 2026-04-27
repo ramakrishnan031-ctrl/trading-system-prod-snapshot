@@ -791,23 +791,33 @@ def test_trading_hours_inverted_window_rejected() -> None:
     print("  OK Inverted entry window rejected by TradingHoursConfig (CFG-1)")
 
 
-def test_trading_hours_namesake_09_25_no_longer_in_yaml() -> None:
+def test_trading_hours_yaml_pins_operator_chosen_window() -> None:
     """
-    CFG-1 pin: the production system_config.yaml must declare
-    entry_start=09:30 (P1), not the prior 09:25 namesake. This test
-    reads the on-disk YAML directly and asserts the canonical values.
+    CFG-1 pin (evolved 2026-04-27 paper Week 2): the production
+    system_config.yaml must declare entry_start/entry_end values that
+    were chosen deliberately by the operator. The original CFG-1 pin
+    enforced the P1 spec (09:30/13:30); this test now pins the
+    paper-Week-2 widened window (09:20/15:15) so the values can't
+    silently drift back to the prior 09:25 namesake or to a typo
+    without a corresponding test edit.
+
+    Regression guards still in place:
+      - 09:25 (the original namesake) is asserted absent.
+      - eod_squareoff_time is still pinned to 15:17 (P1 hard rule).
     """
     project_root = Path(__file__).parent.parent.parent
     raw = yaml.safe_load(
         (project_root / "config" / "system_config.yaml").read_text()
     )
     th = raw.get("trading_hours", {})
-    assert th.get("entry_start") == "09:30", \
-        f"Expected 09:30 per P1, got {th.get('entry_start')}"
-    assert th.get("entry_end") == "13:30", \
-        f"Expected 13:30 per P1, got {th.get('entry_end')}"
+    assert th.get("entry_start") == "09:20", \
+        f"Expected 09:20 (paper Week 2 widened), got {th.get('entry_start')}"
+    assert th.get("entry_end") == "15:15", \
+        f"Expected 15:15 (paper Week 2 widened), got {th.get('entry_end')}"
+    assert th.get("entry_start") != "09:25", \
+        "09:25 namesake must never return (CFG-1 regression guard)"
     assert th.get("eod_squareoff_time") == "15:17"
-    print("  OK Production YAML trading_hours match P1 (09:30/13:30/15:17)")
+    print("  OK Production YAML trading_hours match paper Week 2 (09:20/15:15/15:17)")
 
 
 def test_invalid_date_in_nse_holidays_raises_config_schema_error() -> None:
@@ -1107,7 +1117,7 @@ def run_all_tests() -> int:
         test_config_schema_error_is_trading_system_error,
         test_extra_nested_key_raises_config_schema_error,
         test_trading_hours_inverted_window_rejected,
-        test_trading_hours_namesake_09_25_no_longer_in_yaml,
+        test_trading_hours_yaml_pins_operator_chosen_window,
         test_invalid_date_in_nse_holidays_raises_config_schema_error,
         test_file_hashes_populated_for_all_8_files,
         test_file_hashes_are_64_char_hex_strings,
