@@ -823,6 +823,16 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     # >= min_instrument_rows. Fallthrough guard for type-checkers.
     assert instrument_cache is not None
 
+    # CFG-6 (2026-04-26 audit): wire paper-mode slippage now that
+    # instrument_cache is loaded (P12). Late-bind keeps the existing main
+    # ordering -- adapter is constructed earlier than the cache because
+    # startup_checks needs both. No-op when is_paper is False.
+    if is_paper:
+        from broker.slippage_engine import SlippageEngine
+        broker_adapter.set_slippage_engine(
+            SlippageEngine(app_config.slippage, instrument_cache)
+        )
+
     # ── Account selection + token handling (SU4, SU8-SU14) ──────────────────
     _token_path = Path("data_store/session/zerodha_token.json")
     _access_token: Optional[str] = None

@@ -1,0 +1,130 @@
+"""
+broker/slippage_engine.py -- Trading System v2
+
+Purpose:
+    P12 implementation — apply per-liquidity-tier slippage to paper-mode
+    synthesized fills so paper P&L does not systematically over-state vs
+    live P&L. The audit (2026-04-26 CFG-6) flagged that
+    config/slippage_model.yaml was loaded but never consumed; paper synth
+    in zerodha_adapter._synth_fill set fill_price = price exactly. This
+    closes that gap.
+
+Design Decisions:
+    SE1 -- Stateless, dependency-injected. No singletons, no module-level
+            state. Constructed once at startup and passed to ZerodhaAdapter.
+    SE2 -- Tier resolution from InstrumentCache:
+            - is_fno=True  → "liquid"
+            - is_fno=False → "mid"
+            - unknown sym  → SlippageConfig.default_tier
+            (instruments.csv has no avg_volume column; F&O eligibility is
+            the canonical NSE-side liquidity proxy. Sector-level "small"
+            classification can be added later if a column appears.)
+    SE3 -- Slippage is always ADVERSE (paper conservatism, P12):
+            - BUY  : fill = price + bps_pct * price  (paid more)
+            - SELL : fill = price - bps_pct * price  (received less)
+    SE4 -- Result is rounded to instrument tick_size when known. If symbol
+            is not in cache, no tick rounding is applied (raw float).
+    SE5 -- bps math uses 1 bps = 0.01% = price * (bps / 10_000).
+    SE6 -- apply() is pure: same (symbol, side, price) → same output.
+            No mutation, no I/O, no logging from the hot path.
+    SE7 -- side is uppercased; anything other than "BUY"/"SELL" raises
+            ValueError. The adapter is the only caller and always passes
+            uppercase, so this is defence-in-depth.
+
+What This Module Does NOT Do:
+    - Does not handle live mode. Live fills come from the broker; their
+      price IS the truth.
+    - Does not model market impact, order book depth, or partial fills.
+    - Does not log per-fill slippage; the adapter logs the post-slippage
+      fill_price as part of the existing OrderFilled extra= payload.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from core.config_loader import SlippageConfig
+from core.exceptions import InstrumentNotFoundError
+from core.instrument_cache import InstrumentCache
+
+
+class SlippageEngine:
+    """P12 paper-mode slippage applicator (SE1-SE7)."""
+
+    def __init__(
+        self,
+        config: SlippageConfig,
+        instrument_cache: InstrumentCache,
+    ) -> None:
+        self._cfg = config
+        self._cache = instrument_cache
+        # Pre-validate default_tier so apply() can rely on it.
+        if config.default_tier not in config.tiers:
+            raise ValueError(
+                f"slippage_model.yaml: default_tier {config.default_tier!r} "
+                f"not present in tiers {list(config.tiers.keys())!r}"
+            )
+
+    def tier_for(self, symbol: str) -> str:
+        """SE2: resolve liquidity tier for a symbol."""
+        try:
+            row = self._cache.get_by_symbol(symbol)
+        except InstrumentNotFoundError:
+            return self._cfg.default_tier
+        if row.is_fno:
+            return "liquid" if "liquid" in self._cfg.tiers else self._cfg.default_tier
+        return "mid" if "mid" in self._cfg.tiers else self._cfg.default_tier
+
+    def apply(self, symbol: str, side: str, price: float) -> float:
+        """
+        SE3-SE5: return adverse-slipped fill price for `price`.
+
+        Args:
+            symbol: NSE trading symbol; tier comes from InstrumentCache.
+            side:   "BUY" or "SELL" (case-insensitive).
+            price:  pre-slippage price (limit, trigger, or LTP-gated value).
+
+        Returns:
+            Adjusted fill price, tick-rounded if symbol is known.
+        """
+        side_u = side.upper()
+        if side_u not in ("BUY", "SELL"):
+            raise ValueError(f"side must be BUY or SELL, got {side!r}")
+        if price <= 0:
+            return price  # MARKET-with-no-LTP path; nothing to slip.
+
+        tier = self.tier_for(symbol)
+        bps = self._cfg.tiers[tier].slippage_bps
+        delta = price * (bps / 10_000.0)
+        adjusted = price + delta if side_u == "BUY" else price - delta
+
+        tick = self._tick_size(symbol)
+        if tick is not None and tick > 0:
+            # SE3 conservatism: round AWAY from price for the trader.
+            # BUY rounds up to next tick; SELL rounds down to prev tick.
+            if side_u == "BUY":
+                adjusted = _round_up_to_tick(adjusted, tick)
+            else:
+                adjusted = _round_down_to_tick(adjusted, tick)
+        return adjusted
+
+    def _tick_size(self, symbol: str) -> Optional[float]:
+        try:
+            return self._cache.get_by_symbol(symbol).tick_size
+        except InstrumentNotFoundError:
+            return None
+
+
+def _round_up_to_tick(value: float, tick: float) -> float:
+    n = int(value / tick)
+    rounded = n * tick
+    if rounded < value - 1e-12:
+        rounded += tick
+    return round(rounded, 4)
+
+
+def _round_down_to_tick(value: float, tick: float) -> float:
+    n = int(value / tick)
+    rounded = n * tick
+    if rounded > value + 1e-12:
+        rounded -= tick
+    return round(rounded, 4)

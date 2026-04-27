@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import main as _main_module
-from core.config_loader import HolidayEntry
+from core.config_loader import HolidayEntry, SlippageConfig, SlippageTierConfig
 from main import (
     VERSION,
     _parse_args,
@@ -110,6 +110,17 @@ def _make_mock_app_config():
     cfg.chartink_scanners = MagicMock()
     cfg.broker_limits = MagicMock()
     cfg.broker_costs = MagicMock()
+    # CFG-6 (2026-04-26 audit): main.py builds SlippageEngine in paper mode,
+    # which validates default_tier ∈ tiers. Provide a real config so the
+    # ctor passes; values are not exercised by these tests.
+    cfg.slippage = SlippageConfig(
+        tiers={
+            "liquid": SlippageTierConfig(slippage_bps=5),
+            "mid":    SlippageTierConfig(slippage_bps=15),
+            "small":  SlippageTierConfig(slippage_bps=30),
+        },
+        default_tier="liquid",
+    )
     return cfg
 
 

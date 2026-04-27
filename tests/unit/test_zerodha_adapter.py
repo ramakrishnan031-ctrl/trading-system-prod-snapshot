@@ -622,6 +622,119 @@ def test_paper_mode_get_quote_raises_not_implemented_without_provider() -> None:
     print("  OK paper mode get_quote without provider -> NotImplementedError (ZA10)")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CFG-6 (2026-04-26 audit): paper-mode slippage applied in _synth_fill (P12)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_test_slippage_engine():
+    """Build a SlippageEngine with a tiny in-memory InstrumentCache."""
+    import tempfile
+    from broker.slippage_engine import SlippageEngine
+    from core.config_loader import SlippageConfig, SlippageTierConfig
+    from core.instrument_cache import InstrumentCache
+
+    csv_text = (
+        "symbol,instrument_token,exchange,lot_size,tick_size,is_fno,sector\n"
+        "RELIANCE,738561,NSE,1,0.05,true,ENERGY\n"
+        "INFY,408065,NSE,1,0.05,true,IT\n"
+        "SMALLCO,123456,NSE,1,0.05,false,MISC\n"
+    )
+    td = tempfile.mkdtemp()
+    p = Path(td) / "instruments.csv"
+    p.write_text(csv_text, encoding="utf-8")
+    cache = InstrumentCache.load(p)
+    cfg = SlippageConfig(
+        tiers={
+            "liquid": SlippageTierConfig(slippage_bps=5),
+            "mid":    SlippageTierConfig(slippage_bps=15),
+            "small":  SlippageTierConfig(slippage_bps=30),
+        },
+        default_tier="liquid",
+    )
+    return SlippageEngine(cfg, cache)
+
+
+def test_cfg6_paper_synth_applies_buy_slippage() -> None:
+    """BUY paper fill: avg_fill_price > limit by tier bps (P12 conservatism)."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(paper=True, bus=bus,
+                                        paper_auto_fill_delay_sec=0.02)
+    adapter.set_slippage_engine(_make_test_slippage_engine())
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    ev = captured[0]
+    # 5 bps of 2500 = 1.25; tick 0.05 → 2501.25
+    assert ev.avg_fill_price == 2501.25, (
+        f"BUY fill should include 5 bps adverse slippage; got {ev.avg_fill_price}"
+    )
+    assert ev.expected_price == 2500.0
+    assert ev.slippage_pct > 0, "slippage_pct should be > 0 with engine wired"
+    assert result.internal_order_id  # placed correctly
+    print(f"  OK CFG-6: BUY paper synth applies slippage 2500 → {ev.avg_fill_price}")
+
+
+def test_cfg6_paper_synth_applies_sell_slippage() -> None:
+    """SELL paper fill: avg_fill_price < limit by tier bps."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(paper=True, bus=bus,
+                                        paper_auto_fill_delay_sec=0.02)
+    adapter.set_slippage_engine(_make_test_slippage_engine())
+    adapter.place_order(
+        symbol="INFY", side="SELL", qty=7, price=1500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    ev = captured[0]
+    # 5 bps of 1500 = 0.75; tick 0.05 → 1499.25
+    assert ev.avg_fill_price == 1499.25, (
+        f"SELL fill should include 5 bps adverse slippage; got {ev.avg_fill_price}"
+    )
+    assert ev.slippage_pct < 0, "SELL slippage_pct should be < 0"
+    print(f"  OK CFG-6: SELL paper synth applies slippage 1500 → {ev.avg_fill_price}")
+
+
+def test_cfg6_no_engine_means_no_slippage_backcompat() -> None:
+    """Without set_slippage_engine, paper synth still fills at limit price."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    adapter, _, _, _, _ = _make_adapter(paper=True, bus=bus,
+                                        paper_auto_fill_delay_sec=0.02)
+    # No set_slippage_engine call -- engine remains None.
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    ev = captured[0]
+    assert ev.avg_fill_price == 2500.0, (
+        "no slippage engine wired → paper fill at limit price (back-compat)"
+    )
+    assert ev.slippage_pct == 0.0
+    print("  OK CFG-6: no engine wired → zero slippage (back-compat)")
+
+
+def test_cfg6_set_slippage_engine_noop_in_live() -> None:
+    """Live mode ignores set_slippage_engine (broker fills are truth)."""
+    adapter, _, _, _, _ = _make_adapter(paper=False)
+    # Calling the setter in live mode must not raise and must not bind.
+    adapter.set_slippage_engine(_make_test_slippage_engine())
+    assert adapter._slippage is None, (
+        "set_slippage_engine should be no-op in live mode"
+    )
+    print("  OK CFG-6: set_slippage_engine no-op in live mode")
+
+
 def test_paper_mode_get_quote_delegates_to_provider() -> None:
     from core.time_authority import now_ist
 
@@ -1458,6 +1571,11 @@ def run_all_tests() -> int:
         test_ef4_set_paper_capital_rejects_nonpositive,
         test_ef4_set_paper_capital_noop_in_live,
         test_ef4_no_paper_capital_getattr_in_main,
+        # CFG-6 (2026-04-26 audit): paper-mode slippage in _synth_fill (P12)
+        test_cfg6_paper_synth_applies_buy_slippage,
+        test_cfg6_paper_synth_applies_sell_slippage,
+        test_cfg6_no_engine_means_no_slippage_backcompat,
+        test_cfg6_set_slippage_engine_noop_in_live,
     ]
 
     print("=" * 70)

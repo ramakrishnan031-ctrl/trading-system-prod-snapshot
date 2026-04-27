@@ -111,6 +111,7 @@ from broker.cost_calculator import CostCalculator
 from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
+from broker.slippage_engine import SlippageEngine
 from core.config_loader import RateLimitBackoffConfig
 from core.events import EventBus, OrderFilled
 from core.exceptions import (
@@ -319,6 +320,11 @@ class ZerodhaAdapter:
         paper_ltp_gating_enabled: bool = False,
         paper_ltp_gating_max_wait_sec: float = 60.0,
         paper_ltp_gating_poll_sec: float = 0.5,
+        # CFG-6 (2026-04-26 audit): paper-mode slippage applicator (P12).
+        # None = no slippage (existing tests behave as before). main.py
+        # late-binds via set_slippage_engine() once instrument_cache is
+        # loaded. Live mode ignores this parameter -- broker fills are truth.
+        slippage_engine: Optional[SlippageEngine] = None,
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -336,6 +342,8 @@ class ZerodhaAdapter:
         self._paper_ltp_gating_enabled = paper_ltp_gating_enabled
         self._paper_ltp_gating_max_wait_sec = paper_ltp_gating_max_wait_sec
         self._paper_ltp_gating_poll_sec = paper_ltp_gating_poll_sec
+        # CFG-6: paper-mode slippage engine. May be set later via setter.
+        self._slippage: Optional[SlippageEngine] = slippage_engine
         # BL-6: 429 backoff state. Per-category counter drives exponential delay;
         # resets when any call in the category succeeds. Lock guards increments
         # across threads (order_placer, order_monitor, reconciler can all race).
@@ -733,6 +741,22 @@ class ZerodhaAdapter:
         self._log.info(
             "adapter.set_paper_capital bound",
             extra={"method": "set_paper_capital", "value": value},
+        )
+
+    def set_slippage_engine(self, engine: SlippageEngine) -> None:
+        """
+        CFG-6 (2026-04-26 audit): late-bind paper-mode slippage engine after
+        InstrumentCache is loaded. No-op in live mode (broker fills are
+        truth). Main.py constructs adapter with slippage_engine=None
+        because instrument_cache is loaded later in startup; this setter
+        wires it once available.
+        """
+        if not self._paper:
+            return
+        self._slippage = engine
+        self._log.info(
+            "adapter.set_slippage_engine bound",
+            extra={"method": "set_slippage_engine"},
         )
 
     def get_margins(self) -> MarginInfo:
@@ -1187,6 +1211,14 @@ class ZerodhaAdapter:
             else:
                 # Legacy behaviour: always fill at the requested price.
                 fill_price = price
+
+            # CFG-6 (2026-04-26 audit): apply per-tier slippage to the synth
+            # fill so paper P&L does not over-state vs live (P12). Engine is
+            # injected; absent => zero slippage (back-compat for tests that
+            # don't wire it). MARKET with no LTP can land here as price=0.0;
+            # SlippageEngine.apply() short-circuits non-positive prices.
+            if self._slippage is not None:
+                fill_price = self._slippage.apply(symbol, side, fill_price)
 
             # OSM transition: SUBMITTED -> COMPLETE (legal per OSM2).
             try:
