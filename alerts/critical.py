@@ -35,12 +35,13 @@ import json
 import os
 import socket
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from core.time_authority import now_ist
 
-_IST = timezone(timedelta(hours=5, minutes=30))
+# DUP-1 (2026-04-26 audit): _IST removed; canonical tzinfo lives in
+# core.time_authority. This module never read its own _IST anyway.
 _TITLE_MAX = 120
 
 

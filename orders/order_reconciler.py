@@ -60,7 +60,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
 from capital.fund_manager import FundManager
@@ -78,7 +78,7 @@ from core.state_store import StateStore
 from core.time_authority import now_ist
 from orders.order_manager import OrderManager
 
-_IST = timezone(timedelta(hours=5, minutes=30))
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 # Broker product code -> fund_manager intent (for capital release on MANUAL_CLOSE)
 # Note: _PRODUCT_TO_INTENT is also imported by shadow_tracker.py

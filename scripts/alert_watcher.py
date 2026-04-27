@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # for tests; production value caps a watcher pass so a Gmail rate-limit
 # window cannot stall the next pass.
 _SMTP_TASK_TIMEOUT_SEC: float = 30.0
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -63,7 +63,7 @@ from alerts.critical import (
 )
 from core.config_loader import load_all
 
-_IST = timezone(timedelta(hours=5, minutes=30))
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 
 # ------------------------------------------------------------------------------

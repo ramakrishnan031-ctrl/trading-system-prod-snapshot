@@ -493,8 +493,16 @@ class EodSquareoff:
             mr = t.get("margin_reserved")
             try:
                 capital_used += float(mr) if mr is not None else 0.0
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                # LOG-1 (2026-04-26 audit): never silent on data conversion.
+                self._log.warning(
+                    "eod_squareoff.margin_float_failed",
+                    extra={
+                        "trade_id": t.get("trade_id"),
+                        "mr": mr,
+                        "error": str(exc),
+                    },
+                )
 
         # Strategy breakdown.
         strat_stats: dict = {}

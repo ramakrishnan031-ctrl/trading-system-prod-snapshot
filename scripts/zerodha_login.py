@@ -24,16 +24,19 @@ import json
 import os
 import sys
 import webbrowser
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import requests
 from dotenv import load_dotenv
 
+from core.time_authority import ist_timezone
+
 load_dotenv()
 
-_IST = timezone(timedelta(hours=5, minutes=30))
+# DUP-1 (2026-04-26 audit): _IST removed; canonical source is
+# core.time_authority.ist_timezone().
 _KITE_LOGIN_URL = "https://kite.zerodha.com/connect/login?v=3&api_key={api_key}"
 _KITE_SESSION_URL = "https://api.kite.trade/session/token"
 _DEFAULT_TOKEN_PATH = Path("data_store/session/zerodha_token.json")
@@ -66,7 +69,7 @@ def is_token_valid(account_id: str, token_path: Path) -> bool:
     token = load_token(token_path)
     if token is None:
         return False
-    today_str = datetime.now(_IST).date().isoformat()
+    today_str = datetime.now(ist_timezone()).date().isoformat()
     return (
         token.get("account_id") == account_id
         and token.get("date") == today_str
@@ -139,7 +142,7 @@ def save_token(
     Creates parent directories if needed.
     """
     token_path.parent.mkdir(parents=True, exist_ok=True)
-    now_ist = datetime.now(_IST)
+    now_ist = datetime.now(ist_timezone())
     expires_at = now_ist.replace(hour=5, minute=0, second=0, microsecond=0)
     if expires_at <= now_ist:
         expires_at = expires_at + timedelta(days=1)

@@ -51,18 +51,16 @@ import math
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from core.time_authority import now_ist
+from core.time_authority import now_ist_iso
 
-_IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
+# DUP-2 (2026-04-26 audit): local _now_ist_iso() removed; using canonical
+# core.time_authority.now_ist_iso() at the two call sites.
 _MAX_CONSECUTIVE_FAILURES = 3
 _MAX_HISTORY_CANDLES = 390  # LF14: 1 full trading day of 1-min candles
-
-
-def _now_ist_iso() -> str:
-    return now_ist().isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +267,7 @@ class SmartTgtManager:
                 "consecutive_failures": 0,
             }
 
-        ts = _now_ist_iso()
+        ts = now_ist_iso()
         self._state_store.insert_smart_tgt_state(
             trade_id=trade_id,
             symbol=symbol,
@@ -583,7 +581,7 @@ class SmartTgtManager:
             return
 
         if result.success:
-            ts = _now_ist_iso()
+            ts = now_ist_iso()
             with self._lock:
                 info = self._tracked.get(trade_id)
                 if info is None:

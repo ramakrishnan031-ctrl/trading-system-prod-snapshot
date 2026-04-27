@@ -48,13 +48,11 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.exceptions import BrokerError
-from core.time_authority import now_ist
-
-_IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+from core.time_authority import ist_timezone, now_ist
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +363,7 @@ class SignalProcessor:
                 raise _PipelineReject("OUTSIDE_ENTRY_WINDOW", "Outside entry window")
 
             # Signal age (defense-in-depth; receiver also checks)
-            triggered_aware = triggered_at.replace(tzinfo=_IST)
+            triggered_aware = triggered_at.replace(tzinfo=ist_timezone())
             age_sec = (now - triggered_aware).total_seconds()
             if age_sec > self._signal_expiry_sec:
                 raise _PipelineReject(

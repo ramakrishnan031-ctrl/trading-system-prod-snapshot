@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import date, datetime, time as _time, timedelta, timezone
+from datetime import date, datetime, time as _time
 from pathlib import Path
 from typing import Optional
 
@@ -89,7 +89,7 @@ from scripts.zerodha_login import is_token_valid, load_token
 
 VERSION = "2.0.0"
 
-_IST = timezone(timedelta(hours=5, minutes=30))
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 # Set once in Phase 0a; used in top-level exception handler (MAIN3)
 _log: logging.Logger = logging.getLogger("main")
@@ -197,10 +197,9 @@ def _make_paper_quote_provider():
     In a real paper-trading session the operator should replace this with a
     live-data feed; this stub prevents crashes when no live data is wired.
     """
-    from datetime import timedelta, timezone as _tz
     from broker.zerodha_adapter import Quote
 
-    _IST = _tz(timedelta(hours=5, minutes=30), name="IST")
+    # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
     def _provider(symbols):
         from core.time_authority import now_ist

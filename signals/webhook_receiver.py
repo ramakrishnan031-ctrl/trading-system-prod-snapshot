@@ -43,15 +43,13 @@ import queue
 import sqlite3
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Optional
 
 from flask import Flask, request, jsonify
 
 from core.ids import new_signal_id
-from core.time_authority import now_ist
-
-_IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+from core.time_authority import ist_timezone, now_ist
 
 
 class WebhookReceiver:
@@ -353,9 +351,9 @@ class WebhookReceiver:
         if price <= 0:
             return {"symbol": symbol, "status": "INVALID_PRICE"}
 
-        # WR6: signal expiry (triggered_at is naive IST; attach _IST for comparison)
+        # WR6: signal expiry (triggered_at is naive IST; attach IST for comparison)
         now = now_ist()
-        triggered_at_aware = triggered_at.replace(tzinfo=_IST)
+        triggered_at_aware = triggered_at.replace(tzinfo=ist_timezone())
         age_sec = (now - triggered_at_aware).total_seconds()
         if age_sec > expiry_sec:
             return {"symbol": symbol, "status": "EXPIRED"}

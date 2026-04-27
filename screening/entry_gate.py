@@ -36,12 +36,11 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from core.time_authority import now_ist
+from core.time_authority import ist_timezone, now_ist
 
-_IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 _MAX_QUOTE_FAILURES = 3
 
 
@@ -197,7 +196,7 @@ class EntryGate:
                 # accept either naive or aware ISO strings.
                 added_at = datetime.fromisoformat(added_at_str)
                 if added_at.tzinfo is not None:
-                    added_at = added_at.astimezone(_IST).replace(tzinfo=None)
+                    added_at = added_at.astimezone(ist_timezone()).replace(tzinfo=None)
 
                 extras_json = row.get("extras_json")
                 extras = json.loads(extras_json) if extras_json else {}
@@ -389,7 +388,7 @@ class EntryGate:
         # EG6: timeout check (hard, per-entry)
         now = now_ist()
         added_aware = (
-            entry.added_at.replace(tzinfo=_IST)
+            entry.added_at.replace(tzinfo=ist_timezone())
             if entry.added_at.tzinfo is None
             else entry.added_at
         )
@@ -455,7 +454,7 @@ class EntryGate:
         # Compute elapsed for logging
         now = now_ist()
         added_aware = (
-            entry.added_at.replace(tzinfo=_IST)
+            entry.added_at.replace(tzinfo=ist_timezone())
             if entry.added_at.tzinfo is None
             else entry.added_at
         )

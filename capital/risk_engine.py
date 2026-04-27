@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Callable, List, Optional, TYPE_CHECKING
 
 from core.time_authority import now_ist
@@ -60,8 +60,7 @@ if TYPE_CHECKING:
     from capital.position_sizer import SizingResult
     from core.state_store import StateStore
 
-# IST = UTC+05:30, using stdlib timezone (no tzdata dependency — matches time_authority.py)
-_IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 # Threshold for "net loss" per RE10 audit fix.
 # net_pnl >= -1e-6 is treated as breakeven, not a loss.

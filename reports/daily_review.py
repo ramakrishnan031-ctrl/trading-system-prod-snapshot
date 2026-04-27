@@ -35,7 +35,7 @@ import json
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -45,7 +45,7 @@ from openpyxl.styles import Font
 
 from core.time_authority import now_ist
 
-_IST = timezone(timedelta(hours=5, minutes=30))
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 
 def _now_ist_date() -> str:

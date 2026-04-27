@@ -46,15 +46,13 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, replace as dc_replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Dict, List, Optional
 
 from core.events import EodSquareoffComplete, EventBus, PositionClosed
 from core.logger import log_exception
-from core.time_authority import now_ist, today_ist
+from core.time_authority import ist_timezone, now_ist, today_ist
 from orders.order_reconciler import _PRODUCT_TO_INTENT  # noqa: F401 — exposed for cross-module consistency
-
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -796,7 +794,7 @@ def _parse_ts(ts_str: str) -> datetime:
     try:
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is not None:
-            dt = dt.astimezone(_IST).replace(tzinfo=None)
+            dt = dt.astimezone(ist_timezone()).replace(tzinfo=None)
         return dt
     except (ValueError, TypeError):
         return now_ist().replace(tzinfo=None)
@@ -810,5 +808,5 @@ def _make_naive(now: datetime, ts: datetime) -> datetime:
     """
     if ts.tzinfo is not None:
         # ts is aware — convert to IST naive
-        return ts.astimezone(_IST).replace(tzinfo=None)
+        return ts.astimezone(ist_timezone()).replace(tzinfo=None)
     return ts

@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
@@ -63,8 +63,7 @@ if TYPE_CHECKING:
     import logging
     from core.state_store import StateStore
 
-# Matches time_authority.py approach: no tzdata dependency
-_IST = timezone(timedelta(hours=5, minutes=30), name="IST")
+# DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
