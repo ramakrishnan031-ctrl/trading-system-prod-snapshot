@@ -261,18 +261,32 @@ class WebhookReceiver:
         try:
             body: dict = json.loads(raw_body)
         except (json.JSONDecodeError, ValueError) as exc:
+            self._log.warning(
+                "webhook/%s: Malformed JSON: %s | raw=%r",
+                scanner_name, exc, raw_body[:500],
+            )
             return jsonify({"error": f"Malformed JSON: {exc}"}), 400
 
         if not isinstance(body, dict):
             return jsonify({"error": "Request body must be a JSON object"}), 400
 
-        # Required field presence
-        for field in ("stocks", "trigger_prices", "triggered_at", "scan_name"):
+        # Required field presence (scan_name optional - derive from URL if missing)
+        for field in ("stocks", "trigger_prices", "triggered_at"):
             if field not in body:
+                self._log.warning(
+                    "webhook/%s: Missing field %r | body_keys=%r",
+                    scanner_name, field, list(body.keys()),
+                )
                 return jsonify({"error": f"Missing required field: {field!r}"}), 400
 
-        # WR4: scan_name must match path param (defense in depth)
-        if body["scan_name"] != scanner_name:
+        # WR4: scan_name in body is optional; if present, must match path param
+        # Chartink may not send scan_name, so we derive it from URL path
+        body_scan_name = body.get("scan_name")
+        if body_scan_name is not None and body_scan_name != scanner_name:
+            self._log.warning(
+                "webhook/%s: scan_name mismatch: body=%r vs path=%r",
+                scanner_name, body_scan_name, scanner_name,
+            )
             return jsonify({"error": "scan_name in body does not match scanner_name path param"}), 400
 
         # Parse triggered_at (IST naive, format: "YYYY-MM-DD HH:MM:SS")
