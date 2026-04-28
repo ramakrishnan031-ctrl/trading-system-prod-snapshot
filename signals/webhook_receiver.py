@@ -279,15 +279,18 @@ class WebhookReceiver:
                 )
                 return jsonify({"error": f"Missing required field: {field!r}"}), 400
 
-        # WR4: scan_name in body is optional; if present, must match path param
-        # Chartink may not send scan_name, so we derive it from URL path
+        # WR4: scan_name in body is optional; if present, validate it matches
+        # Chartink sends "GAP FADE LONG" but URL uses "gap_fade_long", so we
+        # normalize both to lowercase with underscores before comparing
         body_scan_name = body.get("scan_name")
-        if body_scan_name is not None and body_scan_name != scanner_name:
-            self._log.warning(
-                "webhook/%s: scan_name mismatch: body=%r vs path=%r",
-                scanner_name, body_scan_name, scanner_name,
-            )
-            return jsonify({"error": "scan_name in body does not match scanner_name path param"}), 400
+        if body_scan_name is not None:
+            normalized_body = body_scan_name.lower().replace(" ", "_")
+            if normalized_body != scanner_name:
+                self._log.warning(
+                    "webhook/%s: scan_name mismatch: body=%r (normalized=%r) vs path=%r",
+                    scanner_name, body_scan_name, normalized_body, scanner_name,
+                )
+                return jsonify({"error": "scan_name in body does not match scanner_name path param"}), 400
 
         # Parse triggered_at (IST naive, format: "YYYY-MM-DD HH:MM:SS")
         try:
