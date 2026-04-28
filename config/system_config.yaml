@@ -62,7 +62,7 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_positions: 10      # hard cap on concurrent open positions (>= 1)
   max_daily_trades: 20        # hard cap on trades per day (>= 1)
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
-  max_consecutive_losses: 4   # halt after 4 consecutive net losses (>= 1)
+  max_consecutive_losses: 20  # TEMP: raised for paper testing (was 4)
   daily_loss_limit_pct: 0.05  # 5% of total capital daily loss limit (> 0, <= 1)
 
 webhook:                      # WR14 — HTTP server settings
