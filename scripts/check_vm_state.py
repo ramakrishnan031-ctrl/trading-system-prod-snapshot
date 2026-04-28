@@ -110,6 +110,35 @@ if len(sys.argv) > 1 and sys.argv[1] == "--cleanup-pending":
     else:
         print("  No PENDING_FILL trades found")
 
+# Cleanup orphaned orders if --cleanup-orders passed
+if len(sys.argv) > 1 and sys.argv[1] == "--cleanup-orders":
+    print("\nCleaning up orphaned PENDING orders...")
+    rows = c.execute("""
+        SELECT o.order_id, t.symbol, o.order_type, t.status as trade_status
+        FROM orders o
+        LEFT JOIN trades t ON o.trade_id = t.trade_id
+        WHERE o.status = 'PENDING'
+          AND (t.status IN ('CANCELLED', 'CLOSED', 'CLOSED_MANUAL') OR t.trade_id IS NULL)
+    """).fetchall()
+    if rows:
+        for r in rows:
+            sym = r[1] if r[1] else 'N/A'
+            otype = r[2] if r[2] else 'N/A'
+            tstatus = r[3] if r[3] else 'orphan'
+            print(f"  {sym:15} {otype:10} trade_status={tstatus}")
+        c.execute("""
+            UPDATE orders SET status = 'CANCELLED'
+            WHERE status = 'PENDING'
+              AND trade_id IN (
+                SELECT trade_id FROM trades
+                WHERE status IN ('CANCELLED', 'CLOSED', 'CLOSED_MANUAL')
+              )
+        """)
+        c.commit()
+        print(f"  {len(rows)} orders marked CANCELLED")
+    else:
+        print("  No orphaned PENDING orders found")
+
 # Quick health check if --health passed
 if len(sys.argv) > 1 and sys.argv[1] == "--health":
     print("\n=== HEALTH CHECK ===")
