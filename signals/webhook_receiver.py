@@ -298,13 +298,28 @@ class WebhookReceiver:
                 )
                 return jsonify({"error": "scan_name in body does not match scanner_name path param"}), 400
 
-        # Parse triggered_at (IST naive, format: "YYYY-MM-DD HH:MM:SS")
-        try:
-            triggered_at: datetime = datetime.strptime(
-                str(body["triggered_at"]), "%Y-%m-%d %H:%M:%S"
+        # Parse triggered_at - Chartink sends "HH:MM am/pm", we also accept "YYYY-MM-DD HH:MM:SS"
+        triggered_at_raw = str(body["triggered_at"]).strip()
+        triggered_at: datetime | None = None
+        # Try multiple formats
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%I:%M %p", "%H:%M"):
+            try:
+                parsed = datetime.strptime(triggered_at_raw, fmt)
+                if fmt in ("%I:%M %p", "%H:%M"):
+                    # Time-only format: use today's date
+                    today = now.date()
+                    triggered_at = datetime(today.year, today.month, today.day,
+                                            parsed.hour, parsed.minute, 0)
+                else:
+                    triggered_at = parsed
+                break
+            except ValueError:
+                continue
+        if triggered_at is None:
+            self._log.warning(
+                "webhook/%s: Invalid triggered_at=%r", scanner_name, triggered_at_raw,
             )
-        except (ValueError, TypeError):
-            return jsonify({"error": "Invalid triggered_at; expected YYYY-MM-DD HH:MM:SS"}), 400
+            return jsonify({"error": "Invalid triggered_at; expected HH:MM am/pm or YYYY-MM-DD HH:MM:SS"}), 400
 
         # Parse stocks / trigger_prices
         stocks_raw = body["stocks"]
