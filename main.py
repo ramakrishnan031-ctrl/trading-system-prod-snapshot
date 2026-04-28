@@ -187,41 +187,47 @@ def _load_holidays(app_config) -> set:
     return {h.date for h in app_config.nse_holidays.holidays}
 
 
-def _make_paper_quote_provider(kite_client):
+def _make_paper_quote_provider():
     """
     Return a quote_provider for paper mode that fetches REAL quotes from Kite.
 
-    In paper mode ZerodhaAdapter.get_quote() delegates to this callable.
-    We use the Kite API to fetch live quotes (read-only, no trading impact)
-    so that the screener has real OHLC/VWAP data to score signals properly.
+    Reads credentials from data_store/session/zerodha_token.json (saved by
+    interactive startup) and calls Kite quote API for live OHLC/VWAP data.
+    Falls back to stub values if token file missing or API fails.
     """
     from broker.zerodha_adapter import Quote
+    from kiteconnect import KiteConnect
+    import json
+    from pathlib import Path
+
+    token_path = Path("data_store/session/zerodha_token.json")
+    kite_client = None
+    if token_path.exists():
+        try:
+            with open(token_path) as f:
+                token_data = json.load(f)
+            kite_client = KiteConnect(api_key=token_data["api_key"])
+            kite_client.set_access_token(token_data["access_token"])
+        except Exception:
+            pass
+
+    def _stub_quote(sym, ts):
+        return Quote(
+            symbol=sym, last_price=100.0, bid=99.9, ask=100.1,
+            volume=100_000, ts=ts, vwap=100.0, open_price=100.0,
+            day_high=102.0, day_low=98.0, upper_circuit=None, lower_circuit=None,
+        )
 
     def _provider(symbols):
         from core.time_authority import now_ist
         ts = now_ist()
+        if kite_client is None:
+            return {sym: _stub_quote(sym, ts) for sym in symbols}
         instrument_keys = [f"NSE:{s}" for s in symbols]
         try:
             raw = kite_client.quote(*instrument_keys)
         except Exception:
-            # Fallback to stub quotes if Kite API fails
-            return {
-                sym: Quote(
-                    symbol=sym,
-                    last_price=100.0,
-                    bid=99.9,
-                    ask=100.1,
-                    volume=100_000,
-                    ts=ts,
-                    vwap=100.0,
-                    open_price=100.0,
-                    day_high=102.0,
-                    day_low=98.0,
-                    upper_circuit=None,
-                    lower_circuit=None,
-                )
-                for sym in symbols
-            }
+            return {sym: _stub_quote(sym, ts) for sym in symbols}
         quotes: dict[str, Quote] = {}
         for key, data in (raw or {}).items():
             symbol = key.split(":", 1)[-1]
@@ -745,7 +751,7 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     cost_calculator = CostCalculator(app_config.broker_costs)
 
     if args.mode == "paper":
-        kite_client = None  # paper adapter does not call kite
+        kite_client = None  # paper adapter uses quote_provider from token file
     else:
         kite_client = _build_kite_client(app_config)
 
@@ -765,9 +771,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         paper_mode=is_paper,
         paper_capital=0.0,
         # paper mode needs a quote_provider so get_quote() doesn't raise
-        # NotImplementedError. Uses live Kite API for real OHLC/VWAP data
-        # so screener scores signals accurately even in paper mode.
-        quote_provider=(_make_paper_quote_provider(kite_client) if is_paper else None),
+        # NotImplementedError. Provider reads token file for real Kite quotes.
+        quote_provider=(_make_paper_quote_provider() if is_paper else None),
         # H-20 / ZA16a: paper needs the bus to publish synthesized
         # OrderFilled. Live adapter ignores these kwargs.
         bus=event_bus,

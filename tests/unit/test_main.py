@@ -693,6 +693,7 @@ class TestSubsystemWiring:
         lf_mock.set_on_reconnect_callback.assert_called_once()
 
     def test_paper_mode_skips_kite_client_build(self):
+        """Paper mode skips kite_client build (quote_provider reads token file directly)."""
         build_kite = MagicMock()
         adapter_cls = MagicMock(return_value=MagicMock(**{
             # F.1 / EF-7: align with paper_capital so EF-7 check passes.
