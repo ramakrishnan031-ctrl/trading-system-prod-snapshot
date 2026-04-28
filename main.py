@@ -254,6 +254,10 @@ def _make_paper_quote_provider():
                 upper_circuit=float(data["upper_circuit_limit"]) if data.get("upper_circuit_limit") else None,
                 lower_circuit=float(data["lower_circuit_limit"]) if data.get("lower_circuit_limit") else None,
             )
+        # Return stub quotes for any symbols not in Kite response
+        for sym in symbols:
+            if sym not in quotes:
+                quotes[sym] = _stub_quote(sym, ts)
         return quotes
 
     return _provider
