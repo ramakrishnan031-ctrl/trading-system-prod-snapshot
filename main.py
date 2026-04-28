@@ -1298,6 +1298,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         shadow_tracker=shadow_tracker,
         # SP7: wire in_flight release so processed signals don't stay locked
         in_flight_release_fn=webhook_receiver.release_in_flight,
+        # Use same expiry as webhook_receiver (config signal_queue.expiry_sec)
+        signal_expiry_sec=app_config.system.signal_queue.expiry_sec,
     )
 
     entry_gate = EntryGate(
