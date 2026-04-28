@@ -189,6 +189,12 @@ class WebhookReceiver:
                 data = resp[0].get_json(silent=True) or {}
                 accepted_count = data.get("accepted", 0)
                 rejected_count = data.get("rejected", 0)
+            # Log raw body on 400 errors for debugging Chartink format
+            if response_code == 400:
+                self._log.warning(
+                    "webhook/%s: 400 response | raw_body=%r",
+                    scanner_name, raw_body[:1000],
+                )
             return resp
         except Exception as exc:
             self._log.critical(f"Unhandled exception processing /webhook/{scanner_name}: {exc}")
