@@ -1,0 +1,30 @@
+# Pending/Skipped Items - Trading System v2
+# Items deferred from paper testing phase for post-live implementation
+
+## CRITICAL - Config Architecture (v2.1)
+- [ ] Config drift audit - document ALL hardcoded defaults in codebase
+- [ ] ConfigValidator implementation - Pydantic schema + mandatory injection
+- [ ] Remove ALL hardcoded defaults from module __init__ methods
+- [ ] Startup assertion: loaded config == actually-used config
+- [ ] CI check: fail if any module has default values for config params
+
+## Paper Testing Temp Changes (MUST REVERT BEFORE LIVE)
+- [ ] config/strategies/gap_fade_long.yaml: entry_end_time 15:00 -> 11:30
+- [ ] config/strategies/gap_fade_long.yaml: min_score 30 -> 0 (uses scorer default)
+- [ ] config/strategies/first_pullback_long.yaml: entry_end_time 15:15 -> 13:30
+- [ ] config/strategies/range_breakout_long.yaml: entry_end_time 15:15 -> 13:30
+- [ ] config/system_config.yaml: max_consecutive_losses 20 -> 4
+- [ ] config/system_config.yaml: daily_loss_limit_pct 1.00 -> 0.05
+- [ ] config/system_config.yaml: daily_loss_limit 100000 -> 10000
+- [ ] config/system_config.yaml: capital_drift_tolerance 100000 -> 50
+- [ ] config/system_config.yaml: drift_handler thresholds 100K/200K/500K -> 250/1000/2500
+- [ ] capital/fund_manager.py: _INVARIANT_TOLERANCE 100.0 -> 0.01
+
+## Bugs Fixed During Paper (commits to preserve)
+- [x] in_flight_release_fn not wired (commit 8536b53)
+- [x] signal_expiry_sec not passed (commit 586af55)
+
+## Deferred Improvements
+- [ ] Make _INVARIANT_TOLERANCE configurable via system_config.yaml
+- [ ] Paper mode: separate capital tracking from broker adapter
+- [ ] G3 capital drift check: needs paper-mode-aware implementation
