@@ -247,10 +247,10 @@ class SecondaryScreener:
         """
         ltp = quote.last_price
 
-        # Attempt circuit state detection (SS8)
+        # Attempt circuit state detection (SS8) using v2.1 Quote fields
         circuit_state = ""
-        upper = getattr(quote, "upper_circuit_limit", None)
-        lower = getattr(quote, "lower_circuit_limit", None)
+        upper = getattr(quote, "upper_circuit", None)
+        lower = getattr(quote, "lower_circuit", None)
         if upper is not None and ltp >= upper:
             circuit_state = "upper_circuit"
         elif lower is not None and ltp <= lower:
@@ -262,16 +262,17 @@ class SecondaryScreener:
             "ask": quote.ask,
             "volume": quote.volume,
             "circuit_state": circuit_state,
-            # Not in Quote v2; will be populated in v2.1 via data providers
-            "vwap": None,
+            # v2.1: populated from Quote fields (Kite API response)
+            "vwap": getattr(quote, "vwap", None),
+            "open": getattr(quote, "open_price", None),
+            "day_high": getattr(quote, "day_high", None),
+            "day_low": getattr(quote, "day_low", None),
+            # Still not in Kite quote API; would need instruments cache
             "atr": None,
             "rsi": None,
             "sector": None,
-            "day_high": None,
-            "day_low": None,
             "prev_close": None,
             "avg_volume_20d": None,
-            "open": None,
         }
 
     def _make_skipped(self, status: str, market_data_snapshot: dict, signal_id: str) -> ScreeningResult:

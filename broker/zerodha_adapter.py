@@ -195,6 +195,13 @@ class Quote:
     ask: float
     volume: int
     ts: datetime
+    # v2.1 fields: OHLC, VWAP, circuit limits (optional for backward compat)
+    vwap: float | None = None
+    open_price: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    upper_circuit: float | None = None
+    lower_circuit: float | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -895,6 +902,8 @@ class ZerodhaAdapter:
                 asks = depth.get("sell", [])
                 bid = float(bids[0]["price"]) if bids else 0.0
                 ask = float(asks[0]["price"]) if asks else 0.0
+            # v2.1: extract OHLC, VWAP, circuit limits from Kite response
+            ohlc = data.get("ohlc", {})
             quotes[symbol] = Quote(
                 symbol=symbol,
                 last_price=float(data.get("last_price", 0.0)),
@@ -902,6 +911,12 @@ class ZerodhaAdapter:
                 ask=ask,
                 volume=int(data.get("volume", 0)),
                 ts=ts,
+                vwap=float(data["average_price"]) if data.get("average_price") else None,
+                open_price=float(ohlc["open"]) if ohlc.get("open") else None,
+                day_high=float(ohlc["high"]) if ohlc.get("high") else None,
+                day_low=float(ohlc["low"]) if ohlc.get("low") else None,
+                upper_circuit=float(data["upper_circuit_limit"]) if data.get("upper_circuit_limit") else None,
+                lower_circuit=float(data["lower_circuit_limit"]) if data.get("lower_circuit_limit") else None,
             )
 
         ms = int((time.monotonic() - t0) * 1000)

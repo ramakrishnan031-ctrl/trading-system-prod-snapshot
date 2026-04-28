@@ -187,34 +187,68 @@ def _load_holidays(app_config) -> set:
     return {h.date for h in app_config.nse_holidays.holidays}
 
 
-def _make_paper_quote_provider():
+def _make_paper_quote_provider(kite_client):
     """
-    Return a simple quote_provider for paper mode (BLOCKER #3 fix).
+    Return a quote_provider for paper mode that fetches REAL quotes from Kite.
 
     In paper mode ZerodhaAdapter.get_quote() delegates to this callable.
-    We return a trivial provider that yields a neutral Quote(ltp=100) for
-    any symbol so that screener/risk code doesn't raise NotImplementedError.
-    In a real paper-trading session the operator should replace this with a
-    live-data feed; this stub prevents crashes when no live data is wired.
+    We use the Kite API to fetch live quotes (read-only, no trading impact)
+    so that the screener has real OHLC/VWAP data to score signals properly.
     """
     from broker.zerodha_adapter import Quote
-
-    # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
     def _provider(symbols):
         from core.time_authority import now_ist
         ts = now_ist()
-        return {
-            sym: Quote(
-                symbol=sym,
-                last_price=100.0,
-                bid=99.9,
-                ask=100.1,
-                volume=100_000,
+        instrument_keys = [f"NSE:{s}" for s in symbols]
+        try:
+            raw = kite_client.quote(*instrument_keys)
+        except Exception:
+            # Fallback to stub quotes if Kite API fails
+            return {
+                sym: Quote(
+                    symbol=sym,
+                    last_price=100.0,
+                    bid=99.9,
+                    ask=100.1,
+                    volume=100_000,
+                    ts=ts,
+                    vwap=100.0,
+                    open_price=100.0,
+                    day_high=102.0,
+                    day_low=98.0,
+                    upper_circuit=None,
+                    lower_circuit=None,
+                )
+                for sym in symbols
+            }
+        quotes: dict[str, Quote] = {}
+        for key, data in (raw or {}).items():
+            symbol = key.split(":", 1)[-1]
+            depth = data.get("depth", {})
+            bid = 0.0
+            ask = 0.0
+            if depth:
+                bids = depth.get("buy", [])
+                asks = depth.get("sell", [])
+                bid = float(bids[0]["price"]) if bids else 0.0
+                ask = float(asks[0]["price"]) if asks else 0.0
+            ohlc = data.get("ohlc", {})
+            quotes[symbol] = Quote(
+                symbol=symbol,
+                last_price=float(data.get("last_price", 0.0)),
+                bid=bid,
+                ask=ask,
+                volume=int(data.get("volume", 0)),
                 ts=ts,
+                vwap=float(data["average_price"]) if data.get("average_price") else None,
+                open_price=float(ohlc["open"]) if ohlc.get("open") else None,
+                day_high=float(ohlc["high"]) if ohlc.get("high") else None,
+                day_low=float(ohlc["low"]) if ohlc.get("low") else None,
+                upper_circuit=float(data["upper_circuit_limit"]) if data.get("upper_circuit_limit") else None,
+                lower_circuit=float(data["lower_circuit_limit"]) if data.get("lower_circuit_limit") else None,
             )
-            for sym in symbols
-        }
+        return quotes
 
     return _provider
 
@@ -731,9 +765,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         paper_mode=is_paper,
         paper_capital=0.0,
         # paper mode needs a quote_provider so get_quote() doesn't raise
-        # NotImplementedError.  A simple passthrough using the Kite HTTP API
-        # is sufficient for paper; live mode ignores this kwarg entirely.
-        quote_provider=(_make_paper_quote_provider() if is_paper else None),
+        # NotImplementedError. Uses live Kite API for real OHLC/VWAP data
+        # so screener scores signals accurately even in paper mode.
+        quote_provider=(_make_paper_quote_provider(kite_client) if is_paper else None),
         # H-20 / ZA16a: paper needs the bus to publish synthesized
         # OrderFilled. Live adapter ignores these kwargs.
         bus=event_bus,
