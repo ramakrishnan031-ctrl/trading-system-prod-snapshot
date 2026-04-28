@@ -126,4 +126,15 @@ if len(sys.argv) > 1 and sys.argv[1] == "--health":
     pending_orders = c.execute("SELECT COUNT(*) FROM orders WHERE status IN ('PENDING', 'OPEN', 'SUBMITTED')").fetchone()[0]
     print(f"Pending orders: {pending_orders}")
 
+# Check order status breakdown if --orders passed
+if len(sys.argv) > 1 and sys.argv[1] == "--orders":
+    print("\nOrder status breakdown:")
+    rows = c.execute("""
+        SELECT order_type, status, COUNT(*) as cnt
+        FROM orders GROUP BY order_type, status
+        ORDER BY cnt DESC
+    """).fetchall()
+    for r in rows:
+        print(f"  {r[0]:10} {r[1]:15} count={r[2]}")
+
 c.close()
