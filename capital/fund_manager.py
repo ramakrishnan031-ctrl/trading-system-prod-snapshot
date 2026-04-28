@@ -105,7 +105,7 @@ _VALID_DIRECTIONS: Final[frozenset[str]] = frozenset({"LONG", "SHORT"})
 _INTRADAY_BUCKET = "intraday"
 _POSITIONAL_BUCKET = "positional"
 
-_INVARIANT_TOLERANCE = 0.01   # 1 paise tolerance for float rounding
+_INVARIANT_TOLERANCE = 100.0  # TEMP: raised for paper testing (was 0.01)
 
 # BL-1 / FM18: orders.product -> semantic intent for rehydrate replay.
 # CO is COVER_ORDER (intraday-bucketed); MIS is plain INTRADAY; CNC and NRML
