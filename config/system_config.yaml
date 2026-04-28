@@ -74,7 +74,7 @@ webhook:                      # WR14 — HTTP server settings
                               # firewall/security-group restrictions to
                               # constrain the actual reachable surface.
   bind_port: 5000             # port to listen on
-  require_hmac: true          # production must validate HMAC
+  require_hmac: false         # TEMP: disabled for Chartink (no HMAC support)
 
 signal_processor:             # SP15 — worker pool settings
   worker_count: 5             # ThreadPoolExecutor workers (1-50)
