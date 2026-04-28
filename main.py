@@ -1258,6 +1258,17 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         maxsize=app_config.system.signal_queue.capacity
     )
 
+    # Create webhook_receiver first so we can wire in_flight_release to signal_processor
+    webhook_receiver = WebhookReceiver(
+        signal_queue=signal_queue,
+        state_store=store,
+        config=app_config,
+        market_windows=market_windows,
+        kill_switch=kill_switch,
+        logger=get_logger("webhook_receiver"),
+        secret_token=os.environ.get("WEBHOOK_SECRET"),
+    )
+
     sp_cfg = app_config.system.signal_processor
     signal_processor = SignalProcessor(
         signal_queue=signal_queue,
@@ -1285,6 +1296,8 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         # has an active simulated inning (real trade closed, shadow inning
         # still running) so real + shadow positions never overlap.
         shadow_tracker=shadow_tracker,
+        # SP7: wire in_flight release so processed signals don't stay locked
+        in_flight_release_fn=webhook_receiver.release_in_flight,
     )
 
     entry_gate = EntryGate(
@@ -1292,16 +1305,6 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         logger=get_logger("entry_gate"),
         state_store=store,
         on_release=_make_gate_release_cb(signal_processor),
-    )
-
-    webhook_receiver = WebhookReceiver(
-        signal_queue=signal_queue,
-        state_store=store,
-        config=app_config,
-        market_windows=market_windows,
-        kill_switch=kill_switch,
-        logger=get_logger("webhook_receiver"),
-        secret_token=os.environ.get("WEBHOOK_SECRET"),
     )
 
     # ── Phase 0e: Event bus subscriptions (MAIN9) ────────────────────────────
