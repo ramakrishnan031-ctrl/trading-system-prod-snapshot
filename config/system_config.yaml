@@ -17,7 +17,7 @@ trading_hours:
 signal_queue:
   capacity: 300               # Max signals in queue before HTTP 503 (P15)
   backpressure_pct: 0.80      # 503 threshold = capacity * backpressure_pct (P15)
-  expiry_sec: 300             # WR6: reject signal older than this (5 min for paper mode latency)
+  expiry_sec: 600             # WR6: 10 min - Chartink triggered_at is scan time, not delivery time
 
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:
