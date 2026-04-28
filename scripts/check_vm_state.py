@@ -74,4 +74,36 @@ if len(sys.argv) > 1 and sys.argv[1] == "--trades":
         sign = '+' if pnl >= 0 else ''
         print(f"  {r[0]:15} {sign}{pnl:>8.2f}  exit={exit_t}")
 
+# Check open positions if --positions passed
+if len(sys.argv) > 1 and sys.argv[1] == "--positions":
+    print("\nOpen positions (status != CLOSED):")
+    rows = c.execute("""
+        SELECT trade_id, symbol, status, entry_time
+        FROM trades WHERE status NOT IN ('CLOSED', 'CANCELLED')
+        ORDER BY entry_time DESC LIMIT 15
+    """).fetchall()
+    if rows:
+        for r in rows:
+            entry_t = r[3][:19] if r[3] else 'N/A'
+            print(f"  {r[1]:15} status={r[2]:15} entry={entry_t}")
+    else:
+        print("  (no open positions)")
+    print(f"\nTotal open: {len(rows)}")
+
+# Quick health check if --health passed
+if len(sys.argv) > 1 and sys.argv[1] == "--health":
+    print("\n=== HEALTH CHECK ===")
+    # Kill switch
+    ks = c.execute("SELECT state FROM kill_switch_state WHERE id=1").fetchone()
+    print(f"Kill switch: {ks[0] if ks else 'N/A'}")
+    # Open positions
+    open_count = c.execute("SELECT COUNT(*) FROM trades WHERE status NOT IN ('CLOSED', 'CANCELLED')").fetchone()[0]
+    print(f"Open positions: {open_count}")
+    # Recent signals
+    recent_sig = c.execute("SELECT COUNT(*) FROM signals WHERE received_at > datetime('now', '-10 minutes')").fetchone()[0]
+    print(f"Signals (last 10 min): {recent_sig}")
+    # Pending orders
+    pending_orders = c.execute("SELECT COUNT(*) FROM orders WHERE status IN ('PENDING', 'OPEN', 'SUBMITTED')").fetchone()[0]
+    print(f"Pending orders: {pending_orders}")
+
 c.close()
