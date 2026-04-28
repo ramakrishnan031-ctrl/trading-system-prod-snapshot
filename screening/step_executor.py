@@ -155,7 +155,9 @@ class StepExecutor:
     ) -> float:
         """Direction-aware VWAP gate (audit fix b)."""
         ltp = md.get("ltp", 0.0)
-        vwap = md.get("vwap", 0.0)
+        vwap = md.get("vwap")
+        if vwap is None or ltp is None or ltp == 0.0:
+            return 0.0  # No VWAP data (ETFs, bonds) -> fail gate
         if direction == "LONG":
             return 1.0 if ltp > vwap else 0.0
         else:  # SHORT

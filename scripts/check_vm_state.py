@@ -90,6 +90,26 @@ if len(sys.argv) > 1 and sys.argv[1] == "--positions":
         print("  (no open positions)")
     print(f"\nTotal open: {len(rows)}")
 
+# Cleanup stale PENDING_FILL trades if --cleanup-pending passed
+if len(sys.argv) > 1 and sys.argv[1] == "--cleanup-pending":
+    print("\nCleaning up PENDING_FILL trades...")
+    rows = c.execute("""
+        SELECT trade_id, symbol, status FROM trades
+        WHERE status = 'PENDING_FILL'
+    """).fetchall()
+    if rows:
+        for r in rows:
+            print(f"  Marking {r[1]} (trade_id={r[0][:12]}...) as CANCELLED")
+        c.execute("""
+            UPDATE trades SET status = 'CANCELLED',
+            exit_reason = 'cleanup_stale_pending'
+            WHERE status = 'PENDING_FILL'
+        """)
+        c.commit()
+        print(f"  {len(rows)} trades marked CANCELLED")
+    else:
+        print("  No PENDING_FILL trades found")
+
 # Quick health check if --health passed
 if len(sys.argv) > 1 and sys.argv[1] == "--health":
     print("\n=== HEALTH CHECK ===")
