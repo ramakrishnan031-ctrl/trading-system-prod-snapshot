@@ -600,7 +600,7 @@ class SignalProcessor:
 
         except _PipelineReject as rej:
             self._log.info(
-                f"Signal {signal_id} ({symbol}) rejected at {rej.check}: {rej.reason}"
+                f'Signal {signal_id} ("{symbol}") rejected at {rej.check}: {rej.reason}'
             )
             self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
             # Release reservation if we had one
@@ -1005,7 +1005,7 @@ class SignalProcessor:
 
         except _PipelineReject as rej:
             self._log.info(
-                f"Gate signal {signal_id} ({symbol}) rejected at {rej.check}: {rej.reason}"
+                f'Gate signal {signal_id} ("{symbol}") rejected at {rej.check}: {rej.reason}'
             )
             self._store.update_signal_status(
                 signal_id, f"REJECTED_{rej.check}", rej.reason

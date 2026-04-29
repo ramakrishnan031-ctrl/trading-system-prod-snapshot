@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import logging
-from logging.handlers import RotatingFileHandler
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -277,14 +276,11 @@ def setup_logging(log_dir: Path = Path("logs")) -> None:
     json_fmt  = _JsonFormatter()
     plain_fmt = _PlainFormatter()
 
-    def _file(stem: str) -> RotatingFileHandler:
-        # HIGH #11: rotate at 50 MB, keep 5 backups
+    def _file(stem: str) -> logging.FileHandler:
+        # One file per day, no mid-day rotation (Foundation Rule 1.7: resume-safe)
+        # Date is embedded in filename; file is appended across restarts
         path = log_dir / f"{stem}_{date_str}.log"
-        h = RotatingFileHandler(
-            path, mode="a", encoding="utf-8",
-            maxBytes=50 * 1024 * 1024,  # 50 MB
-            backupCount=5,
-        )
+        h = logging.FileHandler(path, mode="a", encoding="utf-8")
         h.setLevel(logging.DEBUG)   # level controlled by filters, not handler
         return h
 

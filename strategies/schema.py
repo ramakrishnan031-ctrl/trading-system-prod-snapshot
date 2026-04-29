@@ -90,8 +90,8 @@ class StrategyConfig(BaseModel):
     lot_size: int = 1
 
     # --- Time ---
-    entry_start_time: str = "09:30"
-    entry_end_time: str = "13:30"
+    entry_start_time: str = "09:20"  # Must match system_config.yaml entry_start
+    entry_end_time: str = "15:15"    # Must match system_config.yaml entry_end
     active_days: List[str] = ["MON", "TUE", "WED", "THU", "FRI"]
 
     # ── Field validators ─────────────────────────────────────────────────────
