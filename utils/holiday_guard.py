@@ -81,3 +81,23 @@ def next_trading_day(from_date: date, config_dir: Path) -> date:
             if d not in holiday_set:
                 return d
         d += timedelta(days=1)
+
+
+def get_holiday_name(today: date, config_dir: Path) -> str | None:
+    """
+    Return the holiday name for today, or None if not a listed holiday.
+
+    For weekends, returns None (caller should handle weekend separately).
+    """
+    yaml_path = config_dir / f"nse_holidays_{today.year}.yaml"
+    if not yaml_path.exists():
+        return None
+
+    with open(yaml_path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+
+    for entry in (data or {}).get("holidays") or []:
+        if isinstance(entry, dict) and "date" in entry:
+            if date.fromisoformat(str(entry["date"])) == today:
+                return entry.get("name")
+    return None
