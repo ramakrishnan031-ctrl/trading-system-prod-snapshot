@@ -75,7 +75,7 @@ from screening.step_executor import StepExecutor
 from signals.signal_processor import SignalProcessor
 from signals.webhook_receiver import WebhookReceiver
 from strategies.loader import StrategyLoader
-from utils.holiday_guard import is_trading_day, next_trading_day
+from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
 from utils.startup_checks import (
     StartupCheckFailed,
     StartupScenario,
@@ -150,6 +150,30 @@ def _http_fetch(url: str, timeout_sec: float = 5.0):
             return resp.status, body
     except Exception as exc:
         return None, str(exc)
+
+
+def _send_holiday_notification(message: str) -> None:
+    """Best-effort Telegram notification for holiday/weekend shutdown.
+
+    Uses direct HTTP POST before logger setup. Silent on failure.
+    """
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY")
+    if not bot_token or not chat_id:
+        return
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = json.dumps({"chat_id": chat_id, "text": message}).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5.0):
+            pass
+    except Exception:
+        pass
 
 
 def _init_time_authority(app_config, kill_switch) -> None:
@@ -649,11 +673,42 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     try:
         if not is_trading_day(today, config_dir):
             _next = next_trading_day(today, config_dir)
-            print("=" * 60)
-            print(f"  Market closed today: {today} ({today.strftime('%A')})")
-            print(f"  Next trading day: {_next}")
-            print("  System not started. No logs created.")
-            print("=" * 60)
+            next_day_name = _next.strftime("%A")
+            today_fmt = today.strftime("%d-%b-%Y")
+            next_fmt = _next.strftime("%d-%b-%Y")
+
+            if today.weekday() >= 5:
+                reason = "Weekend"
+            else:
+                reason = get_holiday_name(today, config_dir) or "Market Holiday"
+
+            terminal_msg = (
+                "\n"
+                + "-" * 50 + "\n"
+                "  AlgoCore System Command Center\n"
+                + "-" * 50 + "\n\n"
+                "Hey boss!\n"
+                "Guess what...\n\n"
+                "  --> MARKET IS CLOSED <--\n\n"
+                f"  Reason : {reason}\n"
+                f"  Today  : {today_fmt}\n\n"
+                "So yeah...\n"
+                "No trades, no stress - go enjoy your day!!\n\n"
+                f"  Let's connect on: {next_fmt} ({next_day_name})\n"
+                + "-" * 50 + "\n"
+            )
+            print(terminal_msg)
+
+            telegram_msg = (
+                "Hey boss!\n"
+                "Guess what...\n\n"
+                "MARKET IS CLOSED\n\n"
+                f"Reason : {reason}\n"
+                f"Today  : {today_fmt}\n\n"
+                "No trades, no stress - go enjoy your day!\n\n"
+                f"Let's connect on: {next_fmt} ({next_day_name})"
+            )
+            _send_holiday_notification(telegram_msg)
             return 0
     except FileNotFoundError:
         pass  # missing holiday file: proceed with startup
