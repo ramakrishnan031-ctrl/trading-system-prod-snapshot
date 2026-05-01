@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from utils.holiday_guard import is_trading_day, next_trading_day
+from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +29,15 @@ def _write_holidays(config_dir: Path, year: int, dates: list) -> None:
     lines = ["holidays:\n"]
     for d in dates:
         lines.append(f'  - "{d}"\n')
+    (config_dir / f"nse_holidays_{year}.yaml").write_text("".join(lines), encoding="utf-8")
+
+
+def _write_holidays_with_names(config_dir: Path, year: int, entries: list) -> None:
+    """Write nse_holidays_<year>.yaml with dict entries {date, name}."""
+    lines = ["holidays:\n"]
+    for d, name in entries:
+        lines.append(f'  - date: "{d}"\n')
+        lines.append(f'    name: "{name}"\n')
     (config_dir / f"nse_holidays_{year}.yaml").write_text("".join(lines), encoding="utf-8")
 
 
@@ -86,6 +95,30 @@ def test_next_trading_day_skips_holiday(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# get_holiday_name
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_get_holiday_name_returns_name(tmp_path: Path) -> None:
+    """Returns holiday name when date matches."""
+    _write_holidays_with_names(tmp_path, 2026, [("2026-05-01", "Maharashtra Day")])
+    result = get_holiday_name(date(2026, 5, 1), tmp_path)
+    assert result == "Maharashtra Day"
+
+
+def test_get_holiday_name_returns_none_for_non_holiday(tmp_path: Path) -> None:
+    """Returns None for a regular trading day."""
+    _write_holidays_with_names(tmp_path, 2026, [("2026-05-01", "Maharashtra Day")])
+    result = get_holiday_name(date(2026, 5, 2), tmp_path)
+    assert result is None
+
+
+def test_get_holiday_name_returns_none_for_missing_yaml(tmp_path: Path) -> None:
+    """Returns None if YAML file is missing (no exception)."""
+    result = get_holiday_name(date(2026, 5, 1), tmp_path)
+    assert result is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -100,6 +133,9 @@ if __name__ == "__main__":
         test_missing_yaml_raises_file_not_found,
         test_next_trading_day_skips_weekend,
         test_next_trading_day_skips_holiday,
+        test_get_holiday_name_returns_name,
+        test_get_holiday_name_returns_none_for_non_holiday,
+        test_get_holiday_name_returns_none_for_missing_yaml,
     ]
 
     passed = failed = 0

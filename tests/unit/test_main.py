@@ -36,6 +36,7 @@ from main import (
     _make_orphan_cb,
     _make_gate_release_cb,
     _log_kill_switch_event,
+    _send_holiday_notification,
 )
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -379,6 +380,25 @@ class TestHelpers:
         scenario_result = _make_mock_scenario_result("COLD")
         rc = _print_status(store, ks, scenario_result)
         assert rc == 0
+
+    def test_send_holiday_notification_missing_env_does_not_raise(self):
+        with patch.dict("os.environ", {}, clear=True):
+            _send_holiday_notification("Market closed")
+
+    def test_send_holiday_notification_sends_telegram(self):
+        with patch.dict("os.environ", {
+            "TELEGRAM_BOT_TOKEN": "test_token",
+            "TELEGRAM_CHANNEL_PRIMARY": "-1001234567890",
+        }):
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                mock_urlopen.return_value.__enter__ = MagicMock()
+                mock_urlopen.return_value.__exit__ = MagicMock()
+                _send_holiday_notification("Market closed")
+                mock_urlopen.assert_called_once()
+                call_args = mock_urlopen.call_args
+                req = call_args[0][0]
+                assert "sendMessage" in req.full_url
+                assert req.method == "POST"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
