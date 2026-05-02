@@ -1,7 +1,7 @@
 # DEPLOYMENT.md -- Trading System v2
 
 Operational runbook for deploying the repo onto the Oracle Cloud VM
-(`ubuntu@80.225.198.195`). This file is the single point of truth for the
+(`ubuntu@129.154.253.244`). This file is the single point of truth for the
 post-F.1 deploy story.
 
 Historical step-by-step bootstrap (VM provisioning, venv, firewall, first
@@ -73,7 +73,7 @@ Run in order. Each step is idempotent.
 scp -i ~/.ssh/trading_vm_secure \
     deploy/systemd/trading-system.service \
     deploy/systemd/alert-watcher.service \
-    ubuntu@80.225.198.195:/tmp/
+    ubuntu@129.154.253.244:/tmp/
 
 ssh trading-vm << 'EOF'
 sudo mv /tmp/trading-system.service  /etc/systemd/system/
@@ -96,7 +96,7 @@ after Gate D of Monday's paper trial passes.
 ```bash
 scp -i ~/.ssh/trading_vm_secure \
     deploy/logrotate/trading-system \
-    ubuntu@80.225.198.195:/tmp/
+    ubuntu@129.154.253.244:/tmp/
 
 ssh trading-vm << 'EOF'
 sudo mv /tmp/trading-system /etc/logrotate.d/trading-system
@@ -123,7 +123,7 @@ will start but every broker/notify call fails with a cryptic
 # in repo: .env.example -- copy and fill in real values, then ship).
 scp -i ~/.ssh/trading_vm_secure \
     .env \
-    ubuntu@80.225.198.195:/home/ubuntu/trading-system/.env
+    ubuntu@129.154.253.244:/home/ubuntu/trading-system/.env
 
 ssh trading-vm 'chmod 600 /home/ubuntu/trading-system/.env'
 ```
@@ -145,7 +145,7 @@ re-deploy via §3.1.
 ```bash
 scp -i ~/.ssh/trading_vm_secure \
     deploy/cron/trading-system.cron \
-    ubuntu@80.225.198.195:/tmp/
+    ubuntu@129.154.253.244:/tmp/
 
 ssh trading-vm << 'EOF'
 # install: replaces the entire ubuntu crontab with the committed file.
@@ -172,7 +172,7 @@ Morning (operator at PC):
 
 1. Rotate Zerodha credentials (Kite dev console) + SCP fresh `.env`:
    ```bash
-   scp -i ~/.ssh/trading_vm_secure .env ubuntu@80.225.198.195:~/trading-system/.env
+   scp -i ~/.ssh/trading_vm_secure .env ubuntu@129.154.253.244:~/trading-system/.env
    ```
 2. Refresh instruments (run on PC, not VM, so the PC CSV stays in sync):
    ```bash
@@ -198,7 +198,7 @@ Post-market:
 ```bash
 ssh trading-vm 'cd trading-system && venv/bin/python -m reports.daily_review --unattended'
 scp -i ~/.ssh/trading_vm_secure \
-    ubuntu@80.225.198.195:~/trading-system/reports/daily/*.xlsx \
+    ubuntu@129.154.253.244:~/trading-system/reports/daily/*.xlsx \
     reports/daily/
 ```
 
