@@ -51,6 +51,7 @@ from capital.position_sizer import PositionSizer
 from capital.risk_engine import RiskEngine
 from core.account_registry import AccountRegistry
 from core.config_loader import load_all
+from core.config_validator import config_validator
 from core.events import EventBus, CapitalDriftDetected, KillSwitchActivated
 from core.exceptions import CapitalStateInconsistent, TradingSystemError
 from core.instrument_cache import InstrumentCache
@@ -724,6 +725,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         _log.critical("Config load failed: %s", exc)
         return 5
     _log.info("Config loaded from %s (%d files)", config_dir, len(app_config.file_hashes))
+
+    # CV1: Register all config values for usage tracking (post-paper audit)
+    config_validator.register_all_from_app_config(app_config)
 
     # ── Phase 0c: StateStore + EventBus + KillSwitch + TimeAuthority (MAIN6) ─
     store = StateStore(Path("data_store/trading_system.db"))
@@ -1470,6 +1474,9 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
         daemon=True,
     )
     eod_thread.start()
+
+    # CV3: Validate all config values were accessed (non-strict for gradual rollout)
+    config_validator.validate_all(strict=False)
 
     # ── Phase 0h: Mark startup complete (MAIN12) ────────────────────────────
     now_iso = time_authority.now_ist_iso()

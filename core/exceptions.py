@@ -71,6 +71,20 @@ class ConfigMissingError(ConfigError):
     SEVERITY: str = "ERROR"
 
 
+class ConfigValidationError(ConfigError):
+    """
+    Config values loaded but not actually used by modules, or value drift
+    detected between loaded config and runtime usage.
+
+    Raised by: core/config_validator.py at startup validation gate.
+
+    Useful context kwargs:
+        unaccessed_keys (list[str]): config keys that were never read
+        drift_keys (list[str]): keys where loaded != used value
+    """
+    SEVERITY: str = "ERROR"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sub-root: StateError
 # ─────────────────────────────────────────────────────────────────────────────
