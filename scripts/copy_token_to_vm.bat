@@ -7,12 +7,12 @@ echo.
 
 scp -i "C:\Users\rama\.ssh\trading_vm_secure" ^
     "D:\Projects\trading-system\data_store\session\zerodha_token.json" ^
-    ubuntu@129.154.253.244:/home/ubuntu/trading-system/data_store/session/zerodha_token.json
+    ubuntu@161.118.188.171:/home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
 
 if %errorlevel% equ 0 (
     echo.
     echo   Token copied successfully.
-    echo   VM ready at: ubuntu@129.154.253.244
+    echo   VM ready at: ubuntu@161.118.188.171
 ) else (
     echo.
     echo   ERROR: Token copy failed ^(error code %errorlevel%^)
