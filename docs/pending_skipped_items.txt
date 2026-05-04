@@ -9,10 +9,24 @@
 - [ ] CI check: fail if any module has default values for config params
 
 ## Paper Testing Temp Changes (MUST REVERT BEFORE LIVE)
-- [ ] config/strategies/gap_fade_long.yaml: entry_end_time 15:00 -> 11:30
+### Strategy entry_end_time (all set to 15:20 for paper rehearsal)
+- [ ] config/strategies/gap_fade_long.yaml: entry_end_time 15:20 -> 11:30
+- [ ] config/strategies/gap_fade_short.yaml: entry_end_time 15:20 -> 11:30
+- [ ] config/strategies/gap_go_long.yaml: entry_end_time 15:20 -> 11:00
+- [ ] config/strategies/gap_go_short.yaml: entry_end_time 15:20 -> 11:00
+- [ ] config/strategies/first_pullback_long.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/first_pullback_short.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/open_low_breakout_long.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/open_high_breakdown_short.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/vwap_bounce_long.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/vwap_rejection_short.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/range_breakout_long.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/range_breakout_short.yaml: entry_end_time 15:20 -> 13:30
+- [ ] config/strategies/positional_momentum_long.yaml: entry_end_time 15:20 -> 14:30
+- [ ] config/strategies/positional_swing_long.yaml: entry_end_time 15:20 -> 14:30
+- [ ] config/strategies/positional_sector_rotation.yaml: entry_end_time 15:20 -> 14:30
+### Other temp overrides
 - [ ] config/strategies/gap_fade_long.yaml: min_score 30 -> 0 (uses scorer default)
-- [ ] config/strategies/first_pullback_long.yaml: entry_end_time 15:15 -> 13:30
-- [ ] config/strategies/range_breakout_long.yaml: entry_end_time 15:15 -> 13:30
 - [ ] config/system_config.yaml: max_consecutive_losses 20 -> 4
 - [ ] config/system_config.yaml: daily_loss_limit_pct 1.00 -> 0.05
 - [ ] config/system_config.yaml: daily_loss_limit 100000 -> 10000

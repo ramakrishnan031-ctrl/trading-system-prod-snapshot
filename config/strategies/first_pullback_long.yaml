@@ -40,7 +40,7 @@ max_risk_pct: 0.0
 lot_size: 1
 
 entry_start_time: "09:20"
-entry_end_time: "15:15"  # TEMP: extended for paper testing (was 13:30)
+entry_end_time: "15:20"  # TEMP PAPER: was 13:30 — REVERT BEFORE LIVE
 active_days:
   - MON
   - TUE
