@@ -75,7 +75,7 @@ class _WatchEntry:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # These are the exact Zerodha order status strings as documented in the SDK.
-_KITE_STATUS_OPEN = {"OPEN", "TRIGGER PENDING"}
+_KITE_STATUS_OPEN = {"OPEN", "TRIGGER PENDING", "SUBMITTED"}
 _KITE_STATUS_PARTIAL = {"PARTIAL"}
 _KITE_STATUS_COMPLETE = {"COMPLETE"}
 _KITE_STATUS_CANCELLED = {"CANCELLED"}

@@ -359,6 +359,12 @@ class ZerodhaAdapter:
         )
         self._429_attempts: dict[str, int] = {}
         self._429_lock: threading.Lock = threading.Lock()
+        # Paper order state tracker: broker_order_id -> {status, filled_qty, avg_price}.
+        # Updated by _paper_place_order (SUBMITTED), _synth_fill (COMPLETE),
+        # and cancel_order (CANCELLED). Read by get_order_history() so
+        # order_monitor sees real state instead of a static SUBMITTED stub.
+        self._paper_fills: dict[str, dict] = {}
+        self._paper_fills_lock: threading.Lock = threading.Lock()
         # ZA16a: paper needs bus to publish synthesized OrderFilled. If paper
         # is on but bus is None we degrade safely (state reaches COMPLETE via
         # synth thread; no event) and log a warning. main.py wires bus in
@@ -522,6 +528,9 @@ class ZerodhaAdapter:
         )
 
         if self._paper:
+            with self._paper_fills_lock:
+                if broker_order_id in self._paper_fills:
+                    self._paper_fills[broker_order_id]["status"] = "CANCELLED"
             result = CancelResult(
                 broker_order_id=broker_order_id, success=True, reason=""
             )
@@ -625,12 +634,17 @@ class ZerodhaAdapter:
         )
 
         if self._paper:
+            with self._paper_fills_lock:
+                state = self._paper_fills.get(broker_order_id, {})
+            status = state.get("status", "SUBMITTED")
+            filled_qty = state.get("filled_qty", 0)
+            avg_price = state.get("avg_price", 0.0)
             entries = [
                 OrderHistoryEntry(
                     broker_order_id=broker_order_id,
-                    status="SUBMITTED",
-                    filled_qty=0,
-                    avg_price=0.0,
+                    status=status,
+                    filled_qty=filled_qty,
+                    avg_price=avg_price,
                     rejection_reason="",
                     ts=now_ist(),
                 )
@@ -639,7 +653,7 @@ class ZerodhaAdapter:
             self._log.info(
                 "get_order_history call_end",
                 extra={"method": "get_order_history", "duration_ms": ms,
-                       "result_summary": "PAPER 1 entry"},
+                       "result_summary": f"PAPER 1 entry status={status}"},
             )
             return entries
 
@@ -1123,6 +1137,11 @@ class ZerodhaAdapter:
         fake_broker_id = "PAPER_" + uuid.uuid4().hex[:12].upper()
         self._osm.transition(internal_id, "SUBMITTED")
 
+        with self._paper_fills_lock:
+            self._paper_fills[fake_broker_id] = {
+                "status": "SUBMITTED", "filled_qty": 0, "avg_price": 0.0,
+            }
+
         # ZA16a: paper mode synthesizes the broker fill that live mode
         # receives from order_monitor. Fire the synth off the thread so
         # place_order returns immediately like the live path does.
@@ -1247,6 +1266,11 @@ class ZerodhaAdapter:
                            "broker_order_id": broker_order_id},
                 )
                 return
+
+            with self._paper_fills_lock:
+                self._paper_fills[broker_order_id] = {
+                    "status": "COMPLETE", "filled_qty": qty, "avg_price": fill_price,
+                }
 
             if self._bus is None:
                 # Degraded mode warned at ctor time. State reached COMPLETE;
