@@ -218,13 +218,16 @@ def _make_paper_quote_provider():
 
     Reads credentials from data_store/session/zerodha_token.json (saved by
     interactive startup) and calls Kite quote API for live OHLC/VWAP data.
-    Falls back to stub values if token file missing or API fails.
+    Returns empty dict when API fails — callers (LTP gating, EOD) already
+    handle missing symbols gracefully. Never returns fake non-zero prices.
     """
     from broker.zerodha_adapter import Quote
     from kiteconnect import KiteConnect
     import json
+    import logging
     from pathlib import Path
 
+    _log = logging.getLogger("paper_quote_provider")
     token_path = Path("data_store/session/zerodha_token.json")
     kite_client = None
     if token_path.exists():
@@ -236,23 +239,18 @@ def _make_paper_quote_provider():
         except Exception:
             pass
 
-    def _stub_quote(sym, ts):
-        return Quote(
-            symbol=sym, last_price=100.0, bid=99.9, ask=100.1,
-            volume=100_000, ts=ts, vwap=100.0, open_price=100.0,
-            day_high=102.0, day_low=98.0, upper_circuit=None, lower_circuit=None,
-        )
-
     def _provider(symbols):
         from core.time_authority import now_ist
         ts = now_ist()
         if kite_client is None:
-            return {sym: _stub_quote(sym, ts) for sym in symbols}
+            _log.warning("paper_quote_provider: no kite_client, returning empty")
+            return {}
         instrument_keys = [f"NSE:{s}" for s in symbols]
         try:
             raw = kite_client.quote(*instrument_keys)
-        except Exception:
-            return {sym: _stub_quote(sym, ts) for sym in symbols}
+        except Exception as exc:
+            _log.warning("paper_quote_provider: Kite API failed: %s", exc)
+            return {}
         quotes: dict[str, Quote] = {}
         for key, data in (raw or {}).items():
             symbol = key.split(":", 1)[-1]
@@ -279,10 +277,6 @@ def _make_paper_quote_provider():
                 upper_circuit=float(data["upper_circuit_limit"]) if data.get("upper_circuit_limit") else None,
                 lower_circuit=float(data["lower_circuit_limit"]) if data.get("lower_circuit_limit") else None,
             )
-        # Return stub quotes for any symbols not in Kite response
-        for sym in symbols:
-            if sym not in quotes:
-                quotes[sym] = _stub_quote(sym, ts)
         return quotes
 
     return _provider

@@ -1242,6 +1242,25 @@ class ZerodhaAdapter:
                                "price": price, "trigger_price": trigger_price},
                     )
                     return
+
+                # Sanity guard: reject fills that deviate >50% from the
+                # reference price. Catches stale/stub LTP leaking in.
+                ref = trigger_price if trigger_price > 0 else price
+                if ref > 0 and fill_price > 0:
+                    deviation = abs(fill_price - ref) / ref
+                    if deviation > 0.50:
+                        self._log.warning(
+                            "paper_synth: fill_price deviates >50%% from "
+                            "reference, rejecting fill (likely stale LTP)",
+                            extra={
+                                "internal_order_id": internal_id,
+                                "symbol": symbol,
+                                "fill_price": fill_price,
+                                "reference_price": ref,
+                                "deviation_pct": round(deviation * 100, 1),
+                            },
+                        )
+                        return
             else:
                 # Legacy behaviour: always fill at the requested price.
                 fill_price = price

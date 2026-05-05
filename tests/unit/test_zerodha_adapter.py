@@ -1300,6 +1300,107 @@ def test_audit62_satisfies_condition_pure_helper() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Paper synth-fill sanity guard: reject fills deviating >50% from reference
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_paper_synth_rejects_fill_deviating_from_reference() -> None:
+    """
+    Regression: stub LTP of 100.0 caused SL-M SELL orders for stocks priced
+    >200 to fill at ~99.80, producing garbage P&L. The sanity guard rejects
+    fills where fill_price deviates >50% from trigger_price.
+
+    MEESHO example: entry=209.16, SL trigger=204.66. If LTP returns 100.0,
+    the fill would be 100.0 (or 99.80 after slippage). 100/204.66 = 48.9%
+    deviation -> rejected. For stocks like ZENTEC (SL~1450), deviation is 93%.
+    """
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    # Simulate the bug: quote_provider returns fake LTP=100 for all symbols
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.3,
+        paper_ltp_gating_poll_sec=0.02,
+        quote_provider=_ltp_provider({"ZENTEC": 100.0}),
+    )
+
+    # SL-M SELL for a stock with SL at 1450 — LTP=100 satisfies the
+    # SL-M SELL condition (100 <= 1450), but fill_price=100 is 93% off
+    result = adapter.place_order(
+        symbol="ZENTEC", side="SELL", qty=32, price=0.0,
+        order_type="SL-M", intent="INTRADAY",
+        trigger_price=1450.0,
+    )
+
+    _time_for_h20_tests.sleep(0.5)
+    assert len(captured) == 0, (
+        f"Fill should have been rejected (>50% deviation from trigger); "
+        f"got {captured[0].avg_fill_price if captured else 'no fills'}"
+    )
+    assert osm.current_state(result.internal_order_id) == "SUBMITTED"
+    print("  OK sanity guard rejects paper fill deviating >50% from reference price")
+
+
+def test_paper_synth_allows_fill_within_deviation_threshold() -> None:
+    """Normal SL fill within 50% of trigger passes the sanity guard."""
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    # LTP=202.0, trigger=204.66 → deviation=(204.66-202)/204.66=1.3% — passes
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.5,
+        paper_ltp_gating_poll_sec=0.02,
+        quote_provider=_ltp_provider({"MEESHO": 202.0}),
+    )
+
+    adapter.place_order(
+        symbol="MEESHO", side="SELL", qty=100, price=0.0,
+        order_type="SL-M", intent="INTRADAY",
+        trigger_price=204.66,
+    )
+
+    assert _wait_for_events(captured, 1, timeout_sec=2.0)
+    assert captured[0].avg_fill_price == 202.0
+    print("  OK normal SL fill (1.3% deviation from trigger) passes sanity guard")
+
+
+def test_paper_synth_pnl_sign_correct_for_long_sl_hit() -> None:
+    """
+    Verify P&L is NEGATIVE for LONG when SL fires below entry.
+    Uses the exact MEESHO scenario from bug report.
+    """
+    from orders.shadow_tracker import _calc_pnl
+
+    # MEESHO: LONG, entry=209.16, SL exit=204.66
+    direction = "LONG"
+    entry = 209.16
+    exit_p = 204.66
+
+    pnl_per_share, pnl_pct = _calc_pnl(direction, entry, exit_p)
+
+    assert pnl_per_share < 0, (
+        f"LONG SL hit must produce negative pnl_per_share; got {pnl_per_share}"
+    )
+    expected_pnl = exit_p - entry  # = -4.50
+    assert abs(pnl_per_share - expected_pnl) < 0.001, (
+        f"pnl_per_share should be {expected_pnl}; got {pnl_per_share}"
+    )
+    assert pnl_pct < 0, f"LONG SL must give negative pnl_pct; got {pnl_pct}"
+
+    # Also verify SHORT TGT (should be positive)
+    pnl_s, pct_s = _calc_pnl("SHORT", 209.16, 204.66)
+    assert pnl_s > 0, f"SHORT exit below entry = profit; got {pnl_s}"
+    print("  OK _calc_pnl: LONG SL negative, SHORT exit-below-entry positive")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BL-6: broker 429 detection + penalize + typed exception (Phase D.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
