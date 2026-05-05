@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="${PROJECT_DIR:-/home/ubuntu/trading-system}"
+PROJECT_DIR="${PROJECT_DIR:-/home/ubuntu/systems/trading-system}"
 cd "$PROJECT_DIR"
 
 echo "=== Installing systemd units from $PROJECT_DIR/deploy/systemd/ ==="
@@ -61,5 +61,5 @@ sudo systemctl status alert-watcher.service --no-pager || true
 echo
 echo "Install complete."
 echo "  - token-watcher: active, polling every 30s"
-echo "  - trading-system: waits for token_watcher trigger (or Restart=always if manually started)"
+echo "  - trading-system: waits for token_watcher trigger (Restart=on-failure for crash recovery)"
 echo "  - alert-watcher: (start manually when ready: sudo systemctl start alert-watcher)"

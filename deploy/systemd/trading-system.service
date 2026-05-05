@@ -7,10 +7,10 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/trading-system
-Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
+WorkingDirectory=/home/ubuntu/systems/trading-system
+Environment="PATH=/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=/home/ubuntu/trading-system/.env
+EnvironmentFile=/home/ubuntu/systems/trading-system/.env
 
 # Default mode: paper. To run live, use:
 #   sudo systemctl edit trading-system
@@ -19,8 +19,8 @@ EnvironmentFile=/home/ubuntu/trading-system/.env
 # Headless (no --interactive): account+mode auto-select to
 # primary account (LFL836) + paper. stdin from /dev/null so
 # any accidental prompt fails fast instead of hanging.
-ExecStart=/home/ubuntu/trading-system/venv/bin/python \
-    /home/ubuntu/trading-system/main.py --mode paper
+ExecStart=/home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/systems/trading-system/main.py --mode paper
 StandardInput=null
 
 # Send SIGINT on stop so main.py's Ctrl+C handler runs
@@ -28,11 +28,13 @@ StandardInput=null
 KillSignal=SIGINT
 TimeoutStopSec=30
 
-# Restart policy: always restart on any exit (including clean).
-# token-watcher handles the "wait for fresh token" gating so an
-# always-restart loop will not hammer with a stale token.
-Restart=always
+# Restart policy: only restart on non-zero exit (crash/error).
+# Exit 0 = holiday guard shutdown or normal EOD completion -- no restart.
+# Exit 3 = startup check failure (would loop on same failure) -- no restart.
+# Exit 1/2 = runtime error/crash -- restart so system can recover mid-day.
+Restart=on-failure
 RestartSec=10
+RestartPreventExitStatus=3
 
 # Logging to journal (journalctl -u trading-system)
 StandardOutput=journal

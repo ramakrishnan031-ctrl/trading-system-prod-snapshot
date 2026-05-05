@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 User=root
 Group=root
-Environment=PROJECT_DIR=/home/ubuntu/trading-system
+Environment=PROJECT_DIR=/home/ubuntu/systems/trading-system
 Environment=SLEEP_SEC=30
-ExecStart=/bin/bash /home/ubuntu/trading-system/deploy/token_watcher.sh
+ExecStart=/bin/bash /home/ubuntu/systems/trading-system/deploy/token_watcher.sh
 
 Restart=always
 RestartSec=10

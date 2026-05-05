@@ -11,7 +11,7 @@
 
 set -u
 
-PROJECT_DIR="${PROJECT_DIR:-/home/ubuntu/trading-system}"
+PROJECT_DIR="${PROJECT_DIR:-/home/ubuntu/systems/trading-system}"
 TOKEN_FILE="${PROJECT_DIR}/data_store/session/zerodha_token.json"
 LOG_FILE="${PROJECT_DIR}/logs/token_watcher.log"
 SLEEP_SEC="${SLEEP_SEC:-30}"

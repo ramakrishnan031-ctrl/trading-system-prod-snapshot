@@ -7,11 +7,11 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/trading-system
-Environment="PATH=/home/ubuntu/trading-system/venv/bin:/usr/bin:/bin"
-EnvironmentFile=/home/ubuntu/trading-system/.env
-ExecStart=/home/ubuntu/trading-system/venv/bin/python \
-    /home/ubuntu/trading-system/scripts/alert_watcher.py
+WorkingDirectory=/home/ubuntu/systems/trading-system
+Environment="PATH=/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
+EnvironmentFile=/home/ubuntu/systems/trading-system/.env
+ExecStart=/home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/systems/trading-system/scripts/alert_watcher.py
 
 KillSignal=SIGINT
 TimeoutStopSec=10
