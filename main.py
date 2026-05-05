@@ -77,6 +77,7 @@ from signals.signal_processor import SignalProcessor
 from signals.webhook_receiver import WebhookReceiver
 from strategies.loader import StrategyLoader
 from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
+from utils.instance_lock import acquire_instance_lock, check_port_available, release_instance_lock
 from utils.startup_checks import (
     StartupCheckFailed,
     StartupScenario,
@@ -712,7 +713,21 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     _log = get_logger("main")
     _log.info("Trading System v%s starting (mode=%s)", VERSION, args.mode)
 
-    # ── Phase 0b: Config load (MAIN5) ───────────────────────────────────────
+    # ── Single-instance lock (prevents stale process conflicts) ─────────────
+    lock_ok, lock_reason = acquire_instance_lock()
+    if not lock_ok:
+        _log.critical("Instance lock failed: %s", lock_reason)
+        return 1
+    try:
+        return _main_locked(args, config_dir)
+    finally:
+        release_instance_lock()
+
+
+def _main_locked(args, config_dir: Path) -> int:
+    """Main body after instance lock acquired. Lock released by caller."""
+
+    # ── Phase 0b: Config load (MAIN5) ──────────────────────────────────────���
     try:
         app_config = load_all(config_dir)
     except Exception as exc:
@@ -1433,6 +1448,12 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     smart_tgt.start()
 
     wh_cfg = app_config.system.webhook
+    # Port conflict check: fail fast if another process holds the webhook port
+    port_ok, port_reason = check_port_available(wh_cfg.bind_port, wh_cfg.bind_host)
+    if not port_ok:
+        _log.critical("Webhook port conflict: %s", port_reason)
+        return 1
+
     # Audit 6.5 / B.3: Waitress production WSGI server replaces Flask's
     # dev server. Werkzeug's app.run drops connections under burst load
     # (Chartink can fan out 50+ signals in a sub-second window). Waitress

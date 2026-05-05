@@ -268,6 +268,9 @@ def _make_all_patches(extra=None):
             side_effect=lambda: _main_module._shutdown_event.set()
         ),
         "time": MagicMock(sleep=MagicMock()),
+        "acquire_instance_lock": MagicMock(return_value=(True, "")),
+        "release_instance_lock": MagicMock(),
+        "check_port_available": MagicMock(return_value=(True, "")),
         "is_trading_day": MagicMock(return_value=True),
         "next_trading_day": MagicMock(),
         "is_token_valid": MagicMock(return_value=True),
