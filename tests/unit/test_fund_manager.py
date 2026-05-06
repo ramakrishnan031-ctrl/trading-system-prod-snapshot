@@ -319,6 +319,40 @@ def test_commit_partial_fill_excess_returns_to_available() -> None:
     print("  OK commit_to_used partial fill -> excess returned to available (FM5)")
 
 
+def test_commit_higher_fill_price_deducts_deficit_from_available() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
+        # reserved margin = 100*500/5 = 10000, avail = 60000
+        commit = fm.commit_to_used(result.reservation_id, 520.0, 100)
+        # actual_margin = 100*520/5 = 10400, excess = 10000 - 10400 = -400
+        assert abs(commit.actual_margin - 10_400.0) < 0.01
+        assert abs(commit.excess_returned - (-400.0)) < 0.01
+        snap = fm.get_snapshot()
+        assert abs(snap.intraday_reserved) < 0.01
+        assert abs(snap.intraday_used - 10_400.0) < 0.01
+        # avail = 60000 + (-400) = 59600
+        assert abs(snap.intraday_avail - 59_600.0) < 0.01
+        store.close()
+    print("  OK commit_to_used higher fill price -> deficit deducted from available")
+
+
+def test_commit_higher_fill_price_invariant_holds_across_many_fills() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=1_000_000.0)
+        for i in range(15):
+            result = fm.reserve(f"SYM{i}", 10, 500.0, "INTRADAY")
+            fm.commit_to_used(result.reservation_id, 512.0, 10)
+        snap = fm.get_snapshot()
+        total = snap.intraday_avail + snap.intraday_reserved + snap.intraday_used
+        expected_intraday = 1_000_000.0 * 0.7  # 70% bucket
+        assert abs(total - expected_intraday) < 1.0
+        store.close()
+    print("  OK 15 fills at higher price -> invariant holds (no drift)")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests -- release_used() (FM5, FM7)
 # ─────────────────────────────────────────────────────────────────────────────

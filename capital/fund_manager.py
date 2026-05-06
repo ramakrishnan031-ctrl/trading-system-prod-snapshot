@@ -105,7 +105,7 @@ _VALID_DIRECTIONS: Final[frozenset[str]] = frozenset({"LONG", "SHORT"})
 _INTRADAY_BUCKET = "intraday"
 _POSITIONAL_BUCKET = "positional"
 
-_INVARIANT_TOLERANCE = 100.0  # TEMP: raised for paper testing (was 0.01)
+_INVARIANT_TOLERANCE = 1.0  # Paper-mode: minor float noise from LTP vs limit price rounding
 
 # BL-1 / FM18: orders.product -> semantic intent for rehydrate replay.
 # CO is COVER_ORDER (intraday-bucketed); MIS is plain INTRADAY; CNC and NRML
@@ -136,7 +136,7 @@ class ReservationResult:
 class CommitResult:
     reservation_id: str
     actual_margin: float    # margin deducted from used at fill price/qty
-    excess_returned: float  # margin returned to available (partial fill)
+    excess_returned: float  # margin adjustment to available (positive=returned, negative=deficit)
     bucket: str
 
 
@@ -590,15 +590,13 @@ class FundManager:
                 actual_margin = required_margin(
                     actual_qty, actual_fill_price, res.intent, self._leverage_map
                 )
-                excess = max(0.0, res.margin - actual_margin)
+                # Allow negative excess: when fill price > reserved price,
+                # the deficit must be deducted from available to keep the
+                # invariant balanced.
+                excess = res.margin - actual_margin
 
                 # BL-5: ledger row first. COMMIT is a bucket-internal reshape
-                # (reserved -> used, optional excess -> avail), so margin_delta=0
-                # (no net change to the sum of reserved+used from this bucket's POV
-                # when there is no excess; the excess path adds to avail not to
-                # the reserved+used pair, so the "in-flight" margin decreases by
-                # `excess`). We use amount=actual_margin for audit continuity and
-                # balance_before/after reflect the AVAILABLE balance in `bucket`.
+                # (reserved -> used, excess -> avail), so margin_delta=0.
                 avail_before = self._bucket_avail(res.bucket)
                 projected_after = avail_before + excess
                 ts = now_ist().isoformat()
@@ -1344,7 +1342,7 @@ class FundManager:
         res = self._reservations.pop(reservation_id)
         self._bucket_deduct_reserved(res.bucket, res.margin)
         self._bucket_add_used(res.bucket, actual_margin)
-        if excess > 0:
+        if excess != 0.0:
             self._bucket_add_avail(res.bucket, excess)
 
     # ── bucket helpers ────────────────────────────────────────────────────────
