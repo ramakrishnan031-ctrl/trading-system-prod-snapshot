@@ -146,8 +146,8 @@ smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
 paper:                        # H-20/ZA16a: paper-mode fill synthesis
   auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)
   ltp_gating_enabled: true    # Audit 6.2 — only fill paper LIMIT/SL when LTP crosses
-  ltp_gating_max_wait_sec: 60 # bounded LTP-poll horizon for LIMIT/SL synth (<= 3600)
-  ltp_gating_poll_sec: 0.5    # poll cadence for the LTP-gating loop (> 0, <= 30)
+  ltp_gating_max_wait_sec: 21600 # 6h — covers full trading day (9:15-15:30); exit orders need hours
+  ltp_gating_poll_sec: 5.0    # 5s cadence keeps ~30 exit threads at ~6 LTP fetches/sec total
 
 drift_handler:                # BL-2: capital drift escalation
   # TEMP: thresholds raised for paper (was 250/1000/2500).

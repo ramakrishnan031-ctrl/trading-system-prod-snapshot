@@ -695,16 +695,26 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
             )
             print(terminal_msg)
 
-            telegram_msg = (
-                "Hey boss!\n"
-                "Guess what...\n\n"
-                "MARKET IS CLOSED\n\n"
-                f"Reason : {reason}\n"
-                f"Today  : {today_fmt}\n\n"
-                "No trades, no stress - go enjoy your day!\n\n"
-                f"Let's connect on: {next_fmt} ({next_day_name})"
-            )
-            _send_holiday_notification(telegram_msg)
+            # Anti-loop: only send Telegram once per day. token_watcher may
+            # restart the service multiple times on holidays; the sentinel
+            # prevents flooding the channel with duplicate messages.
+            sentinel = Path("logs") / f".holiday_notified_{today.isoformat()}"
+            if not sentinel.exists():
+                telegram_msg = (
+                    "Hey boss!\n"
+                    "Guess what...\n\n"
+                    "MARKET IS CLOSED\n\n"
+                    f"Reason : {reason}\n"
+                    f"Today  : {today_fmt}\n\n"
+                    "No trades, no stress - go enjoy your day!\n\n"
+                    f"Let's connect on: {next_fmt} ({next_day_name})"
+                )
+                _send_holiday_notification(telegram_msg)
+                try:
+                    sentinel.parent.mkdir(parents=True, exist_ok=True)
+                    sentinel.write_text(today_fmt)
+                except OSError:
+                    pass
             return 0
     except FileNotFoundError:
         pass  # missing holiday file: proceed with startup

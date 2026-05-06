@@ -536,9 +536,9 @@ class PaperConfig(BaseModel):
     def _validate_max_wait(cls, v: float) -> float:
         if v < 0:
             raise ValueError(f"ltp_gating_max_wait_sec must be >= 0, got {v!r}")
-        if v > 3600.0:
+        if v > 25200.0:
             raise ValueError(
-                f"ltp_gating_max_wait_sec must be <= 3600 (1h sanity cap), got {v!r}"
+                f"ltp_gating_max_wait_sec must be <= 25200 (7h trading day cap), got {v!r}"
             )
         return v
 
