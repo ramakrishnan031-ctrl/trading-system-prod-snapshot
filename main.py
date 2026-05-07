@@ -275,6 +275,13 @@ def _make_paper_quote_provider():
             instrument_keys = [f"NSE:{s}" for s in symbols]
             try:
                 raw = kite_client.quote(*instrument_keys)
+                received = len(raw or {})
+                if received < len(symbols):
+                    missing = set(symbols) - {k.split(":", 1)[-1] for k in (raw or {})}
+                    _log.warning(
+                        "paper_quote_provider: partial response — requested %d, got %d. Missing: %s",
+                        len(symbols), received, sorted(missing)
+                    )
             except Exception as exc:
                 _log.warning("paper_quote_provider: Kite API failed: %s", exc)
                 return {}
