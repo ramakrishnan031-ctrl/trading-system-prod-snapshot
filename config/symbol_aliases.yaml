@@ -1,0 +1,9 @@
+# Symbol name aliases for Chartink -> Zerodha mapping
+#
+# Chartink webhook sends abbreviated/alternative symbol names that don't
+# match Zerodha's official trading symbols. This file maps the incoming
+# names to the correct Zerodha symbols.
+#
+# Format: chartink_name: zerodha_name
+
+TVSSCS: TVSSRICHAK  # TVS Supply Chain Solutions

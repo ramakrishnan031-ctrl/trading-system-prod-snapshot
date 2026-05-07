@@ -251,6 +251,18 @@ def _make_paper_quote_provider():
         except Exception:
             pass
 
+    # Load symbol aliases for Chartink -> Zerodha mapping
+    _aliases: dict[str, str] = {}
+    alias_path = Path("config/symbol_aliases.yaml")
+    if alias_path.exists():
+        try:
+            import yaml
+            with open(alias_path) as f:
+                _aliases = yaml.safe_load(f) or {}
+            _log.info("paper_quote_provider: loaded %d symbol aliases", len(_aliases))
+        except Exception as exc:
+            _log.warning("paper_quote_provider: failed to load symbol_aliases.yaml: %s", exc)
+
     _cache: dict[str, Quote] = {}
     _cache_ts: float = 0.0
     _cache_lock = threading.Lock()
@@ -268,19 +280,23 @@ def _make_paper_quote_provider():
             _log.warning("paper_quote_provider: no kite_client, returning empty")
             return {}
 
+        # Translate symbols via alias map
+        translated = [_aliases.get(s, s) for s in symbols]
+
         with _api_lock:
             wait = _MIN_CALL_INTERVAL_SEC - (_time_mod.monotonic() - _last_call_mono)
             if wait > 0:
                 _time_mod.sleep(wait)
-            instrument_keys = [f"NSE:{s}" for s in symbols]
+            instrument_keys = [f"NSE:{s}" for s in translated]
             try:
                 raw = kite_client.quote(*instrument_keys)
                 received = len(raw or {})
-                if received < len(symbols):
-                    missing = set(symbols) - {k.split(":", 1)[-1] for k in (raw or {})}
+                if received < len(translated):
+                    missing_translated = set(translated) - {k.split(":", 1)[-1] for k in (raw or {})}
+                    missing_original = [symbols[translated.index(t)] for t in missing_translated if t in translated]
                     _log.warning(
                         "paper_quote_provider: partial response — requested %d, got %d. Missing: %s",
-                        len(symbols), received, sorted(missing)
+                        len(translated), received, sorted(missing_original)
                     )
             except Exception as exc:
                 _log.warning("paper_quote_provider: Kite API failed: %s", exc)
@@ -288,9 +304,12 @@ def _make_paper_quote_provider():
             finally:
                 _last_call_mono = _time_mod.monotonic()
 
+        # Build quotes dict, reverse-translating symbols to original names
         quotes: dict[str, Quote] = {}
+        reverse_map = {v: k for k, v in _aliases.items()}
         for key, data in (raw or {}).items():
-            symbol = key.split(":", 1)[-1]
+            zerodha_symbol = key.split(":", 1)[-1]
+            original_symbol = reverse_map.get(zerodha_symbol, zerodha_symbol)
             depth = data.get("depth", {})
             bid = 0.0
             ask = 0.0
@@ -300,8 +319,8 @@ def _make_paper_quote_provider():
                 bid = float(bids[0]["price"]) if bids else 0.0
                 ask = float(asks[0]["price"]) if asks else 0.0
             ohlc = data.get("ohlc", {})
-            quotes[symbol] = Quote(
-                symbol=symbol,
+            quotes[original_symbol] = Quote(
+                symbol=original_symbol,
                 last_price=float(data.get("last_price", 0.0)),
                 bid=bid,
                 ask=ask,
