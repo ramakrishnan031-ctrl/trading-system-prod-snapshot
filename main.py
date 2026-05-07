@@ -254,20 +254,33 @@ def _make_paper_quote_provider():
     _cache: dict[str, Quote] = {}
     _cache_ts: float = 0.0
     _cache_lock = threading.Lock()
+    _api_lock = threading.Lock()
     _CACHE_TTL_SEC = 3.0
+    _MIN_CALL_INTERVAL_SEC = 0.35
+
+    _last_call_mono: float = 0.0
 
     def _raw_fetch(symbols):
+        nonlocal _last_call_mono
         from core.time_authority import now_ist
         ts = now_ist()
         if kite_client is None:
             _log.warning("paper_quote_provider: no kite_client, returning empty")
             return {}
-        instrument_keys = [f"NSE:{s}" for s in symbols]
-        try:
-            raw = kite_client.quote(*instrument_keys)
-        except Exception as exc:
-            _log.warning("paper_quote_provider: Kite API failed: %s", exc)
-            return {}
+
+        with _api_lock:
+            wait = _MIN_CALL_INTERVAL_SEC - (_time_mod.monotonic() - _last_call_mono)
+            if wait > 0:
+                _time_mod.sleep(wait)
+            instrument_keys = [f"NSE:{s}" for s in symbols]
+            try:
+                raw = kite_client.quote(*instrument_keys)
+            except Exception as exc:
+                _log.warning("paper_quote_provider: Kite API failed: %s", exc)
+                return {}
+            finally:
+                _last_call_mono = _time_mod.monotonic()
+
         quotes: dict[str, Quote] = {}
         for key, data in (raw or {}).items():
             symbol = key.split(":", 1)[-1]
