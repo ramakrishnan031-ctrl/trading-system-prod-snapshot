@@ -1741,6 +1741,78 @@ def test_bl3_sum_fm_ledger_margin_delta_sums_signed(tmp_path: Path) -> None:
     store.close()
 
 
+def test_cancel_stale_paper_orders(tmp_path: Path) -> None:
+    """
+    cancel_stale_paper_orders marks non-terminal orders from previous days
+    as CANCELLED but leaves today's orders untouched.
+    """
+    store = StateStore(tmp_path / "test.db")
+    today = "2026-05-07"
+    yesterday = "2026-05-06"
+
+    insert_test_trade(store, "t_old", created_date=yesterday, status="OPEN")
+    insert_test_trade(store, "t_today", created_date=today, status="OPEN")
+
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO orders
+              (order_id, trade_id, leg, transaction_type, order_type,
+               product, variety, qty_requested, status, placed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ord_old_pending", "t_old", "ENTRY", "BUY", "LIMIT",
+             "MIS", "regular", 10, "PENDING",
+             f"{yesterday}T09:30:00+05:30", f"{yesterday}T09:30:00+05:30"),
+        )
+        cur.execute(
+            """
+            INSERT INTO orders
+              (order_id, trade_id, leg, transaction_type, order_type,
+               product, variety, qty_requested, status, placed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ord_old_submitted", "t_old", "SL", "SELL", "SL",
+             "MIS", "regular", 10, "SUBMITTED",
+             f"{yesterday}T09:35:00+05:30", f"{yesterday}T09:35:00+05:30"),
+        )
+        cur.execute(
+            """
+            INSERT INTO orders
+              (order_id, trade_id, leg, transaction_type, order_type,
+               product, variety, qty_requested, status, placed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ord_old_filled", "t_old", "ENTRY", "BUY", "LIMIT",
+             "MIS", "regular", 10, "FILLED",
+             f"{yesterday}T09:30:00+05:30", f"{yesterday}T09:32:00+05:30"),
+        )
+        cur.execute(
+            """
+            INSERT INTO orders
+              (order_id, trade_id, leg, transaction_type, order_type,
+               product, variety, qty_requested, status, placed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("ord_today_pending", "t_today", "ENTRY", "BUY", "LIMIT",
+             "MIS", "regular", 10, "PENDING",
+             f"{today}T09:30:00+05:30", f"{today}T09:30:00+05:30"),
+        )
+
+    n = store.cancel_stale_paper_orders(today)
+    assert n == 2, f"Expected 2 stale orders cancelled, got {n}"
+
+    rows = store.fetch_all("SELECT order_id, status FROM orders ORDER BY order_id")
+    by_id = {r["order_id"]: r["status"] for r in rows}
+    assert by_id["ord_old_pending"] == "CANCELLED"
+    assert by_id["ord_old_submitted"] == "CANCELLED"
+    assert by_id["ord_old_filled"] == "FILLED", "Terminal orders must not be touched"
+    assert by_id["ord_today_pending"] == "PENDING", "Today's orders must not be touched"
+
+    print("  OK cancel_stale_paper_orders: 2 stale cancelled, filled+today untouched")
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1828,6 +1900,8 @@ def run_all_tests() -> int:
         # BL-3 / Phase B.5: sum_fm_ledger_margin_delta helper
         test_bl3_sum_fm_ledger_margin_delta_unknown_rid_returns_zero,
         test_bl3_sum_fm_ledger_margin_delta_sums_signed,
+        # cancel_stale_paper_orders
+        test_cancel_stale_paper_orders,
     ]
 
     print("=" * 70)

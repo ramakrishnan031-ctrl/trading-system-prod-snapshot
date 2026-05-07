@@ -1516,6 +1516,10 @@ def _main_locked(args, config_dir: Path) -> int:
     # BLOCKER #11: wire token map so CandleStore can resolve instrument_token -> symbol
     candle_store.set_token_map(instrument_cache.token_map())
     live_feed.connect()
+    if is_paper:
+        n_cancelled = store.cancel_stale_paper_orders(today.isoformat())
+        if n_cancelled:
+            _log.info("Cancelled %d stale paper orders from previous days", n_cancelled)
     order_monitor.rehydrate_from_store(store)  # Audit #21
     # B.1 (2026-04-25): repopulate OrderPlacer._fill_map for SL/TGT/EOD
     # exit legs so a post-restart exit fill closes the trade in DB.

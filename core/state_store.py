@@ -557,6 +557,28 @@ class StateStore:
             """
         )
 
+    def cancel_stale_paper_orders(self, today_iso: str) -> int:
+        """
+        Paper mode startup cleanup: mark non-terminal orders from PREVIOUS
+        days as CANCELLED. After restart, paper_fills dict is empty so these
+        orders can never fill. Without cleanup the reconciler logs ORPHAN_ORDER
+        every cycle (~7500 warnings/day).
+
+        Returns the number of orders cancelled.
+        """
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE orders
+                SET status = 'CANCELLED', updated_at = ?
+                WHERE status IN ('PENDING', 'SUBMITTED', 'OPEN', 'PARTIAL',
+                                 'TRIGGER_PENDING')
+                  AND date(placed_at) < date(?)
+                """,
+                (_now_ist_iso(), today_iso),
+            )
+            return cursor.rowcount
+
     def get_pending_exit_orders_for_open_positions(self) -> List[sqlite3.Row]:
         """
         Return non-terminal SL/TGT orders for trades whose ENTRY is filled
