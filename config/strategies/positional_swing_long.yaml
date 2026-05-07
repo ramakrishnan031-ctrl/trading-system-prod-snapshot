@@ -13,8 +13,8 @@ order_protocol: "LIMIT_TRIPLE"
 entry_method: "LIMIT"
 entry_offset_pct: 0.002
 
-sl_method: "ATR"
-sl_pct: 0.02              # Fallback when ATR unavailable (prevents ZERO_SL)
+sl_method: "FIXED_PCT"    # ATR not yet implemented; using FIXED_PCT until ATR data available
+sl_pct: 0.02
 sl_atr_multiplier: 2.0
 sl_min_pct: 0.005
 sl_max_pct: 0.08

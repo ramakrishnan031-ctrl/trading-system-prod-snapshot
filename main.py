@@ -202,9 +202,12 @@ def _init_time_authority(app_config, kill_switch) -> None:
 def _build_kite_client(app_config):
     """Construct KiteConnect with env-var credentials and timeout (MAIN19)."""
     from kiteconnect import KiteConnect  # type: ignore[import]
+    from requests.adapters import HTTPAdapter
     timeout = app_config.broker_limits.timeouts.read_sec
     kite = KiteConnect(api_key=os.environ["ZERODHA_API_KEY"], timeout=timeout)
     kite.set_access_token(os.environ["ZERODHA_ACCESS_TOKEN"])
+    adapter = HTTPAdapter(pool_connections=1, pool_maxsize=50)
+    kite.reqsession.mount("https://", adapter)
     return kite
 
 
@@ -219,14 +222,20 @@ def _make_paper_quote_provider():
 
     Reads credentials from data_store/session/zerodha_token.json (saved by
     interactive startup) and calls Kite quote API for live OHLC/VWAP data.
-    Returns empty dict when API fails — callers (LTP gating, EOD) already
+    Returns empty dict when API fails -- callers (LTP gating, EOD) already
     handle missing symbols gracefully. Never returns fake non-zero prices.
+
+    Thread-safe LTP cache (3s TTL) prevents 30+ LTP-gating threads from
+    each making individual API calls and exhausting the connection pool.
     """
     from broker.zerodha_adapter import Quote
     from kiteconnect import KiteConnect
     import json
     import logging
+    import threading
+    import time as _time_mod
     from pathlib import Path
+    from requests.adapters import HTTPAdapter
 
     _log = logging.getLogger("paper_quote_provider")
     token_path = Path("data_store/session/zerodha_token.json")
@@ -237,10 +246,17 @@ def _make_paper_quote_provider():
                 token_data = json.load(f)
             kite_client = KiteConnect(api_key=token_data["api_key"])
             kite_client.set_access_token(token_data["access_token"])
+            adapter = HTTPAdapter(pool_connections=1, pool_maxsize=50)
+            kite_client.reqsession.mount("https://", adapter)
         except Exception:
             pass
 
-    def _provider(symbols):
+    _cache: dict[str, Quote] = {}
+    _cache_ts: float = 0.0
+    _cache_lock = threading.Lock()
+    _CACHE_TTL_SEC = 3.0
+
+    def _raw_fetch(symbols):
         from core.time_authority import now_ist
         ts = now_ist()
         if kite_client is None:
@@ -279,6 +295,24 @@ def _make_paper_quote_provider():
                 lower_circuit=float(data["lower_circuit_limit"]) if data.get("lower_circuit_limit") else None,
             )
         return quotes
+
+    def _provider(symbols):
+        nonlocal _cache, _cache_ts
+        now_mono = _time_mod.monotonic()
+
+        with _cache_lock:
+            if now_mono - _cache_ts < _CACHE_TTL_SEC:
+                hit = {s: _cache[s] for s in symbols if s in _cache}
+                if len(hit) == len(symbols):
+                    return hit
+
+        fresh = _raw_fetch(symbols)
+
+        with _cache_lock:
+            _cache.update(fresh)
+            _cache_ts = _time_mod.monotonic()
+
+        return {s: fresh[s] for s in symbols if s in fresh}
 
     return _provider
 

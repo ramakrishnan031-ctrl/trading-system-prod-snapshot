@@ -953,14 +953,28 @@ class ZerodhaAdapter:
             - order_monitor orphan second-source check (H-15): verify tracked
               broker_order_ids still exist before firing orphan callbacks.
 
-        In paper mode returns [] (no real broker orders).
+        In paper mode returns synthetic open-order entries from _paper_fills
+        so the reconciler can distinguish pending from filled/cancelled orders.
 
         Returns:
             List of dicts with keys: ``order_id``, ``symbol``, ``status``,
             ``transaction_type``, ``quantity``, ``price``, ``trigger_price``.
         """
         if self._paper:
-            return []
+            with self._paper_fills_lock:
+                return [
+                    {
+                        "order_id": bid,
+                        "symbol": info.get("symbol", ""),
+                        "status": "OPEN",
+                        "transaction_type": info.get("side", ""),
+                        "quantity": info.get("qty", 0),
+                        "price": info.get("price", 0.0),
+                        "trigger_price": info.get("trigger_price", 0.0),
+                    }
+                    for bid, info in self._paper_fills.items()
+                    if info.get("status") == "SUBMITTED"
+                ]
         try:
             self._rl.acquire(_CATEGORY_MAP["get_margins"])  # reuse quota bucket
             all_orders = self._kite.orders()
@@ -1140,6 +1154,8 @@ class ZerodhaAdapter:
         with self._paper_fills_lock:
             self._paper_fills[fake_broker_id] = {
                 "status": "SUBMITTED", "filled_qty": 0, "avg_price": 0.0,
+                "symbol": symbol, "side": side, "qty": qty,
+                "price": price, "trigger_price": trigger_price,
             }
 
         # ZA16a: paper mode synthesizes the broker fill that live mode

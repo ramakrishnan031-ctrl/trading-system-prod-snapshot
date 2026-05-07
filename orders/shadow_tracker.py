@@ -285,12 +285,30 @@ class ShadowTracker:
 
         trade = rows[0]
         direction: str = trade["direction"]              # LONG | SHORT
-        entry_price: float = (
-            float(trade["entry_actual_price"]) if trade["entry_actual_price"]
-            else float(trade["entry_target_price"])
-        )
-        sl_initial: float = float(trade["sl_initial"])
-        tgt_initial: float = float(trade["tgt_initial"])
+
+        # Guard against NULL prices — trades created with incomplete data
+        # (e.g. MARKET fills before SL/TGT placement) can have NULLs.
+        entry_actual = trade["entry_actual_price"]
+        entry_target = trade["entry_target_price"]
+        if not entry_actual and not entry_target:
+            self._log.error(
+                "shadow_tracker: trade_id=%s has NULL entry prices, skipping inning",
+                trade_id,
+            )
+            return
+        entry_price: float = float(entry_actual) if entry_actual else float(entry_target)
+
+        sl_raw = trade["sl_initial"]
+        tgt_raw = trade["tgt_initial"]
+        if sl_raw is None or tgt_raw is None:
+            self._log.error(
+                "shadow_tracker: trade_id=%s has NULL sl_initial=%s / tgt_initial=%s, "
+                "skipping inning creation",
+                trade_id, sl_raw, tgt_raw,
+            )
+            return
+        sl_initial: float = float(sl_raw)
+        tgt_initial: float = float(tgt_raw)
         db_exit_reason: str = trade["exit_reason"] or "EOD"
 
         # Normalise DB exit_reason to inning convention
@@ -544,15 +562,25 @@ class ShadowTracker:
                 t = rows[0]
                 trade_entry = (
                     float(t["entry_actual_price"]) if t["entry_actual_price"]
-                    else float(t["entry_target_price"])
+                    else float(t["entry_target_price"]) if t["entry_target_price"]
+                    else None
                 )
-                self._start_simulated_inning(
-                    prev_inning=closed_inning,
-                    strategy_name=t["strategy"],
-                    trade_entry=trade_entry,
-                    trade_sl=float(t["sl_initial"]),
-                    trade_tgt=float(t["tgt_initial"]),
-                )
+                sl_raw = t["sl_initial"]
+                tgt_raw = t["tgt_initial"]
+                if trade_entry is None or sl_raw is None or tgt_raw is None:
+                    self._log.error(
+                        "shadow_tracker: cascade skipped — trade_id=%s has "
+                        "NULL price fields (entry=%s, sl=%s, tgt=%s)",
+                        inning.trade_id, trade_entry, sl_raw, tgt_raw,
+                    )
+                else:
+                    self._start_simulated_inning(
+                        prev_inning=closed_inning,
+                        strategy_name=t["strategy"],
+                        trade_entry=trade_entry,
+                        trade_sl=float(sl_raw),
+                        trade_tgt=float(tgt_raw),
+                    )
             else:
                 self._log.error(
                     "shadow_tracker: trade_id=%s not found for cascade from "
