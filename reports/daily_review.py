@@ -144,7 +144,8 @@ def _build_screener_analytics(screener_rows: List[dict]) -> Dict[str, Any]:
             step_results = {}
 
         for step_name, result in step_results.items():
-            passed = result.get("passed", True)
+            # SE logic (step_executor:118-123): score==0.0→REJECTED, >0.0→PASSED
+            passed = (result > 0.0) if isinstance(result, (int, float)) else True
             if not passed:
                 if step_name not in per_step:
                     per_step[step_name] = {"count": 0, "total_score": 0}
