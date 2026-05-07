@@ -1517,7 +1517,7 @@ def _main_locked(args, config_dir: Path) -> int:
     candle_store.set_token_map(instrument_cache.token_map())
     live_feed.connect()
     if is_paper:
-        n_cancelled = store.cancel_stale_paper_orders(today.isoformat())
+        n_cancelled = store.cancel_stale_paper_orders(today_iso)
         if n_cancelled:
             _log.info("Cancelled %d stale paper orders from previous days", n_cancelled)
     order_monitor.rehydrate_from_store(store)  # Audit #21
