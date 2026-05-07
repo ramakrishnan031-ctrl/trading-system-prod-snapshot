@@ -62,6 +62,7 @@ class _WatchEntry:
     qty: int
     expected_price: float
     placed_at: datetime
+    leg: str = ""                # "ENTRY" | "SL" | "TGT" | "EOD" — exit legs skip fill timeout
     filled_qty: int = 0
     avg_fill_price: float = 0.0
     # Track consecutive auth failures for OM11
@@ -209,6 +210,7 @@ class OrderMonitor:
         qty: int,
         expected_price: float,
         placed_at: datetime,
+        leg: str = "",
     ) -> None:
         """
         Add an order to the watch list (OM3).
@@ -238,6 +240,7 @@ class OrderMonitor:
                 qty=qty,
                 expected_price=expected_price,
                 placed_at=placed_at,
+                leg=leg,
             )
         self._log.info(
             "order_monitor.track",
@@ -341,6 +344,7 @@ class OrderMonitor:
                 qty=int(row["qty_requested"] or 0),
                 expected_price=float(row["price"] or 0.0),
                 placed_at=placed_at,
+                leg=row["leg"] or "",
             )
             with self._lock:
                 self._watched[synthetic_internal] = entry
@@ -623,7 +627,13 @@ class OrderMonitor:
         """
         If order has been open longer than fill_timeout_sec, cancel it (OM7).
         placed_at is timezone-aware (IST); now is also IST-aware.
+
+        Exit legs (SL/TGT/EOD) are exempt: they must remain open until price
+        crosses or EOD squareoff handles cleanup. In paper mode the
+        _synth_fill LTP-gating thread handles fill simulation (up to 6h).
         """
+        if entry.leg in ("SL", "TGT", "EOD"):
+            return
         elapsed = (now - entry.placed_at).total_seconds()
         if elapsed <= self._fill_timeout:
             return

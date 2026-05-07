@@ -998,6 +998,7 @@ class EodSquareoff:
                             qty=use_qty,
                             expected_price=placed.price,
                             placed_at=placed.ts,
+                            leg="EOD",
                         )
 
                     # Audit 3.3: track LIMITs for the post-grace promotion sweep.
@@ -1175,6 +1176,7 @@ class EodSquareoff:
                         qty=remaining,
                         expected_price=placed.price,
                         placed_at=placed.ts,
+                        leg="EOD",
                     )
                 with self._store.transaction() as cur:
                     cur.execute(

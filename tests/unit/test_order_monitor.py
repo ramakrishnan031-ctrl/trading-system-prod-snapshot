@@ -456,6 +456,96 @@ def test_fill_timeout_not_triggered_before_deadline() -> None:
     print("  OK fill timeout not triggered before deadline (OM7)")
 
 
+def test_fill_timeout_skipped_for_sl_leg() -> None:
+    """SL exit orders are exempt from fill timeout -- they stay open."""
+    adapter = MockAdapter()
+    adapter.history_responses = [[_entry("OPEN")]]
+    adapter.cancel_success = True
+
+    monitor, _, osm, _ = _make_monitor(adapter=adapter, fill_timeout_sec=30)
+    placed_at = now_ist() - timedelta(seconds=120)  # well past timeout
+    osm.register("ord_sl")
+    osm.transition("ord_sl", "SUBMITTED")
+    monitor.track(
+        internal_order_id="ord_sl", broker_order_id="KITE001",
+        symbol="RELIANCE", side="SELL", qty=10,
+        expected_price=2450.0, placed_at=placed_at, leg="SL",
+    )
+    monitor._poll_cycle()
+
+    assert osm.current_state("ord_sl") == "OPEN"
+    assert adapter.cancel_calls == []
+    assert monitor.is_watching("ord_sl")
+    print("  OK SL leg exempt from fill timeout")
+
+
+def test_fill_timeout_skipped_for_tgt_leg() -> None:
+    """TGT exit orders are exempt from fill timeout -- they stay open."""
+    adapter = MockAdapter()
+    adapter.history_responses = [[_entry("OPEN")]]
+    adapter.cancel_success = True
+
+    monitor, _, osm, _ = _make_monitor(adapter=adapter, fill_timeout_sec=30)
+    placed_at = now_ist() - timedelta(seconds=120)
+    osm.register("ord_tgt")
+    osm.transition("ord_tgt", "SUBMITTED")
+    monitor.track(
+        internal_order_id="ord_tgt", broker_order_id="KITE001",
+        symbol="RELIANCE", side="SELL", qty=10,
+        expected_price=2600.0, placed_at=placed_at, leg="TGT",
+    )
+    monitor._poll_cycle()
+
+    assert osm.current_state("ord_tgt") == "OPEN"
+    assert adapter.cancel_calls == []
+    assert monitor.is_watching("ord_tgt")
+    print("  OK TGT leg exempt from fill timeout")
+
+
+def test_fill_timeout_skipped_for_eod_leg() -> None:
+    """EOD squareoff orders are exempt from fill timeout."""
+    adapter = MockAdapter()
+    adapter.history_responses = [[_entry("OPEN")]]
+    adapter.cancel_success = True
+
+    monitor, _, osm, _ = _make_monitor(adapter=adapter, fill_timeout_sec=30)
+    placed_at = now_ist() - timedelta(seconds=120)
+    osm.register("ord_eod")
+    osm.transition("ord_eod", "SUBMITTED")
+    monitor.track(
+        internal_order_id="ord_eod", broker_order_id="KITE001",
+        symbol="RELIANCE", side="SELL", qty=10,
+        expected_price=2500.0, placed_at=placed_at, leg="EOD",
+    )
+    monitor._poll_cycle()
+
+    assert osm.current_state("ord_eod") == "OPEN"
+    assert adapter.cancel_calls == []
+    print("  OK EOD leg exempt from fill timeout")
+
+
+def test_fill_timeout_still_applies_to_entry_leg() -> None:
+    """Entry orders still get timed out as before."""
+    adapter = MockAdapter()
+    adapter.history_responses = [[_entry("OPEN")]]
+    adapter.cancel_success = True
+
+    monitor, _, osm, _ = _make_monitor(adapter=adapter, fill_timeout_sec=30)
+    placed_at = now_ist() - timedelta(seconds=40)
+    osm.register("ord_entry")
+    osm.transition("ord_entry", "SUBMITTED")
+    monitor.track(
+        internal_order_id="ord_entry", broker_order_id="KITE001",
+        symbol="RELIANCE", side="BUY", qty=10,
+        expected_price=2500.0, placed_at=placed_at, leg="ENTRY",
+    )
+    monitor._poll_cycle()
+
+    assert osm.current_state("ord_entry") == "CANCELLED"
+    assert not monitor.is_watching("ord_entry")
+    print("  OK ENTRY leg still subject to fill timeout")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests -- error tolerance (OM11)
 # ─────────────────────────────────────────────────────────────────────────────

@@ -743,6 +743,7 @@ class OrderPlacer:
                     qty=qty,
                     expected_price=entry_price,
                     placed_at=now,
+                    leg="ENTRY",
                 )
                 successfully_tracked.append(result.entry_internal_id)
 
@@ -771,6 +772,7 @@ class OrderPlacer:
                     qty=qty,
                     expected_price=sl_price,
                     placed_at=now,
+                    leg="SL",
                 )
                 successfully_tracked.append(result.sl_internal_id)
 
@@ -795,6 +797,7 @@ class OrderPlacer:
                     qty=qty,
                     expected_price=tgt_price,
                     placed_at=now,
+                    leg="TGT",
                 )
                 successfully_tracked.append(result.tgt_internal_id)
         except Exception as track_exc:
@@ -1522,6 +1525,7 @@ class OrderPlacer:
                 qty=qty_filled,
                 expected_price=legs.sl_trigger_price,
                 placed_at=now,
+                leg="SL",
             )
 
             with self._fill_map_lock:
@@ -1542,6 +1546,7 @@ class OrderPlacer:
                 qty=qty_filled,
                 expected_price=legs.tgt_price,
                 placed_at=now,
+                leg="TGT",
             )
         except Exception as exc:
             log_exception(self._log, exc)

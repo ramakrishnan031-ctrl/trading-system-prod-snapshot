@@ -206,8 +206,8 @@ def _sample_ledger():
 
 def _sample_screener_result(status="PASSED", rejection_step=None):
     step_results = {
-        "volume_check": {"passed": True,  "score": 20},
-        "trend_check":  {"passed": rejection_step != "trend_check", "score": 15},
+        "volume_check": 0.5,
+        "trend_check":  0.0 if rejection_step == "trend_check" else 0.4,
     }
     return {
         "id":        1,
