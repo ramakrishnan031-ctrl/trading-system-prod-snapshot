@@ -5,6 +5,11 @@
 #
 # This file is canonical. Any live-crontab divergence should be audited
 # against this committed copy.
+#
+# Last synced with VM: 2026-05-09
+
+# ── 00:00 IST | daily log cleanup (delete logs >30 days) ────────────────────
+0 0 * * * find /home/ubuntu/systems/trading-system/logs -name '*.log' -mtime +30 -delete
 
 # ── 01:00 IST | nightly SQLite .backup (safe during DB activity) ─────────────
 0 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/trading_system.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/trading_system-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
@@ -12,8 +17,11 @@
 # ── 02:00 IST | 7-day rolling cleanup of backup files ────────────────────────
 0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups -name "trading_system-*.db" -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
 
-# ── 05:00 IST Mon-Fri | daily token cleanup (forces fresh zerodha_login) ─────
-0 5 * * 1-5 rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
+# ── 05:00 IST daily | token cleanup (forces fresh zerodha_login) ─────────────
+0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
+
+# ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
+0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
 
 # ── 16:01 IST Mon-Fri | generate screened stocks CSV for candle analysis ─────
 1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
