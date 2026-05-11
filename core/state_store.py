@@ -916,13 +916,17 @@ class StateStore:
             (trade_id,),
         )
 
-    def mark_trade_manually_closed(self, trade_id: str) -> None:
+    def mark_trade_manually_closed(self, trade_id: str) -> bool:
         """
-        Mark a trade as CLOSED_MANUAL.
+        Mark a trade as CLOSED_MANUAL if it is still OPEN or PARTIAL.
 
         Called by order_reconciler CHECK 1 when broker position is gone but
         the local trade is still OPEN/PARTIAL — indicating manual broker close
         or SL-hit that was not relayed to the system.
+
+        Returns True if the update happened, False if the trade was already
+        in a terminal status (guards against double-release race with
+        order_placer exit fill processing).
         """
         with self.transaction() as cur:
             cur.execute(
@@ -932,9 +936,11 @@ class StateStore:
                     exit_reason = 'MANUAL',
                     updated_at = ?
                 WHERE trade_id = ?
+                  AND status IN ('OPEN', 'PARTIAL')
                 """,
                 (_now_ist_iso(), trade_id),
             )
+            return cur.rowcount > 0
 
     def get_pending_all_products(self) -> List[sqlite3.Row]:
         """

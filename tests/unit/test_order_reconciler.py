@@ -1311,6 +1311,86 @@ def test_manual_close_idempotent(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Double-release guard: trade closed by order_placer before reconciler acts
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_check1_skips_release_when_trade_already_closed(tmp_path: Path) -> None:
+    """If order_placer closes a trade between get_all_open_trades and CHECK 1,
+    mark_trade_manually_closed returns False and release_used is NOT called.
+    Prevents the double-release race that caused NEGATIVE_MARGIN_USED on 2026-05-08."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="AEROFLEX", status="OPEN",
+                  qty_filled=116, entry_actual_price=430.0)
+    _insert_order(store, "ord1", "t1", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    # Simulate order_placer closing the trade before reconciler acts
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE trades SET status='CLOSED', exit_reason='TGT_HIT' WHERE trade_id='t1'"
+        )
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
+
+    # Manually invoke _check1 with the stale trade row (as if read before close)
+    stale_trade = store.fetch_one(
+        "SELECT t.*, o.product FROM trades t "
+        "LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = 'ENTRY' "
+        "WHERE t.trade_id = 't1'"
+    )
+    action = rec._check1_manual_close(stale_trade)
+
+    # Capital must NOT be released
+    fm.release_used.assert_not_called()
+    assert action.check_name == "MANUAL_CLOSE"
+    assert action.tier == "COSMETIC"
+    assert "already_closed" in action.action_taken
+
+    store.close()
+    print("  OK double-release guard: skip release_used when trade already CLOSED")
+
+
+def test_check1_releases_when_trade_genuinely_open(tmp_path: Path) -> None:
+    """Normal CHECK 1 flow: trade is genuinely OPEN, mark + release proceeds."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", status="OPEN",
+                  qty_filled=10, entry_actual_price=2500.0)
+    _insert_order(store, "ord1", "t1", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(
+        net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
+    actions = rec.reconcile_once()
+
+    mc = [a for a in actions if a.check_name == "MANUAL_CLOSE"]
+    assert len(mc) == 1
+    assert mc[0].tier == "RECOVERABLE"
+    fm.release_used.assert_called_once()
+
+    # Verify trade is now CLOSED_MANUAL
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id='t1'")
+    assert row["status"] == "CLOSED_MANUAL"
+
+    store.close()
+    print("  OK normal CHECK 1: mark + release proceeds for genuinely OPEN trade")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Empty state: reconcile_once() on empty DB returns []
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1672,6 +1752,9 @@ def run_all_tests() -> int:
         test_rc14_startup_reconciliation,
         # Idempotency
         test_manual_close_idempotent,
+        # Double-release guard
+        test_check1_skips_release_when_trade_already_closed,
+        test_check1_releases_when_trade_genuinely_open,
         # Empty state
         test_reconcile_empty_db_returns_empty,
         # BL-3 / Phase B.5: CAPITAL_ACCOUNTING_DRIFT

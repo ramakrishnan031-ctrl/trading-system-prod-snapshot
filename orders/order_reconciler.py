@@ -422,14 +422,34 @@ class OrderReconciler:
         steps: List[str] = []
 
         try:
-            self._store.mark_trade_manually_closed(trade_id)
+            actually_closed = self._store.mark_trade_manually_closed(trade_id)
             steps.append("mark_trade_manually_closed")
         except Exception as exc:
             log.error(
                 "check1: mark_trade_manually_closed failed for %s: %s", trade_id, exc
             )
             success = False
+            actually_closed = False
             steps.append(f"mark_trade_manually_closed FAILED: {exc}")
+
+        if not actually_closed:
+            log.info(
+                "check1: trade %s already in terminal status; skipping capital release",
+                trade_id,
+            )
+            steps.append("skip_release(already_closed)")
+            return ReconciliationAction(
+                check_name="MANUAL_CLOSE",
+                tier="COSMETIC",
+                symbol=symbol,
+                trade_id=trade_id,
+                description=(
+                    f"Trade {trade_id} already closed by another path; "
+                    f"no capital release needed"
+                ),
+                action_taken="; ".join(steps),
+                success=True,
+            )
 
         # Release capital — breakeven proxy (entry == exit -> PnL = 0)
         entry_price = trade["entry_actual_price"]

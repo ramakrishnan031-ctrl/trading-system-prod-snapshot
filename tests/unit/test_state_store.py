@@ -1060,6 +1060,26 @@ def test_mark_trade_manually_closed(tmp_path: Path) -> None:
     store.close()
 
 
+def test_mark_trade_manually_closed_returns_bool(tmp_path: Path) -> None:
+    """mark_trade_manually_closed returns True for OPEN, False for already-CLOSED."""
+    store = StateStore(tmp_path / "test.db")
+
+    insert_test_trade(store, "t1", status="OPEN")
+    assert store.mark_trade_manually_closed("t1") is True
+
+    insert_test_trade(store, "t2", status="CLOSED")
+    assert store.mark_trade_manually_closed("t2") is False
+
+    insert_test_trade(store, "t3", status="PARTIAL")
+    assert store.mark_trade_manually_closed("t3") is True
+
+    insert_test_trade(store, "t4", status="CANCELLED")
+    assert store.mark_trade_manually_closed("t4") is False
+
+    print("  OK mark_trade_manually_closed returns bool based on actual status change")
+    store.close()
+
+
 def test_get_pending_all_products(tmp_path: Path) -> None:
     """get_pending_all_products() returns PENDING_FILL for ALL products (MIS, CO, CNC)."""
     store = StateStore(tmp_path / "test.db")
@@ -1865,6 +1885,7 @@ def run_all_tests() -> int:
         test_get_sl_order_for_trade_active,
         test_get_sl_order_for_trade_none_when_absent,
         test_mark_trade_manually_closed,
+        test_mark_trade_manually_closed_returns_bool,
         test_get_pending_all_products,
         test_insert_reconciliation_log,
         # SS6 screener_results table tests
