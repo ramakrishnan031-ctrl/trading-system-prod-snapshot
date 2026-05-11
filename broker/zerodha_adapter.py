@@ -365,6 +365,7 @@ class ZerodhaAdapter:
         # order_monitor sees real state instead of a static SUBMITTED stub.
         self._paper_fills: dict[str, dict] = {}
         self._paper_fills_lock: threading.Lock = threading.Lock()
+        self._paper_positions: dict[str, dict] = {}
         # ZA16a: paper needs bus to publish synthesized OrderFilled. If paper
         # is on but bus is None we degrade safely (state reaches COMPLETE via
         # synth thread; no event) and log a warning. main.py wires bus in
@@ -697,13 +698,25 @@ class ZerodhaAdapter:
         )
 
         if self._paper:
+            with self._paper_fills_lock:
+                positions = [
+                    Position(
+                        symbol=sym,
+                        qty=abs(info["qty"]),
+                        avg_price=info["avg_price"],
+                        product=info.get("product", "MIS"),
+                        side=info["side"],
+                    )
+                    for sym, info in self._paper_positions.items()
+                    if info["qty"] != 0
+                ]
             ms = int((time.monotonic() - t0) * 1000)
             self._log.info(
                 "get_positions call_end",
                 extra={"method": "get_positions", "duration_ms": ms,
-                       "result_summary": "PAPER 0 positions"},
+                       "result_summary": f"PAPER {len(positions)} positions"},
             )
-            return []
+            return positions
 
         self._rl.acquire(_CATEGORY_MAP["get_positions"])
 
@@ -1306,6 +1319,20 @@ class ZerodhaAdapter:
                 self._paper_fills[broker_order_id] = {
                     "status": "COMPLETE", "filled_qty": qty, "avg_price": fill_price,
                 }
+                pos = self._paper_positions.get(symbol, {"qty": 0, "avg_price": 0.0})
+                if side == "BUY":
+                    new_qty = pos["qty"] + qty
+                else:
+                    new_qty = pos["qty"] - qty
+                if new_qty == 0:
+                    self._paper_positions.pop(symbol, None)
+                else:
+                    self._paper_positions[symbol] = {
+                        "qty": new_qty,
+                        "avg_price": fill_price,
+                        "side": "BUY" if new_qty > 0 else "SELL",
+                        "product": "MIS",
+                    }
 
             if self._bus is None:
                 # Degraded mode warned at ctor time. State reached COMPLETE;

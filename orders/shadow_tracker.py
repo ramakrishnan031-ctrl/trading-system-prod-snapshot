@@ -323,7 +323,7 @@ class ShadowTracker:
         entry_ts_raw = trade["entry_time"] or trade["created_at"]
         entry_ts = _parse_ts(entry_ts_raw)
         exit_ts_raw = trade["exit_time"] or ""
-        exit_ts = _parse_ts(exit_ts_raw) if exit_ts_raw else self._now()
+        exit_ts = _parse_ts(exit_ts_raw) if exit_ts_raw else self._now().replace(tzinfo=None)
 
         duration_sec = max(0, int((exit_ts - entry_ts).total_seconds()))
 
@@ -487,13 +487,14 @@ class ShadowTracker:
         Close an active inning: compute PnL, update DB, cascade (SH7).
         """
         now = self._now()
+        now_naive = now.replace(tzinfo=None)
 
         pnl_per_share, pnl_pct = _calc_pnl(inning.direction, inning.entry_price, exit_price)
 
         entry_ts = inning.entry_ts
         if entry_ts is None:
-            entry_ts = now
-        duration_sec = max(0, int((now - _make_naive(now, entry_ts)).total_seconds()))
+            entry_ts = now_naive
+        duration_sec = max(0, int((now_naive - _make_naive(now_naive, entry_ts)).total_seconds()))
 
         exit_ts_str = now.isoformat()
 
@@ -818,7 +819,7 @@ def _derive_sl_tgt_from_strategy(
 def _parse_ts(ts_str: str) -> datetime:
     """Parse ISO-8601 string to datetime. Returns naive IST if tz-aware."""
     if not ts_str:
-        return now_ist()
+        return now_ist().replace(tzinfo=None)
     try:
         dt = datetime.fromisoformat(ts_str)
         if dt.tzinfo is not None:

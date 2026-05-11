@@ -82,7 +82,7 @@ def test_close_trade_happy_path(tmp_path: Path) -> None:
     """close_trade sets status=CLOSED and populates all exit columns."""
     store = _make_store(tmp_path)
     om = _make_om(store)
-    trade_id = _seed_trade(store, om)
+    trade_id = _seed_open_trade(store, om)
 
     row = om.close_trade(
         trade_id=trade_id,
@@ -107,7 +107,7 @@ def test_close_trade_computes_net_pnl(tmp_path: Path) -> None:
     """net_pnl is gross_pnl minus charges, persisted on the row."""
     store = _make_store(tmp_path)
     om = _make_om(store)
-    trade_id = _seed_trade(store, om)
+    trade_id = _seed_open_trade(store, om)
 
     row = om.close_trade(
         trade_id=trade_id,
@@ -163,7 +163,7 @@ def test_close_trade_rejects_double_close(tmp_path: Path) -> None:
     """Closing an already-CLOSED trade raises ValueError (no overwrite)."""
     store = _make_store(tmp_path)
     om = _make_om(store)
-    trade_id = _seed_trade(store, om)
+    trade_id = _seed_open_trade(store, om)
 
     om.close_trade(
         trade_id=trade_id,
@@ -173,7 +173,7 @@ def test_close_trade_rejects_double_close(tmp_path: Path) -> None:
         gross_pnl=500.0,
         charges=25.0,
     )
-    with pytest.raises(ValueError, match="already CLOSED"):
+    with pytest.raises(ValueError, match="terminal status"):
         om.close_trade(
             trade_id=trade_id,
             exit_price=2560.0,
@@ -267,27 +267,43 @@ def test_e2_negative_implausible_gross_pnl_also_rejected(tmp_path: Path) -> None
     print("  OK E.2: negative implausible gross_pnl rejected (|.| guard)")
 
 
-def test_e2_skipped_when_entry_actual_price_missing(tmp_path: Path) -> None:
-    """E.2: if entry_actual_price is NULL (entry never filled), skip the
-    sanity bound rather than crash on None arithmetic. Defensive: the
-    upstream invariant is that close_trade only runs after an entry fill,
-    but a misfired close still shouldn't blow up here."""
+def test_close_trade_rejects_pending_fill(tmp_path: Path) -> None:
+    """close_trade rejects PENDING_FILL: trade must be OPEN/PARTIAL to close."""
     store = _make_store(tmp_path)
     om = _make_om(store)
-    # PENDING_FILL trade: no record_entry_fill called -> entry_actual_price NULL.
     trade_id = _seed_trade(store, om)
 
-    row = om.close_trade(
-        trade_id=trade_id, exit_price=2550.0, exit_qty=10,
-        exit_reason="MANUAL_CLOSE", gross_pnl=999_999_999.0, charges=0.0,
-    )
-    # The bound is skipped (entry_actual_price=None), so the close succeeds.
-    # This is intentional defense-in-depth: the absent-entry case can't
-    # compute a meaningful ceiling, and crashing here would mask the more
-    # interesting upstream bug (closing a never-filled trade).
-    assert row["status"] == "CLOSED"
+    with pytest.raises(ValueError, match="terminal status"):
+        om.close_trade(
+            trade_id=trade_id, exit_price=2550.0, exit_qty=10,
+            exit_reason="MANUAL_CLOSE", gross_pnl=0.0, charges=0.0,
+        )
     store.close()
-    print("  OK E.2: bound skipped when entry_actual_price is NULL")
+    print("  OK close_trade rejects PENDING_FILL status")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Terminal status guard — prevents double-release (11-May-2026 fix)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_close_trade_rejects_closed_manual(tmp_path: Path) -> None:
+    """close_trade rejects CLOSED_MANUAL: reconciler already closed this trade."""
+    store = _make_store(tmp_path)
+    om = _make_om(store)
+    trade_id = _seed_open_trade(store, om)
+
+    store.mark_trade_manually_closed(trade_id)
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id = ?", (trade_id,))
+    assert row["status"] == "CLOSED_MANUAL"
+
+    with pytest.raises(ValueError, match="terminal status"):
+        om.close_trade(
+            trade_id=trade_id, exit_price=2550.0, exit_qty=10,
+            exit_reason="SL_HIT", gross_pnl=-250.0, charges=25.0,
+        )
+    store.close()
+    print("  OK close_trade rejects CLOSED_MANUAL (prevents double capital release)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -307,7 +323,8 @@ def run_all_tests() -> int:
         test_e2_gross_pnl_within_10x_entry_value_accepted,
         test_e2_gross_pnl_exceeds_10x_entry_value_rejected,
         test_e2_negative_implausible_gross_pnl_also_rejected,
-        test_e2_skipped_when_entry_actual_price_missing,
+        test_close_trade_rejects_pending_fill,
+        test_close_trade_rejects_closed_manual,
     ]
 
     print("=" * 70)

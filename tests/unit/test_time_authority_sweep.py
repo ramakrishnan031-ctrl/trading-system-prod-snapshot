@@ -46,12 +46,13 @@ _FIXED_TS = datetime(2026, 4, 20, 9, 30, 0, tzinfo=_IST)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_shadow_tracker_parse_ts_empty_uses_now_ist() -> None:
-    """Empty ts_str → _parse_ts falls through to now_ist()."""
+    """Empty ts_str → _parse_ts falls through to now_ist(), returns naive."""
     with patch.object(shadow_tracker_mod, "now_ist", return_value=_FIXED_TS) as mock_ni:
         result = shadow_tracker_mod._parse_ts("")
     assert mock_ni.call_count == 1
-    assert result == _FIXED_TS
-    print("  OK H-17: shadow_tracker._parse_ts empty branch uses now_ist")
+    assert result == _FIXED_TS.replace(tzinfo=None)
+    assert result.tzinfo is None
+    print("  OK H-17: shadow_tracker._parse_ts empty branch uses now_ist (naive)")
 
 
 def test_shadow_tracker_parse_ts_invalid_uses_now_ist() -> None:

@@ -404,9 +404,10 @@ class OrderManager:
         existing = self.get_trade(trade_id)
         if existing is None:
             raise ValueError(f"close_trade: trade {trade_id!r} not found")
-        if existing.get("status") == "CLOSED":
+        if existing.get("status") not in ("OPEN", "PARTIAL"):
             raise ValueError(
-                f"close_trade: trade {trade_id!r} is already CLOSED "
+                f"close_trade: trade {trade_id!r} has terminal status "
+                f"{existing.get('status')!r} "
                 f"(exit_time={existing.get('exit_time')!r}); "
                 f"refusing to overwrite"
             )

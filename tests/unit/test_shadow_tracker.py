@@ -1393,6 +1393,59 @@ def test_bl13_idempotency_guard_works_without_startup_restore(tmp_path: Path) ->
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
+# DATETIME NAIVE/AWARE CONSISTENCY — 11-May-2026 fix
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_parse_ts_empty_string_returns_naive(tmp_path=None) -> None:
+    """_parse_ts('') must return a NAIVE datetime (contract consistency)."""
+    from orders.shadow_tracker import _parse_ts
+    result = _parse_ts("")
+    assert result.tzinfo is None, f"Expected naive, got tzinfo={result.tzinfo}"
+    print("  OK _parse_ts('') returns naive datetime")
+
+
+def test_parse_ts_aware_input_returns_naive(tmp_path=None) -> None:
+    """_parse_ts with tz-aware ISO string must strip tzinfo."""
+    from orders.shadow_tracker import _parse_ts
+    result = _parse_ts("2026-04-16T10:00:00+05:30")
+    assert result.tzinfo is None, f"Expected naive, got tzinfo={result.tzinfo}"
+    print("  OK _parse_ts(aware) returns naive datetime")
+
+
+def test_position_closed_null_exit_time_no_crash(tmp_path: Path) -> None:
+    """PositionClosed on a trade with exit_time=NULL must not crash
+    due to naive/aware datetime subtraction (production bug 11-May-2026)."""
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    aware_ta = _FakeTimeAuthority(
+        datetime(2026, 4, 16, 10, 30, 0, tzinfo=_IST)
+    )
+    mw = _FakeMarketWindows(is_open=True)
+    lf = _FakeLiveFeed()
+    tracker = ShadowTracker(
+        state_store=store, bus=bus, live_feed=lf,
+        market_windows=mw, time_authority=aware_ta,
+        max_innings=1, alert_per_inning=False, enabled=True,
+    )
+
+    _seed_signal(store, "sig_dt")
+    _seed_trade(store, "t_dt", "sig_dt", exit_reason="SL_HIT",
+                exit_time=None)
+
+    bus.publish(PositionClosed(
+        source_module="test", trade_id="t_dt", symbol="RELIANCE",
+        signal_id="sig_dt", exit_price=2475.0, realized_pnl=-250.0,
+    ))
+    rows = store.fetch_all(
+        "SELECT * FROM innings WHERE trade_id = ?", ("t_dt",)
+    )
+    assert len(rows) == 1, f"Expected 1 inning, got {len(rows)}"
+    assert rows[0]["duration_sec"] >= 0
+    print("  OK PositionClosed with NULL exit_time does not crash (aware TA)")
+    store.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     tests_no_arg = [
@@ -1406,6 +1459,8 @@ if __name__ == "__main__":
         test_pnl_long_loss,
         test_pnl_short_profit,
         test_pnl_short_loss,
+        test_parse_ts_empty_string_returns_naive,
+        test_parse_ts_aware_input_returns_naive,
     ]
     tests_with_path = [
         test_position_closed_creates_inning_1,
@@ -1448,6 +1503,8 @@ if __name__ == "__main__":
         # B.5 / Audit 5.1 — is_tracking() public API
         test_b5_is_tracking_true_when_simulated_inning_active,
         test_b5_is_tracking_false_when_disabled,
+        # 11-May-2026 datetime fix
+        test_position_closed_null_exit_time_no_crash,
     ]
 
     passed = failed = 0

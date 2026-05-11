@@ -551,6 +551,89 @@ def test_paper_mode_get_margins_returns_paper_capital() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Paper synthetic positions — 11-May-2026 fix
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_paper_get_positions_returns_position_after_fill() -> None:
+    """Paper get_positions returns a Position after a synthetic BUY fill."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus)
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    positions = adapter.get_positions()
+    assert len(positions) == 1
+    p = positions[0]
+    assert p.symbol == "RELIANCE"
+    assert p.qty == 10
+    assert p.side == "BUY"
+    print("  OK paper get_positions returns position after fill")
+
+
+def test_paper_get_positions_flat_after_exit() -> None:
+    """Paper position goes to zero after BUY + SELL of same qty."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus)
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    assert len(adapter.get_positions()) == 1
+    adapter.place_order(
+        symbol="RELIANCE", side="SELL", qty=10, price=2550.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    positions = adapter.get_positions()
+    assert len(positions) == 0, f"Expected flat, got {positions}"
+    print("  OK paper get_positions empty after offsetting fill")
+
+
+def test_paper_get_positions_multiple_symbols() -> None:
+    """Paper positions track multiple symbols independently."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(paper=True, bus=bus)
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    adapter.place_order(
+        symbol="INFY", side="BUY", qty=20, price=1500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    positions = adapter.get_positions()
+    syms = {p.symbol for p in positions}
+    assert syms == {"RELIANCE", "INFY"}, f"Expected both symbols, got {syms}"
+    print("  OK paper get_positions tracks multiple symbols")
+
+
+def test_paper_cancelled_order_no_position() -> None:
+    """Cancelled paper order does not appear in positions."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, bus=bus, paper_auto_fill_delay_sec=5.0,
+    )
+    result = adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    adapter.cancel_order(result.broker_order_id)
+    time.sleep(0.1)
+    positions = adapter.get_positions()
+    assert len(positions) == 0, f"Cancelled order should not have position: {positions}"
+    print("  OK paper cancelled order has no position")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # EF-4: set_paper_capital late-bind
 # ─────────────────────────────────────────────────────────────────────────────
 
