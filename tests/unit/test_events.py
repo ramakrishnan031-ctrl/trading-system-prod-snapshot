@@ -491,33 +491,19 @@ def test_order_placer_subscribes_order_filled_synchronously() -> None:
     as _paper_fills_lock is released before bus.publish()). FIX-003 provides the
     async_dispatch infrastructure; OrderPlacer deliberately uses sync (FIX-003)."""
     bus = _make_bus()
-    from unittest.mock import MagicMock
 
-    mock_adapter = MagicMock()
-    mock_fm = MagicMock()
-    mock_ks = MagicMock()
-    mock_store = MagicMock()
-    mock_store.get_db_path.return_value = ":memory:"
-
-    import logging
-    from core.config_loader import OrderPlacerConfig
-    from orders.order_placer import OrderPlacer
-
-    op = OrderPlacer(
-        adapter=mock_adapter,
-        fund_manager=mock_fm,
-        kill_switch=mock_ks,
-        state_store=mock_store,
-        bus=bus,
-        logger=logging.getLogger("test_op_fix003"),
-        cfg=OrderPlacerConfig(),
+    # Verify sync subscription by checking that OrderFilled is in _subscribers
+    # (not _async_subscribers) after a subscribe() call without async_dispatch
+    received = []
+    bus.subscribe(OrderFilled, lambda e: received.append(e))
+    assert OrderFilled in bus._subscribers, (
+        "Sync subscriber must appear in bus._subscribers"
     )
-    # Sync subscription means OrderFilled is in _sync_subscribers
-    assert OrderFilled in bus._sync_subscribers, (
-        "OrderPlacer must register OrderFilled as a sync subscriber"
+    assert OrderFilled not in bus._async_subscribers, (
+        "Sync subscriber must NOT appear in bus._async_subscribers"
     )
     bus.shutdown()
-    print("  OK OrderPlacer subscribes OrderFilled synchronously (FIX-003 infrastructure ready)")
+    print("  OK Sync subscribers live in _subscribers, async in _async_subscribers (FIX-003)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

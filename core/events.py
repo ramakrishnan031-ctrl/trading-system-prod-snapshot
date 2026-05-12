@@ -219,7 +219,8 @@ class EventBus:
     """
 
     def __init__(self) -> None:
-        self._sync_subscribers: dict[type, list[Callable[[Event], None]]] = {}
+        # _subscribers: synchronous handlers (original name; kept for backward compat)
+        self._subscribers: dict[type, list[Callable[[Event], None]]] = {}
         self._async_subscribers: dict[type, list[tuple[Callable[[Event], None], ThreadPoolExecutor]]] = {}
         self._executors: list[ThreadPoolExecutor] = []
 
@@ -253,7 +254,7 @@ class EventBus:
             self._executors.append(executor)
             self._async_subscribers.setdefault(event_type, []).append((handler, executor))
         else:
-            self._sync_subscribers.setdefault(event_type, []).append(handler)
+            self._subscribers.setdefault(event_type, []).append(handler)
 
     def publish(self, event: Event) -> None:
         """
@@ -277,7 +278,7 @@ class EventBus:
             executor.submit(_run_async_handler, handler, event)
 
         # Invoke sync subscribers with EV4 collect-all-errors semantics
-        handlers = self._sync_subscribers.get(event_type, [])
+        handlers = self._subscribers.get(event_type, [])
         errors: list[Exception] = []
 
         for handler in handlers:
