@@ -108,10 +108,12 @@ class WebhookReceiver:
         self._require_hmac = _require_hmac
 
         # WR17: in-flight symbol set (thread-safe)
-        # HIGH #9: dict[symbol, enqueue_monotonic] for timeout sweeping
-        self._in_flight: dict[str, float] = {}
+        # FIX-011: heartbeat-aware lock tracking. Each entry stores:
+        #   {'acquired_at': monotonic_ts, 'heartbeat_at': monotonic_ts}
+        # Sweeper evicts if (now - heartbeat_at) > 60s, NOT (now - acquired_at).
+        self._in_flight: dict[str, dict[str, float]] = {}
         self._in_flight_lock = threading.Lock()
-        self._in_flight_timeout_sec: float = 300.0  # 5 min hard eviction
+        self._in_flight_timeout_sec: float = 60.0  # evict if no heartbeat for 60s
 
         # H-16: set during graceful shutdown to reject new webhooks with 503
         # before signal_processor is stopped. In-flight requests drain
@@ -469,8 +471,9 @@ class WebhookReceiver:
 
     def _claim_in_flight(self, symbol: str) -> bool:
         """
-        M-1: atomically claim `symbol` as in-flight. Returns True if newly
-        claimed; False if already present. Caller MUST call
+        M-1 / FIX-011: atomically claim `symbol` as in-flight. Returns True if
+        newly claimed; False if already present. Stores a dict with both
+        acquired_at and heartbeat_at timestamps. Caller MUST call
         _release_in_flight(symbol) on any reject path after a successful
         claim (DUPLICATE / QUEUE_FULL / IntegrityError). On accepted path,
         signal_processor's release_in_flight() handles cleanup.
@@ -478,7 +481,11 @@ class WebhookReceiver:
         with self._in_flight_lock:
             if symbol in self._in_flight:
                 return False
-            self._in_flight[symbol] = time.monotonic()
+            now_mono = time.monotonic()
+            self._in_flight[symbol] = {
+                'acquired_at': now_mono,
+                'heartbeat_at': now_mono,
+            }
             return True
 
     def _release_in_flight(self, symbol: str) -> None:
@@ -497,6 +504,18 @@ class WebhookReceiver:
         """
         with self._in_flight_lock:
             self._in_flight.pop(symbol, None)
+
+    def update_heartbeat(self, symbol: str) -> None:
+        """
+        FIX-011: Update the heartbeat timestamp for an in-flight symbol.
+        Called by signal_processor at checkpoints during processing to prove
+        the worker is still alive. If symbol is not in-flight (already released
+        or never claimed), silently no-op.
+        """
+        with self._in_flight_lock:
+            entry = self._in_flight.get(symbol)
+            if entry is not None:
+                entry['heartbeat_at'] = time.monotonic()
 
     # ------------------------------------------------------------------
     # Audit logging (WR13)
@@ -554,24 +573,27 @@ class WebhookReceiver:
 
     def _run_sweeper(self) -> None:
         """
-        Background daemon that evicts in_flight entries older than
-        _in_flight_timeout_sec (300s).  Runs every 60s.
-        Prevents permanently locked symbols when signal_processor crashes
-        before the finally block runs.
+        FIX-011: Background daemon that evicts in_flight entries with no
+        heartbeat for >60s. Runs every 60s. A lock that has been held for
+        400s but continues heartbeating is NOT evicted (active processing).
+        A lock with no heartbeat for 60s IS evicted (stalled worker).
         """
         while not self._sweeper_stop.wait(timeout=60.0):
             now_mono = time.monotonic()
             evicted = []
             with self._in_flight_lock:
-                for sym, added_at in list(self._in_flight.items()):
-                    if now_mono - added_at > self._in_flight_timeout_sec:
-                        evicted.append(sym)
-                for sym in evicted:
+                for sym, entry in list(self._in_flight.items()):
+                    heartbeat_at = entry['heartbeat_at']
+                    if now_mono - heartbeat_at > self._in_flight_timeout_sec:
+                        evicted.append((sym, entry['acquired_at'], heartbeat_at))
+                for sym, _, _ in evicted:
                     del self._in_flight[sym]
-            for sym in evicted:
-                self._log.warning(
-                    "in_flight_sweeper: evicted stuck symbol %s "
-                    "(in_flight > %.0fs); signal_processor may have crashed",
-                    sym,
-                    self._in_flight_timeout_sec,
+            for sym, acquired_at, heartbeat_at in evicted:
+                held_sec = now_mono - acquired_at
+                stall_sec = now_mono - heartbeat_at
+                self._log.critical(
+                    "in_flight_sweeper: evicted STALLED symbol %s "
+                    "(held=%.0fs, no heartbeat for %.0fs); "
+                    "signal_processor worker likely crashed or deadlocked",
+                    sym, held_sec, stall_sec,
                 )

@@ -117,6 +117,7 @@ class SignalProcessor:
         order_placer=None,                  # SP16: still optional (Module 33)
         logger=None,
         in_flight_release_fn: Optional[Callable[[str], None]] = None,  # SP7
+        in_flight_heartbeat_fn: Optional[Callable[[str], None]] = None,  # FIX-011
         worker_count: int = 5,
         drain_poll_sec: float = 0.1,
         signal_expiry_sec: int = 60,
@@ -143,6 +144,7 @@ class SignalProcessor:
         self._placer = order_placer
         self._log = logger
         self._in_flight_release = in_flight_release_fn
+        self._in_flight_heartbeat = in_flight_heartbeat_fn  # FIX-011
         self._worker_count = max(1, worker_count)
         self._drain_poll_sec = drain_poll_sec
         self._signal_expiry_sec = signal_expiry_sec
@@ -344,6 +346,21 @@ class SignalProcessor:
             )
 
     # ------------------------------------------------------------------
+    # Heartbeat helper (FIX-011)
+    # ------------------------------------------------------------------
+
+    def _heartbeat(self, symbol: str) -> None:
+        """
+        FIX-011: Update in-flight heartbeat timestamp at processing checkpoints.
+        No-op if heartbeat callback is not wired.
+        """
+        if self._in_flight_heartbeat is not None:
+            try:
+                self._in_flight_heartbeat(symbol)
+            except Exception as exc:
+                self._log.error(f"in_flight_heartbeat failed for {symbol}: {exc}")
+
+    # ------------------------------------------------------------------
     # Core pipeline (SP6, SPW3)
     # ------------------------------------------------------------------
 
@@ -362,6 +379,7 @@ class SignalProcessor:
         try:
             # SP9: mark PROCESSING immediately
             self._store.update_signal_status(signal_id, "PROCESSING")
+            self._heartbeat(symbol)  # FIX-011: checkpoint 1
 
             # ----------------------------------------------------------
             # Step 1: Pre-flight checks (cheap, no I/O)
@@ -480,6 +498,7 @@ class SignalProcessor:
                 return  # finally releases in_flight (SPW8)
 
             # screen_result.passed=True; screener wrote PASSED
+            self._heartbeat(symbol)  # FIX-011: checkpoint 2 (screener done)
 
             # ----------------------------------------------------------
             # Step 4: Entry + SL price derivation (SPW4)
@@ -511,6 +530,7 @@ class SignalProcessor:
 
             if not sizing.success:
                 raise _PipelineReject(f"SIZING_{sizing.constraint}", sizing.reason)
+            self._heartbeat(symbol)  # FIX-011: checkpoint 3 (sizing done)
 
             # ----------------------------------------------------------
             # Steps 6-7: Risk approval + Capital reservation
@@ -552,6 +572,8 @@ class SignalProcessor:
                 # appears atomically with the reservation entry).
                 self._store.update_signal_status(signal_id, "RESERVED")
 
+            self._heartbeat(symbol)  # FIX-011: checkpoint 4 (reservation done)
+
             # ----------------------------------------------------------
             # Step 8: Order placement (SP16: optional)
             # ----------------------------------------------------------
@@ -584,6 +606,7 @@ class SignalProcessor:
                 direction=strategy_obj.direction,
             )
 
+            self._heartbeat(symbol)  # FIX-011: checkpoint 5 (before placement)
             try:
                 self._placer.place(
                     symbol=symbol,

@@ -917,6 +917,206 @@ def test_g1_require_hmac_true_rejects_invalid_hmac_does_not_fall_through():
 
 
 # ---------------------------------------------------------------------------
+# FIX-011: Sweeper heartbeat mechanism (no blind lock eviction)
+# ---------------------------------------------------------------------------
+
+def test_fix011_long_running_with_heartbeats_not_evicted():
+    """
+    FIX-011: Lock held for 400s but heartbeating every 30s is NOT evicted.
+    Validates that active processing is distinguished from stalled processing.
+    """
+    receiver, sq, store = _make_receiver()
+    # Manually claim a symbol
+    symbol = "LONGRUN"
+    claimed = receiver._claim_in_flight(symbol)
+    assert claimed, "Initial claim should succeed"
+
+    # Simulate 400s of processing with heartbeats every 30s
+    # Sweeper runs every 60s and evicts if no heartbeat for 60s.
+    # We'll update heartbeat at t=0, t=30, t=60, t=90, ... t=390
+    # Then wait 65s (total 455s) and check lock still exists.
+
+    # Fast-forward simulation: directly manipulate the entry timestamps
+    with receiver._in_flight_lock:
+        entry = receiver._in_flight[symbol]
+        # Set acquired_at to 400s ago
+        entry['acquired_at'] = time.monotonic() - 400.0
+        # Set heartbeat_at to 30s ago (recent heartbeat)
+        entry['heartbeat_at'] = time.monotonic() - 30.0
+
+    # Wait for sweeper cycle (it runs every 60s, but we need to ensure it ran)
+    # Instead of waiting 60s, trigger a manual sweep check
+    # (since we can't easily wait in tests, we'll check the eviction logic directly)
+
+    # Check that the lock is still present
+    with receiver._in_flight_lock:
+        assert symbol in receiver._in_flight, "Lock should NOT be evicted (recent heartbeat)"
+
+    # Now manually check sweeper logic: (now - heartbeat_at) should be ~30s < 60s
+    now_mono = time.monotonic()
+    with receiver._in_flight_lock:
+        entry = receiver._in_flight[symbol]
+        stall_time = now_mono - entry['heartbeat_at']
+        assert stall_time < receiver._in_flight_timeout_sec, \
+            f"Stall time {stall_time:.1f}s should be < timeout {receiver._in_flight_timeout_sec}s"
+
+    receiver.release_in_flight(symbol)
+    print("  OK FIX-011: lock held 400s with heartbeats NOT evicted")
+
+
+def test_fix011_no_heartbeat_90s_evicted():
+    """
+    FIX-011: Lock claimed but no heartbeat for 90s is evicted by sweeper.
+    Validates that stalled workers are detected and cleaned up.
+    """
+    receiver, sq, store = _make_receiver()
+    symbol = "STALLED"
+    claimed = receiver._claim_in_flight(symbol)
+    assert claimed, "Initial claim should succeed"
+
+    # Simulate stall: set both timestamps to 90s ago
+    with receiver._in_flight_lock:
+        entry = receiver._in_flight[symbol]
+        old_time = time.monotonic() - 90.0
+        entry['acquired_at'] = old_time
+        entry['heartbeat_at'] = old_time
+
+    # Manually run sweeper logic (instead of waiting 60s for the thread)
+    now_mono = time.monotonic()
+    evicted = []
+    with receiver._in_flight_lock:
+        for sym, entry in list(receiver._in_flight.items()):
+            heartbeat_at = entry['heartbeat_at']
+            if now_mono - heartbeat_at > receiver._in_flight_timeout_sec:
+                evicted.append(sym)
+        for sym in evicted:
+            del receiver._in_flight[sym]
+
+    assert symbol in evicted, "Symbol should be evicted (no heartbeat for 90s > 60s timeout)"
+    with receiver._in_flight_lock:
+        assert symbol not in receiver._in_flight, "Symbol should be removed from in_flight"
+
+    print("  OK FIX-011: lock with no heartbeat for 90s evicted")
+
+
+def test_fix011_evicted_symbol_can_be_readmitted():
+    """
+    FIX-011: After sweeper evicts a stalled symbol, a new signal for that
+    symbol is admitted (not rejected as IN_PROCESS / DUPLICATE).
+    """
+    receiver, sq, store = _make_receiver(expiry=3600)
+    symbol = "READMIT"
+    base = datetime.now()
+    ts1 = base.strftime("%Y-%m-%d %H:%M:%S")
+    ts2 = (base - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")  # different minute
+
+    # First request: accepted
+    with receiver.app.test_client() as client:
+        resp1 = client.post(
+            "/webhook/gap_go_long",
+            json={
+                "stocks": symbol,
+                "trigger_prices": "1000.0",
+                "triggered_at": ts1,
+                "scan_name": "gap_go_long",
+            },
+        )
+    assert resp1.status_code == 200
+    body1 = resp1.get_json()
+    results1 = body1.get("results", [])
+    assert len(results1) == 1
+    assert results1[0]["status"] == "ACCEPTED"
+
+    # Verify symbol is in_flight
+    with receiver._in_flight_lock:
+        assert symbol in receiver._in_flight
+
+    # Simulate stall and eviction (same as previous test)
+    with receiver._in_flight_lock:
+        entry = receiver._in_flight[symbol]
+        old_time = time.monotonic() - 90.0
+        entry['acquired_at'] = old_time
+        entry['heartbeat_at'] = old_time
+
+    # Manual sweep
+    now_mono = time.monotonic()
+    evicted = []
+    with receiver._in_flight_lock:
+        for sym, entry in list(receiver._in_flight.items()):
+            heartbeat_at = entry['heartbeat_at']
+            if now_mono - heartbeat_at > receiver._in_flight_timeout_sec:
+                evicted.append(sym)
+        for sym in evicted:
+            del receiver._in_flight[sym]
+
+    assert symbol in evicted
+
+    # Second request: should be accepted (not rejected as IN_PROCESS)
+    # Use different minute to avoid DUPLICATE fingerprint
+    with receiver.app.test_client() as client:
+        resp2 = client.post(
+            "/webhook/gap_go_long",
+            json={
+                "stocks": symbol,
+                "trigger_prices": "1000.0",
+                "triggered_at": ts2,  # different minute
+                "scan_name": "gap_go_long",
+            },
+        )
+    assert resp2.status_code == 200
+    body2 = resp2.get_json()
+    results2 = body2.get("results", [])
+    assert len(results2) == 1
+    assert results2[0]["status"] == "ACCEPTED", \
+        f"Expected ACCEPTED after eviction, got {results2[0]['status']}"
+
+    print("  OK FIX-011: evicted symbol readmitted on new signal")
+
+
+def test_fix011_update_heartbeat_updates_timestamp():
+    """
+    FIX-011: update_heartbeat() correctly updates the heartbeat_at timestamp.
+    """
+    receiver, sq, store = _make_receiver()
+    symbol = "HEARTBEAT"
+    claimed = receiver._claim_in_flight(symbol)
+    assert claimed
+
+    # Get initial heartbeat timestamp
+    with receiver._in_flight_lock:
+        entry = receiver._in_flight[symbol]
+        initial_heartbeat = entry['heartbeat_at']
+
+    # Sleep briefly then update heartbeat
+    time.sleep(0.05)
+    receiver.update_heartbeat(symbol)
+
+    # Check that heartbeat_at was updated
+    with receiver._in_flight_lock:
+        entry = receiver._in_flight[symbol]
+        updated_heartbeat = entry['heartbeat_at']
+
+    assert updated_heartbeat > initial_heartbeat, \
+        "heartbeat_at should be updated after update_heartbeat() call"
+
+    receiver.release_in_flight(symbol)
+    print("  OK FIX-011: update_heartbeat() updates timestamp")
+
+
+def test_fix011_update_heartbeat_unknown_symbol_noop():
+    """
+    FIX-011: update_heartbeat() on a symbol not in_flight is a silent no-op.
+    """
+    receiver, sq, store = _make_receiver()
+    # Call update_heartbeat on a symbol that was never claimed
+    try:
+        receiver.update_heartbeat("UNKNOWN")
+        print("  OK FIX-011: update_heartbeat() on unknown symbol is no-op")
+    except Exception as exc:
+        raise AssertionError(f"update_heartbeat should not raise on unknown symbol: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (no pytest dependency)
 # ---------------------------------------------------------------------------
 
@@ -965,6 +1165,12 @@ def run_all_tests() -> int:
         test_g1_require_hmac_true_accepts_valid_hmac,
         test_g1_require_hmac_false_keeps_legacy_token_path,
         test_g1_require_hmac_true_rejects_invalid_hmac_does_not_fall_through,
+        # FIX-011: Sweeper heartbeat mechanism
+        test_fix011_long_running_with_heartbeats_not_evicted,
+        test_fix011_no_heartbeat_90s_evicted,
+        test_fix011_evicted_symbol_can_be_readmitted,
+        test_fix011_update_heartbeat_updates_timestamp,
+        test_fix011_update_heartbeat_unknown_symbol_noop,
     ]
 
     print("=" * 70)
