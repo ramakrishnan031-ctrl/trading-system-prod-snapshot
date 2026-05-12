@@ -826,7 +826,7 @@ class OrderReconciler:
                 # G5b handles this (no local SL record at all)
                 continue
 
-            broker_sl_id = str(sl_row.get("order_id") or sl_row.get("broker_order_id") or "")
+            broker_sl_id = str(sl_row["order_id"] if sl_row["order_id"] else "")
             if not broker_sl_id:
                 # SL row exists but has no broker ID yet (just placed this cycle) — skip
                 continue

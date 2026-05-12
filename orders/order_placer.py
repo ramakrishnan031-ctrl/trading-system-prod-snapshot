@@ -382,10 +382,9 @@ class OrderPlacer:
         self._fill_map: Dict[str, _FillEntry] = {}
         self._fill_map_lock = threading.Lock()
 
-        # OP6: subscribe to OrderFilled — async_dispatch=True (FIX-003) so that
-        # paper-synth thread publishing OrderFilled does not deadlock with the
-        # handler's own place_order() calls on the same adapter resources.
-        self._bus.subscribe(OrderFilled, self._on_order_filled, async_dispatch=True)
+        # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
+        # paper-synth lock is released before bus.publish() is called).
+        self._bus.subscribe(OrderFilled, self._on_order_filled)
         # Audit #7: also subscribe to OrderStatusChanged to catch the
         # partial-fill-then-cancel gap. OrderFilled only fires on COMPLETE
         # (OM8); a CANCELLED / REJECTED / FAILED terminal with qty_filled > 0

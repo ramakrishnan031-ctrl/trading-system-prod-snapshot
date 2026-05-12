@@ -56,6 +56,19 @@ class _MockStateStore:
             raise self.raise_exc
         self.updates.append((signal_id, status))
 
+    def release_gate_state(self, signal_id: str, status: str, reason: str = "") -> None:
+        """FIX-010: atomic version used by _release(). Same observable effect as
+        update_signal_status for mock purposes."""
+        if self.raise_exc is not None:
+            raise self.raise_exc
+        self.updates.append((signal_id, status))
+
+    def insert_gate_state(self, entry: dict) -> None:
+        pass
+
+    def delete_gate_state(self, signal_id: str) -> None:
+        pass
+
 
 class _NullLogger:
     def __init__(self):

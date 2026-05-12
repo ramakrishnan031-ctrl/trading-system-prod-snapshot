@@ -486,15 +486,13 @@ def test_async_and_sync_subscribers_coexist() -> None:
     print("  OK sync + async subscribers coexist on same event type (FIX-003)")
 
 
-def test_order_placer_subscribes_with_async_dispatch() -> None:
-    """OrderPlacer must subscribe to OrderFilled with async_dispatch=True (FIX-003)."""
+def test_order_placer_subscribes_order_filled_synchronously() -> None:
+    """OrderPlacer subscribes OrderFilled synchronously (no deadlock risk in paper mode,
+    as _paper_fills_lock is released before bus.publish()). FIX-003 provides the
+    async_dispatch infrastructure; OrderPlacer deliberately uses sync (FIX-003)."""
     bus = _make_bus()
-    # After subscription, the OrderFilled key should appear in _async_subscribers
-    # We test this by verifying there are async subscribers after OrderPlacer construction.
     from unittest.mock import MagicMock
-    from core.events import OrderStatusChanged
 
-    # Build minimal mocks to construct OrderPlacer
     mock_adapter = MagicMock()
     mock_fm = MagicMock()
     mock_ks = MagicMock()
@@ -514,11 +512,12 @@ def test_order_placer_subscribes_with_async_dispatch() -> None:
         logger=logging.getLogger("test_op_fix003"),
         cfg=OrderPlacerConfig(),
     )
-    assert OrderFilled in bus._async_subscribers, (
-        "OrderPlacer must register OrderFilled with async_dispatch=True"
+    # Sync subscription means OrderFilled is in _sync_subscribers
+    assert OrderFilled in bus._sync_subscribers, (
+        "OrderPlacer must register OrderFilled as a sync subscriber"
     )
     bus.shutdown()
-    print("  OK OrderPlacer subscribes OrderFilled with async_dispatch=True (FIX-003)")
+    print("  OK OrderPlacer subscribes OrderFilled synchronously (FIX-003 infrastructure ready)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -555,7 +554,7 @@ def run_all_tests() -> int:
         test_async_dispatch_does_not_block_publisher,
         test_async_dispatch_exception_does_not_raise_to_publisher,
         test_async_and_sync_subscribers_coexist,
-        test_order_placer_subscribes_with_async_dispatch,
+        test_order_placer_subscribes_order_filled_synchronously,
     ]
 
     print("=" * 70)
