@@ -224,11 +224,12 @@ def _guard_non_negative(
 ) -> None:
     """Raise CapitalInvariantViolation if value < -tolerance (INV6 + INV7).
 
-    INV7: round value to 2 dp before the negative check. A spurious
-    -1e-15 from arithmetic noise is logically zero; rounding to paise
-    avoids false NEGATIVE_* violations on otherwise-consistent ledgers.
+    The tolerance parameter (default 0.01) absorbs floating-point noise.
+    Do NOT round value before comparing: round(-0.014, 2) == -0.01 and
+    -0.01 >= -0.01 would incorrectly pass a genuinely-negative value (FIX-005).
+    Arithmetic noise (-1e-15) is handled by tolerance, not rounding.
     """
-    if round(value, 2) >= -tolerance:
+    if value >= -tolerance:
         return
     violation = f"NEGATIVE_{field_name.upper()}"
     lhs = compute_lhs(margin_available, margin_reserved, margin_used)

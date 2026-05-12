@@ -467,22 +467,15 @@ class EntryGate:
         }
         status = _REASON_STATUS.get(reason, f"GATE_RELEASED_{reason}")
 
-        # EG7 step 2: update state_store
+        # FIX-010: atomically update signal status AND delete gate_state row
+        # in one transaction so a crash between the two cannot leave a zombie
+        # gate_state row with a stale signal status (Audit 4.4).
         try:
-            self._state_store.update_signal_status(signal_id, status)
+            self._state_store.release_gate_state(signal_id, status)
         except Exception as exc:
             self._log.error(
-                f"EntryGate: state_store.update_signal_status failed "
+                f"EntryGate: release_gate_state failed "
                 f"for {signal_id} (reason={reason}): {exc}\n{traceback.format_exc()}"
-            )
-
-        # Audit 4.4: clear the rehydrate row so a future restart does not
-        # resurrect a released signal.
-        try:
-            self._state_store.delete_gate_state(signal_id)
-        except Exception as exc:
-            self._log.error(
-                f"EntryGate: gate_state delete failed for {signal_id}: {exc}"
             )
 
         # EG7 step 4: log

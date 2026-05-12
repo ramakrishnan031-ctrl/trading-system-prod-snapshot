@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional
@@ -207,14 +208,35 @@ class EventBus:
         bus = EventBus()
         bus.subscribe(OrderFilled, on_order_filled)
         bus.publish(OrderFilled(source_module="order_placer", symbol="RELIANCE"))
+
+    async_dispatch=True (FIX-003):
+        Subscribers registered with async_dispatch=True are invoked in a
+        dedicated single-threaded executor. Use this for handlers that must
+        not block the publisher thread (e.g. OrderPlacer._on_order_filled
+        called from the paper-synth thread). Async handlers are fire-and-forget
+        from the publisher's perspective; exceptions are logged but do NOT
+        raise EventDispatchError to the publisher.
     """
 
     def __init__(self) -> None:
-        self._subscribers: dict[type, list[Callable[[Event], None]]] = {}
+        self._sync_subscribers: dict[type, list[Callable[[Event], None]]] = {}
+        self._async_subscribers: dict[type, list[tuple[Callable[[Event], None], ThreadPoolExecutor]]] = {}
+        self._executors: list[ThreadPoolExecutor] = []
 
-    def subscribe(self, event_type: type, handler: Callable[[Event], None]) -> None:
+    def subscribe(
+        self,
+        event_type: type,
+        handler: Callable[[Event], None],
+        *,
+        async_dispatch: bool = False,
+    ) -> None:
         """
         Register handler for event_type.
+
+        Args:
+            async_dispatch: If True, handler runs in a dedicated background
+                thread (one executor per subscription, max_workers=1).
+                Exceptions from async handlers are logged but not re-raised.
 
         Raises:
             TypeError: if event_type is not a subclass of Event.
@@ -223,16 +245,39 @@ class EventBus:
             raise TypeError(
                 f"event_type must be a subclass of Event, got {event_type!r}"
             )
-        self._subscribers.setdefault(event_type, []).append(handler)
+        if async_dispatch:
+            executor = ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix=f"ev_{event_type.__name__}",
+            )
+            self._executors.append(executor)
+            self._async_subscribers.setdefault(event_type, []).append((handler, executor))
+        else:
+            self._sync_subscribers.setdefault(event_type, []).append(handler)
 
     def publish(self, event: Event) -> None:
         """
-        Dispatch event to all registered subscribers synchronously (EV1).
-        Every subscriber is invoked even if a sibling raises (EV4).
-        Collects all exceptions, logs each, then raises EventDispatchError
-        if any failed. No-op when no subscribers registered for this type.
+        Dispatch event to all registered subscribers (EV1).
+
+        Synchronous subscribers (default): invoked in the caller's thread.
+        Every sync subscriber is invoked even if a sibling raises (EV4).
+        Collects all sync exceptions, logs each, then raises EventDispatchError
+        if any failed.
+
+        Async subscribers (async_dispatch=True): submitted to their dedicated
+        executor; publish() returns immediately without waiting. Async handler
+        exceptions are logged by the executor wrapper but not raised here.
+
+        No-op when no subscribers registered for this type.
         """
-        handlers = self._subscribers.get(type(event), [])
+        event_type = type(event)
+
+        # Fire async subscribers (non-blocking, fire-and-forget from caller's view)
+        for handler, executor in self._async_subscribers.get(event_type, []):
+            executor.submit(_run_async_handler, handler, event)
+
+        # Invoke sync subscribers with EV4 collect-all-errors semantics
+        handlers = self._sync_subscribers.get(event_type, [])
         errors: list[Exception] = []
 
         for handler in handlers:
@@ -256,3 +301,23 @@ class EventBus:
                 error_count=len(errors),
                 errors=str(errors),
             )
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Shut down all async executor threads. Call at process exit."""
+        for executor in self._executors:
+            executor.shutdown(wait=wait)
+        self._executors.clear()
+
+
+def _run_async_handler(handler: Callable[[Event], None], event: Event) -> None:
+    """Wrapper executed inside the async subscriber's ThreadPoolExecutor."""
+    try:
+        handler(event)
+    except Exception as exc:  # noqa: BLE001
+        _log.error(
+            "Async subscriber %s failed for event %s(id=%s): %r",
+            getattr(handler, "__qualname__", repr(handler)),
+            type(event).__name__,
+            event.event_id,
+            exc,
+        )

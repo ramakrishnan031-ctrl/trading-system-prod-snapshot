@@ -126,6 +126,7 @@ class SignalProcessor:
         notifier=None,                      # TelegramNotifier; optional
         mode: str = "LIVE",                 # session mode label for alert title
         shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
+        rate_limiter=None,                  # FIX-007: optional RateLimiter for order pre-check
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -151,6 +152,7 @@ class SignalProcessor:
         self._notifier = notifier                          # Telegram alerts (optional)
         self._mode = mode                                  # session mode label
         self._shadow_tracker = shadow_tracker              # B.5 / Audit 5.1
+        self._rate_limiter = rate_limiter                  # FIX-007: optional pre-check
 
         # Lifecycle
         self._running = False
@@ -262,6 +264,18 @@ class SignalProcessor:
         """Wraps _process_one; catches all exceptions so workers never die."""
         signal_id = signal_tuple[0] if signal_tuple else "unknown"
         symbol = signal_tuple[2] if len(signal_tuple) > 2 else "unknown"
+
+        # FIX-007: non-blocking rate-limiter pre-check. If the order token bucket
+        # is exhausted, re-enqueue the signal and return immediately rather than
+        # blocking the worker thread on adapter.place_order()'s acquire() call.
+        if self._rate_limiter is not None:
+            if not self._rate_limiter.try_acquire("order"):
+                self._log.warning(
+                    "rate_limiter: order bucket exhausted for %s (%s); re-queuing",
+                    signal_id, symbol,
+                )
+                self._queue.put(signal_tuple)
+                return
 
         with self._active_lock:
             self._active_workers += 1

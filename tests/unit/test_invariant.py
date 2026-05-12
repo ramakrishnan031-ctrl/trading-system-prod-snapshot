@@ -598,6 +598,64 @@ def test_inv7_negative_guard_ignores_sub_paise_negative() -> None:
 
 
 # ------------------------------------------------------------------------------
+# FIX-005: _guard_non_negative rounding bug
+# ------------------------------------------------------------------------------
+
+def test_fix005_minus_0_014_raises_with_tolerance_0_01() -> None:
+    """
+    FIX-005 regression: value=-0.014, tolerance=0.01 must RAISE.
+
+    Old code: round(-0.014, 2) == -0.01, and -0.01 >= -0.01 is True → silently
+    passes a genuinely-negative value. Fixed by removing rounding from guard.
+    """
+    from capital.invariant import CapitalInvariantViolation, _guard_non_negative
+
+    raised = False
+    try:
+        _guard_non_negative(
+            field_name="margin_available",
+            value=-0.014,
+            bucket="INTRADAY",
+            original_mutation_type="RELEASE",
+            reservation_id=None,
+            margin_available=-0.014,
+            margin_reserved=0.0,
+            margin_used=0.0,
+            cash_floor=0.0,
+            realized_pnl_today=0.0,
+            tolerance=0.01,
+        )
+    except CapitalInvariantViolation:
+        raised = True
+    assert raised, "FIX-005: -0.014 with tolerance=0.01 must raise CapitalInvariantViolation"
+    print("  OK FIX-005: -0.014 raises (was silently passing due to rounding bug)")
+
+
+def test_fix005_minus_0_009_passes_with_tolerance_0_01() -> None:
+    """
+    FIX-005: value=-0.009, tolerance=0.01 must PASS (within tolerance).
+
+    -0.009 >= -0.01 is True → should not raise.
+    """
+    from capital.invariant import _guard_non_negative
+
+    _guard_non_negative(
+        field_name="margin_available",
+        value=-0.009,
+        bucket="INTRADAY",
+        original_mutation_type="RELEASE",
+        reservation_id=None,
+        margin_available=-0.009,
+        margin_reserved=0.0,
+        margin_used=0.0,
+        cash_floor=0.0,
+        realized_pnl_today=0.0,
+        tolerance=0.01,
+    )
+    print("  OK FIX-005: -0.009 passes with tolerance=0.01 (within tolerance)")
+
+
+# ------------------------------------------------------------------------------
 # Standalone runner
 # ------------------------------------------------------------------------------
 
@@ -636,6 +694,8 @@ def run_all_tests() -> int:
         test_inv7_half_paise_drift_passes,
         test_inv7_rupee_breach_still_raises,
         test_inv7_negative_guard_ignores_sub_paise_negative,
+        test_fix005_minus_0_014_raises_with_tolerance_0_01,
+        test_fix005_minus_0_009_passes_with_tolerance_0_01,
     ]
 
     print("=" * 70)

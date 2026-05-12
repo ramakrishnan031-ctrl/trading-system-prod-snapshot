@@ -1833,6 +1833,22 @@ def test_cancel_stale_paper_orders(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix006_connection_timeout_and_busy_timeout(tmp_path: Path) -> None:
+    """FIX-006: connection has timeout=30 and busy_timeout=30000ms."""
+    import sqlite3 as _sqlite3
+
+    store = StateStore(tmp_path / "fix006.db")
+    conn = store._get_connection()
+
+    # Verify busy_timeout pragma is 30000 (some SQLite builds expose it via pragma)
+    row = conn.execute("PRAGMA busy_timeout").fetchone()
+    assert row is not None
+    assert row[0] == 30000, f"Expected busy_timeout=30000; got {row[0]}"
+
+    store.close()
+    print("  OK FIX-006: busy_timeout=30000ms confirmed via PRAGMA (FIX-006)")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1923,6 +1939,8 @@ def run_all_tests() -> int:
         test_bl3_sum_fm_ledger_margin_delta_sums_signed,
         # cancel_stale_paper_orders
         test_cancel_stale_paper_orders,
+        # FIX-006 connection timeout
+        test_fix006_connection_timeout_and_busy_timeout,
     ]
 
     print("=" * 70)

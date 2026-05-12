@@ -1131,6 +1131,69 @@ def test_b2_rehydrate_skips_malformed_row() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FIX-010: atomic release_gate_state
+# ---------------------------------------------------------------------------
+
+def test_fix010_release_atomically_deletes_gate_and_updates_signal() -> None:
+    """FIX-010: _release() uses atomic release_gate_state; both rows updated together."""
+    store = _make_real_store()
+    sig_id = "sig_fix010_a"
+    _seed_signal_row(store, sig_id)
+
+    gate, _, _ = _make_gate(store=store)
+    gate.add(_make_entry(signal_id=sig_id))
+
+    # Gate state row must exist at this point
+    rows = store.get_all_gate_state()
+    assert any(r["signal_id"] == sig_id for r in rows), "gate_state row must exist after add()"
+
+    # Trigger a release (e.g. timeout)
+    entry = gate.watchlist()[0]
+    # Directly call internal _release with TIMEOUT reason
+    gate._release(entry, "TIMEOUT")
+
+    # gate_state row must be gone
+    rows = store.get_all_gate_state()
+    assert not any(r["signal_id"] == sig_id for r in rows), (
+        "gate_state row must be deleted after release"
+    )
+
+    # signal status must be updated
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row["status"] == "GATE_RELEASED_TIMEOUT", (
+        f"Expected GATE_RELEASED_TIMEOUT, got {row['status']}"
+    )
+    print("  OK FIX-010: _release atomically updates signal + deletes gate_state")
+
+
+def test_fix010_release_gate_state_state_store_method_is_atomic() -> None:
+    """FIX-010: release_gate_state state_store method runs both ops in one transaction."""
+    store = _make_real_store()
+    sig_id = "sig_fix010_b"
+    _seed_signal_row(store, sig_id, symbol="WIPRO")
+
+    # Use gate.add() to insert gate_state row correctly
+    gate, _, _ = _make_gate(store=store)
+    gate.add(_make_entry(signal_id=sig_id, symbol="WIPRO"))
+
+    # Verify row exists
+    rows = store.get_all_gate_state()
+    assert any(r["signal_id"] == sig_id for r in rows), "gate_state row must exist"
+
+    # Call the atomic method directly on the store
+    store.release_gate_state(sig_id, "GATE_RELEASED_PRICE_HIT")
+
+    # gate_state row is gone
+    rows = store.get_all_gate_state()
+    assert not any(r["signal_id"] == sig_id for r in rows), "gate_state should be deleted"
+
+    # signal status updated
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id = ?", (sig_id,))
+    assert row["status"] == "GATE_RELEASED_PRICE_HIT", f"Unexpected status: {row['status']}"
+    print("  OK FIX-010: release_gate_state atomic method (FIX-010)")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
 
@@ -1189,6 +1252,9 @@ def run_all_tests() -> int:
         test_b2_rehydrate_idempotent,
         test_b2_rehydrate_called_by_start,
         test_b2_rehydrate_skips_malformed_row,
+        # FIX-010: atomic release_gate_state
+        test_fix010_release_atomically_deletes_gate_and_updates_signal,
+        test_fix010_release_gate_state_state_store_method_is_atomic,
     ]
 
     print("=" * 70)

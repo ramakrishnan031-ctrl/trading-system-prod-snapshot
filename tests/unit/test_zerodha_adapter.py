@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import sys
 import logging
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -1454,6 +1455,58 @@ def test_paper_synth_allows_fill_within_deviation_threshold() -> None:
     print("  OK normal SL fill (1.3% deviation from trigger) passes sanity guard")
 
 
+# ── FIX-001: _fetch_ltp returns None on failure; no false SELL fill ─────────
+
+def test_fix001_ltp_failure_does_not_trigger_sell_fill() -> None:
+    """
+    FIX-001: when quote_provider raises, _fetch_ltp must return None
+    and _synth_fill must NOT publish any OrderFilled (no false SELL SL trigger).
+    """
+    bus = EventBus()
+    captured: list[OrderFilled] = []
+    bus.subscribe(OrderFilled, lambda e: captured.append(e))
+
+    def _raising_provider(syms):
+        raise RuntimeError("quote service down")
+
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, bus=bus,
+        paper_auto_fill_delay_sec=0.0,
+        paper_ltp_gating_enabled=True,
+        paper_ltp_gating_max_wait_sec=0.3,   # short poll window so test finishes fast
+        paper_ltp_gating_poll_sec=0.05,
+        quote_provider=_raising_provider,
+    )
+
+    # Place a SELL SL-M order. With LTP fetch always failing, no fill should occur.
+    adapter.place_order(
+        symbol="TESTSL", side="SELL", qty=10, price=0.0,
+        order_type="SL-M", intent="INTRADAY",
+        trigger_price=500.0,
+    )
+
+    # Wait longer than max_wait_sec to confirm no spurious fill
+    import time as _time
+    _time.sleep(0.5)
+
+    assert len(captured) == 0, (
+        f"FIX-001 FAIL: expected 0 OrderFilled events, got {len(captured)}. "
+        f"ltp_failure must NOT trigger a SELL fill at price 0.0"
+    )
+    print("  OK FIX-001: quote_provider exception → no false SELL SL fill")
+
+
+def test_fix001_fetch_ltp_returns_none_not_zero() -> None:
+    """_fetch_ltp returns None (not 0.0) when quote_provider raises."""
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True,
+        quote_provider=lambda s: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    result = adapter._fetch_ltp("ANYSTOCK")
+    assert result is None, f"FIX-001: expected None from _fetch_ltp on failure, got {result!r}"
+    print("  OK FIX-001: _fetch_ltp returns None on exception (not 0.0)")
+
+
 def test_paper_synth_pnl_sign_correct_for_long_sl_hit() -> None:
     """
     Verify P&L is NEGATIVE for LONG when SL fires below entry.
@@ -1699,6 +1752,93 @@ def test_bl6_non_429_error_does_not_penalize() -> None:
     assert raised is not None, "Expected BrokerTimeoutError for non-429 NetworkException"
     assert calls == [], f"penalize should NOT be called for non-429, got {calls}"
     print("  OK BL-6: non-429 error flows through normal translation, no penalize")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-009: get_server_time uses HTTP Date header
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix009_get_server_time_uses_date_header() -> None:
+    """FIX-009: get_server_time() returns broker Date header when present."""
+    from datetime import timezone as _tz
+
+    kite = MockKite()
+
+    class MockSession:
+        def __init__(self):
+            self.hooks = {}
+
+    class MockResponse:
+        headers = {"Date": "Tue, 12 May 2026 09:15:00 GMT"}
+
+    # Install a session with hooks support
+    mock_session = MockSession()
+    kite.reqsession = mock_session
+
+    adapter, _, _, _, _ = _make_adapter(kite=kite, paper=False)
+
+    # Simulate the quote call firing the hook
+    fire_hooks = mock_session.hooks.get("response", [])
+    assert len(fire_hooks) == 1, "Response hook should be installed"
+
+    # Fire the hook with a mock response
+    fire_hooks[0](MockResponse())
+
+    # Now _last_response_date should be set — Date was "09:15:00 GMT"
+    # The hook converts to IST so: 09:15 UTC = 14:45 IST
+    captured = adapter._last_response_date
+    assert captured is not None, "Date header not captured by hook"
+    assert captured.tzinfo is not None, "Captured date should be timezone-aware"
+    # In UTC the time is 09:15:00
+    captured_utc = captured.astimezone(timezone.utc)
+    assert captured_utc.hour == 9 and captured_utc.minute == 15, (
+        f"Expected 09:15 UTC from 'Tue, 12 May 2026 09:15:00 GMT'; got {captured_utc}"
+    )
+    print("  OK FIX-009: response hook captures HTTP Date header")
+
+
+def test_fix009_get_server_time_falls_back_to_now_ist_on_miss() -> None:
+    """FIX-009: get_server_time() falls back to now_ist() when no Date header captured."""
+    from core.time_authority import now_ist
+
+    kite = MockKite()  # no reqsession → hook not installed
+    adapter, _, rl, _, _ = _make_adapter(kite=kite, paper=False)
+
+    # Force _last_response_date to remain None (no hook fired)
+    adapter._last_response_date = None
+
+    # Patch quote to not trigger anything
+    t_before = now_ist()
+    result = adapter.get_server_time()
+    t_after = now_ist()
+
+    assert t_before <= result <= t_after, (
+        "Fallback should return now_ist() within the call window"
+    )
+    print("  OK FIX-009: falls back to now_ist() when no Date header captured")
+
+
+def test_fix009_paper_mode_returns_now_ist() -> None:
+    """FIX-009: paper mode still returns now_ist() (no broker call)."""
+    from core.time_authority import now_ist
+    kite = MockKite()
+    quote_called = []
+    original_quote = kite.quote
+
+    def spy_quote(*args, **kwargs):
+        quote_called.append(args)
+        return original_quote(*args, **kwargs)
+
+    kite.quote = spy_quote
+    adapter, _, _, _, _ = _make_adapter(kite=kite, paper=True)
+
+    t_before = now_ist()
+    result = adapter.get_server_time()
+    t_after = now_ist()
+
+    assert t_before <= result <= t_after
+    assert quote_called == [], "Paper mode must NOT call kite.quote()"
+    print("  OK FIX-009: paper mode returns now_ist() without broker call")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

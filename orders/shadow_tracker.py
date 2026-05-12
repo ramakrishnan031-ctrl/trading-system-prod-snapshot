@@ -53,6 +53,7 @@ from core.events import EodSquareoffComplete, EventBus, PositionClosed
 from core.logger import log_exception
 from core.time_authority import ist_timezone, now_ist, today_ist
 from orders.order_reconciler import _PRODUCT_TO_INTENT  # noqa: F401 — exposed for cross-module consistency
+from orders.price_math import calc_sl_price, calc_tgt_price
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -773,11 +774,7 @@ def _derive_sl_tgt_from_strategy(
         sl_method = "FIXED_PCT"  # ATR not implemented; fallback
 
     if sl_method == "FIXED_PCT":
-        sl_pct = float(strategy.sl_pct)
-        if direction == "LONG":
-            sl = entry_price * (1.0 - sl_pct)
-        else:
-            sl = entry_price * (1.0 + sl_pct)
+        sl = calc_sl_price(direction, entry_price, float(strategy.sl_pct))
     else:
         sl = entry_price  # unknown method; use entry as fallback
 
@@ -802,12 +799,7 @@ def _derive_sl_tgt_from_strategy(
         else:
             tgt = entry_price * (1.0 - tgt_pct)
     elif tgt_method == "RISK_REWARD":
-        sl_dist = abs(entry_price - sl)
-        ratio = float(strategy.tgt_risk_reward)
-        if direction == "LONG":
-            tgt = entry_price + sl_dist * ratio
-        else:
-            tgt = entry_price - sl_dist * ratio
+        tgt = calc_tgt_price(direction, entry_price, sl, float(strategy.tgt_risk_reward))
     else:
         # Unknown method; use 2x sl_distance as fallback
         sl_dist = abs(entry_price - sl)

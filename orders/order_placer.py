@@ -197,6 +197,7 @@ from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderInsertSpec, OrderManager
+from orders.price_math import calc_tgt_price
 from orders.smart_tgt_manager import SmartTgtManager
 
 
@@ -381,8 +382,10 @@ class OrderPlacer:
         self._fill_map: Dict[str, _FillEntry] = {}
         self._fill_map_lock = threading.Lock()
 
-        # OP6: subscribe to OrderFilled
-        self._bus.subscribe(OrderFilled, self._on_order_filled)
+        # OP6: subscribe to OrderFilled — async_dispatch=True (FIX-003) so that
+        # paper-synth thread publishing OrderFilled does not deadlock with the
+        # handler's own place_order() calls on the same adapter resources.
+        self._bus.subscribe(OrderFilled, self._on_order_filled, async_dispatch=True)
         # Audit #7: also subscribe to OrderStatusChanged to catch the
         # partial-fill-then-cancel gap. OrderFilled only fires on COMPLETE
         # (OM8); a CANCELLED / REJECTED / FAILED terminal with qty_filled > 0
@@ -1624,12 +1627,8 @@ class OrderPlacer:
             return price
 
     def _compute_tgt(self, side: str, entry_price: float, sl_price: float) -> float:
-        """OP3: compute tgt_price using R:R ratio."""
-        risk = abs(entry_price - sl_price)
-        if side == "BUY":
-            return entry_price + risk * self._rr_ratio
-        else:
-            return entry_price - risk * self._rr_ratio
+        """OP3: compute tgt_price using R:R ratio (delegates to price_math, FIX-004)."""
+        return calc_tgt_price(side, entry_price, sl_price, self._rr_ratio)
 
     def _handle_placement_failure(
         self,

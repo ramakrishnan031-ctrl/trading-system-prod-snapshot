@@ -83,7 +83,7 @@ _CONNECTION_PRAGMAS = (
     "PRAGMA synchronous = NORMAL",      # WAL + NORMAL is durable enough for our use
     "PRAGMA foreign_keys = ON",         # Per-connection; SQLite requires this
     "PRAGMA temp_store = MEMORY",
-    "PRAGMA busy_timeout = 5000",       # Wait up to 5s on a locked DB
+    "PRAGMA busy_timeout = 30000",      # Wait up to 30s on a locked DB (FIX-006)
 )
 
 
@@ -189,6 +189,7 @@ class StateStore:
             str(self._db_path),
             isolation_level=None,       # We manage transactions explicitly via BEGIN/COMMIT
             check_same_thread=True,     # Catch accidental cross-thread use immediately
+            timeout=30,                 # Connection-level wait for DB lock (FIX-006)
         )
         # Row factory: tuple-by-default but accessible by column name as well
         conn.row_factory = sqlite3.Row
@@ -1431,6 +1432,24 @@ class StateStore:
         with self.transaction() as cur:
             cur.execute(
                 "DELETE FROM gate_state WHERE signal_id = ?", (signal_id,),
+            )
+
+    def release_gate_state(self, signal_id: str, status: str, reason: str = "") -> None:
+        """
+        FIX-010: atomically delete the gate_state row AND update the signal
+        status in a single transaction, so a crash between the two cannot
+        leave a zombie gate_state with a stale signal status.
+
+        Equivalent to calling delete_gate_state() then update_signal_status()
+        but wrapped in one BEGIN/COMMIT.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                "DELETE FROM gate_state WHERE signal_id = ?", (signal_id,),
+            )
+            cur.execute(
+                "UPDATE signals SET status = ?, rejection_reason = ? WHERE signal_id = ?",
+                (status, reason if reason else None, signal_id),
             )
 
     def get_all_gate_state(self) -> list[dict]:

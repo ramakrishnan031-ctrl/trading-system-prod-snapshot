@@ -17,6 +17,8 @@ Or:  python tests/unit/test_events.py  (standalone mode)
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -407,6 +409,119 @@ def test_eod_squareoff_complete_defaults() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# async_dispatch (FIX-003)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_async_dispatch_handler_is_called() -> None:
+    """async_dispatch=True subscriber is eventually invoked (FIX-003)."""
+    bus = _make_bus()
+    called = threading.Event()
+
+    def async_handler(event: OrderFilled) -> None:
+        called.set()
+
+    bus.subscribe(OrderFilled, async_handler, async_dispatch=True)
+    bus.publish(OrderFilled(source_module="test", symbol="INFY"))
+    assert called.wait(timeout=2.0), "async_dispatch subscriber was not called within 2s"
+    bus.shutdown()
+    print("  OK async_dispatch subscriber invoked (FIX-003)")
+
+
+def test_async_dispatch_does_not_block_publisher() -> None:
+    """publish() returns before async_dispatch handler finishes (FIX-003)."""
+    bus = _make_bus()
+    started = threading.Event()
+    finished = threading.Event()
+
+    def slow_handler(event: OrderFilled) -> None:
+        started.set()
+        time.sleep(0.1)
+        finished.set()
+
+    bus.subscribe(OrderFilled, slow_handler, async_dispatch=True)
+    t_before = time.monotonic()
+    bus.publish(OrderFilled(source_module="test", symbol="TCS"))
+    elapsed = time.monotonic() - t_before
+    assert elapsed < 0.05, f"publish() blocked for {elapsed:.3f}s — async_dispatch not working"
+    assert finished.wait(timeout=2.0), "handler never finished"
+    bus.shutdown()
+    print("  OK async_dispatch does not block publisher (FIX-003)")
+
+
+def test_async_dispatch_exception_does_not_raise_to_publisher() -> None:
+    """async_dispatch handler exception must NOT raise EventDispatchError to caller (FIX-003)."""
+    bus = _make_bus()
+    done = threading.Event()
+
+    def failing_handler(event: OrderFilled) -> None:
+        done.set()
+        raise RuntimeError("intentional async failure")
+
+    bus.subscribe(OrderFilled, failing_handler, async_dispatch=True)
+    # publish must not raise
+    bus.publish(OrderFilled(source_module="test", symbol="WIPRO"))
+    done.wait(timeout=2.0)  # wait for handler to run (and fail)
+    bus.shutdown()
+    print("  OK async_dispatch exception does not raise to publisher (FIX-003)")
+
+
+def test_async_and_sync_subscribers_coexist() -> None:
+    """Sync and async subscribers on same event type both receive it (FIX-003)."""
+    bus = _make_bus()
+    sync_called = []
+    async_called = threading.Event()
+
+    def sync_handler(event: OrderFilled) -> None:
+        sync_called.append(event.symbol)
+
+    def async_handler(event: OrderFilled) -> None:
+        async_called.set()
+
+    bus.subscribe(OrderFilled, sync_handler)
+    bus.subscribe(OrderFilled, async_handler, async_dispatch=True)
+    bus.publish(OrderFilled(source_module="test", symbol="RELIANCE"))
+    assert sync_called == ["RELIANCE"], "sync subscriber not called"
+    assert async_called.wait(timeout=2.0), "async subscriber not called"
+    bus.shutdown()
+    print("  OK sync + async subscribers coexist on same event type (FIX-003)")
+
+
+def test_order_placer_subscribes_with_async_dispatch() -> None:
+    """OrderPlacer must subscribe to OrderFilled with async_dispatch=True (FIX-003)."""
+    bus = _make_bus()
+    # After subscription, the OrderFilled key should appear in _async_subscribers
+    # We test this by verifying there are async subscribers after OrderPlacer construction.
+    from unittest.mock import MagicMock
+    from core.events import OrderStatusChanged
+
+    # Build minimal mocks to construct OrderPlacer
+    mock_adapter = MagicMock()
+    mock_fm = MagicMock()
+    mock_ks = MagicMock()
+    mock_store = MagicMock()
+    mock_store.get_db_path.return_value = ":memory:"
+
+    import logging
+    from core.config_loader import OrderPlacerConfig
+    from orders.order_placer import OrderPlacer
+
+    op = OrderPlacer(
+        adapter=mock_adapter,
+        fund_manager=mock_fm,
+        kill_switch=mock_ks,
+        state_store=mock_store,
+        bus=bus,
+        logger=logging.getLogger("test_op_fix003"),
+        cfg=OrderPlacerConfig(),
+    )
+    assert OrderFilled in bus._async_subscribers, (
+        "OrderPlacer must register OrderFilled with async_dispatch=True"
+    )
+    bus.shutdown()
+    print("  OK OrderPlacer subscribes OrderFilled with async_dispatch=True (FIX-003)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -436,6 +551,11 @@ def run_all_tests() -> int:
         test_order_state_changed_typed_fields,
         test_eod_squareoff_complete_typed_fields,
         test_eod_squareoff_complete_defaults,
+        test_async_dispatch_handler_is_called,
+        test_async_dispatch_does_not_block_publisher,
+        test_async_dispatch_exception_does_not_raise_to_publisher,
+        test_async_and_sync_subscribers_coexist,
+        test_order_placer_subscribes_with_async_dispatch,
     ]
 
     print("=" * 70)

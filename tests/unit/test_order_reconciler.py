@@ -1698,6 +1698,183 @@ def test_bl3_integration_check7_to_drift_handler_counter_increments(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# CHECK 9: MISSING_EXITS (FIX-002)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_check9_missing_exits_fires_soft_kill(tmp_path: Path) -> None:
+    """FIX-002: OPEN trade has local SL order not present in broker open orders
+    → MISSING_EXITS action returned + soft_kill() called."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_me1", symbol="INFY", direction="LONG", status="OPEN")
+    # SL order in local DB (status=TRIGGER_PENDING = active, not filtered out)
+    _insert_order(store, "BROKER_SL_999", "t_me1", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=1450.0)
+
+    kill_switch = MagicMock()
+
+    # broker_orders_fn returns empty list → SL order not present on broker
+    broker_orders_fn = MagicMock(return_value=[])
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("INFY", qty=10, avg_price=1500.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 1, f"expected 1 MISSING_EXITS action; got {len(missing)}"
+    assert missing[0].trade_id == "t_me1"
+    assert missing[0].symbol == "INFY"
+    assert missing[0].tier == "UNRECOVERABLE"
+    kill_switch.soft_kill.assert_called_once()
+    call_kwargs = kill_switch.soft_kill.call_args
+    assert "MISSING_EXITS" in str(call_kwargs)
+    store.close()
+    print("  OK CHECK9 MISSING_EXITS: fires + soft_kill called (FIX-002)")
+
+
+def test_check9_skipped_when_sl_present_on_broker(tmp_path: Path) -> None:
+    """FIX-002: When broker open orders includes the SL order ID → no MISSING_EXITS."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_me2", symbol="TCS", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_200", "t_me2", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=3400.0)
+
+    kill_switch = MagicMock()
+    # Broker returns an order with matching order_id
+    broker_orders_fn = MagicMock(return_value=[{"order_id": "BROKER_SL_200"}])
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("TCS", qty=10, avg_price=3500.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 0, "SL present on broker — MISSING_EXITS must NOT fire"
+    kill_switch.soft_kill.assert_not_called()
+    store.close()
+    print("  OK CHECK9: no false-positive when SL present on broker (FIX-002)")
+
+
+def test_check9_skipped_when_no_broker_orders_fn(tmp_path: Path) -> None:
+    """FIX-002: CHECK 9 must not run when broker_orders_fn is None."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_me3", symbol="WIPRO", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_300", "t_me3", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=250.0)
+
+    kill_switch = MagicMock()
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("WIPRO", qty=10, avg_price=260.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    # No broker_orders_fn → CHECK 9 guard should skip entirely
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=None,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 0, "broker_orders_fn=None → CHECK 9 must not run"
+    kill_switch.soft_kill.assert_not_called()
+    store.close()
+    print("  OK CHECK9: skipped when broker_orders_fn=None (FIX-002)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-008: CNC overnight position bootstrap check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix008_cnc_overnight_logs_warning_when_no_local_trade(tmp_path: Path) -> None:
+    """FIX-008: broker has CNC position with no matching local OPEN trade → WARNING logged."""
+    import logging
+
+    store = _make_store(tmp_path)
+    # No trades in DB — any CNC position is unexpected
+
+    cnc_pos = _Position("HDFCBANK", qty=5, avg_price=1700.0)
+    # Attach product attribute to distinguish CNC
+    cnc_pos_dict = {"symbol": "HDFCBANK", "qty": 5, "avg_price": 1700.0, "product": "CNC"}
+
+    adapter = MagicMock()
+    # Return a dict-like position with product=CNC
+    adapter.get_positions.return_value = [cnc_pos_dict]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, notifier=notifier)
+
+    # Call the CNC check directly
+    rec._check_cnc_overnight_positions()
+
+    # notifier.send should have been called with WARNING severity
+    notifier.send.assert_called_once()
+    call_kwargs = notifier.send.call_args
+    assert "WARNING" in str(call_kwargs) or "WARNING" in str(call_kwargs[1].get("severity", ""))
+    assert "HDFCBANK" in str(call_kwargs)
+
+    store.close()
+    print("  OK FIX-008: CNC overnight position with no local trade triggers WARNING alert")
+
+
+def test_fix008_cnc_overnight_no_alert_when_local_trade_exists(tmp_path: Path) -> None:
+    """FIX-008: broker has CNC position AND matching local OPEN trade → no alert fired."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_cnc1", symbol="HDFCBANK", status="OPEN")
+
+    cnc_pos_dict = {"symbol": "HDFCBANK", "qty": 10, "avg_price": 1700.0, "product": "CNC"}
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [cnc_pos_dict]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    notifier = MagicMock()
+
+    rec = _make_reconciler(store, adapter=adapter, notifier=notifier)
+    rec._check_cnc_overnight_positions()
+
+    notifier.send.assert_not_called()
+    store.close()
+    print("  OK FIX-008: no alert when CNC position has matching local trade")
+
+
+def test_fix008_cnc_check_skips_mis_positions(tmp_path: Path) -> None:
+    """FIX-008: MIS intraday positions are not flagged by the CNC overnight check."""
+    store = _make_store(tmp_path)
+
+    mis_pos = {"symbol": "RELIANCE", "qty": 10, "avg_price": 2500.0, "product": "MIS"}
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [mis_pos]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    notifier = MagicMock()
+    rec = _make_reconciler(store, adapter=adapter, notifier=notifier)
+    rec._check_cnc_overnight_positions()
+
+    notifier.send.assert_not_called()
+    store.close()
+    print("  OK FIX-008: MIS positions are not flagged by CNC overnight check")
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 

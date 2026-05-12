@@ -96,13 +96,14 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
+import email.utils
 import random
 import socket
 import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 from kiteconnect import exceptions as kex
@@ -366,6 +367,12 @@ class ZerodhaAdapter:
         self._paper_fills: dict[str, dict] = {}
         self._paper_fills_lock: threading.Lock = threading.Lock()
         self._paper_positions: dict[str, dict] = {}
+        # FIX-009: capture the HTTP Date header from the most recent Kite API
+        # response so get_server_time() can return the broker's actual clock
+        # instead of the local RTT midpoint.
+        self._last_response_date: Optional[datetime] = None
+        self._install_date_header_hook()
+
         # ZA16a: paper needs bus to publish synthesized OrderFilled. If paper
         # is on but bus is None we degrade safely (state reaches COMPLETE via
         # synth thread; no event) and log a warning. main.py wires bus in
@@ -777,6 +784,35 @@ class ZerodhaAdapter:
             extra={"method": "set_paper_capital", "value": value},
         )
 
+    def _install_date_header_hook(self) -> None:
+        """
+        FIX-009: attach a requests response hook to kite.reqsession to
+        capture the HTTP Date header from each Kite API response.
+
+        The kiteconnect SDK exposes its internal requests.Session as
+        `kite.reqsession`.  If the attribute is absent (mocks, paper mode)
+        the hook is silently skipped.
+        """
+        session = getattr(self._kite, "reqsession", None)
+        if session is None:
+            return
+        hooks = getattr(session, "hooks", None)
+        if hooks is None:
+            return
+
+        def _capture_date(response, *args, **kwargs):
+            date_str = response.headers.get("Date", "")
+            if date_str:
+                try:
+                    # email.utils.parsedate_to_datetime handles RFC 2822
+                    parsed = email.utils.parsedate_to_datetime(date_str)
+                    from core.time_authority import ist_timezone
+                    self._last_response_date = parsed.astimezone(ist_timezone())
+                except Exception:
+                    pass
+
+        hooks.setdefault("response", []).append(_capture_date)
+
     def set_slippage_engine(self, engine: SlippageEngine) -> None:
         """
         CFG-6 (2026-04-26 audit): late-bind paper-mode slippage engine after
@@ -864,7 +900,11 @@ class ZerodhaAdapter:
         """
         if self._paper:
             return now_ist()
-        # Live: ping broker to validate connectivity; raises on failure
+        # Live: ping broker to validate connectivity; raises on failure.
+        # FIX-009: the response hook (_install_date_header_hook) captures the
+        # HTTP Date header from this call. After the quote returns we use that
+        # header as the broker clock, falling back to now_ist() if absent.
+        self._last_response_date = None  # reset before call
         try:
             self._rl.acquire(_CATEGORY_MAP["get_quote"])
             # NIFTY 50 is the canonical liquid index quote, always available
@@ -874,6 +914,9 @@ class ZerodhaAdapter:
             raise self._translate_broker_exception(exc, {}, "get_quote") from exc
         # BL-6: success in category -> reset its 429 attempt counter
         self._reset_429_attempts(_CATEGORY_MAP["get_quote"])
+        # FIX-009: prefer broker Date header; fall back to local clock on miss
+        if self._last_response_date is not None:
+            return self._last_response_date
         return now_ist()
 
     def get_quote(self, symbols: list[str]) -> dict[str, Quote]:
@@ -1402,14 +1445,16 @@ class ZerodhaAdapter:
         # without quote_provider; deviation from spec but safer than 0.0).
         if order_type == "MARKET":
             ltp = self._fetch_ltp(symbol)
-            return ltp if ltp > 0 else price
+            # FIX-001: _fetch_ltp returns None on failure; use price as fallback
+            return ltp if ltp is not None else price
 
         deadline = time.monotonic() + max(0.0, self._paper_ltp_gating_max_wait_sec)
         poll = max(0.01, self._paper_ltp_gating_poll_sec)
 
         while True:
             ltp = self._fetch_ltp(symbol)
-            if ltp > 0:
+            # FIX-001: only evaluate condition when LTP is a valid positive float
+            if ltp is not None:
                 fill = self._ltp_satisfies_condition(
                     side=side, order_type=order_type,
                     price=price, trigger_price=trigger_price, ltp=ltp,
@@ -1453,13 +1498,14 @@ class ZerodhaAdapter:
         # Unknown order_type -- do not gate; behave like legacy auto-fill.
         return price
 
-    def _fetch_ltp(self, symbol: str) -> float:
+    def _fetch_ltp(self, symbol: str) -> Optional[float]:
         """
-        Audit 6.2 helper: return latest LTP for symbol, or 0.0 on failure.
-        Failure is non-fatal -- caller falls back to legacy behaviour.
+        Audit 6.2 helper: return latest LTP for symbol, or None on failure.
+        Returns None (not 0.0) so callers can distinguish "no data" from a
+        genuine zero price, preventing false SL triggers (FIX-001).
         """
         if self._quote_provider is None:
-            return 0.0
+            return None
         try:
             quotes = self._quote_provider([symbol])
         except Exception as exc:  # noqa: BLE001 -- best-effort LTP probe
@@ -1467,8 +1513,9 @@ class ZerodhaAdapter:
                 "paper_synth.ltp_fetch_failed",
                 extra={"symbol": symbol, "error": str(exc)},
             )
-            return 0.0
+            return None
         quote = (quotes or {}).get(symbol)
         if quote is None:
-            return 0.0
-        return float(getattr(quote, "last_price", 0.0) or 0.0)
+            return None
+        ltp = float(getattr(quote, "last_price", 0.0) or 0.0)
+        return ltp if ltp > 0.0 else None

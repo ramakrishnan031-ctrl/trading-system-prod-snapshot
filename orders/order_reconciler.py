@@ -167,6 +167,9 @@ class OrderReconciler:
         """
         RC14: run startup reconciliation, subscribe events, start poll thread.
         """
+        # FIX-008: check for unexpected CNC overnight positions before trading
+        self._check_cnc_overnight_positions()
+
         # Startup reconcile before trading begins
         self.reconcile_once()
 
@@ -251,6 +254,79 @@ class OrderReconciler:
     def _now_ist(self) -> str:
         return now_ist().isoformat()
 
+    # ── FIX-008: CNC overnight position bootstrap check ───────────────────────
+
+    def _check_cnc_overnight_positions(self) -> None:
+        """
+        FIX-008: At startup, warn if the broker holds any CNC (delivery)
+        positions that have no corresponding OPEN local trade.
+
+        These are unexpected overnight carry-over positions that the system
+        did not open this session. The check is advisory (WARNING log + alert)
+        — it does NOT place exits or call soft_kill, because CNC positions may
+        be intentional positions managed outside this system.
+
+        Skips silently if adapter.get_positions() raises.
+        """
+        try:
+            positions = self._adapter.get_positions()
+        except Exception as exc:
+            self._log.warning(
+                "FIX-008 cnc_check: get_positions failed at startup: %s — skipping", exc
+            )
+            return
+
+        if not positions:
+            return
+
+        # Collect symbols with OPEN local trades for quick lookup
+        try:
+            open_trades = self._store.get_all_open_trades()
+        except Exception as exc:
+            self._log.warning(
+                "FIX-008 cnc_check: get_all_open_trades failed: %s — skipping", exc
+            )
+            return
+
+        local_symbols = {t["symbol"] for t in (open_trades or [])}
+
+        for pos in positions:
+            product = getattr(pos, "product", None) or (
+                pos.get("product", "") if isinstance(pos, dict) else ""
+            )
+            if str(product).upper() != "CNC":
+                continue
+
+            symbol = getattr(pos, "symbol", None) or (
+                pos.get("symbol", "") if isinstance(pos, dict) else ""
+            )
+            qty = getattr(pos, "qty", 0) or (
+                pos.get("qty", 0) if isinstance(pos, dict) else 0
+            )
+            if not qty:
+                continue
+
+            if symbol not in local_symbols:
+                self._log.warning(
+                    "FIX-008 CNC_OVERNIGHT: broker holds CNC position %s qty=%s "
+                    "with no matching local OPEN trade — possible overnight carry-over",
+                    symbol, qty,
+                )
+                if self._notifier is not None:
+                    try:
+                        self._notifier.send(
+                            severity="WARNING",
+                            title=f"[{self._mode}] CNC overnight position detected",
+                            body=(
+                                f"Broker holds CNC {symbol} qty={qty} with no local "
+                                f"OPEN trade. This may be an overnight carry-over. "
+                                f"Manual review required."
+                            ),
+                            source_module="order_reconciler",
+                        )
+                    except Exception as exc:
+                        self._log.error("FIX-008 notifier.send failed: %s", exc)
+
     # ── Core reconcile cycle ──────────────────────────────────────────────────
 
     def _reconcile(self) -> List[ReconciliationAction]:
@@ -331,6 +407,22 @@ class OrderReconciler:
                 )
             except BrokerAuthError:
                 self._note_auth_error(cycle_auth_errors)
+
+        # FIX-002: MISSING_EXITS — OPEN trade has SL in local DB but not on broker
+        # Runs before G5b so naked positions are caught before recovery attempts.
+        if self._broker_orders_fn is not None and raw_positions is not None:
+            try:
+                actions.extend(self._check9_missing_exits(local_trades))
+            except BrokerTimeoutError:
+                self._log.warning(
+                    "order_reconciler: check9 get_open_orders timed out; skipping (RC11)"
+                )
+            except BrokerAuthError:
+                self._note_auth_error(cycle_auth_errors)
+            except Exception as exc:
+                self._log.error(
+                    "_check9_missing_exits unhandled error: %s", exc, exc_info=True
+                )
 
         # G5b: CRASH_RECOVERY_SL — missing SL on open trades (RC7)
         for trade in local_trades:
@@ -697,6 +789,84 @@ class OrderReconciler:
                     action_taken="logged; manual intervention required",
                     success=True,
                 ))
+        return actions
+
+    # ── CHECK 9: MISSING_EXITS (FIX-002) ─────────────────────────────────────
+
+    def _check9_missing_exits(
+        self, local_trades: list
+    ) -> List[ReconciliationAction]:
+        """
+        FIX-002: For each OPEN local trade, verify the local SL order's
+        broker_order_id appears in broker's open-order list.
+
+        Distinct from G5b (which checks for a missing LOCAL SL record).
+        This check catches: local DB has an SL row but the broker order was
+        silently cancelled/expired — a naked position with no protective leg.
+
+        On detection: CRITICAL log + soft_kill(). Does not auto-place a new
+        SL order (that is G5b's job on the next cycle once soft_kill clears).
+
+        Only runs when broker_orders_fn is available (same guard as CHECK 6).
+        """
+        actions: List[ReconciliationAction] = []
+
+        broker_open = self._broker_orders_fn()
+        broker_order_ids = {
+            str(o.get("order_id", "")) for o in (broker_open or [])
+            if o.get("order_id")
+        }
+
+        for trade in local_trades:
+            trade_id = trade["trade_id"]
+            symbol = trade["symbol"]
+
+            sl_row = self._store.get_sl_order_for_trade(trade_id)
+            if sl_row is None:
+                # G5b handles this (no local SL record at all)
+                continue
+
+            broker_sl_id = str(sl_row.get("order_id") or sl_row.get("broker_order_id") or "")
+            if not broker_sl_id:
+                # SL row exists but has no broker ID yet (just placed this cycle) — skip
+                continue
+
+            if broker_sl_id in broker_order_ids:
+                # SL order is live on the broker — healthy
+                continue
+
+            # Naked position: local SL record exists but broker has no matching order
+            log = bind_trade(self._log, trade_id=trade_id)
+            log.critical(
+                "CHECK9 MISSING_EXITS: trade_id=%s symbol=%s sl_order_id=%s "
+                "found in local DB but NOT in broker open orders — naked position",
+                trade_id, symbol, broker_sl_id,
+            )
+
+            try:
+                self._ks.soft_kill(
+                    reason=(
+                        f"MISSING_EXITS: naked position {symbol} "
+                        f"trade_id={trade_id} sl_order={broker_sl_id}"
+                    ),
+                    triggered_by="order_reconciler",
+                )
+            except Exception as exc:
+                log.error("check9: soft_kill failed: %s", exc)
+
+            actions.append(ReconciliationAction(
+                check_name="MISSING_EXITS",
+                tier="UNRECOVERABLE",
+                symbol=symbol,
+                trade_id=trade_id,
+                description=(
+                    f"OPEN trade {trade_id} has SL order {broker_sl_id} "
+                    f"in local DB but NOT found in broker open orders"
+                ),
+                action_taken="CRITICAL logged; soft_kill triggered",
+                success=True,
+            ))
+
         return actions
 
     # ── G5b: CRASH_RECOVERY_SL ───────────────────────────────────────────────

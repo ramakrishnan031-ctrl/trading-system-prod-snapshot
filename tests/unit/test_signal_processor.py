@@ -1738,6 +1738,89 @@ def test_b5_is_tracking_raises_fails_closed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FIX-007: rate_limiter pre-check
+# ---------------------------------------------------------------------------
+
+class _MockRateLimiter:
+    def __init__(self, permit: bool = True) -> None:
+        self.permit = permit
+        self.calls: list = []
+
+    def try_acquire(self, bucket: str) -> bool:
+        self.calls.append(bucket)
+        return self.permit
+
+
+def test_fix007_rate_limiter_exhausted_requeues_signal() -> None:
+    """FIX-007: when rate_limiter.try_acquire returns False, signal is re-queued,
+    pipeline is skipped, and the queue still contains the signal."""
+    store, _ = _make_store()
+    sig_id = "sig_rl_001"
+    _insert_queued_signal(store, sig_id)
+
+    sq = queue.Queue(maxsize=100)
+    rl = _MockRateLimiter(permit=False)
+
+    proc, _, _ = _make_proc(store=store, sq=sq)
+    proc._rate_limiter = rl
+
+    signal_tup = _now_tup(sig_id)
+    proc._process_one_safe(signal_tup)
+
+    # Signal status must NOT have been advanced (no PROCESSING/PLACEMENT_FAILED)
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] == "QUEUED", f"Expected QUEUED, got {row['status']}"
+
+    # Signal must have been re-enqueued
+    assert not sq.empty(), "Signal must be re-queued when rate_limiter exhausted"
+    requeued = sq.get_nowait()
+    assert requeued[0] == sig_id
+
+    # try_acquire must have been called with 'order'
+    assert rl.calls == ["order"], f"Unexpected try_acquire calls: {rl.calls}"
+
+    # active_workers counter must NOT have been incremented (returned before)
+    assert proc._active_workers == 0
+    print("  OK FIX-007: rate_limiter exhausted -> signal re-queued, pipeline skipped")
+
+
+def test_fix007_rate_limiter_permitted_proceeds_normally() -> None:
+    """FIX-007: when rate_limiter.try_acquire returns True, pipeline proceeds normally."""
+    store, _ = _make_store()
+    sig_id = "sig_rl_002"
+    _insert_queued_signal(store, sig_id)
+
+    rl = _MockRateLimiter(permit=True)
+    proc, _, _ = _make_proc(store=store)
+    proc._rate_limiter = rl
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    # try_acquire was called
+    assert rl.calls == ["order"]
+    # Signal advanced beyond QUEUED
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] != "QUEUED", "Signal should advance when rate_limiter permits"
+    print("  OK FIX-007: rate_limiter=permit -> pipeline proceeds (FIX-007)")
+
+
+def test_fix007_no_rate_limiter_proceeds_normally() -> None:
+    """FIX-007: rate_limiter=None (default) has no effect; pipeline runs as before."""
+    store, _ = _make_store()
+    sig_id = "sig_rl_003"
+    _insert_queued_signal(store, sig_id)
+
+    proc, _, _ = _make_proc(store=store)
+    assert proc._rate_limiter is None
+
+    _run_one(proc, _now_tup(sig_id), store=store)
+
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] != "QUEUED", "Signal should advance with no rate_limiter"
+    print("  OK FIX-007: rate_limiter=None -> pipeline unaffected (FIX-007)")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
 
@@ -1805,6 +1888,10 @@ def run_all_tests() -> int:
         test_b5_no_shadow_inning_proceeds,
         test_b5_no_shadow_tracker_wired_proceeds,
         test_b5_is_tracking_raises_fails_closed,
+        # FIX-007 rate_limiter pre-check
+        test_fix007_rate_limiter_exhausted_requeues_signal,
+        test_fix007_rate_limiter_permitted_proceeds_normally,
+        test_fix007_no_rate_limiter_proceeds_normally,
     ]
 
     print("=" * 70)
