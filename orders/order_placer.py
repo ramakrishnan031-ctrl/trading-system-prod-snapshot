@@ -1026,6 +1026,7 @@ class OrderPlacer:
                 trade_id=fill_entry.trade_id,
                 fill_entry=fill_entry,
                 qty_filled=int(event.qty_filled),
+                avg_fill_price=float(event.avg_fill_price),
                 reason="partial_entry_cancelled",
             )
 
@@ -1100,6 +1101,7 @@ class OrderPlacer:
                 trade_id=trade_id,
                 fill_entry=fill_entry,
                 qty_filled=int(event.filled_qty),
+                avg_fill_price=float(event.avg_fill_price),
                 reason="entry_fill",
             )
 
@@ -1370,6 +1372,7 @@ class OrderPlacer:
         trade_id: str,
         fill_entry: "_FillEntry",
         qty_filled: int,
+        avg_fill_price: float,
         reason: str,
     ) -> None:
         """
@@ -1383,6 +1386,10 @@ class OrderPlacer:
         qty_filled is the ACTUAL filled qty, not the requested qty. Sizing
         SL/TGT to the filled qty is the core of the naked-short fix: a
         partial fill of 100 shares produces SL+TGT at 100, never at 1000.
+
+        FIX-013: TGT price is recalculated from avg_fill_price to preserve
+        risk:reward ratio under entry slippage. SL price remains anchored to
+        the original strategy-requested level.
 
         Failure policy:
           - qty_filled ≤ 0 → skip (nothing to protect).
@@ -1404,6 +1411,30 @@ class OrderPlacer:
             )
             return
 
+        # FIX-013: Recalculate TGT from actual fill price to preserve R:R.
+        # SL stays anchored to original strategy level.
+        actual_tgt_price = calc_tgt_price(
+            direction=fill_entry.direction,
+            entry_price=avg_fill_price,
+            sl_price=fill_entry.sl_price,
+            rr_ratio=self._rr_ratio,
+        )
+        theoretical_tgt = fill_entry.tgt_price
+        tgt_delta = actual_tgt_price - theoretical_tgt
+
+        self._log.info(
+            "order_placer.tgt_recalc_from_fill_price",
+            extra={
+                "trade_id": trade_id,
+                "symbol": fill_entry.symbol,
+                "avg_fill_price": avg_fill_price,
+                "theoretical_tgt": theoretical_tgt,
+                "actual_tgt": actual_tgt_price,
+                "delta": tgt_delta,
+                "sl_price": fill_entry.sl_price,
+            },
+        )
+
         try:
             legs = self._engine.place_deferred_exits(
                 order_protocol="LIMIT_TRIPLE",
@@ -1411,7 +1442,7 @@ class OrderPlacer:
                 entry_side=fill_entry.side,
                 qty=qty_filled,
                 sl_price=fill_entry.sl_price,
-                tgt_price=fill_entry.tgt_price,
+                tgt_price=actual_tgt_price,
                 intent=fill_entry.intent,
                 trade_id=trade_id,
                 tag=trade_id,

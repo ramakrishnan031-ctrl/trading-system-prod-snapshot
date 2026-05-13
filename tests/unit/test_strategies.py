@@ -415,12 +415,15 @@ def test_short_strategy_direction() -> None:
 
 def test_positional_strategy_fields() -> None:
     """
-    S6: DELIVERY, LIMIT_TRIPLE, ATR-based SL, RISK_REWARD TGT, no smart_tgt,
+    S6: DELIVERY, LIMIT_TRIPLE, FIXED_PCT-based SL, RISK_REWARD TGT, no smart_tgt,
     entry_end 14:30.
 
     BL-16: tgt_method changed from "ATR" to "RISK_REWARD" because the ATR
     branch in signal_processor._derive_target falls back to FIXED_PCT which,
     with tgt_pct=0.0, produces target == entry (guaranteed loss).
+
+    FIX-013: sl_method updated from "ATR" to "FIXED_PCT" because ATR data
+    not yet implemented; using FIXED_PCT as interim solution.
     """
     from strategies.loader import StrategyLoader
     loader = StrategyLoader()
@@ -429,13 +432,13 @@ def test_positional_strategy_fields() -> None:
         cfg = loader.get_strategy(name)
         assert cfg.intent == "DELIVERY", "%s intent should be DELIVERY" % name
         assert cfg.order_protocol == "LIMIT_TRIPLE", "%s should use LIMIT_TRIPLE" % name
-        assert cfg.sl_method == "ATR", "%s should use ATR SL" % name
+        assert cfg.sl_method == "FIXED_PCT", "%s should use FIXED_PCT SL (FIX-013)" % name
         assert cfg.tgt_method == "RISK_REWARD", "%s should use RISK_REWARD TGT (BL-16)" % name
         assert cfg.tgt_risk_reward > 0, "%s tgt_risk_reward must be > 0" % name
         assert cfg.smart_tgt_enabled is False, "%s smart_tgt should be disabled" % name
         assert cfg.pullback_wait_enabled is False, "%s pullback_wait should be disabled" % name
         assert cfg.entry_end_time == "14:30", "%s entry_end should be 14:30" % name
-    print("  OK positional_strategy_fields: all 3 DELIVERY strategies verified (BL-16)")
+    print("  OK positional_strategy_fields: all 3 DELIVERY strategies verified (BL-16, FIX-013)")
 
 
 def test_all_15_yaml_files_validate() -> None:
@@ -488,12 +491,15 @@ def test_gap_go_pullback_disabled() -> None:
 
 
 def test_atr_sl_strategy_accepts_zero_sl_pct() -> None:
-    """ATR SL strategies may have sl_pct=0.0 (unused field, no validation error)."""
+    """
+    FIXED_PCT SL strategies have explicit sl_pct (FIX-013: was ATR,
+    now FIXED_PCT until ATR data available).
+    """
     from strategies.schema import validate_strategy
     cfg = validate_strategy(_STRATEGIES_DIR / "positional_momentum_long.yaml")
-    assert cfg.sl_method == "ATR"
-    assert cfg.sl_pct == 0.0  # 0.0 is valid when sl_method=ATR
-    print("  OK atr_sl_strategy_accepts_zero_sl_pct")
+    assert cfg.sl_method == "FIXED_PCT"
+    assert cfg.sl_pct == 0.02  # explicit 2% SL
+    print("  OK atr_sl_strategy_accepts_zero_sl_pct (FIX-013: now FIXED_PCT with 2% SL)")
 
 
 def test_loader_empty_dir_raises_error() -> None:

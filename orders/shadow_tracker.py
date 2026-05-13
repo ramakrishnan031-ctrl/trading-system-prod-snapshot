@@ -309,7 +309,31 @@ class ShadowTracker:
             )
             return
         sl_initial: float = float(sl_raw)
-        tgt_initial: float = float(tgt_raw)
+        tgt_initial_theoretical: float = float(tgt_raw)
+
+        # FIX-013: Recalculate TGT from actual entry price to preserve R:R.
+        # SL stays anchored to original strategy level (matches order_placer).
+        strategy_name = trade.get("strategy_name", "")
+        if strategy_name and self._strategies and strategy_name in self._strategies:
+            strategy = self._strategies[strategy_name]
+            if strategy.tgt_method == "RISK_REWARD":
+                tgt_initial = calc_tgt_price(
+                    direction=direction,
+                    entry_price=entry_price,
+                    sl_price=sl_initial,
+                    rr_ratio=float(strategy.tgt_risk_reward),
+                )
+                tgt_delta = tgt_initial - tgt_initial_theoretical
+                self._log.info(
+                    "shadow_tracker.tgt_recalc_from_actual_entry inning=1 trade_id=%s "
+                    "entry_actual=%.2f theoretical_tgt=%.2f actual_tgt=%.2f delta=%.2f",
+                    trade_id, entry_price, tgt_initial_theoretical, tgt_initial, tgt_delta,
+                )
+            else:
+                tgt_initial = tgt_initial_theoretical
+        else:
+            # No strategy available; use theoretical TGT from DB
+            tgt_initial = tgt_initial_theoretical
         db_exit_reason: str = trade["exit_reason"] or "EOD"
 
         # Normalise DB exit_reason to inning convention
