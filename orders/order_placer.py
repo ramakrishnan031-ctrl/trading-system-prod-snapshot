@@ -920,34 +920,34 @@ class OrderPlacer:
 
     def _on_order_status_changed(self, event: OrderStatusChanged) -> None:
         """
-        Audit #7: close the partial-fill-then-cancel gap.
+        Audit #7 + FIX-017: close entry-order terminal-status gaps.
 
         OrderFilled fires only on COMPLETE (OM8). When an entry order is
-        CANCELLED / REJECTED / FAILED with qty_filled > 0 the position
-        exists at the broker but:
-          - the capital reservation is never committed (FundManager still
-            holds the full margin reserved), and
-          - the trades row is never marked OPEN (record_entry_fill is not
-            called by _handle_entry_fill because no OrderFilled arrives).
+        CANCELLED / REJECTED / FAILED the position may or may not exist:
+          - qty_filled > 0 (partial fill, then cancel): position exists,
+            capital reservation needs commit_to_used at partial qty.
+          - qty_filled == 0 (full cancel): no position, capital reservation
+            needs release back to available (FIX-017).
 
-        This handler fills that gap for ENTRY legs by calling commit_to_used
-        with actual_qty=qty_filled — FundManager.commit_to_used handles the
-        excess return automatically (unfilled portion flows reserved →
-        available). Record the partial entry so the trade row reflects the
-        real broker state (status=OPEN, qty_filled=partial).
+        Partial-fill path (qty_filled > 0):
+          - Commit to used with actual_qty=qty_filled (excess auto-returned).
+          - Record partial entry so trade row = OPEN with partial qty.
+          - FIX-016: place exit legs (both protocols now defer exits to fill).
 
-        Exit-leg partial-cancels (SL/TGT/EOD) are logged and skipped: those
-        legs have different capital accounting (release_used, not
-        commit_to_used) and the scope of Audit #7 is entry-side only.
+        Zero-fill path (qty_filled == 0, FIX-017):
+          - Release full reservation back to available.
+          - Mark trade FAILED (no position at broker).
+
+        Exit-leg terminal statuses (SL/TGT/EOD) are logged and skipped: those
+        legs have different capital accounting (release_used, not commit/release
+        reservation) and are outside scope of Audit #7 / FIX-017.
 
         Idempotency: pops from _fill_map atomically, so OrderStatusChanged
-        and OrderFilled cannot double-commit even when both fire in quick
+        and OrderFilled cannot double-process even when both fire in quick
         succession; whichever pops first wins.
         """
         status = (event.status or "").upper()
-        if status not in ("CANCELLED", "REJECTED", "FAILED"):
-            return
-        if event.qty_filled <= 0:
+        if status not in ("CANCELLED", "REJECTED", "FAILED", "EXPIRED"):
             return
 
         internal_id = event.internal_order_id
@@ -958,7 +958,7 @@ class OrderPlacer:
 
         if fill_entry.leg != _LEG_ENTRY:
             self._log.warning(
-                "order_placer.partial_cancel_exit_leg_skipped",
+                "order_placer.terminal_status_exit_leg_skipped",
                 extra={
                     "internal_order_id": internal_id,
                     "trade_id": fill_entry.trade_id,
@@ -969,6 +969,47 @@ class OrderPlacer:
             )
             return
 
+        # FIX-017: Zero-fill cancellation path (no position created).
+        # Release full reservation and mark trade FAILED.
+        if event.qty_filled <= 0:
+            self._log.warning(
+                "order_placer.entry_cancelled_zero_fill",
+                extra={
+                    "trade_id": fill_entry.trade_id,
+                    "internal_order_id": internal_id,
+                    "status": status,
+                    "qty_requested": fill_entry.qty,
+                    "reservation_id": fill_entry.reservation_id,
+                },
+            )
+            try:
+                self._fm.release(
+                    reservation_id=fill_entry.reservation_id,
+                    reason=f"entry_{status.lower()}_zero_fill",
+                )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.zero_fill_release_failed",
+                    extra={
+                        "trade_id": fill_entry.trade_id,
+                        "reservation_id": fill_entry.reservation_id,
+                    },
+                )
+            try:
+                self._om.update_trade_status(
+                    trade_id=fill_entry.trade_id,
+                    status="FAILED",
+                )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.zero_fill_mark_failed_error",
+                    extra={"trade_id": fill_entry.trade_id},
+                )
+            return
+
+        # Partial-fill path (qty_filled > 0): position exists, commit partial.
         avg_price = float(event.avg_fill_price or 0.0)
         self._log.warning(
             "order_placer.partial_entry_cancelled",
@@ -1017,12 +1058,19 @@ class OrderPlacer:
                 extra={"trade_id": fill_entry.trade_id},
             )
 
-        # Naked-short fix (2.1): LIMIT_TRIPLE partial-fill-then-cancel leaves
-        # a live position (event.qty_filled > 0) with no SL/TGT placed yet.
-        # Place them now at the actual filled qty. Same helper as the happy
-        # path in _handle_entry_fill.
+        # FIX-016: Both protocols defer exits to fill time. Place them now at
+        # the actual filled qty. For partial-fill-then-cancel, this prevents
+        # naked short (TGT sized to requested qty > filled qty).
         if fill_entry.order_protocol == "LIMIT_TRIPLE":
             self._place_limit_triple_exits(
+                trade_id=fill_entry.trade_id,
+                fill_entry=fill_entry,
+                qty_filled=int(event.qty_filled),
+                avg_fill_price=float(event.avg_fill_price),
+                reason="partial_entry_cancelled",
+            )
+        elif fill_entry.order_protocol == "CO_PLUS_TGT":
+            self._place_co_tgt_exit(
                 trade_id=fill_entry.trade_id,
                 fill_entry=fill_entry,
                 qty_filled=int(event.qty_filled),
@@ -1093,11 +1141,20 @@ class OrderPlacer:
                 extra={"trade_id": trade_id},
             )
 
-        # Naked-short fix (2.1): for LIMIT_TRIPLE, SL + TGT are DEFERRED to fill
-        # time. Place them now at the ACTUAL filled qty (not the requested qty).
-        # CO_PLUS_TGT has SL inside the bracket; nothing to defer.
+        # FIX-016: Naked-short fix. For both protocols, exits are DEFERRED to fill
+        # time and placed at the ACTUAL filled qty (not the requested qty).
+        #   - LIMIT_TRIPLE: places both SL + TGT
+        #   - CO_PLUS_TGT: places TGT only (SL embedded in CO bracket)
         if fill_entry.order_protocol == "LIMIT_TRIPLE":
             self._place_limit_triple_exits(
+                trade_id=trade_id,
+                fill_entry=fill_entry,
+                qty_filled=int(event.filled_qty),
+                avg_fill_price=float(event.avg_fill_price),
+                reason="entry_fill",
+            )
+        elif fill_entry.order_protocol == "CO_PLUS_TGT":
+            self._place_co_tgt_exit(
                 trade_id=trade_id,
                 fill_entry=fill_entry,
                 qty_filled=int(event.filled_qty),
@@ -1608,11 +1665,201 @@ class OrderPlacer:
             },
         )
 
+    def _place_co_tgt_exit(
+        self,
+        *,
+        trade_id: str,
+        fill_entry: "_FillEntry",
+        qty_filled: int,
+        avg_fill_price: float,
+        reason: str,
+    ) -> None:
+        """
+        FIX-016: Place TGT for CO_PLUS_TGT AFTER CO ENTRY fills.
+
+        CO protocol has SL embedded in the CO bracket at the broker, so this
+        only places the TGT leg. Called from _handle_entry_fill on CO fill event.
+
+        FIX-013: TGT price is recalculated from avg_fill_price to preserve
+        risk:reward ratio under entry slippage. SL price remains anchored to
+        the original strategy-requested level (embedded in CO bracket).
+
+        Failure policy:
+          - qty_filled ≤ 0 → skip (nothing to protect).
+          - place_deferred_exits raises BrokerError → position is live with
+            NO TGT. This is a capital-protection breach. Fire kill_switch.hard_kill
+            (if injected) and log CRITICAL with grep tag
+            CO_TGT_FAILED_POSITION_UNPROTECTED. Do NOT re-raise:
+            we are inside an event handler; the reconciler is the backstop.
+          - Persist/track failures AFTER broker ack: cancel the broker order
+            best-effort, hard_kill, do not re-raise.
+        """
+        if qty_filled <= 0:
+            self._log.warning(
+                "order_placer.co_tgt_exit_skipped_zero_qty",
+                extra={"trade_id": trade_id, "reason": reason},
+            )
+            return
+
+        # FIX-013: Recalculate TGT from actual fill price to preserve R:R.
+        # SL stays anchored to original strategy level (in CO bracket).
+        actual_tgt_price = calc_tgt_price(
+            direction=fill_entry.direction,
+            entry_price=avg_fill_price,
+            sl_price=fill_entry.sl_price,
+            rr_ratio=self._rr_ratio,
+        )
+        theoretical_tgt = fill_entry.tgt_price
+        tgt_delta = actual_tgt_price - theoretical_tgt
+
+        self._log.info(
+            "order_placer.co_tgt_recalc_from_fill_price",
+            extra={
+                "trade_id": trade_id,
+                "symbol": fill_entry.symbol,
+                "avg_fill_price": avg_fill_price,
+                "theoretical_tgt": theoretical_tgt,
+                "actual_tgt": actual_tgt_price,
+                "delta": tgt_delta,
+                "sl_price": fill_entry.sl_price,
+            },
+        )
+
+        try:
+            legs = self._engine.place_deferred_exits(
+                order_protocol="CO_PLUS_TGT",
+                symbol=fill_entry.symbol,
+                entry_side=fill_entry.side,
+                qty=qty_filled,
+                sl_price=fill_entry.sl_price,  # Not used by CO protocol, but required by signature
+                tgt_price=actual_tgt_price,
+                intent=fill_entry.intent,
+                trade_id=trade_id,
+                tag=trade_id,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.co_tgt_exit_failed "
+                "CO_TGT_FAILED_POSITION_UNPROTECTED: "
+                "CO ENTRY filled but TGT placement raised; position has no take-profit protection",
+                extra={
+                    "trade_id": trade_id,
+                    "symbol": fill_entry.symbol,
+                    "qty_filled": qty_filled,
+                    "tgt_price": actual_tgt_price,
+                    "intent": fill_entry.intent,
+                    "reason": reason,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # Persist TGT row. Use product derived from intent (same as _persist_entry_orders).
+        if self._product_resolver is None:
+            self._log.critical(
+                "order_placer.co_tgt_exit_no_product_resolver "
+                "CO_TGT_FAILED_POSITION_UNPROTECTED",
+                extra={"trade_id": trade_id},
+            )
+            self._fire_hard_kill_for_unprotected_position(
+                trade_id,
+                RuntimeError("product_resolver missing; cannot persist TGT leg"),
+            )
+            return
+
+        product = self._product_resolver.resolve(fill_entry.intent)
+        exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+        specs: List[OrderInsertSpec] = [
+            OrderInsertSpec(
+                broker_order_id=legs.tgt_broker_order_id,
+                leg="TGT",
+                transaction_type=exit_side,
+                order_type="LIMIT",
+                product=product,
+                variety="regular",
+                qty_requested=qty_filled,
+                price=legs.tgt_price,
+            ),
+        ]
+
+        broker_ids_to_cancel: List[str] = [legs.tgt_broker_order_id]
+
+        try:
+            self._om.insert_orders_atomic(trade_id, specs)
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.co_tgt_exit_persist_failed "
+                "CO_TGT_FAILED_POSITION_UNPROTECTED: "
+                "TGT placed at broker but DB persist failed; cancelling leg",
+                extra={
+                    "trade_id": trade_id,
+                    "broker_order_ids": broker_ids_to_cancel,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._cancel_broker_orders(broker_ids_to_cancel)
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # Track TGT with order_monitor for fill detection.
+        now = now_ist()
+        exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+
+        try:
+            # FIX-016: TGT tracking for CO_PLUS_TGT (internal_id from place_exits result)
+            with self._fill_map_lock:
+                self._fill_map[legs.tgt_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
+                    symbol=fill_entry.symbol,
+                    qty=qty_filled,
+                    leg=_LEG_TGT,
+                    order_protocol="CO_PLUS_TGT",
+                    direction=fill_entry.direction,
+                )
+            self._order_monitor.track(
+                internal_order_id=legs.tgt_internal_id,
+                broker_order_id=legs.tgt_broker_order_id,
+                symbol=fill_entry.symbol,
+                side=exit_side,
+                qty=qty_filled,
+                expected_price=legs.tgt_price,
+                placed_at=now,
+                leg="TGT",
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.co_tgt_exit_track_failed "
+                "CO_TGT_FAILED_POSITION_UNPROTECTED: "
+                "TGT persisted but track() failed; exit may not update DB on fill",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        self._log.info(
+            "order_placer.co_tgt_exit_placed",
+            extra={
+                "trade_id": trade_id,
+                "symbol": fill_entry.symbol,
+                "qty_filled": qty_filled,
+                "tgt_broker_id": legs.tgt_broker_order_id,
+                "tgt_price": legs.tgt_price,
+                "reason": reason,
+            },
+        )
+
     def _fire_hard_kill_for_unprotected_position(
         self, trade_id: str, exc: Exception,
     ) -> None:
         """
-        Escalate: a LIMIT_TRIPLE position is live with broken SL/TGT protection.
+        Escalate: a position is live with broken exit protection.
         This is exactly the capital-safety condition kill_switch.hard_kill exists
         for. Best-effort — any failure fires a CRITICAL log and returns.
         """

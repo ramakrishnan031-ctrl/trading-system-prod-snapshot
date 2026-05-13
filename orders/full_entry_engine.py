@@ -123,20 +123,26 @@ class FullEntryEngine(EntryEngine):
         tag: str = "",
     ) -> ExitLegsResult:
         """
-        Place SL + TGT for LIMIT_TRIPLE AFTER ENTRY fill (naked-short fix 2.1).
+        FIX-016: Place exit legs AFTER ENTRY fill (naked-short fix).
 
-        Routes to LimitTripleProtocol.place_exits; rejects any other protocol
-        since only LIMIT_TRIPLE uses the two-phase flow. CO_PLUS_TGT has SL
-        embedded in the CO bracket (no deferred-exit concept).
+        Routes to protocol-specific place_exits():
+          - LIMIT_TRIPLE: places both SL + TGT (two separate orders)
+          - CO_PLUS_TGT: places TGT only (SL embedded in CO bracket)
 
         Raises:
-            ValueError if order_protocol is not "LIMIT_TRIPLE".
+            ValueError if order_protocol is not LIMIT_TRIPLE or CO_PLUS_TGT.
             BrokerError on broker-side failure (SL or TGT).
         """
-        if order_protocol != "LIMIT_TRIPLE":
+        if order_protocol == "LIMIT_TRIPLE":
+            selected = self._limit
+        elif order_protocol == "CO_PLUS_TGT":
+            selected = self._co
+        else:
             raise ValueError(
-                f"place_deferred_exits only supports LIMIT_TRIPLE, got {order_protocol!r}"
+                f"place_deferred_exits only supports LIMIT_TRIPLE or CO_PLUS_TGT, "
+                f"got {order_protocol!r}"
             )
+
         self._log.info(
             "full_entry_engine.place_deferred_exits",
             extra={
@@ -145,8 +151,17 @@ class FullEntryEngine(EntryEngine):
                 "intent": intent, "protocol": order_protocol,
             },
         )
-        return self._limit.place_exits(
-            symbol=symbol, entry_side=entry_side, qty=qty,
-            sl_price=sl_price, tgt_price=tgt_price,
-            intent=intent, trade_id=trade_id, tag=tag,
-        )
+
+        # FIX-016: CO protocol doesn't need sl_price (embedded in bracket)
+        if order_protocol == "CO_PLUS_TGT":
+            return selected.place_exits(
+                symbol=symbol, entry_side=entry_side, qty=qty,
+                tgt_price=tgt_price,
+                intent=intent, trade_id=trade_id, tag=tag,
+            )
+        else:  # LIMIT_TRIPLE
+            return selected.place_exits(
+                symbol=symbol, entry_side=entry_side, qty=qty,
+                sl_price=sl_price, tgt_price=tgt_price,
+                intent=intent, trade_id=trade_id, tag=tag,
+            )

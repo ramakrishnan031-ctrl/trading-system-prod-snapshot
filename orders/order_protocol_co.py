@@ -68,7 +68,9 @@ class CoPlusTgtProtocol(EntryEngine):
     """
     CO_PLUS_TGT entry protocol (P8/P13 default).
 
-    Places: CO entry order (with built-in SL bracket) → separate LIMIT TGT.
+    FIX-016: Two-phase placement to prevent naked short on early TGT fill.
+      Phase 1: execute() places CO entry only (with built-in SL bracket).
+      Phase 2: place_exits() places separate LIMIT TGT after entry fills.
     """
 
     def __init__(
@@ -78,6 +80,8 @@ class CoPlusTgtProtocol(EntryEngine):
     ) -> None:
         self._adapter = adapter
         self._log = logger
+
+    # ── Phase 1: CO ENTRY ONLY ────────────────────────────────────────────────
 
     def execute(
         self,
@@ -93,12 +97,14 @@ class CoPlusTgtProtocol(EntryEngine):
         tag: str = "",
     ) -> EntryResult:
         """
-        Place CO entry + separate LIMIT TGT. (OPC1–OPC7)
+        FIX-016 Phase 1: Place CO entry only. TGT deferred to fill event.
+
+        CO entry order has built-in SL bracket (trigger_price=sl_price).
+        TGT is NOT placed here — caller must use place_exits() after entry fills.
         """
         order_tag = tag or trade_id
-        exit_side = _exit_side(side)
 
-        # ── Step 1: CO entry order ─────────────────────────────────────────
+        # ── CO entry order (with built-in SL bracket) ──────────────────────
         try:
             co_placed = self._adapter.place_order(
                 symbol=symbol,
@@ -122,17 +128,59 @@ class CoPlusTgtProtocol(EntryEngine):
             )
 
         self._log.info(
-            "co_plus_tgt.co_placed",
+            "co_plus_tgt.co_placed phase1_only",
             extra={
                 "trade_id": trade_id, "symbol": symbol,
                 "broker_order_id": co_placed.broker_order_id,
                 "entry_price": entry_price,
                 "sl_price": sl_price,
+                "tgt_deferred": True,  # FIX-016 marker
             },
         )
 
-        # ── Step 2: TGT LIMIT ─────────────────────────────────────────────
-        tgt_placed = None
+        # FIX-016: Return success with empty TGT fields (will be populated in phase 2)
+        return EntryResult(
+            success=True,
+            entry_broker_order_id=co_placed.broker_order_id,
+            sl_broker_order_id="",             # OPC5: SL inside CO bracket
+            tgt_broker_order_id="",            # FIX-016: TGT not placed yet
+            entry_internal_id=co_placed.internal_order_id,
+            sl_internal_id="",
+            tgt_internal_id="",                # FIX-016: will be set in phase 2
+            order_protocol="CO_PLUS_TGT",
+        )
+
+    # ── Phase 2: TGT ON ENTRY FILL ───────────────────────────────────────────
+
+    def place_exits(
+        self,
+        *,
+        symbol: str,
+        entry_side: str,
+        qty: int,
+        tgt_price: float,
+        intent: str,
+        trade_id: str,
+        tag: str = "",
+    ) -> "ExitLegsResult":
+        """
+        FIX-016 Phase 2: Place TGT LIMIT after CO entry fills.
+
+        CO protocol has built-in SL (no separate SL order), so this only
+        places the TGT leg. Called by OrderPlacer on CO entry fill event.
+
+        Returns:
+            ExitLegsResult with tgt_broker_order_id, tgt_order_type="LIMIT".
+            sl_broker_order_id="" (SL embedded in CO bracket).
+
+        Raises:
+            BrokerError if TGT placement fails.
+        """
+        from orders.full_entry_engine import ExitLegsResult
+
+        order_tag = tag or trade_id
+        exit_side = _exit_side(entry_side)
+
         try:
             tgt_placed = self._adapter.place_order(
                 symbol=symbol,
@@ -144,58 +192,35 @@ class CoPlusTgtProtocol(EntryEngine):
                 tag=order_tag,
             )
         except BrokerError as exc:
-            # BL-8: TGT failed after CO placed. CO is live in the market;
-            # return success=False with the CO broker_order_id surfaced so the
-            # caller (OrderPlacer) can cancel it. Pre-BL-8 the CO was left
-            # live and the reconciler was expected to adopt it as an orphan
-            # position. Post-BL-8 reconciler is still a backstop, but the
-            # primary recovery path is cancel-before-FAILED in OrderPlacer.
             log_exception(self._log, exc)
-            self._log.error(
-                "co_plus_tgt.tgt_failed_co_is_live",
+            self._log.critical(
+                "co_plus_tgt.tgt_failed_phase2 CO_TGT_PLACEMENT_FAILED",
                 extra={
                     "trade_id": trade_id,
-                    "co_broker_id": co_placed.broker_order_id,
+                    "symbol": symbol,
                     "tgt_price": tgt_price,
-                    "failure_details": "TGT leg failed; CO leg placed",
+                    "error": str(exc),
                 },
             )
-            return EntryResult(
-                success=False,
-                entry_broker_order_id=co_placed.broker_order_id,
-                sl_broker_order_id="",
-                tgt_broker_order_id="",
-                entry_internal_id=co_placed.internal_order_id,
-                sl_internal_id="",
-                tgt_internal_id="",
-                order_protocol="CO_PLUS_TGT",
-                rejection_reason=f"TGT leg failed (CO leg placed={co_placed.broker_order_id}): {exc}",
-            )
+            raise  # Propagate to OrderPlacer for hard_kill (position unprotected)
 
-        # OP-LM3: empty tgt broker_order_id treated as TGT failure (MED #13 soft path)
+        # OP-LM3: empty tgt broker_order_id is a silent failure
         if not tgt_placed.broker_order_id:
-            self._log.error(
-                "co_plus_tgt.tgt_empty_broker_id_co_is_live",
+            self._log.critical(
+                "co_plus_tgt.tgt_empty_broker_id_phase2 CO_TGT_PLACEMENT_FAILED",
                 extra={
                     "trade_id": trade_id,
-                    "co_broker_id": co_placed.broker_order_id,
-                    "failure_details": "TGT leg returned empty broker_order_id; CO leg placed",
+                    "symbol": symbol,
+                    "failure_details": "TGT returned empty broker_order_id",
                 },
             )
-            return EntryResult(
-                success=False,
-                entry_broker_order_id=co_placed.broker_order_id,
-                sl_broker_order_id="",
-                tgt_broker_order_id="",
-                entry_internal_id=co_placed.internal_order_id,
-                sl_internal_id="",
-                tgt_internal_id="",
-                order_protocol="CO_PLUS_TGT",
-                rejection_reason=f"TGT leg returned empty broker_order_id (CO leg placed={co_placed.broker_order_id})",
+            raise OrderRejectedError(
+                "TGT leg returned empty broker_order_id",
+                symbol=symbol, trade_id=trade_id, leg="TGT",
             )
 
         self._log.info(
-            "co_plus_tgt.tgt_placed",
+            "co_plus_tgt.tgt_placed phase2_complete",
             extra={
                 "trade_id": trade_id, "symbol": symbol,
                 "broker_order_id": tgt_placed.broker_order_id,
@@ -203,13 +228,13 @@ class CoPlusTgtProtocol(EntryEngine):
             },
         )
 
-        return EntryResult(
-            success=True,
-            entry_broker_order_id=co_placed.broker_order_id,
-            sl_broker_order_id="",             # OPC5: SL inside CO bracket
-            tgt_broker_order_id=tgt_placed.broker_order_id,
-            entry_internal_id=co_placed.internal_order_id,
+        return ExitLegsResult(
+            sl_broker_order_id="",             # SL inside CO bracket
             sl_internal_id="",
+            sl_order_type="",
+            sl_trigger_price=0.0,
+            sl_price=0.0,
+            tgt_broker_order_id=tgt_placed.broker_order_id,
             tgt_internal_id=tgt_placed.internal_order_id,
-            order_protocol="CO_PLUS_TGT",
+            tgt_price=tgt_price,
         )

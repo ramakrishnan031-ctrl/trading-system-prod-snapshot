@@ -568,7 +568,7 @@ class TestCoPlusTgtProtocol:
         return CoPlusTgtProtocol(adapter=adapter, logger=_log()), adapter
 
     def test_happy_path_places_co_and_tgt(self) -> None:
-        """CO_PLUS_TGT: places CO order + LIMIT TGT; sl_broker_order_id is empty. (OPC1)"""
+        """FIX-016 Phase 1: execute() places CO only; TGT deferred to place_exits(). (OPC1)"""
         proto, adapter = self._make_proto()
         result = proto.execute(
             symbol="RELIANCE", side="BUY", qty=10,
@@ -579,16 +579,25 @@ class TestCoPlusTgtProtocol:
         assert result.order_protocol == "CO_PLUS_TGT"
         assert result.entry_broker_order_id
         assert result.sl_broker_order_id == ""      # OPC5: SL inside CO bracket
-        assert result.tgt_broker_order_id
-        assert len(adapter.placed) == 2
+        assert result.tgt_broker_order_id == ""     # FIX-016: TGT not placed yet
+        assert len(adapter.placed) == 1             # FIX-016: CO only
         # CO order: variety=co, order_type=SL, trigger_price=sl_price
         assert adapter.placed[0]["variety"] == "co"
         assert adapter.placed[0]["order_type"] == "SL"
         assert adapter.placed[0]["trigger_price"] == pytest.approx(2450.0)
+
+        # FIX-016 Phase 2: TGT placed via place_exits() after CO fills
+        tgt_result = proto.place_exits(
+            symbol="RELIANCE", entry_side="BUY", qty=10,
+            tgt_price=2600.0, intent="INTRADAY", trade_id="trd_co",
+        )
+        assert tgt_result.tgt_broker_order_id
+        assert tgt_result.sl_broker_order_id == ""  # SL inside CO bracket
+        assert len(adapter.placed) == 2             # CO + TGT
         # TGT: variety=regular, order_type=LIMIT
         assert adapter.placed[1]["variety"] == "regular"
         assert adapter.placed[1]["order_type"] == "LIMIT"
-        print("  OK CO_PLUS_TGT happy path: CO + TGT placed (OPC1, OPC2, OPC5)")
+        print("  OK FIX-016: CO-only in execute(), TGT in place_exits() (OPC1, OPC2, OPC5)")
 
     def test_co_failure_raises(self) -> None:
         """CO failure -> BrokerError raised; TGT not placed. (OPC4)"""
@@ -604,24 +613,30 @@ class TestCoPlusTgtProtocol:
         print("  OK CO failure -> BrokerError, nothing placed (OPC4)")
 
     def test_tgt_failure_returns_failure(self) -> None:
-        """MED #13: TGT failure after CO placed -> success=False (contract honesty).
-        CO broker_order_id is preserved in entry_broker_order_id for reconciliation."""
+        """FIX-016: TGT failure in place_exits() raises BrokerError. CO already placed."""
         adapter = _MockAdapter(raises=BrokerAuthError("auth"), fail_on_call=2)
         proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        # FIX-016: execute() only places CO, so it succeeds
         result = proto.execute(
             symbol="SBIN", side="BUY", qty=5,
             entry_price=600.0, sl_price=590.0, tgt_price=620.0,
             intent="INTRADAY", trade_id="trd_co_partial",
         )
-        assert not result.success, "MED #13: TGT leg failure must return success=False"
-        assert result.entry_broker_order_id, "CO broker_order_id preserved for reconciliation"
-        assert result.tgt_broker_order_id == ""
-        assert result.rejection_reason, "rejection_reason names which leg failed"
-        assert "TGT" in result.rejection_reason
-        print("  OK CO TGT failure -> success=False; CO broker_order_id preserved (MED #13)")
+        assert result.success, "FIX-016: execute() places CO only, so succeeds"
+        assert result.entry_broker_order_id, "CO broker_order_id returned"
+        assert result.tgt_broker_order_id == "", "FIX-016: TGT not placed yet"
+        assert len(adapter.placed) == 1, "Only CO placed"
+
+        # FIX-016: TGT failure happens in place_exits(), which raises
+        with pytest.raises(BrokerError):
+            proto.place_exits(
+                symbol="SBIN", entry_side="BUY", qty=5,
+                tgt_price=620.0, intent="INTRADAY", trade_id="trd_co_partial",
+            )
+        print("  OK FIX-016: TGT failure in place_exits() raises BrokerError")
 
     def test_short_co_trade_correct_sides(self) -> None:
-        """SHORT CO trade: CO SELL + TGT BUY. (OPC2, OPC3)"""
+        """FIX-016 Phase 1: SHORT CO entry = SELL. TGT (BUY) deferred to place_exits(). (OPC2)"""
         proto, adapter = self._make_proto()
         result = proto.execute(
             symbol="NIFTY", side="SELL", qty=5,
@@ -629,9 +644,17 @@ class TestCoPlusTgtProtocol:
             intent="INTRADAY", trade_id="trd_co_short",
         )
         assert result.success
+        assert len(adapter.placed) == 1              # FIX-016: CO only
         assert adapter.placed[0]["side"] == "SELL"   # CO entry
+
+        # FIX-016 Phase 2: TGT placed via place_exits(), exit side = BUY
+        proto.place_exits(
+            symbol="NIFTY", entry_side="SELL", qty=5,
+            tgt_price=21600.0, intent="INTRADAY", trade_id="trd_co_short",
+        )
+        assert len(adapter.placed) == 2              # CO + TGT
         assert adapter.placed[1]["side"] == "BUY"    # TGT exit
-        print("  OK CO short trade: SELL CO + BUY TGT (OPC2, OPC3)")
+        print("  OK FIX-016: SHORT CO (SELL) + deferred TGT (BUY) (OPC2, OPC3)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -669,7 +692,7 @@ class TestFullEntryEngine:
         print("  OK routes LIMIT_TRIPLE -> 1 ENTRY (FEE2 / 2.1)")
 
     def test_routes_co_plus_tgt(self) -> None:
-        """order_protocol='CO_PLUS_TGT' routes to CoPlusTgtProtocol. (FEE2)"""
+        """FIX-016: order_protocol='CO_PLUS_TGT' routes to CoPlusTgtProtocol; CO only. (FEE2)"""
         engine, adapter = self._make_engine()
         result = engine.execute(
             symbol="INFY", side="BUY", qty=5,
@@ -679,8 +702,8 @@ class TestFullEntryEngine:
         )
         assert result.success
         assert result.order_protocol == "CO_PLUS_TGT"
-        assert len(adapter.placed) == 2
-        print("  OK routes CO_PLUS_TGT -> 2 orders (FEE2)")
+        assert len(adapter.placed) == 1  # FIX-016: CO only; TGT deferred
+        print("  OK FIX-016: routes CO_PLUS_TGT -> 1 CO entry (FEE2)")
 
     def test_unknown_protocol_raises(self) -> None:
         """Unknown protocol -> ValueError. (FEE2)"""
@@ -731,17 +754,29 @@ class TestFullEntryEngine:
         assert len(adapter.placed) == 3  # ENTRY + SL + TGT after both phases
         print("  OK place_deferred_exits routes to LIMIT_TRIPLE (2.1)")
 
-    def test_place_deferred_exits_rejects_non_limit_triple(self) -> None:
-        """place_deferred_exits raises ValueError for CO_PLUS_TGT. (2.1)"""
-        engine, _ = self._make_engine()
-        with pytest.raises(ValueError, match="only supports LIMIT_TRIPLE"):
-            engine.place_deferred_exits(
-                order_protocol="CO_PLUS_TGT",
-                symbol="X", entry_side="BUY", qty=1,
-                sl_price=1.0, tgt_price=2.0,
-                intent="INTRADAY", trade_id="trd_x",
-            )
-        print("  OK place_deferred_exits rejects CO_PLUS_TGT (2.1)")
+    def test_place_deferred_exits_accepts_co_plus_tgt(self) -> None:
+        """FIX-016: place_deferred_exits routes CO_PLUS_TGT to place TGT only (no SL)."""
+        engine, adapter = self._make_engine()
+        # First place CO entry
+        engine.execute(
+            symbol="RELIANCE", side="BUY", qty=5,
+            entry_price=2500.0, sl_price=2450.0, tgt_price=2600.0,
+            intent="INTRADAY", trade_id="trd_co",
+            order_protocol="CO_PLUS_TGT",
+        )
+        assert len(adapter.placed) == 1  # CO only
+
+        # FIX-016: place_deferred_exits places TGT (no SL)
+        legs = engine.place_deferred_exits(
+            order_protocol="CO_PLUS_TGT",
+            symbol="RELIANCE", entry_side="BUY", qty=5,
+            sl_price=2450.0, tgt_price=2600.0,
+            intent="INTRADAY", trade_id="trd_co",
+        )
+        assert legs.sl_broker_order_id == ""  # SL inside CO bracket
+        assert legs.tgt_broker_order_id        # TGT placed
+        assert len(adapter.placed) == 2        # CO + TGT
+        print("  OK FIX-016: place_deferred_exits accepts CO_PLUS_TGT, places TGT only")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1010,7 +1045,7 @@ class TestOrderPlacer:
             print("  OK fill_map entry removed after fill (OP5)")
 
     def test_place_co_protocol_places_two_orders(self) -> None:
-        """CO_PLUS_TGT protocol places 2 orders (CO + TGT). (OP9)"""
+        """FIX-016: CO_PLUS_TGT protocol places CO entry only. TGT deferred to fill. (OP9)"""
         with TemporaryDirectory() as tmp:
             adapter = _MockAdapter()
             placer, store, fm, bus, _, om = self._make_placer(
@@ -1024,11 +1059,11 @@ class TestOrderPlacer:
                 intent="INTRADAY", signal_id=sig_id,
                 reservation_id="res_co",
             )
-            # CO_PLUS_TGT: CO entry + LIMIT TGT = 2 orders
-            assert len(adapter.placed) == 2
+            # FIX-016: Only CO entry placed initially
+            assert len(adapter.placed) == 1
             assert adapter.placed[0]["variety"] == "co"
             store.close()
-            print("  OK CO_PLUS_TGT places 2 orders (OP9)")
+            print("  OK FIX-016: CO_PLUS_TGT places CO entry only (OP9)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1252,19 +1287,25 @@ class TestEmptyBrokerOrderId:
         print("  OK empty CO broker_order_id -> OrderRejectedError (OP-LM3 CO)")
 
     def test_co_empty_tgt_id_is_failure(self) -> None:
-        """MED #13: CO_PLUS_TGT empty TGT broker_order_id -> success=False. (OP-LM3 + MED #13)"""
+        """FIX-016: empty TGT broker_order_id in place_exits() raises OrderRejectedError. (OP-LM3)"""
         adapter = _MockAdapterEmptyBrokerId(empty_on_call=2)
         proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        # FIX-016: execute() only places CO, should succeed
         result = proto.execute(
             symbol="HDFC", side="BUY", qty=3,
             entry_price=1600.0, sl_price=1580.0, tgt_price=1640.0,
             intent="INTRADAY", trade_id="trd_lm3_co_tgt",
         )
-        assert not result.success, "MED #13: empty TGT broker_order_id must return success=False"
-        assert result.entry_broker_order_id, "CO broker_order_id preserved for reconciliation"
-        assert result.tgt_broker_order_id == ""
-        assert result.rejection_reason
-        print("  OK empty TGT broker_order_id -> success=False; CO preserved (MED #13 + OP-LM3)")
+        assert result.success, "FIX-016: execute() places CO only"
+        assert result.entry_broker_order_id, "CO broker_order_id returned"
+
+        # FIX-016: place_exits() attempts TGT, empty ID raises
+        with pytest.raises(OrderRejectedError, match="empty broker_order_id"):
+            proto.place_exits(
+                symbol="HDFC", entry_side="BUY", qty=3,
+                tgt_price=1640.0, intent="INTRADAY", trade_id="trd_lm3_co_tgt",
+            )
+        print("  OK FIX-016: empty TGT broker_order_id in place_exits() raises (OP-LM3)")
 
 
 class TestProductResolverWiring:
@@ -1807,7 +1848,7 @@ class TestBl7cOrderPlacerTrackingWiring:
             print("  OK BL-7c: LIMIT_TRIPLE track sides ENTRY=BUY, SL/TGT=SELL (2.1)")
 
     def test_co_protocol_skips_sl_track(self) -> None:
-        """CO_PLUS_TGT: sl_broker_order_id empty -> track called 2x; no SL _FillEntry. (BL-7c)"""
+        """FIX-016: CO_PLUS_TGT place() tracks ENTRY only. TGT tracked after fill. (BL-7c)"""
         with TemporaryDirectory() as tmp:
             placer, monitor, adapter, store, _, _ = self._build(
                 Path(tmp), default_protocol="CO_PLUS_TGT"
@@ -1821,21 +1862,21 @@ class TestBl7cOrderPlacerTrackingWiring:
                 reservation_id="res_co",
             )
 
-            # Only ENTRY + TGT tracked
-            assert monitor.track.call_count == 2, (
-                f"CO: expected 2 track() calls, got {monitor.track.call_count}"
+            # FIX-016: Only ENTRY tracked initially (TGT deferred to fill event)
+            assert monitor.track.call_count == 1, (
+                f"FIX-016: expected 1 track() call (ENTRY only), got {monitor.track.call_count}"
             )
 
             with placer._fill_map_lock:
                 legs = sorted(e.leg for e in placer._fill_map.values())
-            assert legs == [_LEG_ENTRY, _LEG_TGT], (
-                f"CO: expected ENTRY+TGT in _fill_map, got {legs}"
+            assert legs == [_LEG_ENTRY], (
+                f"FIX-016: expected ENTRY only in _fill_map, got {legs}"
             )
-            # No SL track ever happened
+            # No SL track (SL inside CO bracket)
             for call_args in monitor.track.call_args_list:
-                assert call_args.kwargs.get("side") != "__NEVER__"  # sanity
+                assert call_args.kwargs.get("leg") == "ENTRY"
             store.close()
-            print("  OK BL-7c: CO_PLUS_TGT skips SL track (2 legs only)")
+            print("  OK FIX-016: CO_PLUS_TGT place() tracks ENTRY only (BL-7c)")
 
     def test_on_order_filled_still_handles_entry_leg(self) -> None:
         """ENTRY-leg fill still pops + commits capital end-to-end. (BL-7c regression)"""
@@ -2718,7 +2759,14 @@ class TestBl8AtomicPersist:
     # --- Test 6 -----------------------------------------------------------
 
     def test_co_plus_tgt_soft_fail_cancels_co(self) -> None:
-        """OP-BL8f: CoPlusTgt soft-fail (CO live, TGT dead) cancels the CO."""
+        """FIX-016: CO-only placement during place() means no soft-fail scenario.
+
+        Pre-FIX-016: TGT failure during execute() → cancel CO (OP-BL8f).
+        Post-FIX-016: execute() places CO only, always succeeds or raises.
+        TGT failure happens later in _place_co_tgt_exit() after CO fills,
+        which fires hard_kill but does NOT cancel CO (position already live).
+
+        This test now verifies that place() succeeds with CO-only."""
         with TemporaryDirectory() as tmp:
             # adapter that succeeds on CO place and FAILS on TGT place
             class _COSuccessTGTFail:
@@ -2755,19 +2803,20 @@ class TestBl8AtomicPersist:
             )
             sig_id = _seed_signal(store)
 
-            with pytest.raises(BrokerError):
-                placer.place(
-                    symbol="RELIANCE", side="BUY", qty=10,
-                    entry_price=2500.0, sl_price=2450.0,
-                    intent="INTRADAY", signal_id=sig_id,
-                    reservation_id="res_co_soft",
-                )
-
-            assert "CO_LIVE_123" in adapter.cancelled, (
-                "CoPlusTgt soft-fail MUST cancel the live CO via OrderPlacer; "
-                f"got cancelled={adapter.cancelled}"
+            # FIX-016: place() only places CO, should succeed (no TGT attempt)
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_co_soft",
             )
-            assert "res_co_soft" in fm.released
+
+            # No cancellation during place() (TGT never attempted)
+            assert len(adapter.cancelled) == 0, (
+                "FIX-016: place() only places CO, no TGT failure, no cancellation"
+            )
+            # Capital NOT released (trade is PENDING_FILL, not FAILED)
+            assert "res_co_soft" not in fm.released
             # Soft-fail is NOT a DB-persist-after-broker-success path; no hard_kill
             assert ks.hard_kill_calls == [], (
                 "soft-fail w/ successful cleanup must NOT fire hard_kill"
@@ -3089,22 +3138,21 @@ class TestEf2TrackFailureCleanup:
 
     def test_ef2_co_plus_tgt_track_raises_mid_loop_partial_cleanup(self) -> None:
         """
-        EF-2 (CO_PLUS_TGT): place() tracks CO ENTRY then TGT. First track succeeds
-        (ENTRY), second raises (TGT). Verify ENTRY _fill_map entry is removed
-        and untrack called for ENTRY.
+        FIX-016: CO_PLUS_TGT place() now tracks ENTRY only (TGT deferred).
 
-        Post 2.1, LIMIT_TRIPLE only tracks one leg (ENTRY) at place() time, so
-        the mid-loop partial-failure scenario is only reachable via CO_PLUS_TGT
-        (which tracks ENTRY + TGT). LIMIT_TRIPLE's track-failure semantics are
-        covered by test_ef2_track_raises_on_entry_leg_full_cleanup.
+        Pre-FIX-016: place() tracked ENTRY + TGT, so mid-loop failure was possible.
+        Post-FIX-016: place() tracks ENTRY only (like LIMIT_TRIPLE post-2.1), so
+        track failure = full cleanup (cancel CO, untrack nothing).
+
+        This test now verifies single-leg track failure for CO protocol.
         """
         import io
         with TemporaryDirectory() as tmp:
             ks = _RecordingKillSwitch()
-            # ENTRY succeeds, TGT raises
+            # FIX-016: ENTRY track raises (only leg tracked during place())
             placer, store, fm, bus, adapter, om, monitor = self._make_placer(
                 Path(tmp),
-                track_side_effect=[None, ValueError("boom on TGT")],
+                track_side_effect=[ValueError("boom on ENTRY")],
                 kill_switch=ks,
                 default_protocol="CO_PLUS_TGT",
             )
@@ -3119,36 +3167,34 @@ class TestEf2TrackFailureCleanup:
             target_logger.setLevel(logging.CRITICAL)
 
             try:
-                with pytest.raises(ValueError, match="boom on TGT"):
+                with pytest.raises(ValueError, match="boom on ENTRY"):
                     placer.place(
                         symbol="RELIANCE", side="BUY", qty=10,
                         entry_price=2500.0, sl_price=2450.0,
                         intent="INTRADAY", signal_id=sig_id,
-                        reservation_id="res_ef2_tgt_fail",
+                        reservation_id="res_ef2_entry_fail",
                     )
 
-                # _fill_map empty: ENTRY entry was popped during cleanup
+                # _fill_map empty: no entries were successfully tracked
                 with placer._fill_map_lock:
                     assert placer._fill_map == {}, (
-                        f"ENTRY _fill_map entry must be popped during cleanup; "
+                        f"_fill_map must be empty after ENTRY track failure; "
                         f"got {placer._fill_map!r}"
                     )
 
-                # track() called 2x (ENTRY ok, TGT raises)
-                assert monitor.track.call_count == 2, (
-                    f"expected 2 track calls (ENTRY ok + TGT raise); "
+                # FIX-016: track() called 1x (ENTRY raises)
+                assert monitor.track.call_count == 1, (
+                    f"FIX-016: expected 1 track call (ENTRY only); "
                     f"got {monitor.track.call_count}"
                 )
 
-                # untrack called exactly once (for ENTRY)
-                assert monitor.untrack.call_count == 1, (
-                    f"expected 1 untrack call (ENTRY only); "
+                # untrack NOT called (nothing was successfully tracked)
+                assert monitor.untrack.call_count == 0, (
+                    f"expected 0 untrack calls (ENTRY track failed); "
                     f"got {monitor.untrack.call_count}"
                 )
-                entry_iid = adapter.placed[0]["internal_order_id"]
-                monitor.untrack.assert_called_once_with(entry_iid)
 
-                # adapter.cancel_order called for both placed broker IDs (CO + TGT)
+                # adapter.cancel_order called for the placed CO
                 placed_broker_ids = sorted(p["broker_order_id"] for p in adapter.placed)
                 assert sorted(adapter.cancelled) == placed_broker_ids
 
@@ -3156,7 +3202,7 @@ class TestEf2TrackFailureCleanup:
                     "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
                 )
                 assert rows[0]["status"] == "FAILED"
-                assert "res_ef2_tgt_fail" in fm.released
+                assert "res_ef2_entry_fail" in fm.released
 
                 logs = log_buf.getvalue()
                 assert "EF2_TRACK_FAILURE_CLEANUP" in logs
@@ -3164,7 +3210,7 @@ class TestEf2TrackFailureCleanup:
             finally:
                 target_logger.removeHandler(handler)
                 store.close()
-            print("  OK EF-2 (CO_PLUS_TGT): partial-tracked cleanup -> untrack(ENTRY), no hard_kill")
+            print("  OK FIX-016 EF-2: CO track failure -> cancel CO, no hard_kill")
 
     # --- Test 3 -----------------------------------------------------------
 
@@ -3830,6 +3876,227 @@ class TestRehydrateFillMap:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-016 + FIX-017: two-phase CO_PLUS_TGT + zero-fill cancellation
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFix016Fix017OrderStatusChanged:
+    """
+    FIX-016: CO_PLUS_TGT two-phase placement + partial-cancel exit placement.
+    FIX-017: Zero-fill CANCELLED/REJECTED/FAILED/EXPIRED releases reservation.
+
+    Audit #7 closed the partial-fill-then-cancel gap for LIMIT_TRIPLE. FIX-016
+    extends that to CO_PLUS_TGT (deferred TGT placement). FIX-017 adds the
+    zero-fill cancellation path (no position created, release full reservation).
+    """
+
+    def _make_placer(self, tmp_path, default_protocol="LIMIT_TRIPLE"):
+        """Helper to build OrderPlacer with real DB + mock adapter."""
+        store = _make_store(tmp_path)
+        adapter = _MockAdapter()
+        co_proto = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        limit_proto = LimitTripleProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            co_protocol=co_proto, limit_protocol=limit_proto,
+            logger=_log(), default_protocol=default_protocol,
+        )
+        om = OrderManager(store, _log())
+        fm = _MockFundManager()
+        bus = EventBus()
+        # Wire OrderManager to the bus so it receives OrderStatusChanged
+        om._bus = bus
+        bus.subscribe(OrderStatusChanged, om._on_order_status_changed)
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=MagicMock(spec=OrderMonitor),
+            cost_calculator=MagicMock(spec=CostCalculator),
+            product_resolver=_default_resolver(),
+            default_order_protocol=default_protocol,
+        )
+        return placer, store, fm, bus, adapter, om
+
+    def test_fix017_zero_fill_cancelled_releases_reservation(self) -> None:
+        """FIX-017: ENTRY CANCELLED with qty_filled=0 → release full reservation + mark FAILED."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            res_id = "res_test_001"
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id, reservation_id=res_id,
+            )
+
+            # Get the internal_id from the fill_map
+            internal_id = list(placer._fill_map.keys())[0]
+
+            # Fire OrderStatusChanged with CANCELLED and qty_filled=0
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id=internal_id,
+                broker_order_id=adapter.placed[0]["broker_order_id"],
+                status="CANCELLED",
+                qty_filled=0, avg_fill_price=0.0,
+            ))
+
+            # Verify: reservation released
+            assert res_id in fm.released, "Reservation should be released"
+            assert res_id not in [c["reservation_id"] for c in fm.committed]
+
+            # Trade should be FAILED
+            trade_row = store.fetch_one("SELECT status FROM trades WHERE signal_id = ?", (sig_id,))
+            assert trade_row is not None
+            assert trade_row["status"] == "FAILED"
+
+            # _fill_map should be empty (entry popped)
+            assert internal_id not in placer._fill_map
+
+            store.close()
+            print("  OK FIX-017: zero-fill CANCELLED releases reservation + FAILED")
+
+    def test_fix017_zero_fill_rejected_releases_reservation(self) -> None:
+        """FIX-017: ENTRY REJECTED with qty_filled=0 → release full reservation."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            res_id = "res_test_002"
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id, reservation_id=res_id,
+            )
+
+            internal_id = list(placer._fill_map.keys())[0]
+
+            # Fire REJECTED with zero fill
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id=internal_id,
+                broker_order_id=adapter.placed[0]["broker_order_id"],
+                status="REJECTED",
+                qty_filled=0, avg_fill_price=0.0,
+            ))
+
+            assert res_id in fm.released
+            trade_row = store.fetch_one("SELECT status FROM trades WHERE signal_id = ?", (sig_id,))
+            assert trade_row is not None
+            assert trade_row["status"] == "FAILED"
+
+            store.close()
+            print("  OK FIX-017: zero-fill REJECTED releases reservation")
+
+    def test_fix017_zero_fill_expired_releases_reservation(self) -> None:
+        """FIX-017: ENTRY EXPIRED with qty_filled=0 → release full reservation."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            res_id = "res_test_003"
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id, reservation_id=res_id,
+            )
+
+            internal_id = list(placer._fill_map.keys())[0]
+
+            # Fire EXPIRED with zero fill
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id=internal_id,
+                broker_order_id=adapter.placed[0]["broker_order_id"],
+                status="EXPIRED",
+                qty_filled=0, avg_fill_price=0.0,
+            ))
+
+            assert res_id in fm.released
+            trade_row = store.fetch_one("SELECT status FROM trades WHERE signal_id = ?", (sig_id,))
+            assert trade_row is not None
+            assert trade_row["status"] == "FAILED"
+
+            store.close()
+            print("  OK FIX-017: zero-fill EXPIRED releases reservation")
+
+    def test_fix016_partial_cancel_co_places_tgt(self) -> None:
+        """FIX-016: CO_PLUS_TGT partial-fill-then-cancel → commit partial + place TGT."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp), default_protocol="CO_PLUS_TGT")
+            sig_id = _seed_signal(store)
+
+            res_id = "res_test_004"
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=100,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id, reservation_id=res_id,
+            )
+
+            # Get CO entry internal_id
+            co_internal_id = list(placer._fill_map.keys())[0]
+
+            # Fire partial-fill-then-cancel: 50/100 filled
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id=co_internal_id,
+                broker_order_id=adapter.placed[0]["broker_order_id"],
+                status="CANCELLED",
+                qty_filled=50, avg_fill_price=2505.0,
+            ))
+
+            # Verify: capital committed for partial qty
+            assert len(fm.committed) == 1
+            assert fm.committed[0]["actual_qty"] == 50
+            assert fm.committed[0]["reservation_id"] == res_id
+
+            # Trade should be OPEN with partial qty
+            trade_row = store.fetch_one("SELECT status, qty_filled FROM trades WHERE signal_id = ?", (sig_id,))
+            assert trade_row is not None
+            assert trade_row["status"] == "OPEN"
+            assert trade_row["qty_filled"] == 50
+
+            # TGT should be placed (CO + TGT = 2 adapter calls)
+            assert len(adapter.placed) == 2, "CO + TGT should be placed"
+
+            store.close()
+            print("  OK FIX-016: CO partial-cancel commits + places TGT")
+
+    def test_fix017_exit_leg_terminal_status_skipped(self) -> None:
+        """FIX-017: SL/TGT/EOD terminal status → logged and skipped (not ENTRY)."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            res_id = "res_test_005"
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=2500.0, sl_price=2450.0,
+                intent="INTRADAY", signal_id=sig_id, reservation_id=res_id,
+            )
+
+            # Manually add an exit leg to _fill_map (simulate filled entry + exits tracked)
+            placer._fill_map["sl_internal_123"] = _FillEntry(
+                trade_id="trd_test", reservation_id=res_id,
+                symbol="RELIANCE", qty=10, leg="SL",
+                order_protocol="LIMIT_TRIPLE", direction="LONG",
+            )
+
+            # Fire CANCELLED on SL leg with zero fill
+            bus.publish(OrderStatusChanged(
+                source_module="test", internal_order_id="sl_internal_123",
+                broker_order_id="broker_sl_1", status="CANCELLED",
+                qty_filled=0, avg_fill_price=0.0,
+            ))
+
+            # Verify: reservation NOT touched (exit legs have different accounting)
+            assert len(fm.released) == 0, "Exit leg cancel should not release reservation"
+            # _fill_map entry should be popped (even though skipped, we pop before checking leg)
+            assert "sl_internal_123" not in placer._fill_map
+
+            store.close()
+            print("  OK FIX-017: exit-leg terminal status skipped, no capital change")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3949,6 +4216,12 @@ if __name__ == "__main__":
         TestRehydrateFillMap().test_rehydrated_entries_have_correct_fields,
         TestRehydrateFillMap().test_does_not_overwrite_existing_fill_map_entries,
         TestRehydrateFillMap().test_state_store_fetch_failure_returns_zero_no_raise,
+        # FIX-016 + FIX-017 OrderStatusChanged two-phase CO + zero-fill release
+        TestFix016Fix017OrderStatusChanged().test_fix017_zero_fill_cancelled_releases_reservation,
+        TestFix016Fix017OrderStatusChanged().test_fix017_zero_fill_rejected_releases_reservation,
+        TestFix016Fix017OrderStatusChanged().test_fix017_zero_fill_expired_releases_reservation,
+        TestFix016Fix017OrderStatusChanged().test_fix016_partial_cancel_co_places_tgt,
+        TestFix016Fix017OrderStatusChanged().test_fix017_exit_leg_terminal_status_skipped,
     ]
     passed = failed = 0
     for fn in tests:
