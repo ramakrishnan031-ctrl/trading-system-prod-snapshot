@@ -301,6 +301,7 @@ class WebhookReceiver:
                 return jsonify({"error": "scan_name in body does not match scanner_name path param"}), 400
 
         # Parse triggered_at - Chartink sends "HH:MM am/pm", we also accept "YYYY-MM-DD HH:MM:SS"
+        # FIX-022: Immediately localize to IST after parsing to prevent timezone-naive/aware subtraction errors
         triggered_at_raw = str(body["triggered_at"]).strip()
         triggered_at: datetime | None = None
         # Try multiple formats
@@ -314,6 +315,11 @@ class WebhookReceiver:
                                             parsed.hour, parsed.minute, 0)
                 else:
                     triggered_at = parsed
+                # FIX-022: Apply IST timezone immediately after parsing
+                # Chartink sends naive strings; we assume IST and make them aware
+                if triggered_at.tzinfo is None:
+                    triggered_at = triggered_at.replace(tzinfo=ist_timezone())
+                    self._log.debug("webhook/%s: localized naive triggered_at to IST", scanner_name)
                 break
             except ValueError:
                 continue
@@ -391,9 +397,14 @@ class WebhookReceiver:
         if price <= 0:
             return {"symbol": symbol, "status": "INVALID_PRICE"}
 
-        # WR6: signal expiry (triggered_at is naive IST; attach IST for comparison)
+        # WR6: signal expiry
+        # FIX-022: triggered_at is now guaranteed IST-aware from parsing,
+        # but handle legacy naive datetimes defensively
         now = now_ist()
-        triggered_at_aware = triggered_at.replace(tzinfo=ist_timezone())
+        if triggered_at.tzinfo is None:
+            triggered_at_aware = triggered_at.replace(tzinfo=ist_timezone())
+        else:
+            triggered_at_aware = triggered_at
         age_sec = (now - triggered_at_aware).total_seconds()
         if age_sec > expiry_sec:
             return {"symbol": symbol, "status": "EXPIRED"}

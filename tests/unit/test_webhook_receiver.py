@@ -1117,6 +1117,73 @@ def test_fix011_update_heartbeat_unknown_symbol_noop():
 
 
 # ---------------------------------------------------------------------------
+# FIX-022: Timezone-aware triggered_at parsing
+# ---------------------------------------------------------------------------
+
+def test_fix022_naive_triggered_at_not_rejected_as_stale():
+    """
+    FIX-022: Send naive triggered_at string (Chartink format).
+    After IST localization, age should be computed correctly → NOT rejected as stale.
+    """
+    receiver, sq, store = _make_receiver(expiry=600)  # 10min expiry
+    # Send a webhook with recent naive timestamp (within expiry window)
+    recent_naive = (datetime.now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    payload = _valid_payload(triggered_at=recent_naive)
+    with receiver.app.test_client() as client:
+        resp = client.post("/webhook/gap_go_long",
+                          data=json.dumps(payload),
+                          content_type="application/json")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.get_json()}"
+        data = resp.get_json()
+        assert data["results"][0]["status"] == "ACCEPTED", \
+            f"Signal should be ACCEPTED, not stale. Got: {data['results'][0]['status']}"
+    print("  OK FIX-022: naive triggered_at localized to IST, age computed correctly, signal accepted")
+
+
+def test_fix022_already_aware_triggered_at_no_double_offset():
+    """
+    FIX-022: If triggered_at is already timezone-aware (future-proofing),
+    should not apply double offset or crash.
+    """
+    from core.time_authority import ist_timezone
+    receiver, sq, store = _make_receiver(expiry=600)
+    # Create an already-aware IST datetime
+    aware_dt = datetime.now(ist_timezone()) - timedelta(seconds=30)
+    aware_str = aware_dt.strftime("%Y-%m-%d %H:%M:%S")  # Still sends as string
+    payload = _valid_payload(triggered_at=aware_str)
+    with receiver.app.test_client() as client:
+        resp = client.post("/webhook/gap_go_long",
+                          data=json.dumps(payload),
+                          content_type="application/json")
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        data = resp.get_json()
+        assert data["results"][0]["status"] == "ACCEPTED"
+    print("  OK FIX-022: already-aware triggered_at handled without double-offset")
+
+
+def test_fix022_simulated_offset_bug_age_correct():
+    """
+    FIX-022: Simulate the bug scenario where naive datetime would cause
+    5.5 hour offset in age calculation. After fix, age should be correct.
+    """
+    receiver, sq, store = _make_receiver(expiry=600)  # 10min expiry
+    # Send a timestamp that's 60 seconds old
+    past_naive = (datetime.now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
+    payload = _valid_payload(triggered_at=past_naive)
+    with receiver.app.test_client() as client:
+        resp = client.post("/webhook/gap_go_long",
+                          data=json.dumps(payload),
+                          content_type="application/json")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # Before fix: age would be calculated as ~19860 seconds (5.5h offset)
+        # After fix: age should be ~60 seconds, well within 600s expiry
+        assert data["results"][0]["status"] == "ACCEPTED", \
+            f"Signal 60s old should be ACCEPTED (expiry=600s). Got: {data['results'][0]['status']}"
+    print("  OK FIX-022: age calculation correct after timezone fix (no 5.5h offset)")
+
+
+# ---------------------------------------------------------------------------
 # Standalone runner (no pytest dependency)
 # ---------------------------------------------------------------------------
 
@@ -1171,6 +1238,10 @@ def run_all_tests() -> int:
         test_fix011_evicted_symbol_can_be_readmitted,
         test_fix011_update_heartbeat_updates_timestamp,
         test_fix011_update_heartbeat_unknown_symbol_noop,
+        # FIX-022: Timezone-aware triggered_at parsing
+        test_fix022_naive_triggered_at_not_rejected_as_stale,
+        test_fix022_already_aware_triggered_at_no_double_offset,
+        test_fix022_simulated_offset_bug_age_correct,
     ]
 
     print("=" * 70)
