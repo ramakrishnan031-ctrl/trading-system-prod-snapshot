@@ -1367,8 +1367,16 @@ def test_stats_returns_valid_dict():
     print(f"  OK stats() keys all present: {sorted(s.keys())}")
 
 
-def test_stats_correct_after_run():
+def test_stats_correct_after_run(monkeypatch):
     """stats() counts reflect actual processing results."""
+    # Fix flaky timing by mocking time.monotonic() to ensure measurable elapsed time
+    _mono_counter = [1000.0]  # Start at 1000 seconds
+    def _mock_monotonic():
+        val = _mono_counter[0]
+        _mono_counter[0] += 0.010  # Each call advances by 10ms
+        return val
+    monkeypatch.setattr(time, "monotonic", _mock_monotonic)
+
     store, _ = _make_store()
     placer = _MockOrderPlacer()
     screener = _MockScreener(state_store=store)
@@ -1380,12 +1388,24 @@ def test_stats_correct_after_run():
         _insert_queued_signal(store, sig_id, symbol=f"SYM{i}")
         sq.put((sig_id, "gap_go_long", f"SYM{i}", 1000.0, datetime.now()))
 
+    # Wait for signals to be processed before stopping
+    # Poll until both signals reach terminal status
+    max_wait = 2.0
+    poll_interval = 0.05
+    elapsed = 0.0
+    while elapsed < max_wait:
+        s = proc.stats()
+        if s["signals_processed"] >= 2:
+            break
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+
     proc.stop()
 
     s = proc.stats()
     assert s["signals_placed"] == 2, f"Expected 2 placed, got {s['signals_placed']}"
     assert s["signals_processed"] == 2, f"Expected 2 processed, got {s['signals_processed']}"
-    assert s["avg_pipeline_ms"] > 0, "avg_pipeline_ms should be > 0"
+    assert s["avg_pipeline_ms"] > 0, f"avg_pipeline_ms should be > 0, got {s['avg_pipeline_ms']}"
     assert s["signals_screened_passed"] == 2, f"Expected 2 screened_passed, got {s['signals_screened_passed']}"
     print(f"  OK stats after 2 signals: {s}")
 
