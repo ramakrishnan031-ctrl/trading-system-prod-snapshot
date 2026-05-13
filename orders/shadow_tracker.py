@@ -313,7 +313,10 @@ class ShadowTracker:
 
         # FIX-013: Recalculate TGT from actual entry price to preserve R:R.
         # SL stays anchored to original strategy level (matches order_placer).
-        strategy_name = trade.get("strategy_name", "")
+        try:
+            strategy_name = trade["strategy_name"] if "strategy_name" in trade.keys() else ""
+        except (KeyError, AttributeError):
+            strategy_name = ""
         if strategy_name and self._strategies and strategy_name in self._strategies:
             strategy = self._strategies[strategy_name]
             if strategy.tgt_method == "RISK_REWARD":
