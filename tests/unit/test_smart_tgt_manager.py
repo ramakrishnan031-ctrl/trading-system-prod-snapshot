@@ -207,6 +207,7 @@ def _make_candle(
     low: float = _ENTRY_PRICE,
     close: float = _ENTRY_PRICE,
     open_p: float = _ENTRY_PRICE,
+    is_synthetic: bool = False,
 ) -> CandleData:
     return CandleData(
         instrument_token=token,
@@ -218,6 +219,7 @@ def _make_candle(
         volume=0,
         ts=datetime(2026, 4, 16, 10, 0),
         interval_sec=60,
+        is_synthetic=is_synthetic,
     )
 
 
@@ -1090,6 +1092,33 @@ def test_multiple_candles_in_succession_counter_updates() -> None:
           f"final_sl={info['current_sl']:.4f}")
 
 
+def test_fix020_synthetic_candles_processed_normally() -> None:
+    """FIX-020: SmartTgtManager processes synthetic flat candles for SL trailing."""
+    mgr, adapter, store, cs, _ = _make_gate()
+    _register(mgr)
+
+    # Real candle: triggers trail
+    cs.fire_candle(_make_candle(high=1005.0, is_synthetic=False))
+    assert len(adapter.calls) == 1, "Real candle should trigger modify"
+
+    # Synthetic candle 1: same high, no trail (no advancement)
+    cs.fire_candle(_make_candle(high=1005.0, is_synthetic=True))
+    # Synthetic candle 2: higher, triggers trail
+    cs.fire_candle(_make_candle(high=1008.0, is_synthetic=True))
+    # Synthetic candle 3: same, no trail
+    cs.fire_candle(_make_candle(high=1008.0, is_synthetic=True))
+
+    # Should have 2 modifies total (1 real + 1 synthetic that advanced)
+    assert len(adapter.calls) == 2, f"Expected 2 modifies, got {len(adapter.calls)}"
+
+    with mgr._lock:
+        info = mgr._tracked["trade_001"]
+
+    assert info["trail_count"] == 2, f"Expected 2 trails, got {info['trail_count']}"
+    assert info["best_price"] == 1008.0, f"Expected best_price=1008.0, got {info['best_price']}"
+    print(f"  OK FIX-020: synthetic candles processed normally, trail_count={info['trail_count']}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # LIFECYCLE (ST11)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1453,6 +1482,7 @@ def run_all_tests() -> int:
         test_no_co_order_id_logs_error_no_crash,
         test_trail_at_exact_boundary_no_redundant_modify,
         test_multiple_candles_in_succession_counter_updates,
+        test_fix020_synthetic_candles_processed_normally,
         # Lifecycle
         test_start_registers_callback_exactly_once,
         test_stop_unregisters_and_clears_tracked,

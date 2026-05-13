@@ -459,6 +459,89 @@ def test_candle_ts_is_ist() -> None:
 
 
 # ---------------------------------------------------------------------------
+# FIX-020: Flat Candle Carry-Forward
+# ---------------------------------------------------------------------------
+
+def test_fix020_one_tick_then_three_minutes_silence() -> None:
+    """FIX-020: 1 real tick then 3 minutes silence → 3 synthetic flat candles."""
+    store = _make_store()
+    store.set_token_map({101: "RELIANCE"})
+
+    # Real tick at minute 1: close=150.0
+    _tick(store, 101, 150.0)
+    store._close_candles()
+
+    # Get first candle and verify it's real
+    candles = store.get_candles(101, n=10)
+    assert len(candles) == 1
+    c0 = candles[0]
+    assert c0.close == 150.0
+    assert c0.is_synthetic is False
+
+    # Simulate 3 minutes of silence (no ticks, just timer fires)
+    for _ in range(3):
+        store._close_candles()
+
+    # Should now have 4 candles: 1 real + 3 synthetic
+    candles = store.get_candles(101, n=10)
+    assert len(candles) == 4, f"Expected 4 candles (1 real + 3 synthetic), got {len(candles)}"
+
+    # Verify first is real
+    assert candles[0].is_synthetic is False
+    assert candles[0].close == 150.0
+
+    # Verify next 3 are synthetic with carried-forward price
+    for i in [1, 2, 3]:
+        c = candles[i]
+        assert c.is_synthetic is True, f"Candle {i} should be synthetic"
+        assert c.open == 150.0, f"Candle {i} open should be 150.0"
+        assert c.high == 150.0, f"Candle {i} high should be 150.0"
+        assert c.low == 150.0, f"Candle {i} low should be 150.0"
+        assert c.close == 150.0, f"Candle {i} close should be 150.0"
+        assert c.volume == 0
+
+    print("  OK fix020_one_tick_then_three_minutes_silence: 1 real + 3 synthetic flat candles")
+
+
+def test_fix020_first_minute_no_prior_no_synthetic() -> None:
+    """FIX-020: First minute with no prior candle → NO synthetic emitted."""
+    store = _make_store()
+    store.set_token_map({101: "RELIANCE"})
+
+    # Close candles without any ticks (no history)
+    store._close_candles()
+
+    # Should have NO candles (no real, no synthetic)
+    candles = store.get_candles(101, n=10)
+    assert len(candles) == 0, f"Expected 0 candles on first close with no ticks, got {len(candles)}"
+
+    print("  OK fix020_first_minute_no_prior_no_synthetic: 0 candles emitted")
+
+
+def test_fix020_synthetic_candle_callback_invoked() -> None:
+    """FIX-020: Synthetic candles trigger on_candle_close callbacks."""
+    received: List = []
+    store = _make_store()
+    store.set_token_map({101: "RELIANCE"})
+    store.register_on_candle_close(lambda c: received.append(c))
+
+    # Real tick
+    _tick(store, 101, 200.0)
+    store._close_candles()
+    assert len(received) == 1
+    assert received[0].is_synthetic is False
+
+    # Silent minute → synthetic candle
+    store._close_candles()
+    assert len(received) == 2
+    syn = received[1]
+    assert syn.is_synthetic is True
+    assert syn.open == syn.high == syn.low == syn.close == 200.0
+
+    print("  OK fix020_synthetic_candle_callback_invoked: callback receives synthetic")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -490,6 +573,9 @@ def run_all_tests() -> int:
         test_close_candles_multiple_symbols_each_fires_callback,
         test_mark_reconnect_zero_partial_candles,
         test_candle_ts_is_ist,
+        test_fix020_one_tick_then_three_minutes_silence,
+        test_fix020_first_minute_no_prior_no_synthetic,
+        test_fix020_synthetic_candle_callback_invoked,
     ]
 
     passed = 0

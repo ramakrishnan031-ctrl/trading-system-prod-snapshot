@@ -33,6 +33,7 @@ class CandleData:
     volume: int        # always 0 (LF11: unreliable from ticks)
     ts: datetime       # IST candle close time (from clock thread)
     interval_sec: int
+    is_synthetic: bool = False  # FIX-020: True for flat carry-forward candles
 
 
 @dataclass
@@ -175,22 +176,32 @@ class CandleStore:
     def _close_candles(self) -> None:
         """Close all active accumulators and emit CandleData to callbacks.
 
+        FIX-020: If a token had no ticks this minute BUT has previous history,
+        emit a synthetic flat candle: O=H=L=C=prev_close, V=0, is_synthetic=True.
+
         Lock is acquired in two short critical sections to avoid holding
         it while calling user callbacks (LF17: no nesting, no deadlock risk).
         """
         close_ts = now_ist()
 
-        # Section 1: snapshot and reset accumulators
+        # Section 1: snapshot and reset accumulators, identify synthetic candidates
         with self._lock:
             to_close = dict(self._accum)
             self._accum.clear()
             token_map_snapshot = dict(self._token_map)
-
-        if not to_close:
-            return
+            # FIX-020: tokens with no ticks but previous history → synthetic candle
+            tokens_with_no_ticks = set(token_map_snapshot.keys()) - set(to_close.keys())
+            synthetic_candidates: Dict[int, float] = {}
+            for token in tokens_with_no_ticks:
+                hist = self._history.get(token)
+                if hist and len(hist) > 0:
+                    # Emit synthetic candle with prev_close price
+                    synthetic_candidates[token] = hist[-1].close
 
         # Build CandleData objects outside lock
         candles: List[CandleData] = []
+
+        # Real candles from ticks
         for token, acc in to_close.items():
             symbol = token_map_snapshot.get(token, str(token))
             candles.append(
@@ -204,8 +215,31 @@ class CandleStore:
                     volume=0,
                     ts=close_ts,
                     interval_sec=self._candle_interval_sec,
+                    is_synthetic=False,
                 )
             )
+
+        # FIX-020: Synthetic flat candles for silent tokens
+        for token, prev_close in synthetic_candidates.items():
+            symbol = token_map_snapshot.get(token, str(token))
+            candles.append(
+                CandleData(
+                    instrument_token=token,
+                    symbol=symbol,
+                    open=prev_close,
+                    high=prev_close,
+                    low=prev_close,
+                    close=prev_close,
+                    volume=0,
+                    ts=close_ts,
+                    interval_sec=self._candle_interval_sec,
+                    is_synthetic=True,
+                )
+            )
+
+        if not candles:
+            # No real or synthetic candles to emit
+            return
 
         # Section 2: persist to history and snapshot callbacks
         with self._lock:
