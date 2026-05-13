@@ -17,10 +17,10 @@ Locked Design Decisions:
             logger, kill_switch=None).
     RE4  -- API: approve(symbol, side, intent, sizing_result, signal_id)
             -> ApprovalResult (frozen dataclass).
-    RE5  -- Check sequence (9 checks, short-circuit on first fail):
+    RE5  -- Check sequence (10 checks, short-circuit on first fail):
             KILL_SWITCH, SIZING_VALID, CAPITAL, OPEN_POSITIONS,
             DAILY_TRADES, CONSECUTIVE_LOSSES, DAILY_LOSS,
-            SECTOR_EXPOSURE, DUPLICATE_SYMBOL.
+            SECTOR_EXPOSURE, CONTRARY_POSITION, DUPLICATE_SYMBOL.
     RE6  -- SECTOR_EXPOSURE counts BOTH open and in-flight (RE6 audit fix).
     RE7  -- DAILY_LOSS uses fund_manager.get_snapshot().daily_realized_pnl.
             risk_engine is a gate, not a monitor.
@@ -214,6 +214,9 @@ class RiskEngine:
         # Duplicate symbol check data
         has_dup = self._store.has_active_position(symbol)
 
+        # FIX-019: Wash trade prevention - get existing position direction if any
+        active_direction = self._store.get_active_position_direction(symbol)
+
         # Kill switch active state
         kill_active: bool = False
         if self._ks is not None:
@@ -238,13 +241,14 @@ class RiskEngine:
             "kill_switch_active":   kill_active,
         }
 
-        # ── Run checks in order, short-circuit on first failure (RE5, FIX-018) ──
+        # ── Run checks in order, short-circuit on first failure (RE5, FIX-018, FIX-019) ──
         checks_run: List[str] = []
         result = self._run_checks(
             checks_run, snapshot, snap, sizing_result,
             open_count, in_flight_count, daily_count,
             consec, existing_sector_margin, has_dup, kill_active,
             processor_in_flight_count,
+            symbol, side, active_direction,
         )
 
         # ── Log every call at INFO (RE12) ─────────────────────────────────────
@@ -275,9 +279,12 @@ class RiskEngine:
         existing_sector_margin: float,
         has_dup: bool,
         kill_active: bool,
-        processor_in_flight_count: int = 0,
+        processor_in_flight_count: int,
+        symbol: str,
+        side: str,
+        active_direction: Optional[str],
     ) -> ApprovalResult:
-        """Execute checks in RE5 + FIX-018 order; return the first failure or approval."""
+        """Execute checks in RE5 + FIX-018 + FIX-019 order; return the first failure or approval."""
 
         def reject(check: str, reason: str) -> ApprovalResult:
             return ApprovalResult(
@@ -374,7 +381,30 @@ class RiskEngine:
                     f"max={self._max_sector_pct * 100:.1f}%",
                 )
 
-        # 9. DUPLICATE_SYMBOL — no existing open or in-flight for same symbol
+        # 9. CONTRARY_POSITION — FIX-019 wash trade prevention
+        # Reject if an active position (open or in-flight) exists in the OPPOSITE direction.
+        # Same-direction signals are NOT blocked by this check (handled by DUPLICATE_SYMBOL).
+        checks_run.append("CONTRARY_POSITION")
+        if active_direction is not None:
+            # Map side (BUY/SELL) to direction (LONG/SHORT) for comparison
+            incoming_direction = "LONG" if side == "BUY" else "SHORT"
+            is_contrary = (
+                (incoming_direction == "LONG" and active_direction == "SHORT") or
+                (incoming_direction == "SHORT" and active_direction == "LONG")
+            )
+            if is_contrary:
+                self._log.warning(
+                    "CONTRARY_POSITION wash trade blocked: symbol=%s incoming=%s "
+                    "conflicting_position=%s",
+                    symbol, incoming_direction, active_direction,
+                )
+                return reject(
+                    "CONTRARY_POSITION",
+                    f"Cannot open {incoming_direction} position: active {active_direction} "
+                    f"position exists for {symbol} (wash trade prevention)",
+                )
+
+        # 10. DUPLICATE_SYMBOL — no existing open or in-flight for same symbol
         checks_run.append("DUPLICATE_SYMBOL")
         if has_dup:
             return reject(

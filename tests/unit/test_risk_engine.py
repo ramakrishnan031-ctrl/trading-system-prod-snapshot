@@ -168,6 +168,7 @@ def _insert_trade(
     net_pnl: float | None = None,
     created_date: str = "2026-04-14",
     exit_time: str | None = None,
+    direction: str = "LONG",  # FIX-019: added for wash trade tests
 ) -> None:
     """Insert a signal + trade row (signal FK required)."""
     sig_id = f"sig_{trade_id}"
@@ -193,7 +194,7 @@ def _insert_trade(
                status, order_protocol, updated_at, net_pnl, exit_time)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (trade_id, sig_id, symbol, "LONG", "strategy", sector,
+            (trade_id, sig_id, symbol, direction, "strategy", sector,
              10, 0, 2500.0, 2450.0, 2600.0, margin, 500.0, ts,
              status, "LIMIT_TRIPLE", ts, net_pnl, exit_time),
         )
@@ -204,7 +205,7 @@ def _insert_trade(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_all_checks_pass(tmp_path: Path) -> None:
-    """approve() with clean state and valid sizing -> approved=True, all 9 checks run."""
+    """approve() with clean state and valid sizing -> approved=True, all 10 checks run."""
     store = StateStore(tmp_path / "test.db")
     handler = _CapturingHandler()
     fm = _MockFundManager(_make_snap())
@@ -216,13 +217,13 @@ def test_all_checks_pass(tmp_path: Path) -> None:
     assert result.approved, f"Expected approval, got: {result.reason}"
     assert result.failed_check == ""
     assert result.reason == "All checks passed"
-    assert len(result.checks_run) == 9
+    assert len(result.checks_run) == 10
     assert result.checks_run == [
         "KILL_SWITCH", "SIZING_VALID", "CAPITAL", "OPEN_POSITIONS",
         "DAILY_TRADES", "CONSECUTIVE_LOSSES", "DAILY_LOSS",
-        "SECTOR_EXPOSURE", "DUPLICATE_SYMBOL",
+        "SECTOR_EXPOSURE", "CONTRARY_POSITION", "DUPLICATE_SYMBOL",
     ]
-    print("  OK all 9 checks passed, approved=True")
+    print("  OK all 10 checks passed, approved=True")
     store.close()
 
 
@@ -263,7 +264,7 @@ def test_kill_switch_none_skips_check(tmp_path: Path) -> None:
 
     assert result.approved
     assert "KILL_SWITCH" not in result.checks_run
-    assert len(result.checks_run) == 8  # 9 minus KILL_SWITCH
+    assert len(result.checks_run) == 9  # 10 minus KILL_SWITCH
     print(f"  OK kill_switch=None: check skipped, {len(result.checks_run)} checks run, WARNING logged")
     store.close()
 
@@ -592,6 +593,106 @@ def test_duplicate_symbol_in_flight(tmp_path: Path) -> None:
     assert not result.approved
     assert result.failed_check == "DUPLICATE_SYMBOL"
     print(f"  OK DUPLICATE_SYMBOL (PENDING_FILL): {result.reason}")
+    store.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-019: Wash Trade Prevention (CONTRARY_POSITION check)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix019_contrary_position_open_long_send_short(tmp_path: Path) -> None:
+    """FIX-019: Open LONG position → send SHORT signal → rejected CONTRARY_POSITION."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks)
+
+    # Insert LONG position for RELIANCE
+    _insert_trade(store, "t1", symbol="RELIANCE", status="OPEN", direction="LONG")
+
+    # Attempt to open SHORT position on same symbol
+    result = engine.approve("RELIANCE", "SELL", "INTRADAY", _make_sizing(), "sig-002")
+
+    assert not result.approved
+    assert result.failed_check == "CONTRARY_POSITION"
+    assert "SHORT" in result.reason and "LONG" in result.reason
+    assert "wash trade" in result.reason
+    # Check WARNING was logged
+    warnings = handler.warnings()
+    assert any("CONTRARY_POSITION" in w and "RELIANCE" in w for w in warnings)
+    print(f"  OK FIX-019 contrary LONG→SHORT: {result.reason}")
+    store.close()
+
+
+def test_fix019_contrary_position_concurrent_long_short(tmp_path: Path) -> None:
+    """FIX-019: Concurrent LONG + SHORT for same symbol → only one admitted."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks)
+
+    # First signal: LONG RELIANCE (no existing position)
+    result1 = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
+    assert result1.approved, f"First LONG should approve: {result1.reason}"
+
+    # Simulate the first trade being inserted (as would happen in production)
+    _insert_trade(store, "t1", symbol="RELIANCE", status="PENDING_FILL", direction="LONG")
+
+    # Second signal: SHORT RELIANCE (now there's a LONG in-flight)
+    result2 = engine.approve("RELIANCE", "SELL", "INTRADAY", _make_sizing(), "sig-002")
+    assert not result2.approved
+    assert result2.failed_check == "CONTRARY_POSITION"
+    print(f"  OK FIX-019 concurrent LONG+SHORT: LONG approved, SHORT blocked")
+    store.close()
+
+
+def test_fix019_same_direction_not_blocked_by_contrary_check(tmp_path: Path) -> None:
+    """FIX-019: Open LONG → send another LONG → NOT rejected by CONTRARY_POSITION.
+
+    Note: Will eventually be rejected by DUPLICATE_SYMBOL check, but that's
+    a different check. This test verifies CONTRARY_POSITION only blocks
+    opposite directions.
+    """
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks)
+
+    # Insert LONG position for RELIANCE
+    _insert_trade(store, "t1", symbol="RELIANCE", status="OPEN", direction="LONG")
+
+    # Attempt another LONG on same symbol
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-002")
+
+    # Should NOT be rejected by CONTRARY_POSITION (though DUPLICATE_SYMBOL will reject)
+    assert not result.approved
+    assert result.failed_check == "DUPLICATE_SYMBOL", (
+        f"Expected DUPLICATE_SYMBOL, got {result.failed_check}"
+    )
+    # Verify CONTRARY_POSITION check ran (should be in checks_run before DUPLICATE_SYMBOL)
+    assert "CONTRARY_POSITION" in result.checks_run
+    assert result.checks_run.index("CONTRARY_POSITION") < result.checks_run.index("DUPLICATE_SYMBOL")
+    print(f"  OK FIX-019 same direction (LONG→LONG): CONTRARY_POSITION passed, DUPLICATE_SYMBOL blocked")
+    store.close()
+
+
+def test_fix019_no_existing_position_approve_normally(tmp_path: Path) -> None:
+    """FIX-019: No open positions → send SHORT → approved normally."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks)
+
+    # No existing trades
+    result = engine.approve("RELIANCE", "SELL", "INTRADAY", _make_sizing(), "sig-001")
+
+    assert result.approved, f"Should approve when no existing position: {result.reason}"
+    assert "CONTRARY_POSITION" in result.checks_run  # Check ran and passed
+    print(f"  OK FIX-019 no existing position: approved normally")
     store.close()
 
 

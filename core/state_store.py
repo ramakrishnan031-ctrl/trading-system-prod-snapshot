@@ -472,6 +472,28 @@ class StateStore:
         )
         return (int(row["n"]) if row else 0) > 0
 
+    def get_active_position_direction(self, symbol: str) -> Optional[str]:
+        """
+        Return the direction (LONG or SHORT) of any active trade for symbol,
+        or None if no active position exists.
+
+        Active = status PENDING_FILL, OPEN, or PARTIAL.
+
+        Used by risk_engine CONTRARY_POSITION check (FIX-019 wash trade prevention).
+        If multiple active trades exist (should not happen post-duplicate check),
+        returns the direction of the first row found.
+        """
+        row = self.fetch_one(
+            """
+            SELECT direction FROM trades
+            WHERE symbol = ?
+              AND status IN ('PENDING_FILL', 'OPEN', 'PARTIAL')
+            LIMIT 1
+            """,
+            (symbol,),
+        )
+        return row["direction"] if row else None
+
     def recent_trade_pnls(self, n: int) -> List[float]:
         """
         Return the net_pnl values of the n most recently closed trades,
