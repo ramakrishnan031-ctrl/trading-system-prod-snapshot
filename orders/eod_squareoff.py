@@ -765,10 +765,15 @@ class EodSquareoff:
         broker_qty: Optional[dict[str, int]] = None
         try:
             broker_positions = self._adapter.get_positions()
+            # FIX-015: Filter to intraday products only (MIS/CO). EOD6 design
+            # mandates DELIVERY (CNC/NRML) positions are never touched. In live
+            # mode, broker may report both intraday and delivery positions; we
+            # must exclude delivery to avoid using their qty or symbol presence
+            # in the position-filter logic below.
             broker_qty = {
                 p.symbol: abs(int(p.qty))
                 for p in broker_positions
-                if int(p.qty) != 0
+                if int(p.qty) != 0 and p.product in ("MIS", "CO")
             }
         except Exception as exc:  # noqa: BLE001
             log_exception(self._log, exc)

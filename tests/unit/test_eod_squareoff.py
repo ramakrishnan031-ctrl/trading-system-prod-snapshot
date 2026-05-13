@@ -1333,6 +1333,56 @@ def test_b1_audit_5_2_broker_qty_zero_skips_exit() -> None:
     adapter.place_order.assert_not_called()
 
 
+def test_fix015_delivery_positions_excluded_from_broker_qty() -> None:
+    """
+    FIX-015: broker.get_positions includes CNC/NRML (delivery); EOD must
+    filter to MIS/CO only before building broker_qty dict (EOD6 design).
+    """
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    # DB has one MIS position for RELIANCE
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row("trd_a", "sig_a", "RELIANCE", "LONG", 10),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    adapter = MagicMock()
+    # Broker reports 3 positions: RELIANCE MIS, INFY CNC, TCS NRML
+    adapter.get_positions.return_value = [
+        Position(symbol="RELIANCE", qty=10, avg_price=100.0, product="MIS", side="BUY"),
+        Position(symbol="INFY", qty=50, avg_price=200.0, product="CNC", side="BUY"),
+        Position(symbol="TCS", qty=25, avg_price=300.0, product="NRML", side="BUY"),
+    ]
+    adapter.place_order.return_value = _placed_order("ord_1", "K1", "RELIANCE", "SELL", 10)
+
+    fm = MagicMock(); fm.release.return_value = True
+    ks = MagicMock()
+    ks.is_active.return_value = False
+    ks.current_state.return_value = KillState.INACTIVE
+    bus = MagicMock(spec=EventBus)
+    osm = OrderStateMachine()
+    om = MagicMock()
+    logger = logging.getLogger("test_fix015")
+    eod = EodSquareoff(
+        adapter=adapter, state_store=store, fund_manager=fm,
+        state_machine=osm, bus=bus, market_windows=_make_market_windows(),
+        time_authority=None, kill_switch=ks, logger=logger,
+        order_monitor=om, inter_order_delay_ms=0,
+        exit_protocol="MARKET",
+    )
+
+    eod.check_and_fire(_ist(15, 17))
+
+    # Verify: only RELIANCE (MIS) should be exited. INFY (CNC) and TCS (NRML)
+    # should be filtered out from broker_qty, so their symbols don't influence
+    # the position filter logic.
+    adapter.place_order.assert_called_once()
+    call_args = adapter.place_order.call_args
+    assert call_args[1]["symbol"] == "RELIANCE", "Only MIS position should be exited"
+    assert call_args[1]["side"] == "SELL"
+    assert call_args[1]["qty"] == 10
+
+
 def test_b1_get_quote_failure_falls_back_to_market() -> None:
     """Audit 3.3: get_quote raises -> all symbols fall back to MARKET."""
     store = MagicMock(spec=StateStore)
