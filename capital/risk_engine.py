@@ -166,9 +166,10 @@ class RiskEngine:
         intent: str,
         sizing_result: "SizingResult",
         signal_id: str,
+        processor_in_flight_count: int = 0,
     ) -> ApprovalResult:
         """
-        Run all portfolio-level checks for the proposed trade (RE4, RE5).
+        Run all portfolio-level checks for the proposed trade (RE4, RE5, FIX-018).
 
         Reads fund_manager snapshot and state_store queries once at the start
         for consistency (RE11, RE16). Runs checks in order, short-circuits on
@@ -183,6 +184,10 @@ class RiskEngine:
                            Schism eliminated: risk_engine sees identical numbers
                            as position_sizer (RE2).
             signal_id:     signal_id from the originating webhook (for logging).
+            processor_in_flight_count: FIX-018 TOCTOU fix. Number of signals
+                           currently in the signal_processor pipeline (between
+                           approve() and DB insert). Added to DB in_flight_count
+                           when checking max_open_positions to prevent race.
 
         Returns:
             ApprovalResult with approved=True/False, reason, failed_check,
@@ -233,12 +238,13 @@ class RiskEngine:
             "kill_switch_active":   kill_active,
         }
 
-        # ── Run checks in order, short-circuit on first failure (RE5) ─────────
+        # ── Run checks in order, short-circuit on first failure (RE5, FIX-018) ──
         checks_run: List[str] = []
         result = self._run_checks(
             checks_run, snapshot, snap, sizing_result,
             open_count, in_flight_count, daily_count,
             consec, existing_sector_margin, has_dup, kill_active,
+            processor_in_flight_count,
         )
 
         # ── Log every call at INFO (RE12) ─────────────────────────────────────
@@ -269,8 +275,9 @@ class RiskEngine:
         existing_sector_margin: float,
         has_dup: bool,
         kill_active: bool,
+        processor_in_flight_count: int = 0,
     ) -> ApprovalResult:
-        """Execute checks in RE5 order; return the first failure or approval."""
+        """Execute checks in RE5 + FIX-018 order; return the first failure or approval."""
 
         def reject(check: str, reason: str) -> ApprovalResult:
             return ApprovalResult(
@@ -309,14 +316,17 @@ class RiskEngine:
                 f"available={bucket_avail:.2f}, required={sizing_result.margin_required:.2f}",
             )
 
-        # 4. OPEN_POSITIONS — open + in-flight must be below cap
+        # 4. OPEN_POSITIONS — open + in-flight + processor_in_flight must be below cap
+        # FIX-018: Add processor_in_flight_count to prevent TOCTOU race where
+        # concurrent signals both pass this check before either inserts into DB.
         checks_run.append("OPEN_POSITIONS")
-        active_total = open_count + in_flight_count
+        active_total = open_count + in_flight_count + processor_in_flight_count
         if active_total >= self._max_open:
             return reject(
                 "OPEN_POSITIONS",
                 f"Position cap reached: {active_total} active "
-                f"(open={open_count}, in_flight={in_flight_count}), "
+                f"(open={open_count}, db_in_flight={in_flight_count}, "
+                f"processor_in_flight={processor_in_flight_count}), "
                 f"max={self._max_open}",
             )
 

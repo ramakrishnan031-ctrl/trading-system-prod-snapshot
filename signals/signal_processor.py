@@ -166,6 +166,12 @@ class SignalProcessor:
         self._active_workers = 0
         self._active_lock = threading.Lock()
 
+        # FIX-018: TOCTOU fix — in-flight counter for signals between approve() and DB insert
+        # Protects against concurrent signals both passing max_open_positions check
+        # before either inserts into the in_flight table.
+        self._in_flight_count = 0
+        self._in_flight_lock = threading.RLock()
+
         # Stats (SP13 + SPW9)
         self._stats: Dict[str, Any] = {
             "processed": 0,
@@ -540,11 +546,20 @@ class SignalProcessor:
             # reads existing exposure) and then both fm.reserve, overshooting
             # max_sector_exposure_pct / max_open_positions. RLock so reserve()
             # re-entering self._fm._lock is safe.
+            #
+            # FIX-018: TOCTOU fix. Increment _in_flight_count BEFORE approve() so
+            # concurrent signals see each other even before they insert into the
+            # in_flight DB table. Decrement in finally block (every exit path).
             # ----------------------------------------------------------
+            with self._in_flight_lock:
+                self._in_flight_count += 1
+                processor_in_flight = self._in_flight_count
+
             with self._fm.portfolio_lock:
                 try:
                     approval = self._risk.approve(
-                        symbol, side, strategy_obj.intent, sizing, signal_id
+                        symbol, side, strategy_obj.intent, sizing, signal_id,
+                        processor_in_flight_count=processor_in_flight
                     )
                 except BrokerError as be:
                     if self._ks:
@@ -666,6 +681,10 @@ class SignalProcessor:
                 bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
 
         finally:
+            # FIX-018: Decrement processor in-flight counter (every exit path)
+            with self._in_flight_lock:
+                self._in_flight_count -= 1
+
             # SP7: ALWAYS release in-flight (audit #21 fix; SPW8: covers screener paths)
             if self._in_flight_release is not None:
                 try:
@@ -957,10 +976,18 @@ class SignalProcessor:
             # Audit 1.2 / Portfolio Lock: see continue_from_gate counterpart in
             # _process_one for rationale. Same critical section here so
             # gate-released signals do not race against direct webhook signals.
+            #
+            # FIX-018: TOCTOU fix. Increment _in_flight_count before approve().
+            # Decrement in finally block (gate path also counts as in-flight).
+            with self._in_flight_lock:
+                self._in_flight_count += 1
+                processor_in_flight = self._in_flight_count
+
             with self._fm.portfolio_lock:
                 try:
                     approval = self._risk.approve(
-                        symbol, side, strategy_obj.intent, sizing, signal_id
+                        symbol, side, strategy_obj.intent, sizing, signal_id,
+                        processor_in_flight_count=processor_in_flight
                     )
                 except BrokerError as be:
                     if self._ks:
@@ -1076,6 +1103,10 @@ class SignalProcessor:
                 bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
 
         finally:
+            # FIX-018: Decrement processor in-flight counter (gate path)
+            with self._in_flight_lock:
+                self._in_flight_count -= 1
+
             elapsed_ms = (time.monotonic() - start_mono) * 1000
             with self._stats_lock:
                 self._stats["total_ms"] += elapsed_ms

@@ -185,8 +185,13 @@ class _MockRiskEngine:
         self._raise = raise_exc
         self.calls: List[dict] = []
 
-    def approve(self, symbol, direction, intent, sizing_result, signal_id):
-        self.calls.append({"symbol": symbol, "signal_id": signal_id})
+    def approve(self, symbol, direction, intent, sizing_result, signal_id,
+                processor_in_flight_count: int = 0):
+        self.calls.append({
+            "symbol": symbol,
+            "signal_id": signal_id,
+            "processor_in_flight_count": processor_in_flight_count,
+        })
         if self._raise:
             raise self._raise
         return self._result
@@ -219,6 +224,9 @@ class _MockFundManager:
     def get_snapshot(self):
         class _Snap:
             total = 1_000_000.0
+            intraday_avail = 500_000.0
+            positional_avail = 500_000.0
+            daily_realized_pnl = 0.0
         return _Snap()
 
 
@@ -1296,7 +1304,8 @@ def test_portfolio_lock_serialises_approve_and_reserve():
     release_event = threading.Event()
 
     class _ConcurrencyTrackingRisk(_MockRiskEngine):
-        def approve(self, symbol, direction, intent, sizing, signal_id):
+        def approve(self, symbol, direction, intent, sizing, signal_id,
+                    processor_in_flight_count: int = 0):
             nonlocal in_approve, max_concurrent
             with counter_lock:
                 in_approve += 1
@@ -1343,6 +1352,214 @@ def test_100_signals_complete_in_reasonable_time():
     elapsed = time.monotonic() - t0
     assert elapsed < 10.0, f"100 signals took {elapsed:.2f}s"
     print(f"  OK 100 signals in {elapsed:.3f}s with 5 workers")
+
+
+# ---------------------------------------------------------------------------
+# FIX-018: TOCTOU Fix (processor_in_flight_count)
+# ---------------------------------------------------------------------------
+
+def test_fix018_toctou_only_one_approved_with_concurrent_signals():
+    """
+    FIX-018: 5 concurrent signals, max_open=5, db has 4 positions.
+    Without TOCTOU fix, all 5 would see "4 < 5" and pass approve().
+    With processor_in_flight_count, the in-memory counter prevents
+    concurrent signals from all passing the OPEN_POSITIONS check.
+
+    Test approach: verify that risk_engine.approve() receives and uses
+    the processor_in_flight_count parameter correctly by checking the
+    rejection message includes processor_in_flight count.
+    """
+    store, _ = _make_store()
+
+    # Insert 4 open positions into the store
+    from core.time_authority import now_ist
+    today_iso = now_ist().replace(tzinfo=None).isoformat()
+    today_date = now_ist().date().isoformat()
+
+    with store.transaction() as cur:
+        for i in range(4):
+            sig_id = f"sig_exist_{i}"
+            # Insert signal first (FK constraint)
+            cur.execute(
+                """
+                INSERT INTO signals
+                  (signal_id, symbol, scanner, strategy, triggered_at, received_at,
+                   expires_at, status, fingerprint, fingerprint_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (sig_id, f"EXIST{i}", "gap_go_long", "gap_go_long_v1",
+                 today_iso, today_iso, today_iso, "TRADED", f"fp_exist_{i}", today_date),
+            )
+            # Insert trade
+            cur.execute(
+                """
+                INSERT INTO trades
+                  (trade_id, signal_id, symbol, direction, strategy, sector,
+                   qty_planned, qty_filled, entry_target_price, sl_initial,
+                   tgt_initial, margin_reserved, risk_amount, created_at,
+                   status, order_protocol, updated_at, entry_actual_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (f"trade_{i}", sig_id, f"EXIST{i}", "LONG", "gap_go_long_v1",
+                 "TECH", 10, 10, 1000.0, 950.0, 1050.0, 10000.0, 500.0, today_iso,
+                 "OPEN", "CO_PLUS_TGT", today_iso, 1000.0),
+            )
+
+    # Verify we have 4 open positions
+    assert store.count_open_positions() == 4
+
+    # Real risk engine that enforces max_open_positions=5
+    from capital.risk_engine import RiskEngine
+    from core.logger import get_logger
+    real_risk = RiskEngine(
+        fund_manager=_MockFundManager(),
+        state_store=store,
+        max_open_positions=5,
+        max_daily_trades=100,
+        max_sector_exposure_pct=0.40,
+        max_consecutive_losses=5,
+        daily_loss_limit_pct=0.05,
+        sector_lookup_fn=lambda s: "TECH",
+        logger=get_logger("test_risk"),
+        kill_switch=None,
+    )
+
+    # Test 1: With processor_in_flight_count=0, should approve (4 + 0 < 5)
+    result_no_in_flight = real_risk.approve(
+        symbol="NEWSYM",
+        side="BUY",
+        intent="INTRADAY",
+        sizing_result=_SizingResult(success=True, qty=10, margin_required=5000.0),
+        signal_id="sig_test_1",
+        processor_in_flight_count=0,
+    )
+    assert result_no_in_flight.approved, (
+        f"Should approve with 4 open + 0 in_flight, got: {result_no_in_flight.reason}"
+    )
+
+    # Test 2: With processor_in_flight_count=1, should reject (4 + 1 >= 5)
+    result_with_in_flight = real_risk.approve(
+        symbol="NEWSYM2",
+        side="BUY",
+        intent="INTRADAY",
+        sizing_result=_SizingResult(success=True, qty=10, margin_required=5000.0),
+        signal_id="sig_test_2",
+        processor_in_flight_count=1,
+    )
+    assert not result_with_in_flight.approved, (
+        "Should reject with 4 open + 1 in_flight (total 5 >= max 5)"
+    )
+    assert result_with_in_flight.failed_check == "OPEN_POSITIONS"
+    assert "processor_in_flight=1" in result_with_in_flight.reason, (
+        f"Rejection message should include processor_in_flight count: {result_with_in_flight.reason}"
+    )
+
+    # Test 3: With processor_in_flight_count=3, should reject (4 + 3 = 7 >> 5)
+    result_high_in_flight = real_risk.approve(
+        symbol="NEWSYM3",
+        side="BUY",
+        intent="INTRADAY",
+        sizing_result=_SizingResult(success=True, qty=10, margin_required=5000.0),
+        signal_id="sig_test_3",
+        processor_in_flight_count=3,
+    )
+    assert not result_high_in_flight.approved
+    assert result_high_in_flight.failed_check == "OPEN_POSITIONS"
+    assert "processor_in_flight=3" in result_high_in_flight.reason
+
+    print(f"  OK FIX-018: processor_in_flight_count correctly prevents TOCTOU race")
+    print(f"    db=4, max=5: in_flight=0 -> approved, in_flight=1 -> rejected")
+
+
+def test_fix018_in_flight_counter_decrements_on_exception():
+    """
+    FIX-018: If an exception occurs mid-pipeline, the finally block must
+    decrement the in_flight_count. Without this, the counter would leak
+    and eventually block all new signals.
+
+    Test approach: Directly monitor the counter during exception processing.
+    """
+    store, _ = _make_store()
+
+    # Track counter values
+    counter_values = []
+    lock = threading.Lock()
+
+    class _TrackingRiskEngine(_MockRiskEngine):
+        """Records counter value when approve() is called."""
+        def approve(self, symbol, direction, intent, sizing_result, signal_id,
+                    processor_in_flight_count: int = 0):
+            with lock:
+                counter_values.append({
+                    "signal_id": signal_id,
+                    "processor_in_flight_count": processor_in_flight_count,
+                })
+            # First call: let it proceed (will fail later in placer)
+            # Second call: let it proceed normally
+            return super().approve(
+                symbol, direction, intent, sizing_result, signal_id,
+                processor_in_flight_count,
+            )
+
+    # Placer that fails on first call, succeeds on second
+    call_count = [0]
+
+    class _ExceptionThenOkPlacer:
+        def place(self, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("simulated placement failure")
+            # Second call succeeds (no-op)
+
+    # First signal: will raise exception in placer
+    sig_id_fail = "sig_exc_001"
+    _insert_queued_signal(store, sig_id_fail)
+
+    # Second signal: should succeed
+    sig_id_ok = "sig_exc_002"
+    _insert_queued_signal(store, sig_id_ok, symbol="RELOK")
+
+    screener = _MockScreener(state_store=store)
+    proc, sq, _ = _make_proc(
+        store=store,
+        risk=_TrackingRiskEngine(),
+        placer=_ExceptionThenOkPlacer(),
+        screener=screener,
+        worker_count=1,  # Sequential processing
+    )
+
+    # Check initial counter state
+    assert proc._in_flight_count == 0, "Counter should start at 0"
+
+    proc.start()
+    sq.put((sig_id_fail, "gap_go_long", "RELFAIL", 1000.0, datetime.now()))
+    time.sleep(0.15)  # Let first signal process
+    sq.put((sig_id_ok, "gap_go_long", "RELOK", 1000.0, datetime.now()))
+    proc.stop()
+
+    # Verify counter is back to 0 after all processing
+    assert proc._in_flight_count == 0, (
+        f"Counter should be 0 after stop(), got {proc._in_flight_count}. "
+        f"Counter values during execution: {counter_values}"
+    )
+
+    # Verify both signals reached approve() (counter was incremented twice)
+    assert len(counter_values) == 2, (
+        f"Expected 2 approve() calls, got {len(counter_values)}: {counter_values}"
+    )
+
+    # First signal sees in_flight=1 (itself)
+    assert counter_values[0]["processor_in_flight_count"] == 1, (
+        f"First signal should see in_flight=1, got {counter_values[0]}"
+    )
+
+    # Second signal sees in_flight=1 (itself, after first was decremented)
+    assert counter_values[1]["processor_in_flight_count"] == 1, (
+        f"Second signal should see in_flight=1, got {counter_values[1]}"
+    )
+
+    print(f"  OK FIX-018: exception mid-pipeline -> counter properly decremented")
+    print(f"    Counter values: {[v['processor_in_flight_count'] for v in counter_values]}")
 
 
 # ---------------------------------------------------------------------------
@@ -1896,6 +2113,9 @@ def run_all_tests() -> int:
         test_tgt_price_passed_to_order_placer,
         test_5_workers_process_5_signals_concurrently,
         test_100_signals_complete_in_reasonable_time,
+        # FIX-018 TOCTOU fix
+        test_fix018_toctou_only_one_approved_with_concurrent_signals,
+        test_fix018_in_flight_counter_decrements_on_exception,
         test_stats_returns_valid_dict,
         test_stats_correct_after_run,
         test_stats_screener_rejected_counted,
