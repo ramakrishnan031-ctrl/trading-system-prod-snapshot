@@ -871,6 +871,61 @@ def test_eod_disabled_no_op(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix023_eod_closes_three_active_innings(tmp_path: Path) -> None:
+    """
+    FIX-023: Open 3 simulated innings, fire EOD without SL/TGT hit.
+    All 3 innings closed with reason=EOD, _active_innings is empty.
+    """
+    store = StateStore(tmp_path / "test.db")
+    bus = EventBus()
+    strategies = {"strategy1": _MockStrategy(direction="LONG")}
+    cache = _MockInstrumentCache({
+        738561: "RELIANCE",
+        408065: "INFY",
+        5633: "ACC",
+    })
+    tracker = _make_tracker(store, bus, strategies=strategies, instrument_cache=cache)
+
+    # Create 3 trades, each cascading to inning 2
+    for tid, sid, sym in [
+        ("t_a", "sig_a", "RELIANCE"),
+        ("t_b", "sig_b", "INFY"),
+        ("t_c", "sig_c", "ACC"),
+    ]:
+        _seed_signal(store, sid, symbol=sym)
+        _seed_trade(store, tid, sid, symbol=sym, exit_reason="TGT_HIT", exit_price=2600.0)
+        bus.publish(PositionClosed(
+            source_module="test",
+            trade_id=tid,
+            symbol=sym,
+            signal_id=sid,
+            exit_price=2600.0,
+            realized_pnl=0.0,
+        ))
+
+    # All 3 should now have inning 2 active
+    assert len(tracker._active_innings) == 3, \
+        f"Expected 3 active innings, got {len(tracker._active_innings)}"
+
+    # Fire EOD
+    bus.publish(EodSquareoffComplete(source_module="test", fired_date="2026-04-16"))
+
+    # All innings should be closed
+    assert len(tracker._active_innings) == 0, \
+        f"Expected 0 active innings after EOD, got {len(tracker._active_innings)}"
+
+    # Verify DB shows all innings closed with reason=EOD
+    for tid in ["t_a", "t_b", "t_c"]:
+        innings = store.get_innings_for_trade(tid)
+        assert len(innings) == 2, f"{tid}: expected 2 innings"
+        assert innings[1]["exit_reason"] == "EOD", \
+            f"{tid} inning 2: expected exit_reason=EOD, got {innings[1]['exit_reason']}"
+        assert innings[1]["exit_price"] is not None
+
+    print("  OK FIX-023: 3 active innings closed at EOD, _active_innings empty")
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ALERTS (SH7, SH3)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1482,6 +1537,7 @@ if __name__ == "__main__":
         test_eod_closes_active_innings,
         test_eod_no_new_innings_after_fire,
         test_eod_disabled_no_op,
+        test_fix023_eod_closes_three_active_innings,
         test_alerts_on_inning_close,
         test_no_alerts_when_disabled,
         test_alert_contains_symbol_and_pnl,

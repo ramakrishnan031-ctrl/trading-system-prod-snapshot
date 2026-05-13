@@ -409,6 +409,9 @@ class ShadowTracker:
         """
         Handle EodSquareoffComplete: close all remaining active innings (SH8).
 
+        FIX-023: Belt-and-braces clear of _active_innings after closing all
+        innings. Prevents zombie accumulation if individual _close_inning fails.
+
         BL-13: Idempotent per IST date. If _eod_fired_date already equals
         today, this is a duplicate event (either in-process re-publish or
         a post-restart replay) and we skip without closing innings again.
@@ -431,11 +434,24 @@ class ShadowTracker:
             self._eod_fired_date = today_iso
             active_copy = list(self._active_innings.values())
 
+        closed_count = 0
         for ing in active_copy:
             # Use last seen price or fallback to entry_price
             with self._lock:
                 ltp = self._last_price.get(ing.symbol, ing.entry_price)
             self._close_inning(ing, ltp, "EOD")
+            closed_count += 1
+
+        # FIX-023: Defensive clear. If any _close_inning failed (DB error),
+        # it wouldn't have popped from _active_innings. Clear explicitly to
+        # prevent zombie accumulation. Failures are already logged in _close_inning.
+        with self._lock:
+            self._active_innings.clear()
+
+        if closed_count > 0:
+            self._log.info(
+                "shadow_tracker: EOD closed %d active innings", closed_count
+            )
 
     # ── private: simulated inning management ──────────────────────────────────
 
