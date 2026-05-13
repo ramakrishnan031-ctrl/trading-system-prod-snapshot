@@ -97,6 +97,7 @@ def _make_sizer(
     min_qty_threshold: int = 1,
     tier_multipliers: dict | None = None,
     logger=None,
+    lot_skew_rejection_threshold: float = 0.25,  # FIX-021
 ) -> PositionSizer:
     fm = _MockFundManager(total, intraday_avail, positional_avail)
     return PositionSizer(
@@ -107,6 +108,7 @@ def _make_sizer(
         min_qty_threshold=min_qty_threshold,
         tier_multipliers=tier_multipliers or _DEFAULT_TIER_MULT,
         logger=logger,
+        lot_skew_rejection_threshold=lot_skew_rejection_threshold,
     )
 
 
@@ -236,6 +238,108 @@ def test_lot_size_larger_than_computed_qty_fails() -> None:
     assert result.qty == 0
     assert result.constraint == "BELOW_MIN"
     print("  OK lot_size(150) > tiered_qty(100) -> success=False, constraint=BELOW_MIN (PS6)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests -- FIX-021: Lot skew rejection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix021_high_skew_rejected() -> None:
+    """FIX-021: tiered=40, lot=25 -> final=25, skew=37.5% > 25% -> REJECTED_LOT_SKEW."""
+    fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
+    sizer = PositionSizer(
+        fund_manager=fm,
+        leverage_map=_DEFAULT_LEVERAGE,
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.10,
+        tier_multipliers=_DEFAULT_TIER_MULT,
+        lot_skew_rejection_threshold=0.25,  # 25%
+    )
+    # Setup: tiered_qty = 40 (by picking entry/sl to produce qty_by_risk=40, tier=HIGH)
+    # risk_rs = 100k * 0.01 = 1000, sl_dist = 25 -> qty_by_risk = floor(1000/25) = 40
+    result = sizer.calculate("SYM", "BUY", 100.0, 75.0, "INTRADAY",
+                             score_tier="HIGH", lot_size=25)
+    # tiered_qty=40, final_qty=(40//25)*25=25, skew=(40-25)/40=0.375=37.5% > 25%
+    assert not result.success
+    assert result.qty == 0
+    assert result.constraint == "REJECTED_LOT_SKEW"
+    assert "37.5%" in result.reason or "0.375" in result.reason
+    print("  OK FIX-021: tiered=40, lot=25 -> skew=37.5% > 25% -> REJECTED_LOT_SKEW")
+
+
+def test_fix021_acceptable_skew_proceeds() -> None:
+    """FIX-021: tiered=30, lot=25 -> final=25, skew=16.7% < 25% -> proceeds with qty=25."""
+    fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
+    sizer = PositionSizer(
+        fund_manager=fm,
+        leverage_map=_DEFAULT_LEVERAGE,
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.10,
+        tier_multipliers=_DEFAULT_TIER_MULT,
+        lot_skew_rejection_threshold=0.25,  # 25%
+    )
+    # Setup: tiered_qty = 30 (risk_rs=1000, sl_dist=33.33... -> qty_by_risk=30)
+    result = sizer.calculate("SYM", "BUY", 100.0, 66.67, "INTRADAY",
+                             score_tier="HIGH", lot_size=25)
+    # tiered_qty=30, final_qty=(30//25)*25=25, skew=(30-25)/30=0.1667=16.7% < 25%
+    assert result.success
+    assert result.qty == 25
+    print("  OK FIX-021: tiered=30, lot=25 -> skew=16.7% < 25% -> proceeds with qty=25")
+
+
+def test_fix021_lot_size_one_never_rejected() -> None:
+    """FIX-021: lot_size=1 skips skew check entirely (equity default)."""
+    fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
+    sizer = PositionSizer(
+        fund_manager=fm,
+        leverage_map=_DEFAULT_LEVERAGE,
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.10,
+        tier_multipliers=_DEFAULT_TIER_MULT,
+        lot_skew_rejection_threshold=0.01,  # Very strict 1% threshold
+    )
+    # Any qty with lot_size=1 should pass (no truncation, no skew)
+    result = sizer.calculate("SYM", "BUY", 50.0, 40.0, "INTRADAY",
+                             score_tier="HIGH", lot_size=1)
+    assert result.success
+    assert result.qty == 100  # normal calculation
+    print("  OK FIX-021: lot_size=1 -> skew check skipped, qty=100 (never rejected)")
+
+
+def test_fix021_threshold_configurable() -> None:
+    """FIX-021: different threshold changes rejection behavior."""
+    fm = _MockFundManager(total=100_000.0, intraday_avail=70_000.0)
+
+    # Strict threshold: 10%
+    sizer_strict = PositionSizer(
+        fund_manager=fm,
+        leverage_map=_DEFAULT_LEVERAGE,
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.10,
+        tier_multipliers=_DEFAULT_TIER_MULT,
+        lot_skew_rejection_threshold=0.10,  # 10%
+    )
+    # tiered=30, lot=25 -> skew=16.7% > 10% -> rejected
+    result_strict = sizer_strict.calculate("SYM", "BUY", 100.0, 66.67, "INTRADAY",
+                                            score_tier="HIGH", lot_size=25)
+    assert not result_strict.success
+    assert result_strict.constraint == "REJECTED_LOT_SKEW"
+
+    # Lenient threshold: 50%
+    sizer_lenient = PositionSizer(
+        fund_manager=fm,
+        leverage_map=_DEFAULT_LEVERAGE,
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.10,
+        tier_multipliers=_DEFAULT_TIER_MULT,
+        lot_skew_rejection_threshold=0.50,  # 50%
+    )
+    # tiered=30, lot=25 -> skew=16.7% < 50% -> proceeds
+    result_lenient = sizer_lenient.calculate("SYM", "BUY", 100.0, 66.67, "INTRADAY",
+                                              score_tier="HIGH", lot_size=25)
+    assert result_lenient.success
+    assert result_lenient.qty == 25
+    print("  OK FIX-021: threshold=10% rejects, threshold=50% proceeds (configurable)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -548,6 +652,10 @@ def run_all_tests() -> int:
         test_tier_low_reduces_qty_audit_regression,
         test_lot_size_rounding_snaps_down,
         test_lot_size_larger_than_computed_qty_fails,
+        test_fix021_high_skew_rejected,
+        test_fix021_acceptable_skew_proceeds,
+        test_fix021_lot_size_one_never_rejected,
+        test_fix021_threshold_configurable,
         test_intraday_uses_intraday_bucket,
         test_delivery_uses_positional_bucket,
         test_intraday_exhausted_positional_has_cash_fails,

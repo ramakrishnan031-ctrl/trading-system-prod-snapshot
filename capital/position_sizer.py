@@ -126,6 +126,7 @@ class PositionSizer:
         tier_multipliers: Optional[dict[str, float]] = None,
         logger=None,
         instrument_cache=None,  # IC7: optional InstrumentCache for lot_size lookup
+        lot_skew_rejection_threshold: float = 0.25,  # FIX-021: reject if skew exceeds this
     ) -> None:
         self._fm = fund_manager
         self._leverage_map = dict(leverage_map)
@@ -135,6 +136,7 @@ class PositionSizer:
         self._tier_multipliers = dict(tier_multipliers or _DEFAULT_TIER_MULTIPLIERS)
         self._log = logger
         self._instrument_cache = instrument_cache  # IC7
+        self._lot_skew_rejection_threshold = lot_skew_rejection_threshold  # FIX-021
 
     def calculate(
         self,
@@ -309,6 +311,27 @@ class PositionSizer:
 
         # ── PS6: Lot size rounding ─────────────────────────────────────────────
         final_qty = (tiered_qty // lot_size) * lot_size
+
+        # ── FIX-021: Lot skew rejection (skip if lot_size == 1 or final_qty == 0) ──
+        # If final_qty==0, let BELOW_MIN handle it (more accurate constraint name).
+        if lot_size != 1 and tiered_qty > 0 and final_qty > 0:
+            skew = (tiered_qty - final_qty) / tiered_qty
+            if skew > self._lot_skew_rejection_threshold:
+                reason = (
+                    f"REJECTED_LOT_SKEW for {symbol}: skew={skew:.1%} "
+                    f"exceeds threshold {self._lot_skew_rejection_threshold:.1%} "
+                    f"(tiered_qty={tiered_qty}, final_qty={final_qty}, lot_size={lot_size})"
+                )
+                return SizingResult(
+                    success=False,
+                    qty=0,
+                    margin_required=0.0,
+                    risk_amount=0.0,
+                    bucket=bucket,
+                    constraint="REJECTED_LOT_SKEW",
+                    reason=reason,
+                    breakdown=breakdown,
+                )
 
         if final_qty < lot_size or final_qty < self._min_qty_threshold:
             reason = (

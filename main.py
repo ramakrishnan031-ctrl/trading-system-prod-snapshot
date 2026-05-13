@@ -1219,6 +1219,7 @@ def _main_locked(args, config_dir: Path) -> int:
         },
         logger=get_logger("position_sizer"),
         instrument_cache=instrument_cache,  # IC7: lot_size from cache
+        lot_skew_rejection_threshold=ps_cfg.lot_skew_rejection_threshold,  # FIX-021
     )
 
     risk_cfg = app_config.system.risk
