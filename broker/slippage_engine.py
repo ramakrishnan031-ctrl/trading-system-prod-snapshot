@@ -40,6 +40,7 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Optional
 
 from core.config_loader import SlippageConfig
@@ -115,16 +116,28 @@ class SlippageEngine:
 
 
 def _round_up_to_tick(value: float, tick: float) -> float:
-    n = int(value / tick)
-    rounded = n * tick
-    if rounded < value - 1e-12:
-        rounded += tick
-    return round(rounded, 4)
+    """
+    Round value UP to nearest tick_size multiple using decimal.Decimal.
+
+    FIX-014: Replaces float arithmetic + delta-check with Decimal ROUND_CEILING
+    to eliminate precision drift (e.g., 10.9999999998 → 11.00 for tick=0.05).
+    """
+    d_value = Decimal(str(value))
+    d_tick = Decimal(str(tick))
+    # Divide and round up to nearest integer multiple
+    d_result = (d_value / d_tick).quantize(Decimal('1'), rounding=ROUND_CEILING) * d_tick
+    return float(d_result)
 
 
 def _round_down_to_tick(value: float, tick: float) -> float:
-    n = int(value / tick)
-    rounded = n * tick
-    if rounded > value + 1e-12:
-        rounded -= tick
-    return round(rounded, 4)
+    """
+    Round value DOWN to nearest tick_size multiple using decimal.Decimal.
+
+    FIX-014: Replaces float arithmetic + delta-check with Decimal ROUND_FLOOR
+    to eliminate precision drift.
+    """
+    d_value = Decimal(str(value))
+    d_tick = Decimal(str(tick))
+    # Divide and round down to nearest integer multiple
+    d_result = (d_value / d_tick).quantize(Decimal('1'), rounding=ROUND_FLOOR) * d_tick
+    return float(d_result)

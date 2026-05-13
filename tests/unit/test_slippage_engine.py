@@ -197,6 +197,80 @@ def test_pure_idempotent() -> None:
     print("  OK apply is idempotent / pure")
 
 
+# ─── FIX-014: Decimal tick rounding precision tests ─────────────────────────
+
+def test_fix014_round_up_tick_001() -> None:
+    """FIX-014: _round_up_to_tick with tick=0.01 precision."""
+    from broker.slippage_engine import _round_up_to_tick
+    assert _round_up_to_tick(10.004, 0.01) == 10.01, "10.004 → 10.01"
+    assert _round_up_to_tick(10.010, 0.01) == 10.01, "10.010 → 10.01 (exact)"
+    assert _round_up_to_tick(10.999, 0.01) == 11.00, "10.999 → 11.00 (rounds up)"
+    print("  OK _round_up_to_tick tick=0.01")
+
+
+def test_fix014_round_up_tick_005() -> None:
+    """FIX-014: _round_up_to_tick with tick=0.05 precision."""
+    from broker.slippage_engine import _round_up_to_tick
+    assert _round_up_to_tick(10.02, 0.05) == 10.05, "10.02 → 10.05"
+    assert _round_up_to_tick(10.05, 0.05) == 10.05, "10.05 → 10.05 (exact)"
+    assert _round_up_to_tick(10.9999999998, 0.05) == 11.00, "10.9999999998 → 11.00 (precision edge)"
+    print("  OK _round_up_to_tick tick=0.05")
+
+
+def test_fix014_round_up_tick_025() -> None:
+    """FIX-014: _round_up_to_tick with tick=0.25 precision."""
+    from broker.slippage_engine import _round_up_to_tick
+    assert _round_up_to_tick(100.1, 0.25) == 100.25, "100.1 → 100.25"
+    assert _round_up_to_tick(100.25, 0.25) == 100.25, "100.25 → 100.25 (exact)"
+    assert _round_up_to_tick(100.26, 0.25) == 100.50, "100.26 → 100.50"
+    print("  OK _round_up_to_tick tick=0.25")
+
+
+def test_fix014_round_down_tick_001() -> None:
+    """FIX-014: _round_down_to_tick with tick=0.01 precision."""
+    from broker.slippage_engine import _round_down_to_tick
+    assert _round_down_to_tick(10.006, 0.01) == 10.00, "10.006 → 10.00"
+    assert _round_down_to_tick(10.010, 0.01) == 10.01, "10.010 → 10.01 (exact)"
+    assert _round_down_to_tick(10.999, 0.01) == 10.99, "10.999 → 10.99"
+    print("  OK _round_down_to_tick tick=0.01")
+
+
+def test_fix014_round_down_tick_005() -> None:
+    """FIX-014: _round_down_to_tick with tick=0.05 precision."""
+    from broker.slippage_engine import _round_down_to_tick
+    assert _round_down_to_tick(10.07, 0.05) == 10.05, "10.07 → 10.05"
+    assert _round_down_to_tick(10.05, 0.05) == 10.05, "10.05 → 10.05 (exact)"
+    assert _round_down_to_tick(11.0000000002, 0.05) == 11.00, "11.0000000002 → 11.00 (precision edge)"
+    print("  OK _round_down_to_tick tick=0.05")
+
+
+def test_fix014_round_down_tick_025() -> None:
+    """FIX-014: _round_down_to_tick with tick=0.25 precision."""
+    from broker.slippage_engine import _round_down_to_tick
+    assert _round_down_to_tick(100.3, 0.25) == 100.25, "100.3 → 100.25"
+    assert _round_down_to_tick(100.25, 0.25) == 100.25, "100.25 → 100.25 (exact)"
+    assert _round_down_to_tick(100.24, 0.25) == 100.00, "100.24 → 100.00"
+    print("  OK _round_down_to_tick tick=0.25")
+
+
+def test_fix014_round_up_negative_price() -> None:
+    """FIX-014: _round_up_to_tick handles negative prices (theoretical edge)."""
+    from broker.slippage_engine import _round_up_to_tick
+    # Negative "round up" means toward zero (less negative)
+    assert _round_up_to_tick(-10.04, 0.05) == -10.00, "-10.04 → -10.00"
+    assert _round_up_to_tick(-10.05, 0.05) == -10.05, "-10.05 → -10.05 (exact)"
+    print("  OK _round_up_to_tick negative prices")
+
+
+def test_fix014_round_down_negative_price() -> None:
+    """FIX-014: _round_down_to_tick handles negative prices (theoretical edge)."""
+    from broker.slippage_engine import _round_down_to_tick
+    # Negative "round down" means away from zero (more negative)
+    assert _round_down_to_tick(-10.02, 0.05) == -10.05, "-10.02 → -10.05"
+    assert _round_down_to_tick(-10.05, 0.05) == -10.05, "-10.05 → -10.05 (exact)"
+    print("  OK _round_down_to_tick negative prices")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -217,6 +291,15 @@ TESTS = [
     test_apply_side_case_insensitive,
     test_ctor_rejects_default_tier_not_in_tiers,
     test_pure_idempotent,
+    # FIX-014 decimal precision tests
+    test_fix014_round_up_tick_001,
+    test_fix014_round_up_tick_005,
+    test_fix014_round_up_tick_025,
+    test_fix014_round_down_tick_001,
+    test_fix014_round_down_tick_005,
+    test_fix014_round_down_tick_025,
+    test_fix014_round_up_negative_price,
+    test_fix014_round_down_negative_price,
 ]
 
 
