@@ -255,13 +255,25 @@ class StepExecutor:
     def _step_8_spread_check(
         self, signal: dict, md: dict, thr: dict, direction: str
     ) -> float:
-        """Spread <= max_spread_pct. Missing bid/ask -> 0.5 (neutral)."""
+        """
+        FIX-043: Spread <= max_spread_pct using mid-price denominator.
+        Missing bid/ask -> 0.5 (neutral). mid <= 0 -> WARNING + 0.5 (neutral).
+        """
         bid = md.get("bid")
         ask = md.get("ask")
-        ltp = md.get("ltp", 0.0)
-        if bid is None or ask is None or not ltp:
+        if bid is None or ask is None:
             return 0.5
-        spread_pct = ((ask - bid) / ltp) * 100.0
+
+        # FIX-043: Use mid-price instead of LTP (LTP can be stale)
+        mid = (ask + bid) / 2.0
+        if mid <= 0.0:
+            self._logger.warning(
+                "step_executor.spread_check: mid_price <= 0 (bid=%s, ask=%s) - returning neutral",
+                bid, ask
+            )
+            return 0.5
+
+        spread_pct = ((ask - bid) / mid) * 100.0
         max_spread = thr.get("max_spread_pct", 0.1)
         return 1.0 if spread_pct <= max_spread else 0.0
 

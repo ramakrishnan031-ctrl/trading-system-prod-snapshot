@@ -358,8 +358,7 @@ def test_step8_spread_within_threshold_returns_one():
     ex = _make_executor()
     md = _base_market_data()
     md["bid"] = 2509.9
-    md["ask"] = 2510.1   # spread = 0.2; ltp=2510; spread_pct=0.00796 < 0.1
-    md["ltp"] = 2510.0
+    md["ask"] = 2510.1   # mid=2510.0; spread_pct=(0.2/2510)*100=0.00796% < 0.1
     result = ex.run_all(_base_signal(), md, _base_thresholds())
     assert result.step_results["spread_check"] == 1.0
 
@@ -368,8 +367,7 @@ def test_step8_wide_spread_returns_zero():
     ex = _make_executor()
     md = _base_market_data()
     md["bid"] = 2505.0
-    md["ask"] = 2515.0   # spread = 10; spread_pct = 0.398% > 0.1
-    md["ltp"] = 2510.0
+    md["ask"] = 2515.0   # mid=2510.0; spread_pct=(10/2510)*100=0.398% > 0.1
     result = ex.run_all(_base_signal(), md, _base_thresholds())
     assert result.step_results["spread_check"] == 0.0
 
@@ -381,6 +379,48 @@ def test_step8_bid_ask_missing_returns_neutral():
     del md["ask"]
     result = ex.run_all(_base_signal(), md, _base_thresholds())
     assert result.step_results["spread_check"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# FIX-043: Mid-Price Spread Denominator Tests
+# ---------------------------------------------------------------------------
+
+def test_fix043_stale_ltp_uses_mid_price_not_ltp():
+    """FIX-043: Stale LTP should not affect spread calculation (mid-price used)."""
+    ex = _make_executor()
+    md = _base_market_data()
+    md["bid"] = 120.0
+    md["ask"] = 120.10
+    md["ltp"] = 100.0  # Stale LTP - should be ignored
+    # mid = (120.0 + 120.10) / 2 = 120.05
+    # spread_pct = ((120.10 - 120.0) / 120.05) * 100 = 0.0833%
+    # Old calculation would have been: (0.10 / 100) * 100 = 0.10%
+    result = ex.run_all(_base_signal(), md, _base_thresholds())
+    # With max_spread_pct=0.1, spread of 0.0833% should pass
+    assert result.step_results["spread_check"] == 1.0
+
+
+def test_fix043_zero_spread_when_bid_equals_ask():
+    """FIX-043: When bid=ask, spread should be 0.0%."""
+    ex = _make_executor()
+    md = _base_market_data()
+    md["bid"] = 100.0
+    md["ask"] = 100.0
+    # mid = 100.0, spread_pct = 0.0%
+    result = ex.run_all(_base_signal(), md, _base_thresholds())
+    assert result.step_results["spread_check"] == 1.0
+
+
+def test_fix043_zero_mid_price_returns_neutral_no_crash():
+    """FIX-043: bid=0, ask=0 → mid=0 → no ZeroDivisionError, neutral score."""
+    ex = _make_executor()
+    md = _base_market_data()
+    md["bid"] = 0.0
+    md["ask"] = 0.0
+    # mid = 0.0 → guard triggers, returns 0.5 (neutral)
+    result = ex.run_all(_base_signal(), md, _base_thresholds())
+    assert result.step_results["spread_check"] == 0.5
+    # Should log WARNING but not crash
 
 
 # ---------------------------------------------------------------------------
