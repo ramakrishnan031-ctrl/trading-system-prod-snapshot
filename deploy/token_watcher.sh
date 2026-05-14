@@ -52,6 +52,15 @@ service_is_active() {
 log "token_watcher started (PROJECT_DIR=$PROJECT_DIR, poll=${SLEEP_SEC}s)"
 
 while true; do
+    # FIX-040: Skip poll if .tmp file exists (copy in progress)
+    if [ -f "${TOKEN_FILE}.tmp" ]; then
+        printf '[%s] DEBUG: %s.tmp exists, skipping poll (copy in progress)\n' \
+            "$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S IST')" \
+            "$TOKEN_FILE" >> "$LOG_FILE"
+        sleep "$SLEEP_SEC"
+        continue
+    fi
+
     if service_is_active; then
         : # already running -- nothing to do
     elif token_is_fresh; then
