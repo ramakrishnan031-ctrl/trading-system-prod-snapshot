@@ -54,6 +54,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from broker.slippage_engine import _round_down_to_tick, _round_up_to_tick
 from core.time_authority import now_ist_iso
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
@@ -667,24 +668,43 @@ class SmartTgtManager:
 
     def _round_sl_to_tick(self, symbol: str, raw_sl: float, direction: str) -> float:
         """
-        Audit #8: snap raw_sl to a valid tick.
+        FIX-044: Snap raw_sl to valid tick using slippage_engine functions.
 
-        LONG trail tightens SL upward: use ceil so rounded_sl >= raw_sl
-        (never weakens the advance). SHORT trail tightens SL downward: use
-        floor so rounded_sl <= raw_sl. Returns raw_sl unchanged if no
-        instrument_cache is wired or tick lookup fails.
+        LONG: round DOWN (conservative - less likely to trigger prematurely)
+        SHORT: round UP (conservative - less likely to trigger prematurely)
+
+        Fallback to tick=0.05 with WARNING if instrument_cache unavailable.
         """
-        if self._instrument_cache is None:
-            return raw_sl
-        try:
-            tick = self._instrument_cache.tick_size(symbol)
-            if tick <= 0:
-                return raw_sl
-            if direction == "LONG":
-                return round(math.ceil(raw_sl / tick) * tick, 10)
-            return round(math.floor(raw_sl / tick) * tick, 10)
-        except Exception:
-            return raw_sl
+        tick_size = None
+        if self._instrument_cache is not None:
+            try:
+                tick_size = self._instrument_cache.tick_size(symbol)
+                if tick_size <= 0:
+                    tick_size = None
+            except Exception:
+                tick_size = None
+
+        # FIX-044: Fallback to 0.05 if tick unavailable
+        if tick_size is None:
+            tick_size = 0.05
+            self._log.warning(
+                f"SmartTgtManager._round_sl_to_tick: tick_size unavailable for {symbol}, "
+                f"using fallback {tick_size}"
+            )
+
+        # FIX-044: Apply directional rounding (reuse slippage_engine functions)
+        if direction == "LONG":
+            rounded_sl = _round_down_to_tick(raw_sl, tick_size)
+        else:  # SHORT
+            rounded_sl = _round_up_to_tick(raw_sl, tick_size)
+
+        # FIX-044: DEBUG log pre/post rounding
+        self._log.debug(
+            f"SmartTgtManager._round_sl_to_tick: {symbol} {direction} "
+            f"raw_sl={raw_sl:.4f} tick={tick_size} rounded_sl={rounded_sl:.4f}"
+        )
+
+        return rounded_sl
 
     def _maybe_fire_critical(
         self, trade_id: str, symbol: str, failures: int, reason: str

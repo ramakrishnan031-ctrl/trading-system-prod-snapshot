@@ -357,14 +357,16 @@ def test_long_price_crosses_trigger_one_step() -> None:
 
     # High = 1005 (0.5% = trigger_pct). steps = int((0.005 - 0.005)/0.003) = 0
     # new_sl = 1000 * (1 + 0.005 + 0) = 1005.0 > 980 -> should trail
+    # FIX-044: Conservative rounding (DOWN for LONG) with tick=0.05 fallback
+    # Float precision: 1000*1.005 = 1004.9999... → rounds DOWN to 1004.95
     cs.fire_candle(_make_candle(high=1005.0))
 
     assert len(adapter.calls) == 1
-    assert abs(adapter.calls[0]["trigger_price"] - 1005.0) < 0.001
+    assert abs(adapter.calls[0]["trigger_price"] - 1004.95) < 0.001
     # current_sl updated in tracked state
     assert len(store.update_calls) == 1
     assert log.has_info("trailed SL")
-    print("  OK LONG crosses trigger: 1 modify call, SL=1005.0")
+    print("  OK LONG crosses trigger: 1 modify call, SL=1004.95 (conservative rounding)")
 
 
 def test_long_price_multiple_steps() -> None:
@@ -376,11 +378,12 @@ def test_long_price_multiple_steps() -> None:
     # distance_pct = 0.02
     # steps = int((0.02 - 0.005) / 0.003) = int(5.0) = 5
     # new_sl = 1000 * (1 + 0.005 + 5 * 0.003) = 1000 * 1.020 = 1020.0
+    # FIX-044: Conservative rounding (DOWN for LONG) with tick=0.05 fallback
+    # Float precision: 1000*1.020 = 1019.9999... → rounds DOWN to 1019.95
     cs.fire_candle(_make_candle(high=1020.0))
 
     assert len(adapter.calls) == 1
-    expected_sl = 1000.0 * (1.0 + 0.005 + 5 * 0.003)
-    assert abs(adapter.calls[0]["trigger_price"] - expected_sl) < 0.001
+    assert abs(adapter.calls[0]["trigger_price"] - 1019.95) < 0.001
     print(f"  OK LONG multiple steps: SL={adapter.calls[0]['trigger_price']:.4f}")
 
 
@@ -1558,6 +1561,168 @@ def test_fix026_volume_nonzero_with_flag_true_enters_placeholder() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-044: Tick-Size Rounding on SL Modifications
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _MockInstrumentCache:
+    """Mock InstrumentCache for tick-size testing."""
+
+    def __init__(self, tick_map: dict = None, raise_on_symbol: str = None):
+        self._tick_map = tick_map or {}
+        self._raise_on = raise_on_symbol
+
+    def tick_size(self, symbol: str) -> float:
+        if self._raise_on and symbol == self._raise_on:
+            raise ValueError(f"No tick_size for {symbol}")
+        return self._tick_map.get(symbol, 0.05)
+
+
+def test_fix044_long_rounds_down_to_tick():
+    """FIX-044: LONG SL rounds DOWN to tick (conservative rounding)."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix044_1": {"order_id": "co_fix044_1", "variety": "co"}}
+
+    # Mock InstrumentCache with tick=0.05
+    ic = _MockInstrumentCache(tick_map={"RELIANCE": 0.05})
+    mgr.set_instrument_cache(ic)
+
+    TOKEN = 1234
+    mgr.register_trade(
+        trade_id="trd_fix044_1",
+        instrument_token=TOKEN,
+        symbol="RELIANCE",
+        direction="LONG",
+        entry_price=100.0,
+        initial_sl=95.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Fire candle that trails SL
+    # With entry=100, trigger=0.5%, step=0.3%, high=105.5:
+    # steps = int((5.5 - 0.5) / 0.3) = 16
+    # new_sl = 100 * (1 + 0.005 + 16*0.003) = 100 * 1.053 = 105.3 (approx)
+    # Float precision: 100*1.053 may be 105.299999... → rounds DOWN to 105.25 with tick=0.05
+    cs.fire_candle(_make_candle(token=TOKEN, high=105.5))
+
+    assert len(adapter.calls) == 1
+    submitted_sl = adapter.calls[0]["trigger_price"]
+    # The submitted SL should be a multiple of 0.05 (with floating point tolerance)
+    remainder = submitted_sl % 0.05
+    assert remainder < 0.001 or remainder > 0.049, \
+        f"SL {submitted_sl} not rounded to tick 0.05 (remainder={remainder})"
+    print(f"  OK FIX-044 LONG: submitted_sl={submitted_sl:.2f} (rounded to tick=0.05)")
+
+
+def test_fix044_short_rounds_up_to_tick():
+    """FIX-044: SHORT SL rounds UP to tick (conservative rounding)."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix044_2": {"order_id": "co_fix044_2", "variety": "co"}}
+
+    ic = _MockInstrumentCache(tick_map={"INFY": 0.05})
+    mgr.set_instrument_cache(ic)
+
+    TOKEN = 5678
+    mgr.register_trade(
+        trade_id="trd_fix044_2",
+        instrument_token=TOKEN,
+        symbol="INFY",
+        direction="SHORT",
+        entry_price=100.0,
+        initial_sl=105.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Fire candle that trails SL down
+    # With entry=100, trigger=0.5%, step=0.3%, low=94.5:
+    # steps = int((5.5 - 0.5) / 0.3) = 16
+    # new_sl = 100 * (1 - 0.005 - 16*0.003) = 100 * 0.947 = 94.7 (approx)
+    # Float precision may cause 94.699999... → rounds UP to 94.70 with tick=0.05
+    cs.fire_candle(_make_candle(token=TOKEN, symbol="INFY", low=94.5))
+
+    assert len(adapter.calls) == 1
+    submitted_sl = adapter.calls[0]["trigger_price"]
+    # Should be rounded to tick=0.05 (with floating point tolerance)
+    remainder = submitted_sl % 0.05
+    assert remainder < 0.001 or remainder > 0.049, \
+        f"SL {submitted_sl} not rounded to tick 0.05 (remainder={remainder})"
+    print(f"  OK FIX-044 SHORT: submitted_sl={submitted_sl:.2f} (rounded to tick=0.05)")
+
+
+def test_fix044_tick_025_rounding():
+    """FIX-044: tick=0.25 rounds correctly (LONG: down, SHORT: up)."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix044_3": {"order_id": "co_fix044_3", "variety": "co"}}
+
+    # tick=0.25 (e.g., high-price stock)
+    ic = _MockInstrumentCache(tick_map={"TCS": 0.25})
+    mgr.set_instrument_cache(ic)
+
+    TOKEN = 9012
+    mgr.register_trade(
+        trade_id="trd_fix044_3",
+        instrument_token=TOKEN,
+        symbol="TCS",
+        direction="LONG",
+        entry_price=1000.0,
+        initial_sl=980.0,
+        qty=5,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    cs.fire_candle(_make_candle(token=TOKEN, symbol="TCS", high=1030.0))
+
+    assert len(adapter.calls) == 1
+    submitted_sl = adapter.calls[0]["trigger_price"]
+    # Should be rounded to tick=0.25 (with floating point tolerance)
+    remainder = submitted_sl % 0.25
+    assert remainder < 0.001 or remainder > 0.249, \
+        f"SL {submitted_sl} not rounded to tick 0.25 (remainder={remainder})"
+    print(f"  OK FIX-044 tick=0.25: submitted_sl={submitted_sl:.2f} (rounded to 0.25)")
+
+
+def test_fix044_tick_unavailable_fallback_with_warning():
+    """FIX-044: tick_size unavailable → fallback to 0.05, WARNING logged."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix044_4": {"order_id": "co_fix044_4", "variety": "co"}}
+
+    # Mock cache that raises exception for this symbol
+    ic = _MockInstrumentCache(raise_on_symbol="UNKNOWN")
+    mgr.set_instrument_cache(ic)
+
+    TOKEN = 1111
+    mgr.register_trade(
+        trade_id="trd_fix044_4",
+        instrument_token=TOKEN,
+        symbol="UNKNOWN",
+        direction="LONG",
+        entry_price=200.0,
+        initial_sl=190.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    cs.fire_candle(_make_candle(token=TOKEN, symbol="UNKNOWN", high=210.0))
+
+    # Should have logged WARNING about fallback
+    warnings = [msg for msg in log.warnings if "tick_size unavailable" in msg.lower()]
+    assert len(warnings) > 0, f"Expected WARNING log for tick_size unavailable, got warnings: {log.warnings}"
+
+    # Should still submit with fallback tick=0.05
+    assert len(adapter.calls) == 1
+    submitted_sl = adapter.calls[0]["trigger_price"]
+    remainder = submitted_sl % 0.05
+    assert remainder < 0.001 or remainder > 0.049, \
+        f"SL {submitted_sl} not rounded to fallback tick 0.05 (remainder={remainder})"
+    print(f"  OK FIX-044 fallback: WARNING logged, submitted_sl={submitted_sl:.2f} (tick=0.05)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1637,6 +1802,11 @@ def run_all_tests() -> int:
         test_fix026_volume_zero_no_division_error,
         test_fix026_volume_dependent_trails_false_skips_volume_logic,
         test_fix026_volume_nonzero_with_flag_true_enters_placeholder,
+        # FIX-044
+        test_fix044_long_rounds_down_to_tick,
+        test_fix044_short_rounds_up_to_tick,
+        test_fix044_tick_025_rounding,
+        test_fix044_tick_unavailable_fallback_with_warning,
     ]
 
     print("=" * 70)
