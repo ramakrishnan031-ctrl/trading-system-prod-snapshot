@@ -5,7 +5,7 @@ generate_screened_stocks_csv.py -- Trading System v2
 PURPOSE:
     Generate screened_stocks_YYYY-MM-DD.csv for post-trade analysis.
 
-    Parses logs/system_YYYY-MM-DD.log to extract:
+    Queries StateStore DB (trades + signals tables) to extract:
     - Symbols that got ORDER PLACED → TRADED column
     - Symbols that were REJECTED/SKIPPED → NON_TRADED + REJECTION_REASON columns
 
@@ -22,174 +22,156 @@ CRON ENTRY (to add to VM crontab):
     1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron.log 2>&1
 
 Paper/Live parity: UNIFIED - works for both modes
+
+FIX-039: Rewritten to use StateStore DB queries instead of log parsing.
 """
 from __future__ import annotations
 
 import csv
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Tuple
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from core.state_store import StateStore
 
 
 # ---------------------------------------------------------------------------
-# Rejection reason mapping (expanded format)
+# Rejection reason expansion
 # ---------------------------------------------------------------------------
 
-def expand_rejection_reason(check: str, reason: str = "") -> str:
+def expand_rejection_reason(rejection_reason: str | None, status: str) -> str:
     """
-    Map rejection check codes to expanded readable reasons.
+    Expand rejection reason into human-readable format.
 
     Args:
-        check: Rejection check code (e.g., "SCORE_48", "DUPLICATE_SYMBOL")
-        reason: Optional detailed reason from log message
+        rejection_reason: The rejection_reason field from signals table (may be None)
+        status: The status field (e.g., 'REJECTED_SCORE', 'DROPPED_DEDUP')
 
     Returns:
         Expanded human-readable reason string
     """
-    # Score-based rejections (regex pattern: SCORE_XX or REJECTED_SCORE_XX)
-    score_match = re.match(r"(?:REJECTED_)?SCORE_(\d+)", check)
-    if score_match:
-        return f"Score too low ({score_match.group(1)}/100)"
+    # If we have a specific reason, use it
+    if rejection_reason:
+        return rejection_reason
 
-    # Exact matches
-    EXACT_MAP = {
-        # Duplicate symbol
-        "DUPLICATE_SYMBOL": "Duplicate symbol (active position/order exists)",
-        "REJECTED_DUPLICATE_SYMBOL": "Duplicate symbol (active position/order exists)",
+    # Otherwise derive from status code
+    STATUS_MAP = {
+        # Signal-level rejections
+        'DROPPED_DEDUP': 'Duplicate signal (same symbol+scanner+minute)',
+        'DROPPED_EXPIRED': 'Signal expired before processing',
+        'DROPPED_KILL_SWITCH': 'Kill switch active',
+        'REJECTED_DUPLICATE_SYMBOL': 'Duplicate symbol (active position exists)',
+        'REJECTED_SCORE': 'Score too low',
+        'REJECTED_OUTSIDE_ENTRY_WINDOW': 'Outside entry window',
+        'REJECTED_CAPITAL_EXCEEDED': 'Insufficient capital',
+        'REJECTED_MAX_POSITIONS': 'Max positions limit reached',
+        'REJECTED_QUOTE_UNAVAILABLE': 'Quote unavailable (API failure)',
+        'REJECTED_INVALID_DERIVED_PRICE': 'Invalid derived price',
+        'REJECTED_TGT_DISTANCE_TOO_SMALL': 'Target distance too small',
+        'REJECTED_UNKNOWN_STRATEGY': 'Unknown strategy',
+        'REJECTED_PLACEMENT_FAILED': 'Order placement failed',
 
-        # Quote unavailable
-        "SKIPPED_QUOTE_UNAVAILABLE": "Quote unavailable (API failure)",
-        "QUOTE_UNAVAILABLE": "Quote unavailable (API failure)",
-
-        # Entry window
-        "OUTSIDE_ENTRY_WINDOW": "Outside entry window (after HH:MM)",
-        "REJECTED_OUTSIDE_ENTRY_WINDOW": "Outside entry window (after HH:MM)",
-
-        # Capital constraints
-        "CAPITAL_EXCEEDED": "Insufficient capital",
-        "INSUFFICIENT_CAPITAL": "Insufficient capital",
-        "REJECTED_CAPITAL_EXCEEDED": "Insufficient capital",
-
-        # Position limits
-        "MAX_POSITIONS_EXCEEDED": "Max positions limit reached",
-        "MAX_POSITIONS": "Max positions limit reached",
-        "REJECTED_MAX_POSITIONS": "Max positions limit reached",
-
-        # Kill switch
-        "KILL_SWITCH": "Kill switch active",
-        "REJECTED_KILL_SWITCH": "Kill switch active",
-
-        # Screener executor/scorer errors
-        "SKIPPED_EXECUTOR_ERROR": "Screener executor error",
-        "SKIPPED_SCORER_ERROR": "Screener scorer error",
-
-        # Invalid derived price
-        "INVALID_DERIVED_PRICE": "Invalid derived price (strategy config issue)",
-        "REJECTED_INVALID_DERIVED_PRICE": "Invalid derived price (strategy config issue)",
-
-        # Target distance too small
-        "TGT_DISTANCE_TOO_SMALL": "Target distance too small (degenerate config)",
-        "REJECTED_TGT_DISTANCE_TOO_SMALL": "Target distance too small (degenerate config)",
-
-        # Unknown strategy
-        "UNKNOWN_STRATEGY": "Unknown strategy",
-        "REJECTED_UNKNOWN_STRATEGY": "Unknown strategy",
-
-        # Other
-        "PLACEMENT_FAILED": "Order placement failed",
+        # Screener rejections
+        'SKIPPED_EXECUTOR_ERROR': 'Screener executor error',
+        'SKIPPED_SCORER_ERROR': 'Screener scorer error',
+        'SKIPPED_QUOTE_UNAVAILABLE': 'Quote unavailable (API failure)',
     }
 
-    if check in EXACT_MAP:
-        return EXACT_MAP[check]
+    # Check for exact match
+    if status in STATUS_MAP:
+        return STATUS_MAP[status]
 
-    # Fallback: use the check itself + reason if available
-    if reason:
-        # Extract concise reason (first sentence only)
-        concise_reason = reason.split('.')[0].split(';')[0]
-        clean_check = check.replace('REJECTED_', '').replace('_', ' ').title()
-        return f"{clean_check} ({concise_reason})"
+    # Check for prefixed matches (e.g., REJECTED_SCORE_48)
+    if status.startswith('REJECTED_SCORE_'):
+        score = status.replace('REJECTED_SCORE_', '')
+        return f'Score too low ({score}/100)'
 
-    return check.replace('REJECTED_', '').replace('_', ' ').title()
+    # Fallback: clean up the status code
+    if status.startswith('REJECTED_'):
+        clean = status.replace('REJECTED_', '').replace('_', ' ').title()
+        return clean
+    elif status.startswith('DROPPED_'):
+        clean = status.replace('DROPPED_', '').replace('_', ' ').title()
+        return f'Dropped: {clean}'
+    elif status.startswith('SKIPPED_'):
+        clean = status.replace('SKIPPED_', '').replace('_', ' ').title()
+        return f'Skipped: {clean}'
+
+    return status.replace('_', ' ').title()
 
 
 # ---------------------------------------------------------------------------
-# Log parsing
+# DB queries
 # ---------------------------------------------------------------------------
 
-def parse_log_file(log_path: Path) -> Tuple[List[str], List[Tuple[str, str]]]:
+def get_traded_symbols(store: StateStore, date_str: str) -> List[str]:
     """
-    Parse system log file to extract TRADED and NON_TRADED symbols.
+    Query trades table for symbols that were actually traded on the given date.
 
     Args:
-        log_path: Path to logs/system_YYYY-MM-DD.log
+        store: StateStore instance
+        date_str: Date in YYYY-MM-DD format
 
     Returns:
-        (traded_symbols, non_traded_with_reasons)
-        traded_symbols: List of symbols that got ORDER PLACED
-        non_traded_with_reasons: List of (symbol, reason) tuples for rejected/skipped
+        Sorted list of unique traded symbols
     """
-    traded: Set[str] = set()
-    non_traded: List[Tuple[str, str]] = []
+    query = """
+        SELECT DISTINCT symbol
+        FROM trades
+        WHERE substr(created_at, 1, 10) = ?
+          AND status NOT IN ('CANCELLED', 'FAILED')
+        ORDER BY symbol
+    """
 
-    # Regex patterns for log parsing
-    order_placed_pattern = re.compile(r'ORDER PLACED — ([A-Z0-9]+)')
+    with store.transaction(readonly=True) as cur:
+        cur.execute(query, (date_str,))
+        rows = cur.fetchall()
 
-    # Unified rejection pattern: captures all rejection types with (SYMBOL) format
-    # Matches:
-    #   - Pipeline: "Signal ... (SYMBOL) rejected at CHECK: reason"
-    #   - Gate: "Gate signal ... (SYMBOL) rejected at CHECK: reason"
-    #   - Screener rejected: "Signal ... (SYMBOL) screener rejected: STATUS"
-    #   - Screener SKIPPED: "Signal ... (SYMBOL) screener SKIPPED: STATUS"
-    rejection_pattern = re.compile(
-        r'(?:Gate signal|Signal) [^\(]+ \(([A-Z0-9]+)\) (?:'
-        r'rejected at ([A-Z_0-9]+): (.+)|'           # Pipeline/gate rejection
-        r'screener rejected: ([A-Z_0-9]+)|'          # Screener rejection
-        r'screener SKIPPED: ([A-Z_0-9]+)'            # Screener skipped
-        r')'
-    )
+    return [row[0] for row in rows]
 
-    if not log_path.exists():
-        print(f"ERROR: Log file not found: {log_path}", file=sys.stderr)
-        return [], []
 
-    with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
-        for line in f:
-            # Check for ORDER PLACED
-            match = order_placed_pattern.search(line)
-            if match:
-                symbol = match.group(1)
-                traded.add(symbol)
-                continue
+def get_non_traded_symbols(store: StateStore, date_str: str) -> List[Tuple[str, str]]:
+    """
+    Query signals table for symbols that were rejected/dropped on the given date.
 
-            # Check for rejections (pipeline, gate, screener)
-            match = rejection_pattern.search(line)
-            if match:
-                symbol = match.group(1)
+    Args:
+        store: StateStore instance
+        date_str: Date in YYYY-MM-DD format
 
-                # Determine rejection type and extract reason
-                if match.group(2):  # Pipeline/gate rejection (rejected at CHECK: reason)
-                    check = match.group(2)
-                    reason_detail = match.group(3)
-                    expanded_reason = expand_rejection_reason(check, reason_detail)
-                elif match.group(4):  # Screener rejection
-                    check = match.group(4)
-                    expanded_reason = expand_rejection_reason(check, "")
-                elif match.group(5):  # Screener SKIPPED
-                    check = match.group(5)
-                    expanded_reason = expand_rejection_reason(check, "")
-                else:
-                    continue  # No valid match group
+    Returns:
+        List of (symbol, reason) tuples for non-traded symbols
+    """
+    query = """
+        SELECT symbol, status, rejection_reason
+        FROM signals
+        WHERE substr(received_at, 1, 10) = ?
+          AND (status LIKE 'REJECTED_%' OR status LIKE 'DROPPED_%' OR status LIKE 'SKIPPED_%')
+        ORDER BY received_at
+    """
 
-                # Skip if already traded (shouldn't happen, but safety)
-                if symbol in traded:
-                    continue
+    with store.transaction(readonly=True) as cur:
+        cur.execute(query, (date_str,))
+        rows = cur.fetchall()
 
-                non_traded.append((symbol, expanded_reason))
+    # Deduplicate symbols (keep first occurrence with its reason)
+    seen = set()
+    result = []
+    for symbol, status, rejection_reason in rows:
+        if symbol not in seen:
+            seen.add(symbol)
+            expanded_reason = expand_rejection_reason(rejection_reason, status)
+            result.append((symbol, expanded_reason))
 
-    return sorted(traded), non_traded
+    return result
 
+
+# ---------------------------------------------------------------------------
+# CSV generation
+# ---------------------------------------------------------------------------
 
 def generate_csv(
     date_str: str,
@@ -213,8 +195,8 @@ def generate_csv(
     non_traded = [symbol for symbol, _ in non_traded_with_reasons]
     reasons = [reason for _, reason in non_traded_with_reasons]
 
-    # Pad lists to same length
-    max_len = max(len(traded), len(non_traded), 1)  # at least 1 for header
+    # Pad lists to same length (at least 1 for header)
+    max_len = max(len(traded), len(non_traded), 1)
 
     traded_padded = traded + [''] * (max_len - len(traded))
     non_traded_padded = non_traded + [''] * (max_len - len(non_traded))
@@ -261,14 +243,39 @@ def main() -> int:
 
     # Paths
     project_root = Path(__file__).parent.parent
-    log_path = project_root / "logs" / f"system_{date_str}.log"
+    db_path = project_root / "data" / "state.db"
     output_dir = project_root / "reports" / "daily_review"
 
     print(f"Generating screened stocks CSV for {date_str}...")
-    print(f"  Log file: {log_path}")
+    print(f"  Database: {db_path}")
 
-    # Parse log
-    traded, non_traded_with_reasons = parse_log_file(log_path)
+    # Check DB exists
+    if not db_path.exists():
+        print(f"ERROR: Database not found at {db_path}", file=sys.stderr)
+        print("  Creating empty CSV with headers only...")
+        # Create empty CSV with headers (FIX-039: no crash on empty DB)
+        csv_path = generate_csv(date_str, [], [], output_dir)
+        print(f"  CSV written to: {csv_path}")
+        print("  WARNING: No data (database not found)")
+        return 0
+
+    # Query database
+    try:
+        store = StateStore(db_path=db_path)
+
+        traded = get_traded_symbols(store, date_str)
+        non_traded_with_reasons = get_non_traded_symbols(store, date_str)
+
+        store.close()
+
+    except Exception as exc:
+        print(f"ERROR: Database query failed: {exc}", file=sys.stderr)
+        print("  Creating empty CSV with headers only...")
+        # FIX-039: no crash on DB error
+        csv_path = generate_csv(date_str, [], [], output_dir)
+        print(f"  CSV written to: {csv_path}")
+        print("  WARNING: No data (database error)")
+        return 0
 
     # Generate CSV
     csv_path = generate_csv(date_str, traded, non_traded_with_reasons, output_dir)
@@ -279,7 +286,7 @@ def main() -> int:
     print(f"  CSV written to: {csv_path}")
 
     if len(traded) == 0 and len(non_traded_with_reasons) == 0:
-        print("  WARNING: No symbols found in log. Check log file exists and has data.")
+        print("  WARNING: No symbols found for this date. Check if trading occurred.")
 
     return 0
 
