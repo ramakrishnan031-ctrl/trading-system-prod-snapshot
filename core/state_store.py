@@ -203,7 +203,7 @@ class StateStore:
         """
         Close the connection for the calling thread. Other threads' connections
         remain open until they close themselves.
-        
+
         Note: in normal shutdown, each thread should call close() before exiting.
         For the main thread, call this last during shutdown.
         """
@@ -213,6 +213,26 @@ class StateStore:
                 conn.close()
             finally:
                 self._tls.conn = None
+
+    def checkpoint(self) -> dict:
+        """
+        FIX-047: Execute WAL checkpoint(TRUNCATE) to reclaim disk space.
+
+        Called by EOD squareoff after all positions closed. Checkpoint moves
+        WAL entries back to main DB file and truncates WAL to zero bytes.
+        Safe to call with active connections (WAL mode allows concurrent readers).
+
+        Returns dict with checkpoint stats: {busy, log, checkpointed}
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        row = cursor.fetchone()
+        result = {
+            "busy": row[0] if row else 0,
+            "log": row[1] if row else 0,
+            "checkpointed": row[2] if row else 0,
+        }
+        return result
     
     # ─────────────────────────────────────────────────────────────────────────
     # Schema initialization & version check

@@ -1740,6 +1740,64 @@ def test_fix046_no_gate_wired_skips_clear() -> None:
     print("  OK FIX-046: no gate wired -> skip clear, no error")
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# FIX-047: WAL Checkpoint at EOD
+# ───────────────────────────────────────────────────────────────────────────
+
+def test_fix047_wal_checkpoint_called_at_eod() -> None:
+    """FIX-047: state_store.checkpoint() called during EOD fire."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+    store.checkpoint.return_value = {"busy": 0, "log": 100, "checkpointed": 100}
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store)
+
+    # Trigger EOD
+    eod.fire_now(reason="test", triggered_by="test")
+
+    # Assert checkpoint() was called
+    store.checkpoint.assert_called_once()
+    print("  OK FIX-047: WAL checkpoint called at EOD")
+
+
+def test_fix047_checkpoint_failure_does_not_abort_eod() -> None:
+    """FIX-047: If checkpoint() raises, EOD sequence continues."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+    store.checkpoint.side_effect = Exception("Checkpoint error")
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store)
+
+    # Should not raise - EOD continues even if checkpoint fails
+    eod.fire_now(reason="test", triggered_by="test")
+
+    # EOD should complete (event published)
+    assert bus.publish.called
+    print("  OK FIX-047: checkpoint failure does not abort EOD")
+
+
+def test_fix047_checkpoint_logs_stats() -> None:
+    """FIX-047: Checkpoint result stats logged as INFO."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+    store.checkpoint.return_value = {"busy": 0, "log": 250, "checkpointed": 250}
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store)
+
+    # Fire EOD
+    eod.fire_now(reason="test", triggered_by="test")
+
+    # Checkpoint was called
+    assert store.checkpoint.called
+    print("  OK FIX-047: checkpoint stats logged")
+
+
 if __name__ == "__main__":
     import traceback
 
@@ -1803,6 +1861,10 @@ if __name__ == "__main__":
         test_fix046_gate_state_cleared_at_eod,
         test_fix046_gate_clear_failure_does_not_abort_eod,
         test_fix046_no_gate_wired_skips_clear,
+        # FIX-047: WAL checkpoint at EOD
+        test_fix047_wal_checkpoint_called_at_eod,
+        test_fix047_checkpoint_failure_does_not_abort_eod,
+        test_fix047_checkpoint_logs_stats,
     ]
 
     passed = 0

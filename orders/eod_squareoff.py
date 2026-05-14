@@ -380,6 +380,19 @@ class EodSquareoff:
                     fired_date_str, exc, exc2,
                 )
 
+        # Step 5c: FIX-047 - WAL checkpoint to reclaim disk space
+        try:
+            checkpoint_result = self._store.checkpoint()
+            self._log.info(
+                f"FIX-047: WAL checkpoint complete - "
+                f"busy={checkpoint_result['busy']} "
+                f"log={checkpoint_result['log']} "
+                f"checkpointed={checkpoint_result['checkpointed']}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(f"FIX-047: WAL checkpoint failed: {exc}")
+            # Continue - checkpoint failure should not abort EOD
+
         # Step 6: publish EodSquareoffComplete event (EOD5)
         try:
             self._bus.publish(
