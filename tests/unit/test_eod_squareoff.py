@@ -1673,6 +1673,73 @@ def test_e5_filter_log_carries_recovery_flag() -> None:
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ───────────────────────────────────────────────────────────────────────────
+# FIX-046: Clear Gate State at EOD
+# ───────────────────────────────────────────────────────────────────────────
+
+def test_fix046_gate_state_cleared_at_eod() -> None:
+    """FIX-046: gate_state table + in-memory watchlist cleared at EOD fire."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    # Mock EntryGate with clear_all method
+    gate = MagicMock()
+    gate.clear_all.return_value = 3  # 3 entries cleared
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store)
+    eod._entry_gate = gate  # Wire the gate
+
+    # Trigger EOD
+    eod.fire_now(reason="test", triggered_by="test")
+
+    # Assert gate.clear_all() was called
+    gate.clear_all.assert_called_once()
+    print("  OK FIX-046: gate_state cleared at EOD fire")
+
+
+def test_fix046_gate_clear_failure_does_not_abort_eod() -> None:
+    """FIX-046: If gate.clear_all() raises, EOD sequence continues."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    # Mock gate that raises on clear_all
+    gate = MagicMock()
+    gate.clear_all.side_effect = Exception("DB error")
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store)
+    eod._entry_gate = gate
+
+    # Should not raise - EOD continues even if gate clear fails
+    eod.fire_now(reason="test", triggered_by="test")
+
+    # EOD should complete (soft_kill called, etc.)
+    assert ks.soft_kill.called
+    print("  OK FIX-046: gate clear failure does not abort EOD")
+
+
+def test_fix046_no_gate_wired_skips_clear() -> None:
+    """FIX-046: If entry_gate=None, EOD proceeds without error."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store)
+    # entry_gate is None (not wired)
+    assert eod._entry_gate is None
+
+    # Should not crash
+    eod.fire_now(reason="test", triggered_by="test")
+
+    # EOD completes normally
+    assert ks.soft_kill.called
+    print("  OK FIX-046: no gate wired -> skip clear, no error")
+
+
 if __name__ == "__main__":
     import traceback
 
@@ -1732,6 +1799,10 @@ if __name__ == "__main__":
         # E.5 / 2026-04-25 audit — broker-position filter on every fire
         test_e5_regular_fire_logs_naked_short_warning_for_stale_db_row,
         test_e5_filter_log_carries_recovery_flag,
+        # FIX-046: Clear gate state at EOD
+        test_fix046_gate_state_cleared_at_eod,
+        test_fix046_gate_clear_failure_does_not_abort_eod,
+        test_fix046_no_gate_wired_skips_clear,
     ]
 
     passed = 0

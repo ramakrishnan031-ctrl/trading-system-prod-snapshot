@@ -119,6 +119,8 @@ class EodSquareoff:
         exit_protocol: str = "MARKET",
         limit_aggressive_pct: float = 0.01,
         limit_grace_sec: float = 120.0,
+        # FIX-046: entry_gate for clearing stale gate state at EOD
+        entry_gate: Optional[object] = None,
     ) -> None:
         self._adapter = adapter
         self._store = state_store
@@ -138,6 +140,8 @@ class EodSquareoff:
         self._exit_protocol = exit_protocol
         self._limit_aggressive_pct = limit_aggressive_pct
         self._limit_grace_sec = limit_grace_sec
+        # FIX-046: entry_gate reference
+        self._entry_gate = entry_gate
 
         # EOD3: per-date "already fired" flag
         self._fired_for_date: dict[date, bool] = {}
@@ -262,6 +266,15 @@ class EodSquareoff:
         start_ts = time.monotonic()
 
         self._log.info("EOD square-off triggered for %s", fired_date_str)
+
+        # Step 0: FIX-046 - Clear gate state to prevent stale signal rehydration
+        if self._entry_gate is not None:
+            try:
+                cleared_count = self._entry_gate.clear_all()
+                self._log.info(f"FIX-046: cleared {cleared_count} gate entries at EOD")
+            except Exception as exc:  # noqa: BLE001
+                self._log.error(f"FIX-046: gate clear_all() failed: {exc}")
+                # Continue with EOD sequence even if gate clear fails
 
         # M-3 (write-ahead): mark IN_PROGRESS before doing anything. A crash
         # between here and the COMPLETE update leaves the row IN_PROGRESS,

@@ -1474,6 +1474,15 @@ class StateStore:
                 (status, reason if reason else None, signal_id),
             )
 
+    def clear_all_gate_state(self) -> int:
+        """
+        FIX-046: Clear all gate_state rows (EOD cleanup to prevent stale signal rehydration).
+        Returns count of rows deleted.
+        """
+        with self.transaction() as cur:
+            cur.execute("DELETE FROM gate_state")
+            return cur.rowcount
+
     def get_all_gate_state(self) -> list[dict]:
         """Return every persisted gate_state row as a list of dicts."""
         with self.transaction() as cur:

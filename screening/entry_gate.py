@@ -246,6 +246,26 @@ class EntryGate:
         self._running = False
         self._log.info("EntryGate stopped")
 
+    def clear_all(self) -> int:
+        """
+        FIX-046: Clear all gate entries (in-memory watchlist + persisted gate_state).
+        Called by EOD squareoff to prevent stale signal rehydration next morning.
+        Returns count of cleared entries.
+        """
+        count = 0
+        with self._lock:
+            count = len(self._watchlist)
+            self._watchlist.clear()
+
+        # Clear persisted state
+        db_count = self._state_store.clear_all_gate_state()
+
+        self._log.info(
+            f"EntryGate.clear_all: cleared {count} in-memory entries, "
+            f"{db_count} DB rows from gate_state"
+        )
+        return count
+
     def is_running(self) -> bool:
         return self._running
 
