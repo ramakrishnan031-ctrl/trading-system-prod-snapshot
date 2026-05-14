@@ -651,6 +651,25 @@ class SmartTgtManager:
                 # Do NOT roll back memory; do NOT re-raise. See comment above.
 
         else:  # modify failed
+            # FIX-045: Check if error indicates terminal order state
+            if self._is_terminal_order_error(result.reason):
+                # Terminal error: order already complete/cancelled
+                # Unregister trade gracefully, do NOT retry
+                with self._lock:
+                    info = self._tracked.get(trade_id)
+                    if info is None:
+                        return
+                    symbol = info["symbol"]
+
+                self._log.info(
+                    f"SmartTgtManager: SL modification rejected — order already terminal "
+                    f"({result.reason}), unregistering trade {trade_id} ({symbol})"
+                )
+                self.unregister_trade(trade_id)
+                return
+
+            # Non-terminal error: transient broker issue (500, timeout, etc.)
+            # Use existing retry logic with consecutive_failures counter
             with self._lock:
                 info = self._tracked.get(trade_id)
                 if info is None:
@@ -665,6 +684,34 @@ class SmartTgtManager:
                 f"(failure {failures}/{_MAX_CONSECUTIVE_FAILURES})"
             )
             self._maybe_fire_critical(trade_id, symbol, failures, result.reason)
+
+    def _is_terminal_order_error(self, error_message: str) -> bool:
+        """
+        FIX-045: Detect if error indicates order is in terminal state.
+
+        Terminal errors mean the order is already complete/cancelled and cannot
+        be modified. These should trigger unregister, not retry.
+
+        Transient errors (500, timeout, rate limit) should still retry.
+        """
+        if not error_message:
+            return False
+
+        msg_lower = error_message.lower()
+
+        # Terminal state keywords
+        terminal_keywords = [
+            "already complete",
+            "already cancelled",
+            "already executed",
+            "order complete",
+            "order cancelled",
+            "order rejected",
+            "order not found",
+            "invalid order",
+        ]
+
+        return any(keyword in msg_lower for keyword in terminal_keywords)
 
     def _round_sl_to_tick(self, symbol: str, raw_sl: float, direction: str) -> float:
         """

@@ -40,6 +40,7 @@ class _MockAdapter:
     def __init__(self, default_success: bool = True) -> None:
         self.calls: List[dict] = []
         self._default_success = default_success
+        self._default_reason = "broker_rejected"  # FIX-045: customizable error message
         self._per_call: List[bool] = []  # queue: pop from front
 
     def set_responses(self, responses: List[bool]) -> None:
@@ -61,7 +62,8 @@ class _MockAdapter:
             success = self._per_call.pop(0)
         else:
             success = self._default_success
-        reason = "" if success else "broker_rejected"
+        # FIX-045: use _default_reason for customizable error messages
+        reason = "" if success else self._default_reason
         return _ModifyResult(
             broker_order_id=broker_order_id, success=success, reason=reason
         )
@@ -1723,6 +1725,137 @@ def test_fix044_tick_unavailable_fallback_with_warning():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-045: Graceful Unregister on Terminal Modification Error
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix045_terminal_error_unregisters_trade():
+    """FIX-045: Terminal error (order already complete) → trade unregistered, no retry."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix045_1": {"order_id": "co_fix045_1", "variety": "co"}}
+
+    # Mock adapter that returns terminal error
+    adapter._default_success = False
+    adapter._default_reason = "Order is already COMPLETE"
+
+    mgr.register_trade(
+        trade_id="trd_fix045_1",
+        instrument_token=_ENTRY_TOKEN,
+        symbol="RELIANCE",
+        direction="LONG",
+        entry_price=1000.0,
+        initial_sl=980.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Fire candle that would trigger trail
+    cs.fire_candle(_make_candle(high=1010.0))
+
+    # Should have attempted modify once
+    assert len(adapter.calls) == 1
+
+    # Trade should be unregistered (not in tracked dict)
+    assert "trd_fix045_1" not in mgr._tracked
+
+    # Should have logged INFO about unregistration (not ERROR)
+    info_msgs = [m for m in log.infos if "already terminal" in m.lower()]
+    assert len(info_msgs) > 0, "Expected INFO log about terminal error unregistration"
+
+    # Fire another candle - should NOT trigger another modify (trade unregistered)
+    cs.fire_candle(_make_candle(high=1020.0))
+    assert len(adapter.calls) == 1, "Should not retry after terminal error unregistration"
+
+    print("  OK FIX-045: terminal error → trade unregistered, no retry")
+
+
+def test_fix045_transient_error_retries_normally():
+    """FIX-045: Transient error (500) → retry logic applies, NOT unregistered."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix045_2": {"order_id": "co_fix045_2", "variety": "co"}}
+
+    # Mock adapter that returns transient error
+    adapter._default_success = False
+    adapter._default_reason = "Internal Server Error 500"
+
+    mgr.register_trade(
+        trade_id="trd_fix045_2",
+        instrument_token=_ENTRY_TOKEN,
+        symbol="RELIANCE",
+        direction="LONG",
+        entry_price=1000.0,
+        initial_sl=980.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Fire candle that would trigger trail
+    cs.fire_candle(_make_candle(high=1010.0))
+
+    # Should have attempted modify once
+    assert len(adapter.calls) == 1
+
+    # Trade should still be tracked (NOT unregistered)
+    assert "trd_fix045_2" in mgr._tracked
+
+    # consecutive_failures should be incremented
+    assert mgr._tracked["trd_fix045_2"]["consecutive_failures"] == 1
+
+    # Should have logged ERROR (not INFO)
+    error_msgs = [m for m in log.errors if "modify_order failed" in m.lower()]
+    assert len(error_msgs) > 0, "Expected ERROR log for transient failure"
+
+    # Fire another candle - should retry (trade still tracked)
+    cs.fire_candle(_make_candle(high=1015.0))
+    assert len(adapter.calls) == 2, "Should retry after transient error"
+    assert mgr._tracked["trd_fix045_2"]["consecutive_failures"] == 2
+
+    print("  OK FIX-045: transient error → retry logic applies, still tracked")
+
+
+def test_fix045_unregistered_trade_no_further_modifies():
+    """FIX-045: After unregister via terminal error → no further modify calls."""
+    mgr, adapter, store, cs, log = _make_gate()
+    store._co_orders = {"trd_fix045_3": {"order_id": "co_fix045_3", "variety": "co"}}
+
+    # Start with terminal error response
+    adapter._default_success = False
+    adapter._default_reason = "Order already cancelled"
+
+    mgr.register_trade(
+        trade_id="trd_fix045_3",
+        instrument_token=_ENTRY_TOKEN,
+        symbol="RELIANCE",
+        direction="LONG",
+        entry_price=1000.0,
+        initial_sl=980.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Fire candle → terminal error → unregister
+    cs.fire_candle(_make_candle(high=1010.0))
+    assert len(adapter.calls) == 1
+    assert "trd_fix045_3" not in mgr._tracked
+
+    # Change adapter to succeed (simulate broker recovering)
+    adapter._default_success = True
+
+    # Fire multiple candles - should NOT trigger any modifies
+    cs.fire_candle(_make_candle(high=1015.0))
+    cs.fire_candle(_make_candle(high=1020.0))
+    cs.fire_candle(_make_candle(high=1025.0))
+
+    # Still only 1 call (the initial one that got terminal error)
+    assert len(adapter.calls) == 1, \
+        "Trade should remain unregistered; no further modify calls"
+
+    print("  OK FIX-045: unregistered trade → no further modify calls")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1807,6 +1940,10 @@ def run_all_tests() -> int:
         test_fix044_short_rounds_up_to_tick,
         test_fix044_tick_025_rounding,
         test_fix044_tick_unavailable_fallback_with_warning,
+        # FIX-045
+        test_fix045_terminal_error_unregisters_trade,
+        test_fix045_transient_error_retries_normally,
+        test_fix045_unregistered_trade_no_further_modifies,
     ]
 
     print("=" * 70)
