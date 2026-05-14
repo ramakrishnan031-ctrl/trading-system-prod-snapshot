@@ -57,31 +57,52 @@ class QualityScorer:
         """
         QS3: Compute total score from step raw scores (0.0-1.0).
 
-        Missing steps treated as 0.0 with a WARNING log.
-        Total capped at 100.
+        FIX-042: Proportional scoring — missing steps excluded from denominator.
+        If circuit_check times out, recalculate score as (achieved / weights_present) * 100
+        instead of penalizing with 0.0 for infrastructure jitter.
         """
         steps_cfg = self._weights.steps
         step_scores: dict[str, int] = {}
         missing_steps: list[str] = []
-        total: float = 0.0
+        total_achieved: float = 0.0
+        total_weights_present: int = 0
+        total_weights_possible: int = 0
 
         for name in self._step_names:
             weight: int = getattr(steps_cfg, name)
+            total_weights_possible += weight
+
             if name not in step_results:
+                # FIX-042: Missing step excluded from denominator
                 self._logger.warning(
-                    "quality_scorer: missing step '%s' in step_results, treating as 0.0",
+                    "quality_scorer.missing_step: step '%s' missing - excluded from scoring denominator",
                     name,
                 )
                 missing_steps.append(name)
-                raw = 0.0
+                step_scores[name] = 0  # still report 0 in step_scores for transparency
             else:
                 raw = float(step_results[name])
+                weighted = raw * weight
+                step_scores[name] = int(round(weighted))
+                total_achieved += weighted
+                total_weights_present += weight
 
-            weighted = raw * weight
-            step_scores[name] = int(round(weighted))
-            total += weighted
-
-        total_score: int = min(100, int(round(total)))
+        # FIX-042: Proportional scoring calculation
+        if total_weights_present > 0:
+            final_score = (total_achieved / total_weights_present) * 100.0
+            total_score: int = min(100, int(round(final_score)))
+            self._logger.info(
+                "quality_scorer.proportional_scoring: effective_weights=%d / total_weights=%d (%.1f%%)",
+                total_weights_present,
+                total_weights_possible,
+                (total_weights_present / total_weights_possible) * 100.0,
+            )
+        else:
+            # FIX-042: All steps missing -> score 0
+            total_score = 0
+            self._logger.warning(
+                "quality_scorer.all_steps_missing: returning score 0 (no valid steps)",
+            )
 
         high_thr = self._weights.high_score_threshold
         med_thr = self._weights.medium_score_threshold

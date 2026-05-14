@@ -165,13 +165,15 @@ def test_passed_false_when_score_below_min_pass():
 
 
 def test_missing_step_contributes_zero_and_appears_in_missing_list():
-    """Missing step -> 0.0 contribution, step in missing_steps."""
+    """FIX-042: Missing step -> excluded from denominator, recalculated proportionally."""
     scorer = _make_scorer()
     step_results = _all_ones()
     del step_results["volume_surge"]  # weight=15
     result = scorer.score(step_results)
-    assert result.total_score == 85   # 100 - 15
+    # FIX-042: 9 steps achieve 85 out of 85 present weights -> (85/85)*100 = 100
+    assert result.total_score == 100
     assert "volume_surge" in result.missing_steps
+    assert result.step_scores["volume_surge"] == 0  # still reported as 0 for transparency
 
 
 def test_all_steps_missing_score_zero_low_not_passed():
@@ -238,6 +240,87 @@ def test_min_pass_score_and_tier_thresholds_from_config():
     assert result.min_pass_score == 60
     assert result.tier_thresholds["high"] == 80
     assert result.tier_thresholds["medium"] == 65
+
+
+# ---------------------------------------------------------------------------
+# FIX-042: Proportional Scoring Tests
+# ---------------------------------------------------------------------------
+
+def test_fix042_proportional_scoring_prevents_false_rejection():
+    """
+    FIX-042: Signal scoring 65 doesn't drop below min_pass_score=60 when one step times out.
+
+    Scenario: 9 steps achieve 55 out of 90 weights (61.1% -> rounds to 61).
+    Old behavior: 55/100 = 55 -> rejected (< 60)
+    New behavior: (55/90)*100 = 61 -> passed (>= 60)
+    """
+    scorer = _make_scorer()
+    step_results = {
+        "volume_surge": 0.6,      # 15 * 0.6 = 9
+        "vwap_position": 0.5,     # 10 * 0.5 = 5
+        "atr_filter": 0.5,        # 10 * 0.5 = 5
+        "rsi_range": 0.6,         # 10 * 0.6 = 6
+        "price_action": 0.6,      # 15 * 0.6 = 9
+        "sector_strength": 0.5,   # 10 * 0.5 = 5
+        "time_of_day": 1.0,       # 5 * 1.0 = 5
+        "spread_check": 1.0,      # 5 * 1.0 = 5
+        "signal_age": 0.6,        # 10 * 0.6 = 6
+        # circuit_check (weight=10) missing -> times out due to broker API delay
+    }
+    result = scorer.score(step_results)
+    # Sum achieved: 9+5+5+6+9+5+5+5+6 = 55
+    # Weights present: 90 (circuit_check's 10 excluded)
+    # Score: (55/90)*100 = 61.11 -> rounds to 61
+    assert result.total_score == 61
+    assert result.passed is True
+    assert "circuit_check" in result.missing_steps
+
+
+def test_fix042_multiple_missing_steps_recalculate_denominator():
+    """FIX-042: Multiple missing steps -> denominator adjusted proportionally."""
+    scorer = _make_scorer()
+    step_results = {
+        "volume_surge": 1.0,      # 15
+        "price_action": 1.0,      # 15
+        "vwap_position": 1.0,     # 10
+        # 7 steps missing (total weight 60) -> present weight = 40
+    }
+    result = scorer.score(step_results)
+    # Achieved: 15+15+10 = 40 out of 40 present weights
+    # Score: (40/40)*100 = 100
+    assert result.total_score == 100
+    assert len(result.missing_steps) == 7
+    assert result.tier == "HIGH"
+
+
+def test_fix042_partial_scores_with_missing_steps():
+    """FIX-042: Partial scores (< 1.0) with missing steps calculate correctly."""
+    scorer = _make_scorer()
+    step_results = {
+        "volume_surge": 0.8,      # 15 * 0.8 = 12
+        "vwap_position": 0.5,     # 10 * 0.5 = 5
+        "atr_filter": 0.6,        # 10 * 0.6 = 6
+        "price_action": 0.7,      # 15 * 0.7 = 10.5
+        "sector_strength": 0.5,   # 10 * 0.5 = 5
+        # 5 steps missing (weight 40) -> present weight = 60
+    }
+    result = scorer.score(step_results)
+    # Achieved: 12+5+6+10.5+5 = 38.5
+    # Present weights: 60
+    # Score: (38.5/60)*100 = 64.17 -> rounds to 64
+    assert result.total_score == 64
+    assert result.tier == "LOW"  # 64 < 65 (medium threshold)
+    assert len(result.missing_steps) == 5
+
+
+def test_fix042_all_steps_missing_returns_zero():
+    """FIX-042: All steps missing -> total_weights_present=0 -> score 0 (no divide-by-zero)."""
+    scorer = _make_scorer()
+    result = scorer.score({})
+    assert result.total_score == 0
+    assert result.tier == "LOW"
+    assert result.passed is False
+    assert len(result.missing_steps) == 10
 
 
 if __name__ == "__main__":
