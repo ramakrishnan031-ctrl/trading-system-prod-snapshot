@@ -98,6 +98,8 @@ def _make_sizer(
     tier_multipliers: dict | None = None,
     logger=None,
     lot_skew_rejection_threshold: float = 0.25,  # FIX-021
+    min_tick_size: float = 0.05,  # FIX-041
+    max_single_order_qty: int = 10000,  # FIX-041
 ) -> PositionSizer:
     fm = _MockFundManager(total, intraday_avail, positional_avail)
     return PositionSizer(
@@ -109,6 +111,8 @@ def _make_sizer(
         tier_multipliers=tier_multipliers or _DEFAULT_TIER_MULT,
         logger=logger,
         lot_skew_rejection_threshold=lot_skew_rejection_threshold,
+        min_tick_size=min_tick_size,
+        max_single_order_qty=max_single_order_qty,
     )
 
 
@@ -462,14 +466,14 @@ def test_entry_price_zero_raises_valueerror() -> None:
 
 
 def test_sl_equals_entry_returns_failure() -> None:
-    """MED #8: sl_price == entry_price -> SizingResult failure, no ValueError or ZeroDivision."""
+    """MED #8 / FIX-041: sl_price == entry_price -> SizingResult failure, no ValueError or ZeroDivision."""
     sizer = _make_sizer(total=100_000.0, intraday_avail=70_000.0)
     result = sizer.calculate("SYM", "BUY", 50.0, 50.0, "INTRADAY")
     assert not result.success, "sl==entry must produce failure result"
-    assert result.constraint == "SL_DISTANCE_ZERO"
-    assert "SL_DISTANCE_ZERO" in result.reason or "zero SL distance" in result.reason
+    assert result.constraint == "INVALID_SL_DISTANCE"  # FIX-041: enhanced from SL_DISTANCE_ZERO
+    assert ("sl_distance" in result.reason and "min_tick_size" in result.reason)  # FIX-041: new reason format
     assert result.qty == 0
-    print("  OK sl_price==entry_price -> SizingResult failure (MED #8, SL_DISTANCE_ZERO)")
+    print("  OK sl_price==entry_price -> SizingResult failure (MED #8 / FIX-041, INVALID_SL_DISTANCE)")
 
 
 def test_invalid_intent_raises_valueerror() -> None:
@@ -639,6 +643,84 @@ def test_sl_distance_uses_abs_regardless_of_side() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-041: Zero SL distance guard + max qty cap
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix041_sl_distance_zero() -> None:
+    """FIX-041: sl_distance == 0.0 -> INVALID_SL_DISTANCE, no ZeroDivisionError."""
+    logger = _MockLogger()
+    sizer = _make_sizer(logger=logger)
+
+    # entry == sl -> sl_distance = 0.0
+    r = sizer.calculate("RELIANCE", "BUY", 2500.0, 2500.0, "INTRADAY")
+
+    assert not r.success
+    assert r.constraint == "INVALID_SL_DISTANCE"
+    assert r.qty == 0
+    assert "sl_distance" in r.reason and "min_tick_size" in r.reason
+    print("  OK FIX-041: sl_distance=0.0 -> INVALID_SL_DISTANCE, no crash")
+
+
+def test_fix041_sl_distance_micro_fraction() -> None:
+    """FIX-041: sl_distance = 0.001 (micro-fraction) < min_tick_size -> rejected."""
+    logger = _MockLogger()
+    sizer = _make_sizer(logger=logger, min_tick_size=0.05)
+
+    # Penny stock: entry=10, sl=9.996 -> sl_distance=0.004 < 0.05
+    r = sizer.calculate("PENNYSTOCK", "BUY", 10.0, 9.996, "INTRADAY")
+
+    assert not r.success
+    assert r.constraint == "INVALID_SL_DISTANCE"
+    assert r.qty == 0
+    assert "0.004" in r.reason or "0.05" in r.reason  # sl_distance or min_tick in reason
+    print("  OK FIX-041: sl_distance < min_tick -> INVALID_SL_DISTANCE")
+
+
+def test_fix041_qty_explosion_guard() -> None:
+    """FIX-041: qty_by_risk > max_single_order_qty -> QTY_EXPLOSION_GUARD."""
+    logger = _MockLogger()
+    # Small SL distance (but > min_tick_size): entry=100, sl=99.94 -> sl_distance=0.06 > 0.05
+    # risk_rs = 100000 * 0.01 = 1000
+    # qty_by_risk = 1000 / 0.06 = 16666 >> 10000
+    sizer = _make_sizer(logger=logger, max_single_order_qty=10000, min_tick_size=0.05)
+
+    r = sizer.calculate("EXPLOSIVE", "BUY", 100.0, 99.94, "INTRADAY")
+
+    assert not r.success
+    assert r.constraint == "QTY_EXPLOSION_GUARD"
+    assert r.qty == 0
+    assert "qty_by_risk" in r.reason and "max_single_order_qty" in r.reason
+    assert r.breakdown["qty_by_risk"] > 10000
+    print("  OK FIX-041: qty_by_risk > max_single_order_qty -> QTY_EXPLOSION_GUARD")
+
+
+def test_fix041_penny_stock_guard() -> None:
+    """FIX-041: Penny stock entry=10, sl=9.96 -> sl_distance=0.04 < 0.05 -> rejected."""
+    logger = _MockLogger()
+    sizer = _make_sizer(logger=logger, min_tick_size=0.05)
+
+    r = sizer.calculate("PENNYSTK", "BUY", 10.0, 9.96, "INTRADAY")
+
+    assert not r.success
+    assert r.constraint == "INVALID_SL_DISTANCE"
+    assert "0.04" in r.reason or "0.05" in r.reason
+    print("  OK FIX-041: penny stock sl_distance=0.04 < 0.05 -> rejected")
+
+
+def test_fix041_normal_sl_distance_proceeds() -> None:
+    """FIX-041: sl_distance = 5.0 (normal) -> sizing proceeds normally."""
+    sizer = _make_sizer()
+
+    # entry=2500, sl=2495 -> sl_distance=5.0 (> 0.05)
+    r = sizer.calculate("RELIANCE", "BUY", 2500.0, 2495.0, "INTRADAY")
+
+    assert r.success  # Should succeed
+    assert r.qty > 0
+    assert r.constraint in ("RISK", "CAPITAL", "CONCENTRATION")
+    print("  OK FIX-041: normal sl_distance=5.0 -> proceeds normally")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -676,6 +758,12 @@ def run_all_tests() -> int:
         test_risk_amount_equals_qty_times_sl_distance,
         test_sizing_result_is_frozen,
         test_sl_distance_uses_abs_regardless_of_side,
+        # FIX-041
+        test_fix041_sl_distance_zero,
+        test_fix041_sl_distance_micro_fraction,
+        test_fix041_qty_explosion_guard,
+        test_fix041_penny_stock_guard,
+        test_fix041_normal_sl_distance_proceeds,
     ]
 
     print("=" * 70)

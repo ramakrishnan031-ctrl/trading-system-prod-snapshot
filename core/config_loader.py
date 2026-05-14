@@ -191,6 +191,8 @@ class PositionSizingConfig(BaseModel):
     max_concentration_pct: float       # PS2: max fraction of total capital in one symbol
     min_qty_threshold: int             # PS6: reject if final qty below this
     lot_skew_rejection_threshold: float  # FIX-021: reject if (tiered-final)/tiered > threshold
+    min_tick_size: float               # FIX-041: min SL distance (penny stock guard)
+    max_single_order_qty: int          # FIX-041: sanity cap on computed qty
     tier_multipliers: PositionSizingTierConfig  # PS5
 
     @field_validator("risk_per_trade_pct")

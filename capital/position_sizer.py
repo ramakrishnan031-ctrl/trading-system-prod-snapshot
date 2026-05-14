@@ -127,6 +127,8 @@ class PositionSizer:
         logger=None,
         instrument_cache=None,  # IC7: optional InstrumentCache for lot_size lookup
         lot_skew_rejection_threshold: float = 0.25,  # FIX-021: reject if skew exceeds this
+        min_tick_size: float = 0.05,  # FIX-041: min SL distance (penny stock guard)
+        max_single_order_qty: int = 10000,  # FIX-041: sanity cap on computed qty
     ) -> None:
         self._fm = fund_manager
         self._leverage_map = dict(leverage_map)
@@ -137,6 +139,8 @@ class PositionSizer:
         self._log = logger
         self._instrument_cache = instrument_cache  # IC7
         self._lot_skew_rejection_threshold = lot_skew_rejection_threshold  # FIX-021
+        self._min_tick_size = min_tick_size  # FIX-041
+        self._max_single_order_qty = max_single_order_qty  # FIX-041
 
     def calculate(
         self,
@@ -239,25 +243,68 @@ class PositionSizer:
         leverage = self._leverage_map.get(intent, 1.0)
         sl_distance = abs(entry_price - sl_price)
 
-        # MED #8: zero SL distance — graceful rejection, not programmer error.
-        # This can occur when sl_pct rounds entry_price * (1 ± pct) back to entry_price.
-        if sl_distance == 0.0:
+        # FIX-041: Guard 1 — SL distance below minimum tick size (penny stock / config error)
+        # Prevents ZeroDivisionError and micro-fraction qty explosion.
+        # MED #8 enhanced: was sl_distance == 0.0, now sl_distance < min_tick_size.
+        if sl_distance < self._min_tick_size:
+            if self._log is not None:
+                self._log.critical(
+                    "position_sizer.invalid_sl_distance",
+                    extra={
+                        "symbol": symbol,
+                        "sl_distance": sl_distance,
+                        "min_tick_size": self._min_tick_size,
+                        "entry_price": entry_price,
+                        "sl_price": sl_price,
+                    },
+                )
             return SizingResult(
                 success=False,
                 qty=0,
                 margin_required=0.0,
                 risk_amount=0.0,
                 bucket=bucket,
-                constraint="SL_DISTANCE_ZERO",
+                constraint="INVALID_SL_DISTANCE",
                 reason=(
-                    f"sl_price == entry_price ({entry_price}): zero SL distance "
-                    f"for {symbol}; cannot size position"
+                    f"sl_distance={sl_distance:.4f} < min_tick_size={self._min_tick_size} "
+                    f"for {symbol} (entry={entry_price}, sl={sl_price}); "
+                    f"cannot size position (ZeroDivisionError guard)"
                 ),
                 breakdown={},
             )
 
         risk_rs = total_capital * self._risk_per_trade_pct
         qty_by_risk = int(math.floor(risk_rs / sl_distance))
+
+        # FIX-041: Guard 2 — Qty explosion sanity cap
+        # Prevents micro-fraction sl_distance from producing million-share orders.
+        if qty_by_risk > self._max_single_order_qty:
+            if self._log is not None:
+                self._log.critical(
+                    "position_sizer.qty_explosion_guard",
+                    extra={
+                        "symbol": symbol,
+                        "qty_by_risk": qty_by_risk,
+                        "max_single_order_qty": self._max_single_order_qty,
+                        "sl_distance": sl_distance,
+                        "entry_price": entry_price,
+                        "sl_price": sl_price,
+                    },
+                )
+            return SizingResult(
+                success=False,
+                qty=0,
+                margin_required=0.0,
+                risk_amount=0.0,
+                bucket=bucket,
+                constraint="QTY_EXPLOSION_GUARD",
+                reason=(
+                    f"qty_by_risk={qty_by_risk} > max_single_order_qty={self._max_single_order_qty} "
+                    f"for {symbol} (sl_distance={sl_distance:.4f}); "
+                    f"rejecting to prevent broker account suspension"
+                ),
+                breakdown={"qty_by_risk": qty_by_risk},
+            )
 
         margin_per_share = entry_price / leverage
         qty_by_capital = (

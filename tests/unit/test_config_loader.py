@@ -99,6 +99,8 @@ position_sizing:
   max_concentration_pct: 0.10
   min_qty_threshold: 1
   lot_skew_rejection_threshold: 0.25
+  min_tick_size: 0.05
+  max_single_order_qty: 10000
   tier_multipliers:
     HIGH: 1.0
     MEDIUM: 0.70
