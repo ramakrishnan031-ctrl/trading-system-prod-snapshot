@@ -15,9 +15,7 @@ import pytest
 
 if __name__ == "__main__":
     sys.exit(pytest.main([
-        "tests/unit/",
-        "tests/integration/",
-        "tests/core/",
+        "tests/",  # Run all tests, including root-level test files
         "-q",
         "--tb=no",
     ]))
