@@ -10,6 +10,7 @@
 # cost_calculator.py divides by 100 before multiplying by turnover.
 
 zerodha:
+  # ── Equity (cash segment) rates ──
   brokerage_flat_intraday: 20.0     # Flat ₹20 cap per executed order (MIS/CO/CNC SELL)
   brokerage_pct_intraday: 0.03      # 0.03% of turnover (MIS/CO/CNC SELL); capped at flat (CC3)
   stt_sell_pct: 0.025               # STT 0.025% on sell-side turnover (MIS/CO intraday) (CC4)
@@ -19,3 +20,16 @@ zerodha:
   sebi_pct: 0.0001                  # SEBI turnover fee 0.0001% (₹10 per crore) (CC7)
   stamp_duty_mis_buy_pct: 0.003     # Stamp duty 0.003% on buy-side turnover for MIS/CO (CC8)
   stamp_duty_cnc_buy_pct: 0.015     # Stamp duty 0.015% on buy-side turnover for CNC (CC8)
+
+  # ── FNO (derivatives segment) rates — FIX-027 ──
+  futures:
+    stt_pct: 0.0125                 # FIX-027: STT 0.0125% on both BUY and SELL for futures
+    stamp_duty_buy_pct: 0.002       # Stamp duty 0.002% on buy-side for futures
+
+  options_buy:
+    stt_pct: 0.0                    # FIX-027: STT 0% on options BUY (no STT)
+    stamp_duty_pct: 0.003           # Stamp duty 0.003% on options buy premium
+
+  options_sell:
+    stt_pct: 0.0625                 # FIX-027: STT 0.0625% on options SELL premium
+    stamp_duty_pct: 0.0             # No stamp duty on sell side

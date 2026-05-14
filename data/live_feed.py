@@ -38,6 +38,7 @@ class LiveFeedManager:
         access_token: str,
         logger,
         on_critical_failure: Optional[Callable[[str], None]] = None,
+        kill_switch=None,  # FIX-029: optional KillSwitch for soft_kill on queue full
         max_reconnect_attempts: int = 10,
         reconnect_delay_sec: int = 5,
         paper_mode: bool = False,
@@ -63,6 +64,7 @@ class LiveFeedManager:
         )
         self._log = logger
         self._on_critical_failure = on_critical_failure
+        self._kill_switch = kill_switch  # FIX-029
         self._max_reconnect_attempts = max_reconnect_attempts
         self._reconnect_delay_sec = reconnect_delay_sec
 
@@ -225,18 +227,27 @@ class LiveFeedManager:
                 "volume": raw.get("volume_traded"),
             }
             # LF6: NOTE - raw["ohlc"] is DAY's OHLC, NOT minute OHLC. Not included.
+            # FIX-029: queue.Full triggers soft_kill instead of dropping ticks
             if not self._tick_queue.full():
                 self._tick_queue.put_nowait(tick)
             else:
-                # Drop oldest to make room (LF5)
-                try:
-                    self._tick_queue.get_nowait()
-                except queue.Empty:
-                    pass
-                self._tick_queue.put_nowait(tick)
-                self._log.warning(
-                    "LiveFeedManager: tick queue full, dropped oldest tick"
+                self._log.critical(
+                    "LiveFeedManager: tick queue full (capacity=%d) - triggering soft_kill "
+                    "LIVEFEED_QUEUE_FULL: consumer thread may be dead or subscribers blocked",
+                    self.TICK_QUEUE_CAPACITY,
                 )
+                if self._kill_switch is not None:
+                    self._kill_switch.soft_kill("LIVEFEED_QUEUE_FULL")
+                else:
+                    self._log.critical(
+                        "LiveFeedManager: no kill_switch configured - cannot trigger soft_kill"
+                    )
+                # Still try to enqueue the tick (may block briefly or raise)
+                try:
+                    self._tick_queue.put_nowait(tick)
+                except queue.Full:
+                    # If put_nowait fails, we've already triggered soft_kill
+                    pass
 
     def _on_connect(self, ws, response) -> None:
         """LF3 + BL-11: Successful connection. Re-subscribe all tracked tokens.
@@ -357,9 +368,15 @@ class LiveFeedManager:
         return ticker
 
     def _consume_ticks(self) -> None:
-        """LF5: Single consumer thread. Drains queue, invokes callbacks.
+        """
+        LF5: Single consumer thread. Drains queue, invokes callbacks.
 
         Audit 3.3: One thread, not one-per-callback.
+
+        FIX-029: Consumer thread is IMMORTAL. All callback exceptions are caught,
+        logged as CRITICAL with full traceback, but NEVER re-raised. This ensures
+        a single misbehaving subscriber cannot kill the tick distribution thread
+        and starve the entire system of live data.
         """
         while not self._stop_event.is_set():
             try:
@@ -373,14 +390,71 @@ class LiveFeedManager:
                 with self._lock:
                     callbacks = list(self._callbacks)
                 for cb in callbacks:
+                    # FIX-029: bare except with CRITICAL log + traceback
+                    # DO NOT re-raise: consumer thread must be immortal
                     try:
                         cb(batch)
                     except Exception as exc:
-                        self._log.error(
-                            "LiveFeedManager: callback raised: %s" % exc
+                        log_exception(self._log, exc)
+                        # Extract callback name for better diagnostics
+                        cb_name = getattr(cb, '__name__', None) or getattr(
+                            cb, '__class__', None
+                        ) or repr(cb)
+                        self._log.critical(
+                            "LiveFeedManager: subscriber callback raised exception and was "
+                            "caught to protect consumer thread. Callback: %s, Exception: %s",
+                            cb_name,
+                            str(exc),
                         )
             except queue.Empty:
                 continue
+
+    # ------------------------------------------------------------------ #
+    # FIX-029 — Consumer thread health check
+    # ------------------------------------------------------------------ #
+
+    def _check_consumer_health(self) -> None:
+        """
+        FIX-029: Periodic health-check for consumer thread.
+
+        If the thread is detected as dead (not alive), attempt to restart it once.
+        If restart fails, trigger soft_kill to halt new trading and alert operators.
+
+        This method is called from the watchdog loop to ensure continuous monitoring.
+        """
+        if self._consumer_thread is None:
+            return  # Not started yet
+
+        if self._consumer_thread.is_alive():
+            return  # Thread is healthy
+
+        # Thread is dead - this is CRITICAL
+        self._log.critical(
+            "LiveFeedManager: consumer thread is DEAD - attempting restart once"
+        )
+
+        # Attempt restart
+        try:
+            self._consumer_thread = threading.Thread(
+                target=self._consume_ticks,
+                daemon=True,
+                name="live-feed-consumer-restarted",
+            )
+            self._consumer_thread.start()
+            self._log.warning(
+                "LiveFeedManager: consumer thread restarted successfully"
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "LiveFeedManager: consumer thread restart FAILED - triggering soft_kill"
+            )
+            if self._kill_switch is not None:
+                self._kill_switch.soft_kill("LIVEFEED_CONSUMER_THREAD_DEAD")
+            else:
+                self._log.critical(
+                    "LiveFeedManager: no kill_switch configured - cannot trigger soft_kill"
+                )
 
     # ------------------------------------------------------------------ #
     # B.6 / Audit 12 — tick-age watchdog
@@ -433,6 +507,9 @@ class LiveFeedManager:
             self._stop_event.wait(timeout=self._watchdog_check_interval_sec)
             if self._stop_event.is_set():
                 return
+
+            # FIX-029: Check consumer thread health
+            self._check_consumer_health()
 
             # Skip when paper-mode somehow flipped or we never connected.
             if self._paper_mode or not self._connected:

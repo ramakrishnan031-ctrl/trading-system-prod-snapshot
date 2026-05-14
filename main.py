@@ -455,11 +455,13 @@ def _make_orphan_cb(
 def _make_gate_release_cb(signal_processor: SignalProcessor):
     def _on_gate_release(entry: WatchEntry, reason: str) -> None:
         if reason == "PRICE_HIT":
+            # FIX-025: extract release_ltp from extras
+            release_ltp = entry.extras.get("release_ltp")
             _log.info(
                 "Gate PRICE_HIT for %s signal_id=%s -- continuing pipeline",
                 entry.symbol, entry.signal_id,
             )
-            signal_processor.continue_from_gate(entry)
+            signal_processor.continue_from_gate(entry, release_ltp=release_ltp)
         else:
             _log.info(
                 "Gate release %s for %s signal_id=%s -- no action",
@@ -1295,6 +1297,7 @@ def _main_locked(args, config_dir: Path) -> int:
         # D.1 (2026-04-25): trail bursts share the same "order" bucket as
         # fresh placements; pass the same RateLimiter so they pace together.
         rate_limiter=rate_limiter,
+        volume_dependent_trails=app_config.system.smart_tgt.volume_dependent_trails,  # FIX-026
     )
     smart_tgt.set_instrument_cache(instrument_cache)  # Audit #8: tick rounding on SL trail
 
@@ -1345,6 +1348,7 @@ def _main_locked(args, config_dir: Path) -> int:
         smart_tgt_manager=smart_tgt,              # BL-7b: CO_PLUS_TGT trail wiring
         smart_tgt_config=app_config.system.smart_tgt,  # BL-7b: trigger_pct/step_pct
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,  # BL-19
+        entry_gate_slippage_buffer=app_config.system.entry_gate.slippage_buffer,  # FIX-025
         notifier=notifier,
         mode=mode_label,
     )

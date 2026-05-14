@@ -8,6 +8,7 @@ pydantic==2.13.0       # CL3: strict schema validation (extra="forbid")
 kiteconnect==5.1.0     # Audit #11: pin; Kite SDK API compat
 requests==2.33.1       # 2026-04-26 audit REQ-1: direct importer in alerts.telegram_notifier, scripts.preflight_scanner_check, scripts.zerodha_login (Foundation Rule 5 Version Freeze)
 flask==3.1.3           # WR2: webhook HTTP server
+cachetools==7.1.1      # FIX-036: TTLCache for webhook deduplication
 waitress==3.0.2        # B.3 / Audit 6.5 + A.1 (2026-04-25): production WSGI server (cross-platform; replaces app.run; supersedes gunicorn ask -- waitress works on Windows dev workstation, gunicorn is UNIX-only)
 openpyxl==3.1.5        # DR5: daily_review .xlsx output
 python-dotenv==1.2.2   # runtime .env loading (SU19)

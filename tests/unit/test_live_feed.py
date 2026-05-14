@@ -293,13 +293,24 @@ def test_tick_batch_invokes_callback_with_all_ticks() -> None:
     print("  OK tick_batch_invokes_callback_with_all_ticks")
 
 
-def test_queue_full_drops_oldest_tick_and_logs_warning() -> None:
+def test_queue_full_triggers_soft_kill() -> None:
+    """
+    FIX-029: Queue full triggers soft_kill instead of dropping ticks.
+
+    When the tick queue reaches capacity, it indicates the consumer thread is
+    blocked or dead. Instead of silently dropping ticks, we trigger soft_kill
+    to halt new trading and alert operators.
+    """
+    # Create a mock kill_switch to track soft_kill calls
+    mock_kill_switch = MagicMock()
+
     feed, ticker, logger = _make_and_connect()
+    feed._kill_switch = mock_kill_switch  # Inject mock kill_switch
     try:
         # Replace queue with capacity=3 to easily fill it
         feed._tick_queue = queue.Queue(maxsize=3)
 
-        # Fill queue: stop consumer from draining by putting stops
+        # Fill queue: stop consumer from draining
         feed._stop_event.set()  # pause consumer
         time.sleep(0.05)
 
@@ -311,26 +322,22 @@ def test_queue_full_drops_oldest_tick_and_logs_warning() -> None:
         ])
         assert feed._tick_queue.full()
 
-        # 4th tick should drop oldest (token=1) and add new (token=4)
+        # 4th tick should trigger soft_kill (queue is full)
         feed._on_ticks(None, [
             {"instrument_token": 4, "last_price": 4.0},
         ])
 
-        logger.warning.assert_called()
-        warning_msg = str(logger.warning.call_args)
-        assert "queue full" in warning_msg
+        # FIX-029: Assert critical log was called
+        logger.critical.assert_called()
+        critical_msg = str(logger.critical.call_args)
+        assert "queue full" in critical_msg.lower() or "LIVEFEED_QUEUE_FULL" in critical_msg
 
-        # Queue still has 3 items; oldest (token=1) was dropped
-        items = []
-        while not feed._tick_queue.empty():
-            items.append(feed._tick_queue.get_nowait())
-        tokens = [i["instrument_token"] for i in items]
-        assert 4 in tokens, "new tick must be in queue"
-        assert 1 not in tokens, "oldest tick must have been dropped"
+        # FIX-029: Assert soft_kill was called with correct reason
+        mock_kill_switch.soft_kill.assert_called_once_with("LIVEFEED_QUEUE_FULL")
     finally:
         feed._stop_event.clear()
         feed.disconnect()
-    print("  OK queue_full_drops_oldest_tick_and_logs_warning")
+    print("  OK FIX-029: queue_full triggers soft_kill")
 
 
 def test_reconnect_notifies_candle_store() -> None:
@@ -840,7 +847,7 @@ def run_all_tests() -> int:
         test_is_connected_false_after_disconnect,
         test_tick_invokes_callback,
         test_tick_batch_invokes_callback_with_all_ticks,
-        test_queue_full_drops_oldest_tick_and_logs_warning,
+        test_queue_full_triggers_soft_kill,
         test_reconnect_notifies_candle_store,
         test_reconnect_notifies_candle_store_only_once_per_gap,
         test_reconnect_resubscribes_all_tokens,

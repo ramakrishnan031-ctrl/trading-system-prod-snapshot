@@ -1695,7 +1695,10 @@ class TestBl7bOrderPlacerDependencyInjection:
         from core.config_loader import SmartTgtConfig
         from orders.smart_tgt_manager import SmartTgtManager
         mgr = MagicMock(spec=SmartTgtManager)
-        cfg = SmartTgtConfig(enabled=True, trigger_pct=0.005, step_pct=0.003)
+        cfg = SmartTgtConfig(
+            enabled=True, trigger_pct=0.005, step_pct=0.003,
+            volume_dependent_trails=False,
+        )
         placer = OrderPlacer(
             order_monitor=MagicMock(spec=OrderMonitor),
             smart_tgt_manager=mgr,
@@ -1965,7 +1968,10 @@ class TestBl7dEntryFillSmartTgt:
 
     def _cfg(self):
         from core.config_loader import SmartTgtConfig
-        return SmartTgtConfig(enabled=True, trigger_pct=0.005, step_pct=0.003)
+        return SmartTgtConfig(
+            enabled=True, trigger_pct=0.005, step_pct=0.003,
+            volume_dependent_trails=False,
+        )
 
     def test_co_entry_fill_registers_with_smart_tgt(self) -> None:
         """CO_PLUS_TGT entry fill triggers smart_tgt.register_trade with trade_id + fill price."""
@@ -2110,8 +2116,10 @@ class TestBl7dExitFillHandling:
         cost_calc = MagicMock(spec=CostCalculator)
         cost_calc.total_round_trip_cost = MagicMock(return_value=25.0)
 
-        cfg = SmartTgtConfig(enabled=True, trigger_pct=0.005, step_pct=0.003) \
-            if smart_tgt_manager is not None else None
+        cfg = SmartTgtConfig(
+            enabled=True, trigger_pct=0.005, step_pct=0.003,
+            volume_dependent_trails=False,
+        ) if smart_tgt_manager is not None else None
 
         placer = OrderPlacer(
             entry_engine=engine,
@@ -4096,6 +4104,149 @@ class TestFix016Fix017OrderStatusChanged:
             print("  OK FIX-017: exit-leg terminal status skipped, no capital change")
 
 
+class TestFix025GateReleaseSlippage:
+    """FIX-025: Gate release LTP slippage protection in OrderPlacer."""
+
+    def _make_placer(self, tmp_path: Path):
+        store = _make_store(tmp_path)
+        om = OrderManager(store, _log())
+        bus = EventBus()
+        fm = _MockFundManager()
+        mon = MagicMock(spec=OrderMonitor)
+        adapter = _MockAdapter()
+        lim_prot = LimitTripleProtocol(adapter=adapter, logger=_log())
+        co_prot = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            limit_protocol=lim_prot,
+            co_protocol=co_prot,
+            logger=_log(),
+        )
+        cost_calc = MagicMock(spec=CostCalculator)
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=mon,
+            cost_calculator=cost_calc,
+            product_resolver=_default_resolver(),
+            entry_gate_slippage_buffer=2.0,  # FIX-025
+        )
+        return placer, store, fm, adapter
+
+    def test_long_slippage_protection_release_ltp_lower(self) -> None:
+        """LONG: entry=1000, release_ltp=1005, buffer=2 → adjusted=1002."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_001",
+                release_ltp=1005.0,  # FIX-025
+            )
+
+            # Verify adapter.place_order called with adjusted limit
+            assert len(adapter.placed) >= 1
+            entry_call = adapter.placed[0]
+            # Adjusted: min(1000 + 2, 1005) = 1002
+            assert entry_call["price"] == 1002.0, f"Expected 1002.0, got {entry_call['price']}"
+
+            store.close()
+            print("  OK FIX-025: LONG slippage protection (release_ltp < entry + buffer)")
+
+    def test_long_slippage_protection_release_ltp_higher(self) -> None:
+        """LONG: entry=1000, release_ltp=1001, buffer=2 → adjusted=1001."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_002",
+                release_ltp=1001.0,
+            )
+
+            assert len(adapter.placed) >= 1
+            entry_call = adapter.placed[0]
+            # Adjusted: min(1000 + 2, 1001) = 1001
+            assert entry_call["price"] == 1001.0, f"Expected 1001.0, got {entry_call['price']}"
+
+            store.close()
+            print("  OK FIX-025: LONG slippage protection (release_ltp caps at LTP)")
+
+    def test_short_slippage_protection_release_ltp_higher(self) -> None:
+        """SHORT: entry=1000, release_ltp=995, buffer=2 → adjusted=998."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="SELL", qty=10,
+                entry_price=1000.0, sl_price=1050.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_003",
+                release_ltp=995.0,
+            )
+
+            assert len(adapter.placed) >= 1
+            entry_call = adapter.placed[0]
+            # Adjusted: max(1000 - 2, 995) = 998
+            assert entry_call["price"] == 998.0, f"Expected 998.0, got {entry_call['price']}"
+
+            store.close()
+            print("  OK FIX-025: SHORT slippage protection (release_ltp > entry - buffer)")
+
+    def test_short_slippage_protection_release_ltp_lower(self) -> None:
+        """SHORT: entry=1000, release_ltp=999, buffer=2 → adjusted=999."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="SELL", qty=10,
+                entry_price=1000.0, sl_price=1050.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_004",
+                release_ltp=999.0,
+            )
+
+            assert len(adapter.placed) >= 1
+            entry_call = adapter.placed[0]
+            # Adjusted: max(1000 - 2, 999) = 999
+            assert entry_call["price"] == 999.0, f"Expected 999.0, got {entry_call['price']}"
+
+            store.close()
+            print("  OK FIX-025: SHORT slippage protection (release_ltp floors at LTP)")
+
+    def test_no_slippage_protection_when_release_ltp_none(self) -> None:
+        """No adjustment when release_ltp is None (direct signal path)."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_005",
+                release_ltp=None,
+            )
+
+            assert len(adapter.placed) >= 1
+            entry_call = adapter.placed[0]
+            # No adjustment, original entry price used
+            assert entry_call["price"] == 1000.0, f"Expected 1000.0, got {entry_call['price']}"
+
+            store.close()
+            print("  OK FIX-025: No slippage protection when release_ltp=None")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -4222,6 +4373,12 @@ if __name__ == "__main__":
         TestFix016Fix017OrderStatusChanged().test_fix017_zero_fill_expired_releases_reservation,
         TestFix016Fix017OrderStatusChanged().test_fix016_partial_cancel_co_places_tgt,
         TestFix016Fix017OrderStatusChanged().test_fix017_exit_leg_terminal_status_skipped,
+        # FIX-025 Gate release LTP slippage protection
+        TestFix025GateReleaseSlippage().test_long_slippage_protection_release_ltp_lower,
+        TestFix025GateReleaseSlippage().test_long_slippage_protection_release_ltp_higher,
+        TestFix025GateReleaseSlippage().test_short_slippage_protection_release_ltp_higher,
+        TestFix025GateReleaseSlippage().test_short_slippage_protection_release_ltp_lower,
+        TestFix025GateReleaseSlippage().test_no_slippage_protection_when_release_ltp_none,
     ]
     passed = failed = 0
     for fn in tests:

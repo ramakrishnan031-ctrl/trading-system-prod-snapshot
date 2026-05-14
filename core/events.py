@@ -108,6 +108,31 @@ class OrderFilled(Event):
 
 
 @dataclass
+class OrderPartiallyTerminated(Event):
+    """
+    FIX-028: Order reached terminal state (CANCELLED/FAILED/EXPIRED) with partial fill.
+
+    Emitted when an entry order fills partially (qty_filled > 0) then gets
+    terminated before COMPLETE. Naked position protection: OrderPlacer subscribes
+    and places exits for the filled quantity.
+
+    Fields mirror OrderFilled but add 'reason' to indicate terminal state.
+    """
+    internal_order_id: str = ""
+    broker_order_id: str = ""
+    symbol: str = ""
+    side: str = ""                 # "BUY" | "SELL"
+    filled_qty: int = 0            # Actual qty filled before termination
+    avg_fill_price: float = 0.0
+    expected_price: float = 0.0
+    slippage_pct: float = 0.0
+    filled_at: str = ""            # ISO-8601 IST string
+    reason: str = ""               # "CANCELLED" | "FAILED" | "EXPIRED"
+    # Legacy fields for compatibility
+    trade_id: str = ""
+
+
+@dataclass
 class PositionClosed(Event):
     """Position fully closed (exit filled or SL triggered)."""
     symbol: str = ""

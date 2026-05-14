@@ -190,6 +190,7 @@ class PositionSizingConfig(BaseModel):
     risk_per_trade_pct: float          # PS2: fraction of total capital at risk per trade
     max_concentration_pct: float       # PS2: max fraction of total capital in one symbol
     min_qty_threshold: int             # PS6: reject if final qty below this
+    lot_skew_rejection_threshold: float  # FIX-021: reject if (tiered-final)/tiered > threshold
     tier_multipliers: PositionSizingTierConfig  # PS5
 
     @field_validator("risk_per_trade_pct")
@@ -211,6 +212,13 @@ class PositionSizingConfig(BaseModel):
     def _validate_min_qty(cls, v: int) -> int:
         if v < 1:
             raise ValueError("min_qty_threshold must be >= 1")
+        return v
+
+    @field_validator("lot_skew_rejection_threshold")
+    @classmethod
+    def _validate_lot_skew_threshold(cls, v: float) -> float:
+        if not (0 < v <= 1):
+            raise ValueError("lot_skew_rejection_threshold must be between 0 (exclusive) and 1 (inclusive)")
         return v
 
 
@@ -563,11 +571,17 @@ class SmartTgtConfig(BaseModel):
     step_pct=0.003). When a future requirement demands per-strategy trails,
     add the override mechanism here rather than scattering YAML-reading logic
     across the codebase.
+
+    FIX-026: volume_dependent_trails is a master kill-switch for any future
+    volume/VWAP-based trail logic. Currently CandleData.volume is always 0
+    (LF11), so this flag is preventive. When volume becomes reliable, set
+    this to True to enable volume-based trail enhancements.
     """
     model_config = ConfigDict(extra="forbid")
     enabled: bool              # master switch; if False, OrderPlacer skips register_trade
     trigger_pct: float         # fraction of entry price before first SL trail fires
     step_pct: float            # fraction of entry price per subsequent trail step
+    volume_dependent_trails: bool  # FIX-026: enable volume/VWAP-based trail logic
 
     @field_validator("trigger_pct", "step_pct")
     @classmethod
@@ -578,6 +592,20 @@ class SmartTgtConfig(BaseModel):
                 "(e.g. 0.005 for 0.5%, NOT 5 for 5%)"
             )
         return v
+
+
+class EntryGateConfig(BaseModel):
+    """
+    FIX-025: EntryGate slippage protection config.
+
+    When EntryGate releases a signal with PRICE_HIT, the release_ltp is
+    captured and passed to OrderPlacer. OrderPlacer applies slippage
+    protection:
+      LONG:  adjusted_limit = min(requested_entry + buffer, release_ltp)
+      SHORT: adjusted_limit = max(requested_entry - buffer, release_ltp)
+    """
+    model_config = ConfigDict(extra="forbid")
+    slippage_buffer: float  # Rs buffer for limit price adjustment
 
 
 class DriftHandlerConfig(BaseModel):
@@ -654,6 +682,7 @@ class SystemConfig(BaseModel):
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
+    entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis
     drift_handler: DriftHandlerConfig         # BL-2: drift escalation policy
 
@@ -662,6 +691,27 @@ class SystemConfig(BaseModel):
 # broker_costs.yaml — BrokerCostsConfig
 # Locked: P12 (identical rates in live and paper mode)
 # ─────────────────────────────────────────────────────────────────────────────
+
+class FuturesRatesConfig(BaseModel):
+    """FIX-027: Futures-specific rates."""
+    model_config = ConfigDict(extra="forbid")
+    stt_pct: float                   # STT % on both BUY and SELL for futures
+    stamp_duty_buy_pct: float        # Stamp duty % on buy-side for futures
+
+
+class OptionsBuyRatesConfig(BaseModel):
+    """FIX-027: Options buy-side rates."""
+    model_config = ConfigDict(extra="forbid")
+    stt_pct: float                   # STT % on options BUY (should be 0)
+    stamp_duty_pct: float            # Stamp duty % on options buy premium
+
+
+class OptionsSellRatesConfig(BaseModel):
+    """FIX-027: Options sell-side rates."""
+    model_config = ConfigDict(extra="forbid")
+    stt_pct: float                   # STT % on options SELL premium
+    stamp_duty_pct: float            # Stamp duty % on sell side (should be 0)
+
 
 class ZerodhaRatesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -674,6 +724,9 @@ class ZerodhaRatesConfig(BaseModel):
     sebi_pct: float                  # % on turnover (CC7)
     stamp_duty_mis_buy_pct: float    # % on buy turnover for MIS/CO (CC8; was stamp_duty_buy_pct)
     stamp_duty_cnc_buy_pct: float    # % on buy turnover for CNC (CC8)
+    futures: FuturesRatesConfig      # FIX-027: Futures rates
+    options_buy: OptionsBuyRatesConfig   # FIX-027: Options buy rates
+    options_sell: OptionsSellRatesConfig  # FIX-027: Options sell rates
 
 
 class BrokerCostsConfig(BaseModel):

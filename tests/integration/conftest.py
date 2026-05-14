@@ -13,6 +13,14 @@ Integration scan_webhook_map (IT3): one scanner "vwap_bounce_long".
 """
 from __future__ import annotations
 
+# Ensure project root is in sys.path for imports
+import sys
+from pathlib import Path
+
+# Use absolute path to avoid any resolution issues
+project_root = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(project_root))
+
 import logging
 import queue
 import types

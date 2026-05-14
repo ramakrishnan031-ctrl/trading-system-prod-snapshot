@@ -354,17 +354,20 @@ class RiskEngine:
                 f"max={self._max_consec}",
             )
 
-        # 7. DAILY_LOSS — abs(realized_pnl) >= limit_pct * total (RE7)
+        # 7. DAILY_LOSS — abs(realized_pnl + unrealized_mtm) >= limit_pct * total (RE7, FIX-035)
         checks_run.append("DAILY_LOSS")
         daily_pnl = snap.daily_realized_pnl
+        unrealized_mtm = self._fm.get_total_unrealized_mtm()
+        total_pnl = daily_pnl + unrealized_mtm
         if (
-            daily_pnl < 0
+            total_pnl < 0
             and snap.total > 0
-            and abs(daily_pnl) >= self._daily_loss_pct * snap.total
+            and abs(total_pnl) >= self._daily_loss_pct * snap.total
         ):
             return reject(
                 "DAILY_LOSS",
-                f"Daily loss limit hit: realized_pnl={daily_pnl:.2f}, "
+                f"Daily loss limit hit: total_pnl={total_pnl:.2f} "
+                f"(realized={daily_pnl:.2f} + unrealized={unrealized_mtm:.2f}), "
                 f"limit={self._daily_loss_pct * snap.total:.2f}",
             )
 

@@ -1874,6 +1874,197 @@ def test_fix008_cnc_check_skips_mis_positions(tmp_path: Path) -> None:
     store.close()
     print("  OK FIX-008: MIS positions are not flagged by CNC overnight check")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-038: Exponential backoff for repeated alerts
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _seed_open_trade(
+    store: StateStore,
+    trade_id: str,
+    symbol: str,
+    qty_planned: int,
+    qty_filled: int,
+    status: str = "OPEN",
+) -> None:
+    """Seed an OPEN trade for reconciler backoff tests (FIX-038)."""
+    _insert_trade(
+        store=store,
+        trade_id=trade_id,
+        symbol=symbol,
+        status=status,
+        qty_filled=qty_filled,
+    )
+
+
+def test_fix038_repeated_discrepancy_uses_exponential_backoff(tmp_path: Path, caplog) -> None:
+    """FIX-038: Same discrepancy detected 20 times alerts at poll 1, ~8, ~32, then every ~120."""
+    import logging
+
+    store = _make_store(tmp_path)
+    _seed_open_trade(store, "t1", "RELIANCE", qty_planned=100, qty_filled=100, status="OPEN")
+
+    # Mock broker to return qty=200 (POSITION_GREW: broker > local)
+    reliance_pos = _Position(symbol="RELIANCE", qty=200, avg_price=2500.0, product="MIS")
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [reliance_pos]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(store, adapter=adapter)
+
+    # Track which polls triggered ERROR logs
+    error_polls = []
+
+    with caplog.at_level(logging.ERROR, logger="order_reconciler"):
+        for poll in range(1, 21):
+            caplog.clear()
+            rec.reconcile_once()
+            # Check if any ERROR log contains "POSITION_GREW"
+            if any("POSITION_GREW" in record.message for record in caplog.records if record.levelno == logging.ERROR):
+                error_polls.append(poll)
+
+    # Expected: poll 1 (immediate), poll 9 (1+8), poll 41 would be (9+32) but we only run 20
+    # So we expect polls: 1, 9
+    assert 1 in error_polls, "First detection should alert immediately"
+    assert 9 in error_polls, "Second alert should occur at poll 9 (8 polls after first)"
+    # Poll 41 (9 + 32) is beyond our 20-poll test, so we can't verify 3rd alert timing
+
+    # Verify that NOT every poll alerted (backoff worked)
+    assert len(error_polls) < 20, f"Backoff failed: alerted on {len(error_polls)}/20 polls"
+
+    store.close()
+    print("  OK FIX-038: Exponential backoff prevents alert spam")
+
+
+def test_fix038_discrepancy_resolved_removes_tracking(tmp_path: Path, caplog) -> None:
+    """FIX-038: When discrepancy resolves, entry is removed from _alerted_discrepancies."""
+    import logging
+
+    store = _make_store(tmp_path)
+    _seed_open_trade(store, "t1", "RELIANCE", qty_planned=100, qty_filled=100, status="OPEN")
+
+    # First 5 polls: broker qty=200 (POSITION_GREW)
+    reliance_pos_bad = _Position(symbol="RELIANCE", qty=200, avg_price=2500.0, product="MIS")
+    # Poll 6+: broker qty=100 (HEALTHY)
+    reliance_pos_good = _Position(symbol="RELIANCE", qty=100, avg_price=2500.0, product="MIS")
+
+    adapter = MagicMock()
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(store, adapter=adapter)
+
+    # Polls 1-5: POSITION_GREW
+    adapter.get_positions.return_value = [reliance_pos_bad]
+    for _ in range(5):
+        rec.reconcile_once()
+
+    # Verify entry is in tracking dict
+    key = ("t1", "POSITION_GREW")
+    assert key in rec._alerted_discrepancies, "Discrepancy should be tracked"
+
+    # Poll 6: HEALTHY
+    adapter.get_positions.return_value = [reliance_pos_good]
+    with caplog.at_level(logging.INFO, logger="order_reconciler"):
+        caplog.clear()
+        rec.reconcile_once()
+        # Verify "discrepancy resolved" log
+        assert any("discrepancy resolved" in record.message for record in caplog.records if record.levelno == logging.INFO)
+
+    # Verify entry removed from tracking
+    assert key not in rec._alerted_discrepancies, "Resolved discrepancy should be removed"
+
+    store.close()
+    print("  OK FIX-038: Resolved discrepancies are removed from tracking")
+
+
+def test_fix038_missing_exits_bypasses_backoff(tmp_path: Path, caplog) -> None:
+    """FIX-038: MISSING_EXITS always alerts (bypass_backoff=True) regardless of poll count."""
+    import logging
+
+    store = _make_store(tmp_path)
+    _seed_open_trade(store, "t1", "RELIANCE", qty_planned=100, qty_filled=100, status="OPEN")
+
+    # Add SL order to DB (but not in broker's open orders)
+    _insert_order(
+        store=store,
+        order_id="broker_sl_123",
+        trade_id="t1",
+        leg="SL",
+        product="MIS",
+        status="OPEN",
+        trigger_price=2450.0,
+    )
+
+    # Mock broker: position exists, but SL order NOT in open orders
+    reliance_pos = _Position(symbol="RELIANCE", qty=100, avg_price=2500.0, product="MIS")
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [reliance_pos]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    adapter.get_open_orders.return_value = []  # No SL order present
+
+    rec = _make_reconciler(store, adapter=adapter, broker_orders_fn=adapter.get_open_orders)
+
+    # Run 5 polls - CRITICAL should fire every time (no backoff)
+    critical_count = 0
+    with caplog.at_level(logging.CRITICAL, logger="order_reconciler"):
+        for _ in range(5):
+            caplog.clear()
+            rec.reconcile_once()
+            if any("MISSING_EXITS" in record.message for record in caplog.records if record.levelno == logging.CRITICAL):
+                critical_count += 1
+
+    # All 5 polls should have alerted (bypass backoff)
+    assert critical_count == 5, f"MISSING_EXITS should alert every poll, got {critical_count}/5"
+
+    store.close()
+    print("  OK FIX-038: MISSING_EXITS bypasses backoff")
+
+
+def test_fix038_capital_drift_uses_exponential_backoff(tmp_path: Path, caplog) -> None:
+    """FIX-038: CAPITAL_DRIFT repeated detection uses exponential backoff."""
+    import logging
+
+    store = _make_store(tmp_path)
+
+    # Mock: broker always reports 90k, fund_manager always reports 100k (10k drift, exceeds tolerance)
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+
+    # Track which polls triggered ERROR logs
+    error_polls = []
+
+    with caplog.at_level(logging.ERROR, logger="order_reconciler"):
+        for poll in range(1, 21):
+            caplog.clear()
+            rec.reconcile_once()
+            # Check if any ERROR log contains "CAPITAL_DRIFT"
+            if any("CAPITAL_DRIFT" in record.message and "backoff" not in record.message
+                   for record in caplog.records if record.levelno == logging.ERROR):
+                error_polls.append(poll)
+
+    # Expected: poll 1 (immediate), poll 9 (1+8)
+    assert 1 in error_polls, "First CAPITAL_DRIFT should alert immediately"
+    assert 9 in error_polls, "Second alert should occur at poll 9 (8 polls after first)"
+
+    # Verify that NOT every poll alerted (backoff worked)
+    assert len(error_polls) < 20, f"Backoff failed: alerted on {len(error_polls)}/20 polls"
+
+    store.close()
+    print("  OK FIX-038: CAPITAL_DRIFT uses exponential backoff")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1940,6 +2131,11 @@ def run_all_tests() -> int:
         test_bl3_check7_multiple_drifts_per_reservation_reporting,
         test_bl3_check7_sub_tolerance_drift_ignored,
         test_bl3_integration_check7_to_drift_handler_counter_increments,
+        # FIX-038: Exponential backoff for repeated alerts
+        test_fix038_repeated_discrepancy_uses_exponential_backoff,
+        test_fix038_discrepancy_resolved_removes_tracking,
+        test_fix038_missing_exits_bypasses_backoff,
+        test_fix038_capital_drift_uses_exponential_backoff,
     ]
 
     print("=" * 70)

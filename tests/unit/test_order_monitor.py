@@ -17,6 +17,7 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -27,6 +28,8 @@ from broker.order_state_machine import OrderStateMachine
 from broker.zerodha_adapter import CancelResult, OrderHistoryEntry
 from core.events import EventBus, OrderFilled
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
+from core.ids import new_signal_id, new_trade_id
+from core.state_store import StateStore
 from core.time_authority import now_ist
 
 
@@ -92,6 +95,90 @@ def _entry(status: str, filled_qty: int = 0, avg_price: float = 0.0) -> OrderHis
         rejection_reason="",
         ts=now_ist(),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: StateStore for rehydration tests (FIX-024)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_store(tmp_path: Path) -> StateStore:
+    """Create a StateStore with schema initialized."""
+    db = tmp_path / "test.db"
+    schema = Path("core/schema.sql")
+    store = StateStore(db_path=db, schema_path=schema)
+    return store
+
+
+def _seed_signal(store: StateStore, signal_id: str | None = None, symbol: str = "RELIANCE") -> str:
+    """Insert a minimal signal row so FK constraints pass."""
+    sig_id = signal_id or new_signal_id()
+    now = now_ist().isoformat()
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO signals (
+                signal_id, symbol, scanner, strategy,
+                triggered_at, received_at, expires_at,
+                status, fingerprint, fingerprint_date
+            ) VALUES (?, ?, 'test_scanner', 'test_strategy',
+                      ?, ?, ?,
+                      'PROCESSED', 'fp_test_001', ?)
+            """,
+            (sig_id, symbol, now, now, now, now[:10]),
+        )
+    return sig_id
+
+
+def _seed_trade_with_order(
+    store: StateStore,
+    signal_id: str,
+    trade_id: str | None = None,
+    order_id: str = "KITE001",
+    order_status: str = "PENDING",
+    symbol: str = "RELIANCE",
+    transaction_type: str = "BUY",
+    qty: int = 10,
+    price: float = 2500.0,
+    leg: str = "ENTRY",
+) -> str:
+    """
+    Seed a trade with a single order in the specified status.
+    Returns the trade_id.
+    """
+    tid = trade_id or new_trade_id()
+    now = now_ist().isoformat()
+
+    with store.transaction() as cur:
+        # Insert trade with all required fields
+        cur.execute(
+            """
+            INSERT INTO trades (
+                trade_id, signal_id, symbol, direction, strategy, sector,
+                qty_planned, qty_filled, entry_target_price, entry_actual_price,
+                sl_initial, tgt_initial, margin_reserved, risk_amount,
+                created_at, entry_time, status, order_protocol, updated_at
+            )
+            VALUES (?, ?, ?, 'LONG', 'test_strategy', NULL,
+                    ?, 0, ?, NULL,
+                    2450.0, 2600.0, 25000.0, 500.0,
+                    ?, NULL, 'PENDING_FILL', 'LIMIT_TRIPLE', ?)
+            """,
+            (tid, signal_id, symbol, qty, price, now, now),
+        )
+
+        # Insert order
+        cur.execute(
+            """
+            INSERT INTO orders (
+                order_id, trade_id, leg, transaction_type, order_type,
+                product, variety, qty_requested, price, status, placed_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'LIMIT', 'MIS', 'regular', ?, ?, ?, ?, ?)
+            """,
+            (order_id, tid, leg, transaction_type, qty, price, order_status, now, now),
+        )
+
+    return tid
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -779,6 +866,269 @@ def test_empty_history_resets_on_non_empty_response() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-024: rehydrate_from_store tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix024_rehydrate_two_pending_orders() -> None:
+    """
+    FIX-024 test 1: Simulate restart with 2 PENDING orders in DB.
+    Assert both appear in _watched after rehydrate_from_store().
+    """
+    with TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        sig_id = _seed_signal(store)
+
+        # Seed two PENDING orders
+        _seed_trade_with_order(
+            store, sig_id, trade_id="trade_001", order_id="KITE_001",
+            order_status="PENDING", symbol="RELIANCE", qty=10
+        )
+        _seed_trade_with_order(
+            store, sig_id, trade_id="trade_002", order_id="KITE_002",
+            order_status="PENDING", symbol="INFY", qty=5
+        )
+
+        monitor, _, _, _ = _make_monitor()
+        count = monitor.rehydrate_from_store(store)
+
+        assert count == 2, f"Expected 2 rehydrated orders, got {count}"
+        assert monitor.watched_count() == 2, "Both orders should be in _watched"
+        # Verify both orders are present
+        assert monitor.is_watching("KITE_001"), "KITE_001 should be watched"
+        assert monitor.is_watching("KITE_002"), "KITE_002 should be watched"
+
+        store.close()
+        print("  OK FIX-024: rehydrate 2 PENDING orders from DB")
+
+
+def test_fix024_rehydrate_filled_order_fires_event() -> None:
+    """
+    FIX-024 test 2: Simulate one order filled at broker during downtime.
+    Assert OrderFilled event fires on first poll after rehydrate.
+    """
+    with TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        sig_id = _seed_signal(store, symbol="TCS")
+
+        # Seed SUBMITTED order that filled during downtime
+        # (SUBMITTED->COMPLETE is a valid transition; PENDING->COMPLETE is not)
+        _seed_trade_with_order(
+            store, sig_id, trade_id="trade_001", order_id="KITE_DOWN",
+            order_status="SUBMITTED", symbol="TCS", qty=8, price=3500.0
+        )
+
+        # Adapter returns COMPLETE history (simulates filled during downtime)
+        adapter = MockAdapter()
+        adapter.history_responses = [
+            [OrderHistoryEntry(
+                broker_order_id="KITE_DOWN",
+                status="COMPLETE",
+                filled_qty=8,
+                avg_price=3505.0,
+                rejection_reason="",
+                ts=now_ist()
+            )]
+        ]
+
+        monitor, _, _, bus = _make_monitor(adapter=adapter, poll_interval_sec=1)
+        monitor.rehydrate_from_store(store)
+
+        # Capture OrderFilled events
+        filled_events: list[OrderFilled] = []
+        def capture_filled(event: OrderFilled) -> None:
+            filled_events.append(event)
+        bus.subscribe(OrderFilled, capture_filled)
+
+        # Run one poll cycle
+        entry = monitor._watched["KITE_DOWN"]
+        monitor._process_order(entry)
+
+        # Assert OrderFilled event was published
+        assert len(filled_events) == 1, f"Expected 1 OrderFilled event, got {len(filled_events)}"
+        evt = filled_events[0]
+        assert evt.internal_order_id == "KITE_DOWN"
+        assert evt.broker_order_id == "KITE_DOWN"
+        assert evt.filled_qty == 8
+        assert evt.avg_fill_price == 3505.0
+
+        store.close()
+        print("  OK FIX-024: rehydrated filled order fires OrderFilled event")
+
+
+def test_fix024_rehydrate_empty_db_no_error() -> None:
+    """
+    FIX-024 test 3: Assert rehydrate_from_store() with empty DB completes without error.
+    """
+    with TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        # No signals, no trades, no orders
+
+        monitor, _, _, _ = _make_monitor()
+        count = monitor.rehydrate_from_store(store)
+
+        assert count == 0, f"Expected 0 rehydrated orders, got {count}"
+        assert monitor.watched_count() == 0, "No orders should be watched"
+
+        store.close()
+        print("  OK FIX-024: rehydrate from empty DB completes without error")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-028: OrderPartiallyTerminated event on partial-fill terminal state
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix028_partial_cancelled_emits_partially_terminated() -> None:
+    """
+    FIX-028 test 1: Partial fill (50/100) then CANCELLED emits OrderPartiallyTerminated.
+    Assert event contains correct qty_filled and reason.
+    """
+    adapter = MockAdapter()
+    # First poll: PARTIAL with 50/100 filled
+    # Second poll: CANCELLED with 50 filled (terminal)
+    adapter.history_responses = [
+        [_entry("PARTIAL", filled_qty=50, avg_price=2505.0)],
+        [_entry("CANCELLED", filled_qty=50, avg_price=2505.0)],
+    ]
+
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+
+    # Subscribe to catch OrderPartiallyTerminated events
+    from core.events import OrderPartiallyTerminated
+    received_partial: list[OrderPartiallyTerminated] = []
+    bus.subscribe(OrderPartiallyTerminated, received_partial.append)  # type: ignore[arg-type]
+
+    # Register and track an entry order for 100 shares
+    _register_and_track(monitor, osm, "ord_entry", "KITE001", "RELIANCE", "BUY", 100, 2500.0)
+
+    # First poll: PARTIAL status (50/100 filled at 2505.0)
+    monitor._poll_cycle()
+
+    # Second poll: CANCELLED status (50 filled, 50 cancelled)
+    monitor._poll_cycle()
+
+    # Assert OrderPartiallyTerminated was published
+    assert len(received_partial) == 1, f"Expected 1 OrderPartiallyTerminated, got {len(received_partial)}"
+
+    event = received_partial[0]
+    assert event.internal_order_id == "ord_entry", f"Expected ord_entry, got {event.internal_order_id}"
+    assert event.filled_qty == 50, f"Expected filled_qty=50, got {event.filled_qty}"
+    assert event.avg_fill_price == 2505.0, f"Expected avg_fill_price=2505.0, got {event.avg_fill_price}"
+    assert event.reason == "CANCELLED", f"Expected reason=CANCELLED, got {event.reason}"
+
+    # Assert OSM transitioned to CANCELLED
+    assert osm.current_state("ord_entry") == "CANCELLED", "Order should be in CANCELLED state"
+
+    # Assert order was untracked
+    assert not monitor.is_watching("ord_entry"), "Order should be untracked"
+
+    print("  OK FIX-028: partial fill (50/100) then CANCELLED emits OrderPartiallyTerminated")
+
+
+def test_fix028_zero_fill_cancelled_no_partially_terminated() -> None:
+    """
+    FIX-028 test 2: Zero fill (0/100) then CANCELLED does NOT emit OrderPartiallyTerminated.
+    Only OrderStatusChanged should be emitted.
+    """
+    adapter = MockAdapter()
+    adapter.history_responses = [[_entry("CANCELLED", filled_qty=0, avg_price=0.0)]]
+
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+
+    # Subscribe to catch events
+    from core.events import OrderPartiallyTerminated, OrderStatusChanged
+    received_partial: list[OrderPartiallyTerminated] = []
+    received_status: list[OrderStatusChanged] = []
+    bus.subscribe(OrderPartiallyTerminated, received_partial.append)  # type: ignore[arg-type]
+    bus.subscribe(OrderStatusChanged, received_status.append)  # type: ignore[arg-type]
+
+    # Register and track
+    _register_and_track(monitor, osm, "ord_entry", "KITE001", "RELIANCE", "BUY", 100, 2500.0)
+
+    # Simulate CANCELLED with zero fill
+    monitor._poll_cycle()
+
+    # Assert NO OrderPartiallyTerminated was published
+    assert len(received_partial) == 0, f"Expected 0 OrderPartiallyTerminated, got {len(received_partial)}"
+
+    # Assert OrderStatusChanged was published (from _safe_transition)
+    assert len(received_status) > 0, "Expected OrderStatusChanged to be published"
+
+    print("  OK FIX-028: zero fill (0/100) then CANCELLED does NOT emit OrderPartiallyTerminated")
+
+
+def test_fix028_complete_fill_no_partially_terminated() -> None:
+    """
+    FIX-028 test 3: Complete fill (100/100) emits OrderFilled, NOT OrderPartiallyTerminated.
+    """
+    adapter = MockAdapter()
+    adapter.history_responses = [[_entry("COMPLETE", filled_qty=100, avg_price=2505.0)]]
+
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+
+    # Subscribe to catch events
+    from core.events import OrderFilled, OrderPartiallyTerminated
+    received_filled: list[OrderFilled] = []
+    received_partial: list[OrderPartiallyTerminated] = []
+    bus.subscribe(OrderFilled, received_filled.append)  # type: ignore[arg-type]
+    bus.subscribe(OrderPartiallyTerminated, received_partial.append)  # type: ignore[arg-type]
+
+    # Register and track
+    _register_and_track(monitor, osm, "ord_entry", "KITE001", "RELIANCE", "BUY", 100, 2500.0)
+
+    # Simulate COMPLETE status (100/100 filled)
+    monitor._poll_cycle()
+
+    # Assert OrderFilled was published
+    assert len(received_filled) == 1, f"Expected 1 OrderFilled, got {len(received_filled)}"
+
+    # Assert NO OrderPartiallyTerminated was published
+    assert len(received_partial) == 0, f"Expected 0 OrderPartiallyTerminated, got {len(received_partial)}"
+
+    print("  OK FIX-028: complete fill (100/100) emits OrderFilled, NOT OrderPartiallyTerminated")
+
+
+def test_fix028_partial_failed_emits_partially_terminated() -> None:
+    """
+    FIX-028 test 4: Partial fill then FAILED (not just CANCELLED) also emits OrderPartiallyTerminated.
+    """
+    adapter = MockAdapter()
+    # First poll: PARTIAL with 30/100 filled
+    # Second poll: REJECTED with 30 filled (maps to FAILED state)
+    adapter.history_responses = [
+        [_entry("PARTIAL", filled_qty=30, avg_price=2502.0)],
+        [_entry("REJECTED", filled_qty=30, avg_price=2502.0)],
+    ]
+
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+
+    # Subscribe to catch OrderPartiallyTerminated events
+    from core.events import OrderPartiallyTerminated
+    received_partial: list[OrderPartiallyTerminated] = []
+    bus.subscribe(OrderPartiallyTerminated, received_partial.append)  # type: ignore[arg-type]
+
+    # Register and track
+    _register_and_track(monitor, osm, "ord_entry", "KITE001", "RELIANCE", "BUY", 100, 2500.0)
+
+    # First poll: PARTIAL
+    monitor._poll_cycle()
+
+    # Second poll: REJECTED (maps to FAILED)
+    monitor._poll_cycle()
+
+    # Assert OrderPartiallyTerminated was published with reason=FAILED
+    assert len(received_partial) == 1, f"Expected 1 OrderPartiallyTerminated, got {len(received_partial)}"
+
+    event = received_partial[0]
+    assert event.filled_qty == 30, f"Expected filled_qty=30, got {event.filled_qty}"
+    assert event.reason == "FAILED", f"Expected reason=FAILED, got {event.reason}"
+
+    # Assert OSM transitioned to FAILED
+    assert osm.current_state("ord_entry") == "FAILED", "Order should be in FAILED state"
+
+    print("  OK FIX-028: partial fill then REJECTED emits OrderPartiallyTerminated with reason=FAILED")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -810,6 +1160,13 @@ def run_all_tests() -> int:
         test_complete_order_polled_again_no_crash,
         test_start_stop_lifecycle,
         test_thread_safety_concurrent_track_untrack,
+        test_fix024_rehydrate_two_pending_orders,
+        test_fix024_rehydrate_filled_order_fires_event,
+        test_fix024_rehydrate_empty_db_no_error,
+        test_fix028_partial_cancelled_emits_partially_terminated,
+        test_fix028_zero_fill_cancelled_no_partially_terminated,
+        test_fix028_complete_fill_no_partially_terminated,
+        test_fix028_partial_failed_emits_partially_terminated,
     ]
 
     print("=" * 70)

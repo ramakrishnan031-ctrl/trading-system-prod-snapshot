@@ -189,7 +189,7 @@ from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
-from core.events import EventBus, OrderFilled, OrderStatusChanged, PositionClosed
+from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged, PositionClosed
 from core.exceptions import BrokerError, BrokerRateLimit429Error, OrderRejectedError
 from core.ids import new_trade_id
 from core.logger import log_exception
@@ -345,6 +345,7 @@ class OrderPlacer:
         smart_tgt_manager: Optional[SmartTgtManager] = None,
         smart_tgt_config: Optional[SmartTgtConfig] = None,
         rate_limit_backoff: Optional[RateLimitBackoffConfig] = None,  # BL-19
+        entry_gate_slippage_buffer: float = 2.0,  # FIX-025: gate release slippage protection
         notifier: Optional[object] = None,   # TelegramNotifier; optional
         mode: str = "LIVE",                   # session mode label for alert title
     ) -> None:
@@ -372,6 +373,8 @@ class OrderPlacer:
         self._rl_backoff: RateLimitBackoffConfig = (
             rate_limit_backoff or RateLimitBackoffConfig()
         )
+        # FIX-025: gate release slippage protection buffer
+        self._entry_gate_slippage_buffer = entry_gate_slippage_buffer
         # IC8: injected by main.py after Module 38; None = no tick rounding
         self._instrument_cache = None  # set via set_instrument_cache()
         # Telegram alerts (optional): wiring for ORDER PLACED / TGT HIT / SL HIT
@@ -385,10 +388,12 @@ class OrderPlacer:
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
         self._bus.subscribe(OrderFilled, self._on_order_filled)
-        # Audit #7: also subscribe to OrderStatusChanged to catch the
-        # partial-fill-then-cancel gap. OrderFilled only fires on COMPLETE
-        # (OM8); a CANCELLED / REJECTED / FAILED terminal with qty_filled > 0
-        # would otherwise leave the reservation un-committed.
+        # FIX-028: subscribe to OrderPartiallyTerminated for partial-fill-then-cancel
+        # path. This event carries all fill details (qty, price, slippage) for
+        # placing exits at the actual filled quantity.
+        self._bus.subscribe(OrderPartiallyTerminated, self._on_order_partially_terminated)
+        # Audit #7 + FIX-017: subscribe to OrderStatusChanged for zero-fill-then-cancel
+        # path (qty_filled == 0). Partial fills now handled by OrderPartiallyTerminated.
         self._bus.subscribe(OrderStatusChanged, self._on_order_status_changed)
 
     def set_instrument_cache(self, cache) -> None:
@@ -477,13 +482,42 @@ class OrderPlacer:
         signal_id: str,
         reservation_id: str,
         tgt_price: Optional[float] = None,  # SPW6: provided by signal_processor; overrides OP3
+        release_ltp: Optional[float] = None,  # FIX-025: gate release LTP for slippage protection
     ) -> None:
         """
         Create trade, place entry orders, register fill tracking. (OP1–OP4)
 
         Raises BrokerError on hard broker failure (after cleanup).
         signal_processor catches this and marks signal PLACEMENT_FAILED.
+
+        FIX-025: If release_ltp is provided (from EntryGate PRICE_HIT), applies
+        slippage protection to entry_price before placing orders:
+          LONG:  adjusted = min(entry_price + buffer, release_ltp)
+          SHORT: adjusted = max(entry_price - buffer, release_ltp)
         """
+        # FIX-025: Apply slippage protection if release_ltp provided
+        requested_entry = entry_price
+        if release_ltp is not None:
+            if side == "BUY":
+                # LONG: limit can't be higher than release_ltp
+                adjusted_limit = min(entry_price + self._entry_gate_slippage_buffer, release_ltp)
+            else:  # side == "SELL"
+                # SHORT: limit can't be lower than release_ltp
+                adjusted_limit = max(entry_price - self._entry_gate_slippage_buffer, release_ltp)
+            entry_price = adjusted_limit
+            self._log.info(
+                "order_placer.slippage_protection",
+                extra={
+                    "signal_id": signal_id,
+                    "symbol": symbol,
+                    "side": side,
+                    "requested_entry": requested_entry,
+                    "release_ltp": release_ltp,
+                    "adjusted_limit": adjusted_limit,
+                    "buffer": self._entry_gate_slippage_buffer,
+                },
+            )
+
         # IC8: round LIMIT prices to tick_size if instrument_cache wired
         entry_price = self._round_to_tick(symbol, entry_price)
         sl_price    = self._round_to_tick(symbol, sl_price)
@@ -918,33 +952,139 @@ class OrderPlacer:
         else:
             self._handle_exit_fill(event, fill_entry)
 
+    def _on_order_partially_terminated(self, event: OrderPartiallyTerminated) -> None:
+        """
+        FIX-028: Handle partial-fill-then-terminate scenario.
+
+        Order reached terminal state (CANCELLED/FAILED/EXPIRED) with qty_filled > 0.
+        This is a naked position risk: the entry filled partially, creating a live
+        position at the broker, but the order never reached COMPLETE so OrderFilled
+        did not fire.
+
+        This handler:
+          1. Commits capital with actual_qty = filled_qty (excess auto-returned).
+          2. Records partial entry fill in DB (status=OPEN).
+          3. Places exit legs (SL/TGT) at the filled qty to protect the position.
+
+        Exit placement uses the retry mechanism from FIX-012: retry up to 4 times
+        with backoff; on final failure, trigger soft_kill (not hard_kill) to allow
+        manual intervention while preventing new trades.
+
+        Idempotency: pops from _fill_map atomically, so OrderPartiallyTerminated
+        and OrderFilled cannot double-process.
+        """
+        internal_id = event.internal_order_id
+        with self._fill_map_lock:
+            fill_entry = self._fill_map.pop(internal_id, None)
+
+        if fill_entry is None:
+            # Not our trade or already handled
+            return
+
+        # Only handle entry legs; exit legs are logged and skipped
+        if fill_entry.leg != _LEG_ENTRY:
+            self._log.warning(
+                "order_placer.partial_terminated_exit_leg_skipped",
+                extra={
+                    "internal_order_id": internal_id,
+                    "trade_id": fill_entry.trade_id,
+                    "leg": fill_entry.leg,
+                    "reason": event.reason,
+                    "qty_filled": event.filled_qty,
+                },
+            )
+            return
+
+        trade_id = fill_entry.trade_id
+        qty_filled = event.filled_qty
+        avg_price = event.avg_fill_price
+
+        self._log.warning(
+            "order_placer.partial_entry_terminated",
+            extra={
+                "trade_id": trade_id,
+                "internal_order_id": internal_id,
+                "reason": event.reason,
+                "qty_filled": qty_filled,
+                "qty_requested": fill_entry.qty,
+                "avg_fill_price": avg_price,
+            },
+        )
+
+        # Commit partial fill: commit_to_used returns excess margin to available
+        try:
+            self._fm.commit_to_used(
+                reservation_id=fill_entry.reservation_id,
+                actual_fill_price=avg_price,
+                actual_qty=qty_filled,
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.partial_terminated_commit_failed",
+                extra={
+                    "trade_id": trade_id,
+                    "reservation_id": fill_entry.reservation_id,
+                },
+            )
+            # commit_to_used has already fired hard_kill (BL-4)
+
+        # Record partial entry fill in DB (sets status=OPEN)
+        try:
+            self._om.record_entry_fill(
+                trade_id=trade_id,
+                avg_fill_price=avg_price,
+                qty_filled=qty_filled,
+                filled_at=event.filled_at or now_ist().isoformat(),
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.error(
+                "order_placer.partial_terminated_record_fill_failed",
+                extra={"trade_id": trade_id},
+            )
+
+        # Place exits at the actual filled qty to protect the partial position
+        if fill_entry.order_protocol == "LIMIT_TRIPLE":
+            self._place_limit_triple_exits(
+                trade_id=trade_id,
+                fill_entry=fill_entry,
+                qty_filled=qty_filled,
+                avg_fill_price=avg_price,
+                reason=f"partial_terminated_{event.reason.lower()}",
+            )
+        elif fill_entry.order_protocol == "CO_PLUS_TGT":
+            self._place_co_tgt_exit(
+                trade_id=trade_id,
+                fill_entry=fill_entry,
+                qty_filled=qty_filled,
+                avg_fill_price=avg_price,
+                reason=f"partial_terminated_{event.reason.lower()}",
+            )
+
     def _on_order_status_changed(self, event: OrderStatusChanged) -> None:
         """
-        Audit #7 + FIX-017: close entry-order terminal-status gaps.
+        FIX-017: Handle zero-fill terminal status for entry orders.
 
-        OrderFilled fires only on COMPLETE (OM8). When an entry order is
-        CANCELLED / REJECTED / FAILED the position may or may not exist:
-          - qty_filled > 0 (partial fill, then cancel): position exists,
-            capital reservation needs commit_to_used at partial qty.
-          - qty_filled == 0 (full cancel): no position, capital reservation
-            needs release back to available (FIX-017).
+        OrderFilled fires only on COMPLETE (OM8). OrderPartiallyTerminated fires
+        for partial fills with terminal status (FIX-028). This handler covers the
+        remaining gap: zero-fill terminal status (qty_filled == 0).
 
-        Partial-fill path (qty_filled > 0):
-          - Commit to used with actual_qty=qty_filled (excess auto-returned).
-          - Record partial entry so trade row = OPEN with partial qty.
-          - FIX-016: place exit legs (both protocols now defer exits to fill).
-
-        Zero-fill path (qty_filled == 0, FIX-017):
+        Zero-fill path (qty_filled == 0):
           - Release full reservation back to available.
           - Mark trade FAILED (no position at broker).
 
+        Partial-fill path (qty_filled > 0):
+          - Now handled by _on_order_partially_terminated (FIX-028).
+          - OrderPartiallyTerminated is emitted by order_monitor when a terminal
+            state is reached with qty_filled > 0.
+
         Exit-leg terminal statuses (SL/TGT/EOD) are logged and skipped: those
         legs have different capital accounting (release_used, not commit/release
-        reservation) and are outside scope of Audit #7 / FIX-017.
+        reservation) and are outside scope of FIX-017 / FIX-028.
 
-        Idempotency: pops from _fill_map atomically, so OrderStatusChanged
-        and OrderFilled cannot double-process even when both fire in quick
-        succession; whichever pops first wins.
+        Idempotency: pops from _fill_map atomically, so OrderStatusChanged,
+        OrderPartiallyTerminated, and OrderFilled cannot double-process.
         """
         status = (event.status or "").upper()
         if status not in ("CANCELLED", "REJECTED", "FAILED", "EXPIRED"):
@@ -1009,74 +1149,77 @@ class OrderPlacer:
                 )
             return
 
-        # Partial-fill path (qty_filled > 0): position exists, commit partial.
-        avg_price = float(event.avg_fill_price or 0.0)
-        self._log.warning(
-            "order_placer.partial_entry_cancelled",
-            extra={
-                "trade_id": fill_entry.trade_id,
-                "internal_order_id": internal_id,
-                "status": status,
-                "qty_filled": event.qty_filled,
-                "qty_requested": fill_entry.qty,
-                "avg_fill_price": avg_price,
-            },
-        )
-
-        # Commit partial fill: commit_to_used returns the excess margin
-        # (corresponding to the unfilled qty) to available automatically.
-        try:
-            self._fm.commit_to_used(
-                reservation_id=fill_entry.reservation_id,
-                actual_fill_price=avg_price,
-                actual_qty=event.qty_filled,
-            )
-        except Exception as exc:
-            log_exception(self._log, exc)
-            self._log.error(
-                "order_placer.partial_commit_failed",
+        # FIX-028: Partial-fill path (qty_filled > 0) is PRIMARY handled by
+        # _on_order_partially_terminated (which pops the entry first). However,
+        # we keep fallback handling here for two scenarios:
+        #   1. Tests that directly publish OrderStatusChanged without order_monitor
+        #   2. Edge cases where OrderPartiallyTerminated wasn't emitted
+        # If we reach here with qty_filled > 0, process it (safe fallback).
+        if event.qty_filled > 0:
+            avg_price = float(event.avg_fill_price or 0.0)
+            self._log.warning(
+                "order_placer.partial_entry_terminated_via_status_changed",
                 extra={
                     "trade_id": fill_entry.trade_id,
-                    "reservation_id": fill_entry.reservation_id,
+                    "internal_order_id": internal_id,
+                    "status": status,
+                    "qty_filled": event.qty_filled,
+                    "qty_requested": fill_entry.qty,
+                    "avg_fill_price": avg_price,
+                    "note": "FIX-028: fallback path (normally OrderPartiallyTerminated)",
                 },
             )
-            # commit_to_used has already fired hard_kill (BL-4); continue to
-            # record the DB fill so trade row matches broker truth.
 
-        # Record partial entry fill in DB (sets status=OPEN).
-        try:
-            self._om.record_entry_fill(
-                trade_id=fill_entry.trade_id,
-                avg_fill_price=avg_price,
-                qty_filled=event.qty_filled,
-                filled_at=now_ist().isoformat(),
-            )
-        except Exception as exc:
-            log_exception(self._log, exc)
-            self._log.error(
-                "order_placer.partial_record_fill_failed",
-                extra={"trade_id": fill_entry.trade_id},
-            )
+            # Commit partial fill
+            try:
+                self._fm.commit_to_used(
+                    reservation_id=fill_entry.reservation_id,
+                    actual_fill_price=avg_price,
+                    actual_qty=event.qty_filled,
+                )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.partial_commit_failed",
+                    extra={
+                        "trade_id": fill_entry.trade_id,
+                        "reservation_id": fill_entry.reservation_id,
+                    },
+                )
 
-        # FIX-016: Both protocols defer exits to fill time. Place them now at
-        # the actual filled qty. For partial-fill-then-cancel, this prevents
-        # naked short (TGT sized to requested qty > filled qty).
-        if fill_entry.order_protocol == "LIMIT_TRIPLE":
-            self._place_limit_triple_exits(
-                trade_id=fill_entry.trade_id,
-                fill_entry=fill_entry,
-                qty_filled=int(event.qty_filled),
-                avg_fill_price=float(event.avg_fill_price),
-                reason="partial_entry_cancelled",
-            )
-        elif fill_entry.order_protocol == "CO_PLUS_TGT":
-            self._place_co_tgt_exit(
-                trade_id=fill_entry.trade_id,
-                fill_entry=fill_entry,
-                qty_filled=int(event.qty_filled),
-                avg_fill_price=float(event.avg_fill_price),
-                reason="partial_entry_cancelled",
-            )
+            # Record partial entry fill in DB
+            try:
+                self._om.record_entry_fill(
+                    trade_id=fill_entry.trade_id,
+                    avg_fill_price=avg_price,
+                    qty_filled=event.qty_filled,
+                    filled_at=now_ist().isoformat(),
+                )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.partial_record_fill_failed",
+                    extra={"trade_id": fill_entry.trade_id},
+                )
+
+            # Place exits at filled qty
+            if fill_entry.order_protocol == "LIMIT_TRIPLE":
+                self._place_limit_triple_exits(
+                    trade_id=fill_entry.trade_id,
+                    fill_entry=fill_entry,
+                    qty_filled=event.qty_filled,
+                    avg_fill_price=avg_price,
+                    reason=f"partial_terminated_{status.lower()}_fallback",
+                )
+            elif fill_entry.order_protocol == "CO_PLUS_TGT":
+                self._place_co_tgt_exit(
+                    trade_id=fill_entry.trade_id,
+                    fill_entry=fill_entry,
+                    qty_filled=event.qty_filled,
+                    avg_fill_price=avg_price,
+                    reason=f"partial_terminated_{status.lower()}_fallback",
+                )
+            return
 
     def _handle_entry_fill(self, event: OrderFilled, fill_entry: "_FillEntry") -> None:
         """

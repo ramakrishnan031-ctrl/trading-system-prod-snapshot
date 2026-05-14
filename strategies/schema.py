@@ -189,8 +189,13 @@ class StrategyConfig(BaseModel):
     @field_validator("max_risk_pct")
     @classmethod
     def _val_max_risk_pct(cls, v: float) -> float:
-        if v < 0:
-            raise ValueError("max_risk_pct must be >= 0 (0 = use global)")
+        # FIX-031: max_risk_pct=0.0 produces qty=0 → BELOW_MIN rejection
+        # Strategies with 0.0 are silently dead-on-arrival. Require > 0.
+        if v <= 0:
+            raise ValueError(
+                "max_risk_pct must be > 0 (FIX-031: 0 produces qty=0 rejection). "
+                "Typical intraday strategies use 0.01 (1% risk per trade)."
+            )
         return v
 
     @field_validator("min_adr_pct", "max_spread_pct")

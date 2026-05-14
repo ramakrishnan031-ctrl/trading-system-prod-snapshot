@@ -31,18 +31,6 @@ class StepExecutorResult:
 _DEFAULT_MARKET_OPEN = dt_time(9, 15)
 
 
-def _minutes_since_open(now: datetime, market_open: dt_time) -> float:
-    """Minutes elapsed since market_open (IST)."""
-    open_today = now.replace(
-        hour=market_open.hour,
-        minute=market_open.minute,
-        second=0,
-        microsecond=0,
-    )
-    delta = now - open_today
-    return delta.total_seconds() / 60.0
-
-
 class StepExecutor:
     """
     SE2: Stateless. Constructor takes only logger.
@@ -230,11 +218,32 @@ class StepExecutor:
         sector = md.get("sector")
         return 1.0 if sector else 0.5
 
+    def _minutes_since_open(self, now: datetime) -> float:
+        """
+        FIX-037: Minutes elapsed since market_open (IST).
+        Clamps negative values to 0.0 (signals before market open).
+        """
+        open_today = now.replace(
+            hour=self._market_open.hour,
+            minute=self._market_open.minute,
+            second=0,
+            microsecond=0,
+        )
+        delta = now - open_today
+        elapsed = delta.total_seconds() / 60.0
+        if elapsed < 0:
+            self._logger.debug(
+                "signal_age clamped negative to zero: elapsed=%.2f minutes",
+                elapsed,
+            )
+            return 0.0
+        return elapsed
+
     def _step_7_time_of_day(
         self, signal: dict, md: dict, thr: dict, direction: str
     ) -> float:
         """Entry time quality based on minutes since market open (IST)."""
-        mins = _minutes_since_open(now_ist(), self._market_open)
+        mins = self._minutes_since_open(now_ist())
         if mins < 15:
             return 0.5   # too early
         if mins < 60:

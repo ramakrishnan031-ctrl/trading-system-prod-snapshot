@@ -454,16 +454,16 @@ def test_duplicate_same_fingerprint_same_minute():
     print("  OK same fingerprint same minute -> DUPLICATE")
 
 
-def test_different_minute_same_scanner_symbol_accepted():
-    """Different minute = different fingerprint -> ACCEPTED (not duplicate).
+def test_fix036_signals_within_ttl_rejected():
+    """FIX-036: Signals within TTL window (300s) are rejected as DUPLICATE.
 
-    Use expiry=3600 so timestamps that are a few minutes old are still fresh.
-    Use current-time-based strings to avoid stale-timestamp expiry.
+    Replaces old minute-string behavior which broke across hour boundaries.
+    Same (symbol, scanner_name) within 300 seconds → DUPLICATE.
     """
     receiver, sq, _ = _make_receiver(expiry=3600)
     base = datetime.now()
     ts1 = base.strftime("%Y-%m-%d %H:%M:%S")
-    ts2 = (base - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")  # different minute
+    ts2 = (base - timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S")  # 1 min earlier, within TTL
 
     with receiver.app.test_client() as client:
         resp1 = client.post("/webhook/gap_go_long",
@@ -476,9 +476,45 @@ def test_different_minute_same_scanner_symbol_accepted():
         resp2 = client.post("/webhook/gap_go_long",
                             json=_valid_payload(triggered_at=ts2))
         assert resp2.status_code == 200
+        # FIX-036: TTLCache rejects within 300s window
+        assert resp2.get_json()["results"][0]["status"] == "DUPLICATE"
+
+    print("  OK FIX-036: signals within TTL window rejected as DUPLICATE")
+
+
+def test_fix036_signals_after_ttl_accepted():
+    """FIX-036: Signals after TTL expires (>300s) are accepted.
+
+    TTLCache automatically evicts entries after 300 seconds.
+    This test uses manual cache manipulation to simulate TTL expiry.
+    Use different minute for ts2 to avoid DB fingerprint collision.
+    """
+    receiver, sq, _ = _make_receiver(expiry=3600)
+    base = datetime.now()
+    ts1 = base.strftime("%Y-%m-%d %H:%M:%S")
+    # Use a different minute so DB fingerprint differs
+    ts2 = (base + timedelta(minutes=6)).strftime("%Y-%m-%d %H:%M:%S")
+
+    with receiver.app.test_client() as client:
+        resp1 = client.post("/webhook/gap_go_long",
+                            json=_valid_payload(triggered_at=ts1))
+        assert resp1.status_code == 200
+        assert resp1.get_json()["results"][0]["status"] == "ACCEPTED"
+
+        receiver.release_in_flight("RELIANCE")
+
+        # Manually clear the TTLCache entry to simulate TTL expiry
+        dedup_key = ("RELIANCE", "gap_go_long")
+        with receiver._dedup_lock:
+            receiver._dedup_cache.pop(dedup_key, None)
+
+        resp2 = client.post("/webhook/gap_go_long",
+                            json=_valid_payload(triggered_at=ts2))
+        assert resp2.status_code == 200
+        # After TTL expiry, signal is accepted again
         assert resp2.get_json()["results"][0]["status"] == "ACCEPTED"
 
-    print("  OK different minute -> second call ACCEPTED (not dup)")
+    print("  OK FIX-036: signals after TTL expiry are ACCEPTED")
 
 
 def test_different_scanner_same_symbol_same_minute_accepted():
@@ -543,14 +579,15 @@ def test_symbol_in_flight_returns_in_process():
         status = resp2.get_json()["results"][0]["status"]
         assert status == "IN_PROCESS", f"Expected IN_PROCESS, got {status}"
 
-    # After release, same symbol is accepted again (third distinct minute)
+    # After release, same symbol within TTL window -> DUPLICATE (FIX-036)
     receiver.release_in_flight("RELIANCE")
     with receiver.app.test_client() as client:
         resp3 = client.post("/webhook/gap_go_long",
                             json=_valid_payload(triggered_at=ts3))
-        assert resp3.get_json()["results"][0]["status"] == "ACCEPTED"
+        # FIX-036: TTLCache rejects within 300s even after in-flight release
+        assert resp3.get_json()["results"][0]["status"] == "DUPLICATE"
 
-    print("  OK in-flight -> IN_PROCESS; after release -> ACCEPTED")
+    print("  OK in-flight -> IN_PROCESS; after release within TTL -> DUPLICATE")
 
 
 def test_in_flight_sweeper_evicts_old_entries() -> None:
@@ -1051,15 +1088,15 @@ def test_fix011_evicted_symbol_can_be_readmitted():
 
     assert symbol in evicted
 
-    # Second request: should be accepted (not rejected as IN_PROCESS)
-    # Use different minute to avoid DUPLICATE fingerprint
+    # Second request: FIX-036 TTLCache rejects within 300s even after eviction
+    # Use different minute but still within TTL window
     with receiver.app.test_client() as client:
         resp2 = client.post(
             "/webhook/gap_go_long",
             json={
                 "stocks": symbol,
                 "trigger_prices": "1000.0",
-                "triggered_at": ts2,  # different minute
+                "triggered_at": ts2,  # different minute but within TTL
                 "scan_name": "gap_go_long",
             },
         )
@@ -1067,10 +1104,11 @@ def test_fix011_evicted_symbol_can_be_readmitted():
     body2 = resp2.get_json()
     results2 = body2.get("results", [])
     assert len(results2) == 1
-    assert results2[0]["status"] == "ACCEPTED", \
-        f"Expected ACCEPTED after eviction, got {results2[0]['status']}"
+    # FIX-036: TTLCache blocks duplicate even after in_flight eviction
+    assert results2[0]["status"] == "DUPLICATE", \
+        f"Expected DUPLICATE within TTL, got {results2[0]['status']}"
 
-    print("  OK FIX-011: evicted symbol readmitted on new signal")
+    print("  OK FIX-011+FIX-036: evicted symbol still blocked by TTLCache within 300s")
 
 
 def test_fix011_update_heartbeat_updates_timestamp():

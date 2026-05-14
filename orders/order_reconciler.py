@@ -161,6 +161,10 @@ class OrderReconciler:
         self._thread: Optional[threading.Thread] = None
         self._auth_error_count = 0   # RC12: consecutive BrokerAuthError counter
 
+        # FIX-038: exponential backoff for repeated alerts
+        self._poll_count: int = 0
+        self._alerted_discrepancies: Dict[tuple, dict] = {}  # (trade_id, check_name) -> {alert_count, next_alert_at_poll}
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -194,6 +198,76 @@ class OrderReconciler:
             self._thread = None
         self._log.info("order_reconciler stopped")
 
+    def _should_alert_for_discrepancy(
+        self, trade_id: Optional[str], check_name: str, bypass_backoff: bool = False
+    ) -> bool:
+        """
+        FIX-038: Exponential backoff for repeated alerts.
+
+        Returns True if we should alert now, False if still in backoff window.
+        Updates _alerted_discrepancies tracking dict.
+
+        Backoff schedule:
+        - 1st detection: alert immediately
+        - 2nd alert: after 8 polls (~2 mins at 15s/poll)
+        - 3rd alert: after 32 polls (~8 mins)
+        - 4th+ alert: every 120 polls (~30 mins) - capped
+
+        Args:
+            trade_id: Trade ID (or None for account-level checks)
+            check_name: Check name (e.g., "POSITION_GREW")
+            bypass_backoff: If True, always alert (for HARD_KILL, MISSING_EXITS)
+        """
+        if bypass_backoff:
+            return True
+
+        key = (trade_id or "", check_name)
+
+        if key not in self._alerted_discrepancies:
+            # First detection - alert immediately
+            self._alerted_discrepancies[key] = {
+                "alert_count": 1,
+                "next_alert_at_poll": self._poll_count + 8,  # Next alert in 8 polls
+            }
+            return True
+
+        entry = self._alerted_discrepancies[key]
+        if self._poll_count >= entry["next_alert_at_poll"]:
+            # Time to alert again
+            entry["alert_count"] += 1
+            alert_count = entry["alert_count"]
+
+            # Calculate next alert poll based on exponential backoff (capped at 120)
+            if alert_count == 2:
+                next_gap = 32  # 3rd alert after 32 polls
+            elif alert_count == 3:
+                next_gap = 120  # 4th+ alerts every 120 polls
+            else:
+                next_gap = 120  # Cap at 120 polls (30 mins)
+
+            entry["next_alert_at_poll"] = self._poll_count + next_gap
+            return True
+
+        # Still in backoff window
+        return False
+
+    def _mark_discrepancy_resolved(
+        self, trade_id: Optional[str], check_name: str
+    ) -> None:
+        """
+        FIX-038: Mark a discrepancy as resolved, removing it from tracking.
+
+        Logs INFO when a previously-alerted discrepancy is resolved.
+        """
+        key = (trade_id or "", check_name)
+        if key in self._alerted_discrepancies:
+            del self._alerted_discrepancies[key]
+            self._log.info(
+                "discrepancy resolved: trade_id=%s check=%s",
+                trade_id or "(account-level)",
+                check_name,
+            )
+
     def reconcile_once(self) -> List[ReconciliationAction]:
         """
         Public entry point: acquire lock (non-blocking) and run a full cycle.
@@ -205,6 +279,8 @@ class OrderReconciler:
             self._log.debug("order_reconciler: cycle already running, skipping")
             return []
         try:
+            # FIX-038: increment poll count for backoff calculations
+            self._poll_count += 1
             return self._reconcile()
         except Exception as exc:
             self._log.error("reconcile_once unhandled error: %s", exc, exc_info=True)
@@ -372,6 +448,9 @@ class OrderReconciler:
 
                     if broker_qty == local_qty:
                         # CHECK 3: HEALTHY (RC5c)
+                        # FIX-038: Mark any previous discrepancies as resolved
+                        self._mark_discrepancy_resolved(trade["trade_id"], "POSITION_GREW")
+                        self._mark_discrepancy_resolved(trade["trade_id"], "PARTIAL_CLOSE")
                         actions.append(ReconciliationAction(
                             check_name="HEALTHY",
                             tier="COSMETIC",
@@ -721,24 +800,36 @@ class OrderReconciler:
         Broker qty > local qty_filled — unexpected position growth (RC5e).
 
         Hard discrepancy. Publishes CapitalDriftDetected and logs at ERROR.
+
+        FIX-038: ERROR logging uses exponential backoff to prevent alert spam.
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
         log = bind_trade(self._log, trade_id=trade_id)
 
-        log.error(
-            "CHECK5 POSITION_GREW: trade_id=%s %s local_qty=%d broker_qty=%d",
-            trade_id, symbol, local_qty, broker_qty,
-        )
-        try:
-            self._bus.publish(CapitalDriftDetected(
-                source_module="order_reconciler",
-                expected=float(local_qty),
-                actual=float(broker_qty),
-                delta=float(broker_qty - local_qty),
-            ))
-        except Exception as exc:
-            log.error("check5: publish CapitalDriftDetected failed: %s", exc)
+        # FIX-038: Check if we should alert (exponential backoff)
+        should_alert = self._should_alert_for_discrepancy(trade_id, "POSITION_GREW")
+
+        if should_alert:
+            log.error(
+                "CHECK5 POSITION_GREW: trade_id=%s %s local_qty=%d broker_qty=%d",
+                trade_id, symbol, local_qty, broker_qty,
+            )
+            try:
+                self._bus.publish(CapitalDriftDetected(
+                    source_module="order_reconciler",
+                    expected=float(local_qty),
+                    actual=float(broker_qty),
+                    delta=float(broker_qty - local_qty),
+                ))
+            except Exception as exc:
+                log.error("check5: publish CapitalDriftDetected failed: %s", exc)
+        else:
+            # Still log at DEBUG level even during backoff
+            log.debug(
+                "CHECK5 POSITION_GREW (backoff): trade_id=%s %s local_qty=%d broker_qty=%d",
+                trade_id, symbol, local_qty, broker_qty,
+            )
 
         return ReconciliationAction(
             check_name="POSITION_GREW",
@@ -837,22 +928,29 @@ class OrderReconciler:
 
             # Naked position: local SL record exists but broker has no matching order
             log = bind_trade(self._log, trade_id=trade_id)
-            log.critical(
-                "CHECK9 MISSING_EXITS: trade_id=%s symbol=%s sl_order_id=%s "
-                "found in local DB but NOT in broker open orders — naked position",
-                trade_id, symbol, broker_sl_id,
+
+            # FIX-038: MISSING_EXITS always alerts (bypass backoff per spec)
+            should_alert = self._should_alert_for_discrepancy(
+                trade_id, "MISSING_EXITS", bypass_backoff=True
             )
 
-            try:
-                self._ks.soft_kill(
-                    reason=(
-                        f"MISSING_EXITS: naked position {symbol} "
-                        f"trade_id={trade_id} sl_order={broker_sl_id}"
-                    ),
-                    triggered_by="order_reconciler",
+            if should_alert:
+                log.critical(
+                    "CHECK9 MISSING_EXITS: trade_id=%s symbol=%s sl_order_id=%s "
+                    "found in local DB but NOT in broker open orders — naked position",
+                    trade_id, symbol, broker_sl_id,
                 )
-            except Exception as exc:
-                log.error("check9: soft_kill failed: %s", exc)
+
+                try:
+                    self._ks.soft_kill(
+                        reason=(
+                            f"MISSING_EXITS: naked position {symbol} "
+                            f"trade_id={trade_id} sl_order={broker_sl_id}"
+                        ),
+                        triggered_by="order_reconciler",
+                    )
+                except Exception as exc:
+                    log.error("check9: soft_kill failed: %s", exc)
 
             actions.append(ReconciliationAction(
                 check_name="MISSING_EXITS",
@@ -1072,43 +1170,58 @@ class OrderReconciler:
         delta = abs(actual - expected)
 
         if delta <= self._cfg.capital_drift_tolerance:
+            # FIX-038: Mark as resolved if drift is back within tolerance
+            self._mark_discrepancy_resolved(None, "CAPITAL_DRIFT")
             return None
 
-        self._log.error(
-            "G3 CAPITAL_DRIFT: expected=%.2f actual=%.2f delta=%.2f tolerance=%.2f",
-            expected, actual, delta, self._cfg.capital_drift_tolerance,
-        )
+        # FIX-038: Check if we should alert (exponential backoff)
+        should_alert = self._should_alert_for_discrepancy(None, "CAPITAL_DRIFT")
 
-        try:
-            self._bus.publish(CapitalDriftDetected(
-                source_module="order_reconciler",
-                expected=expected,
-                actual=actual,
-                delta=delta,
-            ))
-        except Exception as exc:
-            self._log.error("G3: publish CapitalDriftDetected failed: %s", exc)
-
-        try:
-            self._notifier.send(
-                severity="CRITICAL",
-                title=f"[{self._mode}] ⚠️ Capital Drift Detected",
-                body=(
-                    f"Broker: ₹{float(actual):,.2f} | "
-                    f"Local: ₹{float(expected):,.2f}\n"
-                    f"Delta: ₹{float(delta):,.2f} "
-                    f"(tolerance: ₹{float(self._cfg.capital_drift_tolerance):,.2f})"
-                ),
-                source_module="order_reconciler",
-                context={
-                    "expected": expected,
-                    "actual": actual,
-                    "delta": delta,
-                    "tolerance": self._cfg.capital_drift_tolerance,
-                },
+        if should_alert:
+            self._log.error(
+                "G3 CAPITAL_DRIFT: expected=%.2f actual=%.2f delta=%.2f tolerance=%.2f",
+                expected, actual, delta, self._cfg.capital_drift_tolerance,
             )
-        except Exception as exc:
-            self._log.error("G3: TelegramNotifier.send failed: %s", exc)
+
+            try:
+                self._bus.publish(CapitalDriftDetected(
+                    source_module="order_reconciler",
+                    expected=expected,
+                    actual=actual,
+                    delta=delta,
+                ))
+            except Exception as exc:
+                self._log.error("G3: publish CapitalDriftDetected failed: %s", exc)
+
+            try:
+                self._notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{self._mode}] ⚠️ Capital Drift Detected",
+                    body=(
+                        f"Broker: ₹{float(actual):,.2f} | "
+                        f"Local: ₹{float(expected):,.2f}\n"
+                        f"Delta: ₹{float(delta):,.2f} "
+                        f"(tolerance: ₹{float(self._cfg.capital_drift_tolerance):,.2f})"
+                    ),
+                    source_module="order_reconciler",
+                    context={
+                        "expected": expected,
+                        "actual": actual,
+                        "delta": delta,
+                        "tolerance": self._cfg.capital_drift_tolerance,
+                    },
+                )
+            except Exception as exc:
+                self._log.error("G3: TelegramNotifier.send failed: %s", exc)
+
+            action_taken = "CapitalDriftDetected published; CRITICAL alert sent"
+        else:
+            # Still log at DEBUG during backoff
+            self._log.debug(
+                "G3 CAPITAL_DRIFT (backoff): expected=%.2f actual=%.2f delta=%.2f",
+                expected, actual, delta,
+            )
+            action_taken = "drift detected but alert suppressed (exponential backoff)"
 
         return ReconciliationAction(
             check_name="CAPITAL_DRIFT",
@@ -1119,7 +1232,7 @@ class OrderReconciler:
                 f"Broker capital={actual:.2f} vs local={expected:.2f} "
                 f"delta={delta:.2f} exceeds tolerance={self._cfg.capital_drift_tolerance:.2f}"
             ),
-            action_taken="CapitalDriftDetected published; CRITICAL alert sent",
+            action_taken=action_taken,
             success=True,
         )
 

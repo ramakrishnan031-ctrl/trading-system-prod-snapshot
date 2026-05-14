@@ -44,7 +44,7 @@ from typing import Callable, Optional
 
 from broker.order_state_machine import TERMINAL_STATES, OrderStateMachine
 from broker.zerodha_adapter import ZerodhaAdapter
-from core.events import EventBus, OrderFilled, OrderStatusChanged
+from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged
 from core.exceptions import BrokerAuthError, BrokerTimeoutError, InvalidTransitionError
 from core.logger import log_exception
 from core.time_authority import now_ist
@@ -617,8 +617,53 @@ class OrderMonitor:
         self.untrack(entry.internal_order_id)
 
     def _handle_terminal(self, entry: _WatchEntry, osm_state: str) -> None:
-        """Transition to a terminal state and remove from watch."""
-        self._safe_transition(entry.internal_order_id, osm_state, entry=entry)
+        """
+        Transition to a terminal state and remove from watch.
+
+        FIX-028: If the order has a partial fill (entry.filled_qty > 0), emit
+        OrderPartiallyTerminated BEFORE the state transition. This ensures the
+        event arrives before OrderStatusChanged, so OrderPlacer processes the
+        partial fill via the dedicated handler.
+        """
+        # FIX-028: Check for partial fill BEFORE transition
+        # Publish OrderPartiallyTerminated first so it arrives before OrderStatusChanged
+        if entry.filled_qty > 0:
+            slippage = _calc_slippage_pct(entry.side, entry.avg_fill_price, entry.expected_price)
+            filled_at = now_ist()
+
+            self._bus.publish(
+                OrderPartiallyTerminated(
+                    source_module="order_monitor",
+                    internal_order_id=entry.internal_order_id,
+                    broker_order_id=entry.broker_order_id,
+                    symbol=entry.symbol,
+                    side=entry.side,
+                    filled_qty=entry.filled_qty,
+                    avg_fill_price=entry.avg_fill_price,
+                    expected_price=entry.expected_price,
+                    slippage_pct=slippage,
+                    filled_at=filled_at.isoformat(),
+                    reason=osm_state,  # "CANCELLED" | "FAILED" | "EXPIRED"
+                )
+            )
+
+            self._log.warning(
+                "order_monitor.partial_terminated",
+                extra={
+                    "internal_order_id": entry.internal_order_id,
+                    "filled_qty": entry.filled_qty,
+                    "avg_fill_price": entry.avg_fill_price,
+                    "reason": osm_state,
+                },
+            )
+
+        # Transition to terminal state (publishes OrderStatusChanged)
+        transitioned = self._safe_transition(entry.internal_order_id, osm_state, entry=entry)
+        if not transitioned:
+            # Already terminal; idempotent (OM12)
+            self.untrack(entry.internal_order_id)
+            return
+
         self.untrack(entry.internal_order_id)
 
     # ── fill timeout (OM7) ────────────────────────────────────────────────────

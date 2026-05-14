@@ -229,6 +229,10 @@ class _MockFundManager:
             daily_realized_pnl = 0.0
         return _Snap()
 
+    def get_total_unrealized_mtm(self):
+        """FIX-035: Return total unrealized MTM."""
+        return 0.0
+
 
 class _MockOrderPlacer:
     def __init__(self, raise_exc=None):

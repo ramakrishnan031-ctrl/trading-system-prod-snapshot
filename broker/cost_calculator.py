@@ -108,12 +108,6 @@ class CostCalculator:
     def __init__(self, costs: BrokerCostsConfig) -> None:
         self._z = costs.zerodha   # ZerodhaRatesConfig
 
-    # Audit #13: FNO STT rates (sell-side only, on premium for options,
-    # on notional for futures). Values are statutory defaults; promote to
-    # config when FNO trading is enabled in production.
-    _STT_FUTURES_SELL_PCT = 0.02   # 0.02% on sell turnover
-    _STT_OPTIONS_SELL_PCT = 0.10   # 0.10% on sell premium
-
     def calculate_cost(
         self,
         side: str,
@@ -172,15 +166,18 @@ class CostCalculator:
             # CNC BUY → free (CC3)
             brokerage_d = _r2(Decimal("0"))
 
-        # ── STT (CC4 + Audit #13) ────────────────────────────────────────────
+        # ── STT (CC4 + FIX-027) ───────────────────────────────────────────────
         if is_fno:
-            if side == "SELL":
-                rate_pct = (
-                    self._STT_OPTIONS_SELL_PCT
-                    if fno_kind == "OPTIONS"
-                    else self._STT_FUTURES_SELL_PCT
-                )
-                stt_d = _r2(_d(rate_pct) / _d("100") * turnover_d)
+            if fno_kind == "FUTURES":
+                # FIX-027: Futures STT applies to both BUY and SELL
+                stt_d = _r2(_d(z.futures.stt_pct) / _d("100") * turnover_d)
+            elif fno_kind == "OPTIONS":
+                if side == "SELL":
+                    # FIX-027: Options STT only on SELL side
+                    stt_d = _r2(_d(z.options_sell.stt_pct) / _d("100") * turnover_d)
+                else:
+                    # FIX-027: Options BUY has zero STT
+                    stt_d = _r2(_d(z.options_buy.stt_pct) / _d("100") * turnover_d)
             else:
                 stt_d = _r2(Decimal("0"))
         elif product in ("MIS", "CO"):
@@ -204,9 +201,19 @@ class CostCalculator:
             _d(z.gst_pct) / _d("100") * (brokerage_d + exchange_txn_d + sebi_d)
         )
 
-        # ── Stamp duty — BUY side only (CC8) ─────────────────────────────────
+        # ── Stamp duty — BUY side only (CC8 + FIX-027) ───────────────────────
         if side == "SELL":
-            stamp_duty_d = _r2(Decimal("0"))
+            if is_fno and fno_kind == "OPTIONS":
+                # FIX-027: Options sell has zero stamp duty
+                stamp_duty_d = _r2(_d(z.options_sell.stamp_duty_pct) / _d("100") * turnover_d)
+            else:
+                stamp_duty_d = _r2(Decimal("0"))
+        elif is_fno:
+            # FIX-027: FNO BUY stamp duty
+            if fno_kind == "FUTURES":
+                stamp_duty_d = _r2(_d(z.futures.stamp_duty_buy_pct) / _d("100") * turnover_d)
+            else:  # OPTIONS
+                stamp_duty_d = _r2(_d(z.options_buy.stamp_duty_pct) / _d("100") * turnover_d)
         elif product in ("MIS", "CO"):
             stamp_duty_d = _r2(_d(z.stamp_duty_mis_buy_pct) / _d("100") * turnover_d)
         else:

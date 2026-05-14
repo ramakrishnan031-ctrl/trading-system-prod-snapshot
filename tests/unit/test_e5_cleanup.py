@@ -64,6 +64,9 @@ def test_h25_bind_trade_attaches_trade_id_to_log_records() -> None:
     base_logger.addHandler(handler)
     rec._log = base_logger
     rec._bus = MagicMock()
+    # FIX-038: Initialize the discrepancy tracking state that __init__ would set
+    rec._alerted_discrepancies = {}
+    rec._poll_count = 0
 
     trade = {"trade_id": "T-ALPHA-42", "symbol": "RELIANCE"}
     action = rec._check5_position_grew(trade, broker_qty=20, local_qty=10)

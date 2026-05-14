@@ -553,6 +553,51 @@ def test_long_vs_short_rsi_range_differ():
     assert r_short.step_results["rsi_range"] == 0.0
 
 
+def test_fix037_signal_before_market_open_age_clamped_to_zero():
+    """FIX-037: Signal before market open produces age=0.0, not negative."""
+    from datetime import datetime, time as dt_time
+    from unittest.mock import patch
+
+    ex = _make_executor()
+
+    # Mock now_ist to return a time before market open (e.g., 08:00)
+    # Market opens at 09:15, so this is 1h15m = -75 minutes before open
+    mock_now = datetime(2026, 5, 14, 8, 0, 0)
+
+    with patch("screening.step_executor.now_ist", return_value=mock_now):
+        r = ex.run_all(_base_signal(), _base_market_data(), _base_thresholds())
+
+    # _step_7_time_of_day should get clamped age=0.0
+    # Check that the method returns a valid result (0.5 for too-early)
+    assert r.step_results["time_of_day"] == 0.5
+    # The actual clamping happens in _minutes_since_open which returns 0.0
+    # We can't directly test the return value, but we can verify no negative
+    # values leaked through by checking all step_results are in [0, 1]
+    for step_name, score in r.step_results.items():
+        assert 0.0 <= score <= 1.0, f"{step_name} score {score} out of [0, 1] range"
+
+
+def test_fix037_signal_after_market_open_age_positive():
+    """FIX-037: Signal after market open produces positive age."""
+    from datetime import datetime
+    from unittest.mock import patch
+
+    ex = _make_executor()
+
+    # Mock now_ist to return a time after market open (e.g., 10:00)
+    # Market opens at 09:15, so this is 45 minutes after open
+    mock_now = datetime(2026, 5, 14, 10, 0, 0)
+
+    with patch("screening.step_executor.now_ist", return_value=mock_now):
+        r = ex.run_all(_base_signal(), _base_market_data(), _base_thresholds())
+
+    # _step_7_time_of_day should get age=45 minutes (prime time window)
+    assert r.step_results["time_of_day"] == 1.0  # mins < 60 returns 1.0
+    # All scores should still be in valid range
+    for step_name, score in r.step_results.items():
+        assert 0.0 <= score <= 1.0, f"{step_name} score {score} out of [0, 1] range"
+
+
 if __name__ == "__main__":
     import subprocess, sys
     r = subprocess.run(

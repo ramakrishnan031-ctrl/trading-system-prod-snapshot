@@ -98,6 +98,7 @@ position_sizing:
   risk_per_trade_pct: 0.01
   max_concentration_pct: 0.10
   min_qty_threshold: 1
+  lot_skew_rejection_threshold: 0.25
   tier_multipliers:
     HIGH: 1.0
     MEDIUM: 0.70
@@ -162,6 +163,9 @@ smart_tgt:
   enabled: true
   trigger_pct: 0.005
   step_pct: 0.003
+  volume_dependent_trails: false
+entry_gate:
+  slippage_buffer: 2.0
 paper:
   auto_fill_delay_sec: 0.5
 drift_handler:
@@ -182,6 +186,15 @@ zerodha:
   sebi_pct: 0.0001
   stamp_duty_mis_buy_pct: 0.003
   stamp_duty_cnc_buy_pct: 0.015
+  futures:
+    stt_pct: 0.0125
+    stamp_duty_buy_pct: 0.002
+  options_buy:
+    stt_pct: 0.0
+    stamp_duty_pct: 0.003
+  options_sell:
+    stt_pct: 0.0625
+    stamp_duty_pct: 0.0
 """
 
 _BROKER_LIMITS = """\
@@ -681,6 +694,15 @@ zerodha:
   sebi_pct: 0.0001
   stamp_duty_mis_buy_pct: 0.003
   stamp_duty_cnc_buy_pct: 0.015
+  futures:
+    stt_pct: 0.0125
+    stamp_duty_buy_pct: 0.002
+  options_buy:
+    stt_pct: 0.0
+    stamp_duty_pct: 0.003
+  options_sell:
+    stt_pct: 0.0625
+    stamp_duty_pct: 0.0
 """
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)

@@ -1423,6 +1423,141 @@ def test_d1_acquire_called_per_modify_across_multiple_steps() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-026: Volume-dependent trails protection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix026_volume_zero_no_division_error() -> None:
+    """FIX-026: Candle with volume=0 processes without ZeroDivisionError."""
+    mgr, adapter, store, candle_store, log = _make_gate()
+    # Override with volume_dependent_trails=True
+    store._co_orders = {"trd_001": {"order_id": "co_123", "variety": "co"}}
+
+    mgr2 = SmartTgtManager(
+        adapter=adapter,
+        state_store=store,
+        candle_store=candle_store,
+        logger=log,
+        volume_dependent_trails=True,
+    )
+    mgr2.register_trade(
+        trade_id="trd_001",
+        instrument_token=1234,
+        symbol="RELIANCE",
+        direction="LONG",
+        entry_price=1000.0,
+        initial_sl=980.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Candle with volume=0 (normal case per LF11)
+    candle = CandleData(
+        instrument_token=1234,
+        symbol="RELIANCE",
+        open=1000.0,
+        high=1010.0,  # crosses trigger
+        low=995.0,
+        close=1008.0,
+        volume=0,  # always 0 per LF11
+        ts=datetime(2026, 5, 13, 9, 16),
+        interval_sec=60,
+    )
+
+    # Should process without error
+    mgr2._on_candle_close(candle)
+
+    # Trail should have fired (volume=0 doesn't prevent price-based trail)
+    assert len(adapter.calls) == 1
+    print("  OK FIX-026: volume=0 candle processes without ZeroDivisionError")
+
+
+def test_fix026_volume_dependent_trails_false_skips_volume_logic() -> None:
+    """FIX-026: volume_dependent_trails=False skips volume block entirely."""
+    mgr, adapter, store, candle_store, log = _make_gate()
+    store._co_orders = {"trd_002": {"order_id": "co_456", "variety": "co"}}
+
+    # volume_dependent_trails=False (default) — volume block never runs
+    # The mgr from _make_gate already has this default
+    mgr.register_trade(
+        trade_id="trd_002",
+        instrument_token=5678,
+        symbol="INFY",
+        direction="LONG",
+        entry_price=2000.0,
+        initial_sl=1980.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Candle with non-zero volume (hypothetical future)
+    candle = CandleData(
+        instrument_token=5678,
+        symbol="INFY",
+        open=2000.0,
+        high=2020.0,
+        low=1995.0,
+        close=2015.0,
+        volume=100000,  # non-zero
+        ts=datetime(2026, 5, 13, 9, 17),
+        interval_sec=60,
+    )
+
+    # Should process normally (flag=False means volume block is skipped)
+    mgr._on_candle_close(candle)
+
+    # Trail fires based on price only
+    assert len(adapter.calls) == 1
+    print("  OK FIX-026: volume_dependent_trails=False skips volume logic")
+
+
+def test_fix026_volume_nonzero_with_flag_true_enters_placeholder() -> None:
+    """FIX-026: volume>0 + flag=True enters placeholder block (no-op today)."""
+    mgr, adapter, store, candle_store, log = _make_gate()
+    store._co_orders = {"trd_003": {"order_id": "co_789", "variety": "co"}}
+
+    # volume_dependent_trails=True AND volume > 0 → enters placeholder
+    mgr3 = SmartTgtManager(
+        adapter=adapter,
+        state_store=store,
+        candle_store=candle_store,
+        logger=log,
+        volume_dependent_trails=True,
+    )
+    mgr3.register_trade(
+        trade_id="trd_003",
+        instrument_token=9012,
+        symbol="TCS",
+        direction="LONG",
+        entry_price=3000.0,
+        initial_sl=2970.0,
+        qty=10,
+        trigger_pct=0.005,
+        step_pct=0.003,
+    )
+
+    # Candle with volume > 0 (hypothetical)
+    candle = CandleData(
+        instrument_token=9012,
+        symbol="TCS",
+        open=3000.0,
+        high=3030.0,
+        low=2995.0,
+        close=3025.0,
+        volume=50000,
+        ts=datetime(2026, 5, 13, 9, 18),
+        interval_sec=60,
+    )
+
+    # Placeholder block runs (currently no-op), trail still fires
+    mgr3._on_candle_close(candle)
+
+    assert len(adapter.calls) == 1
+    print("  OK FIX-026: volume>0 + flag=True enters placeholder (no-op)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1498,6 +1633,10 @@ def run_all_tests() -> int:
         test_d1_rate_limiter_acquire_raises_skips_modify,
         test_d1_no_rate_limiter_keeps_legacy_behavior,
         test_d1_acquire_called_per_modify_across_multiple_steps,
+        # FIX-026: Volume-dependent trails protection
+        test_fix026_volume_zero_no_division_error,
+        test_fix026_volume_dependent_trails_false_skips_volume_logic,
+        test_fix026_volume_nonzero_with_flag_true_enters_placeholder,
     ]
 
     print("=" * 70)

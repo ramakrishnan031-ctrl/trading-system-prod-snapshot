@@ -668,6 +668,109 @@ def test_reset_daily_pnl_zeroes_pnl_leaves_reserved_used() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tests -- FIX-035: unrealized MTM tracking
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix035_update_unrealized_mtm_stores_value() -> None:
+    """FIX-035: update_unrealized_mtm stores per-trade unrealized PnL."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+
+        # Initially zero
+        assert fm.get_total_unrealized_mtm() == 0.0
+
+        # Update a trade
+        fm.update_unrealized_mtm("trade_001", -500.0)  # losing trade
+        assert fm.get_total_unrealized_mtm() == -500.0
+
+        # Update another trade
+        fm.update_unrealized_mtm("trade_002", 300.0)  # winning trade
+        assert fm.get_total_unrealized_mtm() == -200.0
+
+        # Update same trade again (overwrite)
+        fm.update_unrealized_mtm("trade_001", -200.0)
+        assert fm.get_total_unrealized_mtm() == 100.0  # -200 + 300
+
+        store.close()
+    print("  OK FIX-035: update_unrealized_mtm stores per-trade PnL")
+
+
+def test_fix035_get_total_unrealized_mtm_sums_all_trades() -> None:
+    """FIX-035: get_total_unrealized_mtm sums all tracked trades."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+
+        # Add multiple trades
+        fm.update_unrealized_mtm("trade_001", -1000.0)
+        fm.update_unrealized_mtm("trade_002", 500.0)
+        fm.update_unrealized_mtm("trade_003", -300.0)
+        fm.update_unrealized_mtm("trade_004", 200.0)
+
+        total = fm.get_total_unrealized_mtm()
+        assert total == -600.0  # -1000 + 500 - 300 + 200
+
+        store.close()
+    print("  OK FIX-035: get_total_unrealized_mtm sums all trades")
+
+
+def test_fix035_remove_unrealized_mtm_cleans_up() -> None:
+    """FIX-035: remove_unrealized_mtm removes closed trade from tracking."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+
+        # Add trades
+        fm.update_unrealized_mtm("trade_001", -500.0)
+        fm.update_unrealized_mtm("trade_002", 300.0)
+        assert fm.get_total_unrealized_mtm() == -200.0
+
+        # Remove one trade
+        fm.remove_unrealized_mtm("trade_001")
+        assert fm.get_total_unrealized_mtm() == 300.0
+
+        # Remove non-existent trade (idempotent)
+        fm.remove_unrealized_mtm("trade_999")
+        assert fm.get_total_unrealized_mtm() == 300.0
+
+        # Remove last trade
+        fm.remove_unrealized_mtm("trade_002")
+        assert fm.get_total_unrealized_mtm() == 0.0
+
+        store.close()
+    print("  OK FIX-035: remove_unrealized_mtm cleans up closed trades")
+
+
+def test_fix035_thread_safe_unrealized_mtm_operations() -> None:
+    """FIX-035: unrealized MTM operations are thread-safe."""
+    import threading
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+
+        # Concurrent updates from 10 threads
+        def worker(trade_id: str, pnl: float) -> None:
+            fm.update_unrealized_mtm(trade_id, pnl)
+
+        threads = []
+        for i in range(10):
+            t = threading.Thread(target=worker, args=(f"trade_{i:03d}", 100.0 * (i + 1)))
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join()
+
+        # Should have 10 trades: 100 + 200 + ... + 1000 = 5500
+        assert fm.get_total_unrealized_mtm() == 5500.0
+
+        store.close()
+    print("  OK FIX-035: unrealized MTM operations are thread-safe")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Tests -- ledger write failure causes rollback (FM10)
 # ─────────────────────────────────────────────────────────────────────────────
 

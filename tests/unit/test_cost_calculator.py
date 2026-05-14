@@ -57,6 +57,16 @@ def _make_zerodha(
     z.sebi_pct                = sebi_pct
     z.stamp_duty_mis_buy_pct  = stamp_duty_mis_buy_pct
     z.stamp_duty_cnc_buy_pct  = stamp_duty_cnc_buy_pct
+    # FIX-027: FNO rates
+    z.futures = MagicMock()
+    z.futures.stt_pct = 0.0125
+    z.futures.stamp_duty_buy_pct = 0.002
+    z.options_buy = MagicMock()
+    z.options_buy.stt_pct = 0.0
+    z.options_buy.stamp_duty_pct = 0.003
+    z.options_sell = MagicMock()
+    z.options_sell.stt_pct = 0.0625
+    z.options_sell.stamp_duty_pct = 0.0
     return z
 
 
@@ -345,6 +355,95 @@ def test_rates_from_injected_config_not_hardcoded() -> None:
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-027: FNO (Futures & Options) rates
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix027_futures_buy_stt() -> None:
+    """FIX-027: Futures BUY -> STT = 0.0125% on turnover."""
+    calc = _make_calc()
+    b = calc.calculate_cost("BUY", 100, 1000.0, "MIS", is_fno=True, fno_kind="FUTURES")
+    # turnover = 100 * 1000 = 100000
+    # stt = 0.0125/100 * 100000 = 12.50
+    assert b.turnover == 100000.0
+    assert b.stt == 12.50
+    print("  OK FIX-027: Futures BUY -> STT = 0.0125%")
+
+
+def test_fix027_futures_sell_stt() -> None:
+    """FIX-027: Futures SELL -> STT = 0.0125% on turnover."""
+    calc = _make_calc()
+    b = calc.calculate_cost("SELL", 100, 1000.0, "MIS", is_fno=True, fno_kind="FUTURES")
+    # turnover = 100000
+    # stt = 0.0125/100 * 100000 = 12.50
+    assert b.turnover == 100000.0
+    assert b.stt == 12.50
+    print("  OK FIX-027: Futures SELL -> STT = 0.0125%")
+
+
+def test_fix027_options_buy_stt_zero() -> None:
+    """FIX-027: Options BUY -> STT = 0 (no STT on buy)."""
+    calc = _make_calc()
+    b = calc.calculate_cost("BUY", 100, 50.0, "MIS", is_fno=True, fno_kind="OPTIONS")
+    # turnover = 100 * 50 = 5000
+    # stt = 0.0/100 * 5000 = 0.00
+    assert b.turnover == 5000.0
+    assert b.stt == 0.00
+    print("  OK FIX-027: Options BUY -> STT = 0%")
+
+
+def test_fix027_options_sell_stt() -> None:
+    """FIX-027: Options SELL -> STT = 0.0625% on premium."""
+    calc = _make_calc()
+    b = calc.calculate_cost("SELL", 100, 50.0, "MIS", is_fno=True, fno_kind="OPTIONS")
+    # turnover = 100 * 50 = 5000
+    # stt = 0.0625/100 * 5000 = 3.125 -> 3.13 (rounded)
+    assert b.turnover == 5000.0
+    assert b.stt == 3.13
+    print("  OK FIX-027: Options SELL -> STT = 0.0625%")
+
+
+def test_fix027_equity_rates_unchanged() -> None:
+    """FIX-027: Equity (non-FNO) rates completely unchanged."""
+    calc = _make_calc()
+    b = calc.calculate_cost("SELL", 100, 500.0, "MIS", is_fno=False)
+    # This should use equity STT: 0.025% on sell
+    # turnover = 50000
+    # stt = 0.025/100 * 50000 = 12.50
+    assert b.turnover == 50000.0
+    assert b.stt == 12.50
+    print("  OK FIX-027: Equity intraday rates unchanged")
+
+
+def test_fix027_futures_stamp_duty() -> None:
+    """FIX-027: Futures BUY -> stamp duty 0.002%."""
+    calc = _make_calc()
+    b = calc.calculate_cost("BUY", 100, 1000.0, "MIS", is_fno=True, fno_kind="FUTURES")
+    # turnover = 100000
+    # stamp_duty = 0.002/100 * 100000 = 2.00
+    assert b.stamp_duty == 2.00
+    print("  OK FIX-027: Futures BUY -> stamp duty 0.002%")
+
+
+def test_fix027_options_buy_stamp_duty() -> None:
+    """FIX-027: Options BUY -> stamp duty 0.003%."""
+    calc = _make_calc()
+    b = calc.calculate_cost("BUY", 100, 50.0, "MIS", is_fno=True, fno_kind="OPTIONS")
+    # turnover = 5000
+    # stamp_duty = 0.003/100 * 5000 = 0.15
+    assert b.stamp_duty == 0.15
+    print("  OK FIX-027: Options BUY -> stamp duty 0.003%")
+
+
+def test_fix027_options_sell_no_stamp_duty() -> None:
+    """FIX-027: Options SELL -> stamp duty = 0."""
+    calc = _make_calc()
+    b = calc.calculate_cost("SELL", 100, 50.0, "MIS", is_fno=True, fno_kind="OPTIONS")
+    # stamp_duty = 0.0/100 * 5000 = 0.00
+    assert b.stamp_duty == 0.00
+    print("  OK FIX-027: Options SELL -> stamp duty = 0")
+
+
 def run_all_tests() -> int:
     tests = [
         test_mis_buy_breakdown,
@@ -362,6 +461,15 @@ def run_all_tests() -> int:
         test_unknown_side_raises_value_error,
         test_unknown_product_raises_value_error,
         test_rates_from_injected_config_not_hardcoded,
+        # FIX-027: FNO rates
+        test_fix027_futures_buy_stt,
+        test_fix027_futures_sell_stt,
+        test_fix027_options_buy_stt_zero,
+        test_fix027_options_sell_stt,
+        test_fix027_equity_rates_unchanged,
+        test_fix027_futures_stamp_duty,
+        test_fix027_options_buy_stamp_duty,
+        test_fix027_options_sell_no_stamp_duty,
     ]
 
     print("=" * 70)

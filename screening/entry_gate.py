@@ -430,17 +430,20 @@ class EntryGate:
         upper = entry.entry_price + tolerance
 
         if lower <= ltp <= upper:
-            self._release(entry, "PRICE_HIT")
+            self._release(entry, "PRICE_HIT", release_ltp=ltp)
 
     # ------------------------------------------------------------------
     # Release (EG7)
     # ------------------------------------------------------------------
 
-    def _release(self, entry: WatchEntry, reason: str) -> None:
+    def _release(self, entry: WatchEntry, reason: str, release_ltp: Optional[float] = None) -> None:
         """
         Atomically remove entry, update state_store, call on_release (EG7).
         Idempotent: if entry was already removed, silently returns.
         Never raises: errors in on_release are caught and logged.
+
+        FIX-025: release_ltp is captured at PRICE_HIT time and passed to
+        on_release callback for slippage protection.
         """
         signal_id = entry.signal_id
 
@@ -479,10 +482,19 @@ class EntryGate:
             )
 
         # EG7 step 4: log
+        ltp_str = f" ltp={release_ltp}" if release_ltp is not None else ""
         self._log.info(
             f"EntryGate: released {signal_id} ({entry.symbol}) "
-            f"reason={reason} elapsed={elapsed_sec:.1f}s"
+            f"reason={reason} elapsed={elapsed_sec:.1f}s{ltp_str}"
         )
+
+        # FIX-025: store release_ltp in extras for downstream consumption
+        if release_ltp is not None:
+            # WatchEntry is frozen, so we create a new dict with release_ltp
+            updated_extras = {**entry.extras, "release_ltp": release_ltp}
+            # Replace the extras in-place by updating the dict reference
+            # (This works because extras is mutable even though WatchEntry is frozen)
+            entry.extras.update({"release_ltp": release_ltp})
 
         # EG7 step 3: on_release callback (after store update, errors caught)
         try:

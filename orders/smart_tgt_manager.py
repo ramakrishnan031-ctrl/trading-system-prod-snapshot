@@ -92,6 +92,7 @@ class SmartTgtManager:
         on_critical_failure: Optional[Callable[[str, str], None]] = None,
         async_modify: bool = False,
         rate_limiter: Optional[Any] = None,
+        volume_dependent_trails: bool = False,  # FIX-026
     ) -> None:
         self._adapter = adapter
         self._state_store = state_store
@@ -100,6 +101,9 @@ class SmartTgtManager:
         self._quote_fn = quote_fn
         self._enabled = enabled
         self._on_critical_failure = on_critical_failure
+        # FIX-026: master kill-switch for volume/VWAP-based trail logic.
+        # Currently CandleData.volume is always 0 (LF11), so this is preventive.
+        self._volume_dependent_trails = volume_dependent_trails
         # D.1 (2026-04-25): trailing N CO orders at minute boundary can burst
         # past Zerodha's order quota and trigger 429. Acquire from the "order"
         # bucket before every modify_order call so the trail paces itself
@@ -365,11 +369,29 @@ class SmartTgtManager:
     # ------------------------------------------------------------------
 
     def _process_candle(self, trade_id: str, candle: Any) -> None:
-        """Update best_price from candle; compute and apply trail if advanced."""
+        """Update best_price from candle; compute and apply trail if advanced.
+
+        FIX-026: Future volume/VWAP-based trail enhancements should check
+        self._volume_dependent_trails and candle.volume > 0 before accessing
+        volume-derived fields. Currently no such logic exists (LF11: volume
+        always 0).
+        """
         with self._lock:
             info = self._tracked.get(trade_id)
             if info is None:
                 return
+
+            # FIX-026: Guard for future volume-dependent trail logic.
+            # If volume_dependent_trails is False OR candle.volume is 0,
+            # skip any volume/VWAP-based trail enhancements (preventing
+            # ZeroDivisionError and respecting the config kill-switch).
+            # Currently this is a no-op placeholder since no such logic exists.
+            if self._volume_dependent_trails and hasattr(candle, 'volume') and candle.volume > 0:
+                # PLACEHOLDER: Future volume-based trail logic goes here.
+                # Example: compute VWAP from candle, adjust step_pct based on
+                # volume surge, etc. This block is currently unreachable because
+                # _volume_dependent_trails defaults to False.
+                pass
 
             # ST4: track most favorable intracandle price
             direction = info["direction"]

@@ -894,7 +894,7 @@ class SignalProcessor:
     # Gate-release pipeline entry point (MAIN18)
     # ------------------------------------------------------------------
 
-    def continue_from_gate(self, entry: object) -> None:
+    def continue_from_gate(self, entry: object, release_ltp: Optional[float] = None) -> None:
         """
         Resume post-screening pipeline for a WatchEntry released by EntryGate
         with reason PRICE_HIT (MAIN18).
@@ -907,6 +907,9 @@ class SignalProcessor:
 
         ``entry`` is typed as object to avoid a circular import; callers pass a
         WatchEntry instance (screening.entry_gate.WatchEntry).
+
+        FIX-025: release_ltp is the LTP captured at gate PRICE_HIT time,
+        passed to order_placer for slippage protection.
         """
         signal_id = entry.signal_id          # type: ignore[attr-defined]
         symbol    = entry.symbol              # type: ignore[attr-defined]
@@ -1053,6 +1056,7 @@ class SignalProcessor:
                     signal_id=signal_id,
                     reservation_id=reservation_id,
                     tgt_price=tgt_price,
+                    release_ltp=release_ltp,  # FIX-025
                 )
                 reservation_id = None   # placer owns it now
             except BrokerError as be:

@@ -60,9 +60,14 @@ class _MockFundManager:
     """Minimal fund manager double — only get_snapshot() used by risk_engine."""
     def __init__(self, snap: CapitalSnapshot) -> None:
         self._snap = snap
+        self._unrealized_mtm = 0.0
 
     def get_snapshot(self) -> CapitalSnapshot:
         return self._snap
+
+    def get_total_unrealized_mtm(self) -> float:
+        """FIX-035: Return total unrealized MTM."""
+        return self._unrealized_mtm
 
 
 class _CapturingHandler(logging.Handler):
@@ -500,6 +505,70 @@ def test_daily_loss_positive_pnl_not_rejected(tmp_path: Path) -> None:
 
     assert result.approved, f"Positive pnl should not trigger DAILY_LOSS; got: {result.reason}"
     print("  OK positive daily_pnl never triggers DAILY_LOSS")
+    store.close()
+
+
+def test_fix035_daily_loss_includes_unrealized_mtm(tmp_path: Path) -> None:
+    """FIX-035: DAILY_LOSS check includes unrealized MTM in total P&L calculation."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    # realized_pnl = -20000, unrealized_mtm = -35000, total = -55000
+    # total=1000000, limit_pct=0.05 -> limit = 50000
+    # abs(-55000) = 55000 > 50000 -> should reject
+    snap = _make_snap(total=1_000_000.0, daily_pnl=-20_000.0)
+    fm = _MockFundManager(snap)
+    fm._unrealized_mtm = -35_000.0  # Set unrealized MTM
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
+
+    assert not result.approved
+    assert result.failed_check == "DAILY_LOSS"
+    assert "total_pnl=-55000.00" in result.reason
+    assert "realized=-20000.00" in result.reason
+    assert "unrealized=-35000.00" in result.reason
+    print("  OK FIX-035: DAILY_LOSS includes unrealized MTM")
+    store.close()
+
+
+def test_fix035_daily_loss_unrealized_keeps_under_limit(tmp_path: Path) -> None:
+    """FIX-035: Trade approved when realized + unrealized stays under limit."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    # realized_pnl = -20000, unrealized_mtm = -25000, total = -45000
+    # total=1000000, limit_pct=0.05 -> limit = 50000
+    # abs(-45000) = 45000 < 50000 -> should approve
+    snap = _make_snap(total=1_000_000.0, daily_pnl=-20_000.0)
+    fm = _MockFundManager(snap)
+    fm._unrealized_mtm = -25_000.0
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
+
+    assert result.approved, f"Should approve when total under limit; got: {result.reason}"
+    print("  OK FIX-035: Approved when realized + unrealized under limit")
+    store.close()
+
+
+def test_fix035_daily_loss_unrealized_offsets_realized_loss(tmp_path: Path) -> None:
+    """FIX-035: Positive unrealized MTM offsets realized loss."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    # realized_pnl = -60000, unrealized_mtm = +30000, total = -30000
+    # total=1000000, limit_pct=0.05 -> limit = 50000
+    # abs(-30000) = 30000 < 50000 -> should approve
+    snap = _make_snap(total=1_000_000.0, daily_pnl=-60_000.0)
+    fm = _MockFundManager(snap)
+    fm._unrealized_mtm = 30_000.0  # Open positions showing profit
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
+
+    assert result.approved, f"Unrealized profit should offset realized loss; got: {result.reason}"
+    print("  OK FIX-035: Positive unrealized MTM offsets realized loss")
     store.close()
 
 

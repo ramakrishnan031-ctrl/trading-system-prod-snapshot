@@ -445,7 +445,8 @@ class TestCallbacks:
         cb = _make_gate_release_cb(sp)
         entry = MagicMock(symbol="RELIANCE", signal_id="sig_001")
         cb(entry, "PRICE_HIT")
-        sp.continue_from_gate.assert_called_once_with(entry)
+        # FIX-025: release_ltp is extracted from entry.extras and passed through
+        sp.continue_from_gate.assert_called_once_with(entry, release_ltp=entry.extras.get.return_value)
 
     def test_gate_release_timeout_no_action(self):
         sp = MagicMock(name="SignalProcessor")

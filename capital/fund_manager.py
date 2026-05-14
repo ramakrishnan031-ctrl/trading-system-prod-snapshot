@@ -302,6 +302,9 @@ class FundManager:
         # FM6: active reservations
         self._reservations: dict[str, _Reservation] = {}
 
+        # FIX-035: unrealized MTM tracking per trade_id
+        self._unrealized_mtm: dict[str, float] = {}
+
     # ── public API ────────────────────────────────────────────────────────────
 
     @property
@@ -951,6 +954,39 @@ class FundManager:
                 daily_realized_pnl=self._daily_pnl,
                 ts=now_ist().isoformat(),
             )
+
+    def update_unrealized_mtm(self, trade_id: str, unrealized_pnl: float) -> None:
+        """
+        FIX-035: Update unrealized MTM for a trade (thread-safe).
+
+        Args:
+            trade_id:       Trade identifier.
+            unrealized_pnl: Current unrealized P&L for this trade.
+                           Positive = profit, negative = loss.
+        """
+        with self._lock:
+            self._unrealized_mtm[trade_id] = unrealized_pnl
+
+    def remove_unrealized_mtm(self, trade_id: str) -> None:
+        """
+        FIX-035: Remove unrealized MTM entry for a closed trade (thread-safe).
+
+        Args:
+            trade_id: Trade identifier to remove.
+        """
+        with self._lock:
+            self._unrealized_mtm.pop(trade_id, None)
+
+    def get_total_unrealized_mtm(self) -> float:
+        """
+        FIX-035: Return sum of all unrealized MTM (thread-safe).
+
+        Returns the aggregate unrealized P&L across all tracked trades.
+        Positive = net unrealized profit, negative = net unrealized loss.
+        Returns 0.0 if no trades are tracked.
+        """
+        with self._lock:
+            return sum(self._unrealized_mtm.values())
 
     def reset_daily_pnl(self) -> None:
         """Reset daily realized PnL to 0 at EOD. reserved/used NOT reset (FM14)."""

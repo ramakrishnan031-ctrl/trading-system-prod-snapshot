@@ -44,8 +44,11 @@ import sqlite3
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+from cachetools import TTLCache
 from flask import Flask, request, jsonify
 
 from core.ids import new_signal_id
@@ -127,9 +130,63 @@ class WebhookReceiver:
         )
         self._sweeper_thread.start()
 
+        # FIX-032: Load symbol aliases once at startup
+        # Chartink webhook sends alternate symbol names (e.g., TVSSCS) that don't
+        # match Zerodha's trading symbols (TVSSRICHAK). Load the mapping from
+        # config/symbol_aliases.yaml to resolve at webhook edge before any DB write
+        # or in-flight check uses the wrong symbol name.
+        self._alias_map = self._load_symbol_aliases()
+
+        # FIX-036: TTL-based deduplication cache
+        # Replaces minute-string fingerprint which broke across hour boundaries.
+        # Key: (symbol, scanner_name), TTL: 300 seconds (5 minutes)
+        # Thread-safe via lock wrapper.
+        self._dedup_cache = TTLCache(maxsize=10000, ttl=300)
+        self._dedup_lock = threading.Lock()
+
         self.app = Flask(__name__)
         self.app.config["TESTING"] = False
         self._register_routes()
+
+    # ------------------------------------------------------------------
+    # FIX-032: Symbol alias loading
+    # ------------------------------------------------------------------
+
+    def _load_symbol_aliases(self) -> dict[str, str]:
+        """
+        FIX-032: Load symbol name aliases from config/symbol_aliases.yaml.
+
+        Returns dict mapping Chartink symbol names to Zerodha trading symbols.
+        Empty dict if file doesn't exist or is empty (fail-open: no aliases = passthrough).
+        """
+        alias_path = Path("config/symbol_aliases.yaml")
+        if not alias_path.exists():
+            self._log.warning(
+                "webhook_receiver: symbol_aliases.yaml not found at %s - "
+                "no alias translation will occur", alias_path
+            )
+            return {}
+
+        try:
+            with open(alias_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            # Normalize: keys and values to uppercase strings
+            alias_map = {
+                str(k).upper(): str(v).upper()
+                for k, v in data.items()
+                if k and v
+            }
+            self._log.info(
+                "webhook_receiver: loaded %d symbol aliases from %s",
+                len(alias_map), alias_path
+            )
+            return alias_map
+        except Exception as exc:
+            self._log.error(
+                "webhook_receiver: failed to load symbol_aliases.yaml: %s - "
+                "no alias translation will occur", exc
+            )
+            return {}
 
     # ------------------------------------------------------------------
     # Route registration
@@ -350,7 +407,18 @@ class WebhookReceiver:
         accepted_count = 0
         rejected_count = 0
 
-        for symbol, price_str in zip(symbols, price_strs):
+        for raw_symbol, price_str in zip(symbols, price_strs):
+            # FIX-032: Apply symbol alias at webhook edge BEFORE any operation
+            # (DB write, in-flight check, queue push). Chartink sends alternate
+            # names (e.g., TVSSCS) that must be resolved to Zerodha symbols
+            # (TVSSRICHAK) to prevent ghost locks and instrument cache misses.
+            symbol = self._alias_map.get(raw_symbol.upper(), raw_symbol)
+            if symbol != raw_symbol:
+                self._log.debug(
+                    "webhook_receiver: symbol alias applied: raw=%s → resolved=%s",
+                    raw_symbol, symbol
+                )
+
             item = self._process_signal(
                 scanner_name, symbol, price_str,
                 triggered_at, received_at, today_iso, expiry_sec,
@@ -418,20 +486,22 @@ class WebhookReceiver:
         if not self._claim_in_flight(symbol):
             return {"symbol": symbol, "status": "IN_PROCESS"}
 
-        # WR7: compute dedup fingerprint at minute precision
+        # FIX-036: TTLCache deduplication (replaces minute-string fingerprint)
+        # Check if (symbol, scanner_name) was seen within last 300 seconds.
+        # Thread-safe via lock wrapper.
+        dedup_key = (symbol, scanner_name)
+        with self._dedup_lock:
+            if dedup_key in self._dedup_cache:
+                # Duplicate within TTL window
+                self._release_in_flight(symbol)
+                return {"symbol": symbol, "status": "DUPLICATE"}
+            # Mark as seen in cache
+            self._dedup_cache[dedup_key] = True
+
+        # WR7: compute dedup fingerprint at minute precision (kept for DB fallback)
         minute_str = triggered_at.strftime("%Y-%m-%d %H:%M")
         fp_raw = f"{scanner_name}|{symbol}|{minute_str}"
         fingerprint = hashlib.sha256(fp_raw.encode()).hexdigest()
-
-        # Pre-check for duplicate (fast path; avoids unnecessary DB write)
-        existing = self._store.fetch_one(
-            "SELECT signal_id FROM signals WHERE fingerprint = ? AND fingerprint_date = ?",
-            (fingerprint, today_iso),
-        )
-        if existing is not None:
-            # Release the claim since we did not enqueue anything downstream
-            self._release_in_flight(symbol)
-            return {"symbol": symbol, "status": "DUPLICATE"}
 
         # WR9: insert signal row, then push to queue
         signal_id = new_signal_id()
