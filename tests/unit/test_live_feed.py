@@ -828,6 +828,72 @@ def test_b6_watchdog_alert_clears_on_tick_resume() -> None:
     print("  OK B.6 alert cleared on tick resume")
 
 
+def test_fix059_subscribe_chunks_large_token_list() -> None:
+    """FIX-059: Subscribe chunks tokens into batches of subscription_batch_size."""
+    feed, ticker, _ = _make_and_connect()
+    try:
+        # Set batch size to 10 for easier testing
+        feed._subscription_batch_size = 10
+        ticker.subscribe.reset_mock()
+        ticker.set_mode.reset_mock()
+
+        # Subscribe 25 tokens -> should result in 3 batches (10, 10, 5)
+        tokens = list(range(1000, 1025))
+        feed.subscribe(tokens)
+
+        assert ticker.subscribe.call_count == 3, (
+            f"Expected 3 batches, got {ticker.subscribe.call_count}"
+        )
+        # Check batch sizes
+        calls = ticker.subscribe.call_args_list
+        assert len(calls[0][0][0]) == 10, "First batch should be 10 tokens"
+        assert len(calls[1][0][0]) == 10, "Second batch should be 10 tokens"
+        assert len(calls[2][0][0]) == 5, "Third batch should be 5 tokens"
+    finally:
+        feed.disconnect()
+    print("  OK FIX-059 subscribe chunks large token lists")
+
+
+def test_fix059_subscribe_respects_batch_size_parameter() -> None:
+    """FIX-059: subscription_batch_size parameter controls chunk size."""
+    from data.live_feed import LiveFeedManager
+    from unittest.mock import MagicMock
+
+    # Create feed with custom batch size
+    ticker = MockTicker("k", "t")
+    feed, _ = _make_feed(mock_ticker=ticker)
+    feed._ticker = ticker
+    feed._connected = True
+    feed._subscription_batch_size = 3  # very small batch for testing
+
+    # Subscribe 7 tokens -> should result in 3 batches (3, 3, 1)
+    tokens = [101, 102, 103, 104, 105, 106, 107]
+    feed.subscribe(tokens)
+
+    assert ticker.subscribe.call_count == 3, (
+        f"Expected 3 batches with batch_size=3, got {ticker.subscribe.call_count}"
+    )
+    print("  OK FIX-059 subscription_batch_size parameter respected")
+
+
+def test_fix059_subscribe_single_batch_when_under_limit() -> None:
+    """FIX-059: Single batch used when token count < batch_size."""
+    feed, ticker, _ = _make_and_connect()
+    try:
+        feed._subscription_batch_size = 50  # default
+        ticker.subscribe.reset_mock()
+
+        # Subscribe only 10 tokens -> should be single batch
+        feed.subscribe(list(range(200, 210)))
+
+        assert ticker.subscribe.call_count == 1, (
+            "Small token list should be single batch"
+        )
+    finally:
+        feed.disconnect()
+    print("  OK FIX-059 single batch when under limit")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -873,6 +939,9 @@ def run_all_tests() -> int:
         test_b6_watchdog_fires_critical_when_ticks_stale,
         test_b6_watchdog_skips_outside_market_hours,
         test_b6_watchdog_alert_clears_on_tick_resume,
+        test_fix059_subscribe_chunks_large_token_list,
+        test_fix059_subscribe_respects_batch_size_parameter,
+        test_fix059_subscribe_single_batch_when_under_limit,
     ]
 
     passed = 0

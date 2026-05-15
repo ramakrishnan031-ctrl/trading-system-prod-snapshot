@@ -46,6 +46,8 @@ class LiveFeedManager:
         tick_stale_threshold_sec: int = 30,
         watchdog_check_interval_sec: int = 10,
         market_windows=None,
+        # FIX-059: chunked subscription to avoid broker API limits
+        subscription_batch_size: int = 50,
     ) -> None:
         # LF2
         self._api_key = api_key
@@ -67,6 +69,7 @@ class LiveFeedManager:
         self._kill_switch = kill_switch  # FIX-029
         self._max_reconnect_attempts = max_reconnect_attempts
         self._reconnect_delay_sec = reconnect_delay_sec
+        self._subscription_batch_size = subscription_batch_size  # FIX-059
 
         # LF4: tracked subscriptions for auto-resubscribe on reconnect
         self._subscribed: Set[int] = set()
@@ -147,13 +150,27 @@ class LiveFeedManager:
         return self._connected
 
     def subscribe(self, instrument_tokens: List[int]) -> None:
-        """LF4: Subscribe tokens. MODE_LTP default. Tracks in _subscribed."""
+        """
+        LF4: Subscribe tokens. MODE_LTP default. Tracks in _subscribed.
+        FIX-059: Batched subscription (default 50 tokens/batch) to avoid broker limits.
+        """
         with self._lock:
             new = [t for t in instrument_tokens if t not in self._subscribed]
             self._subscribed.update(instrument_tokens)
+
         if new and self._connected and self._ticker is not None:
-            self._ticker.subscribe(new)
-            self._ticker.set_mode(KiteTicker.MODE_LTP, new)
+            # FIX-059: chunk tokens into batches to avoid broker API limits
+            batch_size = self._subscription_batch_size
+            for i in range(0, len(new), batch_size):
+                batch = new[i : i + batch_size]
+                self._ticker.subscribe(batch)
+                self._ticker.set_mode(KiteTicker.MODE_LTP, batch)
+                self._log.info(
+                    "LiveFeedManager: subscribed batch %d/%d (%d tokens)",
+                    i // batch_size + 1,
+                    (len(new) + batch_size - 1) // batch_size,
+                    len(batch),
+                )
 
     def unsubscribe(self, instrument_tokens: List[int]) -> None:
         """LF4: Unsubscribe tokens and remove from _subscribed set."""
