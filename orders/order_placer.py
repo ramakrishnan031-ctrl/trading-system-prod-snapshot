@@ -181,7 +181,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Dict, Final, Iterable, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Final, Iterable, List, Optional
 
 from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
@@ -243,6 +244,29 @@ _PRODUCT_TO_INTENT: Final[Dict[str, str]] = {
     "CNC":  "DELIVERY",
     "NRML": "DELIVERY",
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-061: Exit retry params for LTP validation errors
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class _ExitRetryParams:
+    """
+    FIX-061: Tracks exit orders awaiting first valid LTP for retry.
+
+    When SL/SL-M placement fails with trigger/LTP validation error (error code
+    16418 or message containing "Trigger price" or "LTP cannot be validated"),
+    we add to _pending_exit_retry and subscribe to LiveFeed. On first valid
+    tick (LTP > 0), we retry placement up to MAX_RETRIES times.
+    """
+    trade_id: str
+    fill_entry: Any  # _FillEntry
+    qty_filled: int
+    avg_fill_price: float
+    reason: str
+    retry_count: int = 0
+    MAX_RETRIES: int = 3
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -348,6 +372,7 @@ class OrderPlacer:
         entry_gate_slippage_buffer: float = 2.0,  # FIX-025: gate release slippage protection
         notifier: Optional[object] = None,   # TelegramNotifier; optional
         mode: str = "LIVE",                   # session mode label for alert title
+        live_feed: Optional[Any] = None,      # FIX-061: LiveFeedManager for LTP retry
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -384,6 +409,12 @@ class OrderPlacer:
         # OP5: internal_order_id → _FillEntry
         self._fill_map: Dict[str, _FillEntry] = {}
         self._fill_map_lock = threading.Lock()
+
+        # FIX-061: Exit retry tracking for LTP validation errors
+        self._pending_exit_retry: Dict[str, _ExitRetryParams] = {}
+        self._pending_exit_retry_lock = threading.Lock()
+        self._live_feed = live_feed
+        self._ltp_callback_registered = False
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -1648,6 +1679,18 @@ class OrderPlacer:
                 tag=trade_id,
             )
         except Exception as exc:
+            # FIX-061: Detect LTP validation errors and add to retry queue
+            if self._is_ltp_validation_error(exc):
+                self._add_to_exit_retry(
+                    trade_id=trade_id,
+                    fill_entry=fill_entry,
+                    qty_filled=qty_filled,
+                    avg_fill_price=avg_fill_price,
+                    reason=reason,
+                )
+                return
+
+            # All other errors: existing hard_kill path
             log_exception(self._log, exc)
             self._log.critical(
                 "order_placer.limit_triple_exits_failed "
@@ -1997,6 +2040,395 @@ class OrderPlacer:
                 "reason": reason,
             },
         )
+
+    # ── FIX-061: LTP retry helpers ────────────────────────────────────────────
+
+    def _is_ltp_validation_error(self, exc: Exception) -> bool:
+        """
+        FIX-061: Detect LTP validation errors from broker.
+
+        Returns True if exception is error code 16418 or message contains
+        "Trigger price" or "LTP cannot be validated".
+        """
+        # Check error code 16418
+        if isinstance(exc, (BrokerError, OrderRejectedError)):
+            error_code = exc.context.get("kite_status_code")
+            if error_code == 16418:
+                return True
+
+            # Check message content
+            rejection_reason = exc.context.get("rejection_reason", "")
+            error_msg = str(exc).lower()
+            trigger_keywords = ["trigger price", "ltp cannot be validated"]
+            if any(keyword in error_msg for keyword in trigger_keywords):
+                return True
+            if any(keyword in rejection_reason.lower() for keyword in trigger_keywords):
+                return True
+
+        return False
+
+    def _add_to_exit_retry(
+        self,
+        *,
+        trade_id: str,
+        fill_entry: "_FillEntry",
+        qty_filled: int,
+        avg_fill_price: float,
+        reason: str,
+    ) -> None:
+        """
+        FIX-061: Add exit order to retry queue and subscribe to LiveFeed.
+
+        Called when SL/SL-M placement fails with LTP validation error.
+        """
+        symbol = fill_entry.symbol
+
+        self._log.warning(
+            "order_placer.exit_ltp_validation_error_retry_queued",
+            extra={
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "retry_reason": "AWAITING_FIRST_LTP",
+            },
+        )
+
+        with self._pending_exit_retry_lock:
+            self._pending_exit_retry[trade_id] = _ExitRetryParams(
+                trade_id=trade_id,
+                fill_entry=fill_entry,
+                qty_filled=qty_filled,
+                avg_fill_price=avg_fill_price,
+                reason=reason,
+                retry_count=0,
+            )
+
+        # Subscribe to LiveFeed if available and not already subscribed
+        if self._live_feed is not None and self._instrument_cache is not None:
+            try:
+                # Get instrument token from cache
+                row = self._instrument_cache.get_by_symbol(symbol)
+                if row is not None:
+                    instrument_token = row.instrument_token
+                    self._live_feed.subscribe([instrument_token])
+
+                    # Register callback if not already done
+                    if not self._ltp_callback_registered:
+                        self._live_feed.register_callback(self._on_ltp_tick_for_retry)
+                        self._ltp_callback_registered = True
+
+                    self._log.info(
+                        "order_placer.exit_retry_subscribed_to_ltp",
+                        extra={
+                            "trade_id": trade_id,
+                            "symbol": symbol,
+                            "instrument_token": instrument_token,
+                        },
+                    )
+                else:
+                    self._log.error(
+                        "order_placer.exit_retry_symbol_not_in_cache",
+                        extra={"trade_id": trade_id, "symbol": symbol},
+                    )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.exit_retry_subscribe_failed",
+                    extra={"trade_id": trade_id, "symbol": symbol},
+                )
+
+    def _on_ltp_tick_for_retry(self, ticks: List[dict]) -> None:
+        """
+        FIX-061: Callback for LiveFeed ticks to retry exit placement.
+
+        Called when any tick arrives. Checks if we have pending retries for
+        the symbol and retries placement if LTP is valid (> 0).
+        """
+        if not ticks:
+            return
+
+        with self._pending_exit_retry_lock:
+            if not self._pending_exit_retry:
+                return
+
+            # Build symbol -> token map for quick lookup
+            symbol_to_token: Dict[int, str] = {}
+            if self._instrument_cache is not None:
+                for trade_id, params in self._pending_exit_retry.items():
+                    row = self._instrument_cache.get_by_symbol(params.fill_entry.symbol)
+                    if row is not None:
+                        symbol_to_token[row.instrument_token] = params.fill_entry.symbol
+
+            # Process each tick
+            for tick in ticks:
+                instrument_token = tick.get("instrument_token")
+                ltp = tick.get("last_price", 0)
+
+                if instrument_token not in symbol_to_token or ltp <= 0:
+                    continue
+
+                symbol = symbol_to_token[instrument_token]
+
+                # Find trade_id(s) for this symbol
+                trades_to_retry = [
+                    trade_id
+                    for trade_id, params in self._pending_exit_retry.items()
+                    if params.fill_entry.symbol == symbol
+                ]
+
+                for trade_id in trades_to_retry:
+                    params = self._pending_exit_retry.get(trade_id)
+                    if params is None:
+                        continue
+
+                    self._log.info(
+                        "order_placer.exit_retry_first_ltp_received",
+                        extra={
+                            "trade_id": trade_id,
+                            "symbol": symbol,
+                            "ltp": ltp,
+                            "retry_count": params.retry_count,
+                        },
+                    )
+
+                    # Remove from pending and retry
+                    del self._pending_exit_retry[trade_id]
+
+                    # Retry outside the lock to avoid deadlock
+                    self._pending_exit_retry_lock.release()
+                    try:
+                        self._retry_limit_triple_exits(params)
+                    finally:
+                        self._pending_exit_retry_lock.acquire()
+
+    def _retry_limit_triple_exits(self, params: _ExitRetryParams) -> None:
+        """
+        FIX-061: Retry placing SL+TGT exits after receiving first valid LTP.
+
+        On success: logs info and returns.
+        On failure: increments retry_count.
+        After MAX_RETRIES: triggers soft_kill and logs CRITICAL.
+        """
+        params.retry_count += 1
+        trade_id = params.trade_id
+        symbol = params.fill_entry.symbol
+
+        self._log.info(
+            "order_placer.exit_retry_attempt",
+            extra={
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "attempt": params.retry_count,
+                "max_retries": params.MAX_RETRIES,
+            },
+        )
+
+        # Retry placement directly (bypass _place_limit_triple_exits to avoid recursion)
+        fill_entry = params.fill_entry
+        qty_filled = params.qty_filled
+        avg_fill_price = params.avg_fill_price
+
+        # Recalculate TGT price from actual fill (same logic as _place_limit_triple_exits)
+        from orders.price_math import calc_tgt_price
+        actual_tgt_price = calc_tgt_price(
+            direction=fill_entry.direction,
+            entry_price=avg_fill_price,
+            sl_price=fill_entry.sl_price,
+            rr_ratio=self._rr_ratio,
+        )
+
+        try:
+            legs = self._engine.place_deferred_exits(
+                order_protocol="LIMIT_TRIPLE",
+                symbol=fill_entry.symbol,
+                entry_side=fill_entry.side,
+                qty=qty_filled,
+                sl_price=fill_entry.sl_price,
+                tgt_price=actual_tgt_price,
+                intent=fill_entry.intent,
+                trade_id=trade_id,
+                tag=trade_id,
+            )
+        except Exception as exc:
+            # Placement failed - handle errors in the except block
+            # Still failing after retry
+            if self._is_ltp_validation_error(exc):
+                # Still LTP error - check if we should retry again
+                if params.retry_count < params.MAX_RETRIES:
+                    # Re-add to pending queue for next tick
+                    with self._pending_exit_retry_lock:
+                        self._pending_exit_retry[trade_id] = params
+
+                    self._log.warning(
+                        "order_placer.exit_retry_still_failing_ltp",
+                        extra={
+                            "trade_id": trade_id,
+                            "symbol": symbol,
+                            "retry_count": params.retry_count,
+                            "max_retries": params.MAX_RETRIES,
+                        },
+                    )
+                    return
+                else:
+                    # Exhausted retries - trigger soft_kill
+                    log_exception(self._log, exc)
+                    self._log.critical(
+                        "order_placer.exit_retry_exhausted_soft_kill "
+                        "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED",
+                        extra={
+                            "trade_id": trade_id,
+                            "symbol": symbol,
+                            "retry_count": params.retry_count,
+                            "error": str(exc),
+                        },
+                    )
+
+                    if self._kill_switch is not None:
+                        try:
+                            self._kill_switch.soft_kill(
+                                reason=(
+                                    f"SL/TGT placement failed after {params.MAX_RETRIES} "
+                                    f"LTP retries for {symbol}: {exc}"
+                                ),
+                                triggered_by="order_placer._retry_limit_triple_exits",
+                            )
+                        except Exception as ks_exc:
+                            log_exception(self._log, ks_exc)
+                            self._log.critical(
+                                "order_placer.soft_kill_failed",
+                                extra={"trade_id": trade_id},
+                            )
+                    return
+
+            # Non-LTP error on retry - use FIX-012 path (existing hard_kill)
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.exit_retry_non_ltp_error "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED",
+                extra={
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "retry_count": params.retry_count,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # Success! Persist and track the orders
+            if self._product_resolver is None:
+                self._log.critical(
+                    "order_placer.exit_retry_no_product_resolver",
+                    extra={"trade_id": trade_id},
+                )
+                return
+
+            product = self._product_resolver.resolve(fill_entry.intent)
+            exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+            specs = [
+                OrderInsertSpec(
+                    broker_order_id=legs.sl_broker_order_id,
+                    leg="SL",
+                    transaction_type=exit_side,
+                    order_type=legs.sl_order_type,
+                    product=product,
+                    variety="regular",
+                    qty_requested=qty_filled,
+                    price=legs.sl_price,
+                    trigger_price=legs.sl_trigger_price,
+                ),
+                OrderInsertSpec(
+                    broker_order_id=legs.tgt_broker_order_id,
+                    leg="TGT",
+                    transaction_type=exit_side,
+                    order_type="LIMIT",
+                    product=product,
+                    variety="regular",
+                    qty_requested=qty_filled,
+                    price=legs.tgt_price,
+                ),
+            ]
+
+            try:
+                self._om.insert_orders_atomic(trade_id, specs)
+            except Exception as persist_exc:
+                log_exception(self._log, persist_exc)
+                self._log.critical(
+                    "order_placer.exit_retry_persist_failed",
+                    extra={"trade_id": trade_id},
+                )
+                # Cancel broker orders and hard_kill
+                self._cancel_broker_orders(
+                    [legs.sl_broker_order_id, legs.tgt_broker_order_id],
+                    reason=f"exit_retry_persist_failed: {type(persist_exc).__name__}",
+                )
+                self._fire_hard_kill_for_unprotected_position(trade_id, persist_exc)
+                return
+
+            # Track orders
+            now = now_ist()
+            try:
+                with self._fill_map_lock:
+                    self._fill_map[legs.sl_internal_id] = _FillEntry(
+                        trade_id=trade_id,
+                        reservation_id=fill_entry.reservation_id,
+                        symbol=fill_entry.symbol,
+                        qty=qty_filled,
+                        leg=_LEG_SL,
+                        order_protocol="LIMIT_TRIPLE",
+                        direction=fill_entry.direction,
+                    )
+                self._order_monitor.track(
+                    internal_order_id=legs.sl_internal_id,
+                    broker_order_id=legs.sl_broker_order_id,
+                    symbol=fill_entry.symbol,
+                    side=exit_side,
+                    qty=qty_filled,
+                    expected_price=legs.sl_trigger_price,
+                    placed_at=now,
+                    leg="SL",
+                )
+
+                with self._fill_map_lock:
+                    self._fill_map[legs.tgt_internal_id] = _FillEntry(
+                        trade_id=trade_id,
+                        reservation_id=fill_entry.reservation_id,
+                        symbol=fill_entry.symbol,
+                        qty=qty_filled,
+                        leg=_LEG_TGT,
+                        order_protocol="LIMIT_TRIPLE",
+                        direction=fill_entry.direction,
+                    )
+                self._order_monitor.track(
+                    internal_order_id=legs.tgt_internal_id,
+                    broker_order_id=legs.tgt_broker_order_id,
+                    symbol=fill_entry.symbol,
+                    side=exit_side,
+                    qty=qty_filled,
+                    expected_price=legs.tgt_price,
+                    placed_at=now,
+                    leg="TGT",
+                )
+
+                self._log.info(
+                    "order_placer.exit_retry_success",
+                    extra={
+                        "trade_id": trade_id,
+                        "symbol": symbol,
+                        "retry_count": params.retry_count,
+                    },
+                )
+                return
+
+            except Exception as track_exc:
+                log_exception(self._log, track_exc)
+                self._log.critical(
+                    "order_placer.exit_retry_track_failed",
+                    extra={"trade_id": trade_id},
+                )
+                return
+
+    # ────────────────────────────────────────────────────────────────────────────
 
     def _fire_hard_kill_for_unprotected_position(
         self, trade_id: str, exc: Exception,
