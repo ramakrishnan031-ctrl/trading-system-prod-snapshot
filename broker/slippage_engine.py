@@ -55,9 +55,11 @@ class SlippageEngine:
         self,
         config: SlippageConfig,
         instrument_cache: InstrumentCache,
+        logger=None,  # FIX-050: optional logger for DEBUG when sub-tick guard activates
     ) -> None:
         self._cfg = config
         self._cache = instrument_cache
+        self._log = logger
         # Pre-validate default_tier so apply() can rely on it.
         if config.default_tier not in config.tiers:
             raise ValueError(
@@ -100,6 +102,19 @@ class SlippageEngine:
 
         tick = self._tick_size(symbol)
         if tick is not None and tick > 0:
+            # FIX-050: Sub-tick guard - if delta is smaller than half a tick,
+            # skip rounding to avoid artificially inflating slippage.
+            # Example: price=5.00, delta=0.0075, tick=0.05 → skip rounding,
+            # return 5.0075 instead of 5.05 (which would be 10x the intended slip).
+            if abs(delta) < (tick / 2.0):
+                if self._log:
+                    self._log.debug(
+                        f"SlippageEngine: sub-tick guard activated for {symbol} "
+                        f"(delta={delta:.6f} < tick/2={tick/2.0:.6f}), "
+                        f"returning {adjusted:.4f} without rounding"
+                    )
+                return adjusted
+
             # SE3 conservatism: round AWAY from price for the trader.
             # BUY rounds up to next tick; SELL rounds down to prev tick.
             if side_u == "BUY":

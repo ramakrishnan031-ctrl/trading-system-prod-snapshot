@@ -271,6 +271,69 @@ def test_fix014_round_down_negative_price() -> None:
     print("  OK _round_down_to_tick negative prices")
 
 
+# ─── FIX-050: Sub-tick slippage guard ────────────────────────────────────────
+
+def test_fix050_sub_tick_guard_skips_rounding() -> None:
+    """FIX-050: When delta < tick/2, skip rounding and return price+delta as-is.
+
+    Example: price=5.00, 5bps slippage → delta=0.0025, tick=0.05.
+    delta (0.0025) < tick/2 (0.025), so return 5.0025 NOT rounded to 5.05.
+    """
+    class _MockLogger:
+        def __init__(self):
+            self.debugs = []
+        def debug(self, msg):
+            self.debugs.append(msg)
+
+    logger = _MockLogger()
+    eng = SlippageEngine(_make_cfg(), _make_cache(), logger=logger)
+
+    # RELIANCE → liquid → 5 bps. 5 bps of 5.00 = 0.0025
+    # delta=0.0025 < tick/2=0.025, so NO rounding
+    result = eng.apply("RELIANCE", "BUY", 5.00)
+    expected = 5.00 + (5.00 * 5 / 10_000.0)  # 5.00 + 0.0025 = 5.0025
+
+    assert result == pytest.approx(expected, abs=1e-9), f"Expected {expected}, got {result}"
+    # Verify DEBUG log was called
+    assert any("sub-tick guard" in d.lower() for d in logger.debugs), \
+        f"Expected DEBUG log about sub-tick guard, got: {logger.debugs}"
+
+    print(f"  OK fix050 sub-tick guard: 5.00 + 0.0025 = {result:.4f} (no rounding)")
+
+
+def test_fix050_normal_delta_applies_rounding() -> None:
+    """FIX-050: When delta >= tick/2, normal tick rounding applies.
+
+    Example: price=100.0, 15bps slippage → delta=0.15, tick=0.05.
+    delta (0.15) >= tick/2 (0.025), so normal rounding applies.
+    """
+    logger = _MockLogger() if hasattr(sys.modules[__name__], '_MockLogger') else None
+    cfg = SlippageConfig(
+        tiers={"mid": SlippageTierConfig(slippage_bps=15)},
+        default_tier="mid"
+    )
+    eng = SlippageEngine(cfg, _make_cache(), logger=logger)
+
+    # Unknown symbol → mid → 15 bps. 15 bps of 100.0 = 0.15
+    # delta=0.15 >= tick/2=0.025, so normal rounding applies
+    # BUY: 100.0 + 0.15 = 100.15 → rounds up to 100.15 (already on tick for RELIANCE tick=0.05)
+    result = eng.apply("RELIANCE", "BUY", 100.0)
+
+    # 100.0 + 0.15 = 100.15, which is a perfect tick multiple (100.15 / 0.05 = 2003)
+    # So rounding should leave it unchanged
+    assert result == pytest.approx(100.15, abs=1e-9), f"Expected 100.15, got {result}"
+
+    print(f"  OK fix050 normal rounding: 100.0 + 0.15 = {result:.2f} (rounded)")
+
+
+class _MockLogger:
+    """Helper for tests that need to capture DEBUG logs."""
+    def __init__(self):
+        self.debugs = []
+    def debug(self, msg):
+        self.debugs.append(msg)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -300,6 +363,9 @@ TESTS = [
     test_fix014_round_down_tick_025,
     test_fix014_round_up_negative_price,
     test_fix014_round_down_negative_price,
+    # FIX-050 sub-tick guard
+    test_fix050_sub_tick_guard_skips_rounding,
+    test_fix050_normal_delta_applies_rounding,
 ]
 
 
