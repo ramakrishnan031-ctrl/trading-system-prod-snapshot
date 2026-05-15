@@ -2061,6 +2061,43 @@ def test_fix007_no_rate_limiter_proceeds_normally() -> None:
     print("  OK FIX-007: rate_limiter=None -> pipeline unaffected (FIX-007)")
 
 
+def test_fix048_queue_full_abandons_signal() -> None:
+    """FIX-048: when queue is full on requeue attempt, signal is abandoned and warning logged."""
+    store, _ = _make_store()
+    sig_id = "sig_rl_full_001"
+    _insert_queued_signal(store, sig_id)
+
+    # Create a queue at capacity (maxsize=1, already full)
+    sq = queue.Queue(maxsize=1)
+    sq.put("blocking_item")  # Fill the queue
+
+    rl = _MockRateLimiter(permit=False)  # Rate limiter exhausted -> triggers requeue
+    logger = _NullLogger()
+
+    proc, _, _ = _make_proc(store=store, sq=sq, logger=logger)
+    proc._rate_limiter = rl
+
+    signal_tup = _now_tup(sig_id)
+    proc._process_one_safe(signal_tup)
+
+    # Signal status must remain QUEUED (pipeline skipped, requeue failed)
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] == "QUEUED", f"Expected QUEUED, got {row['status']}"
+
+    # Queue should still have only the original blocking item (signal abandoned)
+    assert sq.qsize() == 1, f"Expected queue size 1, got {sq.qsize()}"
+
+    # Warning must be logged
+    assert any("REJECTED_QUEUE_FULL" in w for w in logger.warnings), \
+        f"Expected REJECTED_QUEUE_FULL warning, got: {logger.warnings}"
+    assert any(sig_id in w for w in logger.warnings), \
+        f"Expected signal_id {sig_id} in warning, got: {logger.warnings}"
+
+    # active_workers counter must NOT have been incremented (returned before)
+    assert proc._active_workers == 0
+    print("  OK FIX-048: queue full on requeue -> signal abandoned, warning logged")
+
+
 # ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
@@ -2136,6 +2173,8 @@ def run_all_tests() -> int:
         test_fix007_rate_limiter_exhausted_requeues_signal,
         test_fix007_rate_limiter_permitted_proceeds_normally,
         test_fix007_no_rate_limiter_proceeds_normally,
+        # FIX-048 queue full on requeue
+        test_fix048_queue_full_abandons_signal,
     ]
 
     print("=" * 70)

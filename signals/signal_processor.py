@@ -44,6 +44,7 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
+import queue
 import threading
 import time
 import traceback
@@ -282,7 +283,16 @@ class SignalProcessor:
                     "rate_limiter: order bucket exhausted for %s (%s); re-queuing",
                     signal_id, symbol,
                 )
-                self._queue.put(signal_tuple)
+                # FIX-048: Non-blocking put with timeout to prevent deadlock
+                try:
+                    self._queue.put(signal_tuple, timeout=1.0)
+                except queue.Full:
+                    # Queue at capacity (300/300) - abandon signal, free worker thread
+                    scanner_name = signal_tuple[1] if len(signal_tuple) > 1 else "unknown"
+                    self._log.warning(
+                        f"REJECTED_QUEUE_FULL: {symbol} {scanner_name} - "
+                        f"queue at capacity, abandoning signal {signal_id}"
+                    )
                 return
 
         with self._active_lock:
