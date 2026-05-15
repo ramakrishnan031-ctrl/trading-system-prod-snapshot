@@ -153,16 +153,30 @@ class MarketWindows:
     def seconds_to_market_open(self, now: datetime) -> int:
         """Seconds from `now` until the next market open. If `now` is
         before today's open and today is a trading day, returns seconds
-        to today's open. Otherwise returns seconds to the next trading
-        day's open. Integer (truncated), always >= 0 for the forward case;
-        may be 0 exactly at open.
+        to today's open. If market is currently open, returns 0.
+        Otherwise returns seconds to the next trading day's open.
+        Integer (truncated), always >= 0.
+
+        FIX-053: If boot happens after 09:15 but before 15:30 (market
+        currently open), return 0 immediately instead of rolling over
+        to tomorrow's open (24-hour sleep bug).
         """
         today_open = datetime.combine(
             now.date(), self.market_open, tzinfo=now.tzinfo
         )
-        if not self.is_trading_holiday(now) and now <= today_open:
+        today_close = datetime.combine(
+            now.date(), self.market_close, tzinfo=now.tzinfo
+        )
+
+        # FIX-053: If market is currently open, return 0 immediately
+        if not self.is_trading_holiday(now) and today_open <= now < today_close:
+            return 0
+
+        # Before today's open
+        if not self.is_trading_holiday(now) and now < today_open:
             return int((today_open - now).total_seconds())
 
+        # After today's close or holiday — roll to next trading day
         next_day = self.next_trading_day(now)
         next_open = datetime.combine(
             next_day, self.market_open, tzinfo=now.tzinfo

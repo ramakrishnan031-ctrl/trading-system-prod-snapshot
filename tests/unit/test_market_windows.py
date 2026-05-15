@@ -172,11 +172,28 @@ def test_seconds_to_market_open_same_day_before_open():
     assert mw.seconds_to_market_open(TRADING_DAY(8, 0)) == 4500
 
 
-def test_seconds_to_market_open_after_open_rolls_to_next_day():
+def test_fix053_seconds_to_market_open_during_market_hours_returns_zero():
+    """FIX-053: Boot at 09:15:01 or any time during market hours -> return 0."""
     mw = MarketWindows()
-    # Wed 2026-04-15 10:00 -> next open is Thu 2026-04-16 09:15.
-    # delta = 23h15m = 83700s
-    assert mw.seconds_to_market_open(TRADING_DAY(10, 0)) == 83700
+    # Boot at 09:15:01 (just after open) -> market is open, return 0
+    assert mw.seconds_to_market_open(TRADING_DAY(9, 15, 1)) == 0
+    # Boot at 12:00:00 (mid-session) -> market is open, return 0
+    assert mw.seconds_to_market_open(TRADING_DAY(12, 0)) == 0
+    # Boot at 15:29:59 (1 second before close) -> market is open, return 0
+    assert mw.seconds_to_market_open(TRADING_DAY(15, 29, 59)) == 0
+    # Exactly at open -> market is open, return 0
+    assert mw.seconds_to_market_open(TRADING_DAY(9, 15, 0)) == 0
+
+
+def test_fix053_seconds_to_market_open_after_close_rolls_to_next_day():
+    """FIX-053: Boot at 16:00 (after close) -> roll to next trading day."""
+    mw = MarketWindows()
+    # Wed 2026-04-15 16:00 -> next open is Thu 2026-04-16 09:15.
+    # delta = 17h15m = 62100s
+    assert mw.seconds_to_market_open(TRADING_DAY(16, 0)) == 62100
+    # At exact close (15:30) -> also rolls to next day
+    # delta = 17h45m = 63900s
+    assert mw.seconds_to_market_open(TRADING_DAY(15, 30)) == 63900
 
 
 def test_seconds_to_market_open_from_weekend():
@@ -276,7 +293,8 @@ TESTS = [
     test_eod_squareoff_time_preserves_tz_and_date,
     test_seconds_to_eod_squareoff_positive_and_negative,
     test_seconds_to_market_open_same_day_before_open,
-    test_seconds_to_market_open_after_open_rolls_to_next_day,
+    test_fix053_seconds_to_market_open_during_market_hours_returns_zero,
+    test_fix053_seconds_to_market_open_after_close_rolls_to_next_day,
     test_seconds_to_market_open_from_weekend,
     test_is_trading_holiday_weekend_and_configured,
     test_next_trading_day_simple_weekday,
