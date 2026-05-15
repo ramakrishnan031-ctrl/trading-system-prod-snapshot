@@ -372,6 +372,72 @@ def test_no_thaw_log_without_prior_freeze() -> None:
     print("  OK no thaw log when bucket was never frozen (MED #4)")
 
 
+def test_fix060_shutdown_event_aborts_acquire() -> None:
+    """FIX-060: shutdown_event fires -> acquire() raises RateLimitAbortedError."""
+    import threading
+    from core.exceptions import RateLimitAbortedError
+
+    shutdown_event = threading.Event()
+    # Create limiter with very slow refill so acquire() would normally block
+    rl = RateLimiter(_make_limits(order_burst=1, order_rate=0.1), shutdown_event=shutdown_event)
+    rl.acquire("order", 1)  # drain the single token
+
+    # Set shutdown event in 0.05s, then try to acquire
+    timer = threading.Timer(0.05, shutdown_event.set)
+    timer.start()
+
+    try:
+        rl.acquire("order", 1)  # should raise RateLimitAbortedError
+        assert False, "Expected RateLimitAbortedError but acquire succeeded"
+    except RateLimitAbortedError as e:
+        assert e.context["category"] == "order"
+        assert e.context["waited_sec"] >= 0.0
+    finally:
+        timer.cancel()
+
+    print("  OK FIX-060 shutdown_event aborts acquire()")
+
+
+def test_fix060_shutdown_event_none_uses_normal_sleep() -> None:
+    """FIX-060: shutdown_event=None falls back to normal time.sleep behavior."""
+    # No shutdown_event passed
+    rl = RateLimiter(_make_limits(order_burst=2, order_rate=100))
+    rl.acquire("order", 1)
+    rl.acquire("order", 1)  # should succeed without any shutdown checks
+    print("  OK FIX-060 shutdown_event=None uses normal sleep")
+
+
+def test_fix060_acquire_aborted_error_has_correct_context() -> None:
+    """FIX-060: RateLimitAbortedError includes category and waited_sec."""
+    import threading
+    import time
+    from core.exceptions import RateLimitAbortedError
+
+    shutdown_event = threading.Event()
+    rl = RateLimiter(_make_limits(quote_burst=1, quote_rate=0.1), shutdown_event=shutdown_event)
+    rl.acquire("quote", 1)  # drain
+
+    # Fire shutdown after 0.05s
+    timer = threading.Timer(0.05, shutdown_event.set)
+    timer.start()
+    start = time.monotonic()
+
+    try:
+        rl.acquire("quote", 1)
+        assert False, "Expected RateLimitAbortedError"
+    except RateLimitAbortedError as e:
+        elapsed = time.monotonic() - start
+        assert e.context["category"] == "quote"
+        assert 0.03 <= e.context["waited_sec"] <= 0.2, (
+            f"waited_sec should be ~0.05s, got {e.context['waited_sec']}"
+        )
+        assert 0.03 <= elapsed <= 0.2, f"elapsed should be ~0.05s, got {elapsed}"
+    finally:
+        timer.cancel()
+
+    print("  OK FIX-060 RateLimitAbortedError has correct context")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -396,6 +462,9 @@ def run_all_tests() -> int:
         test_broker_rate_limit_error_context_fields,
         test_thaw_logged_once_after_freeze_expires,
         test_no_thaw_log_without_prior_freeze,
+        test_fix060_shutdown_event_aborts_acquire,
+        test_fix060_shutdown_event_none_uses_normal_sleep,
+        test_fix060_acquire_aborted_error_has_correct_context,
     ]
 
     print("=" * 70)

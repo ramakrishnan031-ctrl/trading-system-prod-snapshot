@@ -519,6 +519,8 @@ def _shutdown(
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
+    # FIX-060: Set shutdown event FIRST so rate limiter aborts immediately
+    _shutdown_event.set()
     _log.info("Shutdown initiated")
     # H-16: stop webhook_receiver FIRST so new webhooks return 503. In-flight
     # requests drain naturally; signal_processor stop below still works on
@@ -917,7 +919,8 @@ def _main_locked(args, config_dir: Path) -> int:
 
     # Build broker adapter early for clock check (paper mode skips live calls)
     state_machine = OrderStateMachine()
-    rate_limiter = RateLimiter(app_config.broker_limits)
+    # FIX-060: Pass shutdown_event so rate limiter aborts gracefully
+    rate_limiter = RateLimiter(app_config.broker_limits, shutdown_event=_shutdown_event)
     product_resolver = ProductResolver(app_config.system.product_map)
     cost_calculator = CostCalculator(app_config.broker_costs)
 

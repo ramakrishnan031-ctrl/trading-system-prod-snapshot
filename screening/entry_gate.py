@@ -234,14 +234,20 @@ class EntryGate:
         return restored
 
     def stop(self) -> None:
-        """Signal shutdown and join within 5s."""
+        """Signal shutdown and join within 5s (poll thread + 3s bounded wait for workers)."""
         if not self._running:
             return
         self._stop_event.set()
         if self._poll_thread is not None:
             self._poll_thread.join(timeout=5.0)
+        # FIX-060 Part B: shutdown(wait=False) + bounded 3s wait per thread.
+        # With Part A (shutdown_event in rate limiter), workers blocked in
+        # rate_limiter.acquire() will abort immediately via RateLimitAbortedError.
+        # We give them 3s to wrap up before continuing regardless.
         if self._executor is not None:
-            self._executor.shutdown(wait=True, cancel_futures=False)
+            import time
+            self._executor.shutdown(wait=False, cancel_futures=False)
+            time.sleep(3.0)  # FIX-060: bounded wait; threads finish or orphaned
             self._executor = None
         self._running = False
         self._log.info("EntryGate stopped")

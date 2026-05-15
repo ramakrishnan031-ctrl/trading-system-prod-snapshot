@@ -33,7 +33,7 @@ from __future__ import annotations
 import threading
 import time
 
-from core.exceptions import BrokerRateLimitError
+from core.exceptions import BrokerRateLimitError, RateLimitAbortedError
 from core.logger import get_logger
 
 # Import only for type annotation; caller constructs and injects the config.
@@ -146,8 +146,10 @@ class RateLimiter:
         limits: BrokerLimitsConfig,
         *,
         max_wait_sec: float = 30.0,
+        shutdown_event: threading.Event | None = None,  # FIX-060
     ) -> None:
         self._max_wait_sec = max_wait_sec
+        self._shutdown_event = shutdown_event  # FIX-060
         self._buckets: dict[str, _Bucket] = {
             "order":      _Bucket(limits.order.burst,      limits.order.rate_per_sec),
             "quote":      _Bucket(limits.quote.burst,      limits.quote.rate_per_sec),
@@ -220,12 +222,24 @@ class RateLimiter:
             with bucket._lock:
                 sleep_for = bucket._seconds_until_ready(n)
 
-            # Cap: never sleep past the deadline; never sleep more than 50ms at once
-            # (keeps acquire responsive to cancellation / freeze changes); min 1ms.
+            # FIX-060: Cap sleep interval to 0.1s so shutdown polls every 100ms.
+            # Also cap to remaining deadline; min 1ms for responsiveness.
             remaining = deadline - time.monotonic()
-            sleep_for = min(sleep_for, remaining, 0.05)
+            sleep_for = min(sleep_for, remaining, 0.1)  # FIX-060: 0.1s poll interval
             sleep_for = max(sleep_for, 0.001)
-            time.sleep(sleep_for)
+
+            # FIX-060: Poll shutdown_event if available, else fall back to time.sleep
+            if self._shutdown_event is not None:
+                if self._shutdown_event.wait(timeout=sleep_for):
+                    # Shutdown event was set
+                    raise RateLimitAbortedError(
+                        f"Rate limiter acquire aborted by shutdown during wait for "
+                        f"{n} token(s) in category '{category}'",
+                        category=category,
+                        waited_sec=round(time.monotonic() - start, 3),
+                    )
+            else:
+                time.sleep(sleep_for)
 
     def try_acquire(self, category: str, n: int = 1) -> bool:
         """

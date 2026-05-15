@@ -258,6 +258,23 @@ class BrokerRateLimit429Error(BrokerError):
     SEVERITY: str = "WARN"
 
 
+class RateLimitAbortedError(TradingSystemError):
+    """
+    FIX-060: Rate limiter acquire() was aborted because the shutdown event was set.
+
+    Raised when a RateLimiter.acquire() call is waiting for tokens but the
+    system shutdown_event fires. This allows graceful shutdown without waiting
+    for the full max_wait_sec timeout on every blocked rate limiter.
+
+    INFO (not WARN/ERROR): shutdown is an expected operation, not a failure.
+
+    Useful context kwargs:
+        category (str): endpoint category being acquired
+        waited_sec (float): time spent waiting before abort
+    """
+    SEVERITY: str = "INFO"
+
+
 class InvalidTransitionError(BrokerError):
     """
     An illegal order state transition was attempted. (OSM3, OSM4, OSM6)
