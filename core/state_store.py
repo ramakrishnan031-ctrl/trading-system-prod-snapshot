@@ -1262,6 +1262,22 @@ class StateStore:
         )
         return [dict(r) for r in rows]
 
+    def get_daily_realized_pnl(self, date_iso: str) -> float:
+        """
+        FIX-051: Return realized PnL for date_iso by summing fm_ledger.pnl_delta.
+
+        Args:
+            date_iso: Date string in YYYY-MM-DD format
+
+        Returns:
+            Sum of all pnl_delta values for the given date. Returns 0.0 if no rows.
+        """
+        row = self.fetch_one(
+            "SELECT COALESCE(SUM(pnl_delta), 0.0) as total_pnl FROM fm_ledger WHERE DATE(ts) = ?",
+            (date_iso,),
+        )
+        return row["total_pnl"] if row else 0.0
+
     def get_system_events_for_date(self, date_iso: str) -> List[dict]:
         """Return all system_events rows for date_iso (DR8)."""
         rows = self.fetch_all(

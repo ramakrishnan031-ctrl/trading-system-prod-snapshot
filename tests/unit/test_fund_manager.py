@@ -2216,6 +2216,82 @@ def test_bl4_commit_to_used_bl4_handler_does_not_fire_on_critical_callback() -> 
     print("  OK BL-4: outer handler does NOT fire on_critical (narrow to BL-9)")
 
 
+# ─── FIX-051: SQL-backed daily realized PnL ──────────────────────────────────
+
+def test_fix051_500_mutations_exact_sum_no_drift() -> None:
+    """FIX-051: 500 PnL mutations → SQL SUM matches expected, no float accumulation drift."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=1_000_000.0)
+
+        expected_pnl = 0.0
+        # Simulate 500 release_used mutations with varying PnL deltas
+        for i in range(500):
+            res = fm.reserve("SYM", 10, 100.0, "INTRADAY", signal_id=f"sig_{i}")
+            assert res.success
+            fm.commit_to_used(res.reservation_id, 100.0, 10)
+
+            # Alternate between profit and loss with small amounts
+            if i % 2 == 0:
+                exit_price = 103.7  # profit
+            else:
+                exit_price = 97.7   # loss
+
+            # LONG: pnl = (exit - entry) * qty
+            # entry = 100, qty = 10, so pnl = (exit - 100) * 10
+            fm.release_used("SYM", exit_price, 10, "INTRADAY", 100.0, "LONG", costs=0.0)
+            expected_pnl += (exit_price - 100.0) * 10
+
+        # Verify SQL sum matches expected (no float drift from 500 additions)
+        snapshot = fm.get_snapshot()
+        assert abs(snapshot.daily_realized_pnl - expected_pnl) < 1e-9, (
+            f"Expected {expected_pnl:.10f}, got {snapshot.daily_realized_pnl:.10f}"
+        )
+
+        # Direct SQL query should match
+        from core.time_authority import now_ist
+        today = now_ist().date().isoformat()
+        sql_pnl = store.get_daily_realized_pnl(today)
+        assert abs(sql_pnl - expected_pnl) < 1e-9, f"SQL sum {sql_pnl} != expected {expected_pnl}"
+
+        store.close()
+    print("  OK FIX-051: 500 mutations, exact SQL sum, no float drift")
+
+
+def test_fix051_correct_after_restart() -> None:
+    """FIX-051: Daily PnL correct after FM restart (rehydrate reads from SQL)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        store1 = _make_store(tmp_path)
+        fm1 = _initialized_fm(store1, balance=100_000.0)
+
+        # Make 3 profitable trades
+        for i in range(3):
+            res = fm1.reserve("SYM", 10, 100.0, "INTRADAY", signal_id=f"sig_{i}")
+            fm1.commit_to_used(res.reservation_id, 100.0, 10)
+            fm1.release_used("SYM", 105.0, 10, "INTRADAY", 100.0, "LONG", costs=0.0)  # +50 each
+
+        # Daily PnL should be 150.0
+        snap1 = fm1.get_snapshot()
+        assert snap1.daily_realized_pnl == 150.0
+
+        store1.close()
+
+        # Restart: new FundManager, rehydrate from same DB
+        store2 = _make_store(tmp_path)
+        fm2 = _initialized_fm(store2, balance=100_000.0)
+        fm2.rehydrate_from_open_trades()  # No open trades, but PnL rows exist in ledger
+
+        # Daily PnL should still be 150.0 (read from SQL)
+        snap2 = fm2.get_snapshot()
+        assert snap2.daily_realized_pnl == 150.0, (
+            f"Expected 150.0 after restart, got {snap2.daily_realized_pnl}"
+        )
+
+        store2.close()
+    print("  OK FIX-051: daily PnL correct after restart (SQL-backed)")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2302,6 +2378,9 @@ def run_all_tests() -> int:
         test_bl4_commit_to_used_with_kill_switch_none_logs_no_crash,
         test_bl4_commit_to_used_kill_switch_failure_still_reraises_original,
         test_bl4_commit_to_used_bl4_handler_does_not_fire_on_critical_callback,
+        # FIX-051: SQL-backed daily realized PnL
+        test_fix051_500_mutations_exact_sum_no_drift,
+        test_fix051_correct_after_restart,
     ]
 
     print("=" * 70)

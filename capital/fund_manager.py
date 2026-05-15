@@ -296,7 +296,7 @@ class FundManager:
         self._positional_reserved: float = 0.0
         self._positional_used: float = 0.0
 
-        self._daily_pnl: float = 0.0
+        # FIX-051: _daily_pnl removed; read from fm_ledger SQL instead
         self._initialized: bool = False
 
         # FM6: active reservations
@@ -365,7 +365,7 @@ class FundManager:
             self._positional_avail = broker_balance * self._positional_pct
             self._positional_reserved = 0.0
             self._positional_used = 0.0
-            self._daily_pnl = 0.0
+            # FIX-051: _daily_pnl removed; read from SQL
             self._initialized = True
 
             self._log.info(
@@ -775,7 +775,7 @@ class FundManager:
             self._bucket_add_avail(bucket, margin + pnl)
             # PnL changes total capital (FM2 invariant: avail+res+used==total)
             self._total += pnl
-            self._daily_pnl += pnl
+            # FIX-051: _daily_pnl removed; will read from SQL for loss check
 
             # C.1: capture violation, defer hard_kill to after lock release.
             try:
@@ -788,10 +788,13 @@ class FundManager:
                 # FM7: check daily loss limit after updating PnL (existing
                 # behavior: only runs when invariant was OK; on violation
                 # the state is corrupt and the loss check is moot).
-                if self._daily_pnl <= -self._daily_loss_limit:
+                # FIX-051: Read daily PnL from SQL instead of in-memory accumulator
+                today = now_ist().date().isoformat()
+                daily_pnl = self._store.get_daily_realized_pnl(today)
+                if daily_pnl <= -self._daily_loss_limit:
                     self._log.critical(
                         "fund_manager.daily_loss_breach",
-                        extra={"daily_pnl": self._daily_pnl,
+                        extra={"daily_pnl": daily_pnl,
                                "limit": self._daily_loss_limit},
                     )
                     if self._on_loss_breach is not None:
@@ -941,8 +944,15 @@ class FundManager:
             return dict(self._reservations)
 
     def get_snapshot(self) -> CapitalSnapshot:
-        """Return a frozen, consistent point-in-time view of capital state (FM8)."""
+        """Return a frozen, consistent point-in-time view of capital state (FM8).
+
+        FIX-051: daily_realized_pnl is read from SQL (fm_ledger) instead of in-memory float.
+        """
         with self._lock:
+            # FIX-051: Read daily PnL from SQL to avoid float drift
+            today = now_ist().date().isoformat()
+            daily_pnl = self._store.get_daily_realized_pnl(today)
+
             return CapitalSnapshot(
                 total=self._total,
                 intraday_avail=self._intraday_avail,
@@ -951,7 +961,7 @@ class FundManager:
                 positional_avail=self._positional_avail,
                 positional_reserved=self._positional_reserved,
                 positional_used=self._positional_used,
-                daily_realized_pnl=self._daily_pnl,
+                daily_realized_pnl=daily_pnl,
                 ts=now_ist().isoformat(),
             )
 
@@ -989,11 +999,20 @@ class FundManager:
             return sum(self._unrealized_mtm.values())
 
     def reset_daily_pnl(self) -> None:
-        """Reset daily realized PnL to 0 at EOD. reserved/used NOT reset (FM14)."""
+        """Reset daily realized PnL to 0 at EOD. reserved/used NOT reset (FM14).
+
+        FIX-051: Reads old_pnl from SQL (fm_ledger) instead of in-memory accumulator.
+        The RESET_PNL ledger entry with negative pnl_delta brings the SQL sum back to 0.
+        """
         with self._lock:
-            old_pnl = self._daily_pnl
-            ts = now_ist().isoformat()
+            # FIX-051: Read current PnL from SQL instead of in-memory float
+            ts_now = now_ist()
+            today = ts_now.date().isoformat()
+            old_pnl = self._store.get_daily_realized_pnl(today)
+
+            ts = ts_now.isoformat()
             # BL-5: ledger first, then zero-out
+            # The pnl_delta=-old_pnl entry ensures SUM(pnl_delta) = 0 for the day
             self._write_ledger(
                 ts=ts,
                 entry_type="RESET_PNL",
@@ -1004,7 +1023,7 @@ class FundManager:
                 reason=f"EOD reset: previous pnl={old_pnl:.2f}",
                 pnl_delta=-old_pnl,
             )
-            self._daily_pnl = 0.0
+            # FIX-051: No in-memory _daily_pnl to zero out; SQL is the source of truth
             self._log.info(
                 "fund_manager.reset_daily_pnl",
                 extra={"previous_pnl": old_pnl},
@@ -1080,7 +1099,8 @@ class FundManager:
             # Phase 2: today's realized-PnL carryover. For each CLOSED trade
             # (whose RESERVE+COMMIT were NOT replayed in Phase 1 because the
             # trade is not open), we apply only the *net* effect of the full
-            # lifecycle: bucket avail += pnl, _total += pnl, _daily_pnl += pnl.
+            # lifecycle: bucket avail += pnl, _total += pnl.
+            # FIX-051: _daily_pnl removed; SQL (fm_ledger.pnl_delta) is the source of truth.
             # The -margin/+margin legs of the CLOSED lifecycle cancel to zero,
             # so we don't touch reserved/used here.
             pnl_rows = self._store.fetch_all(
@@ -1098,7 +1118,7 @@ class FundManager:
                 pnl = float(row["pnl_delta"])
                 bucket = row["bucket"]
                 self._bucket_add_avail(bucket, pnl)
-                self._daily_pnl += pnl
+                # FIX-051: No in-memory _daily_pnl to update; SQL has pnl_delta rows
                 self._total += pnl
                 replayed_pnl_rows += 1
 
@@ -1123,13 +1143,17 @@ class FundManager:
                 replayed_pnl_rows=replayed_pnl_rows,
             ) from _violation
 
+        # FIX-051: Read daily_pnl from SQL for logging
+        today = now_ist().date().isoformat()
+        daily_pnl = self._store.get_daily_realized_pnl(today)
+
         self._log.info(
             "fund_manager.rehydrate_complete",
             extra={
                 "replayed_trades": replayed_trades,
                 "replayed_pnl_rows": replayed_pnl_rows,
                 "anomaly_count": len(anomalies),
-                "daily_pnl": self._daily_pnl,
+                "daily_pnl": daily_pnl,
                 "total": self._total,
             },
         )
