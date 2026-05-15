@@ -40,6 +40,7 @@ from typing import Any
 import requests
 
 from alerts.critical import write_critical_sentinel
+from core.logger import SafeJSONEncoder
 from core.time_authority import now_ist
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
@@ -412,7 +413,8 @@ class TelegramNotifier:
         }
         try:
             with open(self._failed_log, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                # FIX-058: SafeJSONEncoder prevents serialization failures
+                fh.write(json.dumps(record, ensure_ascii=False, cls=SafeJSONEncoder) + "\n")
             return True
         except OSError:
             return False

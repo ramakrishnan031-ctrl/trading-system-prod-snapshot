@@ -82,6 +82,27 @@ _active_handlers: list[logging.Handler] = []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# JSON Encoder (FIX-058: never drop a log record)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SafeJSONEncoder(json.JSONEncoder):
+    """
+    FIX-058: JSON encoder that never raises on unserializable objects.
+    Prevents log record drops when extra fields contain datetime, Exception, or
+    other non-JSON-serializable types.
+    """
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, Exception):
+            return str(obj)
+        try:
+            return super().default(obj)
+        except TypeError:
+            return f"<unserializable:{type(obj).__name__}>"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Formatters
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -124,7 +145,8 @@ class _JsonFormatter(logging.Formatter):
             data["exc_type"]      = record.exc_info[0].__name__
             data["exc_traceback"] = self.formatException(record.exc_info)
 
-        return json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=str)
+        # FIX-058: SafeJSONEncoder prevents log record drops
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"), cls=SafeJSONEncoder)
 
 
 class _PlainFormatter(logging.Formatter):

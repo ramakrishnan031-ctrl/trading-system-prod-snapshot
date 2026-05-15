@@ -681,6 +681,77 @@ def test_active_handlers_list_matches_root_handlers() -> None:
     print("  OK _active_handlers matches root logger handlers after setup (L10)")
 
 
+def test_fix058_safe_json_encoder_handles_datetime() -> None:
+    """FIX-058: SafeJSONEncoder converts datetime to ISO format."""
+    from datetime import datetime
+    from core.logger import SafeJSONEncoder
+
+    dt = datetime(2026, 5, 15, 14, 30, 45, 123456)
+    result = json.dumps({"ts": dt}, cls=SafeJSONEncoder)
+    parsed = json.loads(result)
+
+    assert "2026-05-15T14:30:45.123456" in parsed["ts"], f"datetime not ISO formatted: {parsed['ts']}"
+    print("  OK SafeJSONEncoder handles datetime objects")
+
+
+def test_fix058_safe_json_encoder_handles_exception() -> None:
+    """FIX-058: SafeJSONEncoder converts Exception to string."""
+    from core.logger import SafeJSONEncoder
+
+    exc = ValueError("test error")
+    result = json.dumps({"error": exc}, cls=SafeJSONEncoder)
+    parsed = json.loads(result)
+
+    assert parsed["error"] == "test error", f"Exception not stringified: {parsed['error']}"
+    print("  OK SafeJSONEncoder handles Exception objects")
+
+
+def test_fix058_safe_json_encoder_handles_unserializable() -> None:
+    """FIX-058: SafeJSONEncoder handles arbitrary unserializable objects."""
+    from core.logger import SafeJSONEncoder
+
+    class CustomObj:
+        pass
+
+    obj = CustomObj()
+    result = json.dumps({"obj": obj}, cls=SafeJSONEncoder)
+    parsed = json.loads(result)
+
+    assert "<unserializable:CustomObj>" == parsed["obj"], f"Unserializable not tagged: {parsed['obj']}"
+    print("  OK SafeJSONEncoder handles unserializable objects")
+
+
+def test_fix058_safe_json_encoder_complex_nested() -> None:
+    """FIX-058: SafeJSONEncoder handles complex nested dict with all edge cases."""
+    from datetime import datetime
+    from core.logger import SafeJSONEncoder
+
+    class Weird:
+        pass
+
+    data = {
+        "ts": datetime(2026, 5, 15, 9, 15, 0),
+        "error": RuntimeError("boom"),
+        "weird": Weird(),
+        "normal": "ok",
+        "nested": {
+            "inner_dt": datetime(2026, 5, 15, 15, 30, 0),
+            "value": 42,
+        },
+    }
+
+    result = json.dumps(data, cls=SafeJSONEncoder)
+    parsed = json.loads(result)
+
+    assert "2026-05-15T09:15:00" in parsed["ts"]
+    assert parsed["error"] == "boom"
+    assert "<unserializable:Weird>" == parsed["weird"]
+    assert parsed["normal"] == "ok"
+    assert "2026-05-15T15:30:00" in parsed["nested"]["inner_dt"]
+    assert parsed["nested"]["value"] == 42
+    print("  OK SafeJSONEncoder handles complex nested structures")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -719,6 +790,10 @@ def run_all_tests() -> int:
         test_json_ts_is_ist_iso8601_with_offset,
         test_duplicate_setup_logging_does_not_double_attach_handlers,
         test_active_handlers_list_matches_root_handlers,
+        test_fix058_safe_json_encoder_handles_datetime,
+        test_fix058_safe_json_encoder_handles_exception,
+        test_fix058_safe_json_encoder_handles_unserializable,
+        test_fix058_safe_json_encoder_complex_nested,
     ]
 
     print("=" * 70)
