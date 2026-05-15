@@ -541,6 +541,82 @@ def test_fix020_synthetic_candle_callback_invoked() -> None:
     print("  OK fix020_synthetic_candle_callback_invoked: callback receives synthetic")
 
 
+def test_fix049_late_tick_after_window_closed_discarded() -> None:
+    """FIX-049: Tick with exchange_timestamp from already-closed minute is discarded."""
+    logger = _make_logger()
+    from data.candle_store import CandleStore
+    store = CandleStore(logger, candle_interval_sec=60)
+    store.set_token_map({101: "RELIANCE"})
+
+    # First tick at 09:15:30 → creates accumulator for 09:15:00 window
+    ts_0915_30 = datetime(2026, 5, 15, 9, 15, 30)
+    store.on_tick(101, 100.0, ts_0915_30, exchange_timestamp=ts_0915_30)
+
+    # Close the 09:15 candle (simulating timer closing at 09:16:00)
+    store._close_candles()
+    candles = store.get_candles(101, n=1)
+    assert len(candles) == 1
+    assert candles[0].close == 100.0
+
+    # Late tick with exchange_timestamp 09:15:59 arrives AFTER 09:16:00
+    # This should be discarded because 09:15 window is already closed
+    ts_0915_59 = datetime(2026, 5, 15, 9, 15, 59)
+    ts_0916_05 = datetime(2026, 5, 15, 9, 16, 5)  # Current time (local)
+    store.on_tick(101, 105.0, ts_0916_05, exchange_timestamp=ts_0915_59)
+
+    # Tick should be discarded → accumulator for 09:16 window should have 105.0 as first tick
+    # But since we're testing rejection, let's verify DEBUG log was called
+    logger.debug.assert_called()
+    debug_msg = str(logger.debug.call_args)
+    assert "discarded late tick" in debug_msg.lower()
+    assert "09:15:59" in debug_msg or "9:15:59" in debug_msg
+
+    print("  OK fix049_late_tick_after_window_closed_discarded: late tick rejected, DEBUG logged")
+
+
+def test_fix049_normal_tick_bucketed_correctly() -> None:
+    """FIX-049: Normal tick with exchange_timestamp within current window is accepted."""
+    store = _make_store()
+
+    # Tick at 09:15:30 with exchange_timestamp 09:15:25 (same minute) → accepted
+    ts_0915_25 = datetime(2026, 5, 15, 9, 15, 25)
+    ts_0915_30 = datetime(2026, 5, 15, 9, 15, 30)
+    store.on_tick(101, 100.0, ts_0915_30, exchange_timestamp=ts_0915_25)
+
+    # Another tick in same window
+    ts_0915_45 = datetime(2026, 5, 15, 9, 15, 45)
+    store.on_tick(101, 105.0, ts_0915_45, exchange_timestamp=ts_0915_45)
+
+    # Close and verify both ticks were accepted
+    store._close_candles()
+    candles = store.get_candles(101, n=1)
+    assert len(candles) == 1
+    c = candles[0]
+    assert c.open == 100.0
+    assert c.close == 105.0
+    assert c.high == 105.0
+    assert c.low == 100.0
+
+    print("  OK fix049_normal_tick_bucketed_correctly: ticks in same window accepted")
+
+
+def test_fix049_no_exchange_timestamp_no_crash() -> None:
+    """FIX-049: Tick without exchange_timestamp (None) works as before (uses local clock)."""
+    store = _make_store()
+
+    # Call on_tick without exchange_timestamp (old behavior)
+    ts_now = now_ist().replace(tzinfo=None)
+    store.on_tick(101, 100.0, ts_now)  # exchange_timestamp defaults to None
+
+    # Should work without crash
+    store._close_candles()
+    candles = store.get_candles(101, n=1)
+    assert len(candles) == 1
+    assert candles[0].close == 100.0
+
+    print("  OK fix049_no_exchange_timestamp_no_crash: None timestamp handled correctly")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -576,6 +652,10 @@ def run_all_tests() -> int:
         test_fix020_one_tick_then_three_minutes_silence,
         test_fix020_first_minute_no_prior_no_synthetic,
         test_fix020_synthetic_candle_callback_invoked,
+        # FIX-049: Late tick rejection
+        test_fix049_late_tick_after_window_closed_discarded,
+        test_fix049_normal_tick_bucketed_correctly,
+        test_fix049_no_exchange_timestamp_no_crash,
     ]
 
     passed = 0
