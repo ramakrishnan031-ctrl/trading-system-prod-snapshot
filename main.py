@@ -580,6 +580,20 @@ def _shutdown(
         )
     except Exception as exc:
         _log.error("SHUTDOWN event write failed: %s", exc)
+
+    # FIX-057: WAL checkpoint after all threads joined, before close/exit
+    try:
+        stats = store.checkpoint()
+        _log.info(
+            "WAL checkpoint on shutdown complete: wal_size=%d, checkpointed=%d, moved=%d",
+            stats.get("wal_size_before", -1),
+            stats.get("pages_checkpointed", -1),
+            stats.get("pages_moved", -1),
+        )
+    except Exception as chk_exc:
+        # FIX-057: Checkpoint failure must not block shutdown
+        _log.warning("WAL checkpoint on shutdown failed: %s", chk_exc)
+
     try:
         store.close()
     except Exception as exc:

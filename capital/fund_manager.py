@@ -790,7 +790,7 @@ class FundManager:
                 # the state is corrupt and the loss check is moot).
                 # FIX-051: Read daily PnL from SQL instead of in-memory accumulator
                 today = now_ist().date().isoformat()
-                daily_pnl = self._store.get_daily_realized_pnl(today)
+                daily_pnl = self._store.get_daily_realized_net_pnl(today)
                 if daily_pnl <= -self._daily_loss_limit:
                     self._log.critical(
                         "fund_manager.daily_loss_breach",
@@ -951,7 +951,7 @@ class FundManager:
         with self._lock:
             # FIX-051: Read daily PnL from SQL to avoid float drift
             today = now_ist().date().isoformat()
-            daily_pnl = self._store.get_daily_realized_pnl(today)
+            daily_pnl = self._store.get_daily_realized_net_pnl(today)
 
             return CapitalSnapshot(
                 total=self._total,
@@ -1008,7 +1008,7 @@ class FundManager:
             # FIX-051: Read current PnL from SQL instead of in-memory float
             ts_now = now_ist()
             today = ts_now.date().isoformat()
-            old_pnl = self._store.get_daily_realized_pnl(today)
+            old_pnl = self._store.get_daily_realized_net_pnl(today)
 
             ts = ts_now.isoformat()
             # BL-5: ledger first, then zero-out
@@ -1145,7 +1145,7 @@ class FundManager:
 
         # FIX-051: Read daily_pnl from SQL for logging
         today = now_ist().date().isoformat()
-        daily_pnl = self._store.get_daily_realized_pnl(today)
+        daily_pnl = self._store.get_daily_realized_net_pnl(today)
 
         self._log.info(
             "fund_manager.rehydrate_complete",

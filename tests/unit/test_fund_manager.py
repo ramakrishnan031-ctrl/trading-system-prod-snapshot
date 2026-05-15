@@ -2251,7 +2251,7 @@ def test_fix051_500_mutations_exact_sum_no_drift() -> None:
         # Direct SQL query should match
         from core.time_authority import now_ist
         today = now_ist().date().isoformat()
-        sql_pnl = store.get_daily_realized_pnl(today)
+        sql_pnl = store.get_daily_realized_net_pnl(today)
         assert abs(sql_pnl - expected_pnl) < 1e-9, f"SQL sum {sql_pnl} != expected {expected_pnl}"
 
         store.close()
