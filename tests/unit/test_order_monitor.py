@@ -1128,6 +1128,86 @@ def test_fix028_partial_failed_emits_partially_terminated() -> None:
     print("  OK FIX-028: partial fill then REJECTED emits OrderPartiallyTerminated with reason=FAILED")
 
 
+# ─── FIX-052: Terminal→terminal transition tolerance ─────────────────────────
+
+def test_fix052_terminal_to_terminal_debug_only_loop_continues() -> None:
+    """FIX-052: COMPLETE→CANCELLED logs DEBUG, doesn't abort polling loop."""
+    from core.exceptions import InvalidTransitionError
+    monitor, adapter, osm, bus = _make_monitor()
+
+    # Manually transition to COMPLETE (terminal)
+    osm.register("ord1")
+    osm.transition("ord1", "SUBMITTED")
+    osm.transition("ord1", "OPEN")
+    osm.transition("ord1", "COMPLETE")
+
+    # Attempt COMPLETE→CANCELLED (both terminal) via _safe_transition
+    # This should log DEBUG and return False, not raise
+    result = monitor._safe_transition("ord1", "CANCELLED")
+    assert result is False, "Terminal→terminal transition should return False"
+
+    # OSM state should remain COMPLETE
+    assert osm.current_state("ord1") == "COMPLETE", "State should remain COMPLETE"
+
+    print("  OK FIX-052: COMPLETE→CANCELLED logs DEBUG, loop continues")
+
+
+def test_fix052_non_terminal_transition_still_raises() -> None:
+    """FIX-052: OPEN→PENDING (non-terminal→non-terminal invalid) still raises."""
+    from core.exceptions import InvalidTransitionError
+    monitor, adapter, osm, bus = _make_monitor()
+
+    # Transition to OPEN (non-terminal)
+    osm.register("ord1")
+    osm.transition("ord1", "SUBMITTED")
+    osm.transition("ord1", "OPEN")
+
+    # Attempt invalid OPEN→PENDING (not an allowed transition from OPEN)
+    # This should raise because from_state (OPEN) is non-terminal
+    try:
+        monitor._safe_transition("ord1", "PENDING")
+        assert False, "Should have raised InvalidTransitionError"
+    except InvalidTransitionError:
+        pass  # Expected
+
+    print("  OK FIX-052: OPEN→PENDING still raises (non-terminal from_state)")
+
+
+def test_fix052_one_error_does_not_stop_other_orders() -> None:
+    """FIX-052: 3 orders, order 1 has terminal→terminal error, orders 2+3 still process."""
+    adapter = MockAdapter()
+    # Script 3 orders
+    # ord1: COMPLETE (will have terminal→terminal issue)
+    # ord2: normal OPEN→COMPLETE
+    # ord3: normal OPEN→COMPLETE
+    adapter.history_responses = [
+        [_entry("COMPLETE", 100, 100.0)],  # ord1
+        [_entry("COMPLETE", 100, 100.0)],  # ord2
+        [_entry("COMPLETE", 100, 100.0)],  # ord3
+    ]
+
+    monitor, _, osm, _ = _make_monitor(adapter=adapter)
+
+    # Register and track (already transitions to SUBMITTED)
+    _register_and_track(monitor, osm, "ord1", "B1", "SYM", "BUY", 100, 100.0)
+    _register_and_track(monitor, osm, "ord2", "B2", "SYM", "BUY", 100, 100.0)
+    _register_and_track(monitor, osm, "ord3", "B3", "SYM", "BUY", 100, 100.0)
+
+    # Force ord1 to COMPLETE before poll (simulate terminal state)
+    osm.transition("ord1", "OPEN")
+    osm.transition("ord1", "COMPLETE")
+
+    # Poll cycle should process all 3 orders despite ord1's terminal→terminal
+    monitor._poll_cycle()
+
+    # All orders should reach COMPLETE
+    assert osm.current_state("ord1") == "COMPLETE"
+    assert osm.current_state("ord2") == "COMPLETE"
+    assert osm.current_state("ord3") == "COMPLETE"
+
+    print("  OK FIX-052: order 1 terminal→terminal error, orders 2+3 still processed")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1167,6 +1247,10 @@ def run_all_tests() -> int:
         test_fix028_zero_fill_cancelled_no_partially_terminated,
         test_fix028_complete_fill_no_partially_terminated,
         test_fix028_partial_failed_emits_partially_terminated,
+        # FIX-052: Terminal→terminal transition tolerance
+        test_fix052_terminal_to_terminal_debug_only_loop_continues,
+        test_fix052_non_terminal_transition_still_raises,
+        test_fix052_one_error_does_not_stop_other_orders,
     ]
 
     print("=" * 70)

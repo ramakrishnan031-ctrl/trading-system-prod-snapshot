@@ -732,13 +732,38 @@ class OrderMonitor:
         try:
             self._osm.transition(internal_order_id, to_state)
         except InvalidTransitionError as exc:
-            # Already COMPLETE, or illegal transition -- not an error (OM12)
+            # FIX-052: Terminal→terminal transitions log DEBUG only and continue.
+            # Non-terminal→* or *→non-terminal transitions still raise (unexpected state).
+            from_state = exc.context.get("from_state")
+            to_state_exc = exc.context.get("to_state")
+
+            # If both states are terminal, this is benign (e.g. COMPLETE→CANCELLED due to
+            # race between broker updates). Polling loop continues processing other orders.
+            if from_state in TERMINAL_STATES and to_state_exc in TERMINAL_STATES:
+                self._log.debug(
+                    "order_monitor.terminal_to_terminal_transition_skipped",
+                    extra={
+                        "internal_order_id": internal_order_id,
+                        "from_state": from_state,
+                        "to_state": to_state_exc,
+                        "reason": "both states terminal, benign race",
+                    },
+                )
+                return False
+
+            # At least one state is non-terminal → unexpected, re-raise
+            # (OM12 idempotent logic still applies for same-state transitions)
             self._log.debug(
-                "order_monitor.transition_skipped",
+                "order_monitor.transition_skipped_non_terminal",
                 extra={"internal_order_id": internal_order_id,
-                       "to_state": to_state,
+                       "from_state": from_state,
+                       "to_state": to_state_exc,
                        "reason": str(exc)},
             )
+            # FIX-052: Only re-raise if at least one state is non-terminal
+            if (from_state is not None and from_state not in TERMINAL_STATES) or \
+               (to_state_exc is not None and to_state_exc not in TERMINAL_STATES):
+                raise
             return False
         except ValueError:
             # order_id not in OSM (untracked race) -- ignore
