@@ -25,6 +25,10 @@ DEFAULT_ENTRY_END = time(13, 30)
 DEFAULT_MARKET_OPEN = time(9, 15)
 DEFAULT_MARKET_CLOSE = time(15, 30)
 DEFAULT_EOD_SQUAREOFF = time(15, 17)
+# FIX-073: EOD entry cutoff — absolute last moment to place an order.
+# Prevents signals delayed in rate limiter from opening positions after
+# EOD squareoff has started (broker RMS penalty risk).
+DEFAULT_EOD_ENTRY_CUTOFF = time(15, 15)
 
 # Cap for next_trading_day walk; protects against pathological holiday lists.
 # 30 days handles 11 consecutive NSE holidays (longest known streak) with buffer.
@@ -46,6 +50,7 @@ class MarketWindows:
         market_open: time = DEFAULT_MARKET_OPEN,
         market_close: time = DEFAULT_MARKET_CLOSE,
         eod_squareoff: time = DEFAULT_EOD_SQUAREOFF,
+        eod_entry_cutoff: time = DEFAULT_EOD_ENTRY_CUTOFF,
         holidays: set[date] | None = None,
     ) -> None:
         self.entry_start = entry_start
@@ -53,6 +58,7 @@ class MarketWindows:
         self.market_open = market_open
         self.market_close = market_close
         self.eod_squareoff_t = eod_squareoff
+        self.eod_entry_cutoff_t = eod_entry_cutoff
         self.holidays: set[date] = set(holidays) if holidays else set()
 
     # -- weekend / holiday -------------------------------------------------
@@ -122,6 +128,21 @@ class MarketWindows:
             return True
         t = now.time()
         return time(sh, sm) <= t < time(eh, em)
+
+    def is_past_eod_entry_cutoff(self, now: datetime) -> bool:
+        """
+        FIX-073: True if `now.time()` >= the configured EOD entry cutoff.
+
+        This is the absolute last moment to place an order. Prevents signals
+        delayed in rate limiter or entry gate from opening positions after
+        EOD squareoff time (broker RMS penalty risk).
+
+        Default cutoff is 15:15 IST (2 minutes before EOD squareoff at 15:17).
+        Configurable via system_config.yaml trading_hours.eod_entry_cutoff.
+        """
+        if self.is_trading_holiday(now):
+            return True  # Past cutoff on holidays
+        return now.time() >= self.eod_entry_cutoff_t
 
     # -- EOD square-off ----------------------------------------------------
 

@@ -54,6 +54,7 @@ def _make_mock_app_config():
     sys_cfg = cfg.system
     sys_cfg.trading_hours.entry_start = "09:30"
     sys_cfg.trading_hours.entry_end = "13:30"
+    sys_cfg.trading_hours.eod_entry_cutoff = "15:15"  # FIX-073
     sys_cfg.trading_hours.eod_squareoff_time = "15:17"
     sys_cfg.trading_hours.market_open = "09:15"
     sys_cfg.trading_hours.market_close = "15:30"

@@ -963,6 +963,7 @@ def _main_locked(args, config_dir: Path) -> int:
         market_open=_parse_hhmm(th.market_open),
         market_close=_parse_hhmm(th.market_close),
         eod_squareoff=_parse_hhmm(th.eod_squareoff_time),
+        eod_entry_cutoff=_parse_hhmm(th.eod_entry_cutoff),
         holidays=holidays,
     )
 
@@ -1417,6 +1418,9 @@ def _main_locked(args, config_dir: Path) -> int:
         entry_gate_slippage_buffer=app_config.system.entry_gate.slippage_buffer,  # FIX-025
         notifier=notifier,
         mode=mode_label,
+        live_feed=live_feed,  # FIX-061: LTP retry for exit validation errors
+        broker_adapter=broker_adapter,  # FIX-072: margin cache invalidation on 16388
+        market_windows=market_windows,  # FIX-073: EOD entry cutoff check
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 

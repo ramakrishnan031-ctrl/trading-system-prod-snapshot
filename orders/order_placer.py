@@ -374,6 +374,7 @@ class OrderPlacer:
         mode: str = "LIVE",                   # session mode label for alert title
         live_feed: Optional[Any] = None,      # FIX-061: LiveFeedManager for LTP retry
         broker_adapter: Optional[Any] = None,  # FIX-072: optional adapter for margin cache invalidation
+        market_windows: Optional[Any] = None,  # FIX-073: market windows for EOD entry cutoff check
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -425,6 +426,9 @@ class OrderPlacer:
 
         # FIX-072: Optional broker adapter for margin cache invalidation on 16388
         self._adapter = broker_adapter
+
+        # FIX-073: Optional market windows for EOD entry cutoff check
+        self._market_windows = market_windows
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -672,6 +676,31 @@ class OrderPlacer:
                 extra={"trade_id": trade_id, "error": str(status_exc)},
             )
             # Non-fatal: continue with placement even if status update fails
+
+        # FIX-073: EOD entry cutoff check before broker placement.
+        # Prevents signals delayed in rate limiter from opening positions
+        # after EOD squareoff time (broker RMS penalty risk).
+        if self._market_windows is not None:
+            if self._market_windows.is_past_eod_entry_cutoff(now_ist()):
+                eod_exc = OrderRejectedError(
+                    f"order rejected: past EOD entry cutoff "
+                    f"{self._market_windows.eod_entry_cutoff_t.strftime('%H:%M')}",
+                    trade_id=trade_id, signal_id=signal_id, symbol=symbol,
+                )
+                self._log.warning(
+                    "order_placer.rejected_past_eod_cutoff",
+                    extra={
+                        "trade_id": trade_id,
+                        "signal_id": signal_id,
+                        "symbol": symbol,
+                        "cutoff_time": self._market_windows.eod_entry_cutoff_t.strftime('%H:%M'),
+                    },
+                )
+                self._handle_placement_failure(
+                    trade_id, reservation_id, signal_id, eod_exc,
+                    final_status="REJECTED",
+                )
+                raise eod_exc
 
         # BL-19: retry the engine only on BrokerRateLimit429Error. On each
         # raise, the protocol has already cancelled any legs it placed (OP7 /
