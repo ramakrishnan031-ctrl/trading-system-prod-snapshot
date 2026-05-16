@@ -273,6 +273,63 @@ class OrderMonitor:
         last_price = float(getattr(quote, "last_price", 0.0) or 0.0)
         return last_price if last_price > 0.0 else 0.0
 
+    def _cleanup_orphaned_pending_trades(self, state_store) -> None:
+        """
+        FIX-071 Part B: Find and clean up PENDING trades with no orders rows.
+
+        These are trades where the system crashed after FIX-071 Part A's
+        status update (trades.status = PENDING) but before engine.execute()
+        returned (so no orders rows exist yet). They cannot be monitored
+        (no broker_order_id) and must be marked FAILED with capital released.
+
+        Fires the orphan callback for each trade to trigger capital release
+        via OrderPlacer's on_orphan handler.
+        """
+        try:
+            orphaned = state_store.get_orphaned_pending_trades()
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "order_monitor cleanup_orphaned_pending: fetch failed: %s", exc
+            )
+            return
+
+        if not orphaned:
+            return
+
+        for trade in orphaned:
+            trade_id = trade["trade_id"]
+            symbol = trade["symbol"]
+
+            # Mark trade as FAILED in database
+            try:
+                with state_store.transaction() as cur:
+                    cur.execute(
+                        "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
+                        ("FAILED", now_ist().isoformat(), trade_id),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                self._log.error(
+                    "order_monitor cleanup_orphaned_pending: "
+                    "update failed trade_id=%s error=%s",
+                    trade_id, exc,
+                )
+                continue
+
+            # Fire orphan callback to release capital (no broker_order_id available)
+            self._log.critical(
+                "order_monitor.orphaned_pending_trade_detected",
+                extra={
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "reason": "FIX-071 Part B: PENDING trade with no orders rows",
+                    "action": "marked FAILED, capital released via orphan callback",
+                },
+            )
+
+            if self._on_orphan is not None:
+                # Use trade_id as both internal_id and broker_id since we have no broker_id
+                self._on_orphan(trade_id, "")
+
     def rehydrate_from_store(self, state_store) -> int:
         """
         Audit #21: reload _watched from persisted non-terminal orders.
@@ -287,8 +344,16 @@ class OrderMonitor:
         persisted. The reconciler remains the authoritative backstop for
         capital/DB drift; this method simply restores fill-polling.
 
+        FIX-071 Part B: Also cleans up orphaned PENDING trades (no orders rows).
+        These are trades where the system crashed after FIX-071 Part A's status
+        update but before engine.execute() returned. They cannot be monitored
+        and must be marked FAILED with capital released.
+
         Returns the number of orders rehydrated.
         """
+        # FIX-071 Part B: Clean up orphaned PENDING trades first
+        self._cleanup_orphaned_pending_trades(state_store)
+
         try:
             rows = state_store.get_open_orders_for_rehydration()
         except Exception as exc:  # noqa: BLE001

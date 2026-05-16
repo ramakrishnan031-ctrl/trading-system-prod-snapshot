@@ -600,6 +600,39 @@ class StateStore:
             """
         )
 
+    def get_orphaned_pending_trades(self) -> List[sqlite3.Row]:
+        """
+        FIX-071 Part B: Find PENDING trades that never completed the broker call.
+
+        These are trades where:
+        - trades.status = 'PENDING' (set by FIX-071 Part A before broker call)
+        - Either: no orders row exists yet (crashed before engine.execute() returned)
+        - Or: orders row exists but order_id is NULL (shouldn't happen but defensive)
+
+        Returns rows with: trade_id, symbol, direction, created_at, status
+
+        Used by OrderMonitor.rehydrate_from_store() to clean up orphaned
+        placement attempts on startup. These trades cannot be monitored (no
+        broker_order_id to poll) and must be marked FAILED with capital released.
+        """
+        return self.fetch_all(
+            """
+            SELECT
+                t.trade_id,
+                t.symbol,
+                t.direction,
+                t.created_at,
+                t.status
+            FROM trades t
+            LEFT JOIN orders o
+              ON o.trade_id = t.trade_id
+             AND o.leg = 'ENTRY'
+            WHERE t.status = 'PENDING'
+              AND (o.order_id IS NULL OR o.order_id = '')
+            ORDER BY t.created_at
+            """
+        )
+
     def cancel_stale_paper_orders(self, today_iso: str) -> int:
         """
         Paper mode startup cleanup: mark non-terminal orders from PREVIOUS

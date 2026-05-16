@@ -973,6 +973,140 @@ def test_fix024_rehydrate_empty_db_no_error() -> None:
         print("  OK FIX-024: rehydrate from empty DB completes without error")
 
 
+def test_fix071_partb_orphaned_pending_trade_cleanup() -> None:
+    """
+    FIX-071 Part B: Simulate restart with a PENDING trade that has no orders row.
+
+    Scenario: System crashed after FIX-071 Part A's status update (trade.status=PENDING)
+    but before engine.execute() returned (so no orders row exists).
+
+    Assert:
+    - Trade is marked FAILED
+    - Orphan callback is fired (to release capital)
+    - CRITICAL log entry is created
+    - Rehydration proceeds without error
+    """
+    with TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        sig_id = _seed_signal(store, symbol="INFY")
+
+        # Seed a trade with status='PENDING' but NO orders row
+        # This simulates crash after FIX-071 Part A but before engine.execute()
+        trade_id = new_trade_id()
+        now = now_ist().isoformat()
+        with store.transaction() as cur:
+            cur.execute(
+                """
+                INSERT INTO trades (
+                    trade_id, signal_id, symbol, direction, strategy, sector,
+                    qty_planned, qty_filled, entry_target_price, entry_actual_price,
+                    sl_initial, tgt_initial, margin_reserved, risk_amount,
+                    created_at, entry_time, status, order_protocol, updated_at
+                )
+                VALUES (?, ?, 'INFY', 'LONG', 'test_strategy', NULL,
+                        10, 0, 1800.0, NULL,
+                        1750.0, 1850.0, 18000.0, 500.0,
+                        ?, NULL, 'PENDING', 'LIMIT_TRIPLE', ?)
+                """,
+                (trade_id, sig_id, now, now),
+            )
+        # Intentionally do NOT insert an orders row
+
+        # Track orphan callback invocations
+        orphan_calls: list[tuple[str, str]] = []
+        def on_orphan(internal_id: str, broker_id: str) -> None:
+            orphan_calls.append((internal_id, broker_id))
+
+        monitor, _, _, _ = _make_monitor(on_orphan=on_orphan)
+
+        # Rehydrate should detect and clean up the orphaned PENDING trade
+        count = monitor.rehydrate_from_store(store)
+
+        # Assert: 0 orders rehydrated (orphaned trade has no orders row to rehydrate)
+        assert count == 0, f"Expected 0 rehydrated orders, got {count}"
+        assert monitor.watched_count() == 0, "Orphaned trade should not be watched"
+
+        # Assert: Orphan callback was fired
+        assert len(orphan_calls) == 1, f"Expected 1 orphan callback, got {len(orphan_calls)}"
+        assert orphan_calls[0][0] == trade_id, "Orphan callback should receive trade_id"
+        assert orphan_calls[0][1] == "", "Orphan callback should receive empty broker_id"
+
+        # Assert: Trade status is now FAILED
+        with store.transaction() as cur:
+            row = cur.execute(
+                "SELECT status FROM trades WHERE trade_id = ?", (trade_id,)
+            ).fetchone()
+            assert row is not None, "Trade should exist"
+            assert row["status"] == "FAILED", f"Expected FAILED, got {row['status']}"
+
+        store.close()
+        print("  OK FIX-071 Part B: orphaned PENDING trade cleaned up on rehydration")
+
+
+def test_fix071_partb_pending_trade_with_null_broker_id() -> None:
+    """
+    FIX-071 Part B defensive case: PENDING trade with orders row but NULL broker_order_id.
+
+    This shouldn't happen normally but we guard against it. The cleanup logic
+    should catch it via the "OR o.order_id = ''" condition in the query.
+    """
+    with TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        sig_id = _seed_signal(store, symbol="TCS")
+
+        # Seed a trade with status='PENDING' and an orders row with NULL order_id
+        trade_id = new_trade_id()
+        now = now_ist().isoformat()
+        with store.transaction() as cur:
+            cur.execute(
+                """
+                INSERT INTO trades (
+                    trade_id, signal_id, symbol, direction, strategy, sector,
+                    qty_planned, qty_filled, entry_target_price, entry_actual_price,
+                    sl_initial, tgt_initial, margin_reserved, risk_amount,
+                    created_at, entry_time, status, order_protocol, updated_at
+                )
+                VALUES (?, ?, 'TCS', 'LONG', 'test_strategy', NULL,
+                        5, 0, 3500.0, NULL,
+                        3400.0, 3600.0, 17500.0, 500.0,
+                        ?, NULL, 'PENDING', 'LIMIT_TRIPLE', ?)
+                """,
+                (trade_id, sig_id, now, now),
+            )
+            # Insert orders row with NULL order_id (defensive case)
+            cur.execute(
+                """
+                INSERT INTO orders (
+                    order_id, trade_id, leg, transaction_type, order_type,
+                    product, variety, qty_requested, price, status, placed_at, updated_at
+                )
+                VALUES (NULL, ?, 'ENTRY', 'BUY', 'LIMIT', 'MIS', 'regular', 5, 3500.0, 'PENDING', ?, ?)
+                """,
+                (trade_id, now, now),
+            )
+
+        orphan_calls: list[tuple[str, str]] = []
+        def on_orphan(internal_id: str, broker_id: str) -> None:
+            orphan_calls.append((internal_id, broker_id))
+
+        monitor, _, _, _ = _make_monitor(on_orphan=on_orphan)
+        count = monitor.rehydrate_from_store(store)
+
+        # Assert: cleanup logic caught it
+        assert count == 0, f"Expected 0 rehydrated orders, got {count}"
+        assert len(orphan_calls) == 1, f"Expected 1 orphan callback, got {len(orphan_calls)}"
+
+        # Assert: Trade marked FAILED
+        with store.transaction() as cur:
+            row = cur.execute(
+                "SELECT status FROM trades WHERE trade_id = ?", (trade_id,)
+            ).fetchone()
+            assert row["status"] == "FAILED", f"Expected FAILED, got {row['status']}"
+
+        store.close()
+        print("  OK FIX-071 Part B: PENDING trade with NULL broker_id cleaned up")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX-028: OrderPartiallyTerminated event on partial-fill terminal state
 # ─────────────────────────────────────────────────────────────────────────────
