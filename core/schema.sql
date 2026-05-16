@@ -313,7 +313,7 @@ CREATE TABLE IF NOT EXISTS fm_ledger (
     entry_type          TEXT NOT NULL                -- BL-5: enum, was mutation_type
                         CHECK (entry_type IN
                                ('INIT','RESERVE','RELEASE','COMMIT',
-                                'RELEASE_USED','SYNC','RESET_PNL')),
+                                'RELEASE_USED','SYNC','RESET_PNL','TOP_UP')),
     amount              REAL NOT NULL,               -- positive = into reserved/used; negative = release
     bucket              TEXT NOT NULL,               -- 'intraday' | 'positional' | 'both'
     balance_before      REAL NOT NULL,               -- available before mutation (bucket-scoped)

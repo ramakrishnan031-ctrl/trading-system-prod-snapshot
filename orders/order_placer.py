@@ -745,7 +745,7 @@ class OrderPlacer:
 
                         if additional_margin > 0:
                             # Need more margin - attempt top-up
-                            top_up_result = self._fund_manager.top_up_reservation(
+                            top_up_result = self._fm.top_up_reservation(
                                 reservation_id=reservation_id,
                                 additional_margin=additional_margin,
                                 reason=f"price drift {drift_pct*100:.2f}% → ₹{current_ltp:.2f}",
@@ -789,6 +789,9 @@ class OrderPlacer:
                             )
                         # else: drift increased price but less margin needed (e.g., SHORT position), proceed
 
+            except OrderRejectedError:
+                # Re-raise rejection errors (insufficient capital for top-up)
+                raise
             except Exception as quote_exc:
                 # Quote fetch or drift check failed - log warning and continue
                 # FIX-075: don't block order on quote failure (best-effort)

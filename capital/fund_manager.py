@@ -633,10 +633,7 @@ class FundManager:
             )
 
         # FM11: check invariant outside lock
-        _violation = self._check_invariant()
-        if _violation is not None:
-            self._handle_invariant_violation(_violation)
-            raise _violation
+        self._check_invariant("TOP_UP", reservation_id)
 
         return ReservationResult(
             success=True,

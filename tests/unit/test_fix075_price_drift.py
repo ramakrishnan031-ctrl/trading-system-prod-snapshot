@@ -110,10 +110,12 @@ class _FakeLiveFeed:
         self.quote_calls = []
 
     def quote(self, symbol):
+        """Return QuoteResult-like object."""
         self.quote_calls.append(symbol)
         result = SimpleNamespace()
         result.success = self._success
         result.ltp = self._ltp
+        result.error = None if self._success else "Quote fetch failed"
         return result
 
     def set_ltp(self, ltp):
@@ -166,12 +168,17 @@ def _make_placer(tmp_path: Path, fund_manager, live_feed=None, price_drift_thres
     monitor = _FakeMonitor()
     product_resolver = ProductResolver({"zerodha": {"INTRADAY": "MIS"}})
 
+    # Use a real logger to capture warnings
+    import logging
+    logger = logging.getLogger("test_placer")
+    logger.setLevel(logging.DEBUG)
+
     placer = OrderPlacer(
         entry_engine=full_engine,
         order_manager=om,
         fund_manager=fund_manager,
         bus=bus,
-        logger=MagicMock(),
+        logger=logger,
         order_monitor=monitor,
         cost_calculator=cost_calc,
         product_resolver=product_resolver,
@@ -234,13 +241,11 @@ class TestFix075PriceDrift:
                 # Original margin: 100 * 100 / 5 = 2000
                 # After top-up: 100 * 102 / 5 = 2040
                 # Margin is still 'reserved' (not yet filled), so check reserved amount
-                # The drift check should have topped up the reservation
-                assert snap.intraday_reserved > original_margin  # Top-up occurred
+                expected_reserved = 100 * 102 / 5  # 2040
+                assert abs(snap.intraday_reserved - expected_reserved) < 1.0
 
-                # TODO: Debug why price isn't being updated to 102.0
-                # The drift check updates entry_price but it's not reaching the adapter
-                # For now, just verify the order was placed
-                assert placed["symbol"] == "RELIANCE"
+                # Price should be updated to drifted LTP
+                assert placed["price"] == 102.0
             finally:
                 store.close()
                 fm_store.close()
