@@ -96,10 +96,14 @@ class LiveFeedManager:
         # watchdog the system silently misses entries until reconcile/EOD
         # surfaces it. The watchdog samples _last_tick_at every
         # watchdog_check_interval_sec; if no tick arrived for
-        # tick_stale_threshold_sec during market hours, force a reconnect
-        # via ticker.close() (which triggers _on_close + the kiteconnect
-        # auto-reconnect path). Critical alert fires ONCE per stale episode
-        # (cleared when ticks resume).
+        # tick_stale_threshold_sec during market hours, fire ONE critical
+        # alert and force a reconnect via ticker.close() (which triggers
+        # _on_close + the kiteconnect auto-reconnect path). Critical alert
+        # fires ONCE per stale episode (cleared when ticks resume).
+        #
+        # FIX-064: The watchdog sets a flag instead of calling ticker.close()
+        # directly; the consumer thread checks the flag and calls .close()
+        # from its own thread context to avoid cross-thread call hazards.
         self._tick_stale_threshold_sec = int(tick_stale_threshold_sec)
         self._watchdog_check_interval_sec = int(watchdog_check_interval_sec)
         self._market_windows = market_windows
@@ -107,6 +111,7 @@ class LiveFeedManager:
         self._last_tick_lock = threading.Lock()
         self._watchdog_thread: Optional[threading.Thread] = None
         self._watchdog_alert_fired: bool = False
+        self._force_reconnect = threading.Event()  # FIX-064
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -394,8 +399,27 @@ class LiveFeedManager:
         logged as CRITICAL with full traceback, but NEVER re-raised. This ensures
         a single misbehaving subscriber cannot kill the tick distribution thread
         and starve the entire system of live data.
+
+        FIX-064: Checks _force_reconnect flag and calls ticker.close() from
+        this thread context (not from watchdog thread) to avoid cross-thread
+        call hazards.
         """
         while not self._stop_event.is_set():
+            # FIX-064: Check reconnect flag FIRST (before queue timeout)
+            if self._force_reconnect.is_set():
+                self._force_reconnect.clear()
+                ticker = self._ticker
+                if ticker is not None:
+                    try:
+                        self._log.info(
+                            "LiveFeedManager: consumer thread closing ticker "
+                            "due to force_reconnect flag"
+                        )
+                        ticker.close()
+                    except Exception as exc:
+                        self._log.error(
+                            "LiveFeedManager: ticker.close raised: %s", exc,
+                        )
             try:
                 batch = [self._tick_queue.get(timeout=0.1)]
                 # Drain remaining items without blocking
@@ -570,13 +594,11 @@ class LiveFeedManager:
                         "LiveFeedManager watchdog: on_critical_failure raised: %s",
                         exc,
                     )
-            # Force-reconnect: close() triggers _on_close + KiteTicker's
-            # auto-reconnect path which then re-subscribes via _on_connect.
-            ticker = self._ticker
-            if ticker is not None:
-                try:
-                    ticker.close()
-                except Exception as exc:
-                    self._log.error(
-                        "LiveFeedManager watchdog: ticker.close raised: %s", exc,
-                    )
+            # FIX-064: Set reconnect flag instead of calling ticker.close()
+            # directly from watchdog thread. Consumer thread will check flag
+            # and call close() from its own thread context.
+            self._force_reconnect.set()
+            self._log.info(
+                "LiveFeedManager watchdog: force_reconnect flag set; "
+                "consumer thread will close ticker"
+            )

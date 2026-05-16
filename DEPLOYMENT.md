@@ -292,3 +292,112 @@ Section 6.4): on a tuned server the step risk is rare and bounded.
 Adding a `time.monotonic()` fallback inside `time_authority` would force
 a refactor across every consumer of `now_ist()` for marginal benefit.
 The deployment-side mitigation is sufficient.
+
+---
+
+## 8. Nginx Reverse Proxy Recommendation (DOCUMENT-001)
+
+The webhook receiver listens on port 5000. **Do not expose this port directly
+to the internet.** Instead, place Nginx (or another reverse proxy) in front to:
+
+1. **Terminate SSL/TLS on port 443** — Chartink webhooks and browser access
+   require HTTPS. Let Nginx handle certificates (via Let's Encrypt/Certbot)
+   rather than embedding SSL into the Python application.
+2. **Proxy to localhost:5000** — The trading-system process binds to
+   `127.0.0.1:5000` (localhost only). Nginx forwards requests from the
+   public-facing HTTPS listener to the local application.
+3. **Add request validation** — Nginx can enforce rate limits, header checks,
+   or IP allowlists before traffic reaches the application.
+
+### Minimal Nginx configuration
+
+```nginx
+# /etc/nginx/sites-available/trading-system
+# (symlink to sites-enabled/)
+
+server {
+    listen 443 ssl http2;
+    server_name trading.yourdomain.com;  # Replace with your domain
+
+    # SSL certificate (obtain via certbot)
+    ssl_certificate     /etc/letsencrypt/live/trading.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/trading.yourdomain.com/privkey.pem;
+
+    # Modern SSL config
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256';
+    ssl_prefer_server_ciphers off;
+
+    # Proxy to localhost:5000
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Optional: rate limiting (10 requests/second)
+        # Protect against webhook floods or accidental loops
+        limit_req zone=webhook_limit burst=20 nodelay;
+    }
+}
+
+# Rate limit zone definition (add to http block in nginx.conf)
+# limit_req_zone $binary_remote_addr zone=webhook_limit:10m rate=10r/s;
+
+# Redirect HTTP to HTTPS
+server {
+    listen 80;
+    server_name trading.yourdomain.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+### Deployment steps
+
+1. **Install Nginx** (if not already present):
+   ```bash
+   sudo apt update
+   sudo apt install nginx certbot python3-certbot-nginx
+   ```
+
+2. **Obtain SSL certificate**:
+   ```bash
+   sudo certbot --nginx -d trading.yourdomain.com
+   ```
+   Certbot auto-configures the `ssl_certificate` paths and adds a renewal cron.
+
+3. **Deploy the config above** to `/etc/nginx/sites-available/trading-system`,
+   symlink to `sites-enabled/`, and reload:
+   ```bash
+   sudo ln -s /etc/nginx/sites-available/trading-system \
+               /etc/nginx/sites-enabled/
+   sudo nginx -t  # validate syntax
+   sudo systemctl reload nginx
+   ```
+
+4. **Update firewall** to allow 443, deny 5000:
+   ```bash
+   sudo ufw allow 443/tcp
+   sudo ufw deny 5000/tcp  # block direct access to webhook port
+   sudo ufw status
+   ```
+
+5. **Update Chartink webhook URL** from `http://IP:5000/webhook` to
+   `https://trading.yourdomain.com/webhook`.
+
+### Why this matters
+
+- **Security**: Exposing port 5000 directly means any HTTP client can hit the
+  webhook endpoint without encryption. Nginx enforces HTTPS and can validate
+  headers/IP before passing traffic to the app.
+- **Certificate management**: Certbot auto-renews Let's Encrypt certs. Python
+  application code stays certificate-agnostic.
+- **Operational visibility**: Nginx logs (`/var/log/nginx/access.log`) separate
+  external HTTP traffic from application logs, making incident triage easier.
+
+### Current state (as of F.1)
+
+The VM firewall currently allows port 5000 for direct testing. This is
+acceptable for early paper trials but **must** be locked down before
+production use. Add the Nginx layer before Week 2 of live trading.

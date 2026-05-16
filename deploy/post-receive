@@ -27,6 +27,30 @@ LOG=/home/ubuntu/post-receive.log
 
 ts() { date '+%Y-%m-%d %H:%M:%S IST'; }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-065: Market Hours Push Guard
+# ─────────────────────────────────────────────────────────────────────────────
+# Reject pushes during market hours (09:15-15:30 IST) to prevent mid-session
+# deployments. Bypass: include [force-deploy] in commit message.
+
+CURRENT_HOUR=$(TZ="Asia/Calcutta" date +%H%M)
+
+# Get the latest commit message
+while read oldrev newrev refname; do
+    COMMIT_MSG=$(git log -1 --pretty=%B "$newrev")
+done
+
+# Check for bypass flag in commit message
+if echo "$COMMIT_MSG" | grep -q '\[force-deploy\]'; then
+    echo "[$(ts)] FIX-065: [force-deploy] bypass detected, allowing push during market hours" >> "$LOG"
+    echo "[$(ts)] [force-deploy] bypass: allowing push during market hours"
+elif [ "$CURRENT_HOUR" -ge "0915" ] && [ "$CURRENT_HOUR" -le "1530" ]; then
+    echo "[$(ts)] FIX-065: Push rejected - market hours (09:15-15:30 IST). Use [force-deploy] to bypass." >> "$LOG"
+    echo "ERROR: Cannot deploy during market hours (09:15-15:30 IST)."
+    echo "Include [force-deploy] in commit message to bypass this check."
+    exit 1
+fi
+
 echo "[$(ts)] post-receive: start" >> "$LOG"
 git --work-tree="$CHECKOUT" --git-dir="$GIT_DIR" checkout -f main >> "$LOG" 2>&1
 
