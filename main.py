@@ -99,6 +99,45 @@ _log: logging.Logger = logging.getLogger("main")
 # Set by signal handlers; main thread blocks on this
 _shutdown_event = threading.Event()
 
+# FIX-062: Flag to track BrokerAuthError for token invalidation
+_broker_auth_failed = False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-062: Token invalidation on auth error
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _invalidate_token() -> None:
+    """
+    FIX-062: Rename zerodha_token.json to zerodha_token.invalid.
+
+    Called when BrokerAuthError occurs to prevent infinite restart loop.
+    Systemd restarts will not proceed if token file is missing.
+    os.rename() is atomic on Linux.
+    """
+    token_path = Path("zerodha_token.json")
+    invalid_path = Path("zerodha_token.invalid")
+
+    if not token_path.exists():
+        _log.warning("_invalidate_token: zerodha_token.json not found, skipping rename")
+        return
+
+    try:
+        os.rename(token_path, invalid_path)
+        _log.critical(
+            "BrokerAuthError: token invalidated, renamed to zerodha_token.invalid -- "
+            "manual token refresh required"
+        )
+    except Exception as exc:
+        _log.error("_invalidate_token failed: %s", exc, exc_info=True)
+
+
+def _mark_auth_failed() -> None:
+    """FIX-062: Set flag to trigger token invalidation at shutdown."""
+    global _broker_auth_failed
+    _broker_auth_failed = True
+    _log.critical("BrokerAuthError detected -- token will be invalidated at shutdown")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI (MAIN2)
@@ -407,6 +446,11 @@ def _make_critical_failure_cb(
 ):
     def _on_critical_failure(source: str, reason: str) -> None:
         _log.critical("Critical failure from %s: %s", source, reason)
+
+        # FIX-062: Mark auth failure to invalidate token at shutdown
+        if "BrokerAuthError" in reason:
+            _mark_auth_failed()
+
         kill_switch.soft_kill(
             reason=f"{source}: {reason}", triggered_by="auto"
         )
@@ -522,6 +566,11 @@ def _shutdown(
     # FIX-060: Set shutdown event FIRST so rate limiter aborts immediately
     _shutdown_event.set()
     _log.info("Shutdown initiated")
+
+    # FIX-062: Invalidate token if auth error occurred
+    if _broker_auth_failed:
+        _invalidate_token()
+
     # H-16: stop webhook_receiver FIRST so new webhooks return 503. In-flight
     # requests drain naturally; signal_processor stop below still works on
     # queued items.

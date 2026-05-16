@@ -312,6 +312,11 @@ class EodSquareoff:
                 self._ks.current_state().value,
             )
 
+        # FIX-063: Two-pass squareoff with 2s sleep to catch phantom fills
+        #
+        # PASS 1: Cancel all pending orders (entry + exit legs)
+        self._log.info("EOD Pass 1: canceling all pending orders")
+
         # Step 3: cancel pending intraday entry orders (EOD5)
         c_attempted, c_succeeded, c_failed = self._cancel_pending_entries()
 
@@ -325,9 +330,31 @@ class EodSquareoff:
         c_succeeded  += ec_succeeded
         c_failed     += ec_failed
 
+        self._log.info(
+            "EOD Pass 1 complete: %d orders cancelled. Sleeping 2s before Pass 2.",
+            c_succeeded,
+        )
+
+        # FIX-063: Sleep 2 seconds to allow phantom fills to settle
+        # A phantom fill occurs when an order fills at the exchange exactly as
+        # the cancel is sent. The 2s sleep gives the fill enough time to:
+        # 1. Arrive via order_monitor poll
+        # 2. Update the state_machine and DB
+        # 3. Appear in the OPEN positions query below
+        # This prevents naked positions from slipping into the 15:20-15:30 window.
+        time.sleep(2)
+
+        # PASS 2: Re-query and exit ALL open positions (including phantom fills)
+        self._log.info("EOD Pass 2: exiting all open positions")
+
         # Step 4: exit open intraday positions (EOD5)
         p_attempted, p_succeeded, p_failed = self._exit_open_positions(
             now, recovery_fire=recovery_fire,
+        )
+
+        self._log.info(
+            "EOD Pass 2 complete: %d open positions exited.",
+            p_succeeded,
         )
 
         duration_sec = time.monotonic() - start_ts

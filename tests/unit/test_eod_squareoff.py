@@ -439,8 +439,12 @@ def test_inter_order_delay_applied() -> None:
     with patch("orders.eod_squareoff.time.sleep") as mock_sleep:
         eod.check_and_fire(_ist(15, 17))
 
-    # Only ONE sleep between the TWO orders (not after the last)
-    mock_sleep.assert_called_once_with(0.2)
+    # FIX-063: Now there are TWO sleep calls:
+    # 1. The 2-second sleep between Pass 1 (cancel) and Pass 2 (exit)
+    # 2. The inter-order delay (0.2s) between the two exit orders
+    assert mock_sleep.call_count == 2
+    assert mock_sleep.call_args_list[0] == call(2)  # FIX-063 pass sleep
+    assert mock_sleep.call_args_list[1] == call(0.2)  # Inter-order delay
 
 
 def test_co_position_exited_via_cancel_order_variety_co() -> None:
