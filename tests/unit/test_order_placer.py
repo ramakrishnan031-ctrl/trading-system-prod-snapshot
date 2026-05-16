@@ -3573,7 +3573,10 @@ class TestBl19PlacerRateLimitRetry:
                 gc.collect()
 
     def test_placer_does_not_retry_other_broker_errors(self) -> None:
-        """BrokerTimeoutError -> engine called ONCE, error propagates (ZA11 / OP7)."""
+        """
+        BrokerTimeoutError -> engine called ONCE, error propagates (ZA11 / OP7).
+        FIX-068: Timeout sets UNKNOWN_IN_FLIGHT, holds capital until reconciler resolves.
+        """
         import gc
         with TemporaryDirectory() as tmp:
             store = None
@@ -3602,9 +3605,11 @@ class TestBl19PlacerRateLimitRetry:
                 rows = store.fetch_all(
                     "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
                 )
-                assert rows[0]["status"] == "FAILED"
-                assert "res_bl19_noretry" in fm.released
-                print("  OK BL-19: non-429 BrokerError gets single attempt, no retry")
+                # FIX-068: BrokerTimeoutError -> UNKNOWN_IN_FLIGHT (not FAILED)
+                assert rows[0]["status"] == "UNKNOWN_IN_FLIGHT"
+                # FIX-068: Capital NOT released until reconciler resolves state
+                assert "res_bl19_noretry" not in fm.released
+                print("  OK BL-19: BrokerTimeoutError -> single attempt, UNKNOWN_IN_FLIGHT, capital held")
             finally:
                 if store is not None:
                     store.close()
