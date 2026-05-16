@@ -724,6 +724,140 @@ def test_fix041_normal_sl_distance_proceeds() -> None:
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-072 — live margin integration with fallback
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _MockAdapter:
+    """Mock broker adapter for FIX-072 tests."""
+    def __init__(self, margin_pct: float = 0.25, should_fail: bool = False):
+        self.margin_pct = margin_pct
+        self.should_fail = should_fail
+        self.call_count = 0
+
+    def get_live_margin_pct(self, symbol: str, intent: str) -> float:
+        self.call_count += 1
+        if self.should_fail:
+            raise Exception("broker API down")
+        return self.margin_pct
+
+    def invalidate_margin_cache(self, symbol: str, intent: str) -> None:
+        pass
+
+
+def test_fix072_live_margin_used_over_static() -> None:
+    """FIX-072: Position sizer uses live broker margin (25%) instead of static (20%)."""
+    fm = _MockFundManager(total=100_000, intraday_avail=50_000)
+    adapter = _MockAdapter(margin_pct=0.25)  # 25% margin = 4x leverage
+
+    sizer = PositionSizer(
+        fund_manager=fm,
+        leverage_map={"INTRADAY": 5.0},  # static 20% margin = 5x leverage
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.20,  # Increase to 20% to not hit concentration limit
+        broker_adapter=adapter,
+    )
+
+    # Broker returns 25% margin (leverage=4x), static is 20% (leverage=5x)
+    # With 50k avail and 1000 entry price:
+    # - Static leverage 5x: margin_per_share = 1000/5 = 200, qty = 50000/200 = 250
+    # - Live leverage 4x: margin_per_share = 1000/4 = 250, qty = 50000/250 = 200
+    # Risk qty = 100000 * 0.01 / 50 = 20, concentration = 20k/1000 = 20, capital(live)=200 → min=20
+    result = sizer.calculate(
+        symbol="RELIANCE",
+        side="BUY",
+        entry_price=1000.0,
+        sl_price=950.0,
+        intent="INTRADAY",
+        score_tier="HIGH",
+        lot_size=1,
+    )
+
+    assert result.success, f"sizing failed: {result.reason}"
+    # Verify live margin was called
+    assert adapter.call_count == 1, "adapter.get_live_margin_pct not called"
+    # Risk is most constraining (20 shares), but with live margin capital allows 200
+    # So the difference is visible in breakdown even if final qty is risk-bound
+    assert result.qty == 20, f"expected qty=20 (risk-bound), got {result.qty}"
+    # Check that breakdown shows live margin was used (capital_qty should be 200, not 250)
+    assert result.breakdown["qty_by_capital"] == 200, \
+        f"expected capital_qty=200 (live margin 4x), got {result.breakdown['qty_by_capital']}"
+    print("  OK FIX-072: live margin used over static")
+
+
+def test_fix072_fallback_to_static_on_api_failure() -> None:
+    """FIX-072: API failure falls back to static leverage with WARNING log."""
+    fm = _MockFundManager(total=100_000, intraday_avail=50_000)
+    adapter = _MockAdapter(should_fail=True)
+
+    import io
+    log_stream = io.StringIO()
+    handler = logging.StreamHandler(log_stream)
+    logger = logging.getLogger("test_fix072_fallback")
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+
+    sizer = PositionSizer(
+        fund_manager=fm,
+        leverage_map={"INTRADAY": 5.0},
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.20,  # Increase to 20% to not hit concentration limit
+        broker_adapter=adapter,
+        logger=logger,
+    )
+
+    result = sizer.calculate(
+        symbol="RELIANCE",
+        side="BUY",
+        entry_price=1000.0,
+        sl_price=950.0,
+        intent="INTRADAY",
+        score_tier="HIGH",
+        lot_size=1,
+    )
+
+    assert result.success, "sizing should succeed with static fallback"
+    assert adapter.call_count == 1, "adapter was called (but failed)"
+    # Fallback should use static leverage=5x: qty = 50000 / (1000/5) = 250
+    # (concentration now 20%, so max = 20k/1000 = 20 shares; risk=20, capital=250 → min=20)
+    assert result.qty == 20, f"expected qty=20 (risk-bound with static fallback), got {result.qty}"
+
+    # Check WARNING was logged
+    log_output = log_stream.getvalue()
+    assert "live_margin_fallback" in log_output or "WARNING" in log_output, \
+        "WARNING log not found for API failure"
+    print("  OK FIX-072: fallback to static on API failure with WARNING logged")
+
+
+def test_fix072_no_adapter_uses_static() -> None:
+    """FIX-072: Without adapter, sizer uses static leverage (backward compat)."""
+    fm = _MockFundManager(total=100_000, intraday_avail=50_000)
+
+    sizer = PositionSizer(
+        fund_manager=fm,
+        leverage_map={"INTRADAY": 5.0},
+        risk_per_trade_pct=0.01,
+        max_concentration_pct=0.20,  # Increase to 20% to not hit concentration limit
+        broker_adapter=None,  # No adapter
+    )
+
+    result = sizer.calculate(
+        symbol="RELIANCE",
+        side="BUY",
+        entry_price=1000.0,
+        sl_price=950.0,
+        intent="INTRADAY",
+        score_tier="HIGH",
+        lot_size=1,
+    )
+
+    assert result.success, "sizing should succeed with static leverage"
+    # Static leverage=5x: qty = 50000 / (1000/5) = 250
+    # Risk qty = 100000 * 0.01 / 50 = 20; concentration = 20k/1000 = 20; capital=250 → min=20
+    assert result.qty == 20, f"expected qty=20 (risk-bound static), got {result.qty}"
+    print("  OK FIX-072: no adapter uses static leverage (backward compat)")
+
+
 def run_all_tests() -> int:
     tests = [
         test_risk_bound_qty,
@@ -764,6 +898,10 @@ def run_all_tests() -> int:
         test_fix041_qty_explosion_guard,
         test_fix041_penny_stock_guard,
         test_fix041_normal_sl_distance_proceeds,
+        # FIX-072
+        test_fix072_live_margin_used_over_static,
+        test_fix072_fallback_to_static_on_api_failure,
+        test_fix072_no_adapter_uses_static,
     ]
 
     print("=" * 70)

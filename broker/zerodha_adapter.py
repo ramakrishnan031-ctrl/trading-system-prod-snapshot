@@ -372,6 +372,11 @@ class ZerodhaAdapter:
         # instead of the local RTT midpoint.
         self._last_response_date: Optional[datetime] = None
         self._install_date_header_hook()
+        # FIX-072: TTL-cached margin requirements by (symbol, intent).
+        # Cache entry: (margin_pct, fetched_at). TTL = 5 minutes.
+        self._margin_cache: dict[tuple[str, str], tuple[float, datetime]] = {}
+        self._margin_cache_lock: threading.Lock = threading.Lock()
+        self._margin_cache_ttl_sec: float = 300.0  # 5 minutes
 
         # ZA16a: paper needs bus to publish synthesized OrderFilled. If paper
         # is on but bus is None we degrade safely (state reaches COMPLETE via
@@ -876,6 +881,161 @@ class ZerodhaAdapter:
                    "result_summary": f"net={info.net}"},
         )
         return info
+
+    def get_live_margin_pct(self, symbol: str, intent: str) -> float:
+        """
+        FIX-072: Fetch live margin requirement percentage from broker API.
+
+        Uses kite.order_margins() to query the exact margin required for
+        placing 1 share of the given symbol with the specified intent (product).
+        Returns margin_required / price as a percentage (e.g., 0.20 = 20% margin).
+
+        Results are cached with a 5-minute TTL to avoid repeated API calls
+        for the same (symbol, intent) pair. Use invalidate_margin_cache()
+        to force a fresh fetch (e.g., after 16388 margin rejection).
+
+        Paper mode: returns static leverage from _leverage_map (no broker call).
+        Live mode: calls broker API with TTL caching.
+
+        Args:
+            symbol: Trading symbol (e.g., "RELIANCE").
+            intent: Semantic product intent (e.g., "INTRADAY", "DELIVERY").
+
+        Returns:
+            Margin percentage as a decimal (0.20 = 20% margin, leverage = 5x).
+            On API failure: raises BrokerError (caller should catch and fallback).
+
+        Raises:
+            BrokerError: if live API call fails.
+            ValueError: if intent is invalid or broker_code not resolved.
+        """
+        # Paper mode: no broker API; raise error so caller falls back to static
+        if self._paper:
+            raise BrokerError(
+                "get_live_margin_pct not available in paper mode; use static leverage"
+            )
+
+        cache_key = (symbol, intent)
+
+        # Check cache first (thread-safe)
+        with self._margin_cache_lock:
+            if cache_key in self._margin_cache:
+                margin_pct, fetched_at = self._margin_cache[cache_key]
+                age_sec = (now_ist() - fetched_at).total_seconds()
+                if age_sec < self._margin_cache_ttl_sec:
+                    # Cache hit within TTL
+                    return margin_pct
+
+        # Cache miss or expired: fetch from broker
+        t0 = time.monotonic()
+        self._log.info(
+            "get_live_margin_pct call_start",
+            extra={"method": "get_live_margin_pct", "symbol": symbol, "intent": intent},
+        )
+
+        # Resolve intent -> broker product code
+        try:
+            broker_code = self._pr.resolve(intent, "zerodha")
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to resolve intent {intent!r} to broker code: {exc}"
+            ) from exc
+
+        # Acquire rate limit token (use "order" category as this is order-related)
+        self._rl.acquire(_CATEGORY_MAP["place_order"])
+
+        try:
+            # Query broker for margin required for 1 share at market price
+            # kite.order_margins() expects a list of order params
+            raw = self._kite.order_margins([{
+                "exchange": "NSE",
+                "tradingsymbol": symbol,
+                "transaction_type": "BUY",  # Use BUY; margin is symmetric
+                "variety": "regular",
+                "product": broker_code,
+                "order_type": "MARKET",
+                "quantity": 1,
+            }])
+        except Exception as exc:
+            # Translate kite exception to system exception
+            raise self._translate_broker_exception(
+                exc, {"symbol": symbol, "intent": intent}, "order_margins"
+            ) from exc
+
+        # BL-6: success -> reset 429 attempt counter for this category
+        self._reset_429_attempts(_CATEGORY_MAP["place_order"])
+
+        # Parse response: raw is a list of margin objects
+        # Each object has: {"total": <float>, "pnl": {...}, "span": {...}, ...}
+        if not raw or not isinstance(raw, list) or len(raw) == 0:
+            raise BrokerError(
+                f"order_margins returned empty or invalid response for {symbol}/{intent}"
+            )
+
+        margin_obj = raw[0]
+        margin_required = float(margin_obj.get("total", 0.0))
+
+        # Get current LTP to compute margin percentage
+        # We need price to calculate margin_pct = margin_required / (qty * price)
+        # Since qty=1, margin_pct = margin_required / price
+        try:
+            quotes_dict = self.get_quote([symbol])  # get_quote takes a list
+            # get_quote returns dict[symbol, Quote] (stripped of "NSE:" prefix)
+            if symbol not in quotes_dict:
+                raise BrokerError(f"Quote for {symbol} not in response")
+            quote = quotes_dict[symbol]
+            price = quote.last_price
+        except Exception:
+            # If quote fetch fails, cannot compute margin_pct reliably
+            # Raise error so caller can fallback to static
+            raise BrokerError(
+                f"Failed to fetch quote for {symbol} (needed for margin_pct calc)"
+            )
+
+        if price <= 0:
+            raise BrokerError(
+                f"Invalid price {price} for {symbol} (cannot compute margin_pct)"
+            )
+
+        margin_pct = margin_required / price
+
+        # Cache the result
+        with self._margin_cache_lock:
+            self._margin_cache[cache_key] = (margin_pct, now_ist())
+
+        ms = int((time.monotonic() - t0) * 1000)
+        self._log.info(
+            "get_live_margin_pct call_end",
+            extra={
+                "method": "get_live_margin_pct",
+                "symbol": symbol,
+                "intent": intent,
+                "margin_pct": margin_pct,
+                "duration_ms": ms,
+            },
+        )
+
+        return margin_pct
+
+    def invalidate_margin_cache(self, symbol: str, intent: str) -> None:
+        """
+        FIX-072: Invalidate cached margin for (symbol, intent).
+
+        Called by order_placer when a 16388 margin rejection occurs, forcing
+        a fresh fetch on the next get_live_margin_pct() call.
+
+        Args:
+            symbol: Trading symbol.
+            intent: Product intent.
+        """
+        cache_key = (symbol, intent)
+        with self._margin_cache_lock:
+            if cache_key in self._margin_cache:
+                del self._margin_cache[cache_key]
+                self._log.info(
+                    "margin_cache invalidated",
+                    extra={"symbol": symbol, "intent": intent},
+                )
 
     def get_server_time(self) -> datetime:
         """

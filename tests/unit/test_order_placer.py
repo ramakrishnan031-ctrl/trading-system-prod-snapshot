@@ -4256,6 +4256,214 @@ class TestFix025GateReleaseSlippage:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-072 — 16388 margin rejection with cache invalidation + retry
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFix07216388MarginRetry:
+    """FIX-072: Order placer handles 16388 margin rejection by invalidating cache and retrying."""
+
+    def _make_placer(
+        self, tmp_dir: Path
+    ) -> tuple[OrderPlacer, StateStore, Any, _MockAdapter072]:
+        """Helper to create OrderPlacer with tracking adapter for 16388 tests."""
+        from pathlib import Path as PathClass
+        db = tmp_dir / "test.db"
+        schema = PathClass("core/schema.sql")
+        store = StateStore(db_path=db, schema_path=schema)
+
+        bus = EventBus()
+        fm = _MockFundManager()  # Use existing mock from this file
+        adapter = _MockAdapter072()
+        cc = CostCalculator(MagicMock())
+        om = OrderManager(store, _log())  # Need logger arg
+        engine = _MockEngine072(adapter)
+        pr = _default_resolver()  # Product resolver (from existing helper in this file)
+
+        placer = OrderPlacer(
+            order_manager=om,
+            entry_engine=engine,
+            fund_manager=fm,
+            order_monitor=MagicMock(),  # Required parameter
+            cost_calculator=cc,
+            bus=bus,
+            logger=logging.getLogger("test_fix072"),
+            broker_adapter=adapter,  # FIX-072 parameter
+            product_resolver=pr,  # Required for persist
+            rate_limit_backoff=MagicMock(max_placer_retries=3),
+        )
+        return placer, store, fm, adapter
+
+    def test_fix072_16388_invalidates_cache_and_retries(self) -> None:
+        """FIX-072: First 16388 → invalidate cache, retry → success."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            # First attempt: 16388 rejection
+            # Second attempt: success
+            adapter.rejection_sequence = [16388, None]
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_001",
+            )
+
+            # Verify cache was invalidated after 16388
+            assert adapter.invalidate_called, "cache not invalidated after 16388"
+            assert adapter.invalidate_symbol == "RELIANCE"
+            assert adapter.invalidate_intent == "INTRADAY"
+
+            # Verify second attempt succeeded (trade not REJECTED)
+            trades = store.fetch_all("SELECT status FROM trades WHERE signal_id = ?", (sig_id,))
+            assert len(trades) == 1, "expected 1 trade row"
+            status = trades[0][0] if trades else None
+            assert status != "REJECTED", f"trade should succeed on retry, status={status}"
+
+            store.close()
+            print("  OK FIX-072: 16388 → invalidate cache → retry → success")
+
+    def test_fix072_16388_twice_marks_rejected(self) -> None:
+        """FIX-072: 16388 twice (fresh margin still insufficient) → REJECTED, no infinite loop."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            # Both attempts: 16388
+            adapter.rejection_sequence = [16388, 16388]
+
+            try:
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=1000.0, sl_price=950.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_002",
+                )
+                assert False, "should have raised OrderRejectedError"
+            except OrderRejectedError:
+                pass  # expected
+
+            # Verify cache was invalidated after first 16388
+            assert adapter.invalidate_called, "cache should be invalidated"
+
+            # Verify trade marked REJECTED (not FAILED)
+            trades = store.fetch_all("SELECT status FROM trades WHERE signal_id = ?", (sig_id,))
+            assert len(trades) == 1, "expected 1 trade row"
+            status = trades[0][0] if trades else None
+            assert status == "REJECTED", f"expected REJECTED, got {status}"
+
+            # Verify only 2 attempts (not infinite loop)
+            assert adapter.execute_attempts == 2, f"expected 2 attempts, got {adapter.execute_attempts}"
+
+            store.close()
+            print("  OK FIX-072: 16388 twice → REJECTED, no infinite loop")
+
+    def test_fix072_other_rejection_no_retry(self) -> None:
+        """FIX-072: Non-16388 rejection (e.g., 16417) → single attempt, no retry."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, adapter = self._make_placer(Path(tmp))
+            sig_id = _seed_signal(store)
+
+            # Rejection with code 16417 (not 16388)
+            adapter.rejection_sequence = [16417]
+
+            try:
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=1000.0, sl_price=950.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_003",
+                )
+                assert False, "should have raised OrderRejectedError"
+            except OrderRejectedError:
+                pass  # expected
+
+            # Verify NO cache invalidation (not 16388)
+            assert not adapter.invalidate_called, "cache should NOT be invalidated for non-16388"
+
+            # Verify only 1 attempt (no retry for non-16388)
+            assert adapter.execute_attempts == 1, f"expected 1 attempt, got {adapter.execute_attempts}"
+
+            store.close()
+            print("  OK FIX-072: non-16388 rejection → single attempt, no retry")
+
+
+class _MockAdapter072:
+    """Mock adapter for FIX-072 tests tracking invalidate_margin_cache calls."""
+    def __init__(self):
+        self.placed = []
+        self.rejection_sequence = []  # List of kite_status_codes (None = success)
+        self.execute_attempts = 0
+        self.invalidate_called = False
+        self.invalidate_symbol = None
+        self.invalidate_intent = None
+
+    def place_order(self, **kwargs):
+        self.placed.append(kwargs)
+        return PlacedOrder(
+            internal_order_id=f"ord_{len(self.placed)}",
+            broker_order_id=f"KITE{len(self.placed)}",
+            symbol=kwargs.get("symbol", "SYM"),
+            side=kwargs.get("side", "BUY"),
+            qty=kwargs.get("qty", 1),
+            price=kwargs.get("price", 100.0),
+            order_type=kwargs.get("order_type", "LIMIT"),
+            product="MIS",
+            status="SUBMITTED",
+            ts=now_ist(),
+        )
+
+    def cancel_order(self, broker_order_id: str):
+        from broker.zerodha_adapter import CancelResult
+        return CancelResult(broker_order_id=broker_order_id, success=True, reason="")
+
+    def invalidate_margin_cache(self, symbol: str, intent: str) -> None:
+        self.invalidate_called = True
+        self.invalidate_symbol = symbol
+        self.invalidate_intent = intent
+
+
+class _MockEngine072:
+    """Mock entry engine that raises OrderRejectedError with configurable kite_status_code."""
+    def __init__(self, adapter: _MockAdapter072):
+        self.adapter = adapter
+
+    def execute(self, **kwargs) -> EntryResult:
+        self.adapter.execute_attempts += 1
+        attempt = self.adapter.execute_attempts - 1
+
+        if attempt < len(self.adapter.rejection_sequence):
+            code = self.adapter.rejection_sequence[attempt]
+            if code is not None:
+                # Raise OrderRejectedError with specified kite_status_code
+                exc = OrderRejectedError(
+                    f"Margin insufficient (code {code})",
+                    kite_status_code=code,
+                    rejection_reason=f"Insufficient margin for order (code {code})",
+                    symbol=kwargs.get("symbol", "SYM"),
+                    side=kwargs.get("side", "BUY"),
+                    qty=kwargs.get("qty", 1),
+                    price=kwargs.get("entry_price", 100.0),
+                    intent=kwargs.get("intent", "INTRADAY"),
+                )
+                raise exc
+
+        # Success case
+        return EntryResult(
+            success=True,
+            entry_broker_order_id="ENTRY_001",
+            entry_internal_id="ord_entry",
+            sl_broker_order_id="SL_001",
+            sl_internal_id="ord_sl",
+            tgt_broker_order_id="TGT_001",
+            tgt_internal_id="ord_tgt",
+            order_protocol="LIMIT_TRIPLE",  # Required when success=True
+            rejection_reason="",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -4387,6 +4595,10 @@ if __name__ == "__main__":
         TestFix025GateReleaseSlippage().test_short_slippage_protection_release_ltp_higher,
         TestFix025GateReleaseSlippage().test_short_slippage_protection_release_ltp_lower,
         TestFix025GateReleaseSlippage().test_no_slippage_protection_when_release_ltp_none,
+        # FIX-072: 16388 margin rejection retry
+        TestFix07216388MarginRetry().test_fix072_16388_invalidates_cache_and_retries,
+        TestFix07216388MarginRetry().test_fix072_16388_twice_marks_rejected,
+        TestFix07216388MarginRetry().test_fix072_other_rejection_no_retry,
     ]
     passed = failed = 0
     for fn in tests:

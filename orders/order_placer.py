@@ -373,6 +373,7 @@ class OrderPlacer:
         notifier: Optional[object] = None,   # TelegramNotifier; optional
         mode: str = "LIVE",                   # session mode label for alert title
         live_feed: Optional[Any] = None,      # FIX-061: LiveFeedManager for LTP retry
+        broker_adapter: Optional[Any] = None,  # FIX-072: optional adapter for margin cache invalidation
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -421,6 +422,9 @@ class OrderPlacer:
         # order_reconciler polls these and resolves them after 3 cycles (45s)
         self._timeout_recovery_queue: Dict[str, Dict[str, Any]] = {}
         self._timeout_recovery_lock = threading.Lock()
+
+        # FIX-072: Optional broker adapter for margin cache invalidation on 16388
+        self._adapter = broker_adapter
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -676,8 +680,11 @@ class OrderPlacer:
         # 429, so the next attempt's acquire() blocks until the bucket thaws --
         # that IS the backoff pacing; we never sleep directly here.
         # Non-429 BrokerErrors still get one attempt per ZA11 / OP7.
+        # FIX-072: Also retry once on 16388 (insufficient margin) after
+        # invalidating the margin cache to force a fresh fetch.
         max_429_retries = self._rl_backoff.max_placer_retries
         result: Optional[EntryResult] = None
+        retried_16388 = False  # FIX-072: track if we've already retried margin rejection
         for attempt in range(max_429_retries + 1):
             try:
                 result = self._engine.execute(
@@ -692,6 +699,50 @@ class OrderPlacer:
                     order_protocol=order_protocol,
                 )
                 break  # success
+            except OrderRejectedError as rej_exc:
+                # FIX-072: Handle 16388 (insufficient margin) with cache invalidation + 1 retry
+                kite_code = rej_exc.context.get("kite_status_code")
+                if kite_code == 16388 and not retried_16388:
+                    retried_16388 = True
+                    self._log.warning(
+                        "order_placer.16388_margin_rejection_retry",
+                        extra={
+                            "trade_id": trade_id,
+                            "signal_id": signal_id,
+                            "symbol": symbol,
+                            "intent": intent,
+                            "rejection_reason": rej_exc.context.get("rejection_reason", ""),
+                        },
+                    )
+                    # Invalidate margin cache to force fresh fetch on retry
+                    if self._adapter is not None:
+                        self._adapter.invalidate_margin_cache(symbol, intent)
+                    # Continue loop to retry with fresh margin
+                    continue
+                elif kite_code == 16388 and retried_16388:
+                    # Second 16388 after fresh margin fetch: genuine insufficient margin
+                    self._log.error(
+                        "order_placer.16388_margin_still_insufficient",
+                        extra={
+                            "trade_id": trade_id,
+                            "signal_id": signal_id,
+                            "symbol": symbol,
+                            "intent": intent,
+                            "rejection_reason": rej_exc.context.get("rejection_reason", ""),
+                        },
+                    )
+                    # Mark as REJECTED (not FAILED) and release reservation
+                    self._handle_placement_failure(
+                        trade_id, reservation_id, signal_id, rej_exc,
+                        final_status="REJECTED",
+                    )
+                    raise
+                else:
+                    # Other rejection (not 16388): single attempt per ZA11/OP7
+                    self._handle_placement_failure(
+                        trade_id, reservation_id, signal_id, rej_exc
+                    )
+                    raise
             except BrokerRateLimit429Error as rl_exc:
                 if attempt == max_429_retries:
                     # BL-19: exhausted -- same cleanup as any BrokerError
@@ -2556,10 +2607,11 @@ class OrderPlacer:
         signal_id: str,
         exc: Exception,
         broker_order_ids: Iterable[str] = (),
+        final_status: str = "FAILED",  # FIX-072: allow "REJECTED" for margin failures
     ) -> None:
         """
-        OP7 + OP-BL8c: cancel any live broker orders, mark trade FAILED,
-        release capital reservation.
+        OP7 + OP-BL8c: cancel any live broker orders, mark trade as final_status
+        (default FAILED), release capital reservation.
 
         Each step is best-effort with its own try/except. Cancellation is
         first because once we've decided to roll back, leaving live orders
@@ -2568,6 +2620,10 @@ class OrderPlacer:
         broker_order_ids defaults to () so the kill_switch and protocol-only
         failure paths (where no orders made it to the broker) call this
         method exactly the way they used to.
+
+        FIX-072: final_status defaults to "FAILED" for backward compatibility,
+        but can be set to "REJECTED" for known rejection scenarios like 16388
+        (insufficient margin after retry with fresh broker data).
         """
         log_exception(self._log, exc)
 
@@ -2580,7 +2636,7 @@ class OrderPlacer:
             )
 
         try:
-            self._om.update_trade_status(trade_id, "FAILED")
+            self._om.update_trade_status(trade_id, final_status)
         except Exception as db_exc:
             log_exception(self._log, db_exc)
         try:

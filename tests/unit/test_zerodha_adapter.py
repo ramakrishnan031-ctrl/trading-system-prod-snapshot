@@ -107,6 +107,10 @@ class MockKite:
                 },
             }
         }
+        # FIX-072: order_margins mock
+        self.order_margins_return: list = [{"total": 200.0}]
+        self.order_margins_exc: Exception | None = None
+        self.order_margins_called: bool = False
 
     def place_order(self, **kwargs: Any) -> str:
         if self.place_order_exc:
@@ -129,6 +133,13 @@ class MockKite:
 
     def margins(self, segment: str | None = None) -> dict:
         return self.margins_return
+
+    def order_margins(self, order_params: list) -> list:
+        """FIX-072: mock order_margins API."""
+        self.order_margins_called = True
+        if self.order_margins_exc:
+            raise self.order_margins_exc
+        return self.order_margins_return
 
     def quote(self, *instruments: str) -> dict:
         return self.quote_return
@@ -1845,6 +1856,98 @@ def test_fix009_paper_mode_returns_now_ist() -> None:
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-072 — live margin API with TTL caching
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix072_get_live_margin_pct_success() -> None:
+    """FIX-072: get_live_margin_pct fetches broker margin and caches result."""
+    adapter, kite, rl, pr, osm = _make_adapter(paper=False)
+
+    # Mock order_margins response: 25% margin (₹250 for 1 share at ₹1000)
+    kite.order_margins_return = [{"total": 250.0}]
+    kite.quote_return = {"NSE:RELIANCE": {"last_price": 1000.0}}
+
+    margin_pct = adapter.get_live_margin_pct("RELIANCE", "INTRADAY")
+
+    # 250 / 1000 = 0.25 (25%)
+    assert abs(margin_pct - 0.25) < 0.001, f"expected 0.25, got {margin_pct}"
+
+    # Verify broker API was called
+    assert kite.order_margins_called, "order_margins not called"
+    print("  OK FIX-072: live margin fetched and computed correctly")
+
+
+def test_fix072_margin_cache_ttl() -> None:
+    """FIX-072: Same (symbol, intent) within TTL uses cache, no second broker call."""
+    import time as _time_mod
+    adapter, kite, rl, pr, osm = _make_adapter(paper=False)
+
+    kite.order_margins_return = [{"total": 200.0}]
+    kite.quote_return = {"NSE:INFOSY": {"last_price": 1000.0}}
+
+    # First call: should hit broker
+    kite.order_margins_called = False
+    margin1 = adapter.get_live_margin_pct("INFOSY", "INTRADAY")
+    assert kite.order_margins_called, "first call should hit broker"
+
+    # Second call within TTL: should use cache
+    kite.order_margins_called = False
+    margin2 = adapter.get_live_margin_pct("INFOSY", "INTRADAY")
+    assert not kite.order_margins_called, "second call should use cache"
+    assert margin1 == margin2, "cached margin should match"
+    print("  OK FIX-072: margin cache TTL working (only 1 broker call)")
+
+
+def test_fix072_invalidate_margin_cache() -> None:
+    """FIX-072: invalidate_margin_cache() forces fresh fetch on next call."""
+    adapter, kite, rl, pr, osm = _make_adapter(paper=False)
+
+    kite.order_margins_return = [{"total": 200.0}]
+    kite.quote_return = {"NSE:TCS": {"last_price": 1000.0}}
+
+    # First call: cache miss
+    adapter.get_live_margin_pct("TCS", "INTRADAY")
+
+    # Invalidate cache
+    adapter.invalidate_margin_cache("TCS", "INTRADAY")
+
+    # Next call: should hit broker again (cache was invalidated)
+    kite.order_margins_called = False
+    adapter.get_live_margin_pct("TCS", "INTRADAY")
+    assert kite.order_margins_called, "invalidated cache should force fresh fetch"
+    print("  OK FIX-072: cache invalidation forces fresh fetch")
+
+
+def test_fix072_paper_mode_raises_error() -> None:
+    """FIX-072: paper mode raises BrokerError (caller should use static fallback)."""
+    adapter, _, _, _, _ = _make_adapter(paper=True)
+
+    try:
+        adapter.get_live_margin_pct("RELIANCE", "INTRADAY")
+        assert False, "paper mode should raise BrokerError"
+    except BrokerError as e:
+        assert "paper mode" in str(e).lower(), f"expected paper mode error, got: {e}"
+    print("  OK FIX-072: paper mode raises error for live margin fetch")
+
+
+def test_fix072_broker_api_failure_propagates() -> None:
+    """FIX-072: Broker API failure raises BrokerError (caller should fallback to static)."""
+    adapter, kite, rl, pr, osm = _make_adapter(paper=False)
+
+    # Mock broker API failure
+    class KiteException(Exception):
+        pass
+    kite.order_margins_exc = KiteException("API down")
+
+    try:
+        adapter.get_live_margin_pct("RELIANCE", "INTRADAY")
+        assert False, "broker failure should raise BrokerError"
+    except BrokerError:
+        pass  # expected
+    print("  OK FIX-072: broker API failure propagates as BrokerError")
+
+
 def run_all_tests() -> int:
     tests = [
         test_place_order_success_returns_placed_order,
@@ -1900,6 +2003,12 @@ def run_all_tests() -> int:
         test_cfg6_paper_synth_applies_sell_slippage,
         test_cfg6_no_engine_means_no_slippage_backcompat,
         test_cfg6_set_slippage_engine_noop_in_live,
+        # FIX-072: live margin API with TTL caching
+        test_fix072_get_live_margin_pct_success,
+        test_fix072_margin_cache_ttl,
+        test_fix072_invalidate_margin_cache,
+        test_fix072_paper_mode_raises_error,
+        test_fix072_broker_api_failure_propagates,
     ]
 
     print("=" * 70)

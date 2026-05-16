@@ -129,6 +129,7 @@ class PositionSizer:
         lot_skew_rejection_threshold: float = 0.25,  # FIX-021: reject if skew exceeds this
         min_tick_size: float = 0.05,  # FIX-041: min SL distance (penny stock guard)
         max_single_order_qty: int = 10000,  # FIX-041: sanity cap on computed qty
+        broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
     ) -> None:
         self._fm = fund_manager
         self._leverage_map = dict(leverage_map)
@@ -141,6 +142,7 @@ class PositionSizer:
         self._lot_skew_rejection_threshold = lot_skew_rejection_threshold  # FIX-021
         self._min_tick_size = min_tick_size  # FIX-041
         self._max_single_order_qty = max_single_order_qty  # FIX-041
+        self._broker_adapter = broker_adapter  # FIX-072
 
     def calculate(
         self,
@@ -246,7 +248,38 @@ class PositionSizer:
         avail = snap.intraday_avail if bucket == "intraday" else snap.positional_avail
 
         # ── PS2: Three candidate quantities ───────────────────────────────────
-        leverage = self._leverage_map.get(intent, 1.0)
+        # FIX-072: Try live margin from broker API first, fallback to static on error
+        leverage = self._leverage_map.get(intent, 1.0)  # static fallback
+        if self._broker_adapter is not None:
+            try:
+                margin_pct = self._broker_adapter.get_live_margin_pct(symbol, intent)
+                # Convert margin_pct to leverage: leverage = 1 / margin_pct
+                # e.g., margin_pct=0.20 (20%) -> leverage=5.0
+                live_leverage = 1.0 / margin_pct if margin_pct > 0 else 1.0
+                leverage = live_leverage
+                if self._log is not None:
+                    self._log.info(
+                        "position_sizer.live_margin_used",
+                        extra={
+                            "symbol": symbol,
+                            "intent": intent,
+                            "margin_pct": margin_pct,
+                            "live_leverage": live_leverage,
+                            "static_leverage": self._leverage_map.get(intent, 1.0),
+                        },
+                    )
+            except Exception as exc:  # noqa: BLE001
+                # API failed or paper mode: fallback to static leverage
+                if self._log is not None:
+                    self._log.warning(
+                        "position_sizer.live_margin_fallback",
+                        extra={
+                            "symbol": symbol,
+                            "intent": intent,
+                            "error": str(exc),
+                            "fallback_leverage": leverage,
+                        },
+                    )
         sl_distance = abs(entry_price - sl_price)
 
         # FIX-041: Guard 1 — SL distance below minimum tick size (penny stock / config error)

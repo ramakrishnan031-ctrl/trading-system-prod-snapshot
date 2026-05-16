@@ -137,9 +137,11 @@ def test_order_placer_timeout_error_handling():
         )
 
     # Verify trade status was updated to UNKNOWN_IN_FLIGHT
-    mock_order_manager.update_trade_status.assert_called_once_with(
-        "trade_timeout_test", "UNKNOWN_IN_FLIGHT"
-    )
+    # FIX-071 Part A adds PENDING update before broker call, so we expect 2 calls
+    assert mock_order_manager.update_trade_status.call_count == 2
+    calls = mock_order_manager.update_trade_status.call_args_list
+    assert calls[0][0] == ("trade_timeout_test", "PENDING")  # FIX-071 Part A
+    assert calls[1][0] == ("trade_timeout_test", "UNKNOWN_IN_FLIGHT")  # FIX-068
 
     # Verify capital was NOT released (fund_manager.release NOT called)
     mock_fund_manager.release.assert_not_called()
