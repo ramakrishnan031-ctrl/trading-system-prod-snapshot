@@ -657,6 +657,18 @@ class OrderPlacer:
             raise ks_exc
 
         # ── Place entry orders ─────────────────────────────────────────────
+        # FIX-071 Part A: Transition trade to PENDING before broker call.
+        # This ensures OrderMonitor can recognize the order even if it polls
+        # before track() is called (instant-fill race condition).
+        try:
+            self._om.update_trade_status(trade_id, "PENDING")
+        except Exception as status_exc:
+            self._log.warning(
+                "order_placer.pending_status_update_failed",
+                extra={"trade_id": trade_id, "error": str(status_exc)},
+            )
+            # Non-fatal: continue with placement even if status update fails
+
         # BL-19: retry the engine only on BrokerRateLimit429Error. On each
         # raise, the protocol has already cancelled any legs it placed (OP7 /
         # OP-BL8e), so re-executing is safe w.r.t. duplicate orders. The

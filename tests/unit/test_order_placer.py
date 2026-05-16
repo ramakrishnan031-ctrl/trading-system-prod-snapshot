@@ -838,7 +838,8 @@ class TestOrderPlacer:
             rows = store.fetch_all("SELECT * FROM trades WHERE signal_id = ?", (sig_id,))
             assert len(rows) == 1
             trade = dict(rows[0])
-            assert trade["status"] == "PENDING_FILL"
+            # FIX-071: Status is now PENDING (was PENDING_FILL before broker call)
+            assert trade["status"] == "PENDING"
             assert trade["symbol"] == "RELIANCE"
             assert trade["direction"] == "LONG"
             assert trade["order_protocol"] == "LIMIT_TRIPLE"
@@ -3270,7 +3271,8 @@ class TestEf2TrackFailureCleanup:
                 rows = store.fetch_all(
                     "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
                 )
-                assert rows[0]["status"] == "PENDING_FILL"
+                # FIX-071: Status is now PENDING (was PENDING_FILL before broker call)
+                assert rows[0]["status"] == "PENDING"
                 assert fm.released == []
 
                 # No CRITICAL grep tag (no EF-2 cleanup ran)
@@ -3506,8 +3508,9 @@ class TestBl19PlacerRateLimitRetry:
                     "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
                 )
                 assert len(rows) == 1
-                assert rows[0]["status"] == "PENDING_FILL", (
-                    f"Expected PENDING_FILL after successful retry, "
+                # FIX-071: Status is now PENDING (was PENDING_FILL before broker call)
+                assert rows[0]["status"] == "PENDING", (
+                    f"Expected PENDING after successful retry, "
                     f"got {rows[0]['status']}"
                 )
                 assert fm.released == [], (
