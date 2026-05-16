@@ -295,12 +295,13 @@ def test_is_terminal_correct_for_all_states() -> None:
 
 
 def test_allowed_transitions_returns_correct_lists() -> None:
-    assert set(allowed_transitions("PENDING")) == {"SUBMITTED", "FAILED"}
+    assert set(allowed_transitions("PENDING")) == {"SUBMITTED", "FAILED", "UNKNOWN_IN_FLIGHT"}
     assert set(allowed_transitions("SUBMITTED")) == {
         "OPEN", "PARTIAL", "COMPLETE", "CANCELLED", "FAILED", "EXPIRED"
     }
     assert set(allowed_transitions("OPEN")) == {"PARTIAL", "COMPLETE", "CANCELLED", "EXPIRED", "FAILED"}
     assert set(allowed_transitions("PARTIAL")) == {"PARTIAL", "COMPLETE", "CANCELLED", "FAILED"}
+    assert set(allowed_transitions("UNKNOWN_IN_FLIGHT")) == {"OPEN", "PARTIAL", "COMPLETE", "FAILED"}
     for terminal in TERMINAL_STATES:
         assert allowed_transitions(terminal) == [], (
             f"Terminal state {terminal!r} should have no allowed transitions"
@@ -308,9 +309,9 @@ def test_allowed_transitions_returns_correct_lists() -> None:
     print("  OK allowed_transitions() correct for all states (OSM13)")
 
 
-def test_all_states_returns_all_eight() -> None:
+def test_all_states_returns_all_nine() -> None:
     result = all_states()
-    assert len(result) == 8
+    assert len(result) == 9
     assert set(result) == set(STATES)
     print(f"  OK all_states() returns all {len(result)} states (OSM13)")
 
@@ -401,13 +402,12 @@ def run_all_tests() -> int:
         test_failed_rejects_all_transitions,
         test_expired_rejects_all_transitions,
         test_all_four_terminal_states_reject_same_state,
-        test_successful_transition_publishes_event,
-        test_failed_transition_does_not_publish_event,
-        test_bus_none_no_event_no_error,
-        test_multiple_transitions_publish_multiple_events,
+        test_successful_transition_updates_state,
+        test_failed_transition_leaves_state_unchanged,
+        test_multiple_transitions_walk_through_states,
         test_is_terminal_correct_for_all_states,
         test_allowed_transitions_returns_correct_lists,
-        test_all_states_returns_all_eight,
+        test_all_states_returns_all_nine,
         test_invalid_transition_error_context_fields,
         test_thread_safety_concurrent_register_and_transition,
     ]
