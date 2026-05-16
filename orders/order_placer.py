@@ -375,6 +375,7 @@ class OrderPlacer:
         live_feed: Optional[Any] = None,      # FIX-061: LiveFeedManager for LTP retry
         broker_adapter: Optional[Any] = None,  # FIX-072: optional adapter for margin cache invalidation
         market_windows: Optional[Any] = None,  # FIX-073: market windows for EOD entry cutoff check
+        price_drift_threshold: float = 0.005,  # FIX-075: 0.5% default drift threshold for margin top-up
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -429,6 +430,11 @@ class OrderPlacer:
 
         # FIX-073: Optional market windows for EOD entry cutoff check
         self._market_windows = market_windows
+
+        # FIX-075: Price drift threshold for margin top-up
+        self._price_drift_threshold = price_drift_threshold
+        # Need leverage_map for margin recalculation
+        self._leverage_map = fund_manager._leverage_map
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -701,6 +707,101 @@ class OrderPlacer:
                     final_status="REJECTED",
                 )
                 raise eod_exc
+
+        # FIX-075: Price drift check before placement
+        # If price has drifted significantly since reservation, top up margin.
+        # Best-effort: if quote fetch fails, log warning and proceed (don't block order).
+        original_entry_price = entry_price
+        if self._live_feed is not None:
+            try:
+                # Fetch current LTP
+                quote_result = self._live_feed.quote(symbol)
+                if quote_result.success and quote_result.ltp is not None:
+                    current_ltp = quote_result.ltp
+                    drift_pct = abs(current_ltp - original_entry_price) / original_entry_price
+
+                    # Load threshold from config
+                    drift_threshold = self._price_drift_threshold
+
+                    if drift_pct > drift_threshold:
+                        self._log.info(
+                            "order_placer.price_drift_detected",
+                            extra={
+                                "trade_id": trade_id,
+                                "signal_id": signal_id,
+                                "symbol": symbol,
+                                "original_price": original_entry_price,
+                                "current_ltp": current_ltp,
+                                "drift_pct": drift_pct,
+                                "threshold": drift_threshold,
+                            },
+                        )
+
+                        # Recalculate required margin with current LTP
+                        from capital.fund_manager import required_margin
+                        original_margin = required_margin(qty, original_entry_price, intent, self._leverage_map)
+                        new_margin = required_margin(qty, current_ltp, intent, self._leverage_map)
+                        additional_margin = new_margin - original_margin
+
+                        if additional_margin > 0:
+                            # Need more margin - attempt top-up
+                            top_up_result = self._fund_manager.top_up_reservation(
+                                reservation_id=reservation_id,
+                                additional_margin=additional_margin,
+                                reason=f"price drift {drift_pct*100:.2f}% → ₹{current_ltp:.2f}",
+                            )
+
+                            if not top_up_result.success:
+                                # Insufficient capital for top-up - reject order
+                                drift_exc = OrderRejectedError(
+                                    f"price drift {drift_pct*100:.2f}% requires ₹{additional_margin:.2f} "
+                                    f"additional margin, but insufficient capital available",
+                                    trade_id=trade_id, signal_id=signal_id, symbol=symbol,
+                                )
+                                self._log.warning(
+                                    "order_placer.rejected_price_drift",
+                                    extra={
+                                        "trade_id": trade_id,
+                                        "signal_id": signal_id,
+                                        "symbol": symbol,
+                                        "drift_pct": drift_pct,
+                                        "additional_margin": additional_margin,
+                                        "rejection_reason": top_up_result.reason_if_failed,
+                                    },
+                                )
+                                self._handle_placement_failure(
+                                    trade_id, reservation_id, signal_id, drift_exc,
+                                    final_status="REJECTED_PRICE_DRIFT",
+                                )
+                                raise drift_exc
+
+                            # Top-up succeeded - use current_ltp for placement
+                            entry_price = current_ltp
+                            self._log.info(
+                                "order_placer.price_drift_top_up_success",
+                                extra={
+                                    "trade_id": trade_id,
+                                    "signal_id": signal_id,
+                                    "symbol": symbol,
+                                    "additional_margin": additional_margin,
+                                    "adjusted_entry_price": current_ltp,
+                                },
+                            )
+                        # else: drift increased price but less margin needed (e.g., SHORT position), proceed
+
+            except Exception as quote_exc:
+                # Quote fetch or drift check failed - log warning and continue
+                # FIX-075: don't block order on quote failure (best-effort)
+                self._log.warning(
+                    "order_placer.price_drift_check_failed",
+                    extra={
+                        "trade_id": trade_id,
+                        "signal_id": signal_id,
+                        "symbol": symbol,
+                        "error": str(quote_exc),
+                        "note": "proceeding with original price",
+                    },
+                )
 
         # BL-19: retry the engine only on BrokerRateLimit429Error. On each
         # raise, the protocol has already cancelled any legs it placed (OP7 /

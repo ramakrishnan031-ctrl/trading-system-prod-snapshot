@@ -68,6 +68,7 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 20  # TEMP: raised for paper testing (was 4)
   daily_loss_limit_pct: 1.00  # TEMP: 100% for paper testing (was 0.05 = 5%)
+  price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement
 
 webhook:                      # WR14 — HTTP server settings
   bind_host: "0.0.0.0"        # 2026-04-27: bind all interfaces so the VM

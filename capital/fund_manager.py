@@ -543,6 +543,109 @@ class FundManager:
             raise _violation
         return True
 
+    def top_up_reservation(
+        self,
+        reservation_id: str,
+        additional_margin: float,
+        reason: str = "",
+    ) -> ReservationResult:
+        """
+        FIX-075: Increase an existing reservation's margin.
+
+        Used when price drift detection requires more margin than originally
+        reserved. Atomically checks available capital and increases the
+        reservation if sufficient funds exist.
+
+        Args:
+            reservation_id: existing reservation to top up
+            additional_margin: additional margin to add (must be > 0)
+            reason: audit trail note (e.g., "price drift 2% → 102")
+
+        Returns:
+            ReservationResult(success=True, ...) if top-up succeeded
+            ReservationResult(success=False, ...) if insufficient capital
+
+        Raises:
+            ValueError: if reservation_id not found or additional_margin <= 0
+            CapitalInvariantViolation: invariant check fails post-mutation
+        """
+        if additional_margin <= 0:
+            raise ValueError(f"additional_margin must be > 0, got {additional_margin}")
+
+        with self._lock:
+            self._assert_initialized()
+            res = self._reservations.get(reservation_id)
+            if res is None:
+                raise ValueError(
+                    f"reservation_id {reservation_id!r} not found; "
+                    f"cannot top up unknown reservation"
+                )
+
+            bucket = res.bucket
+            avail_before = self._bucket_avail(bucket)
+
+            if additional_margin > avail_before:
+                # Insufficient capital for top-up
+                return ReservationResult(
+                    success=False,
+                    reservation_id=reservation_id,
+                    margin=additional_margin,
+                    bucket=bucket,
+                    reason_if_failed=(
+                        f"insufficient {bucket} capital for top-up: "
+                        f"need ₹{additional_margin:.2f}, avail ₹{avail_before:.2f}"
+                    ),
+                )
+
+            # Top-up succeeds: deduct from available, add to reserved
+            projected_after = avail_before - additional_margin
+            ts = now_ist().isoformat()
+            self._write_ledger(
+                ts=ts,
+                entry_type="TOP_UP",
+                amount=additional_margin,
+                bucket=bucket,
+                balance_before=avail_before,
+                balance_after=projected_after,
+                signal_id=res.signal_id,
+                reservation_id=reservation_id,
+                reason=reason or "price drift top-up",
+                margin_delta=additional_margin,
+            )
+
+            # Update in-memory state
+            self._bucket_deduct_avail(bucket, additional_margin)
+            self._bucket_add_reserved(bucket, additional_margin)
+
+            # Update reservation record with new margin
+            # dataclass is frozen, so create a new instance
+            new_margin = res.margin + additional_margin
+            self._reservations[reservation_id] = _Reservation(
+                reservation_id=res.reservation_id,
+                symbol=res.symbol,
+                qty=res.qty,
+                price=res.price,  # Keep original price for audit trail
+                intent=res.intent,
+                bucket=res.bucket,
+                margin=new_margin,  # Updated margin
+                signal_id=res.signal_id,
+                ts=res.ts,  # Keep original timestamp
+            )
+
+        # FM11: check invariant outside lock
+        _violation = self._check_invariant()
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+
+        return ReservationResult(
+            success=True,
+            reservation_id=reservation_id,
+            margin=new_margin,
+            bucket=bucket,
+            reason_if_failed="",
+        )
+
     def commit_to_used(
         self,
         reservation_id: str,
