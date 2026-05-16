@@ -683,6 +683,30 @@ class SignalProcessor:
             )
 
             self._heartbeat(symbol)  # FIX-011: checkpoint 5 (before placement)
+
+            # FIX-070: Second kill-switch check after pipeline processing.
+            # TOCTOU fix: HARD_KILL could fire during steps 2-7 (screening, sizing,
+            # reservation). Check again immediately before placement to prevent
+            # opening positions after kill-switch activated.
+            # Also check shutdown event - system shutdown could have been initiated.
+            if self._ks and self._ks.is_active("entry"):
+                self._log.warning(
+                    f"FIX-070: kill-switch active after pipeline - aborting placement for {signal_id} ({symbol})"
+                )
+                if reservation_id:
+                    self._fm.release(reservation_id, "kill_switch_after_pipeline")
+                    reservation_id = None
+                raise _PipelineReject("KILL_SWITCH_LATE", "Kill switch active before placement")
+
+            if self._stop_event.is_set():
+                self._log.warning(
+                    f"FIX-070: shutdown event set - aborting placement for {signal_id} ({symbol})"
+                )
+                if reservation_id:
+                    self._fm.release(reservation_id, "shutdown_before_placement")
+                    reservation_id = None
+                raise _PipelineReject("SHUTDOWN", "System shutdown before placement")
+
             try:
                 self._placer.place(
                     symbol=symbol,
