@@ -428,13 +428,34 @@ class LiveFeedManager:
                         batch.append(self._tick_queue.get_nowait())
                 except queue.Empty:
                     pass
+
+                # FIX-079: Validate tick schema before dispatch to prevent hollow
+                # ticks (circuit breaker mode: instrument_token present but no
+                # last_price) from causing KeyError in subscribers and crashing
+                # the consumer thread. Discard hollow ticks; log DEBUG.
+                validated_batch = []
+                for tick in batch:
+                    token = tick.get("instrument_token")
+                    ltp = tick.get("last_price")
+                    if token is None or ltp is None or ltp == 0.0:
+                        self._log.debug(
+                            "LiveFeedManager: hollow tick discarded token=%s ltp=%s",
+                            token, ltp,
+                        )
+                        continue
+                    validated_batch.append(tick)
+
+                # Skip dispatch if all ticks were hollow
+                if not validated_batch:
+                    continue
+
                 with self._lock:
                     callbacks = list(self._callbacks)
                 for cb in callbacks:
                     # FIX-029: bare except with CRITICAL log + traceback
                     # DO NOT re-raise: consumer thread must be immortal
                     try:
-                        cb(batch)
+                        cb(validated_batch)
                     except Exception as exc:
                         log_exception(self._log, exc)
                         # Extract callback name for better diagnostics

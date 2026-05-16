@@ -77,7 +77,7 @@ from signals.signal_processor import SignalProcessor
 from signals.webhook_receiver import WebhookReceiver
 from strategies.loader import StrategyLoader
 from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
-from utils.instance_lock import acquire_instance_lock, check_port_available, release_instance_lock
+from utils.instance_lock import acquire_instance_lock, release_instance_lock
 from utils.startup_checks import (
     StartupCheckFailed,
     StartupScenario,
@@ -1612,11 +1612,8 @@ def _main_locked(args, config_dir: Path) -> int:
     smart_tgt.start()
 
     wh_cfg = app_config.system.webhook
-    # Port conflict check: fail fast if another process holds the webhook port
-    port_ok, port_reason = check_port_available(wh_cfg.bind_port, wh_cfg.bind_host)
-    if not port_ok:
-        _log.critical("Webhook port conflict: %s", port_reason)
-        return 1
+    # FIX-081: Port conflict check removed — acquire_instance_lock() already
+    # binds a persistent socket lock. Separate check_port_available() was TOCTOU-prone.
 
     # Audit 6.5 / B.3: Waitress production WSGI server replaces Flask's
     # dev server. Werkzeug's app.run drops connections under burst load

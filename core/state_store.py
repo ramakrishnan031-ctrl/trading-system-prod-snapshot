@@ -80,7 +80,7 @@ DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 # SQLite PRAGMAs applied to every connection
 _CONNECTION_PRAGMAS = (
     "PRAGMA journal_mode = WAL",
-    "PRAGMA synchronous = NORMAL",      # WAL + NORMAL is durable enough for our use
+    "PRAGMA synchronous = FULL",        # FIX-076: FULL guarantees crash survivability on networked block storage
     "PRAGMA foreign_keys = ON",         # Per-connection; SQLite requires this
     "PRAGMA temp_store = MEMORY",
     "PRAGMA busy_timeout = 30000",      # Wait up to 30s on a locked DB (FIX-006)

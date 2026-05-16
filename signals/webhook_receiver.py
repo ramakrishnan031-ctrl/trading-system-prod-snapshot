@@ -146,6 +146,7 @@ class WebhookReceiver:
 
         self.app = Flask(__name__)
         self.app.config["TESTING"] = False
+        self.app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024  # FIX-077: 1MB hard limit prevents OOM
         self._register_routes()
 
     # ------------------------------------------------------------------

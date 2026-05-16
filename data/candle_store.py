@@ -215,13 +215,21 @@ class CandleStore:
     # ------------------------------------------------------------------ #
 
     def _timer_loop(self) -> None:
-        """Clock-aligned candle close. Fires at candle_interval_sec boundaries."""
+        """
+        Clock-aligned candle close. Fires at candle_interval_sec boundaries.
+
+        FIX-080: Uses time.time() for wall-clock boundary alignment (candle close
+        timing must match market time), but guards sleep_sec with max(0, x) to
+        prevent ValueError on negative sleep from NTP step or leap second.
+        """
         while not self._stop_event.is_set():
             now_ts = time.time()
             next_fire = (
                 (now_ts // self._candle_interval_sec) + 1
             ) * self._candle_interval_sec
             sleep_sec = next_fire - now_ts
+            # FIX-080: Guard against negative sleep (NTP step, leap second)
+            sleep_sec = max(0.0, sleep_sec)
             if self._stop_event.wait(sleep_sec):
                 break
             self._close_candles()
