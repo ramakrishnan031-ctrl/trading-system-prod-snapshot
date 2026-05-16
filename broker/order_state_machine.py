@@ -6,19 +6,21 @@ Purpose:
     transitions for live order lifecycle. Single source of truth.
 
 Locked Design Decisions:
-    OSM1  -- States (8): PENDING, SUBMITTED, OPEN, PARTIAL, COMPLETE,
-             CANCELLED, FAILED, EXPIRED.
+    OSM1  -- States (9): PENDING, SUBMITTED, OPEN, PARTIAL, COMPLETE,
+             CANCELLED, FAILED, EXPIRED, UNKNOWN_IN_FLIGHT.
     OSM2  -- Allowed transition table (one-way; terminal states have no exits):
-               PENDING    -> SUBMITTED, FAILED
-               SUBMITTED  -> OPEN, PARTIAL, COMPLETE, CANCELLED, FAILED, EXPIRED
-               OPEN       -> PARTIAL, COMPLETE, CANCELLED, EXPIRED, FAILED
-               PARTIAL    -> PARTIAL, COMPLETE, CANCELLED, FAILED
-               COMPLETE   -> (terminal)
-               CANCELLED  -> (terminal)
-               FAILED     -> (terminal)
-               EXPIRED    -> (terminal)
+               PENDING          -> SUBMITTED, FAILED, UNKNOWN_IN_FLIGHT
+               SUBMITTED        -> OPEN, PARTIAL, COMPLETE, CANCELLED, FAILED, EXPIRED
+               OPEN             -> PARTIAL, COMPLETE, CANCELLED, EXPIRED, FAILED
+               PARTIAL          -> PARTIAL, COMPLETE, CANCELLED, FAILED
+               UNKNOWN_IN_FLIGHT-> OPEN, PARTIAL, COMPLETE, FAILED
+               COMPLETE         -> (terminal)
+               CANCELLED        -> (terminal)
+               FAILED           -> (terminal)
+               EXPIRED          -> (terminal)
              Self-loop on PARTIAL allowed (multiple partial fills).
              OPEN/PARTIAL -> FAILED added for OM7 cancel-failure (orphan) path.
+             UNKNOWN_IN_FLIGHT added for FIX-068: timeout recovery path.
     OSM3  -- transition(order_id, to_state): reads current state internally,
              validates against OSM2, raises InvalidTransitionError on illegal
              move. Caller only passes target state; machine owns from_state.
@@ -68,6 +70,7 @@ STATES: tuple[str, ...] = (
     "CANCELLED",
     "FAILED",
     "EXPIRED",
+    "UNKNOWN_IN_FLIGHT",  # FIX-068: timeout recovery
 )
 
 TERMINAL_STATES: tuple[str, ...] = (
@@ -83,14 +86,15 @@ TERMINAL_STATES: tuple[str, ...] = (
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TRANSITIONS: dict[str, tuple[str, ...]] = {
-    "PENDING":   ("SUBMITTED", "FAILED"),
-    "SUBMITTED": ("OPEN", "PARTIAL", "COMPLETE", "CANCELLED", "FAILED", "EXPIRED"),
-    "OPEN":      ("PARTIAL", "COMPLETE", "CANCELLED", "EXPIRED", "FAILED"),   # FAILED added: OM7 cancel-failure path
-    "PARTIAL":   ("PARTIAL", "COMPLETE", "CANCELLED", "FAILED"),              # FAILED added: infrastructure failure
-    "COMPLETE":  (),
-    "CANCELLED": (),
-    "FAILED":    (),
-    "EXPIRED":   (),
+    "PENDING":          ("SUBMITTED", "FAILED", "UNKNOWN_IN_FLIGHT"),  # FIX-068: timeout on place
+    "SUBMITTED":        ("OPEN", "PARTIAL", "COMPLETE", "CANCELLED", "FAILED", "EXPIRED"),
+    "OPEN":             ("PARTIAL", "COMPLETE", "CANCELLED", "EXPIRED", "FAILED"),   # FAILED added: OM7 cancel-failure path
+    "PARTIAL":          ("PARTIAL", "COMPLETE", "CANCELLED", "FAILED"),              # FAILED added: infrastructure failure
+    "UNKNOWN_IN_FLIGHT":("OPEN", "PARTIAL", "COMPLETE", "FAILED"),                   # FIX-068: reconciler resolves
+    "COMPLETE":         (),
+    "CANCELLED":        (),
+    "FAILED":           (),
+    "EXPIRED":          (),
 }
 
 

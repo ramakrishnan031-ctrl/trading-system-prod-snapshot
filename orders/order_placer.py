@@ -191,7 +191,7 @@ from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
 from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged, PositionClosed
-from core.exceptions import BrokerError, BrokerRateLimit429Error, OrderRejectedError
+from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutError, OrderRejectedError
 from core.ids import new_trade_id
 from core.logger import log_exception
 from core.time_authority import now_ist
@@ -416,6 +416,12 @@ class OrderPlacer:
         self._live_feed = live_feed
         self._ltp_callback_registered = False
 
+        # FIX-068: Timeout recovery tracking for UNKNOWN_IN_FLIGHT orders
+        # Maps trade_id -> {signal_id, reservation_id, internal_order_ids: list}
+        # order_reconciler polls these and resolves them after 3 cycles (45s)
+        self._timeout_recovery_queue: Dict[str, Dict[str, Any]] = {}
+        self._timeout_recovery_lock = threading.Lock()
+
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
         self._bus.subscribe(OrderFilled, self._on_order_filled)
@@ -430,6 +436,22 @@ class OrderPlacer:
     def set_instrument_cache(self, cache) -> None:
         """Wire InstrumentCache for IC8 tick-size rounding (called from main.py)."""
         self._instrument_cache = cache
+
+    def get_timeout_recovery_trades(self) -> List[str]:
+        """
+        FIX-068: Return list of trade_ids currently in UNKNOWN_IN_FLIGHT state.
+        Called by order_reconciler during CHECK_UNKNOWN_IN_FLIGHT check.
+        """
+        with self._timeout_recovery_lock:
+            return list(self._timeout_recovery_queue.keys())
+
+    def remove_from_timeout_recovery(self, trade_id: str) -> Optional[Dict[str, Any]]:
+        """
+        FIX-068: Remove trade from timeout recovery queue after reconciler resolves it.
+        Returns the queue entry if found, None otherwise.
+        """
+        with self._timeout_recovery_lock:
+            return self._timeout_recovery_queue.pop(trade_id, None)
 
     def rehydrate_fill_map(self, state_store) -> int:
         """
@@ -688,6 +710,39 @@ class OrderPlacer:
                 )
                 # continue loop -- next iteration's acquire() blocks on the
                 # frozen bucket, delivering the backoff without caller sleep.
+            except BrokerTimeoutError as timeout_exc:
+                # FIX-068: Timeout during place_order -- we don't know if the
+                # order reached the broker. Do NOT mark FAILED, do NOT release
+                # capital. Transition to UNKNOWN_IN_FLIGHT and let reconciler
+                # poll the broker to determine actual state.
+                self._log.critical(
+                    "order_placer.place_timeout_UNKNOWN_IN_FLIGHT",
+                    extra={
+                        "trade_id": trade_id,
+                        "signal_id": signal_id,
+                        "symbol": symbol,
+                        "reservation_id": reservation_id,
+                        "timeout_exc": str(timeout_exc),
+                    },
+                )
+                try:
+                    self._om.update_trade_status(trade_id, "UNKNOWN_IN_FLIGHT")
+                except Exception as db_exc:
+                    log_exception(self._log, db_exc)
+                    self._log.critical(
+                        "order_placer.timeout_status_update_failed",
+                        extra={"trade_id": trade_id, "db_exc": str(db_exc)},
+                    )
+                # Add to timeout recovery queue for reconciler
+                with self._timeout_recovery_lock:
+                    self._timeout_recovery_queue[trade_id] = {
+                        "signal_id": signal_id,
+                        "reservation_id": reservation_id,
+                        "symbol": symbol,
+                        "added_at": now_ist().isoformat(),
+                    }
+                # Propagate to signal_processor so it knows placement is in unknown state
+                raise
             except BrokerError as exc:
                 # OP7 + OP-BL8e + ZA11: non-429 BrokerError = single attempt.
                 # The protocol's own cleanup already cancelled any in-flight
