@@ -412,8 +412,12 @@ def _now_tup(signal_id="sig_001", scanner="gap_go_long", symbol="RELIANCE",
 
 def _run_one(proc, sig_tuple, store=None, wait_sec=2.0):
     """Start processor, enqueue one signal, stop (drains), return store row."""
+    import time
     proc.start()
     proc._queue.put(sig_tuple)
+    # FIX-070: Brief wait before stop() to let worker process signal
+    # before shutdown event is set (otherwise REJECTED_SHUTDOWN)
+    time.sleep(0.1)
     proc.stop()
     if store:
         return store.fetch_one(
