@@ -52,7 +52,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Tuple
 
-from core.exceptions import BrokerError
+from core.exceptions import BrokerError, BrokerRateLimitError, BrokerTimeoutError
 from core.time_authority import ist_timezone, now_ist
 
 
@@ -273,8 +273,13 @@ class SignalProcessor:
 
     def _process_one_safe(self, signal_tuple) -> None:
         """Wraps _process_one; catches all exceptions so workers never die."""
-        signal_id = signal_tuple[0] if signal_tuple else "unknown"
-        symbol = signal_tuple[2] if len(signal_tuple) > 2 else "unknown"
+        # FIX-069: Support both tuple and dict signal formats
+        if isinstance(signal_tuple, dict):
+            signal_id = signal_tuple.get("signal_id", "unknown")
+            symbol = signal_tuple.get("symbol", "unknown")
+        else:
+            signal_id = signal_tuple[0] if signal_tuple else "unknown"
+            symbol = signal_tuple[2] if len(signal_tuple) > 2 else "unknown"
 
         # FIX-007: non-blocking rate-limiter pre-check. If the order token bucket
         # is exhausted, re-enqueue the signal and return immediately rather than
@@ -387,12 +392,26 @@ class SignalProcessor:
         Run the full processing pipeline for one signal (SP6, SPW3).
 
         signal_tuple: (signal_id, scanner_name, symbol, trigger_price, triggered_at)
+                      OR dict with keys: signal_id, scanner_name, symbol, trigger_price,
+                      triggered_at, retry_count (FIX-069)
         triggered_at: naive datetime (IST)
         """
-        signal_id, scanner_name, symbol, trigger_price, triggered_at = signal_tuple
+        # FIX-069: Support both tuple and dict formats for backward compatibility
+        # and retry metadata tracking
+        if isinstance(signal_tuple, dict):
+            signal_id = signal_tuple["signal_id"]
+            scanner_name = signal_tuple["scanner_name"]
+            symbol = signal_tuple["symbol"]
+            trigger_price = signal_tuple["trigger_price"]
+            triggered_at = signal_tuple["triggered_at"]
+            retry_count = signal_tuple.get("retry_count", 0)
+        else:
+            signal_id, scanner_name, symbol, trigger_price, triggered_at = signal_tuple
+            retry_count = 0
 
         start_mono = time.monotonic()
         reservation_id: Optional[str] = None
+        requeued = False  # FIX-069: track if signal was re-queued
 
         try:
             # SP9: mark PROCESSING immediately
@@ -677,6 +696,54 @@ class SignalProcessor:
                     tgt_price=tgt_price,
                 )
                 reservation_id = None   # placer owns it now
+            except (BrokerRateLimitError, BrokerTimeoutError) as transient_err:
+                # FIX-069: Transient errors during placement -> re-queue with retry limit
+                # These errors are recoverable - broker may be temporarily unavailable
+                # or rate-limited. Re-queue signal for retry but keep lock held to
+                # prevent duplicate admission. Max 3 retries (45s total with 15s delays).
+                if self._ks:
+                    self._ks.record_api_failure()
+
+                if retry_count >= 3:
+                    # Max retries exhausted - mark as failed and release lock
+                    self._log.warning(
+                        f"FIX-069: signal {signal_id} ({symbol}) abandoned after "
+                        f"{retry_count} retries on {type(transient_err).__name__}"
+                    )
+                    raise  # Let outer exception handler mark PLACEMENT_FAILED
+
+                # Re-queue with incremented retry count
+                retry_count += 1
+                requeued = True  # Signal finally block to NOT release lock
+                self._log.warning(
+                    f"FIX-069: re-queuing {signal_id} ({symbol}) due to "
+                    f"{type(transient_err).__name__}, retry {retry_count}/3"
+                )
+
+                # Build signal dict with retry metadata
+                signal_dict = {
+                    "signal_id": signal_id,
+                    "scanner_name": scanner_name,
+                    "symbol": symbol,
+                    "trigger_price": trigger_price,
+                    "triggered_at": triggered_at,
+                    "retry_count": retry_count,
+                }
+
+                try:
+                    self._queue.put(signal_dict, timeout=1.0)
+                    # Release reservation but keep lock - reconciler will retry
+                    if reservation_id:
+                        self._fm.release(reservation_id, "requeued_transient_error")
+                        reservation_id = None
+                    return  # Exit without releasing lock (requeued=True)
+                except queue.Full:
+                    # Queue full - can't retry, must fail and release lock
+                    self._log.error(
+                        f"FIX-069: queue full, cannot re-queue {signal_id} ({symbol})"
+                    )
+                    requeued = False  # Force lock release
+                    raise  # Let outer handler mark PLACEMENT_FAILED
             except BrokerError as be:
                 if self._ks:
                     self._ks.record_api_failure()
@@ -727,8 +794,11 @@ class SignalProcessor:
             with self._in_flight_lock:
                 self._in_flight_count -= 1
 
+            # FIX-069: Only release in-flight lock if signal was NOT re-queued.
+            # If requeued=True, lock must travel with signal to prevent duplicate
+            # admission while signal is pending retry.
             # SP7: ALWAYS release in-flight (audit #21 fix; SPW8: covers screener paths)
-            if self._in_flight_release is not None:
+            if not requeued and self._in_flight_release is not None:
                 try:
                     self._in_flight_release(symbol)
                 except Exception as rel_exc:
