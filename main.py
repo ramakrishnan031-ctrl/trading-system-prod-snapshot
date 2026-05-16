@@ -1522,6 +1522,8 @@ def _main_locked(args, config_dir: Path) -> int:
         in_flight_release_fn=webhook_receiver.release_in_flight,
         # Use same expiry as webhook_receiver (config signal_queue.expiry_sec)
         signal_expiry_sec=app_config.system.signal_queue.expiry_sec,
+        # FIX-067: quote function for momentum fresh LTP fetch
+        quote_fn=broker_adapter.get_quote,
     )
 
     entry_gate = EntryGate(

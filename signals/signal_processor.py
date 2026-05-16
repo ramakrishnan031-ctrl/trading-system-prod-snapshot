@@ -129,6 +129,7 @@ class SignalProcessor:
         mode: str = "LIVE",                 # session mode label for alert title
         shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
         rate_limiter=None,                  # FIX-007: optional RateLimiter for order pre-check
+        quote_fn=None,                      # FIX-067: quote function for momentum fresh LTP
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -156,6 +157,7 @@ class SignalProcessor:
         self._mode = mode                                  # session mode label
         self._shadow_tracker = shadow_tracker              # B.5 / Audit 5.1
         self._rate_limiter = rate_limiter                  # FIX-007: optional pre-check
+        self._quote_fn = quote_fn                          # FIX-067: momentum fresh LTP
 
         # Lifecycle
         self._running = False
@@ -619,12 +621,42 @@ class SignalProcessor:
             # Derive target price (SPW5, SPW6)
             tgt_price = self._derive_target(entry_price, sl_price, strategy_obj)
 
+            # FIX-067: Fresh quote for momentum strategies (pullback_wait_enabled=false)
+            # Momentum signals process immediately; webhook trigger_price may be stale
+            # by the time we reach placement (2+ seconds of pipeline processing).
+            # Fetch live LTP to avoid placing LIMIT at stale price into moved market.
+            # Pullback strategies (pullback_wait_enabled=true) do NOT use this path
+            # (they go through EntryGate which already waits for current price).
+            fresh_entry_price = entry_price  # Default: use derived price
+            if not strategy_obj.pullback_wait_enabled and self._quote_fn is not None:
+                try:
+                    quote = self._quote_fn(symbol)
+                    live_ltp = quote.get("last_price") if quote else None
+                    if live_ltp and live_ltp > 0:
+                        price_delta = live_ltp - trigger_price
+                        self._log.info(
+                            f"FIX-067 momentum fresh quote: {symbol} stale={trigger_price:.2f} "
+                            f"live={live_ltp:.2f} delta={price_delta:+.2f}"
+                        )
+                        # Use live LTP as new anchor for entry price derivation
+                        fresh_entry_price, _ = self._derive_prices(live_ltp, strategy_obj)
+                    else:
+                        self._log.warning(
+                            f"FIX-067 momentum fresh quote failed for {symbol}: "
+                            f"invalid LTP ({live_ltp}), using stale webhook price"
+                        )
+                except Exception as exc:
+                    self._log.warning(
+                        f"FIX-067 momentum fresh quote failed for {symbol}: {exc}, "
+                        f"using stale webhook price"
+                    )
+
             # Telegram alert: INTRADAY SIGNAL (fires before order placement)
             self._emit_signal_alert(
                 symbol=symbol,
                 strategy_name=strategy_name,
                 score=screen_result.score,
-                entry_price=entry_price,
+                entry_price=fresh_entry_price,
                 sl_price=sl_price,
                 tgt_price=tgt_price,
                 qty=sizing.qty,
@@ -637,7 +669,7 @@ class SignalProcessor:
                     symbol=symbol,
                     side=side,
                     qty=sizing.qty,
-                    entry_price=entry_price,
+                    entry_price=fresh_entry_price,  # FIX-067: use fresh price
                     sl_price=sl_price,
                     intent=strategy_obj.intent,
                     signal_id=signal_id,

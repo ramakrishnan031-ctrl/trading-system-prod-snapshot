@@ -151,6 +151,7 @@ class PositionSizer:
         intent: str,
         score_tier: str = "MEDIUM",
         lot_size: int = 1,
+        entry_offset_pct: float = 0.0,  # FIX-066
     ) -> SizingResult:
         """
         Compute position size using risk-based formula (PS2).
@@ -160,7 +161,8 @@ class PositionSizer:
             sl_distance            = abs(entry_price - sl_price)
             qty_by_risk            = floor(risk_per_trade_rs / sl_distance)
 
-            margin_per_share       = entry_price / leverage
+            effective_entry_price  = entry_price * (1 + entry_offset_pct)  # FIX-066
+            margin_per_share       = effective_entry_price / leverage
             qty_by_capital         = floor(avail_bucket / margin_per_share)
 
             qty_by_concentration   = floor((total_capital * max_conc_pct) / entry_price)
@@ -170,13 +172,17 @@ class PositionSizer:
             final_qty              = (tiered_qty // lot_size) * lot_size
 
         Args:
-            symbol:      Trading symbol (used for logging only).
-            side:        "BUY" or "SELL" (PS8).
-            entry_price: Expected entry price per share (> 0).
-            sl_price:    Stop-loss price per share (> 0, != entry_price).
-            intent:      One of INTRADAY, COVER_ORDER, BRACKET_ORDER, DELIVERY.
-            score_tier:  Signal quality tier: "HIGH", "MEDIUM", or "LOW" (PS5).
-            lot_size:    Shares per lot. 1 for equity; F&O uses contract lot (PS6).
+            symbol:           Trading symbol (used for logging only).
+            side:             "BUY" or "SELL" (PS8).
+            entry_price:      Expected entry price per share (> 0).
+            sl_price:         Stop-loss price per share (> 0, != entry_price).
+            intent:           One of INTRADAY, COVER_ORDER, BRACKET_ORDER, DELIVERY.
+            score_tier:       Signal quality tier: "HIGH", "MEDIUM", or "LOW" (PS5).
+            lot_size:         Shares per lot. 1 for equity; F&O uses contract lot (PS6).
+            entry_offset_pct: FIX-066 - Buffer applied to entry_price for margin calc.
+                              order_placer places at entry_price * (1 + entry_offset_pct),
+                              so margin must account for this to avoid RMS rejection.
+                              Defaults to 0.0 (no buffer).
 
         Returns:
             SizingResult (always returned, never raises for sizing failures).
@@ -306,7 +312,11 @@ class PositionSizer:
                 breakdown={"qty_by_risk": qty_by_risk},
             )
 
-        margin_per_share = entry_price / leverage
+        # FIX-066: Apply entry_offset_pct to margin calculation.
+        # order_placer places at entry_price * (1 + entry_offset_pct), so broker
+        # charges margin on that higher price. Reserve must cover the actual margin.
+        effective_entry_price = entry_price * (1.0 + entry_offset_pct)
+        margin_per_share = effective_entry_price / leverage
         qty_by_capital = (
             int(math.floor(avail / margin_per_share)) if margin_per_share > 0 else 0
         )

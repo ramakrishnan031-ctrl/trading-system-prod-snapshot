@@ -54,6 +54,7 @@ class _MockStrategy:
     min_volume_surge: float = 1.3
     min_adr_pct: float = 0.005
     max_spread_pct: float = 0.005
+    pullback_wait_enabled: bool = False
 
 
 _BUY_STRATEGY = _MockStrategy(name="gap_go_long_v1", direction="LONG")
@@ -397,6 +398,7 @@ def _make_proc(
         drain_poll_sec=drain_poll_sec,
         signal_expiry_sec=signal_expiry_sec,
         shadow_tracker=shadow_tracker,
+        quote_fn=None,  # FIX-067: not needed for these tests
     )
     return proc, sq, store
 
