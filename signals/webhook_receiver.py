@@ -218,6 +218,64 @@ class WebhookReceiver:
             return jsonify({"error": "Internal server error"}), 500
 
     # ------------------------------------------------------------------
+    # FIX-074: Type-cast numeric fields at ingestion
+    # ------------------------------------------------------------------
+
+    def _cast_numeric_fields(self, signal: dict[str, Any]) -> tuple[bool, str]:
+        """
+        FIX-074: Cast known numeric fields from strings to float/int.
+
+        Chartink sends numeric values as strings. Cast them before queueing
+        to prevent downstream TypeError in PositionSizer or other components.
+
+        Returns (success, error_msg):
+        - (True, "") if all critical fields cast successfully
+        - (False, "reason") if a critical field failed to cast
+
+        Critical fields: price, entry_price (must be castable or reject)
+        Non-critical fields: trigger_price, sl_pct, target_pct (set to None on failure)
+        """
+        # Float fields (non-critical by default)
+        float_fields = ["trigger_price", "sl_pct", "target_pct"]
+        # Critical float fields (must cast successfully)
+        critical_float_fields = ["price", "entry_price"]
+
+        # Try casting critical fields first
+        for field in critical_float_fields:
+            if field in signal and signal[field] is not None:
+                try:
+                    signal[field] = float(signal[field])
+                except (ValueError, TypeError) as exc:
+                    return False, f"critical field {field}={signal[field]!r} cannot be cast to float: {exc}"
+
+        # Non-critical float fields: set to None on failure
+        for field in float_fields:
+            if field in signal and signal[field] is not None:
+                try:
+                    signal[field] = float(signal[field])
+                except (ValueError, TypeError):
+                    self._log.warning(
+                        "webhook_receiver: could not cast %s=%r to float - setting to None",
+                        field, signal[field]
+                    )
+                    signal[field] = None
+
+        # Integer fields (e.g., qty) - currently none in Chartink format, but prepare for future
+        int_fields = ["qty"]
+        for field in int_fields:
+            if field in signal and signal[field] is not None:
+                try:
+                    signal[field] = int(signal[field])
+                except (ValueError, TypeError):
+                    self._log.warning(
+                        "webhook_receiver: could not cast %s=%r to int - setting to None",
+                        field, signal[field]
+                    )
+                    signal[field] = None
+
+        return True, ""
+
+    # ------------------------------------------------------------------
     # Main request handler (WR4, WR5)
     # ------------------------------------------------------------------
 
@@ -334,6 +392,16 @@ class WebhookReceiver:
 
         if not isinstance(body, dict):
             return jsonify({"error": "Request body must be a JSON object"}), 400
+
+        # FIX-074: Cast numeric fields before processing
+        # Handles both top-level numeric fields and per-signal fields if present
+        cast_ok, cast_err = self._cast_numeric_fields(body)
+        if not cast_ok:
+            self._log.warning(
+                "webhook/%s: Type cast failed: %s | body_keys=%r",
+                scanner_name, cast_err, list(body.keys()),
+            )
+            return jsonify({"error": f"Invalid payload: {cast_err}"}), 400
 
         # Required field presence (scan_name optional - derive from URL if missing)
         for field in ("stocks", "trigger_prices", "triggered_at"):
