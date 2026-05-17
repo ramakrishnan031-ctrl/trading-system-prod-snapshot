@@ -852,14 +852,21 @@ def _derive_sl_tgt_from_strategy(
 
 
 def _parse_ts(ts_str: str) -> datetime:
-    """Parse ISO-8601 string to datetime. Returns naive IST if tz-aware."""
+    """
+    Parse ISO-8601 string to datetime. Always returns naive IST.
+
+    FIX-A: Ensures all returned datetimes are naive (no tzinfo) to prevent
+    TypeError on subtraction with other naive datetimes.
+    """
     if not ts_str:
         return now_ist().replace(tzinfo=None)
     try:
         dt = datetime.fromisoformat(ts_str)
+        # Always strip tzinfo: if aware, convert to IST first; if naive, strip anyway
         if dt.tzinfo is not None:
-            dt = dt.astimezone(ist_timezone()).replace(tzinfo=None)
-        return dt
+            dt = dt.astimezone(ist_timezone())
+        # Ensure result is naive
+        return dt.replace(tzinfo=None)
     except (ValueError, TypeError):
         return now_ist().replace(tzinfo=None)
 
@@ -868,9 +875,12 @@ def _make_naive(now: datetime, ts: datetime) -> datetime:
     """
     Return ts as a naive datetime comparable to now.
 
-    Strips tzinfo from ts if now is naive; converts to naive IST if ts is aware.
+    FIX-A: Always returns naive IST datetime regardless of input.
+    If ts is aware → convert to IST, then strip tzinfo.
+    If ts is naive → return as-is.
     """
     if ts.tzinfo is not None:
-        # ts is aware — convert to IST naive
+        # ts is aware — convert to IST, then strip tzinfo
         return ts.astimezone(ist_timezone()).replace(tzinfo=None)
+    # ts is already naive — return as-is
     return ts
