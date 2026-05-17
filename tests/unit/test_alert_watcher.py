@@ -24,6 +24,7 @@ from scripts.alert_watcher import (
     SmtpError,
     _acquire_lock,
     _build_email,
+    _build_digest_email,
     _load_attempts,
     _prune_attempts,
     _release_lock,
@@ -37,7 +38,7 @@ from scripts.alert_watcher import (
 # Helpers
 # ==============================================================================
 
-def _make_cfg(tmpdir: Path, max_attempts: int = 3) -> MagicMock:
+def _make_cfg(tmpdir: Path, max_attempts: int = 3, digest_threshold: int = 3) -> MagicMock:
     """Return a minimal config mock matching what run_once() accesses."""
     smtp_cfg = MagicMock()
     smtp_cfg.host = "smtp.test.com"
@@ -57,6 +58,7 @@ def _make_cfg(tmpdir: Path, max_attempts: int = 3) -> MagicMock:
     alerts_cfg = MagicMock()
     alerts_cfg.sentinel_dir = str(tmpdir / "sentinels")
     alerts_cfg.watcher_max_attempts = max_attempts
+    alerts_cfg.alert_digest_threshold = digest_threshold  # FIX-095
     alerts_cfg.watcher_lock_path = str(tmpdir / "alert_watcher.lock")
     alerts_cfg.watcher_log_path = str(tmpdir / "alert_watcher.log")
     alerts_cfg.smtp = smtp_cfg
@@ -471,6 +473,136 @@ class TestWatcherLog(unittest.TestCase):
 # Standalone runner
 # ==============================================================================
 
+# ==============================================================================
+# TestDigestEmail (FIX-095)
+# ==============================================================================
+
+class TestDigestEmail(unittest.TestCase):
+    """FIX-095 -- digest email when pending > threshold."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmpdir = Path(self._tmpdir.name)
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    @patch("scripts.alert_watcher.smtplib.SMTP")
+    def test_two_flags_sends_individual_emails(self, mock_smtp):
+        """2 flags <= threshold(3) → 2 individual emails."""
+        sentinel_dir = self.tmpdir / "sentinels"
+        sentinel_dir.mkdir()
+        cfg = _make_cfg(self.tmpdir, digest_threshold=3)
+
+        _write_sentinel(sentinel_dir, title="Alert 1")
+        _write_sentinel(sentinel_dir, title="Alert 2")
+
+        run_once(cfg, log=_null_log())
+
+        # Should send 2 individual emails (not digest)
+        self.assertEqual(mock_smtp.call_count, 2,
+                        "Expected 2 SMTP connections for 2 individual emails")
+
+    @patch("scripts.alert_watcher.smtplib.SMTP")
+    def test_five_flags_sends_one_digest(self, mock_smtp):
+        """5 flags > threshold(3) → 1 digest email."""
+        sentinel_dir = self.tmpdir / "sentinels"
+        sentinel_dir.mkdir()
+        cfg = _make_cfg(self.tmpdir, digest_threshold=3)
+
+        for i in range(5):
+            _write_sentinel(sentinel_dir, title=f"Alert {i+1}")
+
+        run_once(cfg, log=_null_log())
+
+        # Should send 1 digest email (not 5 individual)
+        self.assertEqual(mock_smtp.call_count, 1,
+                        "Expected 1 SMTP connection for digest email")
+
+        # Verify sendmail was called with digest subject
+        # Digest code doesn't use context manager, so access return_value directly
+        mock_instance = mock_smtp.return_value
+        self.assertTrue(mock_instance.sendmail.called,
+                       "sendmail should be called for digest")
+        args = mock_instance.sendmail.call_args
+        message = args[0][2]  # third arg to sendmail is message string
+        # Subject is encoded, just check for "DIGEST" and "5"
+        self.assertIn("DIGEST", message,
+                     "Message should contain DIGEST")
+        self.assertIn("5", message,
+                     "Message should contain alert count 5")
+
+    @patch("scripts.alert_watcher.smtplib.SMTP")
+    def test_digest_marks_all_flags_delivered(self, mock_smtp):
+        """Digest success marks ALL 5 flags as .delivered."""
+        sentinel_dir = self.tmpdir / "sentinels"
+        sentinel_dir.mkdir()
+        cfg = _make_cfg(self.tmpdir, digest_threshold=3)
+
+        for i in range(5):
+            _write_sentinel(sentinel_dir, title=f"Alert {i+1}")
+
+        run_once(cfg, log=_null_log())
+
+        # All 5 should be marked delivered
+        pending = list_pending_sentinels(sentinel_dir)
+        self.assertEqual(len(pending), 0,
+                        "All flags should be marked .delivered after digest")
+
+        delivered = list(sentinel_dir.glob("*.delivered"))
+        self.assertEqual(len(delivered), 5,
+                        "Should have 5 .delivered files")
+
+    def test_build_digest_email_contains_all_alerts(self):
+        """_build_digest_email includes all alert summaries."""
+        sentinel_dir = self.tmpdir / "sentinels"
+        sentinel_dir.mkdir()
+
+        alerts = []
+        for i in range(5):
+            path = _write_sentinel(sentinel_dir, title=f"Test Alert {i+1}",
+                                  body=f"Body {i+1}")
+            data = {
+                'id': f'alert-{i+1}',
+                'ts': f'2026-05-17T10:{i+10}:00',
+                'title': f'Test Alert {i+1}',
+                'body': f'Body {i+1}',
+                'source_module': 'test',
+                'context': {'severity': 'CRITICAL'},
+            }
+            alerts.append((path, data))
+
+        msg = _build_digest_email(alerts, "from@test.com", ["to@test.com"])
+
+        # Check subject
+        self.assertIn("[DIGEST] 5 CRITICAL ALERTS", msg["Subject"])
+
+        # Check body contains all alerts (decode if base64 encoded)
+        body = msg.get_payload(decode=True)
+        if isinstance(body, bytes):
+            body = body.decode('utf-8')
+        for i in range(5):
+            self.assertIn(f"Test Alert {i+1}", body)
+            self.assertIn(f"Body {i+1}", body)
+
+    @patch("scripts.alert_watcher.smtplib.SMTP")
+    def test_threshold_configurable(self, mock_smtp):
+        """Threshold is configurable via alert_digest_threshold."""
+        sentinel_dir = self.tmpdir / "sentinels"
+        sentinel_dir.mkdir()
+        # Set threshold to 1 → 2 alerts should trigger digest
+        cfg = _make_cfg(self.tmpdir, digest_threshold=1)
+
+        _write_sentinel(sentinel_dir, title="Alert 1")
+        _write_sentinel(sentinel_dir, title="Alert 2")
+
+        run_once(cfg, log=_null_log())
+
+        # Should send digest (2 > 1)
+        self.assertEqual(mock_smtp.call_count, 1,
+                        "Expected digest with threshold=1")
+
+
 def run_all_tests() -> int:
     tests = [
         # Basic
@@ -504,6 +636,12 @@ def run_all_tests() -> int:
         TestAttemptCounter("test_prune_keeps_pending_entries"),
         # Watcher log
         TestWatcherLog("test_log_file_created"),
+        # FIX-095: Digest email
+        TestDigestEmail("test_two_flags_sends_individual_emails"),
+        TestDigestEmail("test_five_flags_sends_one_digest"),
+        TestDigestEmail("test_digest_marks_all_flags_delivered"),
+        TestDigestEmail("test_build_digest_email_contains_all_alerts"),
+        TestDigestEmail("test_threshold_configurable"),
     ]
 
     suite = unittest.TestSuite(tests)

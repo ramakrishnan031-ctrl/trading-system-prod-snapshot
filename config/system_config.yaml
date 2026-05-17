@@ -114,6 +114,7 @@ alerts:                       # TG12/AW11 — alert subsystem settings
   failed_alerts_log_path: "logs/failed_alerts.log"
   sentinel_dir: "data_store"
   watcher_max_attempts: 5
+  alert_digest_threshold: 3   # FIX-095: send digest email when pending flags > this count
   watcher_lock_path: "data_store/alert_watcher.lock"
   watcher_log_path: "logs/alert_watcher.log"
   telegram:

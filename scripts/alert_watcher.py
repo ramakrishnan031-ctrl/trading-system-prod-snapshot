@@ -183,6 +183,66 @@ def _build_email(
     return msg
 
 
+def _build_digest_email(
+    alerts: list[tuple[Path, dict]],
+    from_address: str,
+    to_addresses: list[str],
+) -> MIMEText:
+    """
+    FIX-095: Build a digest email for multiple alerts.
+
+    Args:
+        alerts: List of (sentinel_path, alert_data) tuples, newest first
+        from_address: SMTP from address
+        to_addresses: SMTP to addresses
+
+    Returns:
+        MIMEText digest email
+    """
+    count = len(alerts)
+    subject = f"[DIGEST] {count} CRITICAL ALERTS — Trading System"
+
+    body_lines = [
+        f"ALERT DIGEST: {count} critical alerts pending",
+        f"Generated: {datetime.now().isoformat()}",
+        "",
+        "=" * 70,
+        "",
+    ]
+
+    for i, (sentinel_path, data) in enumerate(alerts, start=1):
+        severity = data.get("context", {}).get("severity", "CRITICAL")
+        title = data.get("title", "(no title)")
+        timestamp = data.get("ts", "?")
+        module = data.get("source_module", "?")
+        alert_id = data.get("id", "?")
+
+        body_lines.append(f"Alert #{i} of {count}")
+        body_lines.append(f"  ID       : {alert_id}")
+        body_lines.append(f"  Time     : {timestamp}")
+        body_lines.append(f"  Severity : {severity}")
+        body_lines.append(f"  Title    : {title}")
+        body_lines.append(f"  Module   : {module}")
+        body_lines.append(f"  File     : {sentinel_path.name}")
+        body_lines.append("")
+        body_lines.append(f"  Summary  : {data.get('body', '')[:200]}")  # first 200 chars
+        body_lines.append("")
+        body_lines.append("-" * 70)
+        body_lines.append("")
+
+    body_lines.append("")
+    body_lines.append(f"Total alerts in this digest: {count}")
+    body_lines.append("")
+    body_lines.append("NOTE: This is an aggregated digest. Individual alert files are")
+    body_lines.append("available in the sentinel directory for detailed inspection.")
+
+    msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = from_address
+    msg["To"] = ", ".join(to_addresses)
+    return msg
+
+
 def _send_email(smtp_cfg, data: dict, log: logging.Logger) -> None:
     """
     Send a single email via SMTP (AW6).
@@ -260,6 +320,8 @@ def run_once(
     max_attempts = alerts_cfg.watcher_max_attempts
     counter_path = sentinel_dir / "alert_watcher_attempts.json"
     smtp_cfg = alerts_cfg.smtp
+    # FIX-095: digest threshold (default 3)
+    digest_threshold = getattr(alerts_cfg, 'alert_digest_threshold', 3)
 
     counters = _load_attempts(counter_path)
 
@@ -296,87 +358,149 @@ def run_once(
 
         to_send.append((sentinel_path, data))
 
+    # FIX-095: Check if we should send digest or individual emails
     if to_send:
-        max_workers = min(8, len(to_send))
-        with ThreadPoolExecutor(
-            max_workers=max_workers, thread_name_prefix="alert-smtp"
-        ) as pool:
-            future_to_path = {
-                pool.submit(_send_email, smtp_cfg, data, log): path
-                for path, data in to_send
-            }
-            # A.2 (2026-04-25): bound the wall time spent waiting on
-            # futures. Pre-fix, a stuck SMTP connection (Gmail rate-limit,
-            # network blackhole) would hang the worker thread until the
-            # smtplib timeout fires (often default 60s+) and block the
-            # watcher's next pass. We use _futures.wait with a hard batch
-            # timeout: futures still pending past the deadline are cancelled
-            # best-effort and treated as recoverable SmtpError-equivalent
-            # (counter increments; sentinel stays .flag for next pass).
-            done, not_done = _futures.wait(
-                list(future_to_path.keys()),
-                timeout=_SMTP_TASK_TIMEOUT_SEC,
+        send_digest = len(to_send) > digest_threshold
+
+        if send_digest:
+            log.info("FIX-095: %d alerts exceeds threshold %d → sending digest",
+                     len(to_send), digest_threshold)
+            # Sort by timestamp (newest first) for digest display
+            to_send_sorted = sorted(
+                to_send,
+                key=lambda x: x[1].get('ts', ''),
+                reverse=True
             )
-            for future in done:
-                sentinel_path = future_to_path[future]
-                fname = sentinel_path.name
+
+            # Send one digest email
+            try:
+                msg = _build_digest_email(to_send_sorted, smtp_cfg.from_address,
+                                         smtp_cfg.to_addresses)
+
+                if smtp_cfg.use_tls:
+                    server = smtplib.SMTP(smtp_cfg.host, smtp_cfg.port,
+                                         timeout=smtp_cfg.timeout_sec)
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                else:
+                    server = smtplib.SMTP_SSL(smtp_cfg.host, smtp_cfg.port,
+                                             timeout=smtp_cfg.timeout_sec)
+
                 try:
-                    future.result()
+                    password = smtp_cfg.resolved_password()
+                    server.login(smtp_cfg.username, password)
+                    server.sendmail(smtp_cfg.from_address, smtp_cfg.to_addresses,
+                                   msg.as_string())
+                finally:
+                    server.quit()
+
+                # Mark ALL sentinels as delivered after successful digest send
+                for sentinel_path, _ in to_send:
                     mark_delivered(sentinel_path)
-                    counters.pop(fname, None)
-                    log.info("Delivered %s -> .delivered", fname)
+                    counters.pop(sentinel_path.name, None)
 
-                except SmtpAuthError as exc:
-                    log.error("SMTP auth failure: %s", exc)
-                    auth_error_exit = True
-                    # Let remaining futures finish (cancellation is best-effort
-                    # and SMTP sockets are already in flight); we'll exit 2.
-                    for pending_future in future_to_path:
-                        pending_future.cancel()
+                log.info("Digest delivered: %d alerts → .delivered", len(to_send))
 
-                except SmtpError as exc:
+            except smtplib.SMTPAuthenticationError as exc:
+                log.error("SMTP auth failure (digest): %s", exc)
+                return 2
+
+            except (smtplib.SMTPException, OSError) as exc:
+                log.error("SMTP error (digest): %s", exc)
+                # Increment counter for all alerts in failed digest
+                for sentinel_path, _ in to_send:
+                    fname = sentinel_path.name
+                    count = counters.get(fname, 0) + 1
+                    counters[fname] = count
+                    if count >= max_attempts:
+                        try:
+                            mark_failed(sentinel_path, f"digest failed: {exc}")
+                            counters.pop(fname, None)
+                        except OSError:
+                            pass
+        else:
+            # Send individual emails (original behavior)
+            max_workers = min(8, len(to_send))
+            with ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="alert-smtp"
+            ) as pool:
+                future_to_path = {
+                    pool.submit(_send_email, smtp_cfg, data, log): path
+                    for path, data in to_send
+                }
+                # A.2 (2026-04-25): bound the wall time spent waiting on
+                # futures. Pre-fix, a stuck SMTP connection (Gmail rate-limit,
+                # network blackhole) would hang the worker thread until the
+                # smtplib timeout fires (often default 60s+) and block the
+                # watcher's next pass. We use _futures.wait with a hard batch
+                # timeout: futures still pending past the deadline are cancelled
+                # best-effort and treated as recoverable SmtpError-equivalent
+                # (counter increments; sentinel stays .flag for next pass).
+                done, not_done = _futures.wait(
+                    list(future_to_path.keys()),
+                    timeout=_SMTP_TASK_TIMEOUT_SEC,
+                )
+                for future in done:
+                    sentinel_path = future_to_path[future]
+                    fname = sentinel_path.name
+                    try:
+                        future.result()
+                        mark_delivered(sentinel_path)
+                        counters.pop(fname, None)
+                        log.info("Delivered %s -> .delivered", fname)
+
+                    except SmtpAuthError as exc:
+                        log.error("SMTP auth failure: %s", exc)
+                        auth_error_exit = True
+                        # Let remaining futures finish (cancellation is best-effort
+                        # and SMTP sockets are already in flight); we'll exit 2.
+                        for pending_future in future_to_path:
+                            pending_future.cancel()
+
+                    except SmtpError as exc:
+                        count = counters.get(fname, 0) + 1
+                        counters[fname] = count
+                        log.error(
+                            "SMTP error for %s (attempt %d/%d): %s",
+                            fname, count, max_attempts, exc,
+                        )
+                        if count >= max_attempts:
+                            try:
+                                mark_failed(sentinel_path, str(exc))
+                                counters.pop(fname, None)
+                                log.error(
+                                    "Abandoned %s after %d attempts -> .failed",
+                                    fname, max_attempts,
+                                )
+                            except OSError:
+                                pass
+
+                # A.2: any future still pending past _SMTP_TASK_TIMEOUT_SEC is a
+                # stuck send. Cancel best-effort; the underlying SMTP socket may
+                # still be held by the worker thread until the smtplib socket
+                # timeout fires, but we stop waiting on it and the watcher pass
+                # proceeds. Treat as recoverable so the retry ladder applies.
+                for future in not_done:
+                    future.cancel()
+                    sentinel_path = future_to_path[future]
+                    fname = sentinel_path.name
                     count = counters.get(fname, 0) + 1
                     counters[fname] = count
                     log.error(
-                        "SMTP error for %s (attempt %d/%d): %s",
-                        fname, count, max_attempts, exc,
+                        "SMTP timeout for %s (attempt %d/%d): send exceeded "
+                        "%.1fs -- likely a stuck connection",
+                        fname, count, max_attempts, _SMTP_TASK_TIMEOUT_SEC,
                     )
                     if count >= max_attempts:
                         try:
-                            mark_failed(sentinel_path, str(exc))
-                            counters.pop(fname, None)
-                            log.error(
-                                "Abandoned %s after %d attempts -> .failed",
-                                fname, max_attempts,
+                            mark_failed(
+                                sentinel_path,
+                                f"timeout after {max_attempts} attempts",
                             )
+                            counters.pop(fname, None)
                         except OSError:
                             pass
-
-            # A.2: any future still pending past _SMTP_TASK_TIMEOUT_SEC is a
-            # stuck send. Cancel best-effort; the underlying SMTP socket may
-            # still be held by the worker thread until the smtplib socket
-            # timeout fires, but we stop waiting on it and the watcher pass
-            # proceeds. Treat as recoverable so the retry ladder applies.
-            for future in not_done:
-                future.cancel()
-                sentinel_path = future_to_path[future]
-                fname = sentinel_path.name
-                count = counters.get(fname, 0) + 1
-                counters[fname] = count
-                log.error(
-                    "SMTP timeout for %s (attempt %d/%d): send exceeded "
-                    "%.1fs -- likely a stuck connection",
-                    fname, count, max_attempts, _SMTP_TASK_TIMEOUT_SEC,
-                )
-                if count >= max_attempts:
-                    try:
-                        mark_failed(
-                            sentinel_path,
-                            f"timeout after {max_attempts} attempts",
-                        )
-                        counters.pop(fname, None)
-                    except OSError:
-                        pass
 
     # Prune entries for files no longer pending
     counters = _prune_attempts(counters, sentinel_dir)
