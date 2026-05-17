@@ -171,6 +171,10 @@ class OrderReconciler:
         # Maps trade_id -> poll_count (incremented each cycle; FAILED after 3)
         self._timeout_poll_counts: Dict[str, int] = {}
 
+        # FIX-B: Track orphan cycle counts
+        # Maps trade_id -> cycle_count (incremented each cycle orphan is seen; auto-close after 3)
+        self._orphan_cycle_count: Dict[str, int] = {}
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -874,6 +878,11 @@ class OrderReconciler:
 
         Only runs when broker_orders_fn is not None. Calls broker_orders_fn()
         which may raise BrokerTimeoutError / BrokerAuthError (handled by caller).
+
+        FIX-B: Tracks orphan cycle count per trade_id. After 3 consecutive
+        cycles where the order is still orphaned, marks trade FAILED, releases
+        capital, and removes from counter. Resets counter if orphan resolves
+        naturally (trade no longer PENDING_FILL or order found at broker).
         """
         actions: List[ReconciliationAction] = []
         broker_open = self._broker_orders_fn()
@@ -882,26 +891,97 @@ class OrderReconciler:
         }
 
         pending = self._store.get_pending_all_products()
+        pending_trade_ids = {trade["trade_id"] for trade in pending}
+
+        # FIX-B: Reset counters for trades that are no longer PENDING_FILL
+        resolved_ids = [tid for tid in self._orphan_cycle_count if tid not in pending_trade_ids]
+        for tid in resolved_ids:
+            del self._orphan_cycle_count[tid]
+            self._log.info(
+                "FIX-B: orphan_cycle_count cleared for %s (trade no longer PENDING_FILL)", tid
+            )
+
         for trade in pending:
+            trade_id = trade["trade_id"]
             bid = str(trade["broker_order_id"] or "")
             if bid and bid not in broker_ids:
-                self._log.warning(
-                    "CHECK6 ORPHAN_ORDER: trade_id=%s broker_order_id=%s "
-                    "not found in broker open orders",
-                    trade["trade_id"], bid,
-                )
-                actions.append(ReconciliationAction(
-                    check_name="ORPHAN_ORDER",
-                    tier="UNRECOVERABLE",
-                    symbol=trade["symbol"],
-                    trade_id=trade["trade_id"],
-                    description=(
-                        f"PENDING_FILL order {bid} not found in "
-                        f"broker open orders for {trade['symbol']}"
-                    ),
-                    action_taken="logged; manual intervention required",
-                    success=True,
-                ))
+                # FIX-B: Increment orphan cycle counter
+                self._orphan_cycle_count[trade_id] = self._orphan_cycle_count.get(trade_id, 0) + 1
+                cycle_count = self._orphan_cycle_count[trade_id]
+
+                if cycle_count >= 3:
+                    # FIX-B: Auto-close after 3 cycles
+                    log = bind_trade(self._log, trade_id=trade_id)
+                    log.warning(
+                        "FIX-B ORPHAN_AUTO_CLOSE: trade_id=%s broker_order_id=%s "
+                        "orphaned for %d cycles, marking FAILED and releasing capital",
+                        trade_id, bid, cycle_count,
+                    )
+
+                    # Mark trade FAILED
+                    try:
+                        with self._store.transaction() as cur:
+                            cur.execute(
+                                "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
+                                ("FAILED", self._now_ist(), trade_id)
+                            )
+                    except Exception as exc:
+                        log.error("FIX-B: update trade status FAILED: %s", exc)
+
+                    # Release capital
+                    # Get reservation_id from trade row (EF-5: stored in trades table, not orders)
+                    # FIX-B: get_pending_all_products now includes reservation_id
+                    reservation_id = trade["reservation_id"]
+                    if reservation_id:
+                        try:
+                            self._fm.release(reservation_id, f"orphan_auto_close_after_{cycle_count}_cycles")
+                            log.info("FIX-B: capital released for reservation_id=%s", reservation_id)
+                        except Exception as exc:
+                            log.error("FIX-B: capital release failed: %s", exc)
+                    else:
+                        log.warning("FIX-B: no reservation_id found in trade %s", trade_id)
+
+                    # Remove from counter
+                    del self._orphan_cycle_count[trade_id]
+
+                    actions.append(ReconciliationAction(
+                        check_name="ORPHAN_ORDER",
+                        tier="RECOVERABLE",
+                        symbol=trade["symbol"],
+                        trade_id=trade_id,
+                        description=(
+                            f"PENDING_FILL order {bid} orphaned for {cycle_count} cycles, "
+                            f"auto-closed as FAILED for {trade['symbol']}"
+                        ),
+                        action_taken=f"marked_FAILED; capital_released; counter_cleared",
+                        success=True,
+                    ))
+                else:
+                    # FIX-B: Still counting cycles
+                    self._log.warning(
+                        "CHECK6 ORPHAN_ORDER: trade_id=%s broker_order_id=%s "
+                        "not found in broker open orders (cycle %d/3)",
+                        trade_id, bid, cycle_count,
+                    )
+                    actions.append(ReconciliationAction(
+                        check_name="ORPHAN_ORDER",
+                        tier="UNRECOVERABLE",
+                        symbol=trade["symbol"],
+                        trade_id=trade_id,
+                        description=(
+                            f"PENDING_FILL order {bid} not found in "
+                            f"broker open orders for {trade['symbol']} (cycle {cycle_count}/3)"
+                        ),
+                        action_taken=f"logged; will auto-close after 3 cycles",
+                        success=True,
+                    ))
+            else:
+                # FIX-B: Order found at broker or no broker_order_id yet - reset counter if present
+                if trade_id in self._orphan_cycle_count:
+                    del self._orphan_cycle_count[trade_id]
+                    self._log.info(
+                        "FIX-B: orphan_cycle_count cleared for %s (order now found at broker)", trade_id
+                    )
         return actions
 
     # ── CHECK 9: MISSING_EXITS (FIX-002) ─────────────────────────────────────

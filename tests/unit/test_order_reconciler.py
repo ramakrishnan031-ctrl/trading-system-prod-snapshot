@@ -2069,6 +2069,135 @@ def test_fix038_capital_drift_uses_exponential_backoff(tmp_path: Path, caplog) -
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-B: Orphan auto-close after 3 cycles
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fixb_orphan_auto_close_after_3_cycles(tmp_path: Path) -> None:
+    """FIX-B: Orphan orders auto-close after 3 consecutive cycles."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", status="PENDING_FILL")
+    _insert_order(store, "ord1", "t1", leg="ENTRY", product="MIS", status="SUBMITTED")
+
+    # Set reservation_id on the trade (EF-5: reservation_id is in trades table)
+    with store.transaction() as cur:
+        cur.execute("UPDATE trades SET reservation_id = ? WHERE trade_id = ?", ("res1", "t1"))
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    # Simulate orphan: order not found in broker open orders
+    adapter.get_open_orders.return_value = []
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, broker_orders_fn=adapter.get_open_orders)
+
+    # Cycle 1: orphan detected, counter = 1
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 1
+    assert "cycle 1/3" in orphan_actions[0].description
+    assert orphan_actions[0].tier == "UNRECOVERABLE"
+
+    # Verify trade still PENDING_FILL
+    trade = store.fetch_one("SELECT * FROM trades WHERE trade_id = ?", ("t1",))
+    assert trade["status"] == "PENDING_FILL"
+
+    # Cycle 2: counter = 2
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 1
+    assert "cycle 2/3" in orphan_actions[0].description
+
+    trade = store.fetch_one("SELECT * FROM trades WHERE trade_id = ?", ("t1",))
+    assert trade["status"] == "PENDING_FILL"
+
+    # Cycle 3: counter = 3, auto-close
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 1
+    assert orphan_actions[0].tier == "RECOVERABLE"
+    assert "auto-closed as FAILED" in orphan_actions[0].description
+    assert "marked_FAILED" in orphan_actions[0].action_taken
+
+    # Verify trade marked FAILED
+    trade = store.fetch_one("SELECT * FROM trades WHERE trade_id = ?", ("t1",))
+    assert trade["status"] == "FAILED"
+
+    # Verify capital released
+    fm.release.assert_called_once_with("res1", "orphan_auto_close_after_3_cycles")
+
+    # Cycle 4: orphan should not appear again (counter cleared, trade FAILED)
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 0
+
+    store.close()
+    print("  OK FIX-B: orphan auto-close after 3 cycles")
+
+
+def test_fixb_orphan_counter_reset_when_order_found(tmp_path: Path) -> None:
+    """FIX-B: Orphan counter resets when order appears at broker."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", status="PENDING_FILL")
+    _insert_order(store, "ord1", "t1", leg="ENTRY", product="MIS", status="SUBMITTED")
+
+    # Set reservation_id on the trade (EF-5: reservation_id is in trades table)
+    with store.transaction() as cur:
+        cur.execute("UPDATE trades SET reservation_id = ? WHERE trade_id = ?", ("res1", "t1"))
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, broker_orders_fn=adapter.get_open_orders)
+
+    # Cycle 1: orphan (order not at broker)
+    adapter.get_open_orders.return_value = []
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 1
+    assert "cycle 1/3" in orphan_actions[0].description
+
+    # Cycle 2: orphan still missing
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 1
+    assert "cycle 2/3" in orphan_actions[0].description
+
+    # Cycle 3: order now found at broker (resolution)
+    adapter.get_open_orders.return_value = [{"order_id": "ord1", "status": "OPEN"}]
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 0
+
+    # Cycle 4: orphan reappears (order missing again)
+    # Counter should start from 1 again (not continue from 2)
+    adapter.get_open_orders.return_value = []
+    actions = rec.reconcile_once()
+    orphan_actions = [a for a in actions if a.check_name == "ORPHAN_ORDER"]
+    assert len(orphan_actions) == 1
+    assert "cycle 1/3" in orphan_actions[0].description  # Reset to 1
+
+    # Verify trade NOT failed yet (counter was reset)
+    trade = store.fetch_one("SELECT * FROM trades WHERE trade_id = ?", ("t1",))
+    assert trade["status"] == "PENDING_FILL"
+
+    # Verify no capital release
+    fm.release.assert_not_called()
+
+    store.close()
+    print("  OK FIX-B: orphan counter reset when order found at broker")
+
+
 def run_all_tests() -> int:
     tests = [
         test_import_and_instantiate,
@@ -2136,6 +2265,9 @@ def run_all_tests() -> int:
         test_fix038_discrepancy_resolved_removes_tracking,
         test_fix038_missing_exits_bypasses_backoff,
         test_fix038_capital_drift_uses_exponential_backoff,
+        # FIX-B: Orphan auto-close after 3 cycles
+        test_fixb_orphan_auto_close_after_3_cycles,
+        test_fixb_orphan_counter_reset_when_order_found,
     ]
 
     print("=" * 70)

@@ -488,6 +488,17 @@ class WebhookReceiver:
                     raw_symbol, symbol
                 )
 
+            # FIX-C: Check excluded symbols after alias resolution
+            excluded_symbols = getattr(self._config.system, "excluded_symbols", [])
+            if symbol.upper() in [s.upper() for s in excluded_symbols]:
+                self._log.debug(
+                    "webhook_receiver: symbol %s rejected (in excluded_symbols list)",
+                    symbol
+                )
+                results.append({"symbol": symbol, "status": "REJECTED_EXCLUDED_SYMBOL"})
+                rejected_count += 1
+                continue
+
             item = self._process_signal(
                 scanner_name, symbol, price_str,
                 triggered_at, received_at, today_iso, expiry_sec,

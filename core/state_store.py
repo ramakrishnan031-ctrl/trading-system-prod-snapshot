@@ -1040,8 +1040,9 @@ class StateStore:
         Return all PENDING_FILL trades regardless of product.
 
         Like get_pending_intraday_orders() but covers CNC and all products.
-        Each row: trade_id, signal_id, symbol, direction, broker_order_id.
+        Each row: trade_id, signal_id, symbol, direction, broker_order_id, reservation_id.
         Used by reconciler for CHECK 6 (orphan order detection on pending trades).
+        FIX-B: Added reservation_id for orphan auto-close capital release.
         """
         return self.fetch_all(
             """
@@ -1050,7 +1051,8 @@ class StateStore:
                 t.signal_id,
                 t.symbol,
                 t.direction,
-                o.order_id AS broker_order_id
+                o.order_id AS broker_order_id,
+                t.reservation_id
             FROM trades t
             JOIN orders o
               ON o.trade_id = t.trade_id

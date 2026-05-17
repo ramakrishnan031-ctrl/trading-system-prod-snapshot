@@ -1225,6 +1225,161 @@ def test_fix022_simulated_offset_bug_age_correct():
 # Standalone runner (no pytest dependency)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# FIX-C: Excluded symbols list
+# ---------------------------------------------------------------------------
+
+def test_fixc_excluded_symbol_rejected_after_alias_resolution() -> None:
+    """FIX-C: Symbol in excluded_symbols list is rejected with DEBUG log only."""
+    sq = queue.Queue(maxsize=20)
+    td = tempfile.mkdtemp()
+    store = StateStore(Path(td) / "test.db")
+
+    # Create config with excluded_symbols list
+    cfg = types.SimpleNamespace()
+    cfg.system = types.SimpleNamespace(
+        signal_queue=types.SimpleNamespace(
+            capacity=20,
+            backpressure_pct=0.8,
+            expiry_sec=86400,  # 24 hours - large enough to not expire during test
+        ),
+        excluded_symbols=["E2E", "GVPIL", "BIRLACABLE", "SHANKARA", "MCLEODRUSS"],
+    )
+    cfg.scan_webhook_map = types.SimpleNamespace(scanners={"test_scanner": "test.yaml"})
+
+    mw = _MockMarketWindows(entry_allowed=True)
+    ks = _MockKillSwitch(active=False)
+    log = _NullLogger()
+
+    receiver = WebhookReceiver(sq, store, cfg, mw, ks, log)
+    client = receiver.app.test_client()
+
+    payload = {
+        "stocks": "E2E,RELIANCE",
+        "trigger_prices": "100.0,2500.0",
+        "triggered_at": "10:30 am",
+        "scan_name": "test_scanner",
+    }
+
+    resp = client.post("/webhook/test_scanner", json=payload)
+    assert resp.status_code == 200
+
+    data = json.loads(resp.data)
+    assert data["accepted"] == 1  # Only RELIANCE
+    assert data["rejected"] == 1  # E2E excluded
+
+    results = data["results"]
+    assert len(results) == 2
+
+    # E2E should be rejected
+    e2e_result = [r for r in results if r["symbol"] == "E2E"][0]
+    assert e2e_result["status"] == "REJECTED_EXCLUDED_SYMBOL"
+
+    # RELIANCE should be accepted
+    rel_result = [r for r in results if r["symbol"] == "RELIANCE"][0]
+    assert rel_result["status"] == "ACCEPTED"
+
+    # Verify E2E not in queue
+    assert sq.qsize() == 1
+    item = sq.get_nowait()
+    assert item[2] == "RELIANCE"  # symbol is 3rd element
+
+    store.close()
+    print("  OK FIX-C: excluded symbol rejected after alias resolution")
+
+
+def test_fixc_excluded_symbols_case_insensitive() -> None:
+    """FIX-C: Excluded symbols check is case-insensitive."""
+    sq = queue.Queue(maxsize=20)
+    td = tempfile.mkdtemp()
+    store = StateStore(Path(td) / "test.db")
+
+    cfg = types.SimpleNamespace()
+    cfg.system = types.SimpleNamespace(
+        signal_queue=types.SimpleNamespace(
+            capacity=20,
+            backpressure_pct=0.8,
+            expiry_sec=86400,  # 24 hours - large enough to not expire during test
+        ),
+        excluded_symbols=["E2E", "gvpil"],  # Mixed case
+    )
+    cfg.scan_webhook_map = types.SimpleNamespace(scanners={"test_scanner": "test.yaml"})
+
+    mw = _MockMarketWindows(entry_allowed=True)
+    ks = _MockKillSwitch(active=False)
+    log = _NullLogger()
+
+    receiver = WebhookReceiver(sq, store, cfg, mw, ks, log)
+    client = receiver.app.test_client()
+
+    payload = {
+        "stocks": "e2e,GVPIL,reliance",  # lowercase symbols
+        "trigger_prices": "100.0,200.0,2500.0",
+        "triggered_at": "10:30 am",
+        "scan_name": "test_scanner",
+    }
+
+    resp = client.post("/webhook/test_scanner", json=payload)
+    assert resp.status_code == 200
+
+    data = json.loads(resp.data)
+    assert data["accepted"] == 1  # Only reliance
+    assert data["rejected"] == 2  # e2e and GVPIL
+
+    # Verify only RELIANCE in queue
+    assert sq.qsize() == 1
+    item = sq.get_nowait()
+    assert item[2] == "reliance"
+
+    store.close()
+    print("  OK FIX-C: excluded symbols check is case-insensitive")
+
+
+def test_fixc_no_excluded_symbols_passthrough() -> None:
+    """FIX-C: When excluded_symbols is empty or missing, all symbols pass through."""
+    sq = queue.Queue(maxsize=20)
+    td = tempfile.mkdtemp()
+    store = StateStore(Path(td) / "test.db")
+
+    cfg = types.SimpleNamespace()
+    cfg.system = types.SimpleNamespace(
+        signal_queue=types.SimpleNamespace(
+            capacity=20,
+            backpressure_pct=0.8,
+            expiry_sec=86400,  # 24 hours - large enough to not expire during test
+        ),
+        # No excluded_symbols attribute
+    )
+    cfg.scan_webhook_map = types.SimpleNamespace(scanners={"test_scanner": "test.yaml"})
+
+    mw = _MockMarketWindows(entry_allowed=True)
+    ks = _MockKillSwitch(active=False)
+    log = _NullLogger()
+
+    receiver = WebhookReceiver(sq, store, cfg, mw, ks, log)
+    client = receiver.app.test_client()
+
+    payload = {
+        "stocks": "E2E,RELIANCE",
+        "trigger_prices": "100.0,2500.0",
+        "triggered_at": "10:30 am",
+        "scan_name": "test_scanner",
+    }
+
+    resp = client.post("/webhook/test_scanner", json=payload)
+    assert resp.status_code == 200
+
+    data = json.loads(resp.data)
+    assert data["accepted"] == 2  # Both accepted
+    assert data["rejected"] == 0
+
+    # Verify both in queue
+    assert sq.qsize() == 2
+
+    store.close()
+    print("  OK FIX-C: no excluded_symbols attribute - all symbols pass through")
+
+
 def run_all_tests() -> int:
     tests = [
         test_health_endpoint_returns_200,
@@ -1280,6 +1435,10 @@ def run_all_tests() -> int:
         test_fix022_naive_triggered_at_not_rejected_as_stale,
         test_fix022_already_aware_triggered_at_no_double_offset,
         test_fix022_simulated_offset_bug_age_correct,
+        # FIX-C: Excluded symbols list
+        test_fixc_excluded_symbol_rejected_after_alias_resolution,
+        test_fixc_excluded_symbols_case_insensitive,
+        test_fixc_no_excluded_symbols_passthrough,
     ]
 
     print("=" * 70)

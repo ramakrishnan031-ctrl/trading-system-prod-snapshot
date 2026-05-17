@@ -30,6 +30,14 @@ signal_queue:
   backpressure_pct: 0.80      # 503 threshold = capacity * backpressure_pct (P15)
   expiry_sec: 600             # WR6: 10 min - Chartink triggered_at is scan time, not delivery time
 
+# FIX-C: Symbol exclusion list (rejected at webhook edge with DEBUG log only)
+excluded_symbols:
+  - "E2E"                     # Exclude list from live observation
+  - "GVPIL"
+  - "BIRLACABLE"
+  - "SHANKARA"
+  - "MCLEODRUSS"
+
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:
     INTRADAY: "MIS"           # Margin Intraday Squareoff (PR3)
