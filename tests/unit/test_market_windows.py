@@ -274,6 +274,103 @@ def test_custom_window_overrides():
     assert mw.is_eod_squareoff_due(TRADING_DAY(14, 59)) is False
 
 
+# ---------- FIX-094: Special sessions ----------
+
+def test_fix094_no_special_sessions_uses_defaults():
+    """When no special sessions configured, defaults are used."""
+    mw = MarketWindows()
+    # Wednesday, normal market hours
+    assert mw.is_market_open(TRADING_DAY(9, 15)) is True
+    assert mw.is_market_open(TRADING_DAY(15, 30)) is False
+    assert mw.is_eod_squareoff_due(TRADING_DAY(15, 17)) is True
+
+
+def test_fix094_special_session_overrides_market_hours():
+    """Muhurat trading: evening session 18:15-19:15."""
+    muhurat_date = date(2026, 11, 1)
+    special_sessions = {
+        muhurat_date: (time(18, 15), time(19, 15), time(19, 12)),
+    }
+    mw = MarketWindows(special_sessions=special_sessions)
+
+    # On Muhurat date, market NOT open at normal hours
+    muhurat_dt = lambda hh, mm=0: _dt(2026, 11, 1, hh, mm)
+    assert mw.is_market_open(muhurat_dt(9, 15)) is False
+    assert mw.is_market_open(muhurat_dt(15, 0)) is False
+
+    # Market IS open during special session
+    assert mw.is_market_open(muhurat_dt(18, 15)) is True
+    assert mw.is_market_open(muhurat_dt(19, 0)) is True
+    assert mw.is_market_open(muhurat_dt(19, 15)) is False  # close time excluded
+
+
+def test_fix094_special_session_eod_squareoff_override():
+    """EOD square-off uses special session time."""
+    muhurat_date = date(2026, 11, 1)
+    special_sessions = {
+        muhurat_date: (time(18, 15), time(19, 15), time(19, 12)),
+    }
+    mw = MarketWindows(special_sessions=special_sessions)
+
+    muhurat_dt = lambda hh, mm=0: _dt(2026, 11, 1, hh, mm)
+    # Normal EOD time 15:17 should NOT trigger
+    assert mw.is_eod_squareoff_due(muhurat_dt(15, 17)) is False
+
+    # Special session EOD time 19:12 triggers
+    assert mw.is_eod_squareoff_due(muhurat_dt(19, 11)) is False
+    assert mw.is_eod_squareoff_due(muhurat_dt(19, 12)) is True
+
+
+def test_fix094_special_session_eod_squareoff_time_returns_correct_datetime():
+    """eod_squareoff_time() returns special session time."""
+    muhurat_date = date(2026, 11, 1)
+    special_sessions = {
+        muhurat_date: (time(18, 15), time(19, 15), time(19, 12)),
+    }
+    mw = MarketWindows(special_sessions=special_sessions)
+
+    muhurat_dt = _dt(2026, 11, 1, 18, 30)
+    eod_dt = mw.eod_squareoff_time(muhurat_dt)
+    assert eod_dt == _dt(2026, 11, 1, 19, 12)
+    assert eod_dt.tzinfo == IST
+
+
+def test_fix094_special_session_not_carried_forward_to_next_day():
+    """Special session on 2026-11-01 does NOT affect 2026-11-02."""
+    muhurat_date = date(2026, 11, 1)
+    special_sessions = {
+        muhurat_date: (time(18, 15), time(19, 15), time(19, 12)),
+    }
+    mw = MarketWindows(special_sessions=special_sessions)
+
+    # Next day (Sunday) should use defaults (weekend -> not open)
+    next_day_dt = _dt(2026, 11, 2, 18, 30)  # Sunday
+    assert mw.is_market_open(next_day_dt) is False  # weekend
+
+    # Monday after Muhurat: normal hours
+    monday_dt = _dt(2026, 11, 3, 9, 30)  # Monday
+    assert mw.is_market_open(monday_dt) is True
+
+
+def test_fix094_seconds_to_market_open_uses_special_session():
+    """seconds_to_market_open uses special session time for next day."""
+    muhurat_date = date(2026, 11, 1)  # Saturday
+    special_sessions = {
+        muhurat_date: (time(18, 15), time(19, 15), time(19, 12)),
+    }
+    # Do NOT add muhurat_date to holidays - special sessions override weekend check
+    mw = MarketWindows(special_sessions=special_sessions)
+
+    # From Friday afternoon, next open is Saturday Muhurat at 18:15
+    friday_dt = _dt(2026, 10, 31, 16, 0)  # Friday 4pm
+    seconds = mw.seconds_to_market_open(friday_dt)
+
+    # Calculate expected: Friday 16:00 to Saturday 18:15
+    # = 26 hours 15 min = 94500 seconds
+    expected = ((24 + 2) * 3600) + (15 * 60)
+    assert seconds == expected, f"Expected {expected}, got {seconds}"
+
+
 # ---------- runner ----------
 
 TESTS = [
@@ -303,6 +400,12 @@ TESTS = [
     test_next_trading_day_lookahead_cap,
     test_next_trading_day_11_consecutive_holidays_succeeds,
     test_custom_window_overrides,
+    test_fix094_no_special_sessions_uses_defaults,
+    test_fix094_special_session_overrides_market_hours,
+    test_fix094_special_session_eod_squareoff_override,
+    test_fix094_special_session_eod_squareoff_time_returns_correct_datetime,
+    test_fix094_special_session_not_carried_forward_to_next_day,
+    test_fix094_seconds_to_market_open_uses_special_session,
 ]
 
 

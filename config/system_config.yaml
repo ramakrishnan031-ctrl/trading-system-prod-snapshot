@@ -15,6 +15,16 @@ trading_hours:
   market_open: "09:15"        # NSE regular-session open
   market_close: "15:30"       # NSE regular-session close; cutoff for EOD-window checks
 
+# FIX-094: Special sessions (Muhurat trading, etc.) — override market hours for specific dates
+# Format: date (YYYY-MM-DD) -> {market_open, market_close, eod_squareoff_time}
+# Uncomment and configure when special session is scheduled:
+special_sessions:
+  # Example: Muhurat Trading (Diwali special evening session)
+  # 2026-11-01:
+  #   market_open: "18:15"
+  #   market_close: "19:15"
+  #   eod_squareoff_time: "19:12"
+
 signal_queue:
   capacity: 300               # Max signals in queue before HTTP 503 (P15)
   backpressure_pct: 0.80      # 503 threshold = capacity * backpressure_pct (P15)

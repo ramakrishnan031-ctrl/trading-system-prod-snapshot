@@ -255,6 +255,33 @@ def _load_holidays(app_config) -> set:
     return {h.date for h in app_config.nse_holidays.holidays}
 
 
+def _load_special_sessions(app_config) -> dict:
+    """
+    FIX-094: Convert special_sessions config to dict[date, tuple[time, time, time]].
+
+    Returns:
+        dict mapping date -> (market_open, market_close, eod_squareoff)
+        Empty dict if no special_sessions configured.
+    """
+    from datetime import datetime
+
+    special_sessions_cfg = getattr(app_config.system, 'special_sessions', None)
+    if not special_sessions_cfg:
+        return {}
+
+    result = {}
+    for date_str, session in special_sessions_cfg.items():
+        # Parse YYYY-MM-DD date string
+        session_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        # Parse HH:MM time strings
+        market_open = _parse_hhmm(session['market_open'])
+        market_close = _parse_hhmm(session['market_close'])
+        eod_squareoff = _parse_hhmm(session['eod_squareoff_time'])
+        result[session_date] = (market_open, market_close, eod_squareoff)
+
+    return result
+
+
 def _make_paper_quote_provider():
     """
     Return a quote_provider for paper mode that fetches REAL quotes from Kite.
@@ -956,6 +983,7 @@ def _main_locked(args, config_dir: Path) -> int:
 
     # ── Phase 0d: Startup checks (MAIN7) ────────────────────────────────────
     holidays = _load_holidays(app_config)
+    special_sessions = _load_special_sessions(app_config)  # FIX-094
     th = app_config.system.trading_hours
     market_windows = MarketWindows(
         entry_start=_parse_hhmm(th.entry_start),
@@ -965,7 +993,22 @@ def _main_locked(args, config_dir: Path) -> int:
         eod_squareoff=_parse_hhmm(th.eod_squareoff_time),
         eod_entry_cutoff=_parse_hhmm(th.eod_entry_cutoff),
         holidays=holidays,
+        special_sessions=special_sessions,  # FIX-094
     )
+
+    # FIX-094: Log special session override if active for today
+    today_date = time_authority.now_ist().date()
+    if today_date in special_sessions:
+        m_open, m_close, eod_sq = special_sessions[today_date]
+        _log.info(
+            "FIX-094 special session override active",
+            extra={
+                "date": today_date.isoformat(),
+                "market_open": m_open.isoformat(),
+                "market_close": m_close.isoformat(),
+                "eod_squareoff": eod_sq.isoformat(),
+            },
+        )
 
     # Build broker adapter early for clock check (paper mode skips live calls)
     state_machine = OrderStateMachine()

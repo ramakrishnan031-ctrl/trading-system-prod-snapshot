@@ -41,6 +41,10 @@ class MarketWindows:
     All `now` arguments must be timezone-aware datetimes (IST). The class
     itself does not validate timezone; that is the caller's contract via
     time_authority.
+
+    FIX-094: Supports special sessions (e.g. Muhurat trading) via
+    special_sessions dict mapping date -> SpecialSession(market_open,
+    market_close, eod_squareoff_time).
     """
 
     def __init__(
@@ -52,6 +56,7 @@ class MarketWindows:
         eod_squareoff: time = DEFAULT_EOD_SQUAREOFF,
         eod_entry_cutoff: time = DEFAULT_EOD_ENTRY_CUTOFF,
         holidays: set[date] | None = None,
+        special_sessions: dict[date, tuple[time, time, time]] | None = None,
     ) -> None:
         self.entry_start = entry_start
         self.entry_end = entry_end
@@ -60,12 +65,41 @@ class MarketWindows:
         self.eod_squareoff_t = eod_squareoff
         self.eod_entry_cutoff_t = eod_entry_cutoff
         self.holidays: set[date] = set(holidays) if holidays else set()
+        # FIX-094: special_sessions maps date -> (market_open, market_close, eod_squareoff)
+        self.special_sessions: dict[date, tuple[time, time, time]] = (
+            special_sessions if special_sessions else {}
+        )
+
+    # -- FIX-094: special session helpers ----------------------------------
+
+    def _get_effective_times(
+        self, d: date
+    ) -> tuple[time, time, time]:
+        """
+        FIX-094: Get effective (market_open, market_close, eod_squareoff) for date.
+
+        If `d` has a special session override, returns those times.
+        Otherwise returns the default times configured at construction.
+
+        Returns:
+            (market_open, market_close, eod_squareoff) as time objects
+        """
+        if d in self.special_sessions:
+            return self.special_sessions[d]
+        return (self.market_open, self.market_close, self.eod_squareoff_t)
 
     # -- weekend / holiday -------------------------------------------------
 
     def is_trading_holiday(self, now: datetime) -> bool:
-        """True if `now` falls on a weekend or a configured holiday."""
+        """True if `now` falls on a weekend or a configured holiday.
+
+        FIX-094: Special session dates are NOT considered holidays,
+        even if they fall on weekends (e.g. Muhurat trading on Diwali Saturday).
+        """
         d = now.date()
+        # FIX-094: Special session override exempts from holiday check
+        if d in self.special_sessions:
+            return False
         # Monday=0 .. Sunday=6
         if d.weekday() >= 5:
             return True
@@ -75,9 +109,16 @@ class MarketWindows:
         """Return the next date strictly after `now.date()` that is a
         trading day (not weekend, not holiday). Walks at most
         _NEXT_DAY_LOOKAHEAD_CAP days; raises ValueError if exceeded.
+
+        FIX-094: Special session dates count as trading days even if they
+        fall on weekends.
         """
         candidate = now.date() + timedelta(days=1)
         for _ in range(_NEXT_DAY_LOOKAHEAD_CAP):
+            # FIX-094: Special session dates are always trading days
+            if candidate in self.special_sessions:
+                return candidate
+            # Regular check: weekday and not a holiday
             if candidate.weekday() < 5 and candidate not in self.holidays:
                 return candidate
             candidate += timedelta(days=1)
@@ -89,11 +130,15 @@ class MarketWindows:
     # -- intraday windows --------------------------------------------------
 
     def is_market_open(self, now: datetime) -> bool:
-        """True if `now` is within market hours on a trading day."""
+        """True if `now` is within market hours on a trading day.
+
+        FIX-094: Uses special session times if configured for this date.
+        """
         if self.is_trading_holiday(now):
             return False
         t = now.time()
-        return self.market_open <= t < self.market_close
+        market_open, market_close, _ = self._get_effective_times(now.date())
+        return market_open <= t < market_close
 
     def is_entry_allowed(self, now: datetime) -> bool:
         """True if `now` is within the entry-order processing window
@@ -151,17 +196,23 @@ class MarketWindows:
         (P1 default 15:17 IST; configurable via system_config.yaml's
         trading_hours.eod_squareoff_time per CFG-1) on a trading day.
         Caller owns the 'already fired today' edge-trigger flag.
+
+        FIX-094: Uses special session eod_squareoff time if configured for this date.
         """
         if self.is_trading_holiday(now):
             return False
-        return now.time() >= self.eod_squareoff_t
+        _, _, eod_squareoff = self._get_effective_times(now.date())
+        return now.time() >= eod_squareoff
 
     def eod_squareoff_time(self, now: datetime) -> datetime:
         """Return the EOD square-off datetime for the date of `now`,
         preserving tzinfo.
+
+        FIX-094: Uses special session eod_squareoff time if configured for this date.
         """
+        _, _, eod_squareoff = self._get_effective_times(now.date())
         return datetime.combine(
-            now.date(), self.eod_squareoff_t, tzinfo=now.tzinfo
+            now.date(), eod_squareoff, tzinfo=now.tzinfo
         )
 
     def seconds_to_eod_squareoff(self, now: datetime) -> int:
@@ -181,12 +232,15 @@ class MarketWindows:
         FIX-053: If boot happens after 09:15 but before 15:30 (market
         currently open), return 0 immediately instead of rolling over
         to tomorrow's open (24-hour sleep bug).
+
+        FIX-094: Uses special session times if configured for today or next day.
         """
+        market_open, market_close, _ = self._get_effective_times(now.date())
         today_open = datetime.combine(
-            now.date(), self.market_open, tzinfo=now.tzinfo
+            now.date(), market_open, tzinfo=now.tzinfo
         )
         today_close = datetime.combine(
-            now.date(), self.market_close, tzinfo=now.tzinfo
+            now.date(), market_close, tzinfo=now.tzinfo
         )
 
         # FIX-053: If market is currently open, return 0 immediately
@@ -199,7 +253,8 @@ class MarketWindows:
 
         # After today's close or holiday — roll to next trading day
         next_day = self.next_trading_day(now)
+        next_market_open, _, _ = self._get_effective_times(next_day)
         next_open = datetime.combine(
-            next_day, self.market_open, tzinfo=now.tzinfo
+            next_day, next_market_open, tzinfo=now.tzinfo
         )
         return int((next_open - now).total_seconds())
