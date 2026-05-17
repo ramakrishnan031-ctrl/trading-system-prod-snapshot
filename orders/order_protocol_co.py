@@ -48,6 +48,7 @@ import logging
 
 from broker.zerodha_adapter import ZerodhaAdapter
 from core.exceptions import BrokerError, OrderRejectedError
+from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
 from orders.entry_engine import EntryEngine, EntryResult
 
@@ -102,7 +103,12 @@ class CoPlusTgtProtocol(EntryEngine):
         CO entry order has built-in SL bracket (trigger_price=sl_price).
         TGT is NOT placed here — caller must use place_exits() after entry fills.
         """
-        order_tag = tag or trade_id
+        # FIX-093: Truncate tag to 16 chars for Kite API compliance
+        order_tag = truncate_tag_for_broker(tag or trade_id)
+        self._log.debug(
+            "co_plus_tgt.order_tag_truncated",
+            extra={"trade_id": trade_id, "order_tag": order_tag},
+        )
 
         # ── CO entry order (with built-in SL bracket) ──────────────────────
         try:
@@ -178,7 +184,8 @@ class CoPlusTgtProtocol(EntryEngine):
         """
         from orders.full_entry_engine import ExitLegsResult
 
-        order_tag = tag or trade_id
+        # FIX-093: Truncate tag to 16 chars for Kite API compliance
+        order_tag = truncate_tag_for_broker(tag or trade_id)
         exit_side = _exit_side(entry_side)
 
         try:

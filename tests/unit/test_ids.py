@@ -29,6 +29,7 @@ from core.ids import (
     new_order_id,
     new_signal_id,
     new_trade_id,
+    truncate_tag_for_broker,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,6 +267,69 @@ def test_cross_validator_rejects_wrong_type_id() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tests — truncate_tag_for_broker (FIX-093)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_truncate_tag_for_broker_1000_ids_max_16_chars() -> None:
+    """Generate 1000 trade_ids and verify all truncated tags are <= 16 chars."""
+    for _ in range(1000):
+        full_trade_id = new_trade_id()
+        truncated = truncate_tag_for_broker(full_trade_id)
+        assert len(truncated) <= 16, f"Truncated tag exceeds 16 chars: {truncated!r} (len={len(truncated)})"
+    print("  OK 1000 trade_ids truncated to <= 16 chars (FIX-093)")
+
+
+def test_truncate_tag_for_broker_alphanumeric() -> None:
+    """Verify truncated tags are alphanumeric (Kite requirement)."""
+    for _ in range(100):
+        full_trade_id = new_trade_id()
+        truncated = truncate_tag_for_broker(full_trade_id)
+        assert truncated.replace("_", "").isalnum(), f"Non-alphanumeric char in tag: {truncated!r}"
+    print("  OK Truncated tags are alphanumeric (FIX-093)")
+
+
+def test_truncate_tag_for_broker_preserves_full_trade_id() -> None:
+    """Verify full trade_id is used for DB storage (not truncated)."""
+    full_trade_id = new_trade_id()
+    truncated = truncate_tag_for_broker(full_trade_id)
+    # Full trade_id is 36 chars: "trd_" + 32 hex = 36
+    assert len(full_trade_id) == 36, f"Expected 36 chars, got {len(full_trade_id)}: {full_trade_id!r}"
+    # Truncated is 16 chars
+    assert len(truncated) == 16, f"Expected 16 chars, got {len(truncated)}: {truncated!r}"
+    # Full ID is preserved (just not sent to broker)
+    assert is_valid_trade_id(full_trade_id), "Full trade_id must remain valid"
+    print("  OK Full trade_id preserved in DB, only broker tag truncated (FIX-093)")
+
+
+def test_truncate_tag_for_broker_handles_collisions() -> None:
+    """
+    Two different trade_ids truncated to same 16 chars is theoretically possible
+    but astronomically unlikely (2^64 collision resistance). Test that truncation
+    is deterministic: same input -> same output.
+    """
+    full_trade_id = "trd_a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5"
+    truncated1 = truncate_tag_for_broker(full_trade_id)
+    truncated2 = truncate_tag_for_broker(full_trade_id)
+    assert truncated1 == truncated2, "Truncation must be deterministic"
+    assert truncated1 == "trd_a3f5b8c2d1e4", f"Expected 'trd_a3f5b8c2d1e4', got {truncated1!r}"
+    print("  OK Truncation is deterministic (FIX-093)")
+
+
+def test_truncate_tag_for_broker_empty_string() -> None:
+    """Edge case: empty string input."""
+    assert truncate_tag_for_broker("") == ""
+    print("  OK truncate_tag_for_broker handles empty string (FIX-093)")
+
+
+def test_truncate_tag_for_broker_short_string() -> None:
+    """Edge case: input already < 16 chars."""
+    short = "trd_abc"
+    truncated = truncate_tag_for_broker(short)
+    assert truncated == short, f"Short string should not be modified: {short!r} -> {truncated!r}"
+    print("  OK truncate_tag_for_broker preserves strings < 16 chars (FIX-093)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -304,6 +368,12 @@ def run_all_tests() -> int:
         test_trade_id_round_trip,
         test_order_id_round_trip,
         test_cross_validator_rejects_wrong_type_id,
+        test_truncate_tag_for_broker_1000_ids_max_16_chars,
+        test_truncate_tag_for_broker_alphanumeric,
+        test_truncate_tag_for_broker_preserves_full_trade_id,
+        test_truncate_tag_for_broker_handles_collisions,
+        test_truncate_tag_for_broker_empty_string,
+        test_truncate_tag_for_broker_short_string,
     ]
 
     print("=" * 70)

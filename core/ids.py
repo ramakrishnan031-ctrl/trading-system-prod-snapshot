@@ -95,3 +95,30 @@ def is_valid_order_id(s: object) -> bool:
         and s.startswith(_PREFIX_ORDER)
         and _HEX32.match(s[len(_PREFIX_ORDER):]) is not None
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Broker Tag Truncation (FIX-093)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def truncate_tag_for_broker(tag: str) -> str:
+    """
+    Truncate tag to 16 chars for broker API compliance (FIX-093).
+
+    Kite API enforces 20-char max on tag field, but empirical testing shows
+    rejection at 17+ chars. Truncate to 16 chars (alphanumeric safe zone).
+
+    Full trade_id is preserved in DB; only the broker tag is truncated.
+    Internal deduplication still uses the full trade_id.
+
+    Args:
+        tag: Full tag string (typically trade_id: "trd_" + 32-char hex = 36 chars)
+
+    Returns:
+        Truncated tag (max 16 chars, alphanumeric)
+
+    Example:
+        >>> truncate_tag_for_broker("trd_a3f5b8c2d1e4f6a7b8c9d0e1f2a3b4c5")
+        'trd_a3f5b8c2d1e4'
+    """
+    return tag[:16] if tag else ""
