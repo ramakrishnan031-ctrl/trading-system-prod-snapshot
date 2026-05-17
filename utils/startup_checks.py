@@ -96,6 +96,16 @@ class ClockCheckResult:
 
 
 @dataclass(frozen=True)
+class DbPermissionResult:
+    """FIX-096: Outcome of check_db_permissions()."""
+    passed:       bool
+    db_path:      str
+    db_dir:       str
+    errors:       List[str] = field(default_factory=list)
+    chown_commands: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ConfigHashResult:
     """Outcome of check_config_hash() (SC6)."""
     changed:          bool
@@ -837,6 +847,105 @@ def check_required_secrets(
             logger.warning("check_required_secrets: missing env var %s", key)
             missing.append(key)
     return missing
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-096 -- DB permission check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_db_permissions(
+    db_path: str,
+    logger,
+) -> DbPermissionResult:
+    """
+    FIX-096: Verify DB file permissions before StateStore init.
+
+    Checks read/write permissions on:
+    - DB directory
+    - .db file (if exists)
+    - .db-wal file (if exists)
+    - .db-shm file (if exists)
+
+    Returns:
+        DbPermissionResult with passed=False and chown commands if any fail.
+
+    Edge cases:
+    - .db-wal exists but .db missing → corrupted state error
+    - DB directory not writable → blocker
+    """
+    db_file = Path(db_path)
+    db_dir = db_file.parent
+    errors = []
+    chown_commands = []
+
+    # Get current user for chown command
+    import getpass
+    try:
+        current_user = getpass.getuser()
+    except Exception:
+        current_user = "USER"
+
+    # Check 1: DB directory must be writable
+    if not db_dir.exists():
+        errors.append(f"DB directory does not exist: {db_dir}")
+    elif not os.access(db_dir, os.R_OK | os.W_OK):
+        errors.append(f"DB directory not readable/writable: {db_dir}")
+        if os.name != 'nt':  # Unix/Linux only
+            chown_commands.append(f"sudo chown {current_user}:{current_user} {db_dir}")
+
+    # Check 2: .db file (if exists)
+    if db_file.exists():
+        if not os.access(db_file, os.R_OK | os.W_OK):
+            errors.append(f"DB file not readable/writable: {db_file}")
+            if os.name != 'nt':
+                chown_commands.append(f"sudo chown {current_user}:{current_user} {db_file}")
+
+    # Check 3: .db-wal file (if exists)
+    wal_file = db_file.with_suffix('.db-wal')
+    if wal_file.exists():
+        # Corruption check: WAL exists but DB missing
+        if not db_file.exists():
+            errors.append(f"CORRUPTED STATE: {wal_file.name} exists but {db_file.name} missing")
+            return DbPermissionResult(
+                passed=False,
+                db_path=str(db_file),
+                db_dir=str(db_dir),
+                errors=errors,
+                chown_commands=chown_commands,
+            )
+
+        if not os.access(wal_file, os.R_OK | os.W_OK):
+            errors.append(f"WAL file not readable/writable: {wal_file}")
+            if os.name != 'nt':
+                chown_commands.append(f"sudo chown {current_user}:{current_user} {wal_file}")
+
+    # Check 4: .db-shm file (if exists)
+    shm_file = db_file.with_suffix('.db-shm')
+    if shm_file.exists():
+        if not os.access(shm_file, os.R_OK | os.W_OK):
+            errors.append(f"SHM file not readable/writable: {shm_file}")
+            if os.name != 'nt':
+                chown_commands.append(f"sudo chown {current_user}:{current_user} {shm_file}")
+
+    passed = len(errors) == 0
+
+    if not passed:
+        for error in errors:
+            logger.critical("check_db_permissions: %s", error)
+        if chown_commands:
+            logger.critical("check_db_permissions: FIX with these commands:")
+            for cmd in chown_commands:
+                logger.critical("  %s", cmd)
+    else:
+        logger.info("check_db_permissions: OK all files readable/writable")
+
+    return DbPermissionResult(
+        passed=passed,
+        db_path=str(db_file),
+        db_dir=str(db_dir),
+        errors=errors,
+        chown_commands=chown_commands,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

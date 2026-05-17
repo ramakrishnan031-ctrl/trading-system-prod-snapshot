@@ -1231,6 +1231,60 @@ def test_f1_ef7_startup_check_noop_in_live_mode(tmp_path: Path) -> None:
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ==============================================================================
+# check_db_permissions (FIX-096)
+# ==============================================================================
+
+def test_fix096_correct_permissions_passes(tmp_path: Path):
+    """All DB files with correct permissions → passed=True."""
+    import logging
+    from utils.startup_checks import check_db_permissions
+    log = logging.getLogger("test")
+    log.addHandler(logging.NullHandler())
+
+    db_path = tmp_path / "test.db"
+    db_path.touch()
+    (tmp_path / "test.db-wal").touch()
+    (tmp_path / "test.db-shm").touch()
+
+    result = check_db_permissions(str(db_path), log)
+    assert result.passed, "Should pass with correct permissions"
+    assert len(result.errors) == 0
+    assert len(result.chown_commands) == 0
+
+
+def test_fix096_wal_without_db_corrupted(tmp_path: Path):
+    """WAL exists but DB missing → corrupted state error."""
+    import logging
+    from utils.startup_checks import check_db_permissions
+    log = logging.getLogger("test")
+    log.addHandler(logging.NullHandler())
+
+    db_path = tmp_path / "test.db"
+    wal_path = tmp_path / "test.db-wal"
+    wal_path.touch()  # WAL exists, DB does not
+
+    result = check_db_permissions(str(db_path), log)
+    assert not result.passed
+    assert any("CORRUPTED STATE" in e for e in result.errors), \
+        f"Should detect corrupted state, got: {result.errors}"
+
+
+def test_fix096_db_path_populated(tmp_path: Path):
+    """Result contains db_path and db_dir fields."""
+    import logging
+    from utils.startup_checks import check_db_permissions
+    log = logging.getLogger("test")
+    log.addHandler(logging.NullHandler())
+
+    db_path = tmp_path / "test.db"
+    db_path.touch()
+
+    result = check_db_permissions(str(db_path), log)
+    assert result.db_path == str(db_path)
+    assert result.db_dir == str(tmp_path)
+
+
 def run_all_tests() -> int:
     tests = [
         # detect_startup_scenario (SC4)
