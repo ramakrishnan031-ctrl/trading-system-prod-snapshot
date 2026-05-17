@@ -141,6 +141,15 @@ class WebhookEndpointResult:
 
 
 @dataclass(frozen=True)
+class DiskSpaceResult:
+    """Result of check_disk_space() (FIX-099)."""
+    passed: bool              # True if free space >= min_free_disk_gb
+    free_gb: float            # Free space in GB
+    min_required_gb: float    # Minimum required from config
+    error: Optional[str] = None  # Error message if check failed
+
+
+@dataclass(frozen=True)
 class StartupReport:
     """Aggregate result of run_all_startup_checks() (SC12)."""
     ok:                  bool          # False if any blocking check failed
@@ -156,6 +165,7 @@ class StartupReport:
     missing_secrets:     List[str]
     missing_config_files: List[str]
     instrument_cache_count: Optional[int] = None  # BL-20: None if check skipped
+    disk_space:          Optional[DiskSpaceResult] = None  # FIX-099: None if skipped
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -946,6 +956,80 @@ def check_db_permissions(
         errors=errors,
         chown_commands=chown_commands,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-099 -- Disk space check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_disk_space(
+    log_dir: Path,
+    min_free_gb: float,
+    logger,
+) -> DiskSpaceResult:
+    """
+    FIX-099: Check free disk space before logger initialization.
+
+    Prevents disk-full paralysis by blocking startup if insufficient space.
+    Should be called BEFORE setup_logging() to ensure space for log writes.
+
+    Args:
+        log_dir: Directory where logs will be written
+        min_free_gb: Minimum free space required (from system_config.yaml)
+        logger: Logger instance (logs to stderr if file logging not yet active)
+
+    Returns:
+        DiskSpaceResult with passed=True if free >= min_free_gb, False otherwise.
+
+    Critical behavior:
+        If disk space < min_free_gb, logs CRITICAL to stderr (not file) and
+        returns passed=False. Caller should exit with code 1.
+    """
+    import shutil
+
+    try:
+        # Ensure log_dir exists for disk_usage check
+        log_dir.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(log_dir)
+        free_gb = usage.free / (1024 ** 3)
+
+        if free_gb < min_free_gb:
+            error_msg = (
+                f"Insufficient disk space. Free: {free_gb:.1f}GB — "
+                f"minimum required: {min_free_gb}GB. Free disk space before starting."
+            )
+            # Log to stderr since file logging may not be initialized yet
+            import sys
+            sys.stderr.write(f"CRITICAL: {error_msg}\n")
+            sys.stderr.flush()
+            logger.critical("check_disk_space: %s", error_msg)
+
+            return DiskSpaceResult(
+                passed=False,
+                free_gb=free_gb,
+                min_required_gb=min_free_gb,
+                error=error_msg,
+            )
+
+        logger.info(
+            "check_disk_space: OK free=%.1fGB >= required=%.1fGB",
+            free_gb, min_free_gb,
+        )
+        return DiskSpaceResult(
+            passed=True,
+            free_gb=free_gb,
+            min_required_gb=min_free_gb,
+        )
+
+    except Exception as exc:
+        error_msg = f"disk_usage check failed: {exc}"
+        logger.error("check_disk_space: %s", error_msg)
+        return DiskSpaceResult(
+            passed=False,
+            free_gb=0.0,
+            min_required_gb=min_free_gb,
+            error=error_msg,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -298,6 +298,44 @@ class TestRetryLogic(unittest.TestCase):
 
     @patch("alerts.telegram_notifier.time.sleep")
     @patch("alerts.telegram_notifier.requests.post")
+    def test_fix097_retry_after_integer(self, mock_post, mock_sleep):
+        """FIX-097: Integer Retry-After → use it (capped at 5s)."""
+        mock_post.side_effect = [_mock_status(429, retry_after="45"), _mock_ok()]
+        n = _make_notifier(self.tmpdir, chat_ids=["a"])
+        result = n.send("INFO", "t", "b", "m")
+        # Should sleep min(45.0, 5.0) = 5.0
+        mock_sleep.assert_called_once_with(5.0)
+        self.assertTrue(result.success)
+
+    @patch("alerts.telegram_notifier.time.sleep")
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_fix097_retry_after_http_date_fallback(self, mock_post, mock_sleep):
+        """FIX-097: HTTP-date Retry-After → fallback 30s (capped at 5s)."""
+        # HTTP-date format (not parseable as int/float)
+        mock_post.side_effect = [
+            _mock_status(429, retry_after="Fri, 31 Dec 1999 23:59:59 GMT"),
+            _mock_ok()
+        ]
+        n = _make_notifier(self.tmpdir, chat_ids=["a"])
+        result = n.send("INFO", "t", "b", "m")
+        # Should fallback to 30s, capped at 5s → sleep(5.0)
+        mock_sleep.assert_called_once_with(5.0)
+        self.assertTrue(result.success)
+
+    @patch("alerts.telegram_notifier.time.sleep")
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_fix097_retry_after_missing_uses_default(self, mock_post, mock_sleep):
+        """FIX-097: Missing Retry-After → fallback 30s (capped at 5s)."""
+        resp = _mock_status(429)  # no retry_after param = no header
+        mock_post.side_effect = [resp, _mock_ok()]
+        n = _make_notifier(self.tmpdir, chat_ids=["a"])
+        result = n.send("INFO", "t", "b", "m")
+        # Should use default "30" from get(), capped at 5s
+        mock_sleep.assert_called_once_with(5.0)
+        self.assertTrue(result.success)
+
+    @patch("alerts.telegram_notifier.time.sleep")
+    @patch("alerts.telegram_notifier.requests.post")
     def test_http_500_retries_with_backoff(self, mock_post, mock_sleep):
         mock_post.side_effect = [_mock_status(500), _mock_status(500), _mock_ok()]
         n = _make_notifier(self.tmpdir, chat_ids=["a"], max_retries=2)

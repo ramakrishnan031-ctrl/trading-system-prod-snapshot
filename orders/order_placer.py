@@ -2404,7 +2404,8 @@ class OrderPlacer:
             # Build symbol -> token map for quick lookup
             symbol_to_token: Dict[int, str] = {}
             if self._instrument_cache is not None:
-                for trade_id, params in self._pending_exit_retry.items():
+                # FIX-098: list() prevents RuntimeError if dict modified during iteration
+                for trade_id, params in list(self._pending_exit_retry.items()):
                     row = self._instrument_cache.get_by_symbol(params.fill_entry.symbol)
                     if row is not None:
                         symbol_to_token[row.instrument_token] = params.fill_entry.symbol
@@ -2420,9 +2421,10 @@ class OrderPlacer:
                 symbol = symbol_to_token[instrument_token]
 
                 # Find trade_id(s) for this symbol
+                # FIX-098: list() prevents RuntimeError after dict modified at line 2445
                 trades_to_retry = [
                     trade_id
-                    for trade_id, params in self._pending_exit_retry.items()
+                    for trade_id, params in list(self._pending_exit_retry.items())
                     if params.fill_entry.symbol == symbol
                 ]
 

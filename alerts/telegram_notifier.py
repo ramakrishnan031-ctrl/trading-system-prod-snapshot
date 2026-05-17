@@ -366,7 +366,19 @@ class TelegramNotifier:
 
             if resp.status_code == 429:
                 # Rate limited: respect Retry-After, retry once (TG6)
-                retry_after = float(resp.headers.get("Retry-After", "5"))
+                # FIX-097: Handle both integer seconds and HTTP-date format
+                retry_after_raw = resp.headers.get("Retry-After", "30")
+                try:
+                    retry_after = float(retry_after_raw)
+                except ValueError:
+                    # HTTP-date format (e.g., "Fri, 31 Dec 1999 23:59:59 GMT")
+                    # Use safe default instead of crashing
+                    retry_after = 30.0
+                    self._log.warning(
+                        "telegram.429_retry_after_not_numeric",
+                        extra={"retry_after_header": retry_after_raw,
+                               "using_default_sec": retry_after},
+                    )
                 time.sleep(min(retry_after, 5.0))
                 try:
                     resp2 = requests.post(url, json=payload, timeout=self._timeout)

@@ -489,6 +489,19 @@ class AlertsConfig(BaseModel):
         return v
 
 
+class LoggingConfig(BaseModel):
+    """FIX-099: Logging subsystem configuration."""
+    model_config = ConfigDict(extra="forbid")
+    min_free_disk_gb: float  # Minimum free disk space (GB) required before startup
+
+    @field_validator("min_free_disk_gb")
+    @classmethod
+    def _validate_min_free_disk_gb(cls, v: float) -> float:
+        if v < 0.1:
+            raise ValueError("min_free_disk_gb must be >= 0.1")
+        return v
+
+
 class ShadowTrackerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool              # SH13: if False, all handlers become no-ops
@@ -681,6 +694,7 @@ class SystemConfig(BaseModel):
     signal_processor: SignalProcessorConfig   # SP15
     eod_squareoff: EodSquareoffConfig         # EOD12
     alerts: AlertsConfig                      # TG12/AW11: alert subsystem config
+    logging: LoggingConfig                    # FIX-099: logging subsystem config
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults

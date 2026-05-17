@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
+import queue
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -79,6 +81,7 @@ _PLAIN_FMT = "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
 
 _loggers: dict[str, logging.Logger] = {}
 _active_handlers: list[logging.Handler] = []
+_queue_listener: logging.handlers.QueueListener | None = None  # FIX-099
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,6 +296,8 @@ def setup_logging(log_dir: Path = Path("logs")) -> None:
     """
     Configure the root logger with four file handlers and one stdout handler (L1–L10).
 
+    FIX-099: File handlers use async QueueHandler to prevent disk-full thread freeze.
+
     Must be called once at startup by main.py before any module calls get_logger().
     Safe to call again (e.g., in tests): removes previously attached handlers first (L10).
 
@@ -300,7 +305,12 @@ def setup_logging(log_dir: Path = Path("logs")) -> None:
         log_dir: directory for log files. Created if absent (L8).
                  Default: Path("logs") relative to cwd (repo root).
     """
-    global _active_handlers
+    global _active_handlers, _queue_listener
+
+    # FIX-099: Stop previous queue listener if exists
+    if _queue_listener is not None:
+        _queue_listener.stop()
+        _queue_listener = None
 
     # Remove handlers from any previous call to setup_logging() (L10).
     root = logging.getLogger()
@@ -351,10 +361,39 @@ def setup_logging(log_dir: Path = Path("logs")) -> None:
     h_stdout.setLevel(logging.WARNING)
     h_stdout.setFormatter(plain_fmt)
 
-    new_handlers = [h_system, h_trades, h_reconciler, h_debug, h_stdout]
+    # FIX-099: Async file logging via QueueHandler to prevent disk-full freeze
+    # File handlers go through queue; stdout remains synchronous for immediate visibility
+    log_queue = queue.Queue(maxsize=10000)
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    queue_handler.setLevel(logging.DEBUG)
+
+    # QueueListener processes file handlers in background thread
+    # respect_handler_level=True ensures each handler's filter + level are honored
+    file_handlers = [h_system, h_trades, h_reconciler, h_debug]
+    _queue_listener = logging.handlers.QueueListener(
+        log_queue, *file_handlers, respect_handler_level=True
+    )
+    _queue_listener.start()
+
+    # Root logger gets QueueHandler (for files) + stdout (synchronous)
+    new_handlers = [queue_handler, h_stdout]
 
     root.setLevel(logging.DEBUG)
     for h in new_handlers:
         root.addHandler(h)
 
     _active_handlers = new_handlers
+
+
+def shutdown_logging() -> None:
+    """
+    Stop the async logging queue listener and flush pending records (FIX-099).
+
+    Called during shutdown to ensure all queued log records are written to disk
+    before the process exits. Safe to call multiple times (idempotent).
+    """
+    global _queue_listener
+
+    if _queue_listener is not None:
+        _queue_listener.stop()  # Blocks until queue is empty
+        _queue_listener = None
