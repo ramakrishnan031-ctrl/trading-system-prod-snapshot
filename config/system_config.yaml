@@ -189,3 +189,6 @@ drift_handler:                # BL-2: capital drift escalation
   soft_kill_threshold_rs: 200000.0
   hard_kill_threshold_rs: 500000.0
   consecutive_cycles_before_escalate: 3
+
+# FIX-D: Scanner connectivity check settings
+scanner_check_delay_sec: 5.0  # Delay before scanner checks (network stabilization at startup)

@@ -515,12 +515,24 @@ def check_config_hash(
 # SC7 -- Scanner connectivity pre-flight (P17)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# FIX-D: Module-level set to track scanners that have logged None warning
+# (persists across calls to suppress repeated warnings)
+_logged_none_warnings: set[str] = set()
+
+
+def reset_scanner_warnings() -> None:
+    """Reset the module-level None warning tracker (for testing)."""
+    global _logged_none_warnings
+    _logged_none_warnings = set()
+
+
 def check_scanner_connectivity(
     scan_webhook_map,
     chartink_scanners,
     http_fetcher_fn: Callable[[str, float], Tuple[Optional[int], str]],
     logger,
     timeout_sec: float = 10.0,
+    delay_sec: float = 0.0,
 ) -> ScannerPreflightResult:
     """
     Verify Chartink scanner URLs are reachable via http_fetcher_fn (P17, SC7).
@@ -530,10 +542,24 @@ def check_scanner_connectivity(
     on the entry. Does NOT parse Chartink HTML -- reachability only.
 
     http_fetcher_fn: (url, timeout) -> (status_code or None, body_snippet)
+    delay_sec: Optional delay before starting scanner checks (FIX-D: network stabilization)
+
+    FIX-D: Suppresses repeated None-status warnings. First None for a scanner logs
+    at WARNING level; subsequent None results for same scanner log at DEBUG only.
     """
+    import time
+
+    # FIX-D: Optional delay before scanner checks (network stabilization)
+    if delay_sec > 0:
+        logger.debug("check_scanner: sleeping %.1fs before scanner checks", delay_sec)
+        time.sleep(delay_sec)
+
     scanners_dict: Dict[str, Any] = _get_scanners_dict(scan_webhook_map)
     chartink_dict: Dict[str, str] = _get_chartink_dict(chartink_scanners)
     results: List[ScannerCheck] = []
+
+    # FIX-D: Use module-level set to suppress repeated None warnings across calls
+    global _logged_none_warnings
 
     for scanner_name, entry in scanners_dict.items():
         url = _resolve_url(scanner_name, entry, chartink_dict)
@@ -553,9 +579,24 @@ def check_scanner_connectivity(
             status_code, body = http_fetcher_fn(url, timeout_sec)
             reachable = status_code is not None and 200 <= status_code < 300
             if not reachable:
-                logger.warning(
-                    "check_scanner: %s returned status %s", scanner_name, status_code
-                )
+                # FIX-D: Suppress repeated None warnings (network startup transients)
+                if status_code is None:
+                    if scanner_name not in _logged_none_warnings:
+                        # First None for this scanner -> WARNING
+                        logger.warning(
+                            "check_scanner: %s returned status None (unreachable)", scanner_name
+                        )
+                        _logged_none_warnings.add(scanner_name)
+                    else:
+                        # Subsequent None for same scanner -> DEBUG
+                        logger.debug(
+                            "check_scanner: %s returned status None again (suppressed)", scanner_name
+                        )
+                else:
+                    # Non-None status (e.g., 404, 500) -> always log WARNING
+                    logger.warning(
+                        "check_scanner: %s returned status %s", scanner_name, status_code
+                    )
             results.append(ScannerCheck(
                 scanner_name=scanner_name,
                 url=url,
@@ -1115,8 +1156,11 @@ def run_all_startup_checks(
     # 7. Scanner connectivity -- skipped on COLD (no prior session to compare)
     scanner_result: Optional[ScannerPreflightResult] = None
     if scenario_details.scenario != StartupScenario.COLD:
+        # FIX-D: Get scanner check delay from config (defaults to 0 if not present)
+        scanner_delay_sec = getattr(app_config.system, "scanner_check_delay_sec", 0.0)
         scanner_result = check_scanner_connectivity(
-            scan_webhook_map, chartink_scanners, http_fetcher_fn, logger
+            scan_webhook_map, chartink_scanners, http_fetcher_fn, logger,
+            delay_sec=scanner_delay_sec
         )
         if not scanner_result.all_reachable:
             warnings.append("scanner_unreachable")

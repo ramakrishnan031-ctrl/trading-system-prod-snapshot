@@ -46,6 +46,7 @@ from utils.startup_checks import (
     check_config_hash,
     check_paper_capital_consistency,
     check_scanner_connectivity,
+    reset_scanner_warnings,  # FIX-D
     check_webhook_endpoint,
     check_config_files_present,
     check_market_holiday_today,
@@ -67,6 +68,7 @@ class _CapturingLogger:
         self.infos:    list = []
         self.warnings: list = []
         self.errors:   list = []
+        self.debugs:   list = []  # FIX-D: capture debug messages
 
     def info(self, msg: str, *args: object) -> None:
         self.infos.append(msg % args if args else msg)
@@ -78,7 +80,8 @@ class _CapturingLogger:
         self.errors.append(msg % args if args else msg)
 
     def debug(self, msg: str, *args: object) -> None:
-        pass
+        # FIX-D: capture debug messages instead of discarding
+        self.debugs.append(msg % args if args else msg)
 
     def has_info(self, substr: str) -> bool:
         return any(substr in m for m in self.infos)
@@ -612,6 +615,112 @@ def test_scanner_returns_results_for_each(tmp_path: Path) -> None:
     result_names = {r.scanner_name for r in result.results}
     assert result_names == set(names)
     print("  OK scanner_connectivity: one result per scanner")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-D: Scanner None suppression and delay tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fixd_first_none_logs_warning(tmp_path: Path) -> None:
+    """FIX-D: First None status for a scanner logs at WARNING level."""
+    reset_scanner_warnings()  # FIX-D: Clean state
+    swm = _make_scan_webhook_map(["scanner_none"])
+    log = _CapturingLogger()
+
+    def _returns_none(url: str, timeout: float):
+        return (None, "")
+
+    result = check_scanner_connectivity(swm, MagicMock(), _returns_none, log)
+
+    assert result.all_reachable is False
+    assert result.results[0].status_code is None
+    assert result.results[0].reachable is False
+
+    # Check that WARNING was logged for first None
+    assert len(log.warnings) == 1
+    assert "scanner_none" in log.warnings[0]
+    assert "status None" in log.warnings[0]
+    print("  OK FIX-D: first None status logs WARNING")
+
+
+def test_fixd_second_none_logs_debug(tmp_path: Path) -> None:
+    """FIX-D: Second None status for same scanner logs at DEBUG level."""
+    reset_scanner_warnings()  # FIX-D: Clean state
+    swm = MagicMock()
+    e1 = MagicMock()
+    e1.chartink_url = "https://chartink.com/scanner1"
+    e2 = MagicMock()
+    e2.chartink_url = "https://chartink.com/scanner1"
+    swm.scanners = {"scanner1_first": e1, "scanner1_second": e2}
+
+    log = _CapturingLogger()
+
+    def _returns_none(url: str, timeout: float):
+        return (None, "")
+
+    # First call - should log WARNING for both scanners (first occurrence)
+    result1 = check_scanner_connectivity(swm, MagicMock(), _returns_none, log)
+
+    # Second call - should log DEBUG for both (suppressed)
+    result2 = check_scanner_connectivity(swm, MagicMock(), _returns_none, log)
+
+    # First cycle: 2 scanners, both first-time None -> 2 WARNINGs
+    assert len(log.warnings) == 2
+    assert all("status None" in w for w in log.warnings)
+
+    # Second cycle: 2 scanners, both repeat None -> 2 DEBUGs
+    assert len(log.debugs) >= 2  # May have debug from sleep message too
+    debug_suppressed = [d for d in log.debugs if "status None again" in d]
+    assert len(debug_suppressed) == 2
+    print("  OK FIX-D: second None status logs DEBUG (suppressed)")
+
+
+def test_fixd_delay_applied_before_check_loop(tmp_path: Path) -> None:
+    """FIX-D: delay_sec parameter causes sleep before scanner checks."""
+    reset_scanner_warnings()  # FIX-D: Clean state
+    import time
+    swm = _make_scan_webhook_map(["scanner_a"])
+    log = _CapturingLogger()
+
+    start = time.monotonic()
+    result = check_scanner_connectivity(
+        swm, MagicMock(), _http_ok, log, delay_sec=0.1  # Use small delay for test speed
+    )
+    elapsed = time.monotonic() - start
+
+    assert result.all_reachable is True
+    # Should have slept at least 0.1 seconds
+    assert elapsed >= 0.1
+    # Check DEBUG log for sleep message
+    assert len(log.debugs) == 1
+    assert "sleeping" in log.debugs[0]
+    assert "0.1" in log.debugs[0]
+    print("  OK FIX-D: delay applied before scanner checks")
+
+
+def test_fixd_non_none_status_always_logs_warning(tmp_path: Path) -> None:
+    """FIX-D: Non-None status codes (e.g., 404, 500) always log WARNING."""
+    reset_scanner_warnings()  # FIX-D: Clean state
+    swm = MagicMock()
+    e1 = MagicMock()
+    e1.chartink_url = "https://chartink.com/scanner1"
+    e2 = MagicMock()
+    e2.chartink_url = "https://chartink.com/scanner1"
+    swm.scanners = {"scanner1_first": e1, "scanner1_second": e2}
+
+    log = _CapturingLogger()
+
+    def _returns_404(url: str, timeout: float):
+        return (404, "Not Found")
+
+    # Call twice - both should log WARNING (non-None status not suppressed)
+    result1 = check_scanner_connectivity(swm, MagicMock(), _returns_404, log)
+    result2 = check_scanner_connectivity(swm, MagicMock(), _returns_404, log)
+
+    # Should have 4 WARNINGs total (2 scanners × 2 calls, no suppression for 404)
+    warnings_404 = [w for w in log.warnings if "status 404" in w]
+    assert len(warnings_404) == 4
+    print("  OK FIX-D: non-None status codes always log WARNING")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1313,6 +1422,11 @@ def run_all_tests() -> int:
         test_scanner_timeout_error,
         test_scanner_empty_map,
         test_scanner_returns_results_for_each,
+        # FIX-D: Scanner None suppression and delay
+        test_fixd_first_none_logs_warning,
+        test_fixd_second_none_logs_debug,
+        test_fixd_delay_applied_before_check_loop,
+        test_fixd_non_none_status_always_logs_warning,
         # check_webhook_endpoint (SC8)
         test_webhook_reachable_200,
         test_webhook_connection_refused,
