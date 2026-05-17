@@ -29,7 +29,7 @@ token_is_fresh() {
     [ -f "$TOKEN_FILE" ] || return 1
     local today
     today="$(TZ=Asia/Kolkata date '+%Y-%m-%d')"
-    python3 - "$TOKEN_FILE" "$today" <<'PY' 2>/dev/null
+    timeout 5 python3 - "$TOKEN_FILE" "$today" <<'PY' 2>/dev/null
 import json, sys
 path, today = sys.argv[1], sys.argv[2]
 try:

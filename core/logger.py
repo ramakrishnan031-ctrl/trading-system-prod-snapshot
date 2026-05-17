@@ -88,9 +88,30 @@ _active_handlers: list[logging.Handler] = []
 class SafeJSONEncoder(json.JSONEncoder):
     """
     FIX-058: JSON encoder that never raises on unserializable objects.
+    FIX-084: Converts NaN/Inf to None (JSON null) to prevent invalid JSON output.
     Prevents log record drops when extra fields contain datetime, Exception, or
     other non-JSON-serializable types.
     """
+    def encode(self, o):
+        import math
+        # FIX-084: Preprocess to replace NaN/Inf with None
+        if isinstance(o, float):
+            if math.isnan(o) or math.isinf(o):
+                return 'null'
+        return super().encode(self._scrub_nan_inf(o))
+
+    def _scrub_nan_inf(self, obj):
+        """Recursively replace NaN/Inf with None in data structures."""
+        import math
+        if isinstance(obj, float):
+            if math.isnan(obj) or math.isinf(obj):
+                return None
+        elif isinstance(obj, dict):
+            return {k: self._scrub_nan_inf(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._scrub_nan_inf(item) for item in obj]
+        return obj
+
     def default(self, obj):
         if isinstance(obj, datetime):
             return obj.isoformat()

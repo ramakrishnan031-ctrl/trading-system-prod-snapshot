@@ -80,6 +80,14 @@ TERMINAL_STATES: tuple[str, ...] = (
     "EXPIRED",
 )
 
+# FIX-089: Earlier states (chronological inversion guard)
+EARLIER_STATES: tuple[str, ...] = (
+    "PENDING",
+    "SUBMITTED",
+    "OPEN",
+    "PARTIAL",
+)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Transition table (OSM2)
 # Only non-terminal states appear as keys; terminal states map to empty tuples.

@@ -42,12 +42,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Optional
 
-from broker.order_state_machine import TERMINAL_STATES, OrderStateMachine
+from broker.order_state_machine import TERMINAL_STATES, EARLIER_STATES, OrderStateMachine  # FIX-089
 from broker.zerodha_adapter import ZerodhaAdapter
 from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged
 from core.exceptions import BrokerAuthError, BrokerTimeoutError, InvalidTransitionError
 from core.logger import log_exception
-from core.time_authority import now_ist
+from core.time_authority import now_ist, today_ist  # FIX-086
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal watch record
@@ -191,7 +191,11 @@ class OrderMonitor:
         self._on_orphan = on_orphan_callback
         self._on_critical = on_critical_failure
 
-        self._watched: dict[str, _WatchEntry] = {}
+        # FIX-086: _watched keyed by (broker_order_id, symbol, date_str) composite
+        # to prevent cross-day broker_order_id collision after rehydration
+        self._watched: dict[tuple[str, str, str], _WatchEntry] = {}
+        # FIX-086: reverse map for external API (untrack, is_watching by internal_order_id)
+        self._internal_to_composite: dict[str, tuple[str, str, str]] = {}
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -215,6 +219,9 @@ class OrderMonitor:
         """
         Add an order to the watch list (OM3).
 
+        FIX-086: Uses composite key (broker_order_id, symbol, date) to prevent
+        cross-day broker_order_id collision after restart/rehydration.
+
         Audit #10: MARKET orders are placed with price=0.0, so callers
         pass expected_price=0.0 and every MARKET fill logs slippage=0%,
         poisoning analytics. When expected_price<=0 we fetch the symbol's
@@ -227,12 +234,15 @@ class OrderMonitor:
         """
         if expected_price <= 0.0:
             expected_price = self._ltp_expected_fallback(symbol)
+        # FIX-086: composite key (broker_order_id, symbol, date_str)
+        trade_date = today_ist()  # Returns "YYYY-MM-DD" string
+        composite_key = (broker_order_id, symbol, trade_date)
         with self._lock:
-            if internal_order_id in self._watched:
+            if internal_order_id in self._internal_to_composite:
                 raise ValueError(
                     f"Order {internal_order_id!r} is already being watched"
                 )
-            self._watched[internal_order_id] = _WatchEntry(
+            entry = _WatchEntry(
                 internal_order_id=internal_order_id,
                 broker_order_id=broker_order_id,
                 symbol=symbol,
@@ -242,11 +252,14 @@ class OrderMonitor:
                 placed_at=placed_at,
                 leg=leg,
             )
+            self._watched[composite_key] = entry
+            self._internal_to_composite[internal_order_id] = composite_key
         self._log.info(
             "order_monitor.track",
             extra={"internal_order_id": internal_order_id,
                    "broker_order_id": broker_order_id,
-                   "symbol": symbol},
+                   "symbol": symbol,
+                   "trade_date": trade_date},
         )
 
     def _ltp_expected_fallback(self, symbol: str) -> float:
@@ -368,8 +381,9 @@ class OrderMonitor:
             if not broker_order_id:
                 continue
             synthetic_internal = broker_order_id
+            # FIX-086: check if already rehydrated using reverse map
             with self._lock:
-                if synthetic_internal in self._watched:
+                if synthetic_internal in self._internal_to_composite:
                     continue
 
             # Register in OSM so _safe_transition publishes events when
@@ -401,10 +415,15 @@ class OrderMonitor:
             except Exception:  # noqa: BLE001
                 placed_at = now_ist()
 
+            # FIX-086: composite key (broker_order_id, symbol, date) for rehydration
+            symbol = row["symbol"] or ""
+            trade_date = placed_at.date().isoformat()
+            composite_key = (broker_order_id, symbol, trade_date)
+
             entry = _WatchEntry(
                 internal_order_id=synthetic_internal,
                 broker_order_id=broker_order_id,
-                symbol=row["symbol"] or "",
+                symbol=symbol,
                 side=row["transaction_type"] or "",
                 qty=int(row["qty_requested"] or 0),
                 expected_price=float(row["price"] or 0.0),
@@ -412,7 +431,8 @@ class OrderMonitor:
                 leg=row["leg"] or "",
             )
             with self._lock:
-                self._watched[synthetic_internal] = entry
+                self._watched[composite_key] = entry
+                self._internal_to_composite[synthetic_internal] = composite_key
             rehydrated += 1
 
         self._log.info(
@@ -424,12 +444,16 @@ class OrderMonitor:
     def untrack(self, internal_order_id: str) -> None:
         """Remove an order from the watch list (OM15). No-op if not present."""
         with self._lock:
-            self._watched.pop(internal_order_id, None)
+            # FIX-086: use reverse map to get composite key
+            composite_key = self._internal_to_composite.pop(internal_order_id, None)
+            if composite_key is not None:
+                self._watched.pop(composite_key, None)
 
     def is_watching(self, internal_order_id: str) -> bool:
         """Return True if the order is currently being watched (OM16)."""
         with self._lock:
-            return internal_order_id in self._watched
+            # FIX-086: check reverse map
+            return internal_order_id in self._internal_to_composite
 
     def watched_count(self) -> int:
         """Return number of orders currently being monitored (OM16)."""
@@ -478,10 +502,11 @@ class OrderMonitor:
         # pressure (shared get_margins quota bucket in the adapter).
         tick_cache = _OrphanTickCache(self._adapter, self._log)
 
-        for internal_id, entry in snapshot.items():
+        # FIX-086: iterate over composite keys
+        for composite_key, entry in snapshot.items():
             # Skip if already removed (concurrent untrack)
             with self._lock:
-                if internal_id not in self._watched:
+                if composite_key not in self._watched:
                     continue
             self._process_order(entry, tick_cache=tick_cache)
 
@@ -741,10 +766,21 @@ class OrderMonitor:
         Exit legs (SL/TGT/EOD) are exempt: they must remain open until price
         crosses or EOD squareoff handles cleanup. In paper mode the
         _synth_fill LTP-gating thread handles fill simulation (up to 6h).
+
+        FIX-085: NTP drift can cause now < placed_at; clamp to 0.0.
         """
         if entry.leg in ("SL", "TGT", "EOD"):
             return
-        elapsed = (now - entry.placed_at).total_seconds()
+        elapsed_raw = (now - entry.placed_at).total_seconds()
+        elapsed = max(0.0, elapsed_raw)  # FIX-085: guard against negative duration
+        if elapsed_raw < 0.0:
+            self._log.debug(
+                "order_monitor.negative_elapsed_clamped",
+                extra={
+                    "internal_order_id": entry.internal_order_id,
+                    "elapsed_raw_sec": round(elapsed_raw, 3),
+                },
+            )
         if elapsed <= self._fill_timeout:
             return
 
@@ -798,11 +834,26 @@ class OrderMonitor:
             self._osm.transition(internal_order_id, to_state)
         except InvalidTransitionError as exc:
             # FIX-052: Terminal→terminal transitions log DEBUG only and continue.
+            # FIX-089: Terminal→earlier chronological inversions also log DEBUG and continue.
             # Non-terminal→* or *→non-terminal transitions still raise (unexpected state).
             from_state = exc.context.get("from_state")
             to_state_exc = exc.context.get("to_state")
 
-            # If both states are terminal, this is benign (e.g. COMPLETE→CANCELLED due to
+            # FIX-089: Chronological inversion guard
+            # COMPLETE arrives before OPEN due to network jitter. Never overwrite terminal with earlier state.
+            if from_state in TERMINAL_STATES and to_state_exc in EARLIER_STATES:
+                self._log.debug(
+                    "order_monitor.chronological_inversion_ignored",
+                    extra={
+                        "internal_order_id": internal_order_id,
+                        "from_state": from_state,
+                        "to_state": to_state_exc,
+                        "reason": "network jitter: earlier state arrived after terminal",
+                    },
+                )
+                return False
+
+            # FIX-052: If both states are terminal, this is benign (e.g. COMPLETE→CANCELLED due to
             # race between broker updates). Polling loop continues processing other orders.
             if from_state in TERMINAL_STATES and to_state_exc in TERMINAL_STATES:
                 self._log.debug(

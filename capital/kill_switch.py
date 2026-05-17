@@ -127,6 +127,7 @@ class KillSwitch:
         enable_auto_trip: bool = True,
         notifier: Optional[object] = None,   # TelegramNotifier; optional
         mode: str = "LIVE",                   # session mode label for alert title
+        adapter: Optional[object] = None,    # FIX-087: ZerodhaAdapter for indestructible exits
     ) -> None:
         self._store = state_store
         self._bus = bus
@@ -136,6 +137,7 @@ class KillSwitch:
         self._auto_trip = enable_auto_trip
         self._notifier = notifier
         self._mode = mode
+        self._adapter = adapter  # FIX-087
 
         # KS4: RLock allows same-thread reentrant acquisition (deadlock fix).
         self._lock = threading.RLock()
@@ -487,10 +489,20 @@ class KillSwitch:
 
     def _run_cancel(self) -> CancellationReport:
         """
-        Invoke on_hard_kill_cancel_fn if set. Return CancellationReport.
-        The callback runs OUTSIDE the lock so it can call broker APIs
-        freely without blocking other threads.
+        FIX-087: Indestructible per-trade exit loop.
+
+        If adapter is set, fetch all open trades and exit each with MARKET orders.
+        Each trade is wrapped in try/except; failed trades are retried infinitely
+        with exponential backoff (5s, 15s, 45s, then capped at 45s). This is
+        intentional - during HARD_KILL the system MUST NOT give up on flattening.
+
+        If adapter is not set, falls back to legacy callback (on_hard_kill_cancel_fn).
         """
+        # FIX-087: New indestructible exit logic if adapter is available
+        if self._adapter is not None:
+            return self._exit_all_trades_indestructible()
+
+        # Legacy callback path (backward compat)
         if self._cancel_fn is None:
             return CancellationReport(attempted=0, succeeded=0, failed=[])
         try:
@@ -514,3 +526,122 @@ class KillSwitch:
                 "on_hard_kill_cancel_fn raised %s: %s", type(exc).__name__, exc
             )
             return CancellationReport(attempted=0, succeeded=0, failed=[str(exc)])
+
+    def _exit_all_trades_indestructible(self) -> CancellationReport:
+        """
+        FIX-087: Exit all open trades with per-trade exception isolation and infinite retry.
+
+        Returns CancellationReport after all trades are confirmed flat. Never gives up.
+        """
+        import time
+
+        # Fetch all open trades
+        try:
+            open_trades = self._store.fetch_all(
+                "SELECT trade_id, symbol, quantity, side FROM trades "
+                "WHERE status IN ('OPEN', 'PENDING')"
+            )
+        except Exception as exc:
+            self._log.critical(
+                "kill_switch: failed to fetch open trades: %s", exc
+            )
+            return CancellationReport(attempted=0, succeeded=0, failed=["fetch_failed"])
+
+        if not open_trades:
+            return CancellationReport(attempted=0, succeeded=0, failed=[])
+
+        attempted = len(open_trades)
+        failed_trades = []
+
+        # First pass: try to exit each trade
+        for trade in open_trades:
+            trade_id = trade["trade_id"]
+            symbol = trade["symbol"]
+            qty = abs(trade["quantity"])
+            # Exit side is opposite of entry side
+            exit_side = "SELL" if trade["side"] == "BUY" else "BUY"
+
+            try:
+                # Place MARKET exit order
+                order_result = self._adapter.place_order(
+                    symbol=symbol,
+                    side=exit_side,
+                    qty=qty,
+                    order_type="MARKET",
+                    price=0.0,
+                )
+                if not order_result.success:
+                    raise RuntimeError(f"Broker rejected exit: {order_result.error}")
+
+                # Update DB (best-effort; broker truth > DB truth during emergency)
+                try:
+                    with self._store.transaction() as cur:
+                        cur.execute(
+                            "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
+                            ("EXITING", now_ist().isoformat(), trade_id),
+                        )
+                except Exception as db_exc:
+                    self._log.critical(
+                        "kill_switch: DB write failed for trade %s (broker exit succeeded): %s",
+                        trade_id, db_exc,
+                    )
+
+                self._log.info(
+                    "kill_switch: trade %s exited successfully", trade_id
+                )
+            except Exception as exc:
+                self._log.critical(
+                    "kill_switch: exit failed for trade %s: %s", trade_id, exc
+                )
+                failed_trades.append((trade_id, symbol, exit_side, qty))
+
+        # Retry loop: infinite retry with exponential backoff
+        retry_delays = [5, 15, 45]  # seconds
+        retry_attempt = 0
+
+        while failed_trades:
+            delay = retry_delays[min(retry_attempt, len(retry_delays) - 1)]
+            self._log.critical(
+                "kill_switch: retrying %d failed trades in %ds (attempt %d)",
+                len(failed_trades), delay, retry_attempt + 1,
+            )
+            time.sleep(delay)
+            retry_attempt += 1
+
+            still_failed = []
+            for trade_id, symbol, exit_side, qty in failed_trades:
+                try:
+                    order_result = self._adapter.place_order(
+                        symbol=symbol,
+                        side=exit_side,
+                        qty=qty,
+                        order_type="MARKET",
+                        price=0.0,
+                    )
+                    if not order_result.success:
+                        raise RuntimeError(f"Broker rejected exit: {order_result.error}")
+
+                    # Best-effort DB update
+                    try:
+                        with self._store.transaction() as cur:
+                            cur.execute(
+                                "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
+                                ("EXITING", now_ist().isoformat(), trade_id),
+                            )
+                    except Exception:
+                        pass  # Broker truth > DB truth
+
+                    self._log.info(
+                        "kill_switch: trade %s exited successfully (retry)", trade_id
+                    )
+                except Exception as exc:
+                    self._log.critical(
+                        "kill_switch: retry failed for trade %s: %s", trade_id, exc
+                    )
+                    still_failed.append((trade_id, symbol, exit_side, qty))
+
+            failed_trades = still_failed
+
+        # All trades successfully exited
+        succeeded = attempted
+        return CancellationReport(attempted=attempted, succeeded=succeeded, failed=[])

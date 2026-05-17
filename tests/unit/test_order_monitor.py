@@ -277,9 +277,10 @@ def test_untrack_unknown_is_noop() -> None:
 
 def test_watched_count_correct() -> None:
     monitor, _, osm, _ = _make_monitor()
-    _register_and_track(monitor, osm, "ord_001")
-    _register_and_track(monitor, osm, "ord_002")
-    _register_and_track(monitor, osm, "ord_003")
+    # FIX-086: composite key requires unique broker_order_id per order
+    _register_and_track(monitor, osm, "ord_001", broker_id="KITE001")
+    _register_and_track(monitor, osm, "ord_002", broker_id="KITE002")
+    _register_and_track(monitor, osm, "ord_003", broker_id="KITE003")
     assert monitor.watched_count() == 3
     monitor.untrack("ord_002")
     assert monitor.watched_count() == 2
@@ -347,8 +348,11 @@ def test_status_partial_tracks_filled_qty_no_event() -> None:
     assert len(received) == 0, "No OrderFilled on partial (OM8)"
     assert monitor.is_watching("ord_aaa")
     # Check filled_qty tracked internally
+    # FIX-086: access via composite key
+    from core.time_authority import today_ist as _today_ist
+    composite_key = ("KITE001", "RELIANCE", _today_ist())
     with monitor._lock:
-        assert monitor._watched["ord_aaa"].filled_qty == 5
+        assert monitor._watched[composite_key].filled_qty == 5
     print("  OK PARTIAL -> state PARTIAL, no OrderFilled, filled_qty tracked (OM5, OM8)")
 
 
@@ -722,9 +726,12 @@ def test_complete_order_polled_again_no_crash() -> None:
     assert len(received) == 1
 
     # Manually re-add to _watched to simulate a second poll of same order
+    # FIX-086: use composite key
+    from broker.order_monitor import _WatchEntry
+    from core.time_authority import today_ist as _today_ist
+    composite_key = ("KITE001", "RELIANCE", _today_ist())
     with monitor._lock:
-        from broker.order_monitor import _WatchEntry
-        monitor._watched["ord_aaa"] = _WatchEntry(
+        monitor._watched[composite_key] = _WatchEntry(
             internal_order_id="ord_aaa",
             broker_order_id="KITE001",
             symbol="RELIANCE",
@@ -733,6 +740,7 @@ def test_complete_order_polled_again_no_crash() -> None:
             expected_price=2500.0,
             placed_at=now_ist(),
         )
+        monitor._internal_to_composite["ord_aaa"] = composite_key
 
     # Second cycle: InvalidTransitionError is caught, no crash (OM12)
     monitor._poll_cycle()
@@ -814,8 +822,12 @@ def test_empty_history_three_consecutive_fires_orphan_fresh() -> None:
     monitor, _, osm, _ = _make_monitor(adapter=adapter, on_orphan=_on_orphan)
     _register_and_track(monitor, osm, internal_id="ord_e2", broker_id="KITE_E2")
 
+    # FIX-086: access via composite key
+    from core.time_authority import today_ist as _today_ist
+    composite_key = ("KITE_E2", "RELIANCE", _today_ist())
+
     for _ in range(3):
-        entry = monitor._watched.get("ord_e2")
+        entry = monitor._watched.get(composite_key)
         if entry is None:
             break
         monitor._process_order(entry)
@@ -824,7 +836,7 @@ def test_empty_history_three_consecutive_fires_orphan_fresh() -> None:
         f"Expected 1 orphan call after 3 empties, got {len(orphan_calls)}"
     )
     assert orphan_calls[0] == ("ord_e2", "KITE_E2")
-    assert "ord_e2" not in monitor._watched, "Order should be untracked after orphan"
+    assert not monitor.is_watching("ord_e2"), "Order should be untracked after orphan"
     print("  OK empty_history x3 fires orphan and untracks (BLOCKER #8)")
 
 
@@ -851,7 +863,10 @@ def test_empty_history_resets_on_non_empty_response() -> None:
     monitor, _, osm, _ = _make_monitor(adapter=adapter)
     _register_and_track(monitor, osm, internal_id="ord_flicker", broker_id="KITE_FL")
 
-    entry = monitor._watched["ord_flicker"]
+    # FIX-086: access via composite key
+    from core.time_authority import today_ist as _today_ist
+    composite_key = ("KITE_FL", "RELIANCE", _today_ist())
+    entry = monitor._watched[composite_key]
     monitor._process_order(entry)  # 1st empty
     assert entry.empty_history_count == 1
 
@@ -940,7 +955,11 @@ def test_fix024_rehydrate_filled_order_fires_event() -> None:
         bus.subscribe(OrderFilled, capture_filled)
 
         # Run one poll cycle
-        entry = monitor._watched["KITE_DOWN"]
+        # FIX-086: access via composite key (rehydration uses broker_order_id as internal_id)
+        from core.time_authority import today_ist as _today_ist
+        # Symbol is TCS, placed_at is today
+        composite_key = ("KITE_DOWN", "TCS", _today_ist())
+        entry = monitor._watched[composite_key]
         monitor._process_order(entry)
 
         # Assert OrderFilled event was published

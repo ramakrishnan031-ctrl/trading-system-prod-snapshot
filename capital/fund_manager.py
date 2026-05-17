@@ -176,6 +176,7 @@ class _Reservation:
     bucket: str
     signal_id: Optional[str]
     ts: str
+    slm_buffer: float = 0.0  # FIX-090: buffer held for SL-M margin
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,6 +241,7 @@ class FundManager:
         on_daily_loss_breach: Optional[Callable[[], None]] = None,
         on_critical_failure: Optional[Callable[[str], None]] = None,
         kill_switch: Optional["KillSwitch"] = None,
+        slm_margin_buffer_pct: float = 0.05,  # FIX-090
     ) -> None:
         # FM12: validate constructor arguments
         if leverage_map is None:
@@ -269,6 +271,7 @@ class FundManager:
         self._positional_pct = positional_bucket_pct
         self._daily_loss_limit = daily_loss_limit
         self._leverage_map = dict(leverage_map)
+        self._slm_buffer_pct = slm_margin_buffer_pct  # FIX-090
         self._on_loss_breach = on_daily_loss_breach
         self._on_critical = on_critical_failure
         self._kill_switch = kill_switch  # FM19 / BL-9
@@ -420,17 +423,23 @@ class FundManager:
         with self._lock:
             self._assert_initialized()
             bucket = self._bucket_for_intent(intent)
-            margin = required_margin(qty, price, intent, self._leverage_map)
+            base_margin = required_margin(qty, price, intent, self._leverage_map)
+
+            # FIX-090: Add SL-M margin buffer (5% for unknown fill price risk)
+            # Buffer is held until SL-M is accepted, then released via release_slm_buffer()
+            slm_buffer = base_margin * self._slm_buffer_pct
+            total_margin = base_margin + slm_buffer
+
             avail_before = self._bucket_avail(bucket)
 
-            if margin > avail_before:
+            if total_margin > avail_before:
                 return ReservationResult(
                     success=False,
                     reservation_id="",
-                    margin=margin,
+                    margin=total_margin,
                     bucket=bucket,
                     reason_if_failed=(
-                        f"Insufficient {bucket} capital: need {margin:.2f}, "
+                        f"Insufficient {bucket} capital: need {total_margin:.2f}, "
                         f"have {avail_before:.2f}"
                     ),
                 )
@@ -439,18 +448,18 @@ class FundManager:
             # ledger row first, then execute the in-memory mutation.
             rid = uuid.uuid4().hex[:16]
             ts = now_ist().isoformat()
-            projected_after = avail_before - margin
+            projected_after = avail_before - total_margin
             self._write_ledger(
                 ts=ts,
                 entry_type="RESERVE",
-                amount=margin,
+                amount=total_margin,
                 bucket=bucket,
                 balance_before=avail_before,
                 balance_after=projected_after,
                 signal_id=signal_id,
                 reservation_id=rid,
-                reason=f"{symbol} qty={qty} @ {price} intent={intent}",
-                margin_delta=+margin,
+                reason=f"{symbol} qty={qty} @ {price} intent={intent} (base={base_margin:.2f} buffer={slm_buffer:.2f})",
+                margin_delta=+total_margin,
             )
 
             # FM18: pure mutation via shared helper (used by both this public
@@ -459,13 +468,14 @@ class FundManager:
             self._apply_reserve(
                 reservation_id=rid,    # NM-4: local `rid` is a tight-scope alias
                 bucket=bucket,
-                margin=margin,
+                margin=total_margin,
                 symbol=symbol,
                 qty=qty,
                 price=price,
                 intent=intent,
                 signal_id=signal_id,
                 ts=ts,
+                slm_buffer=slm_buffer,  # FIX-090
             )
 
             # C.1: capture violation, defer hard_kill to after lock release.
@@ -480,7 +490,7 @@ class FundManager:
                 _result = ReservationResult(
                     success=True,
                     reservation_id=rid,
-                    margin=margin,
+                    margin=total_margin,  # FIX-090: includes buffer
                     bucket=bucket,
                     reason_if_failed="",
                 )
@@ -541,6 +551,98 @@ class FundManager:
         if _violation is not None:
             self._handle_invariant_violation(_violation)
             raise _violation
+        return True
+
+    def release_slm_buffer(self, reservation_id: str, reason: str = "") -> bool:
+        """
+        FIX-090: Release the SL-M margin buffer for a reservation.
+
+        Called after SL-M order is successfully accepted by broker. Releases
+        the buffer (typically 5% of base margin) back to available capital.
+
+        Returns:
+            True  -- buffer released successfully.
+            False -- reservation_id not found or buffer already released (idempotent).
+
+        Raises:
+            CapitalInvariantViolation: invariant check fails post-mutation.
+        """
+        with self._lock:
+            self._assert_initialized()
+            res = self._reservations.get(reservation_id)
+            if res is None:
+                self._log.debug(
+                    "fund_manager.release_slm_buffer_unknown",
+                    extra={"reservation_id": reservation_id},
+                )
+                return False
+
+            if res.slm_buffer <= 0.0:
+                self._log.debug(
+                    "fund_manager.release_slm_buffer_already_released",
+                    extra={"reservation_id": reservation_id},
+                )
+                return False
+
+            # Release buffer: deduct from reserved, add to available
+            buffer_amount = res.slm_buffer
+            bucket = res.bucket
+            avail_before = self._bucket_avail(bucket)
+            ts = now_ist().isoformat()
+
+            # Write ledger (FIX-090: use RELEASE entry_type, reason distinguishes buffer release)
+            self._write_ledger(
+                ts=ts,
+                entry_type="RELEASE",
+                amount=buffer_amount,
+                bucket=bucket,
+                balance_before=avail_before,
+                balance_after=avail_before + buffer_amount,
+                reservation_id=reservation_id,
+                reason=reason or "SL-M buffer released",
+                margin_delta=-buffer_amount,
+            )
+
+            # Update reservation: reduce margin and clear buffer
+            self._bucket_add_avail(bucket, buffer_amount)
+            self._bucket_deduct_reserved(bucket, buffer_amount)
+
+            # Update the reservation in-place
+            updated_res = _Reservation(
+                reservation_id=res.reservation_id,
+                symbol=res.symbol,
+                qty=res.qty,
+                price=res.price,
+                intent=res.intent,
+                margin=res.margin - buffer_amount,
+                bucket=res.bucket,
+                signal_id=res.signal_id,
+                ts=res.ts,
+                slm_buffer=0.0,  # Buffer now released
+            )
+            self._reservations[reservation_id] = updated_res
+
+            # Invariant check
+            try:
+                self._check_invariant("release_slm_buffer", reservation_id)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+            else:
+                _violation = None
+
+        # Outside lock
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+
+        self._log.info(
+            "fund_manager.slm_buffer_released",
+            extra={
+                "reservation_id": reservation_id,
+                "buffer_amount": buffer_amount,
+                "bucket": bucket,
+            },
+        )
         return True
 
     def top_up_reservation(
@@ -1464,11 +1566,14 @@ class FundManager:
         intent: str,
         signal_id: Optional[str],
         ts: str,
+        slm_buffer: float = 0.0,  # FIX-090
     ) -> None:
         """Move margin from avail to reserved; record the reservation.
 
         NM-4 (2026-04-26 audit): param renamed rid -> reservation_id so all
         three _apply_* helpers use the same canonical name.
+
+        FIX-090: slm_buffer tracks the buffer portion held for SL-M margin.
         """
         self._bucket_deduct_avail(bucket, margin)
         self._bucket_add_reserved(bucket, margin)
@@ -1482,6 +1587,7 @@ class FundManager:
             bucket=bucket,
             signal_id=signal_id,
             ts=ts,
+            slm_buffer=slm_buffer,  # FIX-090
         )
 
     def _apply_release(self, reservation_id: str) -> None:

@@ -44,6 +44,7 @@ capital:                      # FM16
   intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
   positional_bucket_pct: 0.30 # 30% of total capital for positional (CNC)
   daily_loss_limit: 100000.0  # TEMP: raised for paper testing (was 10000)
+  slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
   leverage_map:
     INTRADAY: 5.0             # MIS leverage
     COVER_ORDER: 6.0          # CO leverage

@@ -222,7 +222,9 @@ def _build_pnl_summary(trades: List[dict]) -> dict:
             try:
                 e = datetime.fromisoformat(entry_t)
                 x = datetime.fromisoformat(exit_t)
-                durations.append((x - e).total_seconds() / 60.0)
+                # FIX-085: NTP drift can cause exit_time < entry_time; clamp to 0.0
+                duration_sec = max(0.0, (x - e).total_seconds())
+                durations.append(duration_sec / 60.0)
             except ValueError:
                 pass
 

@@ -132,6 +132,43 @@ class CandleStore:
         with self._lock:
             self._token_map = dict(token_map)
 
+    def gc_sweep(self, valid_tokens: set[int]) -> int:
+        """
+        FIX-092: Garbage-collect dead tokens from internal state.
+
+        Removes accumulators and history for tokens not in valid_tokens set.
+        Called on InstrumentsRefreshed event to clean up delisted symbols.
+
+        Args:
+            valid_tokens: Set of instrument_tokens currently in the instrument cache.
+
+        Returns:
+            Number of tokens removed.
+        """
+        with self._lock:
+            removed_count = 0
+
+            # Clean _accum
+            dead_accum = [t for t in self._accum if t not in valid_tokens]
+            for token in dead_accum:
+                del self._accum[token]
+                removed_count += 1
+
+            # Clean _history
+            dead_history = [t for t in self._history if t not in valid_tokens]
+            for token in dead_history:
+                del self._history[token]
+                if token not in dead_accum:  # Don't double-count if already in accum
+                    removed_count += 1
+
+            if removed_count > 0:
+                self._log.info(
+                    f"candle_store.gc_sweep: removed {removed_count} dead tokens",
+                    extra={"removed_count": removed_count},
+                )
+
+            return removed_count
+
     def on_tick(self, instrument_token: int, ltp: float, ts: datetime, exchange_timestamp: Optional[datetime] = None) -> None:
         """LF11: Accumulate LTP into current candle window. LTP ONLY.
 

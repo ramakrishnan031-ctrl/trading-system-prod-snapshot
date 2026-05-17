@@ -112,6 +112,8 @@ class LiveFeedManager:
         self._watchdog_thread: Optional[threading.Thread] = None
         self._watchdog_alert_fired: bool = False
         self._force_reconnect = threading.Event()  # FIX-064
+        # FIX-088: ticker thread identity for checkpoint guard
+        self._ticker_thread_id: Optional[int] = None
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -403,7 +405,13 @@ class LiveFeedManager:
         FIX-064: Checks _force_reconnect flag and calls ticker.close() from
         this thread context (not from watchdog thread) to avoid cross-thread
         call hazards.
+
+        FIX-088: Records thread identity for state_store checkpoint guard.
         """
+        # FIX-088: capture ticker thread ID for checkpoint guard
+        import threading
+        self._ticker_thread_id = threading.get_ident()
+
         while not self._stop_event.is_set():
             # FIX-064: Check reconnect flag FIRST (before queue timeout)
             if self._force_reconnect.is_set():

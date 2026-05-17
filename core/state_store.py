@@ -214,16 +214,33 @@ class StateStore:
             finally:
                 self._tls.conn = None
 
-    def checkpoint(self) -> dict:
+    def checkpoint(self, live_feed=None) -> dict:
         """
         FIX-047: Execute WAL checkpoint(TRUNCATE) to reclaim disk space.
+        FIX-088: Skip checkpoint if called from ticker thread (prevents GIL block → TCP Zero Window).
 
         Called by EOD squareoff after all positions closed. Checkpoint moves
         WAL entries back to main DB file and truncates WAL to zero bytes.
         Safe to call with active connections (WAL mode allows concurrent readers).
 
+        Args:
+            live_feed: Optional LiveFeedManager for thread identity check (FIX-088)
+
         Returns dict with checkpoint stats: {busy, log, checkpointed}
         """
+        # FIX-088: Guard against checkpoint on ticker thread
+        if live_feed is not None:
+            import threading
+            ticker_thread_id = getattr(live_feed, '_ticker_thread_id', None)
+            if ticker_thread_id is not None and threading.get_ident() == ticker_thread_id:
+                # Called from ticker thread - skip checkpoint
+                import logging
+                log = logging.getLogger("state_store")
+                log.warning(
+                    "checkpoint() called from ticker thread - skipping to prevent GIL block (FIX-088)"
+                )
+                return {"busy": 0, "log": 0, "checkpointed": 0, "skipped": True}
+
         conn = self._get_conn()
         cursor = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         row = cursor.fetchone()

@@ -218,6 +218,21 @@ class OrderStatusChanged(Event):
     avg_fill_price: Optional[float] = None
 
 
+@dataclass
+class InstrumentsRefreshed(Event):
+    """
+    FIX-092: Published when instrument_cache reloads from instruments.csv.
+
+    Signals that the instrument universe has changed (symbols added/removed,
+    tokens updated). Consumers like CandleStore use this to garbage-collect
+    dead tokens from their internal state.
+
+    Fields:
+        token_count: Number of instruments in the refreshed cache.
+    """
+    token_count: int = 0
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EventBus (EV1, EV2, EV4, EV5)
 # ─────────────────────────────────────────────────────────────────────────────

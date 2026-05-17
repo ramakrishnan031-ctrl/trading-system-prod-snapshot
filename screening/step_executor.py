@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError  # FIX-091
 from dataclasses import dataclass, field
 from datetime import datetime, time as dt_time
 
@@ -19,7 +20,7 @@ from core.time_authority import now_ist
 class StepExecutorResult:
     """Result from running all 10 screening steps."""
     step_results: dict      # step_name -> float (0.0-1.0)
-    step_statuses: dict     # step_name -> "PASSED" | "REJECTED" | "ERROR"
+    step_statuses: dict     # step_name -> "PASSED" | "REJECTED" | "ERROR" | "TIMEOUT"  # FIX-091
     rejected_at: object     # str | None — first step that returned 0.0
     error_steps: list       # steps that raised exceptions
     latencies_ms: dict      # step_name -> float ms
@@ -41,12 +42,18 @@ class StepExecutor:
     SE8: Missing market_data keys use per-step defaults (0.0 or 0.5).
     """
 
-    def __init__(self, logger, market_open: dt_time | None = None) -> None:
+    def __init__(
+        self,
+        logger,
+        market_open: dt_time | None = None,
+        step_timeout_sec: float = 5.0,  # FIX-091: per-step timeout
+    ) -> None:
         self._logger = logger
         # Audit #18: read market_open from config when provided; fall back
         # to the IST default so existing callers (tests, migrations) keep
         # working without code changes.
         self._market_open = market_open if market_open is not None else _DEFAULT_MARKET_OPEN
+        self._step_timeout_sec = step_timeout_sec  # FIX-091
 
     # -------------------------------------------------------------------------
     # Public API
@@ -80,40 +87,56 @@ class StepExecutor:
             ("signal_age",      self._step_10_signal_age),
         ]
 
-        for name, fn in steps:
-            t0 = time.monotonic()
-            try:
-                score = fn(signal, market_data, thresholds, direction)
-            except Exception:
+        # FIX-091: Use ThreadPoolExecutor with timeout for each step
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for name, fn in steps:
+                t0 = time.monotonic()
+                try:
+                    # Submit step to executor with timeout
+                    future = executor.submit(fn, signal, market_data, thresholds, direction)
+                    score = future.result(timeout=self._step_timeout_sec)
+                except FutureTimeoutError:
+                    # FIX-091: Step timeout -> neutral score, WARNING log
+                    elapsed = (time.monotonic() - t0) * 1000.0
+                    self._logger.warning(
+                        "step_executor: step '%s' timed out after %.2fs",
+                        name,
+                        self._step_timeout_sec,
+                    )
+                    step_results[name] = 0.5  # neutral score
+                    step_statuses[name] = "TIMEOUT"
+                    latencies_ms[name] = elapsed
+                    continue
+                except Exception:
+                    elapsed = (time.monotonic() - t0) * 1000.0
+                    self._logger.error(
+                        "step_executor: step '%s' raised exception:\n%s",
+                        name,
+                        traceback.format_exc(),
+                    )
+                    step_results[name] = 0.0
+                    step_statuses[name] = "ERROR"
+                    error_steps.append(name)
+                    latencies_ms[name] = elapsed
+                    if rejected_at is None:
+                        rejected_at = name
+                    continue
+
                 elapsed = (time.monotonic() - t0) * 1000.0
-                self._logger.error(
-                    "step_executor: step '%s' raised exception:\n%s",
-                    name,
-                    traceback.format_exc(),
-                )
-                step_results[name] = 0.0
-                step_statuses[name] = "ERROR"
-                error_steps.append(name)
                 latencies_ms[name] = elapsed
-                if rejected_at is None:
-                    rejected_at = name
-                continue
 
-            elapsed = (time.monotonic() - t0) * 1000.0
-            latencies_ms[name] = elapsed
+                step_results[name] = score
+                if score == 0.0:
+                    step_statuses[name] = "REJECTED"
+                    if rejected_at is None:
+                        rejected_at = name
+                else:
+                    step_statuses[name] = "PASSED"
 
-            step_results[name] = score
-            if score == 0.0:
-                step_statuses[name] = "REJECTED"
-                if rejected_at is None:
-                    rejected_at = name
-            else:
-                step_statuses[name] = "PASSED"
-
-            self._logger.debug(
-                "step_executor: %s score=%.3f latency=%.2fms",
-                name, score, elapsed,
-            )
+                self._logger.debug(
+                    "step_executor: %s score=%.3f latency=%.2fms",
+                    name, score, elapsed,
+                )
 
         return StepExecutorResult(
             step_results=step_results,

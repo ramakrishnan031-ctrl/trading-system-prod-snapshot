@@ -39,9 +39,12 @@ from __future__ import annotations
 import csv
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 from core.exceptions import ConfigMissingError, ConfigSchemaError, InstrumentNotFoundError
+
+if TYPE_CHECKING:
+    from core.events import EventBus  # FIX-092
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -181,6 +184,35 @@ class InstrumentCache:
             ) from exc
 
         return cls(rows)
+
+    def reload(self, path: Path, event_bus: "EventBus") -> "InstrumentCache":
+        """
+        FIX-092: Reload instruments from CSV and publish InstrumentsRefreshed event.
+
+        Creates a new InstrumentCache instance from the given path and publishes
+        an InstrumentsRefreshed event with the token count. This allows downstream
+        consumers (like CandleStore) to garbage-collect dead tokens.
+
+        Args:
+            path: Path to instruments.csv to reload from.
+            event_bus: EventBus to publish InstrumentsRefreshed event.
+
+        Returns:
+            New InstrumentCache instance with reloaded data.
+
+        Raises:
+            ConfigMissingError, ConfigSchemaError: same as load().
+        """
+        from core.events import InstrumentsRefreshed  # Avoid circular import
+
+        new_cache = self.load(path)
+        event_bus.publish(
+            InstrumentsRefreshed(
+                source_module="instrument_cache",
+                token_count=new_cache.count(),
+            )
+        )
+        return new_cache
 
     # ── public API ─────────────────────────────────────────────────────────────
 
