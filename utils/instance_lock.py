@@ -96,7 +96,7 @@ def acquire_instance_lock(lock_port: int = _LOCK_PORT) -> tuple[bool, str]:
         if _lock_socket is not None:
             try:
                 _lock_socket.close()
-            except:
+            except Exception:  # FIX-106: Don't suppress KeyboardInterrupt/SystemExit
                 pass
             _lock_socket = None
         _LOCK_FILE.unlink(missing_ok=True)  # Clean up PID file
@@ -120,7 +120,7 @@ def release_instance_lock() -> None:
     if _lock_socket is not None:
         try:
             _lock_socket.close()
-        except:
+        except Exception:  # FIX-106: Don't suppress KeyboardInterrupt/SystemExit
             pass
         _lock_socket = None
 
