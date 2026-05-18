@@ -132,6 +132,8 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
     system_config_path = config_dir / "system_config.yaml"
     scoring_config_path = config_dir / "scoring_weights.yaml"
 
+    broker_costs_path = config_dir / "broker_costs.yaml"
+
     config = {}
     if system_config_path.exists():
         with open(system_config_path, "r") as f:
@@ -139,6 +141,9 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
     if scoring_config_path.exists():
         with open(scoring_config_path, "r") as f:
             config["scoring"] = yaml.safe_load(f) or {}
+    if broker_costs_path.exists():
+        with open(broker_costs_path, "r") as f:
+            config["broker_costs"] = yaml.safe_load(f) or {}
 
     excluded_symbols = config.get("system", {}).get("excluded_symbols", [])
     global_min = config.get("scoring", {}).get("min_pass_score", 60)
@@ -279,6 +284,54 @@ def _load_candle_data(candle_dir: Optional[Path], date_iso: str) -> Dict[Tuple[s
                 "close": float(row["close"]),
             }
     return candles
+
+
+def _compute_cost_breakdown(trade: dict, z_rates: dict) -> Dict[str, float]:
+    """Compute itemised Zerodha cost breakdown for a round-trip intraday trade.
+
+    Uses rates from broker_costs.yaml zerodha section.
+    Returns empty dict if trade has no exit_price (still open).
+    """
+    exit_price = trade.get("exit_price")
+    if not exit_price or not trade.get("charges"):
+        return {}
+
+    qty = trade.get("qty_filled") or trade.get("qty_planned") or 0
+    entry_price = trade.get("entry_actual_price") or trade.get("entry_target_price") or 0
+    if not qty or not entry_price:
+        return {}
+
+    direction = (trade.get("direction") or "LONG").upper()
+    entry_side = "BUY" if direction == "LONG" else "SELL"
+    exit_side  = "SELL" if direction == "LONG" else "BUY"
+
+    flat  = z_rates.get("brokerage_flat_intraday", 20.0)
+    b_pct = z_rates.get("brokerage_pct_intraday", 0.03) / 100
+    stt_pct   = z_rates.get("stt_sell_pct", 0.025) / 100
+    exch_pct  = z_rates.get("exchange_txn_pct", 0.00297) / 100
+    sebi_pct  = z_rates.get("sebi_pct", 0.0001) / 100
+    gst_pct   = z_rates.get("gst_pct", 18.0) / 100
+    stamp_pct = z_rates.get("stamp_duty_mis_buy_pct", 0.003) / 100
+
+    def _leg(side: str, price: float):
+        tv    = qty * price
+        brok  = min(flat, b_pct * tv)
+        stt   = stt_pct * tv if side == "SELL" else 0.0
+        exch  = exch_pct * tv + sebi_pct * tv   # bundle SEBI with exchange charges
+        gst   = gst_pct * (brok + exch)
+        stamp = stamp_pct * tv if side == "BUY" else 0.0
+        return brok, stt, exch, gst, stamp
+
+    e = _leg(entry_side, float(entry_price))
+    x = _leg(exit_side, float(exit_price))
+
+    return {
+        "brokerage": round(e[0] + x[0], 2),
+        "stt":       round(e[1] + x[1], 2),
+        "exch":      round(e[2] + x[2], 2),
+        "gst":       round(e[3] + x[3], 2),
+        "stamp":     round(e[4] + x[4], 2),
+    }
 
 
 def _build_strategy_min_scores(config_dir: Path, global_min: int) -> Dict[str, int]:
@@ -610,6 +663,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     _disable_gridlines(ws)
 
     global_min = data.config.get("scoring", {}).get("min_pass_score", 60)
+    z_rates = data.config.get("broker_costs", {}).get("zerodha", {})
 
     # Separator columns (narrow dividers painted with separator blue)
     sep_cols = [8, 13, 20, 23, 29, 37, 40]
@@ -753,6 +807,13 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         qty_filled = trade.get("qty_filled", 0)
         roi_pct = (net_pnl / (fill_entry * qty_filled) * 100) if fill_entry and qty_filled else 0
 
+        cost_bd = _compute_cost_breakdown(trade, z_rates)
+        brokerage   = cost_bd.get("brokerage", "—") if cost_bd else "—"
+        stt         = cost_bd.get("stt",       "—") if cost_bd else "—"
+        exch_chrg   = cost_bd.get("exch",      "—") if cost_bd else "—"
+        stamp       = cost_bd.get("stamp",     "—") if cost_bd else "—"
+        gst         = cost_bd.get("gst",       "—") if cost_bd else "—"
+
         trail_count = 0
         for o in data.orders:
             if o.get("trade_id") == trade_id and o.get("leg") == "SL":
@@ -790,11 +851,11 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             trail_count,                                                     # 28
             "",                                                              # 29 sep
             round(gross_pnl, 2),                                             # 30
-            "—",                                                             # 31 Brokerage
-            "—",                                                             # 32 STT
-            "—",                                                             # 33 Exch Charges
-            "—",                                                             # 34 Stamp Duty
-            "—",                                                             # 35 GST
+            brokerage,                                                       # 31 Brokerage
+            stt,                                                             # 32 STT
+            exch_chrg,                                                       # 33 Exch Charges
+            stamp,                                                           # 34 Stamp Duty
+            gst,                                                             # 35 GST
             round(charges, 2) if charges else "—",                           # 36 Total Costs
             "",                                                              # 37 sep
             round(net_pnl, 2),                                               # 38

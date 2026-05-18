@@ -21,6 +21,7 @@ from reports.daily_report import (
     _fmt_time,
     _fmt_datetime,
     _calc_slip_pct,
+    _compute_cost_breakdown,
     _generate_tune_suggestions,
     _get_order_for_trade_leg,
     _load_candle_data,
@@ -1140,3 +1141,146 @@ class TestPerStrategyEligibleScore:
         result = _build_strategy_min_scores(tmp_path, 60)
         assert result["gap_fade_long"] == 30
         assert result["gap_go_long"] == 60  # 0 → falls back to global 60
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cost breakdown tests (FIX-121)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Zerodha MIS rates matching broker_costs.yaml defaults
+_Z_RATES = {
+    "brokerage_flat_intraday": 20.0,
+    "brokerage_pct_intraday": 0.03,
+    "stt_sell_pct": 0.025,
+    "exchange_txn_pct": 0.00297,
+    "sebi_pct": 0.0001,
+    "gst_pct": 18.0,
+    "stamp_duty_mis_buy_pct": 0.003,
+}
+
+
+class TestComputeCostBreakdown:
+
+    def _trade(self, direction="LONG", entry=320.0, exit_price=313.0, qty=156, charges=52.0):
+        return {
+            "direction": direction,
+            "entry_actual_price": entry,
+            "exit_price": exit_price,
+            "qty_filled": qty,
+            "charges": charges,
+        }
+
+    def test_long_trade_stt_on_exit_sell(self):
+        t = self._trade(direction="LONG", entry=320.0, exit_price=313.0, qty=156)
+        bd = _compute_cost_breakdown(t, _Z_RATES)
+        # STT only on SELL side (exit for LONG): 0.025% × 156×313 = 12.21
+        assert bd["stt"] > 0
+        tv_exit = 156 * 313.0
+        expected_stt = round(0.025 / 100 * tv_exit, 2)
+        assert abs(bd["stt"] - expected_stt) < 0.05
+
+    def test_short_trade_stt_on_entry_sell(self):
+        t = self._trade(direction="SHORT", entry=140.0, exit_price=138.0, qty=300)
+        bd = _compute_cost_breakdown(t, _Z_RATES)
+        # For SHORT: entry is SELL → STT on entry leg
+        tv_entry = 300 * 140.0
+        expected_stt = round(0.025 / 100 * tv_entry, 2)
+        assert abs(bd["stt"] - expected_stt) < 0.05
+
+    def test_brokerage_capped_at_flat_20(self):
+        # Small trade: 0.03% of turnover < ₹20 → proportional brokerage applies
+        t = self._trade(direction="LONG", entry=100.0, exit_price=98.0, qty=10, charges=5.0)
+        bd = _compute_cost_breakdown(t, _Z_RATES)
+        # Entry turnover = 10 * 100 = 1000 → 0.03% = 0.30 < 20 → brokerage = 0.30 per leg
+        assert bd["brokerage"] < 40.0   # two legs, max ₹40 if capped
+
+    def test_brokerage_not_capped_for_large_trade(self):
+        # Large trade: 0.03% × turnover > ₹20 → capped at ₹20 per leg
+        t = self._trade(direction="LONG", entry=5000.0, exit_price=4950.0, qty=200, charges=100.0)
+        bd = _compute_cost_breakdown(t, _Z_RATES)
+        # 0.03% × (200×5000=1,000,000) = 300 → capped at 20; two legs → ₹40
+        assert abs(bd["brokerage"] - 40.0) < 0.01
+
+    def test_total_matches_sum_of_components(self):
+        t = self._trade()
+        bd = _compute_cost_breakdown(t, _Z_RATES)
+        computed_total = round(bd["brokerage"] + bd["stt"] + bd["exch"] + bd["stamp"] + bd["gst"], 2)
+        assert abs(computed_total - (bd["brokerage"] + bd["stt"] + bd["exch"] + bd["stamp"] + bd["gst"])) < 0.01
+
+    def test_open_trade_returns_empty(self):
+        t = {"direction": "LONG", "entry_actual_price": 500.0, "qty_filled": 10}
+        # No exit_price, no charges → open trade
+        assert _compute_cost_breakdown(t, _Z_RATES) == {}
+
+    def test_valiantorg_matches_db_total(self):
+        # Validate against real DB value: VALIANTORG charges=52.26
+        t = {
+            "direction": "LONG",
+            "entry_actual_price": 319.98,
+            "exit_price": 313.17,   # gross_pnl=-1062.36 / qty=156 → 319.98-6.81
+            "qty_filled": 156,
+            "charges": 52.26,
+        }
+        bd = _compute_cost_breakdown(t, _Z_RATES)
+        total = bd["brokerage"] + bd["stt"] + bd["exch"] + bd["stamp"] + bd["gst"]
+        assert abs(total - 52.26) < 1.0   # within ₹1 tolerance (rounding differences)
+
+    def test_build_sheet_2_orders_expense_cols_populated(self, tmp_path):
+        """Cols AE-AI (brokerage/STT/etc.) should have numeric values, not '—'."""
+        import openpyxl
+        trade = {
+            "trade_id": "t-exp-01",
+            "signal_id": "sig-exp-01",
+            "symbol": "RELIANCE",
+            "direction": "LONG",
+            "strategy": "gap_go_long",
+            "qty_planned": 10,
+            "qty_filled": 10,
+            "entry_target_price": 2500.0,
+            "entry_actual_price": 2500.0,
+            "exit_price": 2520.0,
+            "sl_initial": 2450.0,
+            "tgt_initial": 2600.0,
+            "gross_pnl": 200.0,
+            "charges": 55.0,
+            "net_pnl": 145.0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+            "exit_reason": "TGT_HIT",
+        }
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100145.0,
+            signals=[],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            config={"broker_costs": {"zerodha": _Z_RATES}},
+            excluded_symbols=[],
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        # Row 4 = first data row; cols 31-35 = Brokerage, STT, Exch, Stamp, GST
+        brokerage_val = ws.cell(4, 31).value
+        stt_val       = ws.cell(4, 32).value
+        exch_val      = ws.cell(4, 33).value
+        stamp_val     = ws.cell(4, 34).value
+        gst_val       = ws.cell(4, 35).value
+        assert brokerage_val != "—", f"Expected numeric brokerage, got {brokerage_val!r}"
+        assert stt_val != "—",       f"Expected numeric STT, got {stt_val!r}"
+        assert exch_val != "—",      f"Expected numeric exch, got {exch_val!r}"
+        assert stamp_val != "—",     f"Expected numeric stamp, got {stamp_val!r}"
+        assert gst_val != "—",       f"Expected numeric GST, got {gst_val!r}"
+        assert isinstance(brokerage_val, float), f"Brokerage should be float, got {type(brokerage_val)}"

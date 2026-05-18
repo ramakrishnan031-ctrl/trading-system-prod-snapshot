@@ -1,0 +1,140 @@
+"""
+scripts/fetch_daily_candles.py — Fetch 1-minute OHLCV candles from Zerodha for daily report.
+
+Runs on the VM after market close (cron: 15:40 IST Mon-Fri).
+Generates candle_data_YYYY-MM-DD.csv consumed by reports/daily_report.py --candle-dir.
+
+Usage:
+    python scripts/fetch_daily_candles.py [YYYY-MM-DD]
+
+Output:
+    data_store/candles/candle_data_YYYY-MM-DD.csv
+"""
+from __future__ import annotations
+
+import csv
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+TOKEN_PATH  = ROOT / "data_store" / "session" / "zerodha_token.json"
+OUTPUT_DIR  = ROOT / "data_store" / "candles"
+DB_PATH     = ROOT / "data_store" / "trading_system.db"
+
+API_KEY = "pvahsvuu3xjsefc7"
+
+
+def _get_traded_symbols(date_iso: str) -> list[str]:
+    """Return distinct symbols from PROCESSED signals on date_iso."""
+    import sqlite3
+    if not DB_PATH.exists():
+        return []
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT DISTINCT symbol FROM signals "
+        "WHERE status = 'PROCESSED' AND date(triggered_at) = ?",
+        (date_iso,),
+    )
+    symbols = [row[0] for row in cur.fetchall()]
+    conn.close()
+    return symbols
+
+
+def main() -> None:
+    trade_date = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime("%Y-%m-%d")
+
+    print(f"\nCandle Fetcher (VM) — Date: {trade_date}")
+    print("=" * 55)
+
+    if not TOKEN_PATH.exists():
+        print(f"ERROR: Token not found at {TOKEN_PATH}")
+        sys.exit(1)
+
+    with open(TOKEN_PATH) as f:
+        access_token = json.load(f).get("access_token")
+    print(f"Token loaded: {access_token[:8]}...")
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=API_KEY)
+        kite.set_access_token(access_token)
+        profile = kite.profile()
+        print(f"Connected: {profile['user_id']} — {profile['user_name']}")
+    except Exception as e:
+        print(f"ERROR connecting to Zerodha: {e}")
+        sys.exit(1)
+
+    symbols = _get_traded_symbols(trade_date)
+    if not symbols:
+        print(f"No PROCESSED signals found for {trade_date} — nothing to fetch.")
+        sys.exit(0)
+    print(f"Symbols to fetch: {len(symbols)}")
+
+    print("Loading instrument map...")
+    instruments = kite.instruments("NSE")
+    inst_map = {i["tradingsymbol"]: i["instrument_token"] for i in instruments}
+
+    from_dt = datetime.strptime(trade_date, "%Y-%m-%d").replace(hour=9, minute=0)
+    to_dt   = datetime.strptime(trade_date, "%Y-%m-%d").replace(hour=15, minute=31)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_file = OUTPUT_DIR / f"candle_data_{trade_date}.csv"
+
+    all_rows: list[dict] = []
+    failed: list[str] = []
+
+    for i, symbol in enumerate(symbols, 1):
+        token = inst_map.get(symbol)
+        if not token:
+            print(f"  [{i:3d}/{len(symbols)}] {symbol:<20} — NOT FOUND in NSE instruments")
+            failed.append(symbol)
+            continue
+        try:
+            candles = kite.historical_data(
+                instrument_token=token,
+                from_date=from_dt,
+                to_date=to_dt,
+                interval="minute",
+            )
+            if candles:
+                for c in candles:
+                    all_rows.append({
+                        "symbol":   symbol,
+                        "datetime": c["date"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "open":     c["open"],
+                        "high":     c["high"],
+                        "low":      c["low"],
+                        "close":    c["close"],
+                        "volume":   c["volume"],
+                    })
+                print(f"  [{i:3d}/{len(symbols)}] {symbol:<20} — {len(candles)} candles")
+            else:
+                print(f"  [{i:3d}/{len(symbols)}] {symbol:<20} — no data")
+                failed.append(symbol)
+        except Exception as e:
+            print(f"  [{i:3d}/{len(symbols)}] {symbol:<20} — ERROR: {e}")
+            failed.append(symbol)
+
+        time.sleep(0.35)   # Zerodha: 3 historical requests/sec
+
+    if all_rows:
+        with open(output_file, "w", newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=["symbol", "datetime", "open", "high", "low", "close", "volume"]
+            )
+            writer.writeheader()
+            writer.writerows(all_rows)
+        print(f"\nSaved: {output_file}  ({len(all_rows)} rows)")
+    else:
+        print("\nNo candle data fetched.")
+
+    if failed:
+        print(f"Failed symbols ({len(failed)}): {', '.join(failed)}")
+
+
+if __name__ == "__main__":
+    main()
