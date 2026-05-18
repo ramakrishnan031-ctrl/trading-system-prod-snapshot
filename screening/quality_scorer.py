@@ -41,17 +41,20 @@ class QualityScorer:
     def __init__(self, weights: "ScoringConfig", logger) -> None:
         self._weights = weights
         self._logger = logger
-        self._step_names: list[str] = list(
-            weights.steps.model_fields_set
-            if hasattr(weights.steps, "model_fields_set")
-            else vars(weights.steps).keys()
-        )
-        # Build a stable ordered list from the Pydantic model's fields
-        self._step_names = [
-            "volume_surge", "vwap_position", "atr_filter", "rsi_range",
-            "price_action", "sector_strength", "time_of_day", "spread_check",
-            "circuit_check", "signal_age",
-        ]
+        # FIX-101: Derive step names from config instead of hardcoding
+        # Check if real Pydantic model (not MagicMock which also has model_fields!)
+        if hasattr(weights.steps, "model_fields") and isinstance(
+            getattr(weights.steps, "model_fields", None), dict
+        ):
+            # Real Pydantic v2 model - use model_fields for proper field ordering
+            self._step_names: list[str] = list(weights.steps.model_fields.keys())
+        else:
+            # Mock object (tests) - derive from numeric attributes (weights are int/float)
+            all_attrs = vars(weights.steps) if hasattr(weights.steps, "__dict__") else {}
+            self._step_names = [
+                k for k, v in all_attrs.items()
+                if not k.startswith("_") and isinstance(v, (int, float))
+            ]
 
     def score(self, step_results: dict) -> ScoreResult:
         """
