@@ -23,6 +23,7 @@ from reports.daily_report import (
     _calc_slip_pct,
     _generate_tune_suggestions,
     _get_order_for_trade_leg,
+    _load_candle_data,
     is_holiday_or_weekend,
     load_report_data,
     generate_daily_report,
@@ -244,6 +245,57 @@ class TestHolidayCheck:
         holiday_file.write_text(yaml.dump({"holidays": ["2026-01-26"]}))
 
         assert is_holiday_or_weekend("2026-05-15", tmp_path) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Candle data loader tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestLoadCandleData:
+    """Tests for _load_candle_data helper."""
+
+    def test_returns_empty_when_no_dir(self):
+        result = _load_candle_data(None, "2026-05-15")
+        assert result == {}
+
+    def test_returns_empty_when_csv_missing(self, tmp_path):
+        result = _load_candle_data(tmp_path, "2026-05-15")
+        assert result == {}
+
+    def test_loads_csv_correctly(self, tmp_path):
+        import csv as csv_mod
+        csv_path = tmp_path / "candle_data_2026-05-15.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv_mod.DictWriter(f, fieldnames=["symbol","datetime","open","high","low","close","volume"])
+            writer.writeheader()
+            writer.writerow({"symbol": "RELIANCE", "datetime": "2026-05-15 09:31:00",
+                             "open": 2500.0, "high": 2610.0, "low": 2498.0, "close": 2600.0, "volume": 50000})
+
+        result = _load_candle_data(tmp_path, "2026-05-15")
+        assert ("RELIANCE", "09:31") in result
+        assert result[("RELIANCE", "09:31")]["open"] == 2500.0
+        assert result[("RELIANCE", "09:31")]["high"] == 2610.0
+        assert result[("RELIANCE", "09:31")]["low"] == 2498.0
+        assert result[("RELIANCE", "09:31")]["close"] == 2600.0
+
+    def test_multiple_symbols_multiple_candles(self, tmp_path):
+        import csv as csv_mod
+        csv_path = tmp_path / "candle_data_2026-05-15.csv"
+        rows = [
+            {"symbol": "RELIANCE", "datetime": "2026-05-15 09:15:00", "open": 2490, "high": 2510, "low": 2488, "close": 2505, "volume": 1000},
+            {"symbol": "RELIANCE", "datetime": "2026-05-15 09:16:00", "open": 2505, "high": 2520, "low": 2503, "close": 2515, "volume": 900},
+            {"symbol": "TCS",      "datetime": "2026-05-15 09:31:00", "open": 3500, "high": 3600, "low": 3490, "close": 3590, "volume": 500},
+        ]
+        with open(csv_path, "w", newline="") as f:
+            writer = csv_mod.DictWriter(f, fieldnames=["symbol","datetime","open","high","low","close","volume"])
+            writer.writeheader()
+            writer.writerows(rows)
+
+        result = _load_candle_data(tmp_path, "2026-05-15")
+        assert len(result) == 3
+        assert ("RELIANCE", "09:15") in result
+        assert ("RELIANCE", "09:16") in result
+        assert ("TCS", "09:31") in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -709,6 +761,120 @@ class TestSheetBuilders:
         # Column 2 is Strategy
         strategy_value = ws.cell(row=3, column=2).value
         assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
+
+    def test_build_sheet_4_candles_ohlc_populated_from_csv(self, sample_report_data, tmp_path):
+        """When candle CSV is provided, OHLC cols H-K should be populated."""
+        import openpyxl, csv as csv_mod
+
+        # sample_trade entry_time is 2026-05-15T09:31:00+05:30 → "09:31"
+        csv_path = tmp_path / "candle_data_2026-05-15.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv_mod.DictWriter(f, fieldnames=["symbol","datetime","open","high","low","close","volume"])
+            writer.writeheader()
+            writer.writerow({"symbol": "RELIANCE", "datetime": "2026-05-15 09:31:00",
+                             "open": 2490.0, "high": 2610.0, "low": 2488.0, "close": 2605.0, "volume": 75000})
+
+        candle_data = _load_candle_data(tmp_path, "2026-05-15")
+        wb = openpyxl.Workbook()
+        ws = build_sheet_4_candles(wb, sample_report_data, candle_data=candle_data)
+
+        # Row 3 = first CLOSED trade; cols H=8, I=9, J=10, K=11
+        assert ws.cell(row=3, column=8).value == 2490.0, "Open mismatch"
+        assert ws.cell(row=3, column=9).value == 2610.0, "High mismatch"
+        assert ws.cell(row=3, column=10).value == 2488.0, "Low mismatch"
+        assert ws.cell(row=3, column=11).value == 2605.0, "Close mismatch"
+        assert ws.cell(row=3, column=12).value == "No"   # Synthetic? = No (real data)
+
+    def test_build_sheet_4_candles_ohlc_blank_without_candle_data(self, sample_report_data):
+        """Without candle data, OHLC cols and Synthetic? col should stay blank."""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = build_sheet_4_candles(wb, sample_report_data)
+
+        assert ws.cell(row=3, column=8).value == ""   # Open blank
+        assert ws.cell(row=3, column=9).value == ""   # High blank
+        assert ws.cell(row=3, column=10).value == ""  # Low blank
+        assert ws.cell(row=3, column=11).value == ""  # Close blank
+        assert ws.cell(row=3, column=12).value == ""  # Synthetic? blank
+
+    def test_build_sheet_6_drawdown_pct_positive_trade(self, sample_report_data):
+        """When only wins exist, max_loss=0 so drawdown_pct=0."""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        ws = build_sheet_6_strategy(wb, sample_report_data)
+
+        # Row 3 = first strategy; col 17 = Drawdown %
+        # sample_trade net_pnl=930 (win only), max_loss=0, drawdown=0
+        drawdown = ws.cell(row=3, column=17).value
+        assert isinstance(drawdown, float), f"Expected float, got {drawdown!r}"
+        assert drawdown == 0.0
+
+    def test_build_sheet_6_drawdown_pct_loss_trade(self):
+        """Drawdown % = (max_loss / capital_used) * 100."""
+        import openpyxl
+
+        data = ReportData(
+            date_iso="2026-05-15",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=99000.0,
+            signals=[],
+            trades=[{
+                "trade_id": "t1",
+                "symbol": "INFY",
+                "direction": "LONG",
+                "strategy": "TEST",
+                "net_pnl": -500.0,
+                "gross_pnl": -500.0,
+                "charges": 0,
+                "margin_reserved": 10000.0,
+                "status": "CLOSED",
+            }],
+            orders=[], fm_ledger=[], screener_results=[], innings=[],
+            system_events=[], recon_log=[], gate_state=[],
+            config={}, excluded_symbols=[],
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_6_strategy(wb, data)
+
+        # max_loss=-500, capital_used=10000 → -500/10000*100 = -5.0
+        drawdown = ws.cell(row=3, column=17).value
+        assert drawdown == -5.0, f"Expected -5.0, got {drawdown!r}"
+
+    def test_build_sheet_6_drawdown_pct_zero_capital_guard(self):
+        """Drawdown % should be 0.0 when capital_used is 0 (div/zero guard)."""
+        import openpyxl
+
+        data = ReportData(
+            date_iso="2026-05-15",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=99000.0,
+            signals=[],
+            trades=[{
+                "trade_id": "t1",
+                "symbol": "TCS",
+                "direction": "LONG",
+                "strategy": "TEST",
+                "net_pnl": -100.0,
+                "gross_pnl": -100.0,
+                "charges": 0,
+                "margin_reserved": 0,  # zero capital — guard against div/zero
+                "status": "CLOSED",
+            }],
+            orders=[], fm_ledger=[], screener_results=[], innings=[],
+            system_events=[], recon_log=[], gate_state=[],
+            config={}, excluded_symbols=[],
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_6_strategy(wb, data)
+
+        drawdown = ws.cell(row=3, column=17).value
+        assert drawdown == 0.0, f"Expected 0.0 for zero capital, got {drawdown!r}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

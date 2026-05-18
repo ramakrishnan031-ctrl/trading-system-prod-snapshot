@@ -247,6 +247,36 @@ def _add_separator_column(ws: Worksheet, col_idx: int, start_row: int, end_row: 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Candle data loader
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_candle_data(candle_dir: Optional[Path], date_iso: str) -> Dict[Tuple[str, str], dict]:
+    """Load candle CSV into dict keyed by (symbol, HH:MM).
+
+    CSV format: symbol,datetime,open,high,low,close,volume
+    datetime format: YYYY-MM-DD HH:MM:SS
+    Returns empty dict if candle_dir is None or the file is not found.
+    """
+    if not candle_dir:
+        return {}
+    csv_path = candle_dir / f"candle_data_{date_iso}.csv"
+    if not csv_path.exists():
+        return {}
+    import csv as _csv
+    candles: Dict[Tuple[str, str], dict] = {}
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            hhmm = row["datetime"][11:16]  # "YYYY-MM-DD HH:MM:SS" → "HH:MM"
+            candles[(row["symbol"], hhmm)] = {
+                "open":  float(row["open"]),
+                "high":  float(row["high"]),
+                "low":   float(row["low"]),
+                "close": float(row["close"]),
+            }
+    return candles
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sheet 0: EOD Dashboard
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -924,7 +954,11 @@ def build_sheet_3_capital(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 # Sheet 4: Candles
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_sheet_4_candles(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
+def build_sheet_4_candles(
+    wb: openpyxl.Workbook,
+    data: ReportData,
+    candle_data: Optional[Dict[Tuple[str, str], dict]] = None,
+) -> Worksheet:
     """Build Candles analysis sheet with tune suggestions."""
     ws = wb.create_sheet(title="4_Candles")
     _disable_gridlines(ws)
@@ -1027,6 +1061,9 @@ def build_sheet_4_candles(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         elif exit_reason in ("TGT_HIT", "TGT"):
             tune_suggestion = "✅ TGT hit perfectly — no tuning needed"
 
+        entry_hhmm = _fmt_time(trade.get("entry_time"))[:5]  # "HH:MM"
+        candle = (candle_data or {}).get((trade.get("symbol", ""), entry_hhmm), {})
+
         row_data = [
             data.date_iso,
             trade_id[:8] + "..." if len(trade_id) > 8 else trade_id,
@@ -1035,11 +1072,11 @@ def build_sheet_4_candles(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             entry_order.get("order_id", "") if entry_order else "",
             _fmt_time(trade.get("entry_time")),
             "",
-            "",
-            "",
-            "",
-            "",
-            "No",
+            candle.get("open", ""),
+            candle.get("high", ""),
+            candle.get("low", ""),
+            candle.get("close", ""),
+            "No" if candle else "",
             "",
             round(our_entry, 2) if our_entry else "",
             round(our_sl, 2) if our_sl else "",
@@ -1256,6 +1293,7 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 
         capital_used = sum(t.get("margin_reserved") or 0 for t in trades)
         win_rate = len(wins) / len(closed) * 100 if closed else 0
+        drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
 
         row_data = [
             data.date_iso,
@@ -1274,7 +1312,7 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
             round(max_win, 2),
             round(max_loss, 2),
             round(capital_used, 2),
-            "",
+            drawdown_pct,
         ]
 
         for col, value in enumerate(row_data, start=1):
@@ -1345,6 +1383,7 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 
         capital_used = sum(t.get("margin_reserved") or 0 for t in bucket_trades)
         win_rate = len(wins) / len(closed) * 100 if closed else 0
+        drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
 
         row_data = [
             data.date_iso,
@@ -1363,7 +1402,7 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
             round(max_win, 2),
             round(max_loss, 2),
             round(capital_used, 2),
-            "",
+            drawdown_pct,
         ]
 
         for col, value in enumerate(row_data, start=1):
@@ -1387,6 +1426,7 @@ def generate_daily_report(
     date_iso: str,
     output_dir: Path,
     config_dir: Path,
+    candle_dir: Optional[Path] = None,
 ) -> Path:
     """
     Generate the daily report for the given date.
@@ -1396,6 +1436,7 @@ def generate_daily_report(
         date_iso: Date in YYYY-MM-DD format
         output_dir: Directory for output files
         config_dir: Directory containing config files
+        candle_dir: Optional directory containing candle_data_YYYY-MM-DD.csv files
 
     Returns:
         Path to generated xlsx file
@@ -1403,6 +1444,7 @@ def generate_daily_report(
     log.info("Generating daily report for %s", date_iso)
 
     data = load_report_data(store, date_iso, config_dir)
+    candle_data = _load_candle_data(candle_dir, date_iso)
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -1411,7 +1453,7 @@ def generate_daily_report(
     build_sheet_1_signals(wb, data)
     build_sheet_2_orders(wb, data)
     build_sheet_3_capital(wb, data)
-    build_sheet_4_candles(wb, data)
+    build_sheet_4_candles(wb, data, candle_data=candle_data)
     build_sheet_5_telegram(wb, data)
     build_sheet_6_strategy(wb, data)
 
@@ -1463,6 +1505,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Generate even on holidays/weekends.",
     )
     parser.add_argument(
+        "--candle-dir",
+        metavar="DIR",
+        default=None,
+        help="Directory containing candle_data_YYYY-MM-DD.csv files for OHLC population.",
+    )
+    parser.add_argument(
         "--notify",
         action="store_true",
         help="Send Telegram notification on completion.",
@@ -1507,6 +1555,7 @@ def main(argv=None) -> int:
             date_iso=date_iso,
             output_dir=Path(args.output_dir),
             config_dir=config_dir,
+            candle_dir=Path(args.candle_dir) if args.candle_dir else None,
         )
         print(f"Report generated: {output_path}")
 
