@@ -30,7 +30,7 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -77,6 +77,7 @@ class ReportData:
 
     config: dict
     excluded_symbols: List[str]
+    strategy_min_scores: Dict[str, int] = field(default_factory=dict)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -139,6 +140,8 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
             config["scoring"] = yaml.safe_load(f) or {}
 
     excluded_symbols = config.get("system", {}).get("excluded_symbols", [])
+    global_min = config.get("scoring", {}).get("min_pass_score", 60)
+    strategy_min_scores = _build_strategy_min_scores(config_dir, global_min)
 
     opening_capital = 0.0
     closing_capital_broker = 0.0
@@ -168,6 +171,7 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
         gate_state=gate_state,
         config=config,
         excluded_symbols=excluded_symbols,
+        strategy_min_scores=strategy_min_scores,
     )
 
 
@@ -274,6 +278,30 @@ def _load_candle_data(candle_dir: Optional[Path], date_iso: str) -> Dict[Tuple[s
                 "close": float(row["close"]),
             }
     return candles
+
+
+def _build_strategy_min_scores(config_dir: Path, global_min: int) -> Dict[str, int]:
+    """Read all strategy YAMLs and return effective min_score per strategy name.
+
+    min_score=0 means "use global"; any positive value overrides it.
+    """
+    import yaml as _yaml
+    strategies_dir = config_dir / "strategies"
+    result: Dict[str, int] = {}
+    if not strategies_dir.is_dir():
+        return result
+    for yaml_path in strategies_dir.glob("*.yaml"):
+        try:
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                cfg = _yaml.safe_load(f) or {}
+            name = cfg.get("name", "")
+            min_score = cfg.get("min_score", 0)
+            effective = min_score if min_score > 0 else global_min
+            if name:
+                result[name] = effective
+        except Exception:
+            pass
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -469,7 +497,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     ws = wb.create_sheet(title="1_Signals")
     _disable_gridlines(ws)
 
-    min_tradable = data.config.get("scoring", {}).get("min_pass_score", 60)
+    global_min = data.config.get("scoring", {}).get("min_pass_score", 60)
 
     headers = [
         "Trading Date", "Received At", "Scanner/Strategy", "Symbol", "Raw Symbol",
@@ -509,6 +537,8 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
         screener_row = screener_map.get(signal_id, {})
         algo_score = screener_row.get("score", "—")
+        strategy_name = sig.get("strategy", "")
+        effective_min = data.strategy_min_scores.get(strategy_name, global_min)
 
         try:
             received_dt = datetime.fromisoformat(sig.get("received_at", ""))
@@ -531,7 +561,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             1 if is_order_passed else 0,
             1 if is_excluded else 0,
             f"=F{row}-(G{row}+J{row}+L{row})",
-            min_tradable,
+            effective_min,
             algo_score,
             sig.get("trigger_price", ""),
             signal_age,
@@ -548,7 +578,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             cell.border = BORDER_ALL
 
             if col == 15 and isinstance(algo_score, (int, float)):
-                if algo_score < min_tradable:
+                if algo_score < effective_min:
                     cell.fill = FILL_RED
                 else:
                     cell.fill = FILL_GREEN
@@ -578,7 +608,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     ws = wb.create_sheet(title="2_Orders")
     _disable_gridlines(ws)
 
-    min_tradable = data.config.get("scoring", {}).get("min_pass_score", 60)
+    global_min = data.config.get("scoring", {}).get("min_pass_score", 60)
 
     group_headers = [
         ("IDENTITY", 1, 7),
@@ -641,6 +671,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         screener = screener_map.get(signal_id, {})
 
         strategy = trade.get("strategy", "") or signal.get("strategy", "")
+        effective_min = data.strategy_min_scores.get(strategy, global_min)
 
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
         sl_order = _get_order_for_trade_leg(data.orders, trade_id, "SL")
@@ -698,7 +729,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             strategy,
             trade.get("direction", ""),
             trade.get("symbol", ""),
-            min_tradable,
+            effective_min,
             screener.get("score", "—"),
             "",
             _fmt_time(entry_order.get("placed_at")) if entry_order else "",

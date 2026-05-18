@@ -24,6 +24,7 @@ from reports.daily_report import (
     _generate_tune_suggestions,
     _get_order_for_trade_leg,
     _load_candle_data,
+    _build_strategy_min_scores,
     is_holiday_or_weekend,
     load_report_data,
     generate_daily_report,
@@ -1034,3 +1035,108 @@ class TestEdgeCases:
 
         suggestions = _generate_tune_suggestions(data)
         assert isinstance(suggestions, list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-strategy effective min_score tests (FIX-119)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPerStrategyEligibleScore:
+    """Col N (Sheet 1) and Col F (Sheet 2) use per-strategy min_score."""
+
+    def _make_data(self, strategy_min_scores):
+        signal = {
+            "signal_id": "sig-A",
+            "symbol": "TATAMOTORS",
+            "strategy": "gap_fade_long",
+            "scanner": "chartink",
+            "status": "TRADED",
+            "trade_id": "tr-A",
+            "received_at": "2026-05-18T09:30:00+05:30",
+            "triggered_at": "2026-05-18T09:29:55+05:30",
+            "trigger_price": 800.0,
+        }
+        trade = {
+            "trade_id": "tr-A",
+            "signal_id": "sig-A",
+            "symbol": "TATAMOTORS",
+            "direction": "LONG",
+            "strategy": "gap_fade_long",
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 800.0,
+            "entry_actual_price": 801.0,
+            "sl_initial": 780.0,
+            "tgt_initial": 840.0,
+            "gross_pnl": 500.0,
+            "charges": 20.0,
+            "net_pnl": 480.0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+        }
+        return ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100480.0,
+            signals=[signal],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[{"signal_id": "sig-A", "score": 35, "status": "PASSED"}],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            config={"scoring": {"min_pass_score": 60}},
+            excluded_symbols=[],
+            strategy_min_scores=strategy_min_scores,
+        )
+
+    def test_sheet_1_signals_eligible_score_uses_strategy_min_score(self):
+        import openpyxl
+        data = self._make_data({"gap_fade_long": 30})
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_1_signals(wb, data)
+        ws = wb["1_Signals"]
+        # Row 2 = first data row; col 14 = Eligible Score (Min Tradable)
+        eligible_score_cell = ws.cell(row=2, column=14).value
+        assert eligible_score_cell == 30, f"Expected 30 (gap_fade_long override), got {eligible_score_cell}"
+
+    def test_sheet_2_orders_eligible_score_uses_strategy_min_score(self):
+        import openpyxl
+        data = self._make_data({"gap_fade_long": 30})
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        # Row 3 = first data row (rows 1-2 are headers); col 6 = Eligible Score (Min)
+        eligible_score_cell = ws.cell(row=3, column=6).value
+        assert eligible_score_cell == 30, f"Expected 30 (gap_fade_long override), got {eligible_score_cell}"
+
+    def test_sheet_1_signals_falls_back_to_global_min_for_unknown_strategy(self):
+        import openpyxl
+        data = self._make_data({})  # no strategy overrides
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_1_signals(wb, data)
+        ws = wb["1_Signals"]
+        eligible_score_cell = ws.cell(row=2, column=14).value
+        assert eligible_score_cell == 60, f"Expected global 60 fallback, got {eligible_score_cell}"
+
+    def test_build_strategy_min_scores_reads_yaml_override(self, tmp_path):
+        strategies_dir = tmp_path / "strategies"
+        strategies_dir.mkdir()
+        (strategies_dir / "gap_fade_long.yaml").write_text(
+            "name: gap_fade_long\nmin_score: 30\n", encoding="utf-8"
+        )
+        (strategies_dir / "gap_go_long.yaml").write_text(
+            "name: gap_go_long\nmin_score: 0\n", encoding="utf-8"
+        )
+        result = _build_strategy_min_scores(tmp_path, 60)
+        assert result["gap_fade_long"] == 30
+        assert result["gap_go_long"] == 60  # 0 → falls back to global 60
