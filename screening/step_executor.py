@@ -26,9 +26,12 @@ class StepExecutorResult:
     latencies_ms: dict      # step_name -> float ms
 
 
-# Default market-open time in IST. Kept as a fallback for callers that do
-# not inject market_open via the StepExecutor constructor. Audit #18:
-# special sessions (muhurat, etc.) must be able to override via config.
+# FIX-114: Default market-open time (IST) for signal_age calculation.
+# Hardcoded fallback for callers that don't inject market_open parameter.
+# Production code MUST inject market_open from SystemConfig.trading_hours.market_open
+# to support special sessions (muhurat trading, early close, etc.).
+# This constant exists only for backward compatibility with tests that pre-date
+# the market_open parameter (SE2).
 _DEFAULT_MARKET_OPEN = dt_time(9, 15)
 
 
