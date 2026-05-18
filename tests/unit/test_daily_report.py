@@ -406,12 +406,231 @@ class TestSheetBuilders:
         text = " ".join(all_values)
         assert "RECONCILIATION" in text
 
+    def test_build_sheet_3_capital_strategy_fallback(self, sample_report_data):
+        """Strategy column should fallback to signal.strategy if trade.strategy is empty."""
+        import openpyxl
+
+        # Create a trade with empty strategy
+        trade_no_strategy = {
+            "trade_id": "trade-002",
+            "signal_id": "sig-001",  # Same signal as sample_signal which has strategy="MOMENTUM"
+            "symbol": "TCS",
+            "direction": "LONG",
+            "strategy": "",  # Empty strategy
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 3500.0,
+            "entry_actual_price": 3505.0,
+            "sl_initial": 3450.0,
+            "tgt_initial": 3600.0,
+            "margin_reserved": 3500.0,
+            "created_at": "2026-05-15T09:35:00+05:30",
+            "entry_time": "2026-05-15T09:36:00+05:30",
+            "exit_time": "2026-05-15T10:00:00+05:30",
+            "exit_price": 3600.0,
+            "exit_reason": "TGT_HIT",
+            "gross_pnl": 475.0,
+            "charges": 25.0,
+            "net_pnl": 450.0,
+            "status": "CLOSED",
+        }
+
+        data_with_empty_strategy = ReportData(
+            date_iso=sample_report_data.date_iso,
+            mode=sample_report_data.mode,
+            account=sample_report_data.account,
+            opening_capital=sample_report_data.opening_capital,
+            closing_capital_broker=sample_report_data.closing_capital_broker,
+            signals=sample_report_data.signals,  # Contains sig-001 with strategy="MOMENTUM"
+            trades=[trade_no_strategy],
+            orders=sample_report_data.orders,
+            fm_ledger=sample_report_data.fm_ledger,
+            screener_results=sample_report_data.screener_results,
+            innings=sample_report_data.innings,
+            system_events=sample_report_data.system_events,
+            recon_log=sample_report_data.recon_log,
+            gate_state=sample_report_data.gate_state,
+            config=sample_report_data.config,
+            excluded_symbols=sample_report_data.excluded_symbols,
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_3_capital(wb, data_with_empty_strategy)
+
+        # Check that row 3 (first trade row after opening) has strategy from signal
+        # Column 4 is Strategy
+        strategy_value = ws.cell(row=3, column=4).value
+        assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
+
+    def test_build_sheet_2_orders_strategy_fallback_to_signal(self, sample_report_data):
+        """Strategy col (C) in Sheet 2_Orders should fallback to signal.strategy when trade.strategy is empty."""
+        import openpyxl
+
+        trade_no_strategy = {
+            "trade_id": "trade-004",
+            "signal_id": "sig-001",  # Signal has strategy="MOMENTUM"
+            "symbol": "TCS",
+            "direction": "LONG",
+            "strategy": "",
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 3500.0,
+            "entry_actual_price": 3505.0,
+            "sl_initial": 3450.0,
+            "tgt_initial": 3600.0,
+            "margin_reserved": 3500.0,
+            "created_at": "2026-05-15T09:35:00+05:30",
+            "entry_time": "2026-05-15T09:36:00+05:30",
+            "exit_time": "2026-05-15T10:00:00+05:30",
+            "exit_price": 3600.0,
+            "exit_reason": "TGT_HIT",
+            "gross_pnl": 475.0,
+            "charges": 25.0,
+            "net_pnl": 450.0,
+            "status": "CLOSED",
+        }
+
+        data = ReportData(
+            date_iso=sample_report_data.date_iso,
+            mode=sample_report_data.mode,
+            account=sample_report_data.account,
+            opening_capital=sample_report_data.opening_capital,
+            closing_capital_broker=sample_report_data.closing_capital_broker,
+            signals=sample_report_data.signals,
+            trades=[trade_no_strategy],
+            orders=sample_report_data.orders,
+            fm_ledger=sample_report_data.fm_ledger,
+            screener_results=sample_report_data.screener_results,
+            innings=sample_report_data.innings,
+            system_events=sample_report_data.system_events,
+            recon_log=sample_report_data.recon_log,
+            gate_state=sample_report_data.gate_state,
+            config=sample_report_data.config,
+            excluded_symbols=sample_report_data.excluded_symbols,
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_2_orders(wb, data)
+
+        # Row 3 = first trade row; col 3 = Strategy
+        strategy_value = ws.cell(row=3, column=3).value
+        assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
+
+    def test_build_sheet_4_candles_strategy_fallback_to_signal(self, sample_report_data):
+        """Strategy col (C) in Sheet 4_Candles should fallback to signal.strategy when trade.strategy is empty."""
+        import openpyxl
+
+        trade_no_strategy = {
+            "trade_id": "trade-005",
+            "signal_id": "sig-001",  # Signal has strategy="MOMENTUM"
+            "symbol": "INFY",
+            "direction": "LONG",
+            "strategy": "",
+            "qty_planned": 8,
+            "qty_filled": 8,
+            "entry_target_price": 1500.0,
+            "entry_actual_price": 1502.0,
+            "sl_initial": 1470.0,
+            "tgt_initial": 1560.0,
+            "margin_reserved": 2400.0,
+            "created_at": "2026-05-15T10:00:00+05:30",
+            "entry_time": "2026-05-15T10:01:00+05:30",
+            "exit_time": "2026-05-15T11:30:00+05:30",
+            "exit_price": 1560.0,
+            "exit_reason": "TGT_HIT",
+            "gross_pnl": 464.0,
+            "charges": 24.0,
+            "net_pnl": 440.0,
+            "status": "CLOSED",
+        }
+
+        data = ReportData(
+            date_iso=sample_report_data.date_iso,
+            mode=sample_report_data.mode,
+            account=sample_report_data.account,
+            opening_capital=sample_report_data.opening_capital,
+            closing_capital_broker=sample_report_data.closing_capital_broker,
+            signals=sample_report_data.signals,
+            trades=[trade_no_strategy],
+            orders=sample_report_data.orders,
+            fm_ledger=sample_report_data.fm_ledger,
+            screener_results=sample_report_data.screener_results,
+            innings=sample_report_data.innings,
+            system_events=sample_report_data.system_events,
+            recon_log=sample_report_data.recon_log,
+            gate_state=sample_report_data.gate_state,
+            config=sample_report_data.config,
+            excluded_symbols=sample_report_data.excluded_symbols,
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_4_candles(wb, data)
+
+        # Row 3 = first trade row; col 3 = Strategy
+        strategy_value = ws.cell(row=3, column=3).value
+        assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
+
     def test_build_sheet_4_candles_creates_sheet(self, sample_report_data):
         import openpyxl
         wb = openpyxl.Workbook()
         ws = build_sheet_4_candles(wb, sample_report_data)
 
         assert ws.title == "4_Candles"
+
+    def test_build_sheet_4_candles_excludes_cancelled_trades(self, sample_report_data):
+        """Candle analysis should exclude CANCELLED trades to avoid NaN values."""
+        import openpyxl
+
+        # Add a CANCELLED trade to the data
+        cancelled_trade = {
+            "trade_id": "trade-cancelled",
+            "signal_id": "sig-002",
+            "symbol": "INFY",
+            "direction": "LONG",
+            "strategy": "MOMENTUM",
+            "status": "CANCELLED",
+            # Fields below would be None/0 for cancelled trades
+            "entry_actual_price": None,
+            "exit_price": None,
+            "exit_reason": None,
+        }
+
+        data_with_cancelled = ReportData(
+            date_iso=sample_report_data.date_iso,
+            mode=sample_report_data.mode,
+            account=sample_report_data.account,
+            opening_capital=sample_report_data.opening_capital,
+            closing_capital_broker=sample_report_data.closing_capital_broker,
+            signals=sample_report_data.signals,
+            trades=[sample_report_data.trades[0], cancelled_trade],  # 1 CLOSED + 1 CANCELLED
+            orders=sample_report_data.orders,
+            fm_ledger=sample_report_data.fm_ledger,
+            screener_results=sample_report_data.screener_results,
+            innings=sample_report_data.innings,
+            system_events=sample_report_data.system_events,
+            recon_log=sample_report_data.recon_log,
+            gate_state=sample_report_data.gate_state,
+            config=sample_report_data.config,
+            excluded_symbols=sample_report_data.excluded_symbols,
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_4_candles(wb, data_with_cancelled)
+
+        # Count trade rows (skip headers in rows 1-2, check from row 3 onwards)
+        # Only CLOSED trades should appear, not CANCELLED
+        trade_rows = []
+        symbol_col = 4  # Symbol column
+        for row in range(3, 50):  # Check up to row 50
+            symbol = ws.cell(row=row, column=symbol_col).value
+            if symbol and symbol != "":
+                trade_rows.append((row, symbol))
+
+        # Should have exactly 1 trade (the CLOSED one)
+        assert len(trade_rows) == 1, f"Expected 1 CLOSED trade, found {len(trade_rows)}: {trade_rows}"
+
+        # Verify the CLOSED trade is present (RELIANCE from sample_trade)
+        assert trade_rows[0][1] == "RELIANCE"
 
     def test_build_sheet_5_telegram_creates_sheet(self, sample_report_data):
         import openpyxl
@@ -434,6 +653,62 @@ class TestSheetBuilders:
         text = " ".join(all_values)
         assert "STRATEGY-WISE" in text
         assert "TIME-OF-DAY" in text
+
+    def test_build_sheet_6_strategy_fallback_to_signal(self, sample_report_data):
+        """Strategy analysis should use signal.strategy if trade.strategy is empty."""
+        import openpyxl
+
+        # Create a trade with empty strategy
+        trade_no_strategy = {
+            "trade_id": "trade-003",
+            "signal_id": "sig-001",  # Same signal which has strategy="MOMENTUM"
+            "symbol": "INFY",
+            "direction": "SHORT",
+            "strategy": "",  # Empty strategy
+            "qty_planned": 8,
+            "qty_filled": 8,
+            "entry_target_price": 1500.0,
+            "entry_actual_price": 1498.0,
+            "sl_initial": 1550.0,
+            "tgt_initial": 1450.0,
+            "margin_reserved": 2400.0,
+            "created_at": "2026-05-15T10:00:00+05:30",
+            "entry_time": "2026-05-15T10:01:00+05:30",
+            "exit_time": "2026-05-15T11:30:00+05:30",
+            "exit_price": 1450.0,
+            "exit_reason": "TGT_HIT",
+            "gross_pnl": 384.0,
+            "charges": 20.0,
+            "net_pnl": 364.0,
+            "status": "CLOSED",
+        }
+
+        data_with_empty_strategy = ReportData(
+            date_iso=sample_report_data.date_iso,
+            mode=sample_report_data.mode,
+            account=sample_report_data.account,
+            opening_capital=sample_report_data.opening_capital,
+            closing_capital_broker=sample_report_data.closing_capital_broker,
+            signals=sample_report_data.signals,  # Contains sig-001 with strategy="MOMENTUM"
+            trades=[trade_no_strategy],
+            orders=sample_report_data.orders,
+            fm_ledger=sample_report_data.fm_ledger,
+            screener_results=sample_report_data.screener_results,
+            innings=sample_report_data.innings,
+            system_events=sample_report_data.system_events,
+            recon_log=sample_report_data.recon_log,
+            gate_state=sample_report_data.gate_state,
+            config=sample_report_data.config,
+            excluded_symbols=sample_report_data.excluded_symbols,
+        )
+
+        wb = openpyxl.Workbook()
+        ws = build_sheet_6_strategy(wb, data_with_empty_strategy)
+
+        # Check that row 3 (first strategy row) has "MOMENTUM" from signal fallback
+        # Column 2 is Strategy
+        strategy_value = ws.cell(row=3, column=2).value
+        assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

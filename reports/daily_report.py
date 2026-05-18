@@ -570,7 +570,8 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
     sep_cols = [8, 20, 26, 32, 40, 43]
     for col in sep_cols:
-        for r in range(1, 50):
+        # Start from row 3 to avoid interfering with merged header rows 1-2
+        for r in range(3, 50):
             ws.cell(row=r, column=col).fill = FILL_SEPARATOR
         ws.column_dimensions[get_column_letter(col)].width = 2
 
@@ -608,6 +609,8 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         signal_id = trade.get("signal_id", "")
         signal = signal_map.get(signal_id, {})
         screener = screener_map.get(signal_id, {})
+
+        strategy = trade.get("strategy", "") or signal.get("strategy", "")
 
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
         sl_order = _get_order_for_trade_leg(data.orders, trade_id, "SL")
@@ -662,7 +665,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         row_data = [
             data.date_iso,
             _fmt_time(signal.get("received_at")),
-            trade.get("strategy", ""),
+            strategy,
             trade.get("direction", ""),
             trade.get("symbol", ""),
             min_tradable,
@@ -779,6 +782,8 @@ def build_sheet_3_capital(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         signal_id = trade.get("signal_id", "")
         signal = signal_map.get(signal_id, {})
 
+        strategy = trade.get("strategy", "") or signal.get("strategy") or "UNKNOWN"
+
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
 
         order_type_display = "LIMIT"
@@ -832,7 +837,7 @@ def build_sheet_3_capital(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             data.date_iso,
             _fmt_time(trade.get("created_at")),
             sl_no,
-            trade.get("strategy", ""),
+            strategy,  # Fixed: use strategy variable with fallback
             trade.get("symbol", ""),
             direction,
             order_type_display,
@@ -941,7 +946,8 @@ def build_sheet_4_candles(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
     sep_cols = [7, 13, 18, 22]
     for col in sep_cols:
-        for r in range(1, 100):
+        # Start from row 3 to avoid interfering with merged header rows 1-2
+        for r in range(3, 100):
             ws.cell(row=r, column=col).fill = FILL_SEPARATOR
         ws.column_dimensions[get_column_letter(col)].width = 2
 
@@ -970,9 +976,14 @@ def build_sheet_4_candles(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     row = 3
     signal_map = {s.get("signal_id"): s for s in data.signals}
 
-    for trade in data.trades:
+    # Filter to only CLOSED trades - exclude CANCELLED to avoid NaN values
+    closed_trades = [t for t in data.trades if t.get("status") == "CLOSED"]
+
+    for trade in closed_trades:
         trade_id = trade.get("trade_id", "")
         signal_id = trade.get("signal_id", "")
+        signal = signal_map.get(signal_id, {})
+        strategy = trade.get("strategy", "") or signal.get("strategy", "")
 
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
 
@@ -1019,7 +1030,7 @@ def build_sheet_4_candles(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         row_data = [
             data.date_iso,
             trade_id[:8] + "..." if len(trade_id) > 8 else trade_id,
-            trade.get("strategy", ""),
+            strategy,
             trade.get("symbol", ""),
             entry_order.get("order_id", "") if entry_order else "",
             _fmt_time(trade.get("entry_time")),
@@ -1205,15 +1216,21 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 
     ws.freeze_panes = "A3"
 
+    # Build signal map for strategy fallback
+    signal_map = {s.get("signal_id"): s for s in data.signals}
+
     strategies = {}
     for trade in data.trades:
-        strat = trade.get("strategy", "UNKNOWN")
+        signal_id = trade.get("signal_id", "")
+        signal = signal_map.get(signal_id, {})
+        strat = trade.get("strategy", "") or signal.get("strategy") or "UNKNOWN"
+
         if strat not in strategies:
             strategies[strat] = {"trades": [], "signals": 0}
         strategies[strat]["trades"].append(trade)
 
     for sig in data.signals:
-        strat = sig.get("strategy", "UNKNOWN")
+        strat = sig.get("strategy") or "UNKNOWN"
         if strat in strategies:
             strategies[strat]["signals"] += 1
         else:
