@@ -80,10 +80,13 @@ TERMINAL_STATES: tuple[str, ...] = (
     "EXPIRED",
 )
 
-# FIX-108: EARLIER_STATES removed (was defined for chronological guard but never
-# implemented). OSM2 transition table already prevents most invalid backwards
-# transitions. If full chronological validation is needed, implement via explicit
-# ordering check in can_transition_to() rather than a separate constant.
+# FIX-089: Earlier states (chronological inversion guard)
+EARLIER_STATES: tuple[str, ...] = (
+    "PENDING",
+    "SUBMITTED",
+    "OPEN",
+    "PARTIAL",
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Transition table (OSM2)
