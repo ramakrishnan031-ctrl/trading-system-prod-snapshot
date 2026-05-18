@@ -18,10 +18,16 @@ from pathlib import Path
 
 import yaml
 
+# FIX-110: Cache loaded holiday sets to avoid repeated file I/O near year boundaries
+_HOLIDAY_CACHE: dict[tuple[Path, int], frozenset] = {}
+
 
 def _load_holiday_set(config_dir: Path, year: int) -> frozenset:
     """
     Load and return holiday dates for the given year as a frozenset[date].
+
+    FIX-110: Results are cached to avoid repeated file I/O during year-boundary
+    lookups (e.g., next_trading_day iterating from Dec 31 into Jan 1).
 
     Supports two YAML entry formats:
       - Plain string: "2026-01-26"
@@ -31,6 +37,10 @@ def _load_holiday_set(config_dir: Path, year: int) -> frozenset:
         FileNotFoundError: if the YAML file does not exist.
         ValueError: if a date entry cannot be parsed as YYYY-MM-DD.
     """
+    cache_key = (config_dir, year)
+    if cache_key in _HOLIDAY_CACHE:
+        return _HOLIDAY_CACHE[cache_key]
+
     yaml_path = config_dir / f"nse_holidays_{year}.yaml"
     if not yaml_path.exists():
         raise FileNotFoundError(
@@ -51,7 +61,9 @@ def _load_holiday_set(config_dir: Path, year: int) -> frozenset:
         else:
             raise ValueError(f"Unrecognised holiday entry format: {entry!r}")
 
-    return frozenset(result)
+    holiday_set = frozenset(result)
+    _HOLIDAY_CACHE[cache_key] = holiday_set
+    return holiday_set
 
 
 def is_trading_day(today: date, config_dir: Path) -> bool:
