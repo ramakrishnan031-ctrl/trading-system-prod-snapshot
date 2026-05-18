@@ -818,9 +818,13 @@ class SignalProcessor:
                 bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
 
         finally:
-            # FIX-018: Decrement processor in-flight counter (every exit path)
-            with self._in_flight_lock:
-                self._in_flight_count -= 1
+            # FIX-018 / FIX-102: Decrement processor in-flight counter (every exit path).
+            # Best-effort: wrap in try/except so finally block never raises.
+            try:
+                with self._in_flight_lock:
+                    self._in_flight_count -= 1
+            except Exception as lock_exc:
+                self._log.error(f"_in_flight_count decrement failed: {lock_exc}")
 
             # FIX-069: Only release in-flight lock if signal was NOT re-queued.
             # If requeued=True, lock must travel with signal to prevent duplicate
@@ -1247,9 +1251,13 @@ class SignalProcessor:
                 bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
 
         finally:
-            # FIX-018: Decrement processor in-flight counter (gate path)
-            with self._in_flight_lock:
-                self._in_flight_count -= 1
+            # FIX-018 / FIX-102: Decrement processor in-flight counter (gate path).
+            # Best-effort: wrap in try/except so finally block never raises.
+            try:
+                with self._in_flight_lock:
+                    self._in_flight_count -= 1
+            except Exception as lock_exc:
+                self._log.error(f"_in_flight_count decrement failed (gate): {lock_exc}")
 
             elapsed_ms = (time.monotonic() - start_mono) * 1000
             with self._stats_lock:
