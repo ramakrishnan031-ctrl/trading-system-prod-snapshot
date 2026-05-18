@@ -15,70 +15,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Callable, Optional
 
+from core.logger import SafeJSONEncoder  # FIX-104: Reuse instead of duplicating
 from core.time_authority import now_ist
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FIX-030: DateTimeEncoder for JSON serialization
-# ─────────────────────────────────────────────────────────────────────────────
-
-class DateTimeEncoder(json.JSONEncoder):
-    """
-    FIX-030: Custom JSON encoder that handles datetime, date, and Decimal objects.
-    FIX-084: Converts NaN/Inf to None (JSON null) to prevent invalid JSON output.
-
-    Standard json.dumps() fails with TypeError when market_data_snapshot contains
-    non-serializable types like datetime (e.g., exchange_timestamp from broker ticks).
-    This encoder converts:
-      - datetime -> ISO-8601 string
-      - date -> ISO-8601 string
-      - Decimal -> float
-      - NaN/Inf -> None (null)
-      - numpy types -> Python native types (if present)
-
-    Used by _persist_result() when serializing market_data_snapshot to the
-    screener_results table.
-    """
-
-    def encode(self, o):
-        import math
-        # FIX-084: Preprocess to replace NaN/Inf with None
-        if isinstance(o, float):
-            if math.isnan(o) or math.isinf(o):
-                return 'null'
-        return super().encode(self._scrub_nan_inf(o))
-
-    def _scrub_nan_inf(self, obj):
-        """Recursively replace NaN/Inf with None in data structures."""
-        import math
-        if isinstance(obj, float):
-            if math.isnan(obj) or math.isinf(obj):
-                return None
-        elif isinstance(obj, dict):
-            return {k: self._scrub_nan_inf(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self._scrub_nan_inf(item) for item in obj]
-        return obj
-
-    def default(self, obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        if isinstance(obj, date):
-            return obj.isoformat()
-        if isinstance(obj, Decimal):
-            return float(obj)
-        # Handle numpy types if present (common in market data)
-        if hasattr(obj, 'item'):  # numpy scalar
-            val = obj.item()
-            # Check if the numpy scalar value is NaN/Inf
-            if isinstance(val, float):
-                import math
-                if math.isnan(val) or math.isinf(val):
-                    return None
-            return val
-        if hasattr(obj, 'tolist'):  # numpy array
-            return obj.tolist()
-        return super().default(obj)
 
 if TYPE_CHECKING:
     from screening.step_executor import StepExecutor
@@ -377,7 +315,7 @@ class SecondaryScreener:
                 status=result.status,
                 step_results_json=json.dumps(result.step_results),
                 latencies_json=json.dumps(result.latencies_ms),
-                market_data_snapshot_json=json.dumps(result.market_data_snapshot, cls=DateTimeEncoder),
+                market_data_snapshot_json=json.dumps(result.market_data_snapshot, cls=SafeJSONEncoder),
                 ts=ts,
             )
         except Exception:

@@ -116,10 +116,27 @@ class SafeJSONEncoder(json.JSONEncoder):
         return obj
 
     def default(self, obj):
+        from datetime import date
+        from decimal import Decimal
+
         if isinstance(obj, datetime):
             return obj.isoformat()
+        if isinstance(obj, date):  # FIX-104: date support for secondary_screener
+            return obj.isoformat()
+        if isinstance(obj, Decimal):  # FIX-104: Decimal support for market data
+            return float(obj)
         if isinstance(obj, Exception):
             return str(obj)
+        # FIX-104: numpy type support for market data serialization
+        if hasattr(obj, 'item'):  # numpy scalar
+            val = obj.item()
+            if isinstance(val, float):
+                import math
+                if math.isnan(val) or math.isinf(val):
+                    return None
+            return val
+        if hasattr(obj, 'tolist'):  # numpy array
+            return obj.tolist()
         try:
             return super().default(obj)
         except TypeError:
