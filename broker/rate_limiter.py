@@ -141,6 +141,10 @@ class RateLimiter:
         limiter.penalize("order", backoff_sec)
     """
 
+    # FIX-111: Sleep interval constants for acquire() polling loop
+    _POLL_INTERVAL_SEC = 0.1    # Max sleep between bucket checks (shutdown responsiveness)
+    _MIN_SLEEP_SEC = 0.001      # Minimum sleep to avoid tight spin (CPU efficiency)
+
     def __init__(
         self,
         limits: BrokerLimitsConfig,
@@ -222,11 +226,11 @@ class RateLimiter:
             with bucket._lock:
                 sleep_for = bucket._seconds_until_ready(n)
 
-            # FIX-060: Cap sleep interval to 0.1s so shutdown polls every 100ms.
-            # Also cap to remaining deadline; min 1ms for responsiveness.
+            # FIX-060: Cap sleep interval for shutdown responsiveness.
+            # Also cap to remaining deadline; min sleep for CPU efficiency.
             remaining = deadline - time.monotonic()
-            sleep_for = min(sleep_for, remaining, 0.1)  # FIX-060: 0.1s poll interval
-            sleep_for = max(sleep_for, 0.001)
+            sleep_for = min(sleep_for, remaining, self._POLL_INTERVAL_SEC)
+            sleep_for = max(sleep_for, self._MIN_SLEEP_SEC)
 
             # FIX-060: Poll shutdown_event if available, else fall back to time.sleep
             if self._shutdown_event is not None:
