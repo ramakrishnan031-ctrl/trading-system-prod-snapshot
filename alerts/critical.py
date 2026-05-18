@@ -102,7 +102,9 @@ def write_critical_sentinel(
         fh.flush()
         os.fsync(fh.fileno())
 
-    tmp_path.rename(flag_path)  # atomic on POSIX; best-effort on Windows
+    # FIX-116: Use os.replace() for atomic rename on both POSIX and Windows.
+    # Path.rename() is not atomic on Windows (can fail mid-operation if target exists).
+    os.replace(tmp_path, flag_path)
     return flag_path
 
 
