@@ -68,7 +68,21 @@ class SlippageEngine:
             )
 
     def tier_for(self, symbol: str) -> str:
-        """SE2: resolve liquidity tier for a symbol."""
+        """
+        SE2: resolve liquidity tier for a symbol.
+
+        FIX-109 TODO: Current FNO-only proxy is incomplete.
+        Improvement criteria:
+          1. Add avg_volume_20d threshold (e.g., >5M shares → liquid)
+          2. Add sector-based proxies (e.g., NIFTY50 constituents → liquid)
+          3. Handle illiquid FNO contracts (weekly expiries, deep OTM)
+          4. Consider spread % from instrument_cache as liquidity signal
+
+        Current heuristic:
+          - FNO → liquid (rough proxy)
+          - Cash → mid (conservative)
+          - Unknown → default_tier
+        """
         try:
             row = self._cache.get_by_symbol(symbol)
         except InstrumentNotFoundError:
