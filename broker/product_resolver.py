@@ -81,7 +81,12 @@ class ProductResolver:
                     f"intent -> code, got {type(mapping).__name__}"
                 )
 
-        # Defensive copy so mutations to the injected dict don't affect us (PR9).
+        # FIX-115: Defensive copy of the product_map dict (PR9).
+        # Rationale: product_map typically comes from SystemConfig.product_map (Pydantic,
+        # immutable), making this copy technically unnecessary. However, the constructor
+        # accepts a plain dict[str, dict[str, str]] for test flexibility, and callers
+        # might pass mutable dicts. Copying ensures mutations to the original dict after
+        # construction don't affect resolver behavior. One-time overhead at startup.
         self._map: dict[str, dict[str, str]] = {
             broker: dict(mapping)
             for broker, mapping in product_map.items()
