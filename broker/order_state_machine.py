@@ -80,7 +80,11 @@ TERMINAL_STATES: tuple[str, ...] = (
     "EXPIRED",
 )
 
-# FIX-089: Earlier states (chronological inversion guard)
+# FIX-089 / FIX-108: Earlier states (chronological inversion guard).
+# Used by order_monitor.py to detect and ignore backwards state transitions
+# caused by network jitter (e.g., COMPLETE arriving before OPEN due to race).
+# This prevents terminal states from being overwritten by earlier states.
+# See order_monitor.py:844 for usage in _update_from_broker().
 EARLIER_STATES: tuple[str, ...] = (
     "PENDING",
     "SUBMITTED",
