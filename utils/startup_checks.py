@@ -721,10 +721,11 @@ def check_config_files_present(
 
     The nse_holidays file uses the current calendar year.
     """
-    # H-17 SKIP: this check runs before time_authority is constructed (pre-init
-    # config-file presence gate). datetime.now().year is sufficient for picking
-    # nse_holidays_<year>.yaml and cannot depend on time_authority.
-    current_year = datetime.now().year
+    # FIX-107: Use explicit IST offset for year calculation to avoid timezone edge
+    # cases during New Year transitions. This check runs before time_authority is
+    # constructed, but we can still apply the IST offset (+05:30) directly.
+    IST_OFFSET = timedelta(hours=5, minutes=30)
+    current_year = (datetime.now(timezone.utc) + IST_OFFSET).year
     required = _REQUIRED_CONFIG_FILES_STATIC + [
         f"nse_holidays_{current_year}.yaml",
     ]
