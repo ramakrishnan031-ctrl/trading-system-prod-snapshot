@@ -40,8 +40,9 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from reports.style_constants import (
-    FONT_BODY, FONT_HEADER, FONT_TITLE, FONT_SECTION_HEADER,
+    FONT_BODY, FONT_HEADER, FONT_TITLE, FONT_SECTION_HEADER, FONT_WHITE_BOLD,
     FILL_GREEN, FILL_RED, FILL_AMBER, FILL_GREY, FILL_SEPARATOR, FILL_HEADER,
+    FILL_TITLE_BG, FILL_GROUP_HEADER, FILL_SUB_HEADER,
     BORDER_ALL, ALIGN_CENTER, ALIGN_LEFT, ALIGN_RIGHT,
     NUM_FMT_CURRENCY, NUM_FMT_CURRENCY_NEG_PARENS, NUM_FMT_PERCENT, NUM_FMT_RATIO,
     EXIT_REASON_FILLS, ALERT_TYPE_FILLS, DELIVERY_FILLS,
@@ -604,63 +605,99 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
-    """Build Orders sheet with identity, time, prices, deviations, and metadata."""
+    """Build Orders sheet matching order_sheet.xlsx design (43 cols, 3 header rows)."""
     ws = wb.create_sheet(title="2_Orders")
     _disable_gridlines(ws)
 
     global_min = data.config.get("scoring", {}).get("min_pass_score", 60)
 
+    # Separator columns (narrow dividers painted with separator blue)
+    sep_cols = [8, 13, 20, 23, 29, 37, 40]
+
+    # ── Row 1: Title ─────────────────────────────────────────────────────────
+    title_cell = ws.cell(row=1, column=1,
+        value=f"AlgoCore Systems v2.0  ·  Orders & Trade Lifecycle  ·  {data.date_iso}  ({data.mode})")
+    title_cell.font = FONT_TITLE
+    title_cell.fill = FILL_TITLE_BG
+    title_cell.alignment = ALIGN_LEFT
+
+    # ── Row 2: Group headers ─────────────────────────────────────────────────
     group_headers = [
         ("IDENTITY", 1, 7),
         ("TIME", 9, 12),
-        ("SYSTEM Per Qty Price", 13, 19),
-        ("ACTUALLY FILLED Per Qty Price", 21, 25),
-        ("ENTRY DEVIATION & RESULTS", 27, 31),
-        ("REVENUE & EXPENSES Total Amount", 33, 39),
-        ("NET REVENUE Total Amount", 41, 42),
-        ("METADATA IDs", 44, 46),
+        ("SYSTEM  (Per Qty Price)", 14, 19),
+        ("ACTUALLY FILLED  (Per Qty Price)", 21, 22),
+        ("ENTRY DEVIATION  &  RESULTS", 24, 28),
+        ("REVENUE  &  EXPENSES  (Total Amount)", 30, 36),
+        ("NET REVENUE  (Total Amount)", 38, 39),
+        ("METADATA IDs", 41, 43),
     ]
 
     for label, start_col, end_col in group_headers:
-        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
-        cell = ws.cell(row=1, column=start_col, value=label)
-        cell.font = FONT_HEADER
-        cell.fill = FILL_HEADER
+        ws.merge_cells(start_row=2, start_column=start_col, end_row=2, end_column=end_col)
+        cell = ws.cell(row=2, column=start_col, value=label)
+        cell.font = FONT_WHITE_BOLD
+        cell.fill = FILL_GROUP_HEADER
         cell.alignment = ALIGN_CENTER
 
-    sep_cols = [8, 20, 26, 32, 40, 43]
     for col in sep_cols:
-        # Start from row 3 to avoid interfering with merged header rows 1-2
-        for r in range(3, 50):
-            ws.cell(row=r, column=col).fill = FILL_SEPARATOR
-        ws.column_dimensions[get_column_letter(col)].width = 2
+        ws.cell(row=2, column=col).fill = FILL_SEPARATOR
 
+    ws.row_dimensions[2].height = 21.75
+
+    # ── Row 3: Sub-headers ───────────────────────────────────────────────────
     sub_headers = [
-        "Trading Date", "Signal Time", "Strategy", "Direction", "Symbol",
-        "Eligible Score\n(Min)", "Algo Score", "",
-        "Order Placed", "Fill Time", "Exit Time", "Time in Trade\n(min)",
-        "Sys Qty", "Sys Entry\n(₹/scrip)", "Sys SL\n(₹/scrip)", "Sys TGT\n(₹/scrip)",
-        "Sys R:R", "Qty Match", "", "",
-        "Fill Entry\n(₹/scrip)", "Fill SL\n(₹/scrip)", "", "", "", "",
-        "Entry Slip\n(₹/scrip)", "Entry Slip %", "Fill R:R", "Exit Reason", "SL Trail Count",
-        "",
-        "Gross P&L\n(₹)", "Brokerage", "STT", "Exch Charges", "Stamp Duty", "GST", "Total Costs",
-        "",
-        "Net P&L\n(₹)", "ROI %", "",
-        "Trade ID", "Broker Order ID", "Exit Price\n(₹)"
+        # IDENTITY (1-7)
+        "Trading\nDate", "Signal\nTime", "Strategy", "Direction", "Symbol",
+        "Eligible\nScore\n(Min)", "Algo\nScore",
+        "",   # 8 sep
+        # TIME (9-12)
+        "Order\nPlaced", "Fill\nTime", "Exit\nTime", "Time in\nTrade (min)",
+        "",   # 13 sep
+        # SYSTEM (14-19)
+        "Sys\nQty", "Sys Entry\n(₹/scrip)", "Sys SL\n(₹/scrip)", "Sys TGT\n(₹/scrip)",
+        "Sys\nR:R", "Qty\nMatch",
+        "",   # 20 sep
+        # ACTUALLY FILLED (21-22)
+        "Fill Entry\n(₹/scrip)", "Fill SL\n(₹/scrip)",
+        "",   # 23 sep
+        # ENTRY DEVIATION & RESULTS (24-28)
+        "Entry Slip\n(₹/scrip)", "Entry\nSlip %", "Fill R:R", "Exit\nReason", "SL Trail\nCount",
+        "",   # 29 sep
+        # REVENUE & EXPENSES (30-36)
+        "Gross P&L\n(₹)", "Brokerage\n(₹)", "STT\n(₹)", "Exch Charges\n(₹)",
+        "Stamp Duty\n(₹)", "GST\n(₹)", "Total Costs\n(₹)",
+        "",   # 37 sep
+        # NET REVENUE (38-39)
+        "Net P&L\n(₹)", "ROI %",
+        "",   # 40 sep
+        # METADATA (41-43)
+        "Trade ID", "Broker\nOrder ID", "Exit Price\n(₹)",
     ]
 
     for col, header in enumerate(sub_headers, start=1):
-        if header:
-            cell = ws.cell(row=2, column=col, value=header)
-            cell.font = FONT_HEADER
-            cell.fill = FILL_HEADER if col not in sep_cols else FILL_SEPARATOR
+        cell = ws.cell(row=3, column=col, value=header if header else None)
+        if col in sep_cols:
+            cell.fill = FILL_SEPARATOR
+        else:
+            cell.font = FONT_WHITE_BOLD
+            cell.fill = FILL_SUB_HEADER
             cell.alignment = ALIGN_CENTER
             cell.border = BORDER_ALL
 
-    ws.freeze_panes = "A3"
+    ws.row_dimensions[3].height = 39.75
 
-    row = 3
+    # Pre-paint separator columns for all data rows
+    max_rows = max(500, len(data.trades) + 20)
+    for col in sep_cols:
+        for r in range(4, 4 + max_rows):
+            ws.cell(row=r, column=col).fill = FILL_SEPARATOR
+        ws.column_dimensions[get_column_letter(col)].width = 2
+
+    ws.freeze_panes = "A4"
+
+    # ── Data rows (start at row 4) ───────────────────────────────────────────
+    row = 4
     screener_map = {r.get("signal_id"): r for r in data.screener_results}
     signal_map = {s.get("signal_id"): s for s in data.signals}
 
@@ -675,7 +712,6 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
         sl_order = _get_order_for_trade_leg(data.orders, trade_id, "SL")
-        tgt_order = _get_order_for_trade_leg(data.orders, trade_id, "TGT")
 
         sys_qty = trade.get("qty_planned", 0)
         sys_entry = trade.get("entry_target_price", 0)
@@ -724,52 +760,49 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         trail_count = max(0, trail_count - 1)
 
         row_data = [
-            data.date_iso,
-            _fmt_time(signal.get("received_at")),
-            strategy,
-            trade.get("direction", ""),
-            trade.get("symbol", ""),
-            effective_min,
-            screener.get("score", "—"),
-            "",
-            _fmt_time(entry_order.get("placed_at")) if entry_order else "",
-            _fmt_time(trade.get("entry_time")),
-            _fmt_time(trade.get("exit_time")),
-            time_in_trade if time_in_trade else "—",
-            sys_qty,
-            sys_entry,
-            sys_sl,
-            sys_tgt,
-            round(sys_rr, 2) if sys_rr else "—",
-            "✓" if trade.get("qty_filled") == sys_qty else "✗",
-            "",
-            "",
-            fill_entry,
-            fill_sl,
-            "",
-            "",
-            "",
-            "",
-            round(entry_slip, 2) if entry_slip else "—",
-            f"{entry_slip_pct:.2f}%" if entry_slip_pct else "—",
-            round(fill_rr, 2) if fill_rr else "—",
-            trade.get("exit_reason", ""),
-            trail_count,
-            "",
-            round(gross_pnl, 2),
-            "",
-            "",
-            "",
-            "",
-            "",
-            round(charges, 2),
-            "",
-            round(net_pnl, 2),
-            f"{roi_pct:.2f}%",
-            "",
-            trade_id,
-            entry_order.get("order_id") if entry_order else "",
-            trade.get("exit_price", ""),
+            data.date_iso,                                                   # 1
+            _fmt_time(signal.get("received_at")),                           # 2
+            strategy,                                                        # 3
+            trade.get("direction", ""),                                      # 4
+            trade.get("symbol", ""),                                         # 5
+            effective_min,                                                   # 6
+            screener.get("score", "—"),                                      # 7
+            "",                                                              # 8 sep
+            _fmt_time(entry_order.get("placed_at")) if entry_order else "",  # 9
+            _fmt_time(trade.get("entry_time")),                             # 10
+            _fmt_time(trade.get("exit_time")),                              # 11
+            time_in_trade if time_in_trade else "—",                        # 12
+            "",                                                              # 13 sep
+            sys_qty,                                                         # 14
+            sys_entry,                                                       # 15
+            sys_sl,                                                          # 16
+            sys_tgt,                                                         # 17
+            round(sys_rr, 2) if sys_rr else "—",                            # 18
+            "✓" if trade.get("qty_filled") == sys_qty else "✗",   # 19
+            "",                                                              # 20 sep
+            fill_entry,                                                      # 21
+            fill_sl,                                                         # 22
+            "",                                                              # 23 sep
+            round(entry_slip, 2) if entry_slip else "—",                     # 24
+            f"{entry_slip_pct:.2f}%" if entry_slip_pct else "—",            # 25
+            round(fill_rr, 2) if fill_rr else "—",                          # 26
+            trade.get("exit_reason", "") or "—",                             # 27
+            trail_count,                                                     # 28
+            "",                                                              # 29 sep
+            round(gross_pnl, 2),                                             # 30
+            "—",                                                             # 31 Brokerage
+            "—",                                                             # 32 STT
+            "—",                                                             # 33 Exch Charges
+            "—",                                                             # 34 Stamp Duty
+            "—",                                                             # 35 GST
+            round(charges, 2) if charges else "—",                           # 36 Total Costs
+            "",                                                              # 37 sep
+            round(net_pnl, 2),                                               # 38
+            f"{roi_pct:.2f}%" if roi_pct else "—",                          # 39
+            "",                                                              # 40 sep
+            trade_id,                                                        # 41
+            entry_order.get("order_id") if entry_order else "",              # 42
+            trade.get("exit_price", "") or "—",                              # 43
         ]
 
         for col, value in enumerate(row_data, start=1):
@@ -778,12 +811,12 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             if col not in sep_cols:
                 cell.border = BORDER_ALL
 
-            if col == 30:
+            if col == 27:
                 exit_reason = trade.get("exit_reason", "")
                 if exit_reason in EXIT_REASON_FILLS:
                     cell.fill = EXIT_REASON_FILLS[exit_reason]
 
-            if col == 41:
+            if col == 38:
                 if net_pnl > 0:
                     cell.fill = FILL_GREEN
                 elif net_pnl < 0:

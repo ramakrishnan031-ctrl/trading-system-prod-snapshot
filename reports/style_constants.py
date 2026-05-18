@@ -45,6 +45,12 @@ FILL_GREY = PatternFill(start_color=COLOR_GREY_FILL, end_color=COLOR_GREY_FILL, 
 FILL_SEPARATOR = PatternFill(start_color=COLOR_SEPARATOR_BLUE, end_color=COLOR_SEPARATOR_BLUE, fill_type="solid")
 FILL_HEADER = PatternFill(start_color=COLOR_SEPARATOR_BLUE, end_color=COLOR_SEPARATOR_BLUE, fill_type="solid")
 
+# Sheet 2_Orders specific: 3-row header design
+FILL_TITLE_BG     = PatternFill(start_color="DEEAF1", end_color="DEEAF1", fill_type="solid")
+FILL_GROUP_HEADER = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+FILL_SUB_HEADER   = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
+FONT_WHITE_BOLD   = Font(name="Arial", size=9, bold=True, color="FFFFFF")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Borders
 # ─────────────────────────────────────────────────────────────────────────────

@@ -565,8 +565,8 @@ class TestSheetBuilders:
         wb = openpyxl.Workbook()
         ws = build_sheet_2_orders(wb, data)
 
-        # Row 3 = first trade row; col 3 = Strategy
-        strategy_value = ws.cell(row=3, column=3).value
+        # Row 4 = first trade row (rows 1-3 are headers); col 3 = Strategy
+        strategy_value = ws.cell(row=4, column=3).value
         assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
 
     def test_build_sheet_4_candles_strategy_fallback_to_signal(self, sample_report_data):
@@ -1114,8 +1114,8 @@ class TestPerStrategyEligibleScore:
         wb.remove(wb.active)
         build_sheet_2_orders(wb, data)
         ws = wb["2_Orders"]
-        # Row 3 = first data row (rows 1-2 are headers); col 6 = Eligible Score (Min)
-        eligible_score_cell = ws.cell(row=3, column=6).value
+        # Row 4 = first data row (rows 1-3 are headers); col 6 = Eligible Score (Min)
+        eligible_score_cell = ws.cell(row=4, column=6).value
         assert eligible_score_cell == 30, f"Expected 30 (gap_fade_long override), got {eligible_score_cell}"
 
     def test_sheet_1_signals_falls_back_to_global_min_for_unknown_strategy(self):
