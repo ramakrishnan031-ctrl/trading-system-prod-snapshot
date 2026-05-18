@@ -70,6 +70,31 @@ from core.config_loader import load_all
 # Lock file management (AW3)
 # ------------------------------------------------------------------------------
 
+def _is_process_alive(pid: int) -> bool:
+    """
+    FIX-105: Platform-specific process existence check.
+
+    On Windows, os.kill(pid, 0) raises PermissionError for live processes,
+    creating ambiguity. Use OpenProcess instead for reliable checking.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            kernel32.CloseHandle(handle)
+            return True
+        return False
+    else:
+        # Unix: os.kill(pid, 0) works reliably
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+
 def _acquire_lock(lock_path: Path) -> bool:
     """
     Try to acquire the watcher lock (AW3).
@@ -84,18 +109,12 @@ def _acquire_lock(lock_path: Path) -> bool:
             pid = None
 
         if pid is not None:
-            try:
-                os.kill(pid, 0)  # signal 0: check existence without sending
-                # PID alive -> another instance is running
+            if _is_process_alive(pid):
+                # Another instance is running
                 return False
-            except (ProcessLookupError, PermissionError):
-                # PID dead (stale lock) or we have no permission to signal
-                # Treat as stale on ProcessLookupError; proceed on PermissionError
-                # since that usually means the process does exist (Windows)
-                if isinstance(sys.exc_info()[1], ProcessLookupError):
-                    lock_path.unlink(missing_ok=True)  # stale, clean up
-                else:
-                    return False  # process exists, cannot signal (Windows live process)
+            else:
+                # Stale lock, clean up
+                lock_path.unlink(missing_ok=True)
 
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text(str(os.getpid()), encoding="utf-8")
