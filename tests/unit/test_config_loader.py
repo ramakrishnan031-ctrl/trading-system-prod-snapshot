@@ -66,6 +66,7 @@ _SYSTEM_CONFIG = """\
 trading_hours:
   entry_start: "09:30"
   entry_end: "13:30"
+  eod_entry_cutoff: "15:15"
   eod_squareoff_time: "15:17"
 signal_queue:
   capacity: 300
@@ -175,6 +176,8 @@ drift_handler:
   soft_kill_threshold_rs: 1000.0
   hard_kill_threshold_rs: 2500.0
   consecutive_cycles_before_escalate: 3
+logging:
+  min_free_disk_gb: 2.0
 """
 
 _BROKER_COSTS = """\

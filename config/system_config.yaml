@@ -125,9 +125,6 @@ alerts:                       # TG12/AW11 — alert subsystem settings
   alert_digest_threshold: 3   # FIX-095: send digest email when pending flags > this count
   watcher_lock_path: "data_store/alert_watcher.lock"
   watcher_log_path: "logs/alert_watcher.log"
-
-logging:                      # FIX-099 — logging subsystem settings
-  min_free_disk_gb: 2.0       # Minimum free disk space (GB) required before startup
   telegram:
     bot_token_env: "TELEGRAM_BOT_TOKEN"
     telegram_alerts_in_paper_mode: true
@@ -156,6 +153,9 @@ logging:                      # FIX-099 — logging subsystem settings
     to_addresses:
       - "operator@example.com"
     timeout_sec: 30
+
+logging:                      # FIX-099 — logging subsystem settings
+  min_free_disk_gb: 2.0       # Minimum free disk space (GB) required before startup
 
 order_reconciler:             # RC17 — reconciler tuning
   poll_interval_sec: 15       # P14: 15-second periodic cadence

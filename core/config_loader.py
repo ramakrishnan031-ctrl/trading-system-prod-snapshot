@@ -62,6 +62,7 @@ class TradingHoursConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entry_start: str           # "HH:MM" IST — entry window opens (P1)
     entry_end: str             # "HH:MM" IST — entry window closes (P1)
+    eod_entry_cutoff: str      # FIX-073: "HH:MM" IST — absolute last entry moment
     eod_squareoff_time: str    # "HH:MM" IST — square-off trigger (P1)
     market_open: str = "09:15"   # "HH:MM" IST — NSE regular-session open
     market_close: str = "15:30"  # "HH:MM" IST — NSE regular-session close
@@ -72,7 +73,7 @@ class TradingHoursConfig(BaseModel):
         2026-04-26 audit CFG-1: catch operator typos that would otherwise
         silently shrink (or invert) the entry window. P1 mandates
         entry_start < entry_end and market_open <= entry_start
-        and entry_end <= eod_squareoff_time <= market_close.
+        and entry_end <= eod_entry_cutoff <= eod_squareoff_time <= market_close.
         """
         from datetime import time as _time
 
@@ -83,15 +84,16 @@ class TradingHoursConfig(BaseModel):
         mo = _hhmm(self.market_open)
         es = _hhmm(self.entry_start)
         ee = _hhmm(self.entry_end)
+        eec = _hhmm(self.eod_entry_cutoff)
         eod = _hhmm(self.eod_squareoff_time)
         mc = _hhmm(self.market_close)
-        if not (mo <= es < ee <= eod <= mc):
+        if not (mo <= es < ee <= eec <= eod <= mc):
             raise ValueError(
                 "trading_hours ordering violation; require "
-                "market_open <= entry_start < entry_end <= "
+                "market_open <= entry_start < entry_end <= eod_entry_cutoff <= "
                 "eod_squareoff_time <= market_close, got "
                 f"market_open={self.market_open}, entry_start={self.entry_start}, "
-                f"entry_end={self.entry_end}, "
+                f"entry_end={self.entry_end}, eod_entry_cutoff={self.eod_entry_cutoff}, "
                 f"eod_squareoff_time={self.eod_squareoff_time}, "
                 f"market_close={self.market_close}"
             )
@@ -141,6 +143,7 @@ class CapitalConfig(BaseModel):
     intraday_bucket_pct: float     # FM16: fraction of total for intraday (0 < x < 1)
     positional_bucket_pct: float   # FM16: fraction of total for positional (0 < x < 1)
     daily_loss_limit: float        # FM16: absolute rupee cap on daily loss (> 0)
+    slm_margin_buffer_pct: float = 0.05  # FIX-090: SL-M margin buffer % (unknown fill price risk)
     leverage_map: LeverageMapConfig  # FM16: per-intent leverage multiplier
 
     @field_validator("intraday_bucket_pct", "positional_bucket_pct")
@@ -344,6 +347,7 @@ class RiskConfig(BaseModel):
     max_sector_exposure_pct: float   # RE13: max fraction of capital in one sector (> 0, <= 1)
     max_consecutive_losses: int      # RE13: halt after N consecutive losses (>= 1)
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)
+    price_drift_threshold: float = 0.005  # FIX-075: 0.5% default drift threshold for margin top-up
 
     @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses")
     @classmethod
@@ -476,6 +480,7 @@ class AlertsConfig(BaseModel):
     failed_alerts_log_path: str   # TG12: path for ERROR-tier fallback log
     sentinel_dir: str             # TG12/CR2: directory for .flag sentinel files
     watcher_max_attempts: int     # AW11: max SMTP retry attempts before .failed
+    alert_digest_threshold: int = 3  # FIX-095: send digest email when pending flags > this count
     watcher_lock_path: str        # AW11: lock file path for alert_watcher
     watcher_log_path: str         # AW11: alert_watcher own log file path
     telegram: TelegramConfig      # TG12: Telegram Bot API config
@@ -683,6 +688,8 @@ class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     trading_hours: TradingHoursConfig
     signal_queue: SignalQueueConfig
+    special_sessions: dict[str, dict[str, str]] | None = None  # FIX-094: date -> {market_open, market_close, eod_squareoff_time}
+    excluded_symbols: list[str] = []          # FIX-C: symbols rejected at webhook edge
     product_map: dict[str, dict[str, str]]  # broker -> {INTENT -> code} (PR8)
     clock: ClockConfig
     order_monitor: OrderMonitorConfig         # OM14
@@ -701,6 +708,7 @@ class SystemConfig(BaseModel):
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis
     drift_handler: DriftHandlerConfig         # BL-2: drift escalation policy
+    scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
