@@ -234,6 +234,10 @@ class SignalProcessor:
             self._executor.shutdown(wait=True, cancel_futures=False)
             self._executor = None
 
+        # FIX-100: Shutdown screener's internal step_executor thread pool
+        if self._screener is not None and hasattr(self._screener, 'shutdown'):
+            self._screener.shutdown()
+
         self._running = False
         self._log.info("SignalProcessor stopped")
 

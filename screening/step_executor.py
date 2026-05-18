@@ -55,6 +55,17 @@ class StepExecutor:
         self._market_open = market_open if market_open is not None else _DEFAULT_MARKET_OPEN
         self._step_timeout_sec = step_timeout_sec  # FIX-091
 
+        # FIX-100: Reuse single executor across all run_all() calls.
+        # Previous implementation created a new ThreadPoolExecutor per call,
+        # adding ~5-10ms overhead per signal under high throughput. The executor
+        # is single-worker (steps run sequentially per signal) but persists
+        # across calls to avoid create/destroy churn.
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="step-exec",
+        )
+        self._executor_shutdown = False
+
     # -------------------------------------------------------------------------
     # Public API
     # -------------------------------------------------------------------------
@@ -87,56 +98,56 @@ class StepExecutor:
             ("signal_age",      self._step_10_signal_age),
         ]
 
-        # FIX-091: Use ThreadPoolExecutor with timeout for each step
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            for name, fn in steps:
-                t0 = time.monotonic()
-                try:
-                    # Submit step to executor with timeout
-                    future = executor.submit(fn, signal, market_data, thresholds, direction)
-                    score = future.result(timeout=self._step_timeout_sec)
-                except FutureTimeoutError:
-                    # FIX-091: Step timeout -> neutral score, WARNING log
-                    elapsed = (time.monotonic() - t0) * 1000.0
-                    self._logger.warning(
-                        "step_executor: step '%s' timed out after %.2fs",
-                        name,
-                        self._step_timeout_sec,
-                    )
-                    step_results[name] = 0.5  # neutral score
-                    step_statuses[name] = "TIMEOUT"
-                    latencies_ms[name] = elapsed
-                    continue
-                except Exception:
-                    elapsed = (time.monotonic() - t0) * 1000.0
-                    self._logger.error(
-                        "step_executor: step '%s' raised exception:\n%s",
-                        name,
-                        traceback.format_exc(),
-                    )
-                    step_results[name] = 0.0
-                    step_statuses[name] = "ERROR"
-                    error_steps.append(name)
-                    latencies_ms[name] = elapsed
-                    if rejected_at is None:
-                        rejected_at = name
-                    continue
-
+        # FIX-100: Reuse instance-level executor (was: create new executor per call)
+        # FIX-091: Per-step timeout via future.result(timeout=...)
+        for name, fn in steps:
+            t0 = time.monotonic()
+            try:
+                # Submit step to executor with timeout
+                future = self._executor.submit(fn, signal, market_data, thresholds, direction)
+                score = future.result(timeout=self._step_timeout_sec)
+            except FutureTimeoutError:
+                # FIX-091: Step timeout -> neutral score, WARNING log
                 elapsed = (time.monotonic() - t0) * 1000.0
-                latencies_ms[name] = elapsed
-
-                step_results[name] = score
-                if score == 0.0:
-                    step_statuses[name] = "REJECTED"
-                    if rejected_at is None:
-                        rejected_at = name
-                else:
-                    step_statuses[name] = "PASSED"
-
-                self._logger.debug(
-                    "step_executor: %s score=%.3f latency=%.2fms",
-                    name, score, elapsed,
+                self._logger.warning(
+                    "step_executor: step '%s' timed out after %.2fs",
+                    name,
+                    self._step_timeout_sec,
                 )
+                step_results[name] = 0.5  # neutral score
+                step_statuses[name] = "TIMEOUT"
+                latencies_ms[name] = elapsed
+                continue
+            except Exception:
+                elapsed = (time.monotonic() - t0) * 1000.0
+                self._logger.error(
+                    "step_executor: step '%s' raised exception:\n%s",
+                    name,
+                    traceback.format_exc(),
+                )
+                step_results[name] = 0.0
+                step_statuses[name] = "ERROR"
+                error_steps.append(name)
+                latencies_ms[name] = elapsed
+                if rejected_at is None:
+                    rejected_at = name
+                continue
+
+            elapsed = (time.monotonic() - t0) * 1000.0
+            latencies_ms[name] = elapsed
+
+            step_results[name] = score
+            if score == 0.0:
+                step_statuses[name] = "REJECTED"
+                if rejected_at is None:
+                    rejected_at = name
+            else:
+                step_statuses[name] = "PASSED"
+
+            self._logger.debug(
+                "step_executor: %s score=%.3f latency=%.2fms",
+                name, score, elapsed,
+            )
 
         return StepExecutorResult(
             step_results=step_results,
@@ -145,6 +156,21 @@ class StepExecutor:
             error_steps=error_steps,
             latencies_ms=latencies_ms,
         )
+
+    def shutdown(self) -> None:
+        """
+        FIX-100: Shutdown the internal executor cleanly.
+
+        Called by signal_processor.stop() or main.py shutdown sequence.
+        Idempotent: safe to call multiple times.
+        """
+        if self._executor_shutdown:
+            return
+        self._executor_shutdown = True
+        try:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+        except Exception:
+            pass  # Best-effort; executor may already be dead
 
     # -------------------------------------------------------------------------
     # Individual steps

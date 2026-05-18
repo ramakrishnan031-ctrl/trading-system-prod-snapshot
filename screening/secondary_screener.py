@@ -385,3 +385,13 @@ class SecondaryScreener:
                 "secondary_screener [%s]: state_store write failed:\n%s",
                 signal_id, traceback.format_exc(),
             )
+
+    def shutdown(self) -> None:
+        """
+        FIX-100: Shutdown internal step_executor cleanly.
+
+        Called by signal_processor.stop() during system shutdown.
+        Propagates shutdown to the step_executor's internal thread pool.
+        """
+        if hasattr(self._executor, 'shutdown'):
+            self._executor.shutdown()
