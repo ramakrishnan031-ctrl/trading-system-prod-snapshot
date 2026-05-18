@@ -150,6 +150,12 @@ class CostCalculator:
                 f"Unsupported exchange: {exchange!r}. "
                 "Only 'NSE' is currently supported (BSE deferred to v2.1)."
             )
+        # FIX-112: Validate FNO segment is only available on NSE
+        if is_fno and exchange != "NSE":
+            raise ValueError(
+                f"FNO segment (is_fno=True) requires exchange='NSE', got {exchange!r}. "
+                "BSE does not support Futures & Options."
+            )
         if is_fno and fno_kind not in ("FUTURES", "OPTIONS"):
             raise ValueError(
                 f"Invalid fno_kind: {fno_kind!r}. Must be 'FUTURES' or 'OPTIONS'."
