@@ -105,7 +105,15 @@ _VALID_DIRECTIONS: Final[frozenset[str]] = frozenset({"LONG", "SHORT"})
 _INTRADAY_BUCKET = "intraday"
 _POSITIONAL_BUCKET = "positional"
 
-_INVARIANT_TOLERANCE = 1.0  # Paper-mode: minor float noise from LTP vs limit price rounding
+# FIX-113: Invariant tolerance (rupees) for floating-point comparisons.
+# Why 1.0 is appropriate:
+#   - Paper mode: LTP-based fills vs limit-price orders introduce ±0.05-0.50 rounding
+#   - Live mode: broker-reported margin vs local calc can differ by ±0.10-0.50 due to:
+#       * Broker using different rounding for stamp duty/GST
+#       * Intraday leverage timing (margin released async)
+#   - 1.0 rupee catches genuine errors (10+ rupee drift) while tolerating noise
+#   - Too tight (e.g., 0.1) would false-alarm on legitimate rounding differences
+_INVARIANT_TOLERANCE = 1.0
 
 # BL-1 / FM18: orders.product -> semantic intent for rehydrate replay.
 # CO is COVER_ORDER (intraday-bucketed); MIS is plain INTRADAY; CNC and NRML
