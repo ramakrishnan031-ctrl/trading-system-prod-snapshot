@@ -241,7 +241,7 @@ class _MockOrderPlacer:
         self.calls: List[dict] = []
 
     def place(self, *, symbol, side, qty, entry_price, sl_price, intent,
-              signal_id, reservation_id, tgt_price=None):
+              signal_id, reservation_id, strategy="", tgt_price=None):
         if self._raise:
             raise self._raise
         self.calls.append({

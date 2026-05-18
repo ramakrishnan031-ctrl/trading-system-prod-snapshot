@@ -721,6 +721,7 @@ class SignalProcessor:
                     intent=strategy_obj.intent,
                     signal_id=signal_id,
                     reservation_id=reservation_id,
+                    strategy=strategy_name,
                     tgt_price=tgt_price,
                 )
                 reservation_id = None   # placer owns it now
@@ -1199,6 +1200,7 @@ class SignalProcessor:
                     intent=strategy_obj.intent,
                     signal_id=signal_id,
                     reservation_id=reservation_id,
+                    strategy=strategy_name,
                     tgt_price=tgt_price,
                     release_ltp=release_ltp,  # FIX-025
                 )

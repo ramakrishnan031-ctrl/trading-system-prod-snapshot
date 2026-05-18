@@ -548,6 +548,7 @@ class OrderPlacer:
         intent: str,
         signal_id: str,
         reservation_id: str,
+        strategy: str = "",
         tgt_price: Optional[float] = None,  # SPW6: provided by signal_processor; overrides OP3
         release_ltp: Optional[float] = None,  # FIX-025: gate release LTP for slippage protection
     ) -> None:
@@ -617,7 +618,7 @@ class OrderPlacer:
             signal_id=signal_id,
             symbol=symbol,
             direction=direction,
-            strategy="",        # OP10: strategy lookup not yet wired
+            strategy=strategy,
             sector=None,        # OP10: symbol_validator not yet built
             qty=qty,
             entry_target_price=entry_price,
