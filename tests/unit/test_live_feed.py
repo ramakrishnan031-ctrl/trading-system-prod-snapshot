@@ -203,7 +203,8 @@ def test_register_callback() -> None:
     feed = LiveFeedManager("k", "t", _make_logger())
     cb = MagicMock()
     feed.register_callback(cb)
-    assert cb in feed._callbacks
+    # FIX-103: _callbacks now stores weak refs
+    assert any(weak_cb() is cb for weak_cb in feed._callbacks)
     print("  OK register_callback")
 
 
@@ -213,7 +214,8 @@ def test_unregister_callback() -> None:
     cb = MagicMock()
     feed.register_callback(cb)
     feed.unregister_callback(cb)
-    assert cb not in feed._callbacks
+    # FIX-103: _callbacks now stores weak refs
+    assert not any(weak_cb() is cb for weak_cb in feed._callbacks)
     print("  OK unregister_callback")
 
 
@@ -223,7 +225,9 @@ def test_register_callback_idempotent() -> None:
     cb = MagicMock()
     feed.register_callback(cb)
     feed.register_callback(cb)
-    assert feed._callbacks.count(cb) == 1
+    # FIX-103: _callbacks stores weak refs; count matches
+    matches = sum(1 for weak_cb in feed._callbacks if weak_cb() is cb)
+    assert matches == 1
     print("  OK register_callback_idempotent")
 
 

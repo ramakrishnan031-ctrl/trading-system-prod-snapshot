@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import queue
 import threading
+import weakref
 from datetime import datetime
 from typing import Callable, List, Optional, Set
 
@@ -75,7 +76,9 @@ class LiveFeedManager:
         self._subscribed: Set[int] = set()
 
         # LF5: tick distribution
-        self._callbacks: List[Callable[[list], None]] = []
+        # FIX-103: Use weak references to prevent memory leaks when callbacks
+        # are never unregistered. Bound methods use WeakMethod, functions use ref.
+        self._callbacks: List = []  # List[weakref.ref | weakref.WeakMethod]
         self._lock = threading.Lock()
         self._tick_queue: queue.Queue = queue.Queue(maxsize=self.TICK_QUEUE_CAPACITY)
 
@@ -192,18 +195,39 @@ class LiveFeedManager:
             self._ticker.set_mode(mode, tokens)
 
     def register_callback(self, fn: Callable[[list], None]) -> None:
-        """LF5: Register a tick consumer callback. No duplicates."""
+        """
+        LF5: Register a tick consumer callback. No duplicates.
+
+        FIX-103: Store weak reference to prevent memory leaks. Bound methods
+        use WeakMethod; plain functions use ref. Dead refs auto-cleaned on invoke.
+        """
         with self._lock:
-            if fn not in self._callbacks:
-                self._callbacks.append(fn)
+            # Check if already registered (compare actual callables)
+            for weak_cb in self._callbacks:
+                if weak_cb() is fn:
+                    return  # Already registered
+
+            # Create appropriate weak reference
+            if hasattr(fn, '__self__'):
+                # Bound method: use WeakMethod
+                weak_ref = weakref.WeakMethod(fn)
+            else:
+                # Plain function: use ref
+                weak_ref = weakref.ref(fn)
+
+            self._callbacks.append(weak_ref)
 
     def unregister_callback(self, fn: Callable) -> None:
-        """LF5: Remove a previously registered callback."""
+        """
+        LF5: Remove a previously registered callback.
+
+        FIX-103: Find and remove the weak reference matching the given callable.
+        """
         with self._lock:
-            try:
-                self._callbacks.remove(fn)
-            except ValueError:
-                pass
+            for i, weak_cb in enumerate(self._callbacks):
+                if weak_cb() is fn:
+                    del self._callbacks[i]
+                    return
 
     def set_on_reconnect_callback(self, fn: Callable[[datetime], None]) -> None:
         """LF7: Inject candle_store reconnect notifier (called once per gap)."""
@@ -457,8 +481,16 @@ class LiveFeedManager:
                 if not validated_batch:
                     continue
 
+                # FIX-103: Resolve weak refs and filter out dead ones
                 with self._lock:
-                    callbacks = list(self._callbacks)
+                    weak_callbacks = list(self._callbacks)
+                    # Clean up dead references inline
+                    self._callbacks = [wc for wc in self._callbacks if wc() is not None]
+
+                # Dereference and invoke alive callbacks
+                callbacks = [wc() for wc in weak_callbacks]
+                callbacks = [cb for cb in callbacks if cb is not None]
+
                 for cb in callbacks:
                     # FIX-029: bare except with CRITICAL log + traceback
                     # DO NOT re-raise: consumer thread must be immortal
