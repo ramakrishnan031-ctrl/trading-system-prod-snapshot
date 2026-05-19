@@ -79,6 +79,8 @@ class ReportData:
     excluded_symbols: List[str]
     candle_map: Dict[Tuple[str, str], dict] = field(default_factory=dict)
     excursion_map: Dict[str, dict] = field(default_factory=dict)
+    strategy_min_scores: Dict[str, int] = field(default_factory=dict)
+    broker_rates: Dict[str, Any] = field(default_factory=dict)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,6 +130,8 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
     account = session["account_id"] if session else "UNKNOWN"
 
     excluded_symbols = []
+    global_min = 60
+    broker_rates: Dict[str, Any] = {}
     try:
         import yaml
         system_config_path = config_dir / "system_config.yaml"
@@ -135,8 +139,20 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
             with open(system_config_path, "r") as f:
                 sys_cfg = yaml.safe_load(f) or {}
             excluded_symbols = sys_cfg.get("excluded_symbols", [])
+        scoring_path = config_dir / "scoring_weights.yaml"
+        if scoring_path.exists():
+            with open(scoring_path, "r") as f:
+                scoring_cfg = yaml.safe_load(f) or {}
+            global_min = scoring_cfg.get("min_pass_score", 60)
+        broker_costs_path = config_dir / "broker_costs.yaml"
+        if broker_costs_path.exists():
+            with open(broker_costs_path, "r") as f:
+                broker_cfg = yaml.safe_load(f) or {}
+            broker_rates = broker_cfg.get("zerodha", {})
     except Exception:
         pass
+
+    strategy_min_scores = _build_strategy_min_scores(config_dir, global_min)
 
     candle_rows = store.get_candles_for_date(date_iso)
     candle_map: Dict[Tuple[str, str], dict] = {}
@@ -149,6 +165,11 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
                 "low": c["low"], "close": c["close"],
                 "is_synthetic": c.get("is_synthetic", 0),
             }
+
+    if not candle_map:
+        candle_csv_dir = Path(config_dir).parent / "data_store" / "candles"
+        csv_candles = _load_candle_csv(candle_csv_dir, date_iso)
+        candle_map.update(csv_candles)
 
     excursion_rows = store.get_trade_excursions_for_date(date_iso)
     excursion_map: Dict[str, dict] = {r["trade_id"]: r for r in excursion_rows}
@@ -182,6 +203,8 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
         excluded_symbols=excluded_symbols,
         candle_map=candle_map,
         excursion_map=excursion_map,
+        strategy_min_scores=strategy_min_scores,
+        broker_rates=broker_rates,
     )
 
 
@@ -258,6 +281,104 @@ def _add_separator_column(ws: Worksheet, col_idx: int, start_row: int, end_row: 
     for row in range(start_row, end_row + 1):
         cell = ws.cell(row=row, column=col_idx)
         cell.fill = FILL_SEPARATOR
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Private fallbacks for historical data (eligible_score, cost breakdown, CSV candles)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_strategy_min_scores(config_dir: Path, global_min: int) -> Dict[str, int]:
+    """Read all strategy YAMLs and return effective min_score per strategy name.
+
+    Private fallback for signals where screener_results.eligible_score is NULL.
+    """
+    import yaml as _yaml
+    strategies_dir = config_dir / "strategies"
+    result: Dict[str, int] = {}
+    if not strategies_dir.is_dir():
+        return result
+    for yaml_path in strategies_dir.glob("*.yaml"):
+        try:
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                cfg = _yaml.safe_load(f) or {}
+            name = cfg.get("name", "")
+            min_score = cfg.get("min_score", 0)
+            effective = min_score if min_score > 0 else global_min
+            if name:
+                result[name] = effective
+        except Exception:
+            pass
+    return result
+
+
+def _compute_cost_breakdown(trade: dict, z_rates: dict) -> Dict[str, float]:
+    """Compute itemised Zerodha cost breakdown for a round-trip intraday trade.
+
+    Private fallback for trades where cost_brokerage is NULL but charges total exists.
+    """
+    exit_price = trade.get("exit_price")
+    if not exit_price or not trade.get("charges"):
+        return {}
+
+    qty = trade.get("qty_filled") or trade.get("qty_planned") or 0
+    entry_price = trade.get("entry_actual_price") or trade.get("entry_target_price") or 0
+    if not qty or not entry_price:
+        return {}
+
+    direction = (trade.get("direction") or "LONG").upper()
+    entry_side = "BUY" if direction == "LONG" else "SELL"
+    exit_side  = "SELL" if direction == "LONG" else "BUY"
+
+    flat  = z_rates.get("brokerage_flat_intraday", 20.0)
+    b_pct = z_rates.get("brokerage_pct_intraday", 0.03) / 100
+    stt_pct   = z_rates.get("stt_sell_pct", 0.025) / 100
+    exch_pct  = z_rates.get("exchange_txn_pct", 0.00297) / 100
+    sebi_pct  = z_rates.get("sebi_pct", 0.0001) / 100
+    gst_pct   = z_rates.get("gst_pct", 18.0) / 100
+    stamp_pct = z_rates.get("stamp_duty_mis_buy_pct", 0.003) / 100
+
+    def _leg(side: str, price: float):
+        tv    = qty * price
+        brok  = min(flat, b_pct * tv)
+        stt   = stt_pct * tv if side == "SELL" else 0.0
+        exch  = exch_pct * tv + sebi_pct * tv
+        gst   = gst_pct * (brok + exch)
+        stamp = stamp_pct * tv if side == "BUY" else 0.0
+        return brok, stt, exch, gst, stamp
+
+    e = _leg(entry_side, float(entry_price))
+    x = _leg(exit_side, float(exit_price))
+
+    return {
+        "brokerage": round(e[0] + x[0], 2),
+        "stt":       round(e[1] + x[1], 2),
+        "exch":      round(e[2] + x[2], 2),
+        "gst":       round(e[3] + x[3], 2),
+        "stamp":     round(e[4] + x[4], 2),
+    }
+
+
+def _load_candle_csv(candle_dir: Path, date_iso: str) -> Dict[Tuple[str, str], dict]:
+    """Load candle CSV into dict keyed by (symbol, HH:MM).
+
+    Private fallback for when candles table is empty.
+    """
+    csv_path = candle_dir / f"candle_data_{date_iso}.csv"
+    if not csv_path.exists():
+        return {}
+    import csv as _csv
+    candles: Dict[Tuple[str, str], dict] = {}
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        for row in _csv.DictReader(f):
+            hhmm = row["datetime"][11:16]
+            candles[(row["symbol"], hhmm)] = {
+                "open":  float(row["open"]),
+                "high":  float(row["high"]),
+                "low":   float(row["low"]),
+                "close": float(row["close"]),
+                "is_synthetic": 0,
+            }
+    return candles
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -490,8 +611,13 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         is_order_passed = trade_id != "—"
 
         screener_row = screener_map.get(signal_id, {})
-        algo_score = screener_row.get("score", "—")
-        effective_min = screener_row.get("eligible_score", "—")
+        algo_score = screener_row.get("score") if screener_row.get("score") is not None else 0
+        strategy_name = sig.get("strategy", "")
+        eligible_from_db = screener_row.get("eligible_score")
+        if eligible_from_db is not None:
+            effective_min = eligible_from_db
+        else:
+            effective_min = data.strategy_min_scores.get(strategy_name, "—")
 
         try:
             received_dt = datetime.fromisoformat(sig.get("received_at", ""))
@@ -658,7 +784,11 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         screener = screener_map.get(signal_id, {})
 
         strategy = trade.get("strategy", "") or signal.get("strategy", "")
-        effective_min = screener.get("eligible_score", "—")
+        eligible_from_db = screener.get("eligible_score")
+        if eligible_from_db is not None:
+            effective_min = eligible_from_db
+        else:
+            effective_min = data.strategy_min_scores.get(strategy, "—")
 
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
         sl_order = _get_order_for_trade_leg(data.orders, trade_id, "SL")
@@ -703,11 +833,33 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         qty_filled = trade.get("qty_filled", 0)
         roi_pct = (net_pnl / (fill_entry * qty_filled) * 100) if fill_entry and qty_filled else 0
 
-        brokerage = trade.get("cost_brokerage") or "—"
-        stt       = trade.get("cost_stt") or "—"
-        exch_chrg = trade.get("cost_exchange_txn") or "—"
-        stamp     = trade.get("cost_stamp_duty") or "—"
-        gst       = trade.get("cost_gst") or "—"
+        cost_brokerage_db = trade.get("cost_brokerage")
+        charges_total = trade.get("charges")
+        if cost_brokerage_db is not None:
+            brokerage = cost_brokerage_db
+            stt       = trade.get("cost_stt") or 0
+            exch_chrg = trade.get("cost_exchange_txn") or 0
+            stamp     = trade.get("cost_stamp_duty") or 0
+            gst       = trade.get("cost_gst") or 0
+        elif charges_total is not None and charges_total > 0:
+            cost_bd = _compute_cost_breakdown(trade, data.broker_rates)
+            brokerage = cost_bd.get("brokerage", 0) if cost_bd else 0
+            stt       = cost_bd.get("stt", 0) if cost_bd else 0
+            exch_chrg = cost_bd.get("exch", 0) if cost_bd else 0
+            stamp     = cost_bd.get("stamp", 0) if cost_bd else 0
+            gst       = cost_bd.get("gst", 0) if cost_bd else 0
+        elif charges_total is not None:
+            brokerage = 0
+            stt       = 0
+            exch_chrg = 0
+            stamp     = 0
+            gst       = 0
+        else:
+            brokerage = "—"
+            stt       = "—"
+            exch_chrg = "—"
+            stamp     = "—"
+            gst       = "—"
 
         trail_count = trade.get("sl_trail_count") or 0
 
@@ -718,26 +870,26 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             trade.get("direction", ""),                                      # 4
             trade.get("symbol", ""),                                         # 5
             effective_min,                                                   # 6
-            screener.get("score", "—"),                                      # 7
+            screener.get("score") if screener.get("score") is not None else 0,  # 7
             "",                                                              # 8 sep
             _fmt_time(entry_order.get("placed_at")) if entry_order else "",  # 9
             _fmt_time(trade.get("entry_time")),                             # 10
             _fmt_time(trade.get("exit_time")),                              # 11
-            time_in_trade if time_in_trade else "—",                        # 12
+            time_in_trade if time_in_trade else 0,                          # 12
             "",                                                              # 13 sep
             sys_qty,                                                         # 14
             sys_entry,                                                       # 15
             sys_sl,                                                          # 16
             sys_tgt,                                                         # 17
-            round(sys_rr, 2) if sys_rr else "—",                            # 18
-            "✓" if trade.get("qty_filled") == sys_qty else "✗",   # 19
+            round(sys_rr, 2),                                                # 18
+            "Y" if trade.get("qty_filled") == sys_qty else "N",              # 19
             "",                                                              # 20 sep
             fill_entry,                                                      # 21
             fill_sl,                                                         # 22
             "",                                                              # 23 sep
-            round(entry_slip, 2) if entry_slip else "—",                     # 24
-            f"{entry_slip_pct:.2f}%" if entry_slip_pct else "—",            # 25
-            round(fill_rr, 2) if fill_rr else "—",                          # 26
+            round(entry_slip, 2),                                            # 24
+            f"{entry_slip_pct:.2f}%",                                       # 25
+            round(fill_rr, 2),                                               # 26
             trade.get("exit_reason", "") or "—",                             # 27
             trail_count,                                                     # 28
             "",                                                              # 29 sep
@@ -747,14 +899,14 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             exch_chrg,                                                       # 33 Exch Charges
             stamp,                                                           # 34 Stamp Duty
             gst,                                                             # 35 GST
-            round(charges, 2) if charges else "—",                           # 36 Total Costs
+            round(charges, 2),                                               # 36 Total Costs
             "",                                                              # 37 sep
             round(net_pnl, 2),                                               # 38
-            f"{roi_pct:.2f}%" if roi_pct else "—",                          # 39
+            f"{roi_pct:.2f}%",                                              # 39
             "",                                                              # 40 sep
             trade_id,                                                        # 41
             entry_order.get("order_id") if entry_order else "",              # 42
-            trade.get("exit_price", "") or "—",                              # 43
+            trade.get("exit_price") or 0,                                    # 43
         ]
 
         for col, value in enumerate(row_data, start=1):
@@ -1079,20 +1231,20 @@ def build_sheet_4_candles(
             entry_order.get("order_id", "") if entry_order else "",
             _fmt_time(trade.get("entry_time")),
             "",
-            exc_candle.get("entry_candle_open") or candle.get("open", ""),
-            exc_candle.get("entry_candle_high") or candle.get("high", ""),
-            exc_candle.get("entry_candle_low") or candle.get("low", ""),
-            exc_candle.get("entry_candle_close") or candle.get("close", ""),
-            "Yes" if candle.get("is_synthetic") else ("No" if candle else ""),
+            exc_candle.get("entry_candle_open") or candle.get("open") or 0,
+            exc_candle.get("entry_candle_high") or candle.get("high") or 0,
+            exc_candle.get("entry_candle_low") or candle.get("low") or 0,
+            exc_candle.get("entry_candle_close") or candle.get("close") or 0,
+            "Yes" if candle.get("is_synthetic") else ("No" if candle else "N/A"),
             "",
-            round(our_entry, 2) if our_entry else "",
-            round(our_sl, 2) if our_sl else "",
-            round(our_tgt, 2) if our_tgt else "",
-            "✓" if exit_reason in ("TGT_HIT", "TGT") else "✗",
+            round(our_entry, 2) if our_entry else 0,
+            round(our_sl, 2) if our_sl else 0,
+            round(our_tgt, 2) if our_tgt else 0,
+            "Y" if exit_reason in ("TGT_HIT", "TGT") else "N",
             "",
-            round(max_fav, 2) if max_fav else "",
-            round(max_adv, 2) if max_adv else "",
-            round(missed_profit, 2) if missed_profit else "—",
+            round(max_fav, 2) if max_fav else 0,
+            round(max_adv, 2) if max_adv else 0,
+            round(missed_profit, 2),
             "",
             tune_suggestion,
         ]
@@ -1392,13 +1544,17 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
         win_rate = len(wins) / len(closed) * 100 if closed else 0
         drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
 
+        processed = len([t for t in bucket_trades if t.get("status") != "FAILED"])
+        traded = len(bucket_trades)
+        rejected = max(0, bucket_signals - processed - traded)
+
         row_data = [
             data.date_iso,
             bucket_name,
             bucket_signals,
-            len([t for t in bucket_trades if t.get("status") != "FAILED"]),
-            "",
-            len(bucket_trades),
+            processed,
+            rejected,
+            traded,
             len(wins),
             len(losses),
             len(be),

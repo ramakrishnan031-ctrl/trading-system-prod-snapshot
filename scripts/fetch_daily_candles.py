@@ -128,12 +128,49 @@ def main() -> None:
             )
             writer.writeheader()
             writer.writerows(all_rows)
-        print(f"\nSaved: {output_file}  ({len(all_rows)} rows)")
+        print(f"\nSaved CSV: {output_file}  ({len(all_rows)} rows)")
+
+        _insert_into_candles_db(all_rows, inst_map)
     else:
         print("\nNo candle data fetched.")
 
     if failed:
         print(f"Failed symbols ({len(failed)}): {', '.join(failed)}")
+
+
+def _insert_into_candles_db(rows: list[dict], inst_map: dict[str, int]) -> None:
+    """Insert fetched candle rows into the candles DB table (v14 schema)."""
+    import sqlite3
+    if not DB_PATH.exists():
+        print("WARNING: DB not found, skipping candles DB insert")
+        return
+    conn = sqlite3.connect(str(DB_PATH))
+    cur = conn.cursor()
+    inserted = 0
+    for row in rows:
+        token = inst_map.get(row["symbol"], 0)
+        try:
+            cur.execute(
+                "INSERT OR IGNORE INTO candles "
+                "(symbol, instrument_token, ts, interval_sec, open, high, low, close, volume, is_synthetic) "
+                "VALUES (?, ?, ?, 60, ?, ?, ?, ?, ?, 0)",
+                (
+                    row["symbol"],
+                    token,
+                    row["datetime"],
+                    row["open"],
+                    row["high"],
+                    row["low"],
+                    row["close"],
+                    row["volume"],
+                ),
+            )
+            inserted += 1
+        except sqlite3.IntegrityError:
+            pass
+    conn.commit()
+    conn.close()
+    print(f"Saved DB: {inserted} candle rows inserted into candles table")
 
 
 if __name__ == "__main__":

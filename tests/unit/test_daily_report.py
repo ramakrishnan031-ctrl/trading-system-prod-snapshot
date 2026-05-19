@@ -719,17 +719,17 @@ class TestSheetBuilders:
         assert ws.cell(row=3, column=11).value == 2605.0, "Close mismatch"
         assert ws.cell(row=3, column=12).value == "No"
 
-    def test_build_sheet_4_candles_ohlc_blank_without_candle_data(self, sample_report_data):
-        """Without candle data, OHLC cols and Synthetic? col should stay blank."""
+    def test_build_sheet_4_candles_ohlc_zero_without_candle_data(self, sample_report_data):
+        """Without candle data, OHLC cols show 0 (numeric zero-fill rule)."""
         import openpyxl
         wb = openpyxl.Workbook()
         ws = build_sheet_4_candles(wb, sample_report_data)
 
-        assert ws.cell(row=3, column=8).value == ""
-        assert ws.cell(row=3, column=9).value == ""
-        assert ws.cell(row=3, column=10).value == ""
-        assert ws.cell(row=3, column=11).value == ""
-        assert ws.cell(row=3, column=12).value == ""
+        assert ws.cell(row=3, column=8).value == 0
+        assert ws.cell(row=3, column=9).value == 0
+        assert ws.cell(row=3, column=10).value == 0
+        assert ws.cell(row=3, column=11).value == 0
+        assert ws.cell(row=3, column=12).value == "N/A"
 
     def test_build_sheet_6_drawdown_pct_positive_trade(self, sample_report_data):
         """When only wins exist, max_loss=0 so drawdown_pct=0."""
@@ -1115,8 +1115,8 @@ class TestCostColumnsFromDB:
         assert ws.cell(4, 35).value == 7.74
         assert ws.cell(4, 28).value == 2
 
-    def test_build_sheet_2_orders_dash_when_no_cost_data(self):
-        """Cols 31-35 show dash when trade has no cost columns."""
+    def test_build_sheet_2_orders_zero_when_charges_zero(self):
+        """Cols 31-35 show 0 when charges=0 (zero-fill rule: numeric cols never show dash)."""
         import openpyxl
         trade = {
             "trade_id": "t-no-cost",
@@ -1161,4 +1161,306 @@ class TestCostColumnsFromDB:
         build_sheet_2_orders(wb, data)
         ws = wb["2_Orders"]
         for col in (31, 32, 33, 34, 35):
-            assert ws.cell(4, col).value == "—"
+            assert ws.cell(4, col).value == 0, f"Col {col} should be 0, got {ws.cell(4, col).value}"
+
+    def test_build_sheet_2_orders_dash_when_charges_null(self):
+        """Cols 31-35 show dash only when charges is genuinely NULL."""
+        import openpyxl
+        trade = {
+            "trade_id": "t-null-cost",
+            "signal_id": "sig-nc2",
+            "symbol": "TCS",
+            "direction": "LONG",
+            "strategy": "gap_go_long",
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 3000.0,
+            "entry_actual_price": 3000.0,
+            "sl_initial": 2950.0,
+            "tgt_initial": 3100.0,
+            "gross_pnl": 0,
+            "net_pnl": 0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+            "exit_reason": "EOD",
+        }
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=[],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        for col in (31, 32, 33, 34, 35):
+            assert ws.cell(4, col).value == "—", f"Col {col} should be dash, got {ws.cell(4, col).value}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-125: Report data gap fixes
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFix125EligibleScoreFallback:
+    """BUG 1/3: eligible_score falls back to strategy_min_scores when DB is NULL."""
+
+    def test_sheet_1_eligible_score_from_strategy_min_scores(self):
+        import openpyxl
+        signal = {
+            "signal_id": "sig-fb",
+            "symbol": "HDFCBANK",
+            "strategy": "first_pullback_long",
+            "scanner": "chartink",
+            "status": "TRADED",
+            "trade_id": "tr-fb",
+            "received_at": "2026-05-18T09:30:00+05:30",
+            "triggered_at": "2026-05-18T09:29:55+05:30",
+            "trigger_price": 1600.0,
+        }
+        screener = {"signal_id": "sig-fb", "score": 70, "status": "PASSED"}
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=[signal],
+            trades=[],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[screener],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+            strategy_min_scores={"first_pullback_long": 55},
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_1_signals(wb, data)
+        ws = wb["1_Signals"]
+        assert ws.cell(row=2, column=14).value == 55
+
+    def test_sheet_2_eligible_score_from_strategy_min_scores(self):
+        import openpyxl
+        trade = {
+            "trade_id": "tr-fb2",
+            "signal_id": "sig-fb2",
+            "symbol": "INFY",
+            "direction": "LONG",
+            "strategy": "gap_go_long",
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 1500.0,
+            "entry_actual_price": 1502.0,
+            "sl_initial": 1470.0,
+            "tgt_initial": 1560.0,
+            "gross_pnl": 0,
+            "charges": 0,
+            "net_pnl": 0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+            "exit_reason": "EOD",
+        }
+        screener = {"signal_id": "sig-fb2", "score": 60, "status": "PASSED"}
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=[],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[screener],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+            strategy_min_scores={"gap_go_long": 45},
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        assert ws.cell(4, 6).value == 45
+
+
+class TestFix125CostFallback:
+    """BUG 5: cost columns back-calculate from charges when DB breakdown is NULL."""
+
+    def test_cost_fallback_computation(self):
+        import openpyxl
+        trade = {
+            "trade_id": "t-fallback",
+            "signal_id": "sig-fall",
+            "symbol": "RELIANCE",
+            "direction": "LONG",
+            "strategy": "gap_go_long",
+            "qty_planned": 10,
+            "qty_filled": 10,
+            "entry_target_price": 2500.0,
+            "entry_actual_price": 2500.0,
+            "exit_price": 2520.0,
+            "sl_initial": 2450.0,
+            "tgt_initial": 2600.0,
+            "gross_pnl": 200.0,
+            "charges": 55.0,
+            "net_pnl": 145.0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+            "exit_reason": "TGT_HIT",
+        }
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100145.0,
+            signals=[],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+            broker_rates={
+                "brokerage_flat_intraday": 20.0,
+                "brokerage_pct_intraday": 0.03,
+                "stt_sell_pct": 0.025,
+                "exchange_txn_pct": 0.00297,
+                "sebi_pct": 0.0001,
+                "gst_pct": 18.0,
+                "stamp_duty_mis_buy_pct": 0.003,
+            },
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        assert isinstance(ws.cell(4, 31).value, float), "Brokerage should be computed"
+        assert ws.cell(4, 31).value > 0, "Brokerage should be positive"
+        assert isinstance(ws.cell(4, 32).value, float), "STT should be computed"
+
+
+class TestFix125TimeOfDayRejected:
+    """BUG 7: Sheet 6 time-of-day Rejected column computed correctly."""
+
+    def test_rejected_column_computed(self):
+        import openpyxl
+        signals = [
+            {"signal_id": f"s{i}", "strategy": "TEST", "received_at": "2026-05-18T09:20:00+05:30",
+             "status": "REJECTED_SCREEN", "symbol": f"SYM{i}"}
+            for i in range(5)
+        ]
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=signals,
+            trades=[],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_6_strategy(wb, data)
+        ws = wb["6_Strategy_Analysis"]
+
+        found_time_of_day = False
+        for r in range(1, 50):
+            if ws.cell(r, 1).value == "TIME-OF-DAY ANALYSIS":
+                header_row = r + 1
+                first_data_row = r + 2
+                found_time_of_day = True
+                break
+
+        assert found_time_of_day, "TIME-OF-DAY section not found"
+        rejected_val = ws.cell(first_data_row, 5).value
+        assert isinstance(rejected_val, int), f"Rejected should be int, got {type(rejected_val)}: {rejected_val}"
+        assert rejected_val >= 0
+
+
+class TestFix125NumericZeroFill:
+    """General rule: numeric columns show 0, not dash or None."""
+
+    def test_sheet_2_numeric_cols_zero_not_dash(self):
+        import openpyxl
+        trade = {
+            "trade_id": "t-zf",
+            "signal_id": "sig-zf",
+            "symbol": "TCS",
+            "direction": "LONG",
+            "strategy": "TEST",
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 3000.0,
+            "entry_actual_price": 3000.0,
+            "sl_initial": 3000.0,
+            "tgt_initial": 3000.0,
+            "gross_pnl": 0,
+            "charges": 0,
+            "net_pnl": 0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+            "exit_reason": "EOD",
+            "exit_price": 3000.0,
+        }
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=[],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        assert isinstance(ws.cell(4, 12).value, int), f"Time in trade should be int, got {ws.cell(4, 12).value!r}"
+        assert ws.cell(4, 18).value == 0, "Sys R:R should be 0, not dash"
+        assert ws.cell(4, 36).value == 0, "Total costs should be 0, not dash"
