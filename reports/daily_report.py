@@ -76,9 +76,9 @@ class ReportData:
     recon_log: List[dict]
     gate_state: List[dict]
 
-    config: dict
     excluded_symbols: List[str]
-    strategy_min_scores: Dict[str, int] = field(default_factory=dict)
+    candle_map: Dict[Tuple[str, str], dict] = field(default_factory=dict)
+    excursion_map: Dict[str, dict] = field(default_factory=dict)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -108,9 +108,7 @@ def is_holiday_or_weekend(date_iso: str, config_dir: Path) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
-    """Load all data for the report from state_store and config."""
-    import yaml
-
+    """Load all data for the report from state_store (DB-only, v14+)."""
     signals = store.get_signals_for_date(date_iso)
     trades = store.get_trades_for_date(date_iso)
     orders = store.get_orders_for_date(date_iso)
@@ -129,25 +127,31 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
     mode = session["mode"] if session else "UNKNOWN"
     account = session["account_id"] if session else "UNKNOWN"
 
-    system_config_path = config_dir / "system_config.yaml"
-    scoring_config_path = config_dir / "scoring_weights.yaml"
+    excluded_symbols = []
+    try:
+        import yaml
+        system_config_path = config_dir / "system_config.yaml"
+        if system_config_path.exists():
+            with open(system_config_path, "r") as f:
+                sys_cfg = yaml.safe_load(f) or {}
+            excluded_symbols = sys_cfg.get("excluded_symbols", [])
+    except Exception:
+        pass
 
-    broker_costs_path = config_dir / "broker_costs.yaml"
+    candle_rows = store.get_candles_for_date(date_iso)
+    candle_map: Dict[Tuple[str, str], dict] = {}
+    for c in candle_rows:
+        ts = c.get("ts", "")
+        hhmm = ts[11:16] if len(ts) >= 16 else ""
+        if hhmm:
+            candle_map[(c["symbol"], hhmm)] = {
+                "open": c["open"], "high": c["high"],
+                "low": c["low"], "close": c["close"],
+                "is_synthetic": c.get("is_synthetic", 0),
+            }
 
-    config = {}
-    if system_config_path.exists():
-        with open(system_config_path, "r") as f:
-            config["system"] = yaml.safe_load(f) or {}
-    if scoring_config_path.exists():
-        with open(scoring_config_path, "r") as f:
-            config["scoring"] = yaml.safe_load(f) or {}
-    if broker_costs_path.exists():
-        with open(broker_costs_path, "r") as f:
-            config["broker_costs"] = yaml.safe_load(f) or {}
-
-    excluded_symbols = config.get("system", {}).get("excluded_symbols", [])
-    global_min = config.get("scoring", {}).get("min_pass_score", 60)
-    strategy_min_scores = _build_strategy_min_scores(config_dir, global_min)
+    excursion_rows = store.get_trade_excursions_for_date(date_iso)
+    excursion_map: Dict[str, dict] = {r["trade_id"]: r for r in excursion_rows}
 
     opening_capital = 0.0
     closing_capital_broker = 0.0
@@ -175,9 +179,9 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
         system_events=system_events,
         recon_log=recon_log,
         gate_state=gate_state,
-        config=config,
         excluded_symbols=excluded_symbols,
-        strategy_min_scores=strategy_min_scores,
+        candle_map=candle_map,
+        excursion_map=excursion_map,
     )
 
 
@@ -254,108 +258,6 @@ def _add_separator_column(ws: Worksheet, col_idx: int, start_row: int, end_row: 
     for row in range(start_row, end_row + 1):
         cell = ws.cell(row=row, column=col_idx)
         cell.fill = FILL_SEPARATOR
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Candle data loader
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _load_candle_data(candle_dir: Optional[Path], date_iso: str) -> Dict[Tuple[str, str], dict]:
-    """Load candle CSV into dict keyed by (symbol, HH:MM).
-
-    CSV format: symbol,datetime,open,high,low,close,volume
-    datetime format: YYYY-MM-DD HH:MM:SS
-    Returns empty dict if candle_dir is None or the file is not found.
-    """
-    if not candle_dir:
-        return {}
-    csv_path = candle_dir / f"candle_data_{date_iso}.csv"
-    if not csv_path.exists():
-        return {}
-    import csv as _csv
-    candles: Dict[Tuple[str, str], dict] = {}
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        for row in _csv.DictReader(f):
-            hhmm = row["datetime"][11:16]  # "YYYY-MM-DD HH:MM:SS" → "HH:MM"
-            candles[(row["symbol"], hhmm)] = {
-                "open":  float(row["open"]),
-                "high":  float(row["high"]),
-                "low":   float(row["low"]),
-                "close": float(row["close"]),
-            }
-    return candles
-
-
-def _compute_cost_breakdown(trade: dict, z_rates: dict) -> Dict[str, float]:
-    """Compute itemised Zerodha cost breakdown for a round-trip intraday trade.
-
-    Uses rates from broker_costs.yaml zerodha section.
-    Returns empty dict if trade has no exit_price (still open).
-    """
-    exit_price = trade.get("exit_price")
-    if not exit_price or not trade.get("charges"):
-        return {}
-
-    qty = trade.get("qty_filled") or trade.get("qty_planned") or 0
-    entry_price = trade.get("entry_actual_price") or trade.get("entry_target_price") or 0
-    if not qty or not entry_price:
-        return {}
-
-    direction = (trade.get("direction") or "LONG").upper()
-    entry_side = "BUY" if direction == "LONG" else "SELL"
-    exit_side  = "SELL" if direction == "LONG" else "BUY"
-
-    flat  = z_rates.get("brokerage_flat_intraday", 20.0)
-    b_pct = z_rates.get("brokerage_pct_intraday", 0.03) / 100
-    stt_pct   = z_rates.get("stt_sell_pct", 0.025) / 100
-    exch_pct  = z_rates.get("exchange_txn_pct", 0.00297) / 100
-    sebi_pct  = z_rates.get("sebi_pct", 0.0001) / 100
-    gst_pct   = z_rates.get("gst_pct", 18.0) / 100
-    stamp_pct = z_rates.get("stamp_duty_mis_buy_pct", 0.003) / 100
-
-    def _leg(side: str, price: float):
-        tv    = qty * price
-        brok  = min(flat, b_pct * tv)
-        stt   = stt_pct * tv if side == "SELL" else 0.0
-        exch  = exch_pct * tv + sebi_pct * tv   # bundle SEBI with exchange charges
-        gst   = gst_pct * (brok + exch)
-        stamp = stamp_pct * tv if side == "BUY" else 0.0
-        return brok, stt, exch, gst, stamp
-
-    e = _leg(entry_side, float(entry_price))
-    x = _leg(exit_side, float(exit_price))
-
-    return {
-        "brokerage": round(e[0] + x[0], 2),
-        "stt":       round(e[1] + x[1], 2),
-        "exch":      round(e[2] + x[2], 2),
-        "gst":       round(e[3] + x[3], 2),
-        "stamp":     round(e[4] + x[4], 2),
-    }
-
-
-def _build_strategy_min_scores(config_dir: Path, global_min: int) -> Dict[str, int]:
-    """Read all strategy YAMLs and return effective min_score per strategy name.
-
-    min_score=0 means "use global"; any positive value overrides it.
-    """
-    import yaml as _yaml
-    strategies_dir = config_dir / "strategies"
-    result: Dict[str, int] = {}
-    if not strategies_dir.is_dir():
-        return result
-    for yaml_path in strategies_dir.glob("*.yaml"):
-        try:
-            with open(yaml_path, "r", encoding="utf-8") as f:
-                cfg = _yaml.safe_load(f) or {}
-            name = cfg.get("name", "")
-            min_score = cfg.get("min_score", 0)
-            effective = min_score if min_score > 0 else global_min
-            if name:
-                result[name] = effective
-        except Exception:
-            pass
-    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -551,8 +453,6 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     ws = wb.create_sheet(title="1_Signals")
     _disable_gridlines(ws)
 
-    global_min = data.config.get("scoring", {}).get("min_pass_score", 60)
-
     headers = [
         "Trading Date", "Received At", "Scanner/Strategy", "Symbol", "Raw Symbol",
         "Total Rcvd", "Queued", "Selected", "Rejected", "Duplicate", "Order Passed", "Excluded", "Delta",
@@ -591,8 +491,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
         screener_row = screener_map.get(signal_id, {})
         algo_score = screener_row.get("score", "—")
-        strategy_name = sig.get("strategy", "")
-        effective_min = data.strategy_min_scores.get(strategy_name, global_min)
+        effective_min = screener_row.get("eligible_score", "—")
 
         try:
             received_dt = datetime.fromisoformat(sig.get("received_at", ""))
@@ -631,7 +530,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             cell.font = FONT_BODY
             cell.border = BORDER_ALL
 
-            if col == 15 and isinstance(algo_score, (int, float)):
+            if col == 15 and isinstance(algo_score, (int, float)) and isinstance(effective_min, (int, float)):
                 if algo_score < effective_min:
                     cell.fill = FILL_RED
                 else:
@@ -661,9 +560,6 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     """Build Orders sheet matching order_sheet.xlsx design (43 cols, 3 header rows)."""
     ws = wb.create_sheet(title="2_Orders")
     _disable_gridlines(ws)
-
-    global_min = data.config.get("scoring", {}).get("min_pass_score", 60)
-    z_rates = data.config.get("broker_costs", {}).get("zerodha", {})
 
     # Separator columns (narrow dividers painted with separator blue)
     sep_cols = [8, 13, 20, 23, 29, 37, 40]
@@ -762,7 +658,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         screener = screener_map.get(signal_id, {})
 
         strategy = trade.get("strategy", "") or signal.get("strategy", "")
-        effective_min = data.strategy_min_scores.get(strategy, global_min)
+        effective_min = screener.get("eligible_score", "—")
 
         entry_order = _get_order_for_trade_leg(data.orders, trade_id, "ENTRY")
         sl_order = _get_order_for_trade_leg(data.orders, trade_id, "SL")
@@ -807,18 +703,13 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         qty_filled = trade.get("qty_filled", 0)
         roi_pct = (net_pnl / (fill_entry * qty_filled) * 100) if fill_entry and qty_filled else 0
 
-        cost_bd = _compute_cost_breakdown(trade, z_rates)
-        brokerage   = cost_bd.get("brokerage", "—") if cost_bd else "—"
-        stt         = cost_bd.get("stt",       "—") if cost_bd else "—"
-        exch_chrg   = cost_bd.get("exch",      "—") if cost_bd else "—"
-        stamp       = cost_bd.get("stamp",     "—") if cost_bd else "—"
-        gst         = cost_bd.get("gst",       "—") if cost_bd else "—"
+        brokerage = trade.get("cost_brokerage") or "—"
+        stt       = trade.get("cost_stt") or "—"
+        exch_chrg = trade.get("cost_exchange_txn") or "—"
+        stamp     = trade.get("cost_stamp_duty") or "—"
+        gst       = trade.get("cost_gst") or "—"
 
-        trail_count = 0
-        for o in data.orders:
-            if o.get("trade_id") == trade_id and o.get("leg") == "SL":
-                trail_count += 1
-        trail_count = max(0, trail_count - 1)
+        trail_count = trade.get("sl_trail_count") or 0
 
         row_data = [
             data.date_iso,                                                   # 1
@@ -1082,7 +973,6 @@ def build_sheet_3_capital(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 def build_sheet_4_candles(
     wb: openpyxl.Workbook,
     data: ReportData,
-    candle_data: Optional[Dict[Tuple[str, str], dict]] = None,
 ) -> Worksheet:
     """Build Candles analysis sheet with tune suggestions."""
     ws = wb.create_sheet(title="4_Candles")
@@ -1153,18 +1043,9 @@ def build_sheet_4_candles(
         exit_reason = trade.get("exit_reason", "")
         direction = trade.get("direction", "LONG")
 
-        max_fav = exit_price
-        max_adv = exit_price
-
-        trade_innings = [i for i in data.innings if i.get("trade_id") == trade_id]
-        for ing in trade_innings:
-            ing_exit = ing.get("exit_price") or 0
-            if direction == "LONG":
-                max_fav = max(max_fav, ing_exit)
-                max_adv = min(max_adv, ing_exit) if max_adv else ing_exit
-            else:
-                max_fav = min(max_fav, ing_exit) if ing_exit else max_fav
-                max_adv = max(max_adv, ing_exit)
+        exc = data.excursion_map.get(trade_id, {})
+        max_fav = exc.get("mfe_price") or exit_price
+        max_adv = exc.get("mae_price") or exit_price
 
         if direction == "LONG":
             missed_profit = our_tgt - max_fav if our_tgt > max_fav else 0
@@ -1186,8 +1067,9 @@ def build_sheet_4_candles(
         elif exit_reason in ("TGT_HIT", "TGT"):
             tune_suggestion = "✅ TGT hit perfectly — no tuning needed"
 
-        entry_hhmm = _fmt_time(trade.get("entry_time"))[:5]  # "HH:MM"
-        candle = (candle_data or {}).get((trade.get("symbol", ""), entry_hhmm), {})
+        entry_hhmm = _fmt_time(trade.get("entry_time"))[:5]
+        exc_candle = exc
+        candle = data.candle_map.get((trade.get("symbol", ""), entry_hhmm), {})
 
         row_data = [
             data.date_iso,
@@ -1197,11 +1079,11 @@ def build_sheet_4_candles(
             entry_order.get("order_id", "") if entry_order else "",
             _fmt_time(trade.get("entry_time")),
             "",
-            candle.get("open", ""),
-            candle.get("high", ""),
-            candle.get("low", ""),
-            candle.get("close", ""),
-            "No" if candle else "",
+            exc_candle.get("entry_candle_open") or candle.get("open", ""),
+            exc_candle.get("entry_candle_high") or candle.get("high", ""),
+            exc_candle.get("entry_candle_low") or candle.get("low", ""),
+            exc_candle.get("entry_candle_close") or candle.get("close", ""),
+            "Yes" if candle.get("is_synthetic") else ("No" if candle else ""),
             "",
             round(our_entry, 2) if our_entry else "",
             round(our_sl, 2) if our_sl else "",
@@ -1551,7 +1433,6 @@ def generate_daily_report(
     date_iso: str,
     output_dir: Path,
     config_dir: Path,
-    candle_dir: Optional[Path] = None,
 ) -> Path:
     """
     Generate the daily report for the given date.
@@ -1561,7 +1442,6 @@ def generate_daily_report(
         date_iso: Date in YYYY-MM-DD format
         output_dir: Directory for output files
         config_dir: Directory containing config files
-        candle_dir: Optional directory containing candle_data_YYYY-MM-DD.csv files
 
     Returns:
         Path to generated xlsx file
@@ -1569,7 +1449,6 @@ def generate_daily_report(
     log.info("Generating daily report for %s", date_iso)
 
     data = load_report_data(store, date_iso, config_dir)
-    candle_data = _load_candle_data(candle_dir, date_iso)
 
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -1578,7 +1457,7 @@ def generate_daily_report(
     build_sheet_1_signals(wb, data)
     build_sheet_2_orders(wb, data)
     build_sheet_3_capital(wb, data)
-    build_sheet_4_candles(wb, data, candle_data=candle_data)
+    build_sheet_4_candles(wb, data)
     build_sheet_5_telegram(wb, data)
     build_sheet_6_strategy(wb, data)
 
@@ -1630,12 +1509,6 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Generate even on holidays/weekends.",
     )
     parser.add_argument(
-        "--candle-dir",
-        metavar="DIR",
-        default=None,
-        help="Directory containing candle_data_YYYY-MM-DD.csv files for OHLC population.",
-    )
-    parser.add_argument(
         "--notify",
         action="store_true",
         help="Send Telegram notification on completion.",
@@ -1680,7 +1553,6 @@ def main(argv=None) -> int:
             date_iso=date_iso,
             output_dir=Path(args.output_dir),
             config_dir=config_dir,
-            candle_dir=Path(args.candle_dir) if args.candle_dir else None,
         )
         print(f"Report generated: {output_path}")
 

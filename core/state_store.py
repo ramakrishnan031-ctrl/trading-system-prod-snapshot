@@ -1487,6 +1487,24 @@ class StateStore:
         )
         return [dict(r) for r in rows]
 
+    def get_candles_for_date(self, date_iso: str) -> List[dict]:
+        """Return all candle rows whose ts falls on date_iso (DR-v14)."""
+        rows = self.fetch_all(
+            "SELECT * FROM candles WHERE DATE(ts) = ?",
+            (date_iso,),
+        )
+        return [dict(r) for r in rows]
+
+    def get_trade_excursions_for_date(self, date_iso: str) -> List[dict]:
+        """Return trade_excursion rows for trades created on date_iso (DR-v14)."""
+        rows = self.fetch_all(
+            "SELECT te.* FROM trade_excursions te "
+            "JOIN trades t ON te.trade_id = t.trade_id "
+            "WHERE DATE(t.created_at) = ?",
+            (date_iso,),
+        )
+        return [dict(r) for r in rows]
+
     # ─────────────────────────────────────────────────────────────────────────
     # Innings helpers (SH9, SH10)
     # Used by shadow_tracker for per-inning persistence and reporting.

@@ -21,11 +21,8 @@ from reports.daily_report import (
     _fmt_time,
     _fmt_datetime,
     _calc_slip_pct,
-    _compute_cost_breakdown,
     _generate_tune_suggestions,
     _get_order_for_trade_leg,
-    _load_candle_data,
-    _build_strategy_min_scores,
     is_holiday_or_weekend,
     load_report_data,
     generate_daily_report,
@@ -152,10 +149,6 @@ def sample_report_data(sample_trade, sample_signal, sample_order):
         ],
         recon_log=[],
         gate_state=[],
-        config={
-            "system": {"excluded_symbols": ["E2E"]},
-            "scoring": {"min_pass_score": 60},
-        },
         excluded_symbols=["E2E"],
     )
 
@@ -250,57 +243,6 @@ class TestHolidayCheck:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Candle data loader tests
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestLoadCandleData:
-    """Tests for _load_candle_data helper."""
-
-    def test_returns_empty_when_no_dir(self):
-        result = _load_candle_data(None, "2026-05-15")
-        assert result == {}
-
-    def test_returns_empty_when_csv_missing(self, tmp_path):
-        result = _load_candle_data(tmp_path, "2026-05-15")
-        assert result == {}
-
-    def test_loads_csv_correctly(self, tmp_path):
-        import csv as csv_mod
-        csv_path = tmp_path / "candle_data_2026-05-15.csv"
-        with open(csv_path, "w", newline="") as f:
-            writer = csv_mod.DictWriter(f, fieldnames=["symbol","datetime","open","high","low","close","volume"])
-            writer.writeheader()
-            writer.writerow({"symbol": "RELIANCE", "datetime": "2026-05-15 09:31:00",
-                             "open": 2500.0, "high": 2610.0, "low": 2498.0, "close": 2600.0, "volume": 50000})
-
-        result = _load_candle_data(tmp_path, "2026-05-15")
-        assert ("RELIANCE", "09:31") in result
-        assert result[("RELIANCE", "09:31")]["open"] == 2500.0
-        assert result[("RELIANCE", "09:31")]["high"] == 2610.0
-        assert result[("RELIANCE", "09:31")]["low"] == 2498.0
-        assert result[("RELIANCE", "09:31")]["close"] == 2600.0
-
-    def test_multiple_symbols_multiple_candles(self, tmp_path):
-        import csv as csv_mod
-        csv_path = tmp_path / "candle_data_2026-05-15.csv"
-        rows = [
-            {"symbol": "RELIANCE", "datetime": "2026-05-15 09:15:00", "open": 2490, "high": 2510, "low": 2488, "close": 2505, "volume": 1000},
-            {"symbol": "RELIANCE", "datetime": "2026-05-15 09:16:00", "open": 2505, "high": 2520, "low": 2503, "close": 2515, "volume": 900},
-            {"symbol": "TCS",      "datetime": "2026-05-15 09:31:00", "open": 3500, "high": 3600, "low": 3490, "close": 3590, "volume": 500},
-        ]
-        with open(csv_path, "w", newline="") as f:
-            writer = csv_mod.DictWriter(f, fieldnames=["symbol","datetime","open","high","low","close","volume"])
-            writer.writeheader()
-            writer.writerows(rows)
-
-        result = _load_candle_data(tmp_path, "2026-05-15")
-        assert len(result) == 3
-        assert ("RELIANCE", "09:15") in result
-        assert ("RELIANCE", "09:16") in result
-        assert ("TCS", "09:31") in result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Tune suggestion tests
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -340,7 +282,6 @@ class TestTuneSuggestions:
             system_events=[],
             recon_log=[],
             gate_state=[],
-            config={},
             excluded_symbols=[],
         )
         suggestions = _generate_tune_suggestions(data)
@@ -376,7 +317,6 @@ class TestTuneSuggestions:
             system_events=[],
             recon_log=[],
             gate_state=[],
-            config={},
             excluded_symbols=[],
         )
         suggestions = _generate_tune_suggestions(data)
@@ -504,7 +444,6 @@ class TestSheetBuilders:
             system_events=sample_report_data.system_events,
             recon_log=sample_report_data.recon_log,
             gate_state=sample_report_data.gate_state,
-            config=sample_report_data.config,
             excluded_symbols=sample_report_data.excluded_symbols,
         )
 
@@ -559,7 +498,6 @@ class TestSheetBuilders:
             system_events=sample_report_data.system_events,
             recon_log=sample_report_data.recon_log,
             gate_state=sample_report_data.gate_state,
-            config=sample_report_data.config,
             excluded_symbols=sample_report_data.excluded_symbols,
         )
 
@@ -613,7 +551,6 @@ class TestSheetBuilders:
             system_events=sample_report_data.system_events,
             recon_log=sample_report_data.recon_log,
             gate_state=sample_report_data.gate_state,
-            config=sample_report_data.config,
             excluded_symbols=sample_report_data.excluded_symbols,
         )
 
@@ -664,7 +601,6 @@ class TestSheetBuilders:
             system_events=sample_report_data.system_events,
             recon_log=sample_report_data.recon_log,
             gate_state=sample_report_data.gate_state,
-            config=sample_report_data.config,
             excluded_symbols=sample_report_data.excluded_symbols,
         )
 
@@ -752,7 +688,6 @@ class TestSheetBuilders:
             system_events=sample_report_data.system_events,
             recon_log=sample_report_data.recon_log,
             gate_state=sample_report_data.gate_state,
-            config=sample_report_data.config,
             excluded_symbols=sample_report_data.excluded_symbols,
         )
 
@@ -764,28 +699,25 @@ class TestSheetBuilders:
         strategy_value = ws.cell(row=3, column=2).value
         assert strategy_value == "MOMENTUM", f"Expected 'MOMENTUM' from signal fallback, got {strategy_value!r}"
 
-    def test_build_sheet_4_candles_ohlc_populated_from_csv(self, sample_report_data, tmp_path):
-        """When candle CSV is provided, OHLC cols H-K should be populated."""
-        import openpyxl, csv as csv_mod
+    def test_build_sheet_4_candles_ohlc_populated_from_db(self, sample_report_data):
+        """When candle_map has data, OHLC cols H-K should be populated."""
+        import openpyxl
+        from dataclasses import replace
 
-        # sample_trade entry_time is 2026-05-15T09:31:00+05:30 → "09:31"
-        csv_path = tmp_path / "candle_data_2026-05-15.csv"
-        with open(csv_path, "w", newline="") as f:
-            writer = csv_mod.DictWriter(f, fieldnames=["symbol","datetime","open","high","low","close","volume"])
-            writer.writeheader()
-            writer.writerow({"symbol": "RELIANCE", "datetime": "2026-05-15 09:31:00",
-                             "open": 2490.0, "high": 2610.0, "low": 2488.0, "close": 2605.0, "volume": 75000})
-
-        candle_data = _load_candle_data(tmp_path, "2026-05-15")
+        data = replace(sample_report_data, candle_map={
+            ("RELIANCE", "09:31"): {
+                "open": 2490.0, "high": 2610.0,
+                "low": 2488.0, "close": 2605.0, "is_synthetic": 0,
+            },
+        })
         wb = openpyxl.Workbook()
-        ws = build_sheet_4_candles(wb, sample_report_data, candle_data=candle_data)
+        ws = build_sheet_4_candles(wb, data)
 
-        # Row 3 = first CLOSED trade; cols H=8, I=9, J=10, K=11
         assert ws.cell(row=3, column=8).value == 2490.0, "Open mismatch"
         assert ws.cell(row=3, column=9).value == 2610.0, "High mismatch"
         assert ws.cell(row=3, column=10).value == 2488.0, "Low mismatch"
         assert ws.cell(row=3, column=11).value == 2605.0, "Close mismatch"
-        assert ws.cell(row=3, column=12).value == "No"   # Synthetic? = No (real data)
+        assert ws.cell(row=3, column=12).value == "No"
 
     def test_build_sheet_4_candles_ohlc_blank_without_candle_data(self, sample_report_data):
         """Without candle data, OHLC cols and Synthetic? col should stay blank."""
@@ -793,11 +725,11 @@ class TestSheetBuilders:
         wb = openpyxl.Workbook()
         ws = build_sheet_4_candles(wb, sample_report_data)
 
-        assert ws.cell(row=3, column=8).value == ""   # Open blank
-        assert ws.cell(row=3, column=9).value == ""   # High blank
-        assert ws.cell(row=3, column=10).value == ""  # Low blank
-        assert ws.cell(row=3, column=11).value == ""  # Close blank
-        assert ws.cell(row=3, column=12).value == ""  # Synthetic? blank
+        assert ws.cell(row=3, column=8).value == ""
+        assert ws.cell(row=3, column=9).value == ""
+        assert ws.cell(row=3, column=10).value == ""
+        assert ws.cell(row=3, column=11).value == ""
+        assert ws.cell(row=3, column=12).value == ""
 
     def test_build_sheet_6_drawdown_pct_positive_trade(self, sample_report_data):
         """When only wins exist, max_loss=0 so drawdown_pct=0."""
@@ -835,7 +767,7 @@ class TestSheetBuilders:
             }],
             orders=[], fm_ledger=[], screener_results=[], innings=[],
             system_events=[], recon_log=[], gate_state=[],
-            config={}, excluded_symbols=[],
+            excluded_symbols=[],
         )
 
         wb = openpyxl.Workbook()
@@ -869,7 +801,7 @@ class TestSheetBuilders:
             }],
             orders=[], fm_ledger=[], screener_results=[], innings=[],
             system_events=[], recon_log=[], gate_state=[],
-            config={}, excluded_symbols=[],
+            excluded_symbols=[],
         )
 
         wb = openpyxl.Workbook()
@@ -886,7 +818,7 @@ class TestSheetBuilders:
 class TestGenerateReport:
     """Integration test for full report generation."""
 
-    def test_generate_daily_report_creates_file(self, sample_report_data, tmp_path):
+    def _setup_mock_store(self, sample_report_data):
         mock_store = MagicMock()
         mock_store.get_signals_for_date.return_value = sample_report_data.signals
         mock_store.get_trades_for_date.return_value = sample_report_data.trades
@@ -897,15 +829,20 @@ class TestGenerateReport:
         mock_store.get_system_events_for_date.return_value = sample_report_data.system_events
         mock_store.get_reconciliation_log_for_date.return_value = []
         mock_store.get_all_gate_state.return_value = []
+        mock_store.get_candles_for_date.return_value = []
+        mock_store.get_trade_excursions_for_date.return_value = []
         mock_store.get_session_row.return_value = {
             "mode": "PAPER",
             "account_id": "TEST001",
         }
+        return mock_store
+
+    def test_generate_daily_report_creates_file(self, sample_report_data, tmp_path):
+        mock_store = self._setup_mock_store(sample_report_data)
 
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "system_config.yaml").write_text("excluded_symbols: []\n")
-        (config_dir / "scoring_weights.yaml").write_text("min_pass_score: 60\n")
 
         output_dir = tmp_path / "output"
 
@@ -922,25 +859,11 @@ class TestGenerateReport:
     def test_generate_daily_report_has_all_sheets(self, sample_report_data, tmp_path):
         import openpyxl
 
-        mock_store = MagicMock()
-        mock_store.get_signals_for_date.return_value = sample_report_data.signals
-        mock_store.get_trades_for_date.return_value = sample_report_data.trades
-        mock_store.get_orders_for_date.return_value = sample_report_data.orders
-        mock_store.get_fm_ledger_for_date.return_value = sample_report_data.fm_ledger
-        mock_store.get_screener_results_for_date.return_value = sample_report_data.screener_results
-        mock_store.get_innings_for_date.return_value = []
-        mock_store.get_system_events_for_date.return_value = sample_report_data.system_events
-        mock_store.get_reconciliation_log_for_date.return_value = []
-        mock_store.get_all_gate_state.return_value = []
-        mock_store.get_session_row.return_value = {
-            "mode": "PAPER",
-            "account_id": "TEST001",
-        }
+        mock_store = self._setup_mock_store(sample_report_data)
 
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "system_config.yaml").write_text("excluded_symbols: []\n")
-        (config_dir / "scoring_weights.yaml").write_text("min_pass_score: 60\n")
 
         output_dir = tmp_path / "output"
 
@@ -989,7 +912,6 @@ class TestEdgeCases:
             system_events=[],
             recon_log=[],
             gate_state=[],
-            config={},
             excluded_symbols=[],
         )
 
@@ -1030,7 +952,6 @@ class TestEdgeCases:
             system_events=[],
             recon_log=[],
             gate_state=[],
-            config={},
             excluded_symbols=[],
         )
 
@@ -1043,9 +964,9 @@ class TestEdgeCases:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestPerStrategyEligibleScore:
-    """Col N (Sheet 1) and Col F (Sheet 2) use per-strategy min_score."""
+    """Col N (Sheet 1) and Col F (Sheet 2) read eligible_score from screener_results."""
 
-    def _make_data(self, strategy_min_scores):
+    def _make_data(self, eligible_score):
         signal = {
             "signal_id": "sig-A",
             "symbol": "TATAMOTORS",
@@ -1077,6 +998,9 @@ class TestPerStrategyEligibleScore:
             "entry_time": "2026-05-18T09:30:05+05:30",
             "exit_time": "2026-05-18T10:45:00+05:30",
         }
+        screener = {"signal_id": "sig-A", "score": 35, "status": "PASSED"}
+        if eligible_score is not None:
+            screener["eligible_score"] = eligible_score
         return ReportData(
             date_iso="2026-05-18",
             mode="PAPER",
@@ -1087,146 +1011,53 @@ class TestPerStrategyEligibleScore:
             trades=[trade],
             orders=[],
             fm_ledger=[],
-            screener_results=[{"signal_id": "sig-A", "score": 35, "status": "PASSED"}],
+            screener_results=[screener],
             innings=[],
             system_events=[],
             recon_log=[],
             gate_state=[],
-            config={"scoring": {"min_pass_score": 60}},
             excluded_symbols=[],
-            strategy_min_scores=strategy_min_scores,
         )
 
-    def test_sheet_1_signals_eligible_score_uses_strategy_min_score(self):
+    def test_sheet_1_signals_eligible_score_from_db(self):
         import openpyxl
-        data = self._make_data({"gap_fade_long": 30})
+        data = self._make_data(30)
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
         build_sheet_1_signals(wb, data)
         ws = wb["1_Signals"]
-        # Row 2 = first data row; col 14 = Eligible Score (Min Tradable)
         eligible_score_cell = ws.cell(row=2, column=14).value
-        assert eligible_score_cell == 30, f"Expected 30 (gap_fade_long override), got {eligible_score_cell}"
+        assert eligible_score_cell == 30, f"Expected 30, got {eligible_score_cell}"
 
-    def test_sheet_2_orders_eligible_score_uses_strategy_min_score(self):
+    def test_sheet_2_orders_eligible_score_from_db(self):
         import openpyxl
-        data = self._make_data({"gap_fade_long": 30})
+        data = self._make_data(30)
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
         build_sheet_2_orders(wb, data)
         ws = wb["2_Orders"]
-        # Row 4 = first data row (rows 1-3 are headers); col 6 = Eligible Score (Min)
         eligible_score_cell = ws.cell(row=4, column=6).value
-        assert eligible_score_cell == 30, f"Expected 30 (gap_fade_long override), got {eligible_score_cell}"
+        assert eligible_score_cell == 30, f"Expected 30, got {eligible_score_cell}"
 
-    def test_sheet_1_signals_falls_back_to_global_min_for_unknown_strategy(self):
+    def test_sheet_1_signals_dash_when_no_eligible_score(self):
         import openpyxl
-        data = self._make_data({})  # no strategy overrides
+        data = self._make_data(None)
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
         build_sheet_1_signals(wb, data)
         ws = wb["1_Signals"]
         eligible_score_cell = ws.cell(row=2, column=14).value
-        assert eligible_score_cell == 60, f"Expected global 60 fallback, got {eligible_score_cell}"
-
-    def test_build_strategy_min_scores_reads_yaml_override(self, tmp_path):
-        strategies_dir = tmp_path / "strategies"
-        strategies_dir.mkdir()
-        (strategies_dir / "gap_fade_long.yaml").write_text(
-            "name: gap_fade_long\nmin_score: 30\n", encoding="utf-8"
-        )
-        (strategies_dir / "gap_go_long.yaml").write_text(
-            "name: gap_go_long\nmin_score: 0\n", encoding="utf-8"
-        )
-        result = _build_strategy_min_scores(tmp_path, 60)
-        assert result["gap_fade_long"] == 30
-        assert result["gap_go_long"] == 60  # 0 → falls back to global 60
+        assert eligible_score_cell == "—", f"Expected dash, got {eligible_score_cell}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cost breakdown tests (FIX-121)
+# Cost columns from DB (FIX-124 — replaces FIX-121 runtime computation)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Zerodha MIS rates matching broker_costs.yaml defaults
-_Z_RATES = {
-    "brokerage_flat_intraday": 20.0,
-    "brokerage_pct_intraday": 0.03,
-    "stt_sell_pct": 0.025,
-    "exchange_txn_pct": 0.00297,
-    "sebi_pct": 0.0001,
-    "gst_pct": 18.0,
-    "stamp_duty_mis_buy_pct": 0.003,
-}
+class TestCostColumnsFromDB:
 
-
-class TestComputeCostBreakdown:
-
-    def _trade(self, direction="LONG", entry=320.0, exit_price=313.0, qty=156, charges=52.0):
-        return {
-            "direction": direction,
-            "entry_actual_price": entry,
-            "exit_price": exit_price,
-            "qty_filled": qty,
-            "charges": charges,
-        }
-
-    def test_long_trade_stt_on_exit_sell(self):
-        t = self._trade(direction="LONG", entry=320.0, exit_price=313.0, qty=156)
-        bd = _compute_cost_breakdown(t, _Z_RATES)
-        # STT only on SELL side (exit for LONG): 0.025% × 156×313 = 12.21
-        assert bd["stt"] > 0
-        tv_exit = 156 * 313.0
-        expected_stt = round(0.025 / 100 * tv_exit, 2)
-        assert abs(bd["stt"] - expected_stt) < 0.05
-
-    def test_short_trade_stt_on_entry_sell(self):
-        t = self._trade(direction="SHORT", entry=140.0, exit_price=138.0, qty=300)
-        bd = _compute_cost_breakdown(t, _Z_RATES)
-        # For SHORT: entry is SELL → STT on entry leg
-        tv_entry = 300 * 140.0
-        expected_stt = round(0.025 / 100 * tv_entry, 2)
-        assert abs(bd["stt"] - expected_stt) < 0.05
-
-    def test_brokerage_capped_at_flat_20(self):
-        # Small trade: 0.03% of turnover < ₹20 → proportional brokerage applies
-        t = self._trade(direction="LONG", entry=100.0, exit_price=98.0, qty=10, charges=5.0)
-        bd = _compute_cost_breakdown(t, _Z_RATES)
-        # Entry turnover = 10 * 100 = 1000 → 0.03% = 0.30 < 20 → brokerage = 0.30 per leg
-        assert bd["brokerage"] < 40.0   # two legs, max ₹40 if capped
-
-    def test_brokerage_not_capped_for_large_trade(self):
-        # Large trade: 0.03% × turnover > ₹20 → capped at ₹20 per leg
-        t = self._trade(direction="LONG", entry=5000.0, exit_price=4950.0, qty=200, charges=100.0)
-        bd = _compute_cost_breakdown(t, _Z_RATES)
-        # 0.03% × (200×5000=1,000,000) = 300 → capped at 20; two legs → ₹40
-        assert abs(bd["brokerage"] - 40.0) < 0.01
-
-    def test_total_matches_sum_of_components(self):
-        t = self._trade()
-        bd = _compute_cost_breakdown(t, _Z_RATES)
-        computed_total = round(bd["brokerage"] + bd["stt"] + bd["exch"] + bd["stamp"] + bd["gst"], 2)
-        assert abs(computed_total - (bd["brokerage"] + bd["stt"] + bd["exch"] + bd["stamp"] + bd["gst"])) < 0.01
-
-    def test_open_trade_returns_empty(self):
-        t = {"direction": "LONG", "entry_actual_price": 500.0, "qty_filled": 10}
-        # No exit_price, no charges → open trade
-        assert _compute_cost_breakdown(t, _Z_RATES) == {}
-
-    def test_valiantorg_matches_db_total(self):
-        # Validate against real DB value: VALIANTORG charges=52.26
-        t = {
-            "direction": "LONG",
-            "entry_actual_price": 319.98,
-            "exit_price": 313.17,   # gross_pnl=-1062.36 / qty=156 → 319.98-6.81
-            "qty_filled": 156,
-            "charges": 52.26,
-        }
-        bd = _compute_cost_breakdown(t, _Z_RATES)
-        total = bd["brokerage"] + bd["stt"] + bd["exch"] + bd["stamp"] + bd["gst"]
-        assert abs(total - 52.26) < 1.0   # within ₹1 tolerance (rounding differences)
-
-    def test_build_sheet_2_orders_expense_cols_populated(self, tmp_path):
-        """Cols AE-AI (brokerage/STT/etc.) should have numeric values, not '—'."""
+    def test_build_sheet_2_orders_expense_cols_from_db(self):
+        """Cols 31-35 (brokerage/STT/etc.) read from trades.cost_* DB columns."""
         import openpyxl
         trade = {
             "trade_id": "t-exp-01",
@@ -1249,6 +1080,12 @@ class TestComputeCostBreakdown:
             "entry_time": "2026-05-18T09:30:05+05:30",
             "exit_time": "2026-05-18T10:45:00+05:30",
             "exit_reason": "TGT_HIT",
+            "cost_brokerage": 40.0,
+            "cost_stt": 6.3,
+            "cost_exchange_txn": 3.0,
+            "cost_stamp_duty": 0.75,
+            "cost_gst": 7.74,
+            "sl_trail_count": 2,
         }
         data = ReportData(
             date_iso="2026-05-18",
@@ -1265,22 +1102,63 @@ class TestComputeCostBreakdown:
             system_events=[],
             recon_log=[],
             gate_state=[],
-            config={"broker_costs": {"zerodha": _Z_RATES}},
             excluded_symbols=[],
         )
         wb = openpyxl.Workbook()
         wb.remove(wb.active)
         build_sheet_2_orders(wb, data)
         ws = wb["2_Orders"]
-        # Row 4 = first data row; cols 31-35 = Brokerage, STT, Exch, Stamp, GST
-        brokerage_val = ws.cell(4, 31).value
-        stt_val       = ws.cell(4, 32).value
-        exch_val      = ws.cell(4, 33).value
-        stamp_val     = ws.cell(4, 34).value
-        gst_val       = ws.cell(4, 35).value
-        assert brokerage_val != "—", f"Expected numeric brokerage, got {brokerage_val!r}"
-        assert stt_val != "—",       f"Expected numeric STT, got {stt_val!r}"
-        assert exch_val != "—",      f"Expected numeric exch, got {exch_val!r}"
-        assert stamp_val != "—",     f"Expected numeric stamp, got {stamp_val!r}"
-        assert gst_val != "—",       f"Expected numeric GST, got {gst_val!r}"
-        assert isinstance(brokerage_val, float), f"Brokerage should be float, got {type(brokerage_val)}"
+        assert ws.cell(4, 31).value == 40.0
+        assert ws.cell(4, 32).value == 6.3
+        assert ws.cell(4, 33).value == 3.0
+        assert ws.cell(4, 34).value == 0.75
+        assert ws.cell(4, 35).value == 7.74
+        assert ws.cell(4, 28).value == 2
+
+    def test_build_sheet_2_orders_dash_when_no_cost_data(self):
+        """Cols 31-35 show dash when trade has no cost columns."""
+        import openpyxl
+        trade = {
+            "trade_id": "t-no-cost",
+            "signal_id": "sig-nc",
+            "symbol": "TCS",
+            "direction": "LONG",
+            "strategy": "gap_go_long",
+            "qty_planned": 5,
+            "qty_filled": 5,
+            "entry_target_price": 3000.0,
+            "entry_actual_price": 3000.0,
+            "sl_initial": 2950.0,
+            "tgt_initial": 3100.0,
+            "gross_pnl": 0,
+            "charges": 0,
+            "net_pnl": 0,
+            "status": "CLOSED",
+            "created_at": "2026-05-18T09:30:00+05:30",
+            "entry_time": "2026-05-18T09:30:05+05:30",
+            "exit_time": "2026-05-18T10:45:00+05:30",
+            "exit_reason": "EOD",
+        }
+        data = ReportData(
+            date_iso="2026-05-18",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=[],
+            trades=[trade],
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+        )
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, data)
+        ws = wb["2_Orders"]
+        for col in (31, 32, 33, 34, 35):
+            assert ws.cell(4, col).value == "—"
