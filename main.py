@@ -1633,6 +1633,24 @@ def _main_locked(args, config_dir: Path) -> int:
     # ── Phase 0g: Start subsystems (MAIN11) ─────────────────────────────────
     # candle_store.start() BEFORE live_feed.connect() (BLOCKER #2 fix)
     candle_store.start()
+    # v14: persist candles to DB on each close
+    def _persist_candle(candle):
+        try:
+            store.insert_candle(
+                symbol=candle.symbol,
+                instrument_token=candle.instrument_token,
+                ts=candle.ts.isoformat() if hasattr(candle.ts, 'isoformat') else str(candle.ts),
+                interval_sec=candle.interval_sec,
+                open_=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                volume=candle.volume,
+                is_synthetic=1 if candle.is_synthetic else 0,
+            )
+        except Exception as exc:
+            _log.debug("candle persist failed: %s", exc)
+    candle_store.register_on_candle_close(_persist_candle)
     # BLOCKER #11: wire token map so CandleStore can resolve instrument_token -> symbol
     candle_store.set_token_map(instrument_cache.token_map())
     live_feed.connect()

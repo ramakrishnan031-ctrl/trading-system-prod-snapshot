@@ -137,11 +137,14 @@ class OrderManager:
         (EventBus propagates subscriber exceptions back to the publisher).
         """
         try:
+            filled_at = now_ist().isoformat() if event.status == "COMPLETE" else None
             self.update_order_status(
                 broker_order_id=event.broker_order_id,
                 status=event.status,
                 qty_filled=event.qty_filled,
                 avg_fill_price=event.avg_fill_price,
+                rejection_reason=getattr(event, "rejection_reason", None),
+                filled_at=filled_at,
             )
         except Exception as exc:  # noqa: BLE001
             self._log.error(
@@ -170,6 +173,7 @@ class OrderManager:
         margin_reserved: float,
         risk_amount: float,
         reservation_id: Optional[str] = None,  # EF-5
+        mode: Optional[str] = None,  # v14: PAPER | LIVE
     ) -> str:
         """
         Insert a new trade row with status=PENDING_FILL. Returns trade_id.
@@ -192,7 +196,7 @@ class OrderManager:
                     margin_reserved, risk_amount,
                     created_at, updated_at,
                     status, entry_mode, order_protocol, recovered_flag,
-                    reservation_id
+                    reservation_id, mode
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, 0,
@@ -201,7 +205,7 @@ class OrderManager:
                     ?, ?,
                     ?, ?,
                     'PENDING_FILL', 'FULL', ?, 0,
-                    ?
+                    ?, ?
                 )
                 """,
                 (
@@ -212,7 +216,7 @@ class OrderManager:
                     margin_reserved, risk_amount,
                     now, now,
                     order_protocol,
-                    reservation_id,
+                    reservation_id, mode,
                 ),
             )
         self._log.info(
@@ -371,6 +375,7 @@ class OrderManager:
         exit_reason: str,
         gross_pnl: float,
         charges: float,
+        cost_breakdown: Optional[object] = None,
     ) -> Dict:
         """
         Finalize a trade on exit fill (BL-10a).
@@ -454,22 +459,35 @@ class OrderManager:
 
         net_pnl = gross_pnl - charges
         now = now_ist().isoformat()
+        cb = cost_breakdown
         with self._store.transaction() as cur:
             cur.execute(
                 """
                 UPDATE trades
-                SET status     = 'CLOSED',
-                    exit_time  = ?,
-                    exit_price = ?,
-                    exit_reason= ?,
-                    gross_pnl  = ?,
-                    charges    = ?,
-                    net_pnl    = ?,
-                    updated_at = ?
+                SET status          = 'CLOSED',
+                    exit_time       = ?,
+                    exit_price      = ?,
+                    exit_reason     = ?,
+                    gross_pnl       = ?,
+                    charges         = ?,
+                    net_pnl         = ?,
+                    cost_brokerage  = ?,
+                    cost_stt        = ?,
+                    cost_exchange_txn = ?,
+                    cost_sebi       = ?,
+                    cost_gst        = ?,
+                    cost_stamp_duty = ?,
+                    updated_at      = ?
                 WHERE trade_id = ?
                 """,
                 (now, exit_price, exit_reason,
                  gross_pnl, charges, net_pnl,
+                 cb.brokerage if cb else None,
+                 cb.stt if cb else None,
+                 cb.exchange_txn if cb else None,
+                 cb.sebi if cb else None,
+                 cb.gst if cb else None,
+                 cb.stamp_duty if cb else None,
                  now, trade_id),
             )
         self._log.info(
@@ -509,6 +527,8 @@ class OrderManager:
         status: str,
         qty_filled: int = 0,
         avg_fill_price: Optional[float] = None,
+        rejection_reason: Optional[str] = None,
+        filled_at: Optional[str] = None,
     ) -> None:
         """Update an order row's status/fill info."""
         now = now_ist().isoformat()
@@ -519,10 +539,14 @@ class OrderManager:
                 SET status = ?,
                     qty_filled = ?,
                     avg_fill_price = ?,
+                    rejection_reason = COALESCE(?, rejection_reason),
+                    filled_at = COALESCE(?, filled_at),
                     updated_at = ?
                 WHERE order_id = ?
                 """,
-                (status, qty_filled, avg_fill_price, now, broker_order_id),
+                (status, qty_filled, avg_fill_price,
+                 rejection_reason, filled_at,
+                 now, broker_order_id),
             )
 
     # ── read methods ──────────────────────────────────────────────────────────

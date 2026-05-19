@@ -28,7 +28,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from broker.cost_calculator import CostCalculator
+from broker.cost_calculator import CostBreakdown, CostCalculator
 from broker.order_monitor import OrderMonitor
 from broker.product_resolver import ProductResolver
 from broker.zerodha_adapter import PlacedOrder
@@ -42,7 +42,7 @@ from core.exceptions import (
 )
 from core.ids import new_signal_id
 from core.state_store import StateStore
-from core.time_authority import now_ist
+from core.time_authority import now_ist, today_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderManager
@@ -168,6 +168,7 @@ class _MockFundManager:
     }
 
     def __init__(self) -> None:
+        self._leverage_map = dict(self._LEVERAGE_MAP)
         self.committed: List[dict] = []
         self.released: List[str] = []
         self.released_used: List[dict] = []  # BL-10a
@@ -214,7 +215,7 @@ class TestOrderManager:
 
     def test_create_trade_returns_trd_id(self) -> None:
         """create_trade returns a valid trd_ prefixed ID. (OMgr2)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -231,7 +232,7 @@ class TestOrderManager:
 
     def test_create_trade_inserts_pending_fill_row(self) -> None:
         """create_trade inserts row with status=PENDING_FILL. (OMgr2)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -254,7 +255,7 @@ class TestOrderManager:
 
     def test_insert_order_creates_order_row(self) -> None:
         """insert_order creates a row with status=PENDING. (OMgr3)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -281,7 +282,7 @@ class TestOrderManager:
 
     def test_record_entry_fill_sets_open(self) -> None:
         """record_entry_fill sets status=OPEN and fill data. (OMgr4)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -309,7 +310,7 @@ class TestOrderManager:
 
     def test_update_trade_status(self) -> None:
         """update_trade_status changes status column. (OMgr5)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -328,7 +329,7 @@ class TestOrderManager:
 
     def test_link_signal_trade(self) -> None:
         """link_signal_trade sets signals.trade_id. (OMgr6)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -350,7 +351,7 @@ class TestOrderManager:
 
     def test_get_trade_returns_none_for_missing(self) -> None:
         """get_trade returns None for unknown trade_id. (OMgr7)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             om = OrderManager(store, _log())
             result = om.get_trade("trd_" + "0" * 32)
@@ -360,7 +361,7 @@ class TestOrderManager:
 
     def test_get_orders_for_trade_multiple(self) -> None:
         """get_orders_for_trade returns all orders sorted by placed_at. (OMgr8)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -818,7 +819,7 @@ class TestOrderPlacer:
         Post naked-short fix: place() places ENTRY only; SL + TGT are placed
         by _handle_entry_fill on OrderFilled.
         """
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -848,7 +849,7 @@ class TestOrderPlacer:
 
     def test_tgt_computed_from_rr_ratio(self) -> None:
         """tgt_price = entry + (entry - sl) * rr_ratio for LONG. (OP3)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -866,7 +867,7 @@ class TestOrderPlacer:
 
     def test_short_tgt_computed_correctly(self) -> None:
         """tgt_price = entry - (sl - entry) * rr for SHORT. (OP3)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -884,7 +885,7 @@ class TestOrderPlacer:
 
     def test_caller_supplied_tgt_price_overrides_internal(self) -> None:
         """Caller-supplied tgt_price overrides OP3 internal computation. (SPW6)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -905,7 +906,7 @@ class TestOrderPlacer:
 
     def test_none_tgt_price_uses_internal_computation(self) -> None:
         """tgt_price=None (default) -> OP3 internal computation used. (SPW6)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, fm, bus, adapter, om = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -925,7 +926,7 @@ class TestOrderPlacer:
 
     def test_broker_failure_sets_trade_failed_releases_capital(self) -> None:
         """Broker failure -> trade=FAILED, reservation released. (OP7)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter(raises=OrderRejectedError("rejected"))
             placer, store, fm, bus, _, om = self._make_placer(Path(tmp), adapter=adapter)
             sig_id = _seed_signal(store)
@@ -949,7 +950,7 @@ class TestOrderPlacer:
 
     def test_fill_event_commits_capital_and_updates_trade(self) -> None:
         """OrderFilled event -> capital committed + trade status = OPEN. (OP6)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter()
             placer, store, fm, bus, _, om = self._make_placer(Path(tmp), adapter=adapter)
             sig_id = _seed_signal(store)
@@ -992,7 +993,7 @@ class TestOrderPlacer:
 
     def test_fill_for_unknown_internal_id_is_ignored(self) -> None:
         """OrderFilled for unknown internal_order_id does nothing. (OP5)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter()
             placer, store, fm, bus, _, om = self._make_placer(Path(tmp), adapter=adapter)
 
@@ -1011,7 +1012,7 @@ class TestOrderPlacer:
 
     def test_fill_map_entry_removed_after_fill(self) -> None:
         """Fill entry removed from _fill_map after OrderFilled. (OP5)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter()
             placer, store, fm, bus, _, om = self._make_placer(Path(tmp), adapter=adapter)
             sig_id = _seed_signal(store)
@@ -1047,7 +1048,7 @@ class TestOrderPlacer:
 
     def test_place_co_protocol_places_two_orders(self) -> None:
         """FIX-016: CO_PLUS_TGT protocol places CO entry only. TGT deferred to fill. (OP9)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter()
             placer, store, fm, bus, _, om = self._make_placer(
                 Path(tmp), adapter=adapter, default_protocol="CO_PLUS_TGT"
@@ -1075,7 +1076,7 @@ class TestKillSwitchLastMile:
 
     def test_kill_switch_active_aborts_no_adapter_call(self) -> None:
         """Active kill_switch -> no adapter call, trade=FAILED, reservation released. (OP-LM1)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter()
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
@@ -1126,7 +1127,7 @@ class TestKillSwitchLastMile:
 
     def test_kill_switch_inactive_does_not_block(self) -> None:
         """Inactive kill_switch -> placement proceeds normally. (OP-LM1)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter()
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
@@ -1171,7 +1172,7 @@ class TestReservationRelease:
 
     def test_reservation_released_on_broker_error(self) -> None:
         """Every BrokerError path releases the capital reservation. (OP-LM2)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _MockAdapter(raises=OrderRejectedError("rejected hard"))
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
@@ -1495,9 +1496,14 @@ class TestBl12OrderStatusEventPipeline:
             expected_price=2500.0, placed_at=now_ist(),
         )
         # Pre-populate fill data on the watch entry (monitor's poll would do this)
-        entry = monitor._watched[internal_id]
+        ckey = monitor._internal_to_composite[internal_id]
+        entry = monitor._watched[ckey]
         entry.filled_qty = filled_qty
         entry.avg_fill_price = avg_price
+
+    @staticmethod
+    def _entry(monitor: Any, internal_id: str) -> Any:
+        return monitor._watched[monitor._internal_to_composite[internal_id]]
 
     def test_order_monitor_complete_updates_orders_table_status(self) -> None:
         """COMPLETE transition → orders.status='COMPLETE' with qty/avg_price persisted."""
@@ -1510,9 +1516,9 @@ class TestBl12OrderStatusEventPipeline:
                         qty=10, filled_qty=10, avg_price=2510.0)
             # Walk OSM: SUBMITTED -> OPEN -> COMPLETE
             monitor._safe_transition("ord_c1", "OPEN",
-                                     entry=monitor._watched["ord_c1"])
+                                     entry=self._entry(monitor, "ord_c1"))
             monitor._safe_transition("ord_c1", "COMPLETE",
-                                     entry=monitor._watched["ord_c1"])
+                                     entry=self._entry(monitor, "ord_c1"))
             row = store.fetch_one(
                 "SELECT status, qty_filled, avg_fill_price FROM orders WHERE order_id = ?",
                 ("KITE001",),
@@ -1532,9 +1538,9 @@ class TestBl12OrderStatusEventPipeline:
             om, osm, monitor, _ = self._make_pipeline(store)
             self._track(monitor, osm, "ord_x1", "KITE002")
             monitor._safe_transition("ord_x1", "OPEN",
-                                     entry=monitor._watched["ord_x1"])
+                                     entry=self._entry(monitor, "ord_x1"))
             monitor._safe_transition("ord_x1", "CANCELLED",
-                                     entry=monitor._watched["ord_x1"])
+                                     entry=self._entry(monitor, "ord_x1"))
             row = store.fetch_one(
                 "SELECT status, qty_filled, avg_fill_price FROM orders WHERE order_id = ?",
                 ("KITE002",),
@@ -1558,7 +1564,7 @@ class TestBl12OrderStatusEventPipeline:
             self._track(monitor, osm, "ord_r1", "KITE003")
             # REJECTED broker status -> _handle_terminal with osm_state="FAILED"
             monitor._safe_transition("ord_r1", "FAILED",
-                                     entry=monitor._watched["ord_r1"])
+                                     entry=self._entry(monitor, "ord_r1"))
             row = store.fetch_one(
                 "SELECT status FROM orders WHERE order_id = ?", ("KITE003",),
             )
@@ -1575,9 +1581,9 @@ class TestBl12OrderStatusEventPipeline:
             self._track(monitor, osm, "ord_p1", "KITE004",
                         qty=10, filled_qty=4, avg_price=2505.0)
             monitor._safe_transition("ord_p1", "OPEN",
-                                     entry=monitor._watched["ord_p1"])
+                                     entry=self._entry(monitor, "ord_p1"))
             monitor._safe_transition("ord_p1", "PARTIAL",
-                                     entry=monitor._watched["ord_p1"])
+                                     entry=self._entry(monitor, "ord_p1"))
             row = store.fetch_one(
                 "SELECT status, qty_filled, avg_fill_price FROM orders WHERE order_id = ?",
                 ("KITE004",),
@@ -1770,7 +1776,7 @@ class TestBl7cOrderPlacerTrackingWiring:
 
     def test_place_entry_calls_order_monitor_track_for_entry_leg(self) -> None:
         """LIMIT_TRIPLE place() -> track() called 1x (ENTRY); SL+TGT tracked on fill. (BL-7c / 2.1)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, monitor, adapter, store, _, bus = self._build(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -1816,7 +1822,7 @@ class TestBl7cOrderPlacerTrackingWiring:
 
     def test_place_entry_tracks_all_three_legs_for_limit_triple(self) -> None:
         """LIMIT_TRIPLE: entry side = signal side; SL/TGT sides inverted after fill. (BL-7c / 2.1)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, monitor, adapter, store, _, bus = self._build(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -1853,7 +1859,7 @@ class TestBl7cOrderPlacerTrackingWiring:
 
     def test_co_protocol_skips_sl_track(self) -> None:
         """FIX-016: CO_PLUS_TGT place() tracks ENTRY only. TGT tracked after fill. (BL-7c)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, monitor, adapter, store, _, _ = self._build(
                 Path(tmp), default_protocol="CO_PLUS_TGT"
             )
@@ -1884,7 +1890,7 @@ class TestBl7cOrderPlacerTrackingWiring:
 
     def test_on_order_filled_still_handles_entry_leg(self) -> None:
         """ENTRY-leg fill still pops + commits capital end-to-end. (BL-7c regression)"""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, adapter, store, fm, bus = self._build(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -1978,7 +1984,7 @@ class TestBl7dEntryFillSmartTgt:
         """CO_PLUS_TGT entry fill triggers smart_tgt.register_trade with trade_id + fill price."""
         from orders.smart_tgt_manager import SmartTgtManager
         mgr = MagicMock(spec=SmartTgtManager)
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, adapter, store, bus, om = self._build(
                 Path(tmp), "CO_PLUS_TGT", smart_tgt_manager=mgr, smart_tgt_config=self._cfg(),
             )
@@ -2016,7 +2022,7 @@ class TestBl7dEntryFillSmartTgt:
         """LIMIT_TRIPLE has static SL; register_trade must NOT fire even when manager present."""
         from orders.smart_tgt_manager import SmartTgtManager
         mgr = MagicMock(spec=SmartTgtManager)
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, adapter, store, bus, om = self._build(
                 Path(tmp), "LIMIT_TRIPLE", smart_tgt_manager=mgr, smart_tgt_config=self._cfg(),
             )
@@ -2044,7 +2050,7 @@ class TestBl7dEntryFillSmartTgt:
 
     def test_entry_fill_with_null_manager_is_noop(self) -> None:
         """smart_tgt_manager=None: no crash, no register call, entry still processed."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, adapter, store, bus, om = self._build(
                 Path(tmp), "CO_PLUS_TGT", smart_tgt_manager=None, smart_tgt_config=None,
             )
@@ -2115,7 +2121,13 @@ class TestBl7dExitFillHandling:
         fm = _MockFundManager()
         bus = EventBus()
         cost_calc = MagicMock(spec=CostCalculator)
+        _bd = CostBreakdown(
+            brokerage=10.0, stt=5.0, exchange_txn=3.0,
+            gst=2.0, sebi=0.5, stamp_duty=4.5,
+            total=25.0, turnover=50000.0,
+        )
         cost_calc.total_round_trip_cost = MagicMock(return_value=25.0)
+        cost_calc.round_trip_breakdown = MagicMock(return_value=_bd)
 
         cfg = SmartTgtConfig(
             enabled=True, trigger_pct=0.005, step_pct=0.003,
@@ -2205,7 +2217,7 @@ class TestBl7dExitFillHandling:
 
     def test_sl_fill_closes_trade_with_sl_hit(self) -> None:
         """SL leg fill -> close_trade(exit_reason='SL_HIT'); status CLOSED."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(store, om)
             self._inject_exit(
@@ -2225,7 +2237,7 @@ class TestBl7dExitFillHandling:
 
     def test_tgt_fill_closes_trade_with_tgt_hit(self) -> None:
         """TGT leg fill -> close_trade(exit_reason='TGT_HIT')."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(store, om)
             self._inject_exit(
@@ -2244,7 +2256,7 @@ class TestBl7dExitFillHandling:
 
     def test_eod_fill_closes_trade_with_eod_squareoff(self) -> None:
         """EOD leg fill -> close_trade(exit_reason='EOD_SQUAREOFF')."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(store, om)
             self._inject_exit(
@@ -2262,7 +2274,7 @@ class TestBl7dExitFillHandling:
 
     def test_long_tgt_fill_gross_pnl_direction_correct(self) -> None:
         """LONG TGT: gross_pnl = (exit-entry)*qty = (2600-2500)*10 = 1000."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(store, om, direction="LONG")
             self._inject_exit(
@@ -2282,7 +2294,7 @@ class TestBl7dExitFillHandling:
 
     def test_short_tgt_fill_gross_pnl_direction_correct(self) -> None:
         """SHORT TGT: gross_pnl = (entry-exit)*qty = (2500-2400)*10 = 1000 (EF-3)."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(
                 store, om, direction="SHORT", entry_fill=2500.0, sl=2550.0, tgt=2400.0,
@@ -2303,8 +2315,8 @@ class TestBl7dExitFillHandling:
             print("  OK BL-7d: SHORT TGT gross_pnl=(entry-exit)*qty=1000 (EF-3)")
 
     def test_cost_calc_called_with_round_trip_args(self) -> None:
-        """cost_calculator.total_round_trip_cost receives qty/entry/exit/product."""
-        with TemporaryDirectory() as tmp:
+        """cost_calculator.round_trip_breakdown receives qty/entry/exit/product."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, cost_calc = self._build(
                 Path(tmp), protocol="LIMIT_TRIPLE",
             )
@@ -2317,18 +2329,18 @@ class TestBl7dExitFillHandling:
             self._publish_fill(bus, internal_id="cc_x", price=2450.0,
                                qty=10, side="SELL", symbol="RELIANCE")
 
-            cost_calc.total_round_trip_cost.assert_called_once()
-            kwargs = cost_calc.total_round_trip_cost.call_args.kwargs
+            cost_calc.round_trip_breakdown.assert_called_once()
+            kwargs = cost_calc.round_trip_breakdown.call_args.kwargs
             assert kwargs["qty"] == 10
             assert kwargs["entry_price"] == 2500.0
             assert kwargs["exit_price"] == 2450.0
             assert kwargs["product"] == "MIS"  # LIMIT_TRIPLE -> MIS
             store.close()
-            print("  OK BL-7d: cost_calc.total_round_trip_cost(qty, entry, exit, MIS)")
+            print("  OK BL-7d: cost_calc.round_trip_breakdown(qty, entry, exit, MIS)")
 
     def test_release_used_called_with_direction_and_intent(self) -> None:
         """fm.release_used gets direction=LONG|SHORT and intent derived from product."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(
                 Path(tmp), protocol="CO_PLUS_TGT",
             )
@@ -2357,7 +2369,7 @@ class TestBl7dExitFillHandling:
     def test_position_closed_published_with_net_pnl(self) -> None:
         """bus publishes PositionClosed(realized_pnl=NET) after close_trade."""
         from core.events import PositionClosed
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             sig_id, trade_id = self._seed_open_trade(store, om, direction="LONG")
             self._inject_exit(
@@ -2384,7 +2396,7 @@ class TestBl7dExitFillHandling:
         """CO_PLUS_TGT exit fill -> smart_tgt.unregister_trade(trade_id)."""
         from orders.smart_tgt_manager import SmartTgtManager
         mgr = MagicMock(spec=SmartTgtManager)
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(
                 Path(tmp), protocol="CO_PLUS_TGT", smart_tgt_manager=mgr,
             )
@@ -2407,7 +2419,7 @@ class TestBl7dExitFillHandling:
         """LIMIT_TRIPLE exit -> unregister_trade NOT called (static SL, no registration)."""
         from orders.smart_tgt_manager import SmartTgtManager
         mgr = MagicMock(spec=SmartTgtManager)
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(
                 Path(tmp), protocol="LIMIT_TRIPLE", smart_tgt_manager=mgr,
             )
@@ -2426,7 +2438,7 @@ class TestBl7dExitFillHandling:
 
     def test_exit_fill_pops_fill_map_entry(self) -> None:
         """After exit-fill dispatch, the _fill_map entry is removed."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(store, om)
             self._inject_exit(
@@ -2447,7 +2459,7 @@ class TestBl7dExitFillHandling:
     def test_double_close_is_warning_and_skip(self) -> None:
         """Re-firing an exit fill on an already-CLOSED trade: no release, no publish."""
         from core.events import PositionClosed
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, _, store, bus, om, fm, _ = self._build(Path(tmp))
             _, trade_id = self._seed_open_trade(store, om)
 
@@ -2579,7 +2591,7 @@ class TestBl8AtomicPersist:
         Post 2.1: LIMIT_TRIPLE places ENTRY only at place(); SL + TGT are
         placed + persisted by _handle_entry_fill on OrderFilled.
         """
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, adapter, om = self._make_placer(
                 Path(tmp), kill_switch=ks,
@@ -2609,7 +2621,7 @@ class TestBl8AtomicPersist:
     def test_persist_atomic_all_or_nothing(self) -> None:
         """OMgr11: insert_orders_atomic rolls back if any row fails."""
         from orders.order_manager import OrderInsertSpec
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             om = OrderManager(store, _log())
@@ -2652,7 +2664,7 @@ class TestBl8AtomicPersist:
 
     def test_db_persist_failure_after_broker_success_cancels_all(self) -> None:
         """BL-8: DB persist failure after broker success -> all 3 cancelled."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, adapter, om = self._make_placer(
                 Path(tmp), kill_switch=ks,
@@ -2690,7 +2702,7 @@ class TestBl8AtomicPersist:
 
     def test_db_persist_failure_after_broker_success_fires_hard_kill(self) -> None:
         """BL-8: DB persist failure after broker success -> hard_kill fires."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, adapter, om = self._make_placer(
                 Path(tmp), kill_switch=ks,
@@ -2723,7 +2735,7 @@ class TestBl8AtomicPersist:
     def test_cancel_failure_during_cleanup_critical_logged_grep_tag(self) -> None:
         """BL-8: cancel_order returning success=False -> CRITICAL log w/ grep tag."""
         import io
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _AdapterCancelFails(raise_on_cancel=False)
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, _adapter, om = self._make_placer(
@@ -2776,7 +2788,7 @@ class TestBl8AtomicPersist:
         which fires hard_kill but does NOT cancel CO (position already live).
 
         This test now verifies that place() succeeds with CO-only."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             # adapter that succeeds on CO place and FAILS on TGT place
             class _COSuccessTGTFail:
                 def __init__(self):
@@ -2840,7 +2852,7 @@ class TestBl8AtomicPersist:
         Position is live with no SL -> fire kill_switch.hard_kill with the
         LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED grep tag."""
         import io
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             class _SLFailOnPlaceExits:
                 def __init__(self):
                     self._n = 0
@@ -2926,7 +2938,7 @@ class TestBl8AtomicPersist:
 
     def test_cancel_order_returning_false_does_not_abort_cleanup(self) -> None:
         """BL-8: cancel rejection on order #1 must not stop cancel of orders #2,#3."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             adapter = _AdapterCancelFails(raise_on_cancel=False)
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, _adapter, om = self._make_placer(
@@ -2961,7 +2973,7 @@ class TestBl8AtomicPersist:
     def test_protocol_reject_only_does_not_fire_hard_kill(self) -> None:
         """BL-8 scope boundary: protocol rejects entry cleanly -> no hard_kill.
         Capital tracking is intact (no broker orders live)."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             class _EntryRejectAdapter:
                 def __init__(self):
                     self.placed: List[dict] = []
@@ -3074,7 +3086,7 @@ class TestEf2TrackFailureCleanup:
         tracked. Verify cleanup handles empty successfully_tracked list.
         """
         import io
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             ks = _RecordingKillSwitch()
             placer, store, fm, bus, adapter, om, monitor = self._make_placer(
                 Path(tmp),
@@ -3156,7 +3168,7 @@ class TestEf2TrackFailureCleanup:
         This test now verifies single-leg track failure for CO protocol.
         """
         import io
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             ks = _RecordingKillSwitch()
             # FIX-016: ENTRY track raises (only leg tracked during place())
             placer, store, fm, bus, adapter, om, monitor = self._make_placer(
@@ -3229,7 +3241,7 @@ class TestEf2TrackFailureCleanup:
         no cleanup, no cancel_order, no CRITICAL log, no exception.
         """
         import io
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             ks = _RecordingKillSwitch()
             # track() returns None for every call -- normal success
             placer, store, fm, bus, adapter, om, monitor = self._make_placer(
@@ -3342,7 +3354,7 @@ class TestAtomicRegistration:
         corresponding internal_order_id MUST already be in _fill_map.
         This is the regression guard for the ghost-entry race.
         """
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, adapter, monitor = self._make_placer(Path(tmp))
             sig_id = _seed_signal(store)
 
@@ -3380,7 +3392,7 @@ class TestAtomicRegistration:
         difference between OP-AR1 and the pre-fix code: previously the
         insert would not have happened yet, so no pop was needed.
         """
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             placer, store, adapter, monitor = self._make_placer(
                 Path(tmp),
                 track_side_effect=ValueError("boom: duplicate watch"),
@@ -3469,7 +3481,7 @@ class TestBl19PlacerRateLimitRetry:
     def test_placer_retries_on_429_up_to_max(self) -> None:
         """429 raised twice then success -> engine.execute called 3 times, trade OPEN."""
         import gc
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = None
             try:
                 side_effects = [
@@ -3526,7 +3538,7 @@ class TestBl19PlacerRateLimitRetry:
     def test_placer_gives_up_after_max_retries_and_propagates(self) -> None:
         """All attempts 429 -> engine called max_retries+1 times, FAILED + release."""
         import gc
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = None
             try:
                 max_retries = 3
@@ -3581,7 +3593,7 @@ class TestBl19PlacerRateLimitRetry:
         FIX-068: Timeout sets UNKNOWN_IN_FLIGHT, holds capital until reconciler resolves.
         """
         import gc
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = None
             try:
                 side_effects = [BrokerTimeoutError("network timeout")]
@@ -3628,7 +3640,7 @@ class TestBl19PlacerRateLimitRetry:
         import gc
         import orders.order_placer as op_mod
 
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = None
             original_sleep = None
             try:
@@ -3778,7 +3790,7 @@ class TestRehydrateFillMap:
 
     def test_rehydrates_sl_and_tgt_skips_terminal_entry(self) -> None:
         """B.1: SL+TGT inserted into _fill_map; ENTRY (terminal) skipped."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             self._seed_open_trade_with_legs(store, sig_id)
@@ -3800,7 +3812,7 @@ class TestRehydrateFillMap:
         reservation_id is gone post-restart; FundManager.rehydrate_from_open_trades
         owns capital reconstruction. Routing the post-restart fill through
         _handle_entry_fill would call commit_to_used with an unknown rid."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             self._seed_open_trade_with_legs(
@@ -3820,7 +3832,7 @@ class TestRehydrateFillMap:
     def test_rehydrated_entries_have_correct_fields(self) -> None:
         """B.1: _FillEntry carries trade_id/symbol/qty/leg/protocol/direction
         from the joined query; reservation_id is empty by design."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             trade_id = self._seed_open_trade_with_legs(
@@ -3851,7 +3863,7 @@ class TestRehydrateFillMap:
         """B.1: rehydrate is idempotent — if the broker_order_id is already
         in _fill_map (e.g. live OrderPlacer.place ran before rehydrate is
         called twice), the live entry is preserved."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             sig_id = _seed_signal(store)
             self._seed_open_trade_with_legs(store, sig_id)
@@ -3875,7 +3887,7 @@ class TestRehydrateFillMap:
     def test_state_store_fetch_failure_returns_zero_no_raise(self) -> None:
         """B.1: defensive — if state_store query raises, log and return 0
         rather than crashing main.py boot."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             store = _make_store(Path(tmp))
             placer = self._make_placer(store)
 

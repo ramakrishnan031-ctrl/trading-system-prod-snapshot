@@ -65,6 +65,7 @@ class _WatchEntry:
     leg: str = ""                # "ENTRY" | "SL" | "TGT" | "EOD" — exit legs skip fill timeout
     filled_qty: int = 0
     avg_fill_price: float = 0.0
+    status_message: str = ""     # v14: last broker status_message (rejection text)
     # Track consecutive auth failures for OM11
     auth_fail_count: int = field(default=0, compare=False)
     # Track consecutive empty-history responses; after threshold triggers orphan
@@ -609,6 +610,7 @@ class OrderMonitor:
         kite_status = latest.status.upper()
         filled_qty = latest.filled_qty
         avg_price = latest.avg_price if latest.avg_price else 0.0
+        entry.status_message = getattr(latest, "status_message", "") or ""
 
         now = now_ist()
 
@@ -904,6 +906,12 @@ class OrderMonitor:
                     entry.avg_fill_price if entry.avg_fill_price > 0.0 else None
                 )
 
+            rejection_reason = (
+                entry.status_message if entry is not None
+                and to_state in ("FAILED", "CANCELLED")
+                and entry.status_message
+                else None
+            )
             self._bus.publish(OrderStatusChanged(
                 source_module="order_monitor",
                 internal_order_id=internal_order_id,
@@ -911,6 +919,7 @@ class OrderMonitor:
                 status=to_state,
                 qty_filled=qty_filled,
                 avg_fill_price=avg_fill_price,
+                rejection_reason=rejection_reason,
             ))
         except Exception as exc:  # noqa: BLE001
             self._log.error(

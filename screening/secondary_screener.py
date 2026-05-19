@@ -197,7 +197,7 @@ class SecondaryScreener:
                 latencies_ms=exec_result.latencies_ms,
                 market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result)
+            self._persist(signal_id, result, eligible_score=effective_min)
             return result
 
         # ── 7. Signal age defense-in-depth check (P9a add, SS4 step 7) ───────
@@ -214,7 +214,7 @@ class SecondaryScreener:
                 latencies_ms=exec_result.latencies_ms,
                 market_data_snapshot=market_data_snapshot,
             )
-            self._persist(signal_id, result)
+            self._persist(signal_id, result, eligible_score=effective_min)
             return result
 
         # ── 8. All passed ─────────────────────────────────────────────────────
@@ -230,7 +230,7 @@ class SecondaryScreener:
             latencies_ms=exec_result.latencies_ms,
             market_data_snapshot=market_data_snapshot,
         )
-        self._persist(signal_id, result)
+        self._persist(signal_id, result, eligible_score=effective_min)
         self._logger.info(
             "secondary_screener [%s/%s]: %s score=%d tier=%s",
             signal_id, symbol, result.status, result.score, result.tier,
@@ -292,7 +292,10 @@ class SecondaryScreener:
             market_data_snapshot=market_data_snapshot,
         )
 
-    def _persist(self, signal_id: str, result: ScreeningResult) -> None:
+    def _persist(
+        self, signal_id: str, result: ScreeningResult,
+        eligible_score: Optional[int] = None,
+    ) -> None:
         """
         SS5: Write to state_store. DB failure is logged but never raised
         (don't crash signal pipeline for a DB write issue).
@@ -317,6 +320,7 @@ class SecondaryScreener:
                 latencies_json=json.dumps(result.latencies_ms),
                 market_data_snapshot_json=json.dumps(result.market_data_snapshot, cls=SafeJSONEncoder),
                 ts=ts,
+                eligible_score=eligible_score,
             )
         except Exception:
             self._logger.error(

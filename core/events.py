@@ -216,6 +216,7 @@ class OrderStatusChanged(Event):
     status: str = ""
     qty_filled: int = 0
     avg_fill_price: Optional[float] = None
+    rejection_reason: Optional[str] = None
 
 
 @dataclass

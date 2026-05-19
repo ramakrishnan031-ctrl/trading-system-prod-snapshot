@@ -262,12 +262,38 @@ class CostCalculator:
         Returns:
             Sum of calculate_cost("BUY", ...).total + calculate_cost("SELL", ...).total
         """
-        buy  = self.calculate_cost(
-            "BUY",  qty, entry_price, product, exchange,
+        bd = self.round_trip_breakdown(
+            qty, entry_price, exit_price, product, exchange,
+            is_fno=is_fno, fno_kind=fno_kind,
+        )
+        return bd.total
+
+    def round_trip_breakdown(
+        self,
+        qty: int,
+        entry_price: float,
+        exit_price: float,
+        product: str,
+        exchange: str = "NSE",
+        is_fno: bool = False,
+        fno_kind: str = "FUTURES",
+    ) -> CostBreakdown:
+        """Combined CostBreakdown for BUY entry + SELL exit (v14)."""
+        buy = self.calculate_cost(
+            "BUY", qty, entry_price, product, exchange,
             is_fno=is_fno, fno_kind=fno_kind,
         )
         sell = self.calculate_cost(
-            "SELL", qty, exit_price,  product, exchange,
+            "SELL", qty, exit_price, product, exchange,
             is_fno=is_fno, fno_kind=fno_kind,
         )
-        return buy.total + sell.total
+        return CostBreakdown(
+            brokerage=round(buy.brokerage + sell.brokerage, 2),
+            stt=round(buy.stt + sell.stt, 2),
+            exchange_txn=round(buy.exchange_txn + sell.exchange_txn, 2),
+            gst=round(buy.gst + sell.gst, 2),
+            sebi=round(buy.sebi + sell.sebi, 2),
+            stamp_duty=round(buy.stamp_duty + sell.stamp_duty, 2),
+            total=round(buy.total + sell.total, 2),
+            turnover=round(buy.turnover + sell.turnover, 2),
+        )

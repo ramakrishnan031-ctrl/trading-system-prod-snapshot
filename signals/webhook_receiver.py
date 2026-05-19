@@ -502,6 +502,7 @@ class WebhookReceiver:
             item = self._process_signal(
                 scanner_name, symbol, price_str,
                 triggered_at, received_at, today_iso, expiry_sec,
+                webhook_payload=raw_body.decode("utf-8", errors="replace"),
             )
             results.append(item)
             if item["status"] == "ACCEPTED":
@@ -531,6 +532,7 @@ class WebhookReceiver:
         received_at: datetime,
         today_iso: str,
         expiry_sec: int,
+        webhook_payload: Optional[str] = None,
     ) -> dict[str, Any]:
 
         # WR10: validate symbol
@@ -595,13 +597,15 @@ class WebhookReceiver:
                     INSERT INTO signals
                       (signal_id, symbol, scanner, strategy,
                        triggered_at, received_at, expires_at,
-                       status, fingerprint, fingerprint_date, trigger_price)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       status, fingerprint, fingerprint_date, trigger_price,
+                       webhook_payload)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         signal_id, symbol, scanner_name, scanner_name,
                         triggered_at_iso, received_at_iso, received_at_iso,
                         "QUEUED", fingerprint, today_iso, price,
+                        webhook_payload,
                     ),
                 )
         except sqlite3.IntegrityError:

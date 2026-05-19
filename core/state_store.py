@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 13
+EXPECTED_SCHEMA_VERSION = 14
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1100,24 +1100,153 @@ class StateStore:
         latencies_json: str,
         market_data_snapshot_json: str,
         ts: str,
+        eligible_score: Optional[int] = None,
     ) -> None:
         """
         Persist one screening decision to screener_results (SS5, SS6).
 
         All JSON fields are pre-serialized strings. Called after every
         secondary_screener.screen() call for P18 analytics.
+        v14: eligible_score is the per-strategy min_score threshold.
         """
         with self.transaction() as cur:
             cur.execute(
                 """
                 INSERT INTO screener_results
                     (signal_id, score, tier, status,
-                     step_results, latencies, market_data_snapshot, ts)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     step_results, latencies, market_data_snapshot, ts,
+                     eligible_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (signal_id, score, tier, status,
-                 step_results_json, latencies_json, market_data_snapshot_json, ts),
+                 step_results_json, latencies_json, market_data_snapshot_json, ts,
+                 eligible_score),
             )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Candle persistence helpers (v14)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def insert_candle(
+        self,
+        symbol: str,
+        instrument_token: int,
+        ts: str,
+        interval_sec: int,
+        open_: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: int = 0,
+        is_synthetic: int = 0,
+    ) -> None:
+        """Persist one minute candle. Duplicate (token, ts, interval) is ignored."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR IGNORE INTO candles
+                    (symbol, instrument_token, ts, interval_sec,
+                     open, high, low, close, volume, is_synthetic)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (symbol, instrument_token, ts, interval_sec,
+                 open_, high, low, close, volume, is_synthetic),
+            )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Trade excursion helpers (v14)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def insert_trade_excursion(
+        self,
+        trade_id: str,
+        mfe_price: Optional[float],
+        mfe_pct: Optional[float],
+        mae_price: Optional[float],
+        mae_pct: Optional[float],
+        entry_candle_open: Optional[float] = None,
+        entry_candle_high: Optional[float] = None,
+        entry_candle_low: Optional[float] = None,
+        entry_candle_close: Optional[float] = None,
+    ) -> None:
+        """Write or update trade excursion row (v14). Upsert on trade_id."""
+        from core.time_authority import now_ist
+        ts = now_ist().isoformat()
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO trade_excursions
+                    (trade_id, mfe_price, mfe_pct, mae_price, mae_pct,
+                     entry_candle_open, entry_candle_high,
+                     entry_candle_low, entry_candle_close, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (trade_id, mfe_price, mfe_pct, mae_price, mae_pct,
+                 entry_candle_open, entry_candle_high,
+                 entry_candle_low, entry_candle_close, ts),
+            )
+
+    def compute_trade_excursions(
+        self, trade_id: str,
+    ) -> Optional[Dict]:
+        """
+        Compute MFE/MAE from candles table for a closed trade (v14).
+        Returns dict with mfe_price/pct, mae_price/pct, entry candle OHLC,
+        or None if insufficient data.
+        """
+        trade = self.fetch_one(
+            "SELECT symbol, direction, entry_actual_price, entry_time, exit_time "
+            "FROM trades WHERE trade_id = ?",
+            (trade_id,),
+        )
+        if not trade or not trade["entry_time"] or not trade["exit_time"]:
+            return None
+
+        entry_price = trade["entry_actual_price"]
+        if not entry_price or entry_price <= 0:
+            return None
+
+        rows = self.fetch_all(
+            """
+            SELECT open, high, low, close, ts FROM candles
+            WHERE symbol = ? AND ts >= ? AND ts <= ?
+            ORDER BY ts
+            """,
+            (trade["symbol"], trade["entry_time"], trade["exit_time"]),
+        )
+        if not rows:
+            return None
+
+        direction = trade["direction"]
+        highs = [r["high"] for r in rows]
+        lows = [r["low"] for r in rows]
+        max_high = max(highs)
+        min_low = min(lows)
+
+        if direction == "LONG":
+            mfe_price = max_high
+            mae_price = min_low
+        else:
+            mfe_price = min_low
+            mae_price = max_high
+
+        mfe_pct = round((mfe_price - entry_price) / entry_price * 100, 4)
+        mae_pct = round((mae_price - entry_price) / entry_price * 100, 4)
+        if direction == "SHORT":
+            mfe_pct = -mfe_pct
+            mae_pct = -mae_pct
+
+        first = rows[0]
+        return {
+            "mfe_price": mfe_price,
+            "mfe_pct": mfe_pct,
+            "mae_price": mae_price,
+            "mae_pct": mae_pct,
+            "entry_candle_open": first["open"],
+            "entry_candle_high": first["high"],
+            "entry_candle_low": first["low"],
+            "entry_candle_close": first["close"],
+        }
 
     # ─────────────────────────────────────────────────────────────────────────
     # SmartTgtManager helpers (ST14 + ST15)

@@ -628,6 +628,7 @@ class OrderPlacer:
             margin_reserved=margin_reserved,
             risk_amount=risk_amount,
             reservation_id=reservation_id,
+            mode=self._mode,
         )
 
         # Link signal → trade
@@ -1698,13 +1699,16 @@ class OrderPlacer:
         exit_qty = int(event.filled_qty)
 
         # BL-10a: round-trip charges via CostCalculator.
+        # v14: capture full breakdown for per-trade cost columns.
+        cost_breakdown = None
         try:
-            charges = self._cost_calculator.total_round_trip_cost(
+            cost_breakdown = self._cost_calculator.round_trip_breakdown(
                 qty=exit_qty,
                 entry_price=entry_price,
                 exit_price=exit_price,
                 product=product,
             )
+            charges = cost_breakdown.total
         except Exception as exc:
             log_exception(self._log, exc)
             self._log.error(
@@ -1728,6 +1732,7 @@ class OrderPlacer:
                 exit_reason=exit_reason,
                 gross_pnl=gross_pnl,
                 charges=charges,
+                cost_breakdown=cost_breakdown,
             )
         except ValueError as exc:
             # Double-close (e.g. OCO race): DB already CLOSED, capital already released.
@@ -1745,6 +1750,14 @@ class OrderPlacer:
             return
 
         net_pnl = (closed_row or {}).get("net_pnl", gross_pnl - charges)
+
+        # v14: compute and persist MFE/MAE from candle data
+        try:
+            exc_data = self._om._store.compute_trade_excursions(trade_id)
+            if exc_data:
+                self._om._store.insert_trade_excursion(trade_id=trade_id, **exc_data)
+        except Exception as exc:
+            self._log.debug("order_placer.excursion_compute_failed: %s", exc)
 
         # Telegram alert: TARGET HIT / STOP LOSS HIT (optional).
         # EOD exits are intentionally excluded — covered by EOD DAILY SUMMARY.
@@ -1833,11 +1846,26 @@ class OrderPlacer:
                 extra={"trade_id": trade_id},
             )
 
-        # Unregister from SmartTgtManager for CO_PLUS_TGT (idempotent; no-op otherwise).
+        # v14: copy sl_trail_count from smart_tgt_state before unregister deletes the row.
         if (
             fill_entry.order_protocol == "CO_PLUS_TGT"
             and self._smart_tgt_manager is not None
         ):
+            try:
+                row = self._om._store.fetch_one(
+                    "SELECT trail_count FROM smart_tgt_state WHERE trade_id = ?",
+                    (trade_id,),
+                )
+                if row is not None:
+                    self._om._store.execute(
+                        "UPDATE trades SET sl_trail_count = ? WHERE trade_id = ?",
+                        (row["trail_count"], trade_id),
+                    )
+            except Exception as exc:
+                self._log.debug(
+                    "order_placer.sl_trail_count_copy_failed: %s", exc,
+                )
+
             try:
                 self._smart_tgt_manager.unregister_trade(trade_id)
             except Exception as exc:

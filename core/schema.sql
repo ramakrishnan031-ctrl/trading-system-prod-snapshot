@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS signals (
     trigger_price       REAL,                        -- price from Chartink at trigger time
     fingerprint         TEXT NOT NULL,               -- hash(scanner+symbol+trigger_minute) for P6 dedup
     fingerprint_date    TEXT NOT NULL,               -- YYYY-MM-DD of received_at, for unique index
+    webhook_payload     TEXT,                        -- v14: raw JSON from Chartink for forensics
 
     FOREIGN KEY (trade_id) REFERENCES trades(trade_id)
 );
@@ -123,6 +124,18 @@ CREATE TABLE IF NOT EXISTS trades (
     -- at create_trade() time from signal_processor's reservation.
     reservation_id      TEXT,                        -- FK to fm_ledger.reservation_id (not enforced)
 
+    -- v14: cost breakdown (previously single 'charges' float; components now stored)
+    cost_brokerage      REAL,
+    cost_stt            REAL,
+    cost_exchange_txn   REAL,
+    cost_sebi           REAL,
+    cost_gst            REAL,
+    cost_stamp_duty     REAL,
+
+    -- v14: per-trade mode + SL trail analytics
+    mode                TEXT,                        -- PAPER | LIVE
+    sl_trail_count      INTEGER DEFAULT 0,
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -174,7 +187,11 @@ CREATE TABLE IF NOT EXISTS orders (
     
     -- Lifecycle
     placed_at           TEXT NOT NULL,
+    filled_at           TEXT,                        -- v14: exact fill timestamp
     updated_at          TEXT NOT NULL,
+
+    -- v14: broker rejection details
+    rejection_reason    TEXT,
     
     -- Replacement chain (for trail SL updates that cancel-and-replace)
     superseded_by       TEXT,                        -- nullable FK → orders.order_id
@@ -461,7 +478,8 @@ CREATE TABLE IF NOT EXISTS screener_results (
     step_results            TEXT NOT NULL,
     latencies               TEXT NOT NULL,
     market_data_snapshot    TEXT NOT NULL,
-    ts                      TEXT NOT NULL
+    ts                      TEXT NOT NULL,
+    eligible_score          INTEGER              -- v14: per-strategy min_score threshold
 );
 
 CREATE INDEX IF NOT EXISTS idx_screener_results_signal_id
@@ -568,13 +586,57 @@ CREATE TABLE IF NOT EXISTS gate_state (
 CREATE INDEX IF NOT EXISTS idx_gate_state_added_at
     ON gate_state(added_at);
 
--- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v12 -> v13
--- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '13');
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 18: candles  (v14)
+-- Minute OHLC candle persistence. Built from LTP ticks by CandleStore,
+-- written to DB on each candle close. Enables post-session analytics
+-- without re-fetching from Kite historical API.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS candles (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol           TEXT NOT NULL,
+    instrument_token INTEGER NOT NULL,
+    ts               TEXT NOT NULL,                   -- ISO-8601 IST candle close
+    interval_sec     INTEGER NOT NULL DEFAULT 60,     -- 60 for 1-min
+    open             REAL NOT NULL,
+    high             REAL NOT NULL,
+    low              REAL NOT NULL,
+    close            REAL NOT NULL,
+    volume           INTEGER NOT NULL DEFAULT 0,
+    is_synthetic     INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(instrument_token, ts, interval_sec)
+);
+
+CREATE INDEX IF NOT EXISTS idx_candles_symbol_ts
+    ON candles(symbol, ts);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 19: trade_excursions  (v14)
+-- Per-trade MFE/MAE and entry candle snapshot. Written on trade close.
+-- Enables trade quality analysis (how much heat was taken, how much
+-- profit was left on the table).
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS trade_excursions (
+    trade_id           TEXT PRIMARY KEY,
+    mfe_price          REAL,                         -- most favorable price during trade
+    mfe_pct            REAL,                         -- % from entry
+    mae_price          REAL,                         -- most adverse price during trade
+    mae_pct            REAL,                         -- % from entry
+    entry_candle_open  REAL,
+    entry_candle_high  REAL,
+    entry_candle_low   REAL,
+    entry_candle_close REAL,
+    updated_at         TEXT NOT NULL,
+    FOREIGN KEY (trade_id) REFERENCES trades(trade_id)
+);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v13 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- SCHEMA VERSION BUMP: v13 -> v14
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '14');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- END OF SCHEMA v14 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -587,5 +649,10 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '13');
 --                    v12: +gate_state (Audit 4.4 — entry-gate rehydration);
 --                    v13: -session.kill_state/kill_reason/kill_time/kill_type
 --                          (CFG-7); -session.yesterday_pnl/wins/losses
---                          /consecutive_losses (NSK-1) — 2026-04-26 audit)
+--                          /consecutive_losses (NSK-1) — 2026-04-26 audit;
+--                    v14: +trades cost breakdown (6 cols) + mode + sl_trail_count;
+--                          +orders.rejection_reason/filled_at;
+--                          +signals.webhook_payload;
+--                          +screener_results.eligible_score;
+--                          +candles table; +trade_excursions table)
 -- ─────────────────────────────────────────────────────────────────────────────
