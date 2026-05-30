@@ -368,6 +368,7 @@ class OrderPlacer:
         product_resolver: Optional[ProductResolver] = None,
         smart_tgt_manager: Optional[SmartTgtManager] = None,
         smart_tgt_config: Optional[SmartTgtConfig] = None,
+        breakeven_manager: Optional[Any] = None,  # FIX-132 Item 8: BreakevenManager
         rate_limit_backoff: Optional[RateLimitBackoffConfig] = None,  # BL-19
         entry_gate_slippage_buffer: float = 2.0,  # FIX-025: gate release slippage protection
         notifier: Optional[object] = None,   # TelegramNotifier; optional
@@ -398,6 +399,7 @@ class OrderPlacer:
         self._product_resolver = product_resolver  # HIGH #7: use resolver for product codes
         self._smart_tgt_manager = smart_tgt_manager  # BL-7b: None = SmartTgt disabled
         self._smart_tgt_config = smart_tgt_config    # BL-7b: trigger_pct/step_pct source
+        self._breakeven_manager = breakeven_manager  # FIX-132 Item 8: None = disabled
         # BL-19: 429 retry policy. Defaults apply if caller omits the config.
         self._rl_backoff: RateLimitBackoffConfig = (
             rate_limit_backoff or RateLimitBackoffConfig()
@@ -1683,6 +1685,34 @@ class OrderPlacer:
                 reason="entry_fill",
             )
 
+        # FIX-132 Item 8: register LIMIT_TRIPLE trades with BreakevenManager.
+        if (
+            fill_entry.order_protocol == "LIMIT_TRIPLE"
+            and self._breakeven_manager is not None
+            and getattr(fill_entry, "strategy_obj", None) is not None
+            and getattr(fill_entry.strategy_obj, "trailing_sl_enabled", False)
+        ):
+            try:
+                trade_row = self._om.get_trade(trade_id)
+                if trade_row is not None:
+                    s = fill_entry.strategy_obj
+                    self._breakeven_manager.register_trade(
+                        trade_id=trade_id,
+                        symbol=fill_entry.symbol,
+                        direction=fill_entry.direction,
+                        entry_price=float(event.avg_fill_price),
+                        target_price=float(trade_row.get("tgt_initial", 0) or 0),
+                        breakeven_trigger_pct=float(s.trailing_sl_breakeven_trigger_pct),
+                        partial_lock_trigger_pct=float(s.trailing_sl_partial_lock_trigger_pct),
+                        partial_lock_sl_pct=float(s.trailing_sl_partial_lock_sl_pct),
+                    )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.breakeven_register_failed",
+                    extra={"trade_id": trade_id, "error": str(exc)},
+                )
+
         # BL-7d: register CO_PLUS_TGT trades with SmartTgtManager for SL trailing.
         # LIMIT_TRIPLE legs have static SL orders already at the broker; CO
         # legs have a CO_TRIGGER that needs server-side trail updates.
@@ -1966,6 +1996,17 @@ class OrderPlacer:
                 log_exception(self._log, exc)
                 self._log.error(
                     "order_placer.smart_tgt_unregister_failed",
+                    extra={"trade_id": trade_id},
+                )
+
+        # FIX-132 Item 8: unregister LIMIT_TRIPLE trades from BreakevenManager on exit
+        if self._breakeven_manager is not None:
+            try:
+                self._breakeven_manager.unregister_trade(trade_id)
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_placer.breakeven_unregister_failed",
                     extra={"trade_id": trade_id},
                 )
 

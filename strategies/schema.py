@@ -75,6 +75,13 @@ class StrategyConfig(BaseModel):
     smart_tgt_trail_trigger_pct: float = 0.005
     smart_tgt_trail_step_pct: float = 0.003
 
+    # --- Trailing SL (FIX-132 Item 8): milestone-based SL advancement ---
+    # Applies to LIMIT_TRIPLE protocol; all thresholds in % of target distance.
+    trailing_sl_enabled: bool = False
+    trailing_sl_breakeven_trigger_pct: float = 60.0  # advance SL to breakeven
+    trailing_sl_partial_lock_trigger_pct: float = 80.0  # advance SL to partial lock
+    trailing_sl_partial_lock_sl_pct: float = 40.0  # SL moves to this % of target distance
+
     # --- Pullback Wait (P11a) ---
     pullback_wait_enabled: bool
     pullback_wait_tolerance_pct: float = 0.005

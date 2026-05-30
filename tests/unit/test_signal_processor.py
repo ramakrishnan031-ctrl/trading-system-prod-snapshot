@@ -172,7 +172,7 @@ class _MockPositionSizer:
         self.calls: List[dict] = []
 
     def calculate(self, symbol, direction, entry_price, sl_price, intent,
-                  score_tier="MEDIUM", lot_size=1):
+                  score_tier="MEDIUM", lot_size=1, perf_weight=1.0):
         self.calls.append({"symbol": symbol, "score_tier": score_tier,
                            "direction": direction})
         if self._raise:
@@ -1281,7 +1281,7 @@ def test_5_workers_process_5_signals_concurrently():
 
     class _SlowSizer(_MockPositionSizer):
         def calculate(self, symbol, direction, entry_price, sl_price, intent,
-                      score_tier="MEDIUM", lot_size=1):
+                      score_tier="MEDIUM", lot_size=1, perf_weight=1.0):
             barrier.wait()
             with lock:
                 processed_order.append(symbol)

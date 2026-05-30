@@ -154,6 +154,7 @@ class PositionSizer:
         score_tier: str = "MEDIUM",
         lot_size: int = 1,
         entry_offset_pct: float = 0.0,  # FIX-066
+        perf_weight: float = 1.0,       # FIX-132 Item 9: performance-weighted multiplier
     ) -> SizingResult:
         """
         Compute position size using risk-based formula (PS2).
@@ -394,10 +395,13 @@ class PositionSizer:
                 breakdown=breakdown,
             )
 
-        # ── PS5: Tier multiplier ───────────────────────────────────────────────
+        # ── PS5: Tier multiplier + PA4: performance weight (FIX-132 Item 9) ────
         tier_mult = self._tier_multipliers.get(score_tier, 1.0)
-        tiered_qty = int(math.floor(raw_qty * tier_mult))
+        effective_mult = tier_mult * max(0.0, perf_weight)  # perf_weight >= 0 guard
+        tiered_qty = int(math.floor(raw_qty * effective_mult))
         breakdown["tiered_qty"] = tiered_qty
+        breakdown["tier_mult"] = tier_mult
+        breakdown["perf_weight"] = round(perf_weight, 4)
 
         # ── PS6: Lot size rounding ─────────────────────────────────────────────
         final_qty = (tiered_qty // lot_size) * lot_size

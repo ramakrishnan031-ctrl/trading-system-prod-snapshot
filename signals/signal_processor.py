@@ -131,6 +131,7 @@ class SignalProcessor:
         rate_limiter=None,                  # FIX-007: optional RateLimiter for order pre-check
         quote_fn=None,                      # FIX-067: quote function for momentum fresh LTP
         strategy_governor=None,             # FIX-130 Item 6: intraday strategy circuit breaker
+        perf_weights: Optional[Dict[str, float]] = None,  # FIX-132 Item 9
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -160,6 +161,7 @@ class SignalProcessor:
         self._rate_limiter = rate_limiter                  # FIX-007: optional pre-check
         self._quote_fn = quote_fn                          # FIX-067: momentum fresh LTP
         self._strategy_governor = strategy_governor        # FIX-130 Item 6: circuit breaker
+        self._perf_weights: Dict[str, float] = dict(perf_weights or {})  # FIX-132 Item 9
 
         # Lifecycle
         self._running = False
@@ -575,6 +577,7 @@ class SignalProcessor:
                     strategy_obj.intent,
                     screen_result.tier,
                     strategy_obj.lot_size,
+                    perf_weight=self._perf_weights.get(strategy_obj.name, 1.0),  # FIX-132 Item 9
                 )
             except BrokerError as be:
                 if self._ks:
@@ -1161,6 +1164,7 @@ class SignalProcessor:
                     strategy_obj.intent,
                     tier,
                     strategy_obj.lot_size,
+                    perf_weight=self._perf_weights.get(strategy_obj.name, 1.0),  # FIX-132 Item 9
                 )
             except BrokerError as be:
                 if self._ks:
