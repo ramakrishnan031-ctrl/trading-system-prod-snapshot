@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 15
+EXPECTED_SCHEMA_VERSION = 16
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1728,6 +1728,27 @@ class StateStore:
             cur.execute("SELECT * FROM gate_state ORDER BY added_at ASC")
             rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Order reconciliation status helpers (FIX-129 Item 26)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def update_order_reconciliation_status(
+        self,
+        order_id: str,
+        status: str,
+    ) -> None:
+        """
+        FIX-129 (Item 26): Set reconciliation_status on an orders row.
+
+        Valid values: "OK" | "MISMATCH" | "SL_MISSING" | "ORPHAN"
+        Called by order_reconciler when its checks pass or detect a mismatch.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE orders SET reconciliation_status = ? WHERE order_id = ?",
+                (status, order_id),
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # P&L reconciliation helpers (FIX-128 Fix B)

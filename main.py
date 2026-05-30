@@ -745,6 +745,14 @@ def _shutdown(
         order_reconciler.stop()
     except Exception as exc:
         _log.error("order_reconciler.stop error: %s", exc)
+    # FIX-129 (Item 45): Cancel pending ENTRY orders before stopping the monitor.
+    # SL/TGT/EOD legs are preserved — exit protection remains active at the broker.
+    try:
+        n_cancelled = order_monitor.cancel_all_entry_orders()
+        if n_cancelled:
+            _log.info("Shutdown: cancelled %d pending ENTRY order(s)", n_cancelled)
+    except Exception as exc:
+        _log.error("order_monitor.cancel_all_entry_orders error: %s", exc)
     try:
         order_monitor.stop()
     except Exception as exc:

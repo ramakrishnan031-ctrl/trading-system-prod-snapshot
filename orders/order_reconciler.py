@@ -1025,10 +1025,20 @@ class OrderReconciler:
                 continue
 
             if broker_sl_id in broker_order_ids:
-                # SL order is live on the broker — healthy
+                # SL order is live on the broker — healthy; stamp OK.
+                try:
+                    self._store.update_order_reconciliation_status(broker_sl_id, "OK")
+                except Exception as exc:  # noqa: BLE001
+                    self._log.debug("check9: update_order_reconciliation_status OK failed: %s", exc)
                 continue
 
-            # Naked position: local SL record exists but broker has no matching order
+            # Naked position: local SL record exists but broker has no matching order.
+            # FIX-129 (Item 26): stamp SL_MISSING before alerting.
+            try:
+                self._store.update_order_reconciliation_status(broker_sl_id, "SL_MISSING")
+            except Exception as exc:  # noqa: BLE001
+                self._log.debug("check9: update_order_reconciliation_status SL_MISSING failed: %s", exc)
+
             log = bind_trade(self._log, trade_id=trade_id)
 
             # FIX-038: MISSING_EXITS always alerts (bypass backoff per spec)
@@ -1063,7 +1073,7 @@ class OrderReconciler:
                     f"OPEN trade {trade_id} has SL order {broker_sl_id} "
                     f"in local DB but NOT found in broker open orders"
                 ),
-                action_taken="CRITICAL logged; soft_kill triggered",
+                action_taken="CRITICAL logged; soft_kill triggered; reconciliation_status=SL_MISSING",
                 success=True,
             ))
 

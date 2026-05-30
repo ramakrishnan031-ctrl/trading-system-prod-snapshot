@@ -510,6 +510,68 @@ class OrderMonitor:
             self._thread.join(timeout=5.0)
         self._log.info("order_monitor.stop")
 
+    def cancel_all_entry_orders(self) -> int:
+        """
+        FIX-129 (Item 45): Cancel all tracked ENTRY-leg orders at graceful shutdown.
+
+        Called from _shutdown() before stop() so pending ENTRY orders (signals that
+        reached the broker but haven't filled yet) are cancelled cleanly rather than
+        being left open at the broker after the session ends.
+
+        SL/TGT/EOD legs are intentionally preserved — open positions retain their
+        exit protection even after the process stops; the reconciler and broker's own
+        SL mechanisms manage them.
+
+        Paper mode: adapter.cancel_order() is simulated, same as live.
+
+        Returns the number of successful cancellations.
+        """
+        with self._lock:
+            snapshot = dict(self._watched)
+
+        cancelled = 0
+        for entry in snapshot.values():
+            if entry.leg not in ("", "ENTRY"):  # "" = unset leg, treated as ENTRY
+                continue
+            try:
+                result = self._adapter.cancel_order(entry.broker_order_id)
+                if result.success:
+                    self._log.info(
+                        "order_monitor.shutdown_cancel_ok",
+                        extra={
+                            "internal_order_id": entry.internal_order_id,
+                            "broker_order_id": entry.broker_order_id,
+                            "symbol": entry.symbol,
+                        },
+                    )
+                    self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
+                    self.untrack(entry.internal_order_id)
+                    cancelled += 1
+                else:
+                    self._log.warning(
+                        "order_monitor.shutdown_cancel_failed",
+                        extra={
+                            "internal_order_id": entry.internal_order_id,
+                            "broker_order_id": entry.broker_order_id,
+                            "reason": result.reason,
+                        },
+                    )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.error(
+                    "order_monitor.shutdown_cancel_error",
+                    extra={
+                        "internal_order_id": entry.internal_order_id,
+                        "error": str(exc),
+                    },
+                )
+
+        self._log.info(
+            "order_monitor.shutdown_cancel_complete",
+            extra={"cancelled": cancelled, "total_entry_orders": len(snapshot)},
+        )
+        return cancelled
+
     # ── polling loop ──────────────────────────────────────────────────────────
 
     def _poll_loop(self) -> None:

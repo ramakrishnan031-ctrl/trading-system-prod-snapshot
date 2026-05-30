@@ -192,10 +192,15 @@ CREATE TABLE IF NOT EXISTS orders (
 
     -- v14: broker rejection details
     rejection_reason    TEXT,
-    
+
+    -- v16 (FIX-129 Item 26): reconciliation result from order_reconciler.
+    -- NULL=not yet checked; OK=verified at broker; MISMATCH=local≠broker;
+    -- SL_MISSING=SL order not found at broker (naked position detected).
+    reconciliation_status TEXT,
+
     -- Replacement chain (for trail SL updates that cancel-and-replace)
     superseded_by       TEXT,                        -- nullable FK → orders.order_id
-    
+
     FOREIGN KEY (trade_id) REFERENCES trades(trade_id),
     FOREIGN KEY (superseded_by) REFERENCES orders(order_id)
 );
@@ -651,12 +656,12 @@ CREATE INDEX IF NOT EXISTS idx_pnl_reconciliation_date
     ON pnl_reconciliation(date);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v14 -> v15
+-- SCHEMA VERSION BUMP: v15 -> v16
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '15');
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '16');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v15 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v16 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -675,5 +680,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '15');
 --                          +signals.webhook_payload;
 --                          +screener_results.eligible_score;
 --                          +candles table; +trade_excursions table;
---                    v15: +pnl_reconciliation table (FIX-128 Fix B))
+--                    v15: +pnl_reconciliation table (FIX-128 Fix B);
+--                    v16: +orders.reconciliation_status (FIX-129 Item 26))
 -- ─────────────────────────────────────────────────────────────────────────────

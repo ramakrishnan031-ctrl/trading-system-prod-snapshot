@@ -150,6 +150,18 @@ class DiskSpaceResult:
 
 
 @dataclass(frozen=True)
+class NtpCheckResult:
+    """FIX-129 (Item 27): Outcome of check_ntp_sync()."""
+    passed:       bool       # True if drift within tolerance
+    skipped:      bool       # True if check was skipped (e.g. paper mode)
+    drift_sec:    float      # abs(local_time - ntp_time); 0.0 if skipped/failed
+    warn_sec:     float      # warning threshold
+    block_sec:    float      # blocking threshold
+    ntp_host:     str        # NTP host queried
+    error:        str = ""   # description if fetch failed
+
+
+@dataclass(frozen=True)
 class StartupReport:
     """Aggregate result of run_all_startup_checks() (SC12)."""
     ok:                  bool          # False if any blocking check failed
@@ -166,6 +178,7 @@ class StartupReport:
     missing_config_files: List[str]
     instrument_cache_count: Optional[int] = None  # BL-20: None if check skipped
     disk_space:          Optional[DiskSpaceResult] = None  # FIX-099: None if skipped
+    ntp:                 Optional[NtpCheckResult] = None  # FIX-129 Item 27
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -449,6 +462,112 @@ def check_clock_skew(
             local_time=local_now,
             error=str(exc),
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-129 Item 27 -- NTP clock sync check
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _query_ntp_time(host: str, timeout_sec: float = 5.0) -> float:
+    """
+    Query an NTP server via UDP and return its UTC timestamp as a float
+    (seconds since Unix epoch).
+
+    Uses NTP v3 request (48-byte packet, RFC 5905). Pure stdlib — no ntplib.
+    Raises OSError/socket.timeout on network failure.
+    """
+    import socket
+    import struct
+
+    NTP_PORT = 123
+    NTP_EPOCH_DELTA = 2208988800  # seconds between NTP epoch (1900) and Unix epoch (1970)
+
+    # NTP client request: li=0, version=3, mode=3 → byte = 0b00011011 = 0x1B
+    request = b"\x1b" + b"\x00" * 47
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.settimeout(timeout_sec)
+        s.sendto(request, (host, NTP_PORT))
+        data, _ = s.recvfrom(1024)
+
+    if len(data) < 48:
+        raise ValueError(f"NTP response too short: {len(data)} bytes")
+
+    # Transmit Timestamp is at bytes 40-47 (big-endian 64-bit fixed point: 32 int + 32 frac)
+    integ, frac = struct.unpack("!II", data[40:48])
+    ntp_time = integ + frac / 2**32
+    return ntp_time - NTP_EPOCH_DELTA
+
+
+def check_ntp_sync(
+    logger,
+    ntp_host: str = "pool.ntp.org",
+    warn_sec: float = 2.0,
+    block_sec: float = 5.0,
+    timeout_sec: float = 5.0,
+    ntp_fetcher_fn: Optional[Callable] = None,  # injectable for tests
+) -> NtpCheckResult:
+    """
+    FIX-129 (Item 27): Check local clock against NTP server.
+
+    Queries `ntp_host` (default: pool.ntp.org) via UDP/123.
+    Compares the returned UTC time with the local clock.
+
+    Decision:
+      drift < warn_sec  → passed=True (OK)
+      warn_sec <= drift < block_sec → passed=False, warning (non-blocking)
+      drift >= block_sec → passed=False, blocking failure
+
+    Args:
+        ntp_fetcher_fn: injectable for tests. Signature: (host: str) -> float
+            (UTC timestamp). If None, uses _query_ntp_time.
+    """
+    import time as _time_mod
+
+    fetcher = ntp_fetcher_fn or (lambda host: _query_ntp_time(host, timeout_sec))
+
+    try:
+        ntp_utc = fetcher(ntp_host)
+    except Exception as exc:
+        logger.warning("check_ntp_sync: failed to query %s: %s", ntp_host, exc)
+        return NtpCheckResult(
+            passed=True,    # best-effort: don't block startup on NTP unreachable
+            skipped=True,
+            drift_sec=0.0,
+            warn_sec=warn_sec,
+            block_sec=block_sec,
+            ntp_host=ntp_host,
+            error=str(exc),
+        )
+
+    local_utc = _time_mod.time()
+    drift = abs(local_utc - ntp_utc)
+    passed = drift < block_sec
+
+    if drift >= block_sec:
+        logger.critical(
+            "check_ntp_sync: BLOCKING drift %.2fs >= %.0fs threshold (host=%s)",
+            drift, block_sec, ntp_host,
+        )
+    elif drift >= warn_sec:
+        logger.warning(
+            "check_ntp_sync: drift %.2fs >= %.0fs warn threshold (host=%s)",
+            drift, warn_sec, ntp_host,
+        )
+    else:
+        logger.info(
+            "check_ntp_sync: drift %.3fs OK (host=%s)", drift, ntp_host
+        )
+
+    return NtpCheckResult(
+        passed=passed,
+        skipped=False,
+        drift_sec=drift,
+        warn_sec=warn_sec,
+        block_sec=block_sec,
+        ntp_host=ntp_host,
+        error="" if passed else f"drift {drift:.2f}s >= block threshold {block_sec:.0f}s",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1182,6 +1301,19 @@ def run_all_startup_checks(
         if not passed:
             blocking_failures.append("instrument_cache_too_small")
 
+    # 10. NTP clock sync (FIX-129 Item 27)
+    # warn_sec=2, block_sec=5 per spec. Best-effort: NTP unreachable → skipped, not blocking.
+    ntp_result = check_ntp_sync(
+        logger=logger,
+        ntp_host="pool.ntp.org",
+        warn_sec=2.0,
+        block_sec=5.0,
+    )
+    if not ntp_result.passed and not ntp_result.skipped:
+        blocking_failures.append("ntp_clock_skew")
+    elif ntp_result.drift_sec >= ntp_result.warn_sec and not ntp_result.skipped:
+        warnings.append("ntp_clock_drift_warning")
+
     ok = len(blocking_failures) == 0
 
     if ok:
@@ -1208,4 +1340,5 @@ def run_all_startup_checks(
         missing_secrets=missing_secrets,
         missing_config_files=missing_config,
         instrument_cache_count=instrument_cache_count,  # BL-20
+        ntp=ntp_result,  # FIX-129 Item 27
     )

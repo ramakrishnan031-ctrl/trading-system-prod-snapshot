@@ -673,7 +673,9 @@ class OrderPlacer:
                 "kill_switch_active_last_mile",
                 trade_id=trade_id, signal_id=signal_id, symbol=symbol,
             )
-            self._handle_placement_failure(trade_id, reservation_id, signal_id, ks_exc)
+            self._handle_placement_failure(
+                trade_id, reservation_id, signal_id, ks_exc, symbol=symbol
+            )
             raise ks_exc
 
         # ── Place entry orders ─────────────────────────────────────────────
@@ -711,6 +713,7 @@ class OrderPlacer:
                 self._handle_placement_failure(
                     trade_id, reservation_id, signal_id, eod_exc,
                     final_status="REJECTED",
+                    symbol=symbol,
                 )
                 raise eod_exc
 
@@ -766,6 +769,8 @@ class OrderPlacer:
                     self._handle_placement_failure(
                         trade_id, reservation_id, signal_id, slip_exc,
                         final_status="REJECTED",
+                        symbol=symbol,
+                        suppress_alert=True,  # slippage guard already sent its own alert
                     )
                     raise slip_exc
 
@@ -929,12 +934,13 @@ class OrderPlacer:
                     self._handle_placement_failure(
                         trade_id, reservation_id, signal_id, rej_exc,
                         final_status="REJECTED",
+                        symbol=symbol,
                     )
                     raise
                 else:
                     # Other rejection (not 16388): single attempt per ZA11/OP7
                     self._handle_placement_failure(
-                        trade_id, reservation_id, signal_id, rej_exc
+                        trade_id, reservation_id, signal_id, rej_exc, symbol=symbol,
                     )
                     raise
             except BrokerRateLimit429Error as rl_exc:
@@ -951,7 +957,7 @@ class OrderPlacer:
                         },
                     )
                     self._handle_placement_failure(
-                        trade_id, reservation_id, signal_id, rl_exc
+                        trade_id, reservation_id, signal_id, rl_exc, symbol=symbol,
                     )
                     raise
                 self._log.warning(
@@ -1007,7 +1013,7 @@ class OrderPlacer:
                 # no inter-leg state on raise). Capital tracking is intact,
                 # so NO hard_kill -- just FAILED + release.
                 self._handle_placement_failure(
-                    trade_id, reservation_id, signal_id, exc
+                    trade_id, reservation_id, signal_id, exc, symbol=symbol,
                 )
                 raise
 
@@ -1465,6 +1471,22 @@ class OrderPlacer:
                     "reservation_id": fill_entry.reservation_id,
                 },
             )
+            # FIX-129 (Item 43): Telegram alert for broker-side rejection of placed order.
+            if self._notifier is not None and status in ("FAILED", "REJECTED"):
+                try:
+                    rejection_text = getattr(event, "rejection_reason", "") or status
+                    self._notifier.send(
+                        severity="WARNING",
+                        title=f"[{self._mode}] ORDER REJECTED — {fill_entry.symbol}",
+                        body=(
+                            f"Broker rejected entry order after placement.\n"
+                            f"Status: {status} | Trade: {fill_entry.trade_id}\n"
+                            f"Reason: {str(rejection_text)[:200]}"
+                        ),
+                        source_module="order_placer",
+                    )
+                except Exception as _ne:
+                    self._log.error("order_placer: zero_fill rejection alert failed: %s", _ne)
             try:
                 self._fm.release(
                     reservation_id=fill_entry.reservation_id,
@@ -2831,6 +2853,8 @@ class OrderPlacer:
         exc: Exception,
         broker_order_ids: Iterable[str] = (),
         final_status: str = "FAILED",  # FIX-072: allow "REJECTED" for margin failures
+        symbol: str = "",              # FIX-129: for Telegram alert body
+        suppress_alert: bool = False,  # FIX-129: True when caller already sent its own alert
     ) -> None:
         """
         OP7 + OP-BL8c: cancel any live broker orders, mark trade as final_status
@@ -2847,8 +2871,27 @@ class OrderPlacer:
         FIX-072: final_status defaults to "FAILED" for backward compatibility,
         but can be set to "REJECTED" for known rejection scenarios like 16388
         (insufficient margin after retry with fresh broker data).
+
+        FIX-129 (Item 43): sends Telegram WARNING when an order is rejected
+        (suppress_alert=True from paths that already send a more specific alert,
+        e.g. slippage guard which carries trigger/LTP context).
         """
         log_exception(self._log, exc)
+
+        # FIX-129: Telegram alert for placement failures.
+        if self._notifier is not None and not suppress_alert:
+            try:
+                self._notifier.send(
+                    severity="WARNING",
+                    title=f"[{self._mode}] ORDER REJECTED — {symbol or 'unknown'}",
+                    body=(
+                        f"Status: {final_status}\n"
+                        f"Reason: {str(exc)[:200]}"
+                    ),
+                    source_module="order_placer",
+                )
+            except Exception as _ne:
+                self._log.error("order_placer: rejection notifier.send failed: %s", _ne)
 
         # OP-BL8c: cancel any broker orders that were placed before the failure
         ids = [bid for bid in broker_order_ids if bid]
