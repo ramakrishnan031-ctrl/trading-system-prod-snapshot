@@ -632,6 +632,70 @@ def test_hard_kill_event_payload_ks8(tmp_path: Path) -> None:
     store.close()
 
 
+
+
+# -- FIX-127: clear_stale_state tests --
+
+def test_clear_stale_state_clears_previous_day(tmp_path: Path) -> None:
+    """FIX-127: kill switch from a previous day is auto-cleared."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    _seed_persisted_state(store, 'SOFT_KILL', 'naked_position', 'reconciler')
+    ks, _, handler = _make_ks(store)
+    assert ks.is_active('any')
+
+    cleared = ks.clear_stale_state(date(2026, 4, 15))
+    assert cleared
+    assert not ks.is_active('any')
+    assert ks.current_state() == KillState.INACTIVE
+    assert any('auto-cleared' in w for w in handler.warnings())
+    print('  OK stale kill switch from previous day auto-cleared')
+    store.close()
+
+
+def test_clear_stale_state_keeps_same_day(tmp_path: Path) -> None:
+    """FIX-127: kill switch from today is NOT cleared."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    _seed_persisted_state(store, 'SOFT_KILL', 'naked_position', 'reconciler')
+    ks, _, _ = _make_ks(store)
+    assert ks.is_active('any')
+
+    cleared = ks.clear_stale_state(date(2026, 4, 14))
+    assert not cleared
+    assert ks.is_active('any')
+    print('  OK same-day kill switch preserved')
+    store.close()
+
+
+def test_clear_stale_state_noop_when_inactive(tmp_path: Path) -> None:
+    """FIX-127: no-op when kill switch is already INACTIVE."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    ks, _, _ = _make_ks(store)
+    assert not ks.is_active('any')
+
+    cleared = ks.clear_stale_state(date(2026, 5, 30))
+    assert not cleared
+    assert not ks.is_active('any')
+    print('  OK no-op when already INACTIVE')
+    store.close()
+
+
+def test_clear_stale_state_hard_kill_also_cleared(tmp_path: Path) -> None:
+    """FIX-127: even HARD_KILL from a previous day is auto-cleared."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    _seed_persisted_state(store, 'HARD_KILL', 'broker_auth_failed', 'adapter')
+    ks, _, handler = _make_ks(store)
+    assert ks.current_state() == KillState.HARD_KILL
+
+    cleared = ks.clear_stale_state(date(2026, 4, 15))
+    assert cleared
+    assert ks.current_state() == KillState.INACTIVE
+    print('  OK stale HARD_KILL auto-cleared')
+    store.close()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -663,6 +727,10 @@ def run_all_tests() -> int:
         test_concurrent_soft_kill_idempotent,
         test_persistence_atomicity_state_store_failure,
         test_hard_kill_event_payload_ks8,
+        test_clear_stale_state_clears_previous_day,
+        test_clear_stale_state_keeps_same_day,
+        test_clear_stale_state_noop_when_inactive,
+        test_clear_stale_state_hard_kill_also_cleared,
     ]
 
     print("=" * 70)

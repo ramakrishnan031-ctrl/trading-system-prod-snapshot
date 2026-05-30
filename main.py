@@ -934,6 +934,11 @@ def _main_locked(args, config_dir: Path) -> int:
     # TimeAuthority needs kill_switch for the critical-skew callback
     _init_time_authority(app_config, kill_switch)
     today_ist_date: date = time_authority.now_ist().date()
+
+    # FIX-127: auto-clear stale kill switch from previous trading day.
+    # A new day starts clean; if the trigger was legitimate, startup
+    # reconciliation will re-trigger it within seconds.
+    kill_switch.clear_stale_state(today_ist_date)
     today_iso: str = today_ist_date.isoformat()
 
     scenario_result = detect_startup_scenario(store, kill_switch, today_ist_date, _log)

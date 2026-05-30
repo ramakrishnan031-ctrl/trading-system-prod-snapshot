@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
@@ -151,6 +151,44 @@ class KillSwitch:
 
         # KS3: recover persisted state on startup (Audit Issue #18 fix)
         self._load_state_from_store()
+
+    def clear_stale_state(self, today: "date") -> bool:
+        """Auto-clear kill switch if it was triggered on a previous calendar day.
+
+        A new trading day starts with a clean slate. If the prior session's kill
+        switch trigger was legitimate, startup reconciliation will re-trigger it.
+        Returns True if state was cleared, False if no action taken.
+        """
+        with self._lock:
+            if self._state == KillState.INACTIVE:
+                return False
+            if self._triggered_at is None:
+                return False
+            triggered_date = self._triggered_at.date()
+            if triggered_date >= today:
+                return False
+
+            prev_reason = self._reason
+            prev_by = self._triggered_by
+            prev_state = self._state
+            ts = now_ist()
+            clear_reason = (
+                f"auto_clear_stale: was {prev_state.value} from {triggered_date.isoformat()} "
+                f"(reason={prev_reason}, by={prev_by})"
+            )
+
+            self._persist_state(KillState.INACTIVE, clear_reason, ts, "main.auto_clear_stale")
+            self._state = KillState.INACTIVE
+            self._reason = clear_reason
+            self._triggered_at = ts
+            self._triggered_by = "main.auto_clear_stale"
+
+        self._log.warning(
+            "Kill switch auto-cleared: prior %s from %s (reason=%s by=%s) "
+            "-- new day %s starts clean; reconciliation will re-trigger if needed",
+            prev_state.value, triggered_date, prev_reason, prev_by, today,
+        )
+        return True
 
     def set_notifier(
         self,
