@@ -48,6 +48,7 @@ def _make_watcher_cfg(sentinel_dir: Path, max_attempts: int = 3) -> MagicMock:
     alerts_cfg = MagicMock()
     alerts_cfg.sentinel_dir = str(sentinel_dir)
     alerts_cfg.watcher_max_attempts = max_attempts
+    alerts_cfg.alert_digest_threshold = 3  # FIX: prevent MagicMock > int TypeError
     alerts_cfg.watcher_lock_path = str(sentinel_dir / "watcher.lock")
     alerts_cfg.watcher_log_path = str(sentinel_dir / "watcher.log")
     alerts_cfg.smtp = smtp_cfg

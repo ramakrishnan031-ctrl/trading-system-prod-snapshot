@@ -524,7 +524,8 @@ def test_h15_orphan_false_positive_resets_counter_no_callback() -> None:
         "false positive must NOT untrack the order"
     )
     # Counter was reset (now 0) after the verification.
-    entry = monitor._watched["ord_h15"]
+    composite_key = monitor._internal_to_composite["ord_h15"]
+    entry = monitor._watched[composite_key]
     assert entry.empty_history_count == 0, (
         f"false positive must reset empty_history_count; got {entry.empty_history_count}"
     )

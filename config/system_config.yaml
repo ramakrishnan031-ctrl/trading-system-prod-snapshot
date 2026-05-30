@@ -191,6 +191,12 @@ drift_handler:                # BL-2: capital drift escalation
   hard_kill_threshold_rs: 500000.0
   consecutive_cycles_before_escalate: 3
 
+strategy_circuit_breaker:     # FIX-130 (Item 6): intraday strategy circuit breaker
+  enabled: true
+  loss_multiplier: 2.0       # pause if daily loss > 2x avg daily loss
+  cutoff_time: "12:00"       # don't pause after 12:00 IST
+  lookback_days: 10          # days of history to compute avg_daily_loss
+
 circuit_breaker:              # FIX-128 (Fix C): position-level circuit breaker
   partial_fill_timeout_minutes: 5   # cancel stuck PARTIAL-fill entry orders after this many minutes
   force_close_time: "15:15"         # force-cancel all pending entries + close all positions at this IST time

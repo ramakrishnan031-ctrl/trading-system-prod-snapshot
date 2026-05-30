@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import copy
 import queue
 import sys
 from datetime import datetime
@@ -380,8 +381,18 @@ def setup_logging(log_dir: Path = Path("logs")) -> None:
 
     # FIX-099: Async file logging via QueueHandler to prevent disk-full freeze
     # File handlers go through queue; stdout remains synchronous for immediate visibility
+    #
+    # _PassthroughQueueHandler overrides prepare() to pass a shallow copy of the
+    # record unchanged. The default QueueHandler.prepare() pre-formats the record
+    # and clears exc_info/exc_text, which prevents file-handler _JsonFormatter from
+    # adding exc_type/exc_traceback fields. Thread-based QueueListener doesn't need
+    # pickling, so we can skip the pre-format safely.
+    class _PassthroughQueueHandler(logging.handlers.QueueHandler):
+        def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+            return copy.copy(record)
+
     log_queue = queue.Queue(maxsize=10000)
-    queue_handler = logging.handlers.QueueHandler(log_queue)
+    queue_handler = _PassthroughQueueHandler(log_queue)
     queue_handler.setLevel(logging.DEBUG)
 
     # QueueListener processes file handlers in background thread

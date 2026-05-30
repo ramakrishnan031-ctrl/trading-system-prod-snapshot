@@ -633,6 +633,15 @@ class EntryGateConfig(BaseModel):
     max_entry_slippage_pct: float = 1.0  # FIX-128: % cap on trigger→LTP deviation
 
 
+class StrategyCircuitBreakerConfig(BaseModel):
+    """FIX-130 (Item 6): Intraday strategy circuit breaker settings."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    loss_multiplier: float = 2.0   # pause if loss > multiplier × avg_daily_loss
+    cutoff_time: str = "12:00"     # don't pause after this IST time
+    lookback_days: int = 10        # days of history to compute avg_daily_loss
+
+
 class CircuitBreakerConfig(BaseModel):
     """
     FIX-128 (Fix C): Position-level circuit breaker settings.
@@ -732,6 +741,7 @@ class SystemConfig(BaseModel):
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis
     drift_handler: DriftHandlerConfig         # BL-2: drift escalation policy
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()  # FIX-128: defaults if absent
+    strategy_circuit_breaker: StrategyCircuitBreakerConfig = StrategyCircuitBreakerConfig()  # FIX-130
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
 
 

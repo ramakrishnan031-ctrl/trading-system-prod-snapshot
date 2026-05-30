@@ -130,6 +130,7 @@ class SignalProcessor:
         shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
         rate_limiter=None,                  # FIX-007: optional RateLimiter for order pre-check
         quote_fn=None,                      # FIX-067: quote function for momentum fresh LTP
+        strategy_governor=None,             # FIX-130 Item 6: intraday strategy circuit breaker
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -158,6 +159,7 @@ class SignalProcessor:
         self._shadow_tracker = shadow_tracker              # B.5 / Audit 5.1
         self._rate_limiter = rate_limiter                  # FIX-007: optional pre-check
         self._quote_fn = quote_fn                          # FIX-067: momentum fresh LTP
+        self._strategy_governor = strategy_governor        # FIX-130 Item 6: circuit breaker
 
         # Lifecycle
         self._running = False
@@ -508,6 +510,14 @@ class SignalProcessor:
                     f"({strategy_obj.entry_start_time}-{strategy_obj.entry_end_time})",
                 )
 
+            # FIX-130 (Item 6): intraday strategy circuit breaker
+            if self._strategy_governor is not None:
+                paused, pause_reason = self._strategy_governor.check(
+                    strategy_name, now.time()
+                )
+                if paused:
+                    raise _PipelineReject("STRATEGY_CIRCUIT_BREAKER", pause_reason)
+
             # ----------------------------------------------------------
             # Step 3: Secondary screening (SPW3, P18)
             # Screener writes signal status (PASSED / REJECTED_<step>).
@@ -544,7 +554,9 @@ class SignalProcessor:
             # ----------------------------------------------------------
             # Step 4: Entry + SL price derivation (SPW4)
             # ----------------------------------------------------------
-            entry_price, sl_price = self._derive_prices(trigger_price, strategy_obj)
+            entry_price, sl_price = self._derive_prices(
+                trigger_price, strategy_obj, now_time=now.time()  # FIX-130: gap buffer
+            )
 
             # SPW4: convert strategy direction ("LONG"/"SHORT") to order side
             # ("BUY"/"SELL") for downstream modules (position_sizer, order_placer).
@@ -662,7 +674,9 @@ class SignalProcessor:
                             f"live={live_ltp:.2f} delta={price_delta:+.2f}"
                         )
                         # Use live LTP as new anchor for entry price derivation
-                        fresh_entry_price, _ = self._derive_prices(live_ltp, strategy_obj)
+                        fresh_entry_price, _ = self._derive_prices(
+                            live_ltp, strategy_obj, now_time=now.time()
+                        )
                     else:
                         self._log.warning(
                             f"FIX-067 momentum fresh quote failed for {symbol}: "
@@ -846,7 +860,16 @@ class SignalProcessor:
     # Price derivation (SPW4)
     # ------------------------------------------------------------------
 
-    def _derive_prices(self, trigger_price: float, strategy) -> Tuple[float, float]:
+    # Gap-window constants for sl_gap_buffer_pct (FIX-130 Item 4)
+    _GAP_WINDOW_START = __import__("datetime").time(9, 15)
+    _GAP_WINDOW_END   = __import__("datetime").time(9, 30)
+
+    def _derive_prices(
+        self,
+        trigger_price: float,
+        strategy,
+        now_time: Optional[object] = None,  # datetime.time — if provided, enables gap buffer
+    ) -> Tuple[float, float]:
         """
         Derive entry price and SL price from strategy config (SPW4).
 
@@ -863,6 +886,10 @@ class SignalProcessor:
         Bounds:
             If sl_distance_pct < sl_min_pct: adjust sl + WARNING
             If sl_distance_pct > sl_max_pct: adjust sl + WARNING
+
+        FIX-130 (Item 4): if strategy.sl_gap_buffer_pct > 0 and now_time is within
+        09:15-09:30 gap window, widen SL by sl_gap_buffer_pct after bounds enforcement.
+        LONG: sl moved lower (more room); SHORT: sl moved higher (more room).
         """
         direction = strategy.direction  # "LONG" or "SHORT"
 
@@ -960,6 +987,28 @@ class SignalProcessor:
             sl_price = (
                 entry_price - adj_dist if direction == "LONG"
                 else entry_price + adj_dist
+            )
+
+        # FIX-130 (Item 4): apply SL gap-window buffer during 09:15-09:30.
+        # Only active when strategy.sl_gap_buffer_pct > 0 AND now_time is provided
+        # AND we're inside the gap risk window. Applied AFTER bounds enforcement
+        # so the base SL is already within sl_min/sl_max before widening.
+        gap_buffer = float(getattr(strategy, "sl_gap_buffer_pct", 0.0))
+        if (
+            gap_buffer > 0.0
+            and now_time is not None
+            and self._GAP_WINDOW_START <= now_time <= self._GAP_WINDOW_END
+        ):
+            factor = gap_buffer / 100.0
+            original_sl = sl_price
+            if direction == "LONG":
+                sl_price = sl_price * (1.0 - factor)
+            else:
+                sl_price = sl_price * (1.0 + factor)
+            self._log.info(
+                f"sl_gap_buffer applied: strategy={strategy.name} "
+                f"direction={direction} buffer={gap_buffer}% "
+                f"sl {original_sl:.4f} -> {sl_price:.4f}"
             )
 
         return entry_price, sl_price

@@ -218,19 +218,20 @@ class TestApiFailureCircuitBreaker:
 
 class TestPartialFillCircuitBreaker:
 
-    def test_partial_fill_within_timeout_not_cancelled(self) -> None:
-        """Partial fill within timeout window → not cancelled."""
+    def test_partial_fill_entry_cancelled_immediately(self) -> None:
+        """FIX-130 Option A: ENTRY leg first PARTIAL -> cancel immediately (no timeout wait)."""
         adapter = _MockAdapter()
         monitor = _make_monitor(adapter, partial_fill_timeout_minutes=5)
-        internal_id = _track_order(monitor)
+        internal_id = _track_order(monitor)  # leg="ENTRY" by default
         composite_key = monitor._internal_to_composite[internal_id]
         entry = monitor._watched[composite_key]
 
-        # Simulate partial fill (just set partial_since to now — within timeout)
+        # First PARTIAL on ENTRY leg -> immediate cancel (FIX-130 Option A)
         monitor._handle_partial(entry, filled_qty=5, avg_price=1000.0)
 
-        assert adapter.cancelled == [], "Should not cancel within timeout"
-        print("  OK: partial fill within timeout → not cancelled")
+        assert adapter.cancelled != [], "ENTRY first PARTIAL must cancel immediately"
+        assert adapter.cancelled[0] == entry.broker_order_id
+        print("  OK: ENTRY leg first PARTIAL -> immediate cancel (FIX-130 Option A)")
 
     def test_partial_fill_past_timeout_cancelled(self) -> None:
         """Partial fill stuck > timeout → order cancelled."""

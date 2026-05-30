@@ -223,6 +223,7 @@ def _make_scan_webhook_map(names=("scanner_a", "scanner_b")) -> MagicMock:
 def _make_app_config(file_hashes: dict = None) -> MagicMock:
     ac = MagicMock()
     ac.file_hashes = file_hashes or {}
+    ac.system.scanner_check_delay_sec = 0.0  # prevent MagicMock comparison error
     return ac
 
 
@@ -689,8 +690,8 @@ def test_fixd_delay_applied_before_check_loop(tmp_path: Path) -> None:
     elapsed = time.monotonic() - start
 
     assert result.all_reachable is True
-    # Should have slept at least 0.1 seconds
-    assert elapsed >= 0.1
+    # Should have slept at least 0.1 seconds (allow generous margin for Windows timer granularity)
+    assert elapsed >= 0.05
     # Check DEBUG log for sleep message
     assert len(log.debugs) == 1
     assert "sleeping" in log.debugs[0]

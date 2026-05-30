@@ -136,6 +136,14 @@ CREATE TABLE IF NOT EXISTS trades (
     mode                TEXT,                        -- PAPER | LIVE
     sl_trail_count      INTEGER DEFAULT 0,
 
+    -- v17 (FIX-130 Item 5): signal-to-fill latency in milliseconds.
+    -- signal_to_order_ms: signals.received_at → entry order.placed_at
+    -- order_to_fill_ms:   entry order.placed_at → entry order.filled_at
+    -- total_latency_ms:   signals.received_at → entry order.filled_at
+    signal_to_order_ms  INTEGER,
+    order_to_fill_ms    INTEGER,
+    total_latency_ms    INTEGER,
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -656,9 +664,9 @@ CREATE INDEX IF NOT EXISTS idx_pnl_reconciliation_date
     ON pnl_reconciliation(date);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v15 -> v16
+-- SCHEMA VERSION BUMP: v16 -> v17
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '16');
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '17');
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v16 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
@@ -681,5 +689,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '16');
 --                          +screener_results.eligible_score;
 --                          +candles table; +trade_excursions table;
 --                    v15: +pnl_reconciliation table (FIX-128 Fix B);
---                    v16: +orders.reconciliation_status (FIX-129 Item 26))
+--                    v16: +orders.reconciliation_status (FIX-129 Item 26);
+--                    v17: +trades.signal_to_order_ms/order_to_fill_ms/total_latency_ms (FIX-130 Item 5))
 -- ─────────────────────────────────────────────────────────────────────────────

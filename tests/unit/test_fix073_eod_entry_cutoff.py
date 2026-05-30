@@ -200,7 +200,7 @@ class TestFix073EodEntryCutoff:
 
     def test_order_rejected_past_eod_cutoff_15_16(self):
         """Order at 15:16 (past 15:15 cutoff) -> rejected, capital released."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             # Set cutoff at 15:15
             mw = MarketWindows(eod_entry_cutoff=time(15, 15))
             placer, store, fm, adapter = _make_placer(Path(tmp), mw)
@@ -240,7 +240,7 @@ class TestFix073EodEntryCutoff:
     def test_order_proceeds_before_eod_cutoff_15_14(self):
         """Order at 15:14 (before 15:15 cutoff) -> proceeds normally."""
         fake_time = datetime(2026, 5, 18, 15, 14, 0, tzinfo=IST)
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             mw = MarketWindows(eod_entry_cutoff=time(15, 15))
             placer, store, fm, adapter = _make_placer(Path(tmp), mw)
 
@@ -271,7 +271,7 @@ class TestFix073EodEntryCutoff:
 
     def test_order_rejected_exactly_at_cutoff_15_15_00(self):
         """Order at 15:15:00 exactly (boundary inclusive) -> rejected."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             mw = MarketWindows(eod_entry_cutoff=time(15, 15))
             placer, store, fm, adapter = _make_placer(Path(tmp), mw)
             sig_id = _seed_signal(store)
@@ -306,7 +306,7 @@ class TestFix073EodEntryCutoff:
 
     def test_configurable_cutoff_time(self):
         """Changing eod_entry_cutoff changes behavior."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             # Test with 15:10 cutoff
             mw_early = MarketWindows(eod_entry_cutoff=time(15, 10))
             placer, store, fm, adapter = _make_placer(Path(tmp), mw_early)
@@ -343,7 +343,7 @@ class TestFix073EodEntryCutoff:
 
     def test_no_market_windows_skips_check(self):
         """If market_windows=None, no EOD check (backward compat)."""
-        with TemporaryDirectory() as tmp:
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             # Create placer without market_windows
             store = StateStore(Path(tmp) / "test.db")
             bus = EventBus()

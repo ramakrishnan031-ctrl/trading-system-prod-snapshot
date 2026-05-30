@@ -11,12 +11,21 @@ Tests verify that:
 5. Edge cases: 09:15 (open), 15:30 (close)
 """
 
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+# These tests run a bash subprocess. Skip on all Windows machines —
+# even when bash.exe exists (WSL stub), it may not execute scripts.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Bash hook tests require a Unix bash environment; not supported on Windows",
+)
 
 
 @pytest.fixture

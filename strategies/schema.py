@@ -62,6 +62,7 @@ class StrategyConfig(BaseModel):
     sl_atr_multiplier: float = 1.5
     sl_min_pct: float = 0.003
     sl_max_pct: float = 0.05
+    sl_gap_buffer_pct: float = 0.0  # FIX-130: extra SL buffer during 09:15-09:30 gap window (0=disabled)
 
     # --- Target ---
     tgt_method: str

@@ -434,8 +434,6 @@ class OrderPlacer:
 
         # FIX-075: Price drift threshold for margin top-up
         self._price_drift_threshold = price_drift_threshold
-        # Need leverage_map for margin recalculation
-        self._leverage_map = fund_manager._leverage_map
         # FIX-128: max allowed % deviation between trigger price and current LTP
         self._max_entry_slippage_pct = max_entry_slippage_pct
 
@@ -803,10 +801,9 @@ class OrderPlacer:
                             },
                         )
 
-                        # Recalculate required margin with current LTP
-                        from capital.fund_manager import required_margin
-                        original_margin = required_margin(qty, original_entry_price, intent, self._leverage_map)
-                        new_margin = required_margin(qty, current_ltp, intent, self._leverage_map)
+                        # Recalculate required margin with current LTP (H-3: use instance method)
+                        original_margin = self._fm.required_margin(qty, original_entry_price, intent)
+                        new_margin = self._fm.required_margin(qty, current_ltp, intent)
                         additional_margin = new_margin - original_margin
 
                         if additional_margin > 0:
@@ -1410,6 +1407,22 @@ class OrderPlacer:
                 avg_fill_price=avg_price,
                 reason=f"partial_terminated_{event.reason.lower()}",
             )
+
+        # FIX-130 (Item 16): Telegram alert for partial fill
+        if self._notifier is not None:
+            try:
+                body = (
+                    f"{event.symbol}: {qty_filled}/{fill_entry.qty} qty filled"
+                    f" @ {avg_price:.2f}\n"
+                    f"SL placed for {qty_filled} shares | unfilled portion cancelled"
+                )
+                self._notifier.send(
+                    title=f"[{self._mode}] PARTIAL FILL -- {event.symbol}",
+                    body=body,
+                    source_module="order_placer",
+                )
+            except Exception as exc:
+                self._log.error("order_placer: partial_fill notifier.send failed: %s", exc)
 
     def _on_order_status_changed(self, event: OrderStatusChanged) -> None:
         """

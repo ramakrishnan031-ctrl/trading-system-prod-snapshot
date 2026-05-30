@@ -18,6 +18,7 @@ sl_pct: 0.012
 sl_atr_multiplier: 1.5
 sl_min_pct: 0.003
 sl_max_pct: 0.05
+sl_gap_buffer_pct: 0.3  # FIX-130: widen SL 0.3% during 09:15-09:30 gap-risk window
 
 tgt_method: "RISK_REWARD"
 tgt_pct: 0.0

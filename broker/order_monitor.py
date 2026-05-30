@@ -851,7 +851,11 @@ class OrderMonitor:
         filled_qty: int,
         avg_price: float,
     ) -> None:
-        """Update partial fill tracking; transition to PARTIAL (self-loop OK) (OM8)."""
+        """Update partial fill tracking; transition to PARTIAL (self-loop OK) (OM8).
+
+        FIX-130 (Item 16) Option A: ENTRY legs are cancelled immediately on first
+        partial fill detection. Exit legs (SL/TGT/EOD) keep the timeout path.
+        """
         now = now_ist()
         if filled_qty > entry.filled_qty:
             entry.filled_qty = filled_qty
@@ -861,13 +865,46 @@ class OrderMonitor:
                 extra={"internal_order_id": entry.internal_order_id,
                        "filled_qty": filled_qty, "avg_price": avg_price},
             )
-        # FIX-128 Fix C: record when first partial fill arrived (for stuck detection).
+        # Record when first partial fill arrived.
+        first_partial = entry.partial_since is None
         if entry.partial_since is None:
             entry.partial_since = now
 
         self._safe_transition(entry.internal_order_id, "PARTIAL", entry=entry)
 
-        # FIX-128 Fix C: cancel ENTRY orders stuck in PARTIAL state too long.
+        # FIX-130 (Item 16) Option A: cancel ENTRY leg immediately on first PARTIAL.
+        if first_partial and entry.leg == "ENTRY":
+            self._log.warning(
+                "order_monitor.partial_immediate_cancel",
+                extra={
+                    "internal_order_id": entry.internal_order_id,
+                    "broker_order_id": entry.broker_order_id,
+                    "symbol": entry.symbol,
+                    "filled_qty": entry.filled_qty,
+                    "requested_qty": entry.qty,
+                },
+            )
+            result = self._adapter.cancel_order(entry.broker_order_id)
+            if result.success:
+                self._log.info(
+                    "order_monitor.partial_immediate_cancelled",
+                    extra={"internal_order_id": entry.internal_order_id},
+                )
+                # _handle_terminal fires OrderPartiallyTerminated if filled_qty > 0,
+                # then transitions to CANCELLED and untracks — exactly what we need.
+                self._handle_terminal(entry, "CANCELLED")
+            else:
+                self._log.critical(
+                    "order_monitor.partial_immediate_cancel_failed",
+                    extra={
+                        "internal_order_id": entry.internal_order_id,
+                        "cancel_reason": result.reason,
+                    },
+                )
+                self._fire_orphan(entry)
+            return  # handled; skip timeout path below
+
+        # FIX-128 Fix C: timeout-based fallback for non-ENTRY legs stuck in PARTIAL.
         if (
             entry.leg not in ("SL", "TGT", "EOD")  # exit legs are exempt
             and entry.partial_since is not None

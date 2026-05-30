@@ -342,6 +342,10 @@ class OrderManager:
     ) -> None:
         """
         Record that the entry order filled. Sets status=OPEN. (OMgr4)
+
+        FIX-130 (Item 5): also computes and stores signal-to-fill latency metrics
+        (signal_to_order_ms, order_to_fill_ms, total_latency_ms) best-effort.
+        Any failure is logged at DEBUG level and silently skipped.
         """
         now = now_ist().isoformat()
         with self._store.transaction() as cur:
@@ -365,6 +369,83 @@ class OrderManager:
                 "qty_filled": qty_filled,
             },
         )
+
+        # FIX-130 (Item 5): compute latency metrics best-effort (no schema knowledge in OMgr)
+        self._compute_and_store_latency(trade_id, filled_at)
+
+    def _compute_and_store_latency(self, trade_id: str, filled_at: str) -> None:
+        """
+        FIX-130 (Item 5): Compute signal-to-fill latency metrics and store in trades.
+
+        signal_to_order_ms: signal.received_at → ENTRY order.placed_at
+        order_to_fill_ms:   ENTRY order.placed_at → filled_at (entry fill time)
+        total_latency_ms:   signal.received_at → filled_at
+
+        All best-effort — any DB read failure is silently skipped.
+        """
+        from datetime import datetime
+
+        def _parse(ts: Optional[str]) -> Optional[datetime]:
+            if not ts:
+                return None
+            try:
+                return datetime.fromisoformat(ts)
+            except Exception:
+                return None
+
+        def _ms(t_start: Optional[datetime], t_end: Optional[datetime]) -> Optional[int]:
+            if t_start is None or t_end is None:
+                return None
+            delta = (t_end - t_start).total_seconds() * 1000
+            return max(0, int(delta))  # clamp to 0 (NTP skew can give small negatives)
+
+        try:
+            trade_row = self._store.fetch_one(
+                "SELECT signal_id FROM trades WHERE trade_id = ?", (trade_id,)
+            )
+            signal_id = trade_row["signal_id"] if trade_row else None
+
+            sig_received_at: Optional[str] = None
+            if signal_id:
+                sig_row = self._store.fetch_one(
+                    "SELECT received_at FROM signals WHERE signal_id = ?", (signal_id,)
+                )
+                sig_received_at = sig_row["received_at"] if sig_row else None
+
+            order_row = self._store.fetch_one(
+                "SELECT placed_at FROM orders WHERE trade_id = ? AND leg = 'ENTRY'", (trade_id,)
+            )
+            order_placed_at: Optional[str] = order_row["placed_at"] if order_row else None
+
+            t_signal = _parse(sig_received_at)
+            t_placed = _parse(order_placed_at)
+            t_filled = _parse(filled_at)
+
+            sig_to_order = _ms(t_signal, t_placed)
+            order_to_fill = _ms(t_placed, t_filled)
+            total_lat = _ms(t_signal, t_filled)
+
+            if any(v is not None for v in (sig_to_order, order_to_fill, total_lat)):
+                with self._store.transaction() as cur:
+                    cur.execute(
+                        """UPDATE trades
+                           SET signal_to_order_ms = ?,
+                               order_to_fill_ms   = ?,
+                               total_latency_ms   = ?
+                           WHERE trade_id = ?""",
+                        (sig_to_order, order_to_fill, total_lat, trade_id),
+                    )
+                self._log.debug(
+                    "latency_recorded",
+                    extra={
+                        "trade_id": trade_id,
+                        "signal_to_order_ms": sig_to_order,
+                        "order_to_fill_ms": order_to_fill,
+                        "total_latency_ms": total_lat,
+                    },
+                )
+        except Exception as exc:
+            self._log.debug("latency_compute_failed: %s", exc)
 
     def close_trade(
         self,

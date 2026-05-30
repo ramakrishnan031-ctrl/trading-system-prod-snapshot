@@ -67,11 +67,26 @@ def _flush_all() -> None:
 
 
 def _teardown() -> None:
-    """Remove and close all handlers attached by the most recent setup_logging() call.
+    """Drain queue, close all handlers, remove from root logger.
 
     Must be called INSIDE the `with TemporaryDirectory` block on Windows so
     file handles are released before the OS attempts to delete the directory.
     """
+    # Stop async queue listener first — drains pending records and joins thread
+    ql = _logger_mod._queue_listener
+    if ql is not None:
+        try:
+            ql.stop()
+        except Exception:
+            pass
+        # Close the file handlers that were inside the listener
+        for h in getattr(ql, "handlers", ()):
+            try:
+                h.close()
+            except Exception:
+                pass
+        _logger_mod._queue_listener = None
+
     root = logging.getLogger()
     for h in list(_logger_mod._active_handlers):
         root.removeHandler(h)
@@ -83,7 +98,20 @@ def _teardown() -> None:
 
 
 def _read_lines(path: Path) -> list[str]:
-    """Flush, read, return non-empty lines from a log file."""
+    """Drain async queue, flush, read, return non-empty lines from a log file."""
+    # Stop queue listener so all pending records land in files before we read
+    ql = _logger_mod._queue_listener
+    if ql is not None:
+        try:
+            ql.stop()
+        except Exception:
+            pass
+        for h in getattr(ql, "handlers", ()):
+            try:
+                h.close()
+            except Exception:
+                pass
+        _logger_mod._queue_listener = None
     _flush_all()
     text = path.read_text(encoding="utf-8")
     return [ln for ln in text.splitlines() if ln.strip()]
@@ -116,7 +144,7 @@ def test_get_logger_different_names_return_different_instances() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_setup_logging_creates_logs_dir_if_absent() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp) / "nested" / "logs"
         assert not d.exists()
         setup_logging(log_dir=d)
@@ -129,7 +157,7 @@ def test_setup_logging_creates_logs_dir_if_absent() -> None:
 
 def test_4_log_files_created_with_today_ist_date() -> None:
     date = today_ist()
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         found = {stem: (d / f"{stem}_{date}.log").exists()
@@ -146,7 +174,7 @@ def test_4_log_files_created_with_today_ist_date() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_system_file_is_json_lines() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_json_sys")
@@ -161,7 +189,7 @@ def test_system_file_is_json_lines() -> None:
 
 
 def test_reconciler_file_is_json_lines() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("order_reconciler_test")
@@ -175,7 +203,7 @@ def test_reconciler_file_is_json_lines() -> None:
 
 
 def test_trades_file_is_json_lines() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = bind_trade(get_logger("test_json_trades"), signal_id="SIG1")
@@ -189,7 +217,7 @@ def test_trades_file_is_json_lines() -> None:
 
 
 def test_debug_file_is_plain_text_not_json() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_plain_debug")
@@ -218,7 +246,7 @@ def test_bind_trade_returns_trade_context() -> None:
 
 
 def test_bind_trade_attaches_ids_to_records() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = bind_trade(
@@ -240,7 +268,7 @@ def test_bind_trade_attaches_ids_to_records() -> None:
 
 
 def test_bind_trade_skips_none_ids() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = bind_trade(
@@ -265,7 +293,7 @@ def test_bind_trade_skips_none_ids() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_record_with_trade_id_lands_in_trades_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = bind_trade(get_logger("test_route_trades"), trade_id="T42")
@@ -280,7 +308,7 @@ def test_record_with_trade_id_lands_in_trades_log() -> None:
 
 
 def test_record_with_trade_id_also_lands_in_system_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = bind_trade(get_logger("test_route_both"), signal_id="S77")
@@ -297,7 +325,7 @@ def test_record_with_trade_id_also_lands_in_system_log() -> None:
 
 
 def test_record_without_trade_ids_not_in_trades_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_route_no_ids")
@@ -311,7 +339,7 @@ def test_record_without_trade_ids_not_in_trades_log() -> None:
 
 
 def test_reconciler_logger_lands_in_reconciler_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("order_reconciler")
@@ -326,7 +354,7 @@ def test_reconciler_logger_lands_in_reconciler_log() -> None:
 
 
 def test_order_monitor_logger_lands_in_reconciler_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("order_monitor")
@@ -341,7 +369,7 @@ def test_order_monitor_logger_lands_in_reconciler_log() -> None:
 
 
 def test_non_reconciler_logger_not_in_reconciler_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("capital_fund_manager")
@@ -355,7 +383,7 @@ def test_non_reconciler_logger_not_in_reconciler_log() -> None:
 
 
 def test_debug_record_lands_in_debug_log() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_debug_route")
@@ -376,7 +404,7 @@ def test_debug_record_lands_in_debug_log() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_warning_mirrored_to_stdout() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         buf = io.StringIO()
         sys.stdout = buf
@@ -395,7 +423,7 @@ def test_warning_mirrored_to_stdout() -> None:
 
 
 def test_info_not_mirrored_to_stdout() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         buf = io.StringIO()
         sys.stdout = buf
@@ -414,7 +442,7 @@ def test_info_not_mirrored_to_stdout() -> None:
 
 
 def test_debug_not_mirrored_to_stdout() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         buf = io.StringIO()
         sys.stdout = buf
@@ -437,7 +465,7 @@ def test_debug_not_mirrored_to_stdout() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_log_exception_warn_severity_logs_at_warning() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_exc_warn")
@@ -457,7 +485,7 @@ def test_log_exception_warn_severity_logs_at_warning() -> None:
 
 def test_log_exception_error_severity_uses_error_level() -> None:
     from core.exceptions import OrderRejectedError
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_exc_error")
@@ -475,7 +503,7 @@ def test_log_exception_error_severity_uses_error_level() -> None:
 
 
 def test_log_exception_non_trading_system_error_uses_error_level() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_exc_vanilla")
@@ -493,7 +521,7 @@ def test_log_exception_non_trading_system_error_uses_error_level() -> None:
 
 
 def test_log_exception_context_fields_in_json() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_exc_ctx")
@@ -519,7 +547,7 @@ def test_log_exception_context_fields_in_json() -> None:
 
 
 def test_log_exception_non_tse_has_empty_context_in_json() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_exc_no_ctx")
@@ -546,7 +574,7 @@ def test_log_exception_non_tse_has_empty_context_in_json() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_json_line_has_required_fixed_fields() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_json_fields")
@@ -564,7 +592,7 @@ def test_json_line_has_required_fixed_fields() -> None:
 
 
 def test_json_line_field_order_matches_l9_schema() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_json_order")
@@ -606,7 +634,7 @@ def test_json_line_field_order_matches_l9_schema() -> None:
 
 
 def test_json_priority_extra_keys_omitted_when_absent() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_json_omit")
@@ -621,7 +649,7 @@ def test_json_priority_extra_keys_omitted_when_absent() -> None:
 
 
 def test_json_ts_is_ist_iso8601_with_offset() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         log = get_logger("test_json_ts")
@@ -643,7 +671,7 @@ def test_json_ts_is_ist_iso8601_with_offset() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_duplicate_setup_logging_does_not_double_attach_handlers() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
 
         # First setup + first log message
@@ -670,7 +698,7 @@ def test_duplicate_setup_logging_does_not_double_attach_handlers() -> None:
 
 
 def test_active_handlers_list_matches_root_handlers() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         d = Path(tmp)
         setup_logging(log_dir=d)
         root_handlers = logging.getLogger().handlers

@@ -205,6 +205,7 @@ class TestFix075PriceDrift:
                 positional_bucket_pct=0.3,
                 leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, "COVER_ORDER": 6.0, "BRACKET_ORDER": 5.0},
                 kill_switch=None,
+                slm_margin_buffer_pct=0.0,
             )
             fm.initialize(broker_balance=100000.0)
 
@@ -264,6 +265,7 @@ class TestFix075PriceDrift:
                 positional_bucket_pct=0.3,
                 leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, "COVER_ORDER": 6.0, "BRACKET_ORDER": 5.0},
                 kill_switch=None,
+                slm_margin_buffer_pct=0.0,
             )
             fm.initialize(broker_balance=100000.0)
 
@@ -314,6 +316,7 @@ class TestFix075PriceDrift:
                 positional_bucket_pct=0.3,
                 leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, "COVER_ORDER": 6.0, "BRACKET_ORDER": 5.0},
                 kill_switch=None,
+                slm_margin_buffer_pct=0.0,
             )
             fm.initialize(broker_balance=3000.0)
 
@@ -363,6 +366,7 @@ class TestFix075PriceDrift:
                 positional_bucket_pct=0.3,
                 leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, "COVER_ORDER": 6.0, "BRACKET_ORDER": 5.0},
                 kill_switch=None,
+                slm_margin_buffer_pct=0.0,
             )
             fm.initialize(broker_balance=100000.0)
 
@@ -408,6 +412,7 @@ class TestFix075PriceDrift:
                 positional_bucket_pct=0.3,
                 leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, "COVER_ORDER": 6.0, "BRACKET_ORDER": 5.0},
                 kill_switch=None,
+                slm_margin_buffer_pct=0.0,
             )
             fm.initialize(broker_balance=100000.0)
 
@@ -454,6 +459,7 @@ class TestFix075PriceDrift:
                 positional_bucket_pct=0.3,
                 leverage_map={"INTRADAY": 5.0, "DELIVERY": 1.0, "COVER_ORDER": 6.0, "BRACKET_ORDER": 5.0},
                 kill_switch=None,
+                slm_margin_buffer_pct=0.0,
             )
             fm.initialize(broker_balance=100000.0)
 

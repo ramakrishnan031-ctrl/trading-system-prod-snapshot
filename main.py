@@ -78,7 +78,7 @@ from signals.signal_processor import SignalProcessor
 from signals.webhook_receiver import WebhookReceiver
 from strategies.loader import StrategyLoader
 from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
-from utils.instance_lock import acquire_instance_lock, release_instance_lock
+from utils.instance_lock import acquire_instance_lock, check_port_available, release_instance_lock
 from utils.startup_checks import (
     StartupCheckFailed,
     StartupScenario,
@@ -644,6 +644,21 @@ def _make_orphan_cb(
     return _on_orphan
 
 
+def _build_strategy_governor(store, app_config, notifier, mode: str):
+    """FIX-130 Item 6: build StrategyGovernor if circuit breaker config is present."""
+    from capital.strategy_governor import StrategyGovernor
+    cfg = getattr(app_config.system, "strategy_circuit_breaker", None)
+    if cfg is None:
+        return None
+    return StrategyGovernor(
+        store=store,
+        config=cfg,
+        notifier=notifier,
+        logger=get_logger("strategy_governor"),
+        mode=mode,
+    )
+
+
 def _make_gate_release_cb(signal_processor: SignalProcessor):
     def _on_gate_release(entry: WatchEntry, reason: str) -> None:
         if reason == "PRICE_HIT":
@@ -660,6 +675,82 @@ def _make_gate_release_cb(signal_processor: SignalProcessor):
                 reason, entry.symbol, entry.signal_id,
             )
     return _on_gate_release
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EOD pre-alert at 14:45 (FIX-130 Item 7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fire_eod_pre_alert(store: "StateStore", notifier, mode: str, log) -> None:
+    """Query open trades and send Telegram warning ~30 min before EOD squareoff."""
+    try:
+        rows = store.fetch_all(
+            "SELECT symbol, direction, qty_filled, entry_actual_price "
+            "FROM trades WHERE status = 'OPEN' AND qty_filled > 0 "
+            "ORDER BY symbol",
+        )
+        if not rows:
+            log.info("eod_pre_alert: no open positions; skipping alert")
+            return
+        n = len(rows)
+        lines = [f"EOD WARNING: {n} position{'s' if n != 1 else ''} force-squared in ~30 min:"]
+        for r in rows:
+            direction = r["direction"]
+            qty = r["qty_filled"] or 0
+            price = r["entry_actual_price"] or 0.0
+            lines.append(f"  {r['symbol']}: {direction} {qty} @ {price:.2f}")
+        body = "\n".join(lines)
+        if notifier is not None:
+            notifier.send(
+                title=f"[{mode}] EOD SQUAREOFF IN ~30 MIN",
+                body=body,
+                source_module="main",
+            )
+        log.info("eod_pre_alert: sent for %d open position(s)", n)
+    except Exception as exc:
+        log.error("eod_pre_alert: failed: %s", exc)
+
+
+def _start_eod_pre_alert_thread(
+    store: "StateStore",
+    notifier,
+    mode: str,
+    log,
+    market_windows,
+    shutdown_event: "threading.Event",
+) -> None:
+    """Background thread: sleep until 14:45 IST then fire the EOD pre-alert (once/day)."""
+    import time as _time_mod
+    from core.time_authority import now_ist as _now_ist
+
+    _PRE_ALERT_TIME = _time(14, 45)
+
+    def _run() -> None:
+        while not shutdown_event.is_set():
+            now = _now_ist()
+            today = now.date()
+            # Only fire on trading days
+            if market_windows is None or not market_windows.is_trading_day(today):
+                break
+            alert_dt = now.replace(
+                hour=_PRE_ALERT_TIME.hour, minute=_PRE_ALERT_TIME.minute,
+                second=0, microsecond=0,
+            )
+            wait_sec = (alert_dt - now).total_seconds()
+            if wait_sec <= 0:
+                # Already past 14:45 today — don't fire again today
+                break
+            # Sleep in small increments so shutdown_event is checked
+            end = _now_ist().timestamp() + wait_sec
+            while not shutdown_event.is_set() and _now_ist().timestamp() < end:
+                _time_mod.sleep(min(30.0, end - _now_ist().timestamp()))
+            if shutdown_event.is_set():
+                return
+            _fire_eod_pre_alert(store, notifier, mode, log)
+            break  # fire once per day; thread exits
+
+    t = threading.Thread(target=_run, name="eod-pre-alert", daemon=True)
+    t.start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1743,6 +1834,8 @@ def _main_locked(args, config_dir: Path) -> int:
         signal_expiry_sec=app_config.system.signal_queue.expiry_sec,
         # FIX-067: quote function for momentum fresh LTP fetch
         quote_fn=broker_adapter.get_quote,
+        # FIX-130 Item 6: intraday strategy circuit breaker
+        strategy_governor=_build_strategy_governor(store, app_config, notifier, mode_label),
     )
 
     entry_gate = EntryGate(
@@ -1884,6 +1977,16 @@ def _main_locked(args, config_dir: Path) -> int:
         daemon=True,
     )
     eod_thread.start()
+
+    # FIX-130 (Item 7): EOD pre-alert at 14:45 IST
+    _start_eod_pre_alert_thread(
+        store=store,
+        notifier=notifier,
+        mode=args.mode.upper(),
+        log=_log,
+        market_windows=market_windows,
+        shutdown_event=_shutdown_event,
+    )
 
     # CV3: Validate all config values were accessed (non-strict for gradual rollout)
     config_validator.validate_all(strict=False)

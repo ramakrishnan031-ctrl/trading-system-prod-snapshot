@@ -73,6 +73,7 @@ def _make_fm(
         on_daily_loss_breach=on_loss_breach,
         on_critical_failure=on_critical,
         kill_switch=kill_switch,
+        slm_margin_buffer_pct=0.0,  # tests verify pure math; buffer tested separately
     )
 
 
