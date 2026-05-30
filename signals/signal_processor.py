@@ -723,6 +723,7 @@ class SignalProcessor:
                     reservation_id=reservation_id,
                     strategy=strategy_name,
                     tgt_price=tgt_price,
+                    signal_trigger_price=trigger_price,  # FIX-128: for slippage guard
                 )
                 reservation_id = None   # placer owns it now
             except (BrokerRateLimitError, BrokerTimeoutError) as transient_err:
@@ -1203,6 +1204,7 @@ class SignalProcessor:
                     strategy=strategy_name,
                     tgt_price=tgt_price,
                     release_ltp=release_ltp,  # FIX-025
+                    signal_trigger_price=entry.trigger_price,  # FIX-128: for slippage guard
                 )
                 reservation_id = None   # placer owns it now
             except BrokerError as be:

@@ -630,13 +630,33 @@ CREATE TABLE IF NOT EXISTS trade_excursions (
     FOREIGN KEY (trade_id) REFERENCES trades(trade_id)
 );
 
--- ─────────────────────────────────────────────────────────────────────────────
--- SCHEMA VERSION BUMP: v13 -> v14
--- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '14');
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 20: pnl_reconciliation  (v15 / FIX-128 Fix B)
+-- Daily EOD record comparing broker-reported P&L against system net_pnl.
+-- Written by scripts/reconcile_pnl.py at 16:15 IST after market close.
+-- Status: OK | VARIANCE_MINOR | VARIANCE_MAJOR | PAPER_SKIPPED | ERROR
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS pnl_reconciliation (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT NOT NULL UNIQUE,          -- YYYY-MM-DD
+    broker_pnl      REAL,                          -- null when broker fetch skipped (paper)
+    system_pnl      REAL NOT NULL,                 -- sum(trades.net_pnl) for closed trades today
+    variance        REAL,                          -- abs(broker_pnl - system_pnl); null if paper
+    status          TEXT NOT NULL,                 -- OK | VARIANCE_MINOR | VARIANCE_MAJOR | PAPER_SKIPPED | ERROR
+    notes           TEXT,                          -- human-readable explanation; null if OK
+    created_at      TEXT NOT NULL                  -- ISO-8601 IST
+);
+
+CREATE INDEX IF NOT EXISTS idx_pnl_reconciliation_date
+    ON pnl_reconciliation(date);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v14 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- SCHEMA VERSION BUMP: v14 -> v15
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '15');
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- END OF SCHEMA v15 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -654,5 +674,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '14');
 --                          +orders.rejection_reason/filled_at;
 --                          +signals.webhook_payload;
 --                          +screener_results.eligible_score;
---                          +candles table; +trade_excursions table)
+--                          +candles table; +trade_excursions table;
+--                    v15: +pnl_reconciliation table (FIX-128 Fix B))
 -- ─────────────────────────────────────────────────────────────────────────────

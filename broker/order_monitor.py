@@ -70,6 +70,8 @@ class _WatchEntry:
     auth_fail_count: int = field(default=0, compare=False)
     # Track consecutive empty-history responses; after threshold triggers orphan
     empty_history_count: int = field(default=0, compare=False)
+    # FIX-128 (Fix C): partial fill circuit breaker — when first PARTIAL received
+    partial_since: Optional[datetime] = field(default=None, compare=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +172,10 @@ class OrderMonitor:
         fill_timeout_sec: int = 60,
         on_orphan_callback: Optional[Callable[[str, str], None]] = None,
         on_critical_failure: Optional[Callable[[str], None]] = None,
+        partial_fill_timeout_minutes: int = 5,           # FIX-128 Fix C
+        max_api_failures: int = 3,                       # FIX-128 Fix C
+        force_close_time: Optional[str] = None,          # FIX-128 Fix C: "HH:MM" IST
+        on_force_close: Optional[Callable[[], None]] = None,  # FIX-128 Fix C
     ) -> None:
         """
         Args:
@@ -182,6 +188,10 @@ class OrderMonitor:
             on_orphan_callback:   Called with (internal_id, broker_id) when cancel
                                   fails and order is orphaned. Optional. (OM7)
             on_critical_failure:  Called with (reason) when auth fails 3x. (OM11)
+            partial_fill_timeout_minutes: FIX-128: cancel PARTIAL-stuck orders after N min.
+            max_api_failures:     FIX-128: consecutive general API errors before hard_kill.
+            force_close_time:     FIX-128: "HH:MM" IST to force-cancel all ENTRY orders.
+            on_force_close:       FIX-128: callback fired at force_close_time (once/day).
         """
         self._adapter = adapter
         self._osm = state_machine
@@ -203,6 +213,25 @@ class OrderMonitor:
 
         # OM11: consecutive auth fail counter (global across all orders)
         self._consecutive_auth_fails = 0
+
+        # FIX-128 (Fix C): circuit breaker state
+        self._partial_fill_timeout_sec = partial_fill_timeout_minutes * 60
+        self._max_api_failures = max_api_failures
+        self._consecutive_api_fails = 0       # general non-auth, non-timeout failures
+        self._on_force_close = on_force_close
+        self._force_close_fired_date: Optional[str] = None  # YYYY-MM-DD; reset daily
+        import datetime as _dt
+        if force_close_time:
+            try:
+                h, m = force_close_time.split(":")
+                self._force_close_time_t: Optional[_dt.time] = _dt.time(int(h), int(m))
+            except Exception:
+                self._log.warning(
+                    "order_monitor: invalid force_close_time %r; disabling", force_close_time
+                )
+                self._force_close_time_t = None
+        else:
+            self._force_close_time_t = None
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -503,6 +532,9 @@ class OrderMonitor:
         # pressure (shared get_margins quota bucket in the adapter).
         tick_cache = _OrphanTickCache(self._adapter, self._log)
 
+        # FIX-128 Fix C: check force-close time once per poll cycle.
+        self._check_force_close(snapshot)
+
         # FIX-086: iterate over composite keys
         for composite_key, entry in snapshot.items():
             # Skip if already removed (concurrent untrack)
@@ -544,10 +576,35 @@ class OrderMonitor:
             return
         except Exception as exc:
             log_exception(self._log, exc)
+            # FIX-128 Fix C: count general (non-auth, non-timeout) broker errors.
+            # 3 consecutive → fire hard_kill via on_critical_failure.
+            self._consecutive_api_fails += 1
+            self._log.warning(
+                "order_monitor.api_failure_counted",
+                extra={
+                    "broker_order_id": entry.broker_order_id,
+                    "consecutive": self._consecutive_api_fails,
+                    "max": self._max_api_failures,
+                    "error": str(exc),
+                },
+            )
+            if self._consecutive_api_fails >= self._max_api_failures:
+                reason = (
+                    f"circuit_breaker: {self._consecutive_api_fails} consecutive API failures "
+                    f"-- HARD_KILL required"
+                )
+                self._log.critical(
+                    "order_monitor.circuit_breaker_api_failures",
+                    extra={"reason": reason, "consecutive": self._consecutive_api_fails},
+                )
+                if self._on_critical is not None:
+                    self._on_critical(reason)
+                self._stop_event.set()
             return
 
-        # Reset auth fail counter on successful poll (OM11)
+        # Reset both fail counters on successful poll (OM11)
         self._consecutive_auth_fails = 0
+        self._consecutive_api_fails = 0
 
         if not history:
             # OM11 extension: empty history is unexpected for a tracked order.
@@ -636,6 +693,83 @@ class OrderMonitor:
                        "kite_status": kite_status},
             )
 
+    # ── circuit breaker (FIX-128 Fix C) ──────────────────────────────────────
+
+    def _check_force_close(self, snapshot: dict) -> None:
+        """
+        FIX-128 Fix C: force-cancel all pending ENTRY orders at force_close_time.
+
+        Fires once per calendar day. Cancels every tracked ENTRY leg in the
+        current snapshot (SL/TGT/EOD legs are exempt — they must remain open
+        until price crosses or EOD squareoff manages them). Then fires
+        on_force_close callback for the caller to handle position closing.
+
+        Paper mode: cancel_order on the paper adapter is simulated (no real
+        broker call); the callback fires the same way.
+        """
+        if self._force_close_time_t is None or self._on_force_close is None:
+            return
+
+        now = now_ist()
+        today_str = now.date().isoformat()
+
+        if self._force_close_fired_date == today_str:
+            return  # already fired today
+
+        if now.time() < self._force_close_time_t:
+            return  # not yet time
+
+        self._force_close_fired_date = today_str
+        self._log.warning(
+            "order_monitor.force_close_triggered",
+            extra={
+                "force_close_time": self._force_close_time_t.strftime("%H:%M"),
+                "watched_count": len(snapshot),
+            },
+        )
+
+        for entry in snapshot.values():
+            if entry.leg in ("SL", "TGT", "EOD"):
+                continue  # exit legs stay open
+            try:
+                result = self._adapter.cancel_order(entry.broker_order_id)
+                if result.success:
+                    self._log.info(
+                        "order_monitor.force_close_entry_cancelled",
+                        extra={
+                            "internal_order_id": entry.internal_order_id,
+                            "broker_order_id": entry.broker_order_id,
+                        },
+                    )
+                    self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
+                    self.untrack(entry.internal_order_id)
+                else:
+                    self._log.critical(
+                        "order_monitor.force_close_cancel_failed",
+                        extra={
+                            "internal_order_id": entry.internal_order_id,
+                            "reason": result.reason,
+                        },
+                    )
+            except Exception as exc:
+                log_exception(self._log, exc)
+                self._log.critical(
+                    "order_monitor.force_close_cancel_error",
+                    extra={
+                        "internal_order_id": entry.internal_order_id,
+                        "error": str(exc),
+                    },
+                )
+
+        try:
+            self._on_force_close()
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_monitor.force_close_callback_failed",
+                extra={"error": str(exc)},
+            )
+
     # ── status handlers ───────────────────────────────────────────────────────
 
     def _fire_orphan(self, entry: _WatchEntry) -> None:
@@ -656,6 +790,7 @@ class OrderMonitor:
         avg_price: float,
     ) -> None:
         """Update partial fill tracking; transition to PARTIAL (self-loop OK) (OM8)."""
+        now = now_ist()
         if filled_qty > entry.filled_qty:
             entry.filled_qty = filled_qty
             entry.avg_fill_price = avg_price
@@ -664,7 +799,48 @@ class OrderMonitor:
                 extra={"internal_order_id": entry.internal_order_id,
                        "filled_qty": filled_qty, "avg_price": avg_price},
             )
+        # FIX-128 Fix C: record when first partial fill arrived (for stuck detection).
+        if entry.partial_since is None:
+            entry.partial_since = now
+
         self._safe_transition(entry.internal_order_id, "PARTIAL", entry=entry)
+
+        # FIX-128 Fix C: cancel ENTRY orders stuck in PARTIAL state too long.
+        if (
+            entry.leg not in ("SL", "TGT", "EOD")  # exit legs are exempt
+            and entry.partial_since is not None
+            and self._partial_fill_timeout_sec > 0
+        ):
+            elapsed = max(0.0, (now - entry.partial_since).total_seconds())
+            if elapsed > self._partial_fill_timeout_sec:
+                self._log.warning(
+                    "order_monitor.partial_stuck_cancel",
+                    extra={
+                        "internal_order_id": entry.internal_order_id,
+                        "broker_order_id": entry.broker_order_id,
+                        "filled_qty": entry.filled_qty,
+                        "elapsed_sec": round(elapsed, 1),
+                        "timeout_sec": self._partial_fill_timeout_sec,
+                    },
+                )
+                result = self._adapter.cancel_order(entry.broker_order_id)
+                if result.success:
+                    self._log.info(
+                        "order_monitor.partial_stuck_cancelled",
+                        extra={"internal_order_id": entry.internal_order_id},
+                    )
+                    self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
+                    self.untrack(entry.internal_order_id)
+                else:
+                    self._log.critical(
+                        "order_monitor.partial_stuck_cancel_failed",
+                        extra={
+                            "internal_order_id": entry.internal_order_id,
+                            "cancel_reason": result.reason,
+                        },
+                    )
+                    self._fire_orphan(entry)
+
         # No OrderFilled on PARTIAL -- only on COMPLETE (OM8)
 
     def _handle_complete(

@@ -174,6 +174,7 @@ smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
 
 entry_gate:                   # FIX-025: gate release slippage protection
   slippage_buffer: 2.0        # Rs buffer for limit price adjustment at gate release
+  max_entry_slippage_pct: 1.0 # FIX-128: abort if current LTP deviates > 1% from signal trigger price
 
 paper:                        # H-20/ZA16a: paper-mode fill synthesis
   auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)
@@ -189,6 +190,11 @@ drift_handler:                # BL-2: capital drift escalation
   soft_kill_threshold_rs: 200000.0
   hard_kill_threshold_rs: 500000.0
   consecutive_cycles_before_escalate: 3
+
+circuit_breaker:              # FIX-128 (Fix C): position-level circuit breaker
+  partial_fill_timeout_minutes: 5   # cancel stuck PARTIAL-fill entry orders after this many minutes
+  force_close_time: "15:15"         # force-cancel all pending entries + close all positions at this IST time
+  max_api_failures: 3               # consecutive broker API errors before HARD_KILL
 
 # FIX-D: Scanner connectivity check settings
 scanner_check_delay_sec: 5.0  # Delay before scanner checks (network stabilization at startup)

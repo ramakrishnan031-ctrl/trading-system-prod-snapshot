@@ -623,9 +623,32 @@ class EntryGateConfig(BaseModel):
     protection:
       LONG:  adjusted_limit = min(requested_entry + buffer, release_ltp)
       SHORT: adjusted_limit = max(requested_entry - buffer, release_ltp)
+
+    FIX-128 (Fix A): max_entry_slippage_pct caps the allowed deviation
+    between current market price and the original signal trigger price.
+    If abs(ltp - trigger) / trigger * 100 > this value, order is aborted.
     """
     model_config = ConfigDict(extra="forbid")
     slippage_buffer: float  # Rs buffer for limit price adjustment
+    max_entry_slippage_pct: float = 1.0  # FIX-128: % cap on trigger→LTP deviation
+
+
+class CircuitBreakerConfig(BaseModel):
+    """
+    FIX-128 (Fix C): Position-level circuit breaker settings.
+
+    partial_fill_timeout_minutes: cancel a stuck PARTIAL-fill order after
+        this many minutes from first partial. Supplement to the existing
+        fill_timeout_sec (which only applies to OPEN → no-fill timeout).
+    force_close_time: IST HH:MM at which all pending ENTRY orders are
+        cancelled and all open positions are force-closed (circuit breaker
+        distinct from the regular EOD squareoff at 15:17).
+    max_api_failures: consecutive broker API errors before HARD_KILL.
+    """
+    model_config = ConfigDict(extra="forbid")
+    partial_fill_timeout_minutes: int = 5
+    force_close_time: str = "15:15"
+    max_api_failures: int = 3
 
 
 class DriftHandlerConfig(BaseModel):
@@ -708,6 +731,7 @@ class SystemConfig(BaseModel):
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis
     drift_handler: DriftHandlerConfig         # BL-2: drift escalation policy
+    circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()  # FIX-128: defaults if absent
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
 
 

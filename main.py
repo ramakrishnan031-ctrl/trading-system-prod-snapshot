@@ -38,6 +38,7 @@ from typing import Optional
 import core.time_authority as time_authority
 from alerts.telegram_notifier import TelegramNotifier
 from broker.clock_skew_probe import BrokerClockSkewProbe
+from broker.token_monitor import TokenMonitor
 from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
 from broker.order_state_machine import OrderStateMachine
@@ -497,6 +498,126 @@ def _make_critical_failure_cb(
     return _on_critical_failure
 
 
+def _make_force_close_cb(
+    kill_switch: KillSwitch,
+    notifier: Optional[TelegramNotifier],
+    mode: str = "LIVE",
+):
+    """FIX-128 Fix C: force-close circuit breaker callback (15:15 IST trigger)."""
+    def _on_force_close() -> None:
+        _log.critical(
+            "circuit_breaker.force_close_triggered: soft_kill, EOD squareoff handles positions"
+        )
+        kill_switch.soft_kill(
+            reason="circuit_breaker_force_close_15:15",
+            triggered_by="order_monitor",
+        )
+        if notifier is not None:
+            try:
+                notifier.send(
+                    severity="WARNING",
+                    title=f"[{mode}] CIRCUIT BREAKER — Force Close",
+                    body="15:15 circuit breaker fired: pending entry orders cancelled.\nEOD squareoff will close all positions at 15:17.",
+                    source_module="main",
+                )
+            except Exception as ne:
+                _log.error("notifier.send failed in force_close callback: %s", ne)
+    return _on_force_close
+
+
+def _make_api_failure_hard_kill_cb(
+    kill_switch: KillSwitch,
+    notifier: Optional[TelegramNotifier],
+    mode: str = "LIVE",
+):
+    """FIX-128 Fix C: circuit breaker hard_kill on 3 consecutive API failures."""
+    def _on_api_failure(reason: str) -> None:
+        _log.critical("circuit_breaker.api_failure_hard_kill: %s", reason)
+        try:
+            kill_switch.hard_kill(
+                reason=f"circuit_breaker_api_failure: {reason}",
+                triggered_by="order_monitor",
+            )
+        except Exception as exc:
+            _log.error("hard_kill failed in api_failure callback: %s", exc)
+        if notifier is not None:
+            try:
+                notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{mode}] CIRCUIT BREAKER — API Failure Hard Kill",
+                    body=f"3 consecutive broker API failures detected.\n{reason}",
+                    source_module="main",
+                )
+            except Exception as ne:
+                _log.error("notifier.send failed in api_failure callback: %s", ne)
+    return _on_api_failure
+
+
+
+def _make_daily_loss_cb(
+    kill_switch: KillSwitch,
+    notifier: Optional[TelegramNotifier],
+    mode: str = "LIVE",
+    eod_ref: Optional[dict] = None,  # {"eod": EodSquareoff | None} — filled after EodSquareoff created
+):
+    """
+    FIX-128 (Fix D): Daily loss limit kill sequence.
+
+    Correct sequence:
+      1. Telegram alert: DAILY LOSS LIMIT HIT
+      2. Fire EodSquareoff.fire_now() — cancels pending entries + market-closes all positions
+      3. Trigger SOFT_KILL (not HARD_KILL — positions are being closed)
+
+    eod_ref is a mutable dict because EodSquareoff is created AFTER FundManager in main().
+    Main fills it after EodSquareoff construction.
+    Paper mode: EodSquareoff.fire_now() simulates closes (paper adapter).
+    """
+    def _on_daily_loss_breach() -> None:
+        _log.critical(
+            "daily_loss_limit.breach_sequence_start",
+            extra={"mode": mode},
+        )
+
+        if notifier is not None:
+            try:
+                notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{mode}] DAILY LOSS LIMIT HIT",
+                    body=(
+                        "Closing all positions and halting new trades.\n"
+                        "Cancel pending entries → Market-close all positions → SOFT_KILL"
+                    ),
+                    source_module="main",
+                )
+            except Exception as ne:
+                _log.error("notifier.send failed in daily_loss callback: %s", ne)
+
+        eod_instance = (eod_ref or {}).get("eod")
+        if eod_instance is not None:
+            try:
+                eod_instance.fire_now(
+                    reason="daily_loss_limit_breached",
+                    triggered_by="fund_manager",
+                )
+                _log.critical("daily_loss_limit.eod_fire_now_complete")
+            except Exception as exc:
+                _log.error(
+                    "daily_loss_limit.eod_fire_now_failed: %s — proceeding to soft_kill", exc
+                )
+        else:
+            _log.warning(
+                "daily_loss_limit.eod_not_wired — skipping position close; soft_kill only"
+            )
+
+        kill_switch.soft_kill(
+            reason="daily_loss_limit_breached",
+            triggered_by="fund_manager",
+        )
+        _log.critical("daily_loss_limit.sequence_complete: soft_kill triggered")
+
+    return _on_daily_loss_breach
+
+
 def _make_orphan_cb(
     kill_switch: KillSwitch,
     notifier: Optional[TelegramNotifier],
@@ -587,6 +708,7 @@ def _shutdown(
     store: StateStore,
     webhook_receiver: Optional[WebhookReceiver] = None,
     clock_skew_probe: Optional[BrokerClockSkewProbe] = None,
+    token_monitor: Optional[TokenMonitor] = None,  # FIX-128 Fix E
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -632,6 +754,11 @@ def _shutdown(
             clock_skew_probe.stop()
         except Exception as exc:
             _log.error("clock_skew_probe.stop error: %s", exc)
+    if token_monitor is not None:  # FIX-128 Fix E
+        try:
+            token_monitor.stop()
+        except Exception as exc:
+            _log.error("token_monitor.stop error: %s", exc)
     try:
         live_feed.disconnect()
     except Exception as exc:
@@ -1267,6 +1394,10 @@ def _main_locked(args, config_dir: Path) -> int:
         "BRACKET_ORDER": cap_cfg.leverage_map.BRACKET_ORDER,
     }
 
+    # FIX-128 (Fix D): late-binding ref for EodSquareoff in daily_loss_breach callback.
+    # Filled after EodSquareoff is instantiated below.
+    _eod_ref: dict = {"eod": None}
+
     fund_manager = FundManager(
         state_store=store,
         bus=event_bus,
@@ -1275,8 +1406,11 @@ def _main_locked(args, config_dir: Path) -> int:
         positional_bucket_pct=cap_cfg.positional_bucket_pct,
         daily_loss_limit=cap_cfg.daily_loss_limit,
         leverage_map=leverage_map,
-        on_daily_loss_breach=lambda: kill_switch.soft_kill(
-            reason="daily_loss_limit_breached", triggered_by="fund_manager"
+        on_daily_loss_breach=_make_daily_loss_cb(
+            kill_switch=kill_switch,
+            notifier=notifier,
+            mode=mode_label,
+            eod_ref=_eod_ref,  # FIX-128: late-bound; filled after EodSquareoff created
         ),
         kill_switch=kill_switch,  # FM19 / BL-9: invariant violations -> hard_kill
     )
@@ -1422,6 +1556,7 @@ def _main_locked(args, config_dir: Path) -> int:
     )
 
     om_cfg = app_config.system.order_monitor
+    cb_cfg = app_config.system.circuit_breaker
     order_monitor = OrderMonitor(
         adapter=broker_adapter,
         state_machine=state_machine,
@@ -1430,6 +1565,11 @@ def _main_locked(args, config_dir: Path) -> int:
         poll_interval_sec=om_cfg.poll_interval_sec,
         fill_timeout_sec=om_cfg.fill_timeout_sec,
         on_orphan_callback=_make_orphan_cb(kill_switch, notifier, mode_label),
+        on_critical_failure=_make_api_failure_hard_kill_cb(kill_switch, notifier, mode_label),
+        partial_fill_timeout_minutes=cb_cfg.partial_fill_timeout_minutes,  # FIX-128
+        max_api_failures=cb_cfg.max_api_failures,                          # FIX-128
+        force_close_time=cb_cfg.force_close_time,                          # FIX-128
+        on_force_close=_make_force_close_cb(kill_switch, notifier, mode_label),  # FIX-128
     )
 
     co_protocol = CoPlusTgtProtocol(
@@ -1464,6 +1604,7 @@ def _main_locked(args, config_dir: Path) -> int:
         smart_tgt_config=app_config.system.smart_tgt,  # BL-7b: trigger_pct/step_pct
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,  # BL-19
         entry_gate_slippage_buffer=app_config.system.entry_gate.slippage_buffer,  # FIX-025
+        max_entry_slippage_pct=app_config.system.entry_gate.max_entry_slippage_pct,  # FIX-128
         notifier=notifier,
         mode=mode_label,
         live_feed=live_feed,  # FIX-061: LTP retry for exit validation errors
@@ -1526,6 +1667,24 @@ def _main_locked(args, config_dir: Path) -> int:
         exit_protocol=app_config.system.eod_squareoff.exit_protocol,
         limit_aggressive_pct=app_config.system.eod_squareoff.limit_aggressive_pct,
         limit_grace_sec=app_config.system.eod_squareoff.limit_grace_sec,
+    )
+    # FIX-128 (Fix D): wire EodSquareoff into the daily loss callback late-binding ref.
+    _eod_ref["eod"] = eod
+
+    # FIX-128 (Fix E): Token expiry monitor — checks Zerodha token every 30 min.
+    # Paper mode: no-op (no real token required). Does NOT start until Phase 0g.
+    token_monitor = TokenMonitor(
+        profile_fn=broker_adapter._kite.profile if not is_paper else (lambda: None),
+        on_expiry=lambda: kill_switch.soft_kill(
+            reason="token_expired", triggered_by="token_monitor"
+        ),
+        logger=get_logger("token_monitor"),
+        check_interval_sec=1800,  # 30 minutes
+        paper_mode=is_paper,
+        market_open=app_config.system.trading_hours.market_open,
+        market_close=app_config.system.trading_hours.market_close,
+        notifier=notifier,
+        mode=mode_label,
     )
 
     signal_queue: queue.Queue = queue.Queue(
@@ -1671,6 +1830,7 @@ def _main_locked(args, config_dir: Path) -> int:
     order_reconciler.start()
     if clock_skew_probe is not None:
         clock_skew_probe.start()
+    token_monitor.start()  # FIX-128 Fix E: no-op in paper mode
     # signal_processor BEFORE entry_gate (BLOCKER #5 fix): gate may call
     # continue_from_gate() immediately on release; workers must be ready.
     signal_processor.start()
@@ -1788,6 +1948,7 @@ def _main_locked(args, config_dir: Path) -> int:
         store=store,
         webhook_receiver=webhook_receiver,
         clock_skew_probe=clock_skew_probe,
+        token_monitor=token_monitor,  # FIX-128 Fix E
         mode=mode_label,
     )
     return 0

@@ -376,6 +376,7 @@ class OrderPlacer:
         broker_adapter: Optional[Any] = None,  # FIX-072: optional adapter for margin cache invalidation
         market_windows: Optional[Any] = None,  # FIX-073: market windows for EOD entry cutoff check
         price_drift_threshold: float = 0.005,  # FIX-075: 0.5% default drift threshold for margin top-up
+        max_entry_slippage_pct: float = 1.0,  # FIX-128: abort if LTP deviates > this % from trigger
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -435,6 +436,8 @@ class OrderPlacer:
         self._price_drift_threshold = price_drift_threshold
         # Need leverage_map for margin recalculation
         self._leverage_map = fund_manager._leverage_map
+        # FIX-128: max allowed % deviation between trigger price and current LTP
+        self._max_entry_slippage_pct = max_entry_slippage_pct
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -551,6 +554,7 @@ class OrderPlacer:
         strategy: str = "",
         tgt_price: Optional[float] = None,  # SPW6: provided by signal_processor; overrides OP3
         release_ltp: Optional[float] = None,  # FIX-025: gate release LTP for slippage protection
+        signal_trigger_price: Optional[float] = None,  # FIX-128: original Chartink trigger for slippage guard
     ) -> None:
         """
         Create trade, place entry orders, register fill tracking. (OP1–OP4)
@@ -709,6 +713,61 @@ class OrderPlacer:
                     final_status="REJECTED",
                 )
                 raise eod_exc
+
+        # FIX-128 (Fix A): Slippage guard — abort if market has moved too far from signal trigger.
+        # For gate-path signals, release_ltp is already captured at gate release; reuse it
+        # to avoid a redundant quote fetch. For direct-path signals, fetch current LTP.
+        # Best-effort: if LTP unavailable, skip check and proceed.
+        if signal_trigger_price is not None and signal_trigger_price > 0:
+            _slip_ltp = release_ltp  # gate path: already have LTP
+            if _slip_ltp is None and self._live_feed is not None:
+                try:
+                    _q = self._live_feed.quote(symbol)
+                    if _q.success and _q.ltp and _q.ltp > 0:
+                        _slip_ltp = _q.ltp
+                except Exception as _slip_exc:
+                    self._log.debug(
+                        "order_placer.slippage_guard_ltp_fetch_failed",
+                        extra={"symbol": symbol, "error": str(_slip_exc)},
+                    )
+            if _slip_ltp is not None:
+                _slip_pct = abs(_slip_ltp - signal_trigger_price) / signal_trigger_price * 100
+                if _slip_pct > self._max_entry_slippage_pct:
+                    slip_exc = OrderRejectedError(
+                        f"slippage_exceeded: trigger={signal_trigger_price:.2f} "
+                        f"ltp={_slip_ltp:.2f} slippage={_slip_pct:.2f}% "
+                        f"limit={self._max_entry_slippage_pct:.1f}%",
+                        trade_id=trade_id, signal_id=signal_id, symbol=symbol,
+                    )
+                    self._log.warning(
+                        "order_placer.slippage_guard_exceeded",
+                        extra={
+                            "trade_id": trade_id, "signal_id": signal_id,
+                            "symbol": symbol, "side": side,
+                            "trigger_price": signal_trigger_price,
+                            "current_ltp": _slip_ltp,
+                            "slippage_pct": round(_slip_pct, 3),
+                            "limit_pct": self._max_entry_slippage_pct,
+                        },
+                    )
+                    if self._notifier is not None:
+                        try:
+                            self._notifier.send(
+                                severity="WARNING",
+                                title=f"[{self._mode}] SLIPPAGE GUARD — {symbol}",
+                                body=(
+                                    f"Order aborted: {side} | Slippage {_slip_pct:.2f}% > limit {self._max_entry_slippage_pct:.1f}%\n"
+                                    f"Trigger: ₹{signal_trigger_price:.2f} | LTP: ₹{_slip_ltp:.2f}"
+                                ),
+                                source_module="order_placer",
+                            )
+                        except Exception as _ne:
+                            self._log.error("order_placer: slippage notifier.send failed: %s", _ne)
+                    self._handle_placement_failure(
+                        trade_id, reservation_id, signal_id, slip_exc,
+                        final_status="REJECTED",
+                    )
+                    raise slip_exc
 
         # FIX-075: Price drift check before placement
         # If price has drifted significantly since reservation, top up margin.

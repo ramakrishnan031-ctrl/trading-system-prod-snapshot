@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 14
+EXPECTED_SCHEMA_VERSION = 15
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1728,6 +1728,59 @@ class StateStore:
             cur.execute("SELECT * FROM gate_state ORDER BY added_at ASC")
             rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # P&L reconciliation helpers (FIX-128 Fix B)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def get_today_closed_pnl(self, date_iso: str) -> float:
+        """
+        Return sum of net_pnl for trades CLOSED today (FIX-128 Fix B).
+
+        Only terminal statuses (CLOSED) are included. Open trades have
+        unrealized P&L not yet counted. Returns 0.0 if no closed trades today.
+        """
+        row = self.fetch_one(
+            """SELECT COALESCE(SUM(net_pnl), 0.0) AS total
+               FROM trades
+               WHERE status = 'CLOSED'
+                 AND DATE(updated_at) = ?""",
+            (date_iso,),
+        )
+        return float(row["total"]) if row else 0.0
+
+    def upsert_pnl_reconciliation(
+        self,
+        date: str,
+        broker_pnl: Optional[float],
+        system_pnl: float,
+        variance: Optional[float],
+        status: str,
+        notes: Optional[str],
+        created_at: str,
+    ) -> None:
+        """
+        Upsert a pnl_reconciliation row for date (FIX-128 Fix B).
+
+        Uses INSERT OR REPLACE so a re-run on the same date overwrites the
+        previous result. Allows scripts/reconcile_pnl.py to be run multiple
+        times idempotently.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """INSERT OR REPLACE INTO pnl_reconciliation
+                       (date, broker_pnl, system_pnl, variance, status, notes, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (date, broker_pnl, system_pnl, variance, status, notes, created_at),
+            )
+
+    def get_pnl_reconciliation(self, date_iso: str) -> Optional[dict]:
+        """Return pnl_reconciliation row for date_iso, or None if not found."""
+        row = self.fetch_one(
+            "SELECT * FROM pnl_reconciliation WHERE date = ?",
+            (date_iso,),
+        )
+        return dict(row) if row else None
 
     def __repr__(self) -> str:
         return f"StateStore(db_path={self._db_path!r})"

@@ -4476,6 +4476,243 @@ class _MockEngine072:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-128 (Fix A) — Entry slippage guard
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _LiveFeedQuoteResult:
+    """Simple quote result used by _MockLiveFeed."""
+    def __init__(self, ltp: float, success: bool = True):
+        self.ltp = ltp
+        self.success = success
+
+
+class _MockLiveFeed:
+    """Minimal live feed mock that returns a configurable LTP."""
+
+    def __init__(self, ltp: float = 100.0, fail: bool = False):
+        self._ltp = ltp
+        self._fail = fail
+        self.quote_calls: list[str] = []
+
+    def quote(self, symbol: str):
+        self.quote_calls.append(symbol)
+        if self._fail:
+            raise RuntimeError("quote fetch failed")
+        return _LiveFeedQuoteResult(ltp=self._ltp)
+
+
+class TestFix128EntrySlippageGuard:
+    """FIX-128 (Fix A): slippage guard aborts orders where LTP > max_entry_slippage_pct from trigger."""
+
+    def _make_placer(self, tmp_path: Path, live_feed=None, max_slippage_pct: float = 1.0,
+                     notifier=None):
+        store = _make_store(tmp_path)
+        om = OrderManager(store, _log())
+        bus = EventBus()
+        fm = _MockFundManager()
+        mon = MagicMock(spec=OrderMonitor)
+        adapter = _MockAdapter()
+        lim_prot = LimitTripleProtocol(adapter=adapter, logger=_log())
+        co_prot = CoPlusTgtProtocol(adapter=adapter, logger=_log())
+        engine = FullEntryEngine(
+            limit_protocol=lim_prot,
+            co_protocol=co_prot,
+            logger=_log(),
+        )
+        cost_calc = MagicMock(spec=CostCalculator)
+        placer = OrderPlacer(
+            entry_engine=engine,
+            order_manager=om,
+            fund_manager=fm,
+            bus=bus,
+            logger=_log(),
+            order_monitor=mon,
+            cost_calculator=cost_calc,
+            product_resolver=_default_resolver(),
+            live_feed=live_feed,
+            max_entry_slippage_pct=max_slippage_pct,
+            notifier=notifier,
+        )
+        return placer, store, fm, adapter
+
+    def test_slippage_within_limit_order_placed(self) -> None:
+        """Slippage < limit → order proceeds normally."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            # trigger=1000, current_ltp=1005 → slippage=0.5% < limit=1.0%
+            feed = _MockLiveFeed(ltp=1005.0)
+            placer, store, fm, adapter = self._make_placer(Path(tmp), live_feed=feed)
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_001",
+                signal_trigger_price=1000.0,
+            )
+
+            assert len(adapter.placed) >= 1, "Order should have been placed"
+            assert fm.released == [], "Capital should NOT have been released (order placed)"
+            store.close()
+            print("  OK FIX-128: slippage 0.5% < 1.0% → order placed")
+
+    def test_slippage_exceeded_order_aborted(self) -> None:
+        """Slippage > limit → order aborted, trade REJECTED, capital released."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            # trigger=1000, current_ltp=1020 → slippage=2.0% > limit=1.0%
+            feed = _MockLiveFeed(ltp=1020.0)
+            placer, store, fm, adapter = self._make_placer(Path(tmp), live_feed=feed)
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(OrderRejectedError) as exc_info:
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=1000.0, sl_price=950.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_slippage_01",
+                    signal_trigger_price=1000.0,
+                )
+
+            assert "slippage_exceeded" in str(exc_info.value).lower()
+            assert len(adapter.placed) == 0, "No broker order should have been placed"
+            assert "res_slippage_01" in fm.released, "Capital should be released on abort"
+            store.close()
+            print("  OK FIX-128: slippage 2.0% > 1.0% → order aborted, capital released")
+
+    def test_slippage_at_exact_limit_allows_order(self) -> None:
+        """Slippage exactly at limit (not strictly greater) → order proceeds."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            # trigger=1000, ltp=1010 → slippage=1.0% == limit=1.0% → allowed (not > limit)
+            feed = _MockLiveFeed(ltp=1010.0)
+            placer, store, fm, adapter = self._make_placer(
+                Path(tmp), live_feed=feed, max_slippage_pct=1.0
+            )
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_exact_01",
+                signal_trigger_price=1000.0,
+            )
+
+            assert len(adapter.placed) >= 1
+            store.close()
+            print("  OK FIX-128: slippage == limit (not exceeded) → order placed")
+
+    def test_no_signal_trigger_price_skips_check(self) -> None:
+        """No signal_trigger_price provided → slippage guard skipped, order placed."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            # Even with a feed that would show 5% slippage, without trigger price no guard fires
+            feed = _MockLiveFeed(ltp=1050.0)
+            placer, store, fm, adapter = self._make_placer(Path(tmp), live_feed=feed)
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_no_trigger",
+            )
+
+            assert len(adapter.placed) >= 1, "Order should be placed when trigger not provided"
+            assert fm.released == [], "Capital should NOT be released (order placed)"
+            store.close()
+            print("  OK FIX-128: no signal_trigger_price → slippage guard skipped, order placed")
+
+    def test_gate_path_uses_release_ltp_not_feed_for_guard(self) -> None:
+        """Gate path: release_ltp used for slippage guard, order placed (within limit)."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            # release_ltp=1005 → slippage=0.5% < 1.0% → order placed
+            # live_feed shows 2% but release_ltp takes priority for the guard
+            feed = _MockLiveFeed(ltp=1020.0)
+            placer, store, fm, adapter = self._make_placer(Path(tmp), live_feed=feed)
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_gate_path",
+                release_ltp=1005.0,       # gate path LTP (0.5% slippage — within limit)
+                signal_trigger_price=1000.0,
+            )
+
+            # Order placed because release_ltp gives 0.5% slippage < 1.0% limit
+            assert len(adapter.placed) >= 1, "Order placed (release_ltp 0.5% slippage ok)"
+            assert fm.released == [], "Capital not released (order succeeded)"
+            store.close()
+            print("  OK FIX-128: gate path uses release_ltp for slippage guard (within limit)")
+
+    def test_ltp_fetch_failure_allows_order(self) -> None:
+        """LTP fetch failure → check skipped, order proceeds (best-effort)."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            feed = _MockLiveFeed(ltp=0.0, fail=True)
+            placer, store, fm, adapter = self._make_placer(Path(tmp), live_feed=feed)
+            sig_id = _seed_signal(store)
+
+            placer.place(
+                symbol="RELIANCE", side="BUY", qty=10,
+                entry_price=1000.0, sl_price=950.0,
+                intent="INTRADAY", signal_id=sig_id,
+                reservation_id="res_ltp_fail",
+                signal_trigger_price=1000.0,
+            )
+
+            assert len(adapter.placed) >= 1, "Order should proceed when LTP fetch fails"
+            store.close()
+            print("  OK FIX-128: LTP fetch failure → slippage check skipped, order placed")
+
+    def test_slippage_abort_sends_telegram_alert(self) -> None:
+        """Slippage exceeded → Telegram alert sent with correct details."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            feed = _MockLiveFeed(ltp=1030.0)  # 3% slippage
+            notifier = MagicMock()
+            placer, store, fm, adapter = self._make_placer(
+                Path(tmp), live_feed=feed, notifier=notifier
+            )
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(OrderRejectedError):
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=1000.0, sl_price=950.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_tg_test",
+                    signal_trigger_price=1000.0,
+                )
+
+            assert notifier.send.called, "Telegram alert should be sent on slippage abort"
+            call_kwargs = notifier.send.call_args
+            assert call_kwargs.kwargs.get("severity") == "WARNING"
+            assert "SLIPPAGE GUARD" in call_kwargs.kwargs.get("title", "")
+            store.close()
+            print("  OK FIX-128: slippage abort sends Telegram WARNING alert")
+
+    def test_short_side_slippage_exceeded_aborts(self) -> None:
+        """SHORT trade: slippage check uses absolute deviation regardless of direction."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            # trigger=1000, ltp=975 → abs deviation = 2.5% > 1.0% → abort
+            feed = _MockLiveFeed(ltp=975.0)
+            placer, store, fm, adapter = self._make_placer(Path(tmp), live_feed=feed)
+            sig_id = _seed_signal(store)
+
+            with pytest.raises(OrderRejectedError):
+                placer.place(
+                    symbol="RELIANCE", side="SELL", qty=10,
+                    entry_price=1000.0, sl_price=1050.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_short_slip",
+                    signal_trigger_price=1000.0,
+                )
+
+            assert len(adapter.placed) == 0
+            store.close()
+            print("  OK FIX-128: SHORT slippage 2.5% > 1.0% → order aborted")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Runner
 # ─────────────────────────────────────────────────────────────────────────────
 
