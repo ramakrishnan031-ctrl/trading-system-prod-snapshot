@@ -594,6 +594,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     excluded_set = set(data.excluded_symbols)
 
     screener_map = {r.get("signal_id"): r for r in data.screener_results}
+    trade_by_signal = {t.get("signal_id"): t.get("trade_id") for t in data.trades}
 
     row = 2
     for sig in data.signals:
@@ -601,7 +602,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         symbol = sig.get("symbol", "")
         status = sig.get("status", "")
         rejection_reason = sig.get("rejection_reason", "")
-        trade_id = sig.get("trade_id") or "—"
+        trade_id = sig.get("trade_id") or trade_by_signal.get(signal_id) or "—"
 
         is_dup = "DUPLICATE" in status.upper()
         is_excluded = symbol in excluded_set
