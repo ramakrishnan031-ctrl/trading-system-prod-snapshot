@@ -197,6 +197,9 @@ class PositionSizingConfig(BaseModel):
     min_tick_size: float               # FIX-041: min SL distance (penny stock guard)
     max_single_order_qty: int          # FIX-041: sanity cap on computed qty
     tier_multipliers: PositionSizingTierConfig  # PS5
+    dynamic_by_winrate: bool = True            # FIX-133 Item 21: enable perf-weighted sizing
+    min_multiplier: float = 0.5                # FIX-133 Item 21: floor for perf weight
+    max_multiplier: float = 2.0                # FIX-133 Item 21: cap for perf weight
 
     @field_validator("risk_per_trade_pct")
     @classmethod
@@ -740,8 +743,18 @@ class DriftHandlerConfig(BaseModel):
         return self
 
 
+class BrokerConfig(BaseModel):
+    """FIX-133 Item 28/29: multi-broker + multi-account support."""
+    model_config = ConfigDict(extra="forbid")
+    primary: str = "zerodha"
+    fallback: str = "angelone"
+    fallback_enabled: bool = False
+    multi_account_mode: bool = False  # FIX-133 Item 29
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    broker: BrokerConfig = BrokerConfig()  # FIX-133 Item 28
     trading_hours: TradingHoursConfig
     signal_queue: SignalQueueConfig
     special_sessions: dict[str, dict[str, str]] | None = None  # FIX-094: date -> {market_open, market_close, eod_squareoff_time}

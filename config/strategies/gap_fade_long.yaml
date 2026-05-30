@@ -41,8 +41,8 @@ max_spread_pct: 0.005
 max_risk_pct: 0.01  # FIX-031: 1% risk per trade (was 0.0 which produces qty=0)
 lot_size: 1
 
-entry_start_time: "09:20"
-entry_end_time: "15:20"  # TEMP PAPER: was 11:30 — REVERT BEFORE LIVE
+entry_start_time: "09:15"
+entry_end_time: "09:45"   # FIX-133 Item 22: gap strategies — morning only
 active_days:
   - MON
   - TUE

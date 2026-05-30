@@ -437,7 +437,7 @@ def test_positional_strategy_fields() -> None:
         assert cfg.tgt_risk_reward > 0, "%s tgt_risk_reward must be > 0" % name
         assert cfg.smart_tgt_enabled is False, "%s smart_tgt should be disabled" % name
         assert cfg.pullback_wait_enabled is False, "%s pullback_wait should be disabled" % name
-        assert cfg.entry_end_time == "15:20", "%s entry_end should be 15:20 (TEMP PAPER)" % name
+        assert cfg.entry_end_time == "14:00", "%s entry_end should be 14:00 (FIX-133 Item 22)" % name
     print("  OK positional_strategy_fields: all 3 DELIVERY strategies verified (BL-16, FIX-013)")
 
 

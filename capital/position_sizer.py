@@ -399,6 +399,8 @@ class PositionSizer:
         tier_mult = self._tier_multipliers.get(score_tier, 1.0)
         effective_mult = tier_mult * max(0.0, perf_weight)  # perf_weight >= 0 guard
         tiered_qty = int(math.floor(raw_qty * effective_mult))
+        # FIX-133 Item 21: cap at 2x base_qty, floor at 1
+        tiered_qty = max(1, min(tiered_qty, raw_qty * 2))
         breakdown["tiered_qty"] = tiered_qty
         breakdown["tier_mult"] = tier_mult
         breakdown["perf_weight"] = round(perf_weight, 4)

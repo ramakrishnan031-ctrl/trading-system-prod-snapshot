@@ -1,0 +1,4 @@
+account_id,broker,label,is_primary,api_key_env,api_secret_env,totp_secret_env,paper_capital,capital_share_pct,enabled
+ACC001,zerodha,Primary Account,TRUE,ZERODHA_API_KEY_ACC001,ZERODHA_API_SECRET_ACC001,ZERODHA_TOTP_ACC001,500000,0.6,TRUE
+ACC002,zerodha,Secondary Account,FALSE,ZERODHA_API_KEY_ACC002,ZERODHA_API_SECRET_ACC002,ZERODHA_TOTP_ACC002,300000,0.4,TRUE
+ACC003,angelone,Backup Account,FALSE,ANGELONE_API_KEY_ACC003,ANGELONE_API_SECRET_ACC003,,200000,0,FALSE

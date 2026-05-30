@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 18  # FIX-131 Item 18: +telegram_alerts table
+EXPECTED_SCHEMA_VERSION = 19  # FIX-133 Item 30: +trade_journal table
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

@@ -685,10 +685,35 @@ CREATE TABLE IF NOT EXISTS telegram_alerts (
 CREATE INDEX IF NOT EXISTS idx_telegram_alerts_status_severity
     ON telegram_alerts(status, severity);
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '18');  -- FIX-131 Item 18
+-- TABLE 20: trade_journal — FIX-133 Item 30: daily trade journal
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Structured trade journal for pattern analysis. Populated after EOD.
+CREATE TABLE IF NOT EXISTS trade_journal (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    date                TEXT NOT NULL,           -- YYYY-MM-DD
+    trade_id            TEXT NOT NULL,
+    strategy            TEXT NOT NULL,
+    symbol              TEXT NOT NULL,
+    direction           TEXT NOT NULL,           -- LONG | SHORT
+    entry_reason        TEXT,                    -- scanner + screener score
+    exit_reason         TEXT,                    -- SL_HIT/TGT_HIT/EOD/etc
+    slippage_assessment TEXT,                    -- HIGH | LOW
+    mfe_captured_pct    REAL,                    -- (exit-entry)/(mfe-entry)*100
+    entry_price         REAL,
+    exit_price          REAL,
+    net_pnl             REAL,
+    notes               TEXT,
+    created_at          TEXT NOT NULL,
+    FOREIGN KEY (trade_id) REFERENCES trades(trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_journal_date ON trade_journal(date);
+CREATE INDEX IF NOT EXISTS idx_trade_journal_strategy ON trade_journal(strategy);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '19');  -- FIX-133 Item 30
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v16 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v19 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -710,5 +735,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '18');
 --                    v15: +pnl_reconciliation table (FIX-128 Fix B);
 --                    v16: +orders.reconciliation_status (FIX-129 Item 26);
 --                    v17: +trades.signal_to_order_ms/order_to_fill_ms/total_latency_ms (FIX-130 Item 5);
---                    v18: +telegram_alerts table (FIX-131 Item 18))
+--                    v18: +telegram_alerts table (FIX-131 Item 18);
+--                    v19: +trade_journal table (FIX-133 Item 30))
 -- ─────────────────────────────────────────────────────────────────────────────

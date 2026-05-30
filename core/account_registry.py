@@ -193,10 +193,18 @@ class AccountRegistry:
 
         # v2.1 readiness: capital_share_pct must sum to 1.0 across enabled
         # accounts when more than one is enabled.
-        if len(registry.get_enabled_accounts()) > 1:
-            total_share = sum(a.capital_share_pct for a in registry.get_enabled_accounts())
+        enabled = registry.get_enabled_accounts()
+        if len(enabled) > 1:
+            total_share = sum(a.capital_share_pct for a in enabled)
             if abs(total_share - 1.0) > 1e-6:
                 raise ConfigSchemaError(f"capital_share_pct sum = {total_share}, expected 1.0")
+            # FIX-133 Item 29: warn about untested multi-account mode
+            import logging
+            logging.getLogger(__name__).warning(
+                "multi_account.detected: %d enabled accounts. "
+                "Multi-account mode not fully tested — use single account for live.",
+                len(enabled),
+            )
 
         return registry
 
