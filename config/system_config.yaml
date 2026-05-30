@@ -99,6 +99,7 @@ webhook:                      # WR14 — HTTP server settings
                               # constrain the actual reachable surface.
   bind_port: 5000             # port to listen on
   require_hmac: false         # TEMP: disabled for Chartink (no HMAC support)
+  dedup_window_seconds: 300   # FIX-131 Item 17: 5-min fingerprint bucket (was 60s/1-min)
 
 signal_processor:             # SP15 — worker pool settings
   worker_count: 5             # ThreadPoolExecutor workers (1-50)
@@ -128,6 +129,9 @@ alerts:                       # TG12/AW11 — alert subsystem settings
   telegram:
     bot_token_env: "TELEGRAM_BOT_TOKEN"
     telegram_alerts_in_paper_mode: true
+    max_retries: 3              # FIX-131 Item 18: retry attempts per channel
+    retry_backoff_seconds: 2.0  # FIX-131 Item 18: seconds between retries
+    rate_limit_per_minute: 20   # FIX-131 Item 18: max Telegram messages/minute
     channels:
       - chat_id_env: "TELEGRAM_CHANNEL_PRIMARY"
         label: "Primary Alert Channel"

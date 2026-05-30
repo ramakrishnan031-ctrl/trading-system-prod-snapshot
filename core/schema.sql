@@ -666,7 +666,26 @@ CREATE INDEX IF NOT EXISTS idx_pnl_reconciliation_date
 -- ─────────────────────────────────────────────────────────────────────────────
 -- SCHEMA VERSION BUMP: v16 -> v17
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '17');
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TABLE 19: telegram_alerts — FIX-131 Item 18: Telegram alert delivery log
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Tracks every Telegram alert attempt for audit + startup retry of CRITICAL.
+-- status: SENT | FAILED | PENDING
+CREATE TABLE IF NOT EXISTS telegram_alerts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    sent_at       TEXT NOT NULL,           -- ISO-8601 IST
+    severity      TEXT NOT NULL,           -- CRITICAL | ERROR | WARN | INFO
+    title         TEXT NOT NULL,
+    body          TEXT,
+    status        TEXT NOT NULL DEFAULT 'PENDING', -- SENT | FAILED | PENDING
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    source_module TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_telegram_alerts_status_severity
+    ON telegram_alerts(status, severity);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '18');  -- FIX-131 Item 18
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v16 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
@@ -690,5 +709,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '17');
 --                          +candles table; +trade_excursions table;
 --                    v15: +pnl_reconciliation table (FIX-128 Fix B);
 --                    v16: +orders.reconciliation_status (FIX-129 Item 26);
---                    v17: +trades.signal_to_order_ms/order_to_fill_ms/total_latency_ms (FIX-130 Item 5))
+--                    v17: +trades.signal_to_order_ms/order_to_fill_ms/total_latency_ms (FIX-130 Item 5);
+--                    v18: +telegram_alerts table (FIX-131 Item 18))
 -- ─────────────────────────────────────────────────────────────────────────────

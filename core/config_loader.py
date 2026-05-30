@@ -274,6 +274,7 @@ class WebhookConfig(BaseModel):
     bind_host: str    # WR14: interface to bind (default "127.0.0.1")
     bind_port: int    # WR14: port to bind (default 5000)
     require_hmac: bool  # WR14: if True, reject requests missing valid HMAC
+    dedup_window_seconds: int = 300  # FIX-131 Item 17: fingerprint bucket width
 
 
 class EodSquareoffConfig(BaseModel):
@@ -446,6 +447,9 @@ class TelegramConfig(BaseModel):
     channels: list[TelegramChannelConfig]        # whitelist of known channels
     personal_chat_id_env: str = ""               # reserved for v2.1 bot commands; zero sends
     whitelist_only: bool = True                  # if True, only listed+enabled channels receive msgs
+    max_retries: int = 3                         # FIX-131 Item 18: retry attempts for failed sends
+    retry_backoff_seconds: float = 2.0           # FIX-131 Item 18: backoff delay between retries
+    rate_limit_per_minute: int = 20              # FIX-131 Item 18: max messages per minute
 
     @field_validator("channels")
     @classmethod
@@ -788,8 +792,43 @@ class ZerodhaRatesConfig(BaseModel):
 
 
 class BrokerCostsConfig(BaseModel):
+    """
+    FIX-131 Item 25: All rate fields must be explicitly defined in YAML.
+    Pydantic raises ValidationError on first-use if any required field is missing.
+    No hardcoded fallback values exist in CostCalculator (CC9).
+    """
     model_config = ConfigDict(extra="forbid")
     zerodha: ZerodhaRatesConfig
+
+    @model_validator(mode="after")
+    def _validate_required_rates_non_negative(self) -> "BrokerCostsConfig":
+        """FIX-131 Item 25: rates must be non-negative; key rates must be > 0."""
+        z = self.zerodha
+        non_negative = [
+            ("brokerage_flat_intraday", z.brokerage_flat_intraday),
+            ("brokerage_pct_intraday", z.brokerage_pct_intraday),
+            ("stt_sell_pct", z.stt_sell_pct),
+            ("stt_cnc_pct", z.stt_cnc_pct),
+            ("exchange_txn_pct", z.exchange_txn_pct),
+            ("gst_pct", z.gst_pct),
+            ("sebi_pct", z.sebi_pct),
+            ("stamp_duty_mis_buy_pct", z.stamp_duty_mis_buy_pct),
+            ("stamp_duty_cnc_buy_pct", z.stamp_duty_cnc_buy_pct),
+        ]
+        for field_name, value in non_negative:
+            if value < 0:
+                raise ValueError(
+                    f"broker_costs.yaml: zerodha.{field_name} must be >= 0, got {value}"
+                )
+        # Key rates that must be positive to be meaningful
+        if z.brokerage_flat_intraday == 0 and z.brokerage_pct_intraday == 0:
+            raise ValueError(
+                "broker_costs.yaml: at least one of brokerage_flat_intraday or "
+                "brokerage_pct_intraday must be > 0"
+            )
+        if z.gst_pct == 0:
+            raise ValueError("broker_costs.yaml: gst_pct must be > 0 (GST is mandatory)")
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────

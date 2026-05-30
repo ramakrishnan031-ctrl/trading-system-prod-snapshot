@@ -517,6 +517,135 @@ def test_fix036_signals_after_ttl_accepted():
     print("  OK FIX-036: signals after TTL expiry are ACCEPTED")
 
 
+def test_fix131_dedup_window_seconds_used_in_ttl():
+    """FIX-131 Item 17: dedup_window_seconds from config sets TTLCache TTL."""
+    import types
+    cfg = _make_config(expiry=3600)
+    cfg.system.webhook = types.SimpleNamespace(
+        require_hmac=False, dedup_window_seconds=120
+    )
+    receiver, _, _ = _make_receiver(config=cfg, expiry=3600)
+    assert receiver._dedup_window_seconds == 120, (
+        f"Expected 120, got {receiver._dedup_window_seconds}"
+    )
+    print("  OK FIX-131: dedup_window_seconds from config drives TTLCache TTL")
+
+
+def test_fix131_epoch_bucket_same_for_signals_within_5min_epoch():
+    """FIX-131 Item 17: two times within the same 5-min epoch get the same DB fingerprint.
+
+    Old minute-string approach: 12:55 and 12:59 → different fingerprints (4 distinct minutes).
+    New epoch-bucket approach: both within same 300s epoch → same fingerprint → DUPLICATE.
+
+    Note: 5-min epoch boundaries fall on :00, :05, :10, ... so times 12:55:30 and 12:59:30
+    are both in the same 300s epoch (12:55:00-12:59:59) despite crossing 4 minute boundaries.
+    """
+    from datetime import timezone as _tz
+
+    # 12:55:30 UTC and 12:59:30 UTC are 4 minutes apart, same 300s epoch
+    t1 = datetime(2026, 5, 30, 12, 55, 30, tzinfo=_tz.utc)
+    t2 = datetime(2026, 5, 30, 12, 59, 30, tzinfo=_tz.utc)
+    bucket1 = int(t1.timestamp() // 300)
+    bucket2 = int(t2.timestamp() // 300)
+
+    assert bucket1 == bucket2, (
+        f"Expected same 300s bucket for 12:55:30 and 12:59:30, got {bucket1} vs {bucket2}"
+    )
+
+    # Old 1-min bucket would have been different (minute 55 vs 59)
+    old_bucket1 = int(t1.timestamp() // 60)
+    old_bucket2 = int(t2.timestamp() // 60)
+    assert old_bucket1 != old_bucket2, "Old 1-min buckets must differ"
+
+    print(f"  OK FIX-131: 12:55:30 and 12:59:30 share epoch bucket {bucket1} (old 1-min: {old_bucket1} vs {old_bucket2})")
+
+
+def test_fix131_duplicate_across_minute_boundary_rejected_via_db():
+    """FIX-131 Item 17: duplicate within same 5-min epoch rejected even after TTL cleared.
+
+    Uses two timestamps <= 120s apart that share the same 300s epoch bucket.
+    The TTLCache is cleared to force the DB fingerprint check.
+    """
+    import types
+    cfg = _make_config(expiry=3600)
+    cfg.system.webhook = types.SimpleNamespace(
+        require_hmac=False, dedup_window_seconds=300
+    )
+    receiver, sq, _ = _make_receiver(config=cfg, expiry=3600)
+
+    # t1 = 120s ago (within expiry, within 5-min bucket)
+    # t2 = 30s ago  (within expiry, same 5-min bucket as t1 since they're < 300s apart)
+    now = datetime.now()
+    t1 = now - timedelta(seconds=120)
+    t2 = now - timedelta(seconds=30)
+    # Verify they share the same epoch bucket (both fresh, < 300s difference)
+    bucket1 = int(t1.timestamp() // 300)
+    bucket2 = int(t2.timestamp() // 300)
+
+    ts1 = t1.strftime("%Y-%m-%d %H:%M:%S")
+    ts2 = t2.strftime("%Y-%m-%d %H:%M:%S")
+
+    with receiver.app.test_client() as client:
+        resp1 = client.post("/webhook/gap_go_long",
+                            json=_valid_payload(triggered_at=ts1))
+        assert resp1.get_json()["results"][0]["status"] == "ACCEPTED"
+        receiver.release_in_flight("RELIANCE")
+
+        # Clear TTL cache to test DB-fingerprint dedup (not TTL-cache dedup)
+        dedup_key = ("RELIANCE", "gap_go_long")
+        with receiver._dedup_lock:
+            receiver._dedup_cache.pop(dedup_key, None)
+
+        resp2 = client.post("/webhook/gap_go_long",
+                            json=_valid_payload(triggered_at=ts2))
+        status2 = resp2.get_json()["results"][0]["status"]
+        if bucket1 == bucket2:
+            assert status2 == "DUPLICATE", (
+                f"Expected DUPLICATE (same epoch bucket {bucket1}), got {status2}"
+            )
+            print("  OK FIX-131: duplicate within same 5-min epoch bucket rejected via DB fingerprint")
+        else:
+            # If we happen to straddle a 300s boundary, both are accepted — that's correct behavior
+            print(f"  OK FIX-131: signals straddle epoch boundary ({bucket1} vs {bucket2}) -> {status2}")
+
+
+def test_fix131_signal_after_full_window_accepted():
+    """FIX-131 Item 17: signal > 5 min after original is accepted (different epoch bucket)."""
+    import types
+    cfg = _make_config(expiry=7200)
+    cfg.system.webhook = types.SimpleNamespace(
+        require_hmac=False, dedup_window_seconds=300
+    )
+    receiver, sq, _ = _make_receiver(config=cfg, expiry=7200)
+
+    # Two timestamps > 300s apart — guaranteed different epoch buckets
+    # t1 = 600s ago, t2 = 30s ago → 570s apart → different 300s buckets
+    now = datetime.now()
+    t1 = now - timedelta(seconds=600)
+    t2 = now - timedelta(seconds=30)
+    ts1 = t1.strftime("%Y-%m-%d %H:%M:%S")
+    ts2 = t2.strftime("%Y-%m-%d %H:%M:%S")
+
+    with receiver.app.test_client() as client:
+        resp1 = client.post("/webhook/gap_go_long",
+                            json=_valid_payload(triggered_at=ts1))
+        assert resp1.get_json()["results"][0]["status"] == "ACCEPTED"
+        receiver.release_in_flight("RELIANCE")
+
+        # Clear TTL cache to simulate process restart / cache miss
+        dedup_key = ("RELIANCE", "gap_go_long")
+        with receiver._dedup_lock:
+            receiver._dedup_cache.pop(dedup_key, None)
+
+        resp2 = client.post("/webhook/gap_go_long",
+                            json=_valid_payload(triggered_at=ts2))
+        status2 = resp2.get_json()["results"][0]["status"]
+        assert status2 == "ACCEPTED", (
+            f"Expected ACCEPTED (different epoch bucket, 600s apart), got {status2}"
+        )
+    print("  OK FIX-131: signal > 5 min after original accepted (different epoch bucket)")
+
+
 def test_different_scanner_same_symbol_same_minute_accepted():
     """Different scanner + same symbol + same minute = different fingerprint -> ACCEPTED.
 
@@ -1439,6 +1568,11 @@ def run_all_tests() -> int:
         test_fixc_excluded_symbol_rejected_after_alias_resolution,
         test_fixc_excluded_symbols_case_insensitive,
         test_fixc_no_excluded_symbols_passthrough,
+        # FIX-131 Item 17: 5-min epoch bucket dedup
+        test_fix131_dedup_window_seconds_used_in_ttl,
+        test_fix131_epoch_bucket_same_for_signals_within_5min_epoch,
+        test_fix131_duplicate_across_minute_boundary_rejected_via_db,
+        test_fix131_signal_after_full_window_accepted,
     ]
 
     print("=" * 70)

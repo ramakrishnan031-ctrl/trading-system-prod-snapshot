@@ -138,10 +138,14 @@ class WebhookReceiver:
         self._alias_map = self._load_symbol_aliases()
 
         # FIX-036: TTL-based deduplication cache
-        # Replaces minute-string fingerprint which broke across hour boundaries.
-        # Key: (symbol, scanner_name), TTL: 300 seconds (5 minutes)
-        # Thread-safe via lock wrapper.
-        self._dedup_cache = TTLCache(maxsize=10000, ttl=300)
+        # FIX-131 Item 17: TTL driven by dedup_window_seconds (default 300s / 5 min).
+        # Key: (symbol, scanner_name). Thread-safe via lock wrapper.
+        try:
+            _dedup_sec = int(getattr(_webhook_cfg, "dedup_window_seconds", 300))
+        except (TypeError, ValueError):
+            _dedup_sec = 300
+        self._dedup_window_seconds: int = max(60, _dedup_sec)
+        self._dedup_cache = TTLCache(maxsize=10000, ttl=self._dedup_window_seconds)
         self._dedup_lock = threading.Lock()
 
         self.app = Flask(__name__)
@@ -580,9 +584,11 @@ class WebhookReceiver:
             # Mark as seen in cache
             self._dedup_cache[dedup_key] = True
 
-        # WR7: compute dedup fingerprint at minute precision (kept for DB fallback)
-        minute_str = triggered_at.strftime("%Y-%m-%d %H:%M")
-        fp_raw = f"{scanner_name}|{symbol}|{minute_str}"
+        # WR7 / FIX-131 Item 17: compute dedup fingerprint using configurable bucket.
+        # floor(unix_ts / dedup_window_seconds) gives same bucket for all signals
+        # within the same N-second window, surviving minute/hour boundaries.
+        epoch_bucket = int(triggered_at.timestamp() // self._dedup_window_seconds)
+        fp_raw = f"{scanner_name}|{symbol}|{epoch_bucket}"
         fingerprint = hashlib.sha256(fp_raw.encode()).hexdigest()
 
         # WR9: insert signal row, then push to queue

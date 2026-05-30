@@ -28,10 +28,12 @@ Locked Design Decisions:
 """
 from __future__ import annotations
 
+import collections
 import html
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +48,40 @@ from core.time_authority import now_ist
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 _MSG_MAX = 4096
 _TRUNCATION_MARKER = "\n...[truncated]"
+
+
+# ------------------------------------------------------------------------------
+# Rate limiter (FIX-131 Item 18)
+# ------------------------------------------------------------------------------
+
+class _SlidingWindowRateLimiter:
+    """Thread-safe sliding-window rate limiter: max N calls per 60 seconds."""
+
+    def __init__(self, max_per_minute: int) -> None:
+        self._max = max(1, max_per_minute)
+        self._window: collections.deque[float] = collections.deque()
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        """Block until sending is within the rate limit."""
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                # Drop timestamps older than 60 seconds
+                while self._window and self._window[0] < now - 60.0:
+                    self._window.popleft()
+                if len(self._window) < self._max:
+                    self._window.append(now)
+                    return
+            time.sleep(0.5)
+
+    def count_recent(self) -> int:
+        """Return number of messages sent in the last 60 seconds."""
+        now = time.monotonic()
+        with self._lock:
+            while self._window and self._window[0] < now - 60.0:
+                self._window.popleft()
+            return len(self._window)
 
 
 # ------------------------------------------------------------------------------
@@ -96,7 +132,9 @@ class TelegramNotifier:
         sentinel_dir: Path | str = "data_store",
         logger: logging.Logger | None = None,
         timeout_sec: float = 5.0,
-        max_retries: int = 2,
+        max_retries: int = 3,
+        retry_backoff_seconds: float = 2.0,
+        rate_limit_per_minute: int = 20,
         paper_mode: bool = False,
         channels: list[ChannelConfig] | None = None,
         send_in_paper_mode: bool = False,
@@ -129,8 +167,11 @@ class TelegramNotifier:
         self._log = logger or logging.getLogger(__name__)
         self._timeout = timeout_sec
         self._max_retries = max_retries
+        self._retry_backoff = float(retry_backoff_seconds)
         self._paper_mode = paper_mode
         self._send_in_paper_mode = send_in_paper_mode
+        # FIX-131 Item 18: sliding-window rate limiter (20 msgs/min default)
+        self._rate_limiter = _SlidingWindowRateLimiter(rate_limit_per_minute)
 
         if chat_ids and channels:
             self._log.warning(
@@ -221,6 +262,18 @@ class TelegramNotifier:
 
         # Step 2: attempt Telegram send
         delivered, failed = self._send_to_all_chats("CRITICAL", title, body, source_module, context)
+
+        # FIX-131 Item 18: write fallback log for CRITICAL Telegram failures too
+        if failed:
+            self._write_failed_log(
+                severity="CRITICAL",
+                title=title,
+                body=body,
+                source_module=source_module,
+                context=context,
+                telegram_error=f"CRITICAL failed to deliver to: {failed}",
+                chat_ids_attempted=delivered + failed,
+            )
 
         return SendResult(
             success=len(delivered) > 0,
@@ -339,24 +392,27 @@ class TelegramNotifier:
         """
         POST a single message to one chat_id with retry logic (TG6).
 
+        FIX-131 Item 18: rate limiter applied before each attempt; configurable
+        backoff (retry_backoff_seconds) replaces hardcoded 0.5/1.0s ladder.
+
         Returns True on success, False on permanent failure.
         """
         url = _TELEGRAM_API.format(token=self._token)
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
 
         attempt = 0
-        delay = 0.5
 
         while True:
+            # FIX-131 Item 18: acquire rate-limit token before each HTTP attempt
+            self._rate_limiter.acquire()
+
             try:
                 resp = requests.post(url, json=payload, timeout=self._timeout)
             except requests.Timeout:
-                # Transient: retry with backoff
                 attempt += 1
                 if attempt > self._max_retries:
                     return False
-                time.sleep(delay)
-                delay *= 2
+                time.sleep(self._retry_backoff)
                 continue
             except requests.RequestException:
                 return False
@@ -365,14 +421,11 @@ class TelegramNotifier:
                 return True
 
             if resp.status_code == 429:
-                # Rate limited: respect Retry-After, retry once (TG6)
-                # FIX-097: Handle both integer seconds and HTTP-date format
+                # Rate limited: respect Retry-After, retry (TG6 / FIX-097)
                 retry_after_raw = resp.headers.get("Retry-After", "30")
                 try:
                     retry_after = float(retry_after_raw)
                 except ValueError:
-                    # HTTP-date format (e.g., "Fri, 31 Dec 1999 23:59:59 GMT")
-                    # Use safe default instead of crashing
                     retry_after = 30.0
                     self._log.warning(
                         "telegram.429_retry_after_not_numeric",
@@ -380,19 +433,16 @@ class TelegramNotifier:
                                "using_default_sec": retry_after},
                     )
                 time.sleep(min(retry_after, 5.0))
-                try:
-                    resp2 = requests.post(url, json=payload, timeout=self._timeout)
-                    return resp2.status_code == 200
-                except requests.RequestException:
-                    return False
-
-            if resp.status_code >= 500:
-                # Transient server error: retry with backoff (TG6)
                 attempt += 1
                 if attempt > self._max_retries:
                     return False
-                time.sleep(delay)
-                delay *= 2
+                continue  # back to top: re-acquire rate-limit token
+
+            if resp.status_code >= 500:
+                attempt += 1
+                if attempt > self._max_retries:
+                    return False
+                time.sleep(self._retry_backoff)
                 continue
 
             # 4xx (other than 429): permanent failure (TG6)

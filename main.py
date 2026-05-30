@@ -885,17 +885,17 @@ def _shutdown(
     except Exception as exc:
         _log.error("SHUTDOWN event write failed: %s", exc)
 
-    # FIX-057: WAL checkpoint after all threads joined, before close/exit
+    # FIX-057 / FIX-131 Item 23: WAL checkpoint after all threads joined, before close/exit
     try:
-        stats = store.checkpoint()
+        stats = store.checkpoint_wal()  # PASSIVE: safe with any remaining readers
         _log.info(
-            "WAL checkpoint on shutdown complete: wal_size=%d, checkpointed=%d, moved=%d",
-            stats.get("wal_size_before", -1),
-            stats.get("pages_checkpointed", -1),
-            stats.get("pages_moved", -1),
+            "WAL checkpoint_wal on shutdown: busy=%d log=%d checkpointed=%d",
+            stats.get("busy", -1),
+            stats.get("log", -1),
+            stats.get("checkpointed", -1),
         )
     except Exception as chk_exc:
-        # FIX-057: Checkpoint failure must not block shutdown
+        # Checkpoint failure must not block shutdown
         _log.warning("WAL checkpoint on shutdown failed: %s", chk_exc)
 
     try:
@@ -1455,6 +1455,9 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("telegram_notifier"),
         paper_mode=(args.mode == "paper"),
         send_in_paper_mode=tg_cfg.telegram_alerts_in_paper_mode,
+        max_retries=tg_cfg.max_retries,                        # FIX-131 Item 18
+        retry_backoff_seconds=tg_cfg.retry_backoff_seconds,    # FIX-131 Item 18
+        rate_limit_per_minute=tg_cfg.rate_limit_per_minute,    # FIX-131 Item 18
     )
 
     # Refresh mode label — interactive startup may have changed args.mode.

@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 17
+EXPECTED_SCHEMA_VERSION = 18  # FIX-131 Item 18: +telegram_alerts table
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -213,6 +213,25 @@ class StateStore:
                 conn.close()
             finally:
                 self._tls.conn = None
+
+    def checkpoint_wal(self) -> dict:
+        """
+        FIX-131 Item 23: WAL checkpoint using PASSIVE mode for routine use.
+
+        PASSIVE allows readers to proceed; moves completed WAL frames to main DB.
+        Safe to call from any thread including cron-triggered scripts.
+        Intended for: graceful shutdown + 16:00 IST cron job.
+
+        Returns dict with checkpoint stats: {busy, log, checkpointed}
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        row = cursor.fetchone()
+        return {
+            "busy": row[0] if row else 0,
+            "log": row[1] if row else 0,
+            "checkpointed": row[2] if row else 0,
+        }
 
     def checkpoint(self, live_feed=None) -> dict:
         """
