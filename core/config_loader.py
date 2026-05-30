@@ -433,6 +433,25 @@ class SmtpConfig(BaseModel):
         return self.password
 
 
+class EmailFallbackConfig(BaseModel):
+    """FIX-132 Item 10: email fallback when Telegram fails for CRITICAL alerts."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    from_addr_env: str = "ALERT_EMAIL_USER"
+    password_env: str = "ALERT_EMAIL_PASSWORD"
+    to_addr_env: str = "ALERT_EMAIL_TO"
+    use_tls: bool = True
+
+    @field_validator("smtp_port")
+    @classmethod
+    def _validate_port(cls, v: int) -> int:
+        if not (1 <= v <= 65535):
+            raise ValueError("smtp_port must be between 1 and 65535")
+        return v
+
+
 class TelegramChannelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chat_id_env: str    # env var name whose value is the Telegram chat/group ID
@@ -487,6 +506,7 @@ class AlertsConfig(BaseModel):
     alert_digest_threshold: int = 3  # FIX-095: send digest email when pending flags > this count
     watcher_lock_path: str        # AW11: lock file path for alert_watcher
     watcher_log_path: str         # AW11: alert_watcher own log file path
+    email_fallback: EmailFallbackConfig = EmailFallbackConfig()  # FIX-132 Item 10
     telegram: TelegramConfig      # TG12: Telegram Bot API config
     smtp: SmtpConfig              # AW7: SMTP config for alert_watcher
 

@@ -75,6 +75,7 @@ from screening.quality_scorer import QualityScorer
 from screening.secondary_screener import SecondaryScreener
 from screening.step_executor import StepExecutor
 from signals.signal_processor import SignalProcessor
+from scripts.healthcheck_server import start_healthcheck_server
 from signals.webhook_receiver import WebhookReceiver
 from strategies.loader import StrategyLoader
 from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
@@ -1971,6 +1972,9 @@ def _main_locked(args, config_dir: Path) -> int:
     if not wh_result.reachable:
         _log.critical("Webhook endpoint not reachable at %s", webhook_url)
         _shutdown_event.set()
+
+    # FIX-132 Item 15: external health monitor on port 8080
+    start_healthcheck_server(state_store=store, logger=get_logger("healthcheck"), port=8080)
 
     # EOD scheduler daemon thread (MAIN14)
     eod_thread = threading.Thread(

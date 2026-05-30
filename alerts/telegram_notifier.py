@@ -33,11 +33,13 @@ import html
 import json
 import logging
 import os
+import smtplib
 import threading
 import time
 from dataclasses import dataclass, field
+from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -138,6 +140,7 @@ class TelegramNotifier:
         paper_mode: bool = False,
         channels: list[ChannelConfig] | None = None,
         send_in_paper_mode: bool = False,
+        email_fallback_config: Optional[Any] = None,  # FIX-132 Item 10
     ) -> None:
         """
         Construct a TelegramNotifier (TG2).
@@ -172,6 +175,7 @@ class TelegramNotifier:
         self._send_in_paper_mode = send_in_paper_mode
         # FIX-131 Item 18: sliding-window rate limiter (20 msgs/min default)
         self._rate_limiter = _SlidingWindowRateLimiter(rate_limit_per_minute)
+        self._email_fallback = email_fallback_config  # FIX-132 Item 10
 
         if chat_ids and channels:
             self._log.warning(
@@ -274,6 +278,10 @@ class TelegramNotifier:
                 telegram_error=f"CRITICAL failed to deliver to: {failed}",
                 chat_ids_attempted=delivered + failed,
             )
+
+        # FIX-132 Item 10: if Telegram failed for ALL channels, try email fallback
+        if not delivered and failed:
+            self._send_email_fallback(title, body, source_module)
 
         return SendResult(
             success=len(delivered) > 0,
@@ -479,6 +487,66 @@ class TelegramNotifier:
                 fh.write(json.dumps(record, ensure_ascii=False, cls=SafeJSONEncoder) + "\n")
             return True
         except OSError:
+            return False
+
+    # --------------------------------------------------------------------------
+    # Email fallback for CRITICAL (FIX-132 Item 10)
+    # --------------------------------------------------------------------------
+
+    def _send_email_fallback(
+        self, title: str, body: str, source_module: str
+    ) -> bool:
+        """Send email via SMTP when Telegram fails for CRITICAL alerts."""
+        cfg = self._email_fallback
+        if cfg is None or not getattr(cfg, "enabled", False):
+            return False
+
+        from_addr = os.environ.get(getattr(cfg, "from_addr_env", ""), "")
+        password = os.environ.get(getattr(cfg, "password_env", ""), "")
+        to_addr = os.environ.get(getattr(cfg, "to_addr_env", ""), "")
+
+        if not from_addr or not password or not to_addr:
+            self._log.warning(
+                "email_fallback.missing_credentials: env vars not set"
+            )
+            return False
+
+        subject = f"[CRITICAL] {title}"
+        email_body = (
+            f"CRITICAL ALERT -- Telegram delivery failed\n\n"
+            f"Title: {title}\n"
+            f"Source: {source_module}\n"
+            f"Time: {now_ist().isoformat()}\n\n"
+            f"{body}"
+        )
+
+        msg = MIMEText(email_body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = from_addr
+        msg["To"] = to_addr
+
+        try:
+            smtp_host = getattr(cfg, "smtp_host", "smtp.gmail.com")
+            smtp_port = int(getattr(cfg, "smtp_port", 587))
+            use_tls = getattr(cfg, "use_tls", True)
+
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+            if use_tls:
+                server.starttls()
+            server.login(from_addr, password)
+            server.sendmail(from_addr, [to_addr], msg.as_string())
+            server.quit()
+
+            self._log.info(
+                "email_fallback.sent",
+                extra={"to": to_addr, "subject": subject},
+            )
+            return True
+        except Exception as exc:
+            self._log.error(
+                "email_fallback.failed",
+                extra={"error": str(exc)},
+            )
             return False
 
 
