@@ -834,33 +834,34 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         qty_filled = trade.get("qty_filled", 0)
         roi_pct = (net_pnl / (fill_entry * qty_filled) * 100) if fill_entry and qty_filled else 0
 
+        is_closed = trade.get("status") == "CLOSED"
         cost_brokerage_db = trade.get("cost_brokerage")
         charges_total = trade.get("charges")
-        if cost_brokerage_db is not None:
+        if not is_closed or charges_total is None:
+            brokerage = "—"
+            stt       = "—"
+            exch_chrg = "—"
+            stamp     = "—"
+            gst       = "—"
+        elif cost_brokerage_db is not None:
             brokerage = cost_brokerage_db
             stt       = trade.get("cost_stt") or 0
             exch_chrg = trade.get("cost_exchange_txn") or 0
             stamp     = trade.get("cost_stamp_duty") or 0
             gst       = trade.get("cost_gst") or 0
-        elif charges_total is not None and charges_total > 0:
+        elif charges_total > 0:
             cost_bd = _compute_cost_breakdown(trade, data.broker_rates)
             brokerage = cost_bd.get("brokerage", 0) if cost_bd else 0
             stt       = cost_bd.get("stt", 0) if cost_bd else 0
             exch_chrg = cost_bd.get("exch", 0) if cost_bd else 0
             stamp     = cost_bd.get("stamp", 0) if cost_bd else 0
             gst       = cost_bd.get("gst", 0) if cost_bd else 0
-        elif charges_total is not None:
+        else:
             brokerage = 0
             stt       = 0
             exch_chrg = 0
             stamp     = 0
             gst       = 0
-        else:
-            brokerage = "—"
-            stt       = "—"
-            exch_chrg = "—"
-            stamp     = "—"
-            gst       = "—"
 
         trail_count = trade.get("sl_trail_count") or 0
 
@@ -876,7 +877,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             _fmt_time(entry_order.get("placed_at")) if entry_order else "",  # 9
             _fmt_time(trade.get("entry_time")),                             # 10
             _fmt_time(trade.get("exit_time")),                              # 11
-            time_in_trade if time_in_trade else 0,                          # 12
+            time_in_trade if time_in_trade else ("—" if not trade.get("exit_time") else 0),  # 12
             "",                                                              # 13 sep
             sys_qty,                                                         # 14
             sys_entry,                                                       # 15
@@ -900,14 +901,14 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             exch_chrg,                                                       # 33 Exch Charges
             stamp,                                                           # 34 Stamp Duty
             gst,                                                             # 35 GST
-            round(charges, 2),                                               # 36 Total Costs
+            round(charges, 2) if is_closed and charges_total is not None else "—",  # 36 Total Costs
             "",                                                              # 37 sep
             round(net_pnl, 2),                                               # 38
             f"{roi_pct:.2f}%",                                              # 39
             "",                                                              # 40 sep
             trade_id,                                                        # 41
             entry_order.get("order_id") if entry_order else "",              # 42
-            trade.get("exit_price") or 0,                                    # 43
+            round(trade["exit_price"], 2) if trade.get("exit_price") else "—",  # 43
         ]
 
         for col, value in enumerate(row_data, start=1):
@@ -1020,15 +1021,8 @@ def build_sheet_3_capital(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
         net_pnl = trade.get("net_pnl") or 0
 
-        sl_display = "—"
-        tgt_display = "—"
-        if exit_reason in ("SL_HIT", "SL"):
-            sl_display = round(sl_risk, 2)
-        elif exit_reason in ("TGT_HIT", "TGT"):
-            tgt_display = round(tgt_profit, 2)
-        elif exit_reason == "EOD":
-            sl_display = round(sl_risk, 2)
-            tgt_display = round(tgt_profit, 2)
+        sl_display = round(abs(sl_risk), 2) if sl_price else "—"
+        tgt_display = round(abs(tgt_profit), 2) if tgt_price else "—"
 
         running_balance += net_pnl
 
@@ -1232,10 +1226,10 @@ def build_sheet_4_candles(
             entry_order.get("order_id", "") if entry_order else "",
             _fmt_time(trade.get("entry_time")),
             "",
-            exc_candle.get("entry_candle_open") or candle.get("open") or 0,
-            exc_candle.get("entry_candle_high") or candle.get("high") or 0,
-            exc_candle.get("entry_candle_low") or candle.get("low") or 0,
-            exc_candle.get("entry_candle_close") or candle.get("close") or 0,
+            exc_candle.get("entry_candle_open") or candle.get("open") or "—",
+            exc_candle.get("entry_candle_high") or candle.get("high") or "—",
+            exc_candle.get("entry_candle_low") or candle.get("low") or "—",
+            exc_candle.get("entry_candle_close") or candle.get("close") or "—",
             "Yes" if candle.get("is_synthetic") else ("No" if candle else "N/A"),
             "",
             round(our_entry, 2) if our_entry else 0,
@@ -1347,7 +1341,7 @@ def build_sheet_5_telegram(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 
         row_data = [
             data.date_iso,
-            _fmt_time(trade.get("entry_time")),
+            _fmt_time(trade.get("entry_time") or trade.get("created_at")),
             "order_placer",
             alert_type,
             trade.get("symbol", ""),
@@ -1433,6 +1427,8 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
         else:
             strategies[strat] = {"trades": [], "signals": 1}
 
+    _PROCESSED_STATUSES = {"PROCESSED", "TRADED", "FILLED", "CLOSED", "PLACED", "SIZED", "APPROVED", "RESERVED"}
+
     row = 3
     for strat, info in strategies.items():
         trades = info["trades"]
@@ -1455,11 +1451,13 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
         win_rate = len(wins) / len(closed) * 100 if closed else 0
         drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
 
+        processed_count = sum(1 for s in data.signals if s.get("strategy") == strat and s.get("status", "") in _PROCESSED_STATUSES)
+
         row_data = [
             data.date_iso,
             strat,
             signals,
-            len([t for t in trades if t.get("status") != "FAILED"]),
+            processed_count,
             sum(1 for s in data.signals if s.get("strategy") == strat and "REJECTED" in (s.get("status") or "")),
             len(trades),
             len(wins),
@@ -1545,9 +1543,10 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
         win_rate = len(wins) / len(closed) * 100 if closed else 0
         drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
 
-        processed = len([t for t in bucket_trades if t.get("status") != "FAILED"])
+        bucket_signals_list = [s for s in data.signals if start_time <= _fmt_time(s.get("received_at")) < end_time]
+        processed = sum(1 for s in bucket_signals_list if s.get("status", "") in _PROCESSED_STATUSES)
         traded = len(bucket_trades)
-        rejected = max(0, bucket_signals - processed - traded)
+        rejected = max(0, bucket_signals - processed)
 
         row_data = [
             data.date_iso,

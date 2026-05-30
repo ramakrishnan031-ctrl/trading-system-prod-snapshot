@@ -719,16 +719,16 @@ class TestSheetBuilders:
         assert ws.cell(row=3, column=11).value == 2605.0, "Close mismatch"
         assert ws.cell(row=3, column=12).value == "No"
 
-    def test_build_sheet_4_candles_ohlc_zero_without_candle_data(self, sample_report_data):
-        """Without candle data, OHLC cols show 0 (numeric zero-fill rule)."""
+    def test_build_sheet_4_candles_ohlc_dash_without_candle_data(self, sample_report_data):
+        """Without candle data, OHLC cols show dash (not applicable)."""
         import openpyxl
         wb = openpyxl.Workbook()
         ws = build_sheet_4_candles(wb, sample_report_data)
 
-        assert ws.cell(row=3, column=8).value == 0
-        assert ws.cell(row=3, column=9).value == 0
-        assert ws.cell(row=3, column=10).value == 0
-        assert ws.cell(row=3, column=11).value == 0
+        assert ws.cell(row=3, column=8).value == "—"
+        assert ws.cell(row=3, column=9).value == "—"
+        assert ws.cell(row=3, column=10).value == "—"
+        assert ws.cell(row=3, column=11).value == "—"
         assert ws.cell(row=3, column=12).value == "N/A"
 
     def test_build_sheet_6_drawdown_pct_positive_trade(self, sample_report_data):
@@ -1463,4 +1463,145 @@ class TestFix125NumericZeroFill:
         ws = wb["2_Orders"]
         assert isinstance(ws.cell(4, 12).value, int), f"Time in trade should be int, got {ws.cell(4, 12).value!r}"
         assert ws.cell(4, 18).value == 0, "Sys R:R should be 0, not dash"
-        assert ws.cell(4, 36).value == 0, "Total costs should be 0, not dash"
+        assert ws.cell(4, 36).value == 0, "Total costs should be 0 for CLOSED+charges=0"
+
+
+class TestFix126DisplayRules:
+    """FIX-126: dash-vs-zero display rules for open/failed trades."""
+
+    def _make_data(self, trades, signals=None):
+        return ReportData(
+            date_iso="2026-05-20",
+            mode="PAPER",
+            account="TEST",
+            opening_capital=100000.0,
+            closing_capital_broker=100000.0,
+            signals=signals or [],
+            trades=trades,
+            orders=[],
+            fm_ledger=[],
+            screener_results=[],
+            innings=[],
+            system_events=[],
+            recon_log=[],
+            gate_state=[],
+            excluded_symbols=[],
+        )
+
+    def _open_trade(self):
+        return {
+            "trade_id": "t-open",
+            "signal_id": "sig-open",
+            "symbol": "INFY",
+            "direction": "LONG",
+            "strategy": "TEST",
+            "qty_planned": 10,
+            "qty_filled": 10,
+            "entry_target_price": 1500.0,
+            "entry_actual_price": 1502.0,
+            "sl_initial": 1450.0,
+            "tgt_initial": 1600.0,
+            "gross_pnl": 0,
+            "charges": None,
+            "net_pnl": 0,
+            "status": "OPEN",
+            "created_at": "2026-05-20T09:30:00+05:30",
+            "entry_time": "2026-05-20T09:31:00+05:30",
+            "exit_time": None,
+            "exit_price": None,
+            "exit_reason": "",
+        }
+
+    def test_bug2_open_trade_cost_cols_show_dash(self):
+        """BUG 2: Cost cols AE-AJ show dash for non-CLOSED trades."""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, self._make_data([self._open_trade()]))
+        ws = wb["2_Orders"]
+        for col in (31, 32, 33, 34, 35, 36):
+            assert ws.cell(4, col).value == "—", f"Col {col} should be dash for open trade"
+
+    def test_bug3_open_trade_exit_price_dash(self):
+        """BUG 3: Exit price shows dash when None/0."""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, self._make_data([self._open_trade()]))
+        ws = wb["2_Orders"]
+        assert ws.cell(4, 43).value == "—", "Exit price should be dash for open trade"
+
+    def test_bug4_open_trade_time_in_trade_dash(self):
+        """BUG 4: Time in Trade shows dash for trades without exit_time."""
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_2_orders(wb, self._make_data([self._open_trade()]))
+        ws = wb["2_Orders"]
+        assert ws.cell(4, 12).value == "—", "Time in trade should be dash for open trade"
+
+    def test_bug6_sl_risk_tgt_profit_always_shown(self):
+        """BUG 6: SL Risk and Target Profit shown for all trades with sys_sl/sys_tgt."""
+        import openpyxl
+        trade = self._open_trade()
+        trade["status"] = "CLOSED"
+        trade["exit_time"] = "2026-05-20T14:00:00+05:30"
+        trade["exit_price"] = 1480.0
+        trade["exit_reason"] = "SL_HIT"
+        trade["charges"] = 52.0
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_3_capital(wb, self._make_data([trade]))
+        ws = wb["3_Capital"]
+        sl_risk = ws.cell(3, 10).value
+        tgt_profit = ws.cell(3, 11).value
+        assert isinstance(sl_risk, (int, float)) and sl_risk > 0, f"SL Risk should be numeric, got {sl_risk!r}"
+        assert isinstance(tgt_profit, (int, float)) and tgt_profit > 0, f"Target Profit should be numeric, got {tgt_profit!r}"
+
+    def test_bug6_no_sl_shows_dash(self):
+        """BUG 6: SL Risk shows dash when sl_initial is not set."""
+        import openpyxl
+        trade = self._open_trade()
+        trade["status"] = "CLOSED"
+        trade["sl_initial"] = 0
+        trade["tgt_initial"] = 0
+        trade["exit_time"] = "2026-05-20T14:00:00+05:30"
+        trade["exit_price"] = 1480.0
+        trade["exit_reason"] = "EOD"
+        trade["charges"] = 52.0
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_3_capital(wb, self._make_data([trade]))
+        ws = wb["3_Capital"]
+        assert ws.cell(3, 10).value == "—", "SL Risk should be dash when sl_initial=0"
+        assert ws.cell(3, 11).value == "—", "Target Profit should be dash when tgt_initial=0"
+
+    def test_bug7_telegram_sent_at_uses_created_at_fallback(self):
+        """BUG 7: Sent At uses created_at when entry_time is None."""
+        import openpyxl
+        trade = self._open_trade()
+        trade["entry_time"] = None
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_5_telegram(wb, self._make_data([trade]))
+        ws = wb["5_Telegram"]
+        sent_at = ws.cell(5, 2).value
+        assert sent_at == "09:30:00", f"Sent At should use created_at fallback, got {sent_at!r}"
+
+    def test_bug8_processed_includes_traded_signals(self):
+        """BUG 8: Processed count includes TRADED/FILLED/CLOSED statuses."""
+        import openpyxl
+        signals = [
+            {"signal_id": "s1", "strategy": "ALPHA", "received_at": "2026-05-20T09:30:00+05:30", "status": "TRADED"},
+            {"signal_id": "s2", "strategy": "ALPHA", "received_at": "2026-05-20T09:35:00+05:30", "status": "PROCESSED"},
+            {"signal_id": "s3", "strategy": "ALPHA", "received_at": "2026-05-20T09:40:00+05:30", "status": "REJECTED"},
+        ]
+        trade = self._open_trade()
+        trade["strategy"] = "ALPHA"
+        trade["signal_id"] = "s1"
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        build_sheet_6_strategy(wb, self._make_data([trade], signals))
+        ws = wb["6_Strategy_Analysis"]
+        processed = ws.cell(3, 4).value
+        assert processed == 2, f"Processed should count TRADED+PROCESSED signals (2), got {processed}"
