@@ -1714,6 +1714,7 @@ def _main_locked(args, config_dir: Path) -> int:
         live_feed=live_feed,  # FIX-061: LTP retry for exit validation errors
         broker_adapter=broker_adapter,  # FIX-072: margin cache invalidation on 16388
         market_windows=market_windows,  # FIX-073: EOD entry cutoff check
+        min_effective_rr=app_config.system.entry_gate.min_effective_rr,  # FIX-136 Item 54
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 

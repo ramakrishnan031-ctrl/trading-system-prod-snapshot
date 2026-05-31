@@ -477,13 +477,43 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
     row = add_row("Win Rate", f"{win_rate:.1f}%", row)
 
     if best_trade:
-        row = add_row("Best Trade", f"{best_trade['symbol']} ₹{best_trade.get('net_pnl', 0):.2f} ({best_trade.get('exit_reason', '')})", row)
+        row = add_row("Best Trade", f"{best_trade['symbol']} Rs{best_trade.get('net_pnl', 0):.2f} ({best_trade.get('exit_reason', '')})", row)
     if worst_trade:
-        row = add_row("Worst Trade", f"{worst_trade['symbol']} ₹{worst_trade.get('net_pnl', 0):.2f} ({worst_trade.get('exit_reason', '')})", row)
+        row = add_row("Worst Trade", f"{worst_trade['symbol']} Rs{worst_trade.get('net_pnl', 0):.2f} ({worst_trade.get('exit_reason', '')})", row)
+
+    rr_values = []
+    for t in closed_trades:
+        entry_p = t.get("entry_actual_price") or t.get("entry_target_price") or 0.0
+        sl_p = t.get("sl_initial") or 0.0
+        exit_p = t.get("exit_price") or 0.0
+        direction = t.get("direction", "LONG")
+        if entry_p > 0 and sl_p > 0 and entry_p != sl_p:
+            risk = abs(entry_p - sl_p)
+            if direction == "LONG":
+                reward = exit_p - entry_p
+            else:
+                reward = entry_p - exit_p
+            rr_values.append(reward / risk)
+    avg_rr = sum(rr_values) / len(rr_values) if rr_values else 0.0
+    row = add_row("Avg R:R Achieved", f"{avg_rr:.2f}", row)
 
     if data.opening_capital > 0:
         util = sum(t.get("margin_reserved") or 0.0 for t in data.trades) / data.opening_capital * 100
         row = add_row("Capital Utilization %", f"{util:.1f}%", row)
+
+    if closed_trades and data.opening_capital > 0:
+        running_pnl = 0.0
+        max_dd = 0.0
+        peak = 0.0
+        for t in closed_trades:
+            running_pnl += t.get("net_pnl") or 0.0
+            peak = max(peak, running_pnl)
+            dd = peak - running_pnl
+            max_dd = max(max_dd, dd)
+        dd_pct = max_dd / data.opening_capital * 100
+        row = add_row("Max Drawdown %", f"{dd_pct:.2f}%", row)
+    else:
+        row = add_row("Max Drawdown %", "0.00%", row)
     row += 1
 
     row = section_header("Section D — System Health", row)
@@ -491,10 +521,23 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
     critical_count = sum(1 for e in data.system_events if "CRITICAL" in (e.get("event_type") or "").upper() or "KILL" in (e.get("event_type") or "").upper())
     orphan_count = sum(1 for r in data.recon_log if "ORPHAN" in (r.get("check_name") or "").upper())
 
+    kill_count = sum(1 for e in data.system_events if "KILL" in (e.get("event_type") or "").upper())
+
     row = add_row("ERROR Count", error_count, row)
     row = add_row("CRITICAL Count", critical_count, row)
+    row = add_row("Kill Switch Events", kill_count, row)
     row = add_row("Orphan Orders", orphan_count, row)
     row = add_row("Reconcile Status", "OK" if orphan_count == 0 else "REVIEW", row)
+
+    rejected_signals = [s for s in data.signals if "REJECTED" in (s.get("status") or "").upper()]
+    rejection_reasons: dict = {}
+    for s in rejected_signals:
+        reason = s.get("rejection_reason") or s.get("status") or "UNKNOWN"
+        rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+    if rejection_reasons:
+        row = add_row("Rejection Breakdown", "", row)
+        for reason, cnt in sorted(rejection_reasons.items(), key=lambda x: -x[1]):
+            row = add_row(f"  {reason}", cnt, row)
     row += 1
 
     row = section_header("Section E — Auto Tuning Signals", row)
@@ -577,7 +620,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
     headers = [
         "Trading Date", "Received At", "Scanner/Strategy", "Symbol", "Raw Symbol",
         "Total Rcvd", "Queued", "Selected", "Rejected", "Duplicate", "Order Passed", "Excluded", "Delta",
-        "Eligible Score\n(Min Tradable)", "Algo Score\n(Stock's Score)",
+        "Eligible Score\n(Min Tradable)", "Algo Score\n(Stock's Score)", "Score Breakdown",
         "Trigger Price", "Signal Age (s)", "Dedup Status", "Screening Result", "Rejection Reason",
         "Signal ID", "Trade ID"
     ]
@@ -613,6 +656,15 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
         screener_row = screener_map.get(signal_id, {})
         algo_score = screener_row.get("score") if screener_row.get("score") is not None else 0
+        step_results_raw = screener_row.get("step_results", "")
+        score_breakdown = ""
+        if step_results_raw:
+            try:
+                steps = json.loads(step_results_raw) if isinstance(step_results_raw, str) else step_results_raw
+                if isinstance(steps, dict):
+                    score_breakdown = " ".join(f"{k}:{v}" for k, v in steps.items() if isinstance(v, (int, float)))
+            except (json.JSONDecodeError, TypeError):
+                pass
         strategy_name = sig.get("strategy", "")
         eligible_from_db = screener_row.get("eligible_score")
         if eligible_from_db is not None:
@@ -643,6 +695,7 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             f"=F{row}-(G{row}+J{row}+L{row})",
             effective_min,
             algo_score,
+            score_breakdown or "---",
             sig.get("trigger_price", ""),
             signal_age,
             "DUP" if is_dup else "OK",
@@ -662,6 +715,8 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
                     cell.fill = FILL_RED
                 else:
                     cell.fill = FILL_GREEN
+            elif col == 16:
+                cell.alignment = ALIGN_LEFT
 
         row += 1
 
@@ -673,8 +728,8 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             cell.border = BORDER_ALL
 
         row += 1
-        ws.cell(row=row, column=1, value="★ Recon check: F = G + J + L | G = H + I | K ≤ H | Delta ≠ 0 → investigate")
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=22)
+        ws.cell(row=row, column=1, value="Recon check: F = G + J + L | G = H + I | K <= H | Delta != 0 -> investigate")
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=23)
 
     return ws
 
@@ -1575,6 +1630,61 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
             if col in (11, 12, 13, 14, 15, 16):
                 cell.number_format = NUM_FMT_CURRENCY
 
+        row += 1
+
+    row += 3
+    ws.cell(row=row, column=1, value="SCORE BREAKDOWN BY STRATEGY").font = FONT_TITLE
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=17)
+    row += 1
+
+    strat_step_scores: Dict[str, Dict[str, List[float]]] = {}
+    screener_map = {r.get("signal_id"): r for r in data.screener_results}
+    for sig in data.signals:
+        strat = sig.get("strategy") or "UNKNOWN"
+        sr = screener_map.get(sig.get("signal_id"), {})
+        raw = sr.get("step_results", "")
+        if not raw:
+            continue
+        try:
+            steps = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(steps, dict):
+            continue
+        if strat not in strat_step_scores:
+            strat_step_scores[strat] = {}
+        for k, v in steps.items():
+            if isinstance(v, (int, float)):
+                strat_step_scores[strat].setdefault(k, []).append(float(v))
+
+    all_step_names: list = []
+    for scores in strat_step_scores.values():
+        for k in scores:
+            if k not in all_step_names:
+                all_step_names.append(k)
+
+    if all_step_names:
+        sb_headers = ["Strategy"] + all_step_names
+        for col, header in enumerate(sb_headers, start=1):
+            cell = ws.cell(row=row, column=col, value=header)
+            cell.font = FONT_HEADER
+            cell.fill = FILL_HEADER
+            cell.alignment = ALIGN_CENTER
+            cell.border = BORDER_ALL
+        row += 1
+
+        for strat, scores in strat_step_scores.items():
+            ws.cell(row=row, column=1, value=strat).font = FONT_BODY
+            ws.cell(row=row, column=1).border = BORDER_ALL
+            for ci, step_name in enumerate(all_step_names, start=2):
+                vals = scores.get(step_name, [])
+                avg = sum(vals) / len(vals) if vals else 0.0
+                cell = ws.cell(row=row, column=ci, value=round(avg, 1))
+                cell.font = FONT_BODY
+                cell.border = BORDER_ALL
+            row += 1
+    else:
+        ws.cell(row=row, column=1, value="No screener data available").font = FONT_BODY
         row += 1
 
     return ws

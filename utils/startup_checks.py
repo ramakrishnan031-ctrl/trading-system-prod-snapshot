@@ -46,6 +46,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from importlib.metadata import version as pkg_version
+
 from core.exceptions import ClockSkewTooLarge, ConfigError
 
 
@@ -1228,6 +1230,163 @@ def check_strategy_configs(config_dir: Path, logger) -> list[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-136 Item 55 -- SDK version pin check
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class SdkVersionResult:
+    """Outcome of check_sdk_version()."""
+    passed: bool
+    expected: str
+    installed: str
+    error: str = ""
+
+
+def check_sdk_version(
+    requirements_path: Path,
+    logger,
+    package_name: str = "kiteconnect",
+) -> SdkVersionResult:
+    """
+    FIX-136 Item 55: Verify installed SDK version matches requirements.txt pin.
+    Returns FAIL if version mismatch or package not installed.
+    """
+    expected = ""
+    try:
+        if requirements_path.exists():
+            for line in requirements_path.read_text().splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#") or not stripped:
+                    continue
+                if stripped.split("#")[0].strip().startswith(f"{package_name}=="):
+                    expected = stripped.split("==")[1].split("#")[0].strip()
+                    break
+    except Exception as exc:
+        msg = f"Failed to read requirements.txt: {exc}"
+        logger.warning("check_sdk_version: %s", msg)
+        return SdkVersionResult(passed=False, expected="", installed="", error=msg)
+
+    if not expected:
+        logger.info("check_sdk_version: %s not pinned in requirements.txt", package_name)
+        return SdkVersionResult(passed=True, expected="", installed="")
+
+    try:
+        installed = pkg_version(package_name)
+    except Exception:
+        msg = f"{package_name} not installed"
+        logger.critical("check_sdk_version: %s", msg)
+        return SdkVersionResult(passed=False, expected=expected, installed="", error=msg)
+
+    if installed != expected:
+        msg = f"{package_name} version mismatch: installed={installed} expected={expected}"
+        logger.critical("check_sdk_version: %s", msg)
+        return SdkVersionResult(passed=False, expected=expected, installed=installed, error=msg)
+
+    logger.info("check_sdk_version: OK %s==%s", package_name, installed)
+    return SdkVersionResult(passed=True, expected=expected, installed=installed)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-136 Item 50 -- Holiday calendar validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class HolidayCalendarResult:
+    """Outcome of check_holiday_calendar()."""
+    passed: bool
+    warnings: List[str]
+    holiday_count: int
+    year: int
+
+
+def check_holiday_calendar(
+    config_dir: Path,
+    today_date: date,
+    logger,
+    min_holidays: int = 10,
+) -> HolidayCalendarResult:
+    """
+    FIX-136 Item 50: Validate nse_holidays_YYYY.yaml for current year.
+
+    Checks:
+      1. File exists for current year
+      2. At least min_holidays listed (NSE has ~14/year)
+      3. All dates are in the correct year
+      4. No duplicate dates
+    Returns WARNING (not blocking) on any issue.
+    """
+    import yaml
+
+    year = today_date.year
+    fname = f"nse_holidays_{year}.yaml"
+    fpath = config_dir / fname
+    warnings: List[str] = []
+
+    if not fpath.exists():
+        msg = f"Holiday calendar missing: {fname}"
+        logger.warning("check_holiday_calendar: %s", msg)
+        warnings.append(msg)
+        return HolidayCalendarResult(passed=False, warnings=warnings, holiday_count=0, year=year)
+
+    try:
+        with open(fpath, "r") as f:
+            data = yaml.safe_load(f)
+    except Exception as exc:
+        msg = f"Holiday calendar parse error: {exc}"
+        logger.warning("check_holiday_calendar: %s", msg)
+        warnings.append(msg)
+        return HolidayCalendarResult(passed=False, warnings=warnings, holiday_count=0, year=year)
+
+    if not isinstance(data, dict) or "holidays" not in data:
+        msg = f"Holiday calendar missing 'holidays' key"
+        logger.warning("check_holiday_calendar: %s", msg)
+        warnings.append(msg)
+        return HolidayCalendarResult(passed=False, warnings=warnings, holiday_count=0, year=year)
+
+    holidays = data["holidays"]
+    if not isinstance(holidays, list):
+        msg = f"Holiday calendar 'holidays' is not a list"
+        logger.warning("check_holiday_calendar: %s", msg)
+        warnings.append(msg)
+        return HolidayCalendarResult(passed=False, warnings=warnings, holiday_count=0, year=year)
+
+    count = len(holidays)
+    if count < min_holidays:
+        msg = f"Holiday calendar has {count} entries (expected >= {min_holidays})"
+        logger.warning("check_holiday_calendar: %s", msg)
+        warnings.append(msg)
+
+    seen_dates: set = set()
+    for entry in holidays:
+        if isinstance(entry, dict):
+            d = entry.get("date", "")
+        else:
+            d = str(entry)
+        d_str = str(d)
+        if d_str in seen_dates:
+            msg = f"Duplicate holiday date: {d_str}"
+            logger.warning("check_holiday_calendar: %s", msg)
+            warnings.append(msg)
+        seen_dates.add(d_str)
+        try:
+            parsed = date.fromisoformat(d_str)
+            if parsed.year != year:
+                msg = f"Holiday date {d_str} is not in year {year}"
+                logger.warning("check_holiday_calendar: %s", msg)
+                warnings.append(msg)
+        except (ValueError, TypeError):
+            msg = f"Invalid holiday date format: {d_str}"
+            logger.warning("check_holiday_calendar: %s", msg)
+            warnings.append(msg)
+
+    passed = len(warnings) == 0
+    if passed:
+        logger.info("check_holiday_calendar: OK year=%d count=%d", year, count)
+
+    return HolidayCalendarResult(passed=passed, warnings=warnings, holiday_count=count, year=year)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SC12 -- Aggregate startup check runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1340,7 +1499,17 @@ def run_all_startup_checks(
     if strategy_errors:
         blocking_failures.append("invalid_strategy_configs")
 
-    # 11. NTP clock sync (FIX-129 Item 27)
+    # 11. Holiday calendar validation (FIX-136 Item 50)
+    holiday_cal = check_holiday_calendar(config_dir, today_date, logger)
+    if not holiday_cal.passed:
+        warnings.append("holiday_calendar_issues")
+
+    # 12. SDK version pin check (FIX-136 Item 55)
+    sdk_result = check_sdk_version(config_dir.parent / "requirements.txt", logger)
+    if not sdk_result.passed:
+        blocking_failures.append("sdk_version_mismatch")
+
+    # 13. NTP clock sync (FIX-129 Item 27)
     # warn_sec=2, block_sec=5 per spec. Best-effort: NTP unreachable → skipped, not blocking.
     ntp_result = check_ntp_sync(
         logger=logger,

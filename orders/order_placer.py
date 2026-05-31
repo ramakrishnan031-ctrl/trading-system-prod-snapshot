@@ -381,6 +381,7 @@ class OrderPlacer:
         liquidity_check_enabled: bool = False,  # FIX-134 Item 38
         liquidity_max_spread_pct: float = 0.5,
         liquidity_min_depth_qty: int = 500,
+        min_effective_rr: float = 0.0,  # FIX-136 Item 54: abort if R:R below this after slippage
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -445,6 +446,7 @@ class OrderPlacer:
         self._liquidity_check_enabled = liquidity_check_enabled
         self._liquidity_max_spread_pct = liquidity_max_spread_pct
         self._liquidity_min_depth_qty = liquidity_min_depth_qty
+        self._min_effective_rr = min_effective_rr
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -606,6 +608,29 @@ class OrderPlacer:
         # OP3: use caller-supplied tgt_price if provided; else compute internally
         if tgt_price is None:
             tgt_price = self._compute_tgt(side, entry_price, sl_price)
+
+        # FIX-136 Item 54: R:R gate — abort if effective R:R too low after slippage
+        if self._min_effective_rr > 0 and entry_price != sl_price:
+            sl_dist = abs(entry_price - sl_price)
+            if side == "BUY":
+                reward_dist = tgt_price - entry_price
+            else:
+                reward_dist = entry_price - tgt_price
+            effective_rr = reward_dist / sl_dist if sl_dist > 0 else 0.0
+            if effective_rr < self._min_effective_rr:
+                self._log.warning(
+                    "order_placer.rr_gate_failed",
+                    extra={
+                        "signal_id": signal_id, "symbol": symbol,
+                        "effective_rr": round(effective_rr, 3),
+                        "min_rr": self._min_effective_rr,
+                        "entry": entry_price, "sl": sl_price, "tgt": tgt_price,
+                    },
+                )
+                raise OrderRejectedError(
+                    f"RR_GATE_FAILED: effective R:R={effective_rr:.2f} < min={self._min_effective_rr}",
+                    trade_id="", signal_id=signal_id, symbol=symbol,
+                )
 
         # OP9: choose protocol
         order_protocol = self._default_protocol

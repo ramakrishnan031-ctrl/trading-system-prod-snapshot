@@ -192,6 +192,7 @@ class SignalProcessor:
             "screener_total_ms": 0.0,
         }
         self._stats_lock = threading.Lock()
+        self._last_expired_alert_ts: float = 0.0  # FIX-136 Item 51: rate-limit expired alerts
 
         if order_placer is None:
             self._log.info("SignalProcessor: order_placer=None; pipeline stops at PROCESSED_NO_PLACER")
@@ -833,6 +834,17 @@ class SignalProcessor:
             with self._stats_lock:
                 bucket = self._stats["rejected"]
                 bucket[rej.check] = bucket.get(rej.check, 0) + 1
+            if rej.check == "EXPIRED" and self._notifier:
+                import time as _time
+                now_mono = _time.monotonic()
+                if now_mono - self._last_expired_alert_ts > 60.0:
+                    self._last_expired_alert_ts = now_mono
+                    try:
+                        self._notifier.send_warning(
+                            f"[{self._mode}] Signal EXPIRED: {symbol} age={rej.reason}"
+                        )
+                    except Exception:
+                        pass
 
         except Exception as exc:
             # Placement failure or unexpected exception

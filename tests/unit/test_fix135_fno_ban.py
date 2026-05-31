@@ -1,4 +1,4 @@
-"""Tests for FIX-135 Item 44: F&O ban period check."""
+"""Tests for FIX-135 Item 44 + FIX-136 Item 44: F&O ban period check."""
 from __future__ import annotations
 
 import logging
@@ -10,8 +10,11 @@ import pytest
 from core.state_store import StateStore
 from core.time_authority import today_ist
 from scripts.fetch_fno_ban import (
+    fetch_fno_ban_symbols,
     store_fno_ban,
+    store_fetch_failed_sentinel,
     is_symbol_fno_banned,
+    _FETCH_FAILED_SENTINEL,
 )
 
 
@@ -90,3 +93,132 @@ class TestParity:
         log = logging.getLogger("test")
         store_fno_ban(store, ["SBIN"], today_ist(), log)
         assert is_symbol_fno_banned(store, "SBIN") is True
+
+
+# ── FIX-136: Fail-closed + URL config + response validation ─────────────
+
+
+class TestFailClosed:
+    def test_sentinel_blocks_all_symbols(self, store):
+        log = logging.getLogger("test")
+        store_fetch_failed_sentinel(store, today_ist(), log)
+        assert is_symbol_fno_banned(store, "RELIANCE") is True
+        assert is_symbol_fno_banned(store, "TCS") is True
+        assert is_symbol_fno_banned(store, "ANYTHING") is True
+
+    def test_sentinel_date_scoped(self, store):
+        log = logging.getLogger("test")
+        store_fetch_failed_sentinel(store, "2020-01-01", log)
+        assert is_symbol_fno_banned(store, "RELIANCE", "2020-01-01") is True
+        assert is_symbol_fno_banned(store, "RELIANCE", today_ist()) is False
+
+    def test_normal_ban_still_works_without_sentinel(self, store):
+        log = logging.getLogger("test")
+        store_fno_ban(store, ["INFY"], today_ist(), log)
+        assert is_symbol_fno_banned(store, "INFY") is True
+        assert is_symbol_fno_banned(store, "TCS") is False
+
+
+class TestResponseValidation:
+    def test_valid_list_response(self):
+        log = logging.getLogger("test")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {"symbol": "RELIANCE", "name": "Reliance Industries"},
+            {"symbol": "INFY", "name": "Infosys"},
+        ]
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("scripts.fetch_fno_ban.requests") as mock_requests:
+            mock_requests.Session.return_value = mock_session
+            symbols = fetch_fno_ban_symbols(log, url="http://test.local/api")
+        assert symbols == ["RELIANCE", "INFY"]
+
+    def test_valid_dict_data_response(self):
+        log = logging.getLogger("test")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "data": [
+                {"symbol": "SBIN", "name": "SBI"},
+            ]
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("scripts.fetch_fno_ban.requests") as mock_requests:
+            mock_requests.Session.return_value = mock_session
+            symbols = fetch_fno_ban_symbols(log, url="http://test.local/api")
+        assert symbols == ["SBIN"]
+
+    def test_unexpected_string_response_raises(self):
+        log = logging.getLogger("test")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = "not a list or dict"
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("scripts.fetch_fno_ban.requests") as mock_requests:
+            mock_requests.Session.return_value = mock_session
+            with pytest.raises(RuntimeError, match="Unexpected response type"):
+                fetch_fno_ban_symbols(log, url="http://test.local/api")
+
+    def test_item_too_few_fields_raises(self):
+        log = logging.getLogger("test")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [{"symbol": "X"}]
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("scripts.fetch_fno_ban.requests") as mock_requests:
+            mock_requests.Session.return_value = mock_session
+            with pytest.raises(RuntimeError, match="fields, expected >="):
+                fetch_fno_ban_symbols(log, url="http://test.local/api")
+
+    def test_items_but_no_symbols_raises(self):
+        log = logging.getLogger("test")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = [
+            {"foo": "bar", "baz": "qux"},
+        ]
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("scripts.fetch_fno_ban.requests") as mock_requests:
+            mock_requests.Session.return_value = mock_session
+            with pytest.raises(RuntimeError, match="0 valid symbols"):
+                fetch_fno_ban_symbols(log, url="http://test.local/api")
+
+    def test_empty_list_ok(self):
+        log = logging.getLogger("test")
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = []
+        mock_resp.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
+
+        with patch("scripts.fetch_fno_ban.requests") as mock_requests:
+            mock_requests.Session.return_value = mock_session
+            symbols = fetch_fno_ban_symbols(log, url="http://test.local/api")
+        assert symbols == []
+
+
+class TestFnoBanConfig:
+    def test_config_loads_fno_ban_section(self):
+        from core.config_loader import FnoBanConfig
+        cfg = FnoBanConfig()
+        assert "nseindia" in cfg.url
+        assert cfg.fail_closed is True
+        assert cfg.min_expected_fields == 2

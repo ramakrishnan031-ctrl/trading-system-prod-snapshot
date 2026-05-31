@@ -43,7 +43,7 @@ import queue
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -606,6 +606,8 @@ class WebhookReceiver:
         signal_id = new_signal_id()
         triggered_at_iso = triggered_at.isoformat()
         received_at_iso = received_at.isoformat()
+        expires_at_dt = received_at + timedelta(seconds=expiry_sec)
+        expires_at_iso = expires_at_dt.isoformat()
 
         try:
             with self._store.transaction() as cur:
@@ -620,7 +622,7 @@ class WebhookReceiver:
                     """,
                     (
                         signal_id, symbol, scanner_name, scanner_name,
-                        triggered_at_iso, received_at_iso, received_at_iso,
+                        triggered_at_iso, received_at_iso, expires_at_iso,
                         "QUEUED", fingerprint, today_iso, price,
                         webhook_payload,
                     ),

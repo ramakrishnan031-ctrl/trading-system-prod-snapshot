@@ -6,7 +6,7 @@
 # This file is canonical. Any live-crontab divergence should be audited
 # against this committed copy.
 #
-# Last synced with VM: 2026-05-09
+# Last synced with VM: 2026-05-31
 
 # ── 00:00 IST | daily log cleanup (delete logs >30 days) ────────────────────
 0 0 * * * find /home/ubuntu/systems/trading-system/logs -name '*.log' -mtime +30 -delete
@@ -35,8 +35,23 @@
 # ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
 0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
 
+# ── 15:40 IST Mon-Fri | fetch 1-min candle OHLCV for traded symbols ──────────
+40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1
+
+# ── 16:00 IST Mon-Fri | WAL checkpoint to prevent unbounded growth ──────────
+0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/wal_checkpoint.py >> logs/wal_checkpoint.log 2>&1
+
+# ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
+0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
+
 # ── 16:01 IST Mon-Fri | generate screened stocks CSV for candle analysis ─────
 1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
+
+# ── 16:05 IST Mon-Fri | generate daily trading report (excel) ───────────────
+5 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python -m reports.daily_report >> logs/daily_report.log 2>&1
+
+# ── 16:10 IST Mon-Fri | trade journal entry ─────────────────────────────────
+10 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/trade_journal.py >> logs/trade_journal.log 2>&1
 
 # ── 16:15 IST Mon-Fri | strategy metrics (Sharpe, win rate, demotion) ────────
 15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1

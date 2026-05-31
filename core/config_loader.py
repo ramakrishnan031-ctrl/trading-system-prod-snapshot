@@ -663,6 +663,7 @@ class EntryGateConfig(BaseModel):
     max_spread_pct: float = 0.5         # FIX-134 Item 38: max bid-ask spread %
     min_depth_qty: int = 500            # FIX-134 Item 38: min depth qty at best price
     liquidity_check_enabled: bool = True  # FIX-134 Item 38: enable/disable
+    min_effective_rr: float = 1.0       # FIX-136 Item 54: abort if R:R < this after slippage
 
 
 class LiveFeedConfig(BaseModel):
@@ -671,6 +672,14 @@ class LiveFeedConfig(BaseModel):
     max_reconnect_attempts: int = 10
     reconnect_backoff_base_seconds: int = 1
     reconnect_backoff_max_seconds: int = 30
+
+
+class FnoBanConfig(BaseModel):
+    """FIX-136 Item 44: F&O ban list fetch config."""
+    model_config = ConfigDict(extra="forbid")
+    url: str = "https://www.nseindia.com/api/live-analysis-banned"
+    fail_closed: bool = True
+    min_expected_fields: int = 2
 
 
 class StrategyCircuitBreakerConfig(BaseModel):
@@ -793,6 +802,7 @@ class SystemConfig(BaseModel):
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()  # FIX-128: defaults if absent
     strategy_circuit_breaker: StrategyCircuitBreakerConfig = StrategyCircuitBreakerConfig()  # FIX-130
     live_feed: LiveFeedConfig = LiveFeedConfig()  # FIX-134 Item 37
+    fno_ban: FnoBanConfig = FnoBanConfig()    # FIX-136 Item 44
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
 
 
