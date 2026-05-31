@@ -105,6 +105,7 @@ class SignalQueueConfig(BaseModel):
     capacity: int              # max signals in queue (P15 default: 300)
     backpressure_pct: float    # HTTP 503 at capacity × pct (P15 default: 0.80)
     expiry_sec: int            # WR6: reject signal older than this many seconds (default 60)
+    warning_pct: float = 0.60  # FIX-134 Item 35: X-Queue-Warning header above this fill %
 
 
 class ClockSkewProbeConfig(BaseModel):
@@ -644,6 +645,7 @@ class SmartTgtConfig(BaseModel):
 class EntryGateConfig(BaseModel):
     """
     FIX-025: EntryGate slippage protection config.
+    FIX-134 Item 38: Liquidity check config (spread, depth).
 
     When EntryGate releases a signal with PRICE_HIT, the release_ltp is
     captured and passed to OrderPlacer. OrderPlacer applies slippage
@@ -657,7 +659,18 @@ class EntryGateConfig(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
     slippage_buffer: float  # Rs buffer for limit price adjustment
-    max_entry_slippage_pct: float = 1.0  # FIX-128: % cap on trigger→LTP deviation
+    max_entry_slippage_pct: float = 1.0  # FIX-128: % cap on trigger->LTP deviation
+    max_spread_pct: float = 0.5         # FIX-134 Item 38: max bid-ask spread %
+    min_depth_qty: int = 500            # FIX-134 Item 38: min depth qty at best price
+    liquidity_check_enabled: bool = True  # FIX-134 Item 38: enable/disable
+
+
+class LiveFeedConfig(BaseModel):
+    """FIX-134 Item 37: WebSocket reconnect hardening config."""
+    model_config = ConfigDict(extra="forbid")
+    max_reconnect_attempts: int = 10
+    reconnect_backoff_base_seconds: int = 1
+    reconnect_backoff_max_seconds: int = 30
 
 
 class StrategyCircuitBreakerConfig(BaseModel):
@@ -779,6 +792,7 @@ class SystemConfig(BaseModel):
     drift_handler: DriftHandlerConfig         # BL-2: drift escalation policy
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()  # FIX-128: defaults if absent
     strategy_circuit_breaker: StrategyCircuitBreakerConfig = StrategyCircuitBreakerConfig()  # FIX-130
+    live_feed: LiveFeedConfig = LiveFeedConfig()  # FIX-134 Item 37
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
 
 

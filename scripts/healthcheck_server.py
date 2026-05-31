@@ -69,6 +69,8 @@ def _create_app(state_store: Any, logger: Any) -> Flask:
             "kill_switch_state": "INACTIVE",
             "uptime_seconds": uptime,
             "last_signal_at": "",
+            "queue_depth": 0,
+            "queue_capacity": 0,
         }
         try:
             row = state_store.fetch_one(

@@ -217,9 +217,13 @@ def test_main_sanity_check_fails_on_too_few_rows(tmp_path):
 
 def test_main_dry_run_does_not_write(tmp_path):
     """--dry-run returns 0 and does not create output file (RI9)."""
-    # Build a master with >1000 symbols
+    # Build a master with >1000 symbols including required ones
+    required = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
+                "SBIN", "BHARTIARTL", "ITC", "LT", "AXISBANK"]
     lines = ["symbol,name_of_company, series"]
-    for i in range(1100):
+    for sym in required:
+        lines.append(f"{sym},{sym} Ltd,eq")
+    for i in range(1100 - len(required)):
         lines.append(f"SYM{i:04d},Company {i},eq")
     master = tmp_path / "big.csv"
     master.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -227,7 +231,19 @@ def test_main_dry_run_does_not_write(tmp_path):
     index_dir.mkdir()
     out_csv = tmp_path / "instruments.csv"
 
-    with patch.object(ri, "_fetch_kite_instruments", return_value=[]), \
+    # Provide Kite data for all symbols so token=0 pct stays low
+    kite_data = [
+        {"tradingsymbol": sym, "segment": "NSE", "instrument_token": 100000 + i,
+         "lot_size": 1, "tick_size": 0.05}
+        for i, sym in enumerate(required)
+    ]
+    for i in range(1100 - len(required)):
+        kite_data.append(
+            {"tradingsymbol": f"SYM{i:04d}", "segment": "NSE",
+             "instrument_token": 200000 + i, "lot_size": 1, "tick_size": 0.05}
+        )
+
+    with patch.object(ri, "_fetch_kite_instruments", return_value=kite_data), \
          patch.object(ri, "_resolve_credentials", return_value=("k", "t")):
         result = ri.main([
             "--security-master", str(master),

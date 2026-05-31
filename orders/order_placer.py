@@ -378,6 +378,9 @@ class OrderPlacer:
         market_windows: Optional[Any] = None,  # FIX-073: market windows for EOD entry cutoff check
         price_drift_threshold: float = 0.005,  # FIX-075: 0.5% default drift threshold for margin top-up
         max_entry_slippage_pct: float = 1.0,  # FIX-128: abort if LTP deviates > this % from trigger
+        liquidity_check_enabled: bool = False,  # FIX-134 Item 38
+        liquidity_max_spread_pct: float = 0.5,
+        liquidity_min_depth_qty: int = 500,
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -438,6 +441,10 @@ class OrderPlacer:
         self._price_drift_threshold = price_drift_threshold
         # FIX-128: max allowed % deviation between trigger price and current LTP
         self._max_entry_slippage_pct = max_entry_slippage_pct
+        # FIX-134 Item 38: liquidity check before entry
+        self._liquidity_check_enabled = liquidity_check_enabled
+        self._liquidity_max_spread_pct = liquidity_max_spread_pct
+        self._liquidity_min_depth_qty = liquidity_min_depth_qty
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -870,6 +877,22 @@ class OrderPlacer:
                         "note": "proceeding with original price",
                     },
                 )
+
+        # FIX-134 Item 38: Liquidity check before entry (live mode only).
+        # Paper mode skips (simulated fills). Best-effort: failure = proceed.
+        if self._mode == "LIVE" and self._adapter is not None:
+            liq_ok, liq_reason = self._check_liquidity(symbol, side, trade_id, signal_id)
+            if not liq_ok:
+                liq_exc = OrderRejectedError(
+                    f"insufficient_liquidity: {liq_reason}",
+                    trade_id=trade_id, signal_id=signal_id, symbol=symbol,
+                )
+                self._handle_placement_failure(
+                    trade_id, reservation_id, signal_id, liq_exc,
+                    final_status="CANCELLED",
+                    symbol=symbol,
+                )
+                raise liq_exc
 
         # BL-19: retry the engine only on BrokerRateLimit429Error. On each
         # raise, the protocol has already cancelled any legs it placed (OP7 /
@@ -2894,6 +2917,93 @@ class OrderPlacer:
             return round(_math.floor(price / tick) * tick, 10)
         except Exception:
             return price
+
+    def _check_liquidity(
+        self, symbol: str, side: str, trade_id: str, signal_id: str,
+    ) -> tuple[bool, str]:
+        """
+        FIX-134 Item 38: Check bid-ask spread and depth before entry.
+        Returns (ok, reason). Best-effort: returns (True, "") on any error.
+        """
+        max_spread_pct = self._liquidity_max_spread_pct
+        min_depth_qty = self._liquidity_min_depth_qty
+        if not self._liquidity_check_enabled:
+            return True, ""
+        try:
+            raw_quote = self._adapter._kite.quote([f"NSE:{symbol}"])
+            if not raw_quote:
+                return True, ""
+            key = f"NSE:{symbol}"
+            if key not in raw_quote:
+                return True, ""
+            q = raw_quote[key]
+            depth = q.get("depth", {})
+            buy_depth = depth.get("buy", [])
+            sell_depth = depth.get("sell", [])
+            ltp = float(q.get("last_price", 0) or 0)
+            if ltp <= 0:
+                return True, ""
+
+            best_bid = float(buy_depth[0].get("price", 0)) if buy_depth else 0
+            best_ask = float(sell_depth[0].get("price", 0)) if sell_depth else 0
+            if best_bid <= 0 or best_ask <= 0:
+                return True, ""
+
+            spread_pct = (best_ask - best_bid) / ltp * 100
+            if spread_pct > max_spread_pct:
+                reason = f"spread {spread_pct:.2f}% > max {max_spread_pct}%"
+                self._log.warning(
+                    "order_placer.liquidity_check_failed",
+                    extra={
+                        "symbol": symbol, "spread_pct": spread_pct,
+                        "max_spread_pct": max_spread_pct,
+                        "trade_id": trade_id,
+                    },
+                )
+                if self._notifier is not None:
+                    try:
+                        self._notifier.send(
+                            severity="WARNING",
+                            title=f"[{self._mode}] LOW LIQUIDITY -- {symbol}",
+                            body=f"Spread {spread_pct:.2f}% > limit {max_spread_pct}%",
+                            source_module="order_placer",
+                        )
+                    except Exception:
+                        pass
+                return False, reason
+
+            if side == "BUY":
+                top_depth_qty = int(sell_depth[0].get("quantity", 0)) if sell_depth else 0
+            else:
+                top_depth_qty = int(buy_depth[0].get("quantity", 0)) if buy_depth else 0
+            if top_depth_qty < min_depth_qty:
+                reason = f"depth {top_depth_qty} < min {min_depth_qty}"
+                self._log.warning(
+                    "order_placer.liquidity_depth_check_failed",
+                    extra={
+                        "symbol": symbol, "depth_qty": top_depth_qty,
+                        "min_depth_qty": min_depth_qty,
+                        "trade_id": trade_id,
+                    },
+                )
+                if self._notifier is not None:
+                    try:
+                        self._notifier.send(
+                            severity="WARNING",
+                            title=f"[{self._mode}] LOW LIQUIDITY -- {symbol}",
+                            body=f"Depth {top_depth_qty} < min {min_depth_qty}",
+                            source_module="order_placer",
+                        )
+                    except Exception:
+                        pass
+                return False, reason
+
+            return True, ""
+        except Exception as exc:
+            self._log.debug(
+                "order_placer.liquidity_check_error: %s", exc
+            )
+            return True, ""
 
     def _compute_tgt(self, side: str, entry_price: float, sl_price: float) -> float:
         """OP3: compute tgt_price using R:R ratio (delegates to price_math, FIX-004)."""

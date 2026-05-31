@@ -710,10 +710,56 @@ CREATE TABLE IF NOT EXISTS trade_journal (
 CREATE INDEX IF NOT EXISTS idx_trade_journal_date ON trade_journal(date);
 CREATE INDEX IF NOT EXISTS idx_trade_journal_strategy ON trade_journal(strategy);
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '19');  -- FIX-133 Item 30
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 21: position_reconciliation  (v20 / FIX-134 Item 31)
+-- Per-symbol daily position comparison: broker vs system.
+-- Written by scripts/reconcile_positions.py at 15:45 IST after market close.
+-- Status: OK | ORPHAN_AT_BROKER | MISSING_AT_BROKER | QTY_MISMATCH | ERROR
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS position_reconciliation (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT NOT NULL,                  -- YYYY-MM-DD
+    symbol          TEXT NOT NULL,
+    broker_qty      INTEGER,                       -- null on error
+    system_qty      INTEGER,
+    status          TEXT NOT NULL,                  -- OK | ORPHAN_AT_BROKER | MISSING_AT_BROKER | QTY_MISMATCH | ERROR
+    resolved_at     TEXT,                           -- ISO-8601 IST; null until manually resolved
+    created_at      TEXT NOT NULL                   -- ISO-8601 IST
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_reconciliation_date
+    ON position_reconciliation(date);
+
+CREATE INDEX IF NOT EXISTS idx_position_reconciliation_status
+    ON position_reconciliation(status);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 22: strategy_metrics  (v20 / FIX-134 Item 36)
+-- Per-strategy daily performance metrics (Sharpe, win rate, etc).
+-- Computed at EOD by scripts/compute_strategy_metrics.py.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS strategy_metrics (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy        TEXT NOT NULL,
+    date            TEXT NOT NULL,                  -- YYYY-MM-DD
+    sharpe          REAL,                           -- annualized Sharpe ratio
+    win_rate        REAL,                           -- fraction of winning trades (0-1)
+    avg_pnl         REAL,                           -- average net P&L per trade
+    total_trades    INTEGER DEFAULT 0,
+    computed_at     TEXT NOT NULL,                   -- ISO-8601 IST
+    UNIQUE(strategy, date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_metrics_strategy
+    ON strategy_metrics(strategy);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_metrics_date
+    ON strategy_metrics(date);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '20');  -- FIX-134 Items 31+36
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v19 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v20 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -736,5 +782,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '19');
 --                    v16: +orders.reconciliation_status (FIX-129 Item 26);
 --                    v17: +trades.signal_to_order_ms/order_to_fill_ms/total_latency_ms (FIX-130 Item 5);
 --                    v18: +telegram_alerts table (FIX-131 Item 18);
---                    v19: +trade_journal table (FIX-133 Item 30))
+--                    v19: +trade_journal table (FIX-133 Item 30);
+--                    v20: +position_reconciliation, +strategy_metrics (FIX-134 Items 31+36))
 -- ─────────────────────────────────────────────────────────────────────────────

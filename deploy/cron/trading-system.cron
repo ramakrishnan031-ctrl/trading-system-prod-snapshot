@@ -20,11 +20,17 @@
 # ── 05:00 IST daily | token cleanup (forces fresh zerodha_login) ─────────────
 0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
 
+# ── 15:45 IST Mon-Fri | position reconciliation (broker vs system) ──────────
+45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py >> logs/cron-reconcile-positions.log 2>&1
+
 # ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
 0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
 
 # ── 16:01 IST Mon-Fri | generate screened stocks CSV for candle analysis ─────
 1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
+
+# ── 16:15 IST Mon-Fri | strategy metrics (Sharpe, win rate, demotion) ────────
+15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1
 
 # ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
 0 18 * * 0 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1

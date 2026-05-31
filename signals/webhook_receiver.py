@@ -211,6 +211,7 @@ class WebhookReceiver:
                 "kill_switch_active": ks_active,
                 "queue_size": q_size,
                 "queue_capacity": q_cap,
+                "queue_depth": f"{q_size}/{q_cap}",
             }), 200
 
         @app.route("/webhook/<scanner_name>", methods=["POST"])
@@ -374,11 +375,15 @@ class WebhookReceiver:
         if self._ks and self._ks.is_active():
             return jsonify({"error": "Kill switch active; signals rejected"}), 403
 
-        # WR6: backpressure check (before entry-window so fast path wins)
+        # WR6 / FIX-134 Item 35: graduated backpressure
         capacity: int = sq_cfg.capacity
+        q_size = self._queue.qsize()
         bp_threshold = int(capacity * sq_cfg.backpressure_pct)
-        if self._queue.qsize() >= bp_threshold:
-            return jsonify({"error": "Signal queue at capacity; retry later"}), 503
+        warn_threshold = int(capacity * getattr(sq_cfg, "warning_pct", 0.60))
+        if q_size >= bp_threshold:
+            resp = jsonify({"error": "Signal queue at capacity; retry later"})
+            resp.headers["X-Queue-Depth"] = f"{q_size}/{capacity}"
+            return resp, 503
 
         # WR5: outside entry window -> 403
         now = now_ist()
@@ -517,11 +522,17 @@ class WebhookReceiver:
         # HIGH #6: return 503 when queue is full so client knows to retry
         any_queue_full = any(r["status"] == "QUEUE_FULL" for r in results)
         http_status = 503 if any_queue_full else 200
-        return jsonify({
+        resp = jsonify({
             "accepted": accepted_count,
             "rejected": rejected_count,
             "results": results,
-        }), http_status
+        })
+        # FIX-134 Item 35: graduated backpressure headers
+        current_depth = self._queue.qsize()
+        resp.headers["X-Queue-Depth"] = f"{current_depth}/{capacity}"
+        if current_depth >= warn_threshold:
+            resp.headers["X-Queue-Warning"] = "high"
+        return resp, http_status
 
     # ------------------------------------------------------------------
     # Per-signal processing (WR9, WR10, WR17)

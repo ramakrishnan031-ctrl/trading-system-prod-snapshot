@@ -1,12 +1,9 @@
 """
 tests/unit/test_fix133_entry_windows.py
 
-FIX-133 Item 22: Per-strategy entry time windows.
-  - gap_fade strategies have 09:15-09:45 window
-  - gap_go strategies have 09:20-11:00 window
-  - positional strategies have 09:25-14:00 window
-  - default strategies have 09:25-15:00 window
-  - StrategyConfig entry_start_time / entry_end_time fields exist
+FIX-133 Item 22 / FIX-134 revert: Per-strategy entry time windows.
+  - ALL strategies use uniform 09:25-15:00 window until paper testing complete.
+  - StrategyConfig entry_start_time / entry_end_time fields exist.
 """
 from __future__ import annotations
 
@@ -21,53 +18,15 @@ from strategies.schema import StrategyConfig
 
 class TestEntryWindows:
 
-    def test_gap_fade_morning_only(self) -> None:
-        """gap_fade_long/short should have 09:15-09:45 window."""
+    def test_all_strategies_uniform_window(self) -> None:
+        """FIX-134: ALL strategies should have 09:25-15:00 until paper testing complete."""
         loader = StrategyLoader()
         strategies = loader.load_all_strategies(Path("config/strategies"))
 
-        for name in ["gap_fade_long", "gap_fade_short"]:
-            assert name in strategies, f"{name} not loaded"
-            s = strategies[name]
-            assert s.entry_start_time == "09:15", f"{name} start={s.entry_start_time}"
-            assert s.entry_end_time == "09:45", f"{name} end={s.entry_end_time}"
-        print("  OK: gap_fade strategies have 09:15-09:45 window")
-
-    def test_gap_go_morning_window(self) -> None:
-        """gap_go_long/short should have 09:20-11:00 window."""
-        loader = StrategyLoader()
-        strategies = loader.load_all_strategies(Path("config/strategies"))
-
-        for name in ["gap_go_long", "gap_go_short"]:
-            assert name in strategies, f"{name} not loaded"
-            s = strategies[name]
-            assert s.entry_start_time == "09:20", f"{name} start={s.entry_start_time}"
-            assert s.entry_end_time == "11:00", f"{name} end={s.entry_end_time}"
-        print("  OK: gap_go strategies have 09:20-11:00 window")
-
-    def test_positional_strategies_end_at_14(self) -> None:
-        """Positional strategies should end entries at 14:00."""
-        loader = StrategyLoader()
-        strategies = loader.load_all_strategies(Path("config/strategies"))
-
-        for name in ["positional_swing_long", "positional_momentum_long",
-                     "positional_sector_rotation"]:
-            assert name in strategies, f"{name} not loaded"
-            s = strategies[name]
-            assert s.entry_end_time == "14:00", f"{name} end={s.entry_end_time}"
-        print("  OK: positional strategies end at 14:00")
-
-    def test_default_strategies_full_window(self) -> None:
-        """Intraday strategies have 09:25-15:00 default window."""
-        loader = StrategyLoader()
-        strategies = loader.load_all_strategies(Path("config/strategies"))
-
-        for name in ["first_pullback_long", "range_breakout_long", "vwap_bounce_long"]:
-            assert name in strategies, f"{name} not loaded"
-            s = strategies[name]
+        for name, s in strategies.items():
             assert s.entry_start_time == "09:25", f"{name} start={s.entry_start_time}"
             assert s.entry_end_time == "15:00", f"{name} end={s.entry_end_time}"
-        print("  OK: default intraday strategies have 09:25-15:00 window")
+        print(f"  OK: all {len(strategies)} strategies have 09:25-15:00 window")
 
     def test_schema_has_entry_time_fields(self) -> None:
         """StrategyConfig schema has entry_start_time and entry_end_time."""
@@ -87,10 +46,7 @@ class TestEntryWindows:
 
 if __name__ == "__main__":
     tests = [
-        TestEntryWindows().test_gap_fade_morning_only,
-        TestEntryWindows().test_gap_go_morning_window,
-        TestEntryWindows().test_positional_strategies_end_at_14,
-        TestEntryWindows().test_default_strategies_full_window,
+        TestEntryWindows().test_all_strategies_uniform_window,
         TestEntryWindows().test_schema_has_entry_time_fields,
     ]
     passed = 0

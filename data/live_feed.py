@@ -118,6 +118,11 @@ class LiveFeedManager:
         # FIX-088: ticker thread identity for checkpoint guard
         self._ticker_thread_id: Optional[int] = None
 
+        # FIX-134 Item 37: reconnect count for metrics/alerting
+        self._reconnect_count: int = 0
+        self._notifier = None  # set via set_notifier() from main.py
+        self._mode_label: str = "LIVE"
+
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
@@ -232,6 +237,16 @@ class LiveFeedManager:
     def set_on_reconnect_callback(self, fn: Callable[[datetime], None]) -> None:
         """LF7: Inject candle_store reconnect notifier (called once per gap)."""
         self._on_reconnect_cb = fn
+
+    def set_notifier(self, notifier, mode_label: str = "LIVE") -> None:
+        """FIX-134: Inject Telegram notifier for reconnect/noreconnect alerts."""
+        self._notifier = notifier
+        self._mode_label = mode_label
+
+    @property
+    def reconnect_count(self) -> int:
+        """FIX-134 Item 37: total reconnect attempts since startup."""
+        return self._reconnect_count
 
     # ------------------------------------------------------------------ #
     # KiteTicker event callbacks
@@ -352,19 +367,36 @@ class LiveFeedManager:
         self._log.error(f"LiveFeedManager: error code={code} reason={reason}")
 
     def _on_reconnect(self, ws, attempts_count: int) -> None:
-        """LF7: Called on each reconnect attempt by KiteTicker."""
+        """LF7 / FIX-134: Called on each reconnect attempt by KiteTicker."""
+        self._reconnect_count += 1
         now = now_ist()
         gap_sec: Optional[float] = None
         if self._disconnect_time is not None:
             gap_sec = (now - self._disconnect_time).total_seconds()
 
         self._log.warning(
-            "LiveFeedManager: reconnect attempt %d%s"
+            "LiveFeedManager: reconnect attempt %d (total=%d)%s"
             % (
                 attempts_count,
+                self._reconnect_count,
                 (" gap=%.0fs" % gap_sec) if gap_sec is not None else "",
             )
         )
+
+        # FIX-134 Item 37: Telegram WARNING on every reconnect
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="WARNING",
+                    title=f"[{self._mode_label}] WebSocket Reconnecting",
+                    body=(
+                        f"Attempt {attempts_count} (total={self._reconnect_count})"
+                        + (f"\nGap: {gap_sec:.0f}s" if gap_sec else "")
+                    ),
+                    source_module="live_feed",
+                )
+            except Exception:
+                pass
 
         # LF7: Notify candle_store once per disconnect event
         if not self._reconnect_notified:
@@ -383,7 +415,7 @@ class LiveFeedManager:
                 )
 
     def _on_noreconnect(self, ws) -> None:
-        """LF3: Max reconnect attempts exhausted. Fire critical failure."""
+        """LF3 / FIX-134: Max reconnect attempts exhausted. Fire critical failure + SOFT_KILL."""
         self._connected = False
         self._log.critical(
             "LiveFeedManager: max reconnect attempts (%d) exhausted"
@@ -394,6 +426,24 @@ class LiveFeedManager:
                 "KiteTicker max reconnect (%d) exhausted"
                 % self._max_reconnect_attempts
             )
+        # FIX-134 Item 37: trigger SOFT_KILL when max attempts reached
+        if self._kill_switch is not None:
+            self._kill_switch.soft_kill("LIVEFEED_RECONNECT_EXHAUSTED")
+        # FIX-134: CRITICAL Telegram alert
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="ERROR",
+                    title=f"[{self._mode_label}] WebSocket DEAD -- Max Reconnects Exhausted",
+                    body=(
+                        f"Max attempts: {self._max_reconnect_attempts}\n"
+                        f"Total reconnects this session: {self._reconnect_count}\n"
+                        f"SOFT_KILL triggered. Manual intervention required."
+                    ),
+                    source_module="live_feed",
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     # Internal helpers

@@ -57,6 +57,13 @@ _CSV_COLUMNS = [
     "lot_size", "tick_size", "is_fno", "sector",
 ]
 
+_REQUIRED_SYMBOLS = frozenset([
+    "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK",
+    "SBIN", "BHARTIARTL", "ITC", "LT", "AXISBANK",
+])
+
+_MIN_ROW_COUNT = 1000
+
 # RI11: accepted equity series (lowercase)
 _EQ_SERIES = frozenset(["eq", "be", "n", "bt", "il"])
 
@@ -211,6 +218,48 @@ def _write_csv(csv_path: Path, rows: list[dict]) -> None:
         raise
 
 
+def validate_instrument_rows(
+    rows: list[dict],
+    min_count: int = _MIN_ROW_COUNT,
+    required_symbols: frozenset[str] = _REQUIRED_SYMBOLS,
+) -> tuple[bool, list[str]]:
+    """
+    FIX-134 Item 40: Validate instrument data after refresh.
+    Returns (ok, list_of_error_messages).
+    """
+    errors: list[str] = []
+    if len(rows) < min_count:
+        errors.append(f"Row count {len(rows)} < minimum {min_count}")
+
+    present_symbols = {r.get("symbol", "") for r in rows}
+    missing = required_symbols - present_symbols
+    if missing:
+        errors.append(f"Required symbols missing: {sorted(missing)}")
+
+    zero_token_count = sum(1 for r in rows if int(r.get("instrument_token", 0)) == 0)
+    zero_pct = (zero_token_count / len(rows) * 100) if rows else 100
+    if zero_pct > 20:
+        errors.append(f"{zero_token_count}/{len(rows)} ({zero_pct:.0f}%) have token=0")
+
+    return len(errors) == 0, errors
+
+
+def _send_refresh_alert(errors: list[str], notifier=None) -> None:
+    """FIX-134 Item 40: Send Telegram CRITICAL alert on validation failure."""
+    if notifier is None:
+        return
+    try:
+        notifier.send(
+            severity="ERROR",
+            title="[SYSTEM] INSTRUMENT REFRESH FAILED",
+            body="Validation errors:\n" + "\n".join(f"  - {e}" for e in errors)
+                 + "\n\nOld instrument data retained.",
+            source_module="refresh_instruments",
+        )
+    except Exception:
+        pass
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Kite + credential helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,15 +375,16 @@ def main(argv: list[str] | None = None) -> int:
         ellipsis = "..." if len(missing) > 10 else ""
         print(f"WARNING: {len(missing)} symbols not in Kite data (token=0): {sample}{ellipsis}")
 
-    # RI7: sanity check
-    if len(rows) < 1000:
-        print(
-            f"ERROR: sanity check failed — {len(rows)} rows built, expected >1000.",
-            file=sys.stderr,
-        )
+    # RI7 + FIX-134 Item 40: comprehensive validation
+    valid, errors = validate_instrument_rows(rows)
+    if not valid:
+        for err in errors:
+            print(f"ERROR: {err}", file=sys.stderr)
+        _send_refresh_alert(errors)
+        print("Keeping old instrument data. Refresh aborted.", file=sys.stderr)
         return 1
 
-    print(f"Built {len(rows)} rows.")
+    print(f"Built {len(rows)} rows. Validation passed.")
 
     if args.dry_run:
         print("--dry-run: no changes written.")
