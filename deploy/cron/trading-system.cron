@@ -29,6 +29,9 @@
 # ── 15:50 IST Mon-Fri | EOD cleanup (stale signals, orders, fingerprints) ────
 50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_cleanup.py >> logs/cron-eod-cleanup.log 2>&1
 
+# ── 15:55 IST Mon-Fri | EOD verification (positions closed, orders settled) ──
+55 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_verify.py >> logs/cron-eod-verify.log 2>&1
+
 # ── 15:45 IST Mon-Fri | position reconciliation (broker vs system) ──────────
 45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py >> logs/cron-reconcile-positions.log 2>&1
 

@@ -801,10 +801,23 @@ CREATE TABLE IF NOT EXISTS fno_ban (
 CREATE INDEX IF NOT EXISTS idx_fno_ban_date
     ON fno_ban(ban_date);
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '21');  -- FIX-135 Items 41+44
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TABLE 24: eod_verification — FIX-137 Item 59
+-- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS eod_verification (
+    date            TEXT NOT NULL PRIMARY KEY,       -- YYYY-MM-DD
+    open_trades     INTEGER NOT NULL DEFAULT 0,
+    pending_orders  INTEGER NOT NULL DEFAULT 0,
+    pnl_variance    REAL NOT NULL DEFAULT 0.0,
+    status          TEXT NOT NULL DEFAULT 'VERIFIED', -- VERIFIED | ISSUES_FOUND
+    verified_at     TEXT NOT NULL                     -- ISO-8601 IST
+);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '22');  -- FIX-137 Item 59
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v21 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v22 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -829,5 +842,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '21');
 --                    v18: +telegram_alerts table (FIX-131 Item 18);
 --                    v19: +trade_journal table (FIX-133 Item 30);
 --                    v20: +position_reconciliation, +strategy_metrics (FIX-134 Items 31+36);
---                    v21: +shadow_trades (FIX-135 Item 41))
+--                    v21: +shadow_trades (FIX-135 Item 41);
+--                    v22: +eod_verification (FIX-137 Item 59))
 -- ─────────────────────────────────────────────────────────────────────────────

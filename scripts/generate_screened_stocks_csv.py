@@ -280,6 +280,18 @@ def main() -> int:
     # Generate CSV
     csv_path = generate_csv(date_str, traded, non_traded_with_reasons, output_dir)
 
+    # Round-trip validation: re-read and verify CSV integrity
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            assert header == ['TRADED', 'NON_TRADED', 'REJECTION_REASON'], f"Header mismatch: {header}"
+            row_count = sum(1 for _ in reader)
+        print(f"  CSV validation: OK ({row_count} data rows)")
+    except Exception as exc:
+        print(f"  CSV validation FAILED: {exc}", file=sys.stderr)
+        return 1
+
     # Summary
     print(f"  Traded symbols: {len(traded)}")
     print(f"  Non-traded symbols: {len(non_traded_with_reasons)}")

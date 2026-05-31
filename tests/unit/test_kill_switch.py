@@ -696,6 +696,46 @@ def test_clear_stale_state_hard_kill_also_cleared(tmp_path: Path) -> None:
     print('  OK stale HARD_KILL auto-cleared')
     store.close()
 
+
+def test_clear_stale_state_multi_day_gap(tmp_path: Path) -> None:
+    """FIX-137 Item 57: kill switch from Friday cleared on Monday (multi-day gap)."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    # Seed with date 2026-04-14 (Tuesday)
+    _seed_persisted_state(store, 'SOFT_KILL', 'daily_loss_limit', 'fund_manager')
+    ks, _, handler = _make_ks(store)
+    assert ks.is_active('any')
+
+    # Clear with date 5 days later (Sunday -> Monday equivalent gap)
+    cleared = ks.clear_stale_state(date(2026, 4, 19))
+    assert cleared
+    assert not ks.is_active('any')
+    assert ks.current_state() == KillState.INACTIVE
+    print('  OK multi-day gap (5 days) auto-cleared')
+    store.close()
+
+
+def test_clear_stale_state_weekend_gap(tmp_path: Path) -> None:
+    """FIX-137 Item 57: Friday kill switch cleared on Monday restart."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    # Seed with Friday date
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR REPLACE INTO kill_switch_state (id, state, reason, triggered_at, triggered_by) "
+            "VALUES (1, 'HARD_KILL', 'circuit_breaker', '2026-05-29T15:20:00+05:30', 'circuit_breaker')"
+        )
+    ks, _, handler = _make_ks(store)
+    assert ks.current_state() == KillState.HARD_KILL
+
+    # Monday restart
+    cleared = ks.clear_stale_state(date(2026, 6, 1))
+    assert cleared
+    assert ks.current_state() == KillState.INACTIVE
+    print('  OK Friday kill switch cleared on Monday')
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +771,8 @@ def run_all_tests() -> int:
         test_clear_stale_state_keeps_same_day,
         test_clear_stale_state_noop_when_inactive,
         test_clear_stale_state_hard_kill_also_cleared,
+        test_clear_stale_state_multi_day_gap,
+        test_clear_stale_state_weekend_gap,
     ]
 
     print("=" * 70)

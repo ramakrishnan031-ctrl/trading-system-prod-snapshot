@@ -411,6 +411,14 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
         ws.cell(row=r, column=2).border = BORDER_ALL
         return r + 1
 
+    if not data.signals and not data.trades and data.mode == "UNKNOWN":
+        ws.cell(row=row, column=1, value="WARNING: No data found for this date -- verify DB connection and environment")
+        ws.cell(row=row, column=1).font = FONT_WHITE_BOLD
+        ws.cell(row=row, column=1).fill = FILL_RED
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=8)
+        row += 1
+        log.warning("daily_report: no data found for %s -- DB may be empty or wrong environment", data.date_iso)
+
     row = section_header("Section A — Day Overview", row)
     row = add_row("Trading Date", data.date_iso, row)
     row = add_row("Mode", data.mode, row)
