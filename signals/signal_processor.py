@@ -605,6 +605,19 @@ class SignalProcessor:
                 self._in_flight_count += 1
                 processor_in_flight = self._in_flight_count
 
+            # FIX-135 Item 42: per-strategy position cap
+            max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
+            strat_open = self._store.fetch_one(
+                "SELECT COUNT(*) AS n FROM trades WHERE strategy = ? AND status IN ('OPEN', 'PARTIAL')",
+                (strategy_name,),
+            )
+            strat_open_count = int(strat_open["n"]) if strat_open else 0
+            if strat_open_count >= max_strat_pos:
+                raise _PipelineReject(
+                    "STRATEGY_POSITION_LIMIT",
+                    f"{strategy_name} has {strat_open_count}/{max_strat_pos} open positions",
+                )
+
             with self._fm.portfolio_lock:
                 try:
                     approval = self._risk.approve(
@@ -1184,6 +1197,19 @@ class SignalProcessor:
             with self._in_flight_lock:
                 self._in_flight_count += 1
                 processor_in_flight = self._in_flight_count
+
+            # FIX-135 Item 42: per-strategy position cap (gate path)
+            max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
+            strat_open = self._store.fetch_one(
+                "SELECT COUNT(*) AS n FROM trades WHERE strategy = ? AND status IN ('OPEN', 'PARTIAL')",
+                (strategy_name,),
+            )
+            strat_open_count = int(strat_open["n"]) if strat_open else 0
+            if strat_open_count >= max_strat_pos:
+                raise _PipelineReject(
+                    "STRATEGY_POSITION_LIMIT",
+                    f"{strategy_name} has {strat_open_count}/{max_strat_pos} open positions",
+                )
 
             with self._fm.portfolio_lock:
                 try:

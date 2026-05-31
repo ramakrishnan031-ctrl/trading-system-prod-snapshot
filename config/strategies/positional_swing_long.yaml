@@ -39,6 +39,7 @@ max_spread_pct: 0.005
 
 max_risk_pct: 0.01  # FIX-031: 1% risk per trade (was 0.0 which produces qty=0)
 lot_size: 1
+max_concurrent_positions: 2  # FIX-135 Item 42
 
 entry_start_time: "09:25"
 entry_end_time: "15:00"   # FIX-134: uniform window until paper testing complete

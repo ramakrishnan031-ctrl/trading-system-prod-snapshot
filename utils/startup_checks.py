@@ -1194,6 +1194,40 @@ def check_disk_space(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SC-FIX135 -- Strategy config schema validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_strategy_configs(config_dir: Path, logger) -> list[str]:
+    """
+    FIX-135 Item 47: Validate all strategy YAML files against StrategyConfig schema.
+    Returns list of error strings (empty = all valid).
+    """
+    from strategies.loader import StrategyLoader
+    from strategies.schema import StrategyConfig
+    strategies_dir = config_dir / "strategies"
+    errors: list[str] = []
+
+    if not strategies_dir.exists():
+        msg = f"strategies directory not found: {strategies_dir}"
+        logger.critical("check_strategy_configs: %s", msg)
+        errors.append(msg)
+        return errors
+
+    try:
+        loader = StrategyLoader()
+        loader.load_all_strategies(strategies_dir)
+        logger.info(
+            "check_strategy_configs: OK all strategies validated"
+        )
+    except Exception as exc:
+        msg = f"strategy config validation failed: {exc}"
+        logger.critical("check_strategy_configs: %s", msg)
+        errors.append(msg)
+
+    return errors
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SC12 -- Aggregate startup check runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1301,7 +1335,12 @@ def run_all_startup_checks(
         if not passed:
             blocking_failures.append("instrument_cache_too_small")
 
-    # 10. NTP clock sync (FIX-129 Item 27)
+    # 10. Strategy config validation (FIX-135 Item 47)
+    strategy_errors = check_strategy_configs(config_dir, logger)
+    if strategy_errors:
+        blocking_failures.append("invalid_strategy_configs")
+
+    # 11. NTP clock sync (FIX-129 Item 27)
     # warn_sec=2, block_sec=5 per spec. Best-effort: NTP unreachable → skipped, not blocking.
     ntp_result = check_ntp_sync(
         logger=logger,

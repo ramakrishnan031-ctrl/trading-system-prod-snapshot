@@ -292,6 +292,7 @@ class TestScenario3RiskRejection:
                 "REJECTED_CONSECUTIVE_LOSSES",
                 "REJECTED_SIZING_VALID",
                 "REJECTED_CAPITAL",
+                "REJECTED_STRATEGY_POSITION_LIMIT",  # FIX-135 Item 42
             }
             terminal = _wait_for_signal_status(ctx, signal_id, _risk_reject, timeout=5.0)
 

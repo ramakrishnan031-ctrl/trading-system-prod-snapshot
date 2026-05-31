@@ -79,6 +79,9 @@ class _CapturingLogger:
     def error(self, msg: str, *args: object) -> None:
         self.errors.append(msg % args if args else msg)
 
+    def critical(self, msg: str, *args: object) -> None:
+        self.errors.append(msg % args if args else msg)
+
     def debug(self, msg: str, *args: object) -> None:
         # FIX-D: capture debug messages instead of discarding
         self.debugs.append(msg % args if args else msg)
@@ -782,6 +785,18 @@ def _make_config_dir(tmp_path: Path, exclude: list = None) -> Path:
     for f in required:
         if not exclude or f not in exclude:
             (cfg_dir / f).write_text("# stub")
+    # FIX-135 Item 47: strategies dir needed for check_strategy_configs
+    strat_dir = cfg_dir / "strategies"
+    strat_dir.mkdir()
+    (strat_dir / "test_strat.yaml").write_text(
+        "name: test_strat\ndisplay_name: Test\ndescription: test\n"
+        "direction: LONG\nintent: INTRADAY\norder_protocol: LIMIT_TRIPLE\n"
+        "entry_method: LIMIT\nsl_method: FIXED_PCT\nsl_pct: 0.01\n"
+        "tgt_method: RISK_REWARD\ntgt_risk_reward: 2.0\n"
+        "smart_tgt_enabled: false\npullback_wait_enabled: false\n"
+        "min_score: 0\nlot_size: 1\n",
+        encoding="utf-8",
+    )
     return cfg_dir
 
 

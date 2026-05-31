@@ -1631,7 +1631,8 @@ def _main_locked(args, config_dir: Path) -> int:
     def _tick_dispatcher(ticks) -> None:
         for t in ticks:
             ts = t.get("timestamp") or time_authority.now_ist()
-            candle_store.on_tick(t["instrument_token"], t["last_price"], ts)
+            vol = int(t.get("volume") or 0)
+            candle_store.on_tick(t["instrument_token"], t["last_price"], ts, volume=vol)
             shadow_tracker.on_tick(t)
 
     live_feed.register_callback(_tick_dispatcher)

@@ -756,10 +756,55 @@ CREATE INDEX IF NOT EXISTS idx_strategy_metrics_strategy
 CREATE INDEX IF NOT EXISTS idx_strategy_metrics_date
     ON strategy_metrics(date);
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '20');  -- FIX-134 Items 31+36
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 23: shadow_trades  (v21 / FIX-135 Item 41)
+-- Shadow paper engine: simulated trades run in parallel with live.
+-- Entry at signal trigger price; exit at SL/TGT/EOD simulation.
+-- Used for regret analysis in daily report.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS shadow_trades (
+    shadow_trade_id     TEXT PRIMARY KEY,
+    date                TEXT NOT NULL,                  -- YYYY-MM-DD
+    signal_id           TEXT NOT NULL,
+    symbol              TEXT NOT NULL,
+    strategy            TEXT NOT NULL,
+    direction           TEXT NOT NULL,                  -- LONG | SHORT
+    entry_price         REAL NOT NULL,
+    qty                 INTEGER NOT NULL DEFAULT 0,
+    sys_sl              REAL NOT NULL,
+    sys_tgt             REAL NOT NULL,
+    live_trade_id       TEXT,                           -- FK to trades.trade_id (nullable if live rejected)
+    live_status         TEXT DEFAULT 'UNKNOWN',         -- TRADED | REJECTED | CANCELLED
+    simulated_exit_price REAL,
+    simulated_exit_reason TEXT,                         -- SL_HIT | TGT_HIT | EOD
+    simulated_pnl       REAL,
+    created_at          TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_trades_date
+    ON shadow_trades(date);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_trades_signal
+    ON shadow_trades(signal_id);
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 24: fno_ban  (v21 / FIX-135 Item 44)
+-- Daily F&O ban list from NSE. Fetched at 08:30 IST.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS fno_ban (
+    symbol          TEXT NOT NULL,
+    ban_date        TEXT NOT NULL,                  -- YYYY-MM-DD
+    fetched_at      TEXT NOT NULL,                  -- ISO-8601 IST
+    PRIMARY KEY (symbol, ban_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fno_ban_date
+    ON fno_ban(ban_date);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '21');  -- FIX-135 Items 41+44
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v20 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v21 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -783,5 +828,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '20');
 --                    v17: +trades.signal_to_order_ms/order_to_fill_ms/total_latency_ms (FIX-130 Item 5);
 --                    v18: +telegram_alerts table (FIX-131 Item 18);
 --                    v19: +trade_journal table (FIX-133 Item 30);
---                    v20: +position_reconciliation, +strategy_metrics (FIX-134 Items 31+36))
+--                    v20: +position_reconciliation, +strategy_metrics (FIX-134 Items 31+36);
+--                    v21: +shadow_trades (FIX-135 Item 41))
 -- ─────────────────────────────────────────────────────────────────────────────

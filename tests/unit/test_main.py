@@ -864,8 +864,14 @@ class TestContinueFromGate:
         strategy.intent = "INTRADAY"
         strategy.lot_size = 1
         strategy.direction = "LONG"
+        strategy.max_concurrent_positions = 2
 
         store = MagicMock()
+        def _mock_fetch_one(query, params=None):
+            if "COUNT(*)" in query:
+                return {"n": 0}
+            return MagicMock()
+        store.fetch_one.side_effect = _mock_fetch_one
         ks = MagicMock()
         ks.is_active.return_value = False
 

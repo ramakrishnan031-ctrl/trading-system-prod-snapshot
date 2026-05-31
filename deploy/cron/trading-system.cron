@@ -20,6 +20,15 @@
 # ── 05:00 IST daily | token cleanup (forces fresh zerodha_login) ─────────────
 0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
 
+# ── 08:00 IST Mon-Fri | automated token refresh via TOTP ────────────────────
+0 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
+
+# ── 08:30 IST Mon-Fri | fetch F&O ban list from NSE ─────────────────────────
+30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1
+
+# ── 15:50 IST Mon-Fri | EOD cleanup (stale signals, orders, fingerprints) ────
+50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_cleanup.py >> logs/cron-eod-cleanup.log 2>&1
+
 # ── 15:45 IST Mon-Fri | position reconciliation (broker vs system) ──────────
 45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py >> logs/cron-reconcile-positions.log 2>&1
 

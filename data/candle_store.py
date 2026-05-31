@@ -30,7 +30,7 @@ class CandleData:
     high: float
     low: float
     close: float
-    volume: int        # always 0 (LF11: unreliable from ticks)
+    volume: int        # FIX-135 Item 46: accumulated from ticks (was always 0)
     ts: datetime       # IST candle close time (from clock thread)
     interval_sec: int
     is_synthetic: bool = False  # FIX-020: True for flat carry-forward candles
@@ -45,8 +45,9 @@ class _Accumulator:
     close: float
     tick_count: int
     window_start: datetime  # FIX-049: minute boundary for this accumulator
+    volume: int = 0  # FIX-135 Item 46: accumulated volume from ticks
 
-    def update(self, ltp: float, exchange_timestamp: Optional[datetime] = None) -> bool:
+    def update(self, ltp: float, exchange_timestamp: Optional[datetime] = None, volume: int = 0) -> bool:
         """FIX-049: Update accumulator with new tick. Returns False if tick discarded (late).
 
         Args:
@@ -69,6 +70,7 @@ class _Accumulator:
             self.low = ltp
         self.close = ltp
         self.tick_count += 1
+        self.volume += volume
         return True
 
 
@@ -169,12 +171,13 @@ class CandleStore:
 
             return removed_count
 
-    def on_tick(self, instrument_token: int, ltp: float, ts: datetime, exchange_timestamp: Optional[datetime] = None) -> None:
-        """LF11: Accumulate LTP into current candle window. LTP ONLY.
+    def on_tick(self, instrument_token: int, ltp: float, ts: datetime, exchange_timestamp: Optional[datetime] = None, volume: int = 0) -> None:
+        """LF11: Accumulate LTP + volume into current candle window.
 
         Audit 3.4: exchange ohlc from tick is NEVER used here.
         FIX-049: exchange_timestamp param added. If provided and tick belongs to
                  an already-closed minute, the tick is discarded and DEBUG logged.
+        FIX-135 Item 46: volume param added for tick volume accumulation.
         """
         with self._lock:
             # FIX-049: Check if tick belongs to an already-closed window
@@ -198,7 +201,7 @@ class CandleStore:
 
             if instrument_token in self._accum:
                 # Update existing accumulator
-                accepted = self._accum[instrument_token].update(ltp, exchange_timestamp)
+                accepted = self._accum[instrument_token].update(ltp, exchange_timestamp, volume)
                 if not accepted:
                     # FIX-049: Late tick from same window but before accumulator window_start
                     # (This shouldn't normally happen, but kept as defense-in-depth)
@@ -212,7 +215,7 @@ class CandleStore:
                 # Create new accumulator for this window
                 self._accum[instrument_token] = _Accumulator(
                     open=ltp, high=ltp, low=ltp, close=ltp, tick_count=1,
-                    window_start=window_start
+                    window_start=window_start, volume=volume,
                 )
 
     def register_on_candle_close(self, fn: Callable[[CandleData], None]) -> None:
@@ -314,7 +317,7 @@ class CandleStore:
                     high=acc.high,
                     low=acc.low,
                     close=acc.close,
-                    volume=0,
+                    volume=acc.volume,
                     ts=close_ts,
                     interval_sec=self._candle_interval_sec,
                     is_synthetic=False,

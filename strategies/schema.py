@@ -96,6 +96,7 @@ class StrategyConfig(BaseModel):
     # --- Risk ---
     max_risk_pct: float = 0.0    # 0.0 = use global from system_config
     lot_size: int = 1
+    max_concurrent_positions: int = 2  # FIX-135 Item 42: per-strategy position cap
 
     # --- Time ---
     entry_start_time: str = "09:20"  # Must match system_config.yaml entry_start

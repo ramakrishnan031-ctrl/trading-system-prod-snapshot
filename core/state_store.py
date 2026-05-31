@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 20  # FIX-134: +position_reconciliation, +strategy_metrics
+EXPECTED_SCHEMA_VERSION = 21  # FIX-135: +shadow_trades
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
