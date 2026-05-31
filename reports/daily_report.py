@@ -1512,7 +1512,9 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 
         capital_used = sum(t.get("margin_reserved") or 0 for t in trades)
         win_rate = len(wins) / len(closed) * 100 if closed else 0
-        drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
+        drawdown_pct = 0.0
+        if capital_used:
+            drawdown_pct = round(min(max_loss or 0, 0) / capital_used * 100, 1)
 
         processed_count = sum(1 for s in data.signals if s.get("strategy") == strat and s.get("status", "") in _PROCESSED_STATUSES)
 
@@ -1604,7 +1606,9 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 
         capital_used = sum(t.get("margin_reserved") or 0 for t in bucket_trades)
         win_rate = len(wins) / len(closed) * 100 if closed else 0
-        drawdown_pct = round(min(max_loss, 0) / capital_used * 100, 1) if capital_used else 0.0
+        drawdown_pct = 0.0
+        if capital_used:
+            drawdown_pct = round(min(max_loss or 0, 0) / capital_used * 100, 1)
 
         bucket_signals_list = [s for s in data.signals if start_time <= _fmt_time(s.get("received_at")) < end_time]
         processed = sum(1 for s in bucket_signals_list if s.get("status", "") in _PROCESSED_STATUSES)
