@@ -433,8 +433,8 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
     market_hours = "09:15 - 15:30"
     if start_event and end_event:
         try:
-            s = datetime.fromisoformat(start_event["timestamp"])
-            e = datetime.fromisoformat(end_event["timestamp"])
+            s = datetime.fromisoformat(start_event["timestamp"]).replace(tzinfo=None)
+            e = datetime.fromisoformat(end_event["timestamp"]).replace(tzinfo=None)
             uptime = (e - s).total_seconds() / 3600
             row = add_row("System Uptime", f"{uptime:.1f} hours", row)
         except (ValueError, KeyError):
@@ -681,8 +681,8 @@ def build_sheet_1_signals(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
             effective_min = data.strategy_min_scores.get(strategy_name, "—")
 
         try:
-            received_dt = datetime.fromisoformat(sig.get("received_at", ""))
-            triggered_dt = datetime.fromisoformat(sig.get("triggered_at", ""))
+            received_dt = datetime.fromisoformat(sig.get("received_at", "")).replace(tzinfo=None)
+            triggered_dt = datetime.fromisoformat(sig.get("triggered_at", "")).replace(tzinfo=None)
             signal_age = int((received_dt - triggered_dt).total_seconds())
         except (ValueError, TypeError):
             signal_age = "—"
@@ -884,8 +884,8 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         time_in_trade = 0
         if trade.get("entry_time") and trade.get("exit_time"):
             try:
-                entry_dt = datetime.fromisoformat(trade["entry_time"])
-                exit_dt = datetime.fromisoformat(trade["exit_time"])
+                entry_dt = datetime.fromisoformat(trade["entry_time"]).replace(tzinfo=None)
+                exit_dt = datetime.fromisoformat(trade["exit_time"]).replace(tzinfo=None)
                 time_in_trade = max(0, int((exit_dt - entry_dt).total_seconds() / 60))
             except ValueError:
                 pass
