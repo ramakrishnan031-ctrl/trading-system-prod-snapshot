@@ -94,6 +94,7 @@ class SmartTgtManager:
         async_modify: bool = False,
         rate_limiter: Optional[Any] = None,
         volume_dependent_trails: bool = False,  # FIX-026
+        max_modify_failures: int = 3,           # FIX-142: configurable (was hardcoded _MAX_CONSECUTIVE_FAILURES)
     ) -> None:
         self._adapter = adapter
         self._state_store = state_store
@@ -102,6 +103,7 @@ class SmartTgtManager:
         self._quote_fn = quote_fn
         self._enabled = enabled
         self._on_critical_failure = on_critical_failure
+        self._max_modify_failures = max(1, max_modify_failures)
         # FIX-026: master kill-switch for volume/VWAP-based trail logic.
         # Currently CandleData.volume is always 0 (LF11), so this is preventive.
         self._volume_dependent_trails = volume_dependent_trails
@@ -681,7 +683,7 @@ class SmartTgtManager:
             self._log.error(
                 f"SmartTgtManager: modify_order failed for {trade_id} ({symbol}): "
                 f"{result.reason} "
-                f"(failure {failures}/{_MAX_CONSECUTIVE_FAILURES})"
+                f"(failure {failures}/{self._max_modify_failures})"
             )
             self._maybe_fire_critical(trade_id, symbol, failures, result.reason)
 
@@ -757,9 +759,9 @@ class SmartTgtManager:
         self, trade_id: str, symbol: str, failures: int, reason: str
     ) -> None:
         """Fire CRITICAL alert + callback when failure threshold is reached (ST10)."""
-        if failures >= _MAX_CONSECUTIVE_FAILURES:
+        if failures >= self._max_modify_failures:
             self._log.critical(
-                f"SmartTgtManager: {_MAX_CONSECUTIVE_FAILURES} consecutive "
+                f"SmartTgtManager: {self._max_modify_failures} consecutive "
                 f"modify failures for {trade_id} ({symbol}); "
                 f"manual intervention required"
             )

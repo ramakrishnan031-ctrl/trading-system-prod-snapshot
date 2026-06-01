@@ -233,7 +233,7 @@ class CandleStore:
                 pass
 
     def get_candles(self, instrument_token: int, n: int = 10) -> List[CandleData]:
-        """LF14: Return last N closed candles for the given token."""
+        """LF14: Return last N closed candles for the given token. Newest-last (chronological order)."""
         with self._lock:
             hist = self._history.get(instrument_token)
             if hist is None:

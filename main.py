@@ -1651,6 +1651,7 @@ def _main_locked(args, config_dir: Path) -> int:
         # fresh placements; pass the same RateLimiter so they pace together.
         rate_limiter=rate_limiter,
         volume_dependent_trails=app_config.system.smart_tgt.volume_dependent_trails,  # FIX-026
+        max_modify_failures=app_config.system.smart_tgt.max_modify_failures,        # FIX-142
     )
     smart_tgt.set_instrument_cache(instrument_cache)  # Audit #8: tick rounding on SL trail
 

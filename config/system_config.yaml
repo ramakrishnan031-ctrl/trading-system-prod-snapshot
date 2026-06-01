@@ -193,6 +193,7 @@ smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
   trigger_pct: 0.005          # arm trailing once price moves this fraction toward target (0.5%)
   step_pct: 0.003             # trail step size once armed (0.3%)
   volume_dependent_trails: false  # FIX-026: master kill-switch for volume/VWAP-based trail logic
+  max_modify_failures: 3         # FIX-142: CRITICAL alert after this many consecutive modify failures
 
 entry_gate:                   # FIX-025: gate release slippage protection
   slippage_buffer: 2.0        # Rs buffer for limit price adjustment at gate release

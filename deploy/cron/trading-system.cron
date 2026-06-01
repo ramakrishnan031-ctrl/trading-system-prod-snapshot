@@ -56,6 +56,9 @@
 # ── 16:15 IST Mon-Fri | strategy metrics (Sharpe, win rate, demotion) ────────
 15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1
 
+# ── 16:20 IST Mon-Fri | AI log review via Gemini (FIX-142) ──────────────────
+20 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_log_review.py >> logs/cron-gemini-review.log 2>&1
+
 # ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
 0 18 * * 0 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1
 

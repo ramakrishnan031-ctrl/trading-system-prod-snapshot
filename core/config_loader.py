@@ -630,6 +630,7 @@ class SmartTgtConfig(BaseModel):
     trigger_pct: float         # fraction of entry price before first SL trail fires
     step_pct: float            # fraction of entry price per subsequent trail step
     volume_dependent_trails: bool  # FIX-026: enable volume/VWAP-based trail logic
+    max_modify_failures: int = 3   # FIX-142: CRITICAL alert after this many consecutive modify failures
 
     @field_validator("trigger_pct", "step_pct")
     @classmethod
