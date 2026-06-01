@@ -64,7 +64,6 @@ clock:
 order_monitor:                # OM14
   poll_interval_sec: 2        # poll broker every 2s for fill updates (>= 1)
   fill_timeout_sec: 60        # cancel unfilled OPEN/SUBMITTED order after 60s (>= 5)
-  price_movement_cancel_pct: 0.70  # FIX-140: cancel entry if LTP moves 70% of entry→TGT distance before fill (0=disabled)
 
 capital:                      # FM16
   intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
@@ -202,6 +201,7 @@ entry_gate:                   # FIX-025: gate release slippage protection
   min_depth_qty: 500          # FIX-134 Item 38: min depth quantity at best price
   liquidity_check_enabled: true  # FIX-134 Item 38: enable/disable liquidity check
   min_effective_rr: 1.0       # FIX-136 Item 54: abort if R:R < 1.0 after slippage
+  min_pending_rr: 1.0         # FIX-141: cancel pending entry if remaining R:R drops below this (0=disabled)
 
 paper:                        # H-20/ZA16a: paper-mode fill synthesis
   auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)

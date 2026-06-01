@@ -1674,7 +1674,7 @@ def _main_locked(args, config_dir: Path) -> int:
         max_api_failures=cb_cfg.max_api_failures,                          # FIX-128
         force_close_time=cb_cfg.force_close_time,                          # FIX-128
         on_force_close=_make_force_close_cb(kill_switch, notifier, mode_label),  # FIX-128
-        price_movement_cancel_pct=om_cfg.price_movement_cancel_pct,            # FIX-140
+        min_pending_rr=app_config.system.entry_gate.min_pending_rr,             # FIX-141
     )
 
     co_protocol = CoPlusTgtProtocol(

@@ -166,7 +166,6 @@ class OrderMonitorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     poll_interval_sec: int    # OM14: >= 1; how often to poll broker for fill status
     fill_timeout_sec: int     # OM14: >= 5; cancel unfilled order after this many seconds
-    price_movement_cancel_pct: float = 0.0  # FIX-140: cancel entry if LTP moves this fraction toward TGT (0=disabled, 0.7=70%)
 
     @field_validator("poll_interval_sec")
     @classmethod
@@ -180,13 +179,6 @@ class OrderMonitorConfig(BaseModel):
     def _validate_fill_timeout(cls, v: int) -> int:
         if v < 5:
             raise ValueError("fill_timeout_sec must be >= 5")
-        return v
-
-    @field_validator("price_movement_cancel_pct")
-    @classmethod
-    def _validate_price_movement(cls, v: float) -> float:
-        if v < 0 or v > 1:
-            raise ValueError("price_movement_cancel_pct must be between 0 and 1")
         return v
 
 
@@ -672,6 +664,7 @@ class EntryGateConfig(BaseModel):
     min_depth_qty: int = 500            # FIX-134 Item 38: min depth qty at best price
     liquidity_check_enabled: bool = True  # FIX-134 Item 38: enable/disable
     min_effective_rr: float = 1.0       # FIX-136 Item 54: abort if R:R < this after slippage
+    min_pending_rr: float = 0.0         # FIX-141: cancel pending entry if remaining R:R < this (0=disabled)
 
 
 class LiveFeedConfig(BaseModel):

@@ -178,7 +178,7 @@ class OrderMonitor:
         max_api_failures: int = 3,                       # FIX-128 Fix C
         force_close_time: Optional[str] = None,          # FIX-128 Fix C: "HH:MM" IST
         on_force_close: Optional[Callable[[], None]] = None,  # FIX-128 Fix C
-        price_movement_cancel_pct: float = 0.0,              # FIX-140: cancel entry if price moves this % toward TGT (0=disabled)
+        min_pending_rr: float = 0.0,                         # FIX-141: cancel entry if remaining R:R < this (0=disabled)
     ) -> None:
         """
         Args:
@@ -195,8 +195,10 @@ class OrderMonitor:
             max_api_failures:     FIX-128: consecutive general API errors before hard_kill.
             force_close_time:     FIX-128: "HH:MM" IST to force-cancel all ENTRY orders.
             on_force_close:       FIX-128: callback fired at force_close_time (once/day).
-            price_movement_cancel_pct: FIX-140: cancel ENTRY if LTP moves this fraction of
-                                  entry→TGT distance toward TGT before fill. 0=disabled.
+            min_pending_rr:       FIX-141: cancel ENTRY if remaining_reward/risk_distance
+                                  drops below this ratio. 0=disabled. Strategy-adaptive:
+                                  a 1:2 strategy tolerates more drift than 1:1.5 because
+                                  the TGT is further away. Uses sl_price for risk_distance.
         """
         self._adapter = adapter
         self._osm = state_machine
@@ -219,8 +221,8 @@ class OrderMonitor:
         # OM11: consecutive auth fail counter (global across all orders)
         self._consecutive_auth_fails = 0
 
-        # FIX-140: price-movement entry cancellation
-        self._price_movement_cancel_pct = price_movement_cancel_pct
+        # FIX-141: R:R-based entry cancellation (replaces FIX-140 fixed %)
+        self._min_pending_rr = min_pending_rr
 
         # FIX-128 (Fix C): circuit breaker state
         self._partial_fill_timeout_sec = partial_fill_timeout_minutes * 60
@@ -1107,25 +1109,36 @@ class OrderMonitor:
 
     def _check_price_movement_cancel(self, entry: _WatchEntry) -> None:
         """
-        FIX-140: Cancel ENTRY order if LTP has moved too far toward TGT before fill.
+        FIX-141: Cancel ENTRY order if remaining R:R drops below min_pending_rr.
 
-        Only fires for ENTRY legs when price_movement_cancel_pct > 0 and
-        tgt_price is set. Fetches current LTP via adapter; on fetch failure
-        the check is skipped (fail-open: never cancel on missing data).
+        Strategy-adaptive: a 1:2 R:R trade can absorb more price drift before
+        fill than a 1:1.5 trade because the TGT is further away. Both cancel
+        at the same remaining_reward/risk_distance ratio.
 
-        The threshold is a fraction of the entry→TGT distance. If LTP has
-        covered >= that fraction, the effective R:R is degraded and the
-        entry is cancelled.
+        Formula:
+            LONG:  remaining_reward = tgt_price - ltp
+                   risk_distance    = entry_price - sl_price
+            SHORT: remaining_reward = ltp - tgt_price
+                   risk_distance    = sl_price - entry_price
+
+        Cancel when remaining_reward / risk_distance < min_pending_rr.
+
+        Fail-open on any missing data: if tgt_price/sl_price/ltp unavailable,
+        or risk_distance <= 0, check is skipped (never cancel on missing data).
         """
-        if self._price_movement_cancel_pct <= 0:
+        if self._min_pending_rr <= 0:
             return
         if entry.leg != "ENTRY":
             return
-        if entry.tgt_price <= 0 or entry.expected_price <= 0:
+        if entry.tgt_price <= 0 or entry.sl_price <= 0 or entry.expected_price <= 0:
             return
 
-        entry_to_tgt = abs(entry.tgt_price - entry.expected_price)
-        if entry_to_tgt < 1e-6:
+        if entry.side == "BUY":
+            risk_distance = entry.expected_price - entry.sl_price
+        else:
+            risk_distance = entry.sl_price - entry.expected_price
+
+        if risk_distance <= 0:
             return
 
         ltp = self._ltp_expected_fallback(entry.symbol)
@@ -1133,43 +1146,42 @@ class OrderMonitor:
             return
 
         if entry.side == "BUY":
-            movement = ltp - entry.expected_price
+            remaining_reward = entry.tgt_price - ltp
         else:
-            movement = entry.expected_price - ltp
+            remaining_reward = ltp - entry.tgt_price
 
-        if movement <= 0:
-            return
+        pending_rr = remaining_reward / risk_distance
 
-        fraction_moved = movement / entry_to_tgt
-        if fraction_moved < self._price_movement_cancel_pct:
+        if pending_rr >= self._min_pending_rr:
             return
 
         self._log.warning(
-            "order_monitor.price_movement_cancel",
+            "order_monitor.pending_rr_cancel PENDING_RR_BELOW_THRESHOLD",
             extra={
                 "internal_order_id": entry.internal_order_id,
                 "broker_order_id": entry.broker_order_id,
                 "symbol": entry.symbol,
                 "side": entry.side,
                 "entry_price": entry.expected_price,
+                "sl_price": entry.sl_price,
                 "tgt_price": entry.tgt_price,
                 "ltp": ltp,
-                "fraction_moved": round(fraction_moved, 3),
-                "threshold": self._price_movement_cancel_pct,
+                "pending_rr": round(pending_rr, 3),
+                "min_pending_rr": self._min_pending_rr,
             },
         )
 
         result = self._adapter.cancel_order(entry.broker_order_id)
         if result.success:
             self._log.info(
-                "order_monitor.price_movement_cancelled",
+                "order_monitor.pending_rr_cancelled",
                 extra={"internal_order_id": entry.internal_order_id},
             )
             self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
             self.untrack(entry.internal_order_id)
         else:
             self._log.error(
-                "order_monitor.price_movement_cancel_failed",
+                "order_monitor.pending_rr_cancel_failed",
                 extra={
                     "internal_order_id": entry.internal_order_id,
                     "reason": result.reason,
