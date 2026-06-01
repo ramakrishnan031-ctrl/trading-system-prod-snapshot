@@ -86,6 +86,7 @@ clock:
 order_monitor:
   poll_interval_sec: 2
   fill_timeout_sec: 60
+  price_movement_cancel_pct: 0.70
 capital:
   intraday_bucket_pct: 0.70
   positional_bucket_pct: 0.30

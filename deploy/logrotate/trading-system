@@ -12,9 +12,9 @@
 #
 # Install path: /etc/logrotate.d/trading-system
 
-/home/ubuntu/trading-system/logs/*.log
-/home/ubuntu/trading-system/logs/*.log.*
-/home/ubuntu/trading-system/logs/cron-*.log
+/home/ubuntu/systems/trading-system/logs/*.log
+/home/ubuntu/systems/trading-system/logs/*.log.*
+/home/ubuntu/systems/trading-system/logs/cron-*.log
 {
     daily
     missingok

@@ -64,6 +64,7 @@ clock:
 order_monitor:                # OM14
   poll_interval_sec: 2        # poll broker every 2s for fill updates (>= 1)
   fill_timeout_sec: 60        # cancel unfilled OPEN/SUBMITTED order after 60s (>= 5)
+  price_movement_cancel_pct: 0.70  # FIX-140: cancel entry if LTP moves 70% of entry→TGT distance before fill (0=disabled)
 
 capital:                      # FM16
   intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
@@ -108,7 +109,7 @@ webhook:                      # WR14 — HTTP server settings
                               # firewall/security-group restrictions to
                               # constrain the actual reachable surface.
   bind_port: 5000             # port to listen on
-  require_hmac: false         # TEMP: disabled for Chartink (no HMAC support)
+  require_hmac: false         # Chartink cannot sign payloads; use ?token= auth (WEBHOOK_SECRET env var required in live mode)
   dedup_window_seconds: 300   # FIX-131 Item 17: 5-min fingerprint bucket (was 60s/1-min)
 
 signal_processor:             # SP15 — worker pool settings

@@ -66,6 +66,8 @@ class _WatchEntry:
     filled_qty: int = 0
     avg_fill_price: float = 0.0
     status_message: str = ""     # v14: last broker status_message (rejection text)
+    tgt_price: float = 0.0      # FIX-140: ENTRY leg only; cancel if price moves toward TGT
+    sl_price: float = 0.0       # FIX-140: ENTRY leg only; used to compute entry→TGT distance
     # Track consecutive auth failures for OM11
     auth_fail_count: int = field(default=0, compare=False)
     # Track consecutive empty-history responses; after threshold triggers orphan
@@ -176,6 +178,7 @@ class OrderMonitor:
         max_api_failures: int = 3,                       # FIX-128 Fix C
         force_close_time: Optional[str] = None,          # FIX-128 Fix C: "HH:MM" IST
         on_force_close: Optional[Callable[[], None]] = None,  # FIX-128 Fix C
+        price_movement_cancel_pct: float = 0.0,              # FIX-140: cancel entry if price moves this % toward TGT (0=disabled)
     ) -> None:
         """
         Args:
@@ -192,6 +195,8 @@ class OrderMonitor:
             max_api_failures:     FIX-128: consecutive general API errors before hard_kill.
             force_close_time:     FIX-128: "HH:MM" IST to force-cancel all ENTRY orders.
             on_force_close:       FIX-128: callback fired at force_close_time (once/day).
+            price_movement_cancel_pct: FIX-140: cancel ENTRY if LTP moves this fraction of
+                                  entry→TGT distance toward TGT before fill. 0=disabled.
         """
         self._adapter = adapter
         self._osm = state_machine
@@ -213,6 +218,9 @@ class OrderMonitor:
 
         # OM11: consecutive auth fail counter (global across all orders)
         self._consecutive_auth_fails = 0
+
+        # FIX-140: price-movement entry cancellation
+        self._price_movement_cancel_pct = price_movement_cancel_pct
 
         # FIX-128 (Fix C): circuit breaker state
         self._partial_fill_timeout_sec = partial_fill_timeout_minutes * 60
@@ -245,6 +253,8 @@ class OrderMonitor:
         expected_price: float,
         placed_at: datetime,
         leg: str = "",
+        tgt_price: float = 0.0,
+        sl_price: float = 0.0,
     ) -> None:
         """
         Add an order to the watch list (OM3).
@@ -258,6 +268,9 @@ class OrderMonitor:
         current LTP via the adapter and use that as the slippage baseline.
         On any fetch failure we fall back to 0.0 (preserves existing
         behaviour -- worst case the original zero-slippage row).
+
+        FIX-140: tgt_price/sl_price for ENTRY legs enables price-movement
+        cancellation (cancel if price moves too far toward TGT before fill).
 
         Raises:
             ValueError: internal_order_id already being watched.
@@ -281,6 +294,8 @@ class OrderMonitor:
                 expected_price=expected_price,
                 placed_at=placed_at,
                 leg=leg,
+                tgt_price=tgt_price,
+                sl_price=sl_price,
             )
             self._watched[composite_key] = entry
             self._internal_to_composite[internal_order_id] = composite_key
@@ -841,9 +856,10 @@ class OrderMonitor:
         self.untrack(entry.internal_order_id)
 
     def _handle_open(self, entry: _WatchEntry, now: datetime) -> None:
-        """Transition to OPEN; check fill timeout."""
+        """Transition to OPEN; check fill timeout + price-movement cancel."""
         self._safe_transition(entry.internal_order_id, "OPEN", entry=entry)
         self._check_fill_timeout(entry, now)
+        self._check_price_movement_cancel(entry)
 
     def _handle_partial(
         self,
@@ -1088,6 +1104,77 @@ class OrderMonitor:
             self.untrack(entry.internal_order_id)
             if self._on_orphan is not None:
                 self._on_orphan(entry.internal_order_id, entry.broker_order_id)
+
+    def _check_price_movement_cancel(self, entry: _WatchEntry) -> None:
+        """
+        FIX-140: Cancel ENTRY order if LTP has moved too far toward TGT before fill.
+
+        Only fires for ENTRY legs when price_movement_cancel_pct > 0 and
+        tgt_price is set. Fetches current LTP via adapter; on fetch failure
+        the check is skipped (fail-open: never cancel on missing data).
+
+        The threshold is a fraction of the entry→TGT distance. If LTP has
+        covered >= that fraction, the effective R:R is degraded and the
+        entry is cancelled.
+        """
+        if self._price_movement_cancel_pct <= 0:
+            return
+        if entry.leg != "ENTRY":
+            return
+        if entry.tgt_price <= 0 or entry.expected_price <= 0:
+            return
+
+        entry_to_tgt = abs(entry.tgt_price - entry.expected_price)
+        if entry_to_tgt < 1e-6:
+            return
+
+        ltp = self._ltp_expected_fallback(entry.symbol)
+        if ltp <= 0:
+            return
+
+        if entry.side == "BUY":
+            movement = ltp - entry.expected_price
+        else:
+            movement = entry.expected_price - ltp
+
+        if movement <= 0:
+            return
+
+        fraction_moved = movement / entry_to_tgt
+        if fraction_moved < self._price_movement_cancel_pct:
+            return
+
+        self._log.warning(
+            "order_monitor.price_movement_cancel",
+            extra={
+                "internal_order_id": entry.internal_order_id,
+                "broker_order_id": entry.broker_order_id,
+                "symbol": entry.symbol,
+                "side": entry.side,
+                "entry_price": entry.expected_price,
+                "tgt_price": entry.tgt_price,
+                "ltp": ltp,
+                "fraction_moved": round(fraction_moved, 3),
+                "threshold": self._price_movement_cancel_pct,
+            },
+        )
+
+        result = self._adapter.cancel_order(entry.broker_order_id)
+        if result.success:
+            self._log.info(
+                "order_monitor.price_movement_cancelled",
+                extra={"internal_order_id": entry.internal_order_id},
+            )
+            self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
+            self.untrack(entry.internal_order_id)
+        else:
+            self._log.error(
+                "order_monitor.price_movement_cancel_failed",
+                extra={
+                    "internal_order_id": entry.internal_order_id,
+                    "reason": result.reason,
+                },
+            )
 
     # ── helpers ───────────────────────────────────────────────────────────────
 

@@ -1176,6 +1176,8 @@ class OrderPlacer:
                     expected_price=entry_price,
                     placed_at=now,
                     leg="ENTRY",
+                    tgt_price=tgt_price,
+                    sl_price=sl_price,
                 )
                 successfully_tracked.append(result.entry_internal_id)
 

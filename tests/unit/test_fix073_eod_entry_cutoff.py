@@ -134,7 +134,7 @@ class _FakeFundManager:
 class _FakeMonitor:
     """Minimal order monitor stub."""
 
-    def track(self, internal_order_id, broker_order_id, symbol, side, qty, expected_price, placed_at, leg):
+    def track(self, internal_order_id, broker_order_id, symbol, side, qty, expected_price, placed_at, leg, **kwargs):
         pass
 
 

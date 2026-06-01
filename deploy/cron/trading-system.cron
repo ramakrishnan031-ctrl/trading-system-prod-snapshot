@@ -44,9 +44,6 @@
 # ── 16:00 IST Mon-Fri | WAL checkpoint to prevent unbounded growth ──────────
 0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/wal_checkpoint.py >> logs/wal_checkpoint.log 2>&1
 
-# ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
-0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
-
 # ── 16:01 IST Mon-Fri | generate screened stocks CSV for candle analysis ─────
 1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
 
@@ -61,3 +58,6 @@
 
 # ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
 0 18 * * 0 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1
+
+# ── Hourly | disk space monitor (FIX-140) ───────────────────────────────────
+0 * * * * cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1
