@@ -10,7 +10,7 @@ Usage:
     python scripts/gemini_log_review.py [--date YYYY-MM-DD] [--dry-run]
 
 Cron:
-    20 16 * * 1-5  cd ~/systems/trading-system && ~/systems/venv/bin/python scripts/gemini_log_review.py
+    35 16 * * 1-5  cd ~/systems/trading-system && ~/systems/venv/bin/python scripts/gemini_log_review.py
 
 Exit codes:
     0 -- success (review generated)
