@@ -206,6 +206,13 @@ def run_review(
 
     _send_telegram_summary(review_text, date_iso, log)
 
+    # FIX-145: Record heartbeat for cron drift monitoring
+    try:
+        from utils.cron_heartbeat import record_heartbeat
+        record_heartbeat("gemini_log_review")
+    except Exception:
+        pass
+
     return 0
 
 

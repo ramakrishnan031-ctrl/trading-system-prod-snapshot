@@ -23,8 +23,11 @@
 # ── 08:00 IST Mon-Fri | automated token refresh via TOTP ────────────────────
 0 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
 
-# ── 08:30 IST Mon-Fri | fetch F&O ban list from NSE ─────────────────────────
-30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1
+# ── 08:30 IST Mon-Fri | pre-market health check (FIX-146) ───────────────────
+30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/premarket_healthcheck.py >> logs/premarket-healthcheck.log 2>&1
+
+# ── 08:35 IST Mon-Fri | fetch F&O ban list from NSE ─────────────────────────
+35 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1
 
 # ── 15:50 IST Mon-Fri | EOD cleanup (stale signals, orders, fingerprints) ────
 50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_cleanup.py >> logs/cron-eod-cleanup.log 2>&1
@@ -61,6 +64,9 @@
 
 # ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
 0 18 * * 0 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1
+
+# ── 18:00 IST Mon-Fri | cron drift monitor (FIX-145) ─────────────────────────
+0 18 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/check_cron_drift.py >> logs/cron-drift-check.log 2>&1
 
 # ── Hourly | disk space monitor (FIX-140) ───────────────────────────────────
 0 * * * * cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1

@@ -140,6 +140,13 @@ def main(argv=None) -> int:
     except Exception as exc:
         log.warning("eod_verify: telegram alert failed: %s", exc)
 
+    # FIX-145: Record heartbeat for cron drift monitoring
+    try:
+        from utils.cron_heartbeat import record_heartbeat
+        record_heartbeat("eod_verify")
+    except Exception:
+        pass
+
     store.close()
     return 0
 

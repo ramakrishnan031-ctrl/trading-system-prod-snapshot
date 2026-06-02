@@ -102,6 +102,7 @@ position_sizing:
   lot_skew_rejection_threshold: 0.25
   min_tick_size: 0.05
   max_single_order_qty: 10000
+  max_position_value_rs: 50000.0
   tier_multipliers:
     HIGH: 1.0
     MEDIUM: 0.70

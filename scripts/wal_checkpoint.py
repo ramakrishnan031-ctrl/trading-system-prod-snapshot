@@ -36,6 +36,12 @@ def main() -> None:
             f"{now_ist().isoformat()} WAL checkpoint(PASSIVE): "
             f"busy={stats['busy']} log={stats['log']} checkpointed={stats['checkpointed']}"
         )
+        # FIX-145: Record heartbeat for cron drift monitoring
+        try:
+            from utils.cron_heartbeat import record_heartbeat
+            record_heartbeat("wal_checkpoint")
+        except Exception:
+            pass
     except Exception as exc:
         print(f"{now_ist().isoformat()} WAL checkpoint FAILED: {exc}", file=sys.stderr)
         sys.exit(1)

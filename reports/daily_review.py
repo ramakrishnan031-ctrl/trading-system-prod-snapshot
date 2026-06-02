@@ -837,6 +837,14 @@ def main(argv=None) -> int:
             print(f"xlsx: {paths.xlsx_path}")
         if paths.md_path:
             print(f"md:   {paths.md_path}")
+
+    # FIX-145: Record heartbeat for cron drift monitoring
+    try:
+        from utils.cron_heartbeat import record_heartbeat
+        record_heartbeat("daily_review")
+    except Exception:
+        pass  # Non-critical; don't fail the job
+
     return 0
 
 

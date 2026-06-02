@@ -73,7 +73,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 22  # FIX-137: +eod_verification
+EXPECTED_SCHEMA_VERSION = 23  # FIX-145: +cron_heartbeat
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1819,6 +1819,59 @@ class StateStore:
         row = self.fetch_one(
             "SELECT * FROM pnl_reconciliation WHERE date = ?",
             (date_iso,),
+        )
+        return dict(row) if row else None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # FIX-145: Cron heartbeat helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def insert_cron_heartbeat(
+        self,
+        job_name: str,
+        executed_at: str,
+        status: str = "SUCCESS",
+        duration_sec: Optional[float] = None,
+        message: Optional[str] = None,
+    ) -> None:
+        """
+        Record a cron job execution heartbeat.
+
+        Called at the END of each cron script to record successful execution.
+        status: SUCCESS (default) | PARTIAL (completed with warnings) | FAILED
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """INSERT INTO cron_heartbeat
+                       (job_name, executed_at, status, duration_sec, message)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (job_name, executed_at, status, duration_sec, message),
+            )
+
+    def get_cron_heartbeats_since(self, since_iso: str) -> List[dict]:
+        """
+        Return all cron heartbeats since the given ISO timestamp.
+
+        Used by scripts/check_cron_drift.py to verify all expected jobs ran.
+        """
+        rows = self.fetch_all(
+            """SELECT job_name, executed_at, status, duration_sec, message
+               FROM cron_heartbeat
+               WHERE executed_at >= ?
+               ORDER BY executed_at DESC""",
+            (since_iso,),
+        )
+        return [dict(r) for r in rows]
+
+    def get_last_heartbeat_for_job(self, job_name: str) -> Optional[dict]:
+        """Return the most recent heartbeat for a specific cron job."""
+        row = self.fetch_one(
+            """SELECT job_name, executed_at, status, duration_sec, message
+               FROM cron_heartbeat
+               WHERE job_name = ?
+               ORDER BY executed_at DESC
+               LIMIT 1""",
+            (job_name,),
         )
         return dict(row) if row else None
 

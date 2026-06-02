@@ -814,10 +814,30 @@ CREATE TABLE IF NOT EXISTS eod_verification (
     verified_at     TEXT NOT NULL                     -- ISO-8601 IST
 );
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '22');  -- FIX-137 Item 59
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TABLE 25: cron_heartbeat  (v23 / FIX-145)
+-- Records successful cron job executions. Each cron job writes a row on success.
+-- Used by scripts/check_cron_drift.py to detect missing heartbeats.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS cron_heartbeat (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_name        TEXT NOT NULL,                  -- e.g., "daily_report", "token_watcher"
+    executed_at     TEXT NOT NULL,                  -- ISO-8601 IST when job ran
+    status          TEXT NOT NULL DEFAULT 'SUCCESS', -- SUCCESS | PARTIAL | FAILED
+    duration_sec    REAL,                           -- job duration in seconds
+    message         TEXT                            -- optional diagnostic
+);
+
+CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_job_name
+    ON cron_heartbeat(job_name);
+
+CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
+    ON cron_heartbeat(executed_at);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '23');  -- FIX-145: +cron_heartbeat
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v22 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- END OF SCHEMA v23 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -843,5 +863,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '22');
 --                    v19: +trade_journal table (FIX-133 Item 30);
 --                    v20: +position_reconciliation, +strategy_metrics (FIX-134 Items 31+36);
 --                    v21: +shadow_trades (FIX-135 Item 41);
---                    v22: +eod_verification (FIX-137 Item 59))
+--                    v22: +eod_verification (FIX-137 Item 59);
+--                    v23: +cron_heartbeat (FIX-145))
 -- ─────────────────────────────────────────────────────────────────────────────

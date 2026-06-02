@@ -129,6 +129,7 @@ class PositionSizer:
         lot_skew_rejection_threshold: float = 0.25,  # FIX-021: reject if skew exceeds this
         min_tick_size: float = 0.05,  # FIX-041: min SL distance (penny stock guard)
         max_single_order_qty: int = 10000,  # FIX-041: sanity cap on computed qty
+        max_position_value_rs: float = 50000.0,  # FIX-144: hard cap on qty*price
         broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
     ) -> None:
         self._fm = fund_manager
@@ -142,6 +143,7 @@ class PositionSizer:
         self._lot_skew_rejection_threshold = lot_skew_rejection_threshold  # FIX-021
         self._min_tick_size = min_tick_size  # FIX-041
         self._max_single_order_qty = max_single_order_qty  # FIX-041
+        self._max_position_value_rs = max_position_value_rs  # FIX-144
         self._broker_adapter = broker_adapter  # FIX-072
 
     def calculate(
@@ -428,6 +430,38 @@ class PositionSizer:
                     reason=reason,
                     breakdown=breakdown,
                 )
+
+        # ── FIX-144: Position value cap (catastrophic loss guard) ──────────────
+        # Hard cap on qty*price regardless of how it was computed. Catches:
+        # - Bugs in earlier constraints
+        # - High-priced stocks where even small qty is large exposure
+        position_value = final_qty * entry_price
+        if position_value > self._max_position_value_rs:
+            if self._log is not None:
+                self._log.critical(
+                    "position_sizer.position_value_cap_exceeded",
+                    extra={
+                        "symbol": symbol,
+                        "final_qty": final_qty,
+                        "entry_price": entry_price,
+                        "position_value": position_value,
+                        "max_position_value_rs": self._max_position_value_rs,
+                    },
+                )
+            return SizingResult(
+                success=False,
+                qty=0,
+                margin_required=0.0,
+                risk_amount=0.0,
+                bucket=bucket,
+                constraint="POSITION_VALUE_CAP",
+                reason=(
+                    f"position_value={position_value:.2f} > max={self._max_position_value_rs:.2f} "
+                    f"for {symbol} (qty={final_qty}, price={entry_price}); "
+                    f"rejecting to prevent catastrophic loss"
+                ),
+                breakdown=breakdown,
+            )
 
         if final_qty < lot_size or final_qty < self._min_qty_threshold:
             reason = (

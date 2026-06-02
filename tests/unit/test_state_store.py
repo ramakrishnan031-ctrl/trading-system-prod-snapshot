@@ -1848,6 +1848,51 @@ def test_fix006_connection_timeout_and_busy_timeout(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-145: Cron heartbeat helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_cron_heartbeat_insert_and_query(tmp_path: Path) -> None:
+    """FIX-145: insert_cron_heartbeat and get_cron_heartbeats_since work."""
+    store = make_store(tmp_path)
+
+    ts1 = "2026-06-02T16:00:00+05:30"
+    ts2 = "2026-06-02T16:05:00+05:30"
+    store.insert_cron_heartbeat("daily_report", ts1, "SUCCESS", 5.2, None)
+    store.insert_cron_heartbeat("wal_checkpoint", ts2, "SUCCESS", 0.1, "checkpoint OK")
+
+    # Query all since midnight
+    since = "2026-06-02T00:00:00+05:30"
+    beats = store.get_cron_heartbeats_since(since)
+    assert len(beats) == 2
+    job_names = {b["job_name"] for b in beats}
+    assert job_names == {"daily_report", "wal_checkpoint"}
+
+    store.close()
+    print("  OK FIX-145: cron heartbeat insert and query work")
+
+
+def test_get_last_heartbeat_for_job(tmp_path: Path) -> None:
+    """FIX-145: get_last_heartbeat_for_job returns most recent."""
+    store = make_store(tmp_path)
+
+    store.insert_cron_heartbeat("test_job", "2026-06-01T10:00:00+05:30", "SUCCESS")
+    store.insert_cron_heartbeat("test_job", "2026-06-02T10:00:00+05:30", "SUCCESS")
+    store.insert_cron_heartbeat("other_job", "2026-06-03T10:00:00+05:30", "SUCCESS")
+
+    last = store.get_last_heartbeat_for_job("test_job")
+    assert last is not None
+    assert last["job_name"] == "test_job"
+    assert "2026-06-02" in last["executed_at"]
+
+    # Non-existent job returns None
+    missing = store.get_last_heartbeat_for_job("nonexistent")
+    assert missing is None
+
+    store.close()
+    print("  OK FIX-145: get_last_heartbeat_for_job returns most recent")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1939,6 +1984,9 @@ def run_all_tests() -> int:
         test_cancel_stale_paper_orders,
         # FIX-006 connection timeout
         test_fix006_connection_timeout_and_busy_timeout,
+        # FIX-145 cron heartbeat
+        test_cron_heartbeat_insert_and_query,
+        test_get_last_heartbeat_for_job,
     ]
 
     print("=" * 70)

@@ -197,6 +197,7 @@ class PositionSizingConfig(BaseModel):
     lot_skew_rejection_threshold: float  # FIX-021: reject if (tiered-final)/tiered > threshold
     min_tick_size: float               # FIX-041: min SL distance (penny stock guard)
     max_single_order_qty: int          # FIX-041: sanity cap on computed qty
+    max_position_value_rs: float       # FIX-144: hard cap on qty*price (catastrophic loss guard)
     tier_multipliers: PositionSizingTierConfig  # PS5
     dynamic_by_winrate: bool = True            # FIX-133 Item 21: enable perf-weighted sizing
     min_multiplier: float = 0.5                # FIX-133 Item 21: floor for perf weight
@@ -806,6 +807,83 @@ class SystemConfig(BaseModel):
     live_feed: LiveFeedConfig = LiveFeedConfig()  # FIX-134 Item 37
     fno_ban: FnoBanConfig = FnoBanConfig()    # FIX-136 Item 44
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
+
+    @model_validator(mode="after")
+    def _cross_field_sanity_checks(self) -> "SystemConfig":
+        """
+        FIX-147: Cross-field sanity validation. Catches operator typos and
+        misconfigurations that individual field validators can't detect.
+        These are WARNINGS logged at startup — they don't block the system
+        but indicate likely configuration errors.
+        """
+        import logging
+        log = logging.getLogger("config_sanity")
+        warnings = []
+
+        # 1. Daily loss limit vs position_sizing risk
+        # If daily_loss_limit is set but max_position_value_rs could exceed it in one trade
+        if self.position_sizing.max_position_value_rs > self.capital.daily_loss_limit:
+            warnings.append(
+                f"max_position_value_rs ({self.position_sizing.max_position_value_rs}) > "
+                f"daily_loss_limit ({self.capital.daily_loss_limit}) - "
+                f"a single bad trade could exceed daily loss limit"
+            )
+
+        # 2. Risk per trade vs daily loss limit
+        # If 1% risk * 10 positions = 10% loss, check if that exceeds daily limit
+        # (assuming a rough capital estimate from daily_loss_limit / loss_limit_pct)
+        if self.risk.daily_loss_limit_pct < 1.0:  # Only check if not disabled (100%)
+            max_cumulative_risk = self.position_sizing.risk_per_trade_pct * self.risk.max_open_positions
+            if max_cumulative_risk > self.risk.daily_loss_limit_pct * 2:
+                warnings.append(
+                    f"max_open_positions ({self.risk.max_open_positions}) * "
+                    f"risk_per_trade_pct ({self.position_sizing.risk_per_trade_pct:.1%}) = "
+                    f"{max_cumulative_risk:.1%} cumulative risk - "
+                    f"exceeds 2x daily_loss_limit_pct ({self.risk.daily_loss_limit_pct:.1%})"
+                )
+
+        # 3. Entry window sanity
+        # entry_end should be well before eod_squareoff_time
+        from datetime import time as _time
+        def _hhmm(s: str) -> _time:
+            h, m = s.split(":")
+            return _time(int(h), int(m))
+
+        entry_end = _hhmm(self.trading_hours.entry_end)
+        eod_sq = _hhmm(self.trading_hours.eod_squareoff_time)
+        entry_end_mins = entry_end.hour * 60 + entry_end.minute
+        eod_sq_mins = eod_sq.hour * 60 + eod_sq.minute
+
+        if eod_sq_mins - entry_end_mins < 15:
+            warnings.append(
+                f"entry_end ({self.trading_hours.entry_end}) is within 15min of "
+                f"eod_squareoff_time ({self.trading_hours.eod_squareoff_time}) - "
+                f"trades may not have time to hit targets"
+            )
+
+        # 4. Leverage sanity
+        for intent, leverage in [
+            ("INTRADAY", self.capital.leverage_map.INTRADAY),
+            ("COVER_ORDER", self.capital.leverage_map.COVER_ORDER),
+        ]:
+            if leverage > 10:
+                warnings.append(
+                    f"leverage_map.{intent} = {leverage}x seems high - "
+                    f"verify this matches your broker's actual margin"
+                )
+
+        # 5. SL buffer vs min_tick_size
+        if self.position_sizing.min_tick_size < 0.01:
+            warnings.append(
+                f"min_tick_size ({self.position_sizing.min_tick_size}) < 0.01 - "
+                f"may allow micro-fraction SL distances"
+            )
+
+        # Log all warnings
+        for w in warnings:
+            log.warning(f"config_sanity: {w}")
+
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────
