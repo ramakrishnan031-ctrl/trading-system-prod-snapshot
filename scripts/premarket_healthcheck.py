@@ -35,13 +35,11 @@ from core.logger import get_logger
 
 _log = get_logger("premarket_healthcheck")
 
-# Required secrets that must be set
+# Required secrets that must be set (match actual .env variable names)
 REQUIRED_SECRETS = [
-    "ZERODHA_API_KEY",
-    "ZERODHA_API_SECRET",
-    "ZERODHA_TOTP_KEY",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHANNEL_PRIMARY",
+    "WEBHOOK_SECRET",
 ]
 
 # Config files that must exist
