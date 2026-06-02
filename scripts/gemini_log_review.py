@@ -1,20 +1,20 @@
 """
-scripts/gemini_log_review.py -- Trading System v2  FIX-142
+scripts/gemini_log_review.py -- Trading System v2  FIX-143
 
 Purpose:
-    Post-EOD AI log review using Google Gemini API.
-    Extracts WARNING+ log entries, sends to Gemini for analysis,
-    saves review to reports/log_review/.
+    Post-EOD AI log review using Gemini CLI (Google auth, no API key).
+    Reads full day's WARNING+ log entries + watchman notes,
+    sends to Gemini CLI for structured daily report.
 
 Usage:
     python scripts/gemini_log_review.py [--date YYYY-MM-DD] [--dry-run]
 
 Cron:
-    20 16 * * 1-5  (after daily report at 16:05)
+    20 16 * * 1-5  cd ~/systems/trading-system && ~/systems/venv/bin/python scripts/gemini_log_review.py
 
 Exit codes:
     0 -- success (review generated)
-    1 -- error (API failure, missing config)
+    1 -- error (CLI failure)
     2 -- no logs to review (empty day)
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,31 +33,50 @@ if str(_ROOT) not in sys.path:
 from core.logger import get_logger
 from core.time_authority import today_ist
 
+_GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
+_GEMINI_TIMEOUT = 120
 
-_PROMPT_TEMPLATE = """\
-You are a trading system ops reviewer. Analyze these log entries from an \
-automated intraday trading system and provide:
+_EOD_PROMPT = """\
+You are a senior trading ops reviewer. Here is today's complete trading log \
+(WARNING+ entries) and the watchman's real-time notes from throughout the day.
 
-1. Summary of what happened today (2-3 sentences)
-2. Errors or issues found (bullet list)
-3. Patterns or recurring problems (bullet list, or "None" if clean)
-4. Suggestions for improvement (bullet list, or "None" if clean)
+Provide a structured daily report:
 
-Keep response under 500 words. Be specific about error counts and symbols.
+## Session Summary
+- Trading hours: start_time to end_time
+- Total signals received / traded / rejected
+- Total trades: wins / losses / breakeven
 
---- LOG ENTRIES ---
-{logs}
-"""
+## Issues Found
+- List each issue with timestamp, symbol, severity
+
+## Trade Execution Quality
+- Any slippage > 0.5%?
+- Any partial fills?
+- Any order rejections?
+- SL/TGT hit accuracy
+
+## System Health
+- WebSocket disconnects
+- DB errors
+- Kill switch events
+- Latency anomalies
+
+## Recommendations
+- What should be fixed/improved?
+
+Keep response under 800 words."""
 
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="gemini_log_review",
-        description="FIX-142: AI-powered EOD log review via Gemini.",
+        description="FIX-143: AI-powered EOD log review via Gemini CLI.",
     )
     parser.add_argument("--date", metavar="YYYY-MM-DD", default=None)
     parser.add_argument("--log-dir", metavar="PATH", default=None)
     parser.add_argument("--output-dir", metavar="PATH", default=None)
+    parser.add_argument("--watchman-dir", metavar="PATH", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-lines", type=int, default=500)
     return parser.parse_args(argv)
@@ -80,68 +100,100 @@ def _extract_warning_plus(log_path: Path, max_lines: int = 500) -> str:
     return "\n".join(lines)
 
 
-def _call_gemini(prompt: str, api_key: str) -> str:
-    """Call Gemini API and return the response text."""
-    import google.generativeai as genai
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    response = model.generate_content(prompt)
-    return response.text
+def _find_log_file(log_dir: Path, date_iso: str) -> Path:
+    candidates = [
+        log_dir / f"system_{date_iso}.log",
+        log_dir / f"trading_{date_iso}.log",
+        log_dir / f"trading-system_{date_iso}.log",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    matched = sorted(log_dir.glob(f"*{date_iso}*"))
+    return matched[0] if matched else candidates[0]
+
+
+def _load_watchman_notes(watchman_dir: Path, date_iso: str) -> str:
+    path = watchman_dir / f"watchman_{date_iso}.md"
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
+    """Call Gemini CLI: -p for the prompt, stdin for the data."""
+    try:
+        result = subprocess.run(
+            [_GEMINI_BIN, "-p", prompt],
+            input=data,
+            capture_output=True,
+            text=True,
+            timeout=_GEMINI_TIMEOUT,
+        )
+        if result.returncode != 0:
+            log.error("gemini_log_review: CLI returned %d: %s",
+                      result.returncode, result.stderr[:300])
+            return None
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        log.error("gemini_log_review: CLI timed out after %ds", _GEMINI_TIMEOUT)
+        return None
+    except FileNotFoundError:
+        log.error("gemini_log_review: gemini binary not found at '%s'", _GEMINI_BIN)
+        return None
+    except Exception as exc:
+        log.error("gemini_log_review: CLI error: %s", exc)
+        return None
 
 
 def run_review(
     date_iso: str,
     log_dir: Path,
     output_dir: Path,
+    watchman_dir: Path,
     log,
     dry_run: bool = False,
     max_lines: int = 500,
 ) -> int:
-    """Run the log review pipeline. Returns exit code."""
-    log_path = log_dir / f"trading_{date_iso}.log"
-    if not log_path.exists():
-        alt = log_dir / f"trading-system_{date_iso}.log"
-        if alt.exists():
-            log_path = alt
-        else:
-            all_logs = sorted(log_dir.glob(f"*{date_iso}*"))
-            if all_logs:
-                log_path = all_logs[0]
-
+    """Run the EOD review pipeline. Returns exit code."""
+    log_path = _find_log_file(log_dir, date_iso)
     log.info("gemini_log_review: extracting from %s", log_path)
     entries = _extract_warning_plus(log_path, max_lines=max_lines)
+    watchman_notes = _load_watchman_notes(watchman_dir, date_iso)
 
-    if not entries.strip():
+    if not entries.strip() and not watchman_notes.strip():
         log.info("gemini_log_review: no WARNING+ entries for %s", date_iso)
         output_dir.mkdir(parents=True, exist_ok=True)
-        review_path = output_dir / f"review_{date_iso}.md"
+        review_path = output_dir / f"eod_review_{date_iso}.md"
         review_path.write_text(
-            f"# Log Review — {date_iso}\n\nNo WARNING/ERROR/CRITICAL entries found. Clean day.\n",
+            f"# EOD Review -- {date_iso}\n\nNo WARNING/ERROR/CRITICAL entries found. Clean day.\n",
             encoding="utf-8",
         )
         return 2
 
-    prompt = _PROMPT_TEMPLATE.format(logs=entries)
+    data_parts = ["--- LOG ENTRIES ---\n", entries]
+    if watchman_notes:
+        data_parts.append("\n\n--- WATCHMAN NOTES ---\n")
+        data_parts.append(watchman_notes)
+
+    data = "".join(data_parts)
 
     if dry_run:
-        log.info("gemini_log_review: dry-run; prompt length=%d chars, %d log lines",
-                 len(prompt), entries.count("\n") + 1)
+        log.info("gemini_log_review: dry-run; data length=%d chars, %d log lines, watchman=%s",
+                 len(data), entries.count("\n") + 1 if entries else 0,
+                 "yes" if watchman_notes else "no")
         return 0
 
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        log.error("gemini_log_review: GEMINI_API_KEY not set")
-        return 1
-
-    try:
-        review_text = _call_gemini(prompt, api_key)
-    except Exception as exc:
-        log.error("gemini_log_review: API call failed: %s", exc)
+    review_text = _call_gemini_cli(_EOD_PROMPT, data, log)
+    if review_text is None:
         return 1
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    review_path = output_dir / f"review_{date_iso}.md"
-    content = f"# Log Review — {date_iso}\n\n{review_text}\n"
+    review_path = output_dir / f"eod_review_{date_iso}.md"
+    content = f"# EOD Review -- {date_iso}\n\n{review_text}\n"
     review_path.write_text(content, encoding="utf-8")
     log.info("gemini_log_review: saved to %s (%d chars)", review_path, len(content))
 
@@ -158,14 +210,15 @@ def _send_telegram_summary(review_text: str, date_iso: str, log) -> None:
         chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
         if not bot_token or not chat_id:
             return
-        lines = review_text.strip().split("\n")
-        summary = "\n".join(lines[:10])
-        if len(lines) > 10:
+        summary = review_text[:500]
+        if len(review_text) > 500:
             summary += "\n..."
         notifier = TelegramNotifier(bot_token=bot_token, logger=log)
         notifier.send(
-            chat_id=chat_id,
-            message=f"AI Log Review {date_iso}\n\n{summary}",
+            severity="INFO",
+            title=f"AI EOD Review {date_iso}",
+            body=summary,
+            source_module="gemini_log_review",
         )
     except Exception as exc:
         log.debug("gemini_log_review: Telegram send failed: %s", exc)
@@ -177,11 +230,13 @@ def main(argv=None) -> int:
     date_iso = args.date or today_ist()
     log_dir = Path(args.log_dir) if args.log_dir else _ROOT / "logs"
     output_dir = Path(args.output_dir) if args.output_dir else _ROOT / "reports" / "log_review"
+    watchman_dir = Path(args.watchman_dir) if args.watchman_dir else _ROOT / "reports" / "watchman"
 
     return run_review(
         date_iso=date_iso,
         log_dir=log_dir,
         output_dir=output_dir,
+        watchman_dir=watchman_dir,
         log=log,
         dry_run=args.dry_run,
         max_lines=args.max_lines,

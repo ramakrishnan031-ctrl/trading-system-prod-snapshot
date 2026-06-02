@@ -1,0 +1,34 @@
+[Unit]
+Description=Gemini Log Watchman (live AI log monitor during market hours)
+After=trading-system.service
+BindsTo=trading-system.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/systems/trading-system
+Environment="PATH=/home/ubuntu/tools/gemini/node_modules/.bin:/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/home/ubuntu/systems/trading-system/.env
+
+ExecStart=/home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/systems/trading-system/scripts/gemini_watchman.py
+StandardInput=null
+
+# Watchman exits cleanly (0) when market closes -- no restart needed.
+# Restart on crash only, BindsTo will stop it when trading-system stops.
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trading-watchman
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
