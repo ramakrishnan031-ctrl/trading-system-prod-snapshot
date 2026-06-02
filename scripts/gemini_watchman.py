@@ -42,17 +42,25 @@ _MARKET_CLOSE = dtime(16, 30)
 _WARNING_RE = re.compile(r"\b(WARNING|ERROR|CRITICAL)\b")
 
 _WATCHMAN_PROMPT = """\
-You are a trading system watchman monitoring live log entries.
-Analyze these log entries from the last few minutes.
-Report ONLY if you find:
-1. Signal failures (rejected unexpectedly, timeout, dedup issues)
-2. Order execution problems (rejection, partial fill, slippage > 1%)
-3. Capital/risk issues (breach, mismatch, kill switch)
-4. System health (WebSocket disconnect, DB error, timeout)
-5. Anything unusual or concerning
+You are a trading system watchman. Observe ONLY — do not suggest fixes or code changes.
 
-If everything looks normal, say: 'All clear - no issues detected.'
-Keep response under 200 words. Be specific with symbol names and times."""
+For each issue found, format strictly as:
+[HH:MM:SS] [SEVERITY] [SYMBOL] — what happened (one line)
+
+Severity levels:
+- CRITICAL: capital risk, kill switch, broker failure, naked position
+- WARN: order rejection, slippage > 1%, partial fill, dedup miss
+- INFO: unusual but not actionable (latency spike, retry succeeded)
+
+Rules:
+1. Always quote exact timestamp from log
+2. Always include symbol if mentioned
+3. One line per issue — no paragraphs
+4. If nothing found: write 'All clear'
+5. NEVER suggest code changes, NEVER recommend trade actions
+6. Maximum 15 issues per batch — pick the most important
+
+Output only the issue lines or 'All clear'. No preamble, no summary."""
 
 _GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
 _GEMINI_TIMEOUT = 60
@@ -153,7 +161,10 @@ def _append_to_watchman_log(output_dir: Path, date_iso: str, timestamp: str,
     )
     with open(path, "a", encoding="utf-8") as f:
         if f.tell() == 0:
-            f.write(f"# Watchman Log -- {date_iso}\n")
+            f.write(
+                f"# Watchman Notes -- {date_iso}\n"
+                f"Retention: 30 days. Source: live log tail.\n"
+            )
         f.write(entry)
 
 

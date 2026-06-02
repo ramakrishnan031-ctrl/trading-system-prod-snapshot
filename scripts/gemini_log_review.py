@@ -37,35 +37,36 @@ _GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
 _GEMINI_TIMEOUT = 120
 
 _EOD_PROMPT = """\
-You are a senior trading ops reviewer. Here is today's complete trading log \
-(WARNING+ entries) and the watchman's real-time notes from throughout the day.
+You are a senior trading ops reviewer. Today's complete log + watchman notes attached.
+Observe ONLY — do not suggest code fixes.
 
-Provide a structured daily report:
+Output exactly these sections (skip a section if empty):
 
 ## Session Summary
-- Trading hours: start_time to end_time
-- Total signals received / traded / rejected
-- Total trades: wins / losses / breakeven
+- Trading window: HH:MM to HH:MM IST
+- Total signals: X received, Y traded, Z rejected
+- Total trades: A wins, B losses, C breakeven
 
-## Issues Found
-- List each issue with timestamp, symbol, severity
+## Critical Issues (capital/risk/system)
+Format: [HH:MM:SS] [SYMBOL] — issue
 
-## Trade Execution Quality
-- Any slippage > 0.5%?
-- Any partial fills?
-- Any order rejections?
-- SL/TGT hit accuracy
+## Order Execution Quality
+- Slippage outliers (>1%): list with symbol + actual %
+- Rejections: list with reason
+- Partial fills: list
 
 ## System Health
-- WebSocket disconnects
-- DB errors
+- WebSocket events
+- DB/API errors
 - Kill switch events
-- Latency anomalies
+
+## Patterns Noticed
+Recurring issues across the session
 
 ## Recommendations
-- What should be fixed/improved?
+What to investigate manually (NO code suggestions)
 
-Keep response under 800 words."""
+Maximum 800 words total. Be specific with timestamps and symbols."""
 
 
 def _parse_args(argv=None):
@@ -169,7 +170,9 @@ def run_review(
         output_dir.mkdir(parents=True, exist_ok=True)
         review_path = output_dir / f"eod_review_{date_iso}.md"
         review_path.write_text(
-            f"# EOD Review -- {date_iso}\n\nNo WARNING/ERROR/CRITICAL entries found. Clean day.\n",
+            f"# EOD Review -- {date_iso}\n"
+            f"Retention: 90 days. Source: full log + watchman notes.\n\n"
+            f"No WARNING/ERROR/CRITICAL entries found. Clean day.\n",
             encoding="utf-8",
         )
         return 2
@@ -193,7 +196,11 @@ def run_review(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     review_path = output_dir / f"eod_review_{date_iso}.md"
-    content = f"# EOD Review -- {date_iso}\n\n{review_text}\n"
+    content = (
+        f"# EOD Review -- {date_iso}\n"
+        f"Retention: 90 days. Source: full log + watchman notes.\n\n"
+        f"{review_text}\n"
+    )
     review_path.write_text(content, encoding="utf-8")
     log.info("gemini_log_review: saved to %s (%d chars)", review_path, len(content))
 
