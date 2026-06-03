@@ -29,6 +29,12 @@
 # ── 08:35 IST Mon-Fri | fetch F&O ban list from NSE ─────────────────────────
 35 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1
 
+# ── 08:55 IST Mon-Fri | pre-market Gemini briefing (FIX-150) ────────────────
+55 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_premarket_brief.py >> logs/cron-premarket-brief.log 2>&1
+
+# ── Every 5 min 09:00-15:59 Mon-Fri | system metrics capture (FIX-150) ──────
+*/5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1
+
 # ── 15:50 IST Mon-Fri | EOD cleanup (stale signals, orders, fingerprints) ────
 50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_cleanup.py >> logs/cron-eod-cleanup.log 2>&1
 
@@ -59,8 +65,14 @@
 # ── 16:15 IST Mon-Fri | strategy metrics (Sharpe, win rate, demotion) ────────
 15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1
 
+# ── 16:16 IST Mon-Fri | system metrics daily summary (FIX-150) ───────────────
+16 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py --summarize >> logs/cron-metrics.log 2>&1
+
 # ── 16:20 IST Mon-Fri | AI log review via Gemini (FIX-142) ──────────────────
 20 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_log_review.py >> logs/cron-gemini-review.log 2>&1
+
+# ── 17:00 IST Mon-Fri | candle data integrity check (FIX-150) ───────────────
+0 17 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_data_integrity_check.py >> logs/cron-data-integrity.log 2>&1
 
 # ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
 0 18 * * 0 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1

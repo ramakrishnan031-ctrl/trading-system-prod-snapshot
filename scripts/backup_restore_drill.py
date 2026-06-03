@@ -68,6 +68,8 @@ EXPECTED_TABLES = [
     "fno_ban",
     "eod_verification",
     "cron_heartbeat",
+    "system_metrics",
+    "system_metrics_daily",
 ]
 
 DATA_TABLES = ["signals", "trades", "orders"]

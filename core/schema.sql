@@ -834,10 +834,51 @@ CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_job_name
 CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
     ON cron_heartbeat(executed_at);
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '23');  -- FIX-145: +cron_heartbeat
+-- ─────────────────────────────────────────────────────────────────────────────
+-- TABLE 26: system_metrics  (v24 / FIX-150)
+-- Per-snapshot system health metrics captured every 5 min during market hours.
+-- Used for drift detection and baseline comparison.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS system_metrics (
+    timestamp       TEXT NOT NULL,
+    cpu_pct         REAL,
+    memory_mb       REAL,
+    db_size_mb      REAL,
+    log_size_mb     REAL,
+    open_fds        INTEGER,
+    thread_count    INTEGER,
+    disk_used_pct   REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_metrics_ts
+    ON system_metrics(timestamp);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- END OF SCHEMA v23 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
+-- TABLE 27: system_metrics_daily  (v24 / FIX-150)
+-- Daily summary of system metrics: avg/max/p95 per metric.
+-- Computed by capture_metrics_baseline.py --summarize at EOD.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS system_metrics_daily (
+    date                TEXT NOT NULL PRIMARY KEY,   -- YYYY-MM-DD
+    snapshot_count      INTEGER NOT NULL DEFAULT 0,
+    cpu_avg             REAL,
+    cpu_max             REAL,
+    cpu_p95             REAL,
+    memory_avg_mb       REAL,
+    memory_max_mb       REAL,
+    memory_p95_mb       REAL,
+    db_size_mb          REAL,
+    log_size_mb         REAL,
+    thread_avg          REAL,
+    thread_max          INTEGER,
+    disk_used_avg_pct   REAL,
+    disk_used_max_pct   REAL
+);
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '24');  -- FIX-150: +system_metrics
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
 --                    v4: +webhook_audit, signals.trigger_price;
 --                    v5: +eod_squareoff_log; v6: +reconciliation_log;
 --                    v7: +screener_results; v8: +smart_tgt_state;
@@ -864,5 +905,6 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '23');
 --                    v20: +position_reconciliation, +strategy_metrics (FIX-134 Items 31+36);
 --                    v21: +shadow_trades (FIX-135 Item 41);
 --                    v22: +eod_verification (FIX-137 Item 59);
---                    v23: +cron_heartbeat (FIX-145))
+--                    v23: +cron_heartbeat (FIX-145);
+--                    v24: +system_metrics, +system_metrics_daily (FIX-150))
 -- ─────────────────────────────────────────────────────────────────────────────
