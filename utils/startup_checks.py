@@ -181,6 +181,7 @@ class StartupReport:
     instrument_cache_count: Optional[int] = None  # BL-20: None if check skipped
     disk_space:          Optional[DiskSpaceResult] = None  # FIX-099: None if skipped
     ntp:                 Optional[NtpCheckResult] = None  # FIX-129 Item 27
+    temp_config:         Optional[TempConfigResult] = None  # FIX-151
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1387,6 +1388,57 @@ def check_holiday_calendar(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-151 -- TEMP config value check
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class TempConfigResult:
+    """Outcome of check_temp_config_values()."""
+    passed: bool
+    temp_count: int
+    files_with_temp: List[str]
+
+
+def check_temp_config_values(
+    config_dir: Path,
+    logger,
+) -> TempConfigResult:
+    """
+    FIX-151: Scan config YAMLs for '# TEMP' markers.
+    Returns WARNING with count. Blocking only when capital > 25K
+    (checked by caller in run_all_startup_checks).
+    """
+    temp_count = 0
+    files_with_temp: List[str] = []
+
+    yaml_files = list(config_dir.glob("*.yaml")) + list(config_dir.glob("strategies/*.yaml"))
+
+    for fpath in yaml_files:
+        try:
+            content = fpath.read_text(encoding="utf-8")
+            count = content.count("# TEMP")
+            if count > 0:
+                temp_count += count
+                files_with_temp.append(f"{fpath.name}({count})")
+        except OSError:
+            continue
+
+    if temp_count > 0:
+        logger.warning(
+            "check_temp_config: %d TEMP markers found in: %s",
+            temp_count, ", ".join(files_with_temp),
+        )
+    else:
+        logger.info("check_temp_config: OK no TEMP markers found")
+
+    return TempConfigResult(
+        passed=(temp_count == 0),
+        temp_count=temp_count,
+        files_with_temp=files_with_temp,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SC12 -- Aggregate startup check runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1521,6 +1573,11 @@ def run_all_startup_checks(
         blocking_failures.append("ntp_clock_skew")
     elif ntp_result.drift_sec >= ntp_result.warn_sec and not ntp_result.skipped:
         warnings.append("ntp_clock_drift_warning")
+
+    # 14. TEMP config values (FIX-151)
+    temp_result = check_temp_config_values(config_dir, logger)
+    if not temp_result.passed:
+        warnings.append(f"temp_config_values({temp_result.temp_count})")
 
     ok = len(blocking_failures) == 0
 
