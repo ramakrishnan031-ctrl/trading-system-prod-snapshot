@@ -2155,7 +2155,7 @@ class OrderPlacer:
                 )
                 return
 
-            # All other errors: existing hard_kill path
+            # All other errors: attempt emergency market exit, then hard_kill
             log_exception(self._log, exc)
             self._log.critical(
                 "order_placer.limit_triple_exits_failed "
@@ -2172,6 +2172,11 @@ class OrderPlacer:
                     "error": str(exc),
                     "error_type": type(exc).__name__,
                 },
+            )
+            # FIX-148 (GAP 1): Emergency market exit before hard_kill
+            self._emergency_market_exit(
+                trade_id, fill_entry, qty_filled,
+                reason=f"sl_placement_failed: {type(exc).__name__}",
             )
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
             return
@@ -2736,10 +2741,10 @@ class OrderPlacer:
                     )
                     return
                 else:
-                    # Exhausted retries - trigger soft_kill
+                    # Exhausted retries — emergency market exit + hard_kill
                     log_exception(self._log, exc)
                     self._log.critical(
-                        "order_placer.exit_retry_exhausted_soft_kill "
+                        "order_placer.exit_retry_exhausted "
                         "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED",
                         extra={
                             "trade_id": trade_id,
@@ -2749,24 +2754,15 @@ class OrderPlacer:
                         },
                     )
 
-                    if self._kill_switch is not None:
-                        try:
-                            self._kill_switch.soft_kill(
-                                reason=(
-                                    f"SL/TGT placement failed after {params.MAX_RETRIES} "
-                                    f"LTP retries for {symbol}: {exc}"
-                                ),
-                                triggered_by="order_placer._retry_limit_triple_exits",
-                            )
-                        except Exception as ks_exc:
-                            log_exception(self._log, ks_exc)
-                            self._log.critical(
-                                "order_placer.soft_kill_failed",
-                                extra={"trade_id": trade_id},
-                            )
+                    # FIX-148 (GAP 1): Emergency market exit
+                    self._emergency_market_exit(
+                        trade_id, fill_entry, qty_filled,
+                        reason=f"sl_retries_exhausted_after_{params.MAX_RETRIES}",
+                    )
+                    self._fire_hard_kill_for_unprotected_position(trade_id, exc)
                     return
 
-            # Non-LTP error on retry - use FIX-012 path (existing hard_kill)
+            # Non-LTP error on retry — emergency market exit + hard_kill
             log_exception(self._log, exc)
             self._log.critical(
                 "order_placer.exit_retry_non_ltp_error "
@@ -2778,6 +2774,11 @@ class OrderPlacer:
                     "error": str(exc),
                     "error_type": type(exc).__name__,
                 },
+            )
+            # FIX-148 (GAP 1): Emergency market exit
+            self._emergency_market_exit(
+                trade_id, fill_entry, qty_filled,
+                reason=f"sl_retry_non_ltp_error: {type(exc).__name__}",
             )
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
             return
@@ -2926,6 +2927,119 @@ class OrderPlacer:
                 "order_placer.hard_kill_failed",
                 extra={"trade_id": trade_id, "kill_error": str(kse)},
             )
+
+    def _emergency_market_exit(
+        self, trade_id: str, fill_entry: "_FillEntry", qty: int, reason: str,
+    ) -> bool:
+        """
+        FIX-148 (GAP 1): Best-effort emergency MARKET exit when SL placement
+        fails permanently. Returns True if order was successfully placed.
+
+        Does NOT handle capital release — that happens when the exit fills
+        via the normal _handle_exit_fill path.
+        """
+        symbol = fill_entry.symbol
+        side = "SELL" if fill_entry.side == "BUY" else "BUY"
+
+        self._log.critical(
+            "order_placer.emergency_market_exit_attempt "
+            "SL_PLACEMENT_FAILED_MARKET_EXIT",
+            extra={
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "reason": reason,
+            },
+        )
+
+        try:
+            placed = self._engine.adapter.place_order(
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                price=0.0,
+                order_type="MARKET",
+                intent=fill_entry.intent,
+                tag=trade_id,
+            )
+        except Exception as exc:
+            self._log.critical(
+                "order_placer.emergency_market_exit_failed",
+                extra={
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "error": str(exc),
+                },
+            )
+            return False
+
+        self._log.critical(
+            "order_placer.emergency_market_exit_placed",
+            extra={
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "broker_order_id": placed.broker_order_id,
+            },
+        )
+
+        # Persist + track the emergency exit order
+        try:
+            product = self._product_resolver.resolve(fill_entry.intent) if self._product_resolver else "MIS"
+            self._om.insert_order(
+                trade_id=trade_id,
+                broker_order_id=placed.broker_order_id,
+                leg="EOD",
+                transaction_type=side,
+                order_type="MARKET",
+                product=product,
+                variety="regular",
+                qty_requested=qty,
+                price=0.0,
+            )
+            with self._fill_map_lock:
+                self._fill_map[placed.internal_order_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
+                    symbol=symbol,
+                    qty=qty,
+                    leg=_LEG_SL,
+                    order_protocol=fill_entry.order_protocol,
+                    direction=fill_entry.direction,
+                )
+            self._order_monitor.track(
+                internal_order_id=placed.internal_order_id,
+                broker_order_id=placed.broker_order_id,
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                expected_price=0.0,
+                placed_at=now_ist(),
+                leg="EOD",
+            )
+        except Exception as exc:
+            self._log.error(
+                "order_placer.emergency_market_exit_track_failed: %s", exc,
+            )
+
+        # Send Telegram alert
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{self._mode}] EMERGENCY EXIT -- {symbol}",
+                    body=(
+                        f"SL placement failed permanently\n"
+                        f"Trade: {trade_id}\n"
+                        f"Market {side} {qty} shares placed\n"
+                        f"Reason: {reason}"
+                    ),
+                    source_module="order_placer",
+                )
+            except Exception:
+                pass
+
+        return True
 
     def _round_to_tick(self, symbol: str, price: float) -> float:
         """

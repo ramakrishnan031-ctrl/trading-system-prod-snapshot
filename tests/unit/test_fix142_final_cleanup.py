@@ -251,10 +251,13 @@ class TestGeminiLogReview:
             log_dir = Path(td) / "logs"
             log_dir.mkdir()
             out_dir = Path(td) / "output"
+            watchman_dir = Path(td) / "watchman"
+            watchman_dir.mkdir()
             result = run_review(
                 date_iso="2026-06-01",
                 log_dir=log_dir,
                 output_dir=out_dir,
+                watchman_dir=watchman_dir,
                 log=log,
                 dry_run=False,
             )
@@ -269,16 +272,20 @@ class TestGeminiLogReview:
                 "WARNING something\nERROR something else\n", encoding="utf-8"
             )
             out_dir = Path(td) / "output"
+            watchman_dir = Path(td) / "watchman"
+            watchman_dir.mkdir()
             result = run_review(
                 date_iso="2026-06-01",
                 log_dir=log_dir,
                 output_dir=out_dir,
+                watchman_dir=watchman_dir,
                 log=log,
                 dry_run=True,
             )
         assert result == 0
 
     def test_run_review_no_api_key(self):
+        """CLI not found returns exit code 1."""
         from scripts.gemini_log_review import run_review
         log = MagicMock()
         with tempfile.TemporaryDirectory() as td:
@@ -287,11 +294,14 @@ class TestGeminiLogReview:
                 "WARNING something\n", encoding="utf-8"
             )
             out_dir = Path(td) / "output"
-            with patch.dict("os.environ", {"GEMINI_API_KEY": ""}, clear=False):
+            watchman_dir = Path(td) / "watchman"
+            watchman_dir.mkdir()
+            with patch("scripts.gemini_log_review._call_gemini_cli", return_value=None):
                 result = run_review(
                     date_iso="2026-06-01",
                     log_dir=log_dir,
                     output_dir=out_dir,
+                    watchman_dir=watchman_dir,
                     log=log,
                 )
         assert result == 1
@@ -305,16 +315,18 @@ class TestGeminiLogReview:
                 "WARNING something important\n", encoding="utf-8"
             )
             out_dir = Path(td) / "output"
-            with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=False):
-                with patch("scripts.gemini_log_review._call_gemini", return_value="All clear."):
-                    result = run_review(
-                        date_iso="2026-06-01",
-                        log_dir=log_dir,
-                        output_dir=out_dir,
-                        log=log,
-                    )
+            watchman_dir = Path(td) / "watchman"
+            watchman_dir.mkdir()
+            with patch("scripts.gemini_log_review._call_gemini_cli", return_value="All clear."):
+                result = run_review(
+                    date_iso="2026-06-01",
+                    log_dir=log_dir,
+                    output_dir=out_dir,
+                    watchman_dir=watchman_dir,
+                    log=log,
+                )
             assert result == 0
-            review_file = out_dir / "review_2026-06-01.md"
+            review_file = out_dir / "eod_review_2026-06-01.md"
             assert review_file.exists()
             content = review_file.read_text(encoding="utf-8")
             assert "All clear." in content

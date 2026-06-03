@@ -13,7 +13,6 @@ import pytest
 
 from core.logger import SafeJSONEncoder
 from core.time_authority import now_ist, ist_timezone
-from screening.secondary_screener import DateTimeEncoder
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -35,7 +34,7 @@ def test_fix083_bash_timeout_documentation() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX-084: SafeJSONEncoder and DateTimeEncoder handle NaN/Infinity
+# FIX-084: SafeJSONEncoder and SafeJSONEncoder handle NaN/Infinity
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_fix084_safe_json_encoder_nan() -> None:
@@ -75,41 +74,41 @@ def test_fix084_safe_json_encoder_normal_float() -> None:
 
 
 def test_fix084_datetime_encoder_nan() -> None:
-    """FIX-084: DateTimeEncoder (secondary_screener) converts NaN to null."""
+    """FIX-084: SafeJSONEncoder (secondary_screener) converts NaN to null."""
     data = {"atr_value": float("nan")}
-    result = json.dumps(data, cls=DateTimeEncoder)
+    result = json.dumps(data, cls=SafeJSONEncoder)
     parsed = json.loads(result)
     assert parsed["atr_value"] is None, f"Expected None, got {parsed['atr_value']}"
     print("  OK fix084_datetime_encoder_nan: NaN → null")
 
 
 def test_fix084_datetime_encoder_inf() -> None:
-    """FIX-084: DateTimeEncoder converts Infinity to null."""
+    """FIX-084: SafeJSONEncoder converts Infinity to null."""
     data = {"slope": float("inf")}
-    result = json.dumps(data, cls=DateTimeEncoder)
+    result = json.dumps(data, cls=SafeJSONEncoder)
     parsed = json.loads(result)
     assert parsed["slope"] is None, f"Expected None, got {parsed['slope']}"
     print("  OK fix084_datetime_encoder_inf: Inf → null")
 
 
 def test_fix084_datetime_encoder_normal_float() -> None:
-    """FIX-084: DateTimeEncoder preserves normal floats unchanged."""
+    """FIX-084: SafeJSONEncoder preserves normal floats unchanged."""
     data = {"price": 2500.75}
-    result = json.dumps(data, cls=DateTimeEncoder)
+    result = json.dumps(data, cls=SafeJSONEncoder)
     parsed = json.loads(result)
     assert parsed["price"] == 2500.75, f"Expected 2500.75, got {parsed['price']}"
     print("  OK fix084_datetime_encoder_normal_float: 2500.75 preserved")
 
 
 def test_fix084_numpy_nan_handling(monkeypatch) -> None:
-    """FIX-084: DateTimeEncoder handles numpy.nan if numpy is present."""
+    """FIX-084: SafeJSONEncoder handles numpy.nan if numpy is present."""
     # Simulate a numpy scalar with NaN
     class FakeNumpyScalar:
         def item(self):
             return float("nan")
 
     data = {"numpy_val": FakeNumpyScalar()}
-    result = json.dumps(data, cls=DateTimeEncoder)
+    result = json.dumps(data, cls=SafeJSONEncoder)
     parsed = json.loads(result)
     assert parsed["numpy_val"] is None, f"Expected None, got {parsed['numpy_val']}"
     print("  OK fix084_numpy_nan_handling: numpy scalar NaN → null")

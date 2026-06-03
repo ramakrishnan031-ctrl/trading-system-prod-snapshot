@@ -1157,6 +1157,42 @@ class ZerodhaAdapter:
         )
         return quotes
 
+    def get_trades(self) -> list[dict]:
+        """
+        FIX-148: Return today's executed trades from Kite trades() API.
+
+        Used by order_reconciler CHECK 1 to find the actual exit price when a
+        position was closed externally (RMS squareoff, manual close via terminal).
+
+        In paper mode returns an empty list (paper adapter tracks fills internally).
+
+        Returns:
+            List of dicts with keys: trade_id, order_id, tradingsymbol,
+            transaction_type, quantity, average_price, fill_timestamp.
+        """
+        if self._paper:
+            return []
+        try:
+            self._rl.acquire(_CATEGORY_MAP["get_margins"])
+            raw = self._kite.trades()
+        except Exception as exc:
+            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+
+        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
+
+        return [
+            {
+                "trade_id": t.get("trade_id", ""),
+                "order_id": t.get("order_id", ""),
+                "tradingsymbol": t.get("tradingsymbol", ""),
+                "transaction_type": t.get("transaction_type", ""),
+                "quantity": int(t.get("quantity", 0)),
+                "average_price": float(t.get("average_price", 0.0)),
+                "fill_timestamp": t.get("fill_timestamp", ""),
+            }
+            for t in (raw or [])
+        ]
+
     def get_open_orders(self) -> list[dict]:
         """
         Return all broker-side orders that are OPEN or TRIGGER PENDING.

@@ -200,41 +200,31 @@ class TestFix073EodEntryCutoff:
 
     def test_order_rejected_past_eod_cutoff_15_16(self):
         """Order at 15:16 (past 15:15 cutoff) -> rejected, capital released."""
+        fake_time = datetime(2026, 5, 18, 15, 16, 0, tzinfo=IST)
         with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            # Set cutoff at 15:15
             mw = MarketWindows(eod_entry_cutoff=time(15, 15))
             placer, store, fm, adapter = _make_placer(Path(tmp), mw)
             sig_id = _seed_signal(store)
             res_id = fm.reserve(5000.0, "INTRADAY")
 
-            # Mock now_ist to return 15:16:00
-            import core.time_authority as ta
-            original_now = ta.now_ist
+            with patch('core.time_authority.now_ist', return_value=fake_time):
+                with patch('orders.order_placer.now_ist', return_value=fake_time):
+                    with pytest.raises(OrderRejectedError, match="past EOD entry cutoff"):
+                        placer.place(
+                            symbol="RELIANCE",
+                            side="BUY",
+                            qty=10,
+                            entry_price=2500.0,
+                            sl_price=2450.0,
+                            intent="INTRADAY",
+                            signal_id=sig_id,
+                            reservation_id=res_id,
+                        )
 
-            def fake_now():
-                return datetime(2026, 5, 18, 15, 16, 0, tzinfo=IST)
-
-            ta.now_ist = fake_now
-
-            try:
-                with pytest.raises(OrderRejectedError, match="past EOD entry cutoff"):
-                    placer.place(
-                        symbol="RELIANCE",
-                        side="BUY",
-                        qty=10,
-                        entry_price=2500.0,
-                        sl_price=2450.0,
-                        intent="INTRADAY",
-                        signal_id=sig_id,
-                        reservation_id=res_id,
-                    )
-
-                # Capital must be released
-                assert res_id in fm.released
-                # No broker order placed
-                assert len(adapter.placed_orders) == 0
-            finally:
-                ta.now_ist = original_now
+                    # Capital must be released
+                    assert res_id in fm.released
+                    # No broker order placed
+                    assert len(adapter.placed_orders) == 0
             store.close()
 
     def test_order_proceeds_before_eod_cutoff_15_14(self):
@@ -271,41 +261,34 @@ class TestFix073EodEntryCutoff:
 
     def test_order_rejected_exactly_at_cutoff_15_15_00(self):
         """Order at 15:15:00 exactly (boundary inclusive) -> rejected."""
+        fake_time = datetime(2026, 5, 18, 15, 15, 0, tzinfo=IST)
         with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             mw = MarketWindows(eod_entry_cutoff=time(15, 15))
             placer, store, fm, adapter = _make_placer(Path(tmp), mw)
             sig_id = _seed_signal(store)
             res_id = fm.reserve(5000.0, "INTRADAY")
 
-            import core.time_authority as ta
-            original_now = ta.now_ist
+            with patch('core.time_authority.now_ist', return_value=fake_time):
+                with patch('orders.order_placer.now_ist', return_value=fake_time):
+                    with pytest.raises(OrderRejectedError, match="past EOD entry cutoff"):
+                        placer.place(
+                            symbol="RELIANCE",
+                            side="BUY",
+                            qty=10,
+                            entry_price=2500.0,
+                            sl_price=2450.0,
+                            intent="INTRADAY",
+                            signal_id=sig_id,
+                            reservation_id=res_id,
+                        )
 
-            def fake_now():
-                return datetime(2026, 5, 18, 15, 15, 0, tzinfo=IST)
-
-            ta.now_ist = fake_now
-
-            try:
-                with pytest.raises(OrderRejectedError, match="past EOD entry cutoff"):
-                    placer.place(
-                        symbol="RELIANCE",
-                        side="BUY",
-                        qty=10,
-                        entry_price=2500.0,
-                        sl_price=2450.0,
-                        intent="INTRADAY",
-                        signal_id=sig_id,
-                        reservation_id=res_id,
-                    )
-
-                assert res_id in fm.released
-                assert len(adapter.placed_orders) == 0
-            finally:
-                ta.now_ist = original_now
+                    assert res_id in fm.released
+                    assert len(adapter.placed_orders) == 0
             store.close()
 
     def test_configurable_cutoff_time(self):
         """Changing eod_entry_cutoff changes behavior."""
+        fake_time = datetime(2026, 5, 18, 15, 12, 0, tzinfo=IST)
         with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             # Test with 15:10 cutoff
             mw_early = MarketWindows(eod_entry_cutoff=time(15, 10))
@@ -313,32 +296,23 @@ class TestFix073EodEntryCutoff:
             sig_id = _seed_signal(store)
             res_id = fm.reserve(5000.0, "INTRADAY")
 
-            import core.time_authority as ta
-            original_now = ta.now_ist
+            with patch('core.time_authority.now_ist', return_value=fake_time):
+                with patch('orders.order_placer.now_ist', return_value=fake_time):
+                    # At 15:12 with 15:10 cutoff -> rejected
+                    with pytest.raises(OrderRejectedError, match="past EOD entry cutoff"):
+                        placer.place(
+                            symbol="RELIANCE",
+                            side="BUY",
+                            qty=10,
+                            entry_price=2500.0,
+                            sl_price=2450.0,
+                            intent="INTRADAY",
+                            signal_id=sig_id,
+                            reservation_id=res_id,
+                        )
 
-            def fake_now():
-                return datetime(2026, 5, 18, 15, 12, 0, tzinfo=IST)
-
-            ta.now_ist = fake_now
-
-            try:
-                # At 15:12 with 15:10 cutoff -> rejected
-                with pytest.raises(OrderRejectedError, match="past EOD entry cutoff"):
-                    placer.place(
-                        symbol="RELIANCE",
-                        side="BUY",
-                        qty=10,
-                        entry_price=2500.0,
-                        sl_price=2450.0,
-                        intent="INTRADAY",
-                        signal_id=sig_id,
-                        reservation_id=res_id,
-                    )
-
-                assert res_id in fm.released
-                assert len(adapter.placed_orders) == 0
-            finally:
-                ta.now_ist = original_now
+                    assert res_id in fm.released
+                    assert len(adapter.placed_orders) == 0
             store.close()
 
     def test_no_market_windows_skips_check(self):
@@ -371,34 +345,26 @@ class TestFix073EodEntryCutoff:
                 market_windows=None,  # No EOD check
             )
 
-            import core.time_authority as ta
-            original_now = ta.now_ist
+            fake_time = datetime(2026, 5, 18, 15, 20, 0, tzinfo=IST)
+            with patch('core.time_authority.now_ist', return_value=fake_time):
+                with patch('orders.order_placer.now_ist', return_value=fake_time):
+                    sig_id = _seed_signal(store)
+                    res_id = fm.reserve(5000.0, "INTRADAY")
 
-            def fake_now():
-                return datetime(2026, 5, 18, 15, 20, 0, tzinfo=IST)
+                    # Even at 15:20, order proceeds (no check)
+                    placer.place(
+                        symbol="RELIANCE",
+                        side="BUY",
+                        qty=10,
+                        entry_price=2500.0,
+                        sl_price=2450.0,
+                        intent="INTRADAY",
+                        signal_id=sig_id,
+                        reservation_id=res_id,
+                    )
 
-            ta.now_ist = fake_now
-
-            try:
-                sig_id = _seed_signal(store)
-                res_id = fm.reserve(5000.0, "INTRADAY")
-
-                # Even at 15:20, order proceeds (no check)
-                placer.place(
-                    symbol="RELIANCE",
-                    side="BUY",
-                    qty=10,
-                    entry_price=2500.0,
-                    sl_price=2450.0,
-                    intent="INTRADAY",
-                    signal_id=sig_id,
-                    reservation_id=res_id,
-                )
-
-                assert len(adapter.placed_orders) == 1
-            finally:
-                ta.now_ist = original_now
-                store.close()
+                    assert len(adapter.placed_orders) == 1
+            store.close()
 
 
 if __name__ == "__main__":

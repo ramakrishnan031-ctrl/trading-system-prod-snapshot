@@ -682,6 +682,16 @@ class OrderMonitor:
             return
 
         # Reset both fail counters on successful poll (OM11)
+        # FIX-148 (A2): Log recovery from consecutive failures for operator visibility
+        if self._consecutive_auth_fails > 0 or self._consecutive_api_fails > 0:
+            self._log.warning(
+                "order_monitor.recovered_from_failures",
+                extra={
+                    "broker_order_id": entry.broker_order_id,
+                    "prior_auth_fails": self._consecutive_auth_fails,
+                    "prior_api_fails": self._consecutive_api_fails,
+                },
+            )
         self._consecutive_auth_fails = 0
         self._consecutive_api_fails = 0
 

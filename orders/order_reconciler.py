@@ -602,15 +602,17 @@ class OrderReconciler:
 
         return actions
 
-    # ── CHECK 1: MANUAL_CLOSE ─────────────────────────────────────────────────
+    # ── CHECK 1: MANUAL_CLOSE / RMS_SQUAREOFF ───────────────────────────────────
 
     def _check1_manual_close(self, trade) -> ReconciliationAction:
         """
         Local trade is OPEN/PARTIAL but broker has no matching position (RC5a).
 
-        Marks trade CLOSED_MANUAL and releases used capital via fund_manager,
-        using entry_actual_price as exit proxy (breakeven PnL, avoids false
-        profit/loss).
+        FIX-148 (GAP 5): Enhanced to handle RMS auto-squareoff correctly:
+        1. Fetch actual exit price from broker trades() (not breakeven proxy)
+        2. Cancel orphaned SL/TGT orders at broker
+        3. Send CRITICAL Telegram alert with real PnL
+        4. Release capital with actual exit price
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
@@ -648,14 +650,16 @@ class OrderReconciler:
                 success=True,
             )
 
-        # Release capital — breakeven proxy (entry == exit -> PnL = 0)
+        # FIX-148: Cancel orphaned SL/TGT orders at broker before capital release.
+        cancelled_count = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
+        if cancelled_count > 0:
+            steps.append(f"cancelled_{cancelled_count}_orphaned_orders")
+
         entry_price = trade["entry_actual_price"]
         qty = trade["qty_filled"] or 0
         product = trade["product"]
         intent = _PRODUCT_TO_INTENT.get(product or "", "")
-        # EF-3: release_used now requires direction. Breakeven means the sign
-        # doesn't matter numerically, but the param is required. Fall back to
-        # LONG + WARN if the trade row is missing direction (row shouldn't exist).
+
         try:
             direction = trade["direction"] or "LONG"
         except (KeyError, IndexError):
@@ -667,37 +671,36 @@ class OrderReconciler:
             )
             direction = "LONG"
 
+        # FIX-148: Fetch actual exit price from broker trades API.
+        exit_price = self._resolve_exit_price(symbol, direction, entry_price, log)
+        exit_source = "broker_trades" if exit_price != entry_price else "entry_proxy"
+        steps.append(f"exit_price={exit_price:.2f}({exit_source})")
+
         if entry_price and float(entry_price) > 0 and qty > 0 and intent:
             try:
                 release_result = self._fm.release_used(
                     symbol=symbol,
-                    exit_price=float(entry_price),
+                    exit_price=float(exit_price),
                     exit_qty=qty,
                     intent=intent,
                     entry_price=float(entry_price),
                     direction=direction,
                     costs=0.0,
                 )
-                steps.append("capital_released(breakeven)")
+                steps.append(f"capital_released(pnl={release_result.pnl_delta:.2f})")
             except Exception as exc:
                 log.warning(
                     "check1: release_used failed for %s: %s", trade_id, exc
                 )
                 steps.append(f"capital_release FAILED: {exc}")
             else:
-                # BL-10b: out-of-band closure event. source_module distinguishes
-                # from order_placer-originated events. exit_price is the entry
-                # price (breakeven proxy) because the close happened outside our
-                # visibility -- we do not know the real broker fill price.
-                # Publish is gated on release_used success so the event stays
-                # consistent with the capital ledger (realized_pnl == pnl_delta).
                 try:
                     self._bus.publish(PositionClosed(
                         source_module="order_reconciler",
                         symbol=symbol,
                         trade_id=trade_id,
                         signal_id=trade["signal_id"] or "",
-                        exit_price=float(entry_price),
+                        exit_price=float(exit_price),
                         realized_pnl=float(release_result.pnl_delta),
                     ))
                     steps.append("position_closed_published")
@@ -707,21 +710,35 @@ class OrderReconciler:
                         "reconciler.manual_close_publish_position_closed_failed",
                         extra={"trade_id": trade_id, "symbol": symbol},
                     )
+
+                # FIX-148: CRITICAL Telegram alert with real PnL
+                if self._notifier is not None:
+                    try:
+                        pnl = release_result.pnl_delta
+                        self._notifier.send(
+                            severity="CRITICAL",
+                            title=f"[{self._mode}] RMS/MANUAL CLOSE -- {symbol}",
+                            body=(
+                                f"Position closed externally\n"
+                                f"Trade: {trade_id}\n"
+                                f"Entry: {float(entry_price):.2f} | Exit: {exit_price:.2f}\n"
+                                f"Qty: {qty} | PnL: {pnl:+.2f}\n"
+                                f"Source: {exit_source}"
+                            ),
+                            source_module="order_reconciler",
+                        )
+                    except Exception as exc:
+                        log.error("check1: notifier.send failed: %s", exc)
         elif not intent:
-            # BL-10b: intentionally do not publish PositionClosed here. If
-            # entry_price/intent is missing we cannot construct a truthful
-            # event; shadow_tracker would receive inaccurate realized_pnl.
-            # The WARN log below already surfaces the anomaly to operators;
-            # adding a fabricated event would be worse than silence.
             log.warning(
                 "check1: unknown product %r for %s; skipping capital release",
                 product, trade_id,
             )
 
-        log.warning(
+        log.critical(
             "CHECK1 MANUAL_CLOSE: trade_id=%s symbol=%s "
-            "local=OPEN/PARTIAL broker=no_position",
-            trade_id, symbol,
+            "local=OPEN/PARTIAL broker=no_position exit_price=%.2f exit_source=%s",
+            trade_id, symbol, exit_price if exit_price else 0.0, exit_source,
         )
         return ReconciliationAction(
             check_name="MANUAL_CLOSE",
@@ -730,11 +747,102 @@ class OrderReconciler:
             trade_id=trade_id,
             description=(
                 f"Local trade {trade_id} is OPEN/PARTIAL but broker has "
-                f"no position for {symbol}"
+                f"no position for {symbol}; exit_price={exit_price:.2f}"
             ),
             action_taken="; ".join(steps) if steps else "none",
             success=success,
         )
+
+    def _resolve_exit_price(
+        self, symbol: str, direction: str, entry_price, log
+    ) -> float:
+        """
+        FIX-148: Best-effort exit price resolution for externally closed positions.
+
+        Priority: broker trades() → LTP quote → entry_price fallback.
+        """
+        entry_f = float(entry_price) if entry_price else 0.0
+
+        # Try broker trades API
+        try:
+            broker_trades = self._adapter.get_trades()
+            exit_side = "SELL" if direction == "LONG" else "BUY"
+            matching = [
+                t for t in broker_trades
+                if t["tradingsymbol"] == symbol
+                and t["transaction_type"] == exit_side
+                and t["quantity"] > 0
+            ]
+            if matching:
+                latest = matching[-1]
+                price = latest["average_price"]
+                if price > 0:
+                    log.info(
+                        "check1: exit_price resolved from broker trades: %.2f", price
+                    )
+                    return price
+        except Exception as exc:
+            log.warning("check1: get_trades failed: %s — trying LTP fallback", exc)
+
+        # Fallback: fetch current LTP
+        try:
+            quotes = self._quote_fn([symbol])
+            if symbol in quotes:
+                ltp = quotes[symbol].last_price
+                if ltp and ltp > 0:
+                    log.info(
+                        "check1: exit_price resolved from LTP: %.2f", ltp
+                    )
+                    return ltp
+        except Exception as exc:
+            log.warning("check1: quote_fn failed: %s — using entry_price proxy", exc)
+
+        return entry_f
+
+    def _cancel_orphaned_orders_for_trade(
+        self, trade_id: str, symbol: str, log
+    ) -> int:
+        """
+        FIX-148: Cancel any open SL/TGT orders at broker for a trade whose
+        position has been externally closed. Returns count of successfully
+        cancelled orders.
+        """
+        cancelled = 0
+        try:
+            rows = self._store.fetch_all(
+                """SELECT order_id, leg FROM orders
+                   WHERE trade_id = ? AND leg IN ('SL', 'TGT')
+                     AND status NOT IN ('CANCELLED', 'COMPLETE', 'REJECTED', 'FAILED')""",
+                (trade_id,),
+            )
+        except Exception as exc:
+            log.error("check1: orphan order lookup failed: %s", exc)
+            return 0
+
+        for row in (rows or []):
+            broker_id = row["order_id"]
+            leg = row["leg"]
+            if not broker_id:
+                continue
+            try:
+                result = self._adapter.cancel_order(broker_id)
+                if result.success:
+                    log.info(
+                        "check1: cancelled orphaned %s order %s for trade %s",
+                        leg, broker_id, trade_id,
+                    )
+                    cancelled += 1
+                else:
+                    log.warning(
+                        "check1: cancel orphaned %s order %s failed: %s",
+                        leg, broker_id, result.reason,
+                    )
+            except Exception as exc:
+                log.warning(
+                    "check1: cancel orphaned %s order %s raised: %s",
+                    leg, broker_id, exc,
+                )
+        return cancelled
 
     # ── CHECK 2: ORPHAN_ADOPTION ──────────────────────────────────────────────
 
@@ -780,14 +888,19 @@ class OrderReconciler:
         """
         Local qty_filled > broker qty — partial position closure at broker (RC5d).
 
-        Updates qty_filled in DB.  Capital adjustment is not attempted here
-        since actual exit prices are unavailable; operator reconciles manually.
+        FIX-148 (A3): Enhanced to handle partial RMS exits:
+        1. Update qty_filled in DB
+        2. Cancel old SL/TGT orders at broker (wrong qty)
+        3. Telegram alert for partial close
+        G5b on the next cycle will detect missing SL and place a fresh one
+        at the correct (reduced) qty.
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
         log = bind_trade(self._log, trade_id=trade_id)
         local_qty = trade["qty_filled"] or 0
         success = True
+        steps: List[str] = []
 
         try:
             with self._store.transaction() as cur:
@@ -795,11 +908,37 @@ class OrderReconciler:
                     "UPDATE trades SET qty_filled = ?, updated_at = ? WHERE trade_id = ?",
                     (broker_qty, self._now_ist(), trade_id),
                 )
+            steps.append(f"qty_filled={local_qty}->{broker_qty}")
         except Exception as exc:
             log.error(
                 "check4: update qty_filled failed for %s: %s", trade_id, exc
             )
             success = False
+            steps.append(f"qty_update_FAILED: {exc}")
+
+        # FIX-148: Cancel stale SL/TGT orders (they're sized for old qty).
+        # G5b will detect no active SL on next cycle and place a fresh one
+        # at broker_qty.
+        cancelled = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
+        if cancelled > 0:
+            steps.append(f"cancelled_{cancelled}_stale_orders")
+
+        # FIX-148: Telegram alert for partial external close
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="WARNING",
+                    title=f"[{self._mode}] PARTIAL CLOSE -- {symbol}",
+                    body=(
+                        f"Partial external close detected\n"
+                        f"Trade: {trade_id}\n"
+                        f"Qty: {local_qty} -> {broker_qty}\n"
+                        f"Old SL/TGT cancelled; G5b will re-place at new qty"
+                    ),
+                    source_module="order_reconciler",
+                )
+            except Exception as exc:
+                log.error("check4: notifier.send failed: %s", exc)
 
         log.warning(
             "CHECK4 PARTIAL_CLOSE: trade_id=%s %s local_qty=%d broker_qty=%d",
@@ -813,7 +952,7 @@ class OrderReconciler:
             description=(
                 f"Local qty_filled={local_qty} > broker_qty={broker_qty} for {symbol}"
             ),
-            action_taken=f"qty_filled updated to {broker_qty}",
+            action_taken="; ".join(steps) if steps else f"qty_filled updated to {broker_qty}",
             success=success,
         )
 
@@ -1053,6 +1192,9 @@ class OrderReconciler:
                     trade_id, symbol, broker_sl_id,
                 )
 
+                # FIX-148 (GAP 4): Immediate market-close for naked position.
+                emergency_result = self._emergency_market_close(trade, log)
+
                 try:
                     self._ks.soft_kill(
                         reason=(
@@ -1064,6 +1206,26 @@ class OrderReconciler:
                 except Exception as exc:
                     log.error("check9: soft_kill failed: %s", exc)
 
+                # FIX-148: Telegram CRITICAL alert
+                if self._notifier is not None:
+                    try:
+                        self._notifier.send(
+                            severity="CRITICAL",
+                            title=f"[{self._mode}] NAKED POSITION -- {symbol}",
+                            body=(
+                                f"SL order {broker_sl_id} missing from broker\n"
+                                f"Trade: {trade_id}\n"
+                                f"Emergency exit: {emergency_result}"
+                            ),
+                            source_module="order_reconciler",
+                        )
+                    except Exception as exc:
+                        log.error("check9: notifier.send failed: %s", exc)
+
+            action_desc = "CRITICAL logged; soft_kill triggered; reconciliation_status=SL_MISSING"
+            if should_alert:
+                action_desc += f"; emergency_exit={emergency_result}"
+
             actions.append(ReconciliationAction(
                 check_name="MISSING_EXITS",
                 tier="UNRECOVERABLE",
@@ -1073,11 +1235,77 @@ class OrderReconciler:
                     f"OPEN trade {trade_id} has SL order {broker_sl_id} "
                     f"in local DB but NOT found in broker open orders"
                 ),
-                action_taken="CRITICAL logged; soft_kill triggered; reconciliation_status=SL_MISSING",
+                action_taken=action_desc,
                 success=True,
             ))
 
         return actions
+
+    def _emergency_market_close(self, trade, log) -> str:
+        """
+        FIX-148 (GAP 4): Place emergency MARKET exit for a naked position.
+
+        Best-effort: if placement fails, returns failure reason (reconciler
+        soft_kill is the backstop). Does NOT release capital — that happens
+        when the market order fills via normal _handle_exit_fill path, or
+        on the next CHECK 1 cycle if the position disappears.
+        """
+        trade_id = trade["trade_id"]
+        symbol = trade["symbol"]
+        try:
+            direction = trade["direction"] or "LONG"
+        except (KeyError, IndexError):
+            direction = "LONG"
+        qty = trade["qty_filled"] or 0
+        try:
+            product = trade["product"] or "MIS"
+        except (KeyError, IndexError):
+            product = "MIS"
+        intent = _PRODUCT_TO_INTENT.get(product or "", "INTRADAY")
+
+        if qty <= 0:
+            return "skipped(zero_qty)"
+
+        side = "SELL" if direction == "LONG" else "BUY"
+
+        try:
+            placed = self._adapter.place_order(
+                symbol=symbol,
+                side=side,
+                qty=qty,
+                price=0.0,
+                order_type="MARKET",
+                intent=intent,
+                tag=trade_id,
+            )
+            log.critical(
+                "check9: EMERGENCY MARKET EXIT placed for %s %s qty=%d "
+                "broker_order_id=%s",
+                symbol, side, qty, placed.broker_order_id,
+            )
+
+            # Persist the emergency order in DB
+            try:
+                self._order_mgr.insert_order(
+                    trade_id=trade_id,
+                    broker_order_id=placed.broker_order_id,
+                    leg="EOD",
+                    transaction_type=side,
+                    order_type="MARKET",
+                    product=product,
+                    variety="regular",
+                    qty_requested=qty,
+                    price=0.0,
+                )
+            except Exception as exc:
+                log.error("check9: emergency order DB persist failed: %s", exc)
+
+            return f"placed({placed.broker_order_id})"
+        except Exception as exc:
+            log.critical(
+                "check9: EMERGENCY MARKET EXIT FAILED for %s: %s", symbol, exc,
+            )
+            return f"failed({exc})"
 
     # ── G5b: CRASH_RECOVERY_SL ───────────────────────────────────────────────
 

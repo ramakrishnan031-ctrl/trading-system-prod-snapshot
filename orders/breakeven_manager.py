@@ -30,6 +30,7 @@ What This Module Does NOT Do:
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -66,12 +67,19 @@ class BreakevenManager:
         adapter: Any,        # ZerodhaAdapter with .modify_order()
         state_store: Any,    # StateStore with .fetch_one()
         logger: Any,
+        notifier: Any = None,
+        modify_max_retries: int = 3,
+        modify_retry_backoff_sec: float = 2.0,
     ) -> None:
         self._adapter = adapter
         self._store = state_store
         self._log = logger
+        self._notifier = notifier
+        self._modify_max_retries = max(1, modify_max_retries)
+        self._modify_retry_backoff = modify_retry_backoff_sec
         self._tracked: Dict[str, _TradeInfo] = {}
         self._lock = threading.RLock()
+        self._consecutive_failures: Dict[str, int] = {}
 
     # ── public API ─────────────────────────────────────────────────────────────
 
@@ -216,7 +224,12 @@ class BreakevenManager:
     def _advance_sl(
         self, trade_id: str, info: _TradeInfo, new_sl: float, milestone: str
     ) -> None:
-        """BM4: Modify broker SL order; mark milestone only on broker confirmation."""
+        """
+        BM4: Modify broker SL order; mark milestone only on broker confirmation.
+
+        FIX-148 (GAP 2): Retries up to modify_max_retries with backoff.
+        Sends WARNING Telegram alert after all retries exhausted.
+        """
         broker_order_id = self._get_sl_broker_order_id(trade_id)
         if not broker_order_id:
             self._log.warning(
@@ -225,48 +238,99 @@ class BreakevenManager:
             )
             return
 
-        # BM4: modify broker FIRST
-        try:
-            result = self._adapter.modify_order(broker_order_id, trigger_price=round(new_sl, 2))
-        except Exception as exc:
-            self._log.error(
-                "breakeven_manager.modify_failed",
-                extra={"trade_id": trade_id, "milestone": milestone, "error": str(exc)},
-            )
-            return
+        # BM4: modify broker FIRST — with FIX-148 retry logic
+        last_error = None
+        for attempt in range(1, self._modify_max_retries + 1):
+            try:
+                result = self._adapter.modify_order(
+                    broker_order_id, trigger_price=round(new_sl, 2),
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                self._log.error(
+                    "breakeven_manager.modify_failed",
+                    extra={
+                        "trade_id": trade_id, "milestone": milestone,
+                        "attempt": attempt, "max": self._modify_max_retries,
+                        "error": last_error,
+                    },
+                )
+                if attempt < self._modify_max_retries:
+                    time.sleep(self._modify_retry_backoff)
+                continue
 
-        if not result.success:
+            if result.success:
+                # Success — reset failure counter
+                self._consecutive_failures.pop(trade_id, None)
+
+                with self._lock:
+                    t = self._tracked.get(trade_id)
+                    if t is not None:
+                        if milestone == "breakeven":
+                            t.breakeven_applied = True
+                        elif milestone == "partial_lock":
+                            t.partial_lock_applied = True
+                            t.breakeven_applied = True
+
+                self._log.info(
+                    "breakeven_manager.sl_advanced",
+                    extra={
+                        "trade_id": trade_id,
+                        "milestone": milestone,
+                        "new_sl": round(new_sl, 2),
+                        "symbol": info.symbol,
+                        "direction": info.direction,
+                        "attempt": attempt,
+                    },
+                )
+                return
+
+            # Modify rejected by broker
+            last_error = result.reason
             self._log.error(
                 "breakeven_manager.modify_rejected",
                 extra={
-                    "trade_id": trade_id,
-                    "milestone": milestone,
-                    "new_sl": new_sl,
-                    "reason": result.reason,
+                    "trade_id": trade_id, "milestone": milestone,
+                    "new_sl": new_sl, "reason": result.reason,
+                    "attempt": attempt, "max": self._modify_max_retries,
                 },
             )
-            return
+            if attempt < self._modify_max_retries:
+                time.sleep(self._modify_retry_backoff)
 
-        # BM4: update internal state only after broker confirms
-        with self._lock:
-            t = self._tracked.get(trade_id)
-            if t is not None:
-                if milestone == "breakeven":
-                    t.breakeven_applied = True
-                elif milestone == "partial_lock":
-                    t.partial_lock_applied = True
-                    t.breakeven_applied = True  # partial lock implies breakeven too
+        # All retries exhausted — track consecutive failures + alert
+        count = self._consecutive_failures.get(trade_id, 0) + 1
+        self._consecutive_failures[trade_id] = count
 
-        self._log.info(
-            "breakeven_manager.sl_advanced",
+        self._log.warning(
+            "breakeven_manager.modify_retries_exhausted",
             extra={
                 "trade_id": trade_id,
                 "milestone": milestone,
-                "new_sl": round(new_sl, 2),
-                "symbol": info.symbol,
-                "direction": info.direction,
+                "new_sl": new_sl,
+                "consecutive_failures": count,
+                "last_error": last_error,
             },
         )
+
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="WARNING",
+                    title=f"Breakeven SL modify failed -- {info.symbol}",
+                    body=(
+                        f"Trade: {trade_id}\n"
+                        f"Milestone: {milestone}\n"
+                        f"New SL: {new_sl:.2f}\n"
+                        f"Retries: {self._modify_max_retries} exhausted\n"
+                        f"Consecutive failures: {count}\n"
+                        f"Last error: {last_error}\n"
+                        f"Original SL still active at broker"
+                    ),
+                    source_module="breakeven_manager",
+                )
+            except Exception:
+                pass
 
     def _get_sl_broker_order_id(self, trade_id: str) -> Optional[str]:
         """BM9: Look up active SL order's broker_order_id from state_store."""

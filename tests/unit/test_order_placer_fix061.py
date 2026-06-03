@@ -194,9 +194,10 @@ def test_successful_retry_removes_from_queue(placer, fill_entry):
 # Test 4: 3 failed retries → assert soft_kill triggered
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_exhausted_retries_triggers_soft_kill(placer, fill_entry):
+def test_exhausted_retries_triggers_emergency_exit_and_hard_kill(placer, fill_entry):
     """
-    FIX-061 Test 4: After MAX_RETRIES (3) failed attempts → soft_kill triggered.
+    FIX-061/FIX-148: After MAX_RETRIES (3) failed attempts → emergency market exit
+    + hard_kill triggered.
     """
     # Pre-populate with retry_count = 2 (next will be 3rd and final)
     params = _ExitRetryParams(
@@ -218,18 +219,23 @@ def test_exhausted_retries_triggers_soft_kill(placer, fill_entry):
     )
     placer._engine.place_deferred_exits = Mock(side_effect=exc)
 
+    # Mock the adapter for emergency market exit
+    mock_placed = Mock(broker_order_id="EMG_001", internal_order_id="INT_EMG_001")
+    placer._engine.adapter = Mock()
+    placer._engine.adapter.place_order = Mock(return_value=mock_placed)
+
     # Trigger retry (this will be 3rd attempt)
     ticks = [{"instrument_token": 12345, "last_price": 100.5}]
     placer._on_ltp_tick_for_retry(ticks)
 
-    # Assert soft_kill was triggered (not hard_kill)
-    placer._kill_switch.soft_kill.assert_called_once()
-    call_args = placer._kill_switch.soft_kill.call_args
-    assert "3 LTP retries" in call_args.kwargs["reason"] or "retries" in call_args.kwargs["reason"]
-    assert call_args.kwargs["triggered_by"] == "order_placer._retry_limit_triple_exits"
+    # FIX-148: hard_kill triggered (was soft_kill before)
+    placer._kill_switch.hard_kill.assert_called_once()
 
-    # Assert hard_kill was NOT called
-    placer._kill_switch.hard_kill.assert_not_called()
+    # FIX-148: Emergency market exit was attempted
+    placer._engine.adapter.place_order.assert_called_once()
+    call_args = placer._engine.adapter.place_order.call_args
+    assert call_args.kwargs["order_type"] == "MARKET"
+    assert call_args.kwargs["side"] == "SELL"  # LONG trade → SELL exit
 
 
 # ─────────────────────────────────────────────────────────────────────────────
