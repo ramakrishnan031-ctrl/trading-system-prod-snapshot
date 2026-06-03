@@ -68,5 +68,8 @@
 # ── 18:00 IST Mon-Fri | cron drift monitor (FIX-145) ─────────────────────────
 0 18 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/check_cron_drift.py >> logs/cron-drift-check.log 2>&1
 
+# ── 03:00 IST 1st of month | backup restore drill (FIX-149) ─────────────────
+0 3 1 * * cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_restore_drill.py --quiet >> logs/cron-backup-drill.log 2>&1
+
 # ── Hourly | disk space monitor (FIX-140) ───────────────────────────────────
 0 * * * * cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1
