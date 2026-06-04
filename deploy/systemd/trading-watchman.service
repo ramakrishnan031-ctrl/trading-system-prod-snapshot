@@ -8,7 +8,7 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/systems/trading-system
-Environment="PATH=/home/ubuntu/tools/gemini/node_modules/.bin:/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
+Environment="PATH=/home/ubuntu/tools/antigravity:/home/ubuntu/tools/gemini/node_modules/.bin:/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/ubuntu/systems/trading-system/.env
 

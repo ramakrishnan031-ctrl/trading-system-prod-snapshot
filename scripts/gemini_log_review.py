@@ -33,7 +33,7 @@ if str(_ROOT) not in sys.path:
 from core.logger import get_logger
 from core.time_authority import today_ist
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
+_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
 _GEMINI_TIMEOUT = 120
 
 _EOD_PROMPT = """\
@@ -128,7 +128,7 @@ def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
     """Call Gemini CLI: -p for the prompt, stdin for the data."""
     try:
         result = subprocess.run(
-            [_GEMINI_BIN, "-p", prompt],
+            [_GEMINI_BIN, "--print", prompt],
             input=data,
             capture_output=True,
             text=True,
@@ -143,7 +143,7 @@ def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
         log.error("gemini_log_review: CLI timed out after %ds", _GEMINI_TIMEOUT)
         return None
     except FileNotFoundError:
-        log.error("gemini_log_review: gemini binary not found at '%s'", _GEMINI_BIN)
+        log.error("gemini_log_review: agy binary not found at '%s'", _GEMINI_BIN)
         return None
     except Exception as exc:
         log.error("gemini_log_review: CLI error: %s", exc)

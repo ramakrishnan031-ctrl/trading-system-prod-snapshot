@@ -39,7 +39,7 @@ DB_PATH = _ROOT / "data_store" / "trading_system.db"
 EOD_REVIEW_DIR = _ROOT / "reports" / "log_review"
 BRIEFING_DIR = _ROOT / "reports" / "briefing"
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
+_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
 _GEMINI_TIMEOUT = 90
 
 _BRIEFING_PROMPT = """\
@@ -161,22 +161,22 @@ def _get_yesterday_summary(db_path: str, yesterday_iso: str) -> dict:
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
     try:
         result = subprocess.run(
-            [_GEMINI_BIN, "-p", prompt],
+            [_GEMINI_BIN, "--print", prompt],
             input=data,
             capture_output=True,
             text=True,
             timeout=_GEMINI_TIMEOUT,
         )
         if result.returncode != 0:
-            log.error("premarket_brief: Gemini CLI returned %d: %s",
+            log.error("premarket_brief: agy CLI returned %d: %s",
                       result.returncode, result.stderr[:300])
             return None
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
-        log.error("premarket_brief: Gemini CLI timed out after %ds", _GEMINI_TIMEOUT)
+        log.error("premarket_brief: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
         return None
     except FileNotFoundError:
-        log.error("premarket_brief: gemini binary not found at '%s'", _GEMINI_BIN)
+        log.error("premarket_brief: agy binary not found at '%s'", _GEMINI_BIN)
         return None
     except Exception as exc:
         log.error("premarket_brief: Gemini CLI error: %s", exc)

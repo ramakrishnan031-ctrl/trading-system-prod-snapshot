@@ -41,7 +41,7 @@ TOKEN_PATH = _ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR = _ROOT / "reports" / "integrity"
 API_KEY = "pvahsvuu3xjsefc7"
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "gemini")
+_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
 _GEMINI_TIMEOUT = 120
 
 _OHLC_THRESHOLD_PCT = 0.05
@@ -218,22 +218,22 @@ def _compare_candles(system: list[dict], zerodha: list[dict]) -> dict:
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
     try:
         result = subprocess.run(
-            [_GEMINI_BIN, "-p", prompt],
+            [_GEMINI_BIN, "--print", prompt],
             input=data,
             capture_output=True,
             text=True,
             timeout=_GEMINI_TIMEOUT,
         )
         if result.returncode != 0:
-            log.error("integrity_check: Gemini CLI returned %d: %s",
+            log.error("integrity_check: agy CLI returned %d: %s",
                       result.returncode, result.stderr[:300])
             return None
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
-        log.error("integrity_check: Gemini CLI timed out after %ds", _GEMINI_TIMEOUT)
+        log.error("integrity_check: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
         return None
     except FileNotFoundError:
-        log.error("integrity_check: gemini binary not found at '%s'", _GEMINI_BIN)
+        log.error("integrity_check: agy binary not found at '%s'", _GEMINI_BIN)
         return None
     except Exception as exc:
         log.error("integrity_check: Gemini CLI error: %s", exc)
