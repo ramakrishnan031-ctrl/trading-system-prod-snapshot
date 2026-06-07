@@ -653,6 +653,160 @@ def test_clear_stale_state_clears_previous_day(tmp_path: Path) -> None:
     store.close()
 
 
+# -- FIX-154: auto_clear_scheduled_kill tests --
+
+
+def _seed_persisted_state_with_ts(
+    store: StateStore,
+    state: str,
+    reason: str,
+    triggered_by: str,
+    triggered_at: str,
+) -> None:
+    """Seed kill_switch_state with a custom timestamp."""
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO kill_switch_state
+              (id, state, reason, triggered_at, triggered_by)
+            VALUES (1, ?, ?, ?, ?)
+            """,
+            (state, reason, triggered_at, triggered_by),
+        )
+
+
+def _ensure_trades_table(store: StateStore) -> None:
+    """Noop — StateStore already creates the trades table from schema.sql."""
+    pass
+
+
+def test_auto_clear_scheduled_force_close(tmp_path: Path) -> None:
+    """FIX-154: force_close kill switch auto-cleared when no open positions."""
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'circuit_breaker_force_close_15:15',
+        'order_monitor', '2026-06-07T15:15:00+05:30',
+    )
+    ks, _, handler = _make_ks(store)
+    assert ks.is_active('entry')
+
+    cleared = ks.auto_clear_scheduled_kill()
+    assert cleared, "Scheduled force_close should be auto-cleared"
+    assert not ks.is_active('any')
+    assert ks.current_state() == KillState.INACTIVE
+    assert any('auto_clear_scheduled' in m for m in handler.by_level(logging.INFO))
+    print('  OK force_close auto-cleared (no open positions)')
+    store.close()
+
+
+def test_auto_clear_scheduled_eod_squareoff(tmp_path: Path) -> None:
+    """FIX-154: EOD_SQUAREOFF kill switch auto-cleared when no open positions."""
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'EOD_SQUAREOFF',
+        'eod_squareoff', '2026-06-07T15:17:00+05:30',
+    )
+    ks, _, handler = _make_ks(store)
+    assert ks.is_active('entry')
+
+    cleared = ks.auto_clear_scheduled_kill()
+    assert cleared, "EOD_SQUAREOFF should be auto-cleared"
+    assert ks.current_state() == KillState.INACTIVE
+    print('  OK EOD_SQUAREOFF auto-cleared (no open positions)')
+    store.close()
+
+
+def test_auto_clear_does_not_clear_emergency(tmp_path: Path) -> None:
+    """FIX-154: emergency kill switch is NOT auto-cleared."""
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'daily_loss_limit_breached',
+        'fund_manager', '2026-06-07T14:30:00+05:30',
+    )
+    ks, _, handler = _make_ks(store)
+    assert ks.is_active('entry')
+
+    cleared = ks.auto_clear_scheduled_kill()
+    assert not cleared, "Emergency kill should NOT be auto-cleared"
+    assert ks.is_active('entry')
+    assert ks.current_state() == KillState.SOFT_KILL
+    assert any('EMERGENCY' in w for w in handler.warnings())
+    print('  OK emergency kill NOT auto-cleared')
+    store.close()
+
+
+def test_auto_clear_blocked_by_open_positions(tmp_path: Path) -> None:
+    """FIX-154: scheduled kill NOT cleared when open positions exist."""
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    # Insert prerequisite signal row (FK constraint) + open trade
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO signals (signal_id, symbol, scanner, strategy, "
+            "triggered_at, received_at, expires_at, status, fingerprint, "
+            "fingerprint_date) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            ('SIG001', 'RELIANCE', 'gap_fade_short', 'gap_fade_short',
+             '2026-06-07T10:00:00+05:30', '2026-06-07T10:00:00+05:30',
+             '2026-06-07T10:05:00+05:30', 'TRADED', 'fp001', '2026-06-07'),
+        )
+        cur.execute(
+            "INSERT INTO trades (trade_id, signal_id, symbol, direction, strategy, "
+            "qty_planned, entry_target_price, sl_initial, tgt_initial, "
+            "margin_reserved, risk_amount, created_at, status, "
+            "order_protocol, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ('T001', 'SIG001', 'RELIANCE', 'LONG', 'gap_fade_short',
+             10, 100.0, 95.0, 110.0, 200.0, 50.0,
+             '2026-06-07T10:00:00+05:30', 'OPEN',
+             'CO_PLUS_TGT', '2026-06-07T10:00:00+05:30'),
+        )
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'circuit_breaker_force_close_15:15',
+        'order_monitor', '2026-06-07T15:15:00+05:30',
+    )
+    ks, _, handler = _make_ks(store)
+
+    cleared = ks.auto_clear_scheduled_kill()
+    assert not cleared, "Should not clear when open positions exist"
+    assert ks.is_active('entry')
+    assert any('open positions' in w for w in handler.warnings())
+    print('  OK scheduled kill NOT cleared with open positions')
+    store.close()
+
+
+def test_auto_clear_no_op_when_inactive(tmp_path: Path) -> None:
+    """FIX-154: auto_clear_scheduled_kill no-op when already INACTIVE."""
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    ks, _, _ = _make_ks(store)
+    assert ks.current_state() == KillState.INACTIVE
+
+    cleared = ks.auto_clear_scheduled_kill()
+    assert not cleared, "No-op when already INACTIVE"
+    print('  OK no-op when INACTIVE')
+    store.close()
+
+
+def test_auto_clear_does_not_clear_hard_kill(tmp_path: Path) -> None:
+    """FIX-154: HARD_KILL is never auto-cleared (even if reason is scheduled)."""
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    _seed_persisted_state_with_ts(
+        store, 'HARD_KILL', 'circuit_breaker_force_close_15:15',
+        'order_monitor', '2026-06-07T15:15:00+05:30',
+    )
+    ks, _, handler = _make_ks(store)
+
+    cleared = ks.auto_clear_scheduled_kill()
+    assert not cleared, "HARD_KILL must never be auto-cleared"
+    assert ks.current_state() == KillState.HARD_KILL
+    print('  OK HARD_KILL not auto-cleared even with scheduled reason')
+    store.close()
+
+
 def test_clear_stale_state_keeps_same_day(tmp_path: Path) -> None:
     """FIX-127: kill switch from today is NOT cleared."""
     from datetime import date

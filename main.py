@@ -1166,6 +1166,11 @@ def _main_locked(args, config_dir: Path) -> int:
     # A new day starts clean; if the trigger was legitimate, startup
     # reconciliation will re-trigger it within seconds.
     kill_switch.clear_stale_state(today_ist_date)
+
+    # FIX-154: auto-clear scheduled kills (force_close, EOD_SQUAREOFF) even on
+    # same-day restart, as long as no open positions. Emergency kills still
+    # require manual --resume.
+    kill_switch.auto_clear_scheduled_kill()
     today_iso: str = today_ist_date.isoformat()
 
     scenario_result = detect_startup_scenario(store, kill_switch, today_ist_date, _log)

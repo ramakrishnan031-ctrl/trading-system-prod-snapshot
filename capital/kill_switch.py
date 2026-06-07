@@ -65,6 +65,19 @@ if TYPE_CHECKING:
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
+# Kill reasons that are part of normal daily operations (safe to auto-clear on
+# next startup when no open positions exist). Emergency kills are everything
+# else — they require manual --resume.
+SCHEDULED_KILL_REASONS = frozenset({
+    "circuit_breaker_force_close_15:15",
+    "EOD_SQUAREOFF",
+})
+
+
+def _is_scheduled_reason(reason: str) -> bool:
+    """Return True if the kill reason matches a scheduled (non-emergency) pattern."""
+    return reason in SCHEDULED_KILL_REASONS
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Types
@@ -189,6 +202,79 @@ class KillSwitch:
             prev_state.value, triggered_date, prev_reason, prev_by, today,
         )
         return True
+
+    def auto_clear_scheduled_kill(self) -> bool:
+        """Auto-clear kill switch if reason is a scheduled daily operation.
+
+        Scheduled kills (force_close at 15:15, EOD squareoff) are normal daily
+        events that should not block the next startup. This clears them
+        regardless of date — even same-day restarts — as long as there are no
+        open positions. HARD_KILL is never auto-cleared.
+
+        Returns True if state was cleared, False if no action taken.
+        """
+        with self._lock:
+            if self._state == KillState.INACTIVE:
+                return False
+
+            if self._state == KillState.HARD_KILL:
+                self._log.warning(
+                    "HARD_KILL active (reason=%s). Cannot auto-clear. "
+                    "Manual --resume required.",
+                    self._reason,
+                )
+                return False
+
+            reason = self._reason
+            if not _is_scheduled_reason(reason):
+                self._log.warning(
+                    "Kill switch active with EMERGENCY reason %r (triggered_by=%s). "
+                    "Manual --resume required.",
+                    reason, self._triggered_by,
+                )
+                return False
+
+            open_count = self._count_open_positions()
+            if open_count > 0:
+                self._log.warning(
+                    "Scheduled kill switch (%s) but %d open positions remain. "
+                    "Manual --resume required.",
+                    reason, open_count,
+                )
+                return False
+
+            prev_state = self._state
+            prev_reason = reason
+            prev_by = self._triggered_by
+            ts = now_ist()
+            clear_reason = (
+                f"auto_clear_scheduled: was {prev_state.value} "
+                f"(reason={prev_reason}, by={prev_by}), no open positions"
+            )
+
+            self._persist_state(KillState.INACTIVE, clear_reason, ts, "auto_clear_scheduled")
+            self._state = KillState.INACTIVE
+            self._reason = clear_reason
+            self._triggered_at = ts
+            self._triggered_by = "auto_clear_scheduled"
+
+        self._log.info(
+            "Auto-cleared scheduled kill switch: %s (was %s, reason=%s, by=%s)",
+            clear_reason, prev_state.value, prev_reason, prev_by,
+        )
+        return True
+
+    def _count_open_positions(self) -> int:
+        """Count trades with live exposure (OPEN, PARTIAL, or PENDING_FILL)."""
+        try:
+            row = self._store.fetch_one(
+                "SELECT COUNT(*) as cnt FROM trades "
+                "WHERE status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
+            )
+            return row["cnt"] if row else 0
+        except Exception as exc:
+            self._log.error("Failed to count open positions: %s; assuming non-zero", exc)
+            return 1
 
     def set_notifier(
         self,

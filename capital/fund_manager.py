@@ -75,6 +75,7 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
+import math
 import threading
 import uuid
 from dataclasses import dataclass
@@ -430,6 +431,21 @@ class FundManager:
         """
         with self._lock:
             self._assert_initialized()
+
+            if not isinstance(qty, (int, float)) or not isinstance(price, (int, float)):
+                return ReservationResult(
+                    success=False, reservation_id="", margin=0.0, bucket="",
+                    reason_if_failed=f"Invalid numeric input: qty={qty}, price={price}",
+                )
+            try:
+                if math.isnan(qty) or math.isnan(price) or math.isinf(qty) or math.isinf(price):
+                    return ReservationResult(
+                        success=False, reservation_id="", margin=0.0, bucket="",
+                        reason_if_failed=f"Invalid numeric input: qty={qty}, price={price}",
+                    )
+            except TypeError:
+                pass
+
             bucket = self._bucket_for_intent(intent)
             base_margin = required_margin(qty, price, intent, self._leverage_map)
 
