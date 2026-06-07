@@ -68,7 +68,7 @@ order_monitor:                # OM14
 capital:                      # FM16
   intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
   positional_bucket_pct: 0.30 # 30% of total capital for positional (CNC)
-  daily_loss_limit: 100000.0  # TEMP: raised for paper testing (was 10000)
+  daily_loss_limit: 10000.0   # Production threshold
   slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
   leverage_map:
     INTRADAY: 5.0             # MIS leverage
@@ -96,8 +96,8 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_positions: 10      # hard cap on concurrent open positions (>= 1)
   max_daily_trades: 20        # hard cap on trades per day (>= 1)
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
-  max_consecutive_losses: 20  # TEMP: raised for paper testing (was 4)
-  daily_loss_limit_pct: 1.00  # TEMP: 100% for paper testing (was 0.05 = 5%)
+  max_consecutive_losses: 4   # Production threshold
+  daily_loss_limit_pct: 0.05  # Production threshold (5%)
   price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement
 
 webhook:                      # WR14 — HTTP server settings
@@ -182,7 +182,7 @@ logging:                      # FIX-099 — logging subsystem settings
 
 order_reconciler:             # RC17 — reconciler tuning
   poll_interval_sec: 15       # P14: 15-second periodic cadence
-  capital_drift_tolerance: 100000.0  # TEMP: raised for paper (was 50) - G3 drift check invalid in paper mode
+  capital_drift_tolerance: 50.0  # Production threshold
 
 shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   enabled: true               # SH13: false = all handlers no-ops; table stays empty
@@ -212,12 +212,9 @@ paper:                        # H-20/ZA16a: paper-mode fill synthesis
   ltp_gating_poll_sec: 5.0    # 5s cadence keeps ~30 exit threads at ~6 LTP fetches/sec total
 
 drift_handler:                # BL-2: capital drift escalation
-  # TEMP: thresholds raised for paper (was 250/1000/2500).
-  # Paper mode has inherent drift: adapter.get_margins() is static
-  # while fund_manager._total tracks P&L. True fix: skip G3 in paper.
-  log_only_threshold_rs: 100000.0
-  soft_kill_threshold_rs: 200000.0
-  hard_kill_threshold_rs: 500000.0
+  log_only_threshold_rs: 250.0      # Production threshold
+  soft_kill_threshold_rs: 1000.0    # Production threshold
+  hard_kill_threshold_rs: 2500.0    # Production threshold
   consecutive_cycles_before_escalate: 3
 
 strategy_circuit_breaker:     # FIX-130 (Item 6): intraday strategy circuit breaker
