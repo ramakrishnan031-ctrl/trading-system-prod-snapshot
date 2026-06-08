@@ -620,7 +620,14 @@ class OrderMonitor:
             with self._lock:
                 if composite_key not in self._watched:
                     continue
-            self._process_order(entry, tick_cache=tick_cache)
+            try:
+                self._process_order(entry, tick_cache=tick_cache)
+            except Exception:
+                self._log.exception(
+                    "order_monitor.process_order_failed",
+                    extra={"internal_order_id": entry.internal_order_id,
+                           "broker_order_id": entry.broker_order_id},
+                )
 
     def _process_order(
         self,
@@ -1253,8 +1260,21 @@ class OrderMonitor:
                 )
                 return False
 
-            # At least one state is non-terminal → unexpected, re-raise
-            # (OM12 idempotent logic still applies for same-state transitions)
+            # FIX-155c: PENDING→OPEN can happen in paper mode (no SUBMITTED step)
+            # or on restart when orphan PENDING orders appear as OPEN at broker.
+            # Auto-step through SUBMITTED to reach the target state.
+            if from_state == "PENDING" and to_state_exc == "OPEN":
+                self._log.info(
+                    "order_monitor.pending_to_open_auto_step",
+                    extra={"internal_order_id": internal_order_id},
+                )
+                try:
+                    self._osm.transition(internal_order_id, "SUBMITTED")
+                    self._osm.transition(internal_order_id, "OPEN")
+                    return True
+                except InvalidTransitionError:
+                    pass  # fall through to re-raise path below
+
             self._log.debug(
                 "order_monitor.transition_skipped_non_terminal",
                 extra={"internal_order_id": internal_order_id,

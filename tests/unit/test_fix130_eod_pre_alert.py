@@ -125,12 +125,40 @@ class TestEodPreAlert:
         print("  OK: alert body includes position count")
 
 
+def test_eod_pre_alert_thread_uses_is_trading_holiday():
+    """FIX-155c: thread calls market_windows.is_trading_holiday(now), not is_trading_day(today)."""
+    import threading
+    from main import _start_eod_pre_alert_thread
+
+    mw = MagicMock()
+    mw.is_trading_holiday.return_value = True  # holiday → thread exits immediately
+    shutdown = threading.Event()
+
+    with TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        _start_eod_pre_alert_thread(
+            store=store, notifier=None, mode="PAPER",
+            log=_log(), market_windows=mw, shutdown_event=shutdown,
+        )
+        import time; time.sleep(0.2)
+        store.close()
+
+    mw.is_trading_holiday.assert_called_once()
+    arg = mw.is_trading_holiday.call_args[0][0]
+    from datetime import datetime
+    assert isinstance(arg, datetime), f"Expected datetime arg, got {type(arg)}"
+    assert not hasattr(mw, 'is_trading_day') or not mw.is_trading_day.called, \
+        "Should NOT call is_trading_day"
+    print("  OK: thread calls is_trading_holiday(datetime), not is_trading_day")
+
+
 if __name__ == "__main__":
     tests = [
         TestEodPreAlert().test_alert_sent_when_open_positions,
         TestEodPreAlert().test_no_alert_when_no_open_positions,
         TestEodPreAlert().test_no_alert_when_notifier_is_none,
         TestEodPreAlert().test_alert_body_includes_count,
+        test_eod_pre_alert_thread_uses_is_trading_holiday,
     ]
     passed = 0
     for t in tests:

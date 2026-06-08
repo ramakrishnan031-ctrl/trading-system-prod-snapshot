@@ -1433,5 +1433,85 @@ def run_all_tests() -> int:
     return 0
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-155c: PENDING→OPEN auto-step + poll_cycle resilience
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_pending_to_open_auto_steps_through_submitted():
+    """FIX-155c: order in PENDING that broker reports as OPEN transitions via SUBMITTED."""
+    adapter = MockAdapter()
+    adapter.history_responses = [
+        [_entry("OPEN")],
+    ]
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+    osm.register("ord_pending")
+    # Leave in PENDING — do NOT transition to SUBMITTED
+    monitor.track(
+        internal_order_id="ord_pending",
+        broker_order_id="KITE_PEND",
+        symbol="RELIANCE",
+        side="BUY",
+        qty=10,
+        expected_price=2500.0,
+        placed_at=now_ist(),
+        leg="ENTRY",
+    )
+    monitor._poll_cycle()
+    assert osm.current_state("ord_pending") == "OPEN", \
+        f"Expected OPEN, got {osm.current_state('ord_pending')}"
+
+
+def test_poll_cycle_continues_after_order_exception():
+    """FIX-155c: one order raising doesn't kill monitoring of other orders."""
+    adapter = MockAdapter()
+    adapter.history_responses = [
+        [_entry("COMPLETE", filled_qty=10, avg_price=2500.0)],
+    ]
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+
+    osm.register("ord_good")
+    osm.transition("ord_good", "SUBMITTED")
+    monitor.track(
+        internal_order_id="ord_good",
+        broker_order_id="KITE_GOOD",
+        symbol="INFY",
+        side="BUY",
+        qty=10,
+        expected_price=1500.0,
+        placed_at=now_ist(),
+        leg="ENTRY",
+    )
+
+    # Inject a bad order that will fail (mock _process_order to raise on first call)
+    import unittest.mock as _mock
+    original = monitor._process_order
+    call_count = [0]
+
+    def patched_process(entry, tick_cache=None):
+        call_count[0] += 1
+        if entry.internal_order_id == "ord_bad":
+            raise RuntimeError("Simulated explosion")
+        return original(entry, tick_cache=tick_cache)
+
+    osm.register("ord_bad")
+    osm.transition("ord_bad", "SUBMITTED")
+    monitor.track(
+        internal_order_id="ord_bad",
+        broker_order_id="KITE_BAD",
+        symbol="RELIANCE",
+        side="BUY",
+        qty=10,
+        expected_price=2500.0,
+        placed_at=now_ist(),
+        leg="ENTRY",
+    )
+
+    with _mock.patch.object(monitor, "_process_order", side_effect=patched_process):
+        monitor._poll_cycle()
+
+    assert call_count[0] == 2, f"Both orders should be processed, got {call_count[0]}"
+    assert osm.current_state("ord_good") == "COMPLETE"
+
+
 if __name__ == "__main__":
     sys.exit(run_all_tests())

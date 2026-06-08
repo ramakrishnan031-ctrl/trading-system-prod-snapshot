@@ -731,7 +731,7 @@ def _start_eod_pre_alert_thread(
             now = _now_ist()
             today = now.date()
             # Only fire on trading days
-            if market_windows is None or not market_windows.is_trading_day(today):
+            if market_windows is None or market_windows.is_trading_holiday(now):
                 break
             alert_dt = now.replace(
                 hour=_PRE_ALERT_TIME.hour, minute=_PRE_ALERT_TIME.minute,
