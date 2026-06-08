@@ -1559,10 +1559,22 @@ class ZerodhaAdapter:
                     "status": "COMPLETE", "filled_qty": qty, "avg_price": fill_price,
                 }
                 pos = self._paper_positions.get(symbol, {"qty": 0, "avg_price": 0.0})
+                old_qty = pos["qty"]
+                old_avg = pos["avg_price"]
                 if side == "BUY":
-                    new_qty = pos["qty"] + qty
+                    new_qty = old_qty + qty
                 else:
-                    new_qty = pos["qty"] - qty
+                    new_qty = old_qty - qty
+
+                # Track realized PnL so get_margins() reflects trade outcomes
+                # (paper/live parity: real broker margins update after fills).
+                if old_qty != 0 and abs(new_qty) < abs(old_qty):
+                    closed_qty = abs(old_qty) - abs(new_qty)
+                    realized_pnl = (fill_price - old_avg) * (
+                        closed_qty if old_qty > 0 else -closed_qty
+                    )
+                    self._paper_capital += realized_pnl
+
                 if new_qty == 0:
                     self._paper_positions.pop(symbol, None)
                 else:

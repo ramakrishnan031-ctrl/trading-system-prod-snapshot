@@ -607,6 +607,130 @@ def test_paper_get_positions_flat_after_exit() -> None:
     print("  OK paper get_positions empty after offsetting fill")
 
 
+def test_paper_capital_updates_on_profitable_long_exit() -> None:
+    """Paper capital increases when a LONG position exits at profit."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, paper_capital=100_000.0, bus=bus,
+    )
+    assert adapter.get_margins().net == 100_000.0
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    adapter.place_order(
+        symbol="RELIANCE", side="SELL", qty=10, price=2550.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    info = adapter.get_margins()
+    expected = 100_000.0 + (2550.0 - 2500.0) * 10  # +500
+    assert abs(info.net - expected) < 0.01, (
+        f"Expected {expected}, got {info.net}"
+    )
+    print(f"  OK paper capital {info.net} after profitable LONG exit")
+
+
+def test_paper_capital_updates_on_losing_long_exit() -> None:
+    """Paper capital decreases when a LONG position exits at loss (SL hit)."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, paper_capital=100_000.0, bus=bus,
+    )
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    adapter.place_order(
+        symbol="RELIANCE", side="SELL", qty=10, price=2450.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    info = adapter.get_margins()
+    expected = 100_000.0 + (2450.0 - 2500.0) * 10  # -500
+    assert abs(info.net - expected) < 0.01, (
+        f"Expected {expected}, got {info.net}"
+    )
+    print(f"  OK paper capital {info.net} after losing LONG exit")
+
+
+def test_paper_capital_updates_on_short_exit() -> None:
+    """Paper capital increases when a SHORT position exits at profit."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, paper_capital=100_000.0, bus=bus,
+    )
+    adapter.place_order(
+        symbol="INFY", side="SELL", qty=10, price=1500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    adapter.place_order(
+        symbol="INFY", side="BUY", qty=10, price=1450.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    info = adapter.get_margins()
+    expected = 100_000.0 + (1500.0 - 1450.0) * 10  # +500
+    assert abs(info.net - expected) < 0.01, (
+        f"Expected {expected}, got {info.net}"
+    )
+    print(f"  OK paper capital {info.net} after profitable SHORT exit")
+
+
+def test_paper_capital_unchanged_on_entry() -> None:
+    """Paper capital does not change when opening a new position."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, paper_capital=100_000.0, bus=bus,
+    )
+    adapter.place_order(
+        symbol="RELIANCE", side="BUY", qty=10, price=2500.0,
+        order_type="LIMIT", intent="INTRADAY",
+    )
+    time.sleep(0.2)
+    info = adapter.get_margins()
+    assert info.net == 100_000.0, (
+        f"Capital should not change on entry, got {info.net}"
+    )
+    print("  OK paper capital unchanged after entry fill")
+
+
+def test_paper_capital_cumulative_across_trades() -> None:
+    """Paper capital accumulates PnL across multiple trades."""
+    import time
+    bus = EventBus()
+    adapter, _, _, osm, _ = _make_adapter(
+        paper=True, paper_capital=100_000.0, bus=bus,
+    )
+    # Trade 1: LONG +500
+    adapter.place_order(symbol="RELIANCE", side="BUY", qty=10,
+                        price=2500.0, order_type="LIMIT", intent="INTRADAY")
+    time.sleep(0.2)
+    adapter.place_order(symbol="RELIANCE", side="SELL", qty=10,
+                        price=2550.0, order_type="LIMIT", intent="INTRADAY")
+    time.sleep(0.2)
+    # Trade 2: LONG -300
+    adapter.place_order(symbol="INFY", side="BUY", qty=10,
+                        price=1500.0, order_type="LIMIT", intent="INTRADAY")
+    time.sleep(0.2)
+    adapter.place_order(symbol="INFY", side="SELL", qty=10,
+                        price=1470.0, order_type="LIMIT", intent="INTRADAY")
+    time.sleep(0.2)
+    info = adapter.get_margins()
+    expected = 100_000.0 + 500.0 - 300.0  # 100_200
+    assert abs(info.net - expected) < 0.01, (
+        f"Expected {expected}, got {info.net}"
+    )
+    print(f"  OK paper capital cumulative: {info.net}")
+
+
 def test_paper_get_positions_multiple_symbols() -> None:
     """Paper positions track multiple symbols independently."""
     import time

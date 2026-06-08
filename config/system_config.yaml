@@ -94,7 +94,7 @@ position_sizing:              # PS9
 
 risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_positions: 10      # hard cap on concurrent open positions (>= 1)
-  max_daily_trades: 20        # hard cap on trades per day (>= 1)
+  max_daily_trades: 20        # hard cap on new trades per day (>= 1)
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 4   # Production threshold
   daily_loss_limit_pct: 0.05  # Production threshold (5%)

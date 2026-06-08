@@ -1797,6 +1797,174 @@ def test_check9_skipped_when_no_broker_orders_fn(tmp_path: Path) -> None:
     print("  OK CHECK9: skipped when broker_orders_fn=None (FIX-002)")
 
 
+def test_check9_skips_when_exit_order_already_complete(tmp_path: Path) -> None:
+    """FIX-155b: If SL/TGT/EOD order already COMPLETE for this trade,
+    CHECK9 must skip — trade is closing, not a naked position."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_closing", symbol="NRBBEARING", direction="LONG", status="OPEN")
+    # SL order in local DB — status still TRIGGER_PENDING (stale row)
+    _insert_order(store, "BROKER_SL_OLD", "t_closing", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=409.0)
+    # But the SL already filled — a COMPLETE SL order exists
+    now = "2026-06-08T10:43:00+05:30"
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO orders
+              (order_id, trade_id, leg, transaction_type, order_type, product,
+               variety, qty_requested, status, trigger_price, placed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("BROKER_SL_FILLED", "t_closing", "SL", "SELL", "SL", "MIS",
+             "regular", 119, "COMPLETE", 409.0, now, now),
+        )
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])  # SL not in broker open orders
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("NRBBEARING", qty=119, avg_price=418.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 0, (
+        f"CHECK9 should skip trade with COMPLETE exit; got {len(missing)} MISSING_EXITS"
+    )
+    kill_switch.soft_kill.assert_not_called()
+    adapter.place_order.assert_not_called()
+    store.close()
+    print("  OK CHECK9: skips when exit order already COMPLETE (FIX-155b)")
+
+
+def test_check9_still_fires_for_genuine_naked_position(tmp_path: Path) -> None:
+    """FIX-155b: When NO exit order is COMPLETE, CHECK9 still detects naked position."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_naked", symbol="SBIN", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_LIVE", "t_naked", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=970.0)
+    # No COMPLETE exit orders — genuinely naked
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])  # SL vanished from broker
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("SBIN", qty=50, avg_price=984.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    adapter.place_order.return_value = MagicMock(broker_order_id="PAPER_EMG_REAL")
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 1, f"Expected 1 MISSING_EXITS; got {len(missing)}"
+    kill_switch.soft_kill.assert_called_once()
+    adapter.place_order.assert_called_once()
+    store.close()
+    print("  OK CHECK9: still fires for genuine naked position (FIX-155b)")
+
+
+def test_check9_no_cascade_when_emergency_exit_already_pending(tmp_path: Path) -> None:
+    """FIX-155: If an emergency exit order already exists (PENDING/SUBMITTED)
+    for this trade, CHECK9 must NOT place another one — prevents cascade."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_cascade", symbol="NRBBEARING", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_CASCADE", "t_cascade", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=409.0)
+
+    # Simulate a prior emergency exit already placed (PENDING status, leg=EOD, MARKET)
+    now = "2026-06-08T10:43:48+05:30"
+    with store.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO orders
+              (order_id, trade_id, leg, transaction_type, order_type, product,
+               variety, qty_requested, status, trigger_price, placed_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("PAPER_EMERGENCY_001", "t_cascade", "EOD", "SELL", "MARKET", "MIS",
+             "regular", 119, "SUBMITTED", 0.0, now, now),
+        )
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("NRBBEARING", qty=119, avg_price=418.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 1, "MISSING_EXITS action still generated"
+    assert "already_pending" in missing[0].action_taken, (
+        f"Expected 'already_pending' in action, got: {missing[0].action_taken}"
+    )
+    # Emergency exit NOT placed (adapter.place_order not called for MARKET)
+    market_calls = [
+        c for c in adapter.place_order.call_args_list
+        if c.kwargs.get("order_type") == "MARKET" or (len(c.args) > 0 and "MARKET" in str(c))
+    ]
+    assert len(market_calls) == 0, (
+        f"Adapter should NOT place another emergency exit; got {len(market_calls)} calls"
+    )
+    # soft_kill still fires (the naked position IS dangerous)
+    kill_switch.soft_kill.assert_called_once()
+    store.close()
+    print("  OK CHECK9: no cascade -- emergency exit already pending (FIX-155)")
+
+
+def test_check9_places_emergency_exit_when_none_pending(tmp_path: Path) -> None:
+    """FIX-155: When no emergency exit is pending, CHECK9 still places one."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_fresh", symbol="SBIN", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_FRESH", "t_fresh", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=970.0)
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("SBIN", qty=50, avg_price=984.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    adapter.place_order.return_value = MagicMock(broker_order_id="PAPER_EMG_NEW")
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 1
+    assert "PAPER_EMG_NEW" in missing[0].action_taken, (
+        f"Expected emergency exit placed; got: {missing[0].action_taken}"
+    )
+    adapter.place_order.assert_called_once()
+    store.close()
+    print("  OK CHECK9: emergency exit placed when none pending (FIX-155)")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX-008: CNC overnight position bootstrap check
 # ─────────────────────────────────────────────────────────────────────────────

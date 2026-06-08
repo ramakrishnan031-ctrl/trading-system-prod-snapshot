@@ -1171,6 +1171,24 @@ class OrderReconciler:
                     self._log.debug("check9: update_order_reconciliation_status OK failed: %s", exc)
                 continue
 
+            # FIX-155b: If an exit order (SL/TGT/EOD) already completed for
+            # this trade, the position is closing — not a naked position.
+            # Prevents false positive when SL fills but order_monitor hasn't
+            # yet closed the trade in DB.
+            completed_exit = self._store.fetch_one(
+                "SELECT COUNT(*) AS n FROM orders "
+                "WHERE trade_id = ? AND leg IN ('SL', 'TGT', 'EOD') "
+                "AND status = 'COMPLETE'",
+                (trade_id,),
+            )
+            if completed_exit and int(completed_exit["n"]) > 0:
+                self._log.info(
+                    "check9: trade %s has COMPLETE exit order — "
+                    "closing in progress, skipping naked-position check",
+                    trade_id,
+                )
+                continue
+
             # Naked position: local SL record exists but broker has no matching order.
             # FIX-129 (Item 26): stamp SL_MISSING before alerting.
             try:
@@ -1192,8 +1210,23 @@ class OrderReconciler:
                     trade_id, symbol, broker_sl_id,
                 )
 
-                # FIX-148 (GAP 4): Immediate market-close for naked position.
-                emergency_result = self._emergency_market_close(trade, log)
+                # FIX-155: Guard against cascade — skip if emergency exit
+                # already pending for this trade (paper-mode timing race).
+                pending_exit = self._store.fetch_one(
+                    "SELECT COUNT(*) AS n FROM orders "
+                    "WHERE trade_id = ? AND leg = 'EOD' AND order_type = 'MARKET' "
+                    "AND status IN ('PENDING', 'SUBMITTED', 'OPEN')",
+                    (trade_id,),
+                )
+                if pending_exit and int(pending_exit["n"]) > 0:
+                    log.info(
+                        "check9: emergency exit already pending for trade_id=%s, "
+                        "skipping duplicate placement",
+                        trade_id,
+                    )
+                    emergency_result = "skipped(already_pending)"
+                else:
+                    emergency_result = self._emergency_market_close(trade, log)
 
                 try:
                     self._ks.soft_kill(
