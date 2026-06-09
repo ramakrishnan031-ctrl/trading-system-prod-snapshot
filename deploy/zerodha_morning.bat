@@ -31,9 +31,8 @@ if not exist "%TOKEN_FILE%" (
     goto :do_login
 )
 
-REM Check if token was created today (simple date check)
-for /f "tokens=1-3 delims=/" %%a in ('date /t') do set TODAY=%%c-%%a-%%b
-findstr /c:"%TODAY%" "%TOKEN_FILE%" >nul 2>&1
+REM Check if token was created today (locale-independent via Python)
+python -c "import json,sys,datetime; d=json.load(open(r'%TOKEN_FILE%')); sys.exit(0 if d.get('date')==datetime.date.today().isoformat() else 1)" 2>nul
 if errorlevel 1 (
     echo [!] Token expired (not from today). Starting fresh login...
     goto :do_login

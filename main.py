@@ -1564,6 +1564,18 @@ def _main_locked(args, config_dir: Path) -> int:
         store.close()
         return 3
 
+    # FIX-156: after FM rehydrate, paper adapter capital must reflect realized
+    # PnL from fm_ledger replay. Without this re-sync, adapter stays at the
+    # static starting capital while FM.total includes replayed PnL, causing
+    # permanent capital drift alerts every reconciler cycle.
+    if is_paper:
+        _fm_total = fund_manager.get_snapshot().total
+        broker_adapter.set_paper_capital(_fm_total)
+        _log.info(
+            "paper_capital re-synced post-rehydrate",
+            extra={"fm_total": _fm_total},
+        )
+
     ps_cfg = app_config.system.position_sizing
     position_sizer = PositionSizer(
         fund_manager=fund_manager,

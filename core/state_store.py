@@ -559,7 +559,7 @@ class StateStore:
         rows = self.fetch_all(
             """
             SELECT net_pnl FROM trades
-            WHERE status = 'CLOSED' AND net_pnl IS NOT NULL
+            WHERE status IN ('CLOSED', 'CLOSED_MANUAL') AND net_pnl IS NOT NULL
             ORDER BY exit_time DESC
             LIMIT ?
             """,
@@ -1783,7 +1783,7 @@ class StateStore:
         row = self.fetch_one(
             """SELECT COALESCE(SUM(net_pnl), 0.0) AS total
                FROM trades
-               WHERE status = 'CLOSED'
+               WHERE status IN ('CLOSED', 'CLOSED_MANUAL')
                  AND DATE(updated_at) = ?""",
             (date_iso,),
         )

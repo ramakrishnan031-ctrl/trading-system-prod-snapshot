@@ -141,7 +141,7 @@ class PerformanceAllocator:
                     SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
                     COUNT(DISTINCT DATE(exit_time)) AS trading_days
                 FROM trades
-                WHERE status = 'CLOSED'
+                WHERE status IN ('CLOSED', 'CLOSED_MANUAL')
                   AND net_pnl IS NOT NULL
                   AND DATE(created_at) >= ?
                   AND strategy IN ({placeholders})

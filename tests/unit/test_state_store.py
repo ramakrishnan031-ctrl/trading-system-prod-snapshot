@@ -691,6 +691,48 @@ def test_recent_trade_pnls(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix156_recent_trade_pnls_includes_closed_manual(tmp_path: Path) -> None:
+    """FIX-156: recent_trade_pnls includes CLOSED_MANUAL trades (orphan cleanup)."""
+    store = StateStore(tmp_path / "test.db")
+
+    insert_test_trade(store, "t1", status="CLOSED", net_pnl=500.0,
+                      exit_time="2026-04-14T10:00:00+05:30")
+    insert_test_trade(store, "t2", status="CLOSED", net_pnl=-100.0,
+                      exit_time="2026-04-14T11:00:00+05:30")
+    # Orphan cleanup trade — must be included
+    insert_test_trade(store, "t_manual", status="OPEN", net_pnl=226.50,
+                      exit_time="2026-04-14T12:00:00+05:30")
+    store.mark_trade_manually_closed("t_manual")
+
+    pnls = store.recent_trade_pnls(10)
+    assert len(pnls) == 3, f"Expected 3 (CLOSED + CLOSED_MANUAL), got {len(pnls)}"
+    assert 226.50 in pnls, f"CLOSED_MANUAL PnL 226.50 missing from {pnls}"
+    print(f"  OK FIX-156 recent_trade_pnls includes CLOSED_MANUAL: {pnls}")
+    store.close()
+
+
+def test_fix156_get_today_closed_pnl_includes_closed_manual(tmp_path: Path) -> None:
+    """FIX-156: get_today_closed_pnl includes CLOSED_MANUAL trades."""
+    from core.time_authority import now_ist
+    store = StateStore(tmp_path / "test.db")
+
+    today_iso = now_ist().date().isoformat()
+
+    insert_test_trade(store, "t1", status="CLOSED", net_pnl=1000.0,
+                      created_date=today_iso)
+    # Simulate an orphan cleanup trade with PnL
+    insert_test_trade(store, "t_orphan", status="OPEN", net_pnl=226.50,
+                      created_date=today_iso)
+    store.mark_trade_manually_closed("t_orphan")
+
+    total = store.get_today_closed_pnl(today_iso)
+    assert abs(total - 1226.50) < 0.01, (
+        f"Expected ~1226.50 (CLOSED + CLOSED_MANUAL), got {total}"
+    )
+    print(f"  OK FIX-156 get_today_closed_pnl includes CLOSED_MANUAL: {total}")
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EOD square-off query helper tests (EOD8, EOD9)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1917,6 +1959,9 @@ def run_all_tests() -> int:
         test_sector_exposure,
         test_has_active_position,
         test_recent_trade_pnls,
+        # FIX-156: CLOSED_MANUAL PnL inclusion
+        test_fix156_recent_trade_pnls_includes_closed_manual,
+        test_fix156_get_today_closed_pnl_includes_closed_manual,
         # KS9 kill_switch_state table tests
         test_kill_switch_state_table_exists,
         test_kill_switch_state_single_row_constraint,

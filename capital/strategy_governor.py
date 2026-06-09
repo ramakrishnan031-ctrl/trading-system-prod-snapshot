@@ -95,7 +95,7 @@ class StrategyGovernor:
             """SELECT COALESCE(SUM(gross_pnl), 0.0) AS pnl
                FROM trades
                WHERE strategy = ?
-                 AND status = 'CLOSED'
+                 AND status IN ('CLOSED', 'CLOSED_MANUAL')
                  AND updated_at LIKE ?""",
             (strategy_name, f"{today}%"),
         )
@@ -114,7 +114,7 @@ class StrategyGovernor:
                           SUM(gross_pnl)            AS daily_pnl
                    FROM trades
                    WHERE strategy = ?
-                     AND status = 'CLOSED'
+                     AND status IN ('CLOSED', 'CLOSED_MANUAL')
                      AND updated_at >= ?
                      AND SUBSTR(updated_at, 1, 10) < ?
                    GROUP BY trade_date

@@ -2072,6 +2072,41 @@ def test_fix072_broker_api_failure_propagates() -> None:
     print("  OK FIX-072: broker API failure propagates as BrokerError")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-156: paper capital re-sync after FM rehydrate
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_fix156_paper_capital_resync_after_pnl() -> None:
+    """FIX-156: after realized PnL, set_paper_capital re-syncs adapter to FM total."""
+    adapter, _, _, osm, _ = _make_adapter(paper=True, paper_capital=0.0)
+    starting = 1_000_000.0
+    adapter.set_paper_capital(starting)
+    assert adapter.get_margins().net == starting
+
+    fm_total_after_rehydrate = 1_003_499.19
+    adapter.set_paper_capital(fm_total_after_rehydrate)
+    post = adapter.get_margins()
+    assert post.net == fm_total_after_rehydrate, (
+        f"Expected {fm_total_after_rehydrate}, got {post.net}"
+    )
+    assert post.available == fm_total_after_rehydrate
+    print("  OK FIX-156 paper_capital re-synced to FM total after rehydrate")
+
+
+def test_fix156_main_resync_regression_guard() -> None:
+    """FIX-156 regression guard: main.py must re-sync paper_capital after rehydrate."""
+    from pathlib import Path
+    main_src = Path(__file__).parent.parent.parent / "main.py"
+    text = main_src.read_text(encoding="utf-8")
+    assert "re-synced post-rehydrate" in text or "post-rehydrate" in text, (
+        "FIX-156 REGRESSION: main.py must re-sync paper_capital after "
+        "fund_manager.rehydrate_from_open_trades(). Look for the "
+        "set_paper_capital(fm_total) block after rehydrate."
+    )
+    print("  OK FIX-156 main.py contains post-rehydrate paper_capital re-sync")
+
+
 def run_all_tests() -> int:
     tests = [
         test_place_order_success_returns_placed_order,
@@ -2133,6 +2168,9 @@ def run_all_tests() -> int:
         test_fix072_invalidate_margin_cache,
         test_fix072_paper_mode_raises_error,
         test_fix072_broker_api_failure_propagates,
+        # FIX-156: paper capital re-sync after FM rehydrate
+        test_fix156_paper_capital_resync_after_pnl,
+        test_fix156_main_resync_regression_guard,
     ]
 
     print("=" * 70)
