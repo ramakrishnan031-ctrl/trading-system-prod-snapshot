@@ -2107,6 +2107,75 @@ def test_fix156_main_resync_regression_guard() -> None:
     print("  OK FIX-156 main.py contains post-rehydrate paper_capital re-sync")
 
 
+def test_fix157_paper_capital_updates_on_external_position_closed() -> None:
+    """FIX-157: When reconciler closes a trade as CLOSED_MANUAL, the
+    PositionClosed event must update _paper_capital so get_margins()
+    reflects the realized PnL. Only reconciler-sourced events should
+    update; order_placer events are already handled by _synth_fill."""
+    from core.events import EventBus, PositionClosed
+
+    bus = EventBus()
+    adapter, _, _, _, _ = _make_adapter(paper=True, paper_capital=100_000.0, bus=bus)
+
+    initial_margins = adapter.get_margins()
+    assert initial_margins.net == 100_000.0
+
+    # Simulate reconciler closing a trade with Rs 500 profit
+    bus.publish(PositionClosed(
+        source_module="order_reconciler",
+        symbol="ABSLAMC",
+        trade_id="trd_test",
+        signal_id="sig_test",
+        exit_price=250.0,
+        realized_pnl=500.0,
+    ))
+
+    updated_margins = adapter.get_margins()
+    assert updated_margins.net == 100_500.0, (
+        f"Expected 100500.0 after +500 PnL, got {updated_margins.net}"
+    )
+
+    # Verify order_placer events are NOT double-counted
+    bus.publish(PositionClosed(
+        source_module="order_placer",
+        symbol="INFY",
+        trade_id="trd_test2",
+        signal_id="sig_test2",
+        exit_price=1500.0,
+        realized_pnl=300.0,
+    ))
+
+    unchanged_margins = adapter.get_margins()
+    assert unchanged_margins.net == 100_500.0, (
+        f"order_placer PositionClosed should NOT update _paper_capital; "
+        f"got {unchanged_margins.net}"
+    )
+    print("  OK FIX-157: paper_capital updates on external PositionClosed (reconciler)")
+
+
+def test_fix157_paper_capital_loss_on_external_close() -> None:
+    """FIX-157: negative PnL from reconciler close correctly decreases capital."""
+    from core.events import EventBus, PositionClosed
+
+    bus = EventBus()
+    adapter, _, _, _, _ = _make_adapter(paper=True, paper_capital=100_000.0, bus=bus)
+
+    bus.publish(PositionClosed(
+        source_module="order_reconciler",
+        symbol="SBIN",
+        trade_id="trd_loss",
+        signal_id="sig_loss",
+        exit_price=950.0,
+        realized_pnl=-1200.0,
+    ))
+
+    margins = adapter.get_margins()
+    assert margins.net == 98_800.0, (
+        f"Expected 98800.0 after -1200 PnL, got {margins.net}"
+    )
+    print("  OK FIX-157: paper_capital decreases on external close loss")
+
+
 def run_all_tests() -> int:
     tests = [
         test_place_order_success_returns_placed_order,
@@ -2171,6 +2240,9 @@ def run_all_tests() -> int:
         # FIX-156: paper capital re-sync after FM rehydrate
         test_fix156_paper_capital_resync_after_pnl,
         test_fix156_main_resync_regression_guard,
+        # FIX-157: paper capital updates on external PositionClosed
+        test_fix157_paper_capital_updates_on_external_position_closed,
+        test_fix157_paper_capital_loss_on_external_close,
     ]
 
     print("=" * 70)

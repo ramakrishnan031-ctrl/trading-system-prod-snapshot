@@ -1189,6 +1189,22 @@ class OrderReconciler:
                 )
                 continue
 
+            # FIX-157: Re-check current trade status. Earlier checks in this
+            # cycle (e.g., CHECK 1) may have closed the trade as CLOSED_MANUAL.
+            # CLOSED_MANUAL closes directly without completing SL/TGT orders,
+            # so FIX-155b's COMPLETE-exit check above misses them.
+            current_trade = self._store.fetch_one(
+                "SELECT status FROM trades WHERE trade_id = ?",
+                (trade_id,),
+            )
+            if current_trade and current_trade["status"] not in ("OPEN", "PARTIAL"):
+                self._log.info(
+                    "check9: trade %s status=%s (no longer open) — "
+                    "skipping naked-position check",
+                    trade_id, current_trade["status"],
+                )
+                continue
+
             # Naked position: local SL record exists but broker has no matching order.
             # FIX-129 (Item 26): stamp SL_MISSING before alerting.
             try:

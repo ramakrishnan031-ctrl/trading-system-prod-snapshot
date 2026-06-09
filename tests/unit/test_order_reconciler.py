@@ -1965,6 +1965,47 @@ def test_check9_places_emergency_exit_when_none_pending(tmp_path: Path) -> None:
     print("  OK CHECK9: emergency exit placed when none pending (FIX-155)")
 
 
+def test_check9_skips_closed_manual_trade(tmp_path: Path) -> None:
+    """FIX-157: CHECK9 must skip trades that were closed as CLOSED_MANUAL by
+    an earlier check (CHECK 1) in the same reconciliation cycle. CLOSED_MANUAL
+    trades close directly without completing SL/TGT orders, so the FIX-155b
+    COMPLETE-exit check alone doesn't catch them."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_manual", symbol="ABSLAMC", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_MANUAL", "t_manual", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=200.0)
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])
+
+    adapter = MagicMock()
+    # Broker has NO position for ABSLAMC → CHECK 1 will close as CLOSED_MANUAL
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(
+        store,
+        adapter=adapter,
+        kill_switch=kill_switch,
+        broker_orders_fn=broker_orders_fn,
+    )
+    actions = rec.reconcile_once()
+
+    # CHECK 1 should have closed it as CLOSED_MANUAL
+    manual = [a for a in actions if a.check_name == "MANUAL_CLOSE"]
+    assert len(manual) == 1, f"Expected 1 MANUAL_CLOSE, got {len(manual)}"
+
+    # CHECK 9 should NOT fire — trade is now CLOSED_MANUAL
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 0, (
+        f"CHECK9 should skip CLOSED_MANUAL trade; got {len(missing)} MISSING_EXITS"
+    )
+    kill_switch.soft_kill.assert_not_called()
+    adapter.place_order.assert_not_called()
+    store.close()
+    print("  OK CHECK9: skips CLOSED_MANUAL trade (FIX-157)")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX-008: CNC overnight position bootstrap check
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2436,6 +2477,16 @@ def run_all_tests() -> int:
         # FIX-B: Orphan auto-close after 3 cycles
         test_fixb_orphan_auto_close_after_3_cycles,
         test_fixb_orphan_counter_reset_when_order_found,
+        # CHECK 9: MISSING_EXITS
+        test_check9_missing_exits_fires_soft_kill,
+        test_check9_skipped_when_sl_present_on_broker,
+        test_check9_skipped_when_no_broker_orders_fn,
+        test_check9_skips_when_exit_order_already_complete,
+        test_check9_still_fires_for_genuine_naked_position,
+        test_check9_no_cascade_when_emergency_exit_already_pending,
+        test_check9_places_emergency_exit_when_none_pending,
+        # FIX-157: CHECK9 skips CLOSED_MANUAL
+        test_check9_skips_closed_manual_trade,
     ]
 
     print("=" * 70)

@@ -114,7 +114,7 @@ from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
 from broker.slippage_engine import SlippageEngine
 from core.config_loader import RateLimitBackoffConfig
-from core.events import EventBus, OrderFilled
+from core.events import EventBus, OrderFilled, PositionClosed
 from core.exceptions import (
     BrokerAuthError,
     BrokerError,
@@ -388,6 +388,26 @@ class ZerodhaAdapter:
                 "zerodha_adapter paper_mode with bus=None -- OrderFilled "
                 "will NOT be published (ZA16a synth degrades to OSM-only)"
             )
+
+        # FIX-157: subscribe to PositionClosed so _paper_capital reflects
+        # trades closed externally (e.g., reconciler CLOSED_MANUAL). Normal
+        # fills are already handled by _synth_fill; those arrive as
+        # source_module="order_placer" and are skipped to avoid double-count.
+        if self._paper and self._bus is not None:
+            self._bus.subscribe(PositionClosed, self._on_external_position_closed)
+
+    def _on_external_position_closed(self, event: PositionClosed) -> None:
+        if event.source_module == "order_placer":
+            return
+        with self._paper_fills_lock:
+            self._paper_capital += event.realized_pnl
+            self._paper_positions.pop(event.symbol, None)
+        self._log.info(
+            "paper_capital updated via external close",
+            extra={"symbol": event.symbol, "realized_pnl": event.realized_pnl,
+                   "source": event.source_module,
+                   "new_capital": self._paper_capital},
+        )
 
     # ── public methods ────────────────────────────────────────────────────────
 
