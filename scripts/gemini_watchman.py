@@ -24,10 +24,8 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import signal
-import subprocess
 import sys
 import time
 from datetime import datetime, time as dtime
@@ -87,8 +85,7 @@ Write a 10-line EOD summary covering:
 Be specific with symbols and timestamps.
 No code suggestions. Observation and analysis only."""
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
-_GEMINI_TIMEOUT = 60
+from scripts.agy_runner import run_watchman as _agy_watchman
 
 _shutdown = False
 
@@ -158,29 +155,11 @@ def _tail_new_lines(
 
 
 def _call_agy(prompt: str, data: str, log) -> str | None:
-    """Pipe data to agy CLI with a prompt and return response."""
-    try:
-        result = subprocess.run(
-            [_GEMINI_BIN, "--print", prompt],
-            input=data,
-            capture_output=True,
-            text=True,
-            timeout=_GEMINI_TIMEOUT,
-        )
-        if result.returncode != 0:
-            log.warning("gemini_watchman: agy CLI returned %d: %s",
-                        result.returncode, result.stderr[:200])
-            return None
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        log.warning("gemini_watchman: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
-        return None
-    except FileNotFoundError:
-        log.error("gemini_watchman: agy binary not found at '%s'", _GEMINI_BIN)
-        return None
-    except Exception as exc:
-        log.warning("gemini_watchman: agy CLI error: %s", exc)
-        return None
+    """Pipe data to agy CLI with cascade model selection."""
+    result = _agy_watchman(prompt, input_data=data)
+    if result is None:
+        log.warning("gemini_watchman: all models unavailable — watchman skipped")
+    return result
 
 
 def _append_to_watchman_log(output_dir: Path, date_iso: str, timestamp: str,

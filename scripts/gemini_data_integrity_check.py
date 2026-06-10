@@ -22,10 +22,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import sqlite3
-import subprocess
 import sys
 from pathlib import Path
 
@@ -41,8 +39,7 @@ TOKEN_PATH = _ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR = _ROOT / "reports" / "integrity"
 API_KEY = "pvahsvuu3xjsefc7"
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
-_GEMINI_TIMEOUT = 120
+from scripts.agy_runner import run_data_integrity as _agy_integrity
 
 _OHLC_THRESHOLD_PCT = 0.05
 _VOLUME_THRESHOLD_PCT = 5.0
@@ -216,28 +213,10 @@ def _compare_candles(system: list[dict], zerodha: list[dict]) -> dict:
 
 
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
-    try:
-        result = subprocess.run(
-            [_GEMINI_BIN, "--print", prompt],
-            input=data,
-            capture_output=True,
-            text=True,
-            timeout=_GEMINI_TIMEOUT,
-        )
-        if result.returncode != 0:
-            log.error("integrity_check: agy CLI returned %d: %s",
-                      result.returncode, result.stderr[:300])
-            return None
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        log.error("integrity_check: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
-        return None
-    except FileNotFoundError:
-        log.error("integrity_check: agy binary not found at '%s'", _GEMINI_BIN)
-        return None
-    except Exception as exc:
-        log.error("integrity_check: Gemini CLI error: %s", exc)
-        return None
+    result = _agy_integrity(prompt, input_data=data)
+    if result is None:
+        log.error("integrity_check: all models unavailable")
+    return result
 
 
 def _send_telegram(message: str, log) -> None:

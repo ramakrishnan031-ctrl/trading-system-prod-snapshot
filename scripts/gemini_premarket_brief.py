@@ -21,9 +21,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import os
 import sqlite3
-import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -39,8 +37,7 @@ DB_PATH = _ROOT / "data_store" / "trading_system.db"
 EOD_REVIEW_DIR = _ROOT / "reports" / "log_review"
 BRIEFING_DIR = _ROOT / "reports" / "briefing"
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
-_GEMINI_TIMEOUT = 90
+from scripts.agy_runner import run_premarket_brief as _agy_premarket
 
 _BRIEFING_PROMPT = """\
 You are a pre-market briefer for an automated intraday trading system.
@@ -159,28 +156,10 @@ def _get_yesterday_summary(db_path: str, yesterday_iso: str) -> dict:
 
 
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
-    try:
-        result = subprocess.run(
-            [_GEMINI_BIN, "--print", prompt],
-            input=data,
-            capture_output=True,
-            text=True,
-            timeout=_GEMINI_TIMEOUT,
-        )
-        if result.returncode != 0:
-            log.error("premarket_brief: agy CLI returned %d: %s",
-                      result.returncode, result.stderr[:300])
-            return None
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        log.error("premarket_brief: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
-        return None
-    except FileNotFoundError:
-        log.error("premarket_brief: agy binary not found at '%s'", _GEMINI_BIN)
-        return None
-    except Exception as exc:
-        log.error("premarket_brief: Gemini CLI error: %s", exc)
-        return None
+    result = _agy_premarket(prompt, input_data=data)
+    if result is None:
+        log.error("premarket_brief: all models unavailable")
+    return result
 
 
 def _send_telegram(briefing: str, date_iso: str, log) -> None:

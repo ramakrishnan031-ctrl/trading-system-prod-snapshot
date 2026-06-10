@@ -20,9 +20,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -33,8 +31,7 @@ if str(_ROOT) not in sys.path:
 from core.logger import get_logger
 from core.time_authority import today_ist
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
-_GEMINI_TIMEOUT = 120
+from scripts.agy_runner import run_log_review as _agy_log_review
 
 _EOD_PROMPT = """\
 You are a senior trading ops reviewer. Today's complete log + watchman notes attached.
@@ -125,29 +122,11 @@ def _load_watchman_notes(watchman_dir: Path, date_iso: str) -> str:
 
 
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
-    """Call Gemini CLI: -p for the prompt, stdin for the data."""
-    try:
-        result = subprocess.run(
-            [_GEMINI_BIN, "--print", prompt],
-            input=data,
-            capture_output=True,
-            text=True,
-            timeout=_GEMINI_TIMEOUT,
-        )
-        if result.returncode != 0:
-            log.error("gemini_log_review: CLI returned %d: %s",
-                      result.returncode, result.stderr[:300])
-            return None
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        log.error("gemini_log_review: CLI timed out after %ds", _GEMINI_TIMEOUT)
-        return None
-    except FileNotFoundError:
-        log.error("gemini_log_review: agy binary not found at '%s'", _GEMINI_BIN)
-        return None
-    except Exception as exc:
-        log.error("gemini_log_review: CLI error: %s", exc)
-        return None
+    """Call agy with cascade model selection."""
+    result = _agy_log_review(prompt, input_data=data)
+    if result is None:
+        log.error("gemini_log_review: all models unavailable")
+    return result
 
 
 def run_review(

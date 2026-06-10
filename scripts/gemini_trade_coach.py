@@ -21,9 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sqlite3
-import subprocess
 import sys
 from pathlib import Path
 
@@ -37,8 +35,7 @@ from core.time_authority import now_ist, today_ist
 DB_PATH = _ROOT / "data_store" / "trading_system.db"
 OUTPUT_DIR = _ROOT / "reports" / "coach"
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
-_GEMINI_TIMEOUT = 120
+from scripts.agy_runner import run_trade_coach as _agy_trade_coach
 
 _COACH_PROMPT = """\
 You are a trading coach reviewing today's trades.
@@ -174,28 +171,10 @@ def _build_data(trades: list[dict], rejected: list[dict],
 
 
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
-    try:
-        result = subprocess.run(
-            [_GEMINI_BIN, "--print", prompt],
-            input=data,
-            capture_output=True,
-            text=True,
-            timeout=_GEMINI_TIMEOUT,
-        )
-        if result.returncode != 0:
-            log.error("trade_coach: agy CLI returned %d: %s",
-                      result.returncode, result.stderr[:300])
-            return None
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        log.error("trade_coach: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
-        return None
-    except FileNotFoundError:
-        log.error("trade_coach: agy binary not found at '%s'", _GEMINI_BIN)
-        return None
-    except Exception as exc:
-        log.error("trade_coach: Gemini CLI error: %s", exc)
-        return None
+    result = _agy_trade_coach(prompt, input_data=data)
+    if result is None:
+        log.error("trade_coach: all models unavailable")
+    return result
 
 
 def _extract_lessons(coaching: str) -> str:

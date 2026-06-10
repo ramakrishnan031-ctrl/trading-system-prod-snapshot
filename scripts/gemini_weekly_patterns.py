@@ -20,8 +20,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import os
-import subprocess
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -38,8 +36,7 @@ EOD_REVIEW_DIR = _ROOT / "reports" / "log_review"
 DAILY_REPORT_DIR = _ROOT / "reports" / "output"
 OUTPUT_DIR = _ROOT / "reports" / "weekly_patterns"
 
-_GEMINI_BIN = os.environ.get("GEMINI_BIN", "agy")
-_GEMINI_TIMEOUT = 180
+from scripts.agy_runner import run_weekly_patterns as _agy_weekly
 
 _WEEKLY_PROMPT = """\
 You are a senior trading ops analyst. Here are 5 days of operational data.
@@ -116,28 +113,10 @@ def _gather_data(days: list[date], log) -> str:
 
 
 def _call_gemini_cli(prompt: str, data: str, log) -> str | None:
-    try:
-        result = subprocess.run(
-            [_GEMINI_BIN, "--print", prompt],
-            input=data,
-            capture_output=True,
-            text=True,
-            timeout=_GEMINI_TIMEOUT,
-        )
-        if result.returncode != 0:
-            log.error("weekly_patterns: agy CLI returned %d: %s",
-                      result.returncode, result.stderr[:300])
-            return None
-        return result.stdout.strip()
-    except subprocess.TimeoutExpired:
-        log.error("weekly_patterns: agy CLI timed out after %ds", _GEMINI_TIMEOUT)
-        return None
-    except FileNotFoundError:
-        log.error("weekly_patterns: agy binary not found at '%s'", _GEMINI_BIN)
-        return None
-    except Exception as exc:
-        log.error("weekly_patterns: Gemini CLI error: %s", exc)
-        return None
+    result = _agy_weekly(prompt, input_data=data)
+    if result is None:
+        log.error("weekly_patterns: all models unavailable")
+    return result
 
 
 def _send_telegram(message: str, log) -> None:
