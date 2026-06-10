@@ -85,6 +85,26 @@ class TestRunAgy:
         assert call_kwargs.kwargs.get("input") == "log data here" or \
                call_kwargs[1].get("input") == "log data here"
 
+    @patch("scripts.agy_runner.get_agy_bin", return_value="/usr/bin/agy")
+    @patch("scripts.agy_runner.subprocess.run")
+    def test_skip_permissions_flag_present_by_default(self, mock_run, mock_bin):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="ok\n", stderr=""
+        )
+        run_agy("prompt", "Model")
+        cmd = mock_run.call_args[0][0]
+        assert "--dangerously-skip-permissions" in cmd
+
+    @patch("scripts.agy_runner.get_agy_bin", return_value="/usr/bin/agy")
+    @patch("scripts.agy_runner.subprocess.run")
+    def test_skip_permissions_flag_absent_when_disabled(self, mock_run, mock_bin):
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="ok\n", stderr=""
+        )
+        run_agy("prompt", "Model", skip_permissions=False)
+        cmd = mock_run.call_args[0][0]
+        assert "--dangerously-skip-permissions" not in cmd
+
 
 class TestRunWithCascade:
     @patch("scripts.agy_runner.run_agy")

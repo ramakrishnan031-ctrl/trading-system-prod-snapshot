@@ -89,9 +89,12 @@ def run_agy(
     timeout_seconds: int = 120,
     add_dirs: Optional[list] = None,
     input_data: Optional[str] = None,
+    skip_permissions: bool = True,
 ) -> Optional[str]:
     agy_bin = get_agy_bin()
     cmd = [agy_bin, "--model", model, "--print", prompt]
+    if skip_permissions:
+        cmd.insert(2, "--dangerously-skip-permissions")
 
     if add_dirs:
         for d in add_dirs:
