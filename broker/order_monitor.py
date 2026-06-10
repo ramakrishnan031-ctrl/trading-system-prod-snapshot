@@ -1275,6 +1275,12 @@ class OrderMonitor:
                 except InvalidTransitionError:
                     pass  # fall through to re-raise path below
 
+            # FIX-158: Same-state idempotent transition (e.g., OPEN→OPEN).
+            # Already in target state — no-op. Suppresses the 10GB/day log
+            # bloat from polling orders that remain OPEN across cycles.
+            if from_state is not None and from_state == to_state_exc:
+                return False
+
             self._log.debug(
                 "order_monitor.transition_skipped_non_terminal",
                 extra={"internal_order_id": internal_order_id,

@@ -220,14 +220,12 @@ def _send_telegram_summary(review_text: str, date_iso: str, log) -> None:
     """Best-effort Telegram summary of the AI review."""
     try:
         from alerts.telegram_notifier import TelegramNotifier
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
-        if not bot_token or not chat_id:
+        notifier = TelegramNotifier.from_env(logger=log)
+        if not notifier:
             return
         summary = review_text[:500]
         if len(review_text) > 500:
             summary += "\n..."
-        notifier = TelegramNotifier(bot_token=bot_token, logger=log)
         notifier.send(
             severity="INFO",
             title=f"AI EOD Review {date_iso}",

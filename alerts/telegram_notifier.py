@@ -186,6 +186,71 @@ class TelegramNotifier:
         self._failed_log.parent.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------------------------------
+    # Factory methods (FIX-158c)
+    # --------------------------------------------------------------------------
+
+    @classmethod
+    def from_env(cls, logger: logging.Logger | None = None) -> "TelegramNotifier | None":
+        """
+        Build a TelegramNotifier from environment variables.
+
+        Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_PRIMARY.
+        Returns None if either is missing (cron scripts use this pattern).
+        """
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
+        if not bot_token or not chat_id:
+            return None
+        return cls(
+            bot_token=bot_token,
+            chat_ids=[chat_id],
+            logger=logger or logging.getLogger(__name__),
+        )
+
+    @classmethod
+    def from_config(
+        cls,
+        config_dir: str | Path = "config",
+        logger: logging.Logger | None = None,
+    ) -> "TelegramNotifier | None":
+        """
+        Build a TelegramNotifier from env vars (config_dir accepted for
+        API compatibility but env vars are the actual source of truth).
+        """
+        return cls.from_env(logger=logger)
+
+    # --------------------------------------------------------------------------
+    # Convenience methods (FIX-158c)
+    # --------------------------------------------------------------------------
+
+    def send_alert(self, message: str, level: str = "WARNING") -> SendResult:
+        """Convenience: send a simple text alert at the given severity."""
+        return self.send(
+            severity=level.upper(),
+            title=f"[{level.upper()}] Alert",
+            body=message,
+            source_module="script",
+        )
+
+    def send_critical(self, message: str) -> SendResult:
+        """Convenience: send a CRITICAL alert."""
+        return self.send(
+            severity="CRITICAL",
+            title="CRITICAL Alert",
+            body=message,
+            source_module="script",
+        )
+
+    def send_info(self, message: str) -> SendResult:
+        """Convenience: send an INFO alert."""
+        return self.send(
+            severity="INFO",
+            title="Info",
+            body=message,
+            source_module="script",
+        )
+
+    # --------------------------------------------------------------------------
     # Public API
     # --------------------------------------------------------------------------
 

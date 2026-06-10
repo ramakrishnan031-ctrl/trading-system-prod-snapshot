@@ -262,11 +262,9 @@ def _send_critical_alert(response: str, date_iso: str, log) -> None:
 
     try:
         from alerts.telegram_notifier import TelegramNotifier
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
-        if not bot_token or not chat_id:
+        notifier = TelegramNotifier.from_env(logger=log)
+        if not notifier:
             return
-        notifier = TelegramNotifier(bot_token=bot_token, logger=log)
         summary = response[:400]
         notifier.send(
             severity="ERROR",

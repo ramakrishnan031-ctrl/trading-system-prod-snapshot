@@ -583,6 +583,66 @@ class TestBl14SendSignatureLocked(unittest.TestCase):
 
 
 # ==============================================================================
+# FIX-158c: Factory methods + convenience methods
+# ==============================================================================
+
+class TestFactoryMethods(unittest.TestCase):
+    """FIX-158c: from_env(), from_config(), send_alert/send_critical/send_info."""
+
+    def test_from_env_returns_notifier_when_vars_set(self):
+        env = {"TELEGRAM_BOT_TOKEN": "tok123", "TELEGRAM_CHANNEL_PRIMARY": "-100999"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            n = TelegramNotifier.from_env()
+        self.assertIsNotNone(n)
+        self.assertEqual(n._chat_ids, ["-100999"])
+
+    def test_from_env_returns_none_when_token_missing(self):
+        env = {"TELEGRAM_CHANNEL_PRIMARY": "-100999"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            n = TelegramNotifier.from_env()
+        self.assertIsNone(n)
+
+    def test_from_env_returns_none_when_chat_id_missing(self):
+        env = {"TELEGRAM_BOT_TOKEN": "tok123"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            n = TelegramNotifier.from_env()
+        self.assertIsNone(n)
+
+    def test_from_config_delegates_to_from_env(self):
+        env = {"TELEGRAM_BOT_TOKEN": "tok123", "TELEGRAM_CHANNEL_PRIMARY": "-100999"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            n = TelegramNotifier.from_config("/some/config/dir")
+        self.assertIsNotNone(n)
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_send_alert_convenience(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            n = _make_notifier(Path(tmpdir))
+            result = n.send_alert("disk full", level="WARNING")
+        self.assertTrue(result.success)
+        self.assertEqual(result.tier, "WARNING")
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_send_critical_convenience(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            n = _make_notifier(Path(tmpdir))
+            result = n.send_critical("capital breach")
+        self.assertTrue(result.success)
+        self.assertEqual(result.tier, "CRITICAL")
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_send_info_convenience(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            n = _make_notifier(Path(tmpdir))
+            result = n.send_info("EOD verify ok")
+        self.assertTrue(result.success)
+        self.assertEqual(result.tier, "INFO")
+
+
+# ==============================================================================
 # Standalone runner
 # ==============================================================================
 
@@ -636,6 +696,14 @@ def run_all_tests() -> int:
         # BL-14 signature lock
         TestBl14SendSignatureLocked("test_send_signature_parameter_names_locked"),
         TestBl14SendSignatureLocked("test_send_context_has_default_none"),
+        # FIX-158c factory + convenience methods
+        TestFactoryMethods("test_from_env_returns_notifier_when_vars_set"),
+        TestFactoryMethods("test_from_env_returns_none_when_token_missing"),
+        TestFactoryMethods("test_from_env_returns_none_when_chat_id_missing"),
+        TestFactoryMethods("test_from_config_delegates_to_from_env"),
+        TestFactoryMethods("test_send_alert_convenience"),
+        TestFactoryMethods("test_send_critical_convenience"),
+        TestFactoryMethods("test_send_info_convenience"),
     ]
 
     suite = unittest.TestSuite(tests)

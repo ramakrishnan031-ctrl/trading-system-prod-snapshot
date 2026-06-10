@@ -158,13 +158,11 @@ def _send_telegram_alert(level: str, result: dict, log: logging.Logger) -> None:
     """Best-effort Telegram alert. Failures are logged, not raised."""
     try:
         from alerts.telegram_notifier import TelegramNotifier
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
-        if not bot_token or not chat_id:
+        notifier = TelegramNotifier.from_env(logger=log)
+        if not notifier:
             log.debug("disk_monitor: Telegram env vars not set; skipping alert")
             return
 
-        notifier = TelegramNotifier(bot_token=bot_token, logger=log)
         icon = "!!" if level == "CRITICAL" else "!"
         msg = (
             f"{icon} DISK {level}\n"
@@ -173,7 +171,12 @@ def _send_telegram_alert(level: str, result: dict, log: logging.Logger) -> None:
         )
         if result["files_deleted"] > 0:
             msg += f"\nAuto-cleaned: {result['files_deleted']} files ({result['bytes_freed'] // 1024}KB freed)"
-        notifier.send(chat_id=chat_id, message=msg)
+        notifier.send(
+            severity=level,
+            title=f"Disk {level}",
+            body=msg,
+            source_module="disk_monitor",
+        )
     except Exception as exc:
         log.warning("disk_monitor: Telegram alert failed: %s", exc)
 

@@ -1837,8 +1837,9 @@ def main(argv=None) -> int:
         if args.notify:
             try:
                 from alerts.telegram_notifier import TelegramNotifier
-                notifier = TelegramNotifier()
-                notifier.send_message(f"📊 Daily report ready: {output_path.name}")
+                notifier = TelegramNotifier.from_env()
+                if notifier:
+                    notifier.send_info(f"Daily report ready: {output_path.name}")
             except Exception as e:
                 log.warning("Telegram notification failed: %s", e)
 

@@ -287,11 +287,9 @@ def _check_drift(db_path: str, date_iso: str, summary: dict, log) -> None:
 def _send_telegram(message: str, log) -> None:
     try:
         from alerts.telegram_notifier import TelegramNotifier
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
-        if not bot_token or not chat_id:
+        notifier = TelegramNotifier.from_env(logger=log)
+        if not notifier:
             return
-        notifier = TelegramNotifier(bot_token=bot_token, logger=log)
         notifier.send(
             severity="WARNING",
             title="System Metrics Drift",

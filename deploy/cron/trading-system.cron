@@ -6,7 +6,10 @@
 # This file is canonical. Any live-crontab divergence should be audited
 # against this committed copy.
 #
-# Last synced with VM: 2026-05-31
+# FIX-158d: Every Python entry sources .env so TELEGRAM_BOT_TOKEN,
+# GEMINI_API_KEY, and other env vars are available in cron shell.
+#
+# Last synced with VM: 2026-06-10
 
 # ── 00:00 IST | daily log cleanup (delete logs >30 days) ────────────────────
 0 0 * * * find /home/ubuntu/systems/trading-system/logs -name '*.log' -mtime +30 -delete
@@ -21,73 +24,73 @@
 0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
 
 # ── 08:00 IST Mon-Fri | automated token refresh via TOTP ────────────────────
-0 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
+0 8 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
 
 # ── 08:30 IST Mon-Fri | pre-market health check (FIX-146) ───────────────────
-30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/premarket_healthcheck.py >> logs/premarket-healthcheck.log 2>&1
+30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/premarket_healthcheck.py >> logs/premarket-healthcheck.log 2>&1
 
 # ── 08:35 IST Mon-Fri | fetch F&O ban list from NSE ─────────────────────────
-35 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1
+35 8 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1
 
 # ── 08:55 IST Mon-Fri | pre-market Gemini briefing (FIX-150) ────────────────
-55 8 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_premarket_brief.py >> logs/cron-premarket-brief.log 2>&1
+55 8 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_premarket_brief.py >> logs/cron-premarket-brief.log 2>&1
 
 # ── Every 5 min 09:00-15:59 Mon-Fri | system metrics capture (FIX-150) ──────
-*/5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1
-
-# ── 15:50 IST Mon-Fri | EOD cleanup (stale signals, orders, fingerprints) ────
-50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_cleanup.py >> logs/cron-eod-cleanup.log 2>&1
-
-# ── 15:55 IST Mon-Fri | EOD verification (positions closed, orders settled) ──
-55 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_verify.py >> logs/cron-eod-verify.log 2>&1
-
-# ── 15:45 IST Mon-Fri | position reconciliation (broker vs system) ──────────
-45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py >> logs/cron-reconcile-positions.log 2>&1
-
-# ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
-0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
+*/5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1
 
 # ── 15:40 IST Mon-Fri | fetch 1-min candle OHLCV for traded symbols ──────────
-40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1
+40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1
+
+# ── 15:45 IST Mon-Fri | position reconciliation (broker vs system) ──────────
+45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py >> logs/cron-reconcile-positions.log 2>&1
+
+# ── 15:50 IST Mon-Fri | EOD cleanup (stale signals, orders, fingerprints) ────
+50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_cleanup.py >> logs/cron-eod-cleanup.log 2>&1
+
+# ── 15:55 IST Mon-Fri | EOD verification (positions closed, orders settled) ──
+55 15 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_verify.py >> logs/cron-eod-verify.log 2>&1
+
+# ── 16:00 IST Mon-Fri | daily EOD review report (xlsx + md) ─────────────────
+0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
 
 # ── 16:00 IST Mon-Fri | WAL checkpoint to prevent unbounded growth ──────────
-0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/wal_checkpoint.py >> logs/wal_checkpoint.log 2>&1
+0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && /home/ubuntu/systems/venv/bin/python scripts/wal_checkpoint.py >> logs/wal_checkpoint.log 2>&1
 
 # ── 16:01 IST Mon-Fri | generate screened stocks CSV for candle analysis ─────
-1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
+1 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && /home/ubuntu/systems/venv/bin/python scripts/generate_screened_stocks_csv.py >> logs/cron-screened-stocks.log 2>&1
 
 # ── 16:05 IST Mon-Fri | generate daily trading report (excel) ───────────────
-5 16 * * 1-5 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python -m reports.daily_report >> logs/daily_report.log 2>&1
+5 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && /home/ubuntu/systems/venv/bin/python -m reports.daily_report >> logs/daily_report.log 2>&1
 
 # ── 16:10 IST Mon-Fri | trade journal entry ─────────────────────────────────
-10 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/trade_journal.py >> logs/trade_journal.log 2>&1
+10 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/trade_journal.py >> logs/trade_journal.log 2>&1
 
 # ── 16:15 IST Mon-Fri | strategy metrics (Sharpe, win rate, demotion) ────────
-15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1
+15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1
 
 # ── 16:16 IST Mon-Fri | system metrics daily summary (FIX-150) ───────────────
-16 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py --summarize >> logs/cron-metrics.log 2>&1
+16 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py --summarize >> logs/cron-metrics.log 2>&1
 
 # ── 16:20 IST Mon-Fri | AI log review via Gemini (FIX-142) ──────────────────
-20 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_log_review.py >> logs/cron-gemini-review.log 2>&1
+20 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_log_review.py >> logs/cron-gemini-review.log 2>&1
 
 # ── 16:40 IST Mon-Fri | trade quality coaching via Gemini (FIX-151) ──────────
-40 16 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_trade_coach.py >> logs/cron-trade-coach.log 2>&1
+40 16 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_trade_coach.py >> logs/cron-trade-coach.log 2>&1
 
 # ── 17:00 IST Mon-Fri | candle data integrity check (FIX-150) ───────────────
-0 17 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_data_integrity_check.py >> logs/cron-data-integrity.log 2>&1
+0 17 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_data_integrity_check.py >> logs/cron-data-integrity.log 2>&1
 
 # ── 18:00 IST Sunday | weekly instrument master refresh ──────────────────────
-0 18 * * 0 cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1
+0 18 * * 0 cd /home/ubuntu/systems/trading-system && . .env && /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1
 
 # ── 18:00 IST Sunday | weekly pattern detection via Gemini (FIX-151) ─────────
-0 18 * * 0 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_weekly_patterns.py >> logs/cron-weekly-patterns.log 2>&1
+0 18 * * 0 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_weekly_patterns.py >> logs/cron-weekly-patterns.log 2>&1
 
 # ── 18:00 IST Mon-Fri | cron drift monitor (FIX-145) ─────────────────────────
-0 18 * * 1-5 cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/check_cron_drift.py >> logs/cron-drift-check.log 2>&1
+0 18 * * 1-5 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/check_cron_drift.py >> logs/cron-drift-check.log 2>&1
 
 # ── 03:00 IST 1st of month | backup restore drill (FIX-149) ─────────────────
-0 3 1 * * cd /home/ubuntu/systems/trading-system && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_restore_drill.py --quiet >> logs/cron-backup-drill.log 2>&1
+0 3 1 * * cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_restore_drill.py --quiet >> logs/cron-backup-drill.log 2>&1
 
 # ── Hourly | disk space monitor (FIX-140) ───────────────────────────────────
-0 * * * * cd /home/ubuntu/systems/trading-system && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1
+0 * * * * cd /home/ubuntu/systems/trading-system && . .env && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1

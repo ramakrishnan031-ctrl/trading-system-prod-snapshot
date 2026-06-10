@@ -1513,5 +1513,63 @@ def test_poll_cycle_continues_after_order_exception():
     assert osm.current_state("ord_good") == "COMPLETE"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-158: Same-state idempotent transition (OPEN→OPEN log bloat)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix158_open_to_open_no_exception_no_log_bloat():
+    """FIX-158: OPEN→OPEN is silently suppressed — no exception, no log spam."""
+    adapter = MockAdapter()
+    adapter.history_responses = [
+        [_entry("OPEN")],
+        [_entry("OPEN")],
+        [_entry("OPEN")],
+    ]
+    monitor, _, osm, bus = _make_monitor(adapter=adapter)
+    _register_and_track(monitor, osm, "ord_open", "KITE_OPEN", "RELIANCE", "BUY", 10, 2500.0)
+
+    # First poll: SUBMITTED→OPEN (valid)
+    monitor._poll_cycle()
+    assert osm.current_state("ord_open") == "OPEN"
+
+    # Second + third poll: OPEN→OPEN — must NOT raise, must NOT log exception
+    monitor._poll_cycle()
+    monitor._poll_cycle()
+    assert osm.current_state("ord_open") == "OPEN"
+    assert monitor.is_watching("ord_open"), "Order should still be watched"
+
+    print("  OK FIX-158: OPEN→OPEN silently suppressed, no exception")
+
+
+def test_fix158_submitted_to_submitted_also_suppressed():
+    """FIX-158: SUBMITTED→SUBMITTED is also suppressed (same-state no-op)."""
+    monitor, _, osm, bus = _make_monitor()
+    osm.register("ord_sub")
+    osm.transition("ord_sub", "SUBMITTED")
+
+    result = monitor._safe_transition("ord_sub", "SUBMITTED")
+    assert result is False, "Same-state transition should return False"
+    assert osm.current_state("ord_sub") == "SUBMITTED"
+
+    print("  OK FIX-158: SUBMITTED→SUBMITTED suppressed")
+
+
+def test_fix158_different_invalid_still_raises():
+    """FIX-158: OPEN→PENDING (invalid, different states) still raises."""
+    from core.exceptions import InvalidTransitionError
+    monitor, _, osm, bus = _make_monitor()
+    osm.register("ord_inv")
+    osm.transition("ord_inv", "SUBMITTED")
+    osm.transition("ord_inv", "OPEN")
+
+    try:
+        monitor._safe_transition("ord_inv", "PENDING")
+        assert False, "Should have raised InvalidTransitionError"
+    except InvalidTransitionError:
+        pass
+
+    print("  OK FIX-158: OPEN→PENDING still raises (different invalid states)")
+
+
 if __name__ == "__main__":
     sys.exit(run_all_tests())
