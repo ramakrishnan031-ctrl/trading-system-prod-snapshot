@@ -703,6 +703,7 @@ def _fire_eod_pre_alert(store: "StateStore", notifier, mode: str, log) -> None:
         body = "\n".join(lines)
         if notifier is not None:
             notifier.send(
+                severity="WARNING",
                 title=f"[{mode}] EOD SQUAREOFF IN ~30 MIN",
                 body=body,
                 source_module="main",
