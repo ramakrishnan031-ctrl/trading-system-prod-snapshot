@@ -1,0 +1,48 @@
+scenario_id: CT004
+title: "Function Edge Cases Fund Manager"
+category: "1A"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Test FundManager edge cases with invalid inputs"
+
+preconditions:
+  - "Database accessible"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params:
+      command: "python3 tests/crash_test/test_fund_manager_edges.py"
+  - step: 3
+    action: "snapshot_after"
+
+expected_behavior:
+  - "All edge cases raise ValueError or appropriate exception"
+  - "No crash"
+  - "Invariant A holds after each attempt"
+
+assertions:
+  - "All edge cases handled with proper exceptions"
+  - "No unhandled crash"
+  - "Capital state unchanged after invalid operations"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Fund manager accepts invalid inputs"
+  business: "Capital corruption risk"
+
+pass_criteria: "All 7 edge cases produce expected behavior"
+
+post_cleanup: []
+
+notes: "API-independent. Uses test helper script."

@@ -1,0 +1,48 @@
+scenario_id: CT022
+title: "Extra/Unknown Fields"
+category: "1D"
+day: 1
+priority: P2
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system ignores extra unknown fields in payload"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "inject_signal"
+    params: {mode: malformed, type: extra_fields}
+  - step: 3
+    action: "wait"
+    params: {seconds: 10}
+  - step: 4
+    action: "snapshot_after"
+
+expected_behavior:
+  - "Signal accepted (extra fields ignored)"
+  - "No error in logs"
+
+assertions:
+  - "Signal processed normally despite extra fields"
+  - "No error in logs"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Extra fields cause processing failure"
+  business: "Fragile Chartink integration"
+
+pass_criteria: "Signal accepted, extra fields ignored"
+
+post_cleanup: []
+
+notes: ""

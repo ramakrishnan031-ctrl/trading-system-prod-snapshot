@@ -1,0 +1,46 @@
+scenario_id: CT003
+title: "File-Level Responsibility Audit"
+category: "1A"
+day: 1
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify all 16 core files exist and no bare except: in production code"
+
+preconditions:
+  - "Codebase accessible"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params:
+      command: "python3 -c \"import os; files=['main.py','signal_processor.py','capital/fund_manager.py','orders/order_placer.py','orders/order_manager.py','webhook_receiver.py','broker/zerodha_adapter.py','capital/kill_switch.py','screening/secondary_screener.py','orders/eod_squareoff.py','orders/smart_tgt_manager.py','screening/entry_gate.py','orders/order_reconciler.py','core/state_store.py','capital/position_sizer.py','capital/risk_engine.py']; missing=[f for f in files if not os.path.exists(f)]; print('MISSING:', missing if missing else 'NONE')\""
+  - step: 2
+    action: "run_command"
+    params:
+      command: "grep -rn 'except:$' --include='*.py' . | grep -v test | grep -v '.pyc' | grep -v __pycache__ || echo 'NO_BARE_EXCEPT'"
+
+expected_behavior:
+  - "All 16 core files exist"
+  - "Zero bare except: statements in production code"
+
+assertions:
+  - "All 16 core files exist"
+  - "Zero bare except: statements in production code"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Missing files or poor error handling"
+  business: "System instability"
+
+pass_criteria: "All files present, no bare except:"
+
+post_cleanup: []
+
+notes: "API-independent. Static code audit."

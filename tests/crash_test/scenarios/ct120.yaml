@@ -1,0 +1,50 @@
+scenario_id: CT120
+title: "Read-Only Filesystem on data_store"
+category: "4D"
+day: 4
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system handles read-only data_store directory"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "chmod -w data_store/"}
+  - step: 2
+    action: "inject_signal"
+    params: {mode: single, symbol: RELIANCE, scanner: gap_fade_short, price: 1000}
+  - step: 3
+    action: "wait"
+    params: {seconds: 10}
+
+expected_behavior:
+  - "DB write fails with permission error"
+  - "System handles gracefully"
+  - "Error logged clearly"
+
+assertions:
+  - "Permission error logged"
+  - "No silent failure"
+  - "System does not crash without explanation"
+
+recovery_requirements: "Restore permissions"
+
+failure_impact:
+  technical: "Silent failure on read-only filesystem"
+  business: "State not persisted"
+
+pass_criteria: "Error logged, not silent"
+
+post_cleanup:
+  - "run_command: chmod +w data_store/"
+
+notes: "API-independent."

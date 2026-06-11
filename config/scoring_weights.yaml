@@ -19,7 +19,7 @@ steps:
   circuit_check: 10     # Step 9: upper/lower circuit state via kite.quote()
   signal_age: 10        # Step 10: signal freshness (now - triggered_at ≤ 90s, P9a)
 
-min_pass_score: 30      # TEMP: Day 6 crash test — revert to 60 after CT159
+min_pass_score: 60
 
 tier_multipliers:       # Applied to position size in position_sizer (P10)
   high: 1.0             # Score ≥ high_score_threshold

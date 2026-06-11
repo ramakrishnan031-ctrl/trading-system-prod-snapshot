@@ -1,0 +1,48 @@
+scenario_id: CT130
+title: "Cron Silent Failure Detection"
+category: "4G"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify missing cron heartbeat is detected"
+
+preconditions:
+  - "System running"
+  - "Cron jobs configured"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "crontab -l | grep -i eod || echo 'NO_EOD_CRON'"}
+  - step: 2
+    action: "run_command"
+    params: {command: "python3 -c \"import sqlite3; conn=sqlite3.connect('data_store/trading_system.db'); rows=conn.execute('SELECT job_name, executed_at, status FROM cron_heartbeat ORDER BY id DESC LIMIT 5').fetchall(); [print(dict(r)) for r in rows]; conn.close()\""}
+  - step: 3
+    action: "manual_step"
+    params: {instruction: "Check crontab -l for cron schedule. Verify check_cron_drift detects missing heartbeats. Run: python3 scripts/check_cron_drift.py"}
+
+expected_behavior:
+  - "Missing heartbeat detected by check_cron_drift"
+  - "Alert sent or logged"
+
+assertions:
+  - "Cron heartbeat table accessible"
+  - "check_cron_drift script works"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Silent cron failures undetected"
+  business: "EOD jobs missed"
+
+pass_criteria: "Heartbeat table populated, drift detection works"
+
+post_cleanup: []
+
+notes: "API-independent. Requires manual observation."

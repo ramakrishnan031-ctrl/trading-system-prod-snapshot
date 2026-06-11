@@ -1,0 +1,53 @@
+scenario_id: CT132
+title: "Human Error - Delete Config Mid-Session"
+category: "4G"
+day: 4
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system handles deleted strategy config gracefully"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "cp config/strategies/gap_fade_short.yaml /tmp/gap_fade_short_CT132_backup.yaml"}
+  - step: 2
+    action: "run_command"
+    params: {command: "rm config/strategies/gap_fade_short.yaml"}
+  - step: 3
+    action: "inject_signal"
+    params: {mode: single, symbol: RELIANCE, scanner: gap_fade_short, price: 1000}
+  - step: 4
+    action: "wait"
+    params: {seconds: 15}
+
+expected_behavior:
+  - "Signal for gap_fade_short fails gracefully"
+  - "No crash"
+  - "Other strategies still work"
+
+assertions:
+  - "Signal rejected or failed gracefully"
+  - "No crash"
+  - "System continues operating"
+
+recovery_requirements: "Restore config file"
+
+failure_impact:
+  technical: "Missing config causes crash"
+  business: "System down from operator error"
+
+pass_criteria: "Graceful rejection, no crash"
+
+post_cleanup:
+  - "run_command: cp /tmp/gap_fade_short_CT132_backup.yaml config/strategies/gap_fade_short.yaml"
+
+notes: "API-independent."

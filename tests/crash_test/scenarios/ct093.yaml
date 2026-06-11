@@ -1,0 +1,56 @@
+scenario_id: CT093
+title: "SIGINT Idle - Graceful Shutdown"
+category: "4A"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify graceful shutdown via systemctl stop produces clean state"
+
+preconditions:
+  - "System running"
+  - "No open positions"
+  - "Kill switch clear"
+
+test_steps:
+  - step: 1
+    action: "snapshot"
+    params: {label: "before_CT093"}
+  - step: 2
+    action: "run_command"
+    params: {command: "sudo systemctl stop trading-system"}
+  - step: 3
+    action: "wait"
+    params: {seconds: 20}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo journalctl -u trading-system -n 50 --no-pager"}
+
+expected_behavior:
+  - "Graceful shutdown sequence in logs"
+  - "SHUTDOWN event in system_events table"
+  - "WAL checkpoint logged"
+  - "Exit code 0"
+
+assertions:
+  - "SHUTDOWN event logged"
+  - "Clean exit"
+  - "No ERROR after shutdown initiated"
+
+recovery_requirements: "Start service for next test"
+
+failure_impact:
+  technical: "Unclean shutdown"
+  business: "Data loss risk"
+
+pass_criteria: "Clean shutdown with SHUTDOWN event logged"
+
+post_cleanup:
+  - "run_command: sudo systemctl start trading-system && sleep 15"
+
+notes: "API-independent."

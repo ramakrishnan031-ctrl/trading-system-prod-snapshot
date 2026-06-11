@@ -1,0 +1,52 @@
+scenario_id: CT047
+title: "Capital Invariant Violation Forced"
+category: "2B"
+day: 2
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Force capital invariant violation and verify HARD_KILL fires"
+
+preconditions:
+  - "Database accessible"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params:
+      command: "python3 tests/crash_test/test_capital_invariant_violation.py"
+  - step: 3
+    action: "wait"
+    params: {seconds: 15}
+  - step: 4
+    action: "snapshot_after"
+
+expected_behavior:
+  - "HARD_KILL fires"
+  - "No order placed"
+  - "Telegram alert sent or logged"
+
+assertions:
+  - "HARD_KILL triggered"
+  - "No order placed"
+  - "Capital restored from fm_ledger replay"
+
+recovery_requirements: "Restore capital_snapshot from fm_ledger replay"
+
+failure_impact:
+  technical: "Invariant violation not detected"
+  business: "Trading with corrupted capital state"
+
+pass_criteria: "HARD_KILL fires on invariant violation"
+
+post_cleanup:
+  - "cleanup.py --soft --force"
+
+notes: "API-independent. Tests invariant detection."

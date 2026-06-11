@@ -1,0 +1,56 @@
+scenario_id: CT100
+title: "Cold Start - No Prior Session"
+category: "4B"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify clean cold start with no prior session data"
+
+preconditions:
+  - "System stopped"
+
+test_steps:
+  - step: 1
+    action: "snapshot"
+    params: {label: "before_CT100"}
+  - step: 2
+    action: "run_command"
+    params: {command: "sudo systemctl stop trading-system && sleep 5"}
+  - step: 3
+    action: "run_command"
+    params: {command: "python3 -c \"import sqlite3; conn=sqlite3.connect('data_store/trading_system.db'); conn.execute('DELETE FROM session'); conn.commit(); conn.close(); print('session row cleared')\""}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo systemctl start trading-system && sleep 20"}
+  - step: 5
+    action: "snapshot"
+    params: {label: "after_CT100"}
+
+expected_behavior:
+  - "COLD scenario in startup logs"
+  - "All 14+ startup checks ran"
+  - "Capital initialized from accounts.csv"
+  - "System healthy"
+
+assertions:
+  - "COLD scenario detected"
+  - "System healthy after cold start"
+  - "Capital initialized"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Cold start fails"
+  business: "System cannot start fresh"
+
+pass_criteria: "COLD start succeeds, system healthy"
+
+post_cleanup: []
+
+notes: "API-independent."

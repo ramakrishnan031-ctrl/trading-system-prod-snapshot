@@ -1,0 +1,59 @@
+scenario_id: CT118
+title: "DB Corruption - Missing Table"
+category: "4D"
+day: 4
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system detects dropped table and exits safely"
+
+preconditions:
+  - "System stopped"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "sudo systemctl stop trading-system && sleep 5"}
+  - step: 2
+    action: "run_command"
+    params: {command: "cp data_store/trading_system.db data_store/trading_system_CT118_backup.db"}
+  - step: 3
+    action: "run_command"
+    params: {command: "python3 -c \"import sqlite3; conn=sqlite3.connect('data_store/trading_system.db'); conn.execute('DROP TABLE IF EXISTS candles'); conn.commit(); conn.close(); print('candles table dropped')\""}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo systemctl start trading-system && sleep 10"}
+  - step: 5
+    action: "run_command"
+    params: {command: "sudo systemctl is-active trading-system || echo DEAD"}
+
+expected_behavior:
+  - "System detects missing table"
+  - "Exit code 3 (HALT) or startup error"
+  - "systemd NOT in restart loop"
+
+assertions:
+  - "Missing table detected"
+  - "System halted or exited"
+  - "No restart loop"
+
+recovery_requirements: "Restore from backup"
+
+failure_impact:
+  technical: "System runs with missing tables"
+  business: "Silent data loss"
+
+pass_criteria: "Missing table detected, safe halt"
+
+post_cleanup:
+  - "run_command: sudo systemctl stop trading-system 2>/dev/null || true"
+  - "run_command: cp data_store/trading_system_CT118_backup.db data_store/trading_system.db"
+  - "run_command: sudo systemctl start trading-system && sleep 15"
+  - "run_command: rm data_store/trading_system_CT118_backup.db"
+
+notes: "API-independent."

@@ -1,0 +1,58 @@
+scenario_id: CT117
+title: "WAL Recovery After SIGKILL"
+category: "4D"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify WAL data survives SIGKILL and is recovered on restart"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "python3 -c \"import sqlite3; conn=sqlite3.connect('data_store/trading_system.db'); conn.execute(\\\"INSERT INTO system_events (timestamp, event_type, details) VALUES (datetime('now'), 'CT117_MARKER', 'WAL test marker')\\\"  ); conn.commit(); conn.close(); print('Marker inserted')\""}
+  - step: 2
+    action: "run_command"
+    params: {command: "ls -lh data_store/trading_system.db*"}
+  - step: 3
+    action: "run_command"
+    params: {command: "sudo kill -9 $(pgrep -f main.py) 2>/dev/null || true", allow_nonzero: true}
+  - step: 4
+    action: "wait"
+    params: {seconds: 5}
+  - step: 5
+    action: "run_command"
+    params: {command: "sudo systemctl start trading-system && sleep 15"}
+  - step: 6
+    action: "run_command"
+    params: {command: "python3 -c \"import sqlite3; conn=sqlite3.connect('data_store/trading_system.db'); r=conn.execute(\\\"SELECT event_id FROM system_events WHERE event_type='CT117_MARKER'\\\").fetchone(); print('FOUND' if r else 'MISSING'); conn.close()\""}
+
+expected_behavior:
+  - "CT117_MARKER row: FOUND after restart"
+  - "WAL replayed correctly"
+  - "No data loss"
+
+assertions:
+  - "Marker row FOUND after crash and restart"
+  - "WAL recovery successful"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "WAL data lost on crash"
+  business: "Capital/trade data loss"
+
+pass_criteria: "Marker survived SIGKILL + restart"
+
+post_cleanup:
+  - "run_command: python3 -c \"import sqlite3; conn=sqlite3.connect('data_store/trading_system.db'); conn.execute(\\\"DELETE FROM system_events WHERE event_type='CT117_MARKER'\\\"); conn.commit(); conn.close()\""
+
+notes: "API-independent."

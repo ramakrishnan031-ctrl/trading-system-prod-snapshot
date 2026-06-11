@@ -1,0 +1,40 @@
+scenario_id: CT135
+title: "Human Error - Cleanup During Active Trading"
+category: "4G"
+day: 4
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify cleanup.py --hard refuses without --force when system is running"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "python3 tests/crash_test/cleanup.py --hard"}
+
+expected_behavior:
+  - "cleanup.py REFUSES without --force (safety gate working)"
+
+assertions:
+  - "Hard cleanup blocked without --force"
+  - "System unaffected"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Cleanup wipes active state"
+  business: "Open positions lost"
+
+pass_criteria: "Safety gate blocks hard cleanup"
+
+post_cleanup: []
+
+notes: "API-independent. Tests safety gates."

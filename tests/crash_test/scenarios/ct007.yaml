@@ -1,0 +1,50 @@
+scenario_id: CT007
+title: "Function Edge Cases Kill Switch"
+category: "1A"
+day: 1
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Test kill switch idempotency and edge case handling"
+
+preconditions:
+  - "Database accessible"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params:
+      command: "python3 tests/crash_test/test_kill_switch_edges.py"
+  - step: 3
+    action: "snapshot_after"
+
+expected_behavior:
+  - "soft_kill() when already soft killed: idempotent"
+  - "hard_kill() when already hard killed: idempotent"
+  - "resume() when not killed: no error"
+  - "State consistent after each call"
+
+assertions:
+  - "All edge cases handled idempotently"
+  - "Kill switch state consistent after each call"
+  - "No unhandled exceptions"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Kill switch state corruption"
+  business: "Safety mechanism unreliable"
+
+pass_criteria: "All 5 edge cases pass"
+
+post_cleanup:
+  - "cleanup.py --soft --force"
+
+notes: "API-independent. Cleans up kill switch state after."

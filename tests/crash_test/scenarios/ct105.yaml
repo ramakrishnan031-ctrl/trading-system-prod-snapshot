@@ -1,0 +1,53 @@
+scenario_id: CT105
+title: "Systemd Restart Loop Protection"
+category: "4B"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify systemd refuses further restarts after 5+ rapid crashes"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "for i in 1 2 3 4 5 6; do sudo kill -9 $(pgrep -f main.py) 2>/dev/null; sleep 2; done", allow_nonzero: true}
+  - step: 2
+    action: "wait"
+    params: {seconds: 15}
+  - step: 3
+    action: "run_command"
+    params: {command: "sudo systemctl is-active trading-system || echo DEAD"}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo journalctl -u trading-system -n 20 --no-pager | grep -i 'start request\\|start limit\\|failed'"}
+
+expected_behavior:
+  - "After 5+ crashes: systemd refuses further restarts"
+  - "Journal shows start limit reached"
+  - "No infinite restart loop"
+
+assertions:
+  - "Systemd start limit reached"
+  - "No infinite restart loop"
+
+recovery_requirements: "Reset failed state, start manually"
+
+failure_impact:
+  technical: "Infinite restart loop"
+  business: "System thrashes, logs fill disk"
+
+pass_criteria: "Start limit reached, no loop"
+
+post_cleanup:
+  - "run_command: sudo systemctl reset-failed trading-system"
+  - "run_command: sudo systemctl start trading-system && sleep 15"
+
+notes: "API-independent. Tests systemd safety."

@@ -1,0 +1,72 @@
+scenario_id: CT006
+title: "Function Edge Cases Webhook Receiver"
+category: "1A"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Test webhook receiver with all 7 malformed payload types"
+
+preconditions:
+  - "System running"
+  - "Webhook server on port 5000"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "inject_signal"
+    params: {mode: malformed, type: none_body}
+  - step: 3
+    action: "inject_signal"
+    params: {mode: malformed, type: missing_fields}
+  - step: 4
+    action: "inject_signal"
+    params: {mode: malformed, type: wrong_types}
+  - step: 5
+    action: "inject_signal"
+    params: {mode: malformed, type: extra_fields}
+  - step: 6
+    action: "inject_signal"
+    params: {mode: malformed, type: wrong_content_type}
+  - step: 7
+    action: "inject_signal"
+    params: {mode: malformed, type: oversized}
+  - step: 8
+    action: "inject_signal"
+    params: {mode: malformed, type: missing_stocks}
+  - step: 9
+    action: "wait"
+    params: {seconds: 5}
+  - step: 10
+    action: "assert_http"
+    params: {url: "http://localhost:5000/health", expected_status: 200}
+  - step: 11
+    action: "snapshot_after"
+
+expected_behavior:
+  - "All 7: HTTP 400 or signal rejected gracefully"
+  - "No unhandled exception in logs"
+  - "System health endpoint still responds after all 7"
+
+assertions:
+  - "All malformed payloads rejected gracefully"
+  - "System still healthy after all 7 attacks"
+  - "No unhandled exception in logs"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Webhook crashes on malformed input"
+  business: "System offline from bad payload"
+
+pass_criteria: "All 7 malformed payloads handled, system healthy"
+
+post_cleanup: []
+
+notes: "Requires running system."

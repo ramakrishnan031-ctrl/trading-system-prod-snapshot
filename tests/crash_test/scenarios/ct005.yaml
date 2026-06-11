@@ -1,0 +1,44 @@
+scenario_id: CT005
+title: "Function Edge Cases Position Sizer"
+category: "1A"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Test PositionSizer with zero, NaN, negative, and inverted inputs"
+
+preconditions:
+  - "Database accessible"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params:
+      command: "python3 tests/crash_test/test_position_sizer_edges.py"
+
+expected_behavior:
+  - "All edge cases return qty=0 or raise exception"
+  - "No division-by-zero"
+  - "No negative qty"
+
+assertions:
+  - "All edge cases produce qty=0 or controlled exception"
+  - "No division-by-zero"
+  - "No negative qty returned"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Position sizer produces invalid quantities"
+  business: "Wrong order sizes, capital at risk"
+
+pass_criteria: "All 6 edge cases produce safe behavior"
+
+post_cleanup: []
+
+notes: "API-independent."

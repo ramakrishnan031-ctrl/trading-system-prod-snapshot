@@ -1,0 +1,46 @@
+scenario_id: CT001
+title: "State Machine Validation"
+category: "1A"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Validate all state transitions in orders, trades, signals tables are legal"
+
+preconditions:
+  - "Database accessible"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params:
+      command: "python3 tests/crash_test/state_machine_validator.py --all"
+  - step: 3
+    action: "snapshot_after"
+
+expected_behavior:
+  - "state_machine_validator output: all tables CLEAN"
+  - "Zero illegal transitions"
+
+assertions:
+  - "state_machine_validator output: all tables CLEAN"
+  - "Zero illegal transitions"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "State machine corruption in DB"
+  business: "Unreliable trade lifecycle tracking"
+
+pass_criteria: "All tables CLEAN, zero violations"
+
+post_cleanup: []
+
+notes: "API-independent. Runs against existing DB data."

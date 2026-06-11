@@ -1,0 +1,48 @@
+scenario_id: CT020
+title: "Wrong Data Types"
+category: "1D"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify graceful rejection of payloads with wrong data types"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "inject_signal"
+    params: {mode: malformed, type: wrong_types}
+  - step: 3
+    action: "wait"
+    params: {seconds: 5}
+  - step: 4
+    action: "snapshot_after"
+
+expected_behavior:
+  - "Rejected gracefully"
+  - "No exception in main thread"
+
+assertions:
+  - "Payload rejected gracefully"
+  - "No crash"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Type confusion in signal processing"
+  business: "Garbage data enters pipeline"
+
+pass_criteria: "Rejected with clear error"
+
+post_cleanup: []
+
+notes: ""

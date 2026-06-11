@@ -1,0 +1,60 @@
+scenario_id: CT096
+title: "SIGKILL Idle - Crash Recovery"
+category: "4A"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system recovers correctly after SIGKILL"
+
+preconditions:
+  - "System running"
+  - "No open positions"
+
+test_steps:
+  - step: 1
+    action: "snapshot"
+    params: {label: "before_CT096"}
+  - step: 2
+    action: "run_command"
+    params: {command: "sudo kill -9 $(pgrep -f main.py) || true", allow_nonzero: true}
+  - step: 3
+    action: "wait"
+    params: {seconds: 12}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo systemctl start trading-system"}
+  - step: 5
+    action: "wait"
+    params: {seconds: 20}
+  - step: 6
+    action: "snapshot"
+    params: {label: "after_CT096"}
+
+expected_behavior:
+  - "After restart: CRASH scenario detected in logs"
+  - "System starts normally"
+  - "Capital state reconstructed correctly"
+  - "Invariant A holds after restart"
+
+assertions:
+  - "CRASH scenario in startup logs"
+  - "System healthy after restart"
+  - "Capital reconstructed from fm_ledger"
+
+recovery_requirements: "System auto-recovers"
+
+failure_impact:
+  technical: "No crash recovery"
+  business: "Lost capital state"
+
+pass_criteria: "CRASH detected, capital recovered, invariants pass"
+
+post_cleanup: []
+
+notes: "API-independent."

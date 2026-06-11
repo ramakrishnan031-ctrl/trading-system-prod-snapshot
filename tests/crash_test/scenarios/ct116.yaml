@@ -1,0 +1,57 @@
+scenario_id: CT116
+title: "DB Lock Contention"
+category: "4D"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system handles DB lock contention from external process"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params: {command: "python3 -c \"import sqlite3, time; conn=sqlite3.connect('data_store/trading_system.db', timeout=0); conn.execute('BEGIN IMMEDIATE'); print('Lock held for 35s'); time.sleep(35); conn.commit(); conn.close(); print('Lock released')\" &"}
+  - step: 3
+    action: "wait"
+    params: {seconds: 3}
+  - step: 4
+    action: "inject_signal"
+    params: {mode: single, symbol: RELIANCE, scanner: gap_fade_short, price: 1000}
+  - step: 5
+    action: "wait"
+    params: {seconds: 40}
+  - step: 6
+    action: "snapshot_after"
+
+expected_behavior:
+  - "busy_timeout exceeded: OperationalError logged"
+  - "Signal FAILED (not silently dropped)"
+  - "System continues after lock released"
+
+assertions:
+  - "Lock timeout logged"
+  - "Signal not silently dropped"
+  - "System continues after lock release"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Silent data loss under lock contention"
+  business: "Signals lost"
+
+pass_criteria: "Lock contention handled, signal status recorded"
+
+post_cleanup:
+  - "cleanup.py --soft"
+
+notes: "API-independent."

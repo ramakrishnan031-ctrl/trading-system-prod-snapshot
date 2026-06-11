@@ -1,0 +1,48 @@
+scenario_id: CT048
+title: "Double Release Guard"
+category: "2B"
+day: 2
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify double release is rejected and capital unchanged"
+
+preconditions:
+  - "Database accessible"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params:
+      command: "python3 tests/crash_test/test_double_release.py"
+  - step: 3
+    action: "snapshot_after"
+
+expected_behavior:
+  - "Second release: ValueError raised"
+  - "Capital unchanged after double attempt"
+  - "Invariant A holds"
+
+assertions:
+  - "Double release rejected with ValueError"
+  - "Capital state unchanged"
+  - "Invariant A PASS"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Double capital release"
+  business: "Capital inflated incorrectly"
+
+pass_criteria: "Double release blocked, invariant holds"
+
+post_cleanup: []
+
+notes: "API-independent."

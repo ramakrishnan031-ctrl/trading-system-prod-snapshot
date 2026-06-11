@@ -1,0 +1,53 @@
+scenario_id: CT021
+title: "Oversized Payload"
+category: "1E"
+day: 1
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system handles oversized payload (1000 symbols) without OOM"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "inject_signal"
+    params: {mode: malformed, type: oversized}
+  - step: 3
+    action: "wait"
+    params: {seconds: 5}
+  - step: 4
+    action: "assert_http"
+    params: {url: "http://localhost:5000/health", expected_status: 200}
+  - step: 5
+    action: "snapshot_after"
+
+expected_behavior:
+  - "No OOM"
+  - "No crash"
+  - "Waitress handles gracefully"
+
+assertions:
+  - "No OOM"
+  - "No crash"
+  - "System healthy after oversized payload"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "OOM from large payloads"
+  business: "DoS vector"
+
+pass_criteria: "System survives oversized payload"
+
+post_cleanup: []
+
+notes: ""

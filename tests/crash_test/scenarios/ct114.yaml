@@ -1,0 +1,58 @@
+scenario_id: CT114
+title: "Disk Full Warning (<2GB)"
+category: "4D"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system behavior when disk is nearly full"
+
+preconditions:
+  - "System running"
+  - "Sufficient disk to create filler file"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "df -h /"}
+  - step: 2
+    action: "run_command"
+    params: {command: "python3 -c \"import shutil; avail=shutil.disk_usage('/').free//1024//1024//1024; fill=max(0,avail-2); print(f'Available: {avail}GB, will fill: {fill}GB'); exit(0 if fill>0 else 1)\""}
+  - step: 3
+    action: "run_command"
+    params: {command: "fallocate -l $(python3 -c \"import shutil; avail=shutil.disk_usage('/').free; fill=max(0,avail-2*1024*1024*1024); print(fill)\") /tmp/crash_test_filler && df -h /"}
+  - step: 4
+    action: "inject_signal"
+    params: {mode: single, symbol: RELIANCE, scanner: gap_fade_short, price: 1000}
+  - step: 5
+    action: "wait"
+    params: {seconds: 10}
+
+expected_behavior:
+  - "No DB corruption"
+  - "System rejects gracefully or logs disk warning"
+  - "Not a silent failure"
+
+assertions:
+  - "No DB corruption"
+  - "Graceful rejection or disk warning"
+  - "Not silent failure"
+
+recovery_requirements: "Remove filler file"
+
+failure_impact:
+  technical: "DB corruption on full disk"
+  business: "Data loss"
+
+pass_criteria: "System handles disk full gracefully"
+
+post_cleanup:
+  - "run_command: rm -f /tmp/crash_test_filler"
+  - "run_command: df -h /"
+
+notes: "Run LAST in batch - most disruptive."

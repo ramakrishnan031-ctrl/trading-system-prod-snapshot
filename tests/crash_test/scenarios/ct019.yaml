@@ -1,0 +1,57 @@
+scenario_id: CT019
+title: "Missing Required Fields"
+category: "1D"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify graceful rejection of payloads with missing required fields"
+
+preconditions:
+  - "System running"
+  - "Webhook server on port 5000"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "inject_signal"
+    params: {mode: malformed, type: none_body}
+  - step: 3
+    action: "inject_signal"
+    params: {mode: malformed, type: missing_stocks}
+  - step: 4
+    action: "inject_signal"
+    params: {mode: malformed, type: missing_fields}
+  - step: 5
+    action: "wait"
+    params: {seconds: 5}
+  - step: 6
+    action: "snapshot_after"
+
+expected_behavior:
+  - "Each: HTTP 400 or rejected"
+  - "No crash in logs"
+  - "System continues operating normally"
+
+assertions:
+  - "All malformed payloads rejected with HTTP 400"
+  - "No crash in logs"
+  - "System healthy after all 3"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Webhook accepts invalid payloads"
+  business: "Bad data enters pipeline"
+
+pass_criteria: "All 3 payloads rejected gracefully"
+
+post_cleanup: []
+
+notes: "Requires running system."

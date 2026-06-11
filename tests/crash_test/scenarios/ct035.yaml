@@ -1,0 +1,65 @@
+scenario_id: CT035
+title: "Webhook Thread Crash Recovery"
+category: "1H"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system survives maximally malformed payloads and continues operating"
+
+preconditions:
+  - "System running"
+  - "Webhook server on port 5000"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "inject_signal"
+    params: {mode: malformed, type: none_body}
+  - step: 3
+    action: "run_command"
+    params:
+      command: "curl -s -o /dev/null -w '%{http_code}' -X POST http://localhost:5000/webhook/gap_fade_short -H 'Content-Type: application/json' -d '{\"stocks\": null, \"trigger_prices\": null}'"
+  - step: 4
+    action: "wait"
+    params: {seconds: 15}
+  - step: 5
+    action: "assert_http"
+    params: {url: "http://localhost:5000/health", expected_status: 200}
+  - step: 6
+    action: "inject_signal"
+    params: {mode: single, symbol: RELIANCE, scanner: gap_fade_short, price: 1000}
+  - step: 7
+    action: "wait"
+    params: {seconds: 10}
+  - step: 8
+    action: "snapshot_after"
+
+expected_behavior:
+  - "System still responds to /health after malformed requests"
+  - "Post-stress signal accepted"
+  - "No unhandled exception in logs"
+
+assertions:
+  - "System healthy after malformed payloads"
+  - "Valid signal processed after stress"
+  - "No unhandled exceptions in logs"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Webhook thread dies on bad input"
+  business: "System stops receiving signals"
+
+pass_criteria: "System healthy after abuse, valid signal accepted"
+
+post_cleanup:
+  - "cleanup.py --soft"
+
+notes: "Requires running system."

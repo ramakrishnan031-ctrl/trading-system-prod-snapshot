@@ -1,0 +1,49 @@
+scenario_id: CT127
+title: "Clock Backward -60s"
+category: "4F"
+day: 4
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system detects -60s clock skew (backward)"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "date && sudo date -s '-60 seconds' && date"}
+  - step: 2
+    action: "wait"
+    params: {seconds: 70}
+  - step: 3
+    action: "run_command"
+    params: {command: "grep -i 'clock_skew\\|time_skew\\|ntp' logs/trading_system_$(date +%Y-%m-%d).log 2>/dev/null | tail -5 || echo 'NO_SKEW_ENTRIES'"}
+
+expected_behavior:
+  - "Clock skew detected (absolute skew, same as forward)"
+
+assertions:
+  - "Clock skew detected"
+  - "Not silent"
+
+recovery_requirements: "Restore NTP"
+
+failure_impact:
+  technical: "Backward clock causes signal expiry issues"
+  business: "Stale signals processed as fresh"
+
+pass_criteria: "Backward skew detected"
+
+post_cleanup:
+  - "run_command: sudo ntpdate -s pool.ntp.org 2>/dev/null || sudo timedatectl set-ntp true"
+  - "cleanup.py --soft --force"
+  - "run_command: sudo systemctl restart trading-system && sleep 15"
+
+notes: "API-independent."

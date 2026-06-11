@@ -1,0 +1,54 @@
+scenario_id: CT103
+title: "HALT Start - Missing Config Exit Code 3"
+category: "4B"
+day: 4
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system exits with code 3 (HALT) when config is missing"
+
+preconditions:
+  - "System stopped"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "sudo systemctl stop trading-system && sleep 5"}
+  - step: 2
+    action: "run_command"
+    params: {command: "mv config/system_config.yaml config/system_config.yaml.bak"}
+  - step: 3
+    action: "run_command"
+    params: {command: "sudo systemctl start trading-system && sleep 10"}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo systemctl is-active trading-system || echo DEAD"}
+
+expected_behavior:
+  - "systemctl is-active: inactive (dead)"
+  - "Exit code 3 in journal"
+  - "systemd did NOT auto-restart"
+
+assertions:
+  - "System dead after missing config"
+  - "Exit code 3 (HALT)"
+  - "No restart loop"
+
+recovery_requirements: "Restore config file"
+
+failure_impact:
+  technical: "System starts without config"
+  business: "Trading with wrong parameters"
+
+pass_criteria: "HALT exit, no restart loop"
+
+post_cleanup:
+  - "run_command: mv config/system_config.yaml.bak config/system_config.yaml"
+  - "run_command: sudo systemctl start trading-system && sleep 15"
+
+notes: "API-independent."

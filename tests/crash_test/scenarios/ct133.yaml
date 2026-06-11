@@ -1,0 +1,58 @@
+scenario_id: CT133
+title: "Human Error - Bad YAML Config"
+category: "4G"
+day: 4
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system detects invalid YAML config on startup"
+
+preconditions:
+  - "System stopped"
+
+test_steps:
+  - step: 1
+    action: "run_command"
+    params: {command: "sudo systemctl stop trading-system && sleep 5"}
+  - step: 2
+    action: "run_command"
+    params: {command: "cp config/strategies/gap_fade_short.yaml /tmp/gap_fade_short_CT133_backup.yaml"}
+  - step: 3
+    action: "run_command"
+    params: {command: "echo 'invalid: yaml: [broken:' >> config/strategies/gap_fade_short.yaml"}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo systemctl start trading-system && sleep 10"}
+  - step: 5
+    action: "run_command"
+    params: {command: "sudo systemctl is-active trading-system || echo DEAD"}
+
+expected_behavior:
+  - "Startup validation catches invalid YAML"
+  - "Exit code 3 (HALT)"
+  - "systemd NOT in restart loop"
+
+assertions:
+  - "Invalid YAML detected"
+  - "System halted"
+  - "No restart loop"
+
+recovery_requirements: "Restore valid config"
+
+failure_impact:
+  technical: "System starts with invalid config"
+  business: "Wrong strategy parameters"
+
+pass_criteria: "HALT on bad YAML, no loop"
+
+post_cleanup:
+  - "run_command: sudo systemctl stop trading-system 2>/dev/null || true"
+  - "run_command: cp /tmp/gap_fade_short_CT133_backup.yaml config/strategies/gap_fade_short.yaml"
+  - "run_command: sudo systemctl start trading-system && sleep 15"
+
+notes: "API-independent."

@@ -1,0 +1,53 @@
+scenario_id: CT036
+title: "100 Concurrent HTTP Connections"
+category: "1H"
+day: 1
+priority: P1
+
+environment:
+  mode: paper
+  market_hours: required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Verify system handles 100 concurrent webhook connections without crash"
+
+preconditions:
+  - "System running"
+
+test_steps:
+  - step: 1
+    action: "snapshot_before"
+  - step: 2
+    action: "run_command"
+    params:
+      command: "python3 -c \"import concurrent.futures, urllib.request, json, time; payload=json.dumps({'stocks':'RELIANCE','trigger_prices':'1000','triggered_at':'2026-06-05 10:00:00','scan_name':'gap_fade_short','scan_url':'x'}).encode(); f=lambda i: urllib.request.urlopen(urllib.request.Request('http://localhost:5000/webhook/gap_fade_short',data=payload,headers={'Content-Type':'application/json'}),timeout=10).status; results=list(concurrent.futures.ThreadPoolExecutor(100).map(f,range(100))); print(f'Completed: {len(results)}, 200s: {results.count(200)}')\""
+  - step: 3
+    action: "wait"
+    params: {seconds: 30}
+  - step: 4
+    action: "assert_http"
+    params: {url: "http://localhost:5000/health", expected_status: 200}
+  - step: 5
+    action: "snapshot_after"
+
+expected_behavior:
+  - "No crash"
+  - "System responds to /health after flood"
+
+assertions:
+  - "No crash"
+  - "System healthy after 100 concurrent connections"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Waitress thread pool exhaustion"
+  business: "System unresponsive under load"
+
+pass_criteria: "System survives 100 concurrent connections"
+
+post_cleanup:
+  - "cleanup.py --soft"
+
+notes: "Requires running system."

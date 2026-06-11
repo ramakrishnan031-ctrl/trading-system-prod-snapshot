@@ -1,0 +1,76 @@
+scenario_id: CT002
+title: "Idempotency System Restart 5x"
+category: "1A"
+day: 1
+priority: P0
+
+environment:
+  mode: paper
+  market_hours: not_required
+  positions_needed: 0
+  kill_switch: clear
+
+objective: "Prove 5 consecutive restarts produce identical system state"
+
+preconditions:
+  - "System running"
+  - "No open positions"
+  - "Kill switch clear"
+
+test_steps:
+  - step: 1
+    action: "snapshot"
+    params: {label: "before_CT002"}
+  - step: 2
+    action: "run_command"
+    params: {command: "sudo systemctl restart trading-system && sleep 30"}
+  - step: 3
+    action: "snapshot"
+    params: {label: "after_restart_1"}
+  - step: 4
+    action: "run_command"
+    params: {command: "sudo systemctl restart trading-system && sleep 30"}
+  - step: 5
+    action: "snapshot"
+    params: {label: "after_restart_2"}
+  - step: 6
+    action: "run_command"
+    params: {command: "sudo systemctl restart trading-system && sleep 30"}
+  - step: 7
+    action: "snapshot"
+    params: {label: "after_restart_3"}
+  - step: 8
+    action: "run_command"
+    params: {command: "sudo systemctl restart trading-system && sleep 30"}
+  - step: 9
+    action: "snapshot"
+    params: {label: "after_restart_4"}
+  - step: 10
+    action: "run_command"
+    params: {command: "sudo systemctl restart trading-system && sleep 30"}
+  - step: 11
+    action: "snapshot"
+    params: {label: "after_restart_5"}
+
+expected_behavior:
+  - "All 5 snapshots: capital identical to before_CT002"
+  - "No phantom signals"
+  - "No duplicate fm_ledger entries"
+  - "Thread count stable across all restarts"
+
+assertions:
+  - "Capital identical across all snapshots"
+  - "Signal count unchanged"
+  - "No duplicate fm_ledger entries"
+
+recovery_requirements: "None"
+
+failure_impact:
+  technical: "Restart causes state drift"
+  business: "Unreliable after crash recovery"
+
+pass_criteria: "All 5 post-restart states identical to baseline"
+
+post_cleanup: []
+
+notes: "API-independent. Tests systemd restart reliability."

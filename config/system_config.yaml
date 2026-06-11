@@ -68,7 +68,7 @@ order_monitor:                # OM14
 capital:                      # FM16
   intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
   positional_bucket_pct: 0.30 # 30% of total capital for positional (CNC)
-  daily_loss_limit: 9999999.0 # TEMP: Day 6 crash test — revert to 10000.0 after CT159
+  daily_loss_limit: 10000.0
   slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
   leverage_map:
     INTRADAY: 5.0             # MIS leverage
@@ -94,10 +94,10 @@ position_sizing:              # PS9
 
 risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_positions: 10      # hard cap on concurrent open positions (>= 1)
-  max_daily_trades: 9999      # TEMP: Day 6 crash test — revert to 20 after CT159
+  max_daily_trades: 20
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
-  max_consecutive_losses: 9999 # TEMP: Day 6 crash test — revert to 4 after CT159
-  daily_loss_limit_pct: 1.0   # TEMP: Day 6 crash test — revert to 0.05 after CT159
+  max_consecutive_losses: 4
+  daily_loss_limit_pct: 0.05
   price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement
 
 webhook:                      # WR14 — HTTP server settings
