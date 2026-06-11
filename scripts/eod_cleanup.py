@@ -4,7 +4,7 @@ scripts/eod_cleanup.py -- Trading System v2  FIX-135 Item 48
 Purpose:
     End-of-day cleanup of session artifacts:
       1. Mark stale IN_PROCESS signals as EXPIRED
-      2. Mark stale PENDING orders as CANCELLED
+      2. Mark stale OPEN/SUBMITTED/PENDING/TRIGGER_PENDING orders as CANCELLED
       3. Delete orphaned smart_tgt_state rows
       4. Prune old signal fingerprints (>7 days)
 
@@ -104,23 +104,43 @@ def _cleanup_stale_signals(
 def _cleanup_stale_orders(
     store: StateStore, date_iso: str, log: logging.Logger, dry_run: bool
 ) -> int:
+    active_statuses = ("OPEN", "SUBMITTED", "PENDING", "TRIGGER_PENDING")
+    closed_trade_statuses = ("CLOSED", "CLOSED_MANUAL", "CANCELLED", "FAILED")
+
     if dry_run:
         row = store.fetch_one(
-            "SELECT COUNT(*) AS n FROM orders WHERE status = 'PENDING' AND SUBSTR(placed_at, 1, 10) < ?",
+            "SELECT COUNT(*) AS n FROM orders WHERE status IN ('OPEN','SUBMITTED','PENDING','TRIGGER_PENDING') AND SUBSTR(placed_at, 1, 10) < ?",
             (date_iso,),
         )
         count = int(row["n"]) if row else 0
         log.info("eod_cleanup.stale_orders: %d (dry-run)", count)
         return count
 
+    total = 0
     with store.transaction() as cur:
+        # Cancel orders from prior days whose trades are closed/cancelled
         cur.execute(
-            "UPDATE orders SET status = 'CANCELLED' WHERE status = 'PENDING' AND SUBSTR(placed_at, 1, 10) < ?",
+            """UPDATE orders SET status = 'CANCELLED', updated_at = datetime('now','localtime')
+               WHERE status IN ('OPEN','SUBMITTED','PENDING','TRIGGER_PENDING')
+               AND SUBSTR(placed_at, 1, 10) < ?
+               AND trade_id IN (
+                   SELECT trade_id FROM trades
+                   WHERE status IN ('CLOSED','CLOSED_MANUAL','CANCELLED','FAILED')
+               )""",
             (date_iso,),
         )
-        count = cur.rowcount
-    log.info("eod_cleanup.stale_orders_cancelled: %d", count)
-    return count
+        total += cur.rowcount
+        # Cancel prior-day PENDING orders with no matching trade (orphans)
+        cur.execute(
+            """UPDATE orders SET status = 'CANCELLED', updated_at = datetime('now','localtime')
+               WHERE status IN ('OPEN','SUBMITTED','PENDING','TRIGGER_PENDING')
+               AND SUBSTR(placed_at, 1, 10) < ?
+               AND trade_id NOT IN (SELECT trade_id FROM trades)""",
+            (date_iso,),
+        )
+        total += cur.rowcount
+    log.info("eod_cleanup.stale_orders_cancelled: %d", total)
+    return total
 
 
 def _cleanup_orphaned_smart_tgt(
