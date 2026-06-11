@@ -19,6 +19,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 from core.state_store import StateStore
 from core.time_authority import now_ist
 from core.logger import get_logger

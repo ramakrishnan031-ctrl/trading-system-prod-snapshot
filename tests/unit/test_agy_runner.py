@@ -94,6 +94,7 @@ class TestRunAgy:
         run_agy("prompt", "Model")
         cmd = mock_run.call_args[0][0]
         assert "--dangerously-skip-permissions" in cmd
+        assert cmd[1] == "--dangerously-skip-permissions"  # must be at index 1, not splitting --model
 
     @patch("scripts.agy_runner.get_agy_bin", return_value="/usr/bin/agy")
     @patch("scripts.agy_runner.subprocess.run")

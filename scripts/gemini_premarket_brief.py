@@ -30,6 +30,9 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from dotenv import load_dotenv
+load_dotenv(_ROOT / ".env")
+
 from core.logger import get_logger
 from core.time_authority import now_ist, today_ist
 

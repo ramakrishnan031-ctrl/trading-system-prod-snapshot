@@ -16,7 +16,11 @@ import os
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +98,7 @@ def run_agy(
     agy_bin = get_agy_bin()
     cmd = [agy_bin, "--model", model, "--print", prompt]
     if skip_permissions:
-        cmd.insert(2, "--dangerously-skip-permissions")
+        cmd.insert(1, "--dangerously-skip-permissions")
 
     if add_dirs:
         for d in add_dirs:
