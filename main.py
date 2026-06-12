@@ -1258,6 +1258,24 @@ def _main_locked(args, config_dir: Path) -> int:
     if args.mode == "paper":
         kite_client = None  # paper adapter uses quote_provider from token file
     else:
+        # Pre-load primary account to resolve account-specific API key env var
+        # (env has ZERODHA_API_KEY_LFL836, not the generic ZERODHA_API_KEY).
+        # Full registry load happens below; this early read is only to alias the key.
+        try:
+            _pre_registry = AccountRegistry.load(config_dir / "accounts.csv")
+            _pre_primary = _pre_registry.primary()
+            os.environ["ZERODHA_API_KEY"] = os.environ[_pre_primary.api_key_env]
+            _pre_token = load_token(Path("data_store/session/zerodha_token.json"))
+            os.environ["ZERODHA_ACCESS_TOKEN"] = _pre_token["access_token"]
+        except FileNotFoundError:
+            _log.critical(
+                "Token file missing. Run: python scripts/zerodha_login.py "
+                "and SCP token to VM before starting in live mode."
+            )
+            return 6
+        except KeyError as exc:
+            _log.critical("Missing credential env var for live mode: %s", exc)
+            return 6
         kite_client = _build_kite_client(app_config)
 
     is_paper = (args.mode == "paper")
