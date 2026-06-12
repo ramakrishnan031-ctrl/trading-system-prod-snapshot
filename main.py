@@ -755,6 +755,75 @@ def _start_eod_pre_alert_thread(
     t.start()
 
 
+def _start_market_open_margin_sync_thread(
+    broker_adapter: "ZerodhaAdapter",
+    fund_manager: "FundManager",
+    notifier,
+    mode: str,
+    log,
+    shutdown_event: "threading.Event",
+    market_windows,
+) -> None:
+    """FIX-164: Re-sync capital from broker at 09:15 IST (market open).
+
+    Fixes the case where the system starts pre-market with stale Rs 0 margins
+    and the user deposits funds after startup but before 09:15. Only fires if
+    the system started before 09:15; if started after market open, the startup
+    fetch already captured the current balance so this is a no-op.
+    Paper mode: broker_adapter.get_margins() returns static paper_capital —
+    sync is a no-op but follows the identical code path (paper/live parity).
+    """
+    import time as _time_mod
+    from core.time_authority import now_ist as _now_ist
+
+    _MARKET_OPEN = _time(9, 15)
+
+    def _run() -> None:
+        now = _now_ist()
+        if market_windows is not None and market_windows.is_trading_holiday(now):
+            return
+        target_dt = now.replace(
+            hour=_MARKET_OPEN.hour, minute=_MARKET_OPEN.minute,
+            second=0, microsecond=0,
+        )
+        wait_sec = (target_dt - now).total_seconds()
+        if wait_sec <= 0:
+            log.info("market_open_margin_sync: started after 09:15, skipping re-sync")
+            return
+        end = _now_ist().timestamp() + wait_sec
+        while not shutdown_event.is_set() and _now_ist().timestamp() < end:
+            _time_mod.sleep(min(30.0, end - _now_ist().timestamp()))
+        if shutdown_event.is_set():
+            return
+        try:
+            new_capital = broker_adapter.get_margins().net
+            old_capital = fund_manager.get_snapshot().total
+            fund_manager.sync_from_broker(new_capital)
+            delta = new_capital - old_capital
+            log.info(
+                "market_open_margin_sync: capital re-synced at 09:15",
+                extra={"old": old_capital, "new": new_capital, "delta": delta},
+            )
+            if abs(delta) > 1.0:
+                try:
+                    notifier.send(
+                        severity="INFO",
+                        title=f"[{mode}] Capital Updated at Market Open",
+                        body=(
+                            f"09:15 margin re-sync: ₹{old_capital:,.0f} → "
+                            f"₹{new_capital:,.0f} (Δ ₹{delta:+,.0f})"
+                        ),
+                        source_module="main",
+                    )
+                except Exception as exc:
+                    log.warning("market_open_margin_sync: notification failed: %s", exc)
+        except Exception as exc:
+            log.error("market_open_margin_sync: failed: %s", exc, exc_info=True)
+
+    t = threading.Thread(target=_run, name="market-open-margin-sync", daemon=True)
+    t.start()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Signal handlers (MAIN13)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2034,6 +2103,17 @@ def _main_locked(args, config_dir: Path) -> int:
         log=_log,
         market_windows=market_windows,
         shutdown_event=_shutdown_event,
+    )
+
+    # FIX-164: Re-sync capital from broker at market open (09:15 IST)
+    _start_market_open_margin_sync_thread(
+        broker_adapter=broker_adapter,
+        fund_manager=fund_manager,
+        notifier=notifier,
+        mode=mode_label,
+        log=_log,
+        shutdown_event=_shutdown_event,
+        market_windows=market_windows,
     )
 
     # CV3: Validate all config values were accessed (non-strict for gradual rollout)
