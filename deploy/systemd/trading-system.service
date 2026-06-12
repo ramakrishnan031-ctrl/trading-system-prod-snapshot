@@ -12,15 +12,11 @@ Environment="PATH=/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/home/ubuntu/systems/trading-system/.env
 
-# Default mode: paper. To run live, use:
-#   sudo systemctl edit trading-system
-# and override ExecStart with --mode live
-#
 # Headless (no --interactive): account+mode auto-select to
-# primary account (LFL836) + paper. stdin from /dev/null so
+# primary account (LFL836). stdin from /dev/null so
 # any accidental prompt fails fast instead of hanging.
 ExecStart=/home/ubuntu/systems/venv/bin/python \
-    /home/ubuntu/systems/trading-system/main.py --mode paper
+    /home/ubuntu/systems/trading-system/main.py --mode live
 StandardInput=null
 
 # Send SIGINT on stop so main.py's Ctrl+C handler runs
