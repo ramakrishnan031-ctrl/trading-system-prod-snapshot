@@ -83,7 +83,7 @@ position_sizing:              # PS9
   lot_skew_rejection_threshold: 0.25  # FIX-021: reject if (tiered-final)/tiered > 25%; skipped if lot_size=1
   min_tick_size: 0.05         # FIX-041: reject if sl_distance < min_tick (penny stock guard)
   max_single_order_qty: 10000 # FIX-041: sanity cap on computed qty (prevents qty explosion)
-  max_position_value_rs: 50000.0  # FIX-144: hard cap on qty*price (Rs 50K = 2x capital for 25K account)
+  max_position_value_rs: 3000.0   # hard cap on qty*price (Rs 3K = 30% of Rs 10K account)
   tier_multipliers:           # PS5: applied after min(risk, capital, conc)
     HIGH: 1.0                 # full size
     MEDIUM: 0.70              # 70% of computed size
