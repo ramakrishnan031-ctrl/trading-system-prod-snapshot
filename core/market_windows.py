@@ -258,3 +258,9 @@ class MarketWindows:
             next_day, next_market_open, tzinfo=now.tzinfo
         )
         return int((next_open - now).total_seconds())
+
+
+def is_within_market_hours(now_t: time, open_t: time, close_t: time) -> bool:
+    """FIX-169 F18: shared helper replacing duplicate _is_market_hours() in
+    token_monitor.py and gemini_watchman.py."""
+    return open_t <= now_t <= close_t

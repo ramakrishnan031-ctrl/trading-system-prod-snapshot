@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from datetime import date as _date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -51,7 +52,7 @@ CONFIG_FILES = [
     "scoring_weights.yaml",
     "scan_webhook_map.yaml",
     "chartink_scanners.yaml",
-    "nse_holidays_2026.yaml",
+    f"nse_holidays_{_date.today().year}.yaml",
 ]
 
 

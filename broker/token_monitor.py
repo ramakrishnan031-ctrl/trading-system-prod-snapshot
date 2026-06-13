@@ -31,6 +31,7 @@ from datetime import time as _time
 from typing import Callable, Optional
 
 from core.logger import log_exception
+from core.market_windows import is_within_market_hours
 from core.time_authority import now_ist
 
 
@@ -140,11 +141,11 @@ class TokenMonitor:
             return False
 
     def _is_market_hours(self) -> bool:
-        """Return True if current time is within configured market hours."""
+        """Return True if current time is within configured market hours.
+        FIX-169 F18: delegates to shared is_within_market_hours()."""
         if self._market_open_t is None or self._market_close_t is None:
-            return True  # no window configured → always check
-        now_t = now_ist().time()
-        return self._market_open_t <= now_t <= self._market_close_t
+            return True
+        return is_within_market_hours(now_ist().time(), self._market_open_t, self._market_close_t)
 
     def _handle_expiry(self, reason: str) -> None:
         """Fire expiry sequence once per session."""

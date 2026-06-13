@@ -35,7 +35,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -515,9 +515,9 @@ class EntryGate:
             f"reason={reason} elapsed={elapsed_sec:.1f}s{ltp_str}"
         )
 
-        # FIX-025: store release_ltp in extras for downstream consumption
+        # FIX-169 F38: create new entry instead of mutating frozen dataclass interior
         if release_ltp is not None:
-            entry.extras["release_ltp"] = release_ltp
+            entry = replace(entry, extras={**entry.extras, "release_ltp": release_ltp})
 
         # EG7 step 3: on_release callback (after store update, errors caught)
         try:

@@ -2612,20 +2612,20 @@ class OrderPlacer:
         if not ticks:
             return
 
+        # FIX-169 F26: collect work under lock, execute retries outside lock
+        # (replaces unsafe release/acquire pattern inside with-block)
+        collected: list = []
         with self._pending_exit_retry_lock:
             if not self._pending_exit_retry:
                 return
 
-            # Build symbol -> token map for quick lookup
             symbol_to_token: Dict[int, str] = {}
             if self._instrument_cache is not None:
-                # FIX-098: list() prevents RuntimeError if dict modified during iteration
                 for trade_id, params in list(self._pending_exit_retry.items()):
                     row = self._instrument_cache.get_by_symbol(params.fill_entry.symbol)
                     if row is not None:
                         symbol_to_token[row.instrument_token] = params.fill_entry.symbol
 
-            # Process each tick
             for tick in ticks:
                 instrument_token = tick.get("instrument_token")
                 ltp = tick.get("last_price", 0)
@@ -2635,8 +2635,6 @@ class OrderPlacer:
 
                 symbol = symbol_to_token[instrument_token]
 
-                # Find trade_id(s) for this symbol
-                # FIX-098: list() prevents RuntimeError after dict modified at line 2445
                 trades_to_retry = [
                     trade_id
                     for trade_id, params in list(self._pending_exit_retry.items())
@@ -2658,15 +2656,11 @@ class OrderPlacer:
                         },
                     )
 
-                    # Remove from pending and retry
                     del self._pending_exit_retry[trade_id]
+                    collected.append(params)
 
-                    # Retry outside the lock to avoid deadlock
-                    self._pending_exit_retry_lock.release()
-                    try:
-                        self._retry_limit_triple_exits(params)
-                    finally:
-                        self._pending_exit_retry_lock.acquire()
+        for params in collected:
+            self._retry_limit_triple_exits(params)
 
     def _retry_limit_triple_exits(self, params: _ExitRetryParams) -> None:
         """

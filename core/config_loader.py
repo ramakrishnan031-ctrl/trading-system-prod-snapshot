@@ -1202,7 +1202,7 @@ _CONFIG_FILES: tuple[tuple[str, str, type[BaseModel]], ...] = (
     ("scoring",           "scoring_weights.yaml",  ScoringConfig),
     ("scan_webhook_map",  "scan_webhook_map.yaml", ScanWebhookMapConfig),
     ("chartink_scanners", "chartink_scanners.yaml",ChartinkScannersConfig),
-    ("nse_holidays",      "nse_holidays_2026.yaml",NseHolidaysConfig),
+    ("nse_holidays",      f"nse_holidays_{_date.today().year}.yaml", NseHolidaysConfig),
 )
 
 

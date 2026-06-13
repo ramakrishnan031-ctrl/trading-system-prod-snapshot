@@ -182,6 +182,7 @@ class StartupReport:
     disk_space:          Optional[DiskSpaceResult] = None  # FIX-099: None if skipped
     ntp:                 Optional[NtpCheckResult] = None  # FIX-129 Item 27
     temp_config:         Optional[TempConfigResult] = None  # FIX-151
+    db_permissions:      Optional[DbPermissionResult] = None  # FIX-169 F34
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1458,6 +1459,9 @@ def run_all_startup_checks(
     logger,
     instrument_cache=None,             # BL-20: optional; skip check if None
     min_instrument_rows: int = 1000,   # BL-20
+    db_path: Optional[str] = None,     # FIX-169 F34
+    log_dir: Optional[Path] = None,    # FIX-169 F34
+    min_free_disk_gb: float = 1.0,     # FIX-169 F34
 ) -> StartupReport:
     """
     Run all startup checks and return an aggregate StartupReport (SC12).
@@ -1579,6 +1583,20 @@ def run_all_startup_checks(
     if not temp_result.passed:
         warnings.append(f"temp_config_values({temp_result.temp_count})")
 
+    # 15. Disk space check (FIX-169 F34)
+    disk_result: Optional[DiskSpaceResult] = None
+    if log_dir is not None:
+        disk_result = check_disk_space(log_dir, min_free_disk_gb, logger)
+        if not disk_result.passed:
+            blocking_failures.append("insufficient_disk_space")
+
+    # 16. DB permissions check (FIX-169 F34)
+    db_perm_result: Optional[DbPermissionResult] = None
+    if db_path is not None:
+        db_perm_result = check_db_permissions(db_path, logger)
+        if not db_perm_result.passed:
+            blocking_failures.append("db_permission_error")
+
     ok = len(blocking_failures) == 0
 
     if ok:
@@ -1605,6 +1623,8 @@ def run_all_startup_checks(
         missing_secrets=missing_secrets,
         missing_config_files=missing_config,
         instrument_cache_count=instrument_cache_count,  # BL-20
+        disk_space=disk_result,  # FIX-169 F34
         ntp=ntp_result,  # FIX-129 Item 27
         temp_config=temp_result,  # FIX-151
+        db_permissions=db_perm_result,  # FIX-169 F34
     )

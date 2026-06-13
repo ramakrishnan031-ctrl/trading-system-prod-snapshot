@@ -139,10 +139,10 @@ class SecondaryScreener:
 
         # ── 4b. Check for step errors (P9a fix a) ─────────────────────────────
         if exec_result.error_steps:
-            # Any errored step = conservative rejection
-            bad = exec_result.error_steps[0]
+            # FIX-169 F40: log ALL error steps, not just first
+            bad = ", ".join(str(s) for s in exec_result.error_steps)
             self._logger.warning(
-                "secondary_screener [%s/%s]: step error in '%s'",
+                "secondary_screener [%s/%s]: step errors in [%s]",
                 signal_id, symbol, bad,
             )
             result = ScreeningResult(

@@ -39,6 +39,7 @@ from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
 from core.logger import get_logger
+from core.market_windows import is_within_market_hours
 from core.time_authority import now_ist, today_ist
 
 _MARKET_OPEN = dtime(9, 15)
@@ -116,8 +117,8 @@ def _parse_args(argv=None):
 
 
 def _is_market_hours() -> bool:
-    now = now_ist().time()
-    return _MARKET_OPEN <= now <= _MARKET_CLOSE
+    # FIX-169 F18: delegates to shared is_within_market_hours()
+    return is_within_market_hours(now_ist().time(), _MARKET_OPEN, _MARKET_CLOSE)
 
 
 def _find_log_file(log_dir: Path, date_iso: str) -> Path | None:

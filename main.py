@@ -22,6 +22,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import logging
 import os
@@ -660,16 +661,29 @@ def _build_strategy_governor(store, app_config, notifier, mode: str):
     )
 
 
+_gate_release_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="gate-release",
+)
+
+
 def _make_gate_release_cb(signal_processor: SignalProcessor):
+    def _gate_release_worker(entry: WatchEntry, release_ltp) -> None:
+        try:
+            signal_processor.continue_from_gate(entry, release_ltp=release_ltp)
+        except Exception as exc:
+            _log.error(
+                "continue_from_gate failed for %s: %s", entry.signal_id, exc,
+            )
+
     def _on_gate_release(entry: WatchEntry, reason: str) -> None:
         if reason == "PRICE_HIT":
-            # FIX-025: extract release_ltp from extras
             release_ltp = entry.extras.get("release_ltp")
             _log.info(
-                "Gate PRICE_HIT for %s signal_id=%s -- continuing pipeline",
+                "Gate PRICE_HIT for %s signal_id=%s -- submitting to pool",
                 entry.symbol, entry.signal_id,
             )
-            signal_processor.continue_from_gate(entry, release_ltp=release_ltp)
+            # FIX-169 F25: run on dedicated pool, not gate worker thread
+            _gate_release_pool.submit(_gate_release_worker, entry, release_ltp)
         else:
             _log.info(
                 "Gate release %s for %s signal_id=%s -- no action",
@@ -1264,6 +1278,7 @@ def _main_locked(args, config_dir: Path) -> int:
                 "Startup scenario: HALT -- kill switch active; "
                 "use --resume to clear"
             )
+            store.close()  # FIX-169 F32
             return 4
         kill_switch.resume(reason="--resume flag", resumed_by="operator")
         _log.critical("HALT cleared via --resume flag")
@@ -1274,7 +1289,9 @@ def _main_locked(args, config_dir: Path) -> int:
 
     # ── --status mode (MAIN16) ──────────────────────────────────────────────
     if args.status:
-        return _print_status(store, kill_switch, scenario_result)
+        result = _print_status(store, kill_switch, scenario_result)
+        store.close()  # FIX-169 F32
+        return result
 
     # MED #10: Write session row early — before any crash-prone Phase 0d/0e code.
     # If startup crashes mid-way, the next run will still find a session row with
@@ -1341,9 +1358,11 @@ def _main_locked(args, config_dir: Path) -> int:
                 "Token file missing. Run: python scripts/zerodha_login.py "
                 "and SCP token to VM before starting in live mode."
             )
+            store.close()  # FIX-169 F32
             return 6
         except KeyError as exc:
             _log.critical("Missing credential env var for live mode: %s", exc)
+            store.close()  # FIX-169 F32
             return 6
         kite_client = _build_kite_client(app_config)
 
@@ -1386,6 +1405,7 @@ def _main_locked(args, config_dir: Path) -> int:
         )
     except Exception as exc:
         _log.critical("Failed to load accounts.csv: %s", exc)
+        store.close()  # FIX-169 F32
         return 3
 
     _primary_id = account_registry.primary().account_id
@@ -1434,6 +1454,9 @@ def _main_locked(args, config_dir: Path) -> int:
         config_dir=config_dir,
         logger=_log,
         instrument_cache=instrument_cache,  # BL-20
+        db_path=str(Path("data_store/trading_system.db")),  # FIX-169 F34
+        log_dir=Path("logs"),  # FIX-169 F34
+        min_free_disk_gb=getattr(app_config.system, "min_free_disk_gb", 1.0),
     )
 
     if args.dry_run:
@@ -1441,12 +1464,14 @@ def _main_locked(args, config_dir: Path) -> int:
         print(f"Startup report: ok={report.ok}")
         print(f"  Blocking failures: {report.blocking_failures}")
         print(f"  Warnings         : {report.warnings}")
+        store.close()  # FIX-169 F32
         return 0 if report.ok else 3
 
     if not report.ok:
         _log.critical(
             "Startup checks failed: %s", report.blocking_failures
         )
+        store.close()  # FIX-169 F32
         return 3
 
     # BL-20: startup_checks passed, so instrument_cache is non-None and
@@ -2047,6 +2072,10 @@ def _main_locked(args, config_dir: Path) -> int:
     # B.1 (2026-04-25): repopulate OrderPlacer._fill_map for SL/TGT/EOD
     # exit legs so a post-restart exit fill closes the trade in DB.
     order_placer.rehydrate_fill_map(store)
+    # FIX-169 F31: install signal handlers BEFORE starting threads so a
+    # SIGINT during startup triggers clean shutdown instead of default exit.
+    _install_signal_handlers()
+
     order_monitor.start()
     order_reconciler.start()
     if clock_skew_probe is not None:
@@ -2177,7 +2206,6 @@ def _main_locked(args, config_dir: Path) -> int:
         print("Press Ctrl+C to initiate clean shutdown.")
 
     # ── Runtime loop (MAIN13) ────────────────────────────────────────────────
-    _install_signal_handlers()
     _shutdown_event.wait()
 
     # ── Shutdown (MAIN15) ────────────────────────────────────────────────────

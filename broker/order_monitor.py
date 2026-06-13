@@ -963,8 +963,9 @@ class OrderMonitor:
                         "order_monitor.partial_stuck_cancelled",
                         extra={"internal_order_id": entry.internal_order_id},
                     )
-                    self._safe_transition(entry.internal_order_id, "CANCELLED", entry=entry)
-                    self.untrack(entry.internal_order_id)
+                    # FIX-169 F27: use _handle_terminal so OrderPartiallyTerminated
+                    # is emitted when filled_qty > 0 (matches immediate-cancel path)
+                    self._handle_terminal(entry, "CANCELLED")
                 else:
                     self._log.critical(
                         "order_monitor.partial_stuck_cancel_failed",
