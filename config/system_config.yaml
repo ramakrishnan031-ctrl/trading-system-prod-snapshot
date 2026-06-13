@@ -14,7 +14,7 @@ broker:                       # FIX-133 Item 28: multi-broker support
   multi_account_mode: false   # FIX-133 Item 29: enable only when multi-account tested
 
 trading_hours:
-  entry_start: "09:20"        # Paper Week 2 (2026-04-27): widened from P1 spec 09:30 to capture earlier signals
+  entry_start: "10:00"        # Live Week 1 (2026-06-16): conservative start; avoid opening-hour volatility
   entry_end: "15:15"          # Paper Week 2 (2026-04-27): widened from P1 spec 13:30 (still <= eod_squareoff_time 15:17)
   eod_entry_cutoff: "15:15"   # FIX-073: absolute last moment to place order (prevents rate-limiter delays from opening positions after EOD)
   eod_squareoff_time: "15:17" # Square-off trigger; 3-min buffer before RMS auto-sq at 15:20 (P1)
@@ -83,7 +83,7 @@ position_sizing:              # PS9
   lot_skew_rejection_threshold: 0.25  # FIX-021: reject if (tiered-final)/tiered > 25%; skipped if lot_size=1
   min_tick_size: 0.05         # FIX-041: reject if sl_distance < min_tick (penny stock guard)
   max_single_order_qty: 10000 # FIX-041: sanity cap on computed qty (prevents qty explosion)
-  max_position_value_rs: 3000.0   # hard cap on qty*price (Rs 3K = 30% of Rs 10K account)
+  max_position_value_rs: 2500.0   # hard cap on qty*price (Rs 2.5K = 25% of Rs 10K account)
   tier_multipliers:           # PS5: applied after min(risk, capital, conc)
     HIGH: 1.0                 # full size
     MEDIUM: 0.70              # 70% of computed size
