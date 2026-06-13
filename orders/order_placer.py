@@ -2999,7 +2999,7 @@ class OrderPlacer:
                     reservation_id=fill_entry.reservation_id,
                     symbol=symbol,
                     qty=qty,
-                    leg=_LEG_SL,
+                    leg=_LEG_EOD,  # FIX-165h: was _LEG_SL; must match DB + monitor
                     order_protocol=fill_entry.order_protocol,
                     direction=fill_entry.direction,
                 )

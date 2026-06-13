@@ -52,7 +52,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--db", metavar="PATH", default=None,
-        help="Path to SQLite DB (default: data_store/trading.db)",
+        help="Path to SQLite DB (default: data_store/trading_system.db)",
     )
     parser.add_argument(
         "--date", metavar="YYYY-MM-DD", default=None,
@@ -295,7 +295,7 @@ def main(argv=None) -> int:
         log.error("reconcile_positions: config load failed: %s", exc)
         return 1
 
-    db_path = Path(args.db) if args.db else Path("data_store") / "trading.db"
+    db_path = Path(args.db) if args.db else Path("data_store") / "trading_system.db"
     try:
         store = StateStore(db_path=db_path)
     except Exception as exc:

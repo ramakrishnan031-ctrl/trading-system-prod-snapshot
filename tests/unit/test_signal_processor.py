@@ -2087,9 +2087,9 @@ def test_fix048_queue_full_abandons_signal() -> None:
     signal_tup = _now_tup(sig_id)
     proc._process_one_safe(signal_tup)
 
-    # Signal status must remain QUEUED (pipeline skipped, requeue failed)
+    # FIX-165f: Signal status updated to REJECTED (was QUEUED before fix)
     row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
-    assert row["status"] == "QUEUED", f"Expected QUEUED, got {row['status']}"
+    assert row["status"] == "REJECTED", f"Expected REJECTED, got {row['status']}"
 
     # Queue should still have only the original blocking item (signal abandoned)
     assert sq.qsize() == 1, f"Expected queue size 1, got {sq.qsize()}"

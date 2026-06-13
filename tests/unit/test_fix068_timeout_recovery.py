@@ -229,13 +229,6 @@ def test_reconciler_unknown_in_flight_found_at_broker():
         {"order_id": "broker_ord_123", "status": "COMPLETE", "symbol": "RELIANCE"}
     ]
 
-    # Mock store.get_trade_by_id()
-    mock_store.get_trade_by_id.return_value = {
-        "trade_id": "trade_timeout1",
-        "symbol": "RELIANCE",
-        "status": "UNKNOWN_IN_FLIGHT",
-    }
-
     # Mock store.get_orders_for_trade() - local DB has this order
     mock_store.get_orders_for_trade.return_value = [
         {
@@ -268,6 +261,14 @@ def test_reconciler_unknown_in_flight_found_at_broker():
         order_placer=mock_order_placer,
     )
 
+    # FIX-165g: _order_mgr is constructed internally; mock its methods
+    reconciler._order_mgr = Mock()
+    reconciler._order_mgr.get_trade.return_value = {
+        "trade_id": "trade_timeout1",
+        "symbol": "RELIANCE",
+        "status": "UNKNOWN_IN_FLIGHT",
+    }
+
     # Run the check
     actions = reconciler._check_unknown_in_flight()
 
@@ -282,8 +283,8 @@ def test_reconciler_unknown_in_flight_found_at_broker():
     # Verify trade was removed from recovery queue
     mock_order_placer.remove_from_timeout_recovery.assert_called_once_with("trade_timeout1")
 
-    # Verify trade status was updated to PENDING_FILL
-    mock_store.update_trade_status.assert_called_once_with("trade_timeout1", "PENDING_FILL")
+    # FIX-165g: Verify update_trade_status on _order_mgr (not _store)
+    reconciler._order_mgr.update_trade_status.assert_called_once_with("trade_timeout1", "PENDING_FILL")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -311,13 +312,6 @@ def test_reconciler_unknown_in_flight_not_found_after_3_polls():
 
     # Mock adapter.get_open_orders() - order NOT found
     mock_adapter.get_open_orders.return_value = []
-
-    # Mock store.get_trade_by_id()
-    mock_store.get_trade_by_id.return_value = {
-        "trade_id": "trade_timeout2",
-        "symbol": "TCS",
-        "status": "UNKNOWN_IN_FLIGHT",
-    }
 
     # Mock store.get_orders_for_trade() - local DB has order
     mock_store.get_orders_for_trade.return_value = [
@@ -351,6 +345,14 @@ def test_reconciler_unknown_in_flight_not_found_after_3_polls():
         order_placer=mock_order_placer,
     )
 
+    # FIX-165g: _order_mgr is constructed internally; mock its methods
+    reconciler._order_mgr = Mock()
+    reconciler._order_mgr.get_trade.return_value = {
+        "trade_id": "trade_timeout2",
+        "symbol": "TCS",
+        "status": "UNKNOWN_IN_FLIGHT",
+    }
+
     # Simulate 3 polls
     for poll_num in range(1, 4):
         actions = reconciler._check_unknown_in_flight()
@@ -374,8 +376,8 @@ def test_reconciler_unknown_in_flight_not_found_after_3_polls():
             assert action.trade_id == "trade_timeout2"
             assert "marked FAILED" in action.description
 
-            # Verify trade marked FAILED
-            mock_store.update_trade_status.assert_called_with("trade_timeout2", "FAILED")
+            # FIX-165g: Verify update_trade_status on _order_mgr (not _store)
+            reconciler._order_mgr.update_trade_status.assert_called_with("trade_timeout2", "FAILED")
 
             # Verify capital released
             mock_fm.release.assert_called_once()
@@ -505,11 +507,6 @@ def test_full_timeout_recovery_flow():
 
     # Step 2: Reconciler checks (poll 1 - not found)
     mock_adapter.get_open_orders.return_value = []
-    mock_store.get_trade_by_id.return_value = {
-        "trade_id": "trade_integration1",
-        "symbol": "INFY",
-        "status": "UNKNOWN_IN_FLIGHT",
-    }
     mock_store.get_orders_for_trade.return_value = [
         {"order_id": "ord_int1", "trade_id": "trade_integration1", "leg": "ENTRY"}
     ]
@@ -527,6 +524,14 @@ def test_full_timeout_recovery_flow():
         broker_orders_fn=mock_adapter.get_open_orders,
         order_placer=placer,
     )
+
+    # FIX-165g: _order_mgr is constructed internally; mock its methods
+    reconciler._order_mgr = Mock()
+    reconciler._order_mgr.get_trade.return_value = {
+        "trade_id": "trade_integration1",
+        "symbol": "INFY",
+        "status": "UNKNOWN_IN_FLIGHT",
+    }
 
     actions = reconciler._check_unknown_in_flight()
     assert len(actions) == 1
@@ -546,5 +551,5 @@ def test_full_timeout_recovery_flow():
     # Verify removed from recovery queue
     assert "trade_integration1" not in placer.get_timeout_recovery_trades()
 
-    # Verify status updated
-    mock_store.update_trade_status.assert_called_with("trade_integration1", "PENDING_FILL")
+    # FIX-165g: Verify update_trade_status on _order_mgr (not _store)
+    reconciler._order_mgr.update_trade_status.assert_called_with("trade_integration1", "PENDING_FILL")

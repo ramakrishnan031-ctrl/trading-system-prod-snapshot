@@ -323,7 +323,7 @@ def main(argv=None) -> int:
         return 1
 
     # State store
-    db_path = Path(args.db) if args.db else Path("data_store") / "trading.db"
+    db_path = Path(args.db) if args.db else Path("data_store") / "trading_system.db"
     try:
         store = StateStore(db_path=db_path)
     except Exception as exc:

@@ -303,12 +303,23 @@ class SignalProcessor:
                 try:
                     self._queue.put(signal_tuple, timeout=1.0)
                 except queue.Full:
-                    # Queue at capacity (300/300) - abandon signal, free worker thread
+                    # FIX-165f: Queue at capacity — abandon signal but clean up.
                     scanner_name = signal_tuple[1] if len(signal_tuple) > 1 else "unknown"
                     self._log.warning(
                         f"REJECTED_QUEUE_FULL: {symbol} {scanner_name} - "
                         f"queue at capacity, abandoning signal {signal_id}"
                     )
+                    try:
+                        self._store.update_signal_status(
+                            signal_id, "REJECTED", "QUEUE_FULL"
+                        )
+                    except Exception:
+                        pass
+                    if self._in_flight_release is not None:
+                        try:
+                            self._in_flight_release(symbol)
+                        except Exception:
+                            pass
                 return
 
         with self._active_lock:
@@ -1215,7 +1226,7 @@ class SignalProcessor:
             with self._in_flight_lock:
                 self._in_flight_count += 1
                 processor_in_flight = self._in_flight_count
-            in_flight_incremented = True  # FIX-165c (gate path)
+                in_flight_incremented = True  # FIX-165c (gate path)
 
             # FIX-135 Item 42: per-strategy position cap (gate path)
             max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)

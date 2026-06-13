@@ -11,198 +11,230 @@
 
 | Priority | BUG | RISK | INCONSISTENCY | DUPLICATION | DESIGN_GAP | DEAD_CODE | CONFIG_GAP | Total |
 |----------|-----|------|---------------|-------------|------------|-----------|------------|-------|
-| P0       | 4   | 0    | 0             | 0           | 0          | 0         | 0          | 4     |
-| P1       | 0   | 1    | 0             | 1           | 1          | 0         | 1          | 4     |
-| P2       | 0   | 0    | 2             | 1           | 0          | 0         | 0          | 3     |
-| **Total**| 4   | 1    | 2             | 2           | 1          | 0         | 1          | 11    |
+| P0       | 6   | 0    | 0             | 0           | 0          | 0         | 0          | 6     |
+| P1       | 2   | 1    | 1             | 1           | 2          | 0         | 1          | 8     |
+| P2       | 4   | 5    | 5             | 2           | 2          | 1         | 2          | 21    |
+| **Total**| 12  | 6    | 6             | 3           | 4          | 1         | 3          | 35    |
 
-**Fixes applied this session:** FIX-165a through FIX-165e (5 fixes, all P0 BUGs)
+**Fixes applied:** FIX-165a through FIX-165h (8 fixes — all P0 BUGs + 1 P1 BUG + 1 P1 INCONSISTENCY)
+**Test suite:** 2876 passed, 0 failed, 12 skipped
+
+---
+
+## FIXES APPLIED THIS SESSION
+
+| Fix ID   | Finding | Priority | File | Description |
+|----------|---------|----------|------|-------------|
+| FIX-165a | F01 | P0 | fund_manager.py | top_up_reservation: invariant check race + missing handler + slm_buffer drop |
+| FIX-165b | F03 | P0 | kill_switch.py | _exit_all_trades_indestructible: wrong columns/statuses/directions |
+| FIX-165c | F04 | P0 | signal_processor.py | _in_flight_count goes negative (both paths) |
+| FIX-165d | F07 | P0 | order_placer.py | Exit retry success path dead code (wrong indentation) |
+| FIX-165e | F05 | P0 | signal_processor.py | Gate path missing FIX-070 kill-switch check before placement |
+| FIX-165f | F19 | P1 | signal_processor.py | Rate-limiter queue-full abandon: signal status + in_flight release |
+| FIX-165g | F20 | P0 | order_reconciler.py | FIX-068 timeout recovery calls non-existent StateStore methods |
+| FIX-165h | F09 | P1 | order_placer.py | Emergency exit uses _LEG_SL instead of _LEG_EOD in fill_map |
+| — | F21 | P1 | 5 scripts | DB filename `trading.db` → `trading_system.db` |
 
 ---
 
 ## PART 1: Capital & Fund Management
 
-### Finding F01 — FIX-165a: `top_up_reservation` race + slm_buffer drop
-- **File:** `capital/fund_manager.py` lines 746-770
-- **Type:** BUG | **Priority:** P0 | **Status:** FIXED
-- **Description:** Three bugs in `top_up_reservation`:
-  1. `_check_invariant()` was called outside the RLock — race condition under concurrent top-ups.
-  2. `_handle_invariant_violation()` was never called on failure.
-  3. `slm_buffer` field was dropped when creating new `_Reservation` (overwritten by default).
-- **Fix:** Moved invariant check inside lock, added violation handling outside lock, preserved `slm_buffer=res.slm_buffer`.
+### F01 — FIX-165a: `top_up_reservation` race + slm_buffer drop *(P0 BUG — FIXED)*
+- **File:** `capital/fund_manager.py:746-770`
+- Three bugs: invariant check outside lock, missing violation handler, slm_buffer dropped.
 
-### Finding F02 — Capital modules: CLEAN
-- **Files:** `capital/position_sizer.py`, `capital/performance_allocator.py`, `capital/strategy_governor.py`, `capital/invariant.py`, `capital/risk_engine.py`, `capital/drift_handler.py`
-- **Status:** No issues found. Pure calculation modules, thread-safe, fail-open where appropriate.
+### F02 — Capital modules: CLEAN
+- `position_sizer.py`, `performance_allocator.py`, `strategy_governor.py`, `invariant.py`, `risk_engine.py`, `drift_handler.py` — all clean.
 
 ---
 
 ## PART 2: Kill Switch & Safety
 
-### Finding F03 — FIX-165b: `_exit_all_trades_indestructible` wrong column names
-- **File:** `capital/kill_switch.py` lines 663-686
-- **Type:** BUG | **Priority:** P0 | **Status:** FIXED
-- **Description:** Hard-coded SQL used wrong column names and status values:
-  - `quantity` → should be `qty_filled`
-  - `side` → should be `direction`
-  - `PENDING` → should be `PENDING_FILL` + `PARTIAL`
-  - Direction mapping `BUY/SELL` → should be `LONG/SHORT`
-- **Impact:** Kill switch emergency exit would fail to exit any positions. Currently unreachable (main.py doesn't pass adapter to KillSwitch), but the method exists as a safety net.
-- **Fix:** Corrected all column names, status values, and direction mapping. Added `qty == 0` skip guard.
-- **Tests updated:** `tests/unit/test_phase18_batch2.py` — all 3 FIX-087 test mocks updated.
+### F03 — FIX-165b: `_exit_all_trades_indestructible` wrong column names *(P0 BUG — FIXED)*
+- **File:** `capital/kill_switch.py:663-686`
+- Wrong columns, statuses, and direction mapping vs schema.
+
+### F22 — KillSwitch not wired to adapter in main.py *(P1 DESIGN_GAP — DISCUSS)*
+- **File:** `main.py:1222`
+- Neither `adapter` nor `on_hard_kill_cancel_fn` passed. **Hard_kill is toothless** — sets state but cannot exit positions or cancel orders. FIX-165b fixed the method itself but it remains unreachable.
+- **Recommendation:** Add `kill_switch._adapter = broker_adapter` after adapter construction at main.py:1356. Discuss with Rama — has operational implications.
 
 ---
 
 ## PART 3: Signal Pipeline
 
-### Finding F04 — FIX-165c: `_in_flight_count` goes negative
-- **File:** `signals/signal_processor.py` — `_process_one` (line 423) and `continue_from_gate` (line 1147)
-- **Type:** BUG | **Priority:** P0 | **Status:** FIXED (both paths)
-- **Description:** `_in_flight_count` was unconditionally decremented in the `finally` block, but the increment happens mid-pipeline after several checks that can raise `_PipelineReject`. If a reject occurs before the increment, the count goes negative, corrupting the TOCTOU protection.
-- **Fix:** Added `in_flight_incremented = False` flag at method start. Set to `True` after increment. `finally` block only decrements when flag is `True`.
+### F04 — FIX-165c: `_in_flight_count` goes negative *(P0 BUG — FIXED)*
+- **File:** `signals/signal_processor.py` — both `_process_one` and `continue_from_gate`
 
-### Finding F05 — FIX-165e: `continue_from_gate` missing FIX-070 second kill-switch check
-- **File:** `signals/signal_processor.py` lines 1292+ (gate path)
-- **Type:** BUG | **Priority:** P0 | **Status:** FIXED
-- **Description:** `_process_one` has FIX-070 — a second kill-switch + shutdown check immediately before `self._placer.place()`. The gate path was missing this TOCTOU protection. Kill switch could activate during sizing/risk/reservation but placement would proceed.
-- **Fix:** Added kill-switch and shutdown checks before `self._placer.place()` in gate path, mirroring FIX-070.
+### F05 — FIX-165e: Gate path missing kill-switch check *(P0 BUG — FIXED)*
+- **File:** `signals/signal_processor.py:1292+`
 
-### Finding F06 — `continue_from_gate` missing strategy governor check
-- **File:** `signals/signal_processor.py` (gate path)
-- **Type:** DESIGN_GAP | **Priority:** P1 | **Status:** DISCUSS
-- **Description:** `_process_one` calls `self._strategy_governor.check_cooldown()` before placement. The gate path skips this. If a strategy hits its cooldown while a WatchEntry is pending at the gate, the cooldown is not enforced.
-- **Recommendation:** Add governor check in gate path. Discuss with Rama first — may be intentional (gate entries are pre-qualified).
+### F06 — Gate path missing strategy governor check *(P1 DESIGN_GAP — DISCUSS)*
+- **File:** `signals/signal_processor.py`
+- `_process_one` checks `strategy_governor.check()` but gate path skips it.
+
+### F19 — FIX-165f: Rate-limiter queue-full abandon path *(P1 BUG — FIXED)*
+- **File:** `signals/signal_processor.py:305-312`
+- Signal status stayed QUEUED forever; in_flight lock never released.
+
+### F23 — `_derive_target` raises ValueError instead of _PipelineReject *(P2 BUG)*
+- **File:** `signals/signal_processor.py:1090`
+
+### F24 — `avg_pipeline_ms` denominator mismatch *(P2 INCONSISTENCY)*
+- **File:** `signals/signal_processor.py:1410-1422`
+- Numerator includes all signals, denominator only counts successes.
+
+### F25 — `continue_from_gate` runs synchronously on gate worker thread *(P2 DESIGN_GAP)*
+- Blocks LTP polling when 2 entries trigger simultaneously.
 
 ---
 
 ## PART 4: Order Lifecycle
 
-### Finding F07 — FIX-165d: `_retry_limit_triple_exits` success path dead code
-- **File:** `orders/order_placer.py` lines 2786-2897
-- **Type:** BUG | **Priority:** P0 | **Status:** FIXED
-- **Description:** The success path after `place_deferred_exits()` was lexically inside the `except` block due to wrong indentation (12 spaces instead of 8). Since every branch in the except block ends with `return`, the success path was unreachable. When exit retry succeeds, orders were placed at broker but never persisted to DB (`insert_orders_atomic`) and never tracked by `order_monitor`.
-- **Impact:** Position appears unprotected — order_monitor won't poll, reconciler won't check, EOD squareoff won't know about the exit orders. Could trigger CHECK9 alerts, duplicate exits, or capital drift.
-- **Fix:** Dedented success path from 12-space to 8-space indent, making it reachable after the try/except.
+### F07 — FIX-165d: Exit retry success path dead code *(P0 BUG — FIXED)*
+- **File:** `orders/order_placer.py:2786-2897`
 
-### Finding F08 — `_check_liquidity` bypasses adapter API
-- **File:** `orders/order_placer.py` line 3074
-- **Type:** RISK | **Priority:** P1 | **Status:** DOCUMENT
-- **Description:** Directly calls `self._adapter._kite.quote()`, bypassing rate limiting, 429 detection, error translation, and paper mode handling. Guarded by `self._mode == "LIVE"` so no paper mode crash, but rate limiting bypass is a concern.
-- **Recommendation:** Route through adapter's public API with rate limiting.
+### F09 — FIX-165h: Emergency exit wrong leg label *(P1 BUG — FIXED)*
+- **File:** `orders/order_placer.py:3002`
+- Used `_LEG_SL` in fill_map but `"EOD"` in DB/monitor → exit_reason would be `SL_HIT` instead of `EOD_SQUAREOFF`.
 
-### Finding F09 — `_emergency_market_exit` uses wrong leg label
-- **File:** `orders/order_placer.py` line 3007
-- **Type:** INCONSISTENCY | **Priority:** P2 | **Status:** DOCUMENT
-- **Description:** Uses `_LEG_SL` for emergency MARKET exit fill_map entry. This order is not a stop-loss — it's an emergency exit. Mislabeling could cause spurious OCO cancel attempts. Low severity: emergency exits are rare and cancelling a non-existent TGT is a no-op.
+### F08 — `_check_liquidity` bypasses adapter API *(P1 RISK)*
+- **File:** `orders/order_placer.py:3074`
+- Directly calls `_kite.quote()` — skips rate limiting.
 
-### Finding F10 — `get_trades()` wrong rate limit category
-- **File:** `broker/zerodha_adapter.py` line 1196
-- **Type:** INCONSISTENCY | **Priority:** P2 | **Status:** DOCUMENT
-- **Description:** Uses `_CATEGORY_MAP["get_margins"]` as rate limit key but calls `self._kite.trades()`. Comment says intentional bucket sharing. Zero functional impact but misleading.
+### F20 — FIX-165g: Reconciler timeout recovery broken *(P0 BUG — FIXED)*
+- **File:** `orders/order_reconciler.py:1836,1894,1911`
+- Three calls to non-existent StateStore methods (`get_trade_by_id`, `update_trade_status`). FIX-068 feature was silently broken. Fixed to use `_order_mgr`.
 
-### Finding F11 — Order state machine, SL/TGT timing, orphan detection, CHECK9, partial fills, EOD squareoff, OCO cancellation, rate limiting: CLEAN
-- **Status:** All checked and verified correct.
+### F26 — Lock release/acquire inside `with` block is fragile *(P2 RISK)*
+- **File:** `orders/order_placer.py:2619-2673`
+
+### F27 — Stuck-partial cancel skips OrderPartiallyTerminated event *(P2 RISK)*
+- **File:** `broker/order_monitor.py:960-967`
+
+### F28 — `get_trades()` wrong rate limit category name *(P2 INCONSISTENCY)*
+- **File:** `broker/zerodha_adapter.py:1196`
+
+### F29 — Order lifecycle CLEAN sections
+- State machine, SL/TGT timing, orphan detection, CHECK1-CHECK9 SQL, partial fills, EOD squareoff (2-pass + LIMIT_THEN_MARKET), OCO, rate limiting — all verified correct.
 
 ---
 
 ## PART 5: Database & Persistence
 
-### Finding F12 — Database layer: CLEAN
-- **File:** `core/state_store.py`
-- **Status:** Thread-safe per-thread connections via `threading.local()`, WAL mode, `BEGIN IMMEDIATE` for writer serialization. Schema matches code column references (verified against `core/schema.sql`). No SQL injection risks (1 whitelisted dynamic table name in `row_count()`).
+### F12 — Database layer: CLEAN
+- WAL mode, BEGIN IMMEDIATE, per-thread connections, proper cursor cleanup, schema version check, whitelisted table name in `row_count()`.
 
 ---
 
 ## PART 6: Configuration
 
-### Finding F13 — `email_fallback_config` not wired
-- **Type:** CONFIG_GAP | **Priority:** P1 | **Status:** DOCUMENT
-- **Description:** `email_fallback_config` exists in config but is not wired to `TelegramNotifier` in `main.py`. If Telegram fails, there's no email fallback.
-- **Recommendation:** Discuss with Rama whether email fallback is needed for production.
+### F13 — `email_fallback_config` not wired *(P1 CONFIG_GAP — DISCUSS)*
+- **File:** `main.py:1544`
+- Config exists, notifier accepts it, but main.py never passes it.
+
+### F30 — `nse_holidays_2026.yaml` hardcoded *(P2 CONFIG_GAP)*
+- **File:** `config_loader.py:1205`, `scripts/premarket_healthcheck.py:54`
+- Will break on Jan 1 2027.
 
 ---
 
 ## PART 7: AGY / Antigravity
 
-### Finding F14 — AGY: CLEAN
-- **Status:** Model cascade (Tier 1: Sonnet→Pro for deep analysis, Tier 2: Flash for routine), governance boundaries all passing (CT151/152/153), automation fully working with dotenv and watchman.
+### F14 — AGY: CLEAN
+- Model cascade, governance boundaries, automation — all verified.
 
 ---
 
 ## PART 8: Code Quality
 
-### Finding F15 — Code quality checks: CLEAN
-- **Checks performed:**
-  - No bare `except:` statements (all use `except Exception`)
-  - No `# TEMP` or `# TODO_TEMP` markers in production code
-  - No `print()` statements in production code
-  - No SQL injection risks (parameterized queries throughout)
-  - Consistent use of `now_ist()` from `core.time_authority` (no raw `datetime.now()` in production)
+### F15 — Code quality: CLEAN
+- No bare `except:` in production, no `# TEMP` markers, no `print()`, no SQL injection, consistent `now_ist()` usage, no `eval/exec`, no `os.system`, all production threads are daemon threads.
 
 ---
 
 ## PART 9: Startup Sequence
 
-### Finding F16 — Startup: CLEAN (from Agent B)
-- **Status:** Startup sequence in `main.py` correctly initializes all components in dependency order. KillSwitch hydration, FundManager rehydration, and strategy loading all verified.
+### F31 — Signal handlers installed after threads started *(P2 RISK)*
+- **File:** `main.py:2174`
+- SIGINT during startup bypasses clean shutdown.
+
+### F32 — Partial startup failure leaks DB connection *(P2 RISK)*
+- **File:** `main.py:1201-2193`
+- No try/finally around Phase 0e subsystem construction.
+
+### F33 — `StartupReport` omits `temp_config` result *(P2 BUG)*
+- **File:** `utils/startup_checks.py:1594`
+
+### F34 — `check_disk_space()` and `check_db_permissions()` never called *(P2 DESIGN_GAP)*
+- **File:** `utils/startup_checks.py`
+- Functions exist but `run_all_startup_checks()` doesn't call them.
 
 ---
 
 ## PART 10: Duplicate Code
 
-### Finding F17 — `_PRODUCT_TO_INTENT` triplication
-- **Files:** `orders/order_placer.py:241`, `orders/order_reconciler.py:85`, `capital/fund_manager.py:123`
-- **Type:** DUPLICATION | **Priority:** P1 | **Status:** DOCUMENT
-- **Description:** Identical dict `{MIS→INTRADAY, CO→COVER_ORDER, CNC→DELIVERY, NRML→DELIVERY}` in 3 files. Comment in order_placer.py acknowledges: "Keep in lockstep with order_reconciler._PRODUCT_TO_INTENT." If any copy drifts, capital calculations silently break.
-- **Recommendation:** Extract to shared constants module. Discuss with Rama.
+### F17 — `_PRODUCT_TO_INTENT` in 3 files *(P1 DUPLICATION — DISCUSS)*
+- `order_placer.py:241`, `order_reconciler.py:85`, `fund_manager.py:123`
 
-### Finding F18 — `_is_market_hours()` duplication
-- **Files:** `broker/token_monitor.py:142`, `scripts/gemini_watchman.py:118`
-- **Type:** DUPLICATION | **Priority:** P2 | **Status:** DOCUMENT
-- **Description:** Two independent market hours implementations. Neither uses `MarketWindows`. Low priority — different runtime contexts (daemon thread vs. standalone script).
+### F18 — `_is_market_hours()` in 2 files *(P2 DUPLICATION)*
+- `token_monitor.py:142`, `gemini_watchman.py:118`
 
 ---
 
-## PART 11: Report Generation
+## PART 11: Scripts
 
-This document.
+### F21 — 5 scripts use wrong DB filename *(P1 INCONSISTENCY — FIXED)*
+- `eod_cleanup.py`, `reconcile_pnl.py`, `reconcile_positions.py`, `compute_strategy_metrics.py`, `fetch_fno_ban.py` — `trading.db` → `trading_system.db`
+
+### F35 — `reconcile_pnl.py` and `reconcile_positions.py` wrong ZerodhaAdapter constructor *(P2 BUG)*
+- Pass `api_key`/`access_token`/`paper` kwargs that don't match constructor signature.
+
+### F36 — `premarket_healthcheck.py` calls non-existent TelegramNotifier methods *(P2 BUG)*
+- `from_config()` and `.send_alert()` don't exist.
 
 ---
 
-## PART 12: Fix Prioritization
+## PART 12: Entry Gate + Screening
 
-### Fixed this session (P0 BUGs):
-| Fix ID   | Finding | File | Description |
-|----------|---------|------|-------------|
-| FIX-165a | F01     | fund_manager.py | top_up_reservation race + slm_buffer drop |
-| FIX-165b | F03     | kill_switch.py | _exit_all_trades_indestructible wrong columns |
-| FIX-165c | F04     | signal_processor.py | _in_flight_count goes negative (both paths) |
-| FIX-165d | F07     | order_placer.py | Exit retry success path dead code |
-| FIX-165e | F05     | signal_processor.py | Gate path missing kill-switch check before placement |
+### F37 — `updated_extras` dead code *(P2 DEAD_CODE)*
+- **File:** `entry_gate.py:520`
 
-### Discuss with Rama before fixing (P1):
-| Finding | Type | File | Description |
-|---------|------|------|-------------|
-| F06     | DESIGN_GAP | signal_processor.py | Gate path missing strategy governor check |
-| F08     | RISK | order_placer.py | _check_liquidity bypasses adapter API |
-| F13     | CONFIG_GAP | main.py | email_fallback_config not wired |
-| F17     | DUPLICATION | 3 files | _PRODUCT_TO_INTENT triplication |
+### F38 — Frozen dataclass mutation via mutable dict interior *(P2 RISK)*
+- **File:** `entry_gate.py:523`
 
-### Low priority / Document only (P2):
-| Finding | Type | File | Description |
-|---------|------|------|-------------|
-| F09     | INCONSISTENCY | order_placer.py | Emergency exit uses wrong leg label |
-| F10     | INCONSISTENCY | zerodha_adapter.py | get_trades wrong rate limit category |
-| F18     | DUPLICATION | 2 files | _is_market_hours() duplication |
+### F39 — `clear_all` doesn't clear `_quote_failures` *(P2 INCONSISTENCY)*
+- **File:** `entry_gate.py:255-273`
+
+### F40 — Single step error rejects entire signal *(P2 RISK — by design)*
+- **File:** `secondary_screener.py:141-161`
+
+### F41 — Signal age docstring mismatch *(P2 INCONSISTENCY)*
+- **File:** `step_executor.py:354-358`
+
+### F42 — Screening + dedup CLEAN sections
+- Dedup fingerprinting (collision-resistant), quality_scorer NaN handling, weight normalization, WatchEntry lifecycle, price-hit detection — all verified correct.
 
 ---
 
 ## PART 13: Post-Fix Testing
 
-Test suite run after all FIX-165 changes: **2876 passed, 0 failed, 12 skipped** (388s)
+Test suite after all fixes: **2876 passed, 0 failed, 12 skipped** (389s)
 
 ---
 
 ## PART 14: Deployment
 
-SCP to VM: **[PENDING — after test suite passes]**
+Pushed to VM via `git push origin main` — auto-deployed.
+
+---
+
+## Items for Rama's Review
+
+| # | Priority | Type | Description |
+|---|----------|------|-------------|
+| 1 | P1 | DESIGN_GAP | Wire KillSwitch to broker_adapter so hard_kill can exit positions (F22) |
+| 2 | P1 | DESIGN_GAP | Add strategy governor check to gate path (F06) |
+| 3 | P1 | RISK | Route `_check_liquidity` through adapter public API (F08) |
+| 4 | P1 | CONFIG_GAP | Wire `email_fallback_config` to TelegramNotifier (F13) |
+| 5 | P1 | DUPLICATION | Extract `_PRODUCT_TO_INTENT` to shared module (F17) |

@@ -1833,7 +1833,7 @@ class OrderReconciler:
 
             # Get trade details
             try:
-                trade_row = self._store.get_trade_by_id(trade_id)
+                trade_row = self._order_mgr.get_trade(trade_id)
             except Exception as exc:
                 self._log.error(
                     "check_unknown_in_flight: get_trade_by_id failed for %s: %s",
@@ -1891,7 +1891,7 @@ class OrderReconciler:
                 # Update trade status from UNKNOWN_IN_FLIGHT to PENDING_FILL
                 # (normal reconciliation will handle the rest)
                 try:
-                    self._store.update_trade_status(trade_id, "PENDING_FILL")
+                    self._order_mgr.update_trade_status(trade_id, "PENDING_FILL")
                 except Exception as exc:
                     log.error("check_unknown_in_flight: update_trade_status failed: %s", exc)
 
@@ -1908,7 +1908,7 @@ class OrderReconciler:
                 reservation_id = recovery_entry.get("reservation_id") if recovery_entry else None
 
                 try:
-                    self._store.update_trade_status(trade_id, "FAILED")
+                    self._order_mgr.update_trade_status(trade_id, "FAILED")
                 except Exception as exc:
                     log.error("check_unknown_in_flight: update_trade_status FAILED: %s", exc)
 
