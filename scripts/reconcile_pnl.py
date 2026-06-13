@@ -92,7 +92,7 @@ def _fetch_broker_day_pnl(log: logging.Logger) -> float:
     Returns 0.0 on any failure (best-effort; reconcile_pnl logs the error).
     Raises RuntimeError with a descriptive message on hard failures.
     """
-    from broker.zerodha_adapter import ZerodhaAdapter
+    from kiteconnect import KiteConnect
 
     api_key = os.environ.get("ZERODHA_API_KEY", "")
     access_token = os.environ.get("ZERODHA_ACCESS_TOKEN", "")
@@ -102,15 +102,11 @@ def _fetch_broker_day_pnl(log: logging.Logger) -> float:
             "ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN must be set for live P&L fetch"
         )
 
-    adapter = ZerodhaAdapter(
-        api_key=api_key,
-        access_token=access_token,
-        logger=log,
-        paper=False,
-    )
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
 
     try:
-        raw_positions = adapter._kite.positions()
+        raw_positions = kite.positions()
     except Exception as exc:
         raise RuntimeError(f"Kite positions() failed: {exc}") from exc
 

@@ -219,7 +219,9 @@ def main() -> int:
     try:
         from alerts.telegram_notifier import TelegramNotifier
 
-        notifier = TelegramNotifier.from_config(args.config_dir)
+        notifier = TelegramNotifier.from_env()
+        if notifier is None:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_PRIMARY not set")
         notifier.send_alert(alert_msg, level="CRITICAL")
         print("Telegram alert sent")
     except Exception as e:
