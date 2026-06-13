@@ -16,8 +16,8 @@
 | P2       | 4   | 5    | 5             | 2           | 2          | 1         | 2          | 21    |
 | **Total**| 12  | 6    | 6             | 3           | 4          | 1         | 3          | 35    |
 
-**Fixes applied:** FIX-165a through FIX-165h (8 fixes — all P0 BUGs + 1 P1 BUG + 1 P1 INCONSISTENCY)
-**Test suite:** 2876 passed, 0 failed, 12 skipped
+**Fixes applied:** FIX-165a through FIX-165h + FIX-166 (13 fixes — all P0s + all P1s)
+**Test suite:** 2937 passed, 0 failed, 12 skipped
 
 ---
 
@@ -34,6 +34,11 @@
 | FIX-165g | F20 | P0 | order_reconciler.py | FIX-068 timeout recovery calls non-existent StateStore methods |
 | FIX-165h | F09 | P1 | order_placer.py | Emergency exit uses _LEG_SL instead of _LEG_EOD in fill_map |
 | — | F21 | P1 | 5 scripts | DB filename `trading.db` → `trading_system.db` |
+| FIX-166 | F22 | P1 | main.py, kill_switch.py | Wire KillSwitch to broker_adapter via set_adapter() |
+| FIX-166 | F06 | P1 | signal_processor.py | Add strategy governor check to continue_from_gate |
+| FIX-166 | F08 | P1 | order_placer.py, zerodha_adapter.py | Route _check_liquidity through adapter.get_quote_raw() |
+| FIX-166 | F13 | P1 | main.py | Wire email_fallback_config to TelegramNotifier |
+| FIX-166 | F17 | P1 | core/constants.py + 4 files | Extract _PRODUCT_TO_INTENT to shared module |
 
 ---
 
@@ -54,10 +59,9 @@
 - **File:** `capital/kill_switch.py:663-686`
 - Wrong columns, statuses, and direction mapping vs schema.
 
-### F22 — KillSwitch not wired to adapter in main.py *(P1 DESIGN_GAP — DISCUSS)*
-- **File:** `main.py:1222`
-- Neither `adapter` nor `on_hard_kill_cancel_fn` passed. **Hard_kill is toothless** — sets state but cannot exit positions or cancel orders. FIX-165b fixed the method itself but it remains unreachable.
-- **Recommendation:** Add `kill_switch._adapter = broker_adapter` after adapter construction at main.py:1356. Discuss with Rama — has operational implications.
+### F22 — FIX-166: KillSwitch wired to adapter in main.py *(P1 DESIGN_GAP — FIXED)*
+- **File:** `main.py`, `kill_switch.py`
+- Added `set_adapter()` method to KillSwitch (mirrors `set_notifier()` pattern). Wired `kill_switch.set_adapter(broker_adapter)` in main.py after notifier wiring. Hard_kill can now exit positions via `_exit_all_trades_indestructible`.
 
 ---
 
@@ -69,9 +73,9 @@
 ### F05 — FIX-165e: Gate path missing kill-switch check *(P0 BUG — FIXED)*
 - **File:** `signals/signal_processor.py:1292+`
 
-### F06 — Gate path missing strategy governor check *(P1 DESIGN_GAP — DISCUSS)*
+### F06 — FIX-166: Gate path strategy governor check added *(P1 DESIGN_GAP — FIXED)*
 - **File:** `signals/signal_processor.py`
-- `_process_one` checks `strategy_governor.check()` but gate path skips it.
+- Added strategy_governor.check() to `continue_from_gate` (between per-strategy window check and sizing), mirroring `_process_one`. Gate-released entries now respect cooldowns.
 
 ### F19 — FIX-165f: Rate-limiter queue-full abandon path *(P1 BUG — FIXED)*
 - **File:** `signals/signal_processor.py:305-312`
@@ -98,9 +102,9 @@
 - **File:** `orders/order_placer.py:3002`
 - Used `_LEG_SL` in fill_map but `"EOD"` in DB/monitor → exit_reason would be `SL_HIT` instead of `EOD_SQUAREOFF`.
 
-### F08 — `_check_liquidity` bypasses adapter API *(P1 RISK)*
-- **File:** `orders/order_placer.py:3074`
-- Directly calls `_kite.quote()` — skips rate limiting.
+### F08 — FIX-166: `_check_liquidity` routed through adapter *(P1 RISK — FIXED)*
+- **File:** `orders/order_placer.py`, `broker/zerodha_adapter.py`
+- Added `get_quote_raw()` to adapter (rate-limited, returns raw dict with depth data). Changed `_check_liquidity` to use it instead of `_kite.quote()` directly.
 
 ### F20 — FIX-165g: Reconciler timeout recovery broken *(P0 BUG — FIXED)*
 - **File:** `orders/order_reconciler.py:1836,1894,1911`
@@ -129,9 +133,9 @@
 
 ## PART 6: Configuration
 
-### F13 — `email_fallback_config` not wired *(P1 CONFIG_GAP — DISCUSS)*
-- **File:** `main.py:1544`
-- Config exists, notifier accepts it, but main.py never passes it.
+### F13 — FIX-166: `email_fallback_config` wired *(P1 CONFIG_GAP — FIXED)*
+- **File:** `main.py:1554`
+- Added `email_fallback_config=alert_cfg.email_fallback` to TelegramNotifier constructor. CRITICAL alerts now fall back to email when Telegram fails.
 
 ### F30 — `nse_holidays_2026.yaml` hardcoded *(P2 CONFIG_GAP)*
 - **File:** `config_loader.py:1205`, `scripts/premarket_healthcheck.py:54`
@@ -174,8 +178,8 @@
 
 ## PART 10: Duplicate Code
 
-### F17 — `_PRODUCT_TO_INTENT` in 3 files *(P1 DUPLICATION — DISCUSS)*
-- `order_placer.py:241`, `order_reconciler.py:85`, `fund_manager.py:123`
+### F17 — FIX-166: `_PRODUCT_TO_INTENT` extracted *(P1 DUPLICATION — FIXED)*
+- Created `core/constants.py` with canonical `PRODUCT_TO_INTENT`. Updated imports in `fund_manager.py`, `order_placer.py`, `order_reconciler.py`, and `shadow_tracker.py`.
 
 ### F18 — `_is_market_hours()` in 2 files *(P2 DUPLICATION)*
 - `token_monitor.py:142`, `gemini_watchman.py:118`
@@ -231,10 +235,4 @@ Pushed to VM via `git push origin main` — auto-deployed.
 
 ## Items for Rama's Review
 
-| # | Priority | Type | Description |
-|---|----------|------|-------------|
-| 1 | P1 | DESIGN_GAP | Wire KillSwitch to broker_adapter so hard_kill can exit positions (F22) |
-| 2 | P1 | DESIGN_GAP | Add strategy governor check to gate path (F06) |
-| 3 | P1 | RISK | Route `_check_liquidity` through adapter public API (F08) |
-| 4 | P1 | CONFIG_GAP | Wire `email_fallback_config` to TelegramNotifier (F13) |
-| 5 | P1 | DUPLICATION | Extract `_PRODUCT_TO_INTENT` to shared module (F17) |
+All P0 and P1 items have been fixed (FIX-165a-h + FIX-166). Remaining open items are P2 only — see individual findings above.
