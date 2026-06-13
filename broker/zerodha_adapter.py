@@ -220,6 +220,7 @@ _CATEGORY_MAP: dict[str, str] = {
     "get_order_history":"order",
     "get_positions":    "margins",
     "get_margins":      "margins",
+    "get_trades":       "margins",
     "get_quote":        "quote",
 }
 
@@ -1213,12 +1214,12 @@ class ZerodhaAdapter:
         if self._paper:
             return []
         try:
-            self._rl.acquire(_CATEGORY_MAP["get_margins"])
+            self._rl.acquire(_CATEGORY_MAP["get_trades"])
             raw = self._kite.trades()
         except Exception as exc:
-            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+            raise self._translate_broker_exception(exc, {}, "get_trades") from exc
 
-        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
+        self._reset_429_attempts(_CATEGORY_MAP["get_trades"])
 
         return [
             {

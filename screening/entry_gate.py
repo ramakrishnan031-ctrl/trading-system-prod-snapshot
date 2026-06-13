@@ -262,6 +262,7 @@ class EntryGate:
         with self._lock:
             count = len(self._watchlist)
             self._watchlist.clear()
+            self._quote_failures.clear()
 
         # Clear persisted state
         db_count = self._state_store.clear_all_gate_state()
@@ -516,11 +517,7 @@ class EntryGate:
 
         # FIX-025: store release_ltp in extras for downstream consumption
         if release_ltp is not None:
-            # WatchEntry is frozen, so we create a new dict with release_ltp
-            updated_extras = {**entry.extras, "release_ltp": release_ltp}
-            # Replace the extras in-place by updating the dict reference
-            # (This works because extras is mutable even though WatchEntry is frozen)
-            entry.extras.update({"release_ltp": release_ltp})
+            entry.extras["release_ltp"] = release_ltp
 
         # EG7 step 3: on_release callback (after store update, errors caught)
         try:

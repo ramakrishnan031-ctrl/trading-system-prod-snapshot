@@ -1606,4 +1606,5 @@ def run_all_startup_checks(
         missing_config_files=missing_config,
         instrument_cache_count=instrument_cache_count,  # BL-20
         ntp=ntp_result,  # FIX-129 Item 27
+        temp_config=temp_result,  # FIX-151
     )

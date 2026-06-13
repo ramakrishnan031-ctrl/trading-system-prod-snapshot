@@ -16,8 +16,9 @@
 | P2       | 4   | 5    | 5             | 2           | 2          | 1         | 2          | 21    |
 | **Total**| 12  | 6    | 6             | 3           | 4          | 1         | 3          | 35    |
 
-**Fixes applied:** FIX-165a through FIX-165h + FIX-166 (13 fixes — all P0s + all P1s)
-**Test suite:** 2937 passed, 0 failed, 12 skipped
+**Fixes applied:** FIX-165a through FIX-165h + FIX-166 + FIX-167 + FIX-168 (22 fixes — all P0s + all P1s + 9 P2s)
+**Test suite:** 2940 passed, 0 failed, 12 skipped
+**Remaining open:** 12 P2 items (F18, F25, F26, F27, F30, F31, F32, F34, F38, F40)
 
 ---
 
@@ -39,6 +40,15 @@
 | FIX-166 | F08 | P1 | order_placer.py, zerodha_adapter.py | Route _check_liquidity through adapter.get_quote_raw() |
 | FIX-166 | F13 | P1 | main.py | Wire email_fallback_config to TelegramNotifier |
 | FIX-166 | F17 | P1 | core/constants.py + 4 files | Extract _PRODUCT_TO_INTENT to shared module |
+| FIX-167 | F35 | P2 | reconcile_pnl/positions.py | Wrong ZerodhaAdapter constructor → direct KiteConnect |
+| FIX-167 | F36 | P2 | premarket_healthcheck.py | from_config() → from_env() |
+| FIX-168 | F23 | P2 | signal_processor.py | ValueError → _PipelineReject for unknown tgt_method |
+| FIX-168 | F24 | P2 | signal_processor.py | avg_pipeline_ms denominator: pipeline_total (all signals) |
+| FIX-168 | F28 | P2 | zerodha_adapter.py | get_trades() category: "get_margins" → "get_trades" |
+| FIX-168 | F33 | P2 | startup_checks.py | Wire temp_config=temp_result to StartupReport |
+| FIX-168 | F37 | P2 | entry_gate.py | Remove dead updated_extras variable |
+| FIX-168 | F39 | P2 | entry_gate.py | clear_all now clears _quote_failures |
+| FIX-168 | F41 | P2 | step_executor.py | Fix signal_age docstring (>90s → >60s) |
 
 ---
 
@@ -81,12 +91,13 @@
 - **File:** `signals/signal_processor.py:305-312`
 - Signal status stayed QUEUED forever; in_flight lock never released.
 
-### F23 — `_derive_target` raises ValueError instead of _PipelineReject *(P2 BUG)*
-- **File:** `signals/signal_processor.py:1090`
+### F23 — FIX-168: `_derive_target` raises ValueError instead of _PipelineReject *(P2 BUG — FIXED)*
+- **File:** `signals/signal_processor.py:1101`
+- Changed `raise ValueError` to `raise _PipelineReject("UNKNOWN_TGT_METHOD", ...)`.
 
-### F24 — `avg_pipeline_ms` denominator mismatch *(P2 INCONSISTENCY)*
-- **File:** `signals/signal_processor.py:1410-1422`
-- Numerator includes all signals, denominator only counts successes.
+### F24 — FIX-168: `avg_pipeline_ms` denominator mismatch *(P2 INCONSISTENCY — FIXED)*
+- **File:** `signals/signal_processor.py:1430-1443`
+- Added `pipeline_total` counter (incremented in `finally` blocks for both paths). Denominator now includes all signals (processed + rejected), matching numerator.
 
 ### F25 — `continue_from_gate` runs synchronously on gate worker thread *(P2 DESIGN_GAP)*
 - Blocks LTP polling when 2 entries trigger simultaneously.
@@ -116,8 +127,9 @@
 ### F27 — Stuck-partial cancel skips OrderPartiallyTerminated event *(P2 RISK)*
 - **File:** `broker/order_monitor.py:960-967`
 
-### F28 — `get_trades()` wrong rate limit category name *(P2 INCONSISTENCY)*
-- **File:** `broker/zerodha_adapter.py:1196`
+### F28 — FIX-168: `get_trades()` wrong rate limit category name *(P2 INCONSISTENCY — FIXED)*
+- **File:** `broker/zerodha_adapter.py:1200-1221`
+- Added `"get_trades": "margins"` to `_CATEGORY_MAP`. Changed `get_trades()` to use `_CATEGORY_MAP["get_trades"]` for acquire/reset and error context.
 
 ### F29 — Order lifecycle CLEAN sections
 - State machine, SL/TGT timing, orphan detection, CHECK1-CHECK9 SQL, partial fills, EOD squareoff (2-pass + LIMIT_THEN_MARKET), OCO, rate limiting — all verified correct.
@@ -167,8 +179,9 @@
 - **File:** `main.py:1201-2193`
 - No try/finally around Phase 0e subsystem construction.
 
-### F33 — `StartupReport` omits `temp_config` result *(P2 BUG)*
+### F33 — FIX-168: `StartupReport` omits `temp_config` result *(P2 BUG — FIXED)*
 - **File:** `utils/startup_checks.py:1594`
+- Added `temp_config=temp_result` to `StartupReport` constructor call.
 
 ### F34 — `check_disk_space()` and `check_db_permissions()` never called *(P2 DESIGN_GAP)*
 - **File:** `utils/startup_checks.py`
@@ -191,30 +204,33 @@
 ### F21 — 5 scripts use wrong DB filename *(P1 INCONSISTENCY — FIXED)*
 - `eod_cleanup.py`, `reconcile_pnl.py`, `reconcile_positions.py`, `compute_strategy_metrics.py`, `fetch_fno_ban.py` — `trading.db` → `trading_system.db`
 
-### F35 — `reconcile_pnl.py` and `reconcile_positions.py` wrong ZerodhaAdapter constructor *(P2 BUG)*
-- Pass `api_key`/`access_token`/`paper` kwargs that don't match constructor signature.
+### F35 — FIX-167: `reconcile_pnl.py` and `reconcile_positions.py` wrong ZerodhaAdapter constructor *(P2 BUG — FIXED)*
+- Replaced with direct KiteConnect client — scripts only need `kite.positions()`, not the full adapter.
 
-### F36 — `premarket_healthcheck.py` calls non-existent TelegramNotifier methods *(P2 BUG)*
-- `from_config()` and `.send_alert()` don't exist.
+### F36 — FIX-167: `premarket_healthcheck.py` calls non-existent TelegramNotifier methods *(P2 BUG — FIXED)*
+- Changed `from_config()` to `from_env()` which reads from environment variables.
 
 ---
 
 ## PART 12: Entry Gate + Screening
 
-### F37 — `updated_extras` dead code *(P2 DEAD_CODE)*
-- **File:** `entry_gate.py:520`
+### F37 — FIX-168: `updated_extras` dead code *(P2 DEAD_CODE — FIXED)*
+- **File:** `screening/entry_gate.py:520`
+- Removed dead `updated_extras` dict construction and stale comments. Simplified to direct `entry.extras["release_ltp"] = release_ltp`.
 
 ### F38 — Frozen dataclass mutation via mutable dict interior *(P2 RISK)*
-- **File:** `entry_gate.py:523`
+- **File:** `screening/entry_gate.py:523`
 
-### F39 — `clear_all` doesn't clear `_quote_failures` *(P2 INCONSISTENCY)*
-- **File:** `entry_gate.py:255-273`
+### F39 — FIX-168: `clear_all` doesn't clear `_quote_failures` *(P2 INCONSISTENCY — FIXED)*
+- **File:** `screening/entry_gate.py:255-273`
+- Added `self._quote_failures.clear()` inside the lock in `clear_all()`.
 
 ### F40 — Single step error rejects entire signal *(P2 RISK — by design)*
 - **File:** `secondary_screener.py:141-161`
 
-### F41 — Signal age docstring mismatch *(P2 INCONSISTENCY)*
-- **File:** `step_executor.py:354-358`
+### F41 — FIX-168: Signal age docstring mismatch *(P2 INCONSISTENCY — FIXED)*
+- **File:** `screening/step_executor.py:344`
+- Docstring said ">90s → 0.0" but code returns 0.0 for >60s. Fixed docstring to match code: ">60s → 0.0, >30s → 0.5, <=30s → 1.0".
 
 ### F42 — Screening + dedup CLEAN sections
 - Dedup fingerprinting (collision-resistant), quality_scorer NaN handling, weight normalization, WatchEntry lifecycle, price-hit detection — all verified correct.

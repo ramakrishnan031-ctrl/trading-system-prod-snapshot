@@ -69,6 +69,12 @@ class _MockStateStore:
     def delete_gate_state(self, signal_id: str) -> None:
         pass
 
+    def clear_all_gate_state(self) -> int:
+        return 0
+
+    def get_all_gate_state(self) -> list:
+        return []
+
 
 class _NullLogger:
     def __init__(self):
@@ -1206,6 +1212,28 @@ def test_fix010_release_gate_state_state_store_method_is_atomic() -> None:
     print("  OK FIX-010: release_gate_state atomic method (FIX-010)")
 
 
+def test_clear_all_clears_quote_failures():
+    """F39: clear_all must also clear _quote_failures dict."""
+    def fail_quote(symbols):
+        raise RuntimeError("simulated quote failure")
+
+    gate, _, _ = _make_gate(quote_fn=fail_quote)
+    e1 = _make_entry(signal_id="sig_c1", symbol="INFY")
+    e2 = _make_entry(signal_id="sig_c2", symbol="TCS")
+    gate.add(e1)
+    gate.add(e2)
+    gate._check_one(e1)
+    gate._check_one(e2)
+    assert gate._quote_failures.get("sig_c1", 0) >= 1
+    assert gate._quote_failures.get("sig_c2", 0) >= 1
+
+    gate.clear_all()
+    assert gate.size() == 0
+    assert len(gate._quote_failures) == 0, (
+        f"_quote_failures not cleared: {gate._quote_failures}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Standalone runner
 # ---------------------------------------------------------------------------
@@ -1268,6 +1296,8 @@ def run_all_tests() -> int:
         # FIX-010: atomic release_gate_state
         test_fix010_release_atomically_deletes_gate_and_updates_signal,
         test_fix010_release_gate_state_state_store_method_is_atomic,
+        # F39: clear_all clears quote failures
+        test_clear_all_clears_quote_failures,
     ]
 
     print("=" * 70)

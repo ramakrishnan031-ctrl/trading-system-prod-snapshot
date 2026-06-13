@@ -341,7 +341,7 @@ class StepExecutor:
     def _step_10_signal_age(
         self, signal: dict, md: dict, thr: dict, direction: str
     ) -> float:
-        """Signal freshness: >90s -> 0.0, >60s -> 0.5, <=30s -> 1.0 (P9a add)."""
+        """Signal freshness: >60s -> 0.0, >30s -> 0.5, <=30s -> 1.0 (P9a add, SE4)."""
         triggered_at = signal.get("triggered_at")
         if triggered_at is None:
             return 0.5
@@ -355,4 +355,4 @@ class StepExecutor:
             return 1.0
         if age_sec <= 60:
             return 0.5
-        return 0.0   # age_sec > 90 (and 60 < age <= 90 also 0.0 per SE4)
+        return 0.0

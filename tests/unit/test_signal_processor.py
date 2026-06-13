@@ -1202,6 +1202,34 @@ def test_derive_target_rejects_target_below_min_pct():
     print("  OK BL-16: FIXED_PCT tgt_pct<tgt_min_pct -> TGT_DISTANCE_TOO_SMALL")
 
 
+def test_derive_target_unknown_method_raises_pipeline_reject():
+    """F23: unknown tgt_method must raise _PipelineReject, not ValueError."""
+    from signals.signal_processor import _PipelineReject
+    proc, _, _ = _make_proc()
+    strategy = _MockStrategy(direction="LONG", tgt_method="BOGUS", tgt_pct=0.04)
+    raised = False
+    try:
+        proc._derive_target(1000.0, 980.0, strategy)
+    except _PipelineReject as exc:
+        raised = True
+        assert exc.check == "UNKNOWN_TGT_METHOD"
+    assert raised, "Unknown tgt_method must raise _PipelineReject(UNKNOWN_TGT_METHOD)"
+
+
+def test_avg_pipeline_ms_includes_rejections():
+    """F24: avg_pipeline_ms denominator must include rejected signals."""
+    proc, store, _ = _make_proc()
+    with proc._stats_lock:
+        proc._stats["total_ms"] = 300.0
+        proc._stats["pipeline_total"] = 3
+        proc._stats["processed"] = 1
+        proc._stats["processed_no_placer"] = 0
+    snap = proc.stats()
+    assert abs(snap["avg_pipeline_ms"] - 100.0) < 0.01, (
+        f"Expected 300/3=100ms, got {snap['avg_pipeline_ms']}"
+    )
+
+
 def test_positional_tgt_not_equal_entry_price():
     """
     BL-16: each positional strategy YAML must produce target != entry when
@@ -2157,6 +2185,8 @@ def run_all_tests() -> int:
         test_atr_fallback_mode_warn_still_falls_back,
         test_derive_target_rejects_zero_distance,
         test_derive_target_rejects_target_below_min_pct,
+        test_derive_target_unknown_method_raises_pipeline_reject,
+        test_avg_pipeline_ms_includes_rejections,
         test_positional_tgt_not_equal_entry_price,
         test_tgt_price_passed_to_order_placer,
         test_5_workers_process_5_signals_concurrently,

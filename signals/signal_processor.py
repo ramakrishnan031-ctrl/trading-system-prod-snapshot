@@ -185,6 +185,7 @@ class SignalProcessor:
             "rejected": {},
             "placed": 0,
             "total_ms": 0.0,
+            "pipeline_total": 0,
             "processed_no_placer": 0,
             "screener_passed": 0,
             "screener_rejected": {},   # status -> count
@@ -899,6 +900,7 @@ class SignalProcessor:
             elapsed_ms = (time.monotonic() - start_mono) * 1000
             with self._stats_lock:
                 self._stats["total_ms"] += elapsed_ms
+                self._stats["pipeline_total"] += 1
 
     # ------------------------------------------------------------------
     # Price derivation (SPW4)
@@ -1098,7 +1100,10 @@ class SignalProcessor:
             else:
                 tgt_price = entry - sl_distance * ratio
         else:
-            raise ValueError(f"Unknown tgt_method: {tgt_method!r}")
+            raise _PipelineReject(
+                "UNKNOWN_TGT_METHOD",
+                f"Unknown tgt_method: {tgt_method!r}",
+            )
 
         # BL-16: guard against degenerate target (e.g. FIXED_PCT with tgt_pct=0.0
         # or RISK_REWARD with zero sl_distance) that would make tgt == entry.
@@ -1406,6 +1411,7 @@ class SignalProcessor:
             elapsed_ms = (time.monotonic() - start_mono) * 1000
             with self._stats_lock:
                 self._stats["total_ms"] += elapsed_ms
+                self._stats["pipeline_total"] += 1
 
     # ------------------------------------------------------------------
     # Metrics (SP13, SPW9)
@@ -1429,6 +1435,7 @@ class SignalProcessor:
         """
         with self._stats_lock:
             total_done = self._stats["processed"] + self._stats["processed_no_placer"]
+            pipeline_total = self._stats["pipeline_total"]
             total_ms = self._stats["total_ms"]
             screener_total = (
                 self._stats["screener_passed"]
@@ -1440,7 +1447,7 @@ class SignalProcessor:
                 "signals_processed": total_done,
                 "signals_rejected": dict(self._stats["rejected"]),
                 "signals_placed": self._stats["placed"],
-                "avg_pipeline_ms": total_ms / total_done if total_done > 0 else 0.0,
+                "avg_pipeline_ms": total_ms / pipeline_total if pipeline_total > 0 else 0.0,
                 "signals_screened_passed": self._stats["screener_passed"],
                 "signals_screened_rejected": dict(self._stats["screener_rejected"]),
                 "signals_screened_skipped": dict(self._stats["screener_skipped"]),
