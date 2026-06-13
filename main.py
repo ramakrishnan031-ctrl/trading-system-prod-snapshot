@@ -1552,6 +1552,7 @@ def _main_locked(args, config_dir: Path) -> int:
         max_retries=tg_cfg.max_retries,                        # FIX-131 Item 18
         retry_backoff_seconds=tg_cfg.retry_backoff_seconds,    # FIX-131 Item 18
         rate_limit_per_minute=tg_cfg.rate_limit_per_minute,    # FIX-131 Item 18
+        email_fallback_config=alert_cfg.email_fallback,        # FIX-166 F13
     )
 
     # Refresh mode label — interactive startup may have changed args.mode.
@@ -1559,6 +1560,11 @@ def _main_locked(args, config_dir: Path) -> int:
     # Wire notifier to kill_switch (built before notifier existed) so soft_kill
     # alerts reach Telegram.
     kill_switch.set_notifier(notifier, mode=mode_label)
+
+    # FIX-166 F22: wire adapter so hard_kill can exit positions via
+    # _exit_all_trades_indestructible. Adapter is constructed after
+    # kill_switch, so we late-bind it here (same pattern as set_notifier).
+    kill_switch.set_adapter(broker_adapter)
 
     # Alert operator about config hash change now that notifier is ready
     if config_hash_changed:

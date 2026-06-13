@@ -31,18 +31,12 @@ def _make_checker(
     obj._notifier = notifier
     obj._mode = mode
 
-    kite_mock = MagicMock()
-    if quote_data is not None:
-        kite_mock.quote.return_value = quote_data
-    else:
-        kite_mock.quote.return_value = {}
-
     adapter_mock = MagicMock()
-    adapter_mock._kite = kite_mock
+    adapter_mock.get_quote_raw.return_value = quote_data if quote_data is not None else {}
     obj._adapter = adapter_mock
 
     obj._check_liquidity = OrderPlacer._check_liquidity.__get__(obj)
-    return obj, kite_mock
+    return obj, adapter_mock
 
 
 def _good_quote(symbol="RELIANCE", ltp=2500.0, bid=2499.0, ask=2501.0,
@@ -70,9 +64,9 @@ class TestDisabledCheck:
         assert reason == ""
 
     def test_disabled_skips_quote_call(self):
-        obj, kite = _make_checker(liquidity_enabled=False)
+        obj, adapter = _make_checker(liquidity_enabled=False)
         obj._check_liquidity("RELIANCE", "BUY", "t1", "s1")
-        kite.quote.assert_not_called()
+        adapter.get_quote_raw.assert_not_called()
 
 
 # ── Spread check ─────────────────────────────────────────────────────────
@@ -169,8 +163,8 @@ class TestBestEffort:
         assert ok is True
 
     def test_exception_returns_ok(self):
-        obj, kite = _make_checker()
-        kite.quote.side_effect = RuntimeError("API down")
+        obj, adapter = _make_checker()
+        adapter.get_quote_raw.side_effect = RuntimeError("API down")
         ok, _ = obj._check_liquidity("RELIANCE", "BUY", "t1", "s1")
         assert ok is True
 

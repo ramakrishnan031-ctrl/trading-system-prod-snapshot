@@ -116,16 +116,8 @@ _POSITIONAL_BUCKET = "positional"
 #   - Too tight (e.g., 0.1) would false-alarm on legitimate rounding differences
 _INVARIANT_TOLERANCE = 1.0
 
-# BL-1 / FM18: orders.product -> semantic intent for rehydrate replay.
-# CO is COVER_ORDER (intraday-bucketed); MIS is plain INTRADAY; CNC and NRML
-# are deliverable holdings (positional bucket). Anything outside this map
-# falls through to a bucket-derived inference; see _replay_open_trade.
-_PRODUCT_TO_INTENT: Final[dict[str, str]] = {
-    "MIS": "INTRADAY",
-    "CO": "COVER_ORDER",
-    "CNC": "DELIVERY",
-    "NRML": "DELIVERY",
-}
+# FIX-166 F17: canonical copy now in core.constants
+from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
 
 # ─────────────────────────────────────────────────────────────────────────────

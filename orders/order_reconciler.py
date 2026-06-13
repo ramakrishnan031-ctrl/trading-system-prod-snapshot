@@ -80,14 +80,8 @@ from orders.order_manager import OrderManager
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
-# Broker product code -> fund_manager intent (for capital release on MANUAL_CLOSE)
-# Note: _PRODUCT_TO_INTENT is also imported by shadow_tracker.py
-_PRODUCT_TO_INTENT: Dict[str, str] = {
-    "MIS": "INTRADAY",
-    "CO": "COVER_ORDER",
-    "CNC": "DELIVERY",
-    "NRML": "DELIVERY",
-}
+# FIX-166 F17: canonical copy now in core.constants
+from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
 
 @dataclass

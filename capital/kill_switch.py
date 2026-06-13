@@ -293,6 +293,15 @@ class KillSwitch:
         if mode is not None:
             self._mode = mode
 
+    def set_adapter(self, adapter: object) -> None:
+        """Wire ZerodhaAdapter after construction (FIX-166 F22).
+
+        main.py builds KillSwitch BEFORE the adapter. This setter lets main
+        wire the adapter so hard_kill can exit positions via
+        ``_exit_all_trades_indestructible``.
+        """
+        self._adapter = adapter
+
     # ─────────────────────────────────────────────────────────────────────────
     # Read API (KS6, KS10, KS12)
     # ─────────────────────────────────────────────────────────────────────────

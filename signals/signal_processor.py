@@ -1185,6 +1185,16 @@ class SignalProcessor:
                     f"({strategy_obj.entry_start_time}-{strategy_obj.entry_end_time})",
                 )
 
+            # FIX-166 F06: strategy governor check (mirrors _process_one).
+            # Gate-released entries must respect cooldowns and circuit breakers
+            # just like direct webhook entries do.
+            if self._strategy_governor is not None:
+                paused, pause_reason = self._strategy_governor.check(
+                    strategy_name, now.time()
+                )
+                if paused:
+                    raise _PipelineReject("STRATEGY_CIRCUIT_BREAKER", pause_reason)
+
             entry_price = entry.entry_price  # type: ignore[attr-defined]
             sl_price    = entry.sl_price     # type: ignore[attr-defined]
             tgt_price   = entry.tgt_price    # type: ignore[attr-defined]

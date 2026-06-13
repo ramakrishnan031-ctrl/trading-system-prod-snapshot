@@ -238,12 +238,8 @@ _PROTOCOL_TO_PRODUCT: Final[Dict[str, str]] = {
     "CO_PLUS_TGT":  "CO",
     "LIMIT_TRIPLE": "MIS",
 }
-_PRODUCT_TO_INTENT: Final[Dict[str, str]] = {
-    "MIS":  "INTRADAY",
-    "CO":   "COVER_ORDER",
-    "CNC":  "DELIVERY",
-    "NRML": "DELIVERY",
-}
+# FIX-166 F17: canonical copy now in core.constants
+from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3067,7 +3063,7 @@ class OrderPlacer:
         if not self._liquidity_check_enabled:
             return True, ""
         try:
-            raw_quote = self._adapter._kite.quote([f"NSE:{symbol}"])
+            raw_quote = self._adapter.get_quote_raw([f"NSE:{symbol}"])
             if not raw_quote:
                 return True, ""
             key = f"NSE:{symbol}"

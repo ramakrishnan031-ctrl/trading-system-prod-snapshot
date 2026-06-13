@@ -1177,6 +1177,26 @@ class ZerodhaAdapter:
         )
         return quotes
 
+    def get_quote_raw(self, instrument_keys: list[str]) -> dict:
+        """Rate-limited raw kite quote including depth data (FIX-166 F08).
+
+        Unlike ``get_quote`` which returns typed ``Quote`` objects, this
+        returns the raw dict from ``kite.quote()`` so callers that need
+        full depth (bid/ask quantities) can access it while still going
+        through the rate limiter.  Returns ``{}`` in paper mode.
+        """
+        if self._paper:
+            return {}
+        self._rl.acquire(_CATEGORY_MAP["get_quote"])
+        try:
+            raw = self._kite.quote(*instrument_keys)
+        except Exception as exc:
+            raise self._translate_broker_exception(
+                exc, {"keys": instrument_keys}, "get_quote_raw"
+            ) from exc
+        self._reset_429_attempts(_CATEGORY_MAP["get_quote"])
+        return raw or {}
+
     def get_trades(self) -> list[dict]:
         """
         FIX-148: Return today's executed trades from Kite trades() API.

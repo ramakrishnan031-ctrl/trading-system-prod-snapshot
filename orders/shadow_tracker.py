@@ -52,7 +52,7 @@ from typing import Dict, List, Optional
 from core.events import EodSquareoffComplete, EventBus, PositionClosed
 from core.logger import log_exception
 from core.time_authority import ist_timezone, now_ist, today_ist
-from orders.order_reconciler import _PRODUCT_TO_INTENT  # noqa: F401 — exposed for cross-module consistency
+from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 from orders.price_math import calc_sl_price, calc_tgt_price
 
 
