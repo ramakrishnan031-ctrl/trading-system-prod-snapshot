@@ -659,11 +659,13 @@ class KillSwitch:
         """
         import time
 
-        # Fetch all open trades
+        # FIX-165b: corrected column names (qty_filled not quantity,
+        # direction not side) and status values (PENDING_FILL not PENDING,
+        # plus PARTIAL for partially-filled positions).
         try:
             open_trades = self._store.fetch_all(
-                "SELECT trade_id, symbol, quantity, side FROM trades "
-                "WHERE status IN ('OPEN', 'PENDING')"
+                "SELECT trade_id, symbol, qty_filled, direction FROM trades "
+                "WHERE status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
             )
         except Exception as exc:
             self._log.critical(
@@ -681,9 +683,11 @@ class KillSwitch:
         for trade in open_trades:
             trade_id = trade["trade_id"]
             symbol = trade["symbol"]
-            qty = abs(trade["quantity"])
-            # Exit side is opposite of entry side
-            exit_side = "SELL" if trade["side"] == "BUY" else "BUY"
+            qty = abs(trade["qty_filled"] or 0)
+            if qty == 0:
+                continue
+            # Exit side is opposite of entry direction
+            exit_side = "SELL" if trade["direction"] == "LONG" else "BUY"
 
             try:
                 # Place MARKET exit order

@@ -750,24 +750,37 @@ class FundManager:
                 reservation_id=res.reservation_id,
                 symbol=res.symbol,
                 qty=res.qty,
-                price=res.price,  # Keep original price for audit trail
+                price=res.price,
                 intent=res.intent,
                 bucket=res.bucket,
-                margin=new_margin,  # Updated margin
+                margin=new_margin,
                 signal_id=res.signal_id,
-                ts=res.ts,  # Keep original timestamp
+                ts=res.ts,
+                slm_buffer=res.slm_buffer,
             )
 
-        # FM11: check invariant outside lock
-        self._check_invariant("TOP_UP", reservation_id)
+            # FIX-165a: invariant check inside lock (was outside — race condition)
+            try:
+                self._check_invariant("TOP_UP", reservation_id)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+            else:
+                _violation = None
 
-        return ReservationResult(
-            success=True,
-            reservation_id=reservation_id,
-            margin=new_margin,
-            bucket=bucket,
-            reason_if_failed="",
-        )
+            if _violation is None:
+                _result = ReservationResult(
+                    success=True,
+                    reservation_id=reservation_id,
+                    margin=new_margin,
+                    bucket=bucket,
+                    reason_if_failed="",
+                )
+
+        # Outside lock: handle violation (FIX-165a)
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+        return _result
 
     def commit_to_used(
         self,

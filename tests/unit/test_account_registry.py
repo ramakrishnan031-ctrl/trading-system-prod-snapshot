@@ -378,7 +378,7 @@ def test_get_enabled_accounts_empty_if_all_disabled(tmp_path: Path) -> None:
 def test_f1_accounts_csv_paper_capital_50k(tmp_path: Path) -> None:
     """
     Load the real production config/accounts.csv and assert LFL836's
-    paper_capital is 1_000_000.0 (Rs 10 lakhs, paper-trial sizing). Guards
+    paper_capital is 10_000.0 (Rs 10,000 live account sizing). Guards
     against an accidental revert. No tmp file -- reads the real repo file.
     """
     repo_root = Path(__file__).resolve().parents[2]
@@ -387,13 +387,13 @@ def test_f1_accounts_csv_paper_capital_50k(tmp_path: Path) -> None:
 
     registry = AccountRegistry.load(csv_path)
     lfl = registry.get("LFL836")
-    assert lfl.paper_capital == 1_000_000.0, (
-        f"LFL836.paper_capital must equal 1_000_000 (paper-trial sizing); "
+    assert lfl.paper_capital == 10_000.0, (
+        f"LFL836.paper_capital must equal 10_000 (live account sizing); "
         f"got {lfl.paper_capital!r}"
     )
     assert lfl.enabled is True
     assert lfl.is_primary is True
-    print("  OK accounts.csv LFL836 paper_capital = 1_000_000")
+    print("  OK accounts.csv LFL836 paper_capital = 10_000")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

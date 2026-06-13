@@ -2783,118 +2783,114 @@ class OrderPlacer:
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
             return
 
-        # Success! Persist and track the orders
-            if self._product_resolver is None:
-                self._log.critical(
-                    "order_placer.exit_retry_no_product_resolver",
-                    extra={"trade_id": trade_id},
-                )
-                return
+        # FIX-165d: Success path — dedented to be reachable after try/except
+        if self._product_resolver is None:
+            self._log.critical(
+                "order_placer.exit_retry_no_product_resolver",
+                extra={"trade_id": trade_id},
+            )
+            return
 
-            product = self._product_resolver.resolve(fill_entry.intent)
-            exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
-            specs = [
-                OrderInsertSpec(
-                    broker_order_id=legs.sl_broker_order_id,
-                    leg="SL",
-                    transaction_type=exit_side,
-                    order_type=legs.sl_order_type,
-                    product=product,
-                    variety="regular",
-                    qty_requested=qty_filled,
-                    price=legs.sl_price,
-                    trigger_price=legs.sl_trigger_price,
-                ),
-                OrderInsertSpec(
-                    broker_order_id=legs.tgt_broker_order_id,
-                    leg="TGT",
-                    transaction_type=exit_side,
-                    order_type="LIMIT",
-                    product=product,
-                    variety="regular",
-                    qty_requested=qty_filled,
-                    price=legs.tgt_price,
-                ),
-            ]
+        product = self._product_resolver.resolve(fill_entry.intent)
+        exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+        specs = [
+            OrderInsertSpec(
+                broker_order_id=legs.sl_broker_order_id,
+                leg="SL",
+                transaction_type=exit_side,
+                order_type=legs.sl_order_type,
+                product=product,
+                variety="regular",
+                qty_requested=qty_filled,
+                price=legs.sl_price,
+                trigger_price=legs.sl_trigger_price,
+            ),
+            OrderInsertSpec(
+                broker_order_id=legs.tgt_broker_order_id,
+                leg="TGT",
+                transaction_type=exit_side,
+                order_type="LIMIT",
+                product=product,
+                variety="regular",
+                qty_requested=qty_filled,
+                price=legs.tgt_price,
+            ),
+        ]
 
-            try:
-                self._om.insert_orders_atomic(trade_id, specs)
-            except Exception as persist_exc:
-                log_exception(self._log, persist_exc)
-                self._log.critical(
-                    "order_placer.exit_retry_persist_failed",
-                    extra={"trade_id": trade_id},
-                )
-                # Cancel broker orders and hard_kill
-                self._cancel_broker_orders(
-                    [legs.sl_broker_order_id, legs.tgt_broker_order_id],
-                    reason=f"exit_retry_persist_failed: {type(persist_exc).__name__}",
-                )
-                self._fire_hard_kill_for_unprotected_position(trade_id, persist_exc)
-                return
+        try:
+            self._om.insert_orders_atomic(trade_id, specs)
+        except Exception as persist_exc:
+            log_exception(self._log, persist_exc)
+            self._log.critical(
+                "order_placer.exit_retry_persist_failed",
+                extra={"trade_id": trade_id},
+            )
+            self._cancel_broker_orders(
+                [legs.sl_broker_order_id, legs.tgt_broker_order_id],
+                reason=f"exit_retry_persist_failed: {type(persist_exc).__name__}",
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, persist_exc)
+            return
 
-            # Track orders
-            now = now_ist()
-            try:
-                with self._fill_map_lock:
-                    self._fill_map[legs.sl_internal_id] = _FillEntry(
-                        trade_id=trade_id,
-                        reservation_id=fill_entry.reservation_id,
-                        symbol=fill_entry.symbol,
-                        qty=qty_filled,
-                        leg=_LEG_SL,
-                        order_protocol="LIMIT_TRIPLE",
-                        direction=fill_entry.direction,
-                    )
-                self._order_monitor.track(
-                    internal_order_id=legs.sl_internal_id,
-                    broker_order_id=legs.sl_broker_order_id,
+        now = now_ist()
+        try:
+            with self._fill_map_lock:
+                self._fill_map[legs.sl_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
                     symbol=fill_entry.symbol,
-                    side=exit_side,
                     qty=qty_filled,
-                    expected_price=legs.sl_trigger_price,
-                    placed_at=now,
-                    leg="SL",
+                    leg=_LEG_SL,
+                    order_protocol="LIMIT_TRIPLE",
+                    direction=fill_entry.direction,
                 )
+            self._order_monitor.track(
+                internal_order_id=legs.sl_internal_id,
+                broker_order_id=legs.sl_broker_order_id,
+                symbol=fill_entry.symbol,
+                side=exit_side,
+                qty=qty_filled,
+                expected_price=legs.sl_trigger_price,
+                placed_at=now,
+                leg="SL",
+            )
 
-                with self._fill_map_lock:
-                    self._fill_map[legs.tgt_internal_id] = _FillEntry(
-                        trade_id=trade_id,
-                        reservation_id=fill_entry.reservation_id,
-                        symbol=fill_entry.symbol,
-                        qty=qty_filled,
-                        leg=_LEG_TGT,
-                        order_protocol="LIMIT_TRIPLE",
-                        direction=fill_entry.direction,
-                    )
-                self._order_monitor.track(
-                    internal_order_id=legs.tgt_internal_id,
-                    broker_order_id=legs.tgt_broker_order_id,
+            with self._fill_map_lock:
+                self._fill_map[legs.tgt_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
                     symbol=fill_entry.symbol,
-                    side=exit_side,
                     qty=qty_filled,
-                    expected_price=legs.tgt_price,
-                    placed_at=now,
-                    leg="TGT",
+                    leg=_LEG_TGT,
+                    order_protocol="LIMIT_TRIPLE",
+                    direction=fill_entry.direction,
                 )
+            self._order_monitor.track(
+                internal_order_id=legs.tgt_internal_id,
+                broker_order_id=legs.tgt_broker_order_id,
+                symbol=fill_entry.symbol,
+                side=exit_side,
+                qty=qty_filled,
+                expected_price=legs.tgt_price,
+                placed_at=now,
+                leg="TGT",
+            )
 
-                self._log.info(
-                    "order_placer.exit_retry_success",
-                    extra={
-                        "trade_id": trade_id,
-                        "symbol": symbol,
-                        "retry_count": params.retry_count,
-                    },
-                )
-                return
+            self._log.info(
+                "order_placer.exit_retry_success",
+                extra={
+                    "trade_id": trade_id,
+                    "symbol": symbol,
+                    "retry_count": params.retry_count,
+                },
+            )
 
-            except Exception as track_exc:
-                log_exception(self._log, track_exc)
-                self._log.critical(
-                    "order_placer.exit_retry_track_failed",
-                    extra={"trade_id": trade_id},
-                )
-                return
+        except Exception as track_exc:
+            log_exception(self._log, track_exc)
+            self._log.critical(
+                "order_placer.exit_retry_track_failed",
+                extra={"trade_id": trade_id},
+            )
 
     # ────────────────────────────────────────────────────────────────────────────
 

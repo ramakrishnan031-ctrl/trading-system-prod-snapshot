@@ -158,9 +158,9 @@ def test_fix087_per_trade_exception_isolation() -> None:
     store = Mock()
     store.fetch_one.return_value = None  # No persisted kill_switch state
     store.fetch_all.return_value = [
-        {"trade_id": "t1", "symbol": "RELIANCE", "quantity": 10, "side": "BUY"},
-        {"trade_id": "t2", "symbol": "INFY", "quantity": 5, "side": "BUY"},
-        {"trade_id": "t3", "symbol": "TCS", "quantity": 8, "side": "BUY"},
+        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG"},
+        {"trade_id": "t2", "symbol": "INFY", "qty_filled": 5, "direction": "LONG"},
+        {"trade_id": "t3", "symbol": "TCS", "qty_filled": 8, "direction": "LONG"},
     ]
     store.transaction = MagicMock()
 
@@ -204,7 +204,7 @@ def test_fix087_infinite_retry_logic() -> None:
     store = Mock()
     store.fetch_one.return_value = None  # No persisted kill_switch state
     store.fetch_all.return_value = [
-        {"trade_id": "t1", "symbol": "RELIANCE", "quantity": 10, "side": "BUY"},
+        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG"},
     ]
     store.transaction = MagicMock()
 
@@ -245,7 +245,7 @@ def test_fix087_db_write_failure_non_fatal() -> None:
     store = Mock()
     store.fetch_one.return_value = None  # No persisted kill_switch state
     store.fetch_all.return_value = [
-        {"trade_id": "t1", "symbol": "RELIANCE", "quantity": 10, "side": "BUY"},
+        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG"},
     ]
     # DB write raises exception (but fetch_one must succeed first)
     store.transaction.side_effect = RuntimeError("DB locked")

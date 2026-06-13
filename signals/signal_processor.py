@@ -421,6 +421,7 @@ class SignalProcessor:
         start_mono = time.monotonic()
         reservation_id: Optional[str] = None
         requeued = False  # FIX-069: track if signal was re-queued
+        in_flight_incremented = False  # FIX-165c: track whether _in_flight_count was incremented
 
         try:
             # SP9: mark PROCESSING immediately
@@ -604,6 +605,7 @@ class SignalProcessor:
             # ----------------------------------------------------------
             with self._in_flight_lock:
                 self._in_flight_count += 1
+                in_flight_incremented = True  # FIX-165c
                 processor_in_flight = self._in_flight_count
 
             # FIX-135 Item 42: per-strategy position cap
@@ -862,13 +864,16 @@ class SignalProcessor:
                 bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
 
         finally:
-            # FIX-018 / FIX-102: Decrement processor in-flight counter (every exit path).
-            # Best-effort: wrap in try/except so finally block never raises.
-            try:
-                with self._in_flight_lock:
-                    self._in_flight_count -= 1
-            except Exception as lock_exc:
-                self._log.error(f"_in_flight_count decrement failed: {lock_exc}")
+            # FIX-165c: Only decrement if we actually incremented.
+            # Before this fix, early rejections (steps 1-4) decremented without
+            # incrementing, driving _in_flight_count negative and disabling the
+            # TOCTOU protection.
+            if in_flight_incremented:
+                try:
+                    with self._in_flight_lock:
+                        self._in_flight_count -= 1
+                except Exception as lock_exc:
+                    self._log.error(f"_in_flight_count decrement failed: {lock_exc}")
 
             # FIX-069: Only release in-flight lock if signal was NOT re-queued.
             # If requeued=True, lock must travel with signal to prevent duplicate
@@ -1138,6 +1143,7 @@ class SignalProcessor:
         symbol    = entry.symbol              # type: ignore[attr-defined]
         start_mono = time.monotonic()
         reservation_id: Optional[str] = None
+        in_flight_incremented = False  # FIX-165c (gate path)
 
         try:
             self._store.update_signal_status(signal_id, "PROCESSING")
@@ -1209,6 +1215,7 @@ class SignalProcessor:
             with self._in_flight_lock:
                 self._in_flight_count += 1
                 processor_in_flight = self._in_flight_count
+            in_flight_incremented = True  # FIX-165c (gate path)
 
             # FIX-135 Item 42: per-strategy position cap (gate path)
             max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
@@ -1282,6 +1289,27 @@ class SignalProcessor:
                 direction=direction,
             )
 
+            # FIX-165e: Second kill-switch check before placement (gate path).
+            # Mirrors FIX-070 in _process_one — TOCTOU: kill could fire during
+            # sizing/risk/reservation steps.
+            if self._ks and self._ks.is_active("entry"):
+                self._log.warning(
+                    f"FIX-165e: kill-switch active after gate pipeline - aborting placement for {signal_id} ({symbol})"
+                )
+                if reservation_id:
+                    self._fm.release(reservation_id, "kill_switch_after_gate_pipeline")
+                    reservation_id = None
+                raise _PipelineReject("KILL_SWITCH_LATE", "Kill switch active before placement (gate)")
+
+            if self._stop_event.is_set():
+                self._log.warning(
+                    f"FIX-165e: shutdown event set - aborting gate placement for {signal_id} ({symbol})"
+                )
+                if reservation_id:
+                    self._fm.release(reservation_id, "shutdown_before_gate_placement")
+                    reservation_id = None
+                raise _PipelineReject("SHUTDOWN", "System shutdown before placement (gate)")
+
             try:
                 self._placer.place(
                     symbol=symbol,
@@ -1346,13 +1374,13 @@ class SignalProcessor:
                 bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
 
         finally:
-            # FIX-018 / FIX-102: Decrement processor in-flight counter (gate path).
-            # Best-effort: wrap in try/except so finally block never raises.
-            try:
-                with self._in_flight_lock:
-                    self._in_flight_count -= 1
-            except Exception as lock_exc:
-                self._log.error(f"_in_flight_count decrement failed (gate): {lock_exc}")
+            # FIX-018 / FIX-102 / FIX-165c: Decrement only if we incremented.
+            if in_flight_incremented:
+                try:
+                    with self._in_flight_lock:
+                        self._in_flight_count -= 1
+                except Exception as lock_exc:
+                    self._log.error(f"_in_flight_count decrement failed (gate): {lock_exc}")
 
             elapsed_ms = (time.monotonic() - start_mono) * 1000
             with self._stats_lock:
