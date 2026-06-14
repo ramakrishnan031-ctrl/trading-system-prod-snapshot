@@ -62,6 +62,8 @@ Reference data (`instruments`, `nse_holidays`) lives **outside** the DB as CSV/Y
 
 ### O1 — FK declarations are inconsistent (defense-in-depth gap)
 
+> **STATUS: FIXED (FIX-173).** Added FKs to `screener_results.signal_id`, `smart_tgt_state.trade_id`, `innings.trade_id`, `shadow_trades.signal_id`+`live_trade_id`, `reconciliation_log.trade_id`. Schema v25→v26 via the table-rebuild runner; `foreign_key_check` clean on the live DB. `reconciliation_log.trade_id` is nullable and its insert site is wrapped in try/except (audit-log semantics — a rare orphan rejection drops one row with an error log, never crashes the reconciler).
+
 Only a handful of child tables declare actual FK constraints (`trades`, `orders`, `trade_excursions`, `trade_journal`, `gate_state`). Many cross-table references are plain TEXT without FK declarations:
 
 | Table | Column | References |
@@ -79,6 +81,8 @@ Since `foreign_keys=ON`, protection is uneven — declared FKs are enforced, und
 ---
 
 ### O2 — Status/enum columns are unconstrained TEXT
+
+> **STATUS: FIXED (FIX-172).** Added CHECK constraints to `kill_switch_state.state`, `orders.status`, `orders.leg`, `trades.status`, `signals.status`. Value lists were derived from the live code (the draft lists in this doc were incomplete/wrong — e.g. omitted `orders.leg='CO'` which would have broken live CO orders, and treated `signals.status` as closed when it is an open set written by 4 modules). `signals.status` uses GLOB prefix families (`REJECTED*`/`DROPPED_*`/`SKIPPED_*`/`GATE_*`) + enumerated stable values — a shape/typo guard, not a closed enum. Applied to existing DBs via the new idempotent table-rebuild runner in `core/migrations.py` (schema v24→v25). Verified against the full unit suite + live DB (`integrity_check: ok`, `foreign_key_check: []`).
 
 `trades.status`, `orders.status`, `kill_switch_state.state`, every `direction` column, reconciliation `status` columns — all free TEXT. Only `fm_ledger.entry_type` has a CHECK enum.
 
@@ -105,6 +109,8 @@ These columns appear in joins/lookups but lack indexes:
 ---
 
 ### O4 — "Today" queries use DATE() on timestamp column (can't use index)
+
+> **STATUS: FIXED (FIX-174).** Added a STORED generated `date` column (`substr(<ts>,1,10)`, identical to `DATE(ts)` for ISO-8601 timestamps) plus an index to `fm_ledger`, `candles`, `system_metrics`, and `webhook_audit`. Switched the hot date-range queries (`get_daily_realized_net_pnl`, `get_ledger_for_date`, `get_candles_for_date`, and the `gemini_trade_coach` candle summary) from `WHERE DATE(ts)=?` to `WHERE date=?` so they hit the index. `EXPLAIN QUERY PLAN` confirms the daily-loss query now does `SEARCH fm_ledger USING INDEX idx_fm_ledger_date`. Applied to existing DBs via the table-rebuild runner (STORED generated columns can't be added via `ALTER`; the rebuild excludes generated columns from the data copy and lets SQLite recompute them). Schema v26→v27; full unit suite 2933 passed.
 
 `get_daily_realized_net_pnl()` runs `WHERE DATE(ts) = ?` on `fm_ledger.ts` — correct result, but `DATE(ts)` wraps the column in a function, preventing index use.
 
@@ -199,17 +205,20 @@ Result documented in session notes.
 
 ## Priority Order (all post-Monday, non-urgent)
 
-| Priority | Observation | Impact |
-|----------|-------------|--------|
-| High | O5 — DB retention | Long-term operational stability |
-| High | O6 — DB split | WAL health, backup speed |
-| Medium | O3 — Missing indexes | Reconciler + report query speed |
-| Medium | O4 — Date query index | fm_ledger daily-loss query |
-| Low | O1 — FK declarations | Defense-in-depth |
-| Low | O2 — Enum CHECKs | Defense-in-depth |
-| Cosmetic | O7 — Comment numbering | Readability |
-| Verify | O8 — instruments table | Data integrity check correctness |
+| Priority | Observation | Impact | Status |
+|----------|-------------|--------|--------|
+| High | O5 — DB retention | Long-term operational stability | Open |
+| High | O6 — DB split | WAL health, backup speed | Open |
+| Medium | O3 — Missing indexes | Reconciler + report query speed | FIXED (FIX-171) |
+| Medium | O4 — Date query index | fm_ledger daily-loss query | FIXED (FIX-174) |
+| Low | O1 — FK declarations | Defense-in-depth | FIXED (FIX-173) |
+| Low | O2 — Enum CHECKs | Defense-in-depth | FIXED (FIX-172) |
+| Cosmetic | O7 — Comment numbering | Readability | FIXED (FIX-171) |
+| Verify | O8 — instruments table | Data integrity check correctness | FIXED (warn added) |
+| Doc | O9 — Soft circular ref | Schema clarity | DOCUMENTED (FIX-171) |
+
+Remaining open items: **O5 (retention)** and **O6 (DB split)** — both medium-term operational, neither blocks live trading.
 
 ---
 
-*No code changes were made in this review. Schema v24 is production-ready for live trading from 16-Jun-2026.*
+*This review was read-only at schema v24. The defense-in-depth and indexing observations (O1–O4, O7, O9) were subsequently implemented in follow-up commits FIX-171→FIX-174, advancing the schema to v27. O5 and O6 remain open as non-blocking medium-term work. Schema is production-ready for live trading from 16-Jun-2026.*
