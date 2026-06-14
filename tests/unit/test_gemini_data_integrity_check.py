@@ -183,6 +183,18 @@ class TestGetInstrumentToken:
     def test_not_found(self, db_path):
         assert _mod._get_instrument_token(db_path, "UNKNOWN") is None
 
+    def test_table_missing_returns_none_and_warns(self, db_path, log):
+        # db_path uses StateStore schema which has no instruments table (O8)
+        result = _mod._get_instrument_token(db_path, "RELIANCE", log)
+        assert result is None
+        log.warning.assert_called_once()
+        msg = log.warning.call_args[0][0]
+        assert "instruments table not found" in msg
+
+    def test_table_missing_no_log_does_not_raise(self, db_path):
+        # log=None must not crash when table is absent
+        assert _mod._get_instrument_token(db_path, "RELIANCE") is None
+
 
 # ---------------------------------------------------------------------------
 # Tests: _compare_candles

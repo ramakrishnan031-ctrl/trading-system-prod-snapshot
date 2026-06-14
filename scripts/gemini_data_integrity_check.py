@@ -105,7 +105,7 @@ def _get_system_candles(db_path: str, symbol: str, date_iso: str) -> list[dict]:
         conn.close()
 
 
-def _get_instrument_token(db_path: str, symbol: str) -> int | None:
+def _get_instrument_token(db_path: str, symbol: str, log=None) -> int | None:
     conn = sqlite3.connect(db_path)
     try:
         row = conn.execute(
@@ -114,6 +114,12 @@ def _get_instrument_token(db_path: str, symbol: str) -> int | None:
         ).fetchone()
         return row[0] if row else None
     except sqlite3.OperationalError:
+        if log is not None:
+            log.warning(
+                "integrity_check: instruments table not found in DB — token lookup skipped for %s"
+                " (O8: instruments is CSV-based, not in schema.sql)",
+                symbol,
+            )
         return None
     finally:
         conn.close()
@@ -264,7 +270,7 @@ def run_check(
             all_comparisons[symbol] = {"status": "NO_SYSTEM_DATA", "system_count": 0}
             continue
 
-        instrument_token = _get_instrument_token(db_path, symbol)
+        instrument_token = _get_instrument_token(db_path, symbol, log)
         if instrument_token is None:
             all_comparisons[symbol] = {
                 "status": "NO_INSTRUMENT_TOKEN",
