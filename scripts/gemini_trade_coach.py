@@ -113,13 +113,13 @@ def _get_candle_summary(db_path: str, symbol: str, date_iso: str) -> dict:
     try:
         row = conn.execute(
             """SELECT MIN(low) as day_low, MAX(high) as day_high,
-                      (SELECT open FROM candles WHERE symbol = ? AND DATE(ts) = ?
+                      (SELECT open FROM candles WHERE symbol = ? AND date = ?
                        ORDER BY ts LIMIT 1) as day_open,
-                      (SELECT close FROM candles WHERE symbol = ? AND DATE(ts) = ?
+                      (SELECT close FROM candles WHERE symbol = ? AND date = ?
                        ORDER BY ts DESC LIMIT 1) as day_close,
                       COUNT(*) as candle_count
                FROM candles
-               WHERE symbol = ? AND DATE(ts) = ?""",
+               WHERE symbol = ? AND date = ?""",
             (symbol, date_iso, symbol, date_iso, symbol, date_iso),
         ).fetchone()
         if row and row[0] is not None:

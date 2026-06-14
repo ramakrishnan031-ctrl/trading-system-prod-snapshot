@@ -196,6 +196,50 @@ def test_o1_fk_added_to_existing_table(tmp_path):
     store.close()
 
 
+def test_o4_date_column_added_and_indexed(tmp_path):
+    """A pre-O4 fm_ledger (no date col) gains the stored date column + index."""
+    db = tmp_path / "v26.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        "CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        + _V24_SIGNALS
+        + _V24_KILL
+        + """
+        CREATE TABLE fm_ledger (
+            ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
+            entry_type TEXT NOT NULL CHECK (entry_type IN
+              ('INIT','RESERVE','RELEASE','COMMIT','RELEASE_USED','SYNC','RESET_PNL','TOP_UP')),
+            amount REAL NOT NULL, bucket TEXT NOT NULL, balance_before REAL NOT NULL,
+            balance_after REAL NOT NULL, signal_id TEXT, reservation_id TEXT, reason TEXT,
+            session_id TEXT, direction TEXT, trade_id TEXT,
+            margin_delta REAL NOT NULL DEFAULT 0.0, pnl_delta REAL NOT NULL DEFAULT 0.0,
+            costs REAL NOT NULL DEFAULT 0.0
+        );
+        """
+    )
+    conn.execute("INSERT INTO schema_meta VALUES ('schema_version','26')")
+    conn.execute(
+        "INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after,"
+        "pnl_delta,costs) VALUES('2026-06-13T10:00:00+05:30','RELEASE_USED',0,'intraday',"
+        "1,1,500.0,50.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = StateStore(db)  # migrate v26 -> latest
+    assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
+    # generated column computed from existing data
+    assert store.fetch_one("SELECT date FROM fm_ledger")["date"] == "2026-06-13"
+    # the daily-loss query returns the preserved value
+    assert abs(store.get_daily_realized_net_pnl("2026-06-13") - 450.0) < 0.001
+    # the new query uses the date index
+    plan = store.fetch_all(
+        "EXPLAIN QUERY PLAN SELECT * FROM fm_ledger WHERE date = '2026-06-13'"
+    )
+    assert any("idx_fm_ledger_date" in r[3] for r in plan), plan
+    store.close()
+
+
 def test_fresh_and_migrated_table_ddl_converge(tmp_path):
     """A table built fresh from schema.sql and one migrated from v24 must match."""
     fresh = StateStore(tmp_path / "fresh.db")

@@ -75,7 +75,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 26  # FIX-173: O1 uniform FK declarations
+EXPECTED_SCHEMA_VERSION = 27  # FIX-174: O4 stored date column + index
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1510,7 +1510,8 @@ class StateStore:
         the legacy capital_ledger table was never written).
         """
         rows = self.fetch_all(
-            "SELECT * FROM fm_ledger WHERE DATE(ts) = ?",
+            # O4 (v27): use the indexed stored `date` column (== DATE(ts)).
+            "SELECT * FROM fm_ledger WHERE date = ?",
             (date_iso,),
         )
         return [dict(r) for r in rows]
@@ -1529,8 +1530,9 @@ class StateStore:
             Net PnL = sum(pnl_delta) - sum(costs) for the given date.
         """
         row = self.fetch_one(
+            # O4 (v27): use the indexed stored `date` column (== DATE(ts)).
             """SELECT COALESCE(SUM(pnl_delta) - SUM(COALESCE(costs, 0.0)), 0.0) as net_pnl
-               FROM fm_ledger WHERE DATE(ts) = ?""",
+               FROM fm_ledger WHERE date = ?""",
             (date_iso,),
         )
         return row["net_pnl"] if row else 0.0
@@ -1562,7 +1564,8 @@ class StateStore:
     def get_candles_for_date(self, date_iso: str) -> List[dict]:
         """Return all candle rows whose ts falls on date_iso (DR-v14)."""
         rows = self.fetch_all(
-            "SELECT * FROM candles WHERE DATE(ts) = ?",
+            # O4 (v27): use the indexed stored `date` column (== DATE(ts)).
+            "SELECT * FROM candles WHERE date = ?",
             (date_iso,),
         )
         return [dict(r) for r in rows]

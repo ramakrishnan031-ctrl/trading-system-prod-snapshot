@@ -421,11 +421,17 @@ CREATE TABLE IF NOT EXISTS fm_ledger (
     trade_id            TEXT,                        -- nullable; set on COMMIT/RELEASE_USED when known
     margin_delta        REAL NOT NULL DEFAULT 0.0,   -- signed margin movement (+reserve, -release/release_used)
     pnl_delta           REAL NOT NULL DEFAULT 0.0,   -- realized PnL change (nonzero on RELEASE_USED only)
-    costs               REAL NOT NULL DEFAULT 0.0    -- transaction costs (nonzero on RELEASE_USED only)
+    costs               REAL NOT NULL DEFAULT 0.0,   -- transaction costs (nonzero on RELEASE_USED only)
+    -- O4 (v27): stored YYYY-MM-DD (== DATE(ts) for ISO-8601 ts) so the
+    -- daily-loss query can use an index instead of wrapping ts in DATE().
+    date                TEXT GENERATED ALWAYS AS (substr(ts, 1, 10)) STORED
 );
 
 CREATE INDEX IF NOT EXISTS idx_fm_ledger_ts
     ON fm_ledger(ts);
+
+CREATE INDEX IF NOT EXISTS idx_fm_ledger_date
+    ON fm_ledger(date);
 
 CREATE INDEX IF NOT EXISTS idx_fm_ledger_reservation_id
     ON fm_ledger(reservation_id);
@@ -467,11 +473,16 @@ CREATE TABLE IF NOT EXISTS webhook_audit (
     response_code       INTEGER NOT NULL,
     signals_accepted    INTEGER NOT NULL DEFAULT 0,
     signals_rejected    INTEGER NOT NULL DEFAULT 0,
-    duration_ms         INTEGER NOT NULL
+    duration_ms         INTEGER NOT NULL,
+    -- O4 (v27): stored YYYY-MM-DD (== DATE(ts)) for indexed date queries.
+    date                TEXT GENERATED ALWAYS AS (substr(ts, 1, 10)) STORED
 );
 
 CREATE INDEX IF NOT EXISTS idx_webhook_audit_ts
     ON webhook_audit(ts);
+
+CREATE INDEX IF NOT EXISTS idx_webhook_audit_date
+    ON webhook_audit(date);
 
 CREATE INDEX IF NOT EXISTS idx_webhook_audit_scanner
     ON webhook_audit(scanner_name);
@@ -693,11 +704,16 @@ CREATE TABLE IF NOT EXISTS candles (
     close            REAL NOT NULL,
     volume           INTEGER NOT NULL DEFAULT 0,
     is_synthetic     INTEGER NOT NULL DEFAULT 0,
+    -- O4 (v27): stored YYYY-MM-DD (== DATE(ts)) for indexed date queries.
+    date             TEXT GENERATED ALWAYS AS (substr(ts, 1, 10)) STORED,
     UNIQUE(instrument_token, ts, interval_sec)
 );
 
 CREATE INDEX IF NOT EXISTS idx_candles_symbol_ts
     ON candles(symbol, ts);
+
+CREATE INDEX IF NOT EXISTS idx_candles_date
+    ON candles(date);
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 19: trade_excursions  (v14)
@@ -928,11 +944,16 @@ CREATE TABLE IF NOT EXISTS system_metrics (
     log_size_mb     REAL,
     open_fds        INTEGER,
     thread_count    INTEGER,
-    disk_used_pct   REAL
+    disk_used_pct   REAL,
+    -- O4 (v27): stored YYYY-MM-DD (== DATE(timestamp)) for indexed date queries.
+    date            TEXT GENERATED ALWAYS AS (substr(timestamp, 1, 10)) STORED
 );
 
 CREATE INDEX IF NOT EXISTS idx_system_metrics_ts
     ON system_metrics(timestamp);
+
+CREATE INDEX IF NOT EXISTS idx_system_metrics_date
+    ON system_metrics(date);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- TABLE 30: system_metrics_daily  (v24 / FIX-150)
@@ -956,7 +977,7 @@ CREATE TABLE IF NOT EXISTS system_metrics_daily (
     disk_used_max_pct   REAL
 );
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '26');  -- FIX-173: O1 uniform FK declarations
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '27');  -- FIX-174: O4 stored date column + index
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
@@ -995,5 +1016,9 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '26');
 --                    v26: O1 uniform FK declarations — screener_results.signal_id,
 --                          smart_tgt_state.trade_id, innings.trade_id,
 --                          reconciliation_log.trade_id, shadow_trades.signal_id +
---                          live_trade_id (FIX-173). Same table-rebuild migration.)
+--                          live_trade_id (FIX-173). Same table-rebuild migration;
+--                    v27: O4 stored `date` generated column + index on fm_ledger,
+--                          candles, system_metrics, webhook_audit (FIX-174) so
+--                          daily date-range queries use an index instead of
+--                          wrapping the ts column in DATE().)
 -- ─────────────────────────────────────────────────────────────────────────────
