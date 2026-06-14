@@ -20,6 +20,12 @@
 # ── 02:00 IST | 7-day rolling cleanup of backup files ────────────────────────
 0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups -name "trading_system-*.db" -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
 
+# ── 02:30 IST | DB row retention (O5: prune old rows, analytics + main) ──────
+# Runs AFTER the 01:00 backup + 02:00 backup-cleanup so a pre-prune snapshot
+# always exists. Weekly VACUUM (Sun) reclaims file space off-hours.
+30 2 * * 1-6 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py >> logs/cron-db-retention.log 2>&1
+30 2 * * 0 cd /home/ubuntu/systems/trading-system && . .env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py --vacuum >> logs/cron-db-retention.log 2>&1
+
 # ── 05:00 IST daily | token cleanup (forces fresh zerodha_login) ─────────────
 0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
 
