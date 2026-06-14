@@ -17,8 +17,11 @@
 # ── 01:00 IST | nightly SQLite .backup (safe during DB activity) ─────────────
 0 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/trading_system.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/trading_system-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
 
-# ── 02:00 IST | 7-day rolling cleanup of backup files ────────────────────────
-0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups -name "trading_system-*.db" -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
+# ── 01:05 IST | nightly .backup of analytics.db (O6 split; separate file) ────
+5 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/analytics.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/analytics-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
+
+# ── 02:00 IST | 7-day rolling cleanup of backup files (main + analytics) ─────
+0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
 
 # ── 02:30 IST | DB row retention (O5: prune old rows, analytics + main) ──────
 # Runs AFTER the 01:00 backup + 02:00 backup-cleanup so a pre-prune snapshot

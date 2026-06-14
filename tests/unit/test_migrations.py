@@ -240,6 +240,94 @@ def test_o4_date_column_added_and_indexed(tmp_path):
     store.close()
 
 
+def test_o6_analytics_tables_relocated(tmp_path):
+    """A v27 DB with candles/system_metrics in MAIN has them moved to analytics.db."""
+    from core import db_connect
+
+    db = tmp_path / "v27.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        "CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        + """
+        CREATE TABLE candles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+            instrument_token INTEGER NOT NULL, ts TEXT NOT NULL,
+            interval_sec INTEGER NOT NULL DEFAULT 60, open REAL NOT NULL,
+            high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL,
+            volume INTEGER NOT NULL DEFAULT 0, is_synthetic INTEGER NOT NULL DEFAULT 0,
+            date TEXT GENERATED ALWAYS AS (substr(ts,1,10)) STORED,
+            UNIQUE(instrument_token, ts, interval_sec)
+        );
+        CREATE TABLE system_metrics (
+            timestamp TEXT NOT NULL, cpu_pct REAL, memory_mb REAL, db_size_mb REAL,
+            log_size_mb REAL, open_fds INTEGER, thread_count INTEGER, disk_used_pct REAL,
+            date TEXT GENERATED ALWAYS AS (substr(timestamp,1,10)) STORED
+        );
+        CREATE TABLE system_metrics_daily (
+            date TEXT NOT NULL PRIMARY KEY, snapshot_count INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    conn.execute("INSERT INTO schema_meta VALUES ('schema_version','27')")
+    conn.execute(
+        "INSERT INTO candles(symbol,instrument_token,ts,interval_sec,open,high,low,"
+        "close,volume) VALUES('ABC',101,'2026-06-13T09:30:00+05:30',60,10,11,9,10.5,500)"
+    )
+    conn.execute(
+        "INSERT INTO system_metrics(timestamp,cpu_pct,memory_mb) "
+        "VALUES('2026-06-13T09:35:00+05:30',12.5,256.0)"
+    )
+    conn.execute("INSERT INTO system_metrics_daily(date,snapshot_count) VALUES('2026-06-13',75)")
+    conn.commit()
+    conn.close()
+
+    store = StateStore(db)  # migrate v27 -> v28 (relocation)
+    assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
+
+    # The analytics file now exists and the main DB no longer holds these tables.
+    apath = db_connect.analytics_path_for(db)
+    assert apath.exists()
+    main_tables = {r["name"] for r in store.fetch_all(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    for t in db_connect.ANALYTICS_TABLES:
+        assert t not in main_tables, f"{t} should have been relocated out of main"
+
+    # Rows are intact and queryable via the unqualified (ATTACH-resolved) name,
+    # and the relocated candle's STORED date column recomputed in analytics.db.
+    crow = store.fetch_one("SELECT symbol, instrument_token, date FROM candles")
+    assert (crow["symbol"], crow["instrument_token"], crow["date"]) == ("ABC", 101, "2026-06-13")
+    assert store.fetch_one("SELECT cpu_pct FROM system_metrics")["cpu_pct"] == 12.5
+    assert store.fetch_one("SELECT snapshot_count FROM system_metrics_daily")["snapshot_count"] == 75
+
+    # Idempotent: re-open does not error and stays at v28 with rows intact.
+    store.close()
+    store2 = StateStore(db)
+    assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION
+    assert store2.fetch_one("SELECT COUNT(*) AS n FROM candles")["n"] == 1
+    store2.close()
+
+
+def test_o6_fresh_build_has_analytics_in_separate_file(tmp_path):
+    """Fresh build: analytics tables live in analytics.db, not the trading DB."""
+    from core import db_connect
+
+    db = tmp_path / "fresh.db"
+    store = StateStore(db)
+    main_tables = {r["name"] for r in store.fetch_all(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "candles" not in main_tables
+    assert "system_metrics" not in main_tables
+    # but writable/readable transparently via ATTACH
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO candles(symbol,instrument_token,ts,interval_sec,open,high,"
+            "low,close,volume) VALUES('Z',9,'2026-06-14T09:30:00+05:30',60,1,1,1,1,1)"
+        )
+    assert store.fetch_one("SELECT COUNT(*) AS n FROM candles")["n"] == 1
+    assert db_connect.analytics_path_for(db).exists()
+    store.close()
+
+
 def test_fresh_and_migrated_table_ddl_converge(tmp_path):
     """A table built fresh from schema.sql and one migrated from v24 must match."""
     fresh = StateStore(tmp_path / "fresh.db")

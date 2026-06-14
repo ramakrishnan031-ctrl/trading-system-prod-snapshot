@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+from core import db_connect  # O6: ATTACH analytics.db
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -62,7 +63,7 @@ def log():
 
 
 def _seed_trades(db_path, date_iso, symbols):
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     ts = f"{date_iso}T09:30:00+05:30"
     exp = f"{date_iso}T10:30:00+05:30"
     for i, sym in enumerate(symbols):
@@ -92,7 +93,7 @@ def _seed_trades(db_path, date_iso, symbols):
 
 
 def _seed_candles(db_path, symbol, date_iso, candles, instrument_token=999999):
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     for c in candles:
         conn.execute(
             """INSERT INTO candles (symbol, instrument_token, ts, open, high, low, close, volume)
@@ -104,7 +105,7 @@ def _seed_candles(db_path, symbol, date_iso, candles, instrument_token=999999):
 
 
 def _seed_instrument(db_path, symbol, token):
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     try:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS instruments (

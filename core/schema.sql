@@ -687,33 +687,12 @@ CREATE INDEX IF NOT EXISTS idx_gate_state_added_at
     ON gate_state(added_at);
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 18: candles  (v14)
--- Minute OHLC candle persistence. Built from LTP ticks by CandleStore,
--- written to DB on each candle close. Enables post-session analytics
--- without re-fetching from Kite historical API.
+-- TABLE 18: candles  -- RELOCATED (O6, v28) to analytics.db
+-- The candles table now lives in analytics.db (see core/analytics_schema.sql
+-- and core/db_connect.py). It is ATTACHed as schema `analytics` on every
+-- connection, so unqualified `FROM candles` still resolves. Kept out of the
+-- trading DB so the nightly .backup stays small and fast.
 -- ═════════════════════════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS candles (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol           TEXT NOT NULL,
-    instrument_token INTEGER NOT NULL,
-    ts               TEXT NOT NULL,                   -- ISO-8601 IST candle close
-    interval_sec     INTEGER NOT NULL DEFAULT 60,     -- 60 for 1-min
-    open             REAL NOT NULL,
-    high             REAL NOT NULL,
-    low              REAL NOT NULL,
-    close            REAL NOT NULL,
-    volume           INTEGER NOT NULL DEFAULT 0,
-    is_synthetic     INTEGER NOT NULL DEFAULT 0,
-    -- O4 (v27): stored YYYY-MM-DD (== DATE(ts)) for indexed date queries.
-    date             TEXT GENERATED ALWAYS AS (substr(ts, 1, 10)) STORED,
-    UNIQUE(instrument_token, ts, interval_sec)
-);
-
-CREATE INDEX IF NOT EXISTS idx_candles_symbol_ts
-    ON candles(symbol, ts);
-
-CREATE INDEX IF NOT EXISTS idx_candles_date
-    ON candles(date);
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 19: trade_excursions  (v14)
@@ -932,52 +911,15 @@ CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
     ON cron_heartbeat(executed_at);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 29: system_metrics  (v24 / FIX-150)
--- Per-snapshot system health metrics captured every 5 min during market hours.
--- Used for drift detection and baseline comparison.
+-- TABLE 29: system_metrics        -- RELOCATED (O6, v28) to analytics.db
+-- TABLE 30: system_metrics_daily  -- RELOCATED (O6, v28) to analytics.db
+-- Both now live in analytics.db (see core/analytics_schema.sql,
+-- core/db_connect.py), ATTACHed as schema `analytics` on every connection so
+-- unqualified `FROM system_metrics[_daily]` still resolves. Kept out of the
+-- trading DB so the nightly .backup stays small and fast.
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS system_metrics (
-    timestamp       TEXT NOT NULL,
-    cpu_pct         REAL,
-    memory_mb       REAL,
-    db_size_mb      REAL,
-    log_size_mb     REAL,
-    open_fds        INTEGER,
-    thread_count    INTEGER,
-    disk_used_pct   REAL,
-    -- O4 (v27): stored YYYY-MM-DD (== DATE(timestamp)) for indexed date queries.
-    date            TEXT GENERATED ALWAYS AS (substr(timestamp, 1, 10)) STORED
-);
 
-CREATE INDEX IF NOT EXISTS idx_system_metrics_ts
-    ON system_metrics(timestamp);
-
-CREATE INDEX IF NOT EXISTS idx_system_metrics_date
-    ON system_metrics(date);
-
--- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 30: system_metrics_daily  (v24 / FIX-150)
--- Daily summary of system metrics: avg/max/p95 per metric.
--- Computed by capture_metrics_baseline.py --summarize at EOD.
--- ─────────────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS system_metrics_daily (
-    date                TEXT NOT NULL PRIMARY KEY,   -- YYYY-MM-DD
-    snapshot_count      INTEGER NOT NULL DEFAULT 0,
-    cpu_avg             REAL,
-    cpu_max             REAL,
-    cpu_p95             REAL,
-    memory_avg_mb       REAL,
-    memory_max_mb       REAL,
-    memory_p95_mb       REAL,
-    db_size_mb          REAL,
-    log_size_mb         REAL,
-    thread_avg          REAL,
-    thread_max          INTEGER,
-    disk_used_avg_pct   REAL,
-    disk_used_max_pct   REAL
-);
-
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '27');  -- FIX-174: O4 stored date column + index
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '28');  -- FIX-176: O6 analytics DB split (candles, system_metrics[_daily] -> analytics.db)
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

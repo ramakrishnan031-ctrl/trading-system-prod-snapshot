@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+from core import db_connect  # O6: ATTACH analytics.db
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -74,7 +75,7 @@ class TestCaptureSnapshot:
         assert "thread_count" in metrics
         assert "disk_used_pct" in metrics
 
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         rows = conn.execute("SELECT COUNT(*) FROM system_metrics").fetchone()
         conn.close()
         assert rows[0] == 1
@@ -83,7 +84,7 @@ class TestCaptureSnapshot:
         metrics = _mod.capture_snapshot(db_path, log, dry_run=True)
         assert "timestamp" in metrics
 
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         rows = conn.execute("SELECT COUNT(*) FROM system_metrics").fetchone()
         conn.close()
         assert rows[0] == 0
@@ -108,7 +109,7 @@ class TestCaptureSnapshot:
         _mod.capture_snapshot(db_path, log)
         _mod.capture_snapshot(db_path, log)
 
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         rows = conn.execute("SELECT COUNT(*) FROM system_metrics").fetchone()
         conn.close()
         assert rows[0] == 3
@@ -120,7 +121,7 @@ class TestCaptureSnapshot:
 
 class TestDailySummary:
     def _insert_snapshots(self, db_path, date_iso, values):
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         for i, (cpu, mem, db, lg, fds, thr, disk) in enumerate(values):
             ts = f"{date_iso}T09:{i:02d}:00+05:30"
             conn.execute(
@@ -158,7 +159,7 @@ class TestDailySummary:
         ])
         _mod.compute_daily_summary(db_path, log)
 
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         row = conn.execute(
             "SELECT date, snapshot_count, cpu_avg FROM system_metrics_daily WHERE date = '2026-06-03'"
         ).fetchone()
@@ -176,7 +177,7 @@ class TestDailySummary:
         result = _mod.compute_daily_summary(db_path, log, dry_run=True)
         assert result is not None
 
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         row = conn.execute("SELECT COUNT(*) FROM system_metrics_daily").fetchone()
         conn.close()
         assert row[0] == 0
@@ -192,7 +193,7 @@ class TestDailySummary:
         ])
         _mod.compute_daily_summary(db_path, log)
 
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         rows = conn.execute(
             "SELECT COUNT(*) FROM system_metrics_daily WHERE date = '2026-06-03'"
         ).fetchone()
@@ -206,7 +207,7 @@ class TestDailySummary:
 
 class TestDriftDetection:
     def _seed_history(self, db_path, date_iso, cpu_max, mem_max, disk_max, db_max):
-        conn = sqlite3.connect(db_path)
+        conn = db_connect.connect(db_path)
         conn.execute(
             """INSERT INTO system_metrics_daily
                (date, snapshot_count, cpu_avg, cpu_max, cpu_p95,

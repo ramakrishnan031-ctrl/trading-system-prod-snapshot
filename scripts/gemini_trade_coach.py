@@ -29,6 +29,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from core import db_connect  # O6: analytics tables live in analytics.db (ATTACHed)
+
 from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
@@ -67,7 +69,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
 
 
 def _get_closed_trades(db_path: str, date_iso: str) -> list[dict]:
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -90,7 +92,7 @@ def _get_closed_trades(db_path: str, date_iso: str) -> list[dict]:
 
 
 def _get_rejected_signals(db_path: str, date_iso: str) -> list[dict]:
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -109,7 +111,7 @@ def _get_rejected_signals(db_path: str, date_iso: str) -> list[dict]:
 
 
 def _get_candle_summary(db_path: str, symbol: str, date_iso: str) -> dict:
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     try:
         row = conn.execute(
             """SELECT MIN(low) as day_low, MAX(high) as day_high,

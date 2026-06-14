@@ -57,7 +57,6 @@ EXPECTED_TABLES = [
     "smart_tgt_state",
     "innings",
     "gate_state",
-    "candles",
     "trade_excursions",
     "pnl_reconciliation",
     "telegram_alerts",
@@ -68,8 +67,9 @@ EXPECTED_TABLES = [
     "fno_ban",
     "eod_verification",
     "cron_heartbeat",
-    "system_metrics",
-    "system_metrics_daily",
+    # O6 (v28): candles, system_metrics and system_metrics_daily were relocated
+    # to analytics.db, which is a SEPARATE file (backed up separately). They are
+    # intentionally NOT expected in a trading_system.db backup restore.
 ]
 
 DATA_TABLES = ["signals", "trades", "orders"]

@@ -60,6 +60,8 @@ from typing import Any, Iterator, List, Optional, Tuple
 
 from core.exceptions import StateError
 from core import migrations
+from core import db_connect
+from core.db_connect import ANALYTICS_TABLES
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -75,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 27  # FIX-174: O4 stored date column + index
+EXPECTED_SCHEMA_VERSION = 28  # FIX-176: O6 analytics DB split (analytics.db)
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -195,10 +197,15 @@ class StateStore:
         )
         # Row factory: tuple-by-default but accessible by column name as well
         conn.row_factory = sqlite3.Row
-        
+
         for pragma in _CONNECTION_PRAGMAS:
             conn.execute(pragma)
-        
+
+        # O6: ATTACH analytics.db so unqualified candles/system_metrics queries
+        # resolve to the relocated tables. The analytics tables are created by
+        # _initialize_schema (init_analytics_schema) before the first attach.
+        db_connect.attach_analytics(conn, self._db_path)
+
         return conn
     
     def close(self) -> None:
@@ -290,6 +297,12 @@ class StateStore:
         
         schema_sql = self._schema_path.read_text(encoding="utf-8")
 
+        # O6: create analytics.db and its tables BEFORE opening (and ATTACHing
+        # from) the main connection, so the relocation step and any analytics
+        # write have their target tables present. Idempotent (CREATE IF NOT
+        # EXISTS); a no-op once analytics.db is established.
+        db_connect.init_analytics_schema(self._db_path)
+
         conn = self._get_conn()
 
         # Capture the pre-existing version BEFORE applying schema.sql. The
@@ -312,13 +325,19 @@ class StateStore:
         # the version untouched so the migration is retried on next startup —
         # never a version that claims success over an un-rebuilt table.
         if old_version is not None and old_version < EXPECTED_SCHEMA_VERSION:
+            mig_log = logging.getLogger("state_store.migrations")
             migrations.run_migrations(
                 conn,
                 schema_sql,
                 old_version,
                 EXPECTED_SCHEMA_VERSION,
-                logging.getLogger("state_store.migrations"),
+                mig_log,
             )
+            # O6 (v28): move candles/system_metrics[_daily] out of the main DB
+            # into the attached analytics.db. Idempotent — skips tables already
+            # relocated. Runs after the in-place rebuilds above and before the
+            # schema.sql re-apply (which no longer defines these tables).
+            migrations.relocate_analytics_tables(conn, ANALYTICS_TABLES, mig_log)
 
         # Execute the entire schema as one script. Creates any missing tables
         # (with their current constraints) on a fresh DB; a no-op on tables that

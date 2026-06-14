@@ -40,6 +40,8 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from core import db_connect  # O6: analytics tables live in analytics.db (ATTACHed)
+
 from core.logger import get_logger
 from core.time_authority import now_ist, today_ist
 
@@ -145,7 +147,7 @@ def capture_snapshot(db_path: str, log, dry_run: bool = False) -> dict:
     if dry_run:
         return metrics
 
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     try:
         conn.execute(
             """INSERT INTO system_metrics
@@ -169,7 +171,7 @@ def compute_daily_summary(db_path: str, log, dry_run: bool = False) -> dict | No
     """Compute daily avg/min/max/p95 from today's snapshots."""
     date_iso = today_ist()
 
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     try:
         rows = conn.execute(
             """SELECT cpu_pct, memory_mb, db_size_mb, log_size_mb,
@@ -218,7 +220,7 @@ def compute_daily_summary(db_path: str, log, dry_run: bool = False) -> dict | No
     if dry_run:
         return summary
 
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     try:
         conn.execute(
             """INSERT OR REPLACE INTO system_metrics_daily
@@ -251,7 +253,7 @@ def compute_daily_summary(db_path: str, log, dry_run: bool = False) -> dict | No
 
 def _check_drift(db_path: str, date_iso: str, summary: dict, log) -> None:
     """Alert if any metric exceeds 80% of historical max."""
-    conn = sqlite3.connect(db_path)
+    conn = db_connect.connect(db_path)
     try:
         row = conn.execute(
             """SELECT MAX(cpu_max) as cpu, MAX(memory_max_mb) as mem,

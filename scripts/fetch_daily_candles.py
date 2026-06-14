@@ -182,11 +182,11 @@ def main(argv=None) -> None:
 
 def _insert_into_candles_db(rows: list[dict], inst_map: dict[str, int]) -> None:
     """Insert fetched candle rows into the candles DB table (v14 schema)."""
-    import sqlite3
+    from core import db_connect  # O6: candles lives in analytics.db (ATTACHed)
     if not DB_PATH.exists():
         print("WARNING: DB not found, skipping candles DB insert")
         return
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = db_connect.connect(DB_PATH)
     cur = conn.cursor()
     inserted = 0
     for row in rows:

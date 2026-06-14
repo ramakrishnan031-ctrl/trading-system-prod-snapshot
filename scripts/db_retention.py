@@ -137,13 +137,18 @@ def run_retention(
     )
 
     if vacuum and not dry_run and failures == 0:
-        try:
-            # VACUUM cannot run inside a transaction; execute() autocommits.
-            store.execute("VACUUM")
-            log.info("db_retention.vacuum_complete")
-        except Exception as exc:  # noqa: BLE001
-            failures += 1
-            log.error("db_retention.vacuum_failed: %s", exc, exc_info=True)
+        # VACUUM cannot run inside a transaction; execute() autocommits. The
+        # main DB and the attached analytics DB (O6) are vacuumed separately —
+        # most freed space lives in analytics (candles/system_metrics).
+        for schema in ("", "analytics"):
+            target = schema or "main"
+            try:
+                store.execute(f"VACUUM {schema}".strip())
+                log.info("db_retention.vacuum_complete: %s", target)
+            except Exception as exc:  # noqa: BLE001
+                failures += 1
+                log.error("db_retention.vacuum_failed[%s]: %s", target, exc,
+                          exc_info=True)
 
     results["_failures"] = failures
     return results
