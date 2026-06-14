@@ -821,13 +821,14 @@ def test_trading_hours_inverted_window_rejected() -> None:
 
 def test_trading_hours_yaml_pins_operator_chosen_window() -> None:
     """
-    CFG-1 pin (evolved 2026-04-27 paper Week 2): the production
+    CFG-1 pin (evolved 2026-06-16 Live Week 1): the production
     system_config.yaml must declare entry_start/entry_end values that
     were chosen deliberately by the operator. The original CFG-1 pin
-    enforced the P1 spec (09:30/13:30); this test now pins the
-    paper-Week-2 widened window (09:20/15:15) so the values can't
-    silently drift back to the prior 09:25 namesake or to a typo
-    without a corresponding test edit.
+    enforced the P1 spec (09:30/13:30); paper Week 2 widened it to
+    09:20/15:15; Live Week 1 narrows the start to 10:00 (conservative,
+    avoids opening-hour volatility). This test pins the current live
+    window (10:00/15:15) so the values can't silently drift back to the
+    prior 09:25 namesake or to a typo without a corresponding test edit.
 
     Regression guards still in place:
       - 09:25 (the original namesake) is asserted absent.
@@ -838,14 +839,14 @@ def test_trading_hours_yaml_pins_operator_chosen_window() -> None:
         (project_root / "config" / "system_config.yaml").read_text()
     )
     th = raw.get("trading_hours", {})
-    assert th.get("entry_start") == "09:20", \
-        f"Expected 09:20 (paper Week 2 widened), got {th.get('entry_start')}"
+    assert th.get("entry_start") == "10:00", \
+        f"Expected 10:00 (Live Week 1 conservative start), got {th.get('entry_start')}"
     assert th.get("entry_end") == "15:15", \
         f"Expected 15:15 (paper Week 2 widened), got {th.get('entry_end')}"
     assert th.get("entry_start") != "09:25", \
         "09:25 namesake must never return (CFG-1 regression guard)"
     assert th.get("eod_squareoff_time") == "15:17"
-    print("  OK Production YAML trading_hours match paper Week 2 (09:20/15:15/15:17)")
+    print("  OK Production YAML trading_hours match Live Week 1 (10:00/15:15/15:17)")
 
 
 def test_invalid_date_in_nse_holidays_raises_config_schema_error() -> None:
