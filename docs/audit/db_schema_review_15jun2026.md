@@ -90,6 +90,8 @@ A bad write (typo, wrong constant) will silently insert invalid state; applicati
 
 ### O3 — Missing indexes on frequently joined columns
 
+> **STATUS: FIXED (FIX-171).** Added `idx_signals_trade_id`, `idx_trades_signal_id`, and partial `idx_orders_superseded_by` to `core/schema.sql` (idempotent, apply on every startup) and to the live VM DB directly.
+
 These columns appear in joins/lookups but lack indexes:
 
 | Table | Column | Used in |
@@ -143,6 +145,8 @@ Log *files* have a 30-day cron cleanup; DB rows have none. Over a year this bloa
 
 ### O7 — Comment numbering drift in schema.sql (cosmetic)
 
+> **STATUS: FIXED (FIX-171).** Renumbered table comments sequentially 1..30 (counting the removed `capital_ledger` as slot 6). Duplicate "TABLE 19/20/24" labels removed.
+
 The table comment block has duplicate labels:
 - Two "TABLE 19": `trade_excursions` and `telegram_alerts`
 - Two "TABLE 20": (check sequential)
@@ -163,6 +167,8 @@ No runtime impact, but confusing when grepping the comment block.
 ---
 
 ### O9 — Soft circular reference between signals and trades
+
+> **STATUS: DOCUMENTED (FIX-171).** Intentional design, no code fix needed. Rationale block added to the `trades` table comment in `core/schema.sql`.
 
 `signals.trade_id` ↔ `trades.signal_id` is a mutual reference — works because `signals.trade_id` is nullable (set post-fill), but makes the 1:N direction slightly ambiguous in the schema.
 

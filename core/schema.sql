@@ -68,6 +68,10 @@ CREATE INDEX IF NOT EXISTS idx_signals_status
 CREATE INDEX IF NOT EXISTS idx_signals_received_at
     ON signals(received_at);
 
+-- O3 (v25): back-ref lookup trades -> signals via signals.trade_id
+CREATE INDEX IF NOT EXISTS idx_signals_trade_id
+    ON signals(trade_id);
+
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 3: trades
 -- One row per logical position lifecycle. Created at capital reservation.
@@ -76,6 +80,19 @@ CREATE INDEX IF NOT EXISTS idx_signals_received_at
 --
 -- Decision refs: G2a (trade_id), P7a (capital), P8/P13 (order_protocol),
 --                G10 (entry_mode), G5a (recovered_flag)
+--
+-- O9 — SOFT CIRCULAR REFERENCE (intentional design, no fix needed):
+--   signals.trade_id  <->  trades.signal_id  form a mutual reference.
+--   trades.signal_id is set at creation (NOT NULL, immutable) and carries
+--   the enforced FK -> signals(signal_id).
+--   signals.trade_id is set post-fill (nullable, updated after the trade
+--   opens) and carries a FK -> trades(trade_id).
+--   FK enforcement on BOTH directions is safe here because each side is
+--   populated at a different lifecycle moment (trade created first with its
+--   signal_id; signal back-ref filled in afterwards), so neither INSERT
+--   violates the other's FK at write time. The 1:N direction of record is
+--   signals(1) -> trades(N); signals.trade_id is a convenience back-ref.
+--   See docs/audit/db_schema_review_15jun2026.md O9 for rationale.
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS trades (
     trade_id            TEXT PRIMARY KEY,            -- UUID4
@@ -158,6 +175,10 @@ CREATE INDEX IF NOT EXISTS idx_trades_symbol
 CREATE INDEX IF NOT EXISTS idx_trades_created_at
     ON trades(created_at);
 
+-- O3 (v25): join to signals + back-ref lookup via trades.signal_id
+CREATE INDEX IF NOT EXISTS idx_trades_signal_id
+    ON trades(signal_id);
+
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 4: orders
 -- One row per broker order. A single trade has multiple orders over its
@@ -221,6 +242,11 @@ CREATE INDEX IF NOT EXISTS idx_orders_status
 
 CREATE INDEX IF NOT EXISTS idx_orders_leg
     ON orders(leg);
+
+-- O3 (v25): SL trail replacement-chain walks via orders.superseded_by.
+-- Partial index: only the (few) superseded rows carry a non-NULL value.
+CREATE INDEX IF NOT EXISTS idx_orders_superseded_by
+    ON orders(superseded_by) WHERE superseded_by IS NOT NULL;
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 5: capital_snapshot
@@ -667,7 +693,7 @@ CREATE INDEX IF NOT EXISTS idx_pnl_reconciliation_date
 -- SCHEMA VERSION BUMP: v16 -> v17
 -- ─────────────────────────────────────────────────────────────────────────────
 -- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 19: telegram_alerts — FIX-131 Item 18: Telegram alert delivery log
+-- TABLE 21: telegram_alerts — FIX-131 Item 18: Telegram alert delivery log
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Tracks every Telegram alert attempt for audit + startup retry of CRITICAL.
 -- status: SENT | FAILED | PENDING
@@ -685,7 +711,7 @@ CREATE TABLE IF NOT EXISTS telegram_alerts (
 CREATE INDEX IF NOT EXISTS idx_telegram_alerts_status_severity
     ON telegram_alerts(status, severity);
 
--- TABLE 20: trade_journal — FIX-133 Item 30: daily trade journal
+-- TABLE 22: trade_journal — FIX-133 Item 30: daily trade journal
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Structured trade journal for pattern analysis. Populated after EOD.
 CREATE TABLE IF NOT EXISTS trade_journal (
@@ -711,7 +737,7 @@ CREATE INDEX IF NOT EXISTS idx_trade_journal_date ON trade_journal(date);
 CREATE INDEX IF NOT EXISTS idx_trade_journal_strategy ON trade_journal(strategy);
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 21: position_reconciliation  (v20 / FIX-134 Item 31)
+-- TABLE 23: position_reconciliation  (v20 / FIX-134 Item 31)
 -- Per-symbol daily position comparison: broker vs system.
 -- Written by scripts/reconcile_positions.py at 15:45 IST after market close.
 -- Status: OK | ORPHAN_AT_BROKER | MISSING_AT_BROKER | QTY_MISMATCH | ERROR
@@ -734,7 +760,7 @@ CREATE INDEX IF NOT EXISTS idx_position_reconciliation_status
     ON position_reconciliation(status);
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 22: strategy_metrics  (v20 / FIX-134 Item 36)
+-- TABLE 24: strategy_metrics  (v20 / FIX-134 Item 36)
 -- Per-strategy daily performance metrics (Sharpe, win rate, etc).
 -- Computed at EOD by scripts/compute_strategy_metrics.py.
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -757,7 +783,7 @@ CREATE INDEX IF NOT EXISTS idx_strategy_metrics_date
     ON strategy_metrics(date);
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 23: shadow_trades  (v21 / FIX-135 Item 41)
+-- TABLE 25: shadow_trades  (v21 / FIX-135 Item 41)
 -- Shadow paper engine: simulated trades run in parallel with live.
 -- Entry at signal trigger price; exit at SL/TGT/EOD simulation.
 -- Used for regret analysis in daily report.
@@ -788,7 +814,7 @@ CREATE INDEX IF NOT EXISTS idx_shadow_trades_signal
     ON shadow_trades(signal_id);
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- TABLE 24: fno_ban  (v21 / FIX-135 Item 44)
+-- TABLE 26: fno_ban  (v21 / FIX-135 Item 44)
 -- Daily F&O ban list from NSE. Fetched at 08:30 IST.
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS fno_ban (
@@ -802,7 +828,7 @@ CREATE INDEX IF NOT EXISTS idx_fno_ban_date
     ON fno_ban(ban_date);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 24: eod_verification — FIX-137 Item 59
+-- TABLE 27: eod_verification — FIX-137 Item 59
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS eod_verification (
@@ -815,7 +841,7 @@ CREATE TABLE IF NOT EXISTS eod_verification (
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 25: cron_heartbeat  (v23 / FIX-145)
+-- TABLE 28: cron_heartbeat  (v23 / FIX-145)
 -- Records successful cron job executions. Each cron job writes a row on success.
 -- Used by scripts/check_cron_drift.py to detect missing heartbeats.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -835,7 +861,7 @@ CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
     ON cron_heartbeat(executed_at);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 26: system_metrics  (v24 / FIX-150)
+-- TABLE 29: system_metrics  (v24 / FIX-150)
 -- Per-snapshot system health metrics captured every 5 min during market hours.
 -- Used for drift detection and baseline comparison.
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -854,7 +880,7 @@ CREATE INDEX IF NOT EXISTS idx_system_metrics_ts
     ON system_metrics(timestamp);
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- TABLE 27: system_metrics_daily  (v24 / FIX-150)
+-- TABLE 30: system_metrics_daily  (v24 / FIX-150)
 -- Daily summary of system metrics: avg/max/p95 per metric.
 -- Computed by capture_metrics_baseline.py --summarize at EOD.
 -- ─────────────────────────────────────────────────────────────────────────────
