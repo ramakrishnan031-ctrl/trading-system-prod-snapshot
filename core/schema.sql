@@ -530,7 +530,13 @@ CREATE TABLE IF NOT EXISTS reconciliation_log (
     trade_id        TEXT,                    -- nullable (some checks are position-less)
     description     TEXT NOT NULL,           -- human-readable drift description
     action_taken    TEXT NOT NULL,           -- what reconciler did
-    success         INTEGER NOT NULL         -- 1 = action succeeded; 0 = action failed
+    success         INTEGER NOT NULL,        -- 1 = action succeeded; 0 = action failed
+
+    -- O1 (v26): trade_id is nullable (position-less checks log NULL, which is
+    -- FK-exempt). The insert site (order_reconciler) wraps this in try/except,
+    -- so a rare orphan-scenario FK rejection drops one audit row with an error
+    -- log rather than crashing the reconciler.
+    FOREIGN KEY (trade_id) REFERENCES trades(trade_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_reconciliation_log_ts
@@ -557,7 +563,9 @@ CREATE TABLE IF NOT EXISTS screener_results (
     latencies               TEXT NOT NULL,
     market_data_snapshot    TEXT NOT NULL,
     ts                      TEXT NOT NULL,
-    eligible_score          INTEGER              -- v14: per-strategy min_score threshold
+    eligible_score          INTEGER,             -- v14: per-strategy min_score threshold
+
+    FOREIGN KEY (signal_id) REFERENCES signals(signal_id)  -- O1 (v26)
 );
 
 CREATE INDEX IF NOT EXISTS idx_screener_results_signal_id
@@ -591,7 +599,9 @@ CREATE TABLE IF NOT EXISTS smart_tgt_state (
     best_price          REAL,                     -- most favorable price seen; nullable (none yet)
     trail_count         INTEGER NOT NULL DEFAULT 0,
     last_trail_ts       TEXT,                     -- ISO-8601 IST of last trail; nullable
-    registered_at       TEXT NOT NULL             -- ISO-8601 IST when trade was registered
+    registered_at       TEXT NOT NULL,            -- ISO-8601 IST when trade was registered
+
+    FOREIGN KEY (trade_id) REFERENCES trades(trade_id)  -- O1 (v26)
 );
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -623,7 +633,8 @@ CREATE TABLE IF NOT EXISTS innings (
     pnl_per_share   REAL,                -- nullable until closed
     is_real         INTEGER NOT NULL,    -- 1 = real (inning 1); 0 = simulated
 
-    UNIQUE(trade_id, inning_number)
+    UNIQUE(trade_id, inning_number),
+    FOREIGN KEY (trade_id) REFERENCES trades(trade_id)  -- O1 (v26)
 );
 
 CREATE INDEX IF NOT EXISTS idx_innings_trade
@@ -843,7 +854,12 @@ CREATE TABLE IF NOT EXISTS shadow_trades (
     simulated_exit_price REAL,
     simulated_exit_reason TEXT,                         -- SL_HIT | TGT_HIT | EOD
     simulated_pnl       REAL,
-    created_at          TEXT NOT NULL
+    created_at          TEXT NOT NULL,
+
+    -- O1 (v26): signal_id always set; live_trade_id nullable (NULL = live
+    -- rejected/cancelled), FK-exempt when NULL.
+    FOREIGN KEY (signal_id) REFERENCES signals(signal_id),
+    FOREIGN KEY (live_trade_id) REFERENCES trades(trade_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_shadow_trades_date
@@ -940,7 +956,7 @@ CREATE TABLE IF NOT EXISTS system_metrics_daily (
     disk_used_max_pct   REAL
 );
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '25');  -- FIX-172: O2 status/enum CHECK constraints
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '26');  -- FIX-173: O1 uniform FK declarations
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
@@ -975,5 +991,9 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '25');
 --                    v25: O2 status/enum CHECK constraints on signals.status,
 --                          trades.status, orders.status, orders.leg,
 --                          kill_switch_state.state (FIX-172). Applied to existing
---                          DBs via core/migrations.py table rebuild.)
+--                          DBs via core/migrations.py table rebuild;
+--                    v26: O1 uniform FK declarations — screener_results.signal_id,
+--                          smart_tgt_state.trade_id, innings.trade_id,
+--                          reconciliation_log.trade_id, shadow_trades.signal_id +
+--                          live_trade_id (FIX-173). Same table-rebuild migration.)
 -- ─────────────────────────────────────────────────────────────────────────────

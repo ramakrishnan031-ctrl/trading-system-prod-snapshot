@@ -13,7 +13,31 @@ from capital.shadow_engine import ShadowEngine, ShadowTrade
 
 @pytest.fixture()
 def store(tmp_path: Path) -> StateStore:
-    return StateStore(db_path=tmp_path / "test.db")
+    s = StateStore(db_path=tmp_path / "test.db")
+    # O1 (v26): shadow_trades.signal_id and .live_trade_id are now FKs. These
+    # tests use synthetic ids (sig-1..sig-16, trade-1); seed the parent rows so
+    # record_shadow_trade persists (in production the signal/trade always exist).
+    with s.transaction() as cur:
+        for n in range(1, 17):
+            cur.execute(
+                "INSERT OR IGNORE INTO signals(signal_id,symbol,scanner,strategy,"
+                "triggered_at,received_at,expires_at,status,fingerprint,fingerprint_date) "
+                "VALUES(?,?,'sc','st','t','t','t','TRADED',?,?)",
+                (f"sig-{n}", "X", f"fp-sig-{n}", "2026-04-16"),
+            )
+        cur.execute(
+            "INSERT OR IGNORE INTO signals(signal_id,symbol,scanner,strategy,"
+            "triggered_at,received_at,expires_at,status,fingerprint,fingerprint_date) "
+            "VALUES('sig-for-trade-1','X','sc','st','t','t','t','TRADED','fp-t1','2026-04-16')"
+        )
+        cur.execute(
+            "INSERT OR IGNORE INTO trades(trade_id,signal_id,symbol,direction,strategy,"
+            "qty_planned,entry_target_price,sl_initial,tgt_initial,margin_reserved,"
+            "risk_amount,created_at,updated_at,status,order_protocol) "
+            "VALUES('trade-1','sig-for-trade-1','X','LONG','st',1,100,95,110,20,5,"
+            "'t','t','OPEN','CO_PLUS_TGT')"
+        )
+    return s
 
 
 def _make_engine(store, enabled=True):

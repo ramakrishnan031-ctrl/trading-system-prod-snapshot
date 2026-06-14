@@ -29,6 +29,24 @@ from core.state_store import StateStore
 from core.time_authority import now_ist
 from orders.shadow_tracker import Inning, ShadowTracker, _check_hit, _calc_pnl
 
+
+def _seed_inning_parent(store: StateStore, trade_id: str) -> None:
+    """O1 (v26): seed the signal+trade FK parents that innings.trade_id requires."""
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO signals(signal_id,symbol,scanner,strategy,"
+            "triggered_at,received_at,expires_at,status,fingerprint,fingerprint_date) "
+            "VALUES(?,?,'sc','st','t','t','t','TRADED',?,?)",
+            (f"sig_{trade_id}", "X", f"fp_{trade_id}", "2026-04-16"),
+        )
+        cur.execute(
+            "INSERT OR IGNORE INTO trades(trade_id,signal_id,symbol,direction,strategy,"
+            "qty_planned,entry_target_price,sl_initial,tgt_initial,margin_reserved,"
+            "risk_amount,created_at,updated_at,status,order_protocol) "
+            "VALUES(?,?,?,'LONG','st',1,100,95,110,20,5,'t','t','OPEN','CO_PLUS_TGT')",
+            (trade_id, f"sig_{trade_id}", "X"),
+        )
+
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -633,6 +651,7 @@ def test_inning2_risk_reward_tgt(tmp_path: Path) -> None:
 def test_insert_inning_stores_all_fields(tmp_path: Path) -> None:
     """insert_inning stores all Inning fields correctly (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    _seed_inning_parent(store, "t_persist")
     ts = datetime(2026, 4, 16, 10, 0, 0)
     inning = Inning(
         inning_number=1, trade_id="t_persist", symbol="TCS",
@@ -668,6 +687,7 @@ def test_insert_inning_stores_all_fields(tmp_path: Path) -> None:
 def test_update_inning_close_populates_fields(tmp_path: Path) -> None:
     """update_inning_close() sets exit fields on an open inning (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    _seed_inning_parent(store, "t_upd_close")
     ts = datetime(2026, 4, 16, 10, 0, 0)
     inning = Inning(
         inning_number=2, trade_id="t_upd_close", symbol="INFY",
@@ -703,6 +723,7 @@ def test_update_inning_close_populates_fields(tmp_path: Path) -> None:
 def test_get_innings_for_trade_order(tmp_path: Path) -> None:
     """get_innings_for_trade returns innings ordered by inning_number (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    _seed_inning_parent(store, "t_ord")
     ts = datetime(2026, 4, 16, 10, 0, 0)
     for n in [3, 1, 2]:
         store.insert_inning(Inning(
@@ -723,6 +744,8 @@ def test_get_innings_for_trade_order(tmp_path: Path) -> None:
 def test_get_innings_for_date_filters(tmp_path: Path) -> None:
     """get_innings_for_date returns only innings for that date (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    _seed_inning_parent(store, "t_date1")
+    _seed_inning_parent(store, "t_date2")
     ts_today = datetime(2026, 4, 16, 10, 0, 0)
     ts_other = datetime(2026, 4, 15, 10, 0, 0)
 

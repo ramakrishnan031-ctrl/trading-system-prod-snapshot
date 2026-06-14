@@ -149,6 +149,53 @@ def test_migration_failsafe_on_violating_legacy_data(tmp_path):
     conn.close()
 
 
+def test_o1_fk_added_to_existing_table(tmp_path):
+    """A pre-O1 screener_results (no FK) is rebuilt with the FK on migration."""
+    db = tmp_path / "v25.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        "CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+        + _V24_SIGNALS
+        + _V24_KILL
+        + """
+        CREATE TABLE screener_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, signal_id TEXT NOT NULL,
+            score INTEGER NOT NULL, tier TEXT NOT NULL, status TEXT NOT NULL,
+            step_results TEXT NOT NULL, latencies TEXT NOT NULL,
+            market_data_snapshot TEXT NOT NULL, ts TEXT NOT NULL,
+            eligible_score INTEGER
+        );
+        """
+    )
+    # Pretend this DB already has the v25 CHECK constraints so only O1 runs.
+    conn.execute("INSERT INTO schema_meta VALUES ('schema_version','25')")
+    conn.execute(
+        "INSERT INTO signals(signal_id,symbol,scanner,strategy,triggered_at,"
+        "received_at,expires_at,status,fingerprint,fingerprint_date) "
+        "VALUES('s1','Y','sc','st','t','t','t','TRADED','fp','2026-06-14')"
+    )
+    conn.execute(
+        "INSERT INTO screener_results(signal_id,score,tier,status,step_results,"
+        "latencies,market_data_snapshot,ts) VALUES('s1',1,'A','PASSED','{}','{}','{}','t')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = StateStore(db)  # migrate v25 -> latest
+    assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
+    # data preserved
+    assert store.fetch_one("SELECT COUNT(*) AS n FROM screener_results")["n"] == 1
+    # FK now enforced
+    with pytest.raises(sqlite3.IntegrityError):
+        with store.transaction() as cur:
+            cur.execute(
+                "INSERT INTO screener_results(signal_id,score,tier,status,step_results,"
+                "latencies,market_data_snapshot,ts) "
+                "VALUES('nope',1,'A','PASSED','{}','{}','{}','t')"
+            )
+    store.close()
+
+
 def test_fresh_and_migrated_table_ddl_converge(tmp_path):
     """A table built fresh from schema.sql and one migrated from v24 must match."""
     fresh = StateStore(tmp_path / "fresh.db")

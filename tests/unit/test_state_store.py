@@ -1153,6 +1153,7 @@ def test_get_pending_all_products(tmp_path: Path) -> None:
 def test_insert_reconciliation_log(tmp_path: Path) -> None:
     """insert_reconciliation_log() persists one RC action row (RC10)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_rc_1")  # O1 (v26): FK parent for reconciliation_log.trade_id
 
     store.insert_reconciliation_log(
         ts="2026-04-16T10:00:00+05:30",
@@ -1203,6 +1204,7 @@ def test_insert_screener_result(tmp_path: Path) -> None:
     """insert_screener_result() persists one screening decision row (SS5, SS6)."""
     import json
     store = StateStore(tmp_path / "test.db")
+    insert_test_signal(store, "sig_001")  # O1 (v26): FK parent for screener_results.signal_id
 
     store.insert_screener_result(
         signal_id="sig_001",
@@ -1237,6 +1239,7 @@ def test_insert_screener_result_multiple_rows(tmp_path: Path) -> None:
     """Multiple screening rows for same signal_id are allowed (many per signal)."""
     import json
     store = StateStore(tmp_path / "test.db")
+    insert_test_signal(store, "sig_multi")  # O1 (v26): FK parent
     for i in range(3):
         store.insert_screener_result(
             signal_id="sig_multi",
@@ -1307,6 +1310,7 @@ def test_get_co_entry_order_returns_none_when_absent(tmp_path: Path) -> None:
 def test_insert_smart_tgt_state_and_get_all(tmp_path: Path) -> None:
     """insert_smart_tgt_state + get_all_smart_tgt_states round-trip (ST15)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_st_1")  # O1 (v26): FK parent for smart_tgt_state.trade_id
 
     assert store.get_all_smart_tgt_states() == []
 
@@ -1342,6 +1346,7 @@ def test_insert_smart_tgt_state_and_get_all(tmp_path: Path) -> None:
 def test_update_smart_tgt_state(tmp_path: Path) -> None:
     """update_smart_tgt_state() updates current_sl, trail_count, best_price (ST15)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_upd")  # O1 (v26): FK parent
 
     store.insert_smart_tgt_state(
         trade_id="t_upd",
@@ -1379,6 +1384,7 @@ def test_update_smart_tgt_state(tmp_path: Path) -> None:
 def test_delete_smart_tgt_state(tmp_path: Path) -> None:
     """delete_smart_tgt_state() removes the row; idempotent on re-delete (ST15)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_del")  # O1 (v26): FK parent
 
     store.insert_smart_tgt_state(
         trade_id="t_del",
@@ -1411,6 +1417,7 @@ def test_get_all_smart_tgt_states_multiple_rows(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "test.db")
 
     for i in range(3):
+        insert_test_trade(store, f"t_multi_{i}")  # O1 (v26): FK parent
         store.insert_smart_tgt_state(
             trade_id=f"t_multi_{i}",
             symbol=f"SYM_{i}",
@@ -1549,6 +1556,7 @@ def test_innings_table_exists(tmp_path: Path) -> None:
 def test_insert_inning(tmp_path: Path) -> None:
     """insert_inning persists all fields; is_real stored as 1/0 (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_ins1")  # O1 (v26): FK parent for innings.trade_id
     ing = _make_inning("t_ins1")
     store.insert_inning(ing)
 
@@ -1571,6 +1579,7 @@ def test_insert_inning(tmp_path: Path) -> None:
 def test_update_inning_close(tmp_path: Path) -> None:
     """update_inning_close sets exit fields on an open inning (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_upd")  # O1 (v26): FK parent
     ing = _make_inning("t_upd", inning_number=2, is_real=False)
     store.insert_inning(ing)
 
@@ -1600,6 +1609,7 @@ def test_update_inning_close(tmp_path: Path) -> None:
 def test_get_innings_for_trade(tmp_path: Path) -> None:
     """get_innings_for_trade returns all innings for a trade in order (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_ord")  # O1 (v26): FK parent
     for n in [3, 1, 2]:
         store.insert_inning(_make_inning("t_ord", inning_number=n, is_real=(n == 1)))
 
@@ -1614,6 +1624,8 @@ def test_get_innings_for_trade(tmp_path: Path) -> None:
 def test_get_innings_for_date(tmp_path: Path) -> None:
     """get_innings_for_date filters innings to the requested date (SH10)."""
     store = StateStore(tmp_path / "test.db")
+    insert_test_trade(store, "t_d1")  # O1 (v26): FK parents
+    insert_test_trade(store, "t_d2")
 
     ts_today = datetime(2026, 4, 16, 10, 0, 0)
     ts_other = datetime(2026, 4, 15, 10, 0, 0)

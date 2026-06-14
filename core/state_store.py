@@ -75,7 +75,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 25  # FIX-172: O2 status/enum CHECK constraints
+EXPECTED_SCHEMA_VERSION = 26  # FIX-173: O1 uniform FK declarations
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
