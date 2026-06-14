@@ -122,6 +122,8 @@ High-traffic time-series tables without a plain `date` column: `fm_ledger`, `can
 
 ### O5 — No DB-level retention / row cleanup (unbounded growth)
 
+> **STATUS: FIXED (FIX-175).** Added `scripts/db_retention.py` — the DB analogue of the log-file cleanup cron. Deletes rows older than per-table windows: bulky analytics 90d (`candles`, `system_metrics`, `webhook_audit`, `screener_results`), `reconciliation_log` 180d, `fm_ledger` 365d (capital audit kept long). Index-backed cutoffs use the O4 `date` column where present, else `substr(ts,1,10)`; only deletes rows strictly older than the cutoff. Per-table transactions isolate failures; `--dry-run`, `--vacuum` (off by default; VACUUMs main + analytics), and `--set TABLE=DAYS` override. Cron at 02:30 IST (Sun adds VACUUM), after the 01:00 backup so a pre-prune snapshot exists. 8 unit tests.
+
 Append-only tables with no row expiry:
 
 | Table | Growth rate |
@@ -140,6 +142,8 @@ Log *files* have a 30-day cron cleanup; DB rows have none. Over a year this bloa
 ---
 
 ### O6 — Monolithic DB mixes hot transactional + high-volume analytics tables
+
+> **STATUS: FIXED (FIX-176).** `candles`, `system_metrics` and `system_metrics_daily` relocated out of `trading_system.db` into a separate `analytics.db`, ATTACHed at runtime as schema `analytics` (`core/db_connect.py` is the single source of truth for the path, the table set, and the connect+attach sequence). Transparent to query code — since these tables exist only in `analytics.db`, SQLite resolves unqualified `FROM candles` to them, so existing SQL is unchanged. Safe because none of the three has an FK to/from the trading DB and nothing joins them to `trades`/`signals`. Existing DBs migrate automatically on next start (v27→v28): `relocate_analytics_tables()` moves the rows then drops them from main (idempotent, per-table txn, target cleared first so a crash-retry can't duplicate). Raw-sqlite scripts switched to the attach-aware `db_connect.connect`; nightly cron now `.backup`s both files. The trading DB stays small → near-instant backup + short WAL checkpoints. 2 migration tests + full suite green.
 
 `trades`/`orders`/`fm_ledger` (critical path, tiny rows) share one SQLite file and WAL with `candles`/`system_metrics` (bulky, non-critical). WAL absorbs most contention today, but as candle history grows:
 - WAL checkpoint takes longer, potentially stalling writers
@@ -207,8 +211,8 @@ Result documented in session notes.
 
 | Priority | Observation | Impact | Status |
 |----------|-------------|--------|--------|
-| High | O5 — DB retention | Long-term operational stability | Open |
-| High | O6 — DB split | WAL health, backup speed | Open |
+| High | O5 — DB retention | Long-term operational stability | FIXED (FIX-175) |
+| High | O6 — DB split | WAL health, backup speed | FIXED (FIX-176) |
 | Medium | O3 — Missing indexes | Reconciler + report query speed | FIXED (FIX-171) |
 | Medium | O4 — Date query index | fm_ledger daily-loss query | FIXED (FIX-174) |
 | Low | O1 — FK declarations | Defense-in-depth | FIXED (FIX-173) |
@@ -217,8 +221,8 @@ Result documented in session notes.
 | Verify | O8 — instruments table | Data integrity check correctness | FIXED (warn added) |
 | Doc | O9 — Soft circular ref | Schema clarity | DOCUMENTED (FIX-171) |
 
-Remaining open items: **O5 (retention)** and **O6 (DB split)** — both medium-term operational, neither blocks live trading.
+**All nine observations closed.** O1–O9 implemented in FIX-171→FIX-176 (schema v24→v28). Nothing outstanding from this review.
 
 ---
 
-*This review was read-only at schema v24. The defense-in-depth and indexing observations (O1–O4, O7, O9) were subsequently implemented in follow-up commits FIX-171→FIX-174, advancing the schema to v27. O5 and O6 remain open as non-blocking medium-term work. Schema is production-ready for live trading from 16-Jun-2026.*
+*This review was read-only at schema v24. All nine observations were subsequently implemented in follow-up commits FIX-171→FIX-176, advancing the schema to v28: O1–O4/O7/O9 (defense-in-depth, indexing, docs), O5 (DB row retention cron), and O6 (analytics DB split into analytics.db). Nothing from this review remains outstanding. Schema is production-ready for live trading from 16-Jun-2026.*
