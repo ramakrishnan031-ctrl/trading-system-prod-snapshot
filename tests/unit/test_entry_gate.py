@@ -1025,7 +1025,7 @@ def _seed_signal_row(store, signal_id: str, symbol: str = "RELIANCE") -> None:
                expires_at, status, fingerprint, fingerprint_date)
             VALUES (?, ?, 'test_scanner', 'test_strategy',
                     '2026-04-25T09:30:00', '2026-04-25T09:30:00',
-                    '2026-04-25T15:30:00', 'NEW',
+                    '2026-04-25T15:30:00', 'QUEUED',
                     ?, '2026-04-25')
             """,
             (signal_id, symbol, f"fp_{signal_id}"),

@@ -47,7 +47,26 @@ CREATE TABLE IF NOT EXISTS signals (
     triggered_at        TEXT NOT NULL,               -- ISO IST from Chartink
     received_at         TEXT NOT NULL,               -- ISO IST when we received it
     expires_at          TEXT NOT NULL,               -- received_at + signal_expiry_sec
-    status              TEXT NOT NULL,               -- TRADED/REJECTED_*/DROPPED_*
+    status              TEXT NOT NULL                -- QUEUED/PASSED/PROCESSED/REJECTED*/GATE_*/DROPPED_*/SKIPPED_*
+                        -- O2 (v25): signal status is an OPEN set written by many
+                        -- modules (webhook_receiver, signal_processor, secondary_
+                        -- screener, entry_gate). Four open prefix families are
+                        -- allowed via GLOB so new sub-statuses never break an INSERT;
+                        -- stable non-prefixed values are enumerated. This is a
+                        -- shape/typo guard (rejects lowercase, empty, wrong constants
+                        -- like 'OPEN'/'FILLED'), NOT a closed enum — by design,
+                        -- because a wrongly-rejected signal write would crash the
+                        -- pipeline. Verified complete against the full test suite.
+                        CHECK (status IN (
+                            'QUEUED','ACCEPTED','PROCESSING','PROCESSED',
+                            'PROCESSED_NO_PLACER','PLACEMENT_FAILED','RESERVED',
+                            'QUEUE_FULL','PASSED','TRADED','DUPLICATE','EXPIRED',
+                            'INVALID_SYMBOL','INVALID_PRICE','OUTSIDE_HOURS',
+                            'IN_PROCESS','CANCELLED','FAILED','PENDING','TIMEOUT')
+                            OR status GLOB 'REJECTED*'
+                            OR status GLOB 'DROPPED_*'
+                            OR status GLOB 'SKIPPED_*'
+                            OR status GLOB 'GATE_*'),
     rejection_reason    TEXT,                        -- nullable, free text or step name
     trade_id            TEXT,                        -- nullable FK; set if signal became a trade
     trigger_price       REAL,                        -- price from Chartink at trigger time
@@ -129,7 +148,13 @@ CREATE TABLE IF NOT EXISTS trades (
     net_pnl             REAL,
     
     -- State machine
-    status              TEXT NOT NULL,               -- PENDING_FILL/OPEN/PARTIAL/CLOSED/CANCELLED/FAILED
+    status              TEXT NOT NULL                -- PENDING_FILL/OPEN/PARTIAL/CLOSED/CANCELLED/FAILED/REJECTED*
+                        -- O2 (v25): REJECTED* (e.g. REJECTED, REJECTED_PRICE_DRIFT
+                        -- from order_placer placement-failure paths) allowed via GLOB.
+                        CHECK (status IN (
+                            'PENDING','PENDING_FILL','OPEN','PARTIAL','CLOSED',
+                            'CLOSED_MANUAL','CANCELLED','FAILED','UNKNOWN_IN_FLIGHT')
+                            OR status GLOB 'REJECTED*'),
     
     -- Metadata
     recovered_flag      INTEGER NOT NULL DEFAULT 0,  -- 1 if reconstructed during crash recovery
@@ -197,7 +222,9 @@ CREATE TABLE IF NOT EXISTS orders (
     trade_id            TEXT NOT NULL,               -- FK to trades
     
     -- Logical role within the trade
-    leg                 TEXT NOT NULL,               -- ENTRY/SL/TGT/EOD/CANCEL
+    leg                 TEXT NOT NULL                -- ENTRY/SL/TGT/EOD/CO/CANCEL
+                        -- O2 (v25): CO = CO-bracket entry leg (order_protocol_co).
+                        CHECK (leg IN ('ENTRY','SL','TGT','EOD','CO','CANCEL')),
     leg_index           INTEGER NOT NULL DEFAULT 0,  -- 0 for FULL entry; 0/1/2 for SCALE legs
     
     -- Order parameters as sent to broker
@@ -210,7 +237,18 @@ CREATE TABLE IF NOT EXISTS orders (
     trigger_price       REAL,                        -- SL/SL-M trigger; null for LIMIT/MARKET
     
     -- Fill state (updated from broker polls)
-    status              TEXT NOT NULL,               -- PENDING/OPEN/COMPLETE/CANCELLED/REJECTED/TRIGGER_PENDING
+    status              TEXT NOT NULL                -- OSM STATES (broker/order_state_machine.py)
+                        -- O2 (v25): OrderStateMachine.STATES is the write vocabulary;
+                        -- Kite "REJECTED" maps to FAILED in order_monitor and no raw
+                        -- broker strings reach this column. TRIGGER_PENDING (both
+                        -- underscore and Kite's space form) is also permitted because
+                        -- three read-sites filter on it for resting SL orders and
+                        -- wrongly rejecting an SL status write would mean a naked
+                        -- position — the worst outcome. Cost of permitting it: nil.
+                        CHECK (status IN (
+                            'PENDING','SUBMITTED','OPEN','PARTIAL','COMPLETE',
+                            'CANCELLED','FAILED','EXPIRED','UNKNOWN_IN_FLIGHT',
+                            'TRIGGER_PENDING','TRIGGER PENDING')),
     qty_filled          INTEGER NOT NULL DEFAULT 0,
     avg_fill_price      REAL,
     
@@ -406,7 +444,8 @@ CREATE INDEX IF NOT EXISTS idx_fm_ledger_session_id
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS kill_switch_state (
     id           INTEGER PRIMARY KEY CHECK (id = 1),  -- single row
-    state        TEXT NOT NULL,                        -- INACTIVE/SOFT_KILL/HARD_KILL
+    state        TEXT NOT NULL                         -- INACTIVE/SOFT_KILL/HARD_KILL
+                 CHECK (state IN ('INACTIVE','SOFT_KILL','HARD_KILL')),
     reason       TEXT NOT NULL,
     triggered_at TEXT NOT NULL,                        -- ISO-8601 IST
     triggered_by TEXT NOT NULL
@@ -901,7 +940,7 @@ CREATE TABLE IF NOT EXISTS system_metrics_daily (
     disk_used_max_pct   REAL
 );
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '24');  -- FIX-150: +system_metrics
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '25');  -- FIX-172: O2 status/enum CHECK constraints
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
@@ -932,5 +971,9 @@ INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '24');
 --                    v21: +shadow_trades (FIX-135 Item 41);
 --                    v22: +eod_verification (FIX-137 Item 59);
 --                    v23: +cron_heartbeat (FIX-145);
---                    v24: +system_metrics, +system_metrics_daily (FIX-150))
+--                    v24: +system_metrics, +system_metrics_daily (FIX-150);
+--                    v25: O2 status/enum CHECK constraints on signals.status,
+--                          trades.status, orders.status, orders.leg,
+--                          kill_switch_state.state (FIX-172). Applied to existing
+--                          DBs via core/migrations.py table rebuild.)
 -- ─────────────────────────────────────────────────────────────────────────────

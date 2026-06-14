@@ -50,6 +50,7 @@ What This Module Does NOT Do:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -58,6 +59,7 @@ from pathlib import Path
 from typing import Any, Iterator, List, Optional, Tuple
 
 from core.exceptions import StateError
+from core import migrations
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -73,7 +75,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 24  # FIX-150: +system_metrics, +system_metrics_daily
+EXPECTED_SCHEMA_VERSION = 25  # FIX-172: O2 status/enum CHECK constraints
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -287,11 +289,43 @@ class StateStore:
             )
         
         schema_sql = self._schema_path.read_text(encoding="utf-8")
-        
+
         conn = self._get_conn()
-        # Execute the entire schema as one script
+
+        # Capture the pre-existing version BEFORE applying schema.sql. The
+        # schema's trailing INSERT OR REPLACE bumps schema_version to the
+        # latest, which would otherwise mask the DB's real starting version.
+        # None for a brand-new database.
+        old_version = self._read_existing_version(conn)
+
+        # Migrate BEFORE applying schema.sql. An existing DB created before a
+        # constraint/FK/generated-column was added needs its affected tables
+        # rebuilt — CREATE TABLE IF NOT EXISTS silently skips an existing table,
+        # and SQLite cannot ALTER in a CHECK, a FOREIGN KEY, or a STORED
+        # generated column. run_migrations re-applies schema.sql's current
+        # definition for those tables (extracted from the schema text, so it
+        # does not depend on executescript having run). Idempotent.
+        #
+        # Order matters: schema.sql's trailing INSERT bumps schema_version, so
+        # it must run AFTER a successful migration. If a migration fails (e.g.
+        # legacy data violates a new CHECK) it raises and rolls back, leaving
+        # the version untouched so the migration is retried on next startup —
+        # never a version that claims success over an un-rebuilt table.
+        if old_version is not None and old_version < EXPECTED_SCHEMA_VERSION:
+            migrations.run_migrations(
+                conn,
+                schema_sql,
+                old_version,
+                EXPECTED_SCHEMA_VERSION,
+                logging.getLogger("state_store.migrations"),
+            )
+
+        # Execute the entire schema as one script. Creates any missing tables
+        # (with their current constraints) on a fresh DB; a no-op on tables that
+        # already exist (incl. ones just rebuilt above); always bumps the
+        # schema_version row to the latest.
         conn.executescript(schema_sql)
-        
+
         # Verify version
         version = self.get_schema_version()
         if version != EXPECTED_SCHEMA_VERSION:
@@ -300,6 +334,25 @@ class StateStore:
                 f"code expects {EXPECTED_SCHEMA_VERSION}. "
                 f"Run migrations or use a fresh database."
             )
+
+    def _read_existing_version(self, conn: sqlite3.Connection) -> Optional[int]:
+        """
+        Return the schema_version stored in an EXISTING DB, or None if this is
+        a brand-new database (no schema_meta table / no schema_version row yet).
+        Called before schema.sql is applied, so it must not assume any table.
+        """
+        try:
+            row = conn.execute(
+                "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return None  # schema_meta table doesn't exist yet — fresh DB
+        if row is None:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
     
     def get_schema_version(self) -> int:
         """Return the current schema_version stored in the schema_meta table."""

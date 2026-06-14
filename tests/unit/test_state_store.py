@@ -1846,7 +1846,7 @@ def test_cancel_stale_paper_orders(tmp_path: Path) -> None:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             ("ord_old_filled", "t_old", "ENTRY", "BUY", "LIMIT",
-             "MIS", "regular", 10, "FILLED",
+             "MIS", "regular", 10, "COMPLETE",
              f"{yesterday}T09:30:00+05:30", f"{yesterday}T09:32:00+05:30"),
         )
         cur.execute(
@@ -1868,7 +1868,7 @@ def test_cancel_stale_paper_orders(tmp_path: Path) -> None:
     by_id = {r["order_id"]: r["status"] for r in rows}
     assert by_id["ord_old_pending"] == "CANCELLED"
     assert by_id["ord_old_submitted"] == "CANCELLED"
-    assert by_id["ord_old_filled"] == "FILLED", "Terminal orders must not be touched"
+    assert by_id["ord_old_filled"] == "COMPLETE", "Terminal orders must not be touched"
     assert by_id["ord_today_pending"] == "PENDING", "Today's orders must not be touched"
 
     print("  OK cancel_stale_paper_orders: 2 stale cancelled, filled+today untouched")
