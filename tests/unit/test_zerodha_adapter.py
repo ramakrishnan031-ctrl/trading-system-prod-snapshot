@@ -90,12 +90,11 @@ class MockKite:
                  "average_price": 2500.0, "product": "MIS"}
             ]
         }
+        # KiteConnect returns a flat dict when segment="equity" is passed (FIX-178)
         self.margins_return: dict = {
-            "equity": {
-                "net": 50000.0,
-                "available": {"cash": 45000.0},
-                "utilised": {"debits": 5000.0},
-            }
+            "net": 50000.0,
+            "available": {"cash": 45000.0},
+            "utilised": {"debits": 5000.0},
         }
         self.quote_return: dict = {
             "NSE:RELIANCE": {
@@ -498,13 +497,28 @@ def test_get_positions_returns_list_of_positions() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_get_margins_returns_margin_info() -> None:
-    adapter, _, _, _, _ = _make_adapter()
+    adapter, kite, _, _, _ = _make_adapter()
     info = adapter.get_margins()
     assert isinstance(info, MarginInfo)
     assert info.net == 50000.0
     assert info.available == 45000.0
     assert info.used == 5000.0
-    print("  OK get_margins returns MarginInfo (ZA2)")
+    print("  OK get_margins returns MarginInfo flat dict (ZA2, FIX-178)")
+
+
+def test_get_margins_flat_dict_not_zero() -> None:
+    """FIX-178: KiteConnect returns flat dict when segment='equity'; net must not be 0."""
+    adapter, kite, _, _, _ = _make_adapter()
+    kite.margins_return = {
+        "net": 123456.0,
+        "available": {"cash": 100000.0},
+        "utilised": {"debits": 23456.0},
+    }
+    info = adapter.get_margins()
+    assert info.net == 123456.0, f"Expected 123456.0, got {info.net} (nested-key bug?)"
+    assert info.available == 100000.0
+    assert info.used == 23456.0
+    print("  OK get_margins flat dict returns correct values (FIX-178)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

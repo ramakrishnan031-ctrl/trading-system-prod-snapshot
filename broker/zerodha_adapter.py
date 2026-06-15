@@ -888,7 +888,7 @@ class ZerodhaAdapter:
         # BL-6: success in category -> reset its 429 attempt counter
         self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
 
-        equity = raw.get("equity", {}) if isinstance(raw, dict) else {}
+        equity = raw if isinstance(raw, dict) else {}
         info = MarginInfo(
             net=float(equity.get("net", 0.0)),
             available=float(equity.get("available", {}).get("cash", 0.0)),
