@@ -1311,7 +1311,7 @@ class OrderPlacer:
                 )
                 body = (
                     f"Fill: ₹{entry_price:,.2f} | Qty: {qty} | {now_hm} IST\n"
-                    f"SL-M: ₹{sl_price:,.2f} ✓ | TGT: ₹{tgt_price:,.2f} ✓\n"
+                    f"SL: ₹{sl_price:,.2f} ✓ | TGT: ₹{tgt_price:,.2f} ✓\n"
                     f"{smart_line}"
                 )
                 self._notifier.send(
@@ -2201,7 +2201,7 @@ class OrderPlacer:
                 broker_order_id=legs.sl_broker_order_id,
                 leg="SL",
                 transaction_type=exit_side,
-                order_type=legs.sl_order_type,   # "SL-M" (INTRADAY) or "SL" (DELIVERY)
+                order_type=legs.sl_order_type,   # always "SL" (stop-limit) post-P0 2026-06-15
                 product=product,
                 variety="regular",
                 qty_requested=qty_filled,
@@ -2940,7 +2940,9 @@ class OrderPlacer:
         )
 
         try:
-            placed = self._engine.adapter.place_order(
+            # Bug B (P0 2026-06-15): FullEntryEngine has no `adapter` attribute;
+            # OrderPlacer holds the broker adapter directly as self._adapter.
+            placed = self._adapter.place_order(
                 symbol=symbol,
                 side=side,
                 qty=qty,
@@ -3410,13 +3412,15 @@ class OrderPlacer:
                 qty_requested=qty,
             ))
 
-        # SL order (LIMIT_TRIPLE only)
+        # SL order (LIMIT_TRIPLE defers SL to place_exits, so this is normally
+        # empty here; kept for safety). P0 2026-06-15: label as "SL" (stop-limit),
+        # never "SL-M" — Zerodha rejects SL-M via API.
         if result.sl_broker_order_id:
             specs.append(OrderInsertSpec(
                 broker_order_id=result.sl_broker_order_id,
                 leg="SL",
                 transaction_type=exit_side,
-                order_type="SL-M",
+                order_type="SL",
                 product=product,
                 variety="regular",
                 qty_requested=qty,

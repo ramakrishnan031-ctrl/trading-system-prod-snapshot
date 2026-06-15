@@ -26,7 +26,7 @@ RC5  — Six reconciliation checks per cycle:
                                (only when broker_orders_fn is provided)
 RC6  — 3-tier action policy: COSMETIC / RECOVERABLE / UNRECOVERABLE (G1).
 RC7  — G5b crash-recovery SL: for each OPEN/PARTIAL trade with no active SL
-        order, fetch LTP via quote_fn and place a fresh SL-M or MARKET exit.
+        order, fetch LTP via quote_fn and place a fresh SL (stop-limit) or MARKET exit.
 RC8  — G3 Level 3 capital drift: compare adapter.get_margins().net to
         fund_manager.get_snapshot().total; if delta >
         cfg.capital_drift_tolerance publish CapitalDriftDetected and send a
@@ -77,6 +77,7 @@ from core.logger import bind_trade, log_exception
 from core.state_store import StateStore
 from core.time_authority import now_ist
 from orders.order_manager import OrderManager
+from orders.price_math import DEFAULT_SL_LIMIT_OFFSET_PCT, calc_sl_limit_price
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
@@ -1357,10 +1358,11 @@ class OrderReconciler:
         OPEN/PARTIAL trade has no active SL order — place a fresh recovery order
         per G5b logic (RC7).
 
-        LONG:  LTP > sl_initial -> SL-M SELL at sl_initial
+        LONG:  LTP > sl_initial -> SL SELL (stop-limit) at sl_initial
                LTP <= sl_initial -> MARKET SELL (SL already breached)
-        SHORT: LTP < sl_initial -> SL-M BUY  at sl_initial
+        SHORT: LTP < sl_initial -> SL BUY  (stop-limit) at sl_initial
                LTP >= sl_initial -> MARKET BUY  (SL already breached)
+        P0 (2026-06-15): stop-limit (SL), never SL-M (Zerodha API rejects SL-M).
 
         Order is placed via adapter.place_order() (RC18 — no order_placer import)
         and persisted via OrderManager.insert_order().
@@ -1407,15 +1409,20 @@ class OrderReconciler:
             )
             return None
 
-        # Determine order side, type, and trigger based on G5b rules
+        # Determine order side, type, trigger and limit based on G5b rules.
+        # P0 (2026-06-15): SL recovery uses order_type="SL" (stop-limit), never
+        # SL-M (Zerodha rejects SL-M via API). limit_price is offset past the
+        # trigger; MARKET breach-exits keep price/trigger = 0.0.
+        limit_price = 0.0
         if direction == "LONG":
             side = "SELL"
             if ltp > sl_price:
-                order_type = "SL-M"
+                order_type = "SL"
                 trigger = sl_price
+                limit_price = calc_sl_limit_price(side, sl_price, DEFAULT_SL_LIMIT_OFFSET_PCT)
                 desc = (
                     f"LONG {symbol}: LTP={ltp} > sl={sl_price} "
-                    f"-> placing SL-M SELL at {sl_price}"
+                    f"-> placing SL SELL trig={sl_price} limit={limit_price}"
                 )
             else:
                 order_type = "MARKET"
@@ -1427,11 +1434,12 @@ class OrderReconciler:
         else:  # SHORT
             side = "BUY"
             if ltp < sl_price:
-                order_type = "SL-M"
+                order_type = "SL"
                 trigger = sl_price
+                limit_price = calc_sl_limit_price(side, sl_price, DEFAULT_SL_LIMIT_OFFSET_PCT)
                 desc = (
                     f"SHORT {symbol}: LTP={ltp} < sl={sl_price} "
-                    f"-> placing SL-M BUY at {sl_price}"
+                    f"-> placing SL BUY trig={sl_price} limit={limit_price}"
                 )
             else:
                 order_type = "MARKET"
@@ -1446,7 +1454,7 @@ class OrderReconciler:
                 symbol=symbol,
                 side=side,
                 qty=qty,
-                price=0.0,
+                price=limit_price,
                 order_type=order_type,
                 intent=intent,
                 tag="rc_recovery_sl",
@@ -1462,7 +1470,7 @@ class OrderReconciler:
                 product=placed.product,
                 variety=placed.variety,
                 qty_requested=qty,
-                price=0.0,
+                price=limit_price,
                 trigger_price=trigger,
             )
             log.warning(

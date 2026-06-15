@@ -450,13 +450,15 @@ class TestGap1EmergencyExit:
         )
 
         mock_placed = Mock(broker_order_id="EMG_001", internal_order_id="INT_EMG_001")
-        placer._engine.adapter = Mock()
-        placer._engine.adapter.place_order = Mock(return_value=mock_placed)
+        # Bug B (P0 2026-06-15): emergency exit goes through self._adapter, NOT
+        # self._engine.adapter (FullEntryEngine has no `adapter` attribute).
+        placer._adapter = Mock()
+        placer._adapter.place_order = Mock(return_value=mock_placed)
 
         result = placer._emergency_market_exit("T001", fill_entry, 100, "test_reason")
 
         assert result is True
-        call_args = placer._engine.adapter.place_order.call_args
+        call_args = placer._adapter.place_order.call_args
         assert call_args.kwargs["order_type"] == "MARKET"
         assert call_args.kwargs["side"] == "SELL"
         assert call_args.kwargs["qty"] == 100
@@ -484,8 +486,9 @@ class TestGap1EmergencyExit:
             tgt_price=105.0, intent="INTRADAY",
         )
 
-        placer._engine.adapter = Mock()
-        placer._engine.adapter.place_order = Mock(side_effect=Exception("broker down"))
+        # Bug B (P0 2026-06-15): emergency exit uses self._adapter.
+        placer._adapter = Mock()
+        placer._adapter.place_order = Mock(side_effect=Exception("broker down"))
 
         result = placer._emergency_market_exit("T001", fill_entry, 100, "test_reason")
         assert result is False

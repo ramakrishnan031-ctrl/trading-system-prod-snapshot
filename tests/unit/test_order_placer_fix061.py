@@ -219,10 +219,12 @@ def test_exhausted_retries_triggers_emergency_exit_and_hard_kill(placer, fill_en
     )
     placer._engine.place_deferred_exits = Mock(side_effect=exc)
 
-    # Mock the adapter for emergency market exit
+    # Mock the adapter for emergency market exit.
+    # Bug B (P0 2026-06-15): emergency exit uses self._adapter, not
+    # self._engine.adapter (FullEntryEngine has no `adapter` attribute).
     mock_placed = Mock(broker_order_id="EMG_001", internal_order_id="INT_EMG_001")
-    placer._engine.adapter = Mock()
-    placer._engine.adapter.place_order = Mock(return_value=mock_placed)
+    placer._adapter = Mock()
+    placer._adapter.place_order = Mock(return_value=mock_placed)
 
     # Trigger retry (this will be 3rd attempt)
     ticks = [{"instrument_token": 12345, "last_price": 100.5}]
@@ -232,8 +234,8 @@ def test_exhausted_retries_triggers_emergency_exit_and_hard_kill(placer, fill_en
     placer._kill_switch.hard_kill.assert_called_once()
 
     # FIX-148: Emergency market exit was attempted
-    placer._engine.adapter.place_order.assert_called_once()
-    call_args = placer._engine.adapter.place_order.call_args
+    placer._adapter.place_order.assert_called_once()
+    call_args = placer._adapter.place_order.call_args
     assert call_args.kwargs["order_type"] == "MARKET"
     assert call_args.kwargs["side"] == "SELL"  # LONG trade → SELL exit
 

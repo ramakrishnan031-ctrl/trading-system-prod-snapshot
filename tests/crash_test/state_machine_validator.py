@@ -26,9 +26,12 @@ ORDER_TRANSITIONS: Dict[str, Set[str]] = {
 
 TRADE_TRANSITIONS: Dict[str, Set[str]] = {
     "PENDING": {"PENDING_FILL", "CANCELLED", "FAILED"},
-    "PENDING_FILL": {"OPEN", "CANCELLED", "FAILED"},
-    "OPEN": {"CLOSED", "CLOSED_MANUAL", "PARTIAL"},
-    "PARTIAL": {"OPEN", "CLOSED", "CLOSED_MANUAL"},
+    # FIX-179: PENDING_FILL/OPEN/PARTIAL -> EXITING when hard_kill fires a
+    # MARKET exit; EXITING -> CLOSED/CLOSED_MANUAL once the exit is reconciled.
+    "PENDING_FILL": {"OPEN", "EXITING", "CANCELLED", "FAILED"},
+    "OPEN": {"CLOSED", "CLOSED_MANUAL", "PARTIAL", "EXITING"},
+    "PARTIAL": {"OPEN", "CLOSED", "CLOSED_MANUAL", "EXITING"},
+    "EXITING": {"CLOSED", "CLOSED_MANUAL"},
     # Terminal states
     "CLOSED": set(),
     "CLOSED_MANUAL": set(),

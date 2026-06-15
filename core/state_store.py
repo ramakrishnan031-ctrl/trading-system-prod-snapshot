@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 28  # FIX-176: O6 analytics DB split (analytics.db)
+EXPECTED_SCHEMA_VERSION = 29  # FIX-179: trades.status adds 'EXITING' (hard_kill transitional state)
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -533,6 +533,25 @@ class StateStore:
         """
         row = self.fetch_one(
             "SELECT COUNT(*) AS n FROM trades WHERE status = 'PENDING_FILL'"
+        )
+        return int(row["n"]) if row else 0
+
+    def count_active_positions(self) -> int:
+        """
+        Count ALL trades with live (or about-to-be-live) exposure in a SINGLE
+        atomic query: status OPEN, PARTIAL, or PENDING_FILL.
+
+        Bug E (P0 2026-06-15): the risk_engine OPEN_POSITIONS check used to sum
+        two separate queries — count_open_positions() (OPEN/PARTIAL) and
+        count_in_flight_orders() (PENDING_FILL). A trade that transitioned
+        PENDING_FILL -> OPEN *between* the two queries was counted in NEITHER
+        (the first query ran before it became OPEN, the second after it left
+        PENDING_FILL), so the position cap could be exceeded. This single query
+        closes that window. See risk_engine OPEN_POSITIONS check (RE5).
+        """
+        row = self.fetch_one(
+            "SELECT COUNT(*) AS n FROM trades "
+            "WHERE status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
         )
         return int(row["n"]) if row else 0
 

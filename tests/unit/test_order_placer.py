@@ -451,10 +451,14 @@ class TestLimitTripleProtocol:
         assert len(adapter.placed) == 0
         print("  OK Phase 1: ENTRY failure -> BrokerError, 0 orders placed (OPL3)")
 
-    # ── Phase 2: place_exits() — INTRADAY SL-M ───────────────────────────────
+    # ── Phase 2: place_exits() — INTRADAY SL (stop-limit) ────────────────────
 
     def test_place_exits_intraday_uses_sl_m(self) -> None:
-        """INTRADAY place_exits: SL leg is SL-M with trigger_price only. (OPL7)"""
+        """INTRADAY place_exits: SL leg is SL (stop-limit), NOT SL-M. (P0 2026-06-15)
+
+        Zerodha rejects SL-M via the API, so the SL leg is order_type="SL" with a
+        limit price offset 0.5% past the trigger (SELL stop -> limit below).
+        """
         proto, adapter = self._make_proto()
         legs = proto.place_exits(
             symbol="RELIANCE", entry_side="BUY", qty=10,
@@ -464,25 +468,29 @@ class TestLimitTripleProtocol:
         # 2 orders placed (SL + TGT)
         assert len(adapter.placed) == 2
         sl, tgt = adapter.placed[0], adapter.placed[1]
-        assert sl["order_type"] == "SL-M"
+        assert sl["order_type"] == "SL"            # never SL-M post-P0
         assert sl["side"] == "SELL"
         assert sl["trigger_price"] == pytest.approx(2450.0)
-        assert sl["price"] == pytest.approx(0.0)  # SL-M has no limit
+        # SELL stop: limit = trigger * (1 - 0.005) = 2437.75
+        assert sl["price"] == pytest.approx(2437.75)
+        assert sl["price"] < sl["trigger_price"]   # limit below trigger for a SELL stop
         assert tgt["order_type"] == "LIMIT"
         assert tgt["side"] == "SELL"
         assert tgt["price"] == pytest.approx(2600.0)
-        assert legs.sl_order_type == "SL-M"
+        assert legs.sl_order_type == "SL"
+        assert legs.sl_price == pytest.approx(2437.75)
+        assert legs.sl_trigger_price == pytest.approx(2450.0)
         assert legs.sl_broker_order_id
         assert legs.tgt_broker_order_id
-        print("  OK Phase 2 INTRADAY: SL-M (trigger only) + LIMIT TGT (OPL7)")
+        print("  OK Phase 2 INTRADAY: SL stop-limit (limit below trigger) + LIMIT TGT (P0)")
 
-    # ── Phase 2: place_exits() — DELIVERY SL ─────────────────────────────────
+    # ── Phase 2: place_exits() — DELIVERY SL (stop-limit) ────────────────────
 
     def test_place_exits_delivery_uses_sl_not_sl_m(self) -> None:
-        """DELIVERY place_exits: SL leg is SL with explicit price. (OPL7 / 3.4)
+        """DELIVERY place_exits: SL leg is SL (stop-limit) with offset limit. (P0)
 
-        Zerodha rejects SL-M on CNC products; use SL with
-        price = trigger_price (tight limit, explicit).
+        Post-P0 (2026-06-15) both INTRADAY and DELIVERY use SL with a limit price
+        offset past the trigger (never SL-M, never a tight limit==trigger).
         """
         proto, adapter = self._make_proto()
         legs = proto.place_exits(
@@ -493,10 +501,10 @@ class TestLimitTripleProtocol:
         sl, tgt = adapter.placed[0], adapter.placed[1]
         assert sl["order_type"] == "SL"             # not SL-M
         assert sl["trigger_price"] == pytest.approx(2450.0)
-        assert sl["price"] == pytest.approx(2450.0)  # explicit limit
+        assert sl["price"] == pytest.approx(2437.75)  # offset limit, not == trigger
         assert tgt["order_type"] == "LIMIT"
         assert legs.sl_order_type == "SL"
-        print("  OK Phase 2 DELIVERY: SL with explicit price=trigger (OPL7 / 3.4)")
+        print("  OK Phase 2 DELIVERY: SL stop-limit with offset limit (P0)")
 
     def test_place_exits_short_uses_correct_exit_sides(self) -> None:
         """SHORT place_exits: SL and TGT are BUY orders (closing side). (OPL2)"""

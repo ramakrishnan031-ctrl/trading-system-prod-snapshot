@@ -56,6 +56,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
+from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 from core.events import EventBus, KillSwitchActivated
 from core.time_authority import now_ist
 
@@ -671,10 +672,19 @@ class KillSwitch:
         # FIX-165b: corrected column names (qty_filled not quantity,
         # direction not side) and status values (PENDING_FILL not PENDING,
         # plus PARTIAL for partially-filled positions).
+        # Bug C (P0 2026-06-15): also fetch the position's `product` so the
+        # emergency exit can pass the required `intent` to place_order (and exit
+        # under the SAME product the position was opened with — MIS vs CNC
+        # matters). `product` lives on the orders table (ENTRY/CO leg), not on
+        # trades, so pull it via a correlated subquery.
         try:
             open_trades = self._store.fetch_all(
-                "SELECT trade_id, symbol, qty_filled, direction FROM trades "
-                "WHERE status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
+                "SELECT t.trade_id, t.symbol, t.qty_filled, t.direction, "
+                "       (SELECT o.product FROM orders o "
+                "        WHERE o.trade_id = t.trade_id AND o.leg IN ('ENTRY','CO') "
+                "        LIMIT 1) AS product "
+                "FROM trades t "
+                "WHERE t.status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
             )
         except Exception as exc:
             self._log.critical(
@@ -697,6 +707,11 @@ class KillSwitch:
                 continue
             # Exit side is opposite of entry direction
             exit_side = "SELL" if trade["direction"] == "LONG" else "BUY"
+            # Bug C (P0 2026-06-15): derive the product intent from the open
+            # position so place_order gets its required `intent` and exits under
+            # the same product (MIS/CNC). Unknown product -> INTRADAY (safest:
+            # MIS exits are always allowed and the common case).
+            intent = _PRODUCT_TO_INTENT.get(trade["product"] or "", "INTRADAY")
 
             try:
                 # Place MARKET exit order
@@ -706,9 +721,16 @@ class KillSwitch:
                     qty=qty,
                     order_type="MARKET",
                     price=0.0,
+                    intent=intent,
+                    tag="ks_hard_kill_exit",
                 )
-                if not order_result.success:
-                    raise RuntimeError(f"Broker rejected exit: {order_result.error}")
+                # Bug C (P0 2026-06-15): place_order returns a PlacedOrder on
+                # success and RAISES on failure; PlacedOrder has no .success
+                # attribute (the old check AttributeError'd on every success,
+                # sending every trade into the infinite retry loop). Treat an
+                # empty broker_order_id as the only non-exception failure.
+                if not order_result.broker_order_id:
+                    raise RuntimeError("Broker returned empty order id for exit")
 
                 # Update DB (best-effort; broker truth > DB truth during emergency)
                 try:
@@ -730,7 +752,7 @@ class KillSwitch:
                 self._log.critical(
                     "kill_switch: exit failed for trade %s: %s", trade_id, exc
                 )
-                failed_trades.append((trade_id, symbol, exit_side, qty))
+                failed_trades.append((trade_id, symbol, exit_side, qty, intent))
 
         # Retry loop: infinite retry with exponential backoff
         retry_delays = [5, 15, 45]  # seconds
@@ -746,7 +768,7 @@ class KillSwitch:
             retry_attempt += 1
 
             still_failed = []
-            for trade_id, symbol, exit_side, qty in failed_trades:
+            for trade_id, symbol, exit_side, qty, intent in failed_trades:
                 try:
                     order_result = self._adapter.place_order(
                         symbol=symbol,
@@ -754,9 +776,11 @@ class KillSwitch:
                         qty=qty,
                         order_type="MARKET",
                         price=0.0,
+                        intent=intent,
+                        tag="ks_hard_kill_exit",
                     )
-                    if not order_result.success:
-                        raise RuntimeError(f"Broker rejected exit: {order_result.error}")
+                    if not order_result.broker_order_id:
+                        raise RuntimeError("Broker returned empty order id for exit")
 
                     # Best-effort DB update
                     try:
@@ -775,7 +799,7 @@ class KillSwitch:
                     self._log.critical(
                         "kill_switch: retry failed for trade %s: %s", trade_id, exc
                     )
-                    still_failed.append((trade_id, symbol, exit_side, qty))
+                    still_failed.append((trade_id, symbol, exit_side, qty, intent))
 
             failed_trades = still_failed
 

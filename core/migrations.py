@@ -44,6 +44,8 @@ Version map
     v27 -> v28 : O6 — analytics DB split. candles, system_metrics and
                  system_metrics_daily are RELOCATED out of trading_system.db
                  into analytics.db (relocate_analytics_tables, not a rebuild).
+    v28 -> v29 : FIX-179 — trades.status CHECK adds 'EXITING' (kill_switch
+                 hard_kill transitional state). Rebuild trades to widen CHECK.
 """
 from __future__ import annotations
 
@@ -65,6 +67,7 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     # their definition carries the date col — so they are no longer rebuilt
     # in-place here, and no longer appear in schema.sql.
     27: ["fm_ledger", "webhook_audit"],
+    29: ["trades"],  # FIX-179: widen trades.status CHECK to allow 'EXITING'
 }
 
 

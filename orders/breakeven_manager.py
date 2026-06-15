@@ -34,6 +34,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from orders.price_math import DEFAULT_SL_LIMIT_OFFSET_PCT, calc_sl_limit_price
+
 
 @dataclass
 class _TradeInfo:
@@ -70,6 +72,7 @@ class BreakevenManager:
         notifier: Any = None,
         modify_max_retries: int = 3,
         modify_retry_backoff_sec: float = 2.0,
+        sl_limit_offset_pct: float = DEFAULT_SL_LIMIT_OFFSET_PCT,
     ) -> None:
         self._adapter = adapter
         self._store = state_store
@@ -77,6 +80,10 @@ class BreakevenManager:
         self._notifier = notifier
         self._modify_max_retries = max(1, modify_max_retries)
         self._modify_retry_backoff = modify_retry_backoff_sec
+        # P0 (2026-06-15): SL legs are stop-limit (SL), not SL-M. When we advance
+        # the SL trigger we must also move the limit price the same offset, else
+        # the stale limit drifts away from the new trigger. See calc_sl_limit_price.
+        self._sl_limit_offset_pct = sl_limit_offset_pct
         self._tracked: Dict[str, _TradeInfo] = {}
         self._lock = threading.RLock()
         self._consecutive_failures: Dict[str, int] = {}
@@ -238,12 +245,24 @@ class BreakevenManager:
             )
             return
 
+        # P0 (2026-06-15): SL is a stop-limit order — advance the limit price
+        # alongside the trigger so it keeps the configured offset. Exit side for
+        # a LONG position is SELL (limit below trigger); for SHORT it is BUY
+        # (limit above trigger).
+        exit_side = "SELL" if info.direction == "LONG" else "BUY"
+        new_trigger = round(new_sl, 2)
+        new_limit = calc_sl_limit_price(
+            exit_side, new_trigger, self._sl_limit_offset_pct,
+        )
+
         # BM4: modify broker FIRST — with FIX-148 retry logic
         last_error = None
         for attempt in range(1, self._modify_max_retries + 1):
             try:
                 result = self._adapter.modify_order(
-                    broker_order_id, trigger_price=round(new_sl, 2),
+                    broker_order_id,
+                    price=new_limit,
+                    trigger_price=new_trigger,
                 )
             except Exception as exc:
                 last_error = str(exc)

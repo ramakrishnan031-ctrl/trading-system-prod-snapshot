@@ -18,10 +18,12 @@ Naked-Short Fix (2026-04-24 / Audit finding 2.1):
     OrderPlacer on ENTRY fill using event.filled_qty. Partial fills are
     safe because SL/TGT are sized to the filled qty.
 
-DELIVERY Protocol Mismatch Fix (2026-04-24 / Audit finding 3.4):
-    Zerodha rejects overnight SL-M orders for CNC products. place_exits
-    branches on intent: DELIVERY → SL (explicit price=trigger_price).
-    INTRADAY → SL-M (trigger_price only, executes as MARKET).
+SL-M Removal — P0 (2026-06-15, first live day):
+    Zerodha rejects SL-M orders via the API entirely (not just for CNC).
+    place_exits now places EVERY SL leg as order_type="SL" (stop-limit) for
+    both INTRADAY and DELIVERY, with a limit price offset past the trigger
+    (capital.sl_limit_offset_pct, default 0.5%) so a triggered stop fills like
+    a market order. See orders/price_math.calc_sl_limit_price.
 
 Locked Design Decisions:
     OPL1 -- Two-phase placement. execute() = ENTRY. place_exits() = SL+TGT.
@@ -34,9 +36,10 @@ Locked Design Decisions:
     OPL4 -- tag = trade_id passed to zerodha_adapter for all orders.
     OPL5 -- Layer 5 (orders/). Imports broker/zerodha_adapter, orders/entry_engine.
     OPL6 -- order_protocol = "LIMIT_TRIPLE" on the EntryResult.
-    OPL7 -- DELIVERY intent uses order_type="SL" with price = trigger_price
-            (no buffer; tight fill). INTRADAY uses order_type="SL-M".
-            Rationale: SL-M is not valid for CNC/delivery at Zerodha.
+    OPL7 -- ALL SL legs use order_type="SL" (stop-limit) with a limit price
+            offset past the trigger by sl_limit_offset_pct (default 0.5%).
+            Rationale: Zerodha rejects SL-M via the API (P0 2026-06-15).
+            Applies to both INTRADAY and DELIVERY.
 
 What This Module Does NOT Do:
     - Does not manage DB rows (order_placer's job)
@@ -54,6 +57,7 @@ from core.exceptions import BrokerError, OrderRejectedError
 from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
 from orders.entry_engine import EntryEngine, EntryResult
+from orders.price_math import DEFAULT_SL_LIMIT_OFFSET_PCT, calc_sl_limit_price
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -70,9 +74,9 @@ class ExitLegsResult:
     """
     sl_broker_order_id: str
     sl_internal_id: str
-    sl_order_type: str          # "SL-M" for INTRADAY; "SL" for DELIVERY
+    sl_order_type: str          # always "SL" (stop-limit) post-P0 2026-06-15
     sl_trigger_price: float
-    sl_price: float             # 0.0 for SL-M; = trigger_price for SL
+    sl_price: float             # limit price = trigger ± sl_limit_offset_pct
     tgt_broker_order_id: str
     tgt_internal_id: str
     tgt_price: float
@@ -85,11 +89,6 @@ class ExitLegsResult:
 def _exit_side(entry_side: str) -> str:
     """Return the closing side for a position."""
     return "SELL" if entry_side == "BUY" else "BUY"
-
-
-def _is_delivery(intent: str) -> bool:
-    """OPL7: branch on intent for SL order type."""
-    return (intent or "").upper() == "DELIVERY"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -109,9 +108,14 @@ class LimitTripleProtocol(EntryEngine):
         self,
         adapter: ZerodhaAdapter,
         logger: logging.Logger,
+        sl_limit_offset_pct: float = DEFAULT_SL_LIMIT_OFFSET_PCT,
     ) -> None:
         self._adapter = adapter
         self._log = logger
+        # P0 (2026-06-15): SL legs are placed as SL (stop-limit), never SL-M
+        # (Zerodha rejects SL-M via API). This is the offset of the limit price
+        # past the trigger so a triggered stop fills reliably. See calc_sl_limit_price.
+        self._sl_limit_offset_pct = sl_limit_offset_pct
 
     # ── Phase 1: ENTRY ────────────────────────────────────────────────────────
 
@@ -219,17 +223,18 @@ class LimitTripleProtocol(EntryEngine):
         # FIX-093: Truncate tag to 16 chars for Kite API compliance
         order_tag = truncate_tag_for_broker(tag or trade_id)
         exit_side = _exit_side(entry_side)
-        is_delivery = _is_delivery(intent)
 
-        # ── Step 1: SL (SL-M for INTRADAY / SL for DELIVERY) ───────────────
-        if is_delivery:
-            # OPL7: DELIVERY cannot use SL-M at Zerodha (CNC rejects SL-M).
-            # Use SL with price = trigger_price (tight limit).
-            sl_order_type = "SL"
-            sl_limit_price = sl_price
-        else:
-            sl_order_type = "SL-M"
-            sl_limit_price = 0.0  # SL-M ignores price
+        # ── Step 1: SL (stop-limit) for BOTH INTRADAY and DELIVERY ─────────
+        # P0 (2026-06-15): Zerodha rejects SL-M orders via the API entirely,
+        # not just for CNC. Every SL leg is now order_type="SL" (stop-limit)
+        # with a limit price offset past the trigger so a triggered stop still
+        # fills in a fast move. See calc_sl_limit_price / OPL7.
+        sl_order_type = "SL"
+        sl_limit_price = calc_sl_limit_price(
+            exit_side=exit_side,
+            trigger_price=sl_price,
+            offset_pct=self._sl_limit_offset_pct,
+        )
 
         try:
             sl_placed = self._adapter.place_order(

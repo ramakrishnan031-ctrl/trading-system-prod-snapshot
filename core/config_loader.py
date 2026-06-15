@@ -145,7 +145,16 @@ class CapitalConfig(BaseModel):
     positional_bucket_pct: float   # FM16: fraction of total for positional (0 < x < 1)
     daily_loss_limit: float        # FM16: absolute rupee cap on daily loss (> 0)
     slm_margin_buffer_pct: float = 0.05  # FIX-090: SL-M margin buffer % (unknown fill price risk)
+    sl_limit_offset_pct: float = 0.005   # P0 2026-06-15: limit offset past trigger for SL (stop-limit) legs
     leverage_map: LeverageMapConfig  # FM16: per-intent leverage multiplier
+
+    @field_validator("sl_limit_offset_pct")
+    @classmethod
+    def _validate_sl_limit_offset(cls, v: float) -> float:
+        # 0 is allowed (limit == trigger, tight fill) but negative or >= 10% is a typo.
+        if v < 0 or v >= 0.10:
+            raise ValueError("sl_limit_offset_pct must be >= 0 and < 0.10 (10%)")
+        return v
 
     @field_validator("intraday_bucket_pct", "positional_bucket_pct")
     @classmethod
@@ -807,6 +816,7 @@ class SystemConfig(BaseModel):
     live_feed: LiveFeedConfig = LiveFeedConfig()  # FIX-134 Item 37
     fno_ban: FnoBanConfig = FnoBanConfig()    # FIX-136 Item 44
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
+    force_intraday_only: bool = True          # P0 2026-06-15: force every strategy to INTRADAY (MIS); blocks accidental CNC/DELIVERY orders
 
     @model_validator(mode="after")
     def _cross_field_sanity_checks(self) -> "SystemConfig":

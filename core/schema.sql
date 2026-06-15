@@ -148,11 +148,14 @@ CREATE TABLE IF NOT EXISTS trades (
     net_pnl             REAL,
     
     -- State machine
-    status              TEXT NOT NULL                -- PENDING_FILL/OPEN/PARTIAL/CLOSED/CANCELLED/FAILED/REJECTED*
+    status              TEXT NOT NULL                -- PENDING_FILL/OPEN/PARTIAL/EXITING/CLOSED/CANCELLED/FAILED/REJECTED*
                         -- O2 (v25): REJECTED* (e.g. REJECTED, REJECTED_PRICE_DRIFT
                         -- from order_placer placement-failure paths) allowed via GLOB.
+                        -- FIX-179 (v29): EXITING — transitional state set by
+                        -- kill_switch hard_kill while a MARKET exit is in flight
+                        -- (before the fill handler / reconciler closes the row).
                         CHECK (status IN (
-                            'PENDING','PENDING_FILL','OPEN','PARTIAL','CLOSED',
+                            'PENDING','PENDING_FILL','OPEN','PARTIAL','EXITING','CLOSED',
                             'CLOSED_MANUAL','CANCELLED','FAILED','UNKNOWN_IN_FLIGHT')
                             OR status GLOB 'REJECTED*'),
     
@@ -919,7 +922,7 @@ CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
 -- trading DB so the nightly .backup stays small and fast.
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '28');  -- FIX-176: O6 analytics DB split (candles, system_metrics[_daily] -> analytics.db)
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '29');  -- FIX-179: trades.status adds 'EXITING' (hard_kill transitional state)
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

@@ -158,23 +158,25 @@ def test_fix087_per_trade_exception_isolation() -> None:
     store = Mock()
     store.fetch_one.return_value = None  # No persisted kill_switch state
     store.fetch_all.return_value = [
-        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG"},
-        {"trade_id": "t2", "symbol": "INFY", "qty_filled": 5, "direction": "LONG"},
-        {"trade_id": "t3", "symbol": "TCS", "qty_filled": 8, "direction": "LONG"},
+        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG", "product": "MIS"},
+        {"trade_id": "t2", "symbol": "INFY", "qty_filled": 5, "direction": "LONG", "product": "MIS"},
+        {"trade_id": "t3", "symbol": "TCS", "qty_filled": 8, "direction": "LONG", "product": "MIS"},
     ]
     store.transaction = MagicMock()
 
-    # Mock adapter: t2 fails, t1 and t3 succeed
+    # Mock adapter: t2 fails, t1 and t3 succeed.
+    # Bug C (P0 2026-06-15): place_order is called with kwargs incl. intent/tag,
+    # and success is signalled by a non-empty broker_order_id (no .success attr).
     adapter = Mock()
     call_count = {"t1": 0, "t2": 0, "t3": 0}
 
-    def place_order_side_effect(symbol, side, qty, order_type, price):
-        if symbol == "INFY" and call_count["t2"] == 0:
+    def place_order_side_effect(**kwargs):
+        if kwargs["symbol"] == "INFY" and call_count["t2"] == 0:
             call_count["t2"] += 1
             raise RuntimeError("Broker 502 error")
         # t2 succeeds on retry
         result = Mock()
-        result.success = True
+        result.broker_order_id = "B_OK"
         return result
 
     adapter.place_order.side_effect = place_order_side_effect
@@ -204,7 +206,7 @@ def test_fix087_infinite_retry_logic() -> None:
     store = Mock()
     store.fetch_one.return_value = None  # No persisted kill_switch state
     store.fetch_all.return_value = [
-        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG"},
+        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG", "product": "MIS"},
     ]
     store.transaction = MagicMock()
 
@@ -212,12 +214,12 @@ def test_fix087_infinite_retry_logic() -> None:
     adapter = Mock()
     call_count = [0]
 
-    def place_order_side_effect(symbol, side, qty, order_type, price):
+    def place_order_side_effect(**kwargs):
         call_count[0] += 1
         if call_count[0] <= 3:
             raise RuntimeError(f"Broker error (attempt {call_count[0]})")
         result = Mock()
-        result.success = True
+        result.broker_order_id = "B_OK"
         return result
 
     adapter.place_order.side_effect = place_order_side_effect
@@ -245,14 +247,14 @@ def test_fix087_db_write_failure_non_fatal() -> None:
     store = Mock()
     store.fetch_one.return_value = None  # No persisted kill_switch state
     store.fetch_all.return_value = [
-        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG"},
+        {"trade_id": "t1", "symbol": "RELIANCE", "qty_filled": 10, "direction": "LONG", "product": "MIS"},
     ]
     # DB write raises exception (but fetch_one must succeed first)
     store.transaction.side_effect = RuntimeError("DB locked")
 
     adapter = Mock()
     result = Mock()
-    result.success = True
+    result.broker_order_id = "B_OK"
     adapter.place_order.return_value = result
 
     bus = Mock()

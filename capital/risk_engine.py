@@ -199,6 +199,12 @@ class RiskEngine:
         # ── Read all state upfront for snapshot consistency (RE11) ────────────
         snap = self._fm.get_snapshot()
 
+        # Bug E (P0 2026-06-15): count OPEN + PARTIAL + PENDING_FILL in ONE
+        # atomic query for the position-cap decision, eliminating the TOCTOU
+        # window where a PENDING_FILL -> OPEN transition between two separate
+        # counts left a position uncounted (cap could be exceeded). The two
+        # separate reads are kept only for the observability snapshot below.
+        active_count = self._store.count_active_positions()
         open_count = self._store.count_open_positions()
         in_flight_count = self._store.count_in_flight_orders()
         daily_count = self._store.count_trades_today(today)
@@ -245,7 +251,7 @@ class RiskEngine:
         checks_run: List[str] = []
         result = self._run_checks(
             checks_run, snapshot, snap, sizing_result,
-            open_count, in_flight_count, daily_count,
+            active_count, open_count, in_flight_count, daily_count,
             consec, existing_sector_margin, has_dup, kill_active,
             processor_in_flight_count,
             symbol, side, active_direction,
@@ -272,6 +278,7 @@ class RiskEngine:
         snapshot: dict,
         snap: "CapitalSnapshot",
         sizing_result: "SizingResult",
+        active_count: int,
         open_count: int,
         in_flight_count: int,
         daily_count: int,
@@ -323,16 +330,20 @@ class RiskEngine:
                 f"available={bucket_avail:.2f}, required={sizing_result.margin_required:.2f}",
             )
 
-        # 4. OPEN_POSITIONS — open + in-flight + processor_in_flight must be below cap
-        # FIX-018: Add processor_in_flight_count to prevent TOCTOU race where
+        # 4. OPEN_POSITIONS — active (OPEN+PARTIAL+PENDING_FILL) + processor_in_flight < cap
+        # FIX-018: processor_in_flight_count prevents the TOCTOU race where
         # concurrent signals both pass this check before either inserts into DB.
+        # Bug E (P0 2026-06-15): the DB portion is now a SINGLE atomic count
+        # (active_count) instead of count_open + count_in_flight, closing the
+        # window where a PENDING_FILL->OPEN transition between the two queries
+        # left a position uncounted and let the cap be exceeded.
         checks_run.append("OPEN_POSITIONS")
-        active_total = open_count + in_flight_count + processor_in_flight_count
+        active_total = active_count + processor_in_flight_count
         if active_total >= self._max_open:
             return reject(
                 "OPEN_POSITIONS",
                 f"Position cap reached: {active_total} active "
-                f"(open={open_count}, db_in_flight={in_flight_count}, "
+                f"(db_active[open+partial+pending_fill]={active_count}, "
                 f"processor_in_flight={processor_in_flight_count}), "
                 f"max={self._max_open}",
             )

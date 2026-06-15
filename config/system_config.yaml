@@ -45,6 +45,12 @@ excluded_symbols:
   - "SHANKARA"
   - "MCLEODRUSS"
 
+# P0 2026-06-15: MIS-only safety. When true, EVERY strategy is forced to
+# intent=INTRADAY at load time, so the system can never place CNC/DELIVERY
+# orders (first-live-day incident: HARIOMPIPE/SETL went CNC). Set false only
+# when positional/DELIVERY trading is deliberately re-enabled and re-tested.
+force_intraday_only: true
+
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:
     INTRADAY: "MIS"           # Margin Intraday Squareoff (PR3)
@@ -70,6 +76,7 @@ capital:                      # FM16
   positional_bucket_pct: 0.30 # 30% of total capital for positional (CNC)
   daily_loss_limit: 300.0
   slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
+  sl_limit_offset_pct: 0.005  # P0 2026-06-15: SL legs are SL (stop-limit); limit = trigger ± 0.5% so triggered stops fill (Zerodha rejects SL-M via API)
   leverage_map:
     INTRADAY: 5.0             # MIS leverage
     COVER_ORDER: 6.0          # CO leverage

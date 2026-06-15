@@ -775,12 +775,15 @@ def test_g5b_long_ltp_above_sl_places_slm(tmp_path: Path) -> None:
     assert rc_sl[0].success is True
     assert rc_sl[0].tier == "RECOVERABLE"
 
-    # Adapter should be called with SL-M SELL
+    # P0 2026-06-15: recovery places SL (stop-limit) SELL, never SL-M.
+    # SELL stop -> limit offset 0.5% below trigger.
     adapter.place_order.assert_called_once()
     call_kwargs = adapter.place_order.call_args.kwargs
     assert call_kwargs["side"] == "SELL"
-    assert call_kwargs["order_type"] == "SL-M"
+    assert call_kwargs["order_type"] == "SL"
     assert call_kwargs["trigger_price"] == 2450.0
+    assert abs(call_kwargs["price"] - 2437.75) < 0.01  # 2450 * (1 - 0.005)
+    assert call_kwargs["price"] < call_kwargs["trigger_price"]
 
     # SL order should be in DB now
     sl_row = store.get_sl_order_for_trade("t1")
@@ -788,7 +791,7 @@ def test_g5b_long_ltp_above_sl_places_slm(tmp_path: Path) -> None:
     assert sl_row["order_id"] == "broker_sl_1"
 
     store.close()
-    print("  OK G5b LONG LTP>sl: placed SL-M SELL at sl_initial, persisted to orders")
+    print("  OK G5b LONG LTP>sl: placed SL (stop-limit) SELL at sl_initial, persisted to orders")
 
 
 def test_g5b_long_ltp_below_sl_places_market(tmp_path: Path) -> None:
@@ -855,13 +858,16 @@ def test_g5b_short_ltp_below_sl_places_slm(tmp_path: Path) -> None:
     rc_sl = [a for a in actions if a.check_name == "CRASH_RECOVERY_SL"]
     assert len(rc_sl) == 1, f"Expected 1 CRASH_RECOVERY_SL, got {len(rc_sl)}"
 
+    # P0 2026-06-15: SL (stop-limit) BUY, never SL-M. BUY stop -> limit above trigger.
     call_kwargs = adapter.place_order.call_args.kwargs
     assert call_kwargs["side"] == "BUY"
-    assert call_kwargs["order_type"] == "SL-M"
+    assert call_kwargs["order_type"] == "SL"
     assert call_kwargs["trigger_price"] == 1600.0
+    assert abs(call_kwargs["price"] - 1608.0) < 0.01  # 1600 * (1 + 0.005)
+    assert call_kwargs["price"] > call_kwargs["trigger_price"]
 
     store.close()
-    print("  OK G5b SHORT LTP<sl: placed SL-M BUY at sl_initial")
+    print("  OK G5b SHORT LTP<sl: placed SL (stop-limit) BUY at sl_initial")
 
 
 def test_g5b_short_ltp_above_sl_places_market(tmp_path: Path) -> None:

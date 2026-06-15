@@ -1822,6 +1822,7 @@ def _main_locked(args, config_dir: Path) -> int:
     limit_protocol = LimitTripleProtocol(
         adapter=broker_adapter,
         logger=get_logger("order_protocol_limit"),
+        sl_limit_offset_pct=app_config.system.capital.sl_limit_offset_pct,  # P0 SL-M->SL
     )
     full_engine = FullEntryEngine(
         co_protocol=co_protocol,
@@ -1874,7 +1875,10 @@ def _main_locked(args, config_dir: Path) -> int:
 
     strategies_dir = config_dir / "strategies"
     loader = StrategyLoader()
-    strategies = loader.load_all_strategies(strategies_dir)
+    strategies = loader.load_all_strategies(
+        strategies_dir,
+        force_intraday_only=app_config.system.force_intraday_only,  # P0 MIS-only safety
+    )
 
     scorer = QualityScorer(
         weights=app_config.scoring,

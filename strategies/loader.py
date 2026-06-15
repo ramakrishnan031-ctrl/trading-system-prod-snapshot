@@ -9,6 +9,7 @@ Locked decisions: S9-S11
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -16,6 +17,8 @@ import yaml
 
 from core.exceptions import ConfigMissingError, ConfigSchemaError
 from strategies.schema import StrategyConfig, validate_strategy
+
+_log = logging.getLogger("strategies.loader")
 
 
 class StrategyLoader:
@@ -33,12 +36,21 @@ class StrategyLoader:
         self,
         strategies_dir: Path,
         scan_webhook_map_path: Optional[Path] = None,
+        force_intraday_only: bool = False,
     ) -> Dict[str, StrategyConfig]:
         """S9: Load ALL .yaml files from strategies_dir.
 
         Returns dict keyed by strategy name (StrategyConfig.name).
         ANY invalid file raises ConfigSchemaError immediately — no partial loads.
         Optionally cross-validates scan_webhook_map_path (S10).
+
+        Bug D (P0 2026-06-15): when ``force_intraday_only`` is True, every loaded
+        strategy's intent is overridden to "INTRADAY". This is the single
+        chokepoint that guarantees the system can never place CNC/DELIVERY
+        orders — strategy_obj.intent flows into sizing, risk approval, product
+        resolution and order placement, so overriding it here makes the whole
+        pipeline MIS-only. DELIVERY strategies keep their LIMIT_TRIPLE protocol
+        (valid for INTRADAY) and will simply trade/square-off as intraday.
         """
         strategies: Dict[str, StrategyConfig] = {}
 
@@ -51,6 +63,13 @@ class StrategyLoader:
         for yaml_path in yaml_files:
             # validate_strategy raises ConfigSchemaError on any failure
             cfg = validate_strategy(yaml_path)
+            if force_intraday_only and cfg.intent != "INTRADAY":
+                _log.warning(
+                    "force_intraday_only: overriding strategy %r intent %s -> INTRADAY "
+                    "(MIS-only safety; CNC/DELIVERY orders blocked)",
+                    cfg.name, cfg.intent,
+                )
+                cfg = cfg.model_copy(update={"intent": "INTRADAY"})
             strategies[cfg.name] = cfg
 
         # S10: cross-validate against scan_webhook_map
