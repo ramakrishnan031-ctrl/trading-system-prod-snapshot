@@ -338,8 +338,15 @@ class RiskEngine:
         # window where a PENDING_FILL->OPEN transition between the two queries
         # left a position uncounted and let the cap be exceeded.
         checks_run.append("OPEN_POSITIONS")
+        # FIX-181 (off-by-one): processor_in_flight_count is PRE-incremented to
+        # include THIS candidate (signal_processor bumps _in_flight_count before
+        # calling approve), while active_count counts only positions already in
+        # the DB (the candidate is not inserted yet). So active_total ==
+        # max_open means "candidate + (max_open - 1) existing" = max_open total
+        # -> ALLOW. Only active_total > max_open exceeds the cap. The previous
+        # `>=` rejected the legitimate final slot (max=3 only ever held 2).
         active_total = active_count + processor_in_flight_count
-        if active_total >= self._max_open:
+        if active_total > self._max_open:
             return reject(
                 "OPEN_POSITIONS",
                 f"Position cap reached: {active_total} active "

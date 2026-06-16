@@ -1476,20 +1476,37 @@ def test_fix018_toctou_only_one_approved_with_concurrent_signals():
         f"Should approve with 4 open + 0 in_flight, got: {result_no_in_flight.reason}"
     )
 
-    # Test 2: With processor_in_flight_count=1, should reject (4 + 1 >= 5)
+    # FIX-181 (off-by-one): the candidate is pre-incremented into
+    # processor_in_flight_count, so 4 DB + candidate(1) = 5 == max is now the
+    # legitimate 5th slot -> ALLOW. A SECOND concurrent in-flight signal
+    # (processor_in_flight_count=2) is what trips the TOCTOU guard: 4 + 2 = 6 > 5.
+    result_candidate_at_cap = real_risk.approve(
+        symbol="NEWSYM_AT_CAP",
+        side="BUY",
+        intent="INTRADAY",
+        sizing_result=_SizingResult(success=True, qty=10, margin_required=5000.0),
+        signal_id="sig_test_at_cap",
+        processor_in_flight_count=1,
+    )
+    assert result_candidate_at_cap.approved, (
+        f"4 open + candidate(1) = 5 == max should be allowed (the 5th slot), "
+        f"got: {result_candidate_at_cap.reason}"
+    )
+
+    # Test 2: With processor_in_flight_count=2, should reject (4 + 2 = 6 > 5)
     result_with_in_flight = real_risk.approve(
         symbol="NEWSYM2",
         side="BUY",
         intent="INTRADAY",
         sizing_result=_SizingResult(success=True, qty=10, margin_required=5000.0),
         signal_id="sig_test_2",
-        processor_in_flight_count=1,
+        processor_in_flight_count=2,
     )
     assert not result_with_in_flight.approved, (
-        "Should reject with 4 open + 1 in_flight (total 5 >= max 5)"
+        "Should reject with 4 open + 2 in_flight (total 6 > max 5)"
     )
     assert result_with_in_flight.failed_check == "OPEN_POSITIONS"
-    assert "processor_in_flight=1" in result_with_in_flight.reason, (
+    assert "processor_in_flight=2" in result_with_in_flight.reason, (
         f"Rejection message should include processor_in_flight count: {result_with_in_flight.reason}"
     )
 

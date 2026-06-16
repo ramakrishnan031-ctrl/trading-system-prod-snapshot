@@ -77,7 +77,13 @@ from core.logger import bind_trade, log_exception
 from core.state_store import StateStore
 from core.time_authority import now_ist
 from orders.order_manager import OrderManager
-from orders.price_math import DEFAULT_SL_LIMIT_OFFSET_PCT, calc_sl_limit_price
+from orders.price_math import (
+    DEFAULT_SL_LIMIT_OFFSET_PCT,
+    DEFAULT_TICK,
+    EMERGENCY_EXIT_BUFFER_PCT,
+    calc_sl_limit_price,
+    marketable_limit_price,
+)
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
@@ -476,10 +482,23 @@ class OrderReconciler:
                             trade, broker_qty, local_qty
                         ))
 
-            # CHECK 2: ORPHAN_ADOPTION — broker position not in local trades (RC5b)
+            # CHECK 2: ORPHAN_ADOPTION — broker position not in local OPEN/PARTIAL
+            # trades (RC5b). FIX-181: a broker position whose only local record
+            # is an in-flight (PENDING_FILL/PENDING) trade is NOT a true orphan —
+            # its entry filled at the broker. On HARD_KILL it must be flattened,
+            # not abandoned (GICRE incident); otherwise it is a transient fill
+            # the normal fill path will complete, so we don't act destructively.
             for symbol, bp in broker_pos.items():
                 if symbol not in local_symbols:
-                    actions.append(self._check2_orphan_adoption(symbol, bp))
+                    inflight = self._store.get_trades_by_status_and_symbol(
+                        ("PENDING_FILL", "PENDING"), symbol
+                    )
+                    if inflight:
+                        actions.append(
+                            self._check2_inflight_orphan(symbol, bp, inflight[0])
+                        )
+                    else:
+                        actions.append(self._check2_orphan_adoption(symbol, bp))
 
         # CHECK 6: ORPHAN_ORDER (only when broker_orders_fn provided) (RC5f)
         if self._broker_orders_fn is not None:
@@ -901,6 +920,118 @@ class OrderReconciler:
             action_taken="CapitalDriftDetected published; manual intervention required",
             success=True,
         )
+
+    def _check2_inflight_orphan(self, symbol: str, bp, trade) -> ReconciliationAction:
+        """
+        FIX-181 (GICRE incident): a broker position whose only local record is an
+        in-flight (PENDING_FILL/PENDING) trade — its entry LIMIT filled at the
+        broker but the fill was not yet recorded locally.
+
+        HARD_KILL active -> FLATTEN immediately. This is the abandonment race:
+        the kill swept open trades, then a resting entry filled afterwards (or the
+        entry was force-marked CANCELLED while it actually filled). The position
+        must not survive the kill, so we flatten it here as a backstop to the
+        kill_switch broker-position sweep.
+
+        Otherwise -> the normal fill path (order_monitor) will transition this
+        trade to OPEN within a cycle or two; we do NOT act destructively on a
+        transient state. No scary CapitalDriftDetected for a known in-flight trade.
+        """
+        trade_id = trade["trade_id"]
+        kill_active = False
+        try:
+            kill_active = self._ks is not None and self._ks.is_active("exit")
+        except Exception:
+            kill_active = False
+
+        if kill_active:
+            self._log.critical(
+                "CHECK2 INFLIGHT_ORPHAN + HARD_KILL: %s qty=%d trade=%s — entry "
+                "filled at broker during/after kill; FLATTENING",
+                symbol, bp.qty, trade_id,
+            )
+            ok = self._flatten_broker_position(symbol, bp, "KILL", trade_id)
+            return ReconciliationAction(
+                check_name="INFLIGHT_ORPHAN_FLATTEN",
+                tier="CRITICAL",
+                symbol=symbol,
+                trade_id=trade_id,
+                description=(
+                    f"In-flight {symbol} qty={bp.qty} filled at broker during "
+                    f"HARD_KILL; flattened to avoid abandonment"
+                ),
+                action_taken=f"flatten_placed={ok}",
+                success=ok,
+            )
+
+        self._log.warning(
+            "CHECK2 INFLIGHT_ORPHAN: %s qty=%d trade=%s — entry filled at broker, "
+            "awaiting local fill confirmation (no action; fill path will adopt)",
+            symbol, bp.qty, trade_id,
+        )
+        return ReconciliationAction(
+            check_name="INFLIGHT_ORPHAN",
+            tier="COSMETIC",
+            symbol=symbol,
+            trade_id=trade_id,
+            description=(
+                f"Broker position {symbol} qty={bp.qty} matches in-flight trade "
+                f"{trade_id} (status={trade['status']}); fill path will complete it"
+            ),
+            action_taken="none (transient in-flight fill)",
+            success=True,
+        )
+
+    def _flatten_broker_position(
+        self, symbol: str, bp, tag_prefix: str, trade_id: str = "orphan"
+    ) -> bool:
+        """
+        FIX-181: flatten a broker position with a marketable LIMIT (LTP ± buffer,
+        adapter snaps to tick) so it fills but caps slippage; MARKET fallback if
+        no LTP. Returns True if an order was placed. Best-effort — never raises.
+        """
+        try:
+            qty = abs(int(bp.qty))
+            if qty == 0:
+                return False
+            # bp.qty > 0 = long position -> SELL to flatten; < 0 = short -> BUY.
+            exit_side = "SELL" if bp.qty > 0 else "BUY"
+            # Best-effort LTP via quote_fn (same source the reconciler already uses).
+            ltp = None
+            try:
+                raw = self._quote_fn([f"NSE:{symbol}"])
+                q = raw.get(f"NSE:{symbol}") if raw else None
+                if q is not None:
+                    ltp = float(getattr(q, "last_price", 0) or 0) or None
+            except Exception:
+                ltp = None
+
+            if ltp and ltp > 0:
+                price = marketable_limit_price(
+                    exit_side, ltp, EMERGENCY_EXIT_BUFFER_PCT, DEFAULT_TICK
+                )
+                order_type = "LIMIT"
+            else:
+                price = 0.0
+                order_type = "MARKET"
+
+            from core.ids import truncate_tag_for_broker
+            placed = self._adapter.place_order(
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                price=price,
+                order_type=order_type,
+                intent="INTRADAY",
+                tag=truncate_tag_for_broker(f"{tag_prefix}_{trade_id}"),
+            )
+            return bool(getattr(placed, "broker_order_id", None))
+        except Exception as exc:
+            self._log.critical(
+                "reconciler._flatten_broker_position failed for %s: %s",
+                symbol, exc,
+            )
+            return False
 
     # ── CHECK 4: PARTIAL_CLOSE ────────────────────────────────────────────────
 

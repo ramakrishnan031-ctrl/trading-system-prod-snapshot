@@ -315,7 +315,11 @@ def main(argv=None) -> int:
     # FIX-180 Part 12: a live current-day reconcile fetches broker data. Skip on
     # weekend / Friday-after-17:30 when the Zerodha API is unavailable. Paper
     # mode and explicit --date backfills are unaffected.
-    if not is_paper and not args.date and not is_broker_api_available():
+    # FIX-181: pass the holiday set so the cutoff prepones to Thursday when
+    # Friday is an NSE holiday.
+    from utils.holiday_guard import current_holiday_set
+    if (not is_paper and not args.date and not is_broker_api_available(
+            holidays=current_holiday_set(Path(args.config)))):
         log.info("reconcile_pnl.skipped_api_unavailable (weekend/after-hours)")
         return 0
 

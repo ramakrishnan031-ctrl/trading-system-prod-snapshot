@@ -149,6 +149,7 @@ class KillSwitch:
         notifier: Optional[object] = None,   # TelegramNotifier; optional
         mode: str = "LIVE",                   # session mode label for alert title
         adapter: Optional[object] = None,    # FIX-087: ZerodhaAdapter for indestructible exits
+        emergency_exit_buffer_pct: float = 0.01,  # FIX-181: marketable-LIMIT buffer
     ) -> None:
         self._store = state_store
         self._bus = bus
@@ -159,6 +160,10 @@ class KillSwitch:
         self._notifier = notifier
         self._mode = mode
         self._adapter = adapter  # FIX-087
+        # FIX-181: HARD_KILL exits use a marketable LIMIT (LTP ± buffer) instead
+        # of MARKET so they fill but cap worst-case slippage. The adapter snaps
+        # the price to a valid tick, so we pass the raw LTP ± buffer here.
+        self._emergency_exit_buffer_pct = emergency_exit_buffer_pct
 
         # KS4: RLock allows same-thread reentrant acquisition (deadlock fix).
         self._lock = threading.RLock()
@@ -709,6 +714,46 @@ class KillSwitch:
             )
             return False
 
+    def _fetch_ltp(self, symbol: str) -> Optional[float]:
+        """
+        FIX-181: best-effort LTP via the broker adapter for marketable-LIMIT
+        emergency exits. Mirrors order_placer._fetch_ltp (adapter.get_quote_raw,
+        the same source _check_liquidity uses). Returns None on any error so the
+        caller falls back to a MARKET exit (a LIMIT needs a price).
+        """
+        if self._adapter is None:
+            return None
+        try:
+            raw_quote = self._adapter.get_quote_raw([f"NSE:{symbol}"])
+            if not raw_quote:
+                return None
+            q = raw_quote.get(f"NSE:{symbol}")
+            if not q:
+                return None
+            ltp = float(q.get("last_price", 0) or 0)
+            return ltp if ltp > 0 else None
+        except Exception:
+            return None
+
+    def _marketable_exit_params(
+        self, symbol: str, exit_side: str
+    ) -> tuple[str, float]:
+        """
+        FIX-181: compute (order_type, price) for a forced exit. Returns a
+        marketable LIMIT (LTP ± buffer) when an LTP is available, else falls
+        back to MARKET. The adapter snaps the LIMIT price to a valid tick.
+
+            SELL exit -> price below LTP (sell lower to ensure fill)
+            BUY  exit -> price above LTP (buy higher to ensure fill)
+        """
+        ltp = self._fetch_ltp(symbol)
+        if not ltp or ltp <= 0:
+            return "MARKET", 0.0
+        buf = self._emergency_exit_buffer_pct
+        if exit_side == "SELL":
+            return "LIMIT", ltp * (1.0 - buf)
+        return "LIMIT", ltp * (1.0 + buf)
+
     def _alert_exit_failed(self, failed_trades: list) -> None:
         """
         Part 11 (FIX-180): escalate trades that could not be exited within the
@@ -777,16 +822,22 @@ class KillSwitch:
             )
             return CancellationReport(attempted=0, succeeded=0, failed=["fetch_failed"])
 
-        if not open_trades:
-            return CancellationReport(attempted=0, succeeded=0, failed=[])
-
+        # FIX-181 LAYER A: do NOT early-return on an empty local set — a broker
+        # position can exist with no local OPEN/PARTIAL/PENDING_FILL trade (entry
+        # filled after being force-marked CANCELLED, or filled post-kill). The
+        # broker-position sweep below must still run to flatten it.
+        open_trades = open_trades or []
         attempted = len(open_trades)
         failed_trades = []
+        # FIX-181 LAYER A: symbols covered by a local trade exit, so the broker
+        # sweep below does not double-fire on a position we already handled.
+        handled_symbols: set[str] = set()
 
         # First pass: try to exit each trade
         for trade in open_trades:
             trade_id = trade["trade_id"]
             symbol = trade["symbol"]
+            handled_symbols.add(symbol)
             qty = abs(trade["qty_filled"] or 0)
             if qty == 0:
                 continue
@@ -799,13 +850,16 @@ class KillSwitch:
             intent = _PRODUCT_TO_INTENT.get(trade["product"] or "", "INTRADAY")
 
             try:
-                # Place MARKET exit order
+                # FIX-181: marketable LIMIT (LTP ± buffer) exit, MARKET fallback.
+                exit_order_type, exit_price = self._marketable_exit_params(
+                    symbol, exit_side
+                )
                 order_result = self._adapter.place_order(
                     symbol=symbol,
                     side=exit_side,
                     qty=qty,
-                    order_type="MARKET",
-                    price=0.0,
+                    order_type=exit_order_type,
+                    price=exit_price,
                     intent=intent,
                     tag="ks_hard_kill_exit",
                 )
@@ -838,6 +892,49 @@ class KillSwitch:
                     "kill_switch: exit failed for trade %s: %s", trade_id, exc
                 )
                 failed_trades.append((trade_id, symbol, exit_side, qty, intent))
+
+        # FIX-181 LAYER A (GICRE incident): broker-position-driven sweep. A
+        # HARD_KILL must leave NO live broker position, even one with no matching
+        # local OPEN/PARTIAL/PENDING_FILL trade — e.g. an entry LIMIT that filled
+        # during/after the kill, or one force-marked CANCELLED while it actually
+        # filled. Flatten any non-zero broker position not already handled above.
+        try:
+            broker_positions = self._adapter.get_positions()
+            for pos in broker_positions:
+                psym = getattr(pos, "symbol", None)
+                pqty = int(getattr(pos, "qty", 0) or 0)
+                if psym is None or pqty == 0 or psym in handled_symbols:
+                    continue
+                handled_symbols.add(psym)
+                attempted += 1
+                exit_side = "SELL" if pqty > 0 else "BUY"
+                self._log.critical(
+                    "kill_switch: SWEEP orphan broker position %s qty=%d — no "
+                    "matching local trade; flattening (FIX-181)",
+                    psym, pqty,
+                )
+                try:
+                    exit_order_type, exit_price = self._marketable_exit_params(
+                        psym, exit_side
+                    )
+                    order_result = self._adapter.place_order(
+                        symbol=psym,
+                        side=exit_side,
+                        qty=abs(pqty),
+                        order_type=exit_order_type,
+                        price=exit_price,
+                        intent="INTRADAY",
+                        tag="ks_hard_kill_sweep",
+                    )
+                    if not order_result.broker_order_id:
+                        raise RuntimeError("Broker returned empty order id for sweep")
+                except Exception as sweep_exc:
+                    self._log.critical(
+                        "kill_switch: SWEEP exit failed for %s: %s", psym, sweep_exc
+                    )
+                    failed_trades.append(("sweep", psym, exit_side, abs(pqty), "INTRADAY"))
+        except Exception as exc:
+            self._log.error("kill_switch: broker position sweep failed: %s", exc)
 
         # Retry loop: exponential backoff, bounded by a max wall-clock deadline
         # (Part 11 / FIX-180) instead of looping forever.
@@ -886,12 +983,16 @@ class KillSwitch:
                     flat_resolved += 1
                     continue
                 try:
+                    # FIX-181: marketable LIMIT (LTP ± buffer), MARKET fallback.
+                    exit_order_type, exit_price = self._marketable_exit_params(
+                        symbol, exit_side
+                    )
                     order_result = self._adapter.place_order(
                         symbol=symbol,
                         side=exit_side,
                         qty=qty,
-                        order_type="MARKET",
-                        price=0.0,
+                        order_type=exit_order_type,
+                        price=exit_price,
                         intent=intent,
                         tag="ks_hard_kill_exit",
                     )

@@ -40,7 +40,7 @@ What This Module Does NOT Do:
 """
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 from typing import Optional
 
 from core.config_loader import SlippageConfig
@@ -169,4 +169,18 @@ def _round_down_to_tick(value: float, tick: float) -> float:
     d_tick = Decimal(str(tick))
     # Divide and round down to nearest integer multiple
     d_result = (d_value / d_tick).quantize(Decimal('1'), rounding=ROUND_FLOOR) * d_tick
+    return float(d_result)
+
+
+def _round_nearest_to_tick(value: float, tick: float) -> float:
+    """
+    Round value to the NEAREST tick_size multiple using decimal.Decimal.
+
+    FIX-181: companion to _round_up_to_tick / _round_down_to_tick for entry
+    and TGT LIMIT prices, where no directional bias is required — only that
+    the price lands on a valid exchange tick (Zerodha rejects off-tick prices).
+    """
+    d_value = Decimal(str(value))
+    d_tick = Decimal(str(tick))
+    d_result = (d_value / d_tick).quantize(Decimal('1'), rounding=ROUND_HALF_UP) * d_tick
     return float(d_result)

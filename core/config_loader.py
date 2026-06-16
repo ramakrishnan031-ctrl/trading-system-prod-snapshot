@@ -146,6 +146,7 @@ class CapitalConfig(BaseModel):
     daily_loss_limit: float        # FM16: absolute rupee cap on daily loss (> 0)
     slm_margin_buffer_pct: float = 0.05  # FIX-090: SL-M margin buffer % (unknown fill price risk)
     sl_limit_offset_pct: float = 0.005   # P0 2026-06-15: limit offset past trigger for SL (stop-limit) legs
+    emergency_exit_buffer_pct: float = 0.01  # FIX-181: marketable-LIMIT buffer for emergency/kill exits
     leverage_map: LeverageMapConfig  # FM16: per-intent leverage multiplier
 
     @field_validator("sl_limit_offset_pct")
@@ -154,6 +155,14 @@ class CapitalConfig(BaseModel):
         # 0 is allowed (limit == trigger, tight fill) but negative or >= 10% is a typo.
         if v < 0 or v >= 0.10:
             raise ValueError("sl_limit_offset_pct must be >= 0 and < 0.10 (10%)")
+        return v
+
+    @field_validator("emergency_exit_buffer_pct")
+    @classmethod
+    def _validate_emergency_exit_buffer(cls, v: float) -> float:
+        # 0 is allowed (limit == LTP) but negative or >= 10% is a typo.
+        if v < 0 or v >= 0.10:
+            raise ValueError("emergency_exit_buffer_pct must be >= 0 and < 0.10 (10%)")
         return v
 
     @field_validator("intraday_bucket_pct", "positional_bucket_pct")

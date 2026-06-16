@@ -145,7 +145,10 @@ def main(argv=None) -> None:
     # are allowed any day — historical_data works for past dates.
     if not args.backfill and not args.date:
         from core.market_windows import is_broker_api_available
-        if not is_broker_api_available():
+        from utils.holiday_guard import current_holiday_set
+        # FIX-181: pass the holiday set so the cutoff prepones to Thursday when
+        # Friday is an NSE holiday.
+        if not is_broker_api_available(holidays=current_holiday_set(Path("config"))):
             print("Skipping candle fetch — Zerodha API unavailable (weekend/after-hours)")
             return
 

@@ -285,17 +285,25 @@ def is_market_day(dt: datetime | None = None) -> bool:
     return dt.weekday() < 5
 
 
-def is_broker_api_available(dt: datetime | None = None) -> bool:
+def is_broker_api_available(
+    dt: datetime | None = None,
+    holidays: set[date] | None = None,
+) -> bool:
     """Best-effort guard for cron scripts that call the Zerodha API.
 
-    Returns False on Saturday/Sunday and on Friday at/after 17:30 IST, when the
-    broker session is closed for the week and API calls fail or return stale
-    data; True on Mon-Thu and Friday before 17:30.
+    Returns False on Saturday/Sunday and at/after the end-of-week cutoff (17:30
+    IST) once the last trading day of the week is done; True otherwise.
 
-    Scope: weekday/time only. It deliberately does NOT consult the NSE holiday
-    calendar (a holiday still returns True here) — holiday scheduling is handled
-    at the app/cron layer (cron day-field 1-5 + MarketWindows.is_trading_holiday).
-    The sole purpose is to stop weekend/after-hours broker calls from failing.
+    End-of-week cutoff:
+      - No holiday calendar (holidays=None): the last weekday is Friday, so the
+        cutoff is Friday >= 17:30 (unchanged legacy behaviour).
+      - With a holiday calendar (FIX-181): if Friday is a holiday, the week's
+        last trading day is Thursday, so the cutoff PREPONES to Thursday >= 17:30
+        (T-1). A Friday holiday itself also returns False (markets closed).
+
+    Scope is deliberately narrow: weekday/time (+ optional Friday-holiday
+    preponment). It does NOT walk arbitrarily long holiday runs — cron day
+    fields and MarketWindows.is_trading_holiday own full holiday scheduling.
     """
     if dt is None:
         from core.time_authority import now_ist  # local import avoids cycle
@@ -303,6 +311,23 @@ def is_broker_api_available(dt: datetime | None = None) -> bool:
     weekday = dt.weekday()  # Mon=0 .. Sun=6
     if weekday >= 5:  # Saturday / Sunday
         return False
-    if weekday == 4 and dt.time() >= _FRIDAY_API_CUTOFF:  # Friday after 17:30
+
+    hols = holidays or set()
+    today = dt.date()
+
+    # Friday holiday: markets closed Friday -> API not useful for the week.
+    if weekday == 4 and today in hols:
         return False
+
+    # T-1 preponment: if tomorrow (Friday) is a holiday, Thursday is the last
+    # trading day, so the end-of-week cutoff moves to Thursday 17:30.
+    if weekday == 3:  # Thursday
+        next_day = today + timedelta(days=1)
+        if next_day in hols and dt.time() >= _FRIDAY_API_CUTOFF:
+            return False
+
+    # Normal Friday end-of-week cutoff.
+    if weekday == 4 and dt.time() >= _FRIDAY_API_CUTOFF:
+        return False
+
     return True

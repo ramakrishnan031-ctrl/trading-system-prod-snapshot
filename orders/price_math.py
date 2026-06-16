@@ -16,6 +16,45 @@ Both are accepted; BUY is mapped to LONG, SELL to SHORT.
 
 from __future__ import annotations
 
+from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
+
+
+# Default NSE equity tick. Most equities trade in 0.05 increments; a handful
+# (and FNO/index instruments) use 0.01/0.10/0.50/1.0/5.0. Always prefer the
+# instrument's real tick from InstrumentCache; this is only the fallback when
+# a caller has no cache wired (recovery paths, tests).
+DEFAULT_TICK = 0.05
+
+
+def round_to_tick(price: float, tick: float = DEFAULT_TICK, mode: str = "nearest") -> float:
+    """
+    Round `price` to a valid exchange tick multiple.
+
+    Uses decimal.Decimal (not float arithmetic) to avoid precision drift such
+    as 580.6500000001 / 563.3999999998 — mirrors slippage_engine's FIX-014
+    approach so SL/TGT prices and slippage rounding stay byte-identical.
+
+    mode:
+        "up"      -> ROUND_CEILING (BUY stop-limit: limit must stay >= trigger)
+        "down"    -> ROUND_FLOOR   (SELL stop-limit: limit must stay <= trigger)
+        "nearest" -> ROUND_HALF_UP (entry/TGT LIMIT — closest valid tick)
+
+    tick <= 0 falls back to plain 2-decimal rounding (defensive; a 0/neg tick
+    is a config error caught at InstrumentCache load).
+    """
+    if tick <= 0:
+        return round(price, 2)
+    d_price = Decimal(str(price))
+    d_tick = Decimal(str(tick))
+    if mode == "up":
+        rounding = ROUND_CEILING
+    elif mode == "down":
+        rounding = ROUND_FLOOR
+    else:
+        rounding = ROUND_HALF_UP
+    d_result = (d_price / d_tick).quantize(Decimal("1"), rounding=rounding) * d_tick
+    return float(d_result)
+
 
 def _is_long(direction_or_side: str) -> bool:
     v = direction_or_side.upper()
@@ -57,6 +96,43 @@ def calc_tgt_price(
     return entry_price - risk * rr_ratio
 
 
+# FIX-181: default buffer past LTP for a marketable-LIMIT emergency/kill exit.
+# Emergency exits (SL-placement failure, HARD_KILL, SL-breach with no broker SL)
+# must FILL. A MARKET order fills but can slip badly in a fast move; a LIMIT
+# priced 1% through the touch crosses the spread and fills like a market while
+# capping the worst-case price. Overridable via capital.emergency_exit_buffer_pct.
+EMERGENCY_EXIT_BUFFER_PCT = 0.01  # 1%
+
+
+def marketable_limit_price(
+    exit_side: str,
+    ltp: float,
+    buffer_pct: float = EMERGENCY_EXIT_BUFFER_PCT,
+    tick_size: float = DEFAULT_TICK,
+) -> float:
+    """
+    Compute a marketable LIMIT price that crosses the spread to force a fill.
+
+        SELL exit -> price BELOW ltp (willing to sell lower) -> round DOWN
+        BUY  exit -> price ABOVE ltp (willing to buy higher) -> round UP
+
+    Result is snapped to a valid tick (Zerodha rejects off-tick prices).
+
+    Raises:
+        ValueError: exit_side not "BUY"/"SELL", or ltp <= 0.
+    """
+    side = (exit_side or "").upper()
+    if ltp <= 0:
+        raise ValueError(f"ltp must be > 0 for a marketable limit, got {ltp!r}")
+    if buffer_pct < 0:
+        raise ValueError(f"buffer_pct must be >= 0, got {buffer_pct!r}")
+    if side == "SELL":
+        return round_to_tick(ltp * (1.0 - buffer_pct), tick_size, mode="down")
+    elif side == "BUY":
+        return round_to_tick(ltp * (1.0 + buffer_pct), tick_size, mode="up")
+    raise ValueError(f"exit_side must be 'BUY' or 'SELL', got {exit_side!r}")
+
+
 # Default offset (fraction) past the trigger for a stop-limit (SL) order.
 # Mirrors config capital.sl_limit_offset_pct; kept here so the pure helper has
 # a sane fallback when a caller has no config wired (tests, recovery paths).
@@ -67,6 +143,7 @@ def calc_sl_limit_price(
     exit_side: str,
     trigger_price: float,
     offset_pct: float = DEFAULT_SL_LIMIT_OFFSET_PCT,
+    tick_size: float = DEFAULT_TICK,
 ) -> float:
     """
     Compute the limit price for a stop-loss-LIMIT (order_type="SL") order.
@@ -88,8 +165,14 @@ def calc_sl_limit_price(
         offset_pct:    fraction past the trigger for the limit (default 0.5%).
 
     Returns:
-        Positive limit price rounded to 2 decimals (paise). Always > 0 for a
-        positive trigger, satisfying the adapter's "price > 0 for SL" check.
+        Positive limit price snapped to a valid `tick_size` multiple. Always
+        > 0 for a positive trigger, satisfying the adapter's "price > 0 for
+        SL" check. P0 (2026-06-16, GICRE incident): the limit is now snapped
+        to tick — Zerodha rejects any price that is not a tick multiple, and
+        trigger * (1 ± offset_pct) almost never lands on one. Rounding is
+        directional so the limit stays past the trigger (fills like a market):
+          SELL stop -> round DOWN  (willing to sell a little lower)
+          BUY  stop -> round UP    (willing to buy a little higher)
 
     Raises:
         ValueError: exit_side is not "BUY"/"SELL", or trigger_price <= 0.
@@ -104,11 +187,11 @@ def calc_sl_limit_price(
 
     if side == "SELL":
         limit = trigger_price * (1.0 - offset_pct)
+        return round_to_tick(limit, tick_size, mode="down")
     elif side == "BUY":
         limit = trigger_price * (1.0 + offset_pct)
+        return round_to_tick(limit, tick_size, mode="up")
     else:
         raise ValueError(
             f"exit_side must be 'BUY' or 'SELL', got {exit_side!r}"
         )
-
-    return round(limit, 2)

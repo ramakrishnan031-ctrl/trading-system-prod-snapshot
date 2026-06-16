@@ -93,9 +93,14 @@ class TestBugA_SlLimitPrice:
     def test_zero_offset_equals_trigger(self) -> None:
         assert calc_sl_limit_price("SELL", 100.0, 0.0) == pytest.approx(100.0)
 
-    def test_result_is_rounded_to_paise(self) -> None:
-        # 333.33 * 0.995 = 331.66335 -> 331.66
-        assert calc_sl_limit_price("SELL", 333.33, 0.005) == pytest.approx(331.66)
+    def test_result_is_rounded_to_tick(self) -> None:
+        # FIX-181 (GICRE incident): result is snapped to a valid tick multiple,
+        # not just 2 decimals. 333.33 * 0.995 = 331.66335 -> SELL rounds DOWN
+        # to the nearest 0.05 tick -> 331.65 (NOT 331.66, which Zerodha rejects).
+        assert calc_sl_limit_price("SELL", 333.33, 0.005) == pytest.approx(331.65)
+        # default tick 0.05: every result is a 0.05 multiple
+        out = calc_sl_limit_price("SELL", 333.33, 0.005)
+        assert abs((out / 0.05) - round(out / 0.05)) < 1e-9
 
     def test_invalid_side_raises(self) -> None:
         with pytest.raises(ValueError):
@@ -409,37 +414,51 @@ class TestBugE_PositionCap:
         store.close()
 
     def test_pending_fill_counts_toward_cap(self, tmp_path: Path) -> None:
-        """3 PENDING_FILL trades at max_open=3 -> a 4th signal is rejected."""
+        """3 PENDING_FILL trades at max_open=3 -> a 4th signal is rejected.
+
+        FIX-181 (off-by-one): the candidate is pre-incremented into
+        processor_in_flight_count by signal_processor, so 3 DB + candidate(1)
+        = 4 > max(3) -> reject.
+        """
         store = StateStore(tmp_path / "e2.db")
         for i in range(3):
             _insert_trade(store, f"t{i}", "PENDING_FILL", f"S{i}")
         engine = _engine(store, _MockFundManager(_snap()), max_open=3)
 
-        result = engine.approve("ZZZ", "BUY", "INTRADAY", _sizing(), "sig-x")
+        result = engine.approve("ZZZ", "BUY", "INTRADAY", _sizing(), "sig-x",
+                                processor_in_flight_count=1)
 
         assert not result.approved
         assert result.failed_check == "OPEN_POSITIONS"
         store.close()
 
     def test_mixed_open_and_pending_fill_rejected_at_cap(self, tmp_path: Path) -> None:
+        # FIX-181: 3 active DB + candidate(1) = 4 > max(3) -> reject.
         store = StateStore(tmp_path / "e3.db")
         _insert_trade(store, "a", "OPEN", "A")
         _insert_trade(store, "b", "PENDING_FILL", "B")
         _insert_trade(store, "c", "PARTIAL", "C")
         engine = _engine(store, _MockFundManager(_snap()), max_open=3)
-        result = engine.approve("ZZZ", "BUY", "INTRADAY", _sizing(), "sig-x")
+        result = engine.approve("ZZZ", "BUY", "INTRADAY", _sizing(), "sig-x",
+                                processor_in_flight_count=1)
         assert not result.approved
         assert result.failed_check == "OPEN_POSITIONS"
         store.close()
 
     def test_processor_in_flight_still_counted(self, tmp_path: Path) -> None:
-        """2 active DB + 1 processor-in-flight at cap=3 -> reject (TOCTOU guard kept)."""
+        """TOCTOU guard kept: 2 active DB + 2 processor-in-flight (candidate + a
+        concurrent signal) at cap=3 -> 4 > 3 -> reject.
+
+        FIX-181: with the corrected `>` boundary, 2 DB + candidate(1) = 3 == max
+        is now ALLOWED (the legitimate 3rd slot); a SECOND concurrent in-flight
+        signal is what pushes over the cap and triggers the TOCTOU rejection.
+        """
         store = StateStore(tmp_path / "e4.db")
         _insert_trade(store, "a", "OPEN", "A")
         _insert_trade(store, "b", "PENDING_FILL", "B")
         engine = _engine(store, _MockFundManager(_snap()), max_open=3)
         result = engine.approve("ZZZ", "BUY", "INTRADAY", _sizing(), "sig-x",
-                                processor_in_flight_count=1)
+                                processor_in_flight_count=2)
         assert not result.approved
         assert result.failed_check == "OPEN_POSITIONS"
         store.close()

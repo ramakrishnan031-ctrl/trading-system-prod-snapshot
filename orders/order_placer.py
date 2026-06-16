@@ -192,13 +192,18 @@ from capital.kill_switch import KillSwitch
 from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
 from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged, PositionClosed
 from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutError, OrderRejectedError
-from core.ids import new_trade_id
+from core.ids import new_trade_id, truncate_tag_for_broker
 from core.logger import log_exception
 from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderInsertSpec, OrderManager
-from orders.price_math import calc_tgt_price
+from orders.price_math import (
+    DEFAULT_TICK,
+    EMERGENCY_EXIT_BUFFER_PCT,
+    calc_tgt_price,
+    marketable_limit_price,
+)
 from orders.smart_tgt_manager import SmartTgtManager
 
 
@@ -378,6 +383,7 @@ class OrderPlacer:
         liquidity_max_spread_pct: float = 0.5,
         liquidity_min_depth_qty: int = 500,
         min_effective_rr: float = 0.0,  # FIX-136 Item 54: abort if R:R below this after slippage
+        emergency_exit_buffer_pct: float = EMERGENCY_EXIT_BUFFER_PCT,  # FIX-181
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -400,6 +406,8 @@ class OrderPlacer:
         self._smart_tgt_manager = smart_tgt_manager  # BL-7b: None = SmartTgt disabled
         self._smart_tgt_config = smart_tgt_config    # BL-7b: trigger_pct/step_pct source
         self._breakeven_manager = breakeven_manager  # FIX-132 Item 8: None = disabled
+        # FIX-181: marketable-LIMIT buffer for emergency exits (LTP ± buffer).
+        self._emergency_exit_buffer_pct = emergency_exit_buffer_pct
         # BL-19: 429 retry policy. Defaults apply if caller omits the config.
         self._rl_backoff: RateLimitBackoffConfig = (
             rate_limit_backoff or RateLimitBackoffConfig()
@@ -2921,14 +2929,30 @@ class OrderPlacer:
         symbol = fill_entry.symbol
         side = "SELL" if fill_entry.side == "BUY" else "BUY"
 
+        # FIX-181: marketable LIMIT (LTP ± buffer) rather than MARKET so the
+        # forced exit still fills but caps worst-case slippage. Falls back to
+        # MARKET only if we cannot get a positive LTP (a LIMIT needs a price).
+        ltp = self._fetch_ltp(symbol)
+        tick = self._tick_for(symbol)
+        if ltp and ltp > 0:
+            exit_price = marketable_limit_price(
+                side, ltp, self._emergency_exit_buffer_pct, tick,
+            )
+            exit_order_type = "LIMIT"
+        else:
+            exit_price = 0.0
+            exit_order_type = "MARKET"
+
         self._log.critical(
-            "order_placer.emergency_market_exit_attempt "
-            "SL_PLACEMENT_FAILED_MARKET_EXIT",
+            "order_placer.emergency_exit_attempt SL_PLACEMENT_FAILED",
             extra={
                 "trade_id": trade_id,
                 "symbol": symbol,
                 "side": side,
                 "qty": qty,
+                "order_type": exit_order_type,
+                "price": exit_price,
+                "ltp": ltp,
                 "reason": reason,
             },
         )
@@ -2940,10 +2964,10 @@ class OrderPlacer:
                 symbol=symbol,
                 side=side,
                 qty=qty,
-                price=0.0,
-                order_type="MARKET",
+                price=exit_price,
+                order_type=exit_order_type,
                 intent=fill_entry.intent,
-                tag=trade_id,
+                tag=truncate_tag_for_broker(f"EXIT_{trade_id}"),
             )
         except Exception as exc:
             self._log.critical(
@@ -2973,11 +2997,11 @@ class OrderPlacer:
                 broker_order_id=placed.broker_order_id,
                 leg="EOD",
                 transaction_type=side,
-                order_type="MARKET",
+                order_type=exit_order_type,
                 product=product,
                 variety="regular",
                 qty_requested=qty,
-                price=0.0,
+                price=exit_price,
             )
             with self._fill_map_lock:
                 self._fill_map[placed.internal_order_id] = _FillEntry(
@@ -2995,7 +3019,7 @@ class OrderPlacer:
                 symbol=symbol,
                 side=side,
                 qty=qty,
-                expected_price=0.0,
+                expected_price=exit_price,
                 placed_at=now_ist(),
                 leg="EOD",
             )
@@ -3013,7 +3037,8 @@ class OrderPlacer:
                     body=(
                         f"SL placement failed permanently\n"
                         f"Trade: {trade_id}\n"
-                        f"Market {side} {qty} shares placed\n"
+                        f"Emergency {exit_order_type} {side} {qty} shares placed"
+                        f"{f' @ {exit_price}' if exit_price else ''}\n"
                         f"Reason: {reason}"
                     ),
                     source_module="order_placer",
@@ -3022,6 +3047,16 @@ class OrderPlacer:
                 pass
 
         return True
+
+    def _tick_for(self, symbol: str) -> float:
+        """FIX-181: instrument tick for `symbol`; falls back to DEFAULT_TICK."""
+        if self._instrument_cache is None:
+            return DEFAULT_TICK
+        try:
+            tick = self._instrument_cache.tick_size(symbol)
+            return tick if tick and tick > 0 else DEFAULT_TICK
+        except Exception:
+            return DEFAULT_TICK
 
     def _round_to_tick(self, symbol: str, price: float) -> float:
         """

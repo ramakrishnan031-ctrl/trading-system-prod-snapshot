@@ -1240,6 +1240,7 @@ def _main_locked(args, config_dir: Path) -> int:
         api_failure_threshold=app_config.system.kill_switch.api_failure_threshold,
         enable_auto_trip=app_config.system.kill_switch.enable_auto_trip,
         mode=mode_label,
+        emergency_exit_buffer_pct=app_config.capital.emergency_exit_buffer_pct,  # FIX-181
     )
 
     # TimeAuthority needs kill_switch for the critical-skew callback
@@ -1487,6 +1488,12 @@ def _main_locked(args, config_dir: Path) -> int:
         broker_adapter.set_slippage_engine(
             SlippageEngine(app_config.slippage, instrument_cache)
         )
+
+    # FIX-181 (GICRE incident): wire the InstrumentCache into the adapter so
+    # place_order snaps every LIMIT/SL price + trigger to a valid tick before
+    # it reaches Kite. Both paper and live (parity) — an off-tick price is a
+    # calculation bug in either mode and Zerodha rejects it outright.
+    broker_adapter.set_instrument_cache(instrument_cache)
 
     # ── Account selection + token handling (SU4, SU8-SU14) ──────────────────
     _token_path = Path("data_store/session/zerodha_token.json")
@@ -1855,6 +1862,7 @@ def _main_locked(args, config_dir: Path) -> int:
         broker_adapter=broker_adapter,  # FIX-072: margin cache invalidation on 16388
         market_windows=market_windows,  # FIX-073: EOD entry cutoff check
         min_effective_rr=app_config.system.entry_gate.min_effective_rr,  # FIX-136 Item 54
+        emergency_exit_buffer_pct=app_config.capital.emergency_exit_buffer_pct,  # FIX-181
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 

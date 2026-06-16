@@ -175,9 +175,10 @@ class TestEmergencyExit:
         mon.on_tick({"instrument_token": 12345, "last_price": 94.0})
         adapter.place_order.assert_not_called()
 
-    def test_live_mode_places_market_order(self, store):
-        # FIX-180 Bug 7: place_order takes side/intent/price (not transaction_type/
-        # product) and returns a PlacedOrder (not a raw id string).
+    def test_live_mode_places_marketable_limit_order(self, store):
+        # FIX-181: emergency exit is now a marketable LIMIT (LTP - buffer for a
+        # SELL), tick-snapped, instead of a MARKET order. FIX-180 Bug 7:
+        # place_order takes side/intent/price and returns a PlacedOrder.
         adapter = MagicMock()
         adapter.place_order.return_value = MagicMock(broker_order_id="BROKER-123")
         _insert_open_trade(store, "RELIANCE", "LONG", 95.0)
@@ -186,11 +187,13 @@ class TestEmergencyExit:
         mon.on_tick({"instrument_token": 12345, "last_price": 94.0})
         adapter.place_order.assert_called_once()
         call_kwargs = adapter.place_order.call_args.kwargs
-        assert call_kwargs["order_type"] == "MARKET"
+        assert call_kwargs["order_type"] == "LIMIT"
         assert call_kwargs["side"] == "SELL"
         assert call_kwargs["symbol"] == "RELIANCE"
         assert call_kwargs["intent"] == "INTRADAY"
-        assert call_kwargs["price"] == 0.0
+        # SELL marketable LIMIT: 94.0 * (1 - 0.01) = 93.06 -> tick-snap DOWN -> 93.05
+        assert call_kwargs["price"] == pytest.approx(93.05)
+        assert len(call_kwargs["tag"]) <= 20
         assert "transaction_type" not in call_kwargs
         assert "product" not in call_kwargs
 

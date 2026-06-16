@@ -77,6 +77,7 @@ capital:                      # FM16
   daily_loss_limit: 300.0
   slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
   sl_limit_offset_pct: 0.005  # P0 2026-06-15: SL legs are SL (stop-limit); limit = trigger ± 0.5% so triggered stops fill (Zerodha rejects SL-M via API)
+  emergency_exit_buffer_pct: 0.01  # FIX-181: emergency/kill exits use marketable LIMIT (LTP ± 1%) so they fill but cap worst-case slippage
   leverage_map:
     INTRADAY: 5.0             # MIS leverage
     COVER_ORDER: 6.0          # CO leverage

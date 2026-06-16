@@ -555,19 +555,52 @@ class StateStore:
         )
         return int(row["n"]) if row else 0
 
+    def get_trades_by_status_and_symbol(
+        self, statuses: tuple[str, ...], symbol: str
+    ) -> List[sqlite3.Row]:
+        """
+        FIX-181: return trades for `symbol` whose status is in `statuses`,
+        newest first. Used by the reconciler to tell a genuine broker-side
+        orphan (no local record) apart from one that matches a local in-flight
+        (PENDING_FILL/PENDING) trade whose entry filled at the broker — the
+        latter must be flattened on HARD_KILL, not abandoned (GICRE incident).
+        """
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        return self.fetch_all(
+            f"SELECT * FROM trades "
+            f"WHERE symbol = ? AND status IN ({placeholders}) "
+            f"ORDER BY created_at DESC",
+            (symbol, *statuses),
+        )
+
+    # FIX-181: a trade "counts" against the daily limit only if it actually
+    # reached the broker as a live (or live-bound) position. FAILED/CANCELLED/
+    # REJECTED rows never opened exposure and must not burn the daily quota —
+    # otherwise a burst of broker rejections (e.g. BHARATGEAR-type FAILED on
+    # first-live-day) silently exhausts max_daily_trades and halts trading.
+    _EXECUTED_TRADE_STATUSES = (
+        "PENDING_FILL", "OPEN", "PARTIAL", "EXITING", "CLOSED", "CLOSED_MANUAL",
+    )
+
     def count_trades_today(self, date_iso: str) -> int:
         """
-        Count trade rows created on the given IST date (YYYY-MM-DD).
+        Count EXECUTED trade rows created on the given IST date (YYYY-MM-DD).
+
+        FIX-181: only statuses in _EXECUTED_TRADE_STATUSES are counted; FAILED,
+        CANCELLED and REJECTED rows (which never opened a position) are excluded.
         Matches against SUBSTR(created_at, 1, 10) — works with ISO-8601 IST
         strings stored in the DB (e.g., "2026-04-14T09:30:00+05:30").
-        Counts one row per trade (not per signal); a signal that is dropped
-        pre-trade is not counted here. Used by risk_engine DAILY_TRADES check
-        (RE5).
+        Counts one row per trade (not per signal). Used by risk_engine
+        DAILY_TRADES check (RE5).
         """
+        placeholders = ",".join("?" for _ in self._EXECUTED_TRADE_STATUSES)
         row = self.fetch_one(
-            "SELECT COUNT(*) AS n FROM trades "
-            "WHERE SUBSTR(created_at, 1, 10) = ?",
-            (date_iso,),
+            f"SELECT COUNT(*) AS n FROM trades "
+            f"WHERE SUBSTR(created_at, 1, 10) = ? "
+            f"AND status IN ({placeholders})",
+            (date_iso, *self._EXECUTED_TRADE_STATUSES),
         )
         return int(row["n"]) if row else 0
 

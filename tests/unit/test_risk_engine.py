@@ -332,39 +332,56 @@ def test_capital_insufficient_positional(tmp_path: Path) -> None:
 
 
 def test_open_positions_at_limit(tmp_path: Path) -> None:
-    """OPEN_POSITIONS: open+in_flight >= max -> rejected."""
+    """OPEN_POSITIONS: existing active + candidate > max -> rejected.
+
+    FIX-181 (off-by-one): the candidate is pre-incremented into
+    processor_in_flight_count by signal_processor (so this test passes
+    processor_in_flight_count=1 to model production). 3 existing active +
+    candidate = 4 > max(3) -> reject.
+    """
     store = StateStore(tmp_path / "test.db")
     handler = _CapturingHandler()
     fm = _MockFundManager(_make_snap())
     ks = _MockKillSwitch(active=False)
     engine = _make_engine(store, fm, handler, kill_switch=ks, max_open=3)
 
-    # Insert 2 OPEN + 1 PENDING_FILL = 3 active = at limit
+    # Insert 2 OPEN + 1 PENDING_FILL = 3 active already in DB
     _insert_trade(store, "t1", status="OPEN")
     _insert_trade(store, "t2", status="OPEN")
     _insert_trade(store, "t3", status="PENDING_FILL")
 
-    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
+    # candidate is pre-incremented in production -> processor_in_flight_count=1
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
 
     assert not result.approved
     assert result.failed_check == "OPEN_POSITIONS"
-    print(f"  OK OPEN_POSITIONS at limit: {result.reason}")
+    print(f"  OK OPEN_POSITIONS over limit: {result.reason}")
     store.close()
 
 
 def test_open_positions_counts_in_flight(tmp_path: Path) -> None:
-    """OPEN_POSITIONS: in-flight (PENDING_FILL) counted with open positions."""
+    """OPEN_POSITIONS: in-flight (PENDING_FILL) counted with open positions.
+
+    FIX-181: 2 existing PENDING_FILL + candidate (processor_in_flight_count=1)
+    = 3 > max(2) -> reject.
+    """
     store = StateStore(tmp_path / "test.db")
     handler = _CapturingHandler()
     fm = _MockFundManager(_make_snap())
     ks = _MockKillSwitch(active=False)
     engine = _make_engine(store, fm, handler, kill_switch=ks, max_open=2)
 
-    # 0 OPEN + 2 PENDING_FILL = 2 in-flight = at limit
+    # 0 OPEN + 2 PENDING_FILL = 2 in-flight already in DB
     _insert_trade(store, "t1", status="PENDING_FILL")
     _insert_trade(store, "t2", status="PENDING_FILL")
 
-    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
 
     assert not result.approved
     assert result.failed_check == "OPEN_POSITIONS"

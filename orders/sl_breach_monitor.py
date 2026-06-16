@@ -27,7 +27,13 @@ import time
 from typing import Optional
 
 from core.constants import PRODUCT_TO_INTENT
+from core.ids import truncate_tag_for_broker
 from core.time_authority import now_ist
+from orders.price_math import (
+    DEFAULT_TICK,
+    EMERGENCY_EXIT_BUFFER_PCT,
+    marketable_limit_price,
+)
 
 
 class SlBreachMonitor:
@@ -42,6 +48,7 @@ class SlBreachMonitor:
         notifier=None,
         mode: str = "LIVE",
         check_interval_sec: float = 5.0,
+        emergency_exit_buffer_pct: float = EMERGENCY_EXIT_BUFFER_PCT,
     ) -> None:
         self._store = state_store
         self._adapter = adapter
@@ -50,6 +57,8 @@ class SlBreachMonitor:
         self._notifier = notifier
         self._mode = mode
         self._check_interval_sec = check_interval_sec
+        # FIX-181: marketable-LIMIT buffer for the emergency exit (LTP ± buffer).
+        self._emergency_exit_buffer_pct = emergency_exit_buffer_pct
 
         self._token_map: dict[int, str] = {}
         self._last_check_time: float = 0.0
@@ -59,6 +68,16 @@ class SlBreachMonitor:
 
     def set_token_map(self, token_map: dict[int, str]) -> None:
         self._token_map = token_map
+
+    def _tick_for(self, symbol: str) -> float:
+        """FIX-181: instrument tick for `symbol`; falls back to DEFAULT_TICK."""
+        if self._instrument_cache is None:
+            return DEFAULT_TICK
+        try:
+            tick = self._instrument_cache.tick_size(symbol)
+            return tick if tick and tick > 0 else DEFAULT_TICK
+        except Exception:
+            return DEFAULT_TICK
 
     def on_tick(self, tick: dict) -> None:
         token = tick.get("instrument_token")
@@ -179,19 +198,28 @@ class SlBreachMonitor:
 
         if self._mode == "LIVE" and self._adapter is not None:
             try:
-                # Bug 7 (FIX-180): match ZerodhaAdapter.place_order signature
-                # (symbol, side, qty, price, order_type, intent, tag, ...).
-                # Old call used transaction_type=/product= (invalid kwargs),
-                # omitted required price/intent, and treated the returned
-                # PlacedOrder as a raw id -> TypeError on every emergency exit.
+                # FIX-181: marketable LIMIT (LTP ± buffer) instead of MARKET so
+                # the emergency exit fills but caps worst-case slippage. The
+                # adapter snaps the price to tick; we also pass the real tick so
+                # the stored/logged price is aligned. Falls back to MARKET only
+                # if we somehow have no positive LTP (LIMIT needs a price).
+                tick = self._tick_for(symbol)
+                if ltp > 0:
+                    exit_price = marketable_limit_price(
+                        exit_side, ltp, self._emergency_exit_buffer_pct, tick,
+                    )
+                    exit_order_type = "LIMIT"
+                else:
+                    exit_price = 0.0
+                    exit_order_type = "MARKET"
                 placed = self._adapter.place_order(
                     symbol=symbol,
                     side=exit_side,
                     qty=qty,
-                    price=0.0,
-                    order_type="MARKET",
+                    price=exit_price,
+                    order_type=exit_order_type,
                     intent=intent,
-                    tag="sl_breach_exit",
+                    tag=truncate_tag_for_broker("sl_breach_exit"),
                 )
                 broker_order_id = placed.broker_order_id
                 if not broker_order_id:

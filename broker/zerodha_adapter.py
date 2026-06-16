@@ -112,7 +112,12 @@ from broker.cost_calculator import CostCalculator
 from broker.order_state_machine import OrderStateMachine
 from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
-from broker.slippage_engine import SlippageEngine
+from broker.slippage_engine import (
+    SlippageEngine,
+    _round_down_to_tick,
+    _round_nearest_to_tick,
+    _round_up_to_tick,
+)
 from core.config_loader import RateLimitBackoffConfig
 from core.events import EventBus, OrderFilled, PositionClosed
 from core.exceptions import (
@@ -334,6 +339,13 @@ class ZerodhaAdapter:
         # late-binds via set_slippage_engine() once instrument_cache is
         # loaded. Live mode ignores this parameter -- broker fills are truth.
         slippage_engine: Optional[SlippageEngine] = None,
+        # FIX-181 (GICRE incident): authoritative tick-snapping. When wired,
+        # place_order snaps every LIMIT/SL price + trigger to a valid tick
+        # multiple before it reaches Kite, so no caller can submit an
+        # off-tick price (Zerodha rejects those outright). None = no-op
+        # (existing tests behave as before). main.py late-binds via
+        # set_instrument_cache() once the cache is loaded.
+        instrument_cache: Optional[Any] = None,
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -353,6 +365,8 @@ class ZerodhaAdapter:
         self._paper_ltp_gating_poll_sec = paper_ltp_gating_poll_sec
         # CFG-6: paper-mode slippage engine. May be set later via setter.
         self._slippage: Optional[SlippageEngine] = slippage_engine
+        # FIX-181: instrument cache for tick-snapping. May be set via setter.
+        self._instrument_cache: Optional[Any] = instrument_cache
         # BL-6: 429 backoff state. Per-category counter drives exponential delay;
         # resets when any call in the category succeeds. Lock guards increments
         # across threads (order_placer, order_monitor, reconciler can all race).
@@ -462,6 +476,13 @@ class ZerodhaAdapter:
 
         # ZA13: validate before burning rate-limit token
         self._validate_place_order(symbol, side, qty, price, order_type, trigger_price)
+
+        # FIX-181 (GICRE incident): authoritative tick-snap. Runs in BOTH paper
+        # and live (parity) so the synthesized paper fill and the live Kite order
+        # see the same tick-aligned price/trigger. No-op when no cache is wired.
+        price, trigger_price = self._snap_order_to_tick(
+            symbol, order_type, side, price, trigger_price
+        )
 
         # ZA4: resolve product intent -> broker code (may raise ProductNotSupportedError)
         broker_code = self._pr.resolve(intent, "zerodha")
@@ -854,6 +875,82 @@ class ZerodhaAdapter:
             "adapter.set_slippage_engine bound",
             extra={"method": "set_slippage_engine"},
         )
+
+    def set_instrument_cache(self, cache: Any) -> None:
+        """
+        FIX-181: late-bind the InstrumentCache so place_order can snap prices
+        to a valid tick. Wired in BOTH paper and live (parity) — a non-tick
+        price is a calculation bug regardless of mode. main.py constructs the
+        adapter before the cache is loaded, so this is bound during startup.
+        """
+        self._instrument_cache = cache
+        self._log.info(
+            "adapter.set_instrument_cache bound",
+            extra={"method": "set_instrument_cache"},
+        )
+
+    def _snap_order_to_tick(
+        self,
+        symbol: str,
+        order_type: str,
+        side: str,
+        price: float,
+        trigger_price: float,
+    ) -> tuple[float, float]:
+        """
+        FIX-181 (GICRE incident): snap (price, trigger_price) to a valid tick
+        multiple for `symbol`. Zerodha rejects any price/trigger that is not a
+        tick multiple, and SL limit = trigger * (1 ± offset) almost never lands
+        on one. Authoritative net for ALL placements (entry, SL, TGT, emergency
+        and kill exits) — no caller can submit an off-tick price.
+
+        Rules:
+          - order_type "SL" (stop-limit): the limit must stay PAST the trigger
+            so a triggered stop fills like a market. SELL stop (exits LONG) ->
+            round limit DOWN; BUY stop (exits SHORT) -> round limit UP. Trigger
+            rounds to nearest (offset >> tick, so limit stays past trigger).
+          - LIMIT (entry/TGT): round to nearest tick.
+          - MARKET / SL-M: price is 0; nothing to snap.
+
+        Best-effort: returns the inputs unchanged when no cache is wired, the
+        symbol is unknown, or the tick is non-positive.
+        """
+        if self._instrument_cache is None:
+            return price, trigger_price
+        try:
+            tick = self._instrument_cache.tick_size(symbol)
+        except Exception:
+            return price, trigger_price
+        if tick is None or tick <= 0:
+            return price, trigger_price
+
+        new_price, new_trigger = price, trigger_price
+        if order_type == "SL":
+            if price and price > 0:
+                # SELL stop (exits LONG): limit below trigger -> round DOWN.
+                # BUY stop (exits SHORT): limit above trigger -> round UP.
+                if side == "SELL":
+                    new_price = _round_down_to_tick(price, tick)
+                else:
+                    new_price = _round_up_to_tick(price, tick)
+            if trigger_price and trigger_price > 0:
+                new_trigger = _round_nearest_to_tick(trigger_price, tick)
+        else:
+            if price and price > 0:
+                new_price = _round_nearest_to_tick(price, tick)
+            if trigger_price and trigger_price > 0:
+                new_trigger = _round_nearest_to_tick(trigger_price, tick)
+
+        if new_price != price or new_trigger != trigger_price:
+            self._log.debug(
+                "adapter.snap_to_tick",
+                extra={
+                    "symbol": symbol, "order_type": order_type, "tick": tick,
+                    "price_in": price, "price_out": new_price,
+                    "trigger_in": trigger_price, "trigger_out": new_trigger,
+                },
+            )
+        return new_price, new_trigger
 
     def get_margins(self) -> MarginInfo:
         """Return equity margin info from kite."""

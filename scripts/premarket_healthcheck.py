@@ -181,9 +181,11 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Don't send Telegram alert")
     args = parser.parse_args()
 
-    # FIX-180 Part 12: skip on weekend / Friday-after-17:30 — the Zerodha API is
-    # unavailable then and every broker call would fail.
-    if not is_broker_api_available():
+    # FIX-180 Part 12 / FIX-181: skip on weekend / end-of-week-after-17:30 — the
+    # Zerodha API is unavailable then and every broker call would fail. The
+    # holiday set lets the cutoff prepone to Thursday when Friday is a holiday.
+    from utils.holiday_guard import current_holiday_set
+    if not is_broker_api_available(holidays=current_holiday_set(args.config_dir)):
         print("Skipping premarket_healthcheck — Zerodha API unavailable (weekend/after-hours)")
         _log.info("premarket_healthcheck.skipped_api_unavailable")
         return 0

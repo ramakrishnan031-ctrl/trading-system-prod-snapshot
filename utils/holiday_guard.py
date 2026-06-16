@@ -66,6 +66,22 @@ def _load_holiday_set(config_dir: Path, year: int) -> frozenset:
     return holiday_set
 
 
+def current_holiday_set(config_dir: Path, year: int | None = None) -> frozenset:
+    """
+    FIX-181: best-effort holiday set for `year` (defaults to current year).
+
+    Returns an empty frozenset on any error (missing/corrupt YAML) instead of
+    raising — callers are cron-guard helpers where "no holidays known" must
+    degrade gracefully to the plain weekday/Friday cutoff, never crash.
+    """
+    if year is None:
+        year = date.today().year
+    try:
+        return _load_holiday_set(config_dir, year)
+    except Exception:
+        return frozenset()
+
+
 def is_trading_day(today: date, config_dir: Path) -> bool:
     """
     Return True if today is a trading day (weekday AND not an NSE holiday).
