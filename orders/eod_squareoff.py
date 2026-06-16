@@ -53,10 +53,16 @@ from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch, KillState
 from core.events import EodSquareoffComplete, EventBus
 from core.exceptions import BrokerError
+from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
 from core.market_windows import MarketWindows
 from core.state_store import StateStore
 from core.time_authority import now_ist
+from orders.price_math import (
+    DEFAULT_TICK,
+    EMERGENCY_EXIT_BUFFER_PCT,
+    marketable_limit_price,
+)
 
 if TYPE_CHECKING:
     from broker.order_monitor import OrderMonitor
@@ -481,12 +487,52 @@ class EodSquareoff:
     # Daily summary (new)
     # ------------------------------------------------------------------
 
+    # FIX-182: statuses that represent a position that actually reached the
+    # market and was (or is being) closed today. CLOSED_MANUAL covers RMS /
+    # operator closes; EXITING covers a close still in flight at EOD. A
+    # CLOSED_MANUAL trade may carry net_pnl=None if the close path could not
+    # record financials (pre-FIX-180 race) — we coerce None→0.0 for the math
+    # so it is still counted instead of silently dropped.
+    _SUMMARY_CLOSED_STATUSES = ("CLOSED", "CLOSED_MANUAL", "EXITING")
+
+    @staticmethod
+    def _summary_net_pnl(trade: dict) -> float:
+        """FIX-182: net_pnl coerced to float; None / unparseable → 0.0."""
+        val = trade.get("net_pnl")
+        if val is None:
+            return 0.0
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _human_order_symbols_for_date(self, date_str: str) -> list[str]:
+        """FIX-182: distinct symbols flagged ORPHAN_ADOPTION today (human /
+        untracked broker positions the system did not place). Best-effort;
+        returns [] on any error so the summary never fails on this."""
+        try:
+            rows = self._store.fetch_all(
+                "SELECT DISTINCT symbol FROM reconciliation_log "
+                "WHERE check_name = 'ORPHAN_ADOPTION' AND DATE(ts) = ? "
+                "AND symbol IS NOT NULL AND symbol != ''",
+                (date_str,),
+            )
+            return [r["symbol"] for r in (rows or [])]
+        except Exception as exc:  # noqa: BLE001
+            self._log.debug("EOD summary: human-order lookup failed: %s", exc)
+            return []
+
     def _send_daily_summary(self, date_str: str) -> None:
         """Build and send the EOD daily summary Telegram alert.
 
         Pulls closed trades for date_str from the trades table and reports
         net P&L, win rate, best/worst trade, strategy breakdown, and a
         rough Smart TGT split derived from order_protocol.
+
+        FIX-182: "closed" now spans CLOSED / CLOSED_MANUAL / EXITING so manual
+        and RMS closes appear in the summary (previously only pure CLOSED rows
+        were counted, which reported "No closed trades" on manual-close days).
+        Any human/untracked broker positions detected today are noted too.
         """
         try:
             all_trades = self._store.get_trades_for_date(date_str)
@@ -494,15 +540,23 @@ class EodSquareoff:
             self._log.error("EOD_DAILY_SUMMARY fetch failed: %s", exc)
             return
 
+        human_symbols = self._human_order_symbols_for_date(date_str)
+        human_note = (
+            f"\nHuman/untracked orders today: {', '.join(human_symbols)} "
+            f"(not managed by system)"
+            if human_symbols else ""
+        )
+
         closed = [
             t for t in all_trades
-            if (t.get("status") == "CLOSED") and (t.get("net_pnl") is not None)
+            if t.get("status") in self._SUMMARY_CLOSED_STATUSES
         ]
 
         if not closed:
             body = (
                 "\nNo closed trades today.\n"
                 f"Attempted today: {len(all_trades)}"
+                f"{human_note}"
             )
             self._notifier.send(
                 severity="INFO",
@@ -512,19 +566,19 @@ class EodSquareoff:
             )
             return
 
-        total_pnl = sum(float(t["net_pnl"]) for t in closed)
-        wins = [t for t in closed if float(t["net_pnl"]) > 0]
-        losses = [t for t in closed if float(t["net_pnl"]) <= 0]
+        total_pnl = sum(self._summary_net_pnl(t) for t in closed)
+        wins = [t for t in closed if self._summary_net_pnl(t) > 0]
+        losses = [t for t in closed if self._summary_net_pnl(t) <= 0]
         win_n = len(wins)
         loss_n = len(losses)
         total_n = len(closed)
         win_rate_pct = (win_n / total_n * 100.0) if total_n else 0.0
 
-        best = max(closed, key=lambda t: float(t["net_pnl"]))
-        worst = min(closed, key=lambda t: float(t["net_pnl"]))
+        best = max(closed, key=self._summary_net_pnl)
+        worst = min(closed, key=self._summary_net_pnl)
 
-        best_pnl = float(best["net_pnl"])
-        worst_pnl = float(worst["net_pnl"])
+        best_pnl = self._summary_net_pnl(best)
+        worst_pnl = self._summary_net_pnl(worst)
         best_reason = best.get("exit_reason") or "—"
         worst_reason = worst.get("exit_reason") or "—"
 
@@ -537,7 +591,7 @@ class EodSquareoff:
             except Exception:
                 risk_f = 0.0
             if risk_f > 0:
-                r_values.append(float(t["net_pnl"]) / risk_f)
+                r_values.append(self._summary_net_pnl(t) / risk_f)
         avg_r = (sum(r_values) / len(r_values)) if r_values else 0.0
 
         # Capital used = sum of margin_reserved for closed trades.
@@ -565,9 +619,9 @@ class EodSquareoff:
                 name, {"trades": 0, "wins": 0, "pnl": 0.0}
             )
             entry["trades"] += 1
-            if float(t["net_pnl"]) > 0:
+            if self._summary_net_pnl(t) > 0:
                 entry["wins"] += 1
-            entry["pnl"] += float(t["net_pnl"])
+            entry["pnl"] += self._summary_net_pnl(t)
 
         # Smart TGT bucket breakdown: CO_PLUS_TGT = TRAIL-eligible, rest = FIXED.
         trail_n = sum(1 for t in closed if t.get("order_protocol") == "CO_PLUS_TGT")
@@ -601,6 +655,8 @@ class EodSquareoff:
         lines.append(
             f"Smart TGT: FIXED={fixed_n} TRAIL={trail_n} DEFEND={defend_n}"
         )
+        if human_note:
+            lines.append(human_note.lstrip("\n"))
 
         self._notifier.send(
             severity="INFO",
@@ -1143,7 +1199,187 @@ class EodSquareoff:
                 promoted, promote_failed,
             )
 
+        # FIX-182: broker-driven residual sweep. The loop above only acts on
+        # local OPEN/PARTIAL trades. A position can be live at the broker with
+        # NO local OPEN trade — e.g. an entry that filled at the broker while
+        # the local trade was still PENDING (GICRE 16-Jun incident), or a fill
+        # the local state lost track of. Those would ride overnight. Flatten
+        # any non-zero MIS/CO broker position that the system placed (a local
+        # trade exists for the symbol today) but that we did not already exit.
+        # Human / untracked positions (no local trade) are left alone per the
+        # system-trades-only policy.
+        r_attempted, r_succeeded, r_failed = self._sweep_residual_broker_positions(
+            handled_symbols={r["symbol"] for r in rows},
+        )
+        attempted += r_attempted
+        succeeded += r_succeeded
+        failed += r_failed
+
         return attempted, succeeded, failed
+
+    def _sweep_residual_broker_positions(
+        self, handled_symbols: set[str]
+    ) -> tuple[int, int, int]:
+        """
+        FIX-182: flatten residual broker MIS/CO positions not covered by the
+        local-trade exit loop.
+
+        Returns (attempted, succeeded, failed).
+
+        A residual position is flattened only when it is system-owned, i.e. a
+        local trade row exists for its symbol on today's date. Positions with
+        no local trade are human / untracked orders (operator placed them in
+        Kite directly) and are intentionally NOT squared off — the system
+        manages only system trades. They are logged once at INFO for the audit
+        trail and skipped.
+
+        Fresh get_positions() is queried here (not the top-of-fire snapshot) so
+        we only act on what is genuinely still open after Pass-2 + phase-2.
+        """
+        try:
+            positions = self._adapter.get_positions()
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.critical(
+                "EOD residual sweep: get_positions failed; skipping; error=%s",
+                exc,
+            )
+            return (0, 0, 0)
+
+        residual = [
+            p for p in positions
+            if int(getattr(p, "qty", 0)) != 0
+            and getattr(p, "product", "") in ("MIS", "CO")
+            and getattr(p, "symbol", "") not in handled_symbols
+        ]
+        if not residual:
+            return (0, 0, 0)
+
+        # Symbols the system itself traded today (any status). Used to tell a
+        # system-owned residual from a human order.
+        try:
+            today_str = now_ist().date().isoformat()
+            system_symbols = {
+                t.get("symbol") for t in self._store.get_trades_for_date(today_str)
+            }
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.error(
+                "EOD residual sweep: get_trades_for_date failed; treating all "
+                "residuals as system-owned (safer to over-square); error=%s",
+                exc,
+            )
+            system_symbols = {getattr(p, "symbol", "") for p in residual}
+
+        attempted = 0
+        succeeded = 0
+        failed = 0
+        for p in residual:
+            symbol = getattr(p, "symbol", "")
+            qty = abs(int(p.qty))
+            if symbol not in system_symbols:
+                self._log.info(
+                    "EOD residual sweep: skipping %s qty=%d — human/untracked "
+                    "position (no local trade today); system manages system "
+                    "trades only",
+                    symbol, qty,
+                )
+                continue
+
+            attempted += 1
+            self._log.critical(
+                "EOD residual sweep: system position %s qty=%d live at broker "
+                "with no local OPEN trade exited — flattening",
+                symbol, qty,
+            )
+            if self._place_marketable_limit_exit(p):
+                succeeded += 1
+            else:
+                failed += 1
+            if self._inter_order_delay_sec > 0:
+                time.sleep(self._inter_order_delay_sec)
+
+        self._log.info(
+            "EOD residual sweep: attempted=%d squared=%d failed=%d",
+            attempted, succeeded, failed,
+        )
+        return attempted, succeeded, failed
+
+    def _place_marketable_limit_exit(self, position) -> bool:
+        """
+        FIX-182: flatten a single broker position with a marketable LIMIT
+        (LTP ± emergency buffer, adapter snaps to tick) so it fills while
+        capping slippage; MARKET fallback when no LTP is available. Mirrors
+        order_reconciler._flatten_broker_position. Best-effort — never raises;
+        returns True if an order was placed.
+        """
+        try:
+            qty = abs(int(position.qty))
+            if qty == 0:
+                return False
+            symbol = position.symbol
+            # qty > 0 = long -> SELL to flatten; qty < 0 = short -> BUY.
+            exit_side = "SELL" if position.qty > 0 else "BUY"
+
+            ltp = None
+            try:
+                quotes = self._adapter.get_quote([symbol])
+                q = quotes.get(symbol) if quotes else None
+                if q is not None:
+                    ltp = float(getattr(q, "last_price", 0) or 0) or None
+            except Exception:  # noqa: BLE001
+                ltp = None
+
+            if ltp and ltp > 0:
+                price = marketable_limit_price(
+                    exit_side, ltp, EMERGENCY_EXIT_BUFFER_PCT, DEFAULT_TICK
+                )
+                order_type = "LIMIT"
+            else:
+                price = 0.0
+                order_type = "MARKET"
+
+            placed = self._adapter.place_order(
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                price=price,
+                order_type=order_type,
+                intent="INTRADAY",
+                tag=truncate_tag_for_broker("EOD_RESIDUAL"),
+            )
+
+            if self._order_monitor is not None:
+                try:
+                    self._order_monitor.track(
+                        internal_order_id=placed.internal_order_id,
+                        broker_order_id=placed.broker_order_id,
+                        symbol=symbol,
+                        side=exit_side,
+                        qty=qty,
+                        expected_price=placed.price,
+                        placed_at=placed.ts,
+                        leg="EOD",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._log.error(
+                        "EOD residual sweep: order_monitor.track failed for %s: %s",
+                        symbol, exc,
+                    )
+
+            self._log.info(
+                "EOD residual exit OK: symbol=%s side=%s qty=%d type=%s price=%s "
+                "broker_order_id=%s",
+                symbol, exit_side, qty, order_type, price, placed.broker_order_id,
+            )
+            return bool(getattr(placed, "broker_order_id", None))
+        except Exception as exc:  # noqa: BLE001
+            log_exception(self._log, exc)
+            self._log.critical(
+                "EOD residual sweep: flatten failed for %s: %s",
+                getattr(position, "symbol", "?"), exc,
+            )
+            return False
 
     def _promote_limits_to_market(
         self,

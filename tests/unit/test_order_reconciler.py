@@ -578,7 +578,10 @@ def test_manual_close_skips_publish_when_entry_price_missing(tmp_path: Path) -> 
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_check2_orphan_adoption(tmp_path: Path) -> None:
-    """ORPHAN_ADOPTION: broker position with no local trade → CapitalDriftDetected."""
+    """FIX-182 human-order policy: a broker position with NO local trade is an
+    operator/untracked order. First detection logs once (RECOVERABLE) and does
+    NOT publish CapitalDriftDetected; subsequent cycles are silenced (COSMETIC).
+    """
     store = _make_store(tmp_path)
     # No local trades
 
@@ -599,14 +602,23 @@ def test_check2_orphan_adoption(tmp_path: Path) -> None:
 
     orphan = [a for a in actions if a.check_name == "ORPHAN_ADOPTION"]
     assert len(orphan) == 1
-    assert orphan[0].tier == "UNRECOVERABLE"
+    assert orphan[0].tier == "RECOVERABLE"
     assert orphan[0].symbol == "TCS"
     assert orphan[0].trade_id is None
+    assert "TCS" in rec._human_order_symbols
 
-    assert len(received) == 1, "CapitalDriftDetected must be published"
+    # FIX-182: no CapitalDriftDetected from CHECK2 for a human order.
+    assert received == [], "CHECK2 must not publish CapitalDriftDetected for human orders"
+
+    # Second cycle: silenced (COSMETIC), still not published.
+    actions2 = rec.reconcile_once()
+    orphan2 = [a for a in actions2 if a.check_name == "ORPHAN_ADOPTION"]
+    assert len(orphan2) == 1
+    assert orphan2[0].tier == "COSMETIC"
+    assert received == [], "no repeat publish on subsequent cycles"
 
     store.close()
-    print("  OK CHECK2 ORPHAN_ADOPTION: CapitalDriftDetected published, UNRECOVERABLE")
+    print("  OK CHECK2 HUMAN_ORDER: logged once (RECOVERABLE), then silenced (COSMETIC)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1040,6 +1052,78 @@ def test_g3_capital_drift_within_tolerance(tmp_path: Path) -> None:
 
     store.close()
     print("  OK G3 CAPITAL_DRIFT: no action when delta <= tolerance")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-182: human-order margin tolerance widens G3 drift threshold
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix182_human_order_suppresses_g3_drift_within_allowance(tmp_path: Path) -> None:
+    """FIX-182: a human/untracked broker position blocks broker margin the FM
+    doesn't know about. When such an order is present, G3 widens its tolerance
+    by human_order_margin_tolerance (default Rs 5000), so the expected drift
+    does NOT raise a CRITICAL capital-drift alert."""
+    store = _make_store(tmp_path)
+    # No local trade for TCS -> CHECK2 treats it as a human order.
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("TCS", qty=5, avg_price=3500.0)]
+    # Broker net 300 below local total -> drift 300 (< 50 base + 5000 human).
+    adapter.get_margins.return_value = _MarginInfo(net=99_700.0, available=79_700.0, used=20_300.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+    notifier = MagicMock()
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+    actions = rec.reconcile_once()
+
+    assert "TCS" in rec._human_order_symbols
+    drift = [a for a in actions if a.check_name == "CAPITAL_DRIFT"]
+    assert drift == [], f"G3 should be suppressed within human allowance; got {drift}"
+    assert received == [], "No CapitalDriftDetected (CHECK2 silent + G3 within allowance)"
+    notifier.send.assert_not_called()
+
+    store.close()
+    print("  OK FIX-182: human-order present widens G3 tolerance, no drift alert")
+
+
+def test_fix182_g3_still_fires_beyond_human_allowance(tmp_path: Path) -> None:
+    """FIX-182: drift beyond base+human allowance still raises G3 (genuine
+    catastrophic drift is never masked)."""
+    store = _make_store(tmp_path)
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("TCS", qty=5, avg_price=3500.0)]
+    # Drift 10_000 >> 50 + 5000 = 5050 -> must still alert.
+    adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=30_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+    actions = rec.reconcile_once()
+
+    drift = [a for a in actions if a.check_name == "CAPITAL_DRIFT"]
+    assert len(drift) == 1, "G3 must still fire beyond human allowance"
+    assert len(received) == 1, "CapitalDriftDetected published by G3"
+    assert received[0].delta == 10_000.0
+    notifier.send.assert_called_once()
+
+    store.close()
+    print("  OK FIX-182: G3 still fires when drift exceeds base+human allowance")
 
 
 def test_g3_get_margins_timeout_skips_check(tmp_path: Path) -> None:

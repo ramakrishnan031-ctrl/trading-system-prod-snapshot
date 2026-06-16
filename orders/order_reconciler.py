@@ -60,7 +60,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Callable, Dict, List, Optional
 
 from capital.fund_manager import FundManager
@@ -175,6 +175,18 @@ class OrderReconciler:
         # FIX-B: Track orphan cycle counts
         # Maps trade_id -> cycle_count (incremented each cycle orphan is seen; auto-close after 3)
         self._orphan_cycle_count: Dict[str, int] = {}
+
+        # FIX-182: human / untracked broker positions (CHECK2 orphans with no
+        # local trade record at all). The system manages only system trades;
+        # these are operator-placed Kite orders we neither adopt nor protect.
+        # Logged once per symbol per day, then silenced; their margin widens
+        # the G3 capital-drift tolerance so they don't spam CRITICAL alerts.
+        self._human_order_symbols: set[str] = set()
+        self._human_order_date: Optional[date] = None
+        # Default Rs 5000 if cfg omits it (back-compat with older configs).
+        self._human_order_margin_tolerance: float = float(
+            getattr(cfg, "human_order_margin_tolerance", 5000.0)
+        )
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -885,39 +897,64 @@ class OrderReconciler:
 
     # ── CHECK 2: ORPHAN_ADOPTION ──────────────────────────────────────────────
 
+    def _reset_human_orders_if_new_day(self) -> None:
+        """FIX-182: clear the per-day human-order symbol set at IST date change."""
+        today = now_ist().date()
+        if self._human_order_date != today:
+            self._human_order_symbols = set()
+            self._human_order_date = today
+
     def _check2_orphan_adoption(self, symbol: str, bp) -> ReconciliationAction:
         """
-        Broker position exists but no local trade tracks it (RC5b).
+        Broker position exists but no local trade of ANY status tracks it (RC5b).
 
-        This is UNRECOVERABLE — system has no trade record to reconcile against.
-        Publishes CapitalDriftDetected so downstream handlers can react.
+        FIX-182 (human-order policy): post-FIX-181, an in-flight fill (a broker
+        position whose local trade is still PENDING/PENDING_FILL) is routed to
+        _check2_inflight_orphan. So reaching here means the system has no record
+        of this symbol at all — it is an operator-placed (human) order in Kite.
+        Per Rama's decision the system manages only system trades: we do NOT
+        adopt, protect, or flatten it. We log it once per symbol per day at INFO
+        for the audit trail and add it to the human-order set (which widens the
+        G3 capital-drift tolerance). Subsequent cycles are silent — no repeated
+        ERROR spam and no repeated CapitalDriftDetected (the latter was already
+        non-escalating, but it still produced per-cycle INFO from drift_handler).
         """
-        self._log.error(
-            "CHECK2 ORPHAN_ADOPTION: symbol=%s broker_qty=%d avg_price=%.2f "
-            "— no local trade found",
+        self._reset_human_orders_if_new_day()
+
+        if symbol in self._human_order_symbols:
+            # Already detected today — stay quiet (COSMETIC, not persisted).
+            return ReconciliationAction(
+                check_name="ORPHAN_ADOPTION",
+                tier="COSMETIC",
+                symbol=symbol,
+                trade_id=None,
+                description=(
+                    f"Human/untracked broker position {symbol} qty={bp.qty} "
+                    f"already noted today; not managed by system"
+                ),
+                action_taken="none (human order; silenced after first detection)",
+                success=True,
+            )
+
+        # First detection today.
+        self._human_order_symbols.add(symbol)
+        self._log.info(
+            "CHECK2 HUMAN_ORDER: symbol=%s broker_qty=%d avg_price=%.2f — no "
+            "local trade; treating as operator/untracked order. System manages "
+            "system trades only; not adopting or protecting. (logged once/day)",
             symbol, bp.qty, bp.avg_price,
         )
-        try:
-            notional = float(abs(bp.qty)) * float(bp.avg_price)
-            self._bus.publish(CapitalDriftDetected(
-                source_module="order_reconciler",
-                expected=0.0,
-                actual=notional,
-                delta=notional,
-            ))
-        except Exception as exc:
-            self._log.error("check2: publish CapitalDriftDetected failed: %s", exc)
 
         return ReconciliationAction(
             check_name="ORPHAN_ADOPTION",
-            tier="UNRECOVERABLE",
+            tier="RECOVERABLE",
             symbol=symbol,
             trade_id=None,
             description=(
-                f"Broker has position in {symbol} qty={bp.qty} "
-                f"avg_price={bp.avg_price:.2f} but no local trade"
+                f"Human/untracked broker position {symbol} qty={bp.qty} "
+                f"avg_price={bp.avg_price:.2f}; no local trade — not managed by system"
             ),
-            action_taken="CapitalDriftDetected published; manual intervention required",
+            action_taken="logged once; added to human-order set; not adopted",
             success=True,
         )
 
@@ -1716,7 +1753,17 @@ class OrderReconciler:
         actual = margins.net
         delta = abs(actual - expected)
 
-        if delta <= self._cfg.capital_drift_tolerance:
+        # FIX-182: human / untracked orders block broker margin the FM does not
+        # know about, so broker net legitimately differs from local total. When
+        # any human order was detected today, widen the tolerance by the
+        # configured human-order margin allowance so this expected drift does
+        # not raise CRITICAL capital-drift alerts. Genuine catastrophic drift
+        # (beyond the allowance) still alerts.
+        effective_tolerance = self._cfg.capital_drift_tolerance
+        if self._human_order_symbols:
+            effective_tolerance += self._human_order_margin_tolerance
+
+        if delta <= effective_tolerance:
             # FIX-038: Mark as resolved if drift is back within tolerance
             self._mark_discrepancy_resolved(None, "CAPITAL_DRIFT")
             return None
@@ -1726,8 +1773,11 @@ class OrderReconciler:
 
         if should_alert:
             self._log.error(
-                "G3 CAPITAL_DRIFT: expected=%.2f actual=%.2f delta=%.2f tolerance=%.2f",
-                expected, actual, delta, self._cfg.capital_drift_tolerance,
+                "G3 CAPITAL_DRIFT: expected=%.2f actual=%.2f delta=%.2f "
+                "tolerance=%.2f (base=%.2f human_orders=%s)",
+                expected, actual, delta, effective_tolerance,
+                self._cfg.capital_drift_tolerance,
+                sorted(self._human_order_symbols) or "none",
             )
 
             try:
@@ -1748,14 +1798,16 @@ class OrderReconciler:
                         f"Broker: ₹{float(actual):,.2f} | "
                         f"Local: ₹{float(expected):,.2f}\n"
                         f"Delta: ₹{float(delta):,.2f} "
-                        f"(tolerance: ₹{float(self._cfg.capital_drift_tolerance):,.2f})"
+                        f"(tolerance: ₹{float(effective_tolerance):,.2f})"
                     ),
                     source_module="order_reconciler",
                     context={
                         "expected": expected,
                         "actual": actual,
                         "delta": delta,
-                        "tolerance": self._cfg.capital_drift_tolerance,
+                        "tolerance": effective_tolerance,
+                        "base_tolerance": self._cfg.capital_drift_tolerance,
+                        "human_orders": sorted(self._human_order_symbols),
                     },
                 )
             except Exception as exc:
@@ -1777,7 +1829,7 @@ class OrderReconciler:
             trade_id=None,
             description=(
                 f"Broker capital={actual:.2f} vs local={expected:.2f} "
-                f"delta={delta:.2f} exceeds tolerance={self._cfg.capital_drift_tolerance:.2f}"
+                f"delta={delta:.2f} exceeds tolerance={effective_tolerance:.2f}"
             ),
             action_taken=action_taken,
             success=True,

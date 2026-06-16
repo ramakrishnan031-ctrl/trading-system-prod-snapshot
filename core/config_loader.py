@@ -505,6 +505,11 @@ class OrderReconcilerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     poll_interval_sec: int        # RC17: periodic reconciliation cadence (P14 = 15s)
     capital_drift_tolerance: float  # RC17: max acceptable broker/local capital delta
+    # FIX-182: extra capital-drift allowance (Rs) applied when human / untracked
+    # broker orders are detected on the day. Their blocked margin legitimately
+    # widens the broker-vs-local gap; this prevents CRITICAL drift alert spam
+    # while still catching genuine catastrophic drift beyond the allowance.
+    human_order_margin_tolerance: float = 5000.0
 
     @field_validator("poll_interval_sec")
     @classmethod
@@ -518,6 +523,13 @@ class OrderReconcilerConfig(BaseModel):
     def _validate_drift_tolerance(cls, v: float) -> float:
         if v < 0.0:
             raise ValueError("capital_drift_tolerance must be >= 0.0")
+        return v
+
+    @field_validator("human_order_margin_tolerance")
+    @classmethod
+    def _validate_human_order_tolerance(cls, v: float) -> float:
+        if v < 0.0:
+            raise ValueError("human_order_margin_tolerance must be >= 0.0")
         return v
 
 

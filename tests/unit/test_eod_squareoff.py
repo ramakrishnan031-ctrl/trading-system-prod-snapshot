@@ -1802,6 +1802,147 @@ def test_fix047_checkpoint_logs_stats() -> None:
     print("  OK FIX-047: checkpoint stats logged")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-182: daily summary includes CLOSED_MANUAL / EXITING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix182_daily_summary_includes_closed_manual() -> None:
+    """FIX-182: CLOSED_MANUAL trades appear in the daily summary (previously
+    only pure CLOSED counted -> manual-close days reported 'No closed trades').
+    net_pnl=None on a manual close is coerced to 0.0, not dropped."""
+    eod, adapter, fm, ks, bus, om = _make_eod()
+    store = eod._store  # MagicMock(spec=StateStore)
+    store.get_trades_for_date.return_value = [
+        {"status": "CLOSED_MANUAL", "net_pnl": None, "strategy": "gap_fade_short",
+         "symbol": "AGARIND", "exit_reason": "MANUAL", "risk_amount": 500.0,
+         "margin_reserved": 572.55, "order_protocol": "LIMIT_TRIPLE", "trade_id": "t1"},
+        {"status": "CLOSED", "net_pnl": 120.0, "strategy": "gap_go_long",
+         "symbol": "FOO", "exit_reason": "TGT", "risk_amount": 500.0,
+         "margin_reserved": 1000.0, "order_protocol": "LIMIT_TRIPLE", "trade_id": "t2"},
+        {"status": "FAILED", "net_pnl": None, "strategy": "x", "symbol": "BAR",
+         "trade_id": "t3"},
+    ]
+    store.fetch_all.return_value = []  # no human orders today
+
+    notifier = MagicMock()
+    eod._notifier = notifier
+
+    eod._send_daily_summary("2026-06-16")
+
+    notifier.send.assert_called_once()
+    body = notifier.send.call_args.kwargs["body"]
+    assert "No closed trades" not in body
+    # Both closed + closed_manual counted -> 2 trades, 1 win (FOO), 1 loss (AGARIND@0)
+    assert "1W 1L" in body
+    assert "gap_fade_short" in body and "gap_go_long" in body
+    print("  OK FIX-182: daily summary counts CLOSED_MANUAL (net_pnl None -> 0)")
+
+
+def test_fix182_daily_summary_no_closed_adds_human_note() -> None:
+    """FIX-182: with no closed trades but human/untracked orders present, the
+    summary still says 'No closed trades' but appends the human-order note."""
+    eod, adapter, fm, ks, bus, om = _make_eod()
+    store = eod._store
+    store.get_trades_for_date.return_value = [
+        {"status": "FAILED", "net_pnl": None, "symbol": "BHARATGEAR", "trade_id": "t1"},
+    ]
+    store.fetch_all.return_value = [{"symbol": "ITC"}]  # human order detected today
+
+    notifier = MagicMock()
+    eod._notifier = notifier
+
+    eod._send_daily_summary("2026-06-16")
+
+    notifier.send.assert_called_once()
+    body = notifier.send.call_args.kwargs["body"]
+    assert "No closed trades" in body
+    assert "ITC" in body and "Human" in body
+    print("  OK FIX-182: human-order note appended when no closed trades")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-182: EOD broker-driven residual sweep
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix182_residual_sweep_flattens_system_orphan_skips_human() -> None:
+    """FIX-182: a non-zero broker MIS position with no local OPEN trade is
+    flattened ONLY when the system traded that symbol today (system orphan,
+    e.g. GICRE). A human/untracked position (no local trade) is left alone."""
+    from types import SimpleNamespace
+
+    eod, _adapter, fm, ks, bus, om = _make_eod()
+
+    adapter = MagicMock()  # full adapter (get_positions/get_quote/place_order)
+    adapter.get_positions.return_value = [
+        SimpleNamespace(symbol="GICRE", qty=-1, avg_price=366.40, product="MIS"),  # system orphan (short)
+        SimpleNamespace(symbol="ITC", qty=1, avg_price=289.0, product="MIS"),      # human order
+    ]
+    adapter.get_quote.return_value = {"GICRE": SimpleNamespace(last_price=366.0)}
+    placed = MagicMock()
+    placed.internal_order_id = "int1"
+    placed.broker_order_id = "b1"
+    placed.price = 366.05
+    placed.ts = now_ist()
+    adapter.place_order.return_value = placed
+    eod._adapter = adapter
+
+    store = eod._store
+    # System traded GICRE today; ITC has no local trade.
+    store.get_trades_for_date.return_value = [{"symbol": "GICRE"}]
+
+    attempted, succeeded, failed = eod._sweep_residual_broker_positions(handled_symbols=set())
+
+    assert (attempted, succeeded, failed) == (1, 1, 0)
+    # Exactly one flatten order, for GICRE, BUY side (flattening a short).
+    adapter.place_order.assert_called_once()
+    kwargs = adapter.place_order.call_args.kwargs
+    assert kwargs["symbol"] == "GICRE"
+    assert kwargs["side"] == "BUY"
+    assert kwargs["qty"] == 1
+    print("  OK FIX-182: residual sweep flattens system orphan, skips human order")
+
+
+def test_fix182_residual_sweep_skips_handled_symbols() -> None:
+    """FIX-182: positions already handled by the local-trade exit loop are not
+    re-flattened by the residual sweep."""
+    from types import SimpleNamespace
+
+    eod, _adapter, *_ = _make_eod()
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [
+        SimpleNamespace(symbol="GICRE", qty=-1, avg_price=366.40, product="MIS"),
+    ]
+    eod._adapter = adapter
+    eod._store.get_trades_for_date.return_value = [{"symbol": "GICRE"}]
+
+    attempted, succeeded, failed = eod._sweep_residual_broker_positions(
+        handled_symbols={"GICRE"}
+    )
+    assert (attempted, succeeded, failed) == (0, 0, 0)
+    adapter.place_order.assert_not_called()
+    print("  OK FIX-182: residual sweep skips already-handled symbols")
+
+
+def test_fix182_residual_sweep_ignores_cnc_and_zero_qty() -> None:
+    """FIX-182: residual sweep only touches non-zero MIS/CO positions; CNC
+    (delivery) and zero-qty positions are ignored."""
+    from types import SimpleNamespace
+
+    eod, _adapter, *_ = _make_eod()
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [
+        SimpleNamespace(symbol="DELIV", qty=10, avg_price=100.0, product="CNC"),  # delivery
+        SimpleNamespace(symbol="FLAT", qty=0, avg_price=50.0, product="MIS"),     # already flat
+    ]
+    eod._adapter = adapter
+    eod._store.get_trades_for_date.return_value = [{"symbol": "DELIV"}, {"symbol": "FLAT"}]
+
+    attempted, succeeded, failed = eod._sweep_residual_broker_positions(handled_symbols=set())
+    assert (attempted, succeeded, failed) == (0, 0, 0)
+    adapter.place_order.assert_not_called()
+    print("  OK FIX-182: residual sweep ignores CNC + zero-qty positions")
+
+
 if __name__ == "__main__":
     import traceback
 
