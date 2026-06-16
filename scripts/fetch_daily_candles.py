@@ -139,6 +139,16 @@ def _fetch_single_day(trade_date: str, kite, inst_map: dict) -> None:
 def main(argv=None) -> None:
     args = _parse_args(argv)
 
+    # FIX-180 Part 12: the default (no-arg) run fetches *today's* candles via the
+    # live broker session. Skip on weekend / Friday-after-17:30 when the Zerodha
+    # API is unavailable. Explicit historical fetches (--backfill or a date arg)
+    # are allowed any day — historical_data works for past dates.
+    if not args.backfill and not args.date:
+        from core.market_windows import is_broker_api_available
+        if not is_broker_api_available():
+            print("Skipping candle fetch — Zerodha API unavailable (weekend/after-hours)")
+            return
+
     if args.backfill:
         if not args.from_date or not args.to_date:
             print("ERROR: --backfill requires --from and --to")

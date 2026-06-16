@@ -1145,6 +1145,48 @@ class StateStore:
             )
             return cur.rowcount > 0
 
+    def record_manual_close_financials(
+        self,
+        trade_id: str,
+        exit_price: float,
+        net_pnl: float,
+        exit_time: Optional[str] = None,
+        charges: float = 0.0,
+    ) -> bool:
+        """
+        Bug 4 (FIX-180): populate the trade row's exit financials after a
+        CLOSED_MANUAL transition.
+
+        order_reconciler CHECK 1 already resolves the real broker exit price
+        and releases capital with the correct pnl via fm.release_used(), so the
+        fm_ledger is right — but mark_trade_manually_closed() only set status +
+        exit_reason, leaving exit_price/net_pnl/exit_time NULL. That made
+        trades.net_pnl disagree with fm_ledger.pnl_delta and broke per-trade
+        reporting. This writes those fields.
+
+        RMS/manual closes pass costs=0.0 (see capital release call), so
+        gross_pnl == net_pnl and charges == 0.0. Guarded to CLOSED_MANUAL rows
+        only (idempotent; never clobbers a normal CLOSED row). exit_time is
+        preserved if already set. Returns True if the row was updated.
+        """
+        ts = exit_time or _now_ist_iso()
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET exit_price = ?,
+                    exit_time  = COALESCE(exit_time, ?),
+                    gross_pnl  = ?,
+                    charges    = ?,
+                    net_pnl    = ?,
+                    updated_at = ?
+                WHERE trade_id = ?
+                  AND status = 'CLOSED_MANUAL'
+                """,
+                (exit_price, ts, net_pnl, charges, net_pnl, ts, trade_id),
+            )
+            return cur.rowcount > 0
+
     def get_pending_all_products(self) -> List[sqlite3.Row]:
         """
         Return all PENDING_FILL trades regardless of product.

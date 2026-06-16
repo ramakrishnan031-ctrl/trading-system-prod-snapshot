@@ -63,6 +63,12 @@ class _MockAdapter:
         self._raises = raises
         self.placed = []
         self.cancelled = []
+        self._quote_ltp = None  # FIX-180 Bug 6: slippage/drift LTP source
+
+    def get_quote_raw(self, instruments):
+        if self._quote_ltp is None:
+            return {}
+        return {inst: {"last_price": self._quote_ltp} for inst in instruments}
 
     def place_order(self, symbol, side, qty, price, order_type, intent,
                     tag=None, trigger_price=0.0, variety="regular"):
@@ -121,6 +127,7 @@ def _make_placer(tmp_path: Path, adapter=None, notifier=None, raises=None):
         entry_engine=engine, order_manager=om, fund_manager=fm,
         bus=bus, logger=_log(), order_monitor=mon, cost_calculator=cost_calc,
         product_resolver=resolver, notifier=notifier, mode="TEST",
+        broker_adapter=_adapter,  # FIX-180 Bug 6: slippage/drift LTP source
     )
     return placer, store, fm, bus, _adapter
 
@@ -179,14 +186,9 @@ class TestRejectionAlert:
             placer, store, fm, bus, adapter = _make_placer(Path(tmp), notifier=notifier)
             placer._max_entry_slippage_pct = 1.0
 
-            class _FakeFeed:
-                def quote(self, sym):
-                    class R:
-                        ltp = 1030.0  # 3% slippage from trigger=1000
-                        success = True
-                    return R()
-
-            placer._live_feed = _FakeFeed()
+            # FIX-180 Bug 6: slippage guard reads LTP from adapter.get_quote_raw
+            # (not the fictional live_feed.quote). 1030 vs trigger 1000 = 3% slip.
+            adapter._quote_ltp = 1030.0
             sig_id = _seed_signal(store)
 
             with pytest.raises(OrderRejectedError):

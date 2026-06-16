@@ -305,7 +305,7 @@ def main(argv=None) -> int:
         log.error("strategy_metrics: config load failed: %s", exc)
         return 1
 
-    db_path = Path(args.db) if args.db else Path("data_store") / "trading_system.db"
+    db_path = Path(args.db) if args.db else _ROOT / "data_store" / "trading_system.db"
     try:
         store = StateStore(db_path=db_path)
     except Exception as exc:

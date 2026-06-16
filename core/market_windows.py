@@ -264,3 +264,45 @@ def is_within_market_hours(now_t: time, open_t: time, close_t: time) -> bool:
     """FIX-169 F18: shared helper replacing duplicate _is_market_hours() in
     token_monitor.py and gemini_watchman.py."""
     return open_t <= now_t <= close_t
+
+
+# FIX-180 Part 12: broker-API availability guard for cron scripts.
+# Friday cutoff after which the broker session/API is no longer useful for the
+# week (post-market close; Zerodha tokens + data go stale over the weekend).
+_FRIDAY_API_CUTOFF = time(17, 30)
+
+
+def is_market_day(dt: datetime | None = None) -> bool:
+    """True only on weekdays (Mon-Fri); Sat/Sun -> False.
+
+    Calendar weekday check only — does NOT consult the NSE holiday list (that
+    needs a configured MarketWindows). Use MarketWindows.is_trading_holiday()
+    when full holiday-awareness is required.
+    """
+    if dt is None:
+        from core.time_authority import now_ist  # local import avoids cycle
+        dt = now_ist()
+    return dt.weekday() < 5
+
+
+def is_broker_api_available(dt: datetime | None = None) -> bool:
+    """Best-effort guard for cron scripts that call the Zerodha API.
+
+    Returns False on Saturday/Sunday and on Friday at/after 17:30 IST, when the
+    broker session is closed for the week and API calls fail or return stale
+    data; True on Mon-Thu and Friday before 17:30.
+
+    Scope: weekday/time only. It deliberately does NOT consult the NSE holiday
+    calendar (a holiday still returns True here) — holiday scheduling is handled
+    at the app/cron layer (cron day-field 1-5 + MarketWindows.is_trading_holiday).
+    The sole purpose is to stop weekend/after-hours broker calls from failing.
+    """
+    if dt is None:
+        from core.time_authority import now_ist  # local import avoids cycle
+        dt = now_ist()
+    weekday = dt.weekday()  # Mon=0 .. Sun=6
+    if weekday >= 5:  # Saturday / Sunday
+        return False
+    if weekday == 4 and dt.time() >= _FRIDAY_API_CUTOFF:  # Friday after 17:30
+        return False
+    return True

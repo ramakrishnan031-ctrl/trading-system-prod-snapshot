@@ -40,6 +40,20 @@ class _FakeAdapter:
 
     def __init__(self):
         self.placed_orders = []
+        self._live_feed = None  # FIX-180 Bug 6: drift LTP now via get_quote_raw
+
+    def get_quote_raw(self, instruments):
+        # FIX-180 Bug 6: price-drift LTP is fetched via adapter.get_quote_raw
+        # (the real source) rather than the fictional live_feed.quote(). Delegate
+        # to the wired live_feed so existing LTP/quote_calls scenarios still drive.
+        lf = self._live_feed
+        if lf is None or not instruments:
+            return {}
+        sym = instruments[0].split(":")[-1]
+        r = lf.quote(sym)
+        if not getattr(r, "success", True) or getattr(r, "ltp", None) is None:
+            return {}
+        return {instruments[0]: {"last_price": r.ltp}}
 
     def place_order(
         self,
@@ -155,6 +169,7 @@ def _make_placer(tmp_path: Path, fund_manager, live_feed=None, price_drift_thres
     store = StateStore(tmp_path / "test.db")
     bus = EventBus()
     adapter = _FakeAdapter()
+    adapter._live_feed = live_feed  # FIX-180 Bug 6: drift LTP via adapter.get_quote_raw
     engine = _FakeEngine(adapter)
     full_engine = FullEntryEngine(
         limit_protocol=MagicMock(),
@@ -183,6 +198,7 @@ def _make_placer(tmp_path: Path, fund_manager, live_feed=None, price_drift_thres
         cost_calculator=cost_calc,
         product_resolver=product_resolver,
         live_feed=live_feed,  # FIX-075: wire live_feed for drift check
+        broker_adapter=adapter,  # FIX-180 Bug 6: drift/slippage LTP source
         price_drift_threshold=price_drift_threshold,  # FIX-075: configurable threshold
     )
     return placer, store, adapter

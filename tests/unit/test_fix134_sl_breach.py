@@ -176,8 +176,10 @@ class TestEmergencyExit:
         adapter.place_order.assert_not_called()
 
     def test_live_mode_places_market_order(self, store):
+        # FIX-180 Bug 7: place_order takes side/intent/price (not transaction_type/
+        # product) and returns a PlacedOrder (not a raw id string).
         adapter = MagicMock()
-        adapter.place_order.return_value = "BROKER-123"
+        adapter.place_order.return_value = MagicMock(broker_order_id="BROKER-123")
         _insert_open_trade(store, "RELIANCE", "LONG", 95.0)
         mon = _make_monitor(store, mode="LIVE", adapter=adapter)
         mon.set_token_map({12345: "RELIANCE"})
@@ -185,18 +187,23 @@ class TestEmergencyExit:
         adapter.place_order.assert_called_once()
         call_kwargs = adapter.place_order.call_args.kwargs
         assert call_kwargs["order_type"] == "MARKET"
-        assert call_kwargs["transaction_type"] == "SELL"
+        assert call_kwargs["side"] == "SELL"
         assert call_kwargs["symbol"] == "RELIANCE"
+        assert call_kwargs["intent"] == "INTRADAY"
+        assert call_kwargs["price"] == 0.0
+        assert "transaction_type" not in call_kwargs
+        assert "product" not in call_kwargs
 
     def test_live_short_exit_side_is_buy(self, store):
+        # FIX-180 Bug 7: SHORT exit side is BUY, passed as side=.
         adapter = MagicMock()
-        adapter.place_order.return_value = "BROKER-456"
+        adapter.place_order.return_value = MagicMock(broker_order_id="BROKER-456")
         _insert_open_trade(store, "INFY", "SHORT", 105.0)
         mon = _make_monitor(store, mode="LIVE", adapter=adapter)
         mon.set_token_map({67890: "INFY"})
         mon.on_tick({"instrument_token": 67890, "last_price": 106.0})
         call_kwargs = adapter.place_order.call_args.kwargs
-        assert call_kwargs["transaction_type"] == "BUY"
+        assert call_kwargs["side"] == "BUY"
 
     def test_telegram_alert_sent(self, store):
         notifier = MagicMock()

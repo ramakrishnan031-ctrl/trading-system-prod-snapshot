@@ -37,8 +37,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from alerts.telegram_notifier import TelegramNotifier
 from core.config_loader import load_all as load_config
 from core.logger import get_logger
+from core.market_windows import is_broker_api_available
 from core.state_store import StateStore
 from core.time_authority import now_ist, today_ist
 
@@ -310,6 +312,13 @@ def main(argv=None) -> int:
     is_paper = (mode == "paper")
     mode_label = "PAPER" if is_paper else "LIVE"
 
+    # FIX-180 Part 12: a live current-day reconcile fetches broker data. Skip on
+    # weekend / Friday-after-17:30 when the Zerodha API is unavailable. Paper
+    # mode and explicit --date backfills are unaffected.
+    if not is_paper and not args.date and not is_broker_api_available():
+        log.info("reconcile_pnl.skipped_api_unavailable (weekend/after-hours)")
+        return 0
+
     # Config
     config_dir = Path(args.config)
     try:
@@ -319,7 +328,7 @@ def main(argv=None) -> int:
         return 1
 
     # State store
-    db_path = Path(args.db) if args.db else Path("data_store") / "trading_system.db"
+    db_path = Path(args.db) if args.db else _ROOT / "data_store" / "trading_system.db"
     try:
         store = StateStore(db_path=db_path)
     except Exception as exc:
@@ -327,6 +336,17 @@ def main(argv=None) -> int:
         return 1
 
     date_iso = args.date or today_ist()
+
+    # Bug 10 (FIX-180): build the Telegram notifier from env so EOD P&L
+    # discrepancies actually alert. from_env() returns None if env vars are
+    # missing — log a WARNING but do not crash (run-without-alerts).
+    notifier = TelegramNotifier.from_env(log)
+    if notifier is None:
+        log.warning(
+            "reconcile_pnl: Telegram env not set "
+            "(TELEGRAM_BOT_TOKEN/TELEGRAM_CHANNEL_PRIMARY); discrepancy alerts disabled"
+        )
+
     log.info(
         "reconcile_pnl.start",
         extra={"date": date_iso, "mode": mode_label, "dry_run": args.dry_run},
@@ -338,7 +358,7 @@ def main(argv=None) -> int:
             date_iso=date_iso,
             is_paper=is_paper,
             log=log,
-            notifier=None,     # no Telegram in standalone script (no token in scope)
+            notifier=notifier,
             kill_switch=None,  # standalone: log CRITICAL, manual intervention
             mode_label=mode_label,
             dry_run=args.dry_run,

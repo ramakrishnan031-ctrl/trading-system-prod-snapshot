@@ -124,12 +124,26 @@ class _MockAdapter:
     """Mock ZerodhaAdapter that returns PlacedOrder or raises on demand."""
 
     def __init__(self, raises: Optional[Exception] = None,
-                 fail_on_call: int = -1) -> None:
+                 fail_on_call: int = -1,
+                 quote_ltp: Optional[float] = None,
+                 quote_fail: bool = False) -> None:
         self._raises = raises
         self._fail_on = fail_on_call
         self._call_count = 0
         self.placed: List[dict] = []
         self.cancelled: List[str] = []
+        # FIX-180 Bug 6: LTP is now fetched via adapter.get_quote_raw (the real
+        # source) instead of the fictional live_feed.quote(). Tests configure
+        # the simulated market LTP here.
+        self._quote_ltp = quote_ltp
+        self._quote_fail = quote_fail
+
+    def get_quote_raw(self, instruments):
+        if self._quote_fail:
+            raise RuntimeError("quote fetch failed")
+        if self._quote_ltp is None:
+            return {}
+        return {inst: {"last_price": self._quote_ltp} for inst in instruments}
 
     def place_order(self, symbol, side, qty, price, order_type, intent,
                     tag=None, trigger_price=0.0, variety="regular"):
@@ -4519,7 +4533,14 @@ class TestFix128EntrySlippageGuard:
         bus = EventBus()
         fm = _MockFundManager()
         mon = MagicMock(spec=OrderMonitor)
-        adapter = _MockAdapter()
+        # FIX-180 Bug 6: the slippage guard / price-drift check fetch LTP via
+        # adapter.get_quote_raw (not live_feed.quote, which never existed on the
+        # real LiveFeedManager). Mirror the feed's LTP onto the adapter so these
+        # tests exercise the corrected quote source.
+        adapter = _MockAdapter(
+            quote_ltp=getattr(live_feed, "_ltp", None) if live_feed is not None else None,
+            quote_fail=getattr(live_feed, "_fail", False) if live_feed is not None else False,
+        )
         lim_prot = LimitTripleProtocol(adapter=adapter, logger=_log())
         co_prot = CoPlusTgtProtocol(adapter=adapter, logger=_log())
         engine = FullEntryEngine(
@@ -4538,6 +4559,7 @@ class TestFix128EntrySlippageGuard:
             cost_calculator=cost_calc,
             product_resolver=_default_resolver(),
             live_feed=live_feed,
+            broker_adapter=adapter,
             max_entry_slippage_pct=max_slippage_pct,
             notifier=notifier,
         )

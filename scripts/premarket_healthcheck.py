@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.time_authority import now_ist
 from core.logger import get_logger
+from core.market_windows import is_broker_api_available
 
 _log = get_logger("premarket_healthcheck")
 
@@ -179,6 +180,13 @@ def main() -> int:
     parser.add_argument("--db-path", type=Path, default=Path("data_store/trading_system.db"))
     parser.add_argument("--dry-run", action="store_true", help="Don't send Telegram alert")
     args = parser.parse_args()
+
+    # FIX-180 Part 12: skip on weekend / Friday-after-17:30 — the Zerodha API is
+    # unavailable then and every broker call would fail.
+    if not is_broker_api_available():
+        print("Skipping premarket_healthcheck — Zerodha API unavailable (weekend/after-hours)")
+        _log.info("premarket_healthcheck.skipped_api_unavailable")
+        return 0
 
     ts = now_ist().isoformat()
     print(f"{ts} Pre-market healthcheck starting...")

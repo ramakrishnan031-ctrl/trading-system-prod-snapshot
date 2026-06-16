@@ -26,6 +26,7 @@ import threading
 import time
 from typing import Optional
 
+from core.constants import PRODUCT_TO_INTENT
 from core.time_authority import now_ist
 
 
@@ -107,6 +108,7 @@ class SlBreachMonitor:
                     qty=qty_filled,
                     ltp=ltp,
                     sl=sl_initial,
+                    product=trade.get("product"),
                 )
 
     def _get_exposed_trades(self) -> list[dict]:
@@ -118,7 +120,10 @@ class SlBreachMonitor:
         """
         rows = self._store.fetch_all(
             """
-            SELECT t.trade_id, t.symbol, t.direction, t.sl_initial, t.qty_filled
+            SELECT t.trade_id, t.symbol, t.direction, t.sl_initial, t.qty_filled,
+                   (SELECT o2.product FROM orders o2
+                    WHERE o2.trade_id = t.trade_id AND o2.leg IN ('ENTRY','CO')
+                    LIMIT 1) AS product
             FROM trades t
             WHERE t.status IN ('OPEN', 'PARTIAL')
               AND t.qty_filled > 0
@@ -142,9 +147,14 @@ class SlBreachMonitor:
         qty: int,
         ltp: float,
         sl: float,
+        product: Optional[str] = None,
     ) -> None:
         self._fired_trade_ids.add(trade_id)
         exit_side = "SELL" if direction == "LONG" else "BUY"
+        # Bug 7 (FIX-180): derive intent from the position's product so the
+        # emergency exit uses the SAME product it was opened with (MIS/CNC).
+        # Unknown product -> INTRADAY (safest; MIS exits always allowed).
+        intent = PRODUCT_TO_INTENT.get(product or "", "INTRADAY")
 
         self._log.critical(
             "sl_breach_monitor.EMERGENCY_SL: %s ltp=%.2f sl=%.2f side=%s qty=%d trade=%s",
@@ -169,14 +179,23 @@ class SlBreachMonitor:
 
         if self._mode == "LIVE" and self._adapter is not None:
             try:
-                broker_order_id = self._adapter.place_order(
+                # Bug 7 (FIX-180): match ZerodhaAdapter.place_order signature
+                # (symbol, side, qty, price, order_type, intent, tag, ...).
+                # Old call used transaction_type=/product= (invalid kwargs),
+                # omitted required price/intent, and treated the returned
+                # PlacedOrder as a raw id -> TypeError on every emergency exit.
+                placed = self._adapter.place_order(
                     symbol=symbol,
-                    transaction_type=exit_side,
+                    side=exit_side,
                     qty=qty,
+                    price=0.0,
                     order_type="MARKET",
-                    product="MIS",
-                    variety="regular",
+                    intent=intent,
+                    tag="sl_breach_exit",
                 )
+                broker_order_id = placed.broker_order_id
+                if not broker_order_id:
+                    raise RuntimeError("Broker returned empty order id for emergency exit")
                 self._log.critical(
                     "sl_breach_monitor.emergency_order_placed: %s broker_id=%s",
                     symbol, broker_order_id,

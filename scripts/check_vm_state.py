@@ -3,11 +3,19 @@
 import sqlite3
 import os
 import sys
+from pathlib import Path
 
-db_path = os.path.expanduser("~/trading-system/data_store/trading_system.db")
+# Bug 8 (FIX-180): the hardcoded "~/trading-system/data_store/..." path was
+# wrong on the VM (active deploy is ~/systems/trading-system) and CWD-fragile.
+# Anchor to the project root (this file's parent.parent), with a DB_PATH env
+# override for non-standard layouts.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+db_path = os.environ.get(
+    "DB_PATH", str(PROJECT_ROOT / "data_store" / "trading_system.db")
+)
 if not os.path.exists(db_path):
     print(f"DB not found: {db_path}")
-    exit(1)
+    sys.exit(1)
 
 c = sqlite3.connect(db_path)
 c.row_factory = sqlite3.Row

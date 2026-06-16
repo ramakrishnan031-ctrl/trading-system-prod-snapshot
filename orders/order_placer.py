@@ -751,16 +751,10 @@ class OrderPlacer:
         # Best-effort: if LTP unavailable, skip check and proceed.
         if signal_trigger_price is not None and signal_trigger_price > 0:
             _slip_ltp = release_ltp  # gate path: already have LTP
-            if _slip_ltp is None and self._live_feed is not None:
-                try:
-                    _q = self._live_feed.quote(symbol)
-                    if _q.success and _q.ltp and _q.ltp > 0:
-                        _slip_ltp = _q.ltp
-                except Exception as _slip_exc:
-                    self._log.debug(
-                        "order_placer.slippage_guard_ltp_fetch_failed",
-                        extra={"symbol": symbol, "error": str(_slip_exc)},
-                    )
+            if _slip_ltp is None:
+                # Bug 6 (FIX-180): use adapter.get_quote_raw via _fetch_ltp
+                # (live_feed has no .quote()). Best-effort; None -> skip guard.
+                _slip_ltp = self._fetch_ltp(symbol)
             if _slip_ltp is not None:
                 _slip_pct = abs(_slip_ltp - signal_trigger_price) / signal_trigger_price * 100
                 if _slip_pct > self._max_entry_slippage_pct:
@@ -806,12 +800,12 @@ class OrderPlacer:
         # If price has drifted significantly since reservation, top up margin.
         # Best-effort: if quote fetch fails, log warning and proceed (don't block order).
         original_entry_price = entry_price
-        if self._live_feed is not None:
+        if self._adapter is not None:
             try:
-                # Fetch current LTP
-                quote_result = self._live_feed.quote(symbol)
-                if quote_result.success and quote_result.ltp is not None:
-                    current_ltp = quote_result.ltp
+                # Bug 6 (FIX-180): fetch current LTP via adapter.get_quote_raw
+                # (live_feed has no .quote()); None -> skip drift top-up.
+                current_ltp = self._fetch_ltp(symbol)
+                if current_ltp is not None and original_entry_price:
                     drift_pct = abs(current_ltp - original_entry_price) / original_entry_price
 
                     # Load threshold from config
@@ -3046,6 +3040,36 @@ class OrderPlacer:
             return round(_math.floor(price / tick) * tick, 10)
         except Exception:
             return price
+
+    def _fetch_ltp(self, symbol: str) -> Optional[float]:
+        """
+        Bug 6 (FIX-180): fetch current LTP via the broker adapter.
+
+        The slippage guard and price-drift top-up previously called
+        self._live_feed.quote(symbol), but LiveFeedManager has no quote()
+        method (AttributeError silently disabled both guards on every order —
+        first-live-day incident). Route through adapter.get_quote_raw() instead,
+        the same source _check_liquidity uses (FIX-166 F08 pattern).
+
+        Best-effort: returns None on any error or if no adapter/positive LTP.
+        """
+        if self._adapter is None:
+            return None
+        try:
+            raw_quote = self._adapter.get_quote_raw([f"NSE:{symbol}"])
+            if not raw_quote:
+                return None
+            q = raw_quote.get(f"NSE:{symbol}")
+            if not q:
+                return None
+            ltp = float(q.get("last_price", 0) or 0)
+            return ltp if ltp > 0 else None
+        except Exception as exc:
+            self._log.debug(
+                "order_placer.fetch_ltp_failed",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+            return None
 
     def _check_liquidity(
         self, symbol: str, side: str, trade_id: str, signal_id: str,

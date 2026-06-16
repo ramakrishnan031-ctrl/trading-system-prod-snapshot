@@ -52,11 +52,18 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
 from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
+
+# Part 11 (FIX-180): HARD_KILL emergency-exit retry guards.
+# Max wall-clock time to keep retrying a trade that won't exit before we stop
+# the loop and escalate (instead of looping forever and freezing the thread).
+_HARD_KILL_MAX_RETRY_HOURS = 2.0
+# Per-trade Telegram dedup window for the "exit failed" escalation alert.
+_EXIT_ALERT_DEDUP_SEC = 300.0
 from core.events import EventBus, KillSwitchActivated
 from core.time_authority import now_ist
 
@@ -162,6 +169,10 @@ class KillSwitch:
         self._triggered_at: Optional[datetime] = None
         self._triggered_by = ""
         self._api_failure_count = 0
+
+        # Part 11 (FIX-180): per-trade timestamp of the last "exit failed"
+        # escalation alert, for 5-min Telegram dedup during the retry loop.
+        self._exit_alert_ts: dict[str, float] = {}
 
         # KS3: recover persisted state on startup (Audit Issue #18 fix)
         self._load_state_from_store()
@@ -661,11 +672,85 @@ class KillSwitch:
             )
             return CancellationReport(attempted=0, succeeded=0, failed=[str(exc)])
 
+    def _is_position_flat(self, symbol: str) -> bool:
+        """
+        Part 11 (FIX-180): True if the broker reports no open position for
+        `symbol`.
+
+        Used to avoid re-firing an emergency MARKET exit on a position that is
+        already closed (manually at the broker, or an earlier exit that filled).
+        Re-firing on a flat position would open a NEW naked position — the exact
+        failure that caused repeated SULA exit attempts on first-live-day.
+
+        On any broker error this returns False (cannot confirm flat) so the
+        caller falls back to attempting the exit — the kill switch must always
+        err toward flattening, never toward leaving a position open.
+
+        Parity: self._adapter is the paper adapter in PAPER mode and the Zerodha
+        adapter in LIVE mode, so both paths run this check identically.
+        """
+        # Fully defensive: this runs inside the "indestructible" exit loop, so
+        # ANY failure (broker error, non-iterable/garbage payload, bad qty type)
+        # must degrade to "cannot confirm flat" -> return False -> attempt exit,
+        # never crash the loop.
+        try:
+            positions = self._adapter.get_positions()
+            for p in positions:
+                if getattr(p, "symbol", None) != symbol:
+                    continue
+                if abs(int(getattr(p, "qty", 0) or 0)) > 0:
+                    return False   # position still open
+                return True        # symbol present, qty 0 -> flat
+            return True            # symbol not present -> flat
+        except Exception as exc:
+            self._log.warning(
+                "kill_switch: could not verify flat for %s (%s); will attempt exit",
+                symbol, exc,
+            )
+            return False
+
+    def _alert_exit_failed(self, failed_trades: list) -> None:
+        """
+        Part 11 (FIX-180): escalate trades that could not be exited within the
+        max retry window via CRITICAL Telegram, with a per-trade 5-min dedup so
+        we do not spam the channel every retry cycle.
+        """
+        if self._notifier is None:
+            return
+        import time
+        now_mono = time.monotonic()
+        for trade_id, symbol, exit_side, qty, intent in failed_trades:
+            last = self._exit_alert_ts.get(trade_id, 0.0)
+            if now_mono - last < _EXIT_ALERT_DEDUP_SEC:
+                continue
+            self._exit_alert_ts[trade_id] = now_mono
+            try:
+                self._notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{self._mode}] HARD_KILL EXIT FAILED -- {symbol}",
+                    body=(
+                        f"Could not exit {symbol} ({exit_side} x{qty}) within "
+                        f"{_HARD_KILL_MAX_RETRY_HOURS:.0f}h of HARD_KILL.\n"
+                        f"MANUAL INTERVENTION REQUIRED — verify/flatten at broker.\n"
+                        f"Trade: {trade_id}"
+                    ),
+                    source_module="kill_switch",
+                )
+            except Exception:
+                pass
+
     def _exit_all_trades_indestructible(self) -> CancellationReport:
         """
-        FIX-087: Exit all open trades with per-trade exception isolation and infinite retry.
+        FIX-087: Exit all open trades with per-trade exception isolation and retry.
 
-        Returns CancellationReport after all trades are confirmed flat. Never gives up.
+        Part 11 (FIX-180): the retry loop now (a) checks the broker position is
+        still open before each retry (skip-and-resolve if already flat, so we
+        never open a naked position re-firing on a closed one) and (b) stops
+        after _HARD_KILL_MAX_RETRY_HOURS, escalating via CRITICAL Telegram
+        instead of looping forever and freezing the thread.
+
+        Returns CancellationReport after all trades are flat (or the retry
+        deadline is hit, with the unexited trades reported as failed).
         """
         import time
 
@@ -754,11 +839,30 @@ class KillSwitch:
                 )
                 failed_trades.append((trade_id, symbol, exit_side, qty, intent))
 
-        # Retry loop: infinite retry with exponential backoff
+        # Retry loop: exponential backoff, bounded by a max wall-clock deadline
+        # (Part 11 / FIX-180) instead of looping forever.
         retry_delays = [5, 15, 45]  # seconds
         retry_attempt = 0
+        deadline = now_ist() + timedelta(hours=_HARD_KILL_MAX_RETRY_HOURS)
+        flat_resolved = 0  # trades found already flat at broker (no re-fire)
 
         while failed_trades:
+            # Part 11: stop retrying after the deadline; escalate and report the
+            # remaining trades as failed rather than freezing the thread forever.
+            if now_ist() >= deadline:
+                self._log.critical(
+                    "kill_switch: max retry duration (%.1fh) exceeded; %d trades "
+                    "still unexited — escalating, MANUAL INTERVENTION REQUIRED",
+                    _HARD_KILL_MAX_RETRY_HOURS, len(failed_trades),
+                )
+                self._alert_exit_failed(failed_trades)
+                remaining = [t[0] for t in failed_trades]
+                return CancellationReport(
+                    attempted=attempted,
+                    succeeded=attempted - len(remaining),
+                    failed=remaining,
+                )
+
             delay = retry_delays[min(retry_attempt, len(retry_delays) - 1)]
             self._log.critical(
                 "kill_switch: retrying %d failed trades in %ds (attempt %d)",
@@ -769,6 +873,18 @@ class KillSwitch:
 
             still_failed = []
             for trade_id, symbol, exit_side, qty, intent in failed_trades:
+                # Part 11: broker-flat pre-check. If the position is already flat
+                # (closed manually at broker, or a prior exit filled), do NOT
+                # place another order — that would open a new naked position.
+                # Drop it; order_reconciler CHECK 1 will close the trade row and
+                # release capital properly on its next cycle (avoids double-release).
+                if self._is_position_flat(symbol):
+                    self._log.info(
+                        "kill_switch: trade %s (%s) already flat at broker; "
+                        "resolved without re-firing exit", trade_id, symbol,
+                    )
+                    flat_resolved += 1
+                    continue
                 try:
                     order_result = self._adapter.place_order(
                         symbol=symbol,
@@ -803,6 +919,6 @@ class KillSwitch:
 
             failed_trades = still_failed
 
-        # All trades successfully exited
+        # All trades exited or confirmed flat at broker.
         succeeded = attempted
         return CancellationReport(attempted=attempted, succeeded=succeeded, failed=[])

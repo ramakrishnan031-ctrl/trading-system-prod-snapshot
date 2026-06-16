@@ -492,6 +492,15 @@ class OrderReconciler:
             except BrokerAuthError:
                 self._note_auth_error(cycle_auth_errors)
 
+        # Bug 3 (FIX-180): checks 1-5 above can transition trades to
+        # CLOSED_MANUAL / PARTIAL in the DB *this same cycle* (e.g. CHECK 1
+        # manual-close when the broker position is gone). The SL-placement
+        # logic below (check9 missing-exits, G5b crash-recovery) must NOT act
+        # on the stale snapshot taken at the top of the cycle — otherwise it
+        # places recovery SL orders on positions that were just reconciled
+        # closed. Re-query fresh so closed trades drop out of the working set.
+        local_trades = self._store.get_all_open_trades()
+
         # FIX-002: MISSING_EXITS — OPEN trade has SL in local DB but not on broker
         # Runs before G5b so naked positions are caught before recovery attempts.
         if self._broker_orders_fn is not None and raw_positions is not None:
@@ -689,6 +698,22 @@ class OrderReconciler:
                 )
                 steps.append(f"capital_release FAILED: {exc}")
             else:
+                # Bug 4 (FIX-180): persist exit financials onto the trade row so
+                # trades.net_pnl matches fm_ledger.pnl_delta. RMS/manual closes
+                # pass costs=0.0 above, so gross==net and charges=0.0.
+                try:
+                    self._store.record_manual_close_financials(
+                        trade_id=trade_id,
+                        exit_price=float(exit_price),
+                        net_pnl=float(release_result.pnl_delta),
+                    )
+                    steps.append("trade_financials_recorded")
+                except Exception as exc:
+                    log.warning(
+                        "check1: record_manual_close_financials failed for %s: %s",
+                        trade_id, exc,
+                    )
+                    steps.append(f"trade_financials FAILED: {exc}")
                 try:
                     self._bus.publish(PositionClosed(
                         source_module="order_reconciler",
