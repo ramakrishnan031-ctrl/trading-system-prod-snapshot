@@ -183,10 +183,13 @@ class OrderReconciler:
         # the G3 capital-drift tolerance so they don't spam CRITICAL alerts.
         self._human_order_symbols: set[str] = set()
         self._human_order_date: Optional[date] = None
-        # Default Rs 5000 if cfg omits it (back-compat with older configs).
-        self._human_order_margin_tolerance: float = float(
-            getattr(cfg, "human_order_margin_tolerance", 5000.0)
-        )
+        # Default Rs 5000 if cfg omits it (back-compat with older configs) or
+        # if cfg is a test mock whose attribute isn't a real number.
+        _hot = getattr(cfg, "human_order_margin_tolerance", 5000.0)
+        try:
+            self._human_order_margin_tolerance: float = float(_hot)
+        except (TypeError, ValueError):
+            self._human_order_margin_tolerance = 5000.0
 
     # ── Public API ────────────────────────────────────────────────────────────
 
