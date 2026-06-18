@@ -43,6 +43,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `scan_webhook_map.yaml` | Chartink scan → strategy mapping | `signals/webhook_receiver.py` |
 | `chartink_scanners.yaml` | Scanner definitions | screening/signals |
 | `nse_holidays_2026.yaml` | Trading-holiday calendar | `core/market_windows.py` |
+| `cron_registry.yaml` | **Cron job source of truth** (30 jobs; TASK #3) | `core/cron_registry.py` → `cron_officer`, `check_cron_drift` |
 | `symbol_aliases.yaml` | Symbol normalization | instrument resolution |
 | `accounts.csv` | Account registry (LFL836 primary, paper_capital, env-var names) | `core/account_registry.py` |
 | `accounts_multi_example.csv` | Template/example (NOT loaded) | — |
@@ -64,7 +65,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 ### Python Modules (role per package)
 | Package | Role | Key modules |
 |---|---|---|
-| `core/` | Infra: config, DB, events, time, IDs | config_loader, state_store, db_connect, events, logger, time_authority, market_windows, instrument_cache, account_registry, migrations, constants, schema.sql |
+| `core/` | Infra: config, DB, events, time, IDs | config_loader, cron_registry, state_store, db_connect, events, logger, time_authority, market_windows, instrument_cache, account_registry, migrations, constants, schema.sql |
 | `broker/` | Broker integration + polling | zerodha_adapter, angelone_adapter, order_monitor (2s fill poll), order_state_machine, rate_limiter, cost_calculator, slippage_engine, product_resolver, token_monitor, clock_skew_probe |
 | `capital/` | Capital, risk, kill-switch | fund_manager, position_sizer, risk_engine, kill_switch, drift_handler, invariant, performance_allocator, shadow_engine, strategy_governor |
 | `orders/` | Order lifecycle | order_placer, order_reconciler (15s), order_manager, eod_squareoff, smart_tgt_manager, breakeven_manager, sl_breach_monitor, entry_engine, full_entry_engine, order_protocol_co, order_protocol_limit, price_math, shadow_tracker |
@@ -75,7 +76,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `strategies/` | Strategy config | loader, schema |
 | `utils/` | Utilities/preflight | startup_checks, holiday_guard, instance_lock, cron_heartbeat |
 | `reports/` | Reporting | daily_report, daily_review, style_constants |
-| `scripts/` | 36 ops/cron scripts | incl. 6 `gemini_*.py` (AI ops), auto_refresh_token, premarket_healthcheck, reconcile_positions/pnl, eod_cleanup/verify, etc. |
+| `scripts/` | 37 ops/cron scripts | incl. `cron_officer.py` (TASK #3 briefing/eod/check-change), 6 `gemini_*.py` (AI ops), auto_refresh_token, premarket_healthcheck, reconcile_positions/pnl, eod_cleanup/verify, etc. |
 | `tests/` | 305 test files | unit/, integration/, crash_test/ |
 | `main.py` (root) | App entrypoint | launched as `main.py --mode live` |
 
@@ -123,16 +124,20 @@ VM:  bare repo post-receive hook  →  git checkout -f  →  /home/ubuntu/system
 
 ---
 
-## Cron Jobs  (live `crontab -l`, ~28 jobs; canonical copy: `deploy/cron/trading-system.cron`)
+## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, 33 lines; **source of truth: `config/cron_registry.yaml`** — TASK #3)
 All market jobs run `cd … && . .env && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
+To change cron: edit `config/cron_registry.yaml` → regenerate the file → `crontab deploy/cron/trading-system.cron`.
 
 | Time (IST) | Days | Script | Purpose |
 |---|---|---|---|
 | 00:00 | daily | `find logs -mtime +30 -delete` | log cleanup |
 | 01:00 | daily | sqlite3 `.backup` trading_system.db | nightly DB backup |
-| 02:00 | daily | `find backups -mtime +7 -delete` | backup retention |
+| 01:05 | daily | sqlite3 `.backup` analytics.db | analytics DB backup (TASK #3) |
+| 02:00 | daily | `find backups -mtime +7 -delete` (both DBs) | backup retention |
+| 02:30 | daily | `db_retention.py` (Sun: `--vacuum`) | DB row prune (TASK #3) |
+| 04:55 | daily | `cron_officer.py --briefing` | Cron Officer morning briefing (TASK #3) |
 | 05:00 | daily | `rm session/zerodha_token.json` | force fresh login |
-| 08:00 | Mon-Fri | `auto_refresh_token.py` | Headless TOTP token refresh (FIX-187; no manual OTP) |
+| 08:15 | Mon-Fri | `auto_refresh_token.py` | Headless TOTP token refresh (FIX-187; no manual OTP) |
 | 08:30 | Mon-Fri | `premarket_healthcheck.py` | preflight health |
 | 08:35 | Mon-Fri | `fetch_fno_ban.py` | F&O ban list |
 | 08:55 | Mon-Fri | `gemini_premarket_brief.py` | AI premarket brief |
@@ -153,12 +158,15 @@ All market jobs run `cd … && . .env && PYTHONPATH=. venv/bin/python <script> >
 | 16:40 | Mon-Fri | `gemini_trade_coach.py` | AI trade coaching |
 | 17:00 | Mon-Fri | `gemini_data_integrity_check.py` | candle integrity |
 | 18:00 | Sun | `gemini_weekly_patterns.py` | weekly patterns |
-| 18:00 | Mon-Fri | `check_cron_drift.py` | cron heartbeat drift |
+| 18:00 | Mon-Fri | `check_cron_drift.py` | cron heartbeat drift (registry-driven) |
+| 18:30 | Mon-Fri | `cron_officer.py --eod-summary` | Cron Officer EOD report (TASK #3) |
 | 03:00 | 1st of month | `backup_restore_drill.py --quiet` | restore drill |
 | hourly | every | `disk_monitor.py` | disk space |
 
-> ⚠️ The **live crontab diverges** from `deploy/cron/trading-system.cron` (the committed canonical
-> copy). See Known Issues — reconcile before relying on either as truth.
+> ✅ **Synced (TASK #3, 18-Jun):** the live crontab now equals `deploy/cron/trading-system.cron`,
+> which is generated from `config/cron_registry.yaml` (the source of truth). The Cron Officer
+> (`scripts/cron_officer.py --check-change`) flags any future drift. Old crontab backed up to
+> `data_store/crontab_backups/`.
 
 ## Systemd Services  (`/etc/systemd/system/`)
 | Service | ExecStart | Purpose | Notes |
@@ -173,10 +181,11 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 ---
 
 ## Known Duplicates / Issues  (audit 2026-06-18; cleanup applied same day)
-1. **[OPEN] Live crontab ≠ `deploy/cron/trading-system.cron`** — e.g. live runs `refresh_instruments`
-   09:00 Mon-Fri; committed copy has it 18:00 Sun, plus the committed copy has analytics.db
-   backup (01:05) and `db_retention.py` (02:30) jobs that the live crontab does **not** show.
-   → Reconcile and re-sync the canonical file.
+1. ~~Live crontab ≠ `deploy/cron/trading-system.cron`~~ — **RESOLVED 2026-06-18 (TASK #3)**: the
+   registry `config/cron_registry.yaml` is now the source of truth; the canonical file was regenerated
+   and **installed** (`crontab deploy/cron/trading-system.cron`) — live == file (33 lines). The
+   previously-missing analytics.db backup (01:05) + `db_retention` (02:30) were added; `auto_refresh_token`
+   moved 08:00→08:15. Old crontab backed up to `data_store/crontab_backups/`.
 2. **[PARTIAL] `trading-system.service` down (kill switch SOFT_KILL)** — the crash-loop is FIXED
    (18-Jun: `RestartPreventExitStatus=3 4`, so an exit-4 HALT no longer hammer-restarts; service now
    settles to `failed`). Underlying still OPEN: the SOFT_KILL was auto-tripped by the Kite IP allowlist
@@ -233,3 +242,12 @@ inactive alert-watcher).
   live** (token valid + `kite.profile()` OK + heartbeat SUCCESS). TOTP secret is the per-account
   `ZERODHA_TOTP_<acct>` in `.env` (single source of truth; a stale/duplicate `ZERODHA_TOTP_SECRET`
   was removed). Commit ff0984b.
+- 2026-06-18 — Claude Code — TASK #3: **Cron Officer**. New `config/cron_registry.yaml` (single source
+  of truth, 30 jobs) + `core/cron_registry.py` loader; `scripts/cron_officer.py` (`--briefing` 04:55,
+  `--eod-summary` 18:30, `--check-change`); `check_cron_drift.py` now registry-driven (hardcoded list
+  removed). Universal heartbeats via `HeartbeatTimer(alert=True)` (8 silent jobs instrumented) +
+  `alerts/cron_alerts.py` per-job alert policy (reuses TelegramNotifier tiers; honors the master switch)
+  + `skip_if_non_trading_day()` holiday guard. **Crontab regenerated + installed** (live == canonical,
+  33 lines): `auto_refresh_token` 08:00→08:15; +`cron_officer` briefing/eod; +analytics.db backup (01:05);
+  +`db_retention` (02:30 + Sun VACUUM, activated); backup-retention now covers analytics. Old crontab
+  backed up to `data_store/crontab_backups/`. 40 new tests. Commits …→6fd0ed9.
