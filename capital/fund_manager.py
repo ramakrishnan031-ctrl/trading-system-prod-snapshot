@@ -1174,6 +1174,22 @@ class FundManager:
         with self._lock:
             return dict(self._reservations)
 
+    def count_live_reservations(self) -> int:
+        """Return the number of live (uncommitted) entry reservations (FIX-185).
+
+        Every accepted entry holds exactly one reservation from reserve() until
+        the entry FILLS (commit pops it as the trade flips to OPEN) or fails
+        (release pops it). So this count is the authoritative number of in-flight
+        positions that have reserved capital but are NOT yet OPEN/PARTIAL — i.e.
+        reserved-but-not-placed plus PENDING_FILL. The risk_engine OPEN_POSITIONS
+        check uses it as a TOCTOU-proof hard-cap input that does not depend on the
+        signal_processor's in-memory in-flight snapshot (which can under-count in
+        a restart burst). Read under self._lock; callers already holding
+        portfolio_lock (an RLock) re-acquire it safely.
+        """
+        with self._lock:
+            return len(self._reservations)
+
     def get_snapshot(self) -> CapitalSnapshot:
         """Return a frozen, consistent point-in-time view of capital state (FM8).
 

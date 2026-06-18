@@ -234,6 +234,10 @@ class _MockFundManager:
         """FIX-035: Return total unrealized MTM."""
         return 0.0
 
+    def count_live_reservations(self):
+        """FIX-185: authoritative in-flight count (no live reservations in mock)."""
+        return 0
+
 
 class _MockOrderPlacer:
     def __init__(self, raise_exc=None):
@@ -260,7 +264,12 @@ class _MockKillSwitch:
     def is_active(self, intent="entry"):
         return self._active
 
-    def record_api_failure(self):
+    def record_api_failure(self, exc=None):
+        # FIX-185: mirror real KillSwitch — BrokerAuthError (config/permission,
+        # e.g. 403 IP-not-allowed) does NOT count toward the auto-trip counter.
+        from core.exceptions import BrokerAuthError
+        if isinstance(exc, BrokerAuthError):
+            return
         self.failure_count += 1
 
     def record_success(self):

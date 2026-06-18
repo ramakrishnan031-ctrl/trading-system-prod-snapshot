@@ -65,6 +65,7 @@ _HARD_KILL_MAX_RETRY_HOURS = 2.0
 # Per-trade Telegram dedup window for the "exit failed" escalation alert.
 _EXIT_ALERT_DEDUP_SEC = 300.0
 from core.events import EventBus, KillSwitchActivated
+from core.exceptions import BrokerAuthError
 from core.time_authority import now_ist
 
 if TYPE_CHECKING:
@@ -513,14 +514,30 @@ class KillSwitch:
             reason, resumed_by, prev_state.value,
         )
 
-    def record_api_failure(self) -> None:
+    def record_api_failure(self, exc: Optional[BaseException] = None) -> None:
         """
         Increment the consecutive API failure counter.
         If counter reaches api_failure_threshold AND enable_auto_trip is True
         AND state is currently INACTIVE, auto-trigger soft_kill() (KS7).
         The RLock (KS4) prevents deadlock when soft_kill() re-acquires the lock
         from within the same thread.
+
+        FIX-185: a BrokerAuthError (auth/permission, e.g. Zerodha 403 "IP not
+        allowed to place orders") is a CONFIGURATION/credential problem, not the
+        kind of transient API failure this consecutive-failure circuit breaker is
+        meant for. Retrying never clears it, so counting it toward the auto-trip
+        only produces a misleading "consecutive API failures" SOFT_KILL (which on
+        the 18-Jun IP-allowlist incident then HALT-crash-looped the service on
+        restart). Such errors are surfaced via CRITICAL logs/alerts at the call
+        site and must NOT increment the counter. Callers forward the caught
+        exception; ``exc=None`` preserves the legacy "always count" behaviour.
         """
+        if isinstance(exc, BrokerAuthError):
+            self._log.critical(
+                "record_api_failure: BrokerAuthError NOT counted toward auto-trip "
+                "(config/credential error, not a transient API failure): %s", exc,
+            )
+            return
         with self._lock:
             self._api_failure_count += 1
             if (

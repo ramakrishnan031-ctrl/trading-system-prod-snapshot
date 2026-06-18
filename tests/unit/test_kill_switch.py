@@ -471,6 +471,38 @@ def test_record_api_failure_auto_trips(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix185_broker_auth_error_not_counted(tmp_path: Path) -> None:
+    """FIX-185: BrokerAuthError (403/permission) must NOT count toward auto-trip.
+
+    The 18-Jun incident: a VM IP change left the Zerodha dev-console allowlist
+    stale, so every place_order returned 403 PermissionException -> BrokerAuthError.
+    Counting those as 'consecutive API failures' SOFT_KILLed the session (then
+    HALT-crash-looped on restart). A config/credential error must not trip the
+    transient-failure breaker — but genuine transient failures still must.
+    """
+    from core.exceptions import BrokerAuthError, BrokerTimeoutError
+
+    store = _make_store(tmp_path)
+    ks, _, _ = _make_ks(store, threshold=3, auto_trip=True)
+
+    # 5 auth errors -> still INACTIVE (not counted)
+    for _ in range(5):
+        ks.record_api_failure(BrokerAuthError("IP not allowed to place orders"))
+    assert ks.current_state() == KillState.INACTIVE, \
+        "BrokerAuthError must not count toward the auto-trip"
+
+    # A transient error still counts, and auth errors interleaved do not reset it
+    ks.record_api_failure(BrokerTimeoutError("read timeout"))      # count=1
+    ks.record_api_failure(BrokerAuthError("403 again"))            # ignored
+    ks.record_api_failure(BrokerTimeoutError("read timeout"))      # count=2
+    assert ks.current_state() == KillState.INACTIVE
+    ks.record_api_failure(BrokerTimeoutError("read timeout"))      # count=3 -> trips
+    assert ks.current_state() == KillState.SOFT_KILL, \
+        "genuine transient failures must still auto-trip"
+    print("  OK FIX-185: BrokerAuthError excluded; transient failures still trip")
+    store.close()
+
+
 def test_record_success_resets_counter(tmp_path: Path) -> None:
     """record_success() resets the failure counter; no auto-trip occurs."""
     store = _make_store(tmp_path)
@@ -913,6 +945,7 @@ def run_all_tests() -> int:
         test_resume_from_inactive_raises,
         test_resume_empty_triggered_by_raises,
         test_record_api_failure_auto_trips,
+        test_fix185_broker_auth_error_not_counted,
         test_record_success_resets_counter,
         test_enable_auto_trip_false_no_auto_trip,
         test_get_kill_info_has_all_fields,

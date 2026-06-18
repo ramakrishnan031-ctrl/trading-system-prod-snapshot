@@ -354,6 +354,10 @@ class _MockFundManager:
     def get_total_unrealized_mtm(self) -> float:
         return 0.0
 
+    def count_live_reservations(self) -> int:
+        """FIX-185: authoritative in-flight count (none in this mock)."""
+        return 0
+
 
 def _snap() -> CapitalSnapshot:
     return CapitalSnapshot(

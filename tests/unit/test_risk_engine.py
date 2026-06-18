@@ -62,10 +62,11 @@ class _MockKillSwitch:
 
 
 class _MockFundManager:
-    """Minimal fund manager double — only get_snapshot() used by risk_engine."""
+    """Minimal fund manager double — get_snapshot() + count_live_reservations()."""
     def __init__(self, snap: CapitalSnapshot) -> None:
         self._snap = snap
         self._unrealized_mtm = 0.0
+        self._live_reservations = 0  # FIX-185: authoritative in-flight count
 
     def get_snapshot(self) -> CapitalSnapshot:
         return self._snap
@@ -73,6 +74,10 @@ class _MockFundManager:
     def get_total_unrealized_mtm(self) -> float:
         """FIX-035: Return total unrealized MTM."""
         return self._unrealized_mtm
+
+    def count_live_reservations(self) -> int:
+        """FIX-185: authoritative count of uncommitted entry reservations."""
+        return self._live_reservations
 
 
 class _CapturingHandler(logging.Handler):
@@ -393,6 +398,64 @@ def test_open_positions_counts_in_flight(tmp_path: Path) -> None:
     assert result.snapshot["open_count"] == 0
     assert result.snapshot["in_flight_count"] == 2
     print(f"  OK in-flight counted in OPEN_POSITIONS: {result.snapshot}")
+    store.close()
+
+
+def test_fix185_hard_cap_burst_via_reservations(tmp_path: Path) -> None:
+    """FIX-185: cap is hard even when processor_in_flight UNDER-counts (restart burst).
+
+    Models the 18-Jun overshoot: a burst of signals is admitted at restart and
+    several have RESERVED (fund_manager holds their reservations) but not yet
+    inserted trade rows, while signal_processor's in-flight snapshot is stale and
+    under-counts. The legacy check (active_count=0 + processor_in_flight=1 = 1)
+    would WRONGLY allow a 4th position past max=3. The authoritative live-
+    reservation count (3) makes the cap hold.
+    """
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_open=3)
+
+    # DB shows ZERO active trades (burst: rows not inserted yet)...
+    # ...but fund_manager holds 3 live reservations for the in-flight entries.
+    fm._live_reservations = 3
+
+    # Stale/under-counted snapshot from signal_processor (the bug being fixed).
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
+
+    assert not result.approved, "cap must hold via authoritative reservation count"
+    assert result.failed_check == "OPEN_POSITIONS"
+    assert "live_reservations=3" in result.reason
+    print(f"  OK FIX-185 hard cap via reservations: {result.reason}")
+    store.close()
+
+
+def test_fix185_reservations_allow_final_slot(tmp_path: Path) -> None:
+    """FIX-185: the authoritative count still permits the legitimate final slot.
+
+    max=3, DB empty, 2 reservations in flight + this candidate = 3 == max -> ALLOW
+    (the FIX-181 off-by-one fix must survive: the cap holds AT the limit, not one
+    below it).
+    """
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_open=3)
+
+    fm._live_reservations = 2  # 2 in-flight reserved + candidate = 3 == max
+
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
+
+    assert result.approved, f"final slot must be allowed, got: {result.reason}"
+    print("  OK FIX-185 final slot allowed (off-by-one preserved)")
     store.close()
 
 
@@ -960,6 +1023,8 @@ def run_all_tests() -> int:
         test_capital_insufficient_positional,
         test_open_positions_at_limit,
         test_open_positions_counts_in_flight,
+        test_fix185_hard_cap_burst_via_reservations,
+        test_fix185_reservations_allow_final_slot,
         test_daily_trades_at_limit,
         test_consecutive_losses_at_limit,
         test_breakeven_not_counted_as_loss,

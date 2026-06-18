@@ -595,7 +595,7 @@ class SignalProcessor:
                 )
             except BrokerError as be:
                 if self._ks:
-                    self._ks.record_api_failure()
+                    self._ks.record_api_failure(be)
                 raise _PipelineReject("SIZING_BROKER_ERROR", str(be)) from be
 
             if not sizing.success:
@@ -641,7 +641,7 @@ class SignalProcessor:
                     )
                 except BrokerError as be:
                     if self._ks:
-                        self._ks.record_api_failure()
+                        self._ks.record_api_failure(be)
                     raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
 
                 if not approval.approved:
@@ -653,7 +653,7 @@ class SignalProcessor:
                     )
                 except BrokerError as be:
                     if self._ks:
-                        self._ks.record_api_failure()
+                        self._ks.record_api_failure(be)
                     raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
 
                 if not reservation.success:
@@ -777,7 +777,7 @@ class SignalProcessor:
                 # or rate-limited. Re-queue signal for retry but keep lock held to
                 # prevent duplicate admission. Max 3 retries (45s total with 15s delays).
                 if self._ks:
-                    self._ks.record_api_failure()
+                    self._ks.record_api_failure(transient_err)
 
                 if retry_count >= 3:
                     # Max retries exhausted - mark as failed and release lock
@@ -821,7 +821,7 @@ class SignalProcessor:
                     raise  # Let outer handler mark PLACEMENT_FAILED
             except BrokerError as be:
                 if self._ks:
-                    self._ks.record_api_failure()
+                    self._ks.record_api_failure(be)
                 raise  # caught by outer except below
             except Exception:
                 raise  # caught by outer except below
@@ -1225,7 +1225,7 @@ class SignalProcessor:
                 )
             except BrokerError as be:
                 if self._ks:
-                    self._ks.record_api_failure()
+                    self._ks.record_api_failure(be)
                 raise _PipelineReject("SIZING_BROKER_ERROR", str(be)) from be
 
             if not sizing.success:
@@ -1264,7 +1264,7 @@ class SignalProcessor:
                     )
                 except BrokerError as be:
                     if self._ks:
-                        self._ks.record_api_failure()
+                        self._ks.record_api_failure(be)
                     raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
 
                 if not approval.approved:
@@ -1276,7 +1276,7 @@ class SignalProcessor:
                     )
                 except BrokerError as be:
                     if self._ks:
-                        self._ks.record_api_failure()
+                        self._ks.record_api_failure(be)
                     raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
 
                 if not reservation.success:
@@ -1354,7 +1354,7 @@ class SignalProcessor:
                 reservation_id = None   # placer owns it now
             except BrokerError as be:
                 if self._ks:
-                    self._ks.record_api_failure()
+                    self._ks.record_api_failure(be)
                 raise
             except Exception:
                 raise

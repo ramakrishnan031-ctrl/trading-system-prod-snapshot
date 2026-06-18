@@ -348,12 +348,37 @@ class RiskEngine:
         # max_open means "candidate + (max_open - 1) existing" = max_open total
         # -> ALLOW. Only active_total > max_open exceeds the cap. The previous
         # `>=` rejected the legitimate final slot (max=3 only ever held 2).
-        active_total = active_count + processor_in_flight_count
-        if active_total > self._max_open:
+        legacy_total = active_count + processor_in_flight_count
+
+        # FIX-185 (hard cap / restart-burst TOCTOU): the processor_in_flight
+        # snapshot is taken in signal_processor at increment time, BEFORE the
+        # candidate acquires portfolio_lock, so a burst of signals admitted at
+        # restart could under-count it and let the cap be exceeded (observed: 6
+        # open vs max 5 on the 18-Jun restart). Add an AUTHORITATIVE in-flight
+        # count that does not rely on that snapshot: every accepted entry holds a
+        # fund_manager reservation from reserve() until the entry FILLS (commit
+        # pops it exactly as status flips to OPEN). So OPEN/PARTIAL (open_count)
+        # and live reservations (reserve->fill, includes reserved-not-placed and
+        # PENDING_FILL) partition all in-flight/open positions with no overlap and
+        # no gap. active_count (DB truth, includes PENDING_FILL) is kept as a
+        # floor so a PENDING_FILL row whose in-memory reservation was lost across
+        # a restart is still counted. approve() runs inside portfolio_lock, so
+        # this read is consistent with reserve(). +1 for THIS candidate (it has
+        # not reserved or inserted yet). max() with legacy_total => can only ever
+        # HARDEN the cap, never loosen it (no regression risk).
+        # getattr guard: a fund_manager implementation predating FIX-185 degrades
+        # gracefully to the legacy snapshot-only cap rather than crashing.
+        _count_res = getattr(self._fm, "count_live_reservations", None)
+        reserved_inflight = _count_res() if callable(_count_res) else 0
+        authoritative_total = max(open_count + reserved_inflight, active_count) + 1
+
+        effective_total = max(legacy_total, authoritative_total)
+        if effective_total > self._max_open:
             return reject(
                 "OPEN_POSITIONS",
-                f"Position cap reached: {active_total} active "
+                f"Position cap reached: {effective_total} active "
                 f"(db_active[open+partial+pending_fill]={active_count}, "
+                f"open_partial={open_count}, live_reservations={reserved_inflight}, "
                 f"processor_in_flight={processor_in_flight_count}), "
                 f"max={self._max_open}",
             )
