@@ -41,6 +41,11 @@ from capital.fund_manager import CapitalSnapshot
 from capital.position_sizer import SizingResult
 from capital.risk_engine import ApprovalResult, RiskEngine
 from core.state_store import StateStore
+from core.time_authority import now_ist
+
+# FIX-183: the CONSECUTIVE_LOSSES streak is now scoped to the current IST trading
+# day, so streak tests must date their closed trades TODAY (not a fixed past day).
+_TODAY = now_ist().date().isoformat()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,10 +432,10 @@ def test_consecutive_losses_at_limit(tmp_path: Path) -> None:
     ks = _MockKillSwitch(active=False)
     engine = _make_engine(store, fm, handler, kill_switch=ks, max_consec=3)
 
-    # Insert 3 consecutive closed losses (most recent first by exit_time)
-    _insert_trade(store, "t1", status="CLOSED", net_pnl=-100.0, exit_time="2026-04-14T10:00:00+05:30")
-    _insert_trade(store, "t2", status="CLOSED", net_pnl=-200.0, exit_time="2026-04-14T11:00:00+05:30")
-    _insert_trade(store, "t3", status="CLOSED", net_pnl=-150.0, exit_time="2026-04-14T12:00:00+05:30")
+    # Insert 3 consecutive closed losses TODAY (most recent first by exit_time)
+    _insert_trade(store, "t1", status="CLOSED", net_pnl=-100.0, exit_time=f"{_TODAY}T10:00:00+05:30")
+    _insert_trade(store, "t2", status="CLOSED", net_pnl=-200.0, exit_time=f"{_TODAY}T11:00:00+05:30")
+    _insert_trade(store, "t3", status="CLOSED", net_pnl=-150.0, exit_time=f"{_TODAY}T12:00:00+05:30")
 
     result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
 
@@ -453,9 +458,9 @@ def test_breakeven_not_counted_as_loss(tmp_path: Path) -> None:
     engine = _make_engine(store, fm, handler, kill_switch=ks, max_consec=3)
 
     # Most recent trade is breakeven (should break the streak)
-    _insert_trade(store, "t1", status="CLOSED", net_pnl=-500.0, exit_time="2026-04-14T09:30:00+05:30")
-    _insert_trade(store, "t2", status="CLOSED", net_pnl=-500.0, exit_time="2026-04-14T10:00:00+05:30")
-    _insert_trade(store, "t3", status="CLOSED", net_pnl=-1e-7,  exit_time="2026-04-14T11:00:00+05:30")  # breakeven: -0.1 micro
+    _insert_trade(store, "t1", status="CLOSED", net_pnl=-500.0, exit_time=f"{_TODAY}T09:30:00+05:30")
+    _insert_trade(store, "t2", status="CLOSED", net_pnl=-500.0, exit_time=f"{_TODAY}T10:00:00+05:30")
+    _insert_trade(store, "t3", status="CLOSED", net_pnl=-1e-7,  exit_time=f"{_TODAY}T11:00:00+05:30")  # breakeven: -0.1 micro
 
     pnls = store.recent_trade_pnls(5)
     # Most recent is -1e-7, which is >= -1e-6, so streak resets to 0
@@ -481,9 +486,9 @@ def test_zero_pnl_not_counted_as_loss(tmp_path: Path) -> None:
     ks = _MockKillSwitch(active=False)
     engine = _make_engine(store, fm, handler, kill_switch=ks, max_consec=3)
 
-    _insert_trade(store, "t1", status="CLOSED", net_pnl=-300.0, exit_time="2026-04-14T09:00:00+05:30")
-    _insert_trade(store, "t2", status="CLOSED", net_pnl=-300.0, exit_time="2026-04-14T10:00:00+05:30")
-    _insert_trade(store, "t3", status="CLOSED", net_pnl=0.0,    exit_time="2026-04-14T11:00:00+05:30")
+    _insert_trade(store, "t1", status="CLOSED", net_pnl=-300.0, exit_time=f"{_TODAY}T09:00:00+05:30")
+    _insert_trade(store, "t2", status="CLOSED", net_pnl=-300.0, exit_time=f"{_TODAY}T10:00:00+05:30")
+    _insert_trade(store, "t3", status="CLOSED", net_pnl=0.0,    exit_time=f"{_TODAY}T11:00:00+05:30")
 
     result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
 

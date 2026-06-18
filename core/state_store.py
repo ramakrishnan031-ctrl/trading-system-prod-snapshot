@@ -674,21 +674,43 @@ class StateStore:
         )
         return row["direction"] if row else None
 
-    def recent_trade_pnls(self, n: int) -> List[float]:
+    def recent_trade_pnls(self, n: int, today: Optional[str] = None) -> List[float]:
         """
         Return the net_pnl values of the n most recently closed trades,
         ordered most-recent-first. Excludes rows where net_pnl IS NULL.
         Used by risk_engine CONSECUTIVE_LOSSES check (RE5, RE10).
+
+        FIX-183: when ``today`` (an IST date string, YYYY-MM-DD) is given, the
+        streak is scoped to that trading day only — matching the daily reset of
+        DAILY_LOSS / DAILY_TRADES. A consecutive-loss streak that carried across
+        days was a deadlock: it blocks entries, and breaking the streak requires
+        a winning trade, which an entry block makes impossible (the morning after
+        a 2-loss EOD, every signal was rejected). Day-scoping (SUBSTR(exit_time,
+        1, 10) mirrors count_trades_today) keeps the within-day circuit breaker
+        while letting each new day start clean. ``today=None`` preserves the
+        legacy cross-day behaviour for callers/tests that want it.
         """
-        rows = self.fetch_all(
-            """
-            SELECT net_pnl FROM trades
-            WHERE status IN ('CLOSED', 'CLOSED_MANUAL') AND net_pnl IS NOT NULL
-            ORDER BY exit_time DESC
-            LIMIT ?
-            """,
-            (n,),
-        )
+        if today is not None:
+            rows = self.fetch_all(
+                """
+                SELECT net_pnl FROM trades
+                WHERE status IN ('CLOSED', 'CLOSED_MANUAL') AND net_pnl IS NOT NULL
+                  AND SUBSTR(exit_time, 1, 10) = ?
+                ORDER BY exit_time DESC
+                LIMIT ?
+                """,
+                (today, n),
+            )
+        else:
+            rows = self.fetch_all(
+                """
+                SELECT net_pnl FROM trades
+                WHERE status IN ('CLOSED', 'CLOSED_MANUAL') AND net_pnl IS NOT NULL
+                ORDER BY exit_time DESC
+                LIMIT ?
+                """,
+                (n,),
+            )
         return [float(row["net_pnl"]) for row in rows]
 
     # ─────────────────────────────────────────────────────────────────────────

@@ -210,7 +210,10 @@ class RiskEngine:
         daily_count = self._store.count_trades_today(today)
 
         # Consecutive loss streak (RE10)
-        pnls = self._store.recent_trade_pnls(self._max_consec + 1)
+        # FIX-183: scope the streak to TODAY. A cross-day streak was a deadlock —
+        # it blocks entries, but breaking it needs a winning trade, which the
+        # block makes impossible (yesterday's 2-loss EOD halted all signals today).
+        pnls = self._store.recent_trade_pnls(self._max_consec + 1, today=today)
         consec = self._count_trailing_losses(pnls)
 
         # Sector lookup — RE9: exception → "UNKNOWN", log WARNING, do not reject

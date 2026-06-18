@@ -691,6 +691,39 @@ def test_recent_trade_pnls(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix183_recent_trade_pnls_day_scoped(tmp_path: Path) -> None:
+    """
+    FIX-183: recent_trade_pnls(n, today=...) scopes the streak to one IST day.
+
+    Reproduces the live deadlock: yesterday ended on 2 losses; today has no
+    closed trades. The cross-day call still sees the 2 losses (legacy behaviour),
+    but the day-scoped call for today returns [] -> streak resets to 0.
+    """
+    store = StateStore(tmp_path / "test.db")
+
+    # Yesterday: two losses (would trip max_consecutive_losses=2)
+    insert_test_trade(store, "y1", status="CLOSED", net_pnl=-20.14,
+                      exit_time="2026-06-17T15:15:00+05:30")
+    insert_test_trade(store, "y2", status="CLOSED_MANUAL", net_pnl=-0.64,
+                      exit_time="2026-06-17T15:17:00+05:30")
+
+    # Legacy (today=None): still sees yesterday's losses -> would block
+    assert store.recent_trade_pnls(3) == [-0.64, -20.14]
+
+    # Day-scoped to today (no closed trades yet) -> clean slate
+    assert store.recent_trade_pnls(3, today="2026-06-18") == []
+
+    # Day-scoped to yesterday -> still both losses
+    assert store.recent_trade_pnls(3, today="2026-06-17") == [-0.64, -20.14]
+
+    # A loss closed today IS counted under today
+    insert_test_trade(store, "t1", status="CLOSED", net_pnl=-5.0,
+                      exit_time="2026-06-18T09:45:00+05:30")
+    assert store.recent_trade_pnls(3, today="2026-06-18") == [-5.0]
+    print("  OK FIX-183 recent_trade_pnls day-scoped")
+    store.close()
+
+
 def test_fix156_recent_trade_pnls_includes_closed_manual(tmp_path: Path) -> None:
     """FIX-156: recent_trade_pnls includes CLOSED_MANUAL trades (orphan cleanup)."""
     store = StateStore(tmp_path / "test.db")
@@ -1971,6 +2004,8 @@ def run_all_tests() -> int:
         test_sector_exposure,
         test_has_active_position,
         test_recent_trade_pnls,
+        # FIX-183: consecutive-loss streak day-scoping
+        test_fix183_recent_trade_pnls_day_scoped,
         # FIX-156: CLOSED_MANUAL PnL inclusion
         test_fix156_recent_trade_pnls_includes_closed_manual,
         test_fix156_get_today_closed_pnl_includes_closed_manual,
