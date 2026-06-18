@@ -63,6 +63,11 @@ from alerts.critical import (
 )
 from core.config_loader import load_all
 
+# Broker account tag for alert subjects (the locked primary account in
+# config/accounts.csv, is_primary=TRUE). Surfaced in every alert subject so the
+# recipient can identify the account at a glance: "[LFL836] CRITICAL — <title>".
+_ACCOUNT_TAG = "LFL836"
+
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 
@@ -170,30 +175,26 @@ def _build_email(
     from_address: str,
     to_addresses: list[str],
 ) -> MIMEText:
-    """Build a plain-text MIMEText for the sentinel data (AW6)."""
-    host = data.get("hostname", socket.gethostname())
-    pid = data.get("pid", os.getpid())
+    """Build a crisp plain-text MIMEText for the sentinel data (AW6).
+
+    Subject: ``[LFL836] <SEVERITY> — <title>``. Body is intentionally minimal —
+    the alert summary plus key data points, no walls of text.
+    """
     severity = data.get("context", {}).get("severity", "CRITICAL")
     title = data.get("title", "(no title)")
 
-    subject = f"[{severity}] {title} [{host}:{pid}]"
+    subject = f"[{_ACCOUNT_TAG}] {severity} — {title}"
 
+    # Compact context (one line, severity omitted since it's already in subject).
+    ctx = {k: v for k, v in data.get("context", {}).items() if k != "severity"}
     body_lines = [
-        f"Alert ID   : {data.get('id', '?')}",
-        f"Timestamp  : {data.get('ts', '?')}",
-        f"Severity   : {severity}",
-        f"Title      : {title}",
-        f"Module     : {data.get('source_module', '?')}",
-        f"Hostname   : {host}",
-        f"PID        : {pid}",
+        (data.get("body", "") or "").strip() or "(no details)",
         "",
-        "--- Body ---",
-        data.get("body", ""),
-        "",
-        "--- Context ---",
+        f"Severity: {severity} | Module: {data.get('source_module', '?')}",
+        f"Time: {data.get('ts', '?')} | Alert: {data.get('id', '?')}",
     ]
-    for k, v in data.get("context", {}).items():
-        body_lines.append(f"  {k}: {v}")
+    if ctx:
+        body_lines.append("Context: " + " | ".join(f"{k}={v}" for k, v in ctx.items()))
 
     msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
     msg["Subject"] = subject
@@ -219,13 +220,10 @@ def _build_digest_email(
         MIMEText digest email
     """
     count = len(alerts)
-    subject = f"[DIGEST] {count} CRITICAL ALERTS — Trading System"
+    subject = f"[{_ACCOUNT_TAG}] CRITICAL — DIGEST: {count} alerts"
 
     body_lines = [
-        f"ALERT DIGEST: {count} critical alerts pending",
-        f"Generated: {datetime.now().isoformat()}",
-        "",
-        "=" * 70,
+        f"{count} CRITICAL alerts pending — {datetime.now().strftime('%Y-%m-%d %H:%M')}:",
         "",
     ]
 
@@ -233,27 +231,12 @@ def _build_digest_email(
         severity = data.get("context", {}).get("severity", "CRITICAL")
         title = data.get("title", "(no title)")
         timestamp = data.get("ts", "?")
-        module = data.get("source_module", "?")
-        alert_id = data.get("id", "?")
+        summary = (data.get("body", "") or "").strip().splitlines()
+        first_line = summary[0][:160] if summary else ""
 
-        body_lines.append(f"Alert #{i} of {count}")
-        body_lines.append(f"  ID       : {alert_id}")
-        body_lines.append(f"  Time     : {timestamp}")
-        body_lines.append(f"  Severity : {severity}")
-        body_lines.append(f"  Title    : {title}")
-        body_lines.append(f"  Module   : {module}")
-        body_lines.append(f"  File     : {sentinel_path.name}")
-        body_lines.append("")
-        body_lines.append(f"  Summary  : {data.get('body', '')[:200]}")  # first 200 chars
-        body_lines.append("")
-        body_lines.append("-" * 70)
-        body_lines.append("")
-
-    body_lines.append("")
-    body_lines.append(f"Total alerts in this digest: {count}")
-    body_lines.append("")
-    body_lines.append("NOTE: This is an aggregated digest. Individual alert files are")
-    body_lines.append("available in the sentinel directory for detailed inspection.")
+        body_lines.append(f"{i}. [{severity}] {title} — {timestamp}")
+        if first_line:
+            body_lines.append(f"   {first_line}")
 
     msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
     msg["Subject"] = subject

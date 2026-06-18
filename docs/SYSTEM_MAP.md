@@ -56,6 +56,11 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 > (`/etc/systemd/system/trading-system.service.d/*.conf`). **Secrets live in `.env` and the
 > drop-in only — never commit them.**
 
+> **Email alerts (alert-watcher SMTP)** — `system_config.yaml` → `alerts.smtp`: Gmail
+> `smtp.gmail.com:587` TLS, `username`/`from_address`/`to_addresses` = `ramakrishnan031@gmail.com`,
+> password via `password_env: ALERT_SMTP_PASSWORD` (set in `.env`, not committed). `alert_watcher.py`
+> emails CRITICAL sentinels with subject `[LFL836] <SEVERITY> — <title>` (digest when >3 pending).
+
 ### Python Modules (role per package)
 | Package | Role | Key modules |
 |---|---|---|
@@ -177,12 +182,9 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
    settles to `failed`). Underlying still OPEN: the SOFT_KILL was auto-tripped by the Kite IP allowlist
    / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). **To run again: fix the
    Kite dev-console IP allowlist, then `--resume`, then start the service.**
-3. **[PARTIAL] `alert-watcher.service` SMTP delivery** — service is now **enabled + running** (18-Jun;
-   was never enabled, hence flag pile-up; 56 stale flags deleted, 16 remain). REMAINING: the email path
-   is placeholder-configured (`alerts.smtp` username/from `alerts@example.com`, to `operator@example.com`,
-   `password_env: ALERT_SMTP_PASSWORD` unset) so the digest send fails and flags aren't marked
-   `.delivered`. **Action: set real SMTP `username`/`from`/`to` + the `ALERT_SMTP_PASSWORD` env (Gmail
-   app-password) so CRITICAL sentinels actually deliver.**
+3. ~~`alert-watcher.service` SMTP delivery~~ — **RESOLVED 2026-06-18**: service enabled+running; SMTP
+   configured to Gmail (`ramakrishnan031@gmail.com`, `ALERT_SMTP_PASSWORD` in `.env`); subject
+   `[LFL836] <SEVERITY> — <title>`; verified the pending flags deliver (`.flag` → `.delivered`).
 4. ~~Two git remotes on PC~~ — **RESOLVED 2026-06-18** (`vm` remote removed; `origin` remains).
 
 ## PENDING CLEANUP
@@ -214,3 +216,6 @@ inactive alert-watcher).
   `RestartPreventExitStatus=3 4` (live + `deploy/systemd/trading-system.service`) so an exit-4 HALT no
   longer crash-loops — verified service settles to `failed` (NRestarts froze). (C) deleted 0-byte PC
   `trading.db`.
+- 2026-06-18 — VS Code Claude — SMTP configured for alert-watcher: `alerts.smtp` → Gmail
+  `ramakrishnan031@gmail.com` (send+receive), `ALERT_SMTP_PASSWORD` env; crisp account-tagged email
+  subject `[LFL836] <SEVERITY> — <title>` (single + digest builders in `alert_watcher.py`). Issue #3 resolved.

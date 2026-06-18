@@ -367,9 +367,8 @@ class TestEmailBuilding(unittest.TestCase):
             "hostname": "myhost", "pid": 1234,
         }
         msg = _build_email(data, "from@x.com", ["to@x.com"])
-        self.assertIn("[CRITICAL] Capital breach", msg["Subject"])
-        self.assertIn("myhost", msg["Subject"])
-        self.assertIn("1234", msg["Subject"])
+        # FIX (18-Jun): subject = "[LFL836] <SEVERITY> — <title>" (account-tagged, crisp).
+        self.assertEqual("[LFL836] CRITICAL — Capital breach", msg["Subject"])
 
     def test_body_contains_all_fields(self):
         data = {
@@ -574,8 +573,10 @@ class TestDigestEmail(unittest.TestCase):
 
         msg = _build_digest_email(alerts, "from@test.com", ["to@test.com"])
 
-        # Check subject
-        self.assertIn("[DIGEST] 5 CRITICAL ALERTS", msg["Subject"])
+        # Check subject (FIX 18-Jun: account-tagged crisp digest subject)
+        self.assertIn("[LFL836]", msg["Subject"])
+        self.assertIn("DIGEST", msg["Subject"])
+        self.assertIn("5", msg["Subject"])
 
         # Check body contains all alerts (decode if base64 encoded)
         body = msg.get_payload(decode=True)
