@@ -90,6 +90,39 @@ from orders.price_math import (
 # FIX-166 F17: canonical copy now in core.constants
 from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
+# Terminal order statuses — never overwritten by a cancel/sweep (FIX-186).
+_TERMINAL_ORDER_STATUSES: frozenset[str] = frozenset(
+    {"COMPLETE", "CANCELLED", "FAILED", "EXPIRED"}
+)
+
+# FIX-186 (FIX 1): classify a broker cancel_order failure reason so the local
+# DB can be finalized correctly even when order_monitor never polls again
+# (e.g. the cancel landed at EOD shutdown — the 17-Jun IRFC orphan leak).
+#   already-gone  → the order no longer exists at the broker → mark CANCELLED.
+#   being-processed → the order is mid-fill and may COMPLETE → do NOT mark;
+#                     let order_monitor observe the real terminal state.
+_CANCEL_ALREADY_GONE_MARKERS: tuple[str, ...] = (
+    "not found",
+    "does not exist",
+    "no such order",
+    "already cancel",   # "already cancelled"
+)
+_CANCEL_BEING_PROCESSED_MARKERS: tuple[str, ...] = (
+    "being processed",
+)
+
+
+def _cancel_reason_already_gone(reason: str) -> bool:
+    """True if a failed broker cancel means the order is already gone."""
+    r = (reason or "").lower()
+    return any(m in r for m in _CANCEL_ALREADY_GONE_MARKERS)
+
+
+def _cancel_reason_being_processed(reason: str) -> bool:
+    """True if a failed broker cancel means the order is mid-fill (may COMPLETE)."""
+    r = (reason or "").lower()
+    return any(m in r for m in _CANCEL_BEING_PROCESSED_MARKERS)
+
 
 @dataclass
 class ReconciliationAction:
@@ -897,6 +930,18 @@ class OrderReconciler:
         FIX-148: Cancel any open SL/TGT orders at broker for a trade whose
         position has been externally closed. Returns count of successfully
         cancelled orders.
+
+        FIX-186 (FIX 1): finalize the LOCAL orders row immediately after the
+        broker cancel, rather than relying on order_monitor to observe the
+        cancellation on a later poll. If the cancel lands at EOD shutdown
+        (the 17-Jun IRFC incident), order_monitor never polls again and the
+        stale non-terminal row leaks into the next trading day where no check
+        can match it (the broker resets order history daily). Classify the
+        broker response:
+          - success                 → mark CANCELLED in local DB
+          - "order not found"/gone  → mark CANCELLED (already terminal at broker)
+          - "being processed"       → leave alone (may fill); order_monitor owns it
+          - any other error         → leave alone for retry; log ERROR
         """
         cancelled = 0
         try:
@@ -917,23 +962,67 @@ class OrderReconciler:
                 continue
             try:
                 result = self._adapter.cancel_order(broker_id)
-                if result.success:
-                    log.info(
-                        "check1: cancelled orphaned %s order %s for trade %s",
-                        leg, broker_id, trade_id,
-                    )
-                    cancelled += 1
-                else:
-                    log.warning(
-                        "check1: cancel orphaned %s order %s failed: %s",
-                        leg, broker_id, result.reason,
-                    )
             except Exception as exc:
                 log.warning(
                     "check1: cancel orphaned %s order %s raised: %s",
                     leg, broker_id, exc,
                 )
+                continue
+
+            if result.success:
+                self._mark_order_cancelled_local(broker_id, log)
+                log.info(
+                    "Orphan order %s (%s) cancelled at broker AND marked "
+                    "CANCELLED in local DB for trade %s",
+                    broker_id, leg, trade_id,
+                )
+                cancelled += 1
+            elif _cancel_reason_already_gone(result.reason):
+                # Order no longer exists at the broker — finalize locally so it
+                # cannot leak as an orphan row.
+                self._mark_order_cancelled_local(broker_id, log)
+                log.info(
+                    "Orphan order %s (%s) already gone at broker (%s); marked "
+                    "CANCELLED in local DB for trade %s",
+                    broker_id, leg, result.reason, trade_id,
+                )
+                cancelled += 1
+            elif _cancel_reason_being_processed(result.reason):
+                # Mid-fill: may COMPLETE. Do NOT mark — let order_monitor
+                # observe the real terminal state on its next poll.
+                log.warning(
+                    "check1: orphan %s order %s is being processed at broker "
+                    "(may fill); leaving local status for order_monitor: %s",
+                    leg, broker_id, result.reason,
+                )
+            else:
+                log.error(
+                    "check1: cancel orphaned %s order %s failed (left for retry, "
+                    "local status unchanged): %s",
+                    leg, broker_id, result.reason,
+                )
         return cancelled
+
+    def _mark_order_cancelled_local(self, broker_order_id: str, log) -> None:
+        """
+        FIX-186 (FIX 1): set a local orders row to CANCELLED. The terminal-status
+        guard in the WHERE clause makes this a no-op if order_monitor already
+        finalized the row (e.g. to COMPLETE), so a genuinely-filled order is
+        never clobbered to CANCELLED.
+        """
+        try:
+            with self._store.transaction() as cur:
+                cur.execute(
+                    "UPDATE orders SET status = 'CANCELLED', updated_at = ? "
+                    "WHERE order_id = ? AND status NOT IN "
+                    "('COMPLETE', 'CANCELLED', 'FAILED', 'EXPIRED')",
+                    (self._now_ist(), broker_order_id),
+                )
+        except Exception as exc:
+            log.error(
+                "check1: failed to mark order %s CANCELLED in local DB: %s",
+                broker_order_id, exc,
+            )
 
     # ── CHECK 2: ORPHAN_ADOPTION ──────────────────────────────────────────────
 

@@ -18,12 +18,14 @@ Coverage:
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import sys
 import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -344,6 +346,135 @@ def test_check1_manual_close_releases_capital(tmp_path: Path) -> None:
 
     store.close()
     print("  OK CHECK1 MANUAL_CLOSE: release_used called with breakeven exit=entry")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-186 (FIX 1): _cancel_orphaned_orders_for_trade finalizes local DB
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cancel_res(success: bool, reason: str = ""):
+    """Mimic broker CancelResult (only .success / .reason are read)."""
+    return SimpleNamespace(success=success, reason=reason)
+
+
+def _order_status(store: StateStore, order_id: str) -> str:
+    row = store.fetch_one("SELECT status FROM orders WHERE order_id=?", (order_id,))
+    return row["status"] if row else "<missing>"
+
+
+def test_fix186_cancel_success_marks_local_cancelled(tmp_path: Path) -> None:
+    """FIX 1: a successful broker cancel marks the local SL row CANCELLED."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED_MANUAL")
+    _insert_order(store, "sl1", "t1", leg="SL", status="OPEN", trigger_price=99.0)
+
+    adapter = MagicMock()
+    adapter.cancel_order.return_value = _cancel_res(True)
+    rec = _make_reconciler(store, adapter=adapter)
+
+    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+
+    assert n == 1
+    assert _order_status(store, "sl1") == "CANCELLED"
+    store.close()
+    print("  OK FIX-186: broker cancel success → local SL CANCELLED")
+
+
+def test_fix186_cancel_not_found_marks_local_cancelled(tmp_path: Path) -> None:
+    """FIX 1: 'order does not exist' (already gone) → local row CANCELLED."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED_MANUAL")
+    _insert_order(store, "sl1", "t1", leg="SL", status="TRIGGER_PENDING", trigger_price=99.0)
+
+    adapter = MagicMock()
+    adapter.cancel_order.return_value = _cancel_res(
+        False, "Order does not exist or not allowed to cancel."
+    )
+    rec = _make_reconciler(store, adapter=adapter)
+
+    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+
+    assert n == 1
+    assert _order_status(store, "sl1") == "CANCELLED"
+    store.close()
+    print("  OK FIX-186: broker 'not found' → local SL CANCELLED")
+
+
+def test_fix186_cancel_being_processed_leaves_local(tmp_path: Path) -> None:
+    """FIX 1: 'being processed' (may fill) → local row UNCHANGED."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="BEPL", status="CLOSED_MANUAL")
+    _insert_order(store, "sl1", "t1", leg="SL", status="OPEN", trigger_price=99.0)
+
+    adapter = MagicMock()
+    adapter.cancel_order.return_value = _cancel_res(
+        False, "Order cannot be cancelled as it is being processed. Try later."
+    )
+    rec = _make_reconciler(store, adapter=adapter)
+
+    n = rec._cancel_orphaned_orders_for_trade("t1", "BEPL", logging.getLogger("t"))
+
+    assert n == 0
+    assert _order_status(store, "sl1") == "OPEN", "being-processed must NOT be marked CANCELLED"
+    store.close()
+    print("  OK FIX-186: 'being processed' → local SL left for order_monitor")
+
+
+def test_fix186_cancel_other_error_leaves_local(tmp_path: Path) -> None:
+    """FIX 1: an unclassified broker error → local row UNCHANGED (left for retry)."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED_MANUAL")
+    _insert_order(store, "sl1", "t1", leg="SL", status="OPEN", trigger_price=99.0)
+
+    adapter = MagicMock()
+    adapter.cancel_order.return_value = _cancel_res(False, "Network unreachable")
+    rec = _make_reconciler(store, adapter=adapter)
+
+    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+
+    assert n == 0
+    assert _order_status(store, "sl1") == "OPEN"
+    store.close()
+    print("  OK FIX-186: unclassified error → local SL unchanged")
+
+
+def test_fix186_mark_local_does_not_clobber_completed(tmp_path: Path) -> None:
+    """FIX 1: the terminal-status guard never overwrites a COMPLETE order."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED_MANUAL")
+    # TGT already filled (COMPLETE) — must remain COMPLETE.
+    _insert_order(store, "tgt1", "t1", leg="TGT", status="COMPLETE")
+    rec = _make_reconciler(store, adapter=MagicMock())
+
+    rec._mark_order_cancelled_local("tgt1", logging.getLogger("t"))
+
+    assert _order_status(store, "tgt1") == "COMPLETE"
+    store.close()
+    print("  OK FIX-186: COMPLETE order not clobbered to CANCELLED")
+
+
+def test_fix186_paper_parity_marks_local_cancelled(tmp_path: Path) -> None:
+    """FIX 1 parity: paper adapter cancel (always success) → local CANCELLED.
+
+    The reconciler path does not branch on mode; the paper adapter's
+    cancel_order returns success=True, so the same local finalization runs.
+    """
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED_MANUAL")
+    _insert_order(store, "sl1", "t1", leg="SL", status="OPEN", trigger_price=99.0)
+    _insert_order(store, "tgt1", "t1", leg="TGT", status="OPEN")
+
+    paper_adapter = MagicMock()
+    paper_adapter.cancel_order.return_value = _cancel_res(True)  # paper always succeeds
+    rec = _make_reconciler(store, adapter=paper_adapter)
+
+    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+
+    assert n == 2
+    assert _order_status(store, "sl1") == "CANCELLED"
+    assert _order_status(store, "tgt1") == "CANCELLED"
+    store.close()
+    print("  OK FIX-186: paper parity → both exit legs CANCELLED locally")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
