@@ -165,7 +165,7 @@ All market jobs run `cd … && . .env && PYTHONPATH=. venv/bin/python <script> >
 |---|---|---|---|
 | `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). Currently **`failed` (stopped)** — kill switch SOFT_KILL active; needs Kite-IP fix + `--resume`. |
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
-| `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled + running (18-Jun)**; delivery blocked by placeholder SMTP config — see Issues |
+| `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
@@ -182,13 +182,10 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
    settles to `failed`). Underlying still OPEN: the SOFT_KILL was auto-tripped by the Kite IP allowlist
    / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). **To run again: fix the
    Kite dev-console IP allowlist, then `--resume`, then start the service.**
-3. **[BLOCKED on credential] `alert-watcher.service` SMTP delivery** — service enabled+running; SMTP
-   config + transport + email format all done (Gmail `ramakrishnan031@gmail.com`, subject
-   `[LFL836] <SEVERITY> — <title>`); STARTTLS to `smtp.gmail.com:587` connects fine. BUT Gmail rejects
-   login: `535 5.7.8 ... BadCredentials`. `ALERT_SMTP_PASSWORD` in `.env` is **20 chars** — a Gmail
-   **App Password is 16 chars** (2FA required, no spaces). **Action (Rama): generate a valid Gmail App
-   Password at https://myaccount.google.com/apppasswords and set `ALERT_SMTP_PASSWORD` (no spaces/
-   quotes), then `sudo systemctl restart alert-watcher.service`.** Flags will then deliver.
+3. ~~`alert-watcher.service` SMTP delivery~~ — **RESOLVED 2026-06-18 (verified)**: valid Gmail App
+   Password set in `.env`; the 16 pending sentinels delivered (`Digest delivered: 16 alerts → .delivered`;
+   `.flag`=0, `.failed`=0; digest emailed to `ramakrishnan031@gmail.com`, subject
+   `[LFL836] CRITICAL — DIGEST: 16 alerts`). No auth errors after the valid password.
 4. ~~Two git remotes on PC~~ — **RESOLVED 2026-06-18** (`vm` remote removed; `origin` remains).
 
 ## PENDING CLEANUP
@@ -225,3 +222,5 @@ inactive alert-watcher).
   subject `[LFL836] <SEVERITY> — <title>` (single + digest builders in `alert_watcher.py`). Transport
   verified (STARTTLS connects) but Gmail returns 535 BadCredentials — `ALERT_SMTP_PASSWORD` is not a
   valid 16-char App Password. Issue #3 BLOCKED on a valid Gmail App Password (Rama to set).
+- 2026-06-18 — VS Code Claude — SMTP delivery VERIFIED after a valid Gmail App Password was set:
+  16 pending sentinels delivered (`.flag`→`.delivered`), digest emailed. Issue #3 resolved.
