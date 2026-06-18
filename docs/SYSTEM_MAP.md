@@ -49,7 +49,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `instruments.csv` | Instrument master (lot sizes, tokens) | `core/instrument_cache.py` |
 | `config/reference_data/` | NSE reference data | reference lookups |
 | `config/strategies/` | Per-strategy YAML configs | `strategies/loader.py` |
-| `.env` (root, 0600-ish, NOT in git) | Secrets: ZERODHA_*, GEMINI_API_KEY, WEBHOOK_SECRET, etc. | systemd `EnvironmentFile` + cron `. .env` |
+| `.env` (root, 0600-ish, NOT in git) | Secrets: ZERODHA_* — incl. `ZERODHA_USER_ID`/`ZERODHA_PASSWORD` + per-account `ZERODHA_TOTP_<acct>` (e.g. `ZERODHA_TOTP_LFL836`) for headless TOTP login (FIX-187); GEMINI_API_KEY, WEBHOOK_SECRET, etc. | systemd `EnvironmentFile` + cron `. .env` |
 | `.env.example` | Template for `.env` | — |
 
 > Telegram bot token / chat IDs are also injected via the systemd drop-in
@@ -132,7 +132,7 @@ All market jobs run `cd … && . .env && PYTHONPATH=. venv/bin/python <script> >
 | 01:00 | daily | sqlite3 `.backup` trading_system.db | nightly DB backup |
 | 02:00 | daily | `find backups -mtime +7 -delete` | backup retention |
 | 05:00 | daily | `rm session/zerodha_token.json` | force fresh login |
-| 08:00 | Mon-Fri | `auto_refresh_token.py` | TOTP token refresh |
+| 08:00 | Mon-Fri | `auto_refresh_token.py` | Headless TOTP token refresh (FIX-187; no manual OTP) |
 | 08:30 | Mon-Fri | `premarket_healthcheck.py` | preflight health |
 | 08:35 | Mon-Fri | `fetch_fno_ban.py` | F&O ban list |
 | 08:55 | Mon-Fri | `gemini_premarket_brief.py` | AI premarket brief |
@@ -224,3 +224,12 @@ inactive alert-watcher).
   valid 16-char App Password. Issue #3 BLOCKED on a valid Gmail App Password (Rama to set).
 - 2026-06-18 — VS Code Claude — SMTP delivery VERIFIED after a valid Gmail App Password was set:
   16 pending sentinels delivered (`.flag`→`.delivered`), digest emailed. Issue #3 resolved.
+- 2026-06-18 — Claude Code — FIX-187: `scripts/auto_refresh_token.py` rewritten to a fully
+  headless TOTP login — eliminates the daily manual OTP step (08:00 Mon-Fri cron, unchanged).
+  Reuses `zerodha_login.exchange_request_token`+`save_token` (token-format parity: passes
+  `is_token_valid()` and carries `api_key` for the paper quote provider); `request_token` via the
+  `connect/login?v=3` redirect chain; account-specific→generic credential resolution; Telegram +
+  retry + cron-heartbeat. `pyotp==2.9.0` added to requirements and installed in the venv. **Verified
+  live** (token valid + `kite.profile()` OK + heartbeat SUCCESS). TOTP secret is the per-account
+  `ZERODHA_TOTP_<acct>` in `.env` (single source of truth; a stale/duplicate `ZERODHA_TOTP_SECRET`
+  was removed). Commit ff0984b.
