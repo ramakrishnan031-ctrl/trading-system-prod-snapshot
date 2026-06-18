@@ -31,6 +31,7 @@ import signal
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import date, datetime, time as _time
 from pathlib import Path
@@ -187,11 +188,30 @@ def _parse_args(argv: Optional[list] = None) -> argparse.Namespace:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _http_fetch(url: str, timeout_sec: float = 5.0):
-    """Minimal stdlib HTTP fetcher for startup checks."""
+    """Minimal stdlib HTTP fetcher for startup checks.
+
+    FIX-184: send a non-default User-Agent. urllib's default "Python-urllib/x.y"
+    UA is blocked by Chartink's Cloudflare edge with 403, which urlopen RAISES as
+    HTTPError -> previously swallowed into status=None, so every scanner logged
+    "returned status None (unreachable)" at startup even though the URLs are fine
+    (any non-urllib UA returns 200). Also surface real HTTP error codes (4xx/5xx)
+    instead of masking them as None, so a genuinely bad URL (404) is
+    distinguishable from a true connection failure (None).
+    """
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "TradingSystem/2.0 startup-check"}
+    )
     try:
-        with urllib.request.urlopen(url, timeout=timeout_sec) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             body = resp.read(256).decode("utf-8", errors="replace")
             return resp.status, body
+    except urllib.error.HTTPError as exc:
+        # Real HTTP response carrying an error status — report the code, not None.
+        try:
+            body = exc.read(256).decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        return exc.code, body
     except Exception as exc:
         return None, str(exc)
 
