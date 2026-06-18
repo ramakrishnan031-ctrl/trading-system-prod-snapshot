@@ -186,11 +186,15 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
    and **installed** (`crontab deploy/cron/trading-system.cron`) — live == file (33 lines). The
    previously-missing analytics.db backup (01:05) + `db_retention` (02:30) were added; `auto_refresh_token`
    moved 08:00→08:15. Old crontab backed up to `data_store/crontab_backups/`.
-2. **[PARTIAL] `trading-system.service` down (kill switch SOFT_KILL)** — the crash-loop is FIXED
-   (18-Jun: `RestartPreventExitStatus=3 4`, so an exit-4 HALT no longer hammer-restarts; service now
-   settles to `failed`). Underlying still OPEN: the SOFT_KILL was auto-tripped by the Kite IP allowlist
-   / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). **To run again: fix the
-   Kite dev-console IP allowlist, then `--resume`, then start the service.**
+2. **[PARTIAL] `trading-system.service` — emergency-kill recovery + headless** — crash-loop FIXED
+   (`RestartPreventExitStatus=3 4`). FIX-188 (18-Jun) additionally stopped **token-watcher** from
+   hammer-restarting an exit-4 HALT every 30s (now exit-code aware: same-day HALT → back off + 1
+   alert/day; prior-day HALT → one clean start so it auto-recovers) and broadened `/health` (token +
+   kill_switch, 200/503). The emergency SOFT_KILL was cleared (operator `--resume`) and the service
+   **handed off to systemd — now `active`, `NRestarts=0`**. Still OPEN (EXTERNAL): the Kite dev-console
+   **IP allowlist** for the VM IP (place_order 403 root cause; see `kite_ip_allowlist_dependency`,
+   FIX-185) — required for live order placement. Follow-up gap: no clean systemd `--resume` path
+   (standalone `main.py --resume` competes with the service for the instance-lock port 5001).
 3. ~~`alert-watcher.service` SMTP delivery~~ — **RESOLVED 2026-06-18 (verified)**: valid Gmail App
    Password set in `.env`; the 16 pending sentinels delivered (`Digest delivered: 16 alerts → .delivered`;
    `.flag`=0, `.failed`=0; digest emailed to `ramakrishnan031@gmail.com`, subject
@@ -242,6 +246,14 @@ inactive alert-watcher).
   live** (token valid + `kite.profile()` OK + heartbeat SUCCESS). TOTP secret is the per-account
   `ZERODHA_TOTP_<acct>` in `.env` (single source of truth; a stale/duplicate `ZERODHA_TOTP_SECRET`
   was removed). Commit ff0984b.
+- 2026-06-18 — Claude Code — FIX-188: **headless fixes**. (A) `deploy/token_watcher.sh` is now
+  exit-code aware (ExecMainStatus/ExecMainExitTimestamp): same-day exit 4 (HALT) / exit 3 → no restart
+  + 1 Telegram/day + 5-min back-off; prior-day 4/3 → one clean start (auto-recovers overnight HALTs);
+  exit 1/2 → restart w/ 3-per-hour backoff; clean exit-0 today → no post-EOD restart. Stops the 30s
+  hammer-restart of a HALT-failed service. (B) `scripts/healthcheck_server.py` `/health` now reports
+  `{db, token, kill_switch}` and returns 200/503 (reads the `kill_switch_state` table; also fixed the
+  same latent wrong-table bug in `/metrics`). Verified live; service handed off to systemd (active).
+  Commits 7a12cf2, 8cf8685.
 - 2026-06-18 — Claude Code — TASK #3: **Cron Officer**. New `config/cron_registry.yaml` (single source
   of truth, 30 jobs) + `core/cron_registry.py` loader; `scripts/cron_officer.py` (`--briefing` 04:55,
   `--eod-summary` 18:30, `--check-change`); `check_cron_drift.py` now registry-driven (hardcoded list
