@@ -303,5 +303,21 @@ def main() -> int:
     return 0
 
 
+def _cron_main() -> int:
+    """Cron entry: holiday-skip + heartbeat + per-job alert (TASK #3)."""
+    from utils.cron_heartbeat import HeartbeatTimer, skip_if_non_trading_day
+
+    if skip_if_non_trading_day("generate_screened_csv"):
+        return 0
+    timer = HeartbeatTimer("generate_screened_csv", alert=True)
+    with timer:
+        rc = main()
+        rc = 0 if rc is None else rc
+        if rc != 0:
+            timer.status = "FAILED"
+            timer.message = f"exit code {rc}"
+    return rc
+
+
 if __name__ == '__main__':
-    sys.exit(main())
+    sys.exit(_cron_main())

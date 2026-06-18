@@ -160,5 +160,21 @@ def main(argv=None):
     print(f"Trade journal: {count} entries for {date_iso}")
 
 
+def _cron_main(argv=None) -> int:
+    """Cron entry: holiday-skip + heartbeat + per-job alert (TASK #3)."""
+    from utils.cron_heartbeat import HeartbeatTimer, skip_if_non_trading_day
+
+    if skip_if_non_trading_day("trade_journal"):
+        return 0
+    timer = HeartbeatTimer("trade_journal", alert=True)
+    with timer:
+        rc = main(argv)
+        rc = 0 if rc is None else rc
+        if rc != 0:
+            timer.status = "FAILED"
+            timer.message = f"exit code {rc}"
+    return rc
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(_cron_main())

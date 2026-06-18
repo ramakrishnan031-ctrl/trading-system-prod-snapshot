@@ -71,21 +71,34 @@ class HeartbeatTimer:
                 hb.status = "PARTIAL"
                 hb.message = "some warning"
         # heartbeat recorded automatically on exit
+
+    TASK #3 (Cron Officer): pass alert=True to also send a per-job alert on exit
+    (FAILED always; SUCCESS only for jobs marked critical in the registry). The
+    alerting lives in alerts/cron_alerts.py (lazy import) so record_heartbeat()
+    stays a pure, dependency-light DB write.
     """
 
     def __init__(
         self,
         job_name: str,
         db_path: Path = Path("data_store/trading_system.db"),
+        alert: bool = False,
+        critical: Optional[bool] = None,
+        config_dir: Path = Path("config"),
     ):
         self.job_name = job_name
         self.db_path = db_path
         self.status = "SUCCESS"
         self.message: Optional[str] = None
         self._start: float = 0.0
+        self._started_iso: Optional[str] = None
+        self.alert = alert
+        self.critical = critical
+        self.config_dir = Path(config_dir)
 
     def __enter__(self) -> "HeartbeatTimer":
         self._start = time.time()
+        self._started_iso = now_ist().isoformat()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
@@ -93,6 +106,7 @@ class HeartbeatTimer:
         if exc_type is not None:
             self.status = "FAILED"
             self.message = f"{exc_type.__name__}: {exc_val}"
+        ended_iso = now_ist().isoformat()
 
         record_heartbeat(
             job_name=self.job_name,
@@ -101,4 +115,58 @@ class HeartbeatTimer:
             message=self.message,
             db_path=self.db_path,
         )
+
+        if self.alert:
+            try:
+                from alerts.cron_alerts import alert_job_result
+
+                alert_job_result(
+                    self.job_name,
+                    self.status,
+                    duration_sec=duration,
+                    started=self._started_iso,
+                    ended=ended_iso,
+                    message=self.message,
+                    critical=self.critical,
+                    config_dir=self.config_dir,
+                )
+            except Exception:
+                pass  # alerting must never affect the job's exit
+
         return False  # don't suppress exceptions
+
+
+def skip_if_non_trading_day(
+    job_name: str,
+    config_dir: Path | str = Path("config"),
+    db_path: Path = Path("data_store/trading_system.db"),
+) -> bool:
+    """
+    TASK #3 Layer 6: holiday guard for market_day_only jobs.
+
+    If today (IST) is NOT an NSE trading day (weekend or holiday), record a
+    SKIPPED heartbeat and return True so the caller can `return 0` early:
+
+        if skip_if_non_trading_day("eod_verify"):
+            return 0
+
+    Falls back to a plain weekday check if the holiday calendar is unreadable.
+    """
+    from core.time_authority import now_ist
+
+    try:
+        from utils.holiday_guard import is_trading_day
+
+        trading = is_trading_day(now_ist().date(), Path(config_dir))
+    except Exception:
+        trading = now_ist().weekday() < 5
+
+    if not trading:
+        record_heartbeat(
+            job_name,
+            status="SKIPPED",
+            message="non-trading day (weekend/NSE holiday)",
+            db_path=db_path,
+        )
+        return True
+    return False

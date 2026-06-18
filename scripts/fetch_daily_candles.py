@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:  # TASK #3: cron heartbeat import works without PYTHONPATH=.
+    sys.path.insert(0, str(ROOT))
 TOKEN_PATH  = ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR  = ROOT / "data_store" / "candles"
 DB_PATH     = ROOT / "data_store" / "trading_system.db"
@@ -228,5 +230,21 @@ def _insert_into_candles_db(rows: list[dict], inst_map: dict[str, int]) -> None:
     print(f"Saved DB: {inserted} candle rows inserted into candles table")
 
 
+def _cron_main(argv=None) -> int:
+    """Cron entry: holiday-skip + heartbeat + per-job alert (TASK #3)."""
+    from utils.cron_heartbeat import HeartbeatTimer, skip_if_non_trading_day
+
+    if skip_if_non_trading_day("fetch_daily_candles"):
+        return 0
+    timer = HeartbeatTimer("fetch_daily_candles", alert=True)
+    with timer:
+        rc = main(argv)
+        rc = 0 if rc is None else rc
+        if rc != 0:
+            timer.status = "FAILED"
+            timer.message = f"exit code {rc}"
+    return rc
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(_cron_main())
