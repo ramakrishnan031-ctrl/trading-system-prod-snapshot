@@ -14,24 +14,21 @@ _LOG = logging.getLogger("test_hc")
 
 
 class TestCheckKillSwitch:
-    def _store(self, *rows):
+    def _store(self, row):
         s = MagicMock()
-        s.fetch_one.side_effect = list(rows)
+        s.fetch_one.return_value = row  # SELECT state, reason FROM kill_switch_state WHERE id=1
         return s
 
     def test_inactive_ok(self):
-        s = self._store({"value": "INACTIVE"}, None)
-        r = _check_kill_switch(s, _LOG)
+        r = _check_kill_switch(self._store({"state": "INACTIVE", "reason": ""}), _LOG)
         assert r["ok"] is True and r["state"] == "INACTIVE"
 
     def test_soft_kill_not_ok(self):
-        s = self._store({"value": "SOFT_KILL"}, {"value": "API failures"})
-        r = _check_kill_switch(s, _LOG)
+        r = _check_kill_switch(self._store({"state": "SOFT_KILL", "reason": "API failures"}), _LOG)
         assert r["ok"] is False and r["state"] == "SOFT_KILL" and r["reason"] == "API failures"
 
     def test_no_row_defaults_inactive(self):
-        s = self._store(None, None)
-        assert _check_kill_switch(s, _LOG)["ok"] is True
+        assert _check_kill_switch(self._store(None), _LOG)["ok"] is True
 
     def test_query_error_not_ok(self):
         s = MagicMock()

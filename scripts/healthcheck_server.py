@@ -46,13 +46,10 @@ def _check_kill_switch(state_store: Any, logger: Any) -> dict:
     """FIX-188: kill switch state from system_state (ok iff INACTIVE)."""
     try:
         row = state_store.fetch_one(
-            "SELECT value FROM system_state WHERE key = 'kill_switch_state'", ()
+            "SELECT state, reason FROM kill_switch_state WHERE id = 1", ()
         )
-        state = row["value"] if (row and row["value"]) else "INACTIVE"
-        reason_row = state_store.fetch_one(
-            "SELECT value FROM system_state WHERE key = 'kill_switch_reason'", ()
-        )
-        reason = reason_row["value"] if (reason_row and reason_row["value"]) else ""
+        state = row["state"] if (row and row["state"]) else "INACTIVE"
+        reason = (row["reason"] or "") if row else ""
         return {"ok": state == "INACTIVE", "state": state, "reason": reason}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -163,11 +160,11 @@ def _create_app(state_store: Any, logger: Any) -> Flask:
                 m["capital_deployed_pct"] = round(margin_used / max(cash_floor, 1) * 100, 2)
 
             row = state_store.fetch_one(
-                "SELECT value FROM system_state WHERE key = 'kill_switch_state'",
+                "SELECT state FROM kill_switch_state WHERE id = 1",
                 (),
             )
             if row:
-                m["kill_switch_state"] = row["value"] or "INACTIVE"
+                m["kill_switch_state"] = row["state"] or "INACTIVE"
 
             row = state_store.fetch_one(
                 "SELECT received_at FROM signals WHERE DATE(received_at) = ? ORDER BY received_at DESC LIMIT 1",
