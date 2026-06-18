@@ -27,12 +27,48 @@ from flask import Flask, Response
 _start_time = time.monotonic()
 
 
+def _check_token() -> dict:
+    """FIX-188: token validity (reuses scripts.zerodha_login.is_token_valid)."""
+    try:
+        from pathlib import Path
+        from scripts.zerodha_login import is_token_valid, load_token
+
+        token_path = Path("data_store/session/zerodha_token.json")
+        tok = load_token(token_path) or {}
+        account_id = tok.get("account_id", "")
+        ok = bool(account_id) and is_token_valid(account_id, token_path)
+        return {"ok": bool(ok), "account_id": account_id or None, "expires_at": tok.get("expires_at")}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def _check_kill_switch(state_store: Any, logger: Any) -> dict:
+    """FIX-188: kill switch state from system_state (ok iff INACTIVE)."""
+    try:
+        row = state_store.fetch_one(
+            "SELECT value FROM system_state WHERE key = 'kill_switch_state'", ()
+        )
+        state = row["value"] if (row and row["value"]) else "INACTIVE"
+        reason_row = state_store.fetch_one(
+            "SELECT value FROM system_state WHERE key = 'kill_switch_reason'", ()
+        )
+        reason = reason_row["value"] if (reason_row and reason_row["value"]) else ""
+        return {"ok": state == "INACTIVE", "state": state, "reason": reason}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def _create_app(state_store: Any, logger: Any) -> Flask:
     app = Flask("healthcheck")
 
     @app.route("/health", methods=["GET"])
     def health() -> Response:
+        from core.time_authority import now_ist
+
         uptime = round(time.monotonic() - _start_time, 1)
+
+        # DB check (also yields trades_today)
+        db_check = {"ok": True}
         trades_today = 0
         try:
             today_iso = date.today().isoformat()
@@ -40,19 +76,28 @@ def _create_app(state_store: Any, logger: Any) -> Flask:
                 "SELECT COUNT(*) AS cnt FROM trades WHERE DATE(created_at) = ?",
                 (today_iso,),
             )
-            if row:
-                trades_today = int(row["cnt"] or 0)
+            trades_today = int(row["cnt"] or 0) if row else 0
         except Exception as exc:
+            db_check = {"ok": False, "error": str(exc)}
             logger.error("healthcheck.trades_query_failed", extra={"error": str(exc)})
 
-        from core.time_authority import now_ist
+        # FIX-188: broaden /health beyond the DB — token validity + kill switch.
+        checks = {
+            "db": db_check,
+            "token": _check_token(),
+            "kill_switch": _check_kill_switch(state_store, logger),
+        }
+        overall_ok = all(c.get("ok", False) for c in checks.values())
+
         body = json.dumps({
-            "status": "ok",
+            "status": "healthy" if overall_ok else "degraded",
+            "checks": checks,
             "uptime_seconds": uptime,
             "trades_today": trades_today,
             "timestamp": now_ist().isoformat(),
         })
-        return Response(body, status=200, mimetype="application/json")
+        # 503 lets uptime monitors detect a degraded-but-listening process.
+        return Response(body, status=200 if overall_ok else 503, mimetype="application/json")
 
     # FIX-133 Item 24: structured metrics endpoint
     @app.route("/metrics", methods=["GET"])
