@@ -182,9 +182,13 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
    settles to `failed`). Underlying still OPEN: the SOFT_KILL was auto-tripped by the Kite IP allowlist
    / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). **To run again: fix the
    Kite dev-console IP allowlist, then `--resume`, then start the service.**
-3. ~~`alert-watcher.service` SMTP delivery~~ — **RESOLVED 2026-06-18**: service enabled+running; SMTP
-   configured to Gmail (`ramakrishnan031@gmail.com`, `ALERT_SMTP_PASSWORD` in `.env`); subject
-   `[LFL836] <SEVERITY> — <title>`; verified the pending flags deliver (`.flag` → `.delivered`).
+3. **[BLOCKED on credential] `alert-watcher.service` SMTP delivery** — service enabled+running; SMTP
+   config + transport + email format all done (Gmail `ramakrishnan031@gmail.com`, subject
+   `[LFL836] <SEVERITY> — <title>`); STARTTLS to `smtp.gmail.com:587` connects fine. BUT Gmail rejects
+   login: `535 5.7.8 ... BadCredentials`. `ALERT_SMTP_PASSWORD` in `.env` is **20 chars** — a Gmail
+   **App Password is 16 chars** (2FA required, no spaces). **Action (Rama): generate a valid Gmail App
+   Password at https://myaccount.google.com/apppasswords and set `ALERT_SMTP_PASSWORD` (no spaces/
+   quotes), then `sudo systemctl restart alert-watcher.service`.** Flags will then deliver.
 4. ~~Two git remotes on PC~~ — **RESOLVED 2026-06-18** (`vm` remote removed; `origin` remains).
 
 ## PENDING CLEANUP
@@ -218,4 +222,6 @@ inactive alert-watcher).
   `trading.db`.
 - 2026-06-18 — VS Code Claude — SMTP configured for alert-watcher: `alerts.smtp` → Gmail
   `ramakrishnan031@gmail.com` (send+receive), `ALERT_SMTP_PASSWORD` env; crisp account-tagged email
-  subject `[LFL836] <SEVERITY> — <title>` (single + digest builders in `alert_watcher.py`). Issue #3 resolved.
+  subject `[LFL836] <SEVERITY> — <title>` (single + digest builders in `alert_watcher.py`). Transport
+  verified (STARTTLS connects) but Gmail returns 535 BadCredentials — `ALERT_SMTP_PASSWORD` is not a
+  valid 16-char App Password. Issue #3 BLOCKED on a valid Gmail App Password (Rama to set).
