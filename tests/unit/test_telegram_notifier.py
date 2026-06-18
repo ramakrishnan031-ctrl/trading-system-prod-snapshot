@@ -708,6 +708,90 @@ class TestFactoryMethods(unittest.TestCase):
 
 
 # ==============================================================================
+# TestMasterSwitchFromEnv (TASK-10 Item A) -- cron-path factories honor switch
+# ==============================================================================
+
+class TestMasterSwitchFromEnv(unittest.TestCase):
+    """TASK-10 Item A: from_env()/from_config() read telegram.enabled (fail-open)."""
+
+    _ENV = {"TELEGRAM_BOT_TOKEN": "tok123", "TELEGRAM_CHANNEL_PRIMARY": "-100999"}
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.cfgdir = Path(self._tmpdir.name)
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _write_config(self, enabled_line: str) -> None:
+        """Write a minimal system_config.yaml with the given alerts.telegram block."""
+        (self.cfgdir / "system_config.yaml").write_text(
+            "alerts:\n"
+            "  telegram:\n"
+            f"{enabled_line}"
+            '    bot_token_env: "TELEGRAM_BOT_TOKEN"\n',
+            encoding="utf-8",
+        )
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_from_env_config_disabled_is_noop(self, mock_post):
+        self._write_config("    enabled: false\n")
+        with unittest.mock.patch.dict(os.environ, self._ENV, clear=True):
+            n = TelegramNotifier.from_env(config_dir=self.cfgdir)
+        self.assertIsNotNone(n)
+        result = n.send("CRITICAL", "t", "b", "m")
+        mock_post.assert_not_called()
+        self.assertEqual(result.delivered_to, [])
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_from_env_config_enabled_sends(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        self._write_config("    enabled: true\n")
+        with unittest.mock.patch.dict(os.environ, self._ENV, clear=True):
+            n = TelegramNotifier.from_env(config_dir=self.cfgdir)
+        result = n.send("INFO", "t", "b", "m")
+        self.assertTrue(mock_post.called)
+        self.assertTrue(result.success)
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_from_env_config_missing_key_defaults_enabled(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        self._write_config("")  # telegram block present but no enabled key
+        with unittest.mock.patch.dict(os.environ, self._ENV, clear=True):
+            n = TelegramNotifier.from_env(config_dir=self.cfgdir)
+        result = n.send("INFO", "t", "b", "m")
+        self.assertTrue(mock_post.called)
+        self.assertTrue(result.success)
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_from_env_config_file_absent_fails_open(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        # No system_config.yaml written into cfgdir at all -> fail-open enabled=True
+        with unittest.mock.patch.dict(os.environ, self._ENV, clear=True):
+            n = TelegramNotifier.from_env(config_dir=self.cfgdir)
+        result = n.send("INFO", "t", "b", "m")
+        self.assertTrue(mock_post.called)
+        self.assertTrue(result.success)
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_from_config_passes_dir_and_disables(self, mock_post):
+        self._write_config("    enabled: false\n")
+        with unittest.mock.patch.dict(os.environ, self._ENV, clear=True):
+            n = TelegramNotifier.from_config(config_dir=self.cfgdir)
+        self.assertIsNotNone(n)
+        n.send("ERROR", "t", "b", "m")
+        mock_post.assert_not_called()
+
+    def test_read_telegram_enabled_helper_fail_open_on_garbage(self):
+        # Malformed YAML -> fail-open True
+        (self.cfgdir / "system_config.yaml").write_text(
+            "alerts: [unclosed\n", encoding="utf-8"
+        )
+        from alerts.telegram_notifier import _read_telegram_enabled
+        self.assertTrue(_read_telegram_enabled(self.cfgdir))
+
+
+# ==============================================================================
 # Standalone runner
 # ==============================================================================
 
@@ -751,6 +835,20 @@ def run_all_tests() -> int:
         TestPaperMode("test_paper_mode_no_http_call"),
         TestPaperMode("test_paper_mode_critical_still_writes_sentinel"),
         TestPaperMode("test_paper_mode_returns_success_true"),
+        # TASK-10 master switch (in-process)
+        TestMasterSwitch("test_disabled_no_http_call"),
+        TestMasterSwitch("test_disabled_critical_writes_no_sentinel"),
+        TestMasterSwitch("test_disabled_no_failed_alerts_log"),
+        TestMasterSwitch("test_disabled_returns_success_true"),
+        TestMasterSwitch("test_enabled_explicit_sends_normally"),
+        TestMasterSwitch("test_default_enabled_sends_normally"),
+        # TASK-10 Item A master switch (from_env/from_config cron path)
+        TestMasterSwitchFromEnv("test_from_env_config_disabled_is_noop"),
+        TestMasterSwitchFromEnv("test_from_env_config_enabled_sends"),
+        TestMasterSwitchFromEnv("test_from_env_config_missing_key_defaults_enabled"),
+        TestMasterSwitchFromEnv("test_from_env_config_file_absent_fails_open"),
+        TestMasterSwitchFromEnv("test_from_config_passes_dir_and_disables"),
+        TestMasterSwitchFromEnv("test_read_telegram_enabled_helper_fail_open_on_garbage"),
         # Concurrent
         TestConcurrentSends("test_concurrent_sends_no_race"),
         # Channel whitelist

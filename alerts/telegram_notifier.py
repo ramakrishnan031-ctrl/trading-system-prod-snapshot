@@ -52,6 +52,30 @@ _MSG_MAX = 4096
 _TRUNCATION_MARKER = "\n...[truncated]"
 
 
+def _read_telegram_enabled(config_dir: str | Path = "config") -> bool:
+    """
+    Read alerts.telegram.enabled from system_config.yaml (TASK-10 Item A).
+
+    Used by the from_env()/from_config() factories so cron scripts honor the
+    master switch. FAIL-OPEN: any error (missing file, parse error, missing key)
+    returns True — better to alert than to silently skip alerts.
+    """
+    try:
+        import yaml  # local import: keep module-level import surface minimal (TG11)
+
+        path = Path(config_dir) / "system_config.yaml"
+        with open(path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        enabled = (
+            data.get("alerts", {})
+            .get("telegram", {})
+            .get("enabled", True)
+        )
+        return bool(enabled)
+    except Exception:  # noqa: BLE001 — fail-open on any error
+        return True
+
+
 # ------------------------------------------------------------------------------
 # Rate limiter (FIX-131 Item 18)
 # ------------------------------------------------------------------------------
@@ -192,12 +216,22 @@ class TelegramNotifier:
     # --------------------------------------------------------------------------
 
     @classmethod
-    def from_env(cls, logger: logging.Logger | None = None) -> "TelegramNotifier | None":
+    def from_env(
+        cls,
+        logger: logging.Logger | None = None,
+        config_dir: str | Path = "config",
+    ) -> "TelegramNotifier | None":
         """
         Build a TelegramNotifier from environment variables.
 
         Reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_PRIMARY.
         Returns None if either is missing (cron scripts use this pattern).
+
+        TASK-10 (Item A): the telegram.enabled master switch lives in the config
+        file, but cron scripts construct via this factory rather than load_all().
+        So we read alerts.telegram.enabled here and honor it — the master switch
+        therefore silences ALL alerts (main app AND cron) with no exceptions.
+        Fail-open: if the config is missing/unreadable, default to enabled=True.
         """
         bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         chat_id = os.environ.get("TELEGRAM_CHANNEL_PRIMARY", "")
@@ -207,6 +241,7 @@ class TelegramNotifier:
             bot_token=bot_token,
             chat_ids=[chat_id],
             logger=logger or logging.getLogger(__name__),
+            enabled=_read_telegram_enabled(config_dir),
         )
 
     @classmethod
@@ -218,8 +253,10 @@ class TelegramNotifier:
         """
         Build a TelegramNotifier from env vars (config_dir accepted for
         API compatibility but env vars are the actual source of truth).
+
+        The telegram.enabled master switch IS read from config_dir (TASK-10 Item A).
         """
-        return cls.from_env(logger=logger)
+        return cls.from_env(logger=logger, config_dir=config_dir)
 
     # --------------------------------------------------------------------------
     # Convenience methods (FIX-158c)
