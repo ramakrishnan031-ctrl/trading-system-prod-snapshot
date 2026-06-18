@@ -193,8 +193,9 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
    kill_switch, 200/503). The emergency SOFT_KILL was cleared (operator `--resume`) and the service
    **handed off to systemd — now `active`, `NRestarts=0`**. Still OPEN (EXTERNAL): the Kite dev-console
    **IP allowlist** for the VM IP (place_order 403 root cause; see `kite_ip_allowlist_dependency`,
-   FIX-185) — required for live order placement. Follow-up gap: no clean systemd `--resume` path
-   (standalone `main.py --resume` competes with the service for the instance-lock port 5001).
+   FIX-185) — required for live order placement. **Resume cleanly with `deploy/resume.sh`** (stop →
+   `scripts/clear_kill_switch.py` clears the kill in the DB without the instance lock → start under
+   systemd) — FIX-188b; do NOT use a standalone `main.py --resume` (it competes for instance-lock port 5001).
 3. ~~`alert-watcher.service` SMTP delivery~~ — **RESOLVED 2026-06-18 (verified)**: valid Gmail App
    Password set in `.env`; the 16 pending sentinels delivered (`Digest delivered: 16 alerts → .delivered`;
    `.flag`=0, `.failed`=0; digest emailed to `ramakrishnan031@gmail.com`, subject
@@ -254,6 +255,12 @@ inactive alert-watcher).
   `{db, token, kill_switch}` and returns 200/503 (reads the `kill_switch_state` table; also fixed the
   same latent wrong-table bug in `/metrics`). Verified live; service handed off to systemd (active).
   Commits 7a12cf2, 8cf8685.
+- 2026-06-18 — Claude Code — FIX-188b: **systemd-friendly resume**. `scripts/clear_kill_switch.py`
+  clears (resumes) the kill switch in the DB via `KillSwitch.resume()` WITHOUT acquiring the instance
+  lock or starting the loop (`--dry-run`, `--force` for HARD_KILL); `deploy/resume.sh` wraps
+  stop → clear → reset-failed → start under systemd. Closes the manual-vs-systemd `--resume` lock
+  conflict (no more standalone `main.py --resume` competing for port 5001). 6 tests; live dry-run
+  verified. Commit 9ddcddf.
 - 2026-06-18 — Claude Code — TASK #3: **Cron Officer**. New `config/cron_registry.yaml` (single source
   of truth, 30 jobs) + `core/cron_registry.py` loader; `scripts/cron_officer.py` (`--briefing` 04:55,
   `--eod-summary` 18:30, `--check-change`); `check_cron_drift.py` now registry-driven (hardcoded list
