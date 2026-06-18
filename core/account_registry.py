@@ -57,10 +57,11 @@ class AccountRow:
     is_primary:       bool   # True for exactly one row
     api_key_env:      str    # Env var name for broker API key
     api_secret_env:   str    # Env var name for broker API secret
-    totp_secret_env:  str    # Env var name for TOTP secret. UNUSED in v2:
-                             # the live login flow (scripts/zerodha_login.py)
-                             # uses the request_token OAuth path, not TOTP.
-                             # Reserved for v2.1 headless automation. ACC-2.
+    totp_secret_env:  str    # Env var name for TOTP secret. Used by the headless
+                             # refresh (scripts/auto_refresh_token.py, FIX-187):
+                             # password+TOTP login -> request_token -> access_token.
+                             # The interactive flow (scripts/zerodha_login.py) still
+                             # uses the browser request_token OAuth path. ACC-2.
     paper_capital:    float  # Capital (INR) used in paper mode
     capital_share_pct: float # Fraction of pooled capital (v2.1 multi-account)
     enabled:          bool   # Gates inclusion in account selector

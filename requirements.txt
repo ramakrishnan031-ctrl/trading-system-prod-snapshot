@@ -12,3 +12,4 @@ cachetools==7.1.1      # FIX-036: TTLCache for webhook deduplication
 waitress==3.0.2        # B.3 / Audit 6.5 + A.1 (2026-04-25): production WSGI server (cross-platform; replaces app.run; supersedes gunicorn ask -- waitress works on Windows dev workstation, gunicorn is UNIX-only)
 openpyxl==3.1.5        # DR5: daily_review .xlsx output
 python-dotenv==1.2.2   # runtime .env loading (SU19)
+pyotp==2.9.0           # FIX-187: headless TOTP for scripts/auto_refresh_token.py (verify vs `pip freeze` on venv rebuild)
