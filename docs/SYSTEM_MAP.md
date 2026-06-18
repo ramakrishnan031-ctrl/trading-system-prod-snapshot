@@ -167,25 +167,25 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
 ---
 
-## Known Duplicates / Issues  (audit 2026-06-18)
-1. **Live crontab ≠ `deploy/cron/trading-system.cron`** — e.g. live runs `refresh_instruments`
+## Known Duplicates / Issues  (audit 2026-06-18; cleanup applied same day)
+1. **[OPEN] Live crontab ≠ `deploy/cron/trading-system.cron`** — e.g. live runs `refresh_instruments`
    09:00 Mon-Fri; committed copy has it 18:00 Sun, plus the committed copy has analytics.db
    backup (01:05) and `db_retention.py` (02:30) jobs that the live crontab does **not** show.
    → Reconcile and re-sync the canonical file.
-2. **`trading-system.service` crash-loop** — `activating (auto-restart)`. Root cause: Kite IP
+2. **[OPEN] `trading-system.service` crash-loop** — `activating (auto-restart)`. Root cause: Kite IP
    allowlist / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). Operational.
-3. **~70 stale `critical_alert_*.flag` sentinels** in `data_store/` (13–18 Jun, many from the
-   crash-loop). `alert-watcher.service` should consume them; they are piling up → review.
-4. **Two git remotes** on PC (`origin` + `vm`) point to the same bare repo → redundant.
+3. **[OPEN] `alert-watcher.service` is INACTIVE** — the sentinel monitor is not running, which is why
+   `critical_alert_*.flag` files accumulated (72 by 18-Jun). The 56 stale flags older than 18-Jun were
+   deleted on 2026-06-18; today's remain. **Action: start/enable `alert-watcher.service`** so future
+   CRITICAL sentinels are consumed instead of piling up.
+4. ~~Two git remotes on PC~~ — **RESOLVED 2026-06-18** (`vm` remote removed; `origin` remains).
 
-## PENDING CLEANUP — awaiting Rama's approval (do NOT delete without sign-off)
-| Path | Why | Safe to remove? |
-|---|---|---|
-| `/home/ubuntu/systems/trading-system/trading.db` | **0-byte dead DB** at root; canonical DBs are in `data_store/` | Yes (verify 0 bytes first) |
-| `data_store/critical_alert_*.flag` (consumed ones) | Stale sentinels from crash-loop | Only after alert-watcher confirms processed |
-| root `CRON_FIX_2026_05_18.md`, `FIXES_DAILY_REPORT_2026_05_18.md` | Dated one-off notes at repo root (belong in `docs/` or archive) | Likely (review content) |
-| root `deploy_audit_fixes.ps1` | One-off PowerShell deploy helper | Review (may be superseded by git-push deploy) |
-| Duplicate git remote `vm` (PC) | Same target as `origin` | Yes (`git remote remove vm`) |
+## PENDING CLEANUP
+✅ **All previously-listed items were actioned on 2026-06-18** (see Changelog): root `trading.db`
+deleted, 56 stale `critical_alert_*.flag` removed, dated notes archived to `docs/archive/`,
+`deploy_audit_fixes.ps1` removed, duplicate `vm` git remote removed. **No items currently pending.**
+New open operational issues are tracked under "Known Issues" above (crontab divergence, crash-loop,
+inactive alert-watcher).
 
 ---
 
@@ -200,3 +200,7 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 - 2026-06-18 — VS Code Claude — Initial creation. Full VM+PC audit (structure, configs, modules,
   DB, logs, ~28 cron jobs, 4 systemd services, tools, deploy mechanism). Flagged: root `trading.db`
   (0-byte dead), crontab divergence, sentinel accumulation, duplicate git remote, crash-loop.
+- 2026-06-18 — VS Code Claude — Cleanup: removed dead `trading.db`, deleted 56 stale `*.flag` files,
+  moved dated notes (`CRON_FIX_2026_05_18.md`, `FIXES_DAILY_REPORT_2026_05_18.md`) to `docs/archive/`,
+  removed `deploy_audit_fixes.ps1`, removed duplicate `vm` git remote. Discovered `alert-watcher.service`
+  is INACTIVE (now tracked as open issue #3).
