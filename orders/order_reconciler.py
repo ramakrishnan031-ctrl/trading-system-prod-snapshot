@@ -191,6 +191,18 @@ class OrderReconciler:
         except (TypeError, ValueError):
             self._human_order_margin_tolerance = 5000.0
 
+        # TASK-11: dedicated throttle for repeat CAPITAL_DRIFT alerts. First
+        # detection alerts immediately; thereafter at most once per the
+        # configured interval (default 1800s / 30 min). Replaces the generic
+        # exponential backoff for this check. Default if cfg omits it (older
+        # configs) or cfg is a test mock whose attr isn't a real number.
+        _cdai = getattr(cfg, "capital_drift_alert_interval_sec", 1800.0)
+        try:
+            self._capital_drift_alert_interval_sec: float = float(_cdai)
+        except (TypeError, ValueError):
+            self._capital_drift_alert_interval_sec = 1800.0
+        self._last_capital_drift_alert_poll: Optional[int] = None
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -275,6 +287,31 @@ class OrderReconciler:
             return True
 
         # Still in backoff window
+        return False
+
+    def _should_alert_capital_drift(self) -> bool:
+        """
+        TASK-11: throttle repeat G3 CAPITAL_DRIFT alerts to at most once per
+        ``capital_drift_alert_interval_sec`` (default 1800s / 30 min).
+
+        First detection alerts immediately; subsequent detections are suppressed
+        until the configured interval (converted to poll cycles) has elapsed.
+        This replaces the generic exponential backoff for CAPITAL_DRIFT so the
+        repeat cadence is a single operator-tunable value rather than a
+        2min/8min/30min ramp. Capital drift is informational here — kill
+        escalation is governed separately by drift_handler thresholds — so a
+        quieter, fixed cadence is safe.
+
+        Returns True if we should alert now, False if still within the window.
+        """
+        poll_interval = max(1, int(getattr(self._cfg, "poll_interval_sec", 15)))
+        interval_polls = max(
+            1, round(self._capital_drift_alert_interval_sec / poll_interval)
+        )
+        last = self._last_capital_drift_alert_poll
+        if last is None or (self._poll_count - last) >= interval_polls:
+            self._last_capital_drift_alert_poll = self._poll_count
+            return True
         return False
 
     def _mark_discrepancy_resolved(
@@ -1767,12 +1804,15 @@ class OrderReconciler:
             effective_tolerance += self._human_order_margin_tolerance
 
         if delta <= effective_tolerance:
-            # FIX-038: Mark as resolved if drift is back within tolerance
-            self._mark_discrepancy_resolved(None, "CAPITAL_DRIFT")
+            # TASK-11: drift back within tolerance — reset the throttle so the
+            # next genuine drift alerts immediately instead of waiting out the
+            # 30-min window. (Was: FIX-038 _mark_discrepancy_resolved.)
+            self._last_capital_drift_alert_poll = None
             return None
 
-        # FIX-038: Check if we should alert (exponential backoff)
-        should_alert = self._should_alert_for_discrepancy(None, "CAPITAL_DRIFT")
+        # TASK-11: throttle repeat alerts to one per capital_drift_alert_interval_sec
+        # (default 30 min) instead of the FIX-038 exponential backoff.
+        should_alert = self._should_alert_capital_drift()
 
         if should_alert:
             self._log.error(

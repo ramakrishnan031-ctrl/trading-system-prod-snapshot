@@ -511,6 +511,13 @@ class OrderReconcilerConfig(BaseModel):
     # widens the broker-vs-local gap; this prevents CRITICAL drift alert spam
     # while still catching genuine catastrophic drift beyond the allowance.
     human_order_margin_tolerance: float = 5000.0
+    # TASK-11: minimum seconds between repeat CAPITAL_DRIFT alerts. First
+    # detection alerts immediately; thereafter the alert is throttled to at most
+    # once per this interval (default 1800s / 30 min). Replaces the old
+    # exponential backoff (2min/8min/30min ramp) for this check with a single
+    # operator-tunable cadence. Informational only — kill escalation is governed
+    # separately by drift_handler thresholds.
+    capital_drift_alert_interval_sec: float = 1800.0
 
     @field_validator("poll_interval_sec")
     @classmethod
@@ -531,6 +538,13 @@ class OrderReconcilerConfig(BaseModel):
     def _validate_human_order_tolerance(cls, v: float) -> float:
         if v < 0.0:
             raise ValueError("human_order_margin_tolerance must be >= 0.0")
+        return v
+
+    @field_validator("capital_drift_alert_interval_sec")
+    @classmethod
+    def _validate_drift_alert_interval(cls, v: float) -> float:
+        if v < 1.0:
+            raise ValueError("capital_drift_alert_interval_sec must be >= 1.0")
         return v
 
 

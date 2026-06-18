@@ -2319,8 +2319,14 @@ def test_fix038_missing_exits_bypasses_backoff(tmp_path: Path, caplog) -> None:
     print("  OK FIX-038: MISSING_EXITS bypasses backoff")
 
 
-def test_fix038_capital_drift_uses_exponential_backoff(tmp_path: Path, caplog) -> None:
-    """FIX-038: CAPITAL_DRIFT repeated detection uses exponential backoff."""
+def test_task11_capital_drift_fixed_30min_interval(tmp_path: Path, caplog) -> None:
+    """TASK-11: CAPITAL_DRIFT repeat alerts use a single fixed interval (30 min)
+    instead of the old FIX-038 exponential backoff (2min/8min/30min ramp).
+
+    With the test poll_interval_sec=60 and the default 1800s interval, the
+    throttle gap is round(1800/60)=30 polls: alert at poll 1, suppressed
+    2..30, alert again at poll 31. The old 2-min (poll 9) alert is gone.
+    """
     import logging
 
     store = _make_store(tmp_path)
@@ -2338,6 +2344,7 @@ def test_fix038_capital_drift_uses_exponential_backoff(tmp_path: Path, caplog) -
     notifier = MagicMock()
     notifier.send.return_value = MagicMock(success=True)
 
+    # poll_interval_sec=60 (default) -> interval_polls = round(1800/60) = 30
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
                            notifier=notifier, capital_drift_tolerance=50.0)
 
@@ -2345,23 +2352,61 @@ def test_fix038_capital_drift_uses_exponential_backoff(tmp_path: Path, caplog) -
     error_polls = []
 
     with caplog.at_level(logging.ERROR, logger="order_reconciler"):
-        for poll in range(1, 21):
+        for poll in range(1, 32):  # 31 polls
             caplog.clear()
             rec.reconcile_once()
-            # Check if any ERROR log contains "CAPITAL_DRIFT"
             if any("CAPITAL_DRIFT" in record.message and "backoff" not in record.message
                    for record in caplog.records if record.levelno == logging.ERROR):
                 error_polls.append(poll)
 
-    # Expected: poll 1 (immediate), poll 9 (1+8)
-    assert 1 in error_polls, "First CAPITAL_DRIFT should alert immediately"
-    assert 9 in error_polls, "Second alert should occur at poll 9 (8 polls after first)"
-
-    # Verify that NOT every poll alerted (backoff worked)
-    assert len(error_polls) < 20, f"Backoff failed: alerted on {len(error_polls)}/20 polls"
+    assert error_polls == [1, 31], (
+        f"Expected alerts only at poll 1 and poll 31 (30-poll interval); got {error_polls}"
+    )
+    # The old exponential-backoff 2-min alert (poll 9) must NOT fire anymore.
+    assert 9 not in error_polls, "poll 9 (old 8-poll backoff) should no longer alert"
 
     store.close()
-    print("  OK FIX-038: CAPITAL_DRIFT uses exponential backoff")
+    print("  OK TASK-11: CAPITAL_DRIFT uses fixed 30-min interval (no exp backoff)")
+
+
+def test_task11_capital_drift_resets_after_resolved(tmp_path: Path) -> None:
+    """TASK-11: when drift returns within tolerance the throttle resets, so a
+    subsequent drift alerts immediately rather than waiting out the window."""
+    store = _make_store(tmp_path)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    # Start in drift (90k vs 100k = 10k).
+    adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+
+    # Poll 1: drift -> alert.
+    rec.reconcile_once()
+    assert notifier.send.call_count == 1
+    # Poll 2: still drifting, within window -> suppressed.
+    rec.reconcile_once()
+    assert notifier.send.call_count == 1
+    # Poll 3: drift resolved (broker matches local) -> throttle resets.
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    rec.reconcile_once()
+    assert notifier.send.call_count == 1
+    # Poll 4: drift returns -> must alert immediately (reset), not wait the window.
+    adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
+    rec.reconcile_once()
+    assert notifier.send.call_count == 2, "drift after a resolve should re-alert immediately"
+
+    store.close()
+    print("  OK TASK-11: CAPITAL_DRIFT throttle resets after drift resolves")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2563,7 +2608,8 @@ def run_all_tests() -> int:
         test_fix038_repeated_discrepancy_uses_exponential_backoff,
         test_fix038_discrepancy_resolved_removes_tracking,
         test_fix038_missing_exits_bypasses_backoff,
-        test_fix038_capital_drift_uses_exponential_backoff,
+        test_task11_capital_drift_fixed_30min_interval,
+        test_task11_capital_drift_resets_after_resolved,
         # FIX-B: Orphan auto-close after 3 cycles
         test_fixb_orphan_auto_close_after_3_cycles,
         test_fixb_orphan_counter_reset_when_order_found,
