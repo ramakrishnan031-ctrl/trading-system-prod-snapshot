@@ -538,6 +538,96 @@ def test_fix186_sweep_ignores_already_terminal_order(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-186 (FIX 3): G5b guard against recovery-SL during manual-close race
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix186_g5b_skips_when_no_broker_position(tmp_path: Path) -> None:
+    """FIX 3: broker reports no position for the symbol → recovery SL NOT placed."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", direction="LONG",
+                  status="OPEN", qty_filled=10, sl_initial=2450.0,
+                  entry_actual_price=2500.0)
+    adapter = MagicMock()
+    quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
+    rec = _make_reconciler(store, adapter=adapter, quote_fn=quote_fn)
+    trade = store.get_all_open_trades()[0]
+
+    act = rec._g5b_crash_recovery_sl(trade, broker_positions={})  # snapshot: flat
+
+    assert act is None
+    adapter.place_order.assert_not_called()
+    store.close()
+    print("  OK FIX-186: G5b skips recovery-SL when broker has no position")
+
+
+def test_fix186_g5b_skips_when_broker_qty_zero(tmp_path: Path) -> None:
+    """FIX 3: symbol present but qty==0 → treated as flat → SL NOT placed."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", direction="LONG",
+                  status="OPEN", qty_filled=10, sl_initial=2450.0,
+                  entry_actual_price=2500.0)
+    adapter = MagicMock()
+    quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
+    rec = _make_reconciler(store, adapter=adapter, quote_fn=quote_fn)
+    trade = store.get_all_open_trades()[0]
+
+    act = rec._g5b_crash_recovery_sl(
+        trade, broker_positions={"RELIANCE": _Position("RELIANCE", qty=0, avg_price=2500.0)}
+    )
+
+    assert act is None
+    adapter.place_order.assert_not_called()
+    store.close()
+    print("  OK FIX-186: G5b skips recovery-SL when broker qty==0")
+
+
+def test_fix186_g5b_places_when_broker_position_present(tmp_path: Path) -> None:
+    """FIX 3: live broker position present → recovery SL placed normally."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", direction="LONG",
+                  status="OPEN", qty_filled=10, sl_initial=2450.0,
+                  entry_actual_price=2500.0)
+    adapter = MagicMock()
+    adapter.place_order.return_value = _PlacedOrder(
+        "int_1", "broker_sl_1", "RELIANCE", "SELL", 10, 0.0, "SL", trigger_price=2450.0
+    )
+    quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
+    rec = _make_reconciler(store, adapter=adapter, quote_fn=quote_fn)
+    trade = store.get_all_open_trades()[0]
+
+    act = rec._g5b_crash_recovery_sl(
+        trade, broker_positions={"RELIANCE": _Position("RELIANCE", qty=10, avg_price=2500.0)}
+    )
+
+    assert act is not None and act.success is True
+    adapter.place_order.assert_called_once()
+    store.close()
+    print("  OK FIX-186: G5b places recovery-SL when broker position present")
+
+
+def test_fix186_g5b_places_when_snapshot_unavailable(tmp_path: Path) -> None:
+    """FIX 3 fail-safe: no broker snapshot (None) → place SL (protect position)."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", direction="LONG",
+                  status="OPEN", qty_filled=10, sl_initial=2450.0,
+                  entry_actual_price=2500.0)
+    adapter = MagicMock()
+    adapter.place_order.return_value = _PlacedOrder(
+        "int_1", "broker_sl_1", "RELIANCE", "SELL", 10, 0.0, "SL", trigger_price=2450.0
+    )
+    quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
+    rec = _make_reconciler(store, adapter=adapter, quote_fn=quote_fn)
+    trade = store.get_all_open_trades()[0]
+
+    act = rec._g5b_crash_recovery_sl(trade, broker_positions=None)
+
+    assert act is not None
+    adapter.place_order.assert_called_once()
+    store.close()
+    print("  OK FIX-186: G5b places recovery-SL when snapshot unavailable (fail-safe)")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BL-10b: MANUAL_CLOSE publishes PositionClosed (out-of-band closure)
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -591,6 +591,10 @@ class OrderReconciler:
 
         local_trades = self._store.get_all_open_trades()
 
+        # FIX-186 (FIX 3): keep the broker-position snapshot in scope for the G5b
+        # recovery-SL loop below so it can skip symbols the broker no longer holds.
+        # None means "snapshot unavailable" (timeout/auth) → G5b proceeds (fail-safe).
+        broker_pos: Optional[dict] = None
         if raw_positions is not None:
             broker_pos = {p.symbol: p for p in raw_positions}
             local_symbols = {t["symbol"] for t in local_trades}
@@ -691,7 +695,7 @@ class OrderReconciler:
         for trade in local_trades:
             sl_row = self._store.get_sl_order_for_trade(trade["trade_id"])
             if sl_row is None:
-                act = self._g5b_crash_recovery_sl(trade)
+                act = self._g5b_crash_recovery_sl(trade, broker_positions=broker_pos)
                 if act is not None:
                     actions.append(act)
 
@@ -1741,7 +1745,9 @@ class OrderReconciler:
 
     # ── G5b: CRASH_RECOVERY_SL ───────────────────────────────────────────────
 
-    def _g5b_crash_recovery_sl(self, trade) -> Optional[ReconciliationAction]:
+    def _g5b_crash_recovery_sl(
+        self, trade, broker_positions: Optional[dict] = None
+    ) -> Optional[ReconciliationAction]:
         """
         OPEN/PARTIAL trade has no active SL order — place a fresh recovery order
         per G5b logic (RC7).
@@ -1754,6 +1760,13 @@ class OrderReconciler:
 
         Order is placed via adapter.place_order() (RC18 — no order_placer import)
         and persisted via OrderManager.insert_order().
+
+        FIX-186 (FIX 3): if a fresh broker-position snapshot is provided and it
+        shows NO live position for this symbol (absent or qty==0), skip placement.
+        Otherwise a recovery SL placed for a position that is simultaneously being
+        manually closed is immediately orphaned by CHECK1 the next cycle (the
+        17-Jun IRFC race). Fail-safe: when the snapshot is unavailable (None) we
+        proceed, since leaving a genuinely open position unprotected is worse.
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
@@ -1766,6 +1779,18 @@ class OrderReconciler:
 
         if qty <= 0 or sl_price is None or float(sl_price) <= 0:
             return None
+
+        # FIX-186 (FIX 3): skip recovery SL when the broker positively reports no
+        # live position for this symbol (manual close likely in progress).
+        if broker_positions is not None:
+            bp = broker_positions.get(symbol)
+            if bp is None or abs(int(getattr(bp, "qty", 0) or 0)) == 0:
+                log.info(
+                    "G5b skipped recovery-SL for %s — no broker position found "
+                    "(likely manual close in progress)",
+                    symbol,
+                )
+                return None
 
         sl_price = float(sl_price)
 
