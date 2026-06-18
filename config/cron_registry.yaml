@@ -1,0 +1,316 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Cron Job Registry — SINGLE SOURCE OF TRUTH  (TASK #3 / Cron Officer)
+# ─────────────────────────────────────────────────────────────────────────────
+# Read by: core/cron_registry.py -> scripts/cron_officer.py, scripts/check_cron_drift.py.
+# Update THIS file when adding/removing/changing any cron job, then regenerate
+# deploy/cron/trading-system.cron and re-sync the live crontab (see SYSTEM_MAP).
+#
+# Per-job fields:
+#   script           command/path (informational; canonical cron is generated from this)
+#   schedule         human-readable IST schedule
+#   type             python | shell        (shell jobs cannot emit heartbeats)
+#   critical         true  -> SUCCESS also alerts; FAILED always alerts
+#   market_day_only  true  -> script should skip (SKIPPED heartbeat) on NSE holidays
+#   cadence          daily|market_day|intraday|hourly|weekly|monthly  (drives "due today")
+#   monitored        true  -> check_cron_drift / Cron Officer expect a heartbeat when due
+#   weekday          0=Mon..6=Sun           (weekly cadence only)
+#   day_of_month     1..28                  (monthly cadence only)
+
+jobs:
+  # ── Daily (all days) ──────────────────────────────────────────────────────
+  log_cleanup:
+    script: "find logs -name '*.log' -mtime +30 -delete"
+    schedule: "00:00 daily"
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
+  db_backup:
+    script: "sqlite3 trading_system.db .backup backups/trading_system-<date>.db"
+    schedule: "01:00 daily"
+    type: shell
+    critical: true
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
+  # NOTE: present in canonical deploy/cron but MISSING from the live crontab as of
+  # 2026-06-18 — analytics.db is currently un-backed-up on the VM. Pending sync.
+  analytics_backup:
+    script: "sqlite3 analytics.db .backup backups/analytics-<date>.db"
+    schedule: "01:05 daily"
+    type: shell
+    critical: true
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
+  backup_retention:
+    script: "find backups (trading_system-*.db | analytics-*.db) -mtime +7 -delete"
+    schedule: "02:00 daily"
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
+  # NOTE: present in canonical deploy/cron but MISSING from the live crontab.
+  # PRUNES DB ROWS (Sun run adds --vacuum) — activation is a deliberate decision.
+  db_retention:
+    script: "scripts/db_retention.py  (Sun: --vacuum)"
+    schedule: "02:30 daily"
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
+  token_cleanup:
+    script: "rm -f data_store/session/zerodha_token.json"
+    schedule: "05:00 daily"
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
+  cron_officer_briefing:
+    script: "scripts/cron_officer.py --briefing"
+    schedule: "04:55 daily"
+    type: python
+    critical: true
+    market_day_only: false
+    cadence: daily
+    monitored: true
+
+  disk_monitor:
+    script: "scripts/disk_monitor.py"
+    schedule: "hourly"
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: hourly
+    monitored: false
+
+  # ── Market day (Mon-Fri, skip NSE holidays) ───────────────────────────────
+  auto_refresh_token:
+    script: "scripts/auto_refresh_token.py"
+    schedule: "08:15 Mon-Fri"
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  premarket_healthcheck:
+    script: "scripts/premarket_healthcheck.py"
+    schedule: "08:30 Mon-Fri"
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  fetch_fno_ban:
+    script: "scripts/fetch_fno_ban.py"
+    schedule: "08:35 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  gemini_premarket_brief:
+    script: "scripts/gemini_premarket_brief.py"
+    schedule: "08:55 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  refresh_instruments:
+    script: "scripts/refresh_instruments.py --account LFL836"
+    schedule: "09:00 Mon-Fri"
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  capture_metrics:
+    script: "scripts/capture_metrics_baseline.py"
+    schedule: "*/5 09-15 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: intraday
+    monitored: false
+
+  fetch_daily_candles:
+    script: "scripts/fetch_daily_candles.py"
+    schedule: "15:40 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  reconcile_positions:
+    script: "scripts/reconcile_positions.py"
+    schedule: "15:45 Mon-Fri"
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  eod_cleanup:
+    script: "scripts/eod_cleanup.py"
+    schedule: "15:50 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  eod_verify:
+    script: "scripts/eod_verify.py"
+    schedule: "15:55 Mon-Fri"
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  daily_review:
+    script: "reports/daily_review.py"
+    schedule: "16:00 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  wal_checkpoint:
+    script: "scripts/wal_checkpoint.py"
+    schedule: "16:00 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  generate_screened_csv:
+    script: "scripts/generate_screened_stocks_csv.py"
+    schedule: "16:01 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  daily_report:
+    script: "python -m reports.daily_report"
+    schedule: "16:05 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  trade_journal:
+    script: "scripts/trade_journal.py"
+    schedule: "16:10 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  compute_strategy_metrics:
+    script: "scripts/compute_strategy_metrics.py"
+    schedule: "16:15 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  metrics_summary:
+    script: "scripts/capture_metrics_baseline.py --summarize"
+    schedule: "16:16 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: false   # shares the 'capture_metrics_baseline' heartbeat name
+
+  gemini_log_review:
+    script: "scripts/gemini_log_review.py"
+    schedule: "16:20 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  gemini_trade_coach:
+    script: "scripts/gemini_trade_coach.py"
+    schedule: "16:40 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  gemini_data_integrity:
+    script: "scripts/gemini_data_integrity_check.py"
+    schedule: "17:00 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  check_cron_drift:
+    script: "scripts/check_cron_drift.py"
+    schedule: "18:00 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: false   # the monitor itself; does not self-report
+
+  cron_officer_eod:
+    script: "scripts/cron_officer.py --eod-summary"
+    schedule: "18:30 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
+  # ── Weekly ────────────────────────────────────────────────────────────────
+  gemini_weekly_patterns:
+    script: "scripts/gemini_weekly_patterns.py"
+    schedule: "18:00 Sunday"
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: weekly
+    weekday: 6
+    monitored: true
+
+  # ── Monthly ─────────────────────────────────────────────────────────────────
+  backup_restore_drill:
+    script: "scripts/backup_restore_drill.py --quiet"
+    schedule: "03:00 1st-of-month"
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: monthly
+    day_of_month: 1
+    monitored: true

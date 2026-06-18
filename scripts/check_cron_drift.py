@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
-scripts/check_cron_drift.py — FIX-145
+scripts/check_cron_drift.py — FIX-145 / TASK #3 (Cron Officer)
 
-Checks that all expected cron jobs have run in the last 24 hours.
-Sends Telegram alert if any job is missing its heartbeat.
+Checks that every monitored cron job that was DUE today has emitted a heartbeat
+in the last 24 hours. Sends a Telegram alert listing any missing jobs.
+
+The expected-job set is now derived from config/cron_registry.yaml (the single
+source of truth) — no hardcoded list. Only jobs with `monitored: true` that are
+due today and were scheduled at/before "now" are expected (so a 16:00 job isn't
+flagged at an 08:00 run, and weekly/monthly jobs aren't flagged off-schedule).
+A SKIPPED heartbeat (NSE holiday) counts as "ran".
 
 Designed to run daily at 18:00 IST (after market close + all cron jobs).
 
 Usage:
-    python scripts/check_cron_drift.py [--db-path PATH] [--config-dir PATH]
+    python scripts/check_cron_drift.py [--db-path PATH] [--config-dir PATH] [--dry-run]
 """
 from __future__ import annotations
 
@@ -22,52 +28,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+from core.cron_registry import CronRegistry
+from core.logger import get_logger
 from core.state_store import StateStore
 from core.time_authority import now_ist
-from core.logger import get_logger
 
 _log = get_logger("check_cron_drift")
 
-# Expected cron jobs and their typical schedule (for reference in alerts)
-# Only include critical jobs that we want to monitor; hourly jobs like disk_monitor
-# would generate too many heartbeats and are less critical.
-EXPECTED_JOBS = {
-    # Pre-market
-    "auto_refresh_token": "08:00 IST Mon-Fri",
-    "fetch_fno_ban": "08:30 IST Mon-Fri",
-    # EOD cleanup chain
-    "fetch_daily_candles": "15:40 IST Mon-Fri",
-    "reconcile_positions": "15:45 IST Mon-Fri",
-    "eod_cleanup": "15:50 IST Mon-Fri",
-    "eod_verify": "15:55 IST Mon-Fri",
-    # Reports chain
-    "daily_review": "16:00 IST Mon-Fri",
-    "wal_checkpoint": "16:00 IST Mon-Fri",
-    "daily_report": "16:05 IST Mon-Fri",
-    "trade_journal": "16:10 IST Mon-Fri",
-    "compute_strategy_metrics": "16:15 IST Mon-Fri",
-    "gemini_log_review": "16:20 IST Mon-Fri",
-}
 
-
-def check_cron_drift(store: StateStore) -> list[str]:
-    """
-    Check for missing cron heartbeats in the last 24 hours.
-
-    Returns list of missing job names (empty = all OK).
-    """
-    cutoff = now_ist() - timedelta(hours=24)
-    cutoff_iso = cutoff.isoformat()
+def check_cron_drift(store: StateStore, registry: CronRegistry, config_dir: Path) -> list[str]:
+    """Return the names of monitored, due-today jobs missing a heartbeat (24h)."""
+    now = now_ist()
+    cutoff_iso = (now - timedelta(hours=24)).isoformat()
 
     heartbeats = store.get_cron_heartbeats_since(cutoff_iso)
     seen_jobs = {h["job_name"] for h in heartbeats}
 
-    missing = []
-    for job_name in EXPECTED_JOBS:
-        if job_name not in seen_jobs:
-            missing.append(job_name)
-
-    return missing
+    expected = registry.expected_heartbeat_jobs(
+        now.date(), config_dir=config_dir, before_time=now.time()
+    )
+    return [job.name for job in expected if job.name not in seen_jobs]
 
 
 def main() -> int:
@@ -82,34 +62,38 @@ def main() -> int:
         print(f"Database not found: {args.db_path}")
         return 1
 
-    store = StateStore(args.db_path)
+    try:
+        registry = CronRegistry.load(args.config_dir / "cron_registry.yaml")
+    except Exception as e:
+        _log.error("check_cron_drift.registry_load_failed", extra={"error": str(e)})
+        print(f"Failed to load cron registry: {e}")
+        return 1
 
-    missing = check_cron_drift(store)
+    store = StateStore(args.db_path)
+    missing = check_cron_drift(store, registry, args.config_dir)
 
     if not missing:
-        _log.info("check_cron_drift.all_ok", extra={"jobs_checked": len(EXPECTED_JOBS)})
-        print(f"All {len(EXPECTED_JOBS)} expected cron jobs ran in last 24h")
+        expected_n = len(registry.expected_heartbeat_jobs(now_ist().date(), config_dir=args.config_dir, before_time=now_ist().time()))
+        _log.info("check_cron_drift.all_ok", extra={"jobs_checked": expected_n})
+        print(f"All {expected_n} expected cron jobs ran in last 24h")
+        store.close()
         return 0
 
     # Build alert message
     lines = ["CRON DRIFT ALERT: Missing heartbeats in last 24h\n"]
-    for job in missing:
-        schedule = EXPECTED_JOBS.get(job, "unknown")
-        lines.append(f"  - {job} (expected: {schedule})")
-
+    for name in missing:
+        schedule = registry.get(name).schedule
+        lines.append(f"  - {name} (expected: {schedule})")
     alert_msg = "\n".join(lines)
     print(alert_msg)
 
-    _log.warning(
-        "check_cron_drift.missing_jobs",
-        extra={"missing": missing, "count": len(missing)},
-    )
+    _log.warning("check_cron_drift.missing_jobs", extra={"missing": missing, "count": len(missing)})
 
     if args.dry_run:
         print("\n[DRY-RUN] Would send Telegram alert")
+        store.close()
         return 1
 
-    # Send Telegram alert
     try:
         from alerts.telegram_notifier import TelegramNotifier
 
