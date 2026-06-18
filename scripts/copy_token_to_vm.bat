@@ -16,7 +16,7 @@ REM Phase 1: Copy to .tmp
 echo [1/2] Copying to zerodha_token.json.tmp...
 scp -i "C:\Users\rama\.ssh\trading_vm_secure" ^
     "D:\Projects\trading-system\data_store\session\zerodha_token.json" ^
-    ubuntu@161.118.188.171:/home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json.tmp
+    ubuntu@161.118.187.249:/home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json.tmp
 
 if not %errorlevel% equ 0 (
     echo.
@@ -30,13 +30,13 @@ if not %errorlevel% equ 0 (
 REM Phase 2: Atomic rename via SSH
 echo [2/2] Atomically moving .tmp to final location...
 ssh -i "C:\Users\rama\.ssh\trading_vm_secure" ^
-    ubuntu@161.118.188.171 ^
+    ubuntu@161.118.187.249 ^
     "mv /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json.tmp /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json"
 
 if %errorlevel% equ 0 (
     echo.
     echo   Token copied successfully (atomic).
-    echo   VM ready at: ubuntu@161.118.188.171
+    echo   VM ready at: ubuntu@161.118.187.249
 ) else (
     echo.
     echo   ERROR: mv command failed ^(error code %errorlevel%^)

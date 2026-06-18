@@ -18,7 +18,7 @@ The SQLite database is backed up nightly at 01:00 IST with 7-day retention.
 - Need to rollback to previous state
 
 ### Prerequisites
-- SSH access to VM (161.118.188.171)
+- SSH access to VM (161.118.187.249)
 - ubuntu user credentials
 - Trading system service stopped
 

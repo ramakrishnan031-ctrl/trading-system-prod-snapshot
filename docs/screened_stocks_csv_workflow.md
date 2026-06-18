@@ -23,7 +23,7 @@ Output: `reports/daily_review/screened_stocks_YYYY-MM-DD.csv`
 After market close, download the CSV from the VM:
 
 ```bash
-scp ubuntu@161.118.188.171:/home/ubuntu/systems/trading-system/reports/daily_review/screened_stocks_2026-05-09.csv \
+scp ubuntu@161.118.187.249:/home/ubuntu/systems/trading-system/reports/daily_review/screened_stocks_2026-05-09.csv \
     ./reports/daily_review/
 ```
 

@@ -1,7 +1,7 @@
 # Trading System v2 — Operations Runbook
 
 Date: 05-Jun-2026 | Crash Test Day 0 (offline pre-tests)
-VM: 161.118.188.171 | User: ubuntu | System: ~/systems/trading-system
+VM: 161.118.187.249 | User: ubuntu | System: ~/systems/trading-system
 
 ## 1. Daily Startup
 

@@ -4,7 +4,7 @@ External uptime monitoring for the trading system VM via the `/health` endpoint.
 
 ## Prerequisites
 
-- Trading system running on VM (161.118.188.171)
+- Trading system running on VM (161.118.187.249)
 - Port 8080 open in UFW firewall (`sudo ufw allow 8080/tcp`)
 - Healthcheck server started by main.py at boot (FIX-132 Item 15)
 
@@ -15,7 +15,7 @@ External uptime monitoring for the trading system VM via the `/health` endpoint.
 3. Configure:
    - **Monitor Type:** HTTP(s)
    - **Friendly Name:** Trading System Health
-   - **URL:** `http://161.118.188.171:8080/health`
+   - **URL:** `http://161.118.187.249:8080/health`
    - **Monitoring Interval:** 1 minute
 4. Under **Alert Contacts**, add your email address
 5. Click **Create Monitor**
@@ -42,5 +42,5 @@ ssh trading-vm "sudo ufw allow 8080/tcp"
 ## Verify Locally
 
 ```bash
-curl http://161.118.188.171:8080/health
+curl http://161.118.187.249:8080/health
 ```

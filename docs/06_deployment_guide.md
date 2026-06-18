@@ -13,7 +13,7 @@ Complete setup guide for the trading system VM.
 
 ## Current Architecture
 
-- **VM:** 161.118.188.171 (user: ubuntu)
+- **VM:** 161.118.187.249 (user: ubuntu)
 - **Repo:** /home/ubuntu/systems/trading-system/
 - **Venv:** /home/ubuntu/systems/venv/
 - **SSH alias:** `trading-vm` (configured in ~/.ssh/config)
