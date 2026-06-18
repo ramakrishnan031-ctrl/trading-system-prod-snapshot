@@ -1601,6 +1601,7 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("telegram_notifier"),
         paper_mode=(args.mode == "paper"),
         send_in_paper_mode=tg_cfg.telegram_alerts_in_paper_mode,
+        enabled=tg_cfg.enabled,                                # TASK-10: master ON/OFF switch
         max_retries=tg_cfg.max_retries,                        # FIX-131 Item 18
         retry_backoff_seconds=tg_cfg.retry_backoff_seconds,    # FIX-131 Item 18
         rate_limit_per_minute=tg_cfg.rate_limit_per_minute,    # FIX-131 Item 18

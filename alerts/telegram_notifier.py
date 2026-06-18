@@ -141,6 +141,7 @@ class TelegramNotifier:
         channels: list[ChannelConfig] | None = None,
         send_in_paper_mode: bool = False,
         email_fallback_config: Optional[Any] = None,  # FIX-132 Item 10
+        enabled: bool = True,  # TASK-10: master ON/OFF switch (telegram.enabled)
     ) -> None:
         """
         Construct a TelegramNotifier (TG2).
@@ -173,6 +174,7 @@ class TelegramNotifier:
         self._retry_backoff = float(retry_backoff_seconds)
         self._paper_mode = paper_mode
         self._send_in_paper_mode = send_in_paper_mode
+        self._enabled = enabled  # TASK-10: master switch; False = silent no-op
         # FIX-131 Item 18: sliding-window rate limiter (20 msgs/min default)
         self._rate_limiter = _SlidingWindowRateLimiter(rate_limit_per_minute)
         self._email_fallback = email_fallback_config  # FIX-132 Item 10
@@ -270,6 +272,15 @@ class TelegramNotifier:
             ERROR      -> attempt send; write failed_alerts.log on failure
             CRITICAL   -> write sentinel FIRST, then attempt send (TG5)
         """
+        # TASK-10: master ON/OFF switch (telegram.enabled). Single check point;
+        # when disabled the notifier is a silent no-op — no sentinel, no HTTP,
+        # no failed-alerts log. Applies equally to paper and live (shared config).
+        if not self._enabled:
+            self._log.info(
+                "telegram.disabled_via_config: skipping [%s] %s", severity, title
+            )
+            return SendResult(success=True, tier=severity, delivered_to=[])
+
         result = SendResult(success=False, tier=severity)
 
         if severity == "CRITICAL":

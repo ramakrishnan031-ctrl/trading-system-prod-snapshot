@@ -484,6 +484,7 @@ class TelegramChannelConfig(BaseModel):
 
 class TelegramConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    enabled: bool = True  # TASK-10: master ON/OFF switch. False = suppress ALL Telegram alerts (silent)
     bot_token_env: str = "TELEGRAM_BOT_TOKEN"  # env var holding the Bot API token
     telegram_alerts_in_paper_mode: bool = True  # if True, send real Telegram alerts in paper mode
     channels: list[TelegramChannelConfig]        # whitelist of known channels

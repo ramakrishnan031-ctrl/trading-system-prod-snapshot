@@ -39,6 +39,7 @@ def _make_notifier(tmpdir: Path, **kwargs) -> TelegramNotifier:
         timeout_sec=kwargs.get("timeout_sec", 5.0),
         max_retries=kwargs.get("max_retries", 2),
         paper_mode=kwargs.get("paper_mode", False),
+        enabled=kwargs.get("enabled", True),
     )
 
 
@@ -436,6 +437,70 @@ class TestPaperMode(unittest.TestCase):
         result = n.send("ERROR", "t", "b", "m")
         self.assertTrue(result.success)
         mock_post.assert_not_called()
+
+
+# ==============================================================================
+# TestMasterSwitch (TASK-10)
+# ==============================================================================
+
+class TestMasterSwitch(unittest.TestCase):
+    """TASK-10 -- telegram.enabled master ON/OFF switch."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmpdir = Path(self._tmpdir.name)
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_disabled_no_http_call(self, mock_post):
+        n = _make_notifier(self.tmpdir, enabled=False)
+        for sev in ("INFO", "WARN", "ERROR", "CRITICAL"):
+            n.send(sev, "t", "b", "m")
+        mock_post.assert_not_called()
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_disabled_critical_writes_no_sentinel(self, mock_post):
+        # When the master switch is OFF the notifier is a full silent no-op:
+        # not even the CRITICAL sentinel is written (single gate at top of send).
+        n = _make_notifier(self.tmpdir, enabled=False)
+        result = n.send("CRITICAL", "t", "b", "m")
+        mock_post.assert_not_called()
+        self.assertIsNone(result.sentinel_path)
+        self.assertEqual(list_pending_sentinels(self.tmpdir / "sentinels"), [])
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_disabled_no_failed_alerts_log(self, mock_post):
+        n = _make_notifier(self.tmpdir, enabled=False)
+        result = n.send("ERROR", "t", "b", "m")
+        self.assertFalse(result.failed_log_written)
+        self.assertFalse((self.tmpdir / "failed_alerts.log").exists())
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_disabled_returns_success_true(self, mock_post):
+        n = _make_notifier(self.tmpdir, enabled=False)
+        result = n.send("WARN", "t", "b", "m")
+        self.assertTrue(result.success)
+        self.assertEqual(result.tier, "WARN")
+        self.assertEqual(result.delivered_to, [])
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_enabled_explicit_sends_normally(self, mock_post):
+        mock_post.return_value = _mock_ok()
+        n = _make_notifier(self.tmpdir, enabled=True)
+        result = n.send("INFO", "t", "b", "m")
+        self.assertTrue(result.success)
+        self.assertTrue(mock_post.called)
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_default_enabled_sends_normally(self, mock_post):
+        # enabled omitted entirely -> defaults to True (no behavior change).
+        mock_post.return_value = _mock_ok()
+        n = _make_notifier(self.tmpdir)
+        result = n.send("INFO", "t", "b", "m")
+        self.assertTrue(result.success)
+        self.assertTrue(mock_post.called)
 
 
 # ==============================================================================

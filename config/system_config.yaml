@@ -146,6 +146,7 @@ alerts:                       # TG12/AW11 — alert subsystem settings
   watcher_lock_path: "data_store/alert_watcher.lock"
   watcher_log_path: "logs/alert_watcher.log"
   telegram:
+    enabled: true               # TASK-10: master ON/OFF switch. Set false to suppress ALL Telegram alerts (silent)
     bot_token_env: "TELEGRAM_BOT_TOKEN"
     telegram_alerts_in_paper_mode: true
     max_retries: 3              # FIX-131 Item 18: retry attempts per channel
