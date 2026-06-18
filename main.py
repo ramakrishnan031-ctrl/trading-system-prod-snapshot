@@ -1948,6 +1948,10 @@ def _main_locked(args, config_dir: Path) -> int:
     # FIX-128 (Fix D): wire EodSquareoff into the daily loss callback late-binding ref.
     _eod_ref["eod"] = eod
 
+    # FIX-186 (FIX 2): wire the stale-order sweep so EOD finalizes any orphan
+    # order rows left non-terminal by a broker-side cancel (the 17-Jun IRFC leak).
+    eod.set_stale_order_sweep(order_reconciler.sweep_stale_orders)
+
     # FIX-128 (Fix E): Token expiry monitor — checks Zerodha token every 30 min.
     # Paper mode: no-op (no real token required). Does NOT start until Phase 0g.
     token_monitor = TokenMonitor(
@@ -2051,6 +2055,14 @@ def _main_locked(args, config_dir: Path) -> int:
         _log.info(
             "Startup reconciliation: %d action(s) taken", len(recon_actions)
         )
+    # FIX-186 (FIX 2): backstop sweep for orphan order rows that a broker-side
+    # cancel finalized without updating the local DB before yesterday's shutdown
+    # (the 17-Jun IRFC leak). Runs after reconcile_once so any trades it just
+    # closed are already terminal and their stale exit legs get swept here.
+    try:
+        order_reconciler.sweep_stale_orders()
+    except Exception as exc:  # noqa: BLE001 — sweep must never block startup
+        _log.error("startup stale-order sweep failed: %s", exc)
     if kill_switch.is_active("any"):
         _log.critical(
             "Kill switch active after startup reconciliation -- aborting"

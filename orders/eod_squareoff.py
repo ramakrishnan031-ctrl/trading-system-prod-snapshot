@@ -149,6 +149,12 @@ class EodSquareoff:
         # FIX-046: entry_gate reference
         self._entry_gate = entry_gate
 
+        # FIX-186 (FIX 2): optional stale-order sweep callable (wired post-construction
+        # by main.py to OrderReconciler.sweep_stale_orders). Invoked after the
+        # two-pass squareoff so any exit legs left non-terminal by a broker-side
+        # cancel get finalized before the daily EOD verification.
+        self._stale_order_sweep = None
+
         # EOD3: per-date "already fired" flag
         self._fired_for_date: dict[date, bool] = {}
         self._lock = threading.Lock()
@@ -172,6 +178,13 @@ class EodSquareoff:
         would silently drop the event.
         """
         self._check_restart_recovery()
+
+    def set_stale_order_sweep(self, sweep_fn) -> None:
+        """
+        FIX-186 (FIX 2): wire the OrderReconciler.sweep_stale_orders callable so
+        the EOD sequence can finalize any orphan order rows after squareoff.
+        """
+        self._stale_order_sweep = sweep_fn
 
     def check_and_fire(self, now: datetime) -> bool:
         """
@@ -362,6 +375,16 @@ class EodSquareoff:
             "EOD Pass 2 complete: %d open positions exited.",
             p_succeeded,
         )
+
+        # FIX-186 (FIX 2): sweep any orders left non-terminal by a broker-side
+        # cancel whose parent trade is now terminal, before eod_verify runs.
+        # Best-effort: never let the sweep abort the EOD sequence.
+        if self._stale_order_sweep is not None:
+            try:
+                self._stale_order_sweep()
+            except Exception as exc:  # noqa: BLE001
+                log_exception(self._log, exc)
+                self._log.error("EOD stale-order sweep failed: %s", exc)
 
         duration_sec = time.monotonic() - start_ts
 

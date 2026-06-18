@@ -269,6 +269,72 @@ class OrderReconciler:
             self._thread = None
         self._log.info("order_reconciler stopped")
 
+    def sweep_stale_orders(self) -> int:
+        """
+        FIX-186 (FIX 2): defense-in-depth sweep. Mark any non-terminal local
+        order whose parent trade is already terminal (CLOSED / CLOSED_MANUAL /
+        CANCELLED / FAILED) as CANCELLED. This backstops any orphan order row
+        that a broker-side cancel finalized without updating the local DB —
+        e.g. a cancel that landed at EOD before order_monitor's next poll
+        (the 17-Jun IRFC leak). Mode-agnostic; runs identically in paper/live.
+
+        Called at startup (after reconcile_once) and at EOD (after the two-pass
+        squareoff). Returns the number of rows swept. Sends a WARNING Telegram
+        alert if any were swept.
+        """
+        try:
+            rows = self._store.fetch_all(
+                """SELECT order_id FROM orders
+                   WHERE status NOT IN ('COMPLETE','CANCELLED','FAILED','EXPIRED')
+                     AND trade_id IN (
+                         SELECT trade_id FROM trades
+                         WHERE status IN ('CLOSED','CLOSED_MANUAL','CANCELLED','FAILED')
+                     )""",
+            )
+        except Exception as exc:
+            self._log.error("sweep_stale_orders: query failed: %s", exc)
+            return 0
+
+        if not rows:
+            return 0
+
+        ts = self._now_ist()
+        swept = 0
+        try:
+            with self._store.transaction() as cur:
+                for row in rows:
+                    cur.execute(
+                        "UPDATE orders SET status = 'CANCELLED', updated_at = ? "
+                        "WHERE order_id = ? AND status NOT IN "
+                        "('COMPLETE','CANCELLED','FAILED','EXPIRED')",
+                        (ts, row["order_id"]),
+                    )
+                    if cur.rowcount and cur.rowcount > 0:
+                        swept += cur.rowcount
+        except Exception as exc:
+            self._log.error("sweep_stale_orders: update failed: %s", exc)
+            return 0
+
+        if swept > 0:
+            self._log.warning(
+                "Sweep: marked %d stale orders as CANCELLED (parent trade terminal)",
+                swept,
+            )
+            if self._notifier is not None:
+                try:
+                    self._notifier.send(
+                        severity="WARNING",
+                        title=f"[{self._mode}] Stale orders swept",
+                        body=(
+                            f"Marked {swept} stale order(s) as CANCELLED — their "
+                            f"parent trade is already terminal (orphan-order backstop)."
+                        ),
+                        source_module="order_reconciler",
+                    )
+                except Exception as exc:
+                    self._log.error("sweep_stale_orders: notifier.send failed: %s", exc)
+        return swept
+
     def _should_alert_for_discrepancy(
         self, trade_id: Optional[str], check_name: str, bypass_backoff: bool = False
     ) -> bool:

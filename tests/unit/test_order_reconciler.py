@@ -478,6 +478,66 @@ def test_fix186_paper_parity_marks_local_cancelled(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-186 (FIX 2): sweep_stale_orders backstop
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix186_sweep_marks_stale_order_and_alerts(tmp_path: Path) -> None:
+    """FIX 2: non-terminal order under a terminal parent → swept + Telegram alert."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED_MANUAL")
+    _insert_order(store, "sl1", "t1", leg="SL", status="OPEN", trigger_price=99.0)
+
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+    rec = _make_reconciler(store, notifier=notifier)
+
+    n = rec.sweep_stale_orders()
+
+    assert n == 1
+    assert _order_status(store, "sl1") == "CANCELLED"
+    assert notifier.send.called, "sweep with count>0 must send a Telegram alert"
+    assert notifier.send.call_args.kwargs["severity"] == "WARNING"
+    store.close()
+    print("  OK FIX-186: sweep marks stale order CANCELLED + alerts")
+
+
+def test_fix186_sweep_skips_active_parent(tmp_path: Path) -> None:
+    """FIX 2: an active order under an ACTIVE parent is NOT swept, no alert."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="OPEN")
+    _insert_order(store, "sl1", "t1", leg="SL", status="OPEN", trigger_price=99.0)
+
+    notifier = MagicMock()
+    rec = _make_reconciler(store, notifier=notifier)
+
+    n = rec.sweep_stale_orders()
+
+    assert n == 0
+    assert _order_status(store, "sl1") == "OPEN"
+    assert not notifier.send.called, "no alert when nothing swept"
+    store.close()
+    print("  OK FIX-186: sweep leaves active-parent order untouched")
+
+
+def test_fix186_sweep_ignores_already_terminal_order(tmp_path: Path) -> None:
+    """FIX 2: a COMPLETE order under a terminal parent is not re-swept, no alert."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="IRFC", status="CLOSED")
+    _insert_order(store, "e1", "t1", leg="ENTRY", status="COMPLETE")
+
+    notifier = MagicMock()
+    rec = _make_reconciler(store, notifier=notifier)
+
+    n = rec.sweep_stale_orders()
+
+    assert n == 0
+    assert _order_status(store, "e1") == "COMPLETE"
+    assert not notifier.send.called
+    store.close()
+    print("  OK FIX-186: sweep ignores already-terminal orders")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BL-10b: MANUAL_CLOSE publishes PositionClosed (out-of-band closure)
 # ─────────────────────────────────────────────────────────────────────────────
 
