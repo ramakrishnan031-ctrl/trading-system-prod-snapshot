@@ -27,10 +27,12 @@ TimeoutStopSec=30
 # Restart policy: only restart on non-zero exit (crash/error).
 # Exit 0 = holiday guard shutdown or normal EOD completion -- no restart.
 # Exit 3 = startup check failure (would loop on same failure) -- no restart.
+# Exit 4 = HALT: kill switch active, manual --resume required -- no restart
+#          (otherwise systemd hammer-restarts on the same SOFT_KILL; 18-Jun crash-loop).
 # Exit 1/2 = runtime error/crash -- restart so system can recover mid-day.
 Restart=on-failure
 RestartSec=10
-RestartPreventExitStatus=3
+RestartPreventExitStatus=3 4
 
 # Logging to journal (journalctl -u trading-system)
 StandardOutput=journal

@@ -158,9 +158,9 @@ All market jobs run `cd … && . .env && PYTHONPATH=. venv/bin/python <script> >
 ## Systemd Services  (`/etc/systemd/system/`)
 | Service | ExecStart | Purpose | Notes |
 |---|---|---|---|
-| `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, `RestartPreventExitStatus=3`; `EnvironmentFile=.env` + drop-in (Telegram secrets). **Currently in auto-restart/crash-loop** — see Issues. |
+| `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). Currently **`failed` (stopped)** — kill switch SOFT_KILL active; needs Kite-IP fix + `--resume`. |
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
-| `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags | sentinel monitor |
+| `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled + running (18-Jun)**; delivery blocked by placeholder SMTP config — see Issues |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
@@ -172,12 +172,17 @@ Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
    09:00 Mon-Fri; committed copy has it 18:00 Sun, plus the committed copy has analytics.db
    backup (01:05) and `db_retention.py` (02:30) jobs that the live crontab does **not** show.
    → Reconcile and re-sync the canonical file.
-2. **[OPEN] `trading-system.service` crash-loop** — `activating (auto-restart)`. Root cause: Kite IP
-   allowlist / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). Operational.
-3. **[OPEN] `alert-watcher.service` is INACTIVE** — the sentinel monitor is not running, which is why
-   `critical_alert_*.flag` files accumulated (72 by 18-Jun). The 56 stale flags older than 18-Jun were
-   deleted on 2026-06-18; today's remain. **Action: start/enable `alert-watcher.service`** so future
-   CRITICAL sentinels are consumed instead of piling up.
+2. **[PARTIAL] `trading-system.service` down (kill switch SOFT_KILL)** — the crash-loop is FIXED
+   (18-Jun: `RestartPreventExitStatus=3 4`, so an exit-4 HALT no longer hammer-restarts; service now
+   settles to `failed`). Underlying still OPEN: the SOFT_KILL was auto-tripped by the Kite IP allowlist
+   / place_order 403 (see mempalace `kite_ip_allowlist_dependency`, FIX-185). **To run again: fix the
+   Kite dev-console IP allowlist, then `--resume`, then start the service.**
+3. **[PARTIAL] `alert-watcher.service` SMTP delivery** — service is now **enabled + running** (18-Jun;
+   was never enabled, hence flag pile-up; 56 stale flags deleted, 16 remain). REMAINING: the email path
+   is placeholder-configured (`alerts.smtp` username/from `alerts@example.com`, to `operator@example.com`,
+   `password_env: ALERT_SMTP_PASSWORD` unset) so the digest send fails and flags aren't marked
+   `.delivered`. **Action: set real SMTP `username`/`from`/`to` + the `ALERT_SMTP_PASSWORD` env (Gmail
+   app-password) so CRITICAL sentinels actually deliver.**
 4. ~~Two git remotes on PC~~ — **RESOLVED 2026-06-18** (`vm` remote removed; `origin` remains).
 
 ## PENDING CLEANUP
@@ -204,3 +209,8 @@ inactive alert-watcher).
   moved dated notes (`CRON_FIX_2026_05_18.md`, `FIXES_DAILY_REPORT_2026_05_18.md`) to `docs/archive/`,
   removed `deploy_audit_fixes.ps1`, removed duplicate `vm` git remote. Discovered `alert-watcher.service`
   is INACTIVE (now tracked as open issue #3).
+- 2026-06-18 — VS Code Claude — Infra fixes: (A) `alert-watcher.service` enabled + started (survives
+  reboot) — delivery still blocked by placeholder SMTP config (issue #3). (B) systemd unit
+  `RestartPreventExitStatus=3 4` (live + `deploy/systemd/trading-system.service`) so an exit-4 HALT no
+  longer crash-loops — verified service settles to `failed` (NRestarts froze). (C) deleted 0-byte PC
+  `trading.db`.
