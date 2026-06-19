@@ -69,39 +69,7 @@ def test_none_adapter_returns_none():
     assert determine_close_direction(None, "X", "SELL", 3) == ("SELL", 3)
 
 
-# ── FIX-190 (Bug G): entry throttle ──────────────────────────────────────────
-
-def _throttle_sp(min_gap, burst_max, burst_window=60.0):
-    import threading
-    from signals.signal_processor import SignalProcessor
-    sp = SignalProcessor.__new__(SignalProcessor)  # bypass heavy __init__
-    sp._min_entry_gap_sec = float(min_gap)
-    sp._entry_burst_window_sec = float(burst_window)
-    sp._entry_burst_max = int(burst_max)
-    sp._throttle_lock = threading.Lock()
-    sp._last_entry_mono = None
-    sp._recent_entry_monos = []
-    return sp
-
-
-def test_throttle_min_gap_rejects_rapid_second_entry():
-    sp = _throttle_sp(min_gap=20.0, burst_max=0)
-    assert sp._throttle_admit() is None          # first entry admitted
-    assert sp._throttle_admit() is not None       # immediate second -> min_gap reject
-
-
-def test_throttle_burst_caps_entries_per_window():
-    sp = _throttle_sp(min_gap=0.0, burst_max=3, burst_window=60.0)
-    assert sp._throttle_admit() is None   # 1
-    assert sp._throttle_admit() is None   # 2
-    assert sp._throttle_admit() is None   # 3
-    assert sp._throttle_admit() is not None  # 4th in window -> burst reject
-
-
-def test_throttle_disabled_admits_all():
-    sp = _throttle_sp(min_gap=0.0, burst_max=0)
-    for _ in range(10):
-        assert sp._throttle_admit() is None
+# ── Bug G entry throttle: see tests/unit/test_entry_throttle.py (EntryThrottle) ──
 
 
 # ── FIX-190 (Bug B): runtime observability counters ──────────────────────────

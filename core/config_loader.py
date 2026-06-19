@@ -270,6 +270,9 @@ class SignalProcessorConfig(BaseModel):
     min_gap_between_entries_sec: float = 0.0
     entry_burst_window_sec: float = 60.0
     entry_burst_max: int = 0
+    # Bug G (full): per-symbol cooldown — no re-entry of the SAME symbol within
+    # this many seconds (stops rapid same-symbol churn). 0 = off.
+    per_symbol_cooldown_sec: float = 0.0
 
     @field_validator("worker_count")
     @classmethod
