@@ -6,7 +6,7 @@
 #
 # System timezone is Asia/Kolkata (IST, +0530) — all times below are IST.
 # Every Python entry sources .env via `set -a && . ./.env && set +a` so
-# TELEGRAM_BOT_TOKEN / ZERODHA_API_KEY_LFL836 / GEMINI_API_KEY / etc. are
+# TELEGRAM_BOT_TOKEN / ZERODHA_API_KEY_LFL836 / GEMINI_BIN / etc. are
 # EXPORTED into the child Python process's environment.
 #
 # FIX-189 (2026-06-19): cron MUST run these under bash, not dash. cron's default
