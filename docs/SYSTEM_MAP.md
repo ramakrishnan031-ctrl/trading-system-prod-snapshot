@@ -233,9 +233,11 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > reads auth.log, no static IP allow-list — Rama's IPs are dynamic) and **auditd**
 > (`/etc/audit/rules.d/trading-security.rules` from `deploy/security/`; watches `.env`/`config/`/
 > systemd units/`authorized_keys`/`sudoers` — query `sudo ausearch -k <key>`). All three services
-> `enabled` (reboot-survive). SSH hardening (idle timeout / `PermitRootLogin no`) NOT applied —
-> awaiting Rama's OK. Phase 2 (copy protection) + Phase 3 (EOD integration) pending. See
-> memory `vm_security_phase1`.
+> `enabled` (reboot-survive). **SSH hardening #2 APPLIED (19-Jun): `PermitRootLogin no`** via
+> drop-in `/etc/ssh/sshd_config.d/99-trading-security.conf` (`deploy/security/sshd_config.d/`;
+> validated `sshd -t` → `reload ssh`; ubuntu access unaffected — no root keys exist). Idle timeout
+> (#1) intentionally NOT set (long `tail -f` sessions); `MaxSessions` left at 10. Phase 2 (copy
+> protection) + Phase 3 (EOD integration) pending. See memory `vm_security_phase1`.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
