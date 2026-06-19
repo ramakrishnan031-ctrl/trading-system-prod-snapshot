@@ -21,7 +21,7 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 > **Stage-4 ALL fixes LANDED (committed+pushed; unit + replay tested):** C
 > (TGT-only no HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no
 > oversell), E (cancel resting exits — no orphans), F (no duplicate G5b SL), G
-> (entry throttle 20s/3-per-60s), H (`live_test_mode`: live caps now **max_open=4 /
+> (entry throttle: 20s gap / 3-per-60s + per-symbol 5-min cooldown), H (`live_test_mode`: live caps now **max_open=4 /
 > 6-per-day, permanent**), I (in-session drift tolerance), **B** (counting already correct via
 > FIX-181 + FIX-185; added runtime observability metrics to `/metrics`:
 > signals_processed / entries_placed / entries_throttled / entries_rejected).
@@ -94,7 +94,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `broker/` | Broker integration + polling | zerodha_adapter, angelone_adapter, order_monitor (2s fill poll), order_state_machine, rate_limiter, cost_calculator, slippage_engine, product_resolver, token_monitor, clock_skew_probe |
 | `capital/` | Capital, risk, kill-switch | fund_manager, position_sizer, risk_engine, kill_switch, drift_handler, invariant, performance_allocator, shadow_engine, strategy_governor |
 | `orders/` | Order lifecycle | order_placer, order_reconciler (15s), order_manager, eod_squareoff, smart_tgt_manager, breakeven_manager, sl_breach_monitor, entry_engine, full_entry_engine, order_protocol_co, order_protocol_limit, price_math, shadow_tracker |
-| `signals/` | Ingestion | webhook_receiver, signal_processor |
+| `signals/` | Ingestion | webhook_receiver, signal_processor, entry_throttle (Bug G: global min-gap/burst + per-symbol cooldown) |
 | `screening/` | Signal screening/scoring | entry_gate, quality_scorer, secondary_screener, step_executor |
 | `data/` | Market data | live_feed (WS ticks), candle_store |
 | `alerts/` | Alerting | telegram_notifier, critical (sentinels) |
@@ -370,3 +370,11 @@ inactive alert-watcher).
   concurrent positions exercises concurrency/race paths, small qty (1-2 shares) on ₹10k caps loss.
   No auto-disable (manual only). Effective live caps now 4/6 (override base 5/20). Activates on
   next restart (today's 16:00 EOD self-exit → Mon 08:30 auto-start). NOT temporary; no revert.
+- 2026-06-19 — Claude Code — **Bug G entry throttle — full integration** (commit c0554c6). The
+  global throttle (min-gap 20s + burst 3/60s) was already wired in FIX-190; this adds a clean
+  `signals/entry_throttle.py` `EntryThrottle` (thread-safe, ATOMIC `admit(symbol)` check-and-record —
+  no TOCTOU burst race) with a NEW **per-symbol cooldown** (`per_symbol_cooldown_sec: 300` — no
+  re-entry of the same symbol within 5 min) and **per-reason /metrics** (entries_throttled_min_gap /
+  _burst / _per_symbol / entries_admitted). Single chokepoint at both `place()` sites; DROP on
+  throttle (no queuing). 13 unit tests incl. 19-Jun 5-in-5s burst replay (→1 admitted) + thread-safety
+  (50 concurrent → exactly burst_max). Activates next restart.
