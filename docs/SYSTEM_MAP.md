@@ -6,6 +6,19 @@ This is the single authoritative path/ops reference. It complements (does not
 replace) the design/runbook docs in `docs/` — see "Related Docs" at the bottom.
 For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 
+> ## 🛑 CURRENT STATUS (2026-06-19) — SERVICE DOWN (HARD_KILL), DO NOT RESUME
+> **FIX-190 live incident at ~10:00 IST.** First real trading after the Kite IP
+> allowlist was fixed: a Chartink spike fired 5 entries in ~5s; THELEELA's target
+> price exceeded the upper-circuit band → a single recoverable TGT rejection
+> cascaded into a full **HARD_KILL that flattened every open position and left
+> orphan SL/TGT orders**, double-selling THELEELA into a naked short. Rama
+> manually cancelled 4 orders + bought back 1 THELEELA. Net loss ₹2.87 (contained
+> only because he was watching). `trading-system.service` is **failed (HARD_KILL,
+> exit 4)** and must **NOT** be resumed until the P1 fixes are implemented +
+> paper-verified. Root-cause + fix plan: see memory `fix_190_incident` and the
+> FIX-190 instruction. (FIX-189 work — dash-cron, market-window guard, EOD
+> self-exit — is deployed/tested and unrelated to this incident.)
+
 ## Pre-Work Checklist
 - [ ] Read this file (and `PATHS.md`).
 - [ ] Identify exactly which files/paths you will touch.
