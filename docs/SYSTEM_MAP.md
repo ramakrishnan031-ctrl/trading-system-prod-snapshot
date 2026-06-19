@@ -254,6 +254,8 @@ inactive alert-watcher).
 ---
 
 ## Related Docs (do not duplicate these — cross-reference)
+- `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
+  language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/01_system_architecture.md` — architecture
 - `docs/03_daily_operations_runbook.md` / `docs/RUNBOOK.md` — daily ops
 - `docs/04_db_schema_reference.md` — DB schema (v28)
@@ -261,6 +263,16 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **TASK #8: `docs/CONFIG_GUIDE.md`** — comprehensive Rama-facing
+  config reference. Audited all config files (`system_config.yaml`, `scoring_weights.yaml`,
+  `broker_costs/limits.yaml`, `slippage_model.yaml`, `scan_webhook_map.yaml`,
+  `chartink_scanners.yaml`, `cron_registry.yaml`, `accounts.csv`, `strategies/*.yaml`, `.env`).
+  12 sections + a "Currently Effective Values" quick table, an **Override Precedence** section
+  (live_test_mode > base caps; dual daily-loss; smallest sizing cap wins; force_intraday_only),
+  Common Scenarios with edit+restart commands, Dangerous-Changes warnings, Quick Commands.
+  Key correction documented: **`mode` (paper/live) is the `--mode` CLI flag in the systemd
+  ExecStart, NOT a YAML key** — and **config edits require a restart** to take effect.
+  Cross-referenced under Related Docs. Docs-only.
 - 2026-06-19 — Claude Code — **Task: standalone TGT retry mechanism** (closes the
   "TGT fails forever" gap left by FIX-190 Bug C — the 19-Jun THELEELA TGT that failed
   at 10:00:28 and was never retried). When a LIMIT_TRIPLE TGT can't be placed but the
