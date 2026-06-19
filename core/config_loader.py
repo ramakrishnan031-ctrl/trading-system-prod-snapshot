@@ -373,6 +373,14 @@ class RiskConfig(BaseModel):
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)
     price_drift_threshold: float = 0.005  # FIX-075: 0.5% default drift threshold for margin top-up
 
+    # FIX-190 (Bug H): live test mode — conservative caps for early live sessions.
+    # When enabled AND running in live mode, main.py overrides max_open_positions
+    # and max_daily_trades with the test-mode caps below. Defaults keep it off so
+    # existing configs/tests are unaffected. Stays ON until manually disabled.
+    live_test_mode: bool = False
+    live_test_max_open_positions: int = 1
+    live_test_max_entries_per_day: int = 3
+
     @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses")
     @classmethod
     def _validate_positive_int(cls, v: int) -> int:

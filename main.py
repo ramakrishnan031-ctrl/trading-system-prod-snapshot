@@ -1901,11 +1901,25 @@ def _main_locked(args, config_dir: Path) -> int:
     )
 
     risk_cfg = app_config.system.risk
+    # FIX-190 (Bug H): live test mode — conservative caps for early live sessions
+    # after the 19-Jun incident. Only applies in LIVE mode (paper runs full caps
+    # for validation). Stays on until manually disabled in config.
+    _eff_max_open = risk_cfg.max_open_positions
+    _eff_max_daily = risk_cfg.max_daily_trades
+    if getattr(risk_cfg, "live_test_mode", False) and args.mode == "live":
+        _eff_max_open = risk_cfg.live_test_max_open_positions
+        _eff_max_daily = risk_cfg.live_test_max_entries_per_day
+        _log.critical(
+            "FIX-190 LIVE_TEST_MODE ACTIVE: max_open_positions=%d, "
+            "max_daily_trades=%d (conservative caps; disable in config when ready)",
+            _eff_max_open, _eff_max_daily,
+        )
+
     risk_engine = RiskEngine(
         fund_manager=fund_manager,
         state_store=store,
-        max_open_positions=risk_cfg.max_open_positions,
-        max_daily_trades=risk_cfg.max_daily_trades,
+        max_open_positions=_eff_max_open,
+        max_daily_trades=_eff_max_daily,
         max_sector_exposure_pct=risk_cfg.max_sector_exposure_pct,
         max_consecutive_losses=risk_cfg.max_consecutive_losses,
         daily_loss_limit_pct=risk_cfg.daily_loss_limit_pct,
