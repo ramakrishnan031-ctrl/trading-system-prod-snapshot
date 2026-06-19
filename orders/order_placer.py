@@ -3042,12 +3042,18 @@ class OrderPlacer:
                 "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
                 (trade_id,),
             )
+            # Defensive: best-effort in a forced-exit path — a missing column or
+            # odd payload (e.g. a test mock store) must never crash. Build the id
+            # list inside the try so iterating a non-iterable result is caught.
+            ids = [
+                r["broker_order_id"] for r in (rows or [])
+                if r["broker_order_id"]
+            ]
         except Exception as exc:
             self._log.warning(
                 "order_placer: query resting exits failed for %s: %s", trade_id, exc
             )
             return
-        ids = [r["broker_order_id"] for r in (rows or []) if r["broker_order_id"]]
         if ids:
             self._cancel_broker_orders(
                 ids, reason=f"emergency_exit_cancel_resting:{trade_id}",
