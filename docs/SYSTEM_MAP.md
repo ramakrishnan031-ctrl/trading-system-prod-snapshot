@@ -14,16 +14,18 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 > SL/TGT orders**, double-selling THELEELA into a naked short. Rama manually
 > recovered (net loss ₹2.87).
 >
-> **Stage-4 fixes LANDED (committed+pushed; unit-tested):** C (TGT-only no
-> HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no oversell),
-> E (cancel resting exits — no orphans), F (no duplicate G5b SL), H
-> (`live_test_mode`: live caps max_open=1/3-per-day), I (in-session drift
-> tolerance). **STILL TODO before live re-enable:** G (entry throttle), B
-> (broker-filled counter), the integration replay test, and ≥1 clean PAPER
-> session. `trading-system.service` stays **failed (HARD_KILL, exit 4)** — bring
-> it up in **PAPER** only; do NOT resume live until the above are done + Rama
-> approves. See memory `fix_190_incident`. (FIX-189 dash-cron / market-window /
-> EOD-self-exit work is separate and already deployed.)
+> **Stage-4 ALL fixes LANDED (committed+pushed; unit + replay tested):** C
+> (TGT-only no HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no
+> oversell), E (cancel resting exits — no orphans), F (no duplicate G5b SL), G
+> (entry throttle 20s/3-per-60s), H (`live_test_mode`: live caps max_open=1 /
+> 3-per-day), I (in-session drift tolerance). **B** (broker-filled counter) was
+> already correct via FIX-181 (rejects excluded) + FIX-185 (authoritative
+> reservation cap) — only cosmetic metrics deferred. Incident replay green
+> (`tests/integration/test_fix190_incident_replay.py`). **Paper mode SKIPPED per
+> Rama** (stay LIVE with tiny ₹10k). `trading-system.service` stays **failed
+> (HARD_KILL, exit 4)** — **do NOT resume until Rama's explicit go-ahead**; when
+> resumed it's LIVE with `live_test_mode=true`. See memory `fix_190_incident`.
+> (FIX-189 dash-cron / market-window / EOD-self-exit work is separate, deployed.)
 
 ## Pre-Work Checklist
 - [ ] Read this file (and `PATHS.md`).
@@ -327,8 +329,10 @@ inactive alert-watcher).
   skips recovery-SL when a live SL already exists → no duplicate SL. Guardrails: **H**
   `live_test_mode` (RiskConfig; live caps max_open=1 / 3-per-day), **I** in-session capital-drift
   tolerance = max(Rs, expected*10%). Defensive hardening of the new flatten helpers (never crash
-  the indestructible loop). Remaining (follow-ups): **G** entry throttle, **B** broker-filled
-  counter, integration replay test, paper-mode verification. Service stays DOWN; paper-only.
+  the indestructible loop). **G** entry throttle (signal_processor 20s / 3-per-60s, 575a1dc).
+  **B** already correct (FIX-181 excludes rejects + FIX-185 reservation cap; only metrics deferred).
+  Incident replay test (3af8310) green. Paper mode SKIPPED per Rama (stay LIVE, tiny capital).
+  Service stays DOWN until Rama's explicit go-ahead → LIVE with live_test_mode.
 - 2026-06-19 — Claude Code — Cleanup: removed **445** stale `critical_alert_*.flag` from the **PC**
   `data_store/` (31-May→18-Jun, mostly `source_module:test`). Local-only/gitignored — never tracked,
   no `.gitignore` change. VM already clean (alert-watcher consumes → `.delivered`).
