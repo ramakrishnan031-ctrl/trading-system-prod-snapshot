@@ -562,21 +562,25 @@ class TestLimitTripleProtocol:
         assert len(adapter.placed) == 0, "SL failed; no legs placed"
         print("  OK Phase 2: SL failure -> raises, no TGT attempted (OPL3)")
 
-    def test_place_exits_tgt_failure_raises_sl_still_standing(self) -> None:
-        """TGT failure -> raises; SL still standing. (OPL3)"""
+    def test_place_exits_tgt_failure_returns_partial_sl_standing(self) -> None:
+        """FIX-190 (Bug C): TGT failure with SL standing -> partial result
+        (tgt_placed=False), NOT a raise. The position is protected by the live
+        SL, so the caller must not treat it as POSITION_UNPROTECTED / HARD_KILL."""
         # Second call (TGT) fails; SL (first call) succeeds
         adapter = _MockAdapter(raises=OrderRejectedError("tgt rejected"),
                                fail_on_call=2)
         proto = LimitTripleProtocol(adapter=adapter, logger=_log())
-        with pytest.raises(BrokerError):
-            proto.place_exits(
-                symbol="HDFC", entry_side="BUY", qty=3,
-                sl_price=1580.0, tgt_price=1640.0,
-                intent="INTRADAY", trade_id="trd_tgt_fail",
-            )
+        result = proto.place_exits(
+            symbol="HDFC", entry_side="BUY", qty=3,
+            sl_price=1580.0, tgt_price=1640.0,
+            intent="INTRADAY", trade_id="trd_tgt_fail",
+        )
+        assert result.tgt_placed is False
+        assert result.sl_broker_order_id          # SL present
+        assert result.tgt_broker_order_id is None  # TGT not placed
         assert len(adapter.placed) == 1   # only SL placed, TGT failed
-        assert len(adapter.cancelled) == 0  # SL stands (caller handles)
-        print("  OK Phase 2: TGT failure -> SL stands, raises (OPL3)")
+        assert len(adapter.cancelled) == 0  # SL stands (still protected)
+        print("  OK Phase 2 (FIX-190 C): TGT failure -> partial, SL stands, no raise")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

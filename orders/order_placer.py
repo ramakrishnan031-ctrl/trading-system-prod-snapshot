@@ -2060,6 +2060,94 @@ class OrderPlacer:
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    def _persist_sl_only_protected(
+        self, *, trade_id: str, fill_entry: "_FillEntry",
+        qty_filled: int, legs, reason: str,
+    ) -> None:
+        """FIX-190 (Bug C): persist + track an SL-only protected position when the
+        TGT could not be placed (the SL is live, so the position IS protected).
+
+        Does NOT emergency-exit or HARD_KILL — a missing TGT is an opportunity
+        cost, not a protection breach. The position exits via its SL or EOD
+        square-off. (Bug D's circuit-band clamp makes the circuit-rejection case
+        that triggered this on 19-Jun no longer occur; this is the safety net for
+        any other transient TGT failure.)
+        """
+        self._log.critical(
+            "order_placer.limit_triple_tgt_unplaced_sl_protected",
+            extra={
+                "trade_id": trade_id, "symbol": fill_entry.symbol,
+                "qty_filled": qty_filled,
+                "sl_broker_id": legs.sl_broker_order_id,
+                "reason": reason,
+                "detail": "TGT not placed (e.g. circuit band); position protected "
+                          "by the live SL; exits via SL or EOD; NOT escalating",
+            },
+        )
+        if self._product_resolver is None:
+            self._fire_hard_kill_for_unprotected_position(
+                trade_id,
+                RuntimeError("product_resolver missing; cannot persist SL"),
+            )
+            return
+        product = self._product_resolver.resolve(fill_entry.intent)
+        exit_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+        specs = [
+            OrderInsertSpec(
+                broker_order_id=legs.sl_broker_order_id,
+                leg="SL",
+                transaction_type=exit_side,
+                order_type=legs.sl_order_type,
+                product=product,
+                variety="regular",
+                qty_requested=qty_filled,
+                price=legs.sl_price,
+                trigger_price=legs.sl_trigger_price,
+            ),
+        ]
+        try:
+            self._om.insert_orders_atomic(trade_id, specs)
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.sl_only_persist_failed "
+                "LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            self._cancel_broker_orders(
+                [legs.sl_broker_order_id], reason="sl_only_persist_failed",
+            )
+            self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+        now = now_ist()
+        try:
+            with self._fill_map_lock:
+                self._fill_map[legs.sl_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id=fill_entry.reservation_id,
+                    symbol=fill_entry.symbol,
+                    qty=qty_filled,
+                    leg=_LEG_SL,
+                    order_protocol="LIMIT_TRIPLE",
+                    direction=fill_entry.direction,
+                )
+            self._order_monitor.track(
+                internal_order_id=legs.sl_internal_id,
+                broker_order_id=legs.sl_broker_order_id,
+                symbol=fill_entry.symbol,
+                side=exit_side,
+                qty=qty_filled,
+                expected_price=legs.sl_trigger_price,
+                placed_at=now,
+                leg="SL",
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.sl_only_track_failed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+
     def _place_limit_triple_exits(
         self,
         *,
@@ -2177,6 +2265,19 @@ class OrderPlacer:
                 reason=f"sl_placement_failed: {type(exc).__name__}",
             )
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # FIX-190 (Bug C): SL placed but TGT could not be placed (e.g. target
+        # outside the circuit band). The position IS protected by the live stop,
+        # so persist the SL only and DO NOT escalate. Previously place_exits
+        # raised on a TGT-only failure and the except above HARD_KILLed the whole
+        # book + emergency-exited (the 19-Jun cascade). A missing TGT is an
+        # opportunity cost, not a protection breach.
+        if not legs.tgt_placed:
+            self._persist_sl_only_protected(
+                trade_id=trade_id, fill_entry=fill_entry,
+                qty_filled=qty_filled, legs=legs, reason=reason,
+            )
             return
 
         # Persist SL + TGT rows atomically. Use product derived from intent

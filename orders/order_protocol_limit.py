@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from broker.zerodha_adapter import ZerodhaAdapter
 from core.exceptions import BrokerError, OrderRejectedError
@@ -69,17 +70,25 @@ class ExitLegsResult:
     """
     Outcome of LimitTripleProtocol.place_exits().
 
-    Both legs always succeed together on success. On failure the protocol
-    raises; it does not return a partial ExitLegsResult.
+    On full success both legs are present and ``tgt_placed`` is True.
+
+    FIX-190 (Bug C): if the SL is placed but the TGT is rejected (e.g. the
+    target price is outside the circuit band), the protocol no longer raises —
+    the position is STILL protected by the live stop. It returns a partial
+    result with ``tgt_placed=False`` and the tgt_* fields None. The caller keeps
+    the SL and must NOT treat this as POSITION_UNPROTECTED (raising used to make
+    the caller HARD_KILL the whole book — the 19-Jun incident). A genuine SL
+    failure (position truly unprotected) still raises.
     """
     sl_broker_order_id: str
     sl_internal_id: str
     sl_order_type: str          # always "SL" (stop-limit) post-P0 2026-06-15
     sl_trigger_price: float
     sl_price: float             # limit price = trigger ± sl_limit_offset_pct
-    tgt_broker_order_id: str
-    tgt_internal_id: str
-    tgt_price: float
+    tgt_broker_order_id: Optional[str] = None
+    tgt_internal_id: Optional[str] = None
+    tgt_price: Optional[float] = None
+    tgt_placed: bool = True     # FIX-190 Bug C: False = SL live, TGT not placed
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -284,6 +293,23 @@ class LimitTripleProtocol(EntryEngine):
         )
 
         # ── Step 2: TGT LIMIT ─────────────────────────────────────────────
+        # FIX-190 (Bug C): a TGT-only failure with the SL standing is NOT a
+        # protection breach — the position has a live stop. Return a partial
+        # result (tgt_placed=False) instead of raising, so the caller keeps the
+        # SL and does NOT emergency-exit / HARD_KILL the entire book.
+        def _partial_sl_only() -> ExitLegsResult:
+            return ExitLegsResult(
+                sl_broker_order_id=sl_placed.broker_order_id,
+                sl_internal_id=sl_placed.internal_order_id,
+                sl_order_type=sl_order_type,
+                sl_trigger_price=sl_price,
+                sl_price=sl_limit_price,
+                tgt_broker_order_id=None,
+                tgt_internal_id=None,
+                tgt_price=None,
+                tgt_placed=False,
+            )
+
         try:
             tgt_placed = self._adapter.place_order(
                 symbol=symbol,
@@ -295,24 +321,33 @@ class LimitTripleProtocol(EntryEngine):
                 tag=order_tag,
             )
         except BrokerError as exc:
-            # OPL3: TGT failed; SL still stands. Raise so caller can surface.
-            self._log.error(
-                "limit_triple.tgt_failed",
+            self._log.critical(
+                "limit_triple.tgt_failed_sl_standing",
                 extra={
                     "trade_id": trade_id,
                     "symbol": symbol,
                     "qty": qty,
                     "sl_still_standing": sl_placed.broker_order_id,
+                    "tgt_price": tgt_price,
+                    "detail": "TGT rejected; SL is live so the position remains "
+                              "protected; NOT escalating (FIX-190 Bug C)",
+                    "error": str(exc),
                 },
             )
             log_exception(self._log, exc)
-            raise
+            return _partial_sl_only()
 
         if not tgt_placed.broker_order_id:
-            raise OrderRejectedError(
-                "adapter returned empty broker_order_id for TGT order",
-                symbol=symbol, trade_id=trade_id, leg="TGT",
+            self._log.critical(
+                "limit_triple.tgt_failed_sl_standing",
+                extra={
+                    "trade_id": trade_id, "symbol": symbol, "qty": qty,
+                    "sl_still_standing": sl_placed.broker_order_id,
+                    "detail": "adapter returned empty broker_order_id for TGT; "
+                              "SL live, position protected; NOT escalating (FIX-190 Bug C)",
+                },
             )
+            return _partial_sl_only()
 
         self._log.info(
             "limit_triple.tgt_placed",
