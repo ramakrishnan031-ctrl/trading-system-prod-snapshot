@@ -45,15 +45,24 @@ class _MockStore:
 class TestHealthEndpoint:
 
     def test_health_returns_200_with_correct_fields(self) -> None:
-        """GET /health returns JSON with status, uptime, trades, timestamp."""
-        app = _create_app(_MockStore(trade_count=3), _log())
-        client = app.test_client()
+        """GET /health returns JSON with status, uptime, trades, timestamp.
 
-        resp = client.get("/health")
+        FIX-188: /health is 200/"healthy" only when db+token+kill_switch are all
+        OK; patch token+kill to healthy so this test exercises the DB/trades
+        fields with a fully-healthy result."""
+        from unittest.mock import patch
+        with patch("scripts.healthcheck_server._check_token",
+                   return_value={"ok": True, "account_id": "LFL836"}), \
+             patch("scripts.healthcheck_server._check_kill_switch",
+                   return_value={"ok": True, "state": "INACTIVE"}):
+            app = _create_app(_MockStore(trade_count=3), _log())
+            client = app.test_client()
+            resp = client.get("/health")
+
         assert resp.status_code == 200
         data = json.loads(resp.data)
 
-        assert data["status"] == "ok"
+        assert data["status"] == "healthy"
         assert isinstance(data["uptime_seconds"], (int, float))
         assert data["uptime_seconds"] >= 0
         assert data["trades_today"] == 3
@@ -70,17 +79,20 @@ class TestHealthEndpoint:
         assert data["trades_today"] == 0
         print("  OK: zero trades -> trades_today=0")
 
-    def test_health_db_error_still_returns_200(self) -> None:
-        """DB query failure does not crash /health; trades_today defaults to 0."""
+    def test_health_db_error_does_not_crash(self) -> None:
+        """DB query failure does not crash /health; it returns a structured
+        response. FIX-188: a failed db check makes /health degraded -> 503 (the
+        endpoint stays listening so uptime monitors can detect the degradation)."""
         app = _create_app(_MockStore(raise_on_query=True), _log())
         client = app.test_client()
 
         resp = client.get("/health")
-        assert resp.status_code == 200
+        assert resp.status_code == 503             # degraded, but did not crash
         data = json.loads(resp.data)
-        assert data["status"] == "ok"
+        assert data["status"] == "degraded"
+        assert data["checks"]["db"]["ok"] is False
         assert data["trades_today"] == 0
-        print("  OK: DB error -> /health still 200, trades=0")
+        print("  OK: DB error -> /health 503 degraded (no crash), trades=0")
 
     def test_health_content_type_json(self) -> None:
         """Response content-type is application/json."""
