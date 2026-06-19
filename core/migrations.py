@@ -46,6 +46,9 @@ Version map
                  into analytics.db (relocate_analytics_tables, not a rebuild).
     v28 -> v29 : FIX-179 — trades.status CHECK adds 'EXITING' (kill_switch
                  hard_kill transitional state). Rebuild trades to widen CHECK.
+    v29 -> v30 : TGT retry — trades gains needs_tgt_retry / tgt_retry_count /
+                 tgt_last_retry_at columns. Rebuild trades (the rebuild copies
+                 the intersecting old columns; the new ones take their DEFAULT).
 """
 from __future__ import annotations
 
@@ -68,6 +71,7 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     # in-place here, and no longer appear in schema.sql.
     27: ["fm_ledger", "webhook_audit"],
     29: ["trades"],  # FIX-179: widen trades.status CHECK to allow 'EXITING'
+    30: ["trades"],  # TGT retry: add needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
 }
 
 

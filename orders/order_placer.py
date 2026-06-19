@@ -247,6 +247,13 @@ _PROTOCOL_TO_PRODUCT: Final[Dict[str, str]] = {
 # FIX-166 F17: canonical copy now in core.constants
 from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
+# Terminal order statuses — an order in one of these is no longer live (Task:
+# TGT-retry idempotency guard checks this to detect an already-live TGT). Mirrors
+# order_reconciler._TERMINAL_ORDER_STATUSES.
+_TERMINAL_ORDER_STATUSES: frozenset = frozenset(
+    {"COMPLETE", "CANCELLED", "FAILED", "EXPIRED", "REJECTED"}
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX-061: Exit retry params for LTP validation errors
@@ -2120,6 +2127,24 @@ class OrderPlacer:
             )
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
             return
+
+        # Task (TGT retry, 2026-06-19): the SL persisted, so the position is
+        # protected but owes a TGT. Flag it for TGTRetryManager to re-attempt the
+        # TGT on a backoff schedule WITHOUT touching the live SL. Best-effort —
+        # a flag failure must not break the SL-protected path (the SL still
+        # protects; worst case the TGT is simply never retried).
+        try:
+            self._om._store.mark_needs_tgt_retry(trade_id)
+            self._log.info(
+                "order_placer.tgt_retry_flagged",
+                extra={"trade_id": trade_id, "symbol": fill_entry.symbol},
+            )
+        except Exception as exc:
+            self._log.warning(
+                "order_placer.tgt_retry_flag_failed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+
         now = now_ist()
         try:
             with self._fill_map_lock:
@@ -2148,6 +2173,169 @@ class OrderPlacer:
                 "order_placer.sl_only_track_failed",
                 extra={"trade_id": trade_id, "error": str(exc)},
             )
+
+    def retry_tgt_for_trade(self, trade_id: str) -> str:
+        """
+        TGT retry (Task 2026-06-19): attempt to place the missing TGT for a
+        LIMIT_TRIPLE trade left SL-only by FIX-190 Bug C. Re-reads fresh state
+        and re-checks every guard immediately before placing (TGTRetryManager's
+        snapshot may be stale). On success the TGT is persisted AND registered in
+        _fill_map + order_monitor, so a TGT fill triggers the software OCO (cancel
+        the SL + close the trade) exactly like the normal place_exits path. The
+        live SL is never touched.
+
+        Returns a status string consumed by TGTRetryManager:
+          "placed"              - TGT placed + persisted + tracked  -> clear flag, INFO
+          "skipped_closed"      - trade gone / no longer OPEN/PARTIAL -> clear flag
+          "skipped_no_sl"       - SL not standing; never place a naked TGT -> clear flag
+          "skipped_has_tgt"     - an active TGT already exists         -> clear flag
+          "skipped_unplaceable" - clamped/recomputed TGT not profitable -> keep retrying
+          "failed"              - broker rejected the TGT              -> keep retrying
+        """
+        store = self._om._store
+        trade = store.get_trade_for_tgt_retry(trade_id)
+        if trade is None or (trade["status"] not in ("OPEN", "PARTIAL")):
+            return "skipped_closed"
+
+        qty = int(trade["qty_filled"] or 0)
+        if qty <= 0:
+            return "skipped_closed"
+
+        # Guard 1: the SL must still be standing. A retry must NEVER leave a naked
+        # TGT — a TGT fill with no SL is an unprotected reverse. If the SL is gone
+        # the reconciler (CHECK9 / G5b) owns recovery, not this path.
+        if store.get_sl_order_for_trade(trade_id) is None:
+            self._log.warning(
+                "order_placer.tgt_retry_skipped_no_sl",
+                extra={"trade_id": trade_id, "symbol": trade["symbol"]},
+            )
+            return "skipped_no_sl"
+
+        # Guard 2: idempotency — never place a second TGT if one is already live.
+        for o in store.get_orders_for_trade(trade_id):
+            if o["leg"] == "TGT" and o["status"] not in _TERMINAL_ORDER_STATUSES:
+                return "skipped_has_tgt"
+
+        symbol = trade["symbol"]
+        direction = trade["direction"] or "LONG"
+        entry_side = "BUY" if direction == "LONG" else "SELL"
+        exit_side = "SELL" if entry_side == "BUY" else "BUY"
+        entry_price = float(trade["entry_actual_price"] or 0.0)
+        sl_price = float(trade["sl_initial"] or 0.0)
+        product = trade["product"] or ""
+        intent = _PRODUCT_TO_INTENT.get(product, "INTRADAY")
+
+        # Recompute the TGT the way the original placement did (preserve R:R from
+        # the actual fill); fall back to the stored tgt_initial if needed.
+        tgt_price = 0.0
+        if entry_price > 0 and sl_price > 0:
+            tgt_price = calc_tgt_price(
+                direction=direction, entry_price=entry_price,
+                sl_price=sl_price, rr_ratio=self._rr_ratio,
+            )
+        if tgt_price <= 0:
+            tgt_price = float(trade["tgt_initial"] or 0.0)
+
+        # Guard 3: never place an unprofitable TGT (wrong side of entry). Skip
+        # WITHOUT placing and keep retrying — the circuit band may relax later.
+        if tgt_price <= 0 \
+                or (direction == "LONG" and tgt_price <= entry_price) \
+                or (direction == "SHORT" and tgt_price >= entry_price):
+            return "skipped_unplaceable"
+
+        result = self._engine.place_deferred_tgt_only(
+            symbol=symbol, entry_side=entry_side, qty=qty,
+            tgt_price=tgt_price, intent=intent, trade_id=trade_id, tag=trade_id,
+        )
+        if not result.placed:
+            return "failed"
+
+        # Bug D re-check: place_tgt_only clamps to the CURRENT band, which could
+        # push the placed TGT to/under entry. If so cancel it and keep retrying.
+        final_tgt = result.tgt_price
+        if final_tgt is not None and (
+            (direction == "LONG" and final_tgt <= entry_price)
+            or (direction == "SHORT" and final_tgt >= entry_price)
+        ):
+            self._cancel_broker_orders(
+                [result.tgt_broker_order_id], reason="tgt_retry_clamped_unprofitable",
+            )
+            return "skipped_unplaceable"
+
+        # Persist the TGT order row, then register for software OCO. Same machinery
+        # as place_exits so a TGT fill cancels the SL and closes the trade.
+        if self._product_resolver is None:
+            self._cancel_broker_orders(
+                [result.tgt_broker_order_id], reason="tgt_retry_no_product_resolver",
+            )
+            return "failed"
+        resolved_product = self._product_resolver.resolve(intent)
+        spec = OrderInsertSpec(
+            broker_order_id=result.tgt_broker_order_id,
+            leg="TGT",
+            transaction_type=exit_side,
+            order_type="LIMIT",
+            product=resolved_product,
+            variety="regular",
+            qty_requested=qty,
+            price=final_tgt,
+        )
+        try:
+            self._om.insert_orders_atomic(trade_id, [spec])
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.tgt_retry_persist_failed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            self._cancel_broker_orders(
+                [result.tgt_broker_order_id], reason="tgt_retry_persist_failed",
+            )
+            return "failed"
+
+        # OCO registration: fill_map FIRST, track() SECOND (matches place_exits).
+        # reservation_id="" — exit legs use release_used (not the reservation) for
+        # capital accounting, same convention as a rehydrated exit leg.
+        try:
+            with self._fill_map_lock:
+                self._fill_map[result.tgt_internal_id] = _FillEntry(
+                    trade_id=trade_id,
+                    reservation_id="",
+                    symbol=symbol,
+                    qty=qty,
+                    leg=_LEG_TGT,
+                    order_protocol="LIMIT_TRIPLE",
+                    direction=direction,
+                )
+            self._order_monitor.track(
+                internal_order_id=result.tgt_internal_id,
+                broker_order_id=result.tgt_broker_order_id,
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                expected_price=final_tgt,
+                placed_at=now_ist(),
+                leg="TGT",
+            )
+        except Exception as exc:
+            log_exception(self._log, exc)
+            self._log.critical(
+                "order_placer.tgt_retry_track_failed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            # TGT is placed + persisted; a track failure means a fill may not
+            # auto-update the DB, but the reconciler is the backstop. Treat as
+            # placed so the flag clears (avoids a duplicate TGT on the next cycle).
+
+        self._log.info(
+            "order_placer.tgt_retry_placed",
+            extra={
+                "trade_id": trade_id, "symbol": symbol,
+                "tgt_price": final_tgt, "qty": qty,
+                "clamped": result.clamped,
+            },
+        )
+        return "placed"
 
     def _place_limit_triple_exits(
         self,

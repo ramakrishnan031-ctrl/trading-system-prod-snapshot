@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 29  # FIX-179: trades.status adds 'EXITING' (hard_kill transitional state)
+EXPECTED_SCHEMA_VERSION = 30  # Task (TGT retry): trades adds needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1229,6 +1229,102 @@ class StateStore:
                 (_now_ist_iso(), trade_id),
             )
             return cur.rowcount > 0
+
+    # ── TGT retry (Task, 2026-06-19) ─────────────────────────────────────────
+    # A LIMIT_TRIPLE trade whose SL is live but whose TGT could not be placed
+    # (FIX-190 Bug C) is flagged needs_tgt_retry=1; TGTRetryManager re-attempts
+    # the TGT on a backoff schedule and clears the flag on success / give-up.
+
+    def mark_needs_tgt_retry(self, trade_id: str) -> bool:
+        """Flag a trade as owing a TGT placement (Bug C: SL live, TGT not placed).
+        Resets the retry counter and stamps tgt_last_retry_at = now (the failed
+        placement time) so the first retry waits one backoff interval. Returns
+        True if a row was updated."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET needs_tgt_retry = 1,
+                    tgt_retry_count = 0,
+                    tgt_last_retry_at = ?,
+                    updated_at = ?
+                WHERE trade_id = ?
+                """,
+                (_now_ist_iso(), _now_ist_iso(), trade_id),
+            )
+            return cur.rowcount > 0
+
+    def clear_needs_tgt_retry(self, trade_id: str) -> bool:
+        """Clear the TGT-retry flag (on success or give-up). tgt_retry_count is
+        intentionally preserved for forensics. Returns True if a row changed."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE trades SET needs_tgt_retry = 0, updated_at = ? WHERE trade_id = ?",
+                (_now_ist_iso(), trade_id),
+            )
+            return cur.rowcount > 0
+
+    def bump_tgt_retry(self, trade_id: str) -> int:
+        """Record a TGT retry attempt: increment tgt_retry_count and stamp
+        tgt_last_retry_at = now. Returns the NEW count (0 if the trade is gone)."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET tgt_retry_count = tgt_retry_count + 1,
+                    tgt_last_retry_at = ?,
+                    updated_at = ?
+                WHERE trade_id = ?
+                """,
+                (_now_ist_iso(), _now_ist_iso(), trade_id),
+            )
+            row = cur.execute(
+                "SELECT tgt_retry_count FROM trades WHERE trade_id = ?", (trade_id,)
+            ).fetchone()
+            return int(row["tgt_retry_count"]) if row else 0
+
+    def get_tgt_retry_candidates(self) -> List[sqlite3.Row]:
+        """Trades currently owing a TGT placement (needs_tgt_retry=1) and still
+        live (OPEN/PARTIAL). Lightweight scheduling view for TGTRetryManager —
+        the placement path re-reads full context via get_trade_for_tgt_retry."""
+        return self.fetch_all(
+            """
+            SELECT trade_id, symbol, tgt_retry_count, tgt_last_retry_at
+            FROM trades
+            WHERE needs_tgt_retry = 1
+              AND status IN ('OPEN', 'PARTIAL')
+            ORDER BY tgt_last_retry_at
+            """
+        )
+
+    def get_trade_for_tgt_retry(self, trade_id: str) -> Optional[sqlite3.Row]:
+        """Full context for a TGT retry: trade fields + the ENTRY order's product
+        (so intent/exit-side can be derived). Returns None if the trade is gone.
+        Used by OrderPlacer.retry_tgt_for_trade, which re-checks status + SL
+        standing immediately before placing (the manager's snapshot may be stale)."""
+        return self.fetch_one(
+            """
+            SELECT
+                t.trade_id,
+                t.signal_id,
+                t.symbol,
+                t.direction,
+                t.qty_filled,
+                t.entry_actual_price,
+                t.sl_initial,
+                t.tgt_initial,
+                t.status,
+                t.needs_tgt_retry,
+                t.tgt_retry_count,
+                o.product
+            FROM trades t
+            LEFT JOIN orders o
+              ON o.trade_id = t.trade_id
+             AND o.leg = 'ENTRY'
+            WHERE t.trade_id = ?
+            """,
+            (trade_id,),
+        )
 
     def get_orders_for_trade(self, trade_id: str) -> List[sqlite3.Row]:
         """

@@ -189,6 +189,15 @@ CREATE TABLE IF NOT EXISTS trades (
     order_to_fill_ms    INTEGER,
     total_latency_ms    INTEGER,
 
+    -- v30 (Task: TGT retry): when a LIMIT_TRIPLE TGT leg cannot be placed but
+    -- the SL is standing (FIX-190 Bug C — e.g. circuit band / transient broker
+    -- reject), the trade is flagged here so TGTRetryManager re-attempts the TGT
+    -- on a backoff schedule WITHOUT disturbing the live SL. Cleared on success
+    -- or give-up. Survives restart (read from DB each retry cycle).
+    needs_tgt_retry     INTEGER NOT NULL DEFAULT 0,   -- 1 = TGT placement owed
+    tgt_retry_count     INTEGER NOT NULL DEFAULT 0,   -- attempts made so far
+    tgt_last_retry_at   TEXT,                          -- ISO IST of last attempt (NULL = none yet)
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -922,7 +931,7 @@ CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
 -- trading DB so the nightly .backup stays small and fast.
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '29');  -- FIX-179: trades.status adds 'EXITING' (hard_kill transitional state)
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '30');  -- Task (TGT retry): trades adds needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

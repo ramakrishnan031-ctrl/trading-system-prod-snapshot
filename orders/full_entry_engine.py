@@ -165,3 +165,26 @@ class FullEntryEngine(EntryEngine):
                 sl_price=sl_price, tgt_price=tgt_price,
                 intent=intent, trade_id=trade_id, tag=tag,
             )
+
+    def place_deferred_tgt_only(
+        self,
+        *,
+        symbol: str,
+        entry_side: str,
+        qty: int,
+        tgt_price: float,
+        intent: str,
+        trade_id: str,
+        tag: str = "",
+    ):
+        """
+        TGT retry (Task 2026-06-19): place ONLY the TGT LIMIT leg (LIMIT_TRIPLE)
+        for a trade whose SL is already standing (FIX-190 Bug C SL-only). Routes
+        to LimitTripleProtocol.place_tgt_only, which never raises and never
+        touches the SL. Returns a TgtOnlyResult. CO_PLUS_TGT is out of scope —
+        its TGT is placed alongside the CO bracket, not as a standalone retry.
+        """
+        return self._limit.place_tgt_only(
+            symbol=symbol, entry_side=entry_side, qty=qty,
+            tgt_price=tgt_price, intent=intent, trade_id=trade_id, tag=tag,
+        )

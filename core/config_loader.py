@@ -862,6 +862,40 @@ class BrokerConfig(BaseModel):
     multi_account_mode: bool = False  # FIX-133 Item 29
 
 
+class TgtRetryConfig(BaseModel):
+    """Task (2026-06-19): standalone TGT retry. A LIMIT_TRIPLE trade whose SL is
+    live but whose TGT could not be placed (FIX-190 Bug C) is re-attempted on an
+    exponential backoff WITHOUT disturbing the standing SL. Optional section —
+    the defaults reproduce the designed 30/60/120/240/480s schedule and give up
+    after 5 attempts (the position stays SL-protected)."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    poll_interval_sec: int = 30        # how often the retry loop wakes
+    max_attempts: int = 5              # give up after this many (position stays SL-protected)
+    backoff_base_sec: int = 30         # nth retry waits base*2**(n-1): 30/60/120/240/480
+
+    @field_validator("poll_interval_sec")
+    @classmethod
+    def _v_tgt_poll(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("tgt_retry.poll_interval_sec must be >= 1")
+        return v
+
+    @field_validator("max_attempts")
+    @classmethod
+    def _v_tgt_max(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("tgt_retry.max_attempts must be >= 1")
+        return v
+
+    @field_validator("backoff_base_sec")
+    @classmethod
+    def _v_tgt_base(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("tgt_retry.backoff_base_sec must be >= 1")
+        return v
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     broker: BrokerConfig = BrokerConfig()  # FIX-133 Item 28
@@ -882,6 +916,7 @@ class SystemConfig(BaseModel):
     alerts: AlertsConfig                      # TG12/AW11: alert subsystem config
     logging: LoggingConfig                    # FIX-099: logging subsystem config
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
+    tgt_retry: TgtRetryConfig = Field(default_factory=TgtRetryConfig)  # Task: standalone TGT retry
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection

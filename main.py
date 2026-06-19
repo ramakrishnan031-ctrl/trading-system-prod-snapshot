@@ -71,6 +71,7 @@ from orders.order_placer import OrderPlacer
 from orders.order_protocol_co import CoPlusTgtProtocol
 from orders.order_protocol_limit import LimitTripleProtocol
 from orders.order_reconciler import OrderReconciler
+from orders.tgt_retry_manager import TGTRetryManager
 from orders.smart_tgt_manager import SmartTgtManager
 from screening.entry_gate import EntryGate, WatchEntry
 from screening.quality_scorer import QualityScorer
@@ -1022,6 +1023,7 @@ def _shutdown(
     webhook_receiver: Optional[WebhookReceiver] = None,
     clock_skew_probe: Optional[BrokerClockSkewProbe] = None,
     token_monitor: Optional[TokenMonitor] = None,  # FIX-128 Fix E
+    tgt_retry_manager: Optional[TGTRetryManager] = None,  # Task: TGT retry
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1054,6 +1056,11 @@ def _shutdown(
         smart_tgt.stop()
     except Exception as exc:
         _log.error("smart_tgt.stop error: %s", exc)
+    if tgt_retry_manager is not None:
+        try:
+            tgt_retry_manager.stop()
+        except Exception as exc:
+            _log.error("tgt_retry_manager.stop error: %s", exc)
     try:
         order_reconciler.stop()
     except Exception as exc:
@@ -2075,6 +2082,22 @@ def _main_locked(args, config_dir: Path) -> int:
         mode=mode_label,
     )
 
+    # Task (2026-06-19): standalone TGT retry — re-place a TGT left unplaced by
+    # FIX-190 Bug C (SL still protects) on an exponential backoff.
+    tgt_cfg = app_config.system.tgt_retry
+    tgt_retry_manager = TGTRetryManager(
+        state_store=store,
+        order_placer=order_placer,
+        notifier=notifier,
+        kill_switch=kill_switch,
+        logger=get_logger("tgt_retry_manager"),
+        poll_interval_sec=tgt_cfg.poll_interval_sec,
+        max_attempts=tgt_cfg.max_attempts,
+        backoff_base_sec=tgt_cfg.backoff_base_sec,
+        enabled=tgt_cfg.enabled,
+        mode=mode_label,
+    )
+
     strategies_dir = config_dir / "strategies"
     loader = StrategyLoader()
     strategies = loader.load_all_strategies(
@@ -2309,6 +2332,7 @@ def _main_locked(args, config_dir: Path) -> int:
     signal_processor.start()
     entry_gate.start()
     smart_tgt.start()
+    tgt_retry_manager.start()  # Task: standalone TGT retry
 
     wh_cfg = app_config.system.webhook
     # FIX-081: Port conflict check removed — acquire_instance_lock() already
@@ -2474,6 +2498,7 @@ def _main_locked(args, config_dir: Path) -> int:
         webhook_receiver=webhook_receiver,
         clock_skew_probe=clock_skew_probe,
         token_monitor=token_monitor,  # FIX-128 Fix E
+        tgt_retry_manager=tgt_retry_manager,  # Task: TGT retry
         mode=mode_label,
     )
     return 0

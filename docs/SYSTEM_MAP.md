@@ -95,7 +95,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `core/` | Infra: config, DB, events, time, IDs | config_loader, cron_registry, state_store, db_connect, events, logger, time_authority, market_windows, instrument_cache, account_registry, migrations, constants, schema.sql |
 | `broker/` | Broker integration + polling | zerodha_adapter, angelone_adapter, order_monitor (2s fill poll), order_state_machine, rate_limiter, cost_calculator, slippage_engine, product_resolver, token_monitor, clock_skew_probe |
 | `capital/` | Capital, risk, kill-switch | fund_manager, position_sizer, risk_engine, kill_switch, drift_handler, invariant, performance_allocator, shadow_engine, strategy_governor |
-| `orders/` | Order lifecycle | order_placer, order_reconciler (15s), order_manager, eod_squareoff, smart_tgt_manager, breakeven_manager, sl_breach_monitor, entry_engine, full_entry_engine, order_protocol_co, order_protocol_limit, price_math, shadow_tracker |
+| `orders/` | Order lifecycle | order_placer, order_reconciler (15s), order_manager, eod_squareoff, smart_tgt_manager, tgt_retry_manager (30s TGT re-place), breakeven_manager, sl_breach_monitor, entry_engine, full_entry_engine, order_protocol_co, order_protocol_limit, price_math, shadow_tracker |
 | `signals/` | Ingestion | webhook_receiver, signal_processor, entry_throttle (Bug G: global min-gap/burst + per-symbol cooldown) |
 | `screening/` | Signal screening/scoring | entry_gate, quality_scorer, secondary_screener, step_executor |
 | `data/` | Market data | live_feed (WS ticks), candle_store |
@@ -108,7 +108,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `main.py` (root) | App entrypoint | launched as `main.py --mode live` |
 
 ### Database  (`data_store/`)
-- `trading_system.db` (~49 MB) — **MAIN** DB (schema **v28**). trades, orders, signals, fm_ledger, etc.
+- `trading_system.db` (~49 MB) — **MAIN** DB (schema **v30**; v29 added trades.EXITING, v30 added trades.needs_tgt_retry/tgt_retry_count/tgt_last_retry_at for the TGT-retry mechanism). trades, orders, signals, fm_ledger, etc.
 - `analytics.db` (~44 KB) — analytics split (v28); **ATTACHed** to the main DB at runtime.
 - **Raw sqlite access MUST use `core.db_connect.connect`** (it sets up the ATTACH); plain `sqlite3`
   works only for read-only SELECTs against the main file.
@@ -261,6 +261,28 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **Task: standalone TGT retry mechanism** (closes the
+  "TGT fails forever" gap left by FIX-190 Bug C — the 19-Jun THELEELA TGT that failed
+  at 10:00:28 and was never retried). When a LIMIT_TRIPLE TGT can't be placed but the
+  SL is live (Bug C SL-only), `order_placer._persist_sl_only_protected` now flags the
+  trade (`trades.needs_tgt_retry=1`, new schema **v30** columns: needs_tgt_retry /
+  tgt_retry_count / tgt_last_retry_at — auto-migrates v29→v30 on restart). New
+  `orders/tgt_retry_manager.py` `TGTRetryManager` (30s daemon, started after smart_tgt,
+  stopped in `_shutdown`) re-attempts the TGT on exponential backoff
+  (**30/60/120/240/480s, give up after 5** → position stays SL-protected) via
+  `OrderPlacer.retry_tgt_for_trade` → `FullEntryEngine.place_deferred_tgt_only` →
+  `LimitTripleProtocol.place_tgt_only` (re-clamps to the CURRENT circuit band each try —
+  Bug D; the band may relax). Guards: SL must still be standing (never place a naked
+  TGT), no double-TGT (idempotent), never place an unprofitable TGT, skip while the kill
+  switch is active or outside market hours. The placed TGT is registered in `_fill_map` +
+  order_monitor so a fill triggers the software OCO (cancels the SL). Telegram INFO on
+  success / WARNING on give-up. Config `tgt_retry:` (enabled/poll_interval_sec/max_attempts/
+  backoff_base_sec; optional, defaults reproduce the schedule). State lives in the trades
+  table → survives restart. 18 tests in `test_tgt_retry.py`; 454 affected-suite tests green
+  (v29→v30 migration verified live). Activates on next restart. Files: `orders/tgt_retry_manager.py`
+  (new), `orders/order_placer.py`, `orders/order_protocol_limit.py`, `orders/full_entry_engine.py`,
+  `core/schema.sql`, `core/migrations.py`, `core/state_store.py`, `core/config_loader.py`,
+  `config/system_config.yaml`, `main.py`.
 - 2026-06-19 — Claude Code — **Task 4: reconciler resolves trades stuck in EXITING**
   (closes the `followup_reconciler_exiting_gap` exposed by the 19-Jun incident). A
   HARD_KILL / emergency flatten marks a trade EXITING before flattening (Bug A, FIX-190);

@@ -95,6 +95,22 @@ class ExitLegsResult:
     tgt_placed: bool = True     # FIX-190 Bug C: False = SL live, TGT not placed
 
 
+@dataclass(frozen=True)
+class TgtOnlyResult:
+    """Outcome of LimitTripleProtocol.place_tgt_only() (TGT retry, Task 2026-06-19).
+
+    placed=True with ids/price set on success; placed=False (ids None) when the
+    broker rejected the TGT or returned no id (e.g. still outside the circuit
+    band) — the method NEVER raises, so the caller can schedule another retry.
+    The SL is never touched. ``clamped`` records whether the circuit-band clamp
+    moved the target (Bug D)."""
+    placed: bool
+    tgt_broker_order_id: Optional[str] = None
+    tgt_internal_id: Optional[str] = None
+    tgt_price: Optional[float] = None
+    clamped: bool = False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -410,4 +426,79 @@ class LimitTripleProtocol(EntryEngine):
             tgt_broker_order_id=tgt_placed.broker_order_id,
             tgt_internal_id=tgt_placed.internal_order_id,
             tgt_price=tgt_price,
+        )
+
+    def place_tgt_only(
+        self,
+        *,
+        symbol: str,
+        entry_side: str,        # ENTRY side; TGT placed on the opposite side
+        qty: int,
+        tgt_price: float,
+        intent: str,
+        trade_id: str,
+        tag: str = "",
+    ) -> TgtOnlyResult:
+        """
+        TGT retry (Task 2026-06-19): place ONLY the TGT LIMIT leg for a trade
+        whose SL is already standing (FIX-190 Bug C left it SL-only when the TGT
+        could not be placed). Clamps the TGT into the circuit band (Bug D) —
+        circuit limits change intraday, so a retry can succeed once the band
+        relaxes. NEVER raises and NEVER touches the SL: a broker reject / empty
+        broker_order_id returns ``placed=False`` so TGTRetryManager can schedule
+        another attempt. The caller (OrderPlacer) owns DB persistence + fill_map
+        registration so a filled retry-TGT triggers the software OCO.
+        """
+        order_tag = truncate_tag_for_broker(tag or trade_id)
+        exit_side = _exit_side(entry_side)
+
+        # Bug D: re-clamp on every retry against the CURRENT circuit band.
+        upper_c, lower_c = self._circuit_limits(symbol)
+        clamped = False
+        if upper_c or lower_c:
+            tgt_price, clamped = clamp_to_circuit_band(tgt_price, upper_c, lower_c)
+
+        try:
+            placed = self._adapter.place_order(
+                symbol=symbol,
+                side=exit_side,
+                qty=qty,
+                price=tgt_price,
+                order_type="LIMIT",
+                intent=intent,
+                tag=order_tag,
+            )
+        except BrokerError as exc:
+            self._log.warning(
+                "limit_triple.tgt_retry_place_failed",
+                extra={
+                    "trade_id": trade_id, "symbol": symbol, "qty": qty,
+                    "tgt_price": tgt_price, "error": str(exc),
+                    "detail": "TGT retry rejected; SL untouched; will retry on schedule",
+                },
+            )
+            log_exception(self._log, exc)
+            return TgtOnlyResult(placed=False, clamped=clamped)
+
+        if not placed.broker_order_id:
+            self._log.warning(
+                "limit_triple.tgt_retry_empty_broker_id",
+                extra={"trade_id": trade_id, "symbol": symbol, "qty": qty},
+            )
+            return TgtOnlyResult(placed=False, clamped=clamped)
+
+        self._log.info(
+            "limit_triple.tgt_retry_placed",
+            extra={
+                "trade_id": trade_id, "symbol": symbol,
+                "broker_order_id": placed.broker_order_id,
+                "price": tgt_price, "qty": qty,
+            },
+        )
+        return TgtOnlyResult(
+            placed=True,
+            tgt_broker_order_id=placed.broker_order_id,
+            tgt_internal_id=placed.internal_order_id,
+            tgt_price=tgt_price,
+            clamped=clamped,
         )

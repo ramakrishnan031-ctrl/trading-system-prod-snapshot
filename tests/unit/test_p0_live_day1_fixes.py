@@ -280,8 +280,11 @@ class TestExitingStatus:
     """FIX-179: 'EXITING' is a valid trades.status (schema CHECK + state machine)."""
 
     def test_schema_version_bumped_to_29(self) -> None:
+        # v29 added EXITING; v30 (TGT retry) added needs_tgt_retry/tgt_retry_count/
+        # tgt_last_retry_at. EXPECTED_SCHEMA_VERSION must be at least 29.
         from core.state_store import EXPECTED_SCHEMA_VERSION
-        assert EXPECTED_SCHEMA_VERSION == 29
+        assert EXPECTED_SCHEMA_VERSION >= 29
+        assert EXPECTED_SCHEMA_VERSION == 30
 
     def test_fresh_db_accepts_exiting_status(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path / "exiting.db")
@@ -305,7 +308,10 @@ class TestExitingStatus:
         assert "EXITING" in TRADE_TRANSITIONS
         assert "EXITING" in TRADE_TRANSITIONS["OPEN"]
         assert "EXITING" in TRADE_TRANSITIONS["PARTIAL"]
-        assert TRADE_TRANSITIONS["EXITING"] == {"CLOSED", "CLOSED_MANUAL"}
+        # Task 4 (2026-06-19): EXITING -> OPEN added as a reconciler recovery
+        # transition (a trade stuck in EXITING that still holds a live broker
+        # position is reverted to OPEN for normal management).
+        assert TRADE_TRANSITIONS["EXITING"] == {"CLOSED", "CLOSED_MANUAL", "OPEN"}
 
 
 # ═════════════════════════════════════════════════════════════════════════════

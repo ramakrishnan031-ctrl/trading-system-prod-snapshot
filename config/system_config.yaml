@@ -212,6 +212,12 @@ order_reconciler:             # RC17 — reconciler tuning
   capital_drift_alert_interval_sec: 1800  # TASK-11: min seconds between repeat CAPITAL_DRIFT alerts (30 min)
   stuck_exiting_timeout_minutes: 30  # Task 4: resolve trades stuck in EXITING (HARD_KILL died mid-exit) older than this — flat->CLOSED_MANUAL, still-held->OPEN
 
+tgt_retry:                    # Task (2026-06-19): standalone TGT retry — re-place a TGT left unplaced by FIX-190 Bug C (SL still protects)
+  enabled: true
+  poll_interval_sec: 30       # retry loop cadence
+  max_attempts: 5             # give up after 5 (position stays SL-protected)
+  backoff_base_sec: 30        # nth retry waits base*2**(n-1): 30/60/120/240/480s
+
 shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   enabled: true               # SH13: false = all handlers no-ops; table stays empty
   max_innings: 3              # SH4: total innings (1 real + up to 2 simulated)
