@@ -158,7 +158,7 @@ VM:  bare repo post-receive hook  →  git checkout -f  →  /home/ubuntu/system
 ---
 
 ## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, 34 lines; **source of truth: `config/cron_registry.yaml`** — TASK #3)
-All market jobs run `cd … && . ./.env && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
+All market jobs run `cd … && set -a && . ./.env && set +a && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
 To change cron: edit `config/cron_registry.yaml` → regenerate the file → `crontab deploy/cron/trading-system.cron`.
 
 > ⚠️ **FIX-189 (2026-06-19) — cron MUST run under bash.** cron's default `/bin/sh`
@@ -168,6 +168,15 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > canonical file therefore carries TWO guards: a leading **`SHELL=/bin/bash`** line
 > AND **`. ./.env`** (the `./` makes even dash source from CWD). Keep both on any
 > regeneration. `tests/unit/test_cron_registry.py::TestFix189CronShell` enforces it.
+
+> ⚠️ **ENV-EXPORT FIX (2026-06-19) — source MUST be `set -a && . ./.env && set +a`.**
+> `.env` uses bare `VAR=value` (no `export`), so a plain `. ./.env` sets shell
+> variables the child `python` does **NOT** inherit → every cron job ran WITHOUT
+> its `.env` secrets (`ZERODHA_API_KEY_LFL836`, `TELEGRAM_*`, `GEMINI_API_KEY`).
+> FIX-189 made jobs *run*; this made them get their secrets (the 19-Jun 15:45
+> reconcile_positions broker-creds + "Telegram env not set" were both this).
+> `set -a` (allexport) exports everything sourced. Keep the wrapper on every
+> Python job line. `tests/unit/test_cron_registry.py::TestCronEnvExport` enforces it.
 
 | Time (IST) | Days | Script | Purpose |
 |---|---|---|---|
@@ -268,6 +277,24 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **Cron env-export fix (ROOT CAUSE) + reconcile_positions creds (Item A)
+  + per-episode drift logging (Item B).** Investigating the 15:45 `reconcile_positions` FAILED revealed
+  a deeper root cause: cron jobs ran **without any `.env` secrets** — `.env` is bare `VAR=value` (no
+  `export`), so `. ./.env && python` sets shell vars the child Python never inherits (proven on VM:
+  all secrets MISSING under the cron pattern, SET with `set -a`). FIX-189 made jobs *run*; they still
+  got no secrets. **Fix:** every Python cron line now sources via **`set -a && . ./.env && set +a`**
+  (allexport) — `deploy/cron/trading-system.cron` (29 lines) + `config/cron_registry.yaml` header +
+  `TestCronEnvExport`. Crontab **reinstalled** on VM (backup in `data_store/crontab_backups/`); probe
+  confirms `ZERODHA_API_KEY_LFL836`/`TELEGRAM_*` now reach Python; all 5 broker-crons wrapped.
+  **Item A:** `scripts/reconcile_positions.py` read never-set generic `ZERODHA_API_KEY`/`ACCESS_TOKEN`
+  → now mirrors `refresh_instruments` (`_resolve_credentials`: per-account `api_key_env` +
+  `access_token` from token JSON via `load_token`; `--account` default LFL836, generic fallback). Cron
+  passes `--account LFL836`. **Verified end-to-end on VM: exit 0 + heartbeat SUCCESS** (was exit 1 /
+  FAILED). **Item B:** `order_reconciler._g3_capital_drift` logged a `reconciliation_log` row every 15s
+  cycle even while the alert was throttled (144 rows for 3 alerts on 19-Jun) → now per-EPISODE
+  (`_drift_episode_active`): a row only on episode-start or a real alert; throttle unchanged. Tests:
+  130 affected unit tests green (cron_registry 23, reconcile 25, order_reconciler 82). Commits bff0cad
+  (env-export+A), 89c0c20 (B). Item A activates Monday 15:45; env-export already live; Item B next restart.
 - 2026-06-19 — Claude Code — **Doc: `docs/system_manuals/*.docx` location recorded.** Three Word
   manuals (`trading_System_v2_runbook.docx`, `config_file_guide.docx`,
   `chartink_mounted_strategies.docx`) live in `docs/system_manuals/`. **Gitignored** (added
