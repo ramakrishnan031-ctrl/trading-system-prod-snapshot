@@ -18,9 +18,10 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 > (TGT-only no HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no
 > oversell), E (cancel resting exits — no orphans), F (no duplicate G5b SL), G
 > (entry throttle 20s/3-per-60s), H (`live_test_mode`: live caps max_open=1 /
-> 3-per-day), I (in-session drift tolerance). **B** (broker-filled counter) was
-> already correct via FIX-181 (rejects excluded) + FIX-185 (authoritative
-> reservation cap) — only cosmetic metrics deferred. Incident replay green
+> 3-per-day), I (in-session drift tolerance), **B** (counting already correct via
+> FIX-181 + FIX-185; added runtime observability metrics to `/metrics`:
+> signals_processed / entries_placed / entries_throttled / entries_rejected).
+> Incident replay green
 > (`tests/integration/test_fix190_incident_replay.py`). **Paper mode SKIPPED per
 > Rama** (stay LIVE with tiny ₹10k). `trading-system.service` stays **failed
 > (HARD_KILL, exit 4)** — **do NOT resume until Rama's explicit go-ahead**; when
