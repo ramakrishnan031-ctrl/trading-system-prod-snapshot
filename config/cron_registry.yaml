@@ -12,6 +12,14 @@
 # `.` builtin refuses to source a relative path without a slash. See the header
 # of deploy/cron/trading-system.cron for the full explanation.
 #
+# ENV-EXPORT FIX (2026-06-19) — the source MUST be wrapped in allexport:
+# `set -a && . ./.env && set +a` (NOT a plain `. ./.env`). `.env` uses bare
+# `VAR=value` (no `export`), so a plain source sets shell vars that the child
+# `python` does NOT inherit — every cron job ran without its .env secrets
+# (reconcile_positions 15:45 broker-creds + Telegram both failed for this).
+# `set -a` exports everything defined while sourcing so os.environ sees them.
+# Keep this wrapper on every Python job line on any regeneration.
+#
 # Per-job fields:
 #   script           command/path (informational; canonical cron is generated from this)
 #   schedule         human-readable IST schedule
@@ -166,7 +174,7 @@ jobs:
     monitored: true
 
   reconcile_positions:
-    script: "scripts/reconcile_positions.py"
+    script: "scripts/reconcile_positions.py --account LFL836"
     schedule: "15:45 Mon-Fri"
     type: python
     critical: true

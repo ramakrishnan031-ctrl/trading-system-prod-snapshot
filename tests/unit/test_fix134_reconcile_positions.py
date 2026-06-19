@@ -13,6 +13,7 @@ from core.time_authority import now_ist, today_ist
 from scripts.reconcile_positions import (
     run_position_reconciliation,
     _get_system_positions,
+    _resolve_credentials,
 )
 
 
@@ -240,3 +241,86 @@ class TestLiveMode:
         assert statuses["RELIANCE"] == "OK"
         assert statuses["INFY"] == "OK"
         assert statuses["ORPHAN"] == "ORPHAN_AT_BROKER"
+
+    @patch("scripts.reconcile_positions._fetch_broker_positions")
+    def test_credentials_threaded_to_fetch(self, mock_fetch, store):
+        """Resolved api_key/access_token are passed through to the broker fetch."""
+        mock_fetch.return_value = {}
+        run_position_reconciliation(
+            store=store,
+            date_iso=today_ist(),
+            is_paper=False,
+            log=logging.getLogger("test"),
+            api_key="KEY123",
+            access_token="TOK456",
+        )
+        mock_fetch.assert_called_once()
+        pos_args = mock_fetch.call_args[0]
+        # signature: _fetch_broker_positions(log, api_key, access_token)
+        assert pos_args[1] == "KEY123"
+        assert pos_args[2] == "TOK456"
+
+
+# ── Credential resolution (the 19-Jun fix: per-account env + token file) ─────
+
+
+class TestResolveCredentials:
+    """The script used to read generic ZERODHA_API_KEY/ACCESS_TOKEN (never set).
+    Now it mirrors refresh_instruments: api_key from <account.api_key_env> +
+    access_token from the token JSON via zerodha_login.load_token."""
+
+    _CFG = Path("config")
+    _LOG = logging.getLogger("test")
+
+    def test_account_path_resolves(self, monkeypatch):
+        monkeypatch.setenv("ZERODHA_API_KEY_LFL836", "peracct_key")
+        with patch("scripts.zerodha_login.load_token",
+                   return_value={"access_token": "tok_from_file"}), \
+             patch("scripts.zerodha_login.is_token_valid", return_value=True):
+            api_key, access_token = _resolve_credentials("LFL836", self._CFG, self._LOG)
+        assert api_key == "peracct_key"
+        assert access_token == "tok_from_file"
+
+    def test_account_missing_env_raises(self, monkeypatch):
+        monkeypatch.delenv("ZERODHA_API_KEY_LFL836", raising=False)
+        with pytest.raises(RuntimeError, match="not set"):
+            _resolve_credentials("LFL836", self._CFG, self._LOG)
+
+    def test_account_not_found_raises(self):
+        with pytest.raises(RuntimeError, match="not found"):
+            _resolve_credentials("NOPE999", self._CFG, self._LOG)
+
+    def test_token_file_missing_raises(self, monkeypatch):
+        monkeypatch.setenv("ZERODHA_API_KEY_LFL836", "peracct_key")
+        with patch("scripts.zerodha_login.load_token", return_value=None):
+            with pytest.raises(RuntimeError, match="token file"):
+                _resolve_credentials("LFL836", self._CFG, self._LOG)
+
+    def test_empty_access_token_raises(self, monkeypatch):
+        monkeypatch.setenv("ZERODHA_API_KEY_LFL836", "peracct_key")
+        with patch("scripts.zerodha_login.load_token",
+                   return_value={"access_token": "  "}):
+            with pytest.raises(RuntimeError, match="access_token missing"):
+                _resolve_credentials("LFL836", self._CFG, self._LOG)
+
+    def test_stale_token_warns_but_proceeds(self, monkeypatch, caplog):
+        monkeypatch.setenv("ZERODHA_API_KEY_LFL836", "peracct_key")
+        with patch("scripts.zerodha_login.load_token",
+                   return_value={"access_token": "tok"}), \
+             patch("scripts.zerodha_login.is_token_valid", return_value=False):
+            with caplog.at_level(logging.WARNING):
+                api_key, access_token = _resolve_credentials("LFL836", self._CFG, self._LOG)
+        assert (api_key, access_token) == ("peracct_key", "tok")
+        assert any("stale" in r.message.lower() for r in caplog.records)
+
+    def test_generic_fallback_when_no_account(self, monkeypatch):
+        monkeypatch.setenv("ZERODHA_API_KEY", "generic_key")
+        monkeypatch.setenv("ZERODHA_ACCESS_TOKEN", "generic_tok")
+        api_key, access_token = _resolve_credentials("", self._CFG, self._LOG)
+        assert (api_key, access_token) == ("generic_key", "generic_tok")
+
+    def test_generic_fallback_missing_raises(self, monkeypatch):
+        monkeypatch.delenv("ZERODHA_API_KEY", raising=False)
+        monkeypatch.delenv("ZERODHA_ACCESS_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match="must be set"):
+            _resolve_credentials("", self._CFG, self._LOG)

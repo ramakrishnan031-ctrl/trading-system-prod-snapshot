@@ -82,6 +82,42 @@ class TestFix189CronShell:
         assert ". ./.env" in text, "jobs must source via `. ./.env` (slash form)"
 
 
+# ── ENV-EXPORT FIX: cron must export .env vars to the child Python ───────────
+# `.env` uses bare `VAR=value` (no `export`), so a plain `. ./.env` sets shell
+# vars the child `python` does NOT inherit — every cron job ran without its
+# .env secrets (reconcile_positions broker-creds + Telegram both failed). The
+# source must be wrapped in `set -a` (allexport) ... `set +a`.
+
+
+class TestCronEnvExport:
+    CRON = Path("deploy/cron/trading-system.cron")
+
+    def _env_sourcing_lines(self):
+        for ln in self.CRON.read_text(encoding="utf-8").splitlines():
+            if ln.lstrip().startswith("#") or not ln.strip():
+                continue
+            if ". ./.env" in ln:
+                yield ln
+
+    def test_every_sourcing_line_uses_allexport(self):
+        offenders = [
+            ln for ln in self._env_sourcing_lines()
+            if "set -a && . ./.env && set +a" not in ln
+        ]
+        assert offenders == [], (
+            "env-sourcing job(s) missing `set -a && . ./.env && set +a` allexport "
+            "wrapper (vars won't reach Python): " + "; ".join(offenders)
+        )
+
+    def test_no_unwrapped_plain_source(self):
+        # A plain `&& . ./.env &&` not preceded by `set -a` would silently drop
+        # secrets. Every occurrence must be the wrapped form.
+        for ln in self._env_sourcing_lines():
+            assert "set -a && . ./.env && set +a &&" in ln, (
+                f"unwrapped .env source (no allexport): {ln}"
+            )
+
+
 # ── due_time parsing ─────────────────────────────────────────────────────────
 
 

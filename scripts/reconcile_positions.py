@@ -65,26 +65,91 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Force paper/live mode (default: from TRADING_MODE env var)",
     )
     parser.add_argument(
+        "--account", metavar="ID", default="LFL836",
+        help="Account ID from accounts.csv for live broker fetch (default: LFL836). "
+             "Resolves api_key from <api_key_env> + access_token from the token JSON. "
+             "Pass an empty string to fall back to generic ZERODHA_API_KEY/ACCESS_TOKEN env.",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Compute and log but do not write to DB.",
     )
     return parser.parse_args(argv)
 
 
-def _fetch_broker_positions(log: logging.Logger) -> dict[str, int]:
+def _resolve_credentials(
+    account_id: Optional[str], config_dir: Path, log: logging.Logger
+) -> tuple[str, str]:
+    """
+    Return (api_key, access_token) for the live broker fetch.
+
+    Mirrors scripts/refresh_instruments.py._resolve_credentials (RI8) — the
+    proven working pattern, NOT generic env vars (which are never set in this
+    deployment):
+
+    With account_id: api_key from the account's api_key_env (e.g.
+    ZERODHA_API_KEY_LFL836) + access_token from
+    data_store/session/zerodha_token.json (via zerodha_login.load_token).
+
+    Without account_id (empty): falls back to generic ZERODHA_API_KEY /
+    ZERODHA_ACCESS_TOKEN env vars (legacy).
+
+    Raises RuntimeError with a clear message on any resolution failure.
+    """
+    if account_id:
+        from core.account_registry import AccountRegistry
+        from scripts.zerodha_login import is_token_valid, load_token
+
+        registry = AccountRegistry.load(config_dir / "accounts.csv")
+        try:
+            acct = registry.get(account_id)
+        except KeyError as exc:
+            raise RuntimeError(f"account {account_id!r} not found in accounts.csv") from exc
+
+        api_key = os.environ.get(acct.api_key_env, "")
+        if not api_key:
+            raise RuntimeError(f"env var {acct.api_key_env!r} not set")
+
+        token_path = _ROOT / "data_store" / "session" / "zerodha_token.json"
+        token_data = load_token(token_path)
+        if not token_data:
+            raise RuntimeError(f"token file not found/unreadable: {token_path}")
+        access_token = (token_data.get("access_token") or "").strip()
+        if not access_token:
+            raise RuntimeError("access_token missing from token file")
+
+        # Non-fatal: warn if the token is stale/for another account but still try.
+        if not is_token_valid(account_id, token_path):
+            log.warning(
+                "reconcile_positions: token for %s looks stale/mismatched "
+                "(is_token_valid=False); proceeding with the present access_token",
+                account_id,
+            )
+        return api_key, access_token
+
+    # Legacy fallback: generic env vars.
+    api_key = os.environ.get("ZERODHA_API_KEY", "")
+    access_token = os.environ.get("ZERODHA_ACCESS_TOKEN", "")
+    if not api_key or not access_token:
+        raise RuntimeError(
+            "ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN must be set "
+            "(no --account given for the per-account/token-file path)"
+        )
+    return api_key, access_token
+
+
+def _fetch_broker_positions(
+    log: logging.Logger, api_key: str, access_token: str
+) -> dict[str, int]:
     """
     Fetch net open positions from Zerodha. Returns {symbol: net_qty}.
-    Only includes positions with non-zero quantity.
+    Only includes positions with non-zero quantity. Credentials are resolved by
+    the caller via _resolve_credentials (per-account api_key + token-file token).
     """
     from kiteconnect import KiteConnect
 
-    api_key = os.environ.get("ZERODHA_API_KEY", "")
-    access_token = os.environ.get("ZERODHA_ACCESS_TOKEN", "")
-
     if not api_key or not access_token:
-        raise RuntimeError(
-            "ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN must be set for live position fetch"
-        )
+        raise RuntimeError("api_key and access_token are required for live position fetch")
 
     kite = KiteConnect(api_key=api_key)
     kite.set_access_token(access_token)
@@ -142,6 +207,8 @@ def run_position_reconciliation(
     notifier=None,
     mode_label: str = "LIVE",
     dry_run: bool = False,
+    api_key: Optional[str] = None,
+    access_token: Optional[str] = None,
 ) -> list[dict]:
     """
     Compare broker vs system positions symbol-by-symbol.
@@ -175,7 +242,7 @@ def run_position_reconciliation(
         return results
 
     try:
-        broker_positions = _fetch_broker_positions(log)
+        broker_positions = _fetch_broker_positions(log, api_key, access_token)
     except Exception as exc:
         log.error("reconcile_positions.broker_fetch_failed: %s", exc)
         return [{
@@ -328,6 +395,17 @@ def main(argv=None) -> int:
         extra={"date": date_iso, "mode": mode_label, "dry_run": args.dry_run},
     )
 
+    # Resolve live broker credentials (per-account api_key + token-file token).
+    # Paper mode never fetches from the broker, so it needs no credentials.
+    api_key = access_token = None
+    if not is_paper:
+        try:
+            api_key, access_token = _resolve_credentials(args.account, config_dir, log)
+        except Exception as exc:
+            log.error("reconcile_positions: credential resolution failed: %s", exc)
+            store.close()
+            return 1
+
     try:
         results = run_position_reconciliation(
             store=store,
@@ -337,6 +415,8 @@ def main(argv=None) -> int:
             notifier=notifier,
             mode_label=mode_label,
             dry_run=args.dry_run,
+            api_key=api_key,
+            access_token=access_token,
         )
     except Exception as exc:
         log.error("reconcile_positions.unexpected_error: %s", exc, exc_info=True)
