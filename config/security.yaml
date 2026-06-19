@@ -57,6 +57,7 @@ security:
   watched_files:
     - { path: /home/ubuntu/.ssh/authorized_keys, severity: CRITICAL, label: ssh_authorized_keys }
     - { path: /etc/ssh/sshd_config,              severity: CRITICAL, label: sshd_config }
+    - { path: /etc/ssh/sshd_config.d/99-trading-security.conf, severity: CRITICAL, label: sshd_hardening_dropin }
     - { path: /etc/sudoers,                      severity: CRITICAL, label: sudoers }
     - { path: /etc/systemd/system/trading-system.service, severity: CRITICAL, label: unit_trading }
     - { path: /etc/systemd/system/security-watcher.service, severity: CRITICAL, label: unit_security }

@@ -27,6 +27,7 @@
 # --- SSH access surface ---
 -w /home/ubuntu/.ssh/authorized_keys -p wa -k ssh_keys_change
 -w /etc/ssh/sshd_config -p wa -k sshd_config_change
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd_config_change
 
 # --- privilege escalation config ---
 -w /etc/sudoers -p wa -k sudoers_change
