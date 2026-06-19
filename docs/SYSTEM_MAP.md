@@ -89,7 +89,10 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 - `data_store/backups/` — nightly `.backup` snapshots (7-day retention).
 - `data_store/candles/` — candle artifacts.
 - `data_store/critical_alert_*.flag` — CRITICAL sentinels written by `alerts/critical.py`,
-  consumed by `alert-watcher.service`. (Currently accumulating — see Known Issues.)
+  consumed by `alert-watcher.service` (VM) → renamed to `.delivered`. **Local-only/gitignored**
+  (`data_store/` is ignored), so the PC accumulates them whenever the system/tests run there with
+  no watcher — periodically `rm data_store/critical_alert_*.flag` on the PC (VM stays clean via the
+  watcher). VM clean as of 19-Jun (0 `.flag`); PC's 445 stale (mostly test) flags removed 19-Jun.
 
 ### Logs  (`logs/`)
 Daily-dated files: `system_YYYY-MM-DD.log`, `debug_*.log`, `reconciler_*.log`, `trades_*.log`,
@@ -293,4 +296,9 @@ inactive alert-watcher).
   and `live_feed._on_noreconnect` downgrades max-reconnect-exhausted to WARNING (no
   SOFT_KILL/CRITICAL) outside market hours — both still escalate normally in-session.
   **(P2)** token-watcher start is window-gated + already idempotent on `ActiveState`.
-  16 new tests. Kite dev-console IP allowlist remains Rama's external step. Commits …
+  16 new tests. Kite dev-console IP allowlist remains Rama's external step. Commits 2ac32ae,
+  0f722f7, 5603013, 66380b6 — pushed+deployed; crontab installed; service recovered (`/health`
+  HEALTHY).
+- 2026-06-19 — Claude Code — Cleanup: removed **445** stale `critical_alert_*.flag` from the **PC**
+  `data_store/` (31-May→18-Jun, mostly `source_module:test`). Local-only/gitignored — never tracked,
+  no `.gitignore` change. VM already clean (alert-watcher consumes → `.delivered`).
