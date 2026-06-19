@@ -1,0 +1,32 @@
+# /etc/fail2ban/jail.local — trading-system VM (Phase 1)
+#
+# Purpose: throttle the ~3.5k/day distributed SSH brute-force NOISE (499 IPs).
+# NOT a security gate — key-only auth already blocks these. This just trims the
+# log noise + attack surface.
+#
+# SAFETY (why Rama / Claude can't be locked out):
+#   - SSH is key-only; legit logins produce "Accepted publickey" (success), never
+#     the "Failed password"/"Invalid user" lines the jail bans on. The 19-Jun
+#     audit confirmed the management IPs have ZERO failure/preauth-fail events.
+#   - ignoreself = true keeps the host's own addresses unbannable.
+#   - Reads /var/log/auth.log directly (confirmed populated) — explicit, not journald-dependent.
+#   - DO NOT add a static IP allow-list: Rama's IPs are dynamic (Jio/Airtel). Key
+#     auth is the gate; an IP that brute-forces passwords is never Rama.
+
+[DEFAULT]
+bantime  = 3600
+findtime = 600
+maxretry = 5
+ignoreself = true
+ignoreip = 127.0.0.1/8 ::1
+backend  = auto
+# Recidive-style escalation could be added in Phase 2; keep Phase 1 simple.
+
+[sshd]
+enabled  = true
+port     = ssh
+filter   = sshd
+logpath  = /var/log/auth.log
+maxretry = 5
+bantime  = 3600
+findtime = 600

@@ -1,0 +1,33 @@
+# /etc/audit/rules.d/trading-security.rules — trading-system VM (Phase 1)
+#
+# File-integrity audit trail (the WHO/WHEN). security_monitor.py provides the
+# DETECTION + alert via content hashes; auditd provides the forensic record
+# (which uid/pid/exe changed the file) you can pull with:
+#   sudo ausearch -k env_change   (etc.)
+#
+# Load with:  sudo augenrules --load   (or: sudo cp ... && sudo systemctl restart auditd)
+# Verify with: sudo auditctl -l
+#
+# NB: git deploys (post-receive checkout) WILL generate config_change events —
+# correlate with the bare-repo push time when triaging. .env is NOT in git, so
+# any env_change is always a manual/out-of-band edit worth a look.
+
+# --- secrets ---
+-w /home/ubuntu/systems/trading-system/.env -p wa -k env_change
+
+# --- config (git deploys touch these — expected; out-of-deploy = suspicious) ---
+-w /home/ubuntu/systems/trading-system/config/ -p wa -k config_change
+
+# --- systemd units ---
+-w /etc/systemd/system/trading-system.service -p wa -k systemd_change
+-w /etc/systemd/system/token-watcher.service -p wa -k systemd_change
+-w /etc/systemd/system/alert-watcher.service -p wa -k systemd_change
+-w /etc/systemd/system/security-watcher.service -p wa -k systemd_change
+
+# --- SSH access surface ---
+-w /home/ubuntu/.ssh/authorized_keys -p wa -k ssh_keys_change
+-w /etc/ssh/sshd_config -p wa -k sshd_config_change
+
+# --- privilege escalation config ---
+-w /etc/sudoers -p wa -k sudoers_change
+-w /etc/sudoers.d/ -p wa -k sudoers_change

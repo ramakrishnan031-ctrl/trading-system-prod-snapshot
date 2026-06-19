@@ -1,0 +1,64 @@
+# config/security.yaml — VM Security Manager (Phase 1)
+#
+# Read DIRECTLY by scripts/security_monitor.py (yaml.safe_load), NOT by the
+# trading app's config_loader. This is deliberate: SystemConfig uses
+# extra="forbid", so a `security:` key in system_config.yaml would break
+# main.py startup. The security watcher is standalone, so it owns this file.
+#
+# Alert-ONLY. Nothing here blocks access — key-only SSH is the gate.
+
+security:
+  enabled: true
+
+  # Active sessions: ALERT (never block) if exceeded. Rama may run a couple of
+  # multiplexed sessions (PowerShell + VS Code Claude); 2 is a soft signal.
+  max_active_sessions: 2
+
+  # Failed/invalid login rate per hour. Baseline is ~145/hr from the botnet;
+  # alert only on a clear anomaly (≈3.5x). Tune from real data.
+  failed_login_spike_threshold: 500
+
+  # Root login probes per hour (constant internet noise, blocked by key-auth).
+  root_probe_spike_threshold: 400
+
+  # Alert on a successful key login from a not-previously-seen IP. Rama's IPs
+  # change (Jio/Airtel) so this is a "was this you?" nudge, NOT a block.
+  new_ip_alert: true
+
+  # Alert on non-whitelisted sudo commands (INFO).
+  sudo_alert: true
+  sudo_whitelist_prefixes:
+    - /usr/bin/systemctl
+    - /bin/systemctl
+    - /usr/sbin/fail2ban-client
+    - /usr/sbin/augenrules
+    - /usr/bin/auditctl
+    - /usr/bin/journalctl
+    - /usr/bin/grep
+    - /usr/bin/tail
+    - /usr/bin/cat
+
+  # Don't re-alert the same identity (same new key/IP/file-hash) within this
+  # many seconds. 6h = one nudge, not a 60s stream.
+  realert_cooldown_sec: 21600
+
+  # Known-good SSH baseline (from the 19-Jun audit). check_authorized_keys
+  # alerts if the count grows or a non-matching fingerprint appears.
+  expected_ssh_keys: 1
+  expected_key_fingerprint: "SHA256:DrHT9VviCBFmeg+RBwO3wZhw+EwzhjRD/G2ceKntEqM"
+
+  # Auth source (ubuntu is in group adm → readable without sudo).
+  authlog_path: /var/log/auth.log
+  sentinel_dir: data_store
+
+  # Sensitive files: content-hash watched (hash, not mtime, so a no-op git
+  # deploy does not false-alarm). authorized_keys is handled by its own check.
+  watched_files:
+    - { path: /home/ubuntu/.ssh/authorized_keys, severity: CRITICAL, label: ssh_authorized_keys }
+    - { path: /etc/ssh/sshd_config,              severity: CRITICAL, label: sshd_config }
+    - { path: /etc/sudoers,                      severity: CRITICAL, label: sudoers }
+    - { path: /etc/systemd/system/trading-system.service, severity: CRITICAL, label: unit_trading }
+    - { path: /etc/systemd/system/security-watcher.service, severity: CRITICAL, label: unit_security }
+    - { path: /home/ubuntu/systems/trading-system/.env, severity: CRITICAL, label: dotenv }
+    - { path: /home/ubuntu/systems/trading-system/config/system_config.yaml, severity: WARNING, label: system_config }
+    - { path: /home/ubuntu/systems/trading-system/config/accounts.csv, severity: WARNING, label: accounts_csv }
