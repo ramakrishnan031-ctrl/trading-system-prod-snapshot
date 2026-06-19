@@ -859,6 +859,123 @@ def _start_market_open_margin_sync_thread(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-189 (P1-A completion): EOD window-end self-exit. The market-window guard
+# only blocks *starting* overnight; a service started in-window otherwise runs
+# all night (no EOD self-exit existed — the runtime loop just waits on the
+# shutdown event, and EOD squareoff only trips a scheduled SOFT_KILL). This
+# watchdog sets the shutdown event once we are past the service-window end
+# (SERVICE_WINDOW_END, 16:00 IST) AND positions are flat, so main() exits 0 →
+# systemd does not restart (Restart=on-failure) and token-watcher's
+# "exit-0-today" path skips a restart → clean overnight + clean morning start.
+# Safety: it NEVER exits while any position has live exposure (OPEN/PARTIAL/
+# PENDING_FILL) — it stays up to keep managing residual positions and exits only
+# once flat. Parity: StateStore.count_active_positions() is mode-agnostic, so
+# paper and live behave identically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _eod_self_exit_due(store, now: datetime, window_end: _time) -> "tuple[bool, int]":
+    """Decide whether the service should self-exit for the day.
+
+    Returns (due, active_positions). `due` is True iff `now` is at/after
+    `window_end` AND there are zero active positions (OPEN/PARTIAL/PENDING_FILL).
+    Before `window_end` → (False, -1) without querying. On a count error →
+    (False, -1) so the service stays up (fail-safe).
+    """
+    if now.time() < window_end:
+        return (False, -1)
+    try:
+        active = int(store.count_active_positions())
+    except Exception:
+        return (False, -1)
+    return (active == 0, active)
+
+
+def _start_eod_self_exit_thread(
+    store: "StateStore",
+    notifier,
+    mode: str,
+    log,
+    market_windows,
+    shutdown_event: "threading.Event",
+    window_end: "_time | None" = None,
+    poll_interval_sec: int = 60,
+) -> None:
+    """Daemon thread: after the service-window end, exit cleanly once flat."""
+    import time as _time_mod
+    from core.time_authority import now_ist as _now_ist
+
+    if window_end is None:  # default resolved at call time (constant defined below)
+        window_end = SERVICE_WINDOW_END
+
+    def _run() -> None:
+        # Wait until window_end on the start date (the trading day we came up).
+        start_now = _now_ist()
+        target_dt = start_now.replace(
+            hour=window_end.hour, minute=window_end.minute,
+            second=0, microsecond=0,
+        )
+        while not shutdown_event.is_set() and _now_ist() < target_dt:
+            remaining = (target_dt - _now_ist()).total_seconds()
+            _time_mod.sleep(min(30.0, max(1.0, remaining)))
+        if shutdown_event.is_set():
+            return
+
+        warned_not_flat = False
+        while not shutdown_event.is_set():
+            due, active = _eod_self_exit_due(store, _now_ist(), window_end)
+            if due:
+                log.info(
+                    "eod_self_exit: past %s IST and flat (0 active positions) — "
+                    "clean shutdown for the day; auto-restarts tomorrow after "
+                    "the morning token refresh.", window_end.strftime("%H:%M"),
+                )
+                try:
+                    if notifier is not None:
+                        notifier.send(
+                            severity="INFO",
+                            title=f"[{mode}] EOD Clean Shutdown",
+                            body=(
+                                f"Past {window_end.strftime('%H:%M')} IST and flat "
+                                "— service exiting cleanly for the day. "
+                                "Auto-restarts tomorrow after the morning token refresh."
+                            ),
+                            source_module="main",
+                        )
+                except Exception:
+                    pass
+                shutdown_event.set()
+                return
+            if active > 0 and not warned_not_flat:
+                warned_not_flat = True
+                log.warning(
+                    "eod_self_exit: past %s IST but %d active position(s) remain "
+                    "— staying up to manage them; will exit once flat.",
+                    window_end.strftime("%H:%M"), active,
+                )
+                try:
+                    if notifier is not None:
+                        notifier.send(
+                            severity="WARNING",
+                            title=f"[{mode}] EOD shutdown deferred",
+                            body=(
+                                f"{active} position(s) still open past "
+                                f"{window_end.strftime('%H:%M')} IST — service staying "
+                                "up until flat (not abandoning positions)."
+                            ),
+                            source_module="main",
+                        )
+                except Exception:
+                    pass
+            # Re-check after poll_interval (in shutdown-aware increments).
+            end_ts = _now_ist().timestamp() + poll_interval_sec
+            while not shutdown_event.is_set() and _now_ist().timestamp() < end_ts:
+                _time_mod.sleep(min(30.0, max(1.0, end_ts - _now_ist().timestamp())))
+
+    t = threading.Thread(target=_run, name="eod-self-exit", daemon=True)
+    t.start()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Signal handlers (MAIN13)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2237,6 +2354,32 @@ def _main_locked(args, config_dir: Path) -> int:
         shutdown_event=_shutdown_event,
         market_windows=market_windows,
     )
+
+    # FIX-189 (P1-A completion): EOD window-end self-exit — exit 0 once flat after
+    # SERVICE_WINDOW_END (16:00 IST) so the service never idles overnight. Armed
+    # only for normal service starts; skipped for operator/diagnostic starts that
+    # deliberately bypassed the window guard (--interactive/--resume/
+    # TS_IGNORE_MARKET_WINDOW=1), so an operator override is never auto-stopped.
+    _eod_exit_armed = not (
+        getattr(args, "interactive", False)
+        or getattr(args, "resume", False)
+        or os.environ.get("TS_IGNORE_MARKET_WINDOW") == "1"
+    )
+    if _eod_exit_armed:
+        _start_eod_self_exit_thread(
+            store=store,
+            notifier=notifier,
+            mode=mode_label,
+            log=_log,
+            market_windows=market_windows,
+            shutdown_event=_shutdown_event,
+            window_end=SERVICE_WINDOW_END,
+        )
+    else:
+        _log.info(
+            "eod_self_exit: not armed (operator/diagnostic start bypassed the "
+            "window guard)"
+        )
 
     # CV3: Validate all config values were accessed (non-strict for gradual rollout)
     config_validator.validate_all(strict=False)

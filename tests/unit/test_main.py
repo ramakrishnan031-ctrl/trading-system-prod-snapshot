@@ -19,7 +19,7 @@ Or:  python tests/unit/test_main.py
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time as _time_cls
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1045,3 +1045,71 @@ class TestFix189ServiceWindow:
         assert _within_service_window(datetime(2026, 6, 19, 8, 0, tzinfo=ist)) is True   # start inclusive
         assert _within_service_window(datetime(2026, 6, 19, 15, 59, tzinfo=ist)) is True
         assert _within_service_window(datetime(2026, 6, 19, 16, 0, tzinfo=ist)) is False  # end exclusive
+
+
+# ----------------------------------------------------------------------
+# FIX-189 (P1-A completion): EOD window-end self-exit (flat-positions guard)
+# ----------------------------------------------------------------------
+class TestFix189EodSelfExit:
+    """Service exits 0 once past 16:00 IST AND flat; never abandons positions."""
+
+    _IST = timezone(timedelta(hours=5, minutes=30))
+    _W = _time_cls(16, 0)  # window end used in the pure-function tests
+
+    def test_due_false_before_window_end_no_query(self):
+        from main import _eod_self_exit_due
+        store = MagicMock()
+        now = datetime(2026, 6, 19, 10, 0, tzinfo=self._IST)
+        due, active = _eod_self_exit_due(store, now, self._W)
+        assert due is False and active == -1
+        store.count_active_positions.assert_not_called()  # short-circuits before query
+
+    def test_due_true_past_window_and_flat(self):
+        from main import _eod_self_exit_due
+        store = MagicMock()
+        store.count_active_positions.return_value = 0
+        now = datetime(2026, 6, 19, 16, 30, tzinfo=self._IST)
+        assert _eod_self_exit_due(store, now, self._W) == (True, 0)
+
+    def test_due_false_past_window_but_not_flat(self):
+        from main import _eod_self_exit_due
+        store = MagicMock()
+        store.count_active_positions.return_value = 2  # positions still open
+        now = datetime(2026, 6, 19, 16, 30, tzinfo=self._IST)
+        assert _eod_self_exit_due(store, now, self._W) == (False, 2)
+
+    def test_due_false_on_count_error_failsafe(self):
+        from main import _eod_self_exit_due
+        store = MagicMock()
+        store.count_active_positions.side_effect = RuntimeError("db locked")
+        now = datetime(2026, 6, 19, 16, 30, tzinfo=self._IST)
+        assert _eod_self_exit_due(store, now, self._W) == (False, -1)
+
+    def test_thread_sets_shutdown_when_flat(self):
+        """window_end=00:00 -> always 'past window'; flat -> event set quickly."""
+        import threading
+        from main import _start_eod_self_exit_thread
+        store = MagicMock()
+        store.count_active_positions.return_value = 0
+        ev = threading.Event()
+        _start_eod_self_exit_thread(
+            store=store, notifier=None, mode="LIVE", log=MagicMock(),
+            market_windows=None, shutdown_event=ev,
+            window_end=_time_cls(0, 0), poll_interval_sec=1,
+        )
+        assert ev.wait(timeout=3) is True, "should self-exit when flat past window"
+
+    def test_thread_stays_up_when_not_flat(self):
+        """Not flat -> never sets the shutdown event (positions not abandoned)."""
+        import threading
+        from main import _start_eod_self_exit_thread
+        store = MagicMock()
+        store.count_active_positions.return_value = 1  # one open position
+        ev = threading.Event()
+        _start_eod_self_exit_thread(
+            store=store, notifier=None, mode="LIVE", log=MagicMock(),
+            market_windows=None, shutdown_event=ev,
+            window_end=_time_cls(0, 0), poll_interval_sec=1,
+        )
+        assert ev.wait(timeout=2) is False, "must NOT exit while a position is open"
+        ev.set()  # stop the daemon thread cleanly
