@@ -6,7 +6,11 @@ This is the single authoritative path/ops reference. It complements (does not
 replace) the design/runbook docs in `docs/` — see "Related Docs" at the bottom.
 For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 
-> ## 🛑 CURRENT STATUS (2026-06-19) — SERVICE DOWN (HARD_KILL); DO NOT RESUME **LIVE**
+> ## ✅ CURRENT STATUS (2026-06-19) — RESUMED LIVE; FIX-190 CLOSED
+> **Resumed live 13:24 IST** (HARD_KILL force-cleared via `deploy/resume.sh --force`,
+> root cause fixed by Bug C/D; morning trades reconciled to CLOSED_MANUAL, orphans
+> cancelled, capital consistent). Running LIVE with `live_test_mode` (now **max_open=4
+> / 6-per-day, PERMANENT** — active bug-hunting with small qty on ₹10k).
 > **FIX-190 live incident at ~10:00 IST.** First real trading after the Kite IP
 > allowlist was fixed: a Chartink spike fired 5 entries in ~5s; THELEELA's target
 > exceeded the upper-circuit band → a single recoverable TGT rejection cascaded
@@ -17,16 +21,15 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 > **Stage-4 ALL fixes LANDED (committed+pushed; unit + replay tested):** C
 > (TGT-only no HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no
 > oversell), E (cancel resting exits — no orphans), F (no duplicate G5b SL), G
-> (entry throttle 20s/3-per-60s), H (`live_test_mode`: live caps max_open=1 /
-> 3-per-day), I (in-session drift tolerance), **B** (counting already correct via
+> (entry throttle 20s/3-per-60s), H (`live_test_mode`: live caps now **max_open=4 /
+> 6-per-day, permanent**), I (in-session drift tolerance), **B** (counting already correct via
 > FIX-181 + FIX-185; added runtime observability metrics to `/metrics`:
 > signals_processed / entries_placed / entries_throttled / entries_rejected).
 > Incident replay green
 > (`tests/integration/test_fix190_incident_replay.py`). **Paper mode SKIPPED per
-> Rama** (stay LIVE with tiny ₹10k). `trading-system.service` stays **failed
-> (HARD_KILL, exit 4)** — **do NOT resume until Rama's explicit go-ahead**; when
-> resumed it's LIVE with `live_test_mode=true`. See memory `fix_190_incident`.
-> (FIX-189 dash-cron / market-window / EOD-self-exit work is separate, deployed.)
+> Rama** (stay LIVE with tiny ₹10k for active bug-hunting). Service is LIVE with
+> `live_test_mode=true` (4 positions / 6 trades-per-day, permanent). See memory
+> `fix_190_incident`. (FIX-189 dash-cron / market-window / EOD-self-exit separate.)
 
 ## Pre-Work Checklist
 - [ ] Read this file (and `PATHS.md`).
@@ -361,3 +364,9 @@ inactive alert-watcher).
   Trips tomorrow's SOFT_KILL only on a real violation (cap breach / DB-integrity fail / HARD_KILL
   today). Registry + canonical crontab updated (FIX-189 `. ./.env`) + installed (registry==crontab).
   10 unit tests; validated on real VM data. First run Mon 22-Jun. Commits 8d37f4f→29e477e.
+- 2026-06-19 — Claude Code — **live_test_mode → PERMANENT bug-hunting caps**: raised
+  `risk.live_test_max_open_positions` 1→**4** and kept `live_test_max_entries_per_day`=**6**
+  (commit 6b6979c). Rama's strategy — active bug-hunting on live with controlled exposure: 4
+  concurrent positions exercises concurrency/race paths, small qty (1-2 shares) on ₹10k caps loss.
+  No auto-disable (manual only). Effective live caps now 4/6 (override base 5/20). Activates on
+  next restart (today's 16:00 EOD self-exit → Mon 08:30 auto-start). NOT temporary; no revert.
