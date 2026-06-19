@@ -1789,6 +1789,28 @@ class OrderReconciler:
         if qty <= 0 or sl_price is None or float(sl_price) <= 0:
             return None
 
+        # FIX-190 (Bug F): do NOT place a recovery SL if a non-terminal SL order
+        # already exists for this trade. The 19-Jun incident placed a DUPLICATE
+        # SL (G5b alongside the live LIMIT_TRIPLE SL) because the trade looked
+        # "unprotected" after its TGT failed while its SL was actually PENDING.
+        # One SL authority per trade — only G5b-place when there is genuinely none.
+        try:
+            existing_sl = self._store.fetch_one(
+                "SELECT COUNT(*) AS n FROM orders WHERE trade_id = ? AND leg = 'SL' "
+                "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
+                (trade_id,),
+            )
+            if existing_sl and int(existing_sl["n"]) > 0:
+                log.info(
+                    "G5b skip recovery-SL for %s — a non-terminal SL order already "
+                    "exists for this trade (FIX-190 Bug F)", symbol,
+                )
+                return None
+        except Exception as exc:
+            log.warning(
+                "G5b: existing-SL check failed for %s: %s; proceeding", symbol, exc
+            )
+
         # FIX-186 (FIX 3): skip recovery SL when the broker positively reports no
         # live position for this symbol (manual close likely in progress).
         if broker_positions is not None:

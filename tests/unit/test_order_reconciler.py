@@ -581,6 +581,31 @@ def test_fix186_g5b_skips_when_broker_qty_zero(tmp_path: Path) -> None:
     print("  OK FIX-186: G5b skips recovery-SL when broker qty==0")
 
 
+def test_fix190_g5b_skips_when_sl_order_already_exists(tmp_path: Path) -> None:
+    """FIX-190 (Bug F): a non-terminal SL order already exists for the trade ->
+    G5b does NOT place a DUPLICATE recovery SL, even with a live broker position
+    (the 19-Jun THELEELA two-SL bug)."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", direction="LONG",
+                  status="OPEN", qty_filled=10, sl_initial=2450.0,
+                  entry_actual_price=2500.0)
+    _insert_order(store, "o_sl", "t1", leg="SL", status="OPEN")  # live SL present
+    adapter = MagicMock()
+    quote_fn = lambda syms: {"RELIANCE": _Quote("RELIANCE", last_price=2480.0)}
+    rec = _make_reconciler(store, adapter=adapter, quote_fn=quote_fn)
+    trade = store.get_all_open_trades()[0]
+
+    act = rec._g5b_crash_recovery_sl(
+        trade,
+        broker_positions={"RELIANCE": _Position("RELIANCE", qty=10, avg_price=2500.0)},
+    )
+
+    assert act is None
+    adapter.place_order.assert_not_called()
+    store.close()
+    print("  OK FIX-190 (Bug F): G5b skips when a live SL order already exists")
+
+
 def test_fix186_g5b_places_when_broker_position_present(tmp_path: Path) -> None:
     """FIX 3: live broker position present → recovery SL placed normally."""
     store = _make_store(tmp_path)
