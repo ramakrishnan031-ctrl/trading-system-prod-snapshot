@@ -466,6 +466,33 @@ class SignalProcessor:
             m.update(self._entry_throttle.metrics())
         except Exception:
             pass
+        # Bug B (full): broker quota gauges for live monitoring. These mirror the
+        # reservation-aware DAILY_TRADES gate exactly, so /metrics reflects the
+        # real cap decision (not a parallel tally):
+        #   broker_in_flight     = count_live_reservations() = reserved-not-placed
+        #                          + PENDING_FILL (orders sent, awaiting fill)
+        #   broker_filled_today  = settled_today = today's executed trades that
+        #                          opened (excl PENDING_FILL)
+        #   broker_quota_used    = max(daily_count, settled_today + in_flight)
+        #                          — identical to risk_engine's effective_daily
+        #   broker_quota_max     = the configured daily cap (live_test override aware)
+        #   broker_quota_available = max(max - used, 0)
+        # Best-effort and fully guarded: metrics must never raise or block.
+        try:
+            today = now_ist().date().isoformat()
+            daily_count = self._store.count_trades_today(today)
+            settled_today = self._store.count_settled_trades_today(today)
+            _cres = getattr(self._fm, "count_live_reservations", None)
+            in_flight = _cres() if callable(_cres) else 0
+            used = max(daily_count, settled_today + in_flight)
+            max_daily = int(getattr(self._risk, "_max_daily", 0) or 0)
+            m["broker_in_flight"] = in_flight
+            m["broker_filled_today"] = settled_today
+            m["broker_quota_used"] = used
+            m["broker_quota_max"] = max_daily
+            m["broker_quota_available"] = max(max_daily - used, 0)
+        except Exception:
+            pass  # gauges are best-effort; never break /metrics
         return m
 
     # ------------------------------------------------------------------

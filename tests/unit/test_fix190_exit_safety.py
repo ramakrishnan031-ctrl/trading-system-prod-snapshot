@@ -104,3 +104,54 @@ def test_runtime_metrics_counters_and_snapshot():
     # snapshot is a copy — mutating it must not affect the live counters
     m["entries_placed"] = 99
     assert sp.get_runtime_metrics()["entries_placed"] == 2
+
+
+def test_bugb_broker_quota_gauges():
+    """Bug B (full): /metrics broker quota gauges mirror the reservation-aware
+    DAILY_TRADES gate. used = max(daily_count, settled_today + in_flight), so an
+    in-flight reservation not yet visible as a settled trade still consumes quota
+    (the race the daily-cap fix closes)."""
+    import threading
+    from signals.signal_processor import SignalProcessor
+    sp = SignalProcessor.__new__(SignalProcessor)  # bypass heavy __init__
+    sp._rt_metrics_lock = threading.Lock()
+    sp._rt_metrics = {
+        "signals_processed": 0, "entries_placed": 0,
+        "entries_throttled": 0, "entries_rejected": 0,
+    }
+
+    class _Store:
+        # daily_count=3 (2 settled + 1 PENDING_FILL); settled_today=2
+        def count_trades_today(self, _d): return 3
+        def count_settled_trades_today(self, _d): return 2
+
+    class _FM:
+        # 1 PENDING_FILL + 1 reserved-not-placed (the in-flight burst entry)
+        def count_live_reservations(self): return 2
+
+    class _Risk:
+        _max_daily = 6
+
+    sp._store, sp._fm, sp._risk = _Store(), _FM(), _Risk()
+
+    m = sp.get_runtime_metrics()
+    # used = max(3, settled 2 + in_flight 2 = 4) = 4 -> the reserved-not-placed
+    # entry is counted even though daily_count (3) cannot see it yet.
+    assert m["broker_in_flight"] == 2
+    assert m["broker_filled_today"] == 2
+    assert m["broker_quota_used"] == 4
+    assert m["broker_quota_max"] == 6
+    assert m["broker_quota_available"] == 2
+
+
+def test_bugb_broker_quota_gauges_never_raise():
+    """Bug B: the gauge block is best-effort — a bare instance (no store/fm/risk)
+    must not raise; the gauges are simply absent."""
+    import threading
+    from signals.signal_processor import SignalProcessor
+    sp = SignalProcessor.__new__(SignalProcessor)
+    sp._rt_metrics_lock = threading.Lock()
+    sp._rt_metrics = {"signals_processed": 0, "entries_placed": 0,
+                      "entries_throttled": 0, "entries_rejected": 0}
+    m = sp.get_runtime_metrics()  # must not raise despite missing collaborators
+    assert "broker_quota_used" not in m
