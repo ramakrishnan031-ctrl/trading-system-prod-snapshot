@@ -2035,6 +2035,13 @@ class OrderReconciler:
         # not raise CRITICAL capital-drift alerts. Genuine catastrophic drift
         # (beyond the allowance) still alerts.
         effective_tolerance = self._cfg.capital_drift_tolerance
+        # FIX-190 (Bug I): in-session, broker margin legitimately drops by the
+        # deployed capital, so the tight Rs tolerance fires constantly (the 10:00
+        # Δ503 noise). During market hours widen to max(Rs, expected*pct). pct=0
+        # disables (back-compat). Outside hours the Rs tolerance still applies.
+        drift_pct = getattr(self._cfg, "capital_drift_tolerance_pct", 0.0) or 0.0
+        if drift_pct > 0 and broker_margin_reliable:
+            effective_tolerance = max(effective_tolerance, abs(expected) * drift_pct)
         if self._human_order_symbols:
             effective_tolerance += self._human_order_margin_tolerance
 

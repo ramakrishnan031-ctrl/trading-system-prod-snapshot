@@ -198,7 +198,8 @@ logging:                      # FIX-099 — logging subsystem settings
 
 order_reconciler:             # RC17 — reconciler tuning
   poll_interval_sec: 15       # P14: 15-second periodic cadence
-  capital_drift_tolerance: 50.0  # Production threshold
+  capital_drift_tolerance: 50.0  # Production threshold (out-of-session / overnight)
+  capital_drift_tolerance_pct: 0.10  # FIX-190 (Bug I): in-session tolerance = max(Rs, expected*10%) to silence normal deployed-capital drift during trading
   human_order_margin_tolerance: 5000.0  # FIX-182: extra Rs allowance when human/untracked orders present
   capital_drift_alert_interval_sec: 1800  # TASK-11: min seconds between repeat CAPITAL_DRIFT alerts (30 min)
 

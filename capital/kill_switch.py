@@ -837,7 +837,14 @@ class KillSwitch:
             return
         cancelled = 0
         for r in rows or []:
-            boid = r["broker_order_id"]
+            # Defensive: this runs inside the indestructible exit loop, so a row
+            # missing the column (e.g. a test mock or odd payload) must never
+            # crash the flatten — just skip it.
+            try:
+                boid = r["broker_order_id"]
+                oid = r["order_id"]
+            except (KeyError, IndexError, TypeError):
+                continue
             if not boid:
                 continue
             try:
@@ -853,7 +860,7 @@ class KillSwitch:
                     cur.execute(
                         "UPDATE orders SET status = 'CANCELLED', updated_at = ? "
                         "WHERE order_id = ?",
-                        (now_ist().isoformat(), r["order_id"]),
+                        (now_ist().isoformat(), oid),
                     )
             except Exception:
                 pass  # broker cancel is what matters; reconciler finalizes DB

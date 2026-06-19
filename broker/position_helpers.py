@@ -32,13 +32,14 @@ def broker_net_qty(adapter, symbol: str) -> Optional[int]:
         return None
     try:
         positions = adapter.get_positions()
+        net = 0
+        for p in positions or []:
+            if getattr(p, "symbol", None) == symbol:
+                net += int(getattr(p, "qty", 0) or 0)
+        return net
     except Exception:
+        # Non-iterable / garbage payload / broker error -> cannot determine.
         return None
-    net = 0
-    for p in positions or []:
-        if getattr(p, "symbol", None) == symbol:
-            net += int(getattr(p, "qty", 0) or 0)
-    return net
 
 
 def determine_close_direction(

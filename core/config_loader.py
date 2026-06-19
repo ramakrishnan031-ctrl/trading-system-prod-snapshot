@@ -514,6 +514,11 @@ class OrderReconcilerConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     poll_interval_sec: int        # RC17: periodic reconciliation cadence (P14 = 15s)
     capital_drift_tolerance: float  # RC17: max acceptable broker/local capital delta
+    # FIX-190 (Bug I): in-session percentage tolerance. During market hours broker
+    # margin legitimately drops by the deployed capital, so the absolute Rs
+    # tolerance fires constantly (the 10:00 Δ503 noise). In-session the effective
+    # tolerance becomes max(Rs, expected*pct). 0.0 disables (back-compat default).
+    capital_drift_tolerance_pct: float = 0.0
     # FIX-182: extra capital-drift allowance (Rs) applied when human / untracked
     # broker orders are detected on the day. Their blocked margin legitimately
     # widens the broker-vs-local gap; this prevents CRITICAL drift alert spam
