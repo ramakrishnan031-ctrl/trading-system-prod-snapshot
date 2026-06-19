@@ -2341,7 +2341,10 @@ def _main_locked(args, config_dir: Path) -> int:
         _shutdown_event.set()
 
     # FIX-132 Item 15: external health monitor on port 8080
-    start_healthcheck_server(state_store=store, logger=get_logger("healthcheck"), port=8080)
+    start_healthcheck_server(
+        state_store=store, logger=get_logger("healthcheck"), port=8080,
+        metrics_provider=signal_processor.get_runtime_metrics,  # FIX-190 (Bug B)
+    )
 
     # EOD scheduler daemon thread (MAIN14)
     eod_thread = threading.Thread(

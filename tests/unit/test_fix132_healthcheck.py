@@ -69,6 +69,23 @@ class TestHealthEndpoint:
         assert "timestamp" in data
         print(f"  OK: /health -> 200, trades_today=3, uptime={data['uptime_seconds']}")
 
+    def test_metrics_merges_runtime_provider(self) -> None:
+        """FIX-190 (Bug B): /metrics merges the signal-processor runtime counters
+        (entries placed/throttled/rejected) on top of the DB-derived fields."""
+        def provider():
+            return {"entries_placed": 4, "entries_throttled": 2, "entries_rejected": 1,
+                    "signals_processed": 7}
+        app = _create_app(_MockStore(trade_count=3), _log(), metrics_provider=provider)
+        client = app.test_client()
+        resp = client.get("/metrics")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["entries_placed"] == 4
+        assert data["entries_throttled"] == 2
+        assert data["entries_rejected"] == 1
+        assert data["signals_processed"] == 7
+        print("  OK: /metrics merges runtime counters (Bug B)")
+
     def test_health_zero_trades(self) -> None:
         """GET /health with zero trades returns trades_today=0."""
         app = _create_app(_MockStore(trade_count=0), _log())

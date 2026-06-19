@@ -55,7 +55,7 @@ def _check_kill_switch(state_store: Any, logger: Any) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def _create_app(state_store: Any, logger: Any) -> Flask:
+def _create_app(state_store: Any, logger: Any, metrics_provider=None) -> Flask:
     app = Flask("healthcheck")
 
     @app.route("/health", methods=["GET"])
@@ -177,6 +177,18 @@ def _create_app(state_store: Any, logger: Any) -> Flask:
         except Exception as exc:
             logger.error("metrics.query_failed", extra={"error": str(exc)})
 
+        # FIX-190 (Bug B): merge in-memory runtime counters (signals_processed /
+        # entries_placed / entries_throttled / entries_rejected) from the signal
+        # processor so live behaviour — esp. throttle drops, which never become
+        # trades — is observable.
+        if metrics_provider is not None:
+            try:
+                rt = metrics_provider()
+                if isinstance(rt, dict):
+                    m.update(rt)
+            except Exception as exc:
+                logger.error("metrics.runtime_provider_failed", extra={"error": str(exc)})
+
         from core.time_authority import now_ist
         m["timestamp"] = now_ist().isoformat()
         return Response(json.dumps(m), status=200, mimetype="application/json")
@@ -220,9 +232,13 @@ def start_healthcheck_server(
     logger: Any,
     port: int = 8080,
     host: str = "0.0.0.0",
+    metrics_provider=None,
 ) -> Optional[threading.Thread]:
-    """Start the healthcheck HTTP server in a daemon thread (HC2, HC3)."""
-    app = _create_app(state_store, logger)
+    """Start the healthcheck HTTP server in a daemon thread (HC2, HC3).
+
+    FIX-190 (Bug B): metrics_provider() optionally supplies in-memory runtime
+    counters merged into /metrics (signal processor's get_runtime_metrics)."""
+    app = _create_app(state_store, logger, metrics_provider)
 
     from waitress import serve as _waitress_serve
 

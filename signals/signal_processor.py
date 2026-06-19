@@ -190,6 +190,17 @@ class SignalProcessor:
         self._last_entry_mono: Optional[float] = None
         self._recent_entry_monos: List[float] = []
 
+        # FIX-190 (Bug B): in-memory runtime counters for /metrics observability
+        # (entries placed/throttled/rejected aren't captured by the DB signal
+        # status alone — esp. throttle drops, which never become trades).
+        self._rt_metrics_lock = threading.Lock()
+        self._rt_metrics = {
+            "signals_processed": 0,
+            "entries_placed": 0,
+            "entries_throttled": 0,
+            "entries_rejected": 0,
+        }
+
         # Stats (SP13 + SPW9)
         self._stats: Dict[str, Any] = {
             "processed": 0,
@@ -442,6 +453,20 @@ class SignalProcessor:
             self._recent_entry_monos.append(now)
             return None
 
+    def _bump_metric(self, key: str, n: int = 1) -> None:
+        """FIX-190 (Bug B): increment an in-memory runtime counter (thread-safe)."""
+        try:
+            with self._rt_metrics_lock:
+                self._rt_metrics[key] = self._rt_metrics.get(key, 0) + n
+        except Exception:
+            pass  # metrics must never affect the pipeline
+
+    def get_runtime_metrics(self) -> Dict[str, int]:
+        """FIX-190 (Bug B): snapshot of in-memory entry counters for /metrics —
+        signals_processed / entries_placed / entries_throttled / entries_rejected."""
+        with self._rt_metrics_lock:
+            return dict(self._rt_metrics)
+
     # ------------------------------------------------------------------
     # Core pipeline (SP6, SPW3)
     # ------------------------------------------------------------------
@@ -476,6 +501,7 @@ class SignalProcessor:
         try:
             # SP9: mark PROCESSING immediately
             self._store.update_signal_status(signal_id, "PROCESSING")
+            self._bump_metric("signals_processed")  # FIX-190 (Bug B)
             self._heartbeat(symbol)  # FIX-011: checkpoint 1
 
             # ----------------------------------------------------------
@@ -802,6 +828,7 @@ class SignalProcessor:
                 if reservation_id:
                     self._fm.release(reservation_id, "entry_throttled")
                     reservation_id = None
+                self._bump_metric("entries_throttled")
                 raise _PipelineReject(
                     "ENTRY_THROTTLED", f"Entry throttled: {_throttle_reason}"
                 )
@@ -821,6 +848,7 @@ class SignalProcessor:
                     signal_trigger_price=trigger_price,  # FIX-128: for slippage guard
                 )
                 reservation_id = None   # placer owns it now
+                self._bump_metric("entries_placed")  # FIX-190 (Bug B)
             except (BrokerRateLimitError, BrokerTimeoutError) as transient_err:
                 # FIX-069: Transient errors during placement -> re-queue with retry limit
                 # These errors are recoverable - broker may be temporarily unavailable
@@ -888,6 +916,10 @@ class SignalProcessor:
             self._log.info(
                 f"Signal {signal_id} ({symbol}) rejected at {rej.check}: {rej.reason}"
             )
+            # FIX-190 (Bug B): count non-throttle rejects separately (throttle
+            # drops are already counted under entries_throttled).
+            if rej.check != "ENTRY_THROTTLED":
+                self._bump_metric("entries_rejected")
             self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
             # Release reservation if we had one
             if reservation_id:
@@ -1213,6 +1245,7 @@ class SignalProcessor:
 
         try:
             self._store.update_signal_status(signal_id, "PROCESSING")
+            self._bump_metric("signals_processed")  # FIX-190 (Bug B)
 
             # Last-mile kill-switch check
             if self._ks and self._ks.is_active("entry"):
@@ -1392,6 +1425,7 @@ class SignalProcessor:
                 if reservation_id:
                     self._fm.release(reservation_id, "entry_throttled")
                     reservation_id = None
+                self._bump_metric("entries_throttled")
                 raise _PipelineReject(
                     "ENTRY_THROTTLED", f"Entry throttled: {_throttle_reason}"
                 )
@@ -1412,6 +1446,7 @@ class SignalProcessor:
                     signal_trigger_price=entry.trigger_price,  # FIX-128: for slippage guard
                 )
                 reservation_id = None   # placer owns it now
+                self._bump_metric("entries_placed")  # FIX-190 (Bug B)
             except BrokerError as be:
                 if self._ks:
                     self._ks.record_api_failure(be)
@@ -1428,6 +1463,9 @@ class SignalProcessor:
             self._log.info(
                 f"Gate signal {signal_id} ({symbol}) rejected at {rej.check}: {rej.reason}"
             )
+            # FIX-190 (Bug B): count non-throttle rejects separately.
+            if rej.check != "ENTRY_THROTTLED":
+                self._bump_metric("entries_rejected")
             self._store.update_signal_status(
                 signal_id, f"REJECTED_{rej.check}", rej.reason
             )

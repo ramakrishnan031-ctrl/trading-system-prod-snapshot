@@ -102,3 +102,26 @@ def test_throttle_disabled_admits_all():
     sp = _throttle_sp(min_gap=0.0, burst_max=0)
     for _ in range(10):
         assert sp._throttle_admit() is None
+
+
+# ── FIX-190 (Bug B): runtime observability counters ──────────────────────────
+
+def test_runtime_metrics_counters_and_snapshot():
+    import threading
+    from signals.signal_processor import SignalProcessor
+    sp = SignalProcessor.__new__(SignalProcessor)  # bypass heavy __init__
+    sp._rt_metrics_lock = threading.Lock()
+    sp._rt_metrics = {
+        "signals_processed": 0, "entries_placed": 0,
+        "entries_throttled": 0, "entries_rejected": 0,
+    }
+    sp._bump_metric("entries_placed")
+    sp._bump_metric("entries_placed")
+    sp._bump_metric("entries_throttled")
+    m = sp.get_runtime_metrics()
+    assert m["entries_placed"] == 2
+    assert m["entries_throttled"] == 1
+    assert m["entries_rejected"] == 0
+    # snapshot is a copy — mutating it must not affect the live counters
+    m["entries_placed"] = 99
+    assert sp.get_runtime_metrics()["entries_placed"] == 2
