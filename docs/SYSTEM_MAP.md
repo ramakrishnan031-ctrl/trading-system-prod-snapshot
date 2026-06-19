@@ -98,7 +98,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `strategies/` | Strategy config | loader, schema |
 | `utils/` | Utilities/preflight | startup_checks, holiday_guard, instance_lock, cron_heartbeat |
 | `reports/` | Reporting | daily_report, daily_review, style_constants |
-| `scripts/` | 37 ops/cron scripts | incl. `cron_officer.py` (TASK #3 briefing/eod/check-change), 6 `gemini_*.py` (AI ops), auto_refresh_token, premarket_healthcheck, reconcile_positions/pnl, eod_cleanup/verify, etc. |
+| `scripts/` | ops/cron scripts | incl. `cron_officer.py` (TASK #3 briefing/eod/check-change), `system_manager.py` (TASK #5 EOD deep cross-check, 18:45), 6 `gemini_*.py` (AI ops), auto_refresh_token, premarket_healthcheck, reconcile_positions/pnl, eod_cleanup/verify, etc. |
 | `tests/` | 305 test files | unit/, integration/, crash_test/ |
 | `main.py` (root) | App entrypoint | launched as `main.py --mode live` |
 
@@ -123,7 +123,10 @@ older than 30 days (00:00). `failed_alerts.log` = Telegram delivery-failure JSON
 
 ### Reports & Outputs  (`reports/`)
 `reports/daily/`, `reports/daily_review/`, `reports/flow_trace/`, `reports/log_review/`,
-`reports/watchman/`, `reports/weekly_patterns/`, `reports/output/`, `reports/crash_test/`.
+`reports/watchman/`, `reports/weekly_patterns/`, `reports/output/`, `reports/crash_test/`,
+`reports/system_manager/` (TASK #5 `<date>.txt` EOD reports). NB (audit 19-Jun): daily
+report is `reports/output/daily_report_<date>.xlsx`; most other reports are `.md` (not `.xlsx`);
+`reports/daily/` + `reports/daily_review/` are currently empty.
 
 ### Tools / External
 - `gemini` CLI at `/usr/local/bin/gemini` — drives the 6 `scripts/gemini_*.py` AI-ops jobs
@@ -193,6 +196,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 18:00 | Sun | `gemini_weekly_patterns.py` | weekly patterns |
 | 18:00 | Mon-Fri | `check_cron_drift.py` | cron heartbeat drift (registry-driven) |
 | 18:30 | Mon-Fri | `cron_officer.py --eod-summary` | Cron Officer EOD report (TASK #3) |
+| 18:45 | Mon-Fri | `system_manager.py` | System Manager EOD deep cross-check (TASK #5) |
 | 03:00 | 1st of month | `backup_restore_drill.py --quiet` | restore drill |
 | hourly | every | `disk_monitor.py` | disk space |
 
@@ -348,3 +352,12 @@ inactive alert-watcher).
   exits while a position is open (stays up to manage residual positions; count error → stays up).
   Armed only for normal starts (skipped for `--interactive`/`--resume`/`TS_IGNORE_MARKET_WINDOW`).
   Parity-safe. 6 new tests. Commit d61ece9. Activates on next service restart (≈ next 08:30).
+- 2026-06-19 — Claude Code — **TASK #5: System Manager EOD** (`scripts/system_manager.py`, 18:45
+  Mon-Fri, after the Cron Officer EOD). Deep daily cross-check beyond job execution: 8 isolated
+  checks (config-vs-actual w/ live_test_mode effective caps · order quality/slippage · report
+  integrity on REAL paths · system health: PRAGMA integrity_check/heartbeats/disk/token/restarts ·
+  strategy health · risk events: HARD_KILL via LOG since it's not in any table · vs-yesterday ·
+  tomorrow readiness). Telegram + CRITICAL-sentinel→email + saved `reports/system_manager/<date>.txt`.
+  Trips tomorrow's SOFT_KILL only on a real violation (cap breach / DB-integrity fail / HARD_KILL
+  today). Registry + canonical crontab updated (FIX-189 `. ./.env`) + installed (registry==crontab).
+  10 unit tests; validated on real VM data. First run Mon 22-Jun. Commits 8d37f4f→29e477e.
