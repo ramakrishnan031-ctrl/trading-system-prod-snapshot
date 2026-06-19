@@ -462,10 +462,29 @@ class SignalProcessor:
             pass  # metrics must never affect the pipeline
 
     def get_runtime_metrics(self) -> Dict[str, int]:
-        """FIX-190 (Bug B): snapshot of in-memory entry counters for /metrics —
-        signals_processed / entries_placed / entries_throttled / entries_rejected."""
+        """FIX-190 (Bug B): snapshot of the in-memory signal funnel for /metrics:
+        signals_processed -> signals_screened_(passed|rejected|skipped) ->
+        entries_(placed|throttled|rejected).
+
+        The screened_* totals come from the existing SPW9 screener stats — the
+        DOMINANT rejection layer (e.g. score < min_pass_score), which early-returns
+        before the entry counters, so without it /metrics looked like signals
+        'vanished' (19-Jun: 449 processed, ~all screened out, only the post-screen
+        rejects reached entries_rejected)."""
         with self._rt_metrics_lock:
-            return dict(self._rt_metrics)
+            m = dict(self._rt_metrics)
+        try:
+            with self._stats_lock:
+                m["signals_screened_passed"] = self._stats["screener_passed"]
+                m["signals_screened_rejected"] = sum(
+                    self._stats["screener_rejected"].values()
+                )
+                m["signals_screened_skipped"] = sum(
+                    self._stats["screener_skipped"].values()
+                )
+        except Exception:
+            pass  # _stats absent in a bare/test instance -> entry counters only
+        return m
 
     # ------------------------------------------------------------------
     # Core pipeline (SP6, SPW3)

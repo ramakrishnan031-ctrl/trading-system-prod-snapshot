@@ -115,6 +115,13 @@ def test_runtime_metrics_counters_and_snapshot():
         "signals_processed": 0, "entries_placed": 0,
         "entries_throttled": 0, "entries_rejected": 0,
     }
+    # FIX-190 (a): screener funnel totals from the SPW9 stats dict
+    sp._stats_lock = threading.Lock()
+    sp._stats = {
+        "screener_passed": 4,
+        "screener_rejected": {"REJECTED_SCORE_57": 210, "REJECTED_SCORE_52": 73},
+        "screener_skipped": {"SKIPPED_QUOTE_UNAVAILABLE": 4},
+    }
     sp._bump_metric("entries_placed")
     sp._bump_metric("entries_placed")
     sp._bump_metric("entries_throttled")
@@ -122,6 +129,10 @@ def test_runtime_metrics_counters_and_snapshot():
     assert m["entries_placed"] == 2
     assert m["entries_throttled"] == 1
     assert m["entries_rejected"] == 0
+    # screener funnel surfaced (the dominant rejection layer)
+    assert m["signals_screened_passed"] == 4
+    assert m["signals_screened_rejected"] == 283   # 210 + 73
+    assert m["signals_screened_skipped"] == 4
     # snapshot is a copy — mutating it must not affect the live counters
     m["entries_placed"] = 99
     assert sp.get_runtime_metrics()["entries_placed"] == 2
