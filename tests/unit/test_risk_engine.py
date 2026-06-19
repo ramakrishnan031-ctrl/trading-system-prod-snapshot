@@ -487,6 +487,162 @@ def test_daily_trades_at_limit(tmp_path: Path) -> None:
     store.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Bug B (2026-06-19): reservation-aware DAILY_TRADES cap (mirrors FIX-185).
+# The daily cap had the same TOCTOU race the position cap had before FIX-185:
+# a burst of signals reserve under portfolio_lock but their PENDING_FILL trade
+# rows are inserted later (outside the lock) by order_placer, so a plain
+# count_trades_today read lets the whole burst pass -> daily overshoot (18-Jun
+# 8-vs-5). Counting live reservations closes the window.  max_open is set high
+# in these tests so the OPEN_POSITIONS check (which runs first and ALSO counts
+# reservations) never fires — isolating the DAILY_TRADES behaviour.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_bugb_daily_cap_burst_via_reservations(tmp_path: Path) -> None:
+    """Bug B: daily cap holds when a burst has RESERVED but not yet inserted its
+    trade rows. DB shows 0 trades today, but fund_manager holds 5 live
+    reservations for the in-flight burst -> effective daily = 5 == max -> the
+    next candidate is rejected. The plain count_trades_today read (0) would have
+    WRONGLY allowed it (the 18-Jun daily-cap twin of FIX-185)."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_daily=5, max_open=50)
+
+    # DB empty (burst rows not inserted yet) but 5 reservations are in flight.
+    fm._live_reservations = 5
+
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
+
+    assert not result.approved, "daily cap must hold via authoritative reservation count"
+    assert result.failed_check == "DAILY_TRADES"
+    assert "live_reservations=5" in result.reason
+    print(f"  OK Bug B daily cap via reservations: {result.reason}")
+    store.close()
+
+
+def test_bugb_daily_cap_allows_final_slot(tmp_path: Path) -> None:
+    """Bug B: the legitimate final daily slot is still allowed (no new off-by-one).
+    max=5, 3 settled today (2 CLOSED + 1 OPEN) + 1 in-flight reservation = 4 used;
+    this candidate is the 5th -> ALLOW."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_daily=5, max_open=50)
+
+    _insert_trade(store, "t1", symbol="TCS", status="CLOSED", net_pnl=20.0, created_date=_TODAY)
+    _insert_trade(store, "t2", symbol="INFY", status="CLOSED", net_pnl=10.0, created_date=_TODAY)
+    _insert_trade(store, "t3", symbol="HDFC", status="OPEN", created_date=_TODAY)
+    fm._live_reservations = 1  # one entry reserved-not-yet-settled
+
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
+
+    assert result.approved, f"final daily slot must be allowed, got: {result.reason}"
+    print("  OK Bug B final daily slot allowed (4 used + candidate = 5 == max)")
+    store.close()
+
+
+def test_bugb_rejected_does_not_burn_daily_quota(tmp_path: Path) -> None:
+    """Bug B / the '5->3 undershoot is not a bug': FAILED/CANCELLED trades never
+    count toward the daily cap, so a burst of broker rejections does NOT exhaust
+    max_daily — the next signal retries. 5 dead rows today + 0 reservations,
+    max=5 -> still ALLOW."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_daily=5, max_open=50)
+
+    _insert_trade(store, "r1", symbol="TCS",  status="FAILED",    created_date=_TODAY)
+    _insert_trade(store, "r2", symbol="INFY", status="CANCELLED", created_date=_TODAY)
+    _insert_trade(store, "r3", symbol="HDFC", status="FAILED",    created_date=_TODAY)
+    _insert_trade(store, "r4", symbol="TCS",  status="CANCELLED", created_date=_TODAY)
+    _insert_trade(store, "r5", symbol="INFY", status="FAILED",    created_date=_TODAY)
+    fm._live_reservations = 0  # rejections released their reservations
+
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
+
+    assert result.approved, f"rejections must NOT burn quota; got: {result.reason}"
+    print("  OK Bug B rejected/cancelled don't burn daily quota -> retry permitted")
+    store.close()
+
+
+def test_bugb_restart_floor_via_pending_fill(tmp_path: Path) -> None:
+    """Bug B: after a restart the in-memory reservations are gone (0), but the
+    PENDING_FILL DB rows remain. daily_count (which counts PENDING_FILL) is the
+    FLOOR so the cap still holds. 5 PENDING_FILL today + 0 reservations, max=5
+    -> reject."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_daily=5, max_open=50)
+
+    for i in range(5):
+        _insert_trade(store, f"pf{i}", symbol=f"SYM{i}", sector="UNKNOWN",
+                      status="PENDING_FILL", created_date=_TODAY)
+    fm._live_reservations = 0  # lost across the restart
+
+    result = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001",
+        processor_in_flight_count=1,
+    )
+
+    assert not result.approved, "daily cap must hold via the daily_count floor after restart"
+    assert result.failed_check == "DAILY_TRADES"
+    assert "db_today=5" in result.reason
+    print(f"  OK Bug B restart floor via PENDING_FILL: {result.reason}")
+    store.close()
+
+
+def test_bugb_replay_18jun_overshoot(tmp_path: Path) -> None:
+    """Bug B: replay the 18-Jun overshoot. With config max=5 the broker filled 8
+    because a burst all passed the un-hardened daily check. Here 5 entries are
+    already in flight as live reservations (rows not inserted yet); the 6th, 7th
+    and 8th candidates must ALL be rejected at the DAILY_TRADES gate so the broker
+    can never exceed 5. Then prove a slot freed by a rejection is reusable."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap())
+    ks = _MockKillSwitch(active=False)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, max_daily=5, max_open=50)
+
+    # 5 entries admitted in the burst hold live reservations; no DB rows yet.
+    fm._live_reservations = 5
+
+    # The 6th/7th/8th signals of the burst must each be rejected at the cap.
+    for n in (6, 7, 8):
+        res = engine.approve(
+            "RELIANCE", "BUY", "INTRADAY", _make_sizing(), f"sig-{n}",
+            processor_in_flight_count=1,
+        )
+        assert not res.approved, f"signal #{n} must be rejected (would overshoot 5)"
+        assert res.failed_check == "DAILY_TRADES", f"signal #{n}: {res.failed_check}"
+    print("  OK Bug B 18-Jun replay: 6th/7th/8th burst signals rejected (cap held at 5)")
+
+    # One of the 5 in-flight entries is REJECTED by the broker -> its reservation
+    # is released. The freed slot must become available for a retry.
+    fm._live_reservations = 4
+    res = engine.approve(
+        "RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-retry",
+        processor_in_flight_count=1,
+    )
+    assert res.approved, f"freed slot must be reusable after a rejection; got: {res.reason}"
+    print("  OK Bug B 18-Jun replay: a rejection frees a slot -> retry admitted")
+    store.close()
+
+
 def test_consecutive_losses_at_limit(tmp_path: Path) -> None:
     """CONSECUTIVE_LOSSES: trailing loss streak >= max -> rejected."""
     store = StateStore(tmp_path / "test.db")
@@ -1026,6 +1182,12 @@ def run_all_tests() -> int:
         test_fix185_hard_cap_burst_via_reservations,
         test_fix185_reservations_allow_final_slot,
         test_daily_trades_at_limit,
+        # Bug B: reservation-aware daily cap (mirrors FIX-185)
+        test_bugb_daily_cap_burst_via_reservations,
+        test_bugb_daily_cap_allows_final_slot,
+        test_bugb_rejected_does_not_burn_daily_quota,
+        test_bugb_restart_floor_via_pending_fill,
+        test_bugb_replay_18jun_overshoot,
         test_consecutive_losses_at_limit,
         test_breakeven_not_counted_as_loss,
         test_zero_pnl_not_counted_as_loss,

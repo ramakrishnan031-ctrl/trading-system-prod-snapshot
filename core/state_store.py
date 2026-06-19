@@ -604,6 +604,37 @@ class StateStore:
         )
         return int(row["n"]) if row else 0
 
+    # Bug B (2026-06-19): the subset of executed statuses that are NO LONGER
+    # in-flight — i.e. _EXECUTED_TRADE_STATUSES minus PENDING_FILL. A trade in
+    # one of these has had its fund_manager reservation popped (commit at fill /
+    # release on exit), so it is NOT in _reservations. count_live_reservations()
+    # covers the in-flight remainder (reserved-not-placed + PENDING_FILL), so
+    # settled + live_reservations partition today's quota usage with no overlap.
+    # Used by the reservation-aware DAILY_TRADES check (risk_engine RE5).
+    _SETTLED_TRADE_STATUSES = (
+        "OPEN", "PARTIAL", "EXITING", "CLOSED", "CLOSED_MANUAL",
+    )
+
+    def count_settled_trades_today(self, date_iso: str) -> int:
+        """
+        Count today's EXECUTED trades that are no longer in-flight (Bug B):
+        statuses in _SETTLED_TRADE_STATUSES (= _EXECUTED_TRADE_STATUSES minus
+        PENDING_FILL). Mirrors count_trades_today's date match. This is the
+        DB-truth half of the reservation-aware daily cap; the other half is
+        fund_manager.count_live_reservations() (the PENDING_FILL +
+        reserved-not-placed in-flight entries). Keeping PENDING_FILL OUT here is
+        deliberate: it is double-counted by the live reservation it still holds,
+        and counting it in both terms would over-tighten the cap.
+        """
+        placeholders = ",".join("?" for _ in self._SETTLED_TRADE_STATUSES)
+        row = self.fetch_one(
+            f"SELECT COUNT(*) AS n FROM trades "
+            f"WHERE SUBSTR(created_at, 1, 10) = ? "
+            f"AND status IN ({placeholders})",
+            (date_iso, *self._SETTLED_TRADE_STATUSES),
+        )
+        return int(row["n"]) if row else 0
+
     def count_signals_today(self, date_iso: str) -> int:
         """
         Count all signal rows received on the given IST date (YYYY-MM-DD).

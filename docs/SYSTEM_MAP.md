@@ -22,9 +22,11 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 > (TGT-only no HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no
 > oversell), E (cancel resting exits — no orphans), F (no duplicate G5b SL), G
 > (entry throttle: 20s gap / 3-per-60s + per-symbol 5-min cooldown), H (`live_test_mode`: live caps now **max_open=4 /
-> 6-per-day, permanent**), I (in-session drift tolerance), **B** (counting already correct via
-> FIX-181 + FIX-185; added runtime observability metrics to `/metrics`:
-> signals_processed / entries_placed / entries_throttled / entries_rejected).
+> 6-per-day, permanent**), I (in-session drift tolerance), **B** (status semantics
+> correct via FIX-181 + observability metrics on `/metrics`: signals_processed /
+> entries_placed / entries_throttled / entries_rejected — **but the daily-cap RACE
+> was NOT closed**; see the 2026-06-19 "Bug B" Changelog entry for the
+> reservation-aware DAILY_TRADES fix that closes the 18-Jun 8-vs-5 overshoot).
 > Incident replay green
 > (`tests/integration/test_fix190_incident_replay.py`). **Paper mode SKIPPED per
 > Rama** (stay LIVE with tiny ₹10k for active bug-hunting). Service is LIVE with
@@ -259,6 +261,28 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **Bug B: reservation-aware DAILY_TRADES cap** (extends
+  FIX-185 to the daily limit). Audit found the prior "B already correct" was only
+  half-true: FIX-181 fixed *what* counts (rejects excluded → retry) and FIX-190 added
+  funnel metrics, but the `DAILY_TRADES` check was still a bare `count_trades_today`
+  DB read with **no in-flight accounting** — the daily-cap twin of the position-cap
+  TOCTOU race FIX-185 already closed. `approve()` reads `daily_count` inside
+  `portfolio_lock`, but the candidate's `PENDING_FILL` trade row is inserted later by
+  `order_placer.place()` **outside** the lock, so a burst all read the same pre-burst
+  count and passed → overshoot (18-Jun 8-vs-5). Fix mirrors FIX-185 exactly:
+  `effective_daily = max(daily_count, count_settled_trades_today() + count_live_reservations())`
+  — `settled_today` = today's executed trades minus `PENDING_FILL`; `live_reservations`
+  = the in-flight half (reserved-not-placed + `PENDING_FILL`); the two partition with
+  no double-count (commit pops the reservation at fill), and `daily_count` (incl.
+  `PENDING_FILL`) is the restart floor. `reserve()` runs inside the same lock, so the
+  count is race-consistent. Rejections enter neither term → slot frees → next signal
+  retries to reach max (the "5→3 undershoot" was never a counting bug — just no further
+  signals). New `state_store.count_settled_trades_today()` + 6 unit tests (burst race,
+  final-slot, rejection-frees-slot, restart floor, 18-Jun overshoot replay, settled-count
+  partition). 346 tests green locally. Files: `capital/risk_engine.py`,
+  `core/state_store.py`, `tests/unit/test_risk_engine.py`, `tests/unit/test_state_store.py`.
+  Activates on next restart. (NB: `REJECTED` is NOT a valid `trades.status` — rejects are
+  `FAILED`/`CANCELLED` or never get a trade row.)
 - 2026-06-18 — VS Code Claude — Initial creation. Full VM+PC audit (structure, configs, modules,
   DB, logs, ~28 cron jobs, 4 systemd services, tools, deploy mechanism). Flagged: root `trading.db`
   (0-byte dead), crontab divergence, sentinel accumulation, duplicate git remote, crash-loop.

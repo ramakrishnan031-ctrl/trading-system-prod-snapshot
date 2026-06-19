@@ -208,6 +208,10 @@ class RiskEngine:
         open_count = self._store.count_open_positions()
         in_flight_count = self._store.count_in_flight_orders()
         daily_count = self._store.count_trades_today(today)
+        # Bug B: settled-today (executed minus PENDING_FILL) is the DB-truth half
+        # of the reservation-aware daily cap; count_live_reservations() supplies
+        # the in-flight half. Read here so all date-scoped reads happen once (RE16).
+        settled_today = self._store.count_settled_trades_today(today)
 
         # Consecutive loss streak (RE10)
         # FIX-183: scope the streak to TODAY. A cross-day streak was a deadlock —
@@ -255,6 +259,7 @@ class RiskEngine:
         result = self._run_checks(
             checks_run, snapshot, snap, sizing_result,
             active_count, open_count, in_flight_count, daily_count,
+            settled_today,
             consec, existing_sector_margin, has_dup, kill_active,
             processor_in_flight_count,
             symbol, side, active_direction,
@@ -285,6 +290,7 @@ class RiskEngine:
         open_count: int,
         in_flight_count: int,
         daily_count: int,
+        settled_today: int,
         consec: int,
         existing_sector_margin: float,
         has_dup: bool,
@@ -384,11 +390,40 @@ class RiskEngine:
             )
 
         # 5. DAILY_TRADES
+        # Bug B (2026-06-19): mirror the FIX-185 OPEN_POSITIONS hardening on the
+        # daily cap. A bare `count_trades_today` read is TOCTOU-racy: approve()
+        # runs inside portfolio_lock but the candidate's PENDING_FILL trade row is
+        # inserted LATER by order_placer.place(), OUTSIDE the lock. So a burst of
+        # signals each read the same pre-burst daily_count before any row exists
+        # and ALL pass the cap -> daily overshoot (the 18-Jun 8-vs-5 burst, the
+        # daily-cap twin of the position-cap race FIX-185 already closed).
+        # reserve() runs INSIDE the lock, so counting live reservations closes the
+        # same window. Partition (no double-count, exactly like FIX-185):
+        #   settled_today      = today's executed trades MINUS PENDING_FILL; their
+        #                        reservation was popped at fill, so NOT in _reservations.
+        #   reserved_inflight  = count_live_reservations() = reserved-not-placed +
+        #                        PENDING_FILL (all today's: intraday, reset daily).
+        #                        The reserved-not-placed part is exactly the in-flight
+        #                        burst that daily_count cannot see yet.
+        # daily_count (DB truth, INCLUDES PENDING_FILL) is kept as a FLOOR for the
+        # restart case where in-memory reservations were lost but PENDING_FILL rows
+        # remain. max() can only HARDEN the cap, never loosen it (no regression).
+        # REJECTED/FAILED/CANCELLED enter NEITHER term (FIX-181 exclusion + the
+        # signal_processor reservation release), so a rejection frees the slot and
+        # the next signal retries to reach max -- Rama's requirement. getattr guard
+        # degrades to the legacy daily_count if fund_manager predates FIX-185.
         checks_run.append("DAILY_TRADES")
-        if daily_count >= self._max_daily:
+        _count_res_daily = getattr(self._fm, "count_live_reservations", None)
+        reserved_inflight_daily = _count_res_daily() if callable(_count_res_daily) else 0
+        authoritative_daily = settled_today + reserved_inflight_daily
+        effective_daily = max(daily_count, authoritative_daily)
+        if effective_daily >= self._max_daily:
             return reject(
                 "DAILY_TRADES",
-                f"Daily trade limit reached: {daily_count}, max={self._max_daily}",
+                f"Daily trade limit reached: {effective_daily} "
+                f"(db_today={daily_count}, settled_today={settled_today}, "
+                f"live_reservations={reserved_inflight_daily}), "
+                f"max={self._max_daily}",
             )
 
         # 6. CONSECUTIVE_LOSSES (RE10: net_pnl < -1e-6 is a loss)

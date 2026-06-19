@@ -462,6 +462,44 @@ def test_count_trades_today(tmp_path: Path) -> None:
     store.close()
 
 
+def test_count_settled_trades_today(tmp_path: Path) -> None:
+    """Bug B: count_settled_trades_today() counts today's executed trades MINUS
+    PENDING_FILL (OPEN/PARTIAL/EXITING/CLOSED/CLOSED_MANUAL) and excludes the
+    in-flight + dead statuses. It is the DB-truth half of the reservation-aware
+    daily cap; PENDING_FILL is excluded because its live reservation already
+    covers it (no double-count). It must equal count_trades_today minus the
+    PENDING_FILL rows."""
+    store = StateStore(tmp_path / "test.db")
+
+    # Settled (counted): OPEN, PARTIAL, EXITING, CLOSED, CLOSED_MANUAL
+    insert_test_trade(store, "s_open", status="OPEN", created_date="2026-04-14")
+    insert_test_trade(store, "s_part", status="PARTIAL", created_date="2026-04-14")
+    insert_test_trade(store, "s_exit", status="EXITING", created_date="2026-04-14")
+    insert_test_trade(store, "s_clos", status="CLOSED", net_pnl=50.0, created_date="2026-04-14")
+    insert_test_trade(store, "s_man", status="CLOSED_MANUAL", net_pnl=-5.0, created_date="2026-04-14")
+    # In-flight (EXCLUDED here — covered by the live reservation instead):
+    insert_test_trade(store, "pf1", status="PENDING_FILL", created_date="2026-04-14")
+    insert_test_trade(store, "pf2", status="PENDING_FILL", created_date="2026-04-14")
+    # Dead (EXCLUDED — never opened exposure, frees the slot for a retry):
+    insert_test_trade(store, "fail1", status="FAILED", created_date="2026-04-14")
+    insert_test_trade(store, "canc1", status="CANCELLED", created_date="2026-04-14")
+    # Different day (EXCLUDED by date):
+    insert_test_trade(store, "y_open", status="OPEN", created_date="2026-04-13")
+
+    settled = store.count_settled_trades_today("2026-04-14")
+    assert settled == 5, f"Expected 5 settled (excl PENDING_FILL/FAILED/CANCELLED), got {settled}"
+
+    # Partition invariant: settled == count_trades_today - PENDING_FILL count.
+    executed = store.count_trades_today("2026-04-14")           # 5 settled + 2 PENDING_FILL
+    pending = store.count_in_flight_orders()                    # 2 PENDING_FILL
+    assert settled == executed - pending, f"{settled} != {executed} - {pending}"
+
+    assert store.count_settled_trades_today("2026-04-13") == 1
+    assert store.count_settled_trades_today("2026-04-12") == 0
+    print(f"  OK count_settled_trades_today = {settled} (executed={executed}, pending={pending})")
+    store.close()
+
+
 def test_sector_exposure(tmp_path: Path) -> None:
     """
     sector_exposure() sums margin_reserved for PENDING_FILL/OPEN/PARTIAL
@@ -2001,6 +2039,7 @@ def run_all_tests() -> int:
         test_count_open_positions,
         test_count_in_flight_orders,
         test_count_trades_today,
+        test_count_settled_trades_today,  # Bug B: reservation-aware daily cap
         test_sector_exposure,
         test_has_active_position,
         test_recent_trade_pnls,
