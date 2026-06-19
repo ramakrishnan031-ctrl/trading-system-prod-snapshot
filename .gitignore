@@ -21,6 +21,9 @@ logs/
 reports/daily/
 reports/output/*.xlsx
 
+# System manuals (Word docs synced to VM out-of-band, not via git)
+docs/system_manuals/*.docx
+
 # Python
 __pycache__/
 *.py[cod]
