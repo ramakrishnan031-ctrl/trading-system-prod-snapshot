@@ -415,8 +415,51 @@ class LiveFeedManager:
                 )
 
     def _on_noreconnect(self, ws) -> None:
-        """LF3 / FIX-134: Max reconnect attempts exhausted. Fire critical failure + SOFT_KILL."""
+        """LF3 / FIX-134: Max reconnect attempts exhausted.
+
+        During market hours this is a genuine incident: critical failure +
+        SOFT_KILL + CRITICAL alert.
+
+        FIX-189 (P1-B): OUTSIDE market hours the WebSocket legitimately cannot
+        authenticate — the access token expires overnight and Zerodha runs
+        nightly maintenance. That produced the false 07:07 "KiteTicker max
+        reconnect exhausted" CRITICAL while the service was (wrongly) running
+        overnight. When we can tell we are off-hours, downgrade to a single
+        WARNING and do NOT SOFT_KILL or escalate. If no market_windows was
+        injected we fail safe and keep the legacy escalation.
+        """
         self._connected = False
+
+        during_market = False
+        if self._market_windows is not None:
+            try:
+                during_market = self._market_windows.is_market_open(now_ist())
+            except Exception:
+                during_market = True  # fail safe -> escalate
+
+        if self._market_windows is not None and not during_market:
+            self._log.warning(
+                "LiveFeedManager: max reconnect attempts (%d) exhausted outside "
+                "market hours — token likely expired (overnight/maintenance); "
+                "not escalating (no SOFT_KILL / no CRITICAL)."
+                % self._max_reconnect_attempts
+            )
+            if self._notifier is not None:
+                try:
+                    self._notifier.send(
+                        severity="WARNING",
+                        title=f"[{self._mode_label}] WebSocket idle off-hours",
+                        body=(
+                            "Max reconnects exhausted outside market hours "
+                            "(expected: token expired / broker maintenance). "
+                            "No action taken."
+                        ),
+                        source_module="live_feed",
+                    )
+                except Exception:
+                    pass
+            return
+
         self._log.critical(
             "LiveFeedManager: max reconnect attempts (%d) exhausted"
             % self._max_reconnect_attempts

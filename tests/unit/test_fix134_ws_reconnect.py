@@ -105,3 +105,52 @@ class TestReconnectHardening:
         mgr.set_notifier(notifier)
         mgr._on_reconnect(None, 1)
         assert mgr.reconnect_count == 1
+
+    # ── FIX-189 (P1-B): off-hours reconnect-exhaustion is not an incident ──────
+
+    def test_fix189_noreconnect_offhours_no_softkill_no_critical(self):
+        """Max reconnects exhausted OUTSIDE market hours (expired overnight token /
+        broker maintenance) must NOT SOFT_KILL, NOT fire the critical-failure
+        callback, and downgrade the alert to WARNING. This was the false 07:07
+        'KiteTicker max reconnect exhausted' CRITICAL while running overnight."""
+        mw = MagicMock()
+        mw.is_market_open.return_value = False
+        ks = MagicMock()
+        crit = MagicMock()
+        notifier = MagicMock()
+        mgr = self._make_manager(
+            kill_switch=ks, market_windows=mw, on_critical_failure=crit
+        )
+        mgr.set_notifier(notifier, "LIVE")
+        mgr._on_noreconnect(None)
+
+        ks.soft_kill.assert_not_called()
+        crit.assert_not_called()
+        if notifier.send.called:
+            assert notifier.send.call_args.kwargs["severity"] == "WARNING"
+
+    def test_fix189_noreconnect_in_session_still_escalates(self):
+        """The gate is surgical — DURING market hours a dead feed is still a real
+        incident: SOFT_KILL + critical-failure callback + ERROR alert."""
+        mw = MagicMock()
+        mw.is_market_open.return_value = True
+        ks = MagicMock()
+        crit = MagicMock()
+        notifier = MagicMock()
+        mgr = self._make_manager(
+            kill_switch=ks, market_windows=mw, on_critical_failure=crit
+        )
+        mgr.set_notifier(notifier, "LIVE")
+        mgr._on_noreconnect(None)
+
+        ks.soft_kill.assert_called_once_with("LIVEFEED_RECONNECT_EXHAUSTED")
+        crit.assert_called_once()
+        assert notifier.send.call_args.kwargs["severity"] == "ERROR"
+
+    def test_fix189_noreconnect_no_market_windows_failsafe_escalates(self):
+        """If no market_windows is injected we fail safe and keep legacy
+        escalation (SOFT_KILL), so older wiring is never silently weakened."""
+        ks = MagicMock()
+        mgr = self._make_manager(kill_switch=ks)  # market_windows defaults to None
+        mgr._on_noreconnect(None)
+        ks.soft_kill.assert_called_once_with("LIVEFEED_RECONNECT_EXHAUSTED")

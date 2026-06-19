@@ -2936,3 +2936,80 @@ def run_all_tests() -> int:
 
 if __name__ == "__main__":
     sys.exit(run_all_tests())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX-189 (P1-B): overnight capital-drift false-positive suppression
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fix189_g3_drift_skipped_when_broker_net_zero_offhours(tmp_path: Path) -> None:
+    """FIX-189 P1-B: an overnight broker get_margins().net == 0.0 read (Zerodha
+    funds endpoint returns 0 outside the session) must NOT raise a false CRITICAL
+    capital-drift alert. This was the 04:24 false alert while the service was
+    wrongly running overnight."""
+    store = _make_store(tmp_path)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=0.0, available=0.0, used=0.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 10_000.0  # real local capital expected
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+
+    # Friday 2026-06-19 04:24 IST — outside the trading session (the real incident time).
+    fake_now = datetime(2026, 6, 19, 4, 24, tzinfo=_IST)
+    with patch("orders.order_reconciler.now_ist", return_value=fake_now):
+        actions = rec.reconcile_once()
+
+    drift = [a for a in actions if a.check_name == "CAPITAL_DRIFT"]
+    assert drift == [], f"overnight net=0.0 must be skipped; got {drift}"
+    assert received == [], "no CapitalDriftDetected overnight on a net=0.0 read"
+    notifier.send.assert_not_called()
+    store.close()
+
+
+def test_fix189_g3_drift_still_alerts_in_session_when_net_zero(tmp_path: Path) -> None:
+    """FIX-189 P1-B: the gate is surgical — DURING market hours a net=0.0 read is
+    a genuine catastrophic drift and must STILL alert (we never mask real drift)."""
+    store = _make_store(tmp_path)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=0.0, available=0.0, used=0.0)
+
+    fm = MagicMock()
+    snap = MagicMock(); snap.total = 10_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    received: list = []
+    bus.subscribe(CapitalDriftDetected, received.append)
+
+    notifier = MagicMock()
+    notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+
+    # Friday 2026-06-19 11:00 IST — inside the trading session.
+    fake_now = datetime(2026, 6, 19, 11, 0, tzinfo=_IST)
+    with patch("orders.order_reconciler.now_ist", return_value=fake_now):
+        actions = rec.reconcile_once()
+
+    drift = [a for a in actions if a.check_name == "CAPITAL_DRIFT"]
+    assert len(drift) == 1, "in-session net=0.0 must still alert (real drift)"
+    assert len(received) == 1
+    notifier.send.assert_called_once()
+    assert notifier.send.call_args.kwargs["severity"] == "CRITICAL"
+    store.close()

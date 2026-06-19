@@ -60,7 +60,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time
 from typing import Callable, Dict, List, Optional
 
 from capital.fund_manager import FundManager
@@ -74,6 +74,7 @@ from core.events import (
 )
 from core.exceptions import BrokerAuthError, BrokerTimeoutError
 from core.logger import bind_trade, log_exception
+from core.market_windows import is_market_day, is_within_market_hours
 from core.state_store import StateStore
 from core.time_authority import now_ist
 from orders.order_manager import OrderManager
@@ -94,6 +95,14 @@ from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 _TERMINAL_ORDER_STATUSES: frozenset[str] = frozenset(
     {"COMPLETE", "CANCELLED", "FAILED", "EXPIRED"}
 )
+
+# FIX-189 (P1-B): window during which the broker funds/margins endpoint is
+# reliable. Outside it (overnight / pre-auth), Zerodha's funds endpoint returns
+# net=0.0, which the G3 check otherwise reads as a catastrophic capital drift.
+# Slightly padded around the 09:15-15:30 session so live-session reads always
+# count as reliable.
+_MARGIN_RELIABLE_OPEN = dt_time(9, 0)
+_MARGIN_RELIABLE_CLOSE = dt_time(15, 45)
 
 # FIX-186 (FIX 1): classify a broker cancel_order failure reason so the local
 # DB can be finalized correctly even when order_monitor never polls again
@@ -1972,6 +1981,30 @@ class OrderReconciler:
         expected = snapshot.total
         actual = margins.net
         delta = abs(actual - expected)
+
+        # FIX-189 (P1-B): suppress the overnight false positive. Outside the
+        # trading session the Zerodha funds endpoint returns net=0.0 (pre-auth /
+        # post-settlement); against a real local total that reads as a
+        # catastrophic drift and fired a false CRITICAL "Capital Drift" alert at
+        # 04:24 while the service was (wrongly) running overnight. Gate ONLY this
+        # exact pattern — broker net is exactly 0.0, real capital is expected, and
+        # we are outside market hours — so genuine in-session drift still alerts
+        # and paper mode (which never reports net=0.0 overnight) is unaffected.
+        now = now_ist()
+        broker_margin_reliable = is_market_day(now) and is_within_market_hours(
+            now.time(), _MARGIN_RELIABLE_OPEN, _MARGIN_RELIABLE_CLOSE
+        )
+        if (
+            actual == 0.0
+            and expected > self._cfg.capital_drift_tolerance
+            and not broker_margin_reliable
+        ):
+            self._log.info(
+                "G3 CAPITAL_DRIFT skipped: broker net=0.0 outside market hours "
+                "(expected=%.2f) — unreliable overnight/pre-auth margin read",
+                expected,
+            )
+            return None
 
         # FIX-182: human / untracked orders block broker margin the FM does not
         # know about, so broker net legitimately differs from local total. When
