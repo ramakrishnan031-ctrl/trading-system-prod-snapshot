@@ -1,20 +1,34 @@
 [Unit]
-# VM Security Manager Phase 1 — periodic-oneshot watcher (model: alert-watcher).
-# One pass then exit 0; systemd restarts after RestartSec=60 → ~60s cadence.
-# Rising NRestarts is NORMAL (it is a heartbeat, not a crash-loop).
+# VM Security Manager Phase 1 — periodic watcher (model: alert-watcher.service).
+# Type=simple + Restart=always + RestartSec=60: ExecStart runs one monitoring
+# pass and exits 0, systemd restarts it ~60s later → ~60s cadence. Rising
+# NRestarts is NORMAL (it's a heartbeat, not a crash-loop). NB: systemd REFUSES
+# Restart=always with Type=oneshot — must be Type=simple.
 Description=VM Security Monitor (trading system) — auth.log + file integrity + alerts
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 User=ubuntu
+Group=ubuntu
 WorkingDirectory=/home/ubuntu/systems/trading-system
-EnvironmentFile=/home/ubuntu/systems/trading-system/.env
+Environment="PATH=/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
 Environment=PYTHONPATH=/home/ubuntu/systems/trading-system
-ExecStart=/home/ubuntu/systems/venv/bin/python scripts/security_monitor.py --watch
-# Alert-only watcher; a transient failure must never wedge it.
+EnvironmentFile=/home/ubuntu/systems/trading-system/.env
+ExecStart=/home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/systems/trading-system/scripts/security_monitor.py --watch
 Restart=always
 RestartSec=60
+KillSignal=SIGINT
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=security-watcher
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
