@@ -226,6 +226,16 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
 | `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
+| `security-watcher.service` | `python scripts/security_monitor.py --watch` | **VM Security Manager Phase 1** — auth.log + file-integrity monitor, [LFL836] alerts | **enabled+active (19-Jun)**. `Type=simple`+`Restart=always`+`RestartSec=60` → periodic (~60s); model = alert-watcher. Reads `/var/log/auth.log` (ubuntu ∈ `adm`). Config `config/security.yaml` (standalone — NOT system_config.yaml, which is `extra="forbid"`). State `data_store/security_state.json`. Alert-ONLY (never blocks). |
+
+> **VM security tooling (Phase 1, 19-Jun)** — also installed at OS level (NOT via git):
+> **fail2ban** (`/etc/fail2ban/jail.local` from `deploy/security/jail.local`; sshd jail, `ignoreself`,
+> reads auth.log, no static IP allow-list — Rama's IPs are dynamic) and **auditd**
+> (`/etc/audit/rules.d/trading-security.rules` from `deploy/security/`; watches `.env`/`config/`/
+> systemd units/`authorized_keys`/`sudoers` — query `sudo ausearch -k <key>`). All three services
+> `enabled` (reboot-survive). SSH hardening (idle timeout / `PermitRootLogin no`) NOT applied —
+> awaiting Rama's OK. Phase 2 (copy protection) + Phase 3 (EOD integration) pending. See
+> memory `vm_security_phase1`.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
@@ -277,6 +287,18 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **VM Security Manager Phase 1 (monitoring + alerts) — built + deployed.**
+  Alert-ONLY (never blocks; key-only SSH is the gate). New `scripts/security_monitor.py` (7 isolated
+  checks: new/changed authorized_keys, non-whitelisted sudo, failed-login spike, NEW successful-login
+  IP, sensitive-file content-hash change, active-session count, root-probe spike), `config/security.yaml`
+  (standalone — system_config.yaml is `extra="forbid"`), `deploy/systemd/security-watcher.service`
+  (`Type=simple` periodic ~60s), `deploy/security/jail.local` (fail2ban) + `trading-security.rules`
+  (auditd), 15 unit tests. **Live on VM:** installed fail2ban+auditd; auditd 10 file-watches loaded;
+  fail2ban sshd jail running (pre-tested — 0 legit/management IPs in the bannable set; bans rare as
+  the botnet is low-per-IP); security-watcher enabled+active; baseline captured; **SSH access verified
+  intact at every step**. Whitelist path bug (fail2ban-client/auditctl bin↔sbin) found via the live
+  first pass + fixed. NOT done: SSH hardening (needs Rama OK), copy-protection (P2), EOD integration
+  (P3). Commits a701b0d→fcfa9a8. Memory `vm_security_phase1`.
 - 2026-06-19 — Claude Code — **Cron env-export fix (ROOT CAUSE) + reconcile_positions creds (Item A)
   + per-episode drift logging (Item B).** Investigating the 15:45 `reconcile_positions` FAILED revealed
   a deeper root cause: cron jobs ran **without any `.env` secrets** — `.env` is bare `VAR=value` (no
