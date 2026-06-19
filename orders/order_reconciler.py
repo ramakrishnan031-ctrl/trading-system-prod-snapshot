@@ -244,6 +244,12 @@ class OrderReconciler:
         except (TypeError, ValueError):
             self._capital_drift_alert_interval_sec = 1800.0
         self._last_capital_drift_alert_poll: Optional[int] = None
+        # Per-EPISODE drift logging: a reconciliation_log row is written only
+        # when a NEW drift episode begins or an alert actually fires — NOT on
+        # every suppressed 15s cycle. Stops the "144 log rows for 3 alerts"
+        # report inflation (System Manager counts rows). The alert throttle
+        # (_should_alert_capital_drift) is unchanged.
+        self._drift_episode_active: bool = False
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -2179,7 +2185,14 @@ class OrderReconciler:
             # next genuine drift alerts immediately instead of waiting out the
             # 30-min window. (Was: FIX-038 _mark_discrepancy_resolved.)
             self._last_capital_drift_alert_poll = None
+            # Per-episode logging: the episode is over, so the next drift starts
+            # a fresh (logged) episode.
+            self._drift_episode_active = False
             return None
+
+        # Per-episode logging: first cycle of a new drift episode?
+        is_new_episode = not self._drift_episode_active
+        self._drift_episode_active = True
 
         # TASK-11: throttle repeat alerts to one per capital_drift_alert_interval_sec
         # (default 30 min) instead of the FIX-038 exponential backoff.
@@ -2229,12 +2242,20 @@ class OrderReconciler:
 
             action_taken = "CapitalDriftDetected published; CRITICAL alert sent"
         else:
-            # Still log at DEBUG during backoff
+            # Still log at DEBUG every cycle (forensics) even when suppressed.
             self._log.debug(
-                "G3 CAPITAL_DRIFT (backoff): expected=%.2f actual=%.2f delta=%.2f",
+                "G3 CAPITAL_DRIFT (suppressed/throttled): expected=%.2f actual=%.2f delta=%.2f",
                 expected, actual, delta,
             )
-            action_taken = "drift detected but alert suppressed (exponential backoff)"
+            action_taken = "drift detected but alert suppressed (throttled)"
+
+        # Per-episode logging: persist a reconciliation_log row only when a NEW
+        # episode begins OR an alert actually fired — NOT on every suppressed
+        # cycle. (Pre-fix: 144 rows for 3 alerts on 19-Jun.) The per-cycle DEBUG
+        # line above still records every cycle for forensics; the alert throttle
+        # is unchanged.
+        if not (is_new_episode or should_alert):
+            return None
 
         return ReconciliationAction(
             check_name="CAPITAL_DRIFT",

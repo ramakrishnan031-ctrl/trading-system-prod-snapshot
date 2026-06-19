@@ -2716,6 +2716,89 @@ def test_task11_capital_drift_resets_after_resolved(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Item B (2026-06-19): per-EPISODE drift logging (not per-cycle)
+# A persistent drift wrote a reconciliation_log row EVERY 15s cycle even while
+# the alert was correctly throttled -> System Manager counted 144 "events" for
+# only 3 alerts. Now a row is written only at episode start + on each real alert.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _count_drift_rows(store) -> int:
+    rows = store.fetch_all(
+        "SELECT id FROM reconciliation_log WHERE check_name=?", ("CAPITAL_DRIFT",)
+    )
+    return len(rows)
+
+
+def test_itemb_drift_logs_once_per_episode_not_per_cycle(tmp_path: Path) -> None:
+    """Item B: 10 consecutive drift cycles within the 30-min throttle window
+    write ONE reconciliation_log row (episode start), not 10."""
+    store = _make_store(tmp_path)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    adapter.get_margins.return_value = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
+
+    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    notifier = MagicMock(); notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+
+    for _ in range(10):
+        rec.reconcile_once()
+
+    rows = _count_drift_rows(store)
+    assert rows == 1, f"expected 1 episode-start row across 10 cycles; got {rows}"
+    # Alert also fired exactly once (throttle unchanged).
+    assert notifier.send.call_count == 1
+
+    store.close()
+    print("  OK Item B: 10 drift cycles -> 1 reconciliation_log row (per-episode)")
+
+
+def test_itemb_two_episodes_two_rows(tmp_path: Path) -> None:
+    """Item B: drift -> resolve -> drift again = 2 episodes = 2 rows."""
+    store = _make_store(tmp_path)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []
+    drift = _MarginInfo(net=90_000.0, available=70_000.0, used=20_000.0)
+    ok = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    adapter.get_margins.return_value = drift
+
+    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    bus = EventBus()
+    notifier = MagicMock(); notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, bus=bus,
+                           notifier=notifier, capital_drift_tolerance=50.0)
+
+    # Episode 1: 3 drift cycles -> 1 row.
+    for _ in range(3):
+        rec.reconcile_once()
+    # Resolve -> closes the episode (no row).
+    adapter.get_margins.return_value = ok
+    rec.reconcile_once()
+    # Episode 2: 3 drift cycles -> 1 row.
+    adapter.get_margins.return_value = drift
+    for _ in range(3):
+        rec.reconcile_once()
+
+    rows = _count_drift_rows(store)
+    assert rows == 2, f"expected 2 episode rows (drift/resolve/drift); got {rows}"
+    # Re-alert after the resolve reset (throttle behaviour unchanged).
+    assert notifier.send.call_count == 2
+
+    store.close()
+    print("  OK Item B: drift/resolve/drift -> 2 reconciliation_log rows")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
