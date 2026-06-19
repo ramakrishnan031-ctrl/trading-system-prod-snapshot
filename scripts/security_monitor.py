@@ -427,11 +427,14 @@ def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
     since_window = now - timedelta(minutes=15)
     scan_hour = scan_authlog(lines, since_hour)
     scan_window = scan_authlog(lines, since_window)
+    # On baseline, seed known IPs from the WHOLE current auth.log (not just the
+    # 15-min window) so the first --watch doesn't alert on every past IP.
+    ip_scan = scan_authlog(lines, datetime(1970, 1, 1, tzinfo=_IST)) if baseline else scan_window
 
     findings: list[Finding] = []
     checks = [
         lambda: check_authorized_keys(cfg, state),
-        lambda: check_new_login_ips(cfg, scan_window, state, baseline),
+        lambda: check_new_login_ips(cfg, ip_scan, state, baseline),
         lambda: check_failed_spike(cfg, scan_hour, now),
         lambda: check_root_probe_spike(cfg, scan_hour, now),
         lambda: check_sudo_events(cfg, scan_window),
