@@ -125,6 +125,9 @@ class SignalProcessor:
         instrument_cache=None,              # IC: optional InstrumentCache for lot_size/sector
         atr_fallback_mode: str = "WARN",   # MED #12: "WARN" or "HALT"
         tgt_min_pct: float = 0.003,        # BL-16: guard against degenerate target == entry
+        min_gap_between_entries_sec: float = 0.0,  # FIX-190 (Bug G): entry throttle
+        entry_burst_window_sec: float = 60.0,      # FIX-190 (Bug G)
+        entry_burst_max: int = 0,                  # FIX-190 (Bug G): 0 = off
         notifier=None,                      # TelegramNotifier; optional
         mode: str = "LIVE",                 # session mode label for alert title
         shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
@@ -178,6 +181,14 @@ class SignalProcessor:
         # before either inserts into the in_flight table.
         self._in_flight_count = 0
         self._in_flight_lock = threading.RLock()
+
+        # FIX-190 (Bug G): entry throttle state (prevents the 19-Jun burst).
+        self._min_entry_gap_sec = float(min_gap_between_entries_sec or 0.0)
+        self._entry_burst_window_sec = float(entry_burst_window_sec or 60.0)
+        self._entry_burst_max = int(entry_burst_max or 0)
+        self._throttle_lock = threading.Lock()
+        self._last_entry_mono: Optional[float] = None
+        self._recent_entry_monos: List[float] = []
 
         # Stats (SP13 + SPW9)
         self._stats: Dict[str, Any] = {
@@ -403,6 +414,33 @@ class SignalProcessor:
                 self._in_flight_heartbeat(symbol)
             except Exception as exc:
                 self._log.error(f"in_flight_heartbeat failed for {symbol}: {exc}")
+
+    def _throttle_admit(self) -> Optional[str]:
+        """FIX-190 (Bug G): admit (and record) one PLACED entry under the throttle,
+        or return a reject reason string. Thread-safe across workers; called right
+        before placement so only entries that actually place count against the
+        throttle. Disabled when both min-gap and burst-max are 0 (default)."""
+        if self._min_entry_gap_sec <= 0 and self._entry_burst_max <= 0:
+            return None
+        with self._throttle_lock:
+            now = time.monotonic()
+            if self._min_entry_gap_sec > 0 and self._last_entry_mono is not None:
+                gap = now - self._last_entry_mono
+                if gap < self._min_entry_gap_sec:
+                    return (f"min_gap {gap:.1f}s < {self._min_entry_gap_sec:.0f}s "
+                            "since last entry")
+            if self._entry_burst_max > 0:
+                cutoff = now - self._entry_burst_window_sec
+                self._recent_entry_monos = [
+                    t for t in self._recent_entry_monos if t >= cutoff
+                ]
+                if len(self._recent_entry_monos) >= self._entry_burst_max:
+                    return (f"burst {len(self._recent_entry_monos)} >= "
+                            f"{self._entry_burst_max} in {self._entry_burst_window_sec:.0f}s")
+            # Admit: record this entry's placement time.
+            self._last_entry_mono = now
+            self._recent_entry_monos.append(now)
+            return None
 
     # ------------------------------------------------------------------
     # Core pipeline (SP6, SPW3)
@@ -755,6 +793,18 @@ class SignalProcessor:
                     self._fm.release(reservation_id, "shutdown_before_placement")
                     reservation_id = None
                 raise _PipelineReject("SHUTDOWN", "System shutdown before placement")
+
+            # FIX-190 (Bug G): entry throttle — space out placed entries to prevent
+            # a burst (the 5-entries-in-5s 19-Jun spike). Released reservation on
+            # reject so the slot frees for a later signal.
+            _throttle_reason = self._throttle_admit()
+            if _throttle_reason is not None:
+                if reservation_id:
+                    self._fm.release(reservation_id, "entry_throttled")
+                    reservation_id = None
+                raise _PipelineReject(
+                    "ENTRY_THROTTLED", f"Entry throttled: {_throttle_reason}"
+                )
 
             try:
                 self._placer.place(
@@ -1335,6 +1385,16 @@ class SignalProcessor:
                     self._fm.release(reservation_id, "shutdown_before_gate_placement")
                     reservation_id = None
                 raise _PipelineReject("SHUTDOWN", "System shutdown before placement (gate)")
+
+            # FIX-190 (Bug G): entry throttle (gate path).
+            _throttle_reason = self._throttle_admit()
+            if _throttle_reason is not None:
+                if reservation_id:
+                    self._fm.release(reservation_id, "entry_throttled")
+                    reservation_id = None
+                raise _PipelineReject(
+                    "ENTRY_THROTTLED", f"Entry throttled: {_throttle_reason}"
+                )
 
             try:
                 self._placer.place(

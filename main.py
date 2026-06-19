@@ -2177,6 +2177,10 @@ def _main_locked(args, config_dir: Path) -> int:
         instrument_cache=instrument_cache,  # IC: lot_size/sector lookup
         atr_fallback_mode=sp_cfg.atr_fallback_mode,  # MED #12
         tgt_min_pct=sp_cfg.tgt_min_pct,              # BL-16
+        # FIX-190 (Bug G): entry throttle
+        min_gap_between_entries_sec=getattr(sp_cfg, "min_gap_between_entries_sec", 0.0),
+        entry_burst_window_sec=getattr(sp_cfg, "entry_burst_window_sec", 60.0),
+        entry_burst_max=getattr(sp_cfg, "entry_burst_max", 0),
         notifier=notifier,
         mode=mode_label,
         # B.5 / Audit 5.1: re-entry guard. Skips a new signal whose symbol

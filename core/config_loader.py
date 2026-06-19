@@ -262,6 +262,14 @@ class SignalProcessorConfig(BaseModel):
     # BL-16: minimum target distance as fraction of entry. Guards against
     # degenerate configs that would produce target == entry (guaranteed loss).
     tgt_min_pct: float = 0.003
+    # FIX-190 (Bug G): entry throttle — spaces out placed entries to prevent a
+    # burst (the 5-entries-in-5s Chartink spike on 19-Jun). All default OFF so
+    # existing configs/tests are unaffected; system_config enables them.
+    #   min_gap_between_entries_sec: reject a new entry placed < this since the last.
+    #   entry_burst_max placed entries allowed within entry_burst_window_sec (0=off).
+    min_gap_between_entries_sec: float = 0.0
+    entry_burst_window_sec: float = 60.0
+    entry_burst_max: int = 0
 
     @field_validator("worker_count")
     @classmethod

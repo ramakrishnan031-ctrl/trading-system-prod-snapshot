@@ -132,6 +132,10 @@ signal_processor:             # SP15 — worker pool settings
   drain_poll_sec: 0.1         # queue poll interval when empty
   pipeline_timeout_sec: 30    # hard per-signal processing deadline
   tgt_min_pct: 0.003          # BL-16: reject signal if target distance < 0.3% of entry
+  # FIX-190 (Bug G): entry throttle — prevents the 19-Jun 5-entries-in-5s burst.
+  min_gap_between_entries_sec: 20   # >=20s between PLACED entries
+  entry_burst_window_sec: 60        # rolling burst window
+  entry_burst_max: 3                # max 3 placed entries per 60s (0 = off)
 
 kill_switch:                  # KS7 — auto-trip settings
   api_failure_threshold: 3    # consecutive API failures before auto soft_kill (>= 1)
