@@ -124,9 +124,17 @@ VM:  bare repo post-receive hook  →  git checkout -f  →  /home/ubuntu/system
 
 ---
 
-## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, 33 lines; **source of truth: `config/cron_registry.yaml`** — TASK #3)
-All market jobs run `cd … && . .env && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
+## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, 34 lines; **source of truth: `config/cron_registry.yaml`** — TASK #3)
+All market jobs run `cd … && . ./.env && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
 To change cron: edit `config/cron_registry.yaml` → regenerate the file → `crontab deploy/cron/trading-system.cron`.
+
+> ⚠️ **FIX-189 (2026-06-19) — cron MUST run under bash.** cron's default `/bin/sh`
+> is **dash**, whose `.` (source) builtin will NOT load a relative path without a
+> slash → a bare `. .env` fails with `sh: .: .env: not found` and **every job dies
+> before Python** (no token refresh, no heartbeats, no per-cron logs). The
+> canonical file therefore carries TWO guards: a leading **`SHELL=/bin/bash`** line
+> AND **`. ./.env`** (the `./` makes even dash source from CWD). Keep both on any
+> regeneration. `tests/unit/test_cron_registry.py::TestFix189CronShell` enforces it.
 
 | Time (IST) | Days | Script | Purpose |
 |---|---|---|---|
@@ -171,7 +179,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 ## Systemd Services  (`/etc/systemd/system/`)
 | Service | ExecStart | Purpose | Notes |
 |---|---|---|---|
-| `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). Currently **`failed` (stopped)** — kill switch SOFT_KILL active; needs Kite-IP fix + `--resume`. |
+| `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). **FIX-189 (19-Jun): main() now exits 0 outside the broad service window [08:00–16:00 IST]** so it never runs overnight (bypass: `--status`/`--dry-run`/`--interactive`/`--resume` or `TS_IGNORE_MARKET_WINDOW=1`). |
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
 | `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
@@ -270,3 +278,19 @@ inactive alert-watcher).
   33 lines): `auto_refresh_token` 08:00→08:15; +`cron_officer` briefing/eod; +analytics.db backup (01:05);
   +`db_retention` (02:30 + Sun VACUUM, activated); backup-retention now covers analytics. Old crontab
   backed up to `data_store/crontab_backups/`. 40 new tests. Commits …→6fd0ed9.
+- 2026-06-19 — Claude Code — **FIX-189: dash-cron + overnight-run + false-alert fixes.**
+  Root cause of the 19-Jun morning incident: cron's default `/bin/sh` is dash, so
+  the bare `. .env` in every market job failed (`sh: .: .env: not found`) — no token
+  refresh (08:15), no heartbeats, no per-cron logs. FIX-187's "verified live" had only
+  ever been exercised via a manual **bash** run, so the dash bug never surfaced.
+  Fixes: **(P0-A)** `deploy/cron/trading-system.cron` now leads with `SHELL=/bin/bash`
+  and sources via `. ./.env` (belt-and-suspenders); registry header documents the rule.
+  **(P1-A)** `main.py` exits 0 outside the broad service window [08:00–16:00 IST] and
+  `deploy/token_watcher.sh` only starts the service in-window — the service no longer
+  runs overnight (the 18-Jun 23:22 start that produced the false 04:24 capital-drift and
+  07:07 KiteTicker CRITICALs). **(P1-B)** `order_reconciler._g3_capital_drift` skips the
+  alert when broker `net==0.0` outside market hours (overnight funds endpoint returns 0),
+  and `live_feed._on_noreconnect` downgrades max-reconnect-exhausted to WARNING (no
+  SOFT_KILL/CRITICAL) outside market hours — both still escalate normally in-session.
+  **(P2)** token-watcher start is window-gated + already idempotent on `ActiveState`.
+  16 new tests. Kite dev-console IP allowlist remains Rama's external step. Commits …
