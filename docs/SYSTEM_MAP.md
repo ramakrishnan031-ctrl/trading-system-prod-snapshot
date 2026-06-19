@@ -6,18 +6,24 @@ This is the single authoritative path/ops reference. It complements (does not
 replace) the design/runbook docs in `docs/` — see "Related Docs" at the bottom.
 For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 
-> ## 🛑 CURRENT STATUS (2026-06-19) — SERVICE DOWN (HARD_KILL), DO NOT RESUME
+> ## 🛑 CURRENT STATUS (2026-06-19) — SERVICE DOWN (HARD_KILL); DO NOT RESUME **LIVE**
 > **FIX-190 live incident at ~10:00 IST.** First real trading after the Kite IP
 > allowlist was fixed: a Chartink spike fired 5 entries in ~5s; THELEELA's target
-> price exceeded the upper-circuit band → a single recoverable TGT rejection
-> cascaded into a full **HARD_KILL that flattened every open position and left
-> orphan SL/TGT orders**, double-selling THELEELA into a naked short. Rama
-> manually cancelled 4 orders + bought back 1 THELEELA. Net loss ₹2.87 (contained
-> only because he was watching). `trading-system.service` is **failed (HARD_KILL,
-> exit 4)** and must **NOT** be resumed until the P1 fixes are implemented +
-> paper-verified. Root-cause + fix plan: see memory `fix_190_incident` and the
-> FIX-190 instruction. (FIX-189 work — dash-cron, market-window guard, EOD
-> self-exit — is deployed/tested and unrelated to this incident.)
+> exceeded the upper-circuit band → a single recoverable TGT rejection cascaded
+> into a full **HARD_KILL that flattened every open position and left orphan
+> SL/TGT orders**, double-selling THELEELA into a naked short. Rama manually
+> recovered (net loss ₹2.87).
+>
+> **Stage-4 fixes LANDED (committed+pushed; unit-tested):** C (TGT-only no
+> HARD_KILL), D (circuit-band clamp), A (reverse-aware flatten — no oversell),
+> E (cancel resting exits — no orphans), F (no duplicate G5b SL), H
+> (`live_test_mode`: live caps max_open=1/3-per-day), I (in-session drift
+> tolerance). **STILL TODO before live re-enable:** G (entry throttle), B
+> (broker-filled counter), the integration replay test, and ≥1 clean PAPER
+> session. `trading-system.service` stays **failed (HARD_KILL, exit 4)** — bring
+> it up in **PAPER** only; do NOT resume live until the above are done + Rama
+> approves. See memory `fix_190_incident`. (FIX-189 dash-cron / market-window /
+> EOD-self-exit work is separate and already deployed.)
 
 ## Pre-Work Checklist
 - [ ] Read this file (and `PATHS.md`).
@@ -312,6 +318,17 @@ inactive alert-watcher).
   16 new tests. Kite dev-console IP allowlist remains Rama's external step. Commits 2ac32ae,
   0f722f7, 5603013, 66380b6 — pushed+deployed; crontab installed; service recovered (`/health`
   HEALTHY).
+- 2026-06-19 — Claude Code — **FIX-190 Stage 4: incident fixes** (commits 51f5e94→870bbc9).
+  Root-cause cluster of the 10:00 cascade fixed: **C** TGT-only failure returns a partial
+  (SL-protected) result instead of raising → no emergency-exit/HARD_KILL; **D** SL/TGT clamped
+  into the circuit band before placing; **A** reverse-aware flatten (`broker/position_helpers`)
+  in the HARD_KILL first pass + emergency exit (skip if flat, BUY to cover a short, mark EXITING)
+  → no oversell; **E** cancel a trade's resting SL/TGT before any flatten → no orphans; **F** G5b
+  skips recovery-SL when a live SL already exists → no duplicate SL. Guardrails: **H**
+  `live_test_mode` (RiskConfig; live caps max_open=1 / 3-per-day), **I** in-session capital-drift
+  tolerance = max(Rs, expected*10%). Defensive hardening of the new flatten helpers (never crash
+  the indestructible loop). Remaining (follow-ups): **G** entry throttle, **B** broker-filled
+  counter, integration replay test, paper-mode verification. Service stays DOWN; paper-only.
 - 2026-06-19 — Claude Code — Cleanup: removed **445** stale `critical_alert_*.flag` from the **PC**
   `data_store/` (31-May→18-Jun, mostly `source_module:test`). Local-only/gitignored — never tracked,
   no `.gitignore` change. VM already clean (alert-watcher consumes → `.delivered`).
