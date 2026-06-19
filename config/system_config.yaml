@@ -103,15 +103,16 @@ position_sizing:              # PS9
 risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_positions: 5       # hard cap on concurrent open positions (>= 1)
   max_daily_trades: 20
-  # FIX-190 (Bug H): live test mode — conservative caps for early live re-enable
-  # after the 19-Jun incident. When live_test_mode is true AND mode=live, the two
-  # caps above are overridden by the test-mode caps below. Keep ON until Rama
-  # explicitly disables it (after several clean live sessions).
+  # FIX-190 (Bug H) / 19-Jun: live test mode — ACTIVE BUG-HUNTING on live with
+  # controlled exposure (Rama's strategy). When live_test_mode is true AND
+  # mode=live, max_open_positions / max_daily_trades above are overridden by the
+  # test-mode caps below. Capital ₹10k with small qty/trade (typically 1-2 shares)
+  # naturally caps daily loss; 4 concurrent positions exercises concurrency/race
+  # paths; more trades = more bug discovery. PERMANENT — no auto-disable; stays ON
+  # until Rama manually disables it (manual review required). NOT temporary.
   live_test_mode: true
-  live_test_max_open_positions: 1
-  live_test_max_entries_per_day: 6   # 19-Jun PM: 3 morning trades counted (incident
-                                     # pre-fix); raised to 6 for 3 fresh afternoon
-                                     # test attempts. REVERT to 3 tomorrow (20-Jun).
+  live_test_max_open_positions: 4
+  live_test_max_entries_per_day: 6
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 2
   daily_loss_limit_pct: 0.03
