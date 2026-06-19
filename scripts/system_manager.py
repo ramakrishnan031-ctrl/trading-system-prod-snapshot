@@ -595,8 +595,12 @@ def tomorrow_readiness_check(store: StateStore, app_config, day_date: date,
         nxt = day_date + timedelta(days=1)
         res.info(f"Next day: {nxt.isoformat()} (holiday calendar unavailable)")
 
-    # DB clean: stuck signals / orphan orders / stuck in-flight trades
-    stuck_sig = int(_scalar(store, "SELECT COUNT(*) FROM signals WHERE status='PROCESSING'", ()))
+    # DB clean: stuck signals / orphan orders / stuck in-flight trades.
+    # A PROCESSING signal OLDER than 15 min is genuinely stuck (a worker died
+    # mid-pipeline); freshly-PROCESSING ones are just being worked — so this is
+    # not a false positive if run during market hours while the service is live.
+    cutoff = (now_ist() - timedelta(minutes=15)).isoformat()
+    stuck_sig = int(_scalar(store, "SELECT COUNT(*) FROM signals WHERE status='PROCESSING' AND received_at < ?", (cutoff,)))
     stuck_trades = int(_scalar(store, "SELECT COUNT(*) FROM trades WHERE status IN ('PENDING','PENDING_FILL','EXITING')", ()))
     orphan_orders = int(_scalar(
         store,
