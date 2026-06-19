@@ -542,12 +542,28 @@ class OrderReconcilerConfig(BaseModel):
     # operator-tunable cadence. Informational only — kill escalation is governed
     # separately by drift_handler thresholds.
     capital_drift_alert_interval_sec: float = 1800.0
+    # Task 4 (2026-06-19): a trade marked EXITING by a HARD_KILL / emergency
+    # flatten that never finalized (process died mid-exit — the 19-Jun incident)
+    # lingers with locked capital + orphan SL/TGT, untouched by CHECK1/G5b (they
+    # only act on OPEN/PARTIAL/PENDING_FILL). The reconciler resolves EXITING
+    # trades older than this many minutes against broker truth (flat ->
+    # CLOSED_MANUAL; still held -> back to OPEN for normal management). A fresh
+    # EXITING (an exit legitimately in progress) is left alone until it ages past
+    # this threshold.
+    stuck_exiting_timeout_minutes: int = 30
 
     @field_validator("poll_interval_sec")
     @classmethod
     def _validate_poll_interval(cls, v: int) -> int:
         if v < 1:
             raise ValueError("poll_interval_sec must be >= 1")
+        return v
+
+    @field_validator("stuck_exiting_timeout_minutes")
+    @classmethod
+    def _validate_stuck_exiting_timeout(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("stuck_exiting_timeout_minutes must be >= 1")
         return v
 
     @field_validator("capital_drift_tolerance")

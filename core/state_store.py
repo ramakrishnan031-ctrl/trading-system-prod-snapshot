@@ -1164,6 +1164,72 @@ class StateStore:
             """
         )
 
+    def get_stuck_exiting_trades(self, older_than_iso: str) -> List[sqlite3.Row]:
+        """
+        Task 4 (2026-06-19): return trades stuck in EXITING whose last update
+        (the moment they entered EXITING) is at or before `older_than_iso` —
+        i.e. EXITING for longer than the reconciler's stuck timeout.
+
+        Same JOIN/columns as get_all_open_trades so order_reconciler can feed a
+        stuck row straight into CHECK 1 (_check1_manual_close) unchanged. EXITING
+        is set by a HARD_KILL / emergency flatten (Bug A, FIX-190) and is meant to
+        be transient (EXITING -> CLOSED/CLOSED_MANUAL); a process death mid-exit
+        leaves it stuck with locked capital + orphan SL/TGT (the 19-Jun incident),
+        which CHECK1/G5b never resolve (they only see OPEN/PARTIAL/PENDING_FILL).
+        Timestamps are ISO-8601 IST (identical +05:30 offset), so the lexical
+        `<=` compares chronologically. Sorted by symbol (Foundation Rule 3.7).
+        """
+        return self.fetch_all(
+            """
+            SELECT
+                t.trade_id,
+                t.signal_id,
+                t.symbol,
+                t.direction,
+                t.qty_planned,
+                t.qty_filled,
+                t.status,
+                t.sl_initial,
+                t.entry_target_price,
+                t.entry_actual_price,
+                t.reservation_id,
+                o.product,
+                o.order_id AS entry_broker_order_id
+            FROM trades t
+            LEFT JOIN orders o
+              ON o.trade_id = t.trade_id
+             AND o.leg = 'ENTRY'
+            WHERE t.status = 'EXITING'
+              AND t.updated_at <= ?
+            ORDER BY t.symbol
+            """,
+            (older_than_iso,),
+        )
+
+    def revert_exiting_to_open(self, trade_id: str) -> bool:
+        """
+        Task 4 (2026-06-19): flip a stuck EXITING trade back to OPEN, but only if
+        it is still EXITING (atomic guard against a concurrent finalize). Used by
+        order_reconciler when a trade stuck in EXITING STILL has a live broker
+        position — handing it back to normal management (SL/TGT, EOD squareoff, or
+        an active kill switch's flatten loop) is the generalized form of the
+        19-Jun manual recovery. Returns True if the flip happened, False if the
+        trade had already left EXITING. Capital is intentionally untouched: a live
+        position still legitimately holds its reservation/used margin.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET status = 'OPEN',
+                    updated_at = ?
+                WHERE trade_id = ?
+                  AND status = 'EXITING'
+                """,
+                (_now_ist_iso(), trade_id),
+            )
+            return cur.rowcount > 0
+
     def get_orders_for_trade(self, trade_id: str) -> List[sqlite3.Row]:
         """
         Return all order rows for a trade_id.
@@ -1207,11 +1273,15 @@ class StateStore:
 
     def mark_trade_manually_closed(self, trade_id: str) -> bool:
         """
-        Mark a trade as CLOSED_MANUAL if it is still OPEN or PARTIAL.
+        Mark a trade as CLOSED_MANUAL if it is still OPEN, PARTIAL or EXITING.
 
         Called by order_reconciler CHECK 1 when broker position is gone but
-        the local trade is still OPEN/PARTIAL — indicating manual broker close
-        or SL-hit that was not relayed to the system.
+        the local trade is still live — indicating a manual broker close, an
+        SL-hit not relayed to the system, or (Task 4, 2026-06-19) a trade left
+        in EXITING by a HARD_KILL / emergency flatten that flattened at the
+        broker but died before finalizing the DB. EXITING -> CLOSED_MANUAL is a
+        valid terminal transition, so CHECK 1 can finalize a stuck EXITING trade
+        directly (no more manual EXITING->OPEN flip needed).
 
         Returns True if the update happened, False if the trade was already
         in a terminal status (guards against double-release race with
@@ -1225,7 +1295,7 @@ class StateStore:
                     exit_reason = 'MANUAL',
                     updated_at = ?
                 WHERE trade_id = ?
-                  AND status IN ('OPEN', 'PARTIAL')
+                  AND status IN ('OPEN', 'PARTIAL', 'EXITING')
                 """,
                 (_now_ist_iso(), trade_id),
             )

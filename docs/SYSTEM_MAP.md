@@ -261,6 +261,33 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **Task 4: reconciler resolves trades stuck in EXITING**
+  (closes the `followup_reconciler_exiting_gap` exposed by the 19-Jun incident). A
+  HARD_KILL / emergency flatten marks a trade EXITING before flattening (Bug A, FIX-190);
+  if the process dies mid-exit the trade lingered in EXITING with locked capital + orphan
+  SL/TGT, and CHECK1/G5b never touched it (they only see OPEN/PARTIAL/PENDING_FILL) — the
+  morning incident needed a manual EXITING→OPEN flip. New `_check_stuck_exiting` runs each
+  reconcile cycle (startup via `reconcile_once()` + every 15s) inside the broker-positions
+  guard: for EXITING trades older than `reconciler.stuck_exiting_timeout_minutes` (default
+  **30**), **flat at broker → CHECK1 finalize (CLOSED_MANUAL + release capital + cancel
+  orphans)** — `mark_trade_manually_closed` now accepts EXITING; **still holding → revert
+  EXITING→OPEN** (`revert_exiting_to_open`) + WARNING so SL/TGT/EOD/kill-switch resume
+  management. Fresh EXITING (active exit) is left alone. CHECK2 guarded so a held EXITING
+  position is not mis-adopted as an orphan. New `state_store.get_stuck_exiting_trades()` +
+  `revert_exiting_to_open()`; EXITING→OPEN added to the crash-test state-machine validator;
+  config key `stuck_exiting_timeout_minutes`. 6 new tests (incident replay flat→CLOSED_MANUAL,
+  fresh-not-touched, stale-held→OPEN, + 3 store helpers). 323 touched-suite tests green
+  (`test_main` waitress failures are a pre-existing local-venv gap, not a regression).
+  Activates on next restart. Files: `orders/order_reconciler.py`, `core/state_store.py`,
+  `core/config_loader.py`, `config/system_config.yaml`, `tests/crash_test/state_machine_validator.py`.
+- 2026-06-19 — Claude Code — **Bug B metrics: `/metrics` broker quota gauges.** Added
+  `broker_in_flight` / `broker_filled_today` / `broker_quota_used` / `broker_quota_max` /
+  `broker_quota_available` to `SignalProcessor.get_runtime_metrics()` (merged into `/metrics`
+  via the existing `metrics_provider`). They mirror the reservation-aware DAILY_TRADES gate
+  exactly — `used = max(daily_count, settled_today + count_live_reservations())` — so live
+  monitoring reflects the real cap decision, not a parallel tally. Fully guarded (best-effort;
+  never raises/blocks). 2 tests. Files: `signals/signal_processor.py`. (NB: the `/metrics/prometheus`
+  text endpoint is unchanged — it already omits the runtime counters.)
 - 2026-06-19 — Claude Code — **Bug B: reservation-aware DAILY_TRADES cap** (extends
   FIX-185 to the daily limit). Audit found the prior "B already correct" was only
   half-true: FIX-181 fixed *what* counts (rejects excluded → retry) and FIX-190 added

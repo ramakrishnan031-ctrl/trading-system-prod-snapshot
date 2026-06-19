@@ -60,7 +60,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime, time as dt_time
+from datetime import date, datetime, time as dt_time, timedelta
 from typing import Callable, Dict, List, Optional
 
 from capital.fund_manager import FundManager
@@ -654,6 +654,16 @@ class OrderReconciler:
             # the normal fill path will complete, so we don't act destructively.
             for symbol, bp in broker_pos.items():
                 if symbol not in local_symbols:
+                    # Task 4 (2026-06-19): a broker position whose only local
+                    # record is an EXITING trade is OURS mid-exit, not an orphan.
+                    # local_symbols only covers OPEN/PARTIAL (get_all_open_trades),
+                    # so without this guard CHECK2 would wrongly adopt/flag a
+                    # stuck-EXITING position before _check_stuck_exiting (below)
+                    # resolves it. Leave it for that handler.
+                    if self._store.get_trades_by_status_and_symbol(
+                        ("EXITING",), symbol
+                    ):
+                        continue
                     inflight = self._store.get_trades_by_status_and_symbol(
                         ("PENDING_FILL", "PENDING"), symbol
                     )
@@ -663,6 +673,15 @@ class OrderReconciler:
                         )
                     else:
                         actions.append(self._check2_orphan_adoption(symbol, bp))
+
+            # Task 4 (2026-06-19): resolve trades stuck in EXITING. A HARD_KILL /
+            # emergency flatten marks a trade EXITING before flattening (Bug A,
+            # FIX-190); if the process dies mid-exit (the 19-Jun incident) the
+            # trade lingers in EXITING with locked capital + orphan SL/TGT, and the
+            # checks above never touch it (they only handle OPEN/PARTIAL/PENDING_
+            # FILL). Runs inside the raw_positions guard so it always has broker
+            # truth to decide flat-vs-still-held (never acts blind).
+            actions.extend(self._check_stuck_exiting(broker_pos))
 
         # CHECK 6: ORPHAN_ORDER (only when broker_orders_fn provided) (RC5f)
         if self._broker_orders_fn is not None:
@@ -954,6 +973,116 @@ class OrderReconciler:
             ),
             action_taken="; ".join(steps) if steps else "none",
             success=success,
+        )
+
+    def _check_stuck_exiting(self, broker_pos: dict) -> List[ReconciliationAction]:
+        """
+        Task 4 (2026-06-19): resolve trades stuck in EXITING.
+
+        A HARD_KILL / emergency flatten marks a trade EXITING before flattening
+        (Bug A, FIX-190). EXITING is meant to be transient (EXITING ->
+        CLOSED/CLOSED_MANUAL once the exit reconciles). If the process dies
+        mid-exit (the 19-Jun incident) the trade lingers in EXITING with locked
+        capital + orphan SL/TGT, and CHECK1/G5b never touch it (they only act on
+        OPEN/PARTIAL/PENDING_FILL). Resolved here against broker truth:
+          - flat at broker -> CHECK1 finalize (CLOSED_MANUAL + release capital +
+            cancel orphan SL/TGT) — the incident's case; now that
+            mark_trade_manually_closed accepts EXITING this works end-to-end with
+            no manual EXITING->OPEN flip.
+          - still holding  -> hand back to normal management (EXITING -> OPEN) +
+            WARNING; SL/TGT, EOD squareoff, or an active kill switch's own flatten
+            loop then closes it the proper way.
+
+        Only trades EXITING longer than cfg.stuck_exiting_timeout_minutes are
+        touched, so an exit legitimately in progress is left alone. The caller
+        runs this inside the raw_positions guard, so broker_pos is always real
+        broker truth (never act blind).
+        """
+        actions: List[ReconciliationAction] = []
+        timeout_min = int(getattr(self._cfg, "stuck_exiting_timeout_minutes", 30) or 30)
+        cutoff = (now_ist() - timedelta(minutes=timeout_min)).isoformat()
+        try:
+            stuck = self._store.get_stuck_exiting_trades(cutoff)
+        except Exception as exc:
+            self._log.error(
+                "_check_stuck_exiting: get_stuck_exiting_trades failed: %s",
+                exc, exc_info=True,
+            )
+            return actions
+
+        for trade in stuck:
+            symbol = trade["symbol"]
+            bp = broker_pos.get(symbol)
+            broker_qty = abs(bp.qty) if bp is not None else 0
+            try:
+                if broker_qty == 0:
+                    # Flat at broker: flatten succeeded, DB never finalized.
+                    actions.append(self._check1_manual_close(trade))
+                else:
+                    # Still holding: resume normal management.
+                    actions.append(self._resume_exiting_to_open(trade, broker_qty))
+            except Exception as exc:
+                self._log.error(
+                    "_check_stuck_exiting: resolve failed for %s: %s",
+                    trade["trade_id"], exc, exc_info=True,
+                )
+        return actions
+
+    def _resume_exiting_to_open(self, trade, broker_qty: int) -> ReconciliationAction:
+        """
+        Task 4 (2026-06-19): a stuck EXITING trade STILL has a live broker
+        position. Flip it back to OPEN so the normal protective machinery (SL/TGT,
+        EOD squareoff, or an active kill switch's flatten loop) manages it — the
+        generalized form of the 19-Jun manual recovery (flip EXITING -> OPEN).
+        Capital is left as-is: a live position legitimately holds its margin.
+        """
+        trade_id = trade["trade_id"]
+        symbol = trade["symbol"]
+        log = bind_trade(self._log, trade_id=trade_id)
+        reverted = False
+        try:
+            reverted = self._store.revert_exiting_to_open(trade_id)
+        except Exception as exc:
+            log.error(
+                "stuck_exiting: revert_exiting_to_open failed for %s: %s",
+                trade_id, exc,
+            )
+
+        if reverted:
+            log.warning(
+                "STUCK_EXITING: trade_id=%s symbol=%s still held at broker "
+                "(qty=%d) -> reverted EXITING to OPEN for normal management",
+                trade_id, symbol, broker_qty,
+            )
+            if self._notifier is not None:
+                try:
+                    self._notifier.send(
+                        severity="WARNING",
+                        title=f"[{self._mode}] Stuck EXITING resumed -> OPEN",
+                        body=(
+                            f"{symbol} ({trade_id}) was stuck in EXITING with a "
+                            f"live broker position (qty={broker_qty}); reverted to "
+                            f"OPEN so SL/TGT/EOD (or the kill switch) manages it."
+                        ),
+                        source_module="order_reconciler",
+                    )
+                except Exception as exc:
+                    log.error("stuck_exiting: notifier.send failed: %s", exc)
+
+        return ReconciliationAction(
+            check_name="STUCK_EXITING",
+            tier="RECOVERABLE",
+            symbol=symbol,
+            trade_id=trade_id,
+            description=(
+                f"Trade {trade_id} stuck in EXITING with live position "
+                f"qty={broker_qty}; reverted to OPEN"
+                if reverted else
+                f"Trade {trade_id} stuck in EXITING; revert to OPEN FAILED "
+                f"(already left EXITING or DB error)"
+            ),
+            action_taken="revert_exiting_to_open" if reverted else "revert_failed",
+            success=reverted,
         )
 
     def _resolve_exit_price(

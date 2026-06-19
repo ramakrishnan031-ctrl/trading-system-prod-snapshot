@@ -1092,6 +1092,72 @@ def test_get_all_open_trades_returns_open_partial(tmp_path: Path) -> None:
     store.close()
 
 
+def test_get_stuck_exiting_trades(tmp_path: Path) -> None:
+    """Task 4: get_stuck_exiting_trades() returns only EXITING trades whose
+    updated_at is at/older than the cutoff, with the JOIN columns CHECK1 needs."""
+    from core.time_authority import now_ist
+    store = StateStore(tmp_path / "test.db")
+
+    # Two EXITING trades aged in the past (default updated_at 2026-04-14) -> stuck.
+    insert_test_trade(store, "stuck1", symbol="AEROENTER", status="EXITING")
+    insert_test_trade(store, "stuck2", symbol="THELEELA",  status="EXITING")
+    # One EXITING trade updated just now -> NOT stuck.
+    insert_test_trade(store, "fresh", symbol="RCF", status="EXITING")
+    with store.transaction() as cur:
+        cur.execute("UPDATE trades SET updated_at = ? WHERE trade_id = ?",
+                    (now_ist().isoformat(), "fresh"))
+    # Non-EXITING trades must never appear.
+    insert_test_trade(store, "open1", symbol="INFY", status="OPEN")
+    insert_test_trade(store, "pf1",   symbol="WIPRO", status="PENDING_FILL")
+
+    cutoff = (now_ist() - __import__("datetime").timedelta(minutes=30)).isoformat()
+    rows = store.get_stuck_exiting_trades(cutoff)
+    ids = {r["trade_id"] for r in rows}
+    assert ids == {"stuck1", "stuck2"}, f"expected the two aged EXITING trades, got {ids}"
+    # JOIN columns CHECK1 relies on are present.
+    for r in rows:
+        assert "entry_actual_price" in r.keys()
+        assert "product" in r.keys()
+        assert "direction" in r.keys()
+    print(f"  OK get_stuck_exiting_trades returns aged EXITING only: {ids}")
+    store.close()
+
+
+def test_revert_exiting_to_open(tmp_path: Path) -> None:
+    """Task 4: revert_exiting_to_open() flips EXITING->OPEN only when still EXITING."""
+    store = StateStore(tmp_path / "test.db")
+
+    insert_test_trade(store, "t1", symbol="RELIANCE", status="EXITING")
+    assert store.revert_exiting_to_open("t1") is True
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t1",))
+    assert row["status"] == "OPEN"
+
+    # Second call is a no-op (already OPEN, not EXITING) -> False.
+    assert store.revert_exiting_to_open("t1") is False
+    # A non-EXITING trade is never flipped.
+    insert_test_trade(store, "t2", symbol="INFY", status="OPEN")
+    assert store.revert_exiting_to_open("t2") is False
+    assert store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t2",))["status"] == "OPEN"
+    print("  OK revert_exiting_to_open flips only EXITING; guarded otherwise")
+    store.close()
+
+
+def test_mark_trade_manually_closed_accepts_exiting(tmp_path: Path) -> None:
+    """Task 4: mark_trade_manually_closed() now finalizes EXITING (not just
+    OPEN/PARTIAL) so CHECK1 can close a stuck EXITING trade directly."""
+    store = StateStore(tmp_path / "test.db")
+
+    insert_test_trade(store, "ex", symbol="AEROENTER", status="EXITING")
+    assert store.mark_trade_manually_closed("ex") is True
+    row = store.fetch_one("SELECT status, exit_reason FROM trades WHERE trade_id=?", ("ex",))
+    assert row["status"] == "CLOSED_MANUAL"
+    assert row["exit_reason"] == "MANUAL"
+    # Terminal trade returns False (idempotent / double-release guard).
+    assert store.mark_trade_manually_closed("ex") is False
+    print("  OK mark_trade_manually_closed accepts EXITING -> CLOSED_MANUAL")
+    store.close()
+
+
 def test_get_orders_for_trade(tmp_path: Path) -> None:
     """get_orders_for_trade() returns all orders for a trade, sorted by leg."""
     store = StateStore(tmp_path / "test.db")
@@ -2071,6 +2137,10 @@ def run_all_tests() -> int:
         test_reconciliation_log_table_exists,
         test_get_all_open_trades_empty,
         test_get_all_open_trades_returns_open_partial,
+        # Task 4: reconciler EXITING resolution helpers
+        test_get_stuck_exiting_trades,
+        test_revert_exiting_to_open,
+        test_mark_trade_manually_closed_accepts_exiting,
         test_get_orders_for_trade,
         test_get_sl_order_for_trade_active,
         test_get_sl_order_for_trade_none_when_absent,

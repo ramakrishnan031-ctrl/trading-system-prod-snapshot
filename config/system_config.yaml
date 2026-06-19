@@ -210,6 +210,7 @@ order_reconciler:             # RC17 — reconciler tuning
   capital_drift_tolerance_pct: 0.10  # FIX-190 (Bug I): in-session tolerance = max(Rs, expected*10%) to silence normal deployed-capital drift during trading
   human_order_margin_tolerance: 5000.0  # FIX-182: extra Rs allowance when human/untracked orders present
   capital_drift_alert_interval_sec: 1800  # TASK-11: min seconds between repeat CAPITAL_DRIFT alerts (30 min)
+  stuck_exiting_timeout_minutes: 30  # Task 4: resolve trades stuck in EXITING (HARD_KILL died mid-exit) older than this — flat->CLOSED_MANUAL, still-held->OPEN
 
 shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   enabled: true               # SH13: false = all handlers no-ops; table stays empty

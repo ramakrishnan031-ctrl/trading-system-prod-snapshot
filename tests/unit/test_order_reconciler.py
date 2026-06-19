@@ -2848,6 +2848,112 @@ def test_fixb_orphan_counter_reset_when_order_found(tmp_path: Path) -> None:
     print("  OK FIX-B: orphan counter reset when order found at broker")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Task 4 (2026-06-19): reconciler resolves trades stuck in EXITING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _touch_updated_at(store: StateStore, trade_id: str, iso: str) -> None:
+    with store.transaction() as cur:
+        cur.execute(
+            "UPDATE trades SET updated_at = ? WHERE trade_id = ?", (iso, trade_id)
+        )
+
+
+def test_task4_stuck_exiting_flat_finalizes_closed_manual(tmp_path: Path) -> None:
+    """Task 4 replay (19-Jun incident): a HARD_KILL flattened at the broker but the
+    process died mid-exit, leaving trades in EXITING. With the broker now flat, the
+    reconciler must finalize them CLOSED_MANUAL + release capital — no manual
+    EXITING->OPEN flip. (updated_at defaults to 2026-04-16, so both are 'stuck'.)"""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_aero", symbol="AEROENTER", status="EXITING",
+                  qty_filled=10, entry_actual_price=100.0)
+    _insert_order(store, "o_aero", "t_aero", leg="ENTRY", product="MIS", status="COMPLETE")
+    _insert_trade(store, "t_lela", symbol="THELEELA", status="EXITING",
+                  qty_filled=5, entry_actual_price=200.0)
+    _insert_order(store, "o_lela", "t_lela", leg="ENTRY", product="MIS", status="COMPLETE")
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []   # broker flat (flatten succeeded)
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
+    actions = rec.reconcile_once()
+
+    mc = [a for a in actions if a.check_name == "MANUAL_CLOSE"]
+    assert len(mc) == 2, f"both stuck EXITING trades should finalize; got {[a.check_name for a in actions]}"
+    for tid in ("t_aero", "t_lela"):
+        row = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", (tid,))
+        assert row["status"] == "CLOSED_MANUAL", f"{tid} -> {row['status']}"
+    assert fm.release_used.call_count == 2, "capital must be released for both"
+    store.close()
+    print("  OK Task4: stuck EXITING + broker flat -> CLOSED_MANUAL + capital released")
+
+
+def test_task4_fresh_exiting_not_resolved(tmp_path: Path) -> None:
+    """Task 4: an EXITING trade younger than the stuck timeout is left alone — an
+    exit may be completing legitimately and the normal fill path finalizes it.
+    Even with the broker flat, a fresh EXITING is NOT touched by the reconciler."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RCF", status="EXITING", qty_filled=10)
+    _insert_order(store, "o1", "t1", leg="ENTRY", product="MIS", status="COMPLETE")
+    _touch_updated_at(store, "t1", datetime.now(_IST).isoformat())  # freshly EXITING
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []   # flat, but trade is fresh
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
+    actions = rec.reconcile_once()
+
+    assert not [a for a in actions if a.check_name in ("MANUAL_CLOSE", "STUCK_EXITING")], \
+        "fresh EXITING must not be resolved"
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t1",))
+    assert row["status"] == "EXITING", f"fresh EXITING must be left untouched; got {row['status']}"
+    fm.release_used.assert_not_called()
+    store.close()
+    print("  OK Task4: fresh EXITING (within window) left untouched")
+
+
+def test_task4_stuck_exiting_with_position_reverts_to_open(tmp_path: Path) -> None:
+    """Task 4: a trade stuck in EXITING that STILL has a live broker position is
+    reverted to OPEN (normal SL/TGT/EOD/kill-switch management resumes) + WARNING.
+    Capital is NOT released — a live position legitimately holds its margin. CHECK2
+    must NOT mis-adopt the held position as an orphan."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t1", symbol="RELIANCE", status="EXITING", qty_filled=10)
+    _insert_order(store, "o1", "t1", leg="ENTRY", product="MIS", status="COMPLETE")
+    # default updated_at (2026-04-16) -> stuck.
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("RELIANCE", qty=10, avg_price=2500.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    fm = MagicMock(); snap = MagicMock(); snap.total = 100_000.0
+    fm.get_snapshot.return_value = snap
+    notifier = MagicMock(); notifier.send.return_value = MagicMock(success=True)
+
+    rec = _make_reconciler(store, adapter=adapter, fund_manager=fm, notifier=notifier)
+    actions = rec.reconcile_once()
+
+    se = [a for a in actions if a.check_name == "STUCK_EXITING"]
+    assert len(se) == 1, f"expected one STUCK_EXITING action; got {[a.check_name for a in actions]}"
+    assert se[0].tier == "RECOVERABLE"
+    assert se[0].success is True
+    # CHECK2 must not have adopted the held position as an orphan.
+    assert not [a for a in actions if a.check_name == "ORPHAN_ADOPTION"], \
+        "held EXITING position must not be mis-adopted as orphan"
+    row = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t1",))
+    assert row["status"] == "OPEN", f"stuck EXITING + live position -> OPEN; got {row['status']}"
+    fm.release_used.assert_not_called()
+    assert any(c.kwargs.get("severity") == "WARNING" for c in notifier.send.call_args_list), \
+        "a WARNING alert must be sent"
+    store.close()
+    print("  OK Task4: stuck EXITING + live position -> reverted OPEN + WARNING")
+
+
 def run_all_tests() -> int:
     tests = [
         test_import_and_instantiate,
@@ -2929,6 +3035,10 @@ def run_all_tests() -> int:
         test_check9_places_emergency_exit_when_none_pending,
         # FIX-157: CHECK9 skips CLOSED_MANUAL
         test_check9_skips_closed_manual_trade,
+        # Task 4: reconciler resolves trades stuck in EXITING
+        test_task4_stuck_exiting_flat_finalizes_closed_manual,
+        test_task4_fresh_exiting_not_resolved,
+        test_task4_stuck_exiting_with_position_reverts_to_open,
     ]
 
     print("=" * 70)

@@ -31,7 +31,10 @@ TRADE_TRANSITIONS: Dict[str, Set[str]] = {
     "PENDING_FILL": {"OPEN", "EXITING", "CANCELLED", "FAILED"},
     "OPEN": {"CLOSED", "CLOSED_MANUAL", "PARTIAL", "EXITING"},
     "PARTIAL": {"OPEN", "CLOSED", "CLOSED_MANUAL", "EXITING"},
-    "EXITING": {"CLOSED", "CLOSED_MANUAL"},
+    # Task 4 (2026-06-19): EXITING -> OPEN is a reconciler recovery transition —
+    # a trade stuck in EXITING (HARD_KILL died mid-exit) that STILL has a live
+    # broker position is reverted to OPEN so normal management resumes.
+    "EXITING": {"CLOSED", "CLOSED_MANUAL", "OPEN"},
     # Terminal states
     "CLOSED": set(),
     "CLOSED_MANUAL": set(),
