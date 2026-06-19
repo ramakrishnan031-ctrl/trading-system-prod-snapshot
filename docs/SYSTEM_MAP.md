@@ -77,7 +77,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `instruments.csv` | Instrument master (lot sizes, tokens) | `core/instrument_cache.py` |
 | `config/reference_data/` | NSE reference data | reference lookups |
 | `config/strategies/` | Per-strategy YAML configs | `strategies/loader.py` |
-| `.env` (root, 0600-ish, NOT in git) | Secrets: ZERODHA_* — incl. `ZERODHA_USER_ID`/`ZERODHA_PASSWORD` + per-account `ZERODHA_TOTP_<acct>` (e.g. `ZERODHA_TOTP_LFL836`) for headless TOTP login (FIX-187); GEMINI_API_KEY, WEBHOOK_SECRET, etc. | systemd `EnvironmentFile` + cron `. .env` |
+| `.env` (root, 0600-ish, NOT in git) | Secrets: ZERODHA_* — incl. `ZERODHA_USER_ID`/`ZERODHA_PASSWORD` + per-account `ZERODHA_TOTP_<acct>` (e.g. `ZERODHA_TOTP_LFL836`) for headless TOTP login (FIX-187); `GEMINI_BIN` (path to the `agy` CLI — agy auths via OAuth tokens in `~/.gemini/`, NOT an API key), WEBHOOK_SECRET, etc. | systemd `EnvironmentFile` + cron `set -a && . ./.env && set +a` |
 | `.env.example` | Template for `.env` | — |
 
 > Telegram bot token / chat IDs are also injected via the systemd drop-in
@@ -172,7 +172,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > ⚠️ **ENV-EXPORT FIX (2026-06-19) — source MUST be `set -a && . ./.env && set +a`.**
 > `.env` uses bare `VAR=value` (no `export`), so a plain `. ./.env` sets shell
 > variables the child `python` does **NOT** inherit → every cron job ran WITHOUT
-> its `.env` secrets (`ZERODHA_API_KEY_LFL836`, `TELEGRAM_*`, `GEMINI_API_KEY`).
+> its `.env` secrets (`ZERODHA_API_KEY_LFL836`, `TELEGRAM_*`).
 > FIX-189 made jobs *run*; this made them get their secrets (the 19-Jun 15:45
 > reconcile_positions broker-creds + "Telegram env not set" were both this).
 > `set -a` (allexport) exports everything sourced. Keep the wrapper on every
