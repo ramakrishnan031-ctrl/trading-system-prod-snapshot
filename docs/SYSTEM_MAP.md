@@ -256,6 +256,11 @@ inactive alert-watcher).
 ## Related Docs (do not duplicate these — cross-reference)
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
+- `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
+  `config_file_guide.docx`, `chartink_mounted_strategies.docx`). ⚠️ **GITIGNORED** (binary;
+  `.gitignore` → `docs/system_manuals/*.docx`) — so `git push` does **NOT** carry them. Sync
+  out-of-band: `scp docs/system_manuals/*.docx trading-vm:~/systems/trading-system/docs/system_manuals/`.
+  Re-scp after any edit. VM copies verified byte-identical + valid OOXML (19-Jun).
 - `docs/01_system_architecture.md` — architecture
 - `docs/03_daily_operations_runbook.md` / `docs/RUNBOOK.md` — daily ops
 - `docs/04_db_schema_reference.md` — DB schema (v28)
@@ -263,6 +268,11 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-19 — Claude Code — **Doc: `docs/system_manuals/*.docx` location recorded.** Three Word
+  manuals (`trading_System_v2_runbook.docx`, `config_file_guide.docx`,
+  `chartink_mounted_strategies.docx`) live in `docs/system_manuals/`. **Gitignored** (added
+  `docs/system_manuals/*.docx` to `.gitignore`, commit 2424a21) → NOT carried by `git push`;
+  synced to the VM out-of-band via `scp` (verified byte-identical + valid docx). Added to Related Docs.
 - 2026-06-19 — Claude Code — **TASK #8: `docs/CONFIG_GUIDE.md`** — comprehensive Rama-facing
   config reference. Audited all config files (`system_config.yaml`, `scoring_weights.yaml`,
   `broker_costs/limits.yaml`, `slippage_model.yaml`, `scan_webhook_map.yaml`,
