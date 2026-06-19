@@ -5,6 +5,13 @@
 # Update THIS file when adding/removing/changing any cron job, then regenerate
 # deploy/cron/trading-system.cron and re-sync the live crontab (see SYSTEM_MAP).
 #
+# FIX-189 (2026-06-19) — when regenerating deploy/cron/trading-system.cron, the
+# generated file MUST keep two things or every Python job silently dies before
+# it runs: (1) a leading `SHELL=/bin/bash` line, and (2) `. ./.env` (with the
+# `./` slash) — NOT `. .env`. Reason: cron's default /bin/sh is dash, and dash's
+# `.` builtin refuses to source a relative path without a slash. See the header
+# of deploy/cron/trading-system.cron for the full explanation.
+#
 # Per-job fields:
 #   script           command/path (informational; canonical cron is generated from this)
 #   schedule         human-readable IST schedule

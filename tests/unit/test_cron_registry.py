@@ -52,6 +52,36 @@ class TestRealRegistry:
         assert "fetch_fno_ban" not in crit
 
 
+# ── FIX-189 (P0-A): generated crontab must run under bash + `. ./.env` ───────
+# cron's default /bin/sh is dash; dash's `.` builtin will NOT source a relative
+# path without a slash, so a bare `. .env` fails ("sh: .: .env: not found") and
+# EVERY job dies before Python (no token refresh, no heartbeats, no logs).
+
+
+class TestFix189CronShell:
+    CRON = Path("deploy/cron/trading-system.cron")
+
+    def _job_lines(self):
+        for ln in self.CRON.read_text(encoding="utf-8").splitlines():
+            if ln.lstrip().startswith("#") or not ln.strip():
+                continue
+            yield ln
+
+    def test_shell_is_bash(self):
+        assert any(ln.strip() == "SHELL=/bin/bash" for ln in self._job_lines()), \
+            "canonical crontab must declare SHELL=/bin/bash"
+
+    def test_no_bare_dot_env_sourcing(self):
+        offenders = [ln for ln in self._job_lines() if "&& . .env &&" in ln]
+        assert offenders == [], (
+            "dash-unsafe bare `. .env` in crontab job(s): " + "; ".join(offenders)
+        )
+
+    def test_env_sourced_with_slash(self):
+        text = self.CRON.read_text(encoding="utf-8")
+        assert ". ./.env" in text, "jobs must source via `. ./.env` (slash form)"
+
+
 # ── due_time parsing ─────────────────────────────────────────────────────────
 
 
