@@ -58,7 +58,11 @@ from core.exceptions import BrokerError, OrderRejectedError
 from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
 from orders.entry_engine import EntryEngine, EntryResult
-from orders.price_math import DEFAULT_SL_LIMIT_OFFSET_PCT, calc_sl_limit_price
+from orders.price_math import (
+    DEFAULT_SL_LIMIT_OFFSET_PCT,
+    calc_sl_limit_price,
+    clamp_to_circuit_band,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -201,6 +205,24 @@ class LimitTripleProtocol(EntryEngine):
 
     # ── Phase 2: SL + TGT ─────────────────────────────────────────────────────
 
+    def _circuit_limits(self, symbol: str):
+        """FIX-190 (Bug D): best-effort (upper, lower) circuit limits from a quote.
+        Returns (None, None) if unavailable so the caller places prices as-is."""
+        try:
+            quotes = self._adapter.get_quote([symbol])
+            q = quotes.get(symbol) if quotes else None
+            if q is not None:
+                return (
+                    getattr(q, "upper_circuit", None),
+                    getattr(q, "lower_circuit", None),
+                )
+        except Exception as exc:
+            self._log.debug(
+                "limit_triple.circuit_limits_fetch_failed",
+                extra={"symbol": symbol, "error": str(exc)},
+            )
+        return (None, None)
+
     def place_exits(
         self,
         *,
@@ -232,6 +254,26 @@ class LimitTripleProtocol(EntryEngine):
         # FIX-093: Truncate tag to 16 chars for Kite API compliance
         order_tag = truncate_tag_for_broker(tag or trade_id)
         exit_side = _exit_side(entry_side)
+
+        # FIX-190 (Bug D): clamp the SL trigger + TGT into the circuit band so the
+        # broker cannot reject them for breaching the price band (the 19-Jun
+        # THELEELA TGT-above-upper-circuit rejection that triggered the cascade).
+        # Best-effort — if quote/circuit data is unavailable we place as-is and
+        # Bug C handles any resulting TGT rejection (SL-only protection).
+        upper_c, lower_c = self._circuit_limits(symbol)
+        if upper_c or lower_c:
+            sl_price, sl_clamped = clamp_to_circuit_band(sl_price, upper_c, lower_c)
+            tgt_price, tgt_clamped = clamp_to_circuit_band(tgt_price, upper_c, lower_c)
+            if sl_clamped or tgt_clamped:
+                self._log.warning(
+                    "limit_triple.exit_price_clamped_to_band",
+                    extra={
+                        "trade_id": trade_id, "symbol": symbol,
+                        "upper_circuit": upper_c, "lower_circuit": lower_c,
+                        "sl_clamped": sl_clamped, "tgt_clamped": tgt_clamped,
+                        "sl_price": sl_price, "tgt_price": tgt_price,
+                    },
+                )
 
         # ── Step 1: SL (stop-limit) for BOTH INTRADAY and DELIVERY ─────────
         # P0 (2026-06-15): Zerodha rejects SL-M orders via the API entirely,

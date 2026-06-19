@@ -138,3 +138,38 @@ def run_all_tests() -> int:
 
 if __name__ == "__main__":
     sys.exit(run_all_tests())
+
+
+# ── FIX-190 (Bug D): circuit-band clamp ──────────────────────────────────────
+
+def test_clamp_tgt_above_upper_circuit_clamps_down():
+    from orders.price_math import clamp_to_circuit_band
+    # THELEELA-like: TGT 505 above upper circuit 503.35 -> clamp to ~2% below.
+    clamped, was = clamp_to_circuit_band(505.0, upper_circuit=503.35, lower_circuit=440.0)
+    assert was is True
+    assert clamped < 503.35
+
+
+def test_clamp_sl_below_lower_circuit_clamps_up():
+    from orders.price_math import clamp_to_circuit_band
+    clamped, was = clamp_to_circuit_band(430.0, upper_circuit=503.35, lower_circuit=440.0)
+    assert was is True
+    assert clamped > 440.0
+
+
+def test_clamp_inside_band_unchanged():
+    from orders.price_math import clamp_to_circuit_band
+    clamped, was = clamp_to_circuit_band(480.0, upper_circuit=503.35, lower_circuit=440.0)
+    assert was is False
+    assert clamped == 480.0
+
+
+def test_clamp_no_band_data_unchanged():
+    from orders.price_math import clamp_to_circuit_band
+    clamped, was = clamp_to_circuit_band(505.0, upper_circuit=None, lower_circuit=None)
+    assert was is False and clamped == 505.0
+
+
+def test_clamp_nonpositive_price_unchanged():
+    from orders.price_math import clamp_to_circuit_band
+    assert clamp_to_circuit_band(0.0, 503.0, 440.0) == (0.0, False)

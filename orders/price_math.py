@@ -195,3 +195,45 @@ def calc_sl_limit_price(
         raise ValueError(
             f"exit_side must be 'BUY' or 'SELL', got {exit_side!r}"
         )
+
+
+# FIX-190 (Bug D): default safety margin inside the circuit band (2%).
+DEFAULT_CIRCUIT_MARGIN_PCT = 0.02
+
+
+def clamp_to_circuit_band(
+    price: float,
+    upper_circuit: float | None,
+    lower_circuit: float | None,
+    tick: float = DEFAULT_TICK,
+    margin_pct: float = DEFAULT_CIRCUIT_MARGIN_PCT,
+) -> tuple[float, bool]:
+    """FIX-190 (Bug D): clamp an exit price into the circuit band so the broker
+    cannot reject it for breaching the upper/lower price band (the 19-Jun
+    THELEELA TGT @ above upper-circuit rejection that triggered the cascade).
+
+    Clamps into ``[lower*(1+margin), upper*(1-margin)]`` — side-agnostic, so it
+    is correct for a TGT above the band (clamped down) or an SL trigger below it
+    (clamped up), for both LONG and SHORT. Re-snaps to a tick multiple (upper
+    bound rounds DOWN to stay inside; lower bound rounds UP). If band data is
+    missing/non-positive the price is returned unchanged.
+
+    Returns ``(clamped_price, was_clamped)``.
+    """
+    if price <= 0:
+        return (price, False)
+    clamped = price
+    if upper_circuit and upper_circuit > 0:
+        upper_safe = round_to_tick(
+            upper_circuit * (1.0 - margin_pct), tick, mode="down"
+        )
+        if clamped > upper_safe:
+            clamped = upper_safe
+    if lower_circuit and lower_circuit > 0:
+        lower_safe = round_to_tick(
+            lower_circuit * (1.0 + margin_pct), tick, mode="up"
+        )
+        if clamped < lower_safe:
+            clamped = lower_safe
+    was_clamped = abs(clamped - price) > (tick / 2.0)
+    return (clamped, was_clamped)
