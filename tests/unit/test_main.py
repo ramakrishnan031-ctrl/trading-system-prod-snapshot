@@ -1019,3 +1019,29 @@ if __name__ == "__main__":
 
     print(f"\nResults: {passed}/{total} passed, {failed} failed")
     sys.exit(0 if failed == 0 else 1)
+
+
+# ----------------------------------------------------------------------
+# FIX-189 (P1-A): broad service-window guard [08:00, 16:00) IST
+# ----------------------------------------------------------------------
+class TestFix189ServiceWindow:
+    """The trading service must not run overnight."""
+
+    def test_within_window_midday(self):
+        from main import _within_service_window
+        ist = timezone(timedelta(hours=5, minutes=30))
+        assert _within_service_window(datetime(2026, 6, 19, 11, 0, tzinfo=ist)) is True
+
+    def test_outside_window_overnight(self):
+        from main import _within_service_window
+        ist = timezone(timedelta(hours=5, minutes=30))
+        # 23:22 (observed bad start) and 04:24 (false-alert time) are outside.
+        assert _within_service_window(datetime(2026, 6, 18, 23, 22, tzinfo=ist)) is False
+        assert _within_service_window(datetime(2026, 6, 19, 4, 24, tzinfo=ist)) is False
+
+    def test_window_boundaries(self):
+        from main import _within_service_window
+        ist = timezone(timedelta(hours=5, minutes=30))
+        assert _within_service_window(datetime(2026, 6, 19, 8, 0, tzinfo=ist)) is True   # start inclusive
+        assert _within_service_window(datetime(2026, 6, 19, 15, 59, tzinfo=ist)) is True
+        assert _within_service_window(datetime(2026, 6, 19, 16, 0, tzinfo=ist)) is False  # end exclusive

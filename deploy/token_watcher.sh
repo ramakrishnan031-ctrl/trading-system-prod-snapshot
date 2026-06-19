@@ -37,6 +37,19 @@ log() {
 
 today_ist() { TZ=Asia/Kolkata date '+%Y-%m-%d'; }
 
+# FIX-189 (P1-A): the service must only run during the broad market window
+# (08:00-16:00 IST). Mirrors the main.py guard so token-watcher never starts the
+# service overnight — a leftover evening-refreshed token previously triggered a
+# 23:22 start that ran all night and emitted false CRITICAL alerts (capital drift
+# off an overnight broker net=0.0; KiteTicker max-reconnect exhausted). main.py is
+# the authoritative backstop (it also exits 0 off-hours); this just avoids the
+# needless start/exit churn.
+within_service_window() {
+    local h
+    h=$((10#$(TZ=Asia/Kolkata date +%H)))   # 10# forces base-10 (avoid "08" octal)
+    [ "$h" -ge 8 ] && [ "$h" -lt 16 ]
+}
+
 token_is_fresh() {
     [ -f "$TOKEN_FILE" ] || return 1
     local today
@@ -135,7 +148,7 @@ while true; do
                     log "HALT detected (exit 4) today -- kill switch active; manual --resume required. NOT restarting."
                     alert_once_per_day halt "trading-system in HALT (exit 4 / kill switch active) today. Fix root cause, then: main.py --resume"
                     this_sleep="$LONG_SLEEP"
-                elif token_is_fresh; then
+                elif token_is_fresh && within_service_window; then
                     start_service "Prior-day HALT (exit 4); attempting clean start (clear_stale_state auto-clears prior-day kills)."
                 else
                     this_sleep="$LONG_SLEEP"
@@ -146,7 +159,7 @@ while true; do
                     log "Startup-check failure (exit 3) today -- config/env issue. NOT restarting."
                     alert_once_per_day startup "trading-system startup checks failed (exit 3) today. Manual fix needed."
                     this_sleep="$LONG_SLEEP"
-                elif token_is_fresh; then
+                elif token_is_fresh && within_service_window; then
                     start_service "Prior-day startup-fail (exit 3); retrying once."
                 else
                     this_sleep="$LONG_SLEEP"
@@ -154,7 +167,7 @@ while true; do
                 ;;
             1|2|*)
                 n="$(crash_count_last_hour)"; n="${n:-0}"
-                if token_is_fresh && [ "$n" -lt "$MAX_CRASH_PER_HOUR" ]; then
+                if token_is_fresh && within_service_window && [ "$n" -lt "$MAX_CRASH_PER_HOUR" ]; then
                     record_crash_restart
                     start_service "Crash (exit $exit_status) recovery [$((n + 1))/${MAX_CRASH_PER_HOUR} this hour]."
                 else
@@ -169,8 +182,8 @@ while true; do
         # inactive / dead: clean exit 0 (EOD/holiday) or never started this boot.
         if [ "$exit_status" = "0" ] && [ "$exited_today" = true ]; then
             : # today's session already completed cleanly -- do NOT restart post-EOD
-        elif token_is_fresh; then
-            start_service "Fresh token detected (daily start)."
+        elif token_is_fresh && within_service_window; then
+            start_service "Fresh token detected (daily start, in service window)."
         fi
     fi
 

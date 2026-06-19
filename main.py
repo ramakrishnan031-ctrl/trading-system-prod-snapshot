@@ -1145,6 +1145,29 @@ def _print_welcome_banner(account, mode, capital, today):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FIX-189 (P1-A): broad service-window guard — the trading service must NOT run
+# overnight. A leftover/evening-refreshed token previously let token-watcher
+# start the service late at night (observed 18-Jun 23:22); it then ran until the
+# token expired (~04:30) and emitted false CRITICAL alerts (capital drift @ 04:24
+# off an overnight broker net=0.0; KiteTicker max-reconnect exhausted @ 07:07).
+# Outside this broad window main() exits cleanly (0) so systemd/token-watcher do
+# not keep a long-lived process alive off-hours. The normal path stays inside the
+# window: 08:15 token-refresh cron -> 08:30 premarket start; intraday crash
+# recovery is also in-window. EOD self-exit (post square-off) is unchanged.
+# ─────────────────────────────────────────────────────────────────────────────
+SERVICE_WINDOW_START = _time(8, 0)   # IST — before the 08:30 premarket start
+SERVICE_WINDOW_END = _time(16, 0)    # IST — after 15:30 close + EOD square-off
+
+
+def _within_service_window(now: datetime) -> bool:
+    """True if `now` (IST, tz-aware) is within the broad service window
+    [08:00, 16:00). Pure time-of-day check (holiday/weekend is handled by the
+    separate holiday guard), so it is host-timezone independent.
+    """
+    return SERVICE_WINDOW_START <= now.time() < SERVICE_WINDOW_END
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # main() (MAIN1-MAIN15)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1216,6 +1239,25 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
             return 0
     except FileNotFoundError:
         pass  # missing holiday file: proceed with startup
+
+    # ── FIX-189 (P1-A): service-window guard — never run overnight ───────────
+    # Skip for operator/diagnostic invocations (--status/--dry-run/--interactive/
+    # --resume) and overridable via TS_IGNORE_MARKET_WINDOW=1 for emergencies.
+    _window_bypass = (
+        args.status or args.dry_run or args.interactive or args.resume
+        or os.environ.get("TS_IGNORE_MARKET_WINDOW") == "1"
+    )
+    _svc_now = time_authority.now_ist()
+    if not _window_bypass and not _within_service_window(_svc_now):
+        print(
+            f"Outside service window "
+            f"[{SERVICE_WINDOW_START.strftime('%H:%M')}-"
+            f"{SERVICE_WINDOW_END.strftime('%H:%M')} IST]; current IST "
+            f"{_svc_now.strftime('%H:%M')}. Not starting (clean exit 0). "
+            "Token-watcher starts the service in-window after the morning "
+            "token refresh. Override with TS_IGNORE_MARKET_WINDOW=1 or --resume."
+        )
+        return 0
 
     setup_logging(Path("logs"))
     _log = get_logger("main")
