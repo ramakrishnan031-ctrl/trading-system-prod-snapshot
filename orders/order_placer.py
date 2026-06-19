@@ -186,6 +186,7 @@ from typing import Any, Dict, Final, Iterable, List, Optional
 
 from broker.cost_calculator import CostCalculator
 from broker.order_monitor import OrderMonitor
+from broker.position_helpers import determine_close_direction  # FIX-190 (Bug A)
 from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
@@ -3017,6 +3018,41 @@ class OrderPlacer:
                 extra={"trade_id": trade_id, "kill_error": str(kse)},
             )
 
+    def _mark_trade_exiting(self, trade_id: str) -> None:
+        """FIX-190 (Bug A): mark a trade EXITING (best-effort) so a concurrent
+        flatten path does not re-select and double-sell it."""
+        try:
+            with self._om._store.transaction() as cur:
+                cur.execute(
+                    "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
+                    ("EXITING", now_ist().isoformat(), trade_id),
+                )
+        except Exception as exc:
+            self._log.warning(
+                "order_placer: mark EXITING failed for %s: %s", trade_id, exc
+            )
+
+    def _cancel_trade_resting_exits(self, trade_id: str) -> None:
+        """FIX-190 (Bug E): cancel a trade's resting SL/TGT at the broker before an
+        emergency flatten so they don't survive as orphans. Best-effort."""
+        try:
+            rows = self._om._store.fetch_all(
+                "SELECT broker_order_id FROM orders WHERE trade_id = ? "
+                "AND leg IN ('SL','TGT') "
+                "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
+                (trade_id,),
+            )
+        except Exception as exc:
+            self._log.warning(
+                "order_placer: query resting exits failed for %s: %s", trade_id, exc
+            )
+            return
+        ids = [r["broker_order_id"] for r in (rows or []) if r["broker_order_id"]]
+        if ids:
+            self._cancel_broker_orders(
+                ids, reason=f"emergency_exit_cancel_resting:{trade_id}",
+            )
+
     def _emergency_market_exit(
         self, trade_id: str, fill_entry: "_FillEntry", qty: int, reason: str,
     ) -> bool:
@@ -3028,7 +3064,28 @@ class OrderPlacer:
         via the normal _handle_exit_fill path.
         """
         symbol = fill_entry.symbol
-        side = "SELL" if fill_entry.side == "BUY" else "BUY"
+        fallback_side = "SELL" if fill_entry.side == "BUY" else "BUY"
+
+        # FIX-190 (Bug E): cancel this trade's resting SL/TGT FIRST so they don't
+        # survive as orphans that later re-fire into a naked position.
+        self._cancel_trade_resting_exits(trade_id)
+
+        # FIX-190 (Bug A): reverse-aware exit. If the broker confirms we are
+        # already flat (a concurrent HARD_KILL flatten beat us, or the position
+        # never opened) do NOT fire another order — that is the THELEELA oversell
+        # (BUY 1 -> SELL 1 -> SELL 1 -> naked short -1). A genuine short closes
+        # with BUY. On a broker error we fall back to the intended exit.
+        side, ex_qty = determine_close_direction(
+            self._adapter, symbol, fallback_side, qty,
+        )
+        if side is None or ex_qty <= 0:
+            self._log.critical(
+                "order_placer.emergency_exit_skipped_already_flat",
+                extra={"trade_id": trade_id, "symbol": symbol, "reason": reason},
+            )
+            self._mark_trade_exiting(trade_id)
+            return True
+        qty = ex_qty
 
         # FIX-181: marketable LIMIT (LTP ± buffer) rather than MARKET so the
         # forced exit still fills but caps worst-case slippage. Falls back to
@@ -3089,6 +3146,10 @@ class OrderPlacer:
                 "broker_order_id": placed.broker_order_id,
             },
         )
+
+        # FIX-190 (Bug A): mark EXITING so a concurrent HARD_KILL flatten (which
+        # selects OPEN/PARTIAL/PENDING_FILL) does not re-select and double-sell.
+        self._mark_trade_exiting(trade_id)
 
         # Persist + track the emergency exit order
         try:

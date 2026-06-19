@@ -56,6 +56,7 @@ from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
+from broker.position_helpers import determine_close_direction  # FIX-190 (Bug A)
 from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
 # Part 11 (FIX-180): HARD_KILL emergency-exit retry guards.
@@ -801,6 +802,68 @@ class KillSwitch:
             except Exception:
                 pass
 
+    def _mark_trade_exiting(self, trade_id: str) -> None:
+        """FIX-190: mark a trade EXITING (best-effort; broker truth > DB). Marking
+        BEFORE/right-after placing the flatten keeps a concurrent flatten path
+        (the OPEN/PARTIAL/PENDING_FILL query) from re-selecting and double-selling."""
+        try:
+            with self._store.transaction() as cur:
+                cur.execute(
+                    "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
+                    ("EXITING", now_ist().isoformat(), trade_id),
+                )
+        except Exception as exc:
+            self._log.critical(
+                "kill_switch: DB write (EXITING) failed for trade %s: %s",
+                trade_id, exc,
+            )
+
+    def _cancel_trade_resting_exits(self, trade_id: str) -> None:
+        """FIX-190 (Bug E): cancel a trade's resting SL/TGT orders at the broker
+        BEFORE flattening, so they don't survive as orphans that later re-fire
+        into a naked position. Best-effort; broker truth > DB."""
+        try:
+            rows = self._store.fetch_all(
+                "SELECT order_id, broker_order_id, leg FROM orders "
+                "WHERE trade_id = ? AND leg IN ('SL','TGT') "
+                "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
+                (trade_id,),
+            )
+        except Exception as exc:
+            self._log.warning(
+                "kill_switch: could not query resting exits for %s: %s",
+                trade_id, exc,
+            )
+            return
+        cancelled = 0
+        for r in rows or []:
+            boid = r["broker_order_id"]
+            if not boid:
+                continue
+            try:
+                self._adapter.cancel_order(boid)
+            except Exception as exc:
+                self._log.warning(
+                    "kill_switch: cancel resting %s order %s failed: %s",
+                    r["leg"], boid, exc,
+                )
+                continue
+            try:
+                with self._store.transaction() as cur:
+                    cur.execute(
+                        "UPDATE orders SET status = 'CANCELLED', updated_at = ? "
+                        "WHERE order_id = ?",
+                        (now_ist().isoformat(), r["order_id"]),
+                    )
+            except Exception:
+                pass  # broker cancel is what matters; reconciler finalizes DB
+            cancelled += 1
+        if cancelled:
+            self._log.critical(
+                "kill_switch: cancelled %d resting exit order(s) for trade %s "
+                "before flatten (FIX-190 Bug E)", cancelled, trade_id,
+            )
+
     def _exit_all_trades_indestructible(self) -> CancellationReport:
         """
         FIX-087: Exit all open trades with per-trade exception isolation and retry.
@@ -855,26 +918,47 @@ class KillSwitch:
             trade_id = trade["trade_id"]
             symbol = trade["symbol"]
             handled_symbols.add(symbol)
-            qty = abs(trade["qty_filled"] or 0)
-            if qty == 0:
+            local_qty = abs(trade["qty_filled"] or 0)
+            if local_qty == 0:
                 continue
-            # Exit side is opposite of entry direction
-            exit_side = "SELL" if trade["direction"] == "LONG" else "BUY"
             # Bug C (P0 2026-06-15): derive the product intent from the open
             # position so place_order gets its required `intent` and exits under
             # the same product (MIS/CNC). Unknown product -> INTRADAY (safest:
             # MIS exits are always allowed and the common case).
             intent = _PRODUCT_TO_INTENT.get(trade["product"] or "", "INTRADAY")
+            fallback_side = "SELL" if trade["direction"] == "LONG" else "BUY"
+
+            # FIX-190 (Bug E): cancel this trade's resting SL/TGT BEFORE flattening
+            # so a late fill can't re-open a naked position and so we leave no
+            # orphan exit orders (the AEROENTER orphans of the 19-Jun incident).
+            self._cancel_trade_resting_exits(trade_id)
+
+            # FIX-190 (Bug A): reverse-aware close based on the ACTUAL broker
+            # position, not the local intended direction. A position already
+            # flattened by order_placer's emergency exit reads net 0 -> skip (no
+            # second SELL -> no naked short, the THELEELA oversell). A genuine
+            # short closes with BUY. On broker error we fall back to the intended
+            # exit (err toward flattening).
+            close_side, close_qty = determine_close_direction(
+                self._adapter, symbol, fallback_side, local_qty
+            )
+            if close_side is None or close_qty <= 0:
+                self._log.info(
+                    "kill_switch: trade %s (%s) already flat at broker; marking "
+                    "EXITING without re-firing (FIX-190 A)", trade_id, symbol,
+                )
+                self._mark_trade_exiting(trade_id)
+                continue
 
             try:
                 # FIX-181: marketable LIMIT (LTP ± buffer) exit, MARKET fallback.
                 exit_order_type, exit_price = self._marketable_exit_params(
-                    symbol, exit_side
+                    symbol, close_side
                 )
                 order_result = self._adapter.place_order(
                     symbol=symbol,
-                    side=exit_side,
-                    qty=qty,
+                    side=close_side,
+                    qty=close_qty,
                     order_type=exit_order_type,
                     price=exit_price,
                     intent=intent,
@@ -882,33 +966,21 @@ class KillSwitch:
                 )
                 # Bug C (P0 2026-06-15): place_order returns a PlacedOrder on
                 # success and RAISES on failure; PlacedOrder has no .success
-                # attribute (the old check AttributeError'd on every success,
-                # sending every trade into the infinite retry loop). Treat an
-                # empty broker_order_id as the only non-exception failure.
+                # attribute. Treat an empty broker_order_id as the only
+                # non-exception failure.
                 if not order_result.broker_order_id:
                     raise RuntimeError("Broker returned empty order id for exit")
 
-                # Update DB (best-effort; broker truth > DB truth during emergency)
-                try:
-                    with self._store.transaction() as cur:
-                        cur.execute(
-                            "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
-                            ("EXITING", now_ist().isoformat(), trade_id),
-                        )
-                except Exception as db_exc:
-                    self._log.critical(
-                        "kill_switch: DB write failed for trade %s (broker exit succeeded): %s",
-                        trade_id, db_exc,
-                    )
-
+                self._mark_trade_exiting(trade_id)
                 self._log.info(
-                    "kill_switch: trade %s exited successfully", trade_id
+                    "kill_switch: trade %s exited successfully (%s %d)",
+                    trade_id, close_side, close_qty,
                 )
             except Exception as exc:
                 self._log.critical(
                     "kill_switch: exit failed for trade %s: %s", trade_id, exc
                 )
-                failed_trades.append((trade_id, symbol, exit_side, qty, intent))
+                failed_trades.append((trade_id, symbol, close_side, close_qty, intent))
 
         # FIX-181 LAYER A (GICRE incident): broker-position-driven sweep. A
         # HARD_KILL must leave NO live broker position, even one with no matching
