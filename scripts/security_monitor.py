@@ -99,8 +99,8 @@ class SecConfig:
     expected_key_fingerprint: str = ""
     sudo_whitelist_prefixes: list = field(default_factory=lambda: [
         "/usr/bin/systemctl", "/bin/systemctl", "/usr/bin/grep", "/usr/bin/tail",
-        "/usr/bin/cat", "/usr/sbin/fail2ban-client", "/usr/sbin/augenrules",
-        "/usr/bin/auditctl", "/usr/bin/journalctl",
+        "/usr/bin/cat", "/usr/bin/fail2ban-client", "/usr/sbin/augenrules",
+        "/usr/sbin/auditctl", "/usr/sbin/ausearch", "/usr/bin/journalctl",
     ])
     watched_files: list = field(default_factory=list)
     authlog_path: str = str(_DEFAULT_AUTHLOG)

@@ -27,12 +27,13 @@ security:
 
   # Alert on non-whitelisted sudo commands (INFO).
   sudo_alert: true
-  sudo_whitelist_prefixes:
+  sudo_whitelist_prefixes:        # exact VM paths (verified 19-Jun)
     - /usr/bin/systemctl
     - /bin/systemctl
-    - /usr/sbin/fail2ban-client
+    - /usr/bin/fail2ban-client
     - /usr/sbin/augenrules
-    - /usr/bin/auditctl
+    - /usr/sbin/auditctl
+    - /usr/sbin/ausearch
     - /usr/bin/journalctl
     - /usr/bin/grep
     - /usr/bin/tail
