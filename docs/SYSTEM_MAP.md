@@ -182,7 +182,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 ## Systemd Services  (`/etc/systemd/system/`)
 | Service | ExecStart | Purpose | Notes |
 |---|---|---|---|
-| `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). **FIX-189 (19-Jun): main() now exits 0 outside the broad service window [08:00–16:00 IST]** so it never runs overnight (bypass: `--status`/`--dry-run`/`--interactive`/`--resume` or `TS_IGNORE_MARKET_WINDOW=1`). |
+| `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). **FIX-189 (19-Jun): main() exits 0 outside the broad service window [08:00–16:00 IST]** (startup guard; bypass: `--status`/`--dry-run`/`--interactive`/`--resume` or `TS_IGNORE_MARKET_WINDOW=1`) **and an `eod-self-exit` thread exits 0 once past 16:00 IST AND flat** (`count_active_positions()==0`) so it never idles overnight; never exits while a position is open. |
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
 | `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
@@ -302,3 +302,14 @@ inactive alert-watcher).
 - 2026-06-19 — Claude Code — Cleanup: removed **445** stale `critical_alert_*.flag` from the **PC**
   `data_store/` (31-May→18-Jun, mostly `source_module:test`). Local-only/gitignored — never tracked,
   no `.gitignore` change. VM already clean (alert-watcher consumes → `.delivered`).
+- 2026-06-19 — Claude Code — **FIX-189 (P1-A completion): EOD window-end self-exit.** Found while
+  verifying the assumed "EOD self-exit" that it did **not** exist (runtime loop only waits on the
+  shutdown event; EOD squareoff just trips a scheduled SOFT_KILL; no timer/cron stops the process) —
+  so a service started in-window ran all night (harmless after P1-B, but not clean). Added an
+  `eod-self-exit` daemon thread (`_start_eod_self_exit_thread` / `_eod_self_exit_due`): once past
+  `SERVICE_WINDOW_END` (16:00 IST) **and** flat (`StateStore.count_active_positions()==0` over
+  OPEN/PARTIAL/PENDING_FILL) it sets the shutdown event → `main()` exits 0 → systemd won't restart →
+  token-watcher's exit-0-today path skips the restart → clean overnight + clean 08:30 start. **Never**
+  exits while a position is open (stays up to manage residual positions; count error → stays up).
+  Armed only for normal starts (skipped for `--interactive`/`--resume`/`TS_IGNORE_MARKET_WINDOW`).
+  Parity-safe. 6 new tests. Commit d61ece9. Activates on next service restart (≈ next 08:30).
