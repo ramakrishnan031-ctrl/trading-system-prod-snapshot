@@ -166,6 +166,25 @@ def _max_concurrent_positions(store: StateStore, day: str) -> int:
     return peak
 
 
+def _count_in_log(root: Path, day: str, needle: str) -> int:
+    """Count lines containing `needle` in today's system log. Kill activations are
+    logged (`HARD_KILL ACTIVATED` / `SOFT_KILL ACTIVATED`) but NOT written to any
+    queryable table and the kill_switch_state row is overwritten on clear — so the
+    EOD log (complete after market close) is the only reliable source."""
+    path = root / "logs" / f"system_{day}.log"
+    if not path.exists():
+        return 0
+    n = 0
+    try:
+        with path.open(errors="replace") as f:
+            for line in f:
+                if needle in line:
+                    n += 1
+    except Exception:
+        return 0
+    return n
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Check 1 — Config vs Actual
 # ─────────────────────────────────────────────────────────────────────────────
@@ -481,7 +500,7 @@ def trade_strategy_health(store: StateStore, day: str) -> CheckResult:
 # Check 6 — Risk Events
 # ─────────────────────────────────────────────────────────────────────────────
 
-def risk_events_check(store: StateStore, day: str) -> CheckResult:
+def risk_events_check(store: StateStore, day: str, root: Path) -> CheckResult:
     res = CheckResult("🛡️ RISK EVENTS")
 
     def _rl_count(like: str) -> int:
@@ -491,16 +510,15 @@ def risk_events_check(store: StateStore, day: str) -> CheckResult:
             (day, like),
         ))
 
-    hard = int(_scalar(
-        store, "SELECT COUNT(*) FROM system_events WHERE substr(timestamp,1,10)=? "
-               "AND (details LIKE '%HARD_KILL%' OR event_type LIKE '%HARD_KILL%')", (day,)))
-    # current state catches a HARD_KILL still active even if no event row
+    # Log-based (the only reliable source — see _count_in_log). Also catch a
+    # HARD_KILL still active right now even if its log line predates today.
+    hard = _count_in_log(root, day, "HARD_KILL ACTIVATED")
     ks = store.fetch_one("SELECT state FROM kill_switch_state WHERE id=1", ())
-    hard_active = (ks and ks["state"] == "HARD_KILL")
+    hard_active = bool(ks and ks["state"] == "HARD_KILL")
     if hard or hard_active:
         res.violation(
-            f"HARD_KILL today: {hard} event(s)" + (" (currently ACTIVE)" if hard_active else ""),
-            soft_kill_reason="HARD_KILL fired today" if not hard_active else "HARD_KILL currently active",
+            f"HARD_KILL today: {hard} activation(s)" + (" (currently ACTIVE)" if hard_active else " (cleared)"),
+            soft_kill_reason="HARD_KILL currently active" if hard_active else "HARD_KILL fired today",
         )
     else:
         res.ok("HARD_KILL: 0 today")
@@ -520,10 +538,8 @@ def risk_events_check(store: StateStore, day: str) -> CheckResult:
     ))
     (res.ok if orphan_rl == 0 else res.warn)(f"Orphan detections: {orphan_rl}")
 
-    soft = int(_scalar(
-        store, "SELECT COUNT(*) FROM system_events WHERE substr(timestamp,1,10)=? "
-               "AND details LIKE '%SOFT_KILL%'", (day,)))
-    res.info(f"ℹ️ SOFT_KILL events logged today: {soft}")
+    soft = _count_in_log(root, day, "SOFT_KILL ACTIVATED")
+    res.info(f"ℹ️ SOFT_KILL activations today: {soft}")
     return res
 
 
@@ -699,7 +715,7 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         lambda: report_integrity_check(day, root),
         lambda: system_health_check(store, day, db_path, root),
         lambda: trade_strategy_health(store, day),
-        lambda: risk_events_check(store, day),
+        lambda: risk_events_check(store, day, root),
         lambda: compare_with_yesterday(store, day, _day(prev)),
         lambda: tomorrow_readiness_check(store, app_config, day_date, config_dir),
     ]
