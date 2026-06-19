@@ -300,6 +300,15 @@ jobs:
     cadence: market_day
     monitored: true
 
+  system_manager_eod:                       # TASK #5: deep daily cross-check
+    script: "scripts/system_manager.py"
+    schedule: "18:45 Mon-Fri"
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+
   # ── Weekly ────────────────────────────────────────────────────────────────
   gemini_weekly_patterns:
     script: "scripts/gemini_weekly_patterns.py"

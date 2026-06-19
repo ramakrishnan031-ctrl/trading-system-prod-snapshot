@@ -19,7 +19,8 @@
 #
 # Last synced with registry: 2026-06-19  (FIX-189 dash fix: SHELL=/bin/bash +
 # `. ./.env`; auto_refresh_token -> 08:15; +cron_officer briefing/eod; +analytics
-# .db backup; +db_retention; backup-retention covers analytics).
+# .db backup; +db_retention; backup-retention covers analytics; +TASK #5
+# system_manager_eod 18:45).
 
 # FIX-189: run all jobs under bash (dash's `.` can't source a bare relative path).
 SHELL=/bin/bash
@@ -114,6 +115,9 @@ SHELL=/bin/bash
 
 # ── 18:30 IST Mon-Fri | Cron Officer EOD execution summary (TASK #3) ─────────
 30 18 * * 1-5 cd /home/ubuntu/systems/trading-system && . ./.env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/cron_officer.py --eod-summary >> logs/cron-officer.log 2>&1
+
+# ── 18:45 IST Mon-Fri | System Manager EOD deep cross-check (TASK #5) ────────
+45 18 * * 1-5 cd /home/ubuntu/systems/trading-system && . ./.env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/system_manager.py >> logs/system-manager.log 2>&1
 
 # ── 03:00 IST 1st of month | backup restore drill ───────────────────────────
 0 3 1 * * cd /home/ubuntu/systems/trading-system && . ./.env && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_restore_drill.py --quiet >> logs/cron-backup-drill.log 2>&1
