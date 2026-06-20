@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.security_monitor as sm
 from scripts.security_monitor import (
     SecConfig,
     Finding,
@@ -17,6 +18,11 @@ from scripts.security_monitor import (
     check_failed_spike,
     check_sudo_events,
     check_watched_files,
+    check_copy_protection_switch,
+    check_copy_bypass,
+    parse_ausearch_execve,
+    is_outbound_copy,
+    recent_allowed_copy_times,
     _dedup,
 )
 
@@ -192,3 +198,114 @@ def test_config_loads_real_file():
     assert cfg.enabled is True
     assert cfg.expected_key_fingerprint.startswith("SHA256:")
     assert cfg.max_active_sessions == 2
+
+
+def test_config_loads_copy_protection_block():
+    cfg = SecConfig.load(Path("config/security.yaml"))
+    assert cfg.copy_protection_enabled is True
+    assert cfg.copy_audit_log_path.endswith("copy_audit.log")
+
+
+# ── Phase 2: copy_protection ON->OFF switch ──────────────────────────────────
+
+def test_copy_switch_seeds_silently_then_alerts_on_disable():
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=_IST)
+    state = {}
+    on = SecConfig(copy_protection_enabled=True)
+    assert check_copy_protection_switch(on, state, now) == []       # seed
+    assert state["copy_protection_enabled"] is True
+    off = SecConfig(copy_protection_enabled=False)
+    out = check_copy_protection_switch(off, state, now)
+    assert len(out) == 1 and out[0].severity == "CRITICAL"
+    assert "DISABLED" in out[0].title.upper()
+    # persistent OFF must NOT re-alert (transition-based)
+    assert check_copy_protection_switch(off, state, now) == []
+
+
+def test_copy_switch_reenable_is_info():
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=_IST)
+    state = {"copy_protection_enabled": False}
+    out = check_copy_protection_switch(SecConfig(copy_protection_enabled=True), state, now)
+    assert len(out) == 1 and out[0].severity == "INFO"
+
+
+# ── Phase 2: auditd execve parsing + direction ───────────────────────────────
+
+_AUSEARCH_SAMPLE = """----
+type=PROCTITLE msg=audit(06/20/2026 10:15:30.123:4567) : proctitle=scp /etc/hostname user@pc:/tmp/
+type=CWD msg=audit(06/20/2026 10:15:30.123:4567) : cwd=/home/ubuntu
+type=EXECVE msg=audit(06/20/2026 10:15:30.123:4567) : argc=3 a0=scp a1=/etc/hostname a2=user@pc:/tmp/
+type=SYSCALL msg=audit(06/20/2026 10:15:30.123:4567) : arch=x86_64 syscall=execve success=yes exit=0 comm=scp exe=/usr/bin/scp key=copy_attempt
+"""
+
+
+def test_parse_ausearch_execve():
+    now = datetime(2026, 6, 20, 10, 20, tzinfo=_IST)
+    events = parse_ausearch_execve(_AUSEARCH_SAMPLE, now)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["id"] == "4567"
+    assert ev["exe"] == "/usr/bin/scp"
+    assert ev["cmd"] == "scp /etc/hostname user@pc:/tmp/"
+    assert ev["ts"] is not None and ev["ts"].hour == 10 and ev["ts"].minute == 15
+
+
+@pytest.mark.parametrize("exe,cmd,outbound", [
+    ("/usr/bin/scp", "scp /etc/hostname user@pc:/tmp/", True),    # push out
+    ("/usr/bin/scp", "scp -f /etc/passwd", True),                 # source mode (PC pulling)
+    ("/usr/bin/scp", "scp -t /home/ubuntu/in/", False),           # sink mode (PC->VM push)
+    ("/usr/bin/scp", "scp pc:/remote/f /local/f", True),          # host:path present
+    ("/usr/bin/rsync", "rsync -a /data user@pc:/backup", True),
+    ("/usr/bin/rsync", "rsync -a /data /local/backup", False),    # local only
+    ("/usr/bin/sftp", "sftp user@pc", True),
+])
+def test_is_outbound_copy(exe, cmd, outbound):
+    assert is_outbound_copy(exe, cmd) is outbound
+
+
+def test_recent_allowed_copy_times(tmp_path):
+    import json
+    now = datetime(2026, 6, 20, 10, 15, 31, tzinfo=_IST)
+    log = tmp_path / "copy_audit.log"
+    fresh = {"event": "COPY_ALLOWED", "ts": (now - timedelta(seconds=2)).isoformat()}
+    stale = {"event": "COPY_ALLOWED", "ts": (now - timedelta(hours=2)).isoformat()}
+    other = {"event": "COPY_TOKEN_ISSUED", "ts": now.isoformat()}
+    log.write_text("\n".join(json.dumps(r) for r in (fresh, stale, other)), encoding="utf-8")
+    got = recent_allowed_copy_times(str(log), now, window_sec=120)
+    assert len(got) == 1  # only the fresh COPY_ALLOWED within the window
+
+
+# ── Phase 2: bypass detection (monkeypatched auditd) ─────────────────────────
+
+def test_copy_bypass_flags_unauthorized_outbound(monkeypatch, tmp_path):
+    now = datetime(2026, 6, 20, 10, 15, 31, tzinfo=_IST)
+    ev = {"id": "4567", "ts": datetime(2026, 6, 20, 10, 15, 30, tzinfo=_IST),
+          "exe": "/usr/bin/scp", "cmd": "scp /etc/hostname user@pc:/tmp/"}
+    monkeypatch.setattr(sm, "ausearch_copy_attempts", lambda since, n: [ev])
+    cfg = SecConfig(copy_audit_log_path=str(tmp_path / "none.log"))  # no COPY_ALLOWED
+    out = check_copy_bypass(cfg, {}, now)
+    assert len(out) == 1 and out[0].severity == "CRITICAL"
+    assert "BYPASS" in out[0].title.upper()
+
+
+def test_copy_bypass_silent_when_authorized(monkeypatch, tmp_path):
+    import json
+    now = datetime(2026, 6, 20, 10, 15, 31, tzinfo=_IST)
+    ev = {"id": "4567", "ts": datetime(2026, 6, 20, 10, 15, 30, tzinfo=_IST),
+          "exe": "/usr/bin/scp", "cmd": "scp /etc/hostname user@pc:/tmp/"}
+    monkeypatch.setattr(sm, "ausearch_copy_attempts", lambda since, n: [ev])
+    log = tmp_path / "copy_audit.log"
+    log.write_text(json.dumps(
+        {"event": "COPY_ALLOWED", "ts": datetime(2026, 6, 20, 10, 15, 30, tzinfo=_IST).isoformat()}),
+        encoding="utf-8")
+    cfg = SecConfig(copy_audit_log_path=str(log))
+    assert check_copy_bypass(cfg, {}, now) == []  # matched a COPY_ALLOWED -> no alert
+
+
+def test_copy_bypass_ignores_inbound_sink(monkeypatch, tmp_path):
+    now = datetime(2026, 6, 20, 10, 15, 31, tzinfo=_IST)
+    ev = {"id": "99", "ts": datetime(2026, 6, 20, 10, 15, 30, tzinfo=_IST),
+          "exe": "/usr/bin/scp", "cmd": "scp -t /home/ubuntu/incoming/"}  # PC->VM push
+    monkeypatch.setattr(sm, "ausearch_copy_attempts", lambda since, n: [ev])
+    cfg = SecConfig(copy_audit_log_path=str(tmp_path / "none.log"))
+    assert check_copy_bypass(cfg, {}, now) == []  # inbound is not a bypass

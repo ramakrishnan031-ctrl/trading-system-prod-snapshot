@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# VM Security Manager Phase 2 — `request-copy` launcher.
+# Installed as a symlink:  /usr/local/bin/request-copy -> this file.
+# Mint a 15-min VM->PC copy token (see scripts/request_copy.py).
+#   request-copy <reason>      issue a token
+#   request-copy --status      show the gate status
+#   request-copy --revoke      revoke the active token
+exec /home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/systems/trading-system/scripts/request_copy.py "$@"

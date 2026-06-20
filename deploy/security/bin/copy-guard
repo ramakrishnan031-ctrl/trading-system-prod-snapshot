@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# VM Security Manager Phase 2 — copy-guard wrapper.
+#
+# Installed as symlinks:  /usr/local/bin/{scp,sftp,rsync} -> this file.
+# Because /usr/local/bin precedes /usr/bin in the default PATH, an interactive
+# VM-INITIATED `scp`/`sftp`/`rsync` hits this wrapper first. It asks the gate
+# (scripts/copy_gate.py --enforce) whether a copy is allowed right now; on
+# allow it exec's the REAL binary, on block it refuses (exit 1).
+#
+# Scope / non-goals:
+#   * Blocks VM-INITIATED outbound copies (the case the VM is the client for).
+#   * Does NOT see PC-INITIATED pulls (sshd invokes the real binary by absolute
+#     path, not via PATH) — those are detected post-hoc by the auditd
+#     `copy_attempt` bypass check in security_monitor.py.
+#   * Does NOT touch git deploys (git-over-ssh, not scp) or PC->VM pushes
+#     (served by the VM's real binary via sshd, never this wrapper).
+#   * FAIL-SAFE: if the gate cannot be consulted, the copy is REFUSED (nothing
+#     automated on the VM uses scp/sftp/rsync, so blocking on error is safe).
+set -uo pipefail
+
+tool="$(basename "$0")"
+ROOT="/home/ubuntu/systems/trading-system"
+PY="/home/ubuntu/systems/venv/bin/python"
+
+# Resolve the REAL binary, searching only the system dirs so we never recurse
+# back into this wrapper in /usr/local/bin.
+real="$(PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v "$tool" 2>/dev/null || true)"
+if [[ -z "$real" || "$real" == "/usr/local/bin/$tool" ]]; then
+    echo "[copy-guard] cannot locate the real '$tool'; refusing (fail-safe)." >&2
+    exit 1
+fi
+
+if PYTHONPATH="$ROOT" "$PY" "$ROOT/scripts/copy_gate.py" \
+        --enforce --tool "$tool" -- "$@"; then
+    exec "$real" "$@"
+fi
+exit 1

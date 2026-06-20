@@ -14,6 +14,8 @@ What it watches (read-only):
   5. sensitive-file content hashes      -> .env/sshd_config/sudoers/units (CRITICAL/WARNING)
   6. active SSH session count           -> over configured limit (WARNING, alert not block)
   7. root login probes                  -> anomalous spike (INFO)
+  8. copy_protection ON->OFF transition -> someone disabled the gate (CRITICAL)  [Phase 2]
+  9. auditd copy_attempt bypass         -> outbound scp/sftp/rsync w/o a token (CRITICAL)  [Phase 2]
 
 Auth source: /var/log/auth.log (the `ubuntu` user is in group `adm`, so this
 reads it directly — no sudo needed).
@@ -106,6 +108,11 @@ class SecConfig:
     authlog_path: str = str(_DEFAULT_AUTHLOG)
     authorized_keys_path: str = "/home/ubuntu/.ssh/authorized_keys"
     sentinel_dir: str = "data_store"
+    # Phase 2 (copy protection): the on/off switch and the audit log we
+    # correlate auditd copy_attempt events against. Read from the top-level
+    # `copy_protection:` block (sibling of `security:`).
+    copy_protection_enabled: bool = True
+    copy_audit_log_path: str = str(_ROOT / "data_store" / "security" / "copy_audit.log")
 
     @staticmethod
     def load(path: Path) -> "SecConfig":
@@ -123,6 +130,12 @@ class SecConfig:
             ):
                 if f in sec and sec[f] is not None:
                     setattr(cfg, f, sec[f])
+            cp = raw.get("copy_protection", {}) if isinstance(raw, dict) else {}
+            if isinstance(cp, dict):
+                if cp.get("enabled") is not None:
+                    cfg.copy_protection_enabled = bool(cp["enabled"])
+                if cp.get("audit_log_path"):
+                    cfg.copy_audit_log_path = str(cp["audit_log_path"])
         except FileNotFoundError:
             _log.warning("security.yaml not found at %s; using defaults", path)
         except Exception as exc:  # never fail to run on a bad config
@@ -235,6 +248,118 @@ def established_ssh_peers() -> list[str]:
         return peers
     except Exception:
         return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2: copy-bypass auditd parsing (pure helpers; unit-tested)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ausearch -i stamp: "audit(06/20/2026 10:15:30.123:4567)" (interpreted).
+_AUSEARCH_TS_RE = re.compile(
+    r"audit\((\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})[.\d]*:(\d+)\)")
+_EXE_RE = re.compile(r"\bexe=(?:\"([^\"]+)\"|(\S+))")
+_PROCTITLE_RE = re.compile(r"\bproctitle=(.+)$")
+_EXECVE_ARG_RE = re.compile(r"\ba\d+=(?:\"([^\"]*)\"|(\S+))")
+
+
+def parse_ausearch_execve(text: str, now: datetime) -> list[dict]:
+    """Parse `ausearch -k copy_attempt -i` output into copy events.
+
+    Each returned dict: {id, ts(datetime|None), exe, cmd}. Tolerant: events
+    are grouped by the audit sequence id; the command line is taken from
+    `proctitle=` (falling back to the EXECVE a0..aN args). Best-effort — an
+    unparseable block is skipped, never raised."""
+    events: dict[str, dict] = {}
+    for line in text.splitlines():
+        m = _AUSEARCH_TS_RE.search(line)
+        if not m:
+            continue
+        ev_id = m.group(2)
+        ev = events.setdefault(ev_id, {"id": ev_id, "ts": None, "exe": "", "cmd": ""})
+        if ev["ts"] is None:
+            try:
+                naive = datetime.strptime(m.group(1), "%m/%d/%Y %H:%M:%S")
+                ev["ts"] = naive.replace(tzinfo=now.tzinfo or _IST)
+            except ValueError:
+                ev["ts"] = None
+        em = _EXE_RE.search(line)
+        if em and not ev["exe"]:
+            ev["exe"] = em.group(1) or em.group(2)
+        pm = _PROCTITLE_RE.search(line)
+        if pm and not ev["cmd"]:
+            ev["cmd"] = pm.group(1).strip()
+        if "type=EXECVE" in line and not ev["cmd"]:
+            args = [a or b for a, b in _EXECVE_ARG_RE.findall(line)]
+            if args:
+                ev["cmd"] = " ".join(args)
+    return [e for e in events.values() if e["exe"] or e["cmd"]]
+
+
+def is_outbound_copy(exe: str, cmd: str) -> bool:
+    """Heuristic: does this scp/sftp/rsync invocation move data OFF the VM?
+
+    Conservative — only returns True on a positive outbound indicator so a
+    PC->VM push (sshd-spawned `scp -t <dir>`, sink mode) does NOT false-fire."""
+    base = (exe or "").rsplit("/", 1)[-1] or (cmd.split() or [""])[0]
+    base = base.rsplit("/", 1)[-1]
+    t = f" {cmd} "
+    if base == "scp":
+        if re.search(r"\s-[A-Za-z]*t", t):      # sink mode -> INBOUND (PC->VM)
+            return False
+        if re.search(r"\s-[A-Za-z]*f", t):      # source mode -> OUTBOUND (PC<-VM pull)
+            return True
+        return bool(re.search(r"\s\S+@\S+:|\s[\w.\-]+:", t))  # host:path destination
+    if base == "rsync":
+        return bool(re.search(r"\s\S+@\S+:|::", t))           # any remote endpoint
+    if base == "sftp":
+        return True                                            # VM-initiated sftp session
+    return False
+
+
+def ausearch_copy_attempts(since: Optional[datetime], now: datetime) -> list[dict]:
+    """Query auditd for copy_attempt execve events since `since` (best-effort).
+
+    Needs `sudo ausearch` (ausearch is on the security.yaml sudo whitelist, so
+    this does not self-alert). Returns [] if auditd/ausearch is unavailable."""
+    start = since or (now - timedelta(minutes=15))
+    cmd = ["sudo", "-n", "ausearch", "-k", "copy_attempt", "-i",
+           "-ts", start.strftime("%m/%d/%Y"), start.strftime("%H:%M:%S")]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception:
+        return []
+    if out.returncode != 0 or not out.stdout.strip():
+        return []
+    events = parse_ausearch_execve(out.stdout, now)
+    # keep only events at/after `since` (ausearch -ts granularity is seconds)
+    return [e for e in events if e["ts"] is None or e["ts"] >= start]
+
+
+def recent_allowed_copy_times(audit_log_path: str, now: datetime,
+                              window_sec: int = 120) -> list[datetime]:
+    """Timestamps of COPY_ALLOWED entries in the copy audit log within the
+    window — used to recognise wrapper-authorised copies (so they are NOT
+    flagged as bypass). Best-effort; [] on any error."""
+    out: list[datetime] = []
+    cutoff = now - timedelta(seconds=window_sec)
+    try:
+        lines = Path(audit_log_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines[-500:]:  # bounded tail
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("event") != "COPY_ALLOWED":
+            continue
+        try:
+            ts = datetime.fromisoformat(rec.get("ts", ""))
+        except (ValueError, TypeError):
+            continue
+        if ts >= cutoff:
+            out.append(ts)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -376,6 +501,73 @@ def check_active_sessions(cfg: SecConfig, state: dict) -> list[Finding]:
     return []
 
 
+def check_copy_protection_switch(cfg: SecConfig, state: dict,
+                                 now: datetime) -> list[Finding]:
+    """Phase 2: alert on a copy_protection ON->OFF transition (the 'no bypassing
+    the protector' guard). Transition-based, so a persistent OFF does not spam.
+    First observation only seeds state (no alert)."""
+    prev = state.get("copy_protection_enabled")
+    cur = bool(cfg.copy_protection_enabled)
+    state["copy_protection_enabled"] = cur
+    if prev is None:
+        return []  # baseline / first run — seed silently
+    if prev and not cur:
+        peers = sorted(set(established_ssh_peers()))
+        who = ", ".join(peers) if peers else "(no active SSH peers seen)"
+        return [Finding("CRITICAL", "copyprot:disabled",
+                        "COPY PROTECTION DISABLED",
+                        f"copy_protection.enabled was turned OFF at "
+                        f"{now:%Y-%m-%d %H:%M:%S %Z}. Active SSH peer(s): {who}. "
+                        f"VM->PC copies are now unrestricted. If this was not you, "
+                        f"investigate immediately.")]
+    if (not prev) and cur:
+        return [Finding("INFO", "copyprot:enabled",
+                        "Copy protection re-enabled",
+                        f"copy_protection.enabled was turned back ON at "
+                        f"{now:%Y-%m-%d %H:%M:%S %Z}.")]
+    return []
+
+
+def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Finding]:
+    """Phase 2: flag an OUTBOUND scp/sftp/rsync execve that ran WITHOUT a valid
+    copy token (i.e. bypassed the copy-guard wrapper — e.g. a raw /usr/bin/scp).
+
+    Correlates auditd `copy_attempt` events with the wrapper's COPY_ALLOWED
+    audit entries; an outbound copy with no matching authorisation is a bypass.
+    Best-effort: silently no-ops if auditd/ausearch is unavailable."""
+    last = state.get("copy_bypass_last_check")
+    since = None
+    if last:
+        try:
+            since = datetime.fromisoformat(last)
+        except (ValueError, TypeError):
+            since = None
+    state["copy_bypass_last_check"] = now.isoformat()
+
+    events = ausearch_copy_attempts(since, now)
+    if not events:
+        return []
+    allowed = recent_allowed_copy_times(cfg.copy_audit_log_path, now,
+                                        window_sec=180)
+    out: list[Finding] = []
+    for ev in events:
+        if not is_outbound_copy(ev["exe"], ev["cmd"]):
+            continue
+        ev_ts = ev["ts"]
+        authorised = False
+        if ev_ts is not None:
+            authorised = any(abs((ev_ts - a).total_seconds()) <= 180 for a in allowed)
+        if authorised:
+            continue
+        when = ev_ts.strftime("%Y-%m-%d %H:%M:%S") if ev_ts else "recently"
+        out.append(Finding("CRITICAL", f"copybypass:{ev['id']}",
+                           "COPY BYPASS DETECTED",
+                           f"Outbound copy ran WITHOUT a valid token at {when}: "
+                           f"{ev['cmd'] or ev['exe']}. Possible VM->PC exfiltration "
+                           f"bypassing the copy gate — investigate."))
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Dispatch
 # ─────────────────────────────────────────────────────────────────────────────
@@ -440,6 +632,8 @@ def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
         lambda: check_sudo_events(cfg, scan_window),
         lambda: check_watched_files(cfg, state),
         lambda: check_active_sessions(cfg, state),
+        lambda: check_copy_protection_switch(cfg, state, now),   # Phase 2
+        lambda: check_copy_bypass(cfg, state, now),              # Phase 2
     ]
     for chk in checks:
         try:

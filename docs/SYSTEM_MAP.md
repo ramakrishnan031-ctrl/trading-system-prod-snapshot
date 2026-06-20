@@ -226,7 +226,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
 | `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
-| `security-watcher.service` | `python scripts/security_monitor.py --watch` | **VM Security Manager Phase 1** — auth.log + file-integrity monitor, [LFL836] alerts | **enabled+active (19-Jun)**. `Type=simple`+`Restart=always`+`RestartSec=60` → periodic (~60s); model = alert-watcher. Reads `/var/log/auth.log` (ubuntu ∈ `adm`). Config `config/security.yaml` (standalone — NOT system_config.yaml, which is `extra="forbid"`). State `data_store/security_state.json`. Alert-ONLY (never blocks). |
+| `security-watcher.service` | `python scripts/security_monitor.py --watch` | **VM Security Manager Phase 1+2** — auth.log + file-integrity monitor (9 checks incl. Phase-2 copy-switch + copy-bypass), [LFL836] alerts | **enabled+active (19-Jun)**. `Type=simple`+`Restart=always`+`RestartSec=60` → periodic (~60s); model = alert-watcher. Reads `/var/log/auth.log` (ubuntu ∈ `adm`). Config `config/security.yaml` (standalone — NOT system_config.yaml, which is `extra="forbid"`). State `data_store/security_state.json`. Alert-ONLY (never blocks). |
 
 > **VM security tooling (Phase 1, 19-Jun)** — also installed at OS level (NOT via git):
 > **fail2ban** (`/etc/fail2ban/jail.local` from `deploy/security/jail.local`; sshd jail, `ignoreself`,
@@ -237,7 +237,24 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > drop-in `/etc/ssh/sshd_config.d/99-trading-security.conf` (`deploy/security/sshd_config.d/`;
 > validated `sshd -t` → `reload ssh`; ubuntu access unaffected — no root keys exist). Idle timeout
 > (#1) intentionally NOT set (long `tail -f` sessions); `MaxSessions` left at 10. Phase 2 (copy
-> protection) + Phase 3 (EOD integration) pending. See memory `vm_security_phase1`.
+> protection) **BUILT 20-Jun** (code+config+tests in git; OS-level activation staged — see the
+> Phase 2 note below); Phase 3 (EOD integration) pending. See memory `vm_security_phase1` /
+> `vm_security_phase2`.
+
+> **VM security tooling (Phase 2 — copy protection, 20-Jun, code in git; NOT yet activated on the
+> VM)** — controls **VM→PC** file copying. `scripts/copy_gate.py` = the policy engine (priority:
+> **TIME-LOCK 18:00–08:00 IST absolute** › OFF-switch › session-cap › 15-min token) + token store
+> (`data_store/security/copy_token.json`) + JSON-lines audit (`data_store/security/copy_audit.log`).
+> `scripts/request_copy.py` (`request-copy <reason>`) mints a 15-min token (audited + Telegram).
+> `deploy/security/bin/copy-guard` is symlinked as `/usr/local/bin/{scp,sftp,rsync}` and consults the
+> gate before exec'ing the real binary — **hard-blocks VM-INITIATED copies** (fail-safe: blocks if the
+> gate can't be consulted). `security_monitor.py` gained two checks: **(8)** `copy_protection` ON→OFF
+> transition → CRITICAL, **(9)** auditd `copy_attempt` bypass (a raw outbound scp/sftp/rsync with no
+> token) → CRITICAL. auditd `copy_attempt` execve rules added to `trading-security.rules`.
+> **Limitation:** a **PC-INITIATED pull** (PC is the client, VM's sshd serves it) cannot be
+> hard-blocked from the VM side without risky `ForceCommand`/subsystem changes — it is **detect+alert
+> only**. **Activate on the VM** with `bash deploy/security/install_copy_protection.sh` (reversible:
+> `--uninstall`); git push / interactive ssh are NOT wrapped, so it cannot lock you out.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
@@ -289,6 +306,29 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **VM Security Manager Phase 2 (copy protection) — BUILT (code in git;
+  OS activation staged).** Controls **VM→PC** copying. New `scripts/copy_gate.py` = policy engine
+  (strict priority: **TIME-LOCK 18:00–08:00 IST is absolute** and overrides even the OFF switch / a
+  live token › master switch OFF = unrestricted › session-cap › a valid 15-min token) + atomic token
+  store (`data_store/security/copy_token.json`) + append-only JSON-lines audit
+  (`data_store/security/copy_audit.log`). New `scripts/request_copy.py` (`request-copy <reason>`,
+  `--status`, `--revoke`) mints a 15-min token, audited + Telegram. `deploy/security/bin/copy-guard`
+  (symlinked as `/usr/local/bin/{scp,sftp,rsync}`) consults the gate before exec'ing the real
+  binary — **hard-blocks VM-INITIATED copies**, fail-safe (blocks if the gate errors); nothing
+  automated on the VM uses these clients, and git/ssh are unwrapped so no lockout. `security_monitor.py`
+  gained **2 checks** (now 9): (8) `copy_protection` ON→OFF transition → CRITICAL (who/when), (9) auditd
+  `copy_attempt` bypass — an outbound scp/sftp/rsync run with no token → CRITICAL (conservative: skips
+  inbound `scp -t` sinks so PC→VM pushes don't false-fire). `copy_protection:` block added to the
+  standalone `config/security.yaml` (NOT system_config.yaml); auditd execve rules added to
+  `deploy/security/trading-security.rules`. **Known limitation:** a PC-INITIATED *pull* (PC is the
+  client; VM sshd serves it) can't be hard-blocked from the VM without risky `ForceCommand`/subsystem
+  changes on the live trading VM → **detect+alert only** (and modern scp's sftp-subsystem path may
+  evade the execve rule; reliable pull-detection needs the deferred sftp `-l INFO` logging). 52
+  unit tests green (`test_copy_gate.py` + extended `test_security_monitor.py`); CLIs smoke-tested
+  end-to-end (deny→issue→allow→revoke lifecycle in the audit log). **NOT yet activated on the VM** —
+  run `bash deploy/security/install_copy_protection.sh` (reversible `--uninstall`) on Rama's go-ahead.
+  Phase 3 (System Manager EOD integration — a 9th System-Manager security check reading the copy audit
+  log) still pending. Memory `vm_security_phase2`.
 - 2026-06-19 — Claude Code — **VM Security Manager Phase 1 (monitoring + alerts) — built + deployed.**
   Alert-ONLY (never blocks; key-only SSH is the gate). New `scripts/security_monitor.py` (7 isolated
   checks: new/changed authorized_keys, non-whitelisted sudo, failed-login spike, NEW successful-login

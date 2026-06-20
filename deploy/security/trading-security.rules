@@ -32,3 +32,16 @@
 # --- privilege escalation config ---
 -w /etc/sudoers -p wa -k sudoers_change
 -w /etc/sudoers.d/ -p wa -k sudoers_change
+
+# --- PHASE 2: copy bypass detection (VM->PC exfiltration trail) ---
+# Record every execution of an outbound copy client. The copy-guard wrapper
+# is the blessed path (it audits COPY_ALLOWED to copy_audit.log); any scp/
+# sftp/rsync execve here WITHOUT a matching authorization is flagged by
+# security_monitor.check_copy_bypass() (which also queries these with
+#   sudo ausearch -k copy_attempt
+# ). NB: a PC->VM push makes sshd spawn `scp -t ...` (sink mode) on the VM —
+# that is INBOUND and is filtered out by the bypass check (it keys on `-f`
+# source mode / a host:path destination), so docx sync etc. do not false-fire.
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/scp -k copy_attempt
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/sftp -k copy_attempt
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/rsync -k copy_attempt

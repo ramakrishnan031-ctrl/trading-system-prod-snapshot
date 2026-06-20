@@ -64,3 +64,24 @@ security:
     - { path: /home/ubuntu/systems/trading-system/.env, severity: CRITICAL, label: dotenv }
     - { path: /home/ubuntu/systems/trading-system/config/system_config.yaml, severity: WARNING, label: system_config }
     - { path: /home/ubuntu/systems/trading-system/config/accounts.csv, severity: WARNING, label: accounts_csv }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2 — Copy protection (VM->PC).  TOP-LEVEL key (sibling of `security:`),
+# read by scripts/copy_gate.py + scripts/request_copy.py, and the on/off-switch
+# transition is watched by scripts/security_monitor.py.
+#
+# Model: VM->PC copies are BLOCKED by default. To copy, mint a short-lived token
+# with `request-copy <reason>`; the copy-guard wrapper (/usr/local/bin/{scp,
+# sftp,rsync}) checks it. A hard TIME-LOCK 18:00-08:00 overrides EVERYTHING
+# (even the off switch / a live token). Disabling `enabled` raises a CRITICAL
+# alert. A raw scp run without a token is caught by the auditd bypass check.
+# ─────────────────────────────────────────────────────────────────────────────
+copy_protection:
+  enabled: true                 # master switch (default ON). OFF -> CRITICAL alert (who/when).
+  token_ttl_minutes: 15         # how long a request-copy token stays valid
+  time_lock_start: 18           # 18:00 IST — nightly hard block begins (ABSOLUTE)
+  time_lock_end: 8              # 08:00 IST — nightly hard block ends
+  max_sessions_for_copy: 2      # > this many active SSH sessions -> copy blocked
+  token_path: /home/ubuntu/systems/trading-system/data_store/security/copy_token.json
+  audit_log_path: /home/ubuntu/systems/trading-system/data_store/security/copy_audit.log
+  sentinel_dir: data_store
