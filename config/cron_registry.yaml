@@ -93,7 +93,7 @@ jobs:
 
   cron_officer_briefing:
     script: "scripts/cron_officer.py --briefing"
-    schedule: "04:55 daily"
+    schedule: "09:20 daily"          # Phase 6: morning briefing post pre-flight (was 04:55)
     type: python
     critical: true
     market_day_only: false
@@ -281,7 +281,11 @@ jobs:
     cadence: market_day
     monitored: true
 
-  gemini_data_integrity:
+  # BUG A FIX (20-Jun): registry key renamed gemini_data_integrity ->
+  # gemini_data_integrity_check to MATCH the heartbeat the script records
+  # (record_heartbeat("gemini_data_integrity_check")). The old key never matched
+  # a heartbeat -> the job was reported "missed" every day despite running fine.
+  gemini_data_integrity_check:
     script: "scripts/gemini_data_integrity_check.py"
     schedule: "17:00 Mon-Fri"
     type: python
@@ -298,10 +302,12 @@ jobs:
     market_day_only: true
     cadence: market_day
     monitored: false   # the monitor itself; does not self-report
+    detection_method: none
+    excluded_reason: "the cron drift-monitor itself — no self-signal by design"
 
   cron_officer_eod:
     script: "scripts/cron_officer.py --eod-summary"
-    schedule: "18:30 Mon-Fri"
+    schedule: "18:50 Mon-Fri"        # Phase 6: floor 18:45 + 5min after last job (system_manager_eod 18:45)
     type: python
     critical: false
     market_day_only: true
@@ -338,3 +344,18 @@ jobs:
     cadence: monthly
     day_of_month: 1
     monitored: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cron Officer settings (Phase 6) — day window, alert timing, Telegram-ban route.
+# Loaded by core/cron_registry.py -> OfficerConfig. All fields optional/defaulted.
+# ─────────────────────────────────────────────────────────────────────────────
+officer:
+  day_window_start: "00:00"          # IST — counter window start / daily reset
+  day_window_end: "23:59"            # IST — counter window end (covers midnight jobs)
+  morning_briefing_time: "09:20"     # IST — morning briefing (post pre-flight)
+  eod_floor_time: "18:45"            # IST — earliest the EOD report fires
+  eod_gap_minutes: 5                 # fire +N min after the last expected job
+  # Telegram ban window (IN, until 23-Jun-2026 inclusive). While active, BOTH the
+  # morning briefing and EOD summary route to EMAIL (subject prefixed [LFL836-BAN]).
+  # Auto-clears after the date — no manual toggle.
+  telegram_ban_until: "2026-06-23"

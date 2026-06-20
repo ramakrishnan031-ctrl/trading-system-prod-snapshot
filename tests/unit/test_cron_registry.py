@@ -196,8 +196,8 @@ class TestExpectedHeartbeats:
     def test_eod_officer_excluded_at_1800_drift_check(self, tmp_path):
         reg = load_cron_registry(_REAL)
         names = {j.name for j in reg.expected_heartbeat_jobs(MON, tmp_path, before_time=time(18, 0))}
-        assert "cron_officer_eod" not in names  # 18:30 > 18:00
-        assert "gemini_data_integrity" in names  # 17:00 <= 18:00
+        assert "cron_officer_eod" not in names  # 18:50 > 18:00
+        assert "gemini_data_integrity_check" in names  # 17:00 <= 18:00 (Bug A: key renamed)
 
 
 # ── validation ───────────────────────────────────────────────────────────────

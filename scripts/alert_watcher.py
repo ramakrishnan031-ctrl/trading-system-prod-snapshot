@@ -47,6 +47,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # window cannot stall the next pass.
 _SMTP_TASK_TIMEOUT_SEC: float = 30.0
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -174,29 +175,45 @@ def _build_email(
     data: dict,
     from_address: str,
     to_addresses: list[str],
-) -> MIMEText:
-    """Build a crisp plain-text MIMEText for the sentinel data (AW6).
+):
+    """Build the email for the sentinel data (AW6).
 
-    Subject: ``[LFL836] <SEVERITY> — <title>``. Body is intentionally minimal —
-    the alert summary plus key data points, no walls of text.
+    Plain text by default. When ``content_type == "text/html"`` the sentinel
+    carries an HTML body + a required ``plain_fallback`` (Cron Officer rich
+    report) and we send a multipart/alternative message. Subject defaults to
+    ``[LFL836] <SEVERITY> — <title>`` unless the sentinel supplies a verbatim
+    ``subject`` (Cron Officer severity/ban prefixes).
     """
     severity = data.get("context", {}).get("severity", "CRITICAL")
     title = data.get("title", "(no title)")
+    subject = data.get("subject") or f"[{_ACCOUNT_TAG}] {severity} — {title}"
 
-    subject = f"[{_ACCOUNT_TAG}] {severity} — {title}"
+    content_type = data.get("content_type", "text/plain")
+    if content_type == "text/html":
+        # Foundation Rule "Fail Fast": HTML without a plain mirror is rejected
+        # loudly so a render bug can't ship an unreadable email.
+        plain = data.get("plain_fallback")
+        if not plain:
+            raise ValueError(
+                "sentinel content_type=text/html requires a non-empty plain_fallback"
+            )
+        html = data.get("html_body") or plain
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(plain, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))  # last part = preferred
+    else:
+        # Compact context (one line, severity omitted since it's already in subject).
+        ctx = {k: v for k, v in data.get("context", {}).items() if k != "severity"}
+        body_lines = [
+            (data.get("body", "") or "").strip() or "(no details)",
+            "",
+            f"Severity: {severity} | Module: {data.get('source_module', '?')}",
+            f"Time: {data.get('ts', '?')} | Alert: {data.get('id', '?')}",
+        ]
+        if ctx:
+            body_lines.append("Context: " + " | ".join(f"{k}={v}" for k, v in ctx.items()))
+        msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
 
-    # Compact context (one line, severity omitted since it's already in subject).
-    ctx = {k: v for k, v in data.get("context", {}).items() if k != "severity"}
-    body_lines = [
-        (data.get("body", "") or "").strip() or "(no details)",
-        "",
-        f"Severity: {severity} | Module: {data.get('source_module', '?')}",
-        f"Time: {data.get('ts', '?')} | Alert: {data.get('id', '?')}",
-    ]
-    if ctx:
-        body_lines.append("Context: " + " | ".join(f"{k}={v}" for k, v in ctx.items()))
-
-    msg = MIMEText("\n".join(body_lines), "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = from_address
     msg["To"] = ", ".join(to_addresses)

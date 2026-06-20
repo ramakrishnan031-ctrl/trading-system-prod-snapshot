@@ -55,6 +55,11 @@ def write_critical_sentinel(
     source_module: str,
     context: dict | None = None,
     sentinel_dir: Path | str = "data_store",
+    *,
+    subject: str | None = None,
+    content_type: str = "text/plain",
+    plain_fallback: str | None = None,
+    html_body: str | None = None,
 ) -> Path:
     """
     Write an atomic sentinel .flag file for a CRITICAL alert (CR2, CR3).
@@ -68,6 +73,14 @@ def write_critical_sentinel(
         source_module: Module that raised the alert (e.g. "capital.fund_manager").
         context:       Optional dict of structured context fields.
         sentinel_dir:  Directory for sentinel files. Created if absent (CR4).
+        subject:       Optional verbatim email subject (overrides the watcher's
+                       default ``[LFL836] <SEV> — <title>``). Used by the Cron
+                       Officer for its severity/ban-prefixed subjects.
+        content_type:  ``text/plain`` (default) or ``text/html``. When
+                       ``text/html`` the watcher sends multipart/alternative.
+        plain_fallback: REQUIRED when content_type=text/html — the plain-text
+                       mirror for clients that block HTML (fail-fast in watcher).
+        html_body:     The HTML body (used when content_type=text/html).
 
     Returns:
         Path to the written .flag file.
@@ -92,6 +105,13 @@ def write_critical_sentinel(
         "hostname": socket.gethostname(),
         "pid": os.getpid(),
     }
+    # Optional rich-email fields (backward compatible — absent => plain text path).
+    if subject is not None:
+        payload["subject"] = subject
+    if content_type and content_type != "text/plain":
+        payload["content_type"] = content_type
+        payload["plain_fallback"] = plain_fallback
+        payload["html_body"] = html_body
 
     flag_path = sentinel_dir / f"critical_alert_{sentinel_id}.flag"
     tmp_path = flag_path.with_suffix(".tmp")

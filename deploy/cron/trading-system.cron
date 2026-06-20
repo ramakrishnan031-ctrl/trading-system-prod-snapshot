@@ -35,27 +35,35 @@
 # FIX-189: run all jobs under bash (dash's `.` can't source a bare relative path).
 SHELL=/bin/bash
 
+# Phase 2.3 (Cron Officer): jobs that cannot emit a DB heartbeat (shell jobs +
+# unmonitored python) append an exit-code MARKER the Officer reads at EOD:
+#   ; rc=$?; mkdir -p <marks>; echo "$rc $(date -Iseconds)" > <marks>/<name>.done
+# `rc=$?` captures the JOB's real exit BEFORE the marker write, and the marker
+# write sits after `;` so it can never affect the job. A missing/stale marker is
+# reported "No signal" (informational) — never a false CRITICAL. Marker name ==
+# the registry job key so the Officer matches it.
+
 # ── 00:00 IST daily | log cleanup (delete *.log >30 days) ───────────────────
-0 0 * * * find /home/ubuntu/systems/trading-system/logs -name '*.log' -mtime +30 -delete
+0 0 * * * find /home/ubuntu/systems/trading-system/logs -name '*.log' -mtime +30 -delete; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/log_cleanup.done
 
 # ── 01:00 IST daily | nightly SQLite .backup of the main DB ──────────────────
-0 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/trading_system.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/trading_system-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
+0 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/trading_system.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/trading_system-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/db_backup.done
 
 # ── 01:05 IST daily | nightly .backup of analytics.db (v28 split) ────────────
-5 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/analytics.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/analytics-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
+5 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/analytics.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/analytics-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/analytics_backup.done
 
 # ── 02:00 IST daily | 7-day rolling cleanup of backups (main + analytics) ────
-0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1
+0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/backup_retention.done
 
 # ── 02:30 IST | DB row retention (Mon-Sat prune; Sun prune + VACUUM) ─────────
-30 2 * * 1-6 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py >> logs/cron-db-retention.log 2>&1
-30 2 * * 0 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py --vacuum >> logs/cron-db-retention.log 2>&1
+30 2 * * 1-6 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py >> logs/cron-db-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/db_retention.done
+30 2 * * 0 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py --vacuum >> logs/cron-db-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/db_retention.done
 
-# ── 04:55 IST daily | Cron Officer morning briefing (TASK #3) ────────────────
-55 4 * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/cron_officer.py --briefing >> logs/cron-officer.log 2>&1
+# ── 09:20 IST daily | Cron Officer morning briefing (post pre-flight; Phase 6) ─
+20 9 * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/cron_officer.py --briefing >> logs/cron-officer.log 2>&1
 
 # ── 05:00 IST daily | token cleanup (forces fresh zerodha_login) ─────────────
-0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
+0 5 * * * rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/token_cleanup.done
 
 # ── 08:15 IST Mon-Fri | headless TOTP token refresh (FIX-187) ────────────────
 15 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
@@ -73,7 +81,7 @@ SHELL=/bin/bash
 0 9 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/refresh_instruments.py --account LFL836 >> logs/cron-refresh-instruments.log 2>&1
 
 # ── Every 5 min 09:00-15:59 Mon-Fri | system metrics capture ────────────────
-*/5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1
+*/5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/capture_metrics.done
 
 # ── 15:40 IST Mon-Fri | fetch 1-min candle OHLCV for traded symbols ──────────
 40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1
@@ -106,7 +114,7 @@ SHELL=/bin/bash
 15 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/compute_strategy_metrics.py >> logs/cron-strategy-metrics.log 2>&1
 
 # ── 16:16 IST Mon-Fri | system metrics daily summary ─────────────────────────
-16 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py --summarize >> logs/cron-metrics.log 2>&1
+16 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py --summarize >> logs/cron-metrics.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/metrics_summary.done
 
 # ── 16:20 IST Mon-Fri | AI log review via Gemini ────────────────────────────
 20 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_log_review.py >> logs/cron-gemini-review.log 2>&1
@@ -123,8 +131,8 @@ SHELL=/bin/bash
 # ── 18:00 IST Mon-Fri | cron heartbeat drift monitor (registry-driven) ──────
 0 18 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/check_cron_drift.py >> logs/cron-drift-check.log 2>&1
 
-# ── 18:30 IST Mon-Fri | Cron Officer EOD execution summary (TASK #3) ─────────
-30 18 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/cron_officer.py --eod-summary >> logs/cron-officer.log 2>&1
+# ── 18:50 IST Mon-Fri | Cron Officer EOD summary (floor 18:45 +5min; Phase 6) ─
+50 18 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/cron_officer.py --eod-summary >> logs/cron-officer.log 2>&1
 
 # ── 18:45 IST Mon-Fri | System Manager EOD deep cross-check (TASK #5) ────────
 45 18 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/system_manager.py >> logs/system-manager.log 2>&1
@@ -133,4 +141,4 @@ SHELL=/bin/bash
 0 3 1 * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_restore_drill.py --quiet >> logs/cron-backup-drill.log 2>&1
 
 # ── Hourly | disk space monitor ─────────────────────────────────────────────
-0 * * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1
+0 * * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/disk_monitor.done

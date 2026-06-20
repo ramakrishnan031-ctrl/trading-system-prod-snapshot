@@ -1,0 +1,57 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎯 [LFL836] SYSTEM MANAGER EOD — 19-Jun-2026 (Friday)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 CONFIG vs ACTUAL
+(live_test_mode ON — effective caps: max_open=1, max_daily=6)
+✅ Max positions: cap 1 / actual 0
+✅ Daily trades: cap 6 / actual 0
+✅ Daily loss: limit ₹300 / actual ₹0.00
+✅ Max position value: cap ₹2,500 / actual ₹0
+ℹ️ Max risk/trade today: ₹0.00 (config risk_per_trade_pct=1.0%, concentration=10%)
+
+📈 ORDER QUALITY
+No closed trades today.
+
+📁 REPORT INTEGRITY
+⚠️ daily_report.xlsx: MISSING (daily_report_2026-06-19.xlsx)
+⚠️ watchman.md: MISSING (watchman_2026-06-19.md)
+⚠️ flow_trace.md: MISSING (trace_2026-06-19.md)
+⚠️ system log: MISSING (system_2026-06-19.log)
+⚠️ DB backup: MISSING (trading_system-2026-06-19.db)
+
+🏥 SYSTEM HEALTH
+✅ Cron heartbeats: 0 jobs ran, 0 failed
+✅ DB integrity: ok
+✅ Disk: 666.5 GB free (98%)
+⚠️ Token (LFL836): INVALID/expired
+✅ Service starts today: 0; crashes detected: 0
+✅ Pending CRITICAL sentinels: 0
+✅ Kill switch: INACTIVE
+
+📉 STRATEGY HEALTH
+No closed trades today — no per-strategy stats.
+
+🛡️ RISK EVENTS
+✅ HARD_KILL: 0 today
+✅ Capital drift events: 0
+✅ Manual/external closes: 0
+✅ Orphan detections: 0
+ℹ️ SOFT_KILL events logged today: 0
+
+📅 vs YESTERDAY
+(today 2026-06-19 vs prev trading day 2026-06-18)
+  Trades: today 0 / prev 0
+  P&L: today ₹0.00 / prev ₹0.00
+  Signals recv: today 0 / prev 0
+  Signals rejected: today 0 / prev 0
+
+🔮 TOMORROW READINESS
+✅ Next trading day: 22-Jun (Monday)
+✅ DB clean: 0 stuck signals, 0 stuck trades, 0 orphan orders
+✅ Kill switch: INACTIVE (no --resume needed)
+ℹ️ live_test_mode ON: tomorrow max_open=1, max_daily=6
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SUMMARY: 0 violation(s), 6 warning(s)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

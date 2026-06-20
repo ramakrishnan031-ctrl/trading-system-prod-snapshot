@@ -28,15 +28,36 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+from alerts.critical import write_critical_sentinel
 from core.cron_registry import CronJob, CronRegistry
 from core.logger import get_logger
 from core.state_store import StateStore
 from core.time_authority import now_ist
+from scripts.cron_report_render import (
+    COMPLETED, FAILED, MISSED, NO_SIGNAL, NOT_TRACKED, PENDING,
+    PENDING_REDESIGN, SKIPPED, CronReport, JobOutcome, briefing_subject,
+    eod_subject, render_briefing_html, render_briefing_plaintext,
+    render_briefing_telegram, render_eod_html, render_eod_plaintext,
+    render_eod_telegram,
+)
 from utils.cron_heartbeat import record_heartbeat
 
 _log = get_logger("cron_officer")
 _BAR = "━" * 24
 _ROOT = Path(__file__).resolve().parent.parent
+_MARKS_DIR = _ROOT / "data_store" / "cron_marks"
+_AUDIT_DIR = _ROOT / "data_store" / "cron_audit"
+
+# daily_report heartbeat is DEFERRED (lands with the xlsx redesign) — Bug C.
+# Until then it is shown as ⏸ Pending (never ❌/⚠️, never CRITICAL).
+_PENDING_REDESIGN_JOBS = {"daily_report"}
+
+
+def get_preflight_complete_signal(now: datetime, briefing_time: time = time(9, 20)) -> bool:
+    """Phase 5.1 hook STUB: the morning briefing fires once pre-flight is done.
+    For now this is a pure time gate (True at/after the configured briefing time);
+    the pre-flight work (Diary #1) will later wire the real completion signal."""
+    return now.time() >= briefing_time
 
 
 def security_watcher_health(root: Path, now: datetime) -> tuple[str, bool]:
@@ -238,6 +259,137 @@ def build_change_report(registry: CronRegistry, crontab_text: str) -> tuple[str,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Full report model (Phase 2.4/4) — EVERY job due today, by detection method
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_mode(store: StateStore) -> str:
+    """Paper | Live from the most recent trade's mode; default Live."""
+    try:
+        row = store.fetch_one(
+            "SELECT mode FROM trades WHERE mode IS NOT NULL ORDER BY created_at DESC LIMIT 1")
+        if row and row["mode"]:
+            return str(row["mode"]).capitalize()
+    except Exception:
+        pass
+    return "Live"
+
+
+def _read_marker(name: str, today: date, marks_dir: Path) -> tuple[str, float, str]:
+    """exit_code_file detection: read data_store/cron_marks/<name>.done
+    ('<rc> <iso-ts>'). Fresh-today + rc 0 -> COMPLETED; rc!=0 -> FAILED;
+    absent/stale -> NO_SIGNAL (informational, NEVER a false CRITICAL)."""
+    try:
+        parts = (marks_dir / f"{name}.done").read_text(encoding="utf-8").strip().split(None, 1)
+        rc = int(parts[0])
+        ts = parts[1] if len(parts) > 1 else ""
+        if ts[:10] != today.isoformat():
+            return NO_SIGNAL, 0.0, "no run recorded today"
+        return (COMPLETED, 0.0, "") if rc == 0 else (FAILED, 0.0, f"exit {rc}")
+    except (OSError, ValueError, IndexError):
+        return NO_SIGNAL, 0.0, "marker pending"
+
+
+def _classify_job(job: CronJob, today: date, now_time: time,
+                  hb: dict, marks_dir: Path) -> JobOutcome:
+    """One job's outcome via its effective detection method."""
+    cat = job.effective_category
+    due_label = _time_label(job).strip()
+    due_sort = job.due_time or time(23, 59)
+
+    if job.name in _PENDING_REDESIGN_JOBS:   # Bug C deferral
+        return JobOutcome(job.name, cat, due_label, due_sort, PENDING_REDESIGN,
+                          job.effective_detection_method, 0.0,
+                          "heartbeat lands with the daily_report.xlsx redesign")
+
+    method = job.effective_detection_method
+    if method == "heartbeat_db":
+        row = hb.get(job.name)
+        if row is not None:
+            status = (row.get("status") or "").upper()
+            rt = float(row.get("duration_sec") or 0.0)
+            if status == "FAILED":
+                return JobOutcome(job.name, cat, due_label, due_sort, FAILED, method, rt,
+                                  (row.get("message") or "failed")[:120])
+            if status == "SKIPPED":
+                return JobOutcome(job.name, cat, due_label, due_sort, SKIPPED, method, rt,
+                                  "non-trading day")
+            # SUCCESS / PARTIAL / STARTED (Bug B self-row) -> completed
+            return JobOutcome(job.name, cat, due_label, due_sort, COMPLETED, method, rt, "")
+        if job.due_time is not None and now_time < job.due_time:
+            return JobOutcome(job.name, cat, due_label, due_sort, PENDING, method, 0.0, "")
+        return JobOutcome(job.name, cat, due_label, due_sort, MISSED, method, 0.0, "")
+
+    if method == "exit_code_file":
+        st, rt, note = _read_marker(job.name, today, marks_dir)
+        if st == NO_SIGNAL and job.due_time is not None and now_time < job.due_time:
+            st, note = PENDING, ""
+        return JobOutcome(job.name, cat, due_label, due_sort, st, method, rt, note)
+
+    # detection_method none / log_marker (unimplemented) -> visibility only
+    return JobOutcome(job.name, cat, due_label, due_sort, NOT_TRACKED, method, 0.0,
+                      job.excluded_reason or "")
+
+
+def _compute_severity(jobs: list, watcher_stale: bool) -> str:
+    """CRITICAL on any FAILED/MISSED or a stale security watcher. ⏸ Pending,
+    NO_SIGNAL and NOT_TRACKED never escalate (Bug C / first-deploy safe)."""
+    if watcher_stale or any(j.status in (FAILED, MISSED) for j in jobs):
+        return "CRITICAL"
+    return "INFO"
+
+
+def _change_log(registry: CronRegistry, today: date, audit_dir: Path) -> tuple[list, list]:
+    """Diff today's job-name set vs the most recent prior snapshot; persist today's
+    snapshot (data_store/cron_audit/job_list_<date>.json) for tomorrow's diff."""
+    import json as _json
+    names = sorted(j.name for j in registry.all_jobs())
+    added: list = []
+    removed: list = []
+    try:
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        prior_names = None
+        for p in sorted(audit_dir.glob("job_list_*.json"), reverse=True):
+            if p.stem.replace("job_list_", "") < today.isoformat():
+                prior_names = set(_json.loads(p.read_text(encoding="utf-8")))
+                break
+        if prior_names is not None:
+            added = [n for n in names if n not in prior_names]
+            removed = sorted(prior_names - set(names))
+        (audit_dir / f"job_list_{today.isoformat()}.json").write_text(
+            _json.dumps(names, indent=2), encoding="utf-8")
+    except Exception as exc:  # never block the report on the change-log
+        _log.warning("cron_officer.change_log_failed", extra={"error": str(exc)})
+    return added, removed
+
+
+def build_report(registry: CronRegistry, store: StateStore, today: date,
+                 config_dir: Path, now_time: time, *, is_eod: bool,
+                 root: Path = _ROOT, marks_dir: Path = _MARKS_DIR,
+                 audit_dir: Path = _AUDIT_DIR, mode: Optional[str] = None) -> CronReport:
+    """Phase 2.4/4: the full per-job report covering EVERY job due today (not
+    just the monitored subset), each classified by its detection method."""
+    hb = _today_heartbeats(store, today) if store is not None else {}
+    due = sorted(registry.jobs_due_on(today, config_dir), key=_sort_key)
+    jobs = [_classify_job(j, today, now_time, hb, marks_dir) for j in due]
+    # Security-watcher supervision uses REAL wall-clock (not a simulated date).
+    wline, watcher_stale = security_watcher_health(root, now_ist())
+    added, removed = _change_log(registry, today, audit_dir) if is_eod else ([], [])
+    excluded = [(j.name, j.excluded_reason or "")
+                for j in registry.all_jobs() if j.excluded_reason]
+    extra = [wline,
+             "Known: daily_report heartbeat is pending the xlsx redesign (shown ⏸ Pending)."]
+    return CronReport(
+        day=today, weekday=today.strftime("%A"),
+        mode=mode or _detect_mode(store), is_eod=is_eod, jobs=jobs,
+        severity=_compute_severity(jobs, watcher_stale),
+        added=added, removed=removed, excluded=excluded, extra_lines=extra,
+        ts_iso=now_ist().isoformat(),
+        alert_id=now_ist().strftime("%Y%m%d_%H%M%S") + ("_eod" if is_eod else "_brief"),
+        ban_active=registry.officer.ban_active(today),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Send + CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -258,6 +410,79 @@ def _send(severity: str, title: str, body: str, config_dir: Path, dry_run: bool)
         _log.error("cron_officer.send_failed", extra={"error": str(exc)})
 
 
+def _hhmm(s: str, default: time) -> time:
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})", s or "")
+    if not m:
+        return default
+    hh, mm = int(m.group(1)), int(m.group(2))
+    return time(hh, mm) if (0 <= hh <= 23 and 0 <= mm <= 59) else default
+
+
+def _resolve_sentinel_dir() -> Path:
+    """Where alert_watcher looks for sentinels (best-effort from config)."""
+    try:
+        from core.config_loader import load_all
+        return Path(load_all().system.alerts.sentinel_dir)
+    except Exception:
+        return _ROOT / "data_store"
+
+
+def _send_telegram_md(text: str, severity: str, config_dir: Path) -> None:
+    """Best-effort Telegram send with MarkdownV2 (used OUTSIDE the ban window)."""
+    try:
+        from alerts.telegram_notifier import TelegramNotifier
+        notifier = TelegramNotifier.from_env(logger=_log, config_dir=config_dir)
+        if notifier is None:
+            _log.info("cron_officer.telegram_unconfigured")
+            return
+        try:  # parse_mode best-effort; plain still delivers if unsupported
+            notifier.send(severity=severity, title="Cron Officer", body=text,
+                          source_module="cron_officer", parse_mode="MarkdownV2")
+        except TypeError:
+            notifier.send(severity=severity, title="Cron Officer", body=text,
+                          source_module="cron_officer")
+    except Exception as exc:
+        _log.error("cron_officer.telegram_failed", extra={"error": str(exc)})
+
+
+def deliver_report(report: CronReport, config_dir: Path, *, dry_run: bool,
+                   sentinel_dir: Optional[Path] = None) -> dict:
+    """Render + route a CronReport. EOD ALWAYS emails (rich HTML + plain mirror);
+    the morning briefing emails ONLY during the Telegram ban, else Telegrams.
+    Returns the rendered parts (dry-run inspection / tests). Never raises."""
+    if report.is_eod:
+        html, plain, tg = (render_eod_html(report), render_eod_plaintext(report),
+                           render_eod_telegram(report))
+        subject = eod_subject(report)
+    else:
+        html, plain, tg = (render_briefing_html(report), render_briefing_plaintext(report),
+                           render_briefing_telegram(report))
+        subject = briefing_subject(report)
+    parts = {"subject": subject, "html": html, "plain": plain, "telegram": tg}
+
+    if dry_run:
+        print(f"[DRY-RUN] subject: {subject}\n")
+        print(plain)
+        return parts
+
+    sdir = sentinel_dir or _resolve_sentinel_dir()
+    ban = report.ban_active
+    if report.is_eod or ban:        # EOD always emails; briefing emails during ban
+        try:
+            write_critical_sentinel(
+                title=f"Cron {'EOD' if report.is_eod else 'Briefing'} {report.day.isoformat()}",
+                body=plain, source_module="cron_officer", sentinel_dir=sdir,
+                context={"severity": report.severity},
+                subject=subject, content_type="text/html",
+                plain_fallback=plain, html_body=html,
+            )
+        except Exception as exc:
+            _log.error("cron_officer.email_sentinel_failed", extra={"error": str(exc)})
+    if not ban:                     # Telegram only outside the ban window
+        _send_telegram_md(tg, report.severity, config_dir)
+    return parts
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Cron Officer")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -267,6 +492,10 @@ def main(argv=None) -> int:
     parser.add_argument("--config-dir", type=Path, default=Path("config"))
     parser.add_argument("--db-path", type=Path, default=Path("data_store/trading_system.db"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force-dry-run", action="store_true",
+                        help="Render + print only (never send); bypass the holiday-guard skip (test).")
+    parser.add_argument("--as-of-date", type=lambda s: date.fromisoformat(s), default=None,
+                        help="Simulate the report for YYYY-MM-DD (dry-run a market day on a non-market day).")
     args = parser.parse_args(argv)
 
     try:
@@ -277,47 +506,73 @@ def main(argv=None) -> int:
         return 1
 
     now = now_ist()
+    today = args.as_of_date or now.date()
+    simulated = args.as_of_date is not None
+    force = args.force_dry_run
+    dry = args.dry_run or force          # force-dry-run never sends
 
-    if args.briefing:
-        from utils.holiday_guard import get_holiday_name
-        holiday = None
+    # --check-change needs no DB.
+    if args.check_change:
         try:
-            holiday = get_holiday_name(now.date(), args.config_dir)
-        except Exception:
-            pass
-        msg = build_briefing(registry, now.date(), args.config_dir, holiday)
-        _send("INFO", "Today's Schedule", msg, args.config_dir, args.dry_run)
-        record_heartbeat("cron_officer_briefing", db_path=args.db_path)
-        return 0
-
-    if args.eod_summary:
-        if not args.db_path.exists():
-            print(f"Database not found: {args.db_path}")
+            result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10)
+            crontab_text = result.stdout
+        except Exception as e:
+            print(f"Could not read crontab: {e}")
             return 1
-        store = StateStore(args.db_path)
-        msg, critical_miss = build_eod_summary(registry, store, now.date(), args.config_dir, now.time())
-        store.close()
-        # Phase 3: supervise the security-watcher service heartbeat.
-        wline, watcher_stale = security_watcher_health(_ROOT, now)
-        msg = f"{msg}\n{wline}"
-        severity = "CRITICAL" if (critical_miss or watcher_stale) else "INFO"
-        _send(severity, "Cron Daily Report", msg, args.config_dir, args.dry_run)
-        record_heartbeat("cron_officer_eod", db_path=args.db_path)
+        msg, has_diff = build_change_report(registry, crontab_text)
+        if has_diff:
+            _send("WARNING", "Cron Divergence", msg, args.config_dir, dry)
+            return 1
+        print(msg)
         return 0
 
-    # --check-change
+    # briefing + eod-summary need the store (heartbeats + mode).
+    store: Optional[StateStore] = None
+    if args.db_path.exists():
+        store = StateStore(args.db_path)
+    elif not simulated:
+        print(f"Database not found: {args.db_path}")
+        return 1
+
     try:
-        result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10)
-        crontab_text = result.stdout
-    except Exception as e:
-        print(f"Could not read crontab: {e}")
-        return 1
-    msg, has_diff = build_change_report(registry, crontab_text)
-    if has_diff:
-        _send("WARNING", "Cron Divergence", msg, args.config_dir, args.dry_run)
-        return 1
-    print(msg)
-    return 0
+        if args.briefing:
+            from utils.holiday_guard import is_trading_day
+            try:
+                trading = is_trading_day(today, args.config_dir)
+            except Exception:
+                trading = today.weekday() < 5
+            if not trading and not force:
+                # Phase 5.1: no morning briefing on weekends/NSE holidays. Still
+                # record the heartbeat so the EOD report doesn't flag it missed.
+                if not dry:
+                    record_heartbeat("cron_officer_briefing", db_path=args.db_path)
+                print(f"non-trading day ({today.isoformat()}) — morning briefing skipped")
+                return 0
+            # Phase 5.1 pre-flight gate (stub): real cron fires at the briefing time.
+            get_preflight_complete_signal(now, _hhmm(registry.officer.morning_briefing_time, time(9, 20)))
+            now_time = (_hhmm(registry.officer.morning_briefing_time, time(9, 20))
+                        if simulated else now.time())
+            report = build_report(registry, store, today, args.config_dir, now_time, is_eod=False)
+            deliver_report(report, args.config_dir, dry_run=dry)
+            if not dry:
+                record_heartbeat("cron_officer_briefing", db_path=args.db_path)
+            return 0
+
+        # --eod-summary
+        # Bug B: record a STARTED heartbeat BEFORE building the report so the
+        # officer stops counting ITSELF as missed; a SUCCESS row lands at the end.
+        if not dry:
+            record_heartbeat("cron_officer_eod", status="STARTED", db_path=args.db_path)
+        now_time = (registry.eod_report_time(today, args.config_dir)
+                    if simulated else now.time())
+        report = build_report(registry, store, today, args.config_dir, now_time, is_eod=True)
+        deliver_report(report, args.config_dir, dry_run=dry)
+        if not dry:
+            record_heartbeat("cron_officer_eod", status="SUCCESS", db_path=args.db_path)
+        return 0
+    finally:
+        if store is not None:
+            store.close()
 
 
 if __name__ == "__main__":
