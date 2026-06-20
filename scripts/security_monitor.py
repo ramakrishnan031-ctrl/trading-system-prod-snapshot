@@ -632,15 +632,21 @@ def _dedup(findings: list[Finding], state: dict, cooldown: int, now_ts: float) -
 
 
 def _send(f: Finding, cfg: SecConfig) -> None:
+    result = None
     try:
         from alerts.telegram_notifier import TelegramNotifier
         n = TelegramNotifier.from_env(logger=_log)
         if n is not None:
-            n.send(severity=f.severity, title=f"🔒 {f.title}", body=f.body,
-                   source_module="security_monitor")
+            result = n.send(severity=f.severity, title=f"🔒 {f.title}", body=f.body,
+                            source_module="security_monitor")
     except Exception as exc:
         _log.error("security_monitor: telegram send failed: %s", exc)
-    if f.severity == "CRITICAL":
+    # TelegramNotifier.send() writes the CRITICAL sentinel itself (TG5) and returns
+    # its path. Only write our OWN when that did not happen — notifier missing,
+    # Telegram disabled via the master switch, or send() raised — so every CRITICAL
+    # produces EXACTLY ONE sentinel -> one email (email is the sole channel while
+    # Telegram is unavailable; no duplicate emails, no missed alerts).
+    if f.severity == "CRITICAL" and not getattr(result, "sentinel_path", None):
         try:
             from alerts.critical import write_critical_sentinel
             write_critical_sentinel(title=f.title, body=f.body,

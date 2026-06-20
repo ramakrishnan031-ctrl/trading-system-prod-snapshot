@@ -359,3 +359,43 @@ def test_copy_bypass_silent_within_token_window(monkeypatch, tmp_path):
     cfg = SecConfig(copy_audit_log_path=str(log))
     # a deliberate copy covered by a request-copy token window is NOT a bypass
     assert check_copy_bypass(cfg, {}, now) == []
+
+
+# ── _send sentinel dedupe (one CRITICAL -> exactly one email) ─────────────────
+
+def _crit() -> Finding:
+    return Finding("CRITICAL", "k", "Title", "Body")
+
+
+def test_send_no_double_sentinel_when_telegram_wrote_it(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    class _Stub:
+        def send(self, **kw):  # mimics TelegramNotifier.send writing the sentinel (TG5)
+            return SimpleNamespace(sentinel_path=tmp_path / "from_telegram.flag")
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: _Stub())
+    sm._send(_crit(), SecConfig(sentinel_dir=str(tmp_path)))
+    # telegram already wrote one -> NO extra explicit sentinel
+    assert list(tmp_path.glob("critical_alert_*.flag")) == []
+
+
+def test_send_writes_sentinel_when_telegram_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: None)
+    sm._send(_crit(), SecConfig(sentinel_dir=str(tmp_path)))
+    # no telegram -> exactly one explicit sentinel so email still fires
+    assert len(list(tmp_path.glob("critical_alert_*.flag"))) == 1
+
+
+def test_send_writes_sentinel_when_telegram_disabled(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    class _Stub:
+        def send(self, **kw):  # master switch off: send() no-ops, sentinel_path=None
+            return SimpleNamespace(sentinel_path=None)
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: _Stub())
+    sm._send(_crit(), SecConfig(sentinel_dir=str(tmp_path)))
+    # disabled telegram still leaves email working via exactly one sentinel
+    assert len(list(tmp_path.glob("critical_alert_*.flag"))) == 1

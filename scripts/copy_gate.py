@@ -268,16 +268,21 @@ class CopyGate:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def send_alert(cfg: CopyConfig, severity: str, title: str, body: str) -> None:
-    """Best-effort Telegram (all tiers) + CRITICAL sentinel email. Never raises."""
+    """Best-effort Telegram (all tiers) + CRITICAL sentinel email. Never raises.
+
+    send() writes the CRITICAL sentinel itself (TG5) and returns its path; we only
+    write our own when that did not happen (notifier missing / Telegram disabled /
+    send raised) so each CRITICAL = exactly ONE sentinel -> one email."""
+    result = None
     try:
         from alerts.telegram_notifier import TelegramNotifier
         n = TelegramNotifier.from_env(logger=_log)
         if n is not None:
-            n.send(severity=severity, title=f"🔒 {title}", body=body,
-                   source_module="copy_gate")
+            result = n.send(severity=severity, title=f"🔒 {title}", body=body,
+                            source_module="copy_gate")
     except Exception as exc:
         _log.error("copy_gate: telegram send failed: %s", exc)
-    if severity == "CRITICAL":
+    if severity == "CRITICAL" and not getattr(result, "sentinel_path", None):
         try:
             from alerts.critical import write_critical_sentinel
             write_critical_sentinel(title=title, body=body,
