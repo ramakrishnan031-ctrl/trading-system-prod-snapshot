@@ -238,7 +238,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > validated `sshd -t` → `reload ssh`; ubuntu access unaffected — no root keys exist). Idle timeout
 > (#1) intentionally NOT set (long `tail -f` sessions); `MaxSessions` left at 10. Phase 2 (copy
 > protection) **BUILT 20-Jun** (code+config+tests in git; OS-level activation staged — see the
-> Phase 2 note below); Phase 3 (EOD integration) pending. See memory `vm_security_phase1` /
+> Phase 2 note below); Phase 3 (EOD integration) **DONE 20-Jun** (Changelog). See memory `vm_security_phase1` /
 > `vm_security_phase2`.
 
 > **VM security tooling (Phase 2 — copy protection, 20-Jun, code in git; NOT yet activated on the
@@ -309,6 +309,28 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **VM Security Manager Phase 3 (EOD integration) + CRITICAL email dedupe.**
+  **(A) Double-email fix** — `security_monitor._send` + `copy_gate.send_alert` used to write a sentinel
+  explicitly AND let `TelegramNotifier.send()` write one (TG5) → 2 emails per security CRITICAL. Now
+  they capture `send()`'s `SendResult` and write their own ONLY when `send()` did not
+  (`result.sentinel_path is None` — notifier missing / Telegram disabled via the master switch / send
+  raised), so each CRITICAL = **exactly one email**, and email still fires when Telegram is unavailable
+  (the sole channel while Telegram is banned to 22-Jun). **(B) System Manager 9th check**
+  `security_check` (18:45, after tomorrow_readiness): (1) daily copy-audit summary from
+  `data_store/security/copy_audit.log`; (2) a `COPY_BYPASS_DETECTED` / `COPY_PROTECTION_DISABLED` today
+  is a **VIOLATION** → escalates the EOD report to CRITICAL (→ email) + exit 3, **but never trips the
+  trading SOFT_KILL** (security ≠ trading-safety halt); (3) health: auditd `copy_attempt` rules loaded
+  (`sudo -n auditctl -l`), `copy_protection.enabled`, audit-log writable, **security-watcher alive**
+  (`security_state.json` freshness). `security_monitor` now persists freshly-alerted bypass/switch
+  findings to `copy_audit.log` (single EOD source; post-dedup only → no per-pass bloat). **(C) Cron
+  Officer** `--eod-summary` appends a **security-watcher liveness** line and escalates to CRITICAL if
+  the watcher is stale/down (`build_eod_summary` signature left intact). **Verified live on the VM:**
+  the 9th check renders 0 violations with `3 auditd rules / enabled / watcher alive (42s)`, and the
+  Cron Officer prints the watcher line. +15 tests (`test_system_manager_security.py`,
+  `test_cron_officer_security.py`, `_send` dedupe + copy-audit persistence in `test_security_monitor.py`).
+  Commits 202b98f (A), bb351e0 (B+C). NB pre-existing `test_system_manager.py::test_report_integrity_*`
+  fails on any day ≠ 2026-06-19 (date-hardcoded; verified via stash, not a regression). Memory
+  `vm_security_phase2`.
 - 2026-06-20 — Claude Code — **VM Security Manager Phase 2 (copy protection) — BUILT (code in git;
   OS activation staged).** Controls **VM→PC** copying. New `scripts/copy_gate.py` = policy engine
   (strict priority: **TIME-LOCK 18:00–08:00 IST is absolute** and overrides even the OFF switch / a
