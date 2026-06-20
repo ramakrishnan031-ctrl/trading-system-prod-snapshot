@@ -309,6 +309,24 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Kill switch: HEADLESS prior-day auto-clear + `KILL_AUTO_CLEARED` audit.**
+  Rama's decision: the system ALWAYS starts headless — EVERY prior-day kill auto-clears at next-day
+  startup regardless of type (scheduled, emergency, HARD_KILL, loss-limit, System Manager EOD); the
+  safety net shifts from "block startup" → EOD report analysis (Task B, later). Investigation
+  (`softkill_investigation_20jun`) found this already worked: **`clear_stale_state()`** (FIX-127,
+  `main.py:1439`) already clears ALL prior-day kills and **`auto_clear_scheduled_kill()`** (FIX-154,
+  `main.py:1444`) clears same-day *scheduled* kills when flat. This commit **solidifies** the guarantee
+  (explicit docstring) and adds the audit bridge: new `KillSwitch._record_cleared_kill()` writes a
+  `system_events` row (`event_type=KILL_AUTO_CLEARED`; details JSON: previous_state / reason /
+  triggered_by / triggered_at / classification `scheduled|emergency` / cleared_via) on every auto-clear.
+  Same-day kills still persist within the day (the `triggered_date >= today` guard is unchanged →
+  loss-limit/HARD_KILL stay active intraday). The System Manager "SOFT_KILL for tomorrow" is dated its
+  RUN time (`now_ist`, never post-dated) so it clears as prior-day. **Monday 22-Jun: the live kill
+  (`circuit_breaker_force_close_15:15` from Fri) auto-clears at 08:30 — NO `resume.sh` needed** (proven
+  against a DB copy: → INACTIVE + audit row, classification=scheduled). NB the morning manual-resume
+  Rama hits is a *same-day* emergency re-trigger (Kite IP-403 `BrokerAuthError` → HALT exit 4), NOT the
+  scheduled kill — a separate token/IP issue. Parity-safe (kill switch is mode-agnostic). +4 tests; 42
+  kill_switch tests pass. Commit a60868f.
 - 2026-06-20 — Claude Code — **VM Security Manager Phase 3 (EOD integration) + CRITICAL email dedupe.**
   **(A) Double-email fix** — `security_monitor._send` + `copy_gate.send_alert` used to write a sentinel
   explicitly AND let `TelegramNotifier.send()` write one (TG5) → 2 emails per security CRITICAL. Now
