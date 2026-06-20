@@ -36,6 +36,21 @@ from utils.cron_heartbeat import record_heartbeat
 
 _log = get_logger("cron_officer")
 _BAR = "━" * 24
+_ROOT = Path(__file__).resolve().parent.parent
+
+
+def security_watcher_health(root: Path, now: datetime) -> tuple[str, bool]:
+    """Supervise the security-watcher service (VM Security Manager). It rewrites
+    data_store/security_state.json every ~60s pass, so a stale (>5 min) or missing
+    file means the watcher is likely DOWN. Returns (report_line, stale)."""
+    p = root / "data_store" / "security_state.json"
+    try:
+        age = now.timestamp() - p.stat().st_mtime
+    except OSError:
+        return ("🔴 Security watcher: state file MISSING — service may be down", True)
+    if age <= 300:
+        return (f"🔒 Security watcher: alive (last pass {int(age)}s ago)", False)
+    return (f"🔴 Security watcher: STALE — no pass in {int(age) // 60}m (service may be DOWN)", True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -282,7 +297,11 @@ def main(argv=None) -> int:
         store = StateStore(args.db_path)
         msg, critical_miss = build_eod_summary(registry, store, now.date(), args.config_dir, now.time())
         store.close()
-        _send("CRITICAL" if critical_miss else "INFO", "Cron Daily Report", msg, args.config_dir, args.dry_run)
+        # Phase 3: supervise the security-watcher service heartbeat.
+        wline, watcher_stale = security_watcher_health(_ROOT, now)
+        msg = f"{msg}\n{wline}"
+        severity = "CRITICAL" if (critical_miss or watcher_stale) else "INFO"
+        _send(severity, "Cron Daily Report", msg, args.config_dir, args.dry_run)
         record_heartbeat("cron_officer_eod", db_path=args.db_path)
         return 0
 

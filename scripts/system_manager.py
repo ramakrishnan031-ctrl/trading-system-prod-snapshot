@@ -13,10 +13,13 @@ SOFT_KILL for tomorrow on a genuine safety violation.
 Checks (each isolated — one failing check never crashes the report):
   1 config_vs_actual   2 order_quality     3 report_integrity   4 system_health
   5 strategy_health    6 risk_events       7 vs_yesterday       8 tomorrow_ready
+  9 security (VM copy protection — Phase 3)
 
 SOFT_KILL (tomorrow) is tripped ONLY on: a config violation (position/trade/loss
 cap exceeded), a DB integrity failure, or a HARD_KILL having fired today. Missing
-reports / strategy concerns are warnings, never kills.
+reports / strategy concerns are warnings, never kills. A SECURITY violation (copy
+bypass / protection disabled) escalates the EOD report to CRITICAL (→ email) but
+does NOT trip the trading SOFT_KILL — a security event is not a trading-safety halt.
 
 Parity: queries the same DB in paper and live; effective caps honour
 live_test_mode (assumes live mode, the production case).
@@ -30,7 +33,10 @@ Exit codes: 0 = clean; 2 = warnings only; 3 = violation(s)/soft-kill; 1 = error.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -629,6 +635,133 @@ def tomorrow_readiness_check(store: StateStore, app_config, day_date: date,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Check 9 — Security (VM copy protection)   [VM Security Manager Phase 3]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _read_copy_audit(path: Path, day: str) -> tuple[dict, int, int]:
+    """Tally today's copy-audit events. Returns (counts_by_event, bypasses, disables)."""
+    counts: dict[str, int] = {}
+    bypasses = disables = 0
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return counts, 0, 0
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if str(rec.get("ts", ""))[:10] != day:
+            continue
+        ev = str(rec.get("event", "?"))
+        counts[ev] = counts.get(ev, 0) + 1
+        if ev == "COPY_BYPASS_DETECTED":
+            bypasses += 1
+        elif ev == "COPY_PROTECTION_DISABLED":
+            disables += 1
+    return counts, bypasses, disables
+
+
+def _auditd_copy_rules() -> Optional[int]:
+    """Count loaded auditd copy_attempt rules (None if it can't be checked)."""
+    try:
+        out = subprocess.run(["sudo", "-n", "auditctl", "-l"],
+                             capture_output=True, text=True, timeout=15,
+                             stdin=subprocess.DEVNULL)
+        if out.returncode != 0:
+            return None
+        return sum(1 for ln in out.stdout.splitlines() if "copy_attempt" in ln)
+    except Exception:
+        return None
+
+
+def _audit_log_writable(path: Path) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return os.access(path.parent, os.W_OK)
+    except Exception:
+        return False
+
+
+def _security_state_age_sec(root: Path) -> Optional[float]:
+    """Seconds since the security-watcher last wrote its state file (None if absent).
+    The watcher rewrites data_store/security_state.json every ~60s pass."""
+    try:
+        mtime = (root / "data_store" / "security_state.json").stat().st_mtime
+    except OSError:
+        return None
+    return max(0.0, datetime.now().timestamp() - mtime)
+
+
+def security_check(day: str, root: Path, config_dir: Path) -> CheckResult:
+    """VM copy-protection EOD check (Phase 3). Three jobs:
+      (1) daily copy-audit summary (tokens / allowed / denied / bypass / disable);
+      (2) flag a COPY_BYPASS or copy-protection-DISABLED today as a VIOLATION so it
+          escalates via the EOD CRITICAL report + email — but it does NOT trip the
+          trading SOFT_KILL (a security event is not a trading-safety halt);
+      (3) verify protection is still healthy: auditd copy_attempt rules loaded,
+          copy_protection enabled, audit log writable, security-watcher alive."""
+    res = CheckResult("🔒 SECURITY (COPY PROTECTION)")
+
+    try:
+        from scripts.security_monitor import SecConfig
+        sec = SecConfig.load(config_dir / "security.yaml")
+        audit_path = Path(sec.copy_audit_log_path)
+        enabled = bool(sec.copy_protection_enabled)
+    except Exception as exc:
+        res.warn(f"security.yaml unreadable ({exc}) — copy-protection status unknown")
+        return res
+
+    # (1) daily copy-audit summary
+    counts, bypasses, disables = _read_copy_audit(audit_path, day)
+    issued = counts.get("COPY_TOKEN_ISSUED", 0)
+    allowed = counts.get("COPY_ALLOWED", 0)
+    denied = sum(v for k, v in counts.items() if k.startswith("COPY_DENIED_"))
+    res.info(f"Copy events today: tokens issued {issued} | allowed {allowed} | denied {denied}")
+    if counts:
+        res.info("  " + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())))
+
+    # (2) bypass / disable -> VIOLATION (escalate; NOT a trading soft-kill)
+    if bypasses:
+        res.violation(f"COPY BYPASS today: {bypasses} outbound copy(ies) without a token — "
+                      f"possible VM->PC exfiltration. SECURITY violation (investigate; "
+                      f"does not halt trading).")
+    if disables:
+        res.violation(f"Copy protection DISABLED today ({disables}x) — the gate was turned "
+                      f"off. SECURITY violation (investigate; does not halt trading).")
+    if not bypasses and not disables:
+        res.ok("No copy-bypass / protection-disabled events today")
+
+    # (3) protection healthy?
+    if enabled:
+        res.ok("copy_protection.enabled: true")
+    else:
+        res.violation("copy_protection.enabled: FALSE — VM->PC copying is currently unrestricted")
+
+    n_rules = _auditd_copy_rules()
+    if n_rules is None:
+        res.info("ℹ️ auditd copy_attempt rules: could not check (auditctl/sudo unavailable here)")
+    elif n_rules >= 3:
+        res.ok(f"auditd copy_attempt rules: {n_rules} loaded")
+    else:
+        res.warn(f"auditd copy_attempt rules: {n_rules} (expected ≥3) — bypass detection degraded")
+
+    if _audit_log_writable(audit_path):
+        res.ok("copy audit log writable")
+    else:
+        res.warn(f"copy audit log dir not writable ({audit_path.parent}) — events may be lost")
+
+    age = _security_state_age_sec(root)
+    if age is None:
+        res.warn("security-watcher: state file missing — watcher may never have run")
+    elif age <= 300:
+        res.ok(f"security-watcher: alive (last pass {int(age)}s ago)")
+    else:
+        res.warn(f"security-watcher: STALE — last pass {int(age)//60}m ago, service may be DOWN")
+    return res
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Report + send + soft-kill
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -710,7 +843,7 @@ def trigger_soft_kill(store: StateStore, reasons: List[str], day: str) -> bool:
 
 def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         db_path: Path, root: Path) -> tuple[str, int, int, List[str]]:
-    """Run all 8 checks (each isolated) and build the report."""
+    """Run all 9 checks (each isolated) and build the report."""
     day = _day(day_date)
     prev = _prev_trading_day(day_date, config_dir)
     specs = [
@@ -722,9 +855,11 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         lambda: risk_events_check(store, day, root),
         lambda: compare_with_yesterday(store, day, _day(prev)),
         lambda: tomorrow_readiness_check(store, app_config, day_date, config_dir),
+        lambda: security_check(day, root, config_dir),
     ]
     titles = ["CONFIG vs ACTUAL", "ORDER QUALITY", "REPORT INTEGRITY", "SYSTEM HEALTH",
-              "STRATEGY HEALTH", "RISK EVENTS", "vs YESTERDAY", "TOMORROW READINESS"]
+              "STRATEGY HEALTH", "RISK EVENTS", "vs YESTERDAY", "TOMORROW READINESS",
+              "SECURITY (COPY PROTECTION)"]
     results: List[CheckResult] = []
     for spec, title in zip(specs, titles):
         try:

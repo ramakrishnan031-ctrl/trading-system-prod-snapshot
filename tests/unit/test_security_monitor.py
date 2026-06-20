@@ -399,3 +399,18 @@ def test_send_writes_sentinel_when_telegram_disabled(monkeypatch, tmp_path):
     sm._send(_crit(), SecConfig(sentinel_dir=str(tmp_path)))
     # disabled telegram still leaves email working via exactly one sentinel
     assert len(list(tmp_path.glob("critical_alert_*.flag"))) == 1
+
+
+# ── Phase 3: persist copy events to the audit log (single source for EOD) ─────
+
+def test_maybe_copy_audit_persists_only_copy_events(tmp_path):
+    import json
+    cfg = SecConfig(copy_audit_log_path=str(tmp_path / "copy_audit.log"))
+    now = datetime(2026, 6, 20, 12, 0, tzinfo=_IST)
+    sm._maybe_copy_audit(cfg, Finding("CRITICAL", "copybypass:99", "COPY BYPASS DETECTED", "scp x pc:/y"), now)
+    sm._maybe_copy_audit(cfg, Finding("CRITICAL", "copyprot:disabled", "COPY PROTECTION DISABLED", "off"), now)
+    sm._maybe_copy_audit(cfg, Finding("INFO", "copyprot:enabled", "re-enabled", "on"), now)
+    sm._maybe_copy_audit(cfg, Finding("WARNING", "newip:1.2.3.4", "x", "y"), now)   # not a copy event
+    lines = (tmp_path / "copy_audit.log").read_text(encoding="utf-8").splitlines()
+    events = [json.loads(l)["event"] for l in lines]
+    assert events == ["COPY_BYPASS_DETECTED", "COPY_PROTECTION_DISABLED", "COPY_PROTECTION_ENABLED"]

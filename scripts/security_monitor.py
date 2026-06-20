@@ -656,6 +656,34 @@ def _send(f: Finding, cfg: SecConfig) -> None:
             _log.error("security_monitor: sentinel write failed: %s", exc)
 
 
+def _append_copy_audit(cfg: SecConfig, event: str, now: datetime, **fields) -> None:
+    """Append a JSON line to the copy audit log so the System Manager EOD summary
+    (Phase 3) has a SINGLE source for copy-protection events. Best-effort."""
+    rec = {"ts": now.isoformat(), "event": event, "source": "security_monitor"}
+    rec.update(fields)
+    try:
+        p = Path(cfg.copy_audit_log_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        _log.error("security_monitor: copy-audit append failed: %s", exc)
+
+
+def _maybe_copy_audit(cfg: SecConfig, f: Finding, now: datetime) -> None:
+    """Persist a freshly-alerted (post-dedup) copy-protection finding to the copy
+    audit log — only the bypass / switch findings, keyed off the Finding.key."""
+    if f.key.startswith("copybypass:"):
+        event = "COPY_BYPASS_DETECTED"
+    elif f.key == "copyprot:disabled":
+        event = "COPY_PROTECTION_DISABLED"
+    elif f.key == "copyprot:enabled":
+        event = "COPY_PROTECTION_ENABLED"
+    else:
+        return
+    _append_copy_audit(cfg, event, now, detail=f.body[:300])
+
+
 def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
              baseline: bool) -> list[Finding]:
     """Run all checks (each isolated). Returns findings (pre-dedup)."""
@@ -741,6 +769,7 @@ def main(argv=None) -> int:
     fresh = _dedup(findings, state, cfg.realert_cooldown_sec, now.timestamp())
     for f in fresh:
         _send(f, cfg)
+        _maybe_copy_audit(cfg, f, now)   # Phase 3: persist copy events for the EOD summary
         _log.warning("security_monitor ALERT [%s] %s — %s", f.severity, f.title, f.body)
     save_state(args.state, state)
     _log.info("security_monitor: pass complete (%d finding(s), %d new alert(s))",
