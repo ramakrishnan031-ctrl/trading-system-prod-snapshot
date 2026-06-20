@@ -108,7 +108,9 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `main.py` (root) | App entrypoint | launched as `main.py --mode live` |
 
 ### Database  (`data_store/`)
-- `trading_system.db` (~49 MB) — **MAIN** DB (schema **v30**; v29 added trades.EXITING, v30 added trades.needs_tgt_retry/tgt_retry_count/tgt_last_retry_at for the TGT-retry mechanism). trades, orders, signals, fm_ledger, etc.
+- `trading_system.db` (~49 MB) — **MAIN** DB (schema **v31**; v30 added trades.needs_tgt_retry/…; **v31
+  added the slippage-intelligence layer: order_execution_log + trade_slippage_log + market_execution_context**).
+  trades, orders, signals, fm_ledger, etc.
 - `analytics.db` (~44 KB) — analytics split (v28); **ATTACHed** to the main DB at runtime.
 - **Raw sqlite access MUST use `core.db_connect.connect`** (it sets up the ATTACH); plain `sqlite3`
   works only for read-only SELECTs against the main file.
@@ -313,6 +315,23 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Slippage intelligence Phase 1 — raw data layer (schema v31).** Permanent
+  execution-intelligence tables (RAW facts only; analytics computed on-demand in Phase-2 reports — NO
+  aggregate/stale tables). **v31** adds 3 append-only tables to the MAIN DB: `order_execution_log` (per
+  filled leg), `trade_slippage_log` (per trade, incl. **`rr_damage_pct`** = % of the planned risk budget
+  execution ate — the key metric), `market_execution_context` (Priority-2, nullable bid/ask/spread).
+  `EXPECTED_SCHEMA_VERSION` 30→31 (pure additions; `CREATE IF NOT EXISTS` + executescript creates them,
+  no rebuild). New `orders/slippage_recorder.py` `SlippageRecorder` subscribes **ASYNC** to `OrderFilled`
+  (→ order log + context) and `PositionClosed` (→ trade roll-up) — async dispatch means the EventBus
+  logs but NEVER re-raises handler exceptions, so recording is **fully decoupled and can never block
+  trade execution** (handlers also try/except; inserts best-effort/never-raise). Pure tested helpers:
+  adverse/favourable slip (adverse=positive), `calc_rr_damage_pct` (Rama's example 20%), `get_price_band`,
+  `build_trade_slippage_row`. Wired in main.py (construction wrapped). `slippage_bands` config (default
+  0-100..1000+). **Parity:** records paper + live (events fire in both). **Verified live: v30→v31
+  migration runs cleanly on a copy of the real DB** (3 tables created, 63 trades intact). +19 tests; 156
+  migration/state_store/config tests pass. Queries + roadmap in `docs/slippage_intelligence.md`. Commit
+  71d4186. Activates next restart (migration at StateStore init). Phase 2 (reports) + Phase 3 (adaptive
+  engine: Global→Band→Strategy→Symbol) pending.
 - 2026-06-20 — Claude Code — **Slippage tolerance → %-of-SL-distance (replaces today's flat-Rs tiers).**
   Calibration investigation (`slippage_calibration_data_20jun`) found **SL is fixed (signal-based) and
   TGT recalcs from the fill (FIX-013)** ⇒ entry slippage directly inflates the risk budget. Rama's model:
