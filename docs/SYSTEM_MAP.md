@@ -253,8 +253,11 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > token) → CRITICAL. auditd `copy_attempt` execve rules added to `trading-security.rules`.
 > **Limitation:** a **PC-INITIATED pull** (PC is the client, VM's sshd serves it) cannot be
 > hard-blocked from the VM side without risky `ForceCommand`/subsystem changes — it is **detect+alert
-> only**. **Activate on the VM** with `bash deploy/security/install_copy_protection.sh` (reversible:
-> `--uninstall`); git push / interactive ssh are NOT wrapped, so it cannot lock you out.
+> only**. **Detection-only is LIVE on the VM (20-Jun):** the auditd `copy_attempt` rules are loaded
+> and the two monitor checks are verified (a raw outbound copy raises a CRITICAL), but the blocking
+> wrappers are NOT symlinked yet (scp workflow unchanged). **To add hard-block** later, run
+> `bash deploy/security/install_copy_protection.sh` (reversible: `--uninstall`); git push / interactive
+> ssh are NOT wrapped, so it cannot lock you out.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
@@ -325,10 +328,16 @@ inactive alert-watcher).
   changes on the live trading VM → **detect+alert only** (and modern scp's sftp-subsystem path may
   evade the execve rule; reliable pull-detection needs the deferred sftp `-l INFO` logging). 52
   unit tests green (`test_copy_gate.py` + extended `test_security_monitor.py`); CLIs smoke-tested
-  end-to-end (deny→issue→allow→revoke lifecycle in the audit log). **NOT yet activated on the VM** —
-  run `bash deploy/security/install_copy_protection.sh` (reversible `--uninstall`) on Rama's go-ahead.
-  Phase 3 (System Manager EOD integration — a 9th System-Manager security check reading the copy audit
-  log) still pending. Memory `vm_security_phase2`.
+  end-to-end (deny→issue→allow→revoke lifecycle in the audit log). **DETECTION-ONLY ACTIVATED on the
+  VM 20-Jun** (Rama's choice): auditd `copy_attempt` rules installed (`/etc/audit/rules.d/`,
+  `augenrules --load`; the `b64` rule confirmed capturing `scp` execve on this **aarch64** VM) + the
+  two monitor checks verified live (real `ausearch -i` parsed, 0 false-positives on a benign `scp`).
+  **Blocking wrappers deliberately NOT symlinked** → Rama's `scp` workflow is unchanged; run
+  `bash deploy/security/install_copy_protection.sh` later to add hard-block. **Follow-up commit
+  7129b38** fixed two findings surfaced by the live aarch64 box: real `ausearch -i` uses a **2-digit
+  year** (parser now accepts 2-/4-digit) and `ausearch` **blocks on stdin** (now `stdin=DEVNULL`,
+  query uses the locale-proof `-ts recent`). Phase 3 (System Manager EOD integration — a 9th
+  System-Manager security check reading the copy audit log) still pending. Memory `vm_security_phase2`.
 - 2026-06-19 — Claude Code — **VM Security Manager Phase 1 (monitoring + alerts) — built + deployed.**
   Alert-ONLY (never blocks; key-only SSH is the gate). New `scripts/security_monitor.py` (7 isolated
   checks: new/changed authorized_keys, non-whitelisted sudo, failed-login spike, NEW successful-login
