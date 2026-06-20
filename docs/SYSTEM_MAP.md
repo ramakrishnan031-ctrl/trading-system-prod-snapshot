@@ -103,7 +103,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `strategies/` | Strategy config | loader, schema |
 | `utils/` | Utilities/preflight | startup_checks, holiday_guard, instance_lock, cron_heartbeat |
 | `reports/` | Reporting | daily_report, daily_review, style_constants |
-| `scripts/` | ops/cron scripts | incl. `cron_officer.py` (TASK #3 briefing/eod/check-change), `system_manager.py` (TASK #5 EOD deep cross-check, 18:45), 6 `gemini_*.py` (AI ops), auto_refresh_token, premarket_healthcheck, reconcile_positions/pnl, eod_cleanup/verify, etc. |
+| `scripts/` | ops/cron scripts | incl. `cron_officer.py` (TASK #3 briefing/eod/check-change) + `cron_report_render.py` (rich HTML/Telegram render, pure), `system_manager.py` (TASK #5 EOD deep cross-check, 18:45), 6 `gemini_*.py` (AI ops), auto_refresh_token, premarket_healthcheck, reconcile_positions/pnl, eod_cleanup/verify, etc. |
 | `tests/` | 305 test files | unit/, integration/, crash_test/ |
 | `main.py` (root) | App entrypoint | launched as `main.py --mode live` |
 
@@ -188,7 +188,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 01:05 | daily | sqlite3 `.backup` analytics.db | analytics DB backup (TASK #3) |
 | 02:00 | daily | `find backups -mtime +7 -delete` (both DBs) | backup retention |
 | 02:30 | daily | `db_retention.py` (Sun: `--vacuum`) | DB row prune (TASK #3) |
-| 04:55 | daily | `cron_officer.py --briefing` | Cron Officer morning briefing (TASK #3) |
+| 09:20† | daily | `cron_officer.py --briefing` | Cron Officer morning briefing (was 04:55; †live crontab still 04:55 until reinstall) |
 | 05:00 | daily | `rm session/zerodha_token.json` | force fresh login |
 | 08:15 | Mon-Fri | `auto_refresh_token.py` | Headless TOTP token refresh (FIX-187; no manual OTP) |
 | 08:30 | Mon-Fri | `premarket_healthcheck.py` | preflight health |
@@ -212,7 +212,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 17:00 | Mon-Fri | `gemini_data_integrity_check.py` | candle integrity |
 | 18:00 | Sun | `gemini_weekly_patterns.py` | weekly patterns |
 | 18:00 | Mon-Fri | `check_cron_drift.py` | cron heartbeat drift (registry-driven) |
-| 18:30 | Mon-Fri | `cron_officer.py --eod-summary` | Cron Officer EOD report (TASK #3) |
+| 18:50† | Mon-Fri | `cron_officer.py --eod-summary` | Cron Officer EOD report (was 18:30; floor 18:45 +5min so it captures system_manager_eod; †live crontab still 18:30 until reinstall) |
 | 18:45 | Mon-Fri | `system_manager.py` | System Manager EOD deep cross-check (TASK #5) |
 | 03:00 | 1st of month | `backup_restore_drill.py --quiet` | restore drill |
 | hourly | every | `disk_monitor.py` | disk space |
@@ -316,6 +316,36 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Cron Officer revision — Phase 2-6 (full visibility + Bug A/B fixes + rich
+  email/Telegram).** Commit 3dd72b0 (pushed; **crontab reinstall + docs PENDING Rama's dry-run sign-off**).
+  EXTENDS `config/cron_registry.yaml` (no fork). **Phase-1 finding:** the 7 "missed" on 19-Jun were **3
+  permanent bugs + 4 environmental** (FIX-189 morning, already fixed); registry was already 33 jobs, "20"
+  was the EOD *expected* subset. **Bug A** registry key `gemini_data_integrity` → **`gemini_data_integrity_check`**
+  (matches the heartbeat the script records — 0 heartbeats under the old key ever; cron file needed no
+  change). **Bug B** `cron_officer_eod` records a `STARTED` heartbeat BEFORE building the report → stops
+  self-reporting missed. **Bug C** (`daily_report` has no heartbeat) DEFERRED → shown **⏸ Pending** (never
+  CRITICAL; lands with the xlsx redesign). **Schema:** `category` DERIVED from `cadence` (single source of
+  truth, no 33-job duplication) + `heartbeat_required`/`detection_method`/`excluded_reason` (defaults
+  derived) + `OfficerConfig` (`officer:` block: day-window 00:00-23:59, morning **09:20**, EOD floor 18:45
+  +5min = **18:50**, `telegram_ban_until: 2026-06-23` auto-clears). `build_report` classifies **EVERY** job
+  due today by detection method: `heartbeat_db`, or `exit_code_file` (a marker the cron line appends —
+  `; rc=$?; … > data_store/cron_marks/<name>.done`; missing → **NO_SIGNAL**, never a false CRITICAL), or
+  `none`. **Rich delivery** (`scripts/cron_report_render.py`, pure/tested): HTML email (Gmail-safe inline-CSS
+  tables — severity banner, stat cards, progress bar, status pills, per-task table, change-log, excluded,
+  footer) + plain mirror + Telegram MarkdownV2 (`escape_md_v2`). `alerts/critical.py` + `alert_watcher._build_email`
+  extended for `content_type=text/html` → multipart/alternative (fail-fast w/o `plain_fallback`) + verbatim
+  `subject` — **backward-compatible** (no content_type → plain, unchanged). EOD always emails; morning
+  briefing emails during the ban, else Telegrams; subject carries severity emoji + **`[LFL836-BAN]`** in the
+  ban window. New CLI `--force-dry-run` / `--as-of-date`. **Verified** (dry-run on the real VM DB, as-of Fri
+  19-Jun): **17 done / 3 real-missed / 1 ⏸ pending** (vs old "12/20, 7 missed"); HTML samples in
+  `reports/cron_officer/`. +20 tests; 116 cron/alert green; legacy `build_eod_summary`/`build_briefing` kept.
+  See memory `cron_officer_revision_20jun`. NB cron-table times above (09:20/18:50) are the canonical file —
+  the **live crontab still runs 04:55/18:30 until reinstalled** (the held activation step).
+- 2026-06-20 — Claude Code — **Slippage overrides ship FULLY EMPTY (commit 8fd54a8, follow-up to 2ce54ab).**
+  Rama's call: set `by_price_band` to `{}` too (was the lone example `0-100: 0.18`) → every entry resolves to
+  the global **0.22** baseline everywhere for clean data collection first; add per-symbol/strategy/band
+  overrides later from real evidence. Verified live on the VM (`load_all` → all maps `{}`). The v30→v32
+  migration was confirmed clean on a copy of the real DB (63 trades preserved). Docs/test updated.
 - 2026-06-20 — Claude Code — **Slippage tolerance override hierarchy — Phase 3a (MANUAL, schema v32).**
   Lets Rama set per-symbol / per-strategy / per-price-band entry-slippage tolerances NOW (from trading
   knowledge), without waiting for the Phase-3b auto-recommender. New `entry_gate.slippage_control.overrides`
