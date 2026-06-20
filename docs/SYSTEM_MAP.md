@@ -313,6 +313,18 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Copy approval is Telegram-INDEPENDENT (verified) + email fallback.**
+  Rama's check: does VM→PC copy work with Telegram banned (IN, until 23-Jun)? **YES** — `request-copy`
+  writes the token to a LOCAL file (+ audits `copy_audit.log`) BEFORE `send_alert`, and the gate
+  decision is purely local (time-lock/switch/session/token); `send_alert` is best-effort and never
+  blocks. Proven live (token granted + copy succeeded, Telegram down). One gap fixed:
+  `copy_gate.send_alert` INFO "token issued" / WARNING denials were Telegram-only → now an **email
+  fallback** writes a sentinel (→ alert-watcher email) for ANY tier when Telegram did NOT deliver
+  (`result.sentinel_path`/`success`), with `context.severity` keeping the subject correctly labelled
+  (INFO/WARNING) and NO email spam when Telegram is up (delivered → skip); CRITICAL still exactly one
+  email. Security CRITICALs (bypass / protection-disabled, via `security_monitor._send`) already
+  emailed. Verified live (deployed `send_alert` writes an INFO-labelled sentinel). +4 tests. Commit
+  cd85994.
 - 2026-06-20 — Claude Code — **Copy protection: HARD-BLOCK ACTIVATED** (was detection-only). Rama's
   go-ahead, done at 14:00 Sat (markets closed, service down — safest window). Pre-checks confirmed NO
   cron / post-receive hook / systemd unit invokes `scp`/`sftp`/`rsync`, real binaries present, PATH puts
