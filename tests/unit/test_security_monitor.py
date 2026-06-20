@@ -231,12 +231,20 @@ def test_copy_switch_reenable_is_info():
 
 # ── Phase 2: auditd execve parsing + direction ───────────────────────────────
 
+# Mirrors REAL `ausearch -k copy_attempt -i` output on the aarch64 VM:
+# 2-digit year, " : " separator, unquoted exe/proctitle (verified live 20-Jun).
 _AUSEARCH_SAMPLE = """----
-type=PROCTITLE msg=audit(06/20/2026 10:15:30.123:4567) : proctitle=scp /etc/hostname user@pc:/tmp/
-type=CWD msg=audit(06/20/2026 10:15:30.123:4567) : cwd=/home/ubuntu
-type=EXECVE msg=audit(06/20/2026 10:15:30.123:4567) : argc=3 a0=scp a1=/etc/hostname a2=user@pc:/tmp/
-type=SYSCALL msg=audit(06/20/2026 10:15:30.123:4567) : arch=x86_64 syscall=execve success=yes exit=0 comm=scp exe=/usr/bin/scp key=copy_attempt
+type=PROCTITLE msg=audit(06/20/26 10:15:30.123:4567) : proctitle=scp /etc/hostname user@pc:/tmp/
+type=CWD msg=audit(06/20/26 10:15:30.123:4567) : cwd=/home/ubuntu
+type=EXECVE msg=audit(06/20/26 10:15:30.123:4567) : argc=3 a0=scp a1=/etc/hostname a2=user@pc:/tmp/
+type=SYSCALL msg=audit(06/20/26 10:15:30.123:4567) : arch=aarch64 syscall=execve success=yes exit=0 auid=ubuntu uid=ubuntu comm=scp exe=/usr/bin/scp subj=unconfined key=copy_attempt
 """
+
+# A 4-digit-year build must still parse (defensive: regex/strptime accept both).
+_AUSEARCH_SAMPLE_4Y = (
+    "type=PROCTITLE msg=audit(06/20/2026 09:05:00.000:42) : proctitle=rsync -a /data pc:/b\n"
+    "type=SYSCALL msg=audit(06/20/2026 09:05:00.000:42) : exe=/usr/bin/rsync key=copy_attempt\n"
+)
 
 
 def test_parse_ausearch_execve():
@@ -247,7 +255,15 @@ def test_parse_ausearch_execve():
     assert ev["id"] == "4567"
     assert ev["exe"] == "/usr/bin/scp"
     assert ev["cmd"] == "scp /etc/hostname user@pc:/tmp/"
-    assert ev["ts"] is not None and ev["ts"].hour == 10 and ev["ts"].minute == 15
+    assert ev["ts"] is not None
+    assert ev["ts"].year == 2026 and ev["ts"].hour == 10 and ev["ts"].minute == 15
+
+
+def test_parse_ausearch_execve_four_digit_year():
+    now = datetime(2026, 6, 20, 10, 20, tzinfo=_IST)
+    events = parse_ausearch_execve(_AUSEARCH_SAMPLE_4Y, now)
+    assert len(events) == 1 and events[0]["ts"].year == 2026
+    assert events[0]["exe"] == "/usr/bin/rsync"
 
 
 @pytest.mark.parametrize("exe,cmd,outbound", [

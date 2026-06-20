@@ -254,9 +254,11 @@ def established_ssh_peers() -> list[str]:
 # Phase 2: copy-bypass auditd parsing (pure helpers; unit-tested)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ausearch -i stamp: "audit(06/20/2026 10:15:30.123:4567)" (interpreted).
+# ausearch -i stamp (interpreted). The year width varies by auditd build/locale
+# — real aarch64 output is 2-digit "audit(06/20/26 10:34:10.979:14038)", some
+# builds emit 4-digit — so accept either and try both strptime formats below.
 _AUSEARCH_TS_RE = re.compile(
-    r"audit\((\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})[.\d]*:(\d+)\)")
+    r"audit\((\d{2}/\d{2}/\d{2,4} \d{2}:\d{2}:\d{2})[.\d]*:(\d+)\)")
 _EXE_RE = re.compile(r"\bexe=(?:\"([^\"]+)\"|(\S+))")
 _PROCTITLE_RE = re.compile(r"\bproctitle=(.+)$")
 _EXECVE_ARG_RE = re.compile(r"\ba\d+=(?:\"([^\"]*)\"|(\S+))")
@@ -277,11 +279,13 @@ def parse_ausearch_execve(text: str, now: datetime) -> list[dict]:
         ev_id = m.group(2)
         ev = events.setdefault(ev_id, {"id": ev_id, "ts": None, "exe": "", "cmd": ""})
         if ev["ts"] is None:
-            try:
-                naive = datetime.strptime(m.group(1), "%m/%d/%Y %H:%M:%S")
-                ev["ts"] = naive.replace(tzinfo=now.tzinfo or _IST)
-            except ValueError:
-                ev["ts"] = None
+            for fmt in ("%m/%d/%y %H:%M:%S", "%m/%d/%Y %H:%M:%S"):
+                try:
+                    naive = datetime.strptime(m.group(1), fmt)
+                    ev["ts"] = naive.replace(tzinfo=now.tzinfo or _IST)
+                    break
+                except ValueError:
+                    continue
         em = _EXE_RE.search(line)
         if em and not ev["exe"]:
             ev["exe"] = em.group(1) or em.group(2)
@@ -322,16 +326,21 @@ def ausearch_copy_attempts(since: Optional[datetime], now: datetime) -> list[dic
     Needs `sudo ausearch` (ausearch is on the security.yaml sudo whitelist, so
     this does not self-alert). Returns [] if auditd/ausearch is unavailable."""
     start = since or (now - timedelta(minutes=15))
-    cmd = ["sudo", "-n", "ausearch", "-k", "copy_attempt", "-i",
-           "-ts", start.strftime("%m/%d/%Y"), start.strftime("%H:%M:%S")]
+    # `-ts recent` (~last 10 min) is a locale-proof keyword — a computed
+    # MM/DD/YYYY can be rejected on 2-digit-year builds, silently disabling the
+    # check. copy_attempt events are rare, so re-scanning 10 min is cheap and the
+    # event-id dedup ledger (6h) prevents re-alerting. stdin=DEVNULL: ausearch
+    # blocks reading stdin when it inherits a pipe/tty (it hung over ssh).
+    cmd = ["sudo", "-n", "ausearch", "-k", "copy_attempt", "-i", "-ts", "recent"]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20,
+                             stdin=subprocess.DEVNULL)
     except Exception:
         return []
     if out.returncode != 0 or not out.stdout.strip():
         return []
     events = parse_ausearch_execve(out.stdout, now)
-    # keep only events at/after `since` (ausearch -ts granularity is seconds)
+    # keep only events at/after `since` (parsed ts; unparseable ts -> keep)
     return [e for e in events if e["ts"] is None or e["ts"] >= start]
 
 
