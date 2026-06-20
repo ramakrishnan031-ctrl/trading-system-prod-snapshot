@@ -23,6 +23,7 @@ from scripts.security_monitor import (
     parse_ausearch_execve,
     is_outbound_copy,
     recent_allowed_copy_times,
+    active_token_windows,
     _dedup,
 )
 
@@ -325,3 +326,36 @@ def test_copy_bypass_ignores_inbound_sink(monkeypatch, tmp_path):
     monkeypatch.setattr(sm, "ausearch_copy_attempts", lambda since, n: [ev])
     cfg = SecConfig(copy_audit_log_path=str(tmp_path / "none.log"))
     assert check_copy_bypass(cfg, {}, now) == []  # inbound is not a bypass
+
+
+def test_active_token_windows(tmp_path):
+    import json
+    now = datetime(2026, 6, 20, 10, 30, tzinfo=_IST)
+    log = tmp_path / "copy_audit.log"
+    rows = [
+        {"event": "COPY_TOKEN_ISSUED", "ts": (now - timedelta(minutes=5)).isoformat(),
+         "expires_at": (now + timedelta(minutes=10)).isoformat()},          # fresh
+        {"event": "COPY_TOKEN_ISSUED", "ts": (now - timedelta(hours=3)).isoformat(),
+         "expires_at": (now - timedelta(hours=2)).isoformat()},             # expired > lookback
+        {"event": "COPY_ALLOWED", "ts": now.isoformat()},                   # not a token issue
+    ]
+    log.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+    w = active_token_windows(str(log), now)
+    assert len(w) == 1 and w[0][0] < now < w[0][1]
+
+
+def test_copy_bypass_silent_within_token_window(monkeypatch, tmp_path):
+    import json
+    now = datetime(2026, 6, 20, 10, 15, 31, tzinfo=_IST)
+    ev_ts = datetime(2026, 6, 20, 10, 15, 30, tzinfo=_IST)
+    ev = {"id": "555", "ts": ev_ts, "exe": "/usr/bin/scp",
+          "cmd": "scp /etc/hostname user@pc:/tmp/"}  # outbound
+    monkeypatch.setattr(sm, "ausearch_copy_attempts", lambda since, n: [ev])
+    log = tmp_path / "copy_audit.log"
+    log.write_text(json.dumps({
+        "event": "COPY_TOKEN_ISSUED",
+        "ts": (ev_ts - timedelta(minutes=2)).isoformat(),
+        "expires_at": (ev_ts + timedelta(minutes=13)).isoformat()}), encoding="utf-8")
+    cfg = SecConfig(copy_audit_log_path=str(log))
+    # a deliberate copy covered by a request-copy token window is NOT a bypass
+    assert check_copy_bypass(cfg, {}, now) == []

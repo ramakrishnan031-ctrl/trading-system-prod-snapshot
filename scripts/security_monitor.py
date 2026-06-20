@@ -371,6 +371,36 @@ def recent_allowed_copy_times(audit_log_path: str, now: datetime,
     return out
 
 
+def active_token_windows(audit_log_path: str, now: datetime,
+                         lookback_sec: int = 3600) -> list[tuple[datetime, datetime]]:
+    """[(issued, expires)] windows from COPY_TOKEN_ISSUED entries within lookback.
+
+    An outbound copy whose timestamp falls inside a window had a valid token, so
+    it is NOT a bypass — this makes `request-copy` suppress the alert on a
+    deliberate copy even in detection-only mode (before the wrappers exist)."""
+    out: list[tuple[datetime, datetime]] = []
+    cutoff = now - timedelta(seconds=lookback_sec)
+    try:
+        lines = Path(audit_log_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return out
+    for line in lines[-500:]:
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("event") != "COPY_TOKEN_ISSUED":
+            continue
+        try:
+            issued = datetime.fromisoformat(rec.get("ts", ""))
+            expires = datetime.fromisoformat(rec.get("expires_at", ""))
+        except (ValueError, TypeError):
+            continue
+        if expires >= cutoff:
+            out.append((issued, expires))
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # State
 # ─────────────────────────────────────────────────────────────────────────────
@@ -558,6 +588,7 @@ def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Findin
         return []
     allowed = recent_allowed_copy_times(cfg.copy_audit_log_path, now,
                                         window_sec=180)
+    windows = active_token_windows(cfg.copy_audit_log_path, now)
     out: list[Finding] = []
     for ev in events:
         if not is_outbound_copy(ev["exe"], ev["cmd"]):
@@ -565,7 +596,10 @@ def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Findin
         ev_ts = ev["ts"]
         authorised = False
         if ev_ts is not None:
-            authorised = any(abs((ev_ts - a).total_seconds()) <= 180 for a in allowed)
+            authorised = (
+                any(abs((ev_ts - a).total_seconds()) <= 180 for a in allowed)
+                or any(start <= ev_ts <= end for (start, end) in windows)
+            )
         if authorised:
             continue
         when = ev_ts.strftime("%Y-%m-%d %H:%M:%S") if ev_ts else "recently"
