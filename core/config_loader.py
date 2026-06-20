@@ -729,6 +729,28 @@ class SmartTgtConfig(BaseModel):
         return v
 
 
+class SlippageTier(BaseModel):
+    """One price band of the tiered entry-slippage guard. `price < max_price`
+    selects this band (lower bound exclusive); `max_slippage_rs` is the max
+    acceptable |LTP - trigger| (in Rs) before the entry is aborted."""
+    model_config = ConfigDict(extra="forbid")
+    max_price: float
+    max_slippage_rs: float
+
+
+class EntrySlippageTiersConfig(BaseModel):
+    """Tiered (per-price-band) entry-slippage tolerance in RUPEES — calibratable
+    without code changes. When enabled, the pre-order guard aborts an entry if
+    |LTP - signal_trigger| exceeds the band's `max_slippage_rs`. The flat
+    `entry_gate.max_entry_slippage_pct` is still applied when `also_apply_pct_check`
+    (belt-and-suspenders), and remains the sole gate when `enabled=false`."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    tiers: list[SlippageTier] = Field(default_factory=list)
+    default_max_slippage_rs: float = 2.0
+    also_apply_pct_check: bool = True
+
+
 class EntryGateConfig(BaseModel):
     """
     FIX-025: EntryGate slippage protection config.
@@ -752,6 +774,9 @@ class EntryGateConfig(BaseModel):
     liquidity_check_enabled: bool = True  # FIX-134 Item 38: enable/disable
     min_effective_rr: float = 1.0       # FIX-136 Item 54: abort if R:R < this after slippage
     min_pending_rr: float = 0.0         # FIX-141: cancel pending entry if remaining R:R < this (0=disabled)
+    slippage_tiers: EntrySlippageTiersConfig = Field(  # tiered Rs slippage abort (calibratable)
+        default_factory=EntrySlippageTiersConfig
+    )
 
 
 class LiveFeedConfig(BaseModel):

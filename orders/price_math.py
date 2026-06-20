@@ -56,6 +56,25 @@ def round_to_tick(price: float, tick: float = DEFAULT_TICK, mode: str = "nearest
     return float(d_result)
 
 
+def tier_slippage_tolerance_rs(
+    price: float,
+    tiers: list[tuple[float, float]],
+    default_rs: float,
+) -> float:
+    """Max acceptable entry slippage (in Rs) for a trigger `price`, from price bands.
+
+    `tiers` is a list of (max_price, max_slippage_rs). The first band with
+    ``price < max_price`` wins — the lower bound is EXCLUSIVE, so e.g. exactly
+    100.00 falls into the 100-200 band, not the <100 band. Falls back to
+    `default_rs` when no band matches (price at/above the top band's max_price).
+    Empty `tiers` -> `default_rs`.
+    """
+    for max_price, max_slip in sorted(tiers, key=lambda t: t[0]):
+        if price < max_price:
+            return max_slip
+    return default_rs
+
+
 def _is_long(direction_or_side: str) -> bool:
     v = direction_or_side.upper()
     return v in ("LONG", "BUY")

@@ -204,8 +204,35 @@ from orders.price_math import (
     EMERGENCY_EXIT_BUFFER_PCT,
     calc_tgt_price,
     marketable_limit_price,
+    tier_slippage_tolerance_rs,
 )
 from orders.smart_tgt_manager import SmartTgtManager
+
+
+def _slippage_abort_reason(
+    trigger_price: float,
+    slip_rs: float,
+    slip_pct: float,
+    tier_tuples: list,
+    tiers_cfg: Any,
+    max_pct: float,
+) -> Optional[str]:
+    """Decide whether a pre-order entry should abort on slippage; return the
+    reason string or None (allowed). Tiered RUPEE band first (when enabled), then
+    the flat pct check — kept as belt-and-suspenders when `also_apply_pct_check`,
+    and the SOLE gate when tiers are disabled. Pure (no I/O) for easy testing."""
+    apply_pct = True
+    if tiers_cfg is not None and getattr(tiers_cfg, "enabled", False) and tier_tuples:
+        tol_rs = tier_slippage_tolerance_rs(
+            trigger_price, tier_tuples, getattr(tiers_cfg, "default_max_slippage_rs", 2.0)
+        )
+        if slip_rs > tol_rs:
+            return (f"slippage ₹{slip_rs:.2f} > tier tolerance ₹{tol_rs:.2f} "
+                    f"(band for ₹{trigger_price:.2f})")
+        apply_pct = getattr(tiers_cfg, "also_apply_pct_check", True)
+    if apply_pct and slip_pct > max_pct:
+        return f"slippage {slip_pct:.2f}% > limit {max_pct:.1f}%"
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,6 +414,7 @@ class OrderPlacer:
         market_windows: Optional[Any] = None,  # FIX-073: market windows for EOD entry cutoff check
         price_drift_threshold: float = 0.005,  # FIX-075: 0.5% default drift threshold for margin top-up
         max_entry_slippage_pct: float = 1.0,  # FIX-128: abort if LTP deviates > this % from trigger
+        entry_slippage_tiers: Optional[Any] = None,  # tiered Rs slippage abort (EntrySlippageTiersConfig)
         liquidity_check_enabled: bool = False,  # FIX-134 Item 38
         liquidity_max_spread_pct: float = 0.5,
         liquidity_min_depth_qty: int = 500,
@@ -454,6 +482,13 @@ class OrderPlacer:
         self._price_drift_threshold = price_drift_threshold
         # FIX-128: max allowed % deviation between trigger price and current LTP
         self._max_entry_slippage_pct = max_entry_slippage_pct
+        # Tiered Rs slippage abort: precompute (max_price, max_slippage_rs) tuples
+        # for the pure tier lookup. Empty/None -> tiered guard inactive (pct only).
+        self._entry_slippage_tiers = entry_slippage_tiers
+        self._slippage_tier_tuples = [
+            (t.max_price, t.max_slippage_rs)
+            for t in getattr(entry_slippage_tiers, "tiers", None) or []
+        ]
         # FIX-134 Item 38: liquidity check before entry
         self._liquidity_check_enabled = liquidity_check_enabled
         self._liquidity_max_spread_pct = liquidity_max_spread_pct
@@ -772,12 +807,27 @@ class OrderPlacer:
                 # (live_feed has no .quote()). Best-effort; None -> skip guard.
                 _slip_ltp = self._fetch_ltp(symbol)
             if _slip_ltp is not None:
-                _slip_pct = abs(_slip_ltp - signal_trigger_price) / signal_trigger_price * 100
-                if _slip_pct > self._max_entry_slippage_pct:
+                _slip_rs = abs(_slip_ltp - signal_trigger_price)
+                _slip_pct = _slip_rs / signal_trigger_price * 100
+                # Calibration: always record the observed slippage (even within
+                # tolerance) so the tiers can be tuned from real numbers.
+                self._log.info(
+                    "order_placer.entry_slippage_observed",
+                    extra={
+                        "symbol": symbol, "side": side,
+                        "trigger_price": signal_trigger_price, "current_ltp": _slip_ltp,
+                        "slippage_rs": round(_slip_rs, 2), "slippage_pct": round(_slip_pct, 3),
+                    },
+                )
+                _abort_reason = _slippage_abort_reason(
+                    signal_trigger_price, _slip_rs, _slip_pct,
+                    self._slippage_tier_tuples, self._entry_slippage_tiers,
+                    self._max_entry_slippage_pct,
+                )
+                if _abort_reason is not None:
                     slip_exc = OrderRejectedError(
                         f"slippage_exceeded: trigger={signal_trigger_price:.2f} "
-                        f"ltp={_slip_ltp:.2f} slippage={_slip_pct:.2f}% "
-                        f"limit={self._max_entry_slippage_pct:.1f}%",
+                        f"ltp={_slip_ltp:.2f} | {_abort_reason}",
                         trade_id=trade_id, signal_id=signal_id, symbol=symbol,
                     )
                     self._log.warning(
@@ -787,8 +837,9 @@ class OrderPlacer:
                             "symbol": symbol, "side": side,
                             "trigger_price": signal_trigger_price,
                             "current_ltp": _slip_ltp,
+                            "slippage_rs": round(_slip_rs, 2),
                             "slippage_pct": round(_slip_pct, 3),
-                            "limit_pct": self._max_entry_slippage_pct,
+                            "reason": _abort_reason,
                         },
                     )
                     if self._notifier is not None:
@@ -797,8 +848,9 @@ class OrderPlacer:
                                 severity="WARNING",
                                 title=f"[{self._mode}] SLIPPAGE GUARD — {symbol}",
                                 body=(
-                                    f"Order aborted: {side} | Slippage {_slip_pct:.2f}% > limit {self._max_entry_slippage_pct:.1f}%\n"
-                                    f"Trigger: ₹{signal_trigger_price:.2f} | LTP: ₹{_slip_ltp:.2f}"
+                                    f"Order aborted: {side} | {_abort_reason}\n"
+                                    f"Trigger: ₹{signal_trigger_price:.2f} | "
+                                    f"LTP: ₹{_slip_ltp:.2f} | Slip: ₹{_slip_rs:.2f}"
                                 ),
                                 source_module="order_placer",
                             )
