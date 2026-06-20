@@ -313,7 +313,25 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
-- 2026-06-20 — Claude Code — **Tiered entry-slippage abort (per-price-band, in RUPEES).** Augments the
+- 2026-06-20 — Claude Code — **Slippage tolerance → %-of-SL-distance (replaces today's flat-Rs tiers).**
+  Calibration investigation (`slippage_calibration_data_20jun`) found **SL is fixed (signal-based) and
+  TGT recalcs from the fill (FIX-013)** ⇒ entry slippage directly inflates the risk budget. Rama's model:
+  cap slippage as a FRACTION of the SL distance. `entry_gate.slippage_control` (replaces `slippage_tiers`),
+  mode-selectable: **sl_fraction (DEFAULT)** `tolerance = min(SL_dist × max_slippage_fraction(0.22),
+  absolute_cap_rs(₹5))` — auto-scales with price AND strategy SL%; `flat_tiers` (today's) + `pct` kept for
+  A/B; **`hard_max_slippage_rs(₹10)`** absolute ceiling in every mode; `also_apply_pct_check`
+  belt-and-suspenders; disabled → legacy flat %. `SL_dist = |signal_trigger − sl_price|` (both available
+  in `place()`; cap-only if SL missing). New `_compute_slippage_tolerance` / `_slippage_decision`
+  (order_placer, pure/tested); guard uses them; the calibration log now records
+  `sl_distance_rs`/`tolerance_rs`/**`fraction_of_sl_used`** per entry (tune 0.22 from real numbers).
+  **Step 7.3 (LIMIT=signal+tolerance) deliberately NOT done** — it's a no-op when the guard passes (the
+  `release_ltp` cap dominates), risks NON-FILLS when planned-entry ≠ trigger, and doesn't fix the CO/SL
+  gap; the pre-order ABORT is the safe enforcement. Verified live (all 5 spec examples: THELEELA
+  ₹3.10 > ₹2.12 ABORT, etc.). **FINDING:** LLOYDSENGG (₹0.43 = 26% of its 2% SL) ABORTS at 0.22 (spec
+  Step 9.6 assumed flat_tiers) → raise `max_slippage_fraction` to ~0.27 to allow it. +18 tests; 137 pass.
+  Commits a08901e + 3ddb774. Activates next restart.
+- 2026-06-20 — Claude Code — **Tiered entry-slippage abort (per-price-band, in RUPEES).** [superseded
+  same day by the %-of-SL model above; flat_tiers retained as a mode] Augments the
   flat `entry_gate.max_entry_slippage_pct` (1%) with a tiered Rs tolerance by price band, calibratable in
   config without code changes. The pre-order guard (`order_placer.place()`, the FIX-128 LTP-vs-trigger
   check) now aborts when `|LTP − signal_trigger|` exceeds the band's `max_slippage_rs`. Starter bands
