@@ -238,19 +238,26 @@ entry_gate:                   # FIX-025: gate release slippage protection
   liquidity_check_enabled: true  # FIX-134 Item 38: enable/disable liquidity check
   min_effective_rr: 1.0       # FIX-136 Item 54: abort if R:R < 1.0 after slippage
   min_pending_rr: 1.0         # FIX-141: cancel pending entry if remaining R:R drops below this (0=disabled)
-  # Tiered entry-slippage abort (in RUPEES, by price band) — pre-order guard.
-  # Aborts the entry if |LTP - signal trigger| exceeds the band's max_slippage_rs.
-  # Band selected by price < max_price (lower bound EXCLUSIVE: 100.00 -> 100-200 band).
-  # STARTER values (Rama to calibrate over live days). Edit freely; restart to apply.
-  slippage_tiers:
+  # Entry-slippage abort (pre-order guard). Aborts if |LTP - signal trigger| > tolerance.
+  # mode=sl_fraction (DEFAULT): tolerance = min(SL_distance x max_slippage_fraction, absolute_cap_rs)
+  #   -> auto-scales with price AND strategy SL%; caps how much of the risk budget slippage eats.
+  #   (SL is fixed/signal-based, TGT recalcs from fill (FIX-013), so slippage directly inflates risk.)
+  # Calibrate via max_slippage_fraction + absolute_cap_rs; check entry_slippage_observed logs
+  # (fraction_of_sl_used). Restart to apply. flat_tiers/pct modes kept for A/B.
+  slippage_control:
     enabled: true
+    mode: sl_fraction              # sl_fraction | flat_tiers | pct
+    max_slippage_fraction: 0.22    # sl_fraction: slippage <= 22% of the SL distance
+    absolute_cap_rs: 5.00          # sl_fraction: hard backstop (smaller of the two wins)
+    hard_max_slippage_rs: 10.0     # absolute ceiling, ALWAYS applied (any mode)
+    also_apply_pct_check: true     # also keep the flat max_entry_slippage_pct (belt + suspenders)
+    # --- flat_tiers mode (today's build, kept for A/B) ---
+    default_max_slippage_rs: 2.00
     tiers:
       - { max_price: 100,    max_slippage_rs: 1.00 }   # < Rs 100
       - { max_price: 200,    max_slippage_rs: 1.25 }   # Rs 100-200
       - { max_price: 500,    max_slippage_rs: 2.00 }   # Rs 200-500
       - { max_price: 999999, max_slippage_rs: 3.00 }   # > Rs 500
-    default_max_slippage_rs: 2.00   # fallback if no band matches
-    also_apply_pct_check: true      # also keep the flat max_entry_slippage_pct (belt + suspenders)
 
 paper:                        # H-20/ZA16a: paper-mode fill synthesis
   auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)

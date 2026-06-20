@@ -2057,7 +2057,7 @@ def _main_locked(args, config_dir: Path) -> int:
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,  # BL-19
         entry_gate_slippage_buffer=app_config.system.entry_gate.slippage_buffer,  # FIX-025
         max_entry_slippage_pct=app_config.system.entry_gate.max_entry_slippage_pct,  # FIX-128
-        entry_slippage_tiers=app_config.system.entry_gate.slippage_tiers,  # tiered Rs slippage abort
+        slippage_control=app_config.system.entry_gate.slippage_control,  # sl_fraction/flat_tiers/pct abort
         notifier=notifier,
         mode=mode_label,
         live_feed=live_feed,  # FIX-061: LTP retry for exit validation errors

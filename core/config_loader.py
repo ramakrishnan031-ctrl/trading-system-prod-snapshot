@@ -738,17 +738,37 @@ class SlippageTier(BaseModel):
     max_slippage_rs: float
 
 
-class EntrySlippageTiersConfig(BaseModel):
-    """Tiered (per-price-band) entry-slippage tolerance in RUPEES — calibratable
-    without code changes. When enabled, the pre-order guard aborts an entry if
-    |LTP - signal_trigger| exceeds the band's `max_slippage_rs`. The flat
-    `entry_gate.max_entry_slippage_pct` is still applied when `also_apply_pct_check`
-    (belt-and-suspenders), and remains the sole gate when `enabled=false`."""
+class SlippageControlConfig(BaseModel):
+    """Entry-slippage abort tolerance — calibratable without code changes. The
+    pre-order guard aborts an entry when |LTP − signal_trigger| exceeds a
+    `tolerance` computed per `mode`:
+      sl_fraction (DEFAULT): tolerance = min(SL_distance × max_slippage_fraction,
+                             absolute_cap_rs) — auto-scales with price AND the
+                             strategy's SL%; directly caps how much of the risk
+                             budget slippage may eat.
+      flat_tiers: per-price-band Rs from `tiers`.
+      pct:        signal_price × entry_gate.max_entry_slippage_pct.
+    `hard_max_slippage_rs` is an absolute ceiling applied in EVERY mode. (SL is
+    fixed/signal-based while TGT recalcs from the fill — FIX-013 — so entry
+    slippage directly inflates risk; sl_fraction caps that fraction.)"""
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
-    tiers: list[SlippageTier] = Field(default_factory=list)
-    default_max_slippage_rs: float = 2.0
-    also_apply_pct_check: bool = True
+    mode: str = "sl_fraction"               # sl_fraction | flat_tiers | pct
+    max_slippage_fraction: float = 0.22     # sl_fraction: slippage ≤ this × SL distance
+    absolute_cap_rs: float = 5.0            # sl_fraction: backstop (the smaller of the two wins)
+    tiers: list[SlippageTier] = Field(default_factory=list)  # flat_tiers mode
+    default_max_slippage_rs: float = 2.0    # flat_tiers: fallback when no band matches
+    also_apply_pct_check: bool = True       # also apply the flat % (belt+suspenders), non-pct modes
+    hard_max_slippage_rs: float = 10.0      # absolute ceiling, ALWAYS applied regardless of mode
+
+    @field_validator("mode")
+    @classmethod
+    def _valid_mode(cls, v: str) -> str:
+        if v not in ("sl_fraction", "flat_tiers", "pct"):
+            raise ValueError(
+                f"slippage_control.mode must be sl_fraction|flat_tiers|pct, got {v!r}"
+            )
+        return v
 
 
 class EntryGateConfig(BaseModel):
@@ -774,8 +794,8 @@ class EntryGateConfig(BaseModel):
     liquidity_check_enabled: bool = True  # FIX-134 Item 38: enable/disable
     min_effective_rr: float = 1.0       # FIX-136 Item 54: abort if R:R < this after slippage
     min_pending_rr: float = 0.0         # FIX-141: cancel pending entry if remaining R:R < this (0=disabled)
-    slippage_tiers: EntrySlippageTiersConfig = Field(  # tiered Rs slippage abort (calibratable)
-        default_factory=EntrySlippageTiersConfig
+    slippage_control: SlippageControlConfig = Field(  # entry-slippage abort (sl_fraction/flat_tiers/pct)
+        default_factory=SlippageControlConfig
     )
 
 

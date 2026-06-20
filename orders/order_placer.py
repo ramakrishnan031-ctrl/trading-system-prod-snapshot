@@ -209,30 +209,61 @@ from orders.price_math import (
 from orders.smart_tgt_manager import SmartTgtManager
 
 
-def _slippage_abort_reason(
-    trigger_price: float,
+def _compute_slippage_tolerance(
+    cfg: Any,
+    signal_price: float,
+    sl_price: Optional[float],
+    tier_tuples: list,
+    max_pct: float,
+) -> tuple[float, Optional[float]]:
+    """Entry-slippage tolerance (Rs) for the active mode, plus the hard ceiling.
+    Returns (tolerance_rs, sl_distance_rs_or_None). Pure (no I/O) for testing.
+
+      sl_fraction: min(SL_distance × max_slippage_fraction, absolute_cap_rs)
+                   — SL_distance = |signal − sl|; falls back to absolute_cap_rs if
+                   the SL price is unavailable.
+      flat_tiers:  per-price-band Rs (tier_tuples).
+      pct:         signal_price × max_pct%.
+    `hard_max_slippage_rs` is applied as an absolute ceiling in every mode."""
+    mode = getattr(cfg, "mode", "sl_fraction")
+    sl_dist: Optional[float] = None
+    if mode == "sl_fraction":
+        if sl_price is not None and sl_price > 0:
+            sl_dist = abs(signal_price - sl_price)
+            tol = min(sl_dist * cfg.max_slippage_fraction, cfg.absolute_cap_rs)
+        else:
+            tol = cfg.absolute_cap_rs        # SL unavailable -> backstop only
+    elif mode == "flat_tiers":
+        tol = tier_slippage_tolerance_rs(signal_price, tier_tuples, cfg.default_max_slippage_rs)
+    elif mode == "pct":
+        tol = signal_price * (max_pct / 100.0)
+    else:
+        tol = cfg.absolute_cap_rs            # unknown mode -> safe small cap
+    return min(tol, cfg.hard_max_slippage_rs), sl_dist
+
+
+def _slippage_decision(
+    cfg: Any,
+    signal_price: float,
+    sl_price: Optional[float],
     slip_rs: float,
     slip_pct: float,
     tier_tuples: list,
-    tiers_cfg: Any,
     max_pct: float,
-) -> Optional[str]:
-    """Decide whether a pre-order entry should abort on slippage; return the
-    reason string or None (allowed). Tiered RUPEE band first (when enabled), then
-    the flat pct check — kept as belt-and-suspenders when `also_apply_pct_check`,
-    and the SOLE gate when tiers are disabled. Pure (no I/O) for easy testing."""
-    apply_pct = True
-    if tiers_cfg is not None and getattr(tiers_cfg, "enabled", False) and tier_tuples:
-        tol_rs = tier_slippage_tolerance_rs(
-            trigger_price, tier_tuples, getattr(tiers_cfg, "default_max_slippage_rs", 2.0)
-        )
-        if slip_rs > tol_rs:
-            return (f"slippage ₹{slip_rs:.2f} > tier tolerance ₹{tol_rs:.2f} "
-                    f"(band for ₹{trigger_price:.2f})")
-        apply_pct = getattr(tiers_cfg, "also_apply_pct_check", True)
-    if apply_pct and slip_pct > max_pct:
-        return f"slippage {slip_pct:.2f}% > limit {max_pct:.1f}%"
-    return None
+) -> tuple[Optional[str], float, Optional[float]]:
+    """Decide whether to abort the entry on slippage. Returns
+    (abort_reason_or_None, tolerance_rs, sl_distance_or_None). Pure (no I/O).
+    Aborts on the mode tolerance; the flat % is kept as belt-and-suspenders for
+    the non-pct modes when `also_apply_pct_check`."""
+    tol, sl_dist = _compute_slippage_tolerance(cfg, signal_price, sl_price, tier_tuples, max_pct)
+    if slip_rs > tol:
+        extra = f", SL_dist=₹{sl_dist:.2f}, {slip_rs / sl_dist * 100:.0f}% of SL" if sl_dist else ""
+        return (f"slippage ₹{slip_rs:.2f} > tolerance ₹{tol:.2f} "
+                f"(mode={getattr(cfg, 'mode', '?')}{extra})"), tol, sl_dist
+    if (getattr(cfg, "also_apply_pct_check", True) and getattr(cfg, "mode", "") != "pct"
+            and slip_pct > max_pct):
+        return f"slippage {slip_pct:.2f}% > flat limit {max_pct:.1f}%", tol, sl_dist
+    return None, tol, sl_dist
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -414,7 +445,7 @@ class OrderPlacer:
         market_windows: Optional[Any] = None,  # FIX-073: market windows for EOD entry cutoff check
         price_drift_threshold: float = 0.005,  # FIX-075: 0.5% default drift threshold for margin top-up
         max_entry_slippage_pct: float = 1.0,  # FIX-128: abort if LTP deviates > this % from trigger
-        entry_slippage_tiers: Optional[Any] = None,  # tiered Rs slippage abort (EntrySlippageTiersConfig)
+        slippage_control: Optional[Any] = None,  # SlippageControlConfig (sl_fraction/flat_tiers/pct)
         liquidity_check_enabled: bool = False,  # FIX-134 Item 38
         liquidity_max_spread_pct: float = 0.5,
         liquidity_min_depth_qty: int = 500,
@@ -482,12 +513,12 @@ class OrderPlacer:
         self._price_drift_threshold = price_drift_threshold
         # FIX-128: max allowed % deviation between trigger price and current LTP
         self._max_entry_slippage_pct = max_entry_slippage_pct
-        # Tiered Rs slippage abort: precompute (max_price, max_slippage_rs) tuples
-        # for the pure tier lookup. Empty/None -> tiered guard inactive (pct only).
-        self._entry_slippage_tiers = entry_slippage_tiers
+        # Entry-slippage control (sl_fraction/flat_tiers/pct). Precompute the
+        # (max_price, max_slippage_rs) tuples for the flat_tiers lookup.
+        self._slippage_control = slippage_control
         self._slippage_tier_tuples = [
             (t.max_price, t.max_slippage_rs)
-            for t in getattr(entry_slippage_tiers, "tiers", None) or []
+            for t in getattr(slippage_control, "tiers", None) or []
         ]
         # FIX-134 Item 38: liquidity check before entry
         self._liquidity_check_enabled = liquidity_check_enabled
@@ -809,20 +840,36 @@ class OrderPlacer:
             if _slip_ltp is not None:
                 _slip_rs = abs(_slip_ltp - signal_trigger_price)
                 _slip_pct = _slip_rs / signal_trigger_price * 100
-                # Calibration: always record the observed slippage (even within
-                # tolerance) so the tiers can be tuned from real numbers.
+                _scfg = self._slippage_control
+                if _scfg is not None and getattr(_scfg, "enabled", False):
+                    _abort_reason, _slip_tol, _slip_sl_dist = _slippage_decision(
+                        _scfg, signal_trigger_price, sl_price, _slip_rs, _slip_pct,
+                        self._slippage_tier_tuples, self._max_entry_slippage_pct,
+                    )
+                else:
+                    # slippage_control disabled/absent -> legacy flat % guard (FIX-128)
+                    _slip_tol = signal_trigger_price * (self._max_entry_slippage_pct / 100.0)
+                    _slip_sl_dist = None
+                    _abort_reason = (
+                        f"slippage {_slip_pct:.2f}% > limit {self._max_entry_slippage_pct:.1f}%"
+                        if _slip_pct > self._max_entry_slippage_pct else None
+                    )
+                # Calibration: always record the observed slippage + how much of the
+                # SL risk-budget it consumed (even within tolerance) so
+                # max_slippage_fraction can be tuned from real numbers.
                 self._log.info(
                     "order_placer.entry_slippage_observed",
                     extra={
                         "symbol": symbol, "side": side,
                         "trigger_price": signal_trigger_price, "current_ltp": _slip_ltp,
                         "slippage_rs": round(_slip_rs, 2), "slippage_pct": round(_slip_pct, 3),
+                        "sl_distance_rs": (round(_slip_sl_dist, 2) if _slip_sl_dist else None),
+                        "tolerance_rs": round(_slip_tol, 2),
+                        "fraction_of_sl_used": (round(_slip_rs / _slip_sl_dist, 3)
+                                                if _slip_sl_dist else None),
+                        "mode": getattr(_scfg, "mode", None),
+                        "aborted": _abort_reason is not None,
                     },
-                )
-                _abort_reason = _slippage_abort_reason(
-                    signal_trigger_price, _slip_rs, _slip_pct,
-                    self._slippage_tier_tuples, self._entry_slippage_tiers,
-                    self._max_entry_slippage_pct,
                 )
                 if _abort_reason is not None:
                     slip_exc = OrderRejectedError(
