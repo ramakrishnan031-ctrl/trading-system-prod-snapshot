@@ -313,6 +313,22 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Tiered entry-slippage abort (per-price-band, in RUPEES).** Augments the
+  flat `entry_gate.max_entry_slippage_pct` (1%) with a tiered Rs tolerance by price band, calibratable in
+  config without code changes. The pre-order guard (`order_placer.place()`, the FIX-128 LTP-vs-trigger
+  check) now aborts when `|LTP − signal_trigger|` exceeds the band's `max_slippage_rs`. Starter bands
+  (Rama to calibrate over live days): **<100→₹1.00, 100-200→₹1.25, 200-500→₹2.00, >500→₹3.00** (lower
+  bound EXCLUSIVE → 100.00 is in the 100-200 band). **THELEELA (trigger 481.50, slip ₹2.60) now ABORTS**
+  (200-500 band tol ₹2.00; it passed the old flat 1% = ₹4.81). `also_apply_pct_check: true` keeps the
+  flat % as belt-and-suspenders; `enabled: false` → flat % is the sole gate (backward-compatible). New
+  `tier_slippage_tolerance_rs` (orders/price_math.py) + `_slippage_abort_reason` (orders/order_placer.py)
+  + `EntrySlippageTiersConfig`/`SlippageTier` (config_loader, `extra="forbid"`) + the
+  `entry_gate.slippage_tiers` block in system_config.yaml. Every entry logs `entry_slippage_observed`
+  (Rs+pct) for calibration; an abort logs `slippage_guard_exceeded` + a WARNING (Telegram + email
+  fallback). **Parity:** runs in `place()` for paper + live; config is mode-agnostic. Verified live
+  (config loads; ₹2.60 → abort, ₹1.50/₹2.80-at-600 → allow). +18 tests. Commit d464f33. Activates next
+  restart; abort-only (safe direction), editable. NB the system_config.yaml hash change → the
+  security-watcher emits one WARNING "system_config changed" (expected for a config deploy).
 - 2026-06-20 — Claude Code — **Copy approval is Telegram-INDEPENDENT (verified) + email fallback.**
   Rama's check: does VM→PC copy work with Telegram banned (IN, until 23-Jun)? **YES** — `request-copy`
   writes the token to a LOCAL file (+ audits `copy_audit.log`) BEFORE `send_alert`, and the gate

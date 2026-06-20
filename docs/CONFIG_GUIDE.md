@@ -264,7 +264,24 @@ sequence (`1, 5, 30 s` then soft_kill) kicks in. `timeouts` = HTTP connect/read 
 
 ### entry_gate (slippage & liquidity protection)
 **File:** `system_config.yaml → entry_gate`
-- `max_entry_slippage_pct: 1.0` — abort entry if LTP drifted >1% from signal price.
+- `max_entry_slippage_pct: 1.0` — abort entry if LTP drifted >1% from signal price (flat %).
+- `slippage_tiers:` — **tiered slippage abort in RUPEES, by price band** (finer than the flat %).
+  Abort the entry if `|LTP − signal price|` exceeds the band's `max_slippage_rs`. **Edit these to
+  calibrate** (then restart). Band chosen by `price < max_price` (lower bound exclusive, so ₹100.00 is
+  in the 100-200 band). Starter values:
+  ```yaml
+  slippage_tiers:
+    enabled: true              # false -> only the flat max_entry_slippage_pct applies
+    tiers:
+      - { max_price: 100,    max_slippage_rs: 1.00 }   # < ₹100
+      - { max_price: 200,    max_slippage_rs: 1.25 }   # ₹100-200
+      - { max_price: 500,    max_slippage_rs: 2.00 }   # ₹200-500
+      - { max_price: 999999, max_slippage_rs: 3.00 }   # > ₹500
+    default_max_slippage_rs: 2.00
+    also_apply_pct_check: true  # also keep the flat % check (belt + suspenders)
+  ```
+  Too many aborts? Loosen the `max_slippage_rs`. Calibration data is in the logs:
+  `entry_slippage_observed` (logged on every entry, even allowed) shows the real Rs/% slippage.
 - `max_spread_pct: 0.5` / `min_depth_qty: 500` / `liquidity_check_enabled: true` —
   liquidity gate: skip illiquid names (wide spread / thin book).
 - `min_effective_rr: 1.0` — abort if reward:risk < 1.0 after slippage.
