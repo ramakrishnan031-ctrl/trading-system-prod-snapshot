@@ -309,6 +309,23 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Kite IP-403: actionable alert (headless self-recovery, no halt).**
+  Investigated the "morning manual resume" blamed on the IP-allowlist 403. Deep trace: **post-FIX-185 a
+  pure IP-403 ALREADY self-recovers** — `place_order` 403 → `PermissionException` → `BrokerAuthError` →
+  `signal_processor` rejects the signal (SP12) + `record_api_failure` ignores it (FIX-185, never trips);
+  reads are NOT IP-gated so `order_monitor`/`order_reconciler` never hit their 3×-auth escalation and the
+  token is never invalidated → the next signal after the IP is fixed just succeeds. **No halt, no
+  restart, no token invalidation.** So the proposed `token-watcher` restart-retry + a token-invalidation
+  guard were **moot**; the only real gap was the operator not being told WHAT to fix. Added that:
+  new `broker/auth_recovery.py` (`classify_broker_auth_error` IP-vs-token-vs-unknown; `get_public_ip`;
+  `build_ip403_alert_body`) + `KillSwitch.record_api_failure()` now fires **ONE CRITICAL alert/hour** on
+  an IP-allowlist 403 with the VM's **current public IP + exact Kite steps** (via the injected notifier →
+  its CRITICAL path writes the sentinel → **email**, the live channel while Telegram is banned). Throttled
+  1/hr (None sentinel = first always fires), runs outside the lock, best-effort; **FIX-185 preserved**
+  (still never trips). **Verified live:** `get_public_ip()` → `161.118.187.249`; classification + alert
+  body render correctly. Parity-safe (mode-agnostic). +13 tests. Commit 7126034. (See
+  `kite_ip_allowlist_dependency` — the Kite-console IP update remains Rama's external step; this just
+  makes the system TELL him the IP.)
 - 2026-06-20 — Claude Code — **Kill switch: HEADLESS prior-day auto-clear + `KILL_AUTO_CLEARED` audit.**
   Rama's decision: the system ALWAYS starts headless — EVERY prior-day kill auto-clears at next-day
   startup regardless of type (scheduled, emergency, HARD_KILL, loss-limit, System Manager EOD); the
