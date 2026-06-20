@@ -65,6 +65,10 @@ from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 _HARD_KILL_MAX_RETRY_HOURS = 2.0
 # Per-trade Telegram dedup window for the "exit failed" escalation alert.
 _EXIT_ALERT_DEDUP_SEC = 300.0
+# Throttle for the actionable Kite IP-allowlist (403) alert: one per hour, so a
+# burst of failed entries does not spam the channel (the system self-recovers on
+# the next signal once the IP is allowlisted).
+_IP403_ALERT_THROTTLE_SEC = 3600.0
 from core.events import EventBus, KillSwitchActivated
 from core.exceptions import BrokerAuthError
 from core.time_authority import now_ist
@@ -180,6 +184,10 @@ class KillSwitch:
         # Part 11 (FIX-180): per-trade timestamp of the last "exit failed"
         # escalation alert, for 5-min Telegram dedup during the retry loop.
         self._exit_alert_ts: dict[str, float] = {}
+
+        # Monotonic ts of the last Kite IP-403 actionable alert (1/hr throttle);
+        # None = never alerted (so the first IP-403 always alerts).
+        self._ip403_last_alert_ts: Optional[float] = None
 
         # KS3: recover persisted state on startup (Audit Issue #18 fix)
         self._load_state_from_store()
@@ -592,6 +600,11 @@ class KillSwitch:
                 "record_api_failure: BrokerAuthError NOT counted toward auto-trip "
                 "(config/credential error, not a transient API failure): %s", exc,
             )
+            # Kite IP-allowlist (403): the token is valid; only the VM IP needs
+            # updating. Fire ONE actionable alert/hour with the IP + exact steps.
+            # Trading self-recovers on the next signal once allowlisted (no halt,
+            # no restart) — record_api_failure deliberately does NOT trip here.
+            self._maybe_alert_ip403(exc)
             return
         with self._lock:
             self._api_failure_count += 1
@@ -613,6 +626,49 @@ class KillSwitch:
         """Reset the consecutive API failure counter on any successful API call."""
         with self._lock:
             self._api_failure_count = 0
+
+    def _maybe_alert_ip403(self, exc: object) -> None:
+        """If `exc` is a Kite IP-allowlist 403, send ONE actionable CRITICAL alert
+        per hour: the VM's current public IP + the exact steps to fix it. The
+        token is VALID (do not invalidate it), and new entries self-recover on the
+        next signal once the IP is allowlisted — so this is an alert, not a halt.
+
+        Runs OUTSIDE self._lock (record_api_failure returns before acquiring it),
+        so the public-IP network probe never blocks the lock. Best-effort: any
+        failure here is logged and swallowed — it must never affect trading."""
+        try:
+            from broker.auth_recovery import (
+                build_ip403_alert_body,
+                classify_broker_auth_error,
+                get_public_ip,
+            )
+            if classify_broker_auth_error(exc) != "IP_NOT_ALLOWLISTED":
+                return
+            import time
+            now_mono = time.monotonic()
+            if (self._ip403_last_alert_ts is not None
+                    and (now_mono - self._ip403_last_alert_ts) < _IP403_ALERT_THROTTLE_SEC):
+                return  # already alerted within the last hour
+            self._ip403_last_alert_ts = now_mono
+
+            if self._notifier is None:
+                self._log.critical(
+                    "KITE IP NOT ALLOWLISTED (no notifier wired to alert): %s", exc
+                )
+                return
+            ip = get_public_ip()
+            self._notifier.send(
+                severity="CRITICAL",
+                title=f"[{self._mode}] 🚫 KITE IP NOT ALLOWLISTED",
+                body=build_ip403_alert_body(ip, str(exc)),
+                source_module="kill_switch",
+            )
+            self._log.critical(
+                "KITE IP NOT ALLOWLISTED — actionable alert sent (VM IP %s). New "
+                "entries self-recover on the next signal once allowlisted.", ip,
+            )
+        except Exception as alert_exc:  # noqa: BLE001 — alerting must never raise
+            self._log.error("kill_switch: IP-403 alert failed: %s", alert_exc)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Internal helpers

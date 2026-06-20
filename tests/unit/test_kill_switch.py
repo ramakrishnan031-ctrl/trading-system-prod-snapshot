@@ -1001,6 +1001,66 @@ def test_auto_clear_scheduled_audits_as_scheduled(tmp_path: Path) -> None:
     store.close()
 
 
+# -- 2026-06-20: Kite IP-403 actionable alert (headless: alert, never halt) --
+
+class _CapturingNotifier:
+    def __init__(self) -> None:
+        self.sent: list = []
+
+    def send(self, **kw):
+        from types import SimpleNamespace
+        self.sent.append(kw)
+        return SimpleNamespace(sentinel_path=None)
+
+
+def _ip403_crit(note: "_CapturingNotifier") -> list:
+    return [m for m in note.sent
+            if m.get("severity") == "CRITICAL" and "IP NOT ALLOWLISTED" in m.get("title", "")]
+
+
+def test_ip403_actionable_alert_once_then_throttled(tmp_path: Path, monkeypatch) -> None:
+    import broker.auth_recovery as ar
+    from core.exceptions import BrokerAuthError
+    monkeypatch.setattr(ar, "get_public_ip", lambda timeout=5.0: "203.0.113.7")
+    store = _make_store(tmp_path)
+    note = _CapturingNotifier()
+    ks, _, _ = _make_ks(store)
+    ks.set_notifier(note, mode="LIVE")
+    exc = BrokerAuthError("Zerodha permission denied: IP not allowed to place orders")
+    ks.record_api_failure(exc)   # 1st -> actionable alert
+    ks.record_api_failure(exc)   # 2nd within the hour -> throttled
+    crit = _ip403_crit(note)
+    assert len(crit) == 1
+    assert "203.0.113.7" in crit[0]["body"]          # the IP to allowlist
+    assert "no restart needed" in crit[0]["body"].lower()
+    store.close()
+
+
+def test_ip403_alert_not_fired_for_token_expiry(tmp_path: Path) -> None:
+    from core.exceptions import BrokerAuthError
+    store = _make_store(tmp_path)
+    note = _CapturingNotifier()
+    ks, _, _ = _make_ks(store)
+    ks.set_notifier(note, mode="LIVE")
+    ks.record_api_failure(BrokerAuthError("Zerodha token/auth failure: token expired"))
+    assert _ip403_crit(note) == []                   # token expiry != IP-403
+    store.close()
+
+
+def test_ip403_never_trips_kill_switch(tmp_path: Path, monkeypatch) -> None:
+    """The alert path must preserve FIX-185: a BrokerAuthError never auto-trips."""
+    import broker.auth_recovery as ar
+    from core.exceptions import BrokerAuthError
+    monkeypatch.setattr(ar, "get_public_ip", lambda timeout=5.0: "x")
+    store = _make_store(tmp_path)
+    ks, _, _ = _make_ks(store)
+    ks.set_notifier(_CapturingNotifier(), mode="LIVE")
+    for _ in range(5):
+        ks.record_api_failure(BrokerAuthError("permission denied: IP not allowed"))
+    assert not ks.is_active("any")                   # never halted
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
