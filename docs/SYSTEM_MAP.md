@@ -339,8 +339,8 @@ inactive alert-watcher).
   Phase 1 records WHAT happened, Phase 3a records WHICH rule applied → Phase 3b can later analyse
   effectiveness (join `trade_slippage_log.rr_damage_pct` on `trade_id`). **+v31→v32 migration verified on a
   built DB (DROP-COLUMN-simulated v31 → migrate → cols added, rows preserved, round-trips).** +27 tests
-  (control 20 / recorder 1 / migration 1 + version-pin fixes); 200+ affected tests green. CONFIG_GUIDE.md +
-  slippage_intelligence.md updated. Activates next restart. Commit <pending>.
+  (control 20 / recorder 1 / migration 1 + version-pin fixes); 367 affected tests green. CONFIG_GUIDE.md +
+  slippage_intelligence.md updated. Activates next restart. Commit 2ce54ab.
 - 2026-06-20 — Claude Code — **Slippage intelligence Phase 1 — raw data layer (schema v31).** Permanent
   execution-intelligence tables (RAW facts only; analytics computed on-demand in Phase-2 reports — NO
   aggregate/stale tables). **v31** adds 3 append-only tables to the MAIN DB: `order_execution_log` (per
