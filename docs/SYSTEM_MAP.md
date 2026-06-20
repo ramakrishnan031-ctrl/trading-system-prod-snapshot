@@ -253,11 +253,15 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 > token) → CRITICAL. auditd `copy_attempt` execve rules added to `trading-security.rules`.
 > **Limitation:** a **PC-INITIATED pull** (PC is the client, VM's sshd serves it) cannot be
 > hard-blocked from the VM side without risky `ForceCommand`/subsystem changes — it is **detect+alert
-> only**. **Detection-only is LIVE on the VM (20-Jun):** the auditd `copy_attempt` rules are loaded
-> and the two monitor checks are verified (a raw outbound copy raises a CRITICAL), but the blocking
-> wrappers are NOT symlinked yet (scp workflow unchanged). **To add hard-block** later, run
-> `bash deploy/security/install_copy_protection.sh` (reversible: `--uninstall`); git push / interactive
-> ssh are NOT wrapped, so it cannot lock you out.
+> only**. **HARD-BLOCK ACTIVE on the VM (20-Jun 14:00):** `install_copy_protection.sh` symlinked
+> `/usr/local/bin/{scp,sftp,rsync}` → `copy-guard` and `/usr/local/bin/request-copy`. `/usr/local/bin`
+> precedes `/usr/bin` in PATH, so a VM-initiated `scp`/`sftp`/`rsync` hits the gate: **blocked without a
+> token, allowed with one** (verified live: no-token → DENIED exit 1 real-scp-never-ran; `request-copy`
+> → token → copy succeeds). git push (ssh) + interactive ssh are NOT wrapped (verified intact). **New
+> workflow to copy VM→PC:** `request-copy '<reason>'` (15-min token), then `scp`/`rsync`; blocked
+> 18:00–08:00 (hard time-lock, no override) / without a token / when >2 SSH sessions. **Rollback:**
+> `bash deploy/security/install_copy_protection.sh --uninstall` (removes the symlinks; real `/usr/bin`
+> binaries untouched).
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
@@ -309,6 +313,18 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Copy protection: HARD-BLOCK ACTIVATED** (was detection-only). Rama's
+  go-ahead, done at 14:00 Sat (markets closed, service down — safest window). Pre-checks confirmed NO
+  cron / post-receive hook / systemd unit invokes `scp`/`sftp`/`rsync`, real binaries present, PATH puts
+  `/usr/local/bin` before `/usr/bin`. `bash deploy/security/install_copy_protection.sh` symlinked
+  `/usr/local/bin/{scp,sftp,rsync}` → `deploy/security/bin/copy-guard` + `/usr/local/bin/request-copy`.
+  **Verified live:** `which scp`→wrapper; no-token `scp` → `DENIED (NO_TOKEN)` exit 1, real scp never
+  executed; `request-copy` → 15-min token → `scp` exit 0, copy succeeds (real binary reached); token
+  revoked. **git push (this commit) + interactive ssh confirmed unaffected** (ssh is not wrapped).
+  Fail-safe = block-on-error. Time-lock 18:00–08:00 absolute (unit-tested; not live-testable at 14:00).
+  Audit: no-token denials are logged (not alerted — normal case); `request-copy` issuance + TIME_LOCK/
+  SESSION denials alert; raw-scp bypass still → CRITICAL via auditd. **Rollback:**
+  `bash deploy/security/install_copy_protection.sh --uninstall`. Memory `vm_security_phase2`.
 - 2026-06-20 — Claude Code — **Kite IP-403: actionable alert (headless self-recovery, no halt).**
   Investigated the "morning manual resume" blamed on the IP-allowlist 403. Deep trace: **post-FIX-185 a
   pure IP-403 ALREADY self-recovers** — `place_order` 403 → `PermissionException` → `BrokerAuthError` →
