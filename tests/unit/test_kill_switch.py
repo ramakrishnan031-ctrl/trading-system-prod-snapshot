@@ -922,6 +922,85 @@ def test_clear_stale_state_weekend_gap(tmp_path: Path) -> None:
     store.close()
 
 
+# -- 2026-06-20: KILL_AUTO_CLEARED audit (headless guarantee + Task B bridge) --
+
+def _cleared_events(store: StateStore) -> list:
+    return store.fetch_all(
+        "SELECT details FROM system_events WHERE event_type='KILL_AUTO_CLEARED' "
+        "ORDER BY event_id"
+    )
+
+
+def test_clear_stale_state_audits_prior_day_hard_kill(tmp_path: Path) -> None:
+    """Headless: a prior-day HARD_KILL clears AND is audited as emergency."""
+    import json
+    from datetime import date
+    store = _make_store(tmp_path)
+    _seed_persisted_state_with_ts(
+        store, 'HARD_KILL', 'circuit_breaker_api_failure: broker down', 'order_monitor',
+        '2026-06-18T10:00:00+05:30',
+    )
+    ks, _, _ = _make_ks(store)
+    assert ks.clear_stale_state(date(2026, 6, 19)) is True
+    rows = _cleared_events(store)
+    assert len(rows) == 1
+    d = json.loads(rows[0]['details'])
+    assert d['previous_state'] == 'HARD_KILL'
+    assert d['classification'] == 'emergency'
+    assert d['cleared_via'] == 'clear_stale_state'
+    assert d['triggered_at'].startswith('2026-06-18')
+    store.close()
+
+
+def test_clear_stale_state_audits_prior_day_emergency_softkill(tmp_path: Path) -> None:
+    """Headless: a prior-day loss-limit SOFT_KILL clears AND is audited."""
+    import json
+    from datetime import date
+    store = _make_store(tmp_path)
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'daily_loss_limit_breached', 'fund_manager',
+        '2026-06-18T11:00:00+05:30',
+    )
+    ks, _, _ = _make_ks(store)
+    assert ks.clear_stale_state(date(2026, 6, 19)) is True
+    d = json.loads(_cleared_events(store)[0]['details'])
+    assert d['classification'] == 'emergency'
+    assert d['reason'] == 'daily_loss_limit_breached'
+    store.close()
+
+
+def test_clear_stale_state_same_day_not_cleared_no_audit(tmp_path: Path) -> None:
+    """Within-day safety: a SAME-day kill is NOT cleared and writes no audit."""
+    from datetime import date
+    store = _make_store(tmp_path)
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'daily_loss_limit_breached', 'fund_manager',
+        '2026-06-19T11:00:00+05:30',
+    )
+    ks, _, _ = _make_ks(store)
+    assert ks.clear_stale_state(date(2026, 6, 19)) is False
+    assert _cleared_events(store) == []
+    assert ks.is_active('any')
+    store.close()
+
+
+def test_auto_clear_scheduled_audits_as_scheduled(tmp_path: Path) -> None:
+    """The same-day scheduled clear is audited with classification=scheduled."""
+    import json
+    store = _make_store(tmp_path)
+    _ensure_trades_table(store)
+    _seed_persisted_state_with_ts(
+        store, 'SOFT_KILL', 'EOD_SQUAREOFF', 'eod_squareoff',
+        '2026-06-19T15:17:00+05:30',
+    )
+    ks, _, _ = _make_ks(store)
+    assert ks.auto_clear_scheduled_kill() is True
+    d = json.loads(_cleared_events(store)[0]['details'])
+    assert d['classification'] == 'scheduled'
+    assert d['cleared_via'] == 'auto_clear_scheduled'
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────

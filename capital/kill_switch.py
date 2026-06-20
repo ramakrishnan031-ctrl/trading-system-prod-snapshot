@@ -185,11 +185,19 @@ class KillSwitch:
         self._load_state_from_store()
 
     def clear_stale_state(self, today: "date") -> bool:
-        """Auto-clear kill switch if it was triggered on a previous calendar day.
+        """Auto-clear ANY kill switch triggered on a PREVIOUS calendar day.
 
-        A new trading day starts with a clean slate. If the prior session's kill
-        switch trigger was legitimate, startup reconciliation will re-trigger it.
-        Returns True if state was cleared, False if no action taken.
+        HEADLESS GUARANTEE (Rama's 2026-06-20 decision): a new trading day ALWAYS
+        starts with a clean slate — EVERY prior-day kill is cleared regardless of
+        type (SOFT_KILL / HARD_KILL, scheduled, emergency, loss-limit, System
+        Manager EOD). The system never blocks the next-day startup; the safety net
+        shifts from "block startup" to the EOD report's analysis of what was
+        cleared (Task B). Each clear is audited to system_events
+        (event_type=KILL_AUTO_CLEARED) so that report has the data.
+
+        Same-day kills are intentionally NOT touched here (triggered_date >= today
+        returns False) — within a trading day an active kill stays active (loss
+        limit, HARD_KILL, etc. persist correctly). Returns True if cleared.
         """
         with self._lock:
             if self._state == KillState.INACTIVE:
@@ -198,11 +206,12 @@ class KillSwitch:
                 return False
             triggered_date = self._triggered_at.date()
             if triggered_date >= today:
-                return False
+                return False  # same-day (or future-dated) kill — must persist within the day
 
             prev_reason = self._reason
             prev_by = self._triggered_by
             prev_state = self._state
+            prev_triggered_at = self._triggered_at
             ts = now_ist()
             clear_reason = (
                 f"auto_clear_stale: was {prev_state.value} from {triggered_date.isoformat()} "
@@ -215,9 +224,13 @@ class KillSwitch:
             self._triggered_at = ts
             self._triggered_by = "main.auto_clear_stale"
 
+        # Audit + log OUTSIDE the lock (the insert opens its own transaction).
+        self._record_cleared_kill(
+            prev_state, prev_reason, prev_by, prev_triggered_at, "clear_stale_state",
+        )
         self._log.warning(
             "Kill switch auto-cleared: prior %s from %s (reason=%s by=%s) "
-            "-- new day %s starts clean; reconciliation will re-trigger if needed",
+            "-- new day %s starts clean (HEADLESS); audited to system_events",
             prev_state.value, triggered_date, prev_reason, prev_by, today,
         )
         return True
@@ -265,6 +278,7 @@ class KillSwitch:
             prev_state = self._state
             prev_reason = reason
             prev_by = self._triggered_by
+            prev_triggered_at = self._triggered_at
             ts = now_ist()
             clear_reason = (
                 f"auto_clear_scheduled: was {prev_state.value} "
@@ -277,6 +291,9 @@ class KillSwitch:
             self._triggered_at = ts
             self._triggered_by = "auto_clear_scheduled"
 
+        self._record_cleared_kill(
+            prev_state, prev_reason, prev_by, prev_triggered_at, "auto_clear_scheduled",
+        )
         self._log.info(
             "Auto-cleared scheduled kill switch: %s (was %s, reason=%s, by=%s)",
             clear_reason, prev_state.value, prev_reason, prev_by,
@@ -294,6 +311,43 @@ class KillSwitch:
         except Exception as exc:
             self._log.error("Failed to count open positions: %s; assuming non-zero", exc)
             return 1
+
+    def _record_cleared_kill(
+        self,
+        prev_state: KillState,
+        prev_reason: str,
+        prev_by: str,
+        prev_triggered_at: Optional[datetime],
+        cleared_via: str,
+    ) -> None:
+        """Audit an auto-cleared kill to system_events (event_type
+        KILL_AUTO_CLEARED) so the EOD report (Task B) can analyse what the headless
+        startup cleared — especially a prior-day HARD_KILL / emergency that no
+        longer blocks trading. Best-effort: a failure here must NEVER block the
+        clear (the headless guarantee comes first)."""
+        try:
+            import json
+            details = json.dumps({
+                "previous_state": prev_state.value,
+                "reason": prev_reason,
+                "triggered_by": prev_by,
+                "triggered_at": (
+                    prev_triggered_at.isoformat() if prev_triggered_at else None
+                ),
+                "classification": (
+                    "scheduled" if _is_scheduled_reason(prev_reason) else "emergency"
+                ),
+                "cleared_via": cleared_via,
+            })
+            self._store.insert_system_event(
+                event_type="KILL_AUTO_CLEARED",
+                timestamp=now_ist().isoformat(),
+                details=details,
+            )
+        except Exception as exc:
+            self._log.error(
+                "kill_switch: failed to audit cleared kill (%s): %s", cleared_via, exc
+            )
 
     def set_notifier(
         self,
