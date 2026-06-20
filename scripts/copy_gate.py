@@ -268,11 +268,16 @@ class CopyGate:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def send_alert(cfg: CopyConfig, severity: str, title: str, body: str) -> None:
-    """Best-effort Telegram (all tiers) + CRITICAL sentinel email. Never raises.
+    """Best-effort Telegram + EMAIL FALLBACK for every copy audit alert. Never raises.
 
-    send() writes the CRITICAL sentinel itself (TG5) and returns its path; we only
-    write our own when that did not happen (notifier missing / Telegram disabled /
-    send raised) so each CRITICAL = exactly ONE sentinel -> one email."""
+    Email is the only alert channel while Telegram is unavailable (banned in IN
+    until 23-Jun). TelegramNotifier.send() writes the CRITICAL sentinel itself and
+    returns its path + a `success` flag; for ANY tier we write our own sentinel
+    (-> alert-watcher email) when Telegram did NOT deliver (notifier missing/
+    unconfigured, disabled, or the send failed). So a `request-copy` token-issued /
+    denial reaches email when Telegram is down, with NO email spam when Telegram is
+    up (delivered -> skip), and exactly one sentinel per CRITICAL. `context.severity`
+    keeps the email subject correctly labelled (INFO/WARNING), not CRITICAL."""
     result = None
     try:
         from alerts.telegram_notifier import TelegramNotifier
@@ -282,11 +287,14 @@ def send_alert(cfg: CopyConfig, severity: str, title: str, body: str) -> None:
                             source_module="copy_gate")
     except Exception as exc:
         _log.error("copy_gate: telegram send failed: %s", exc)
-    if severity == "CRITICAL" and not getattr(result, "sentinel_path", None):
+    sentinel_written = bool(result is not None and getattr(result, "sentinel_path", None))
+    telegram_delivered = bool(result is not None and getattr(result, "success", False))
+    if not sentinel_written and not telegram_delivered:
         try:
             from alerts.critical import write_critical_sentinel
             write_critical_sentinel(title=title, body=body,
                                     source_module="copy_gate",
+                                    context={"severity": severity},
                                     sentinel_dir=cfg.sentinel_dir)
         except Exception as exc:
             _log.error("copy_gate: sentinel write failed: %s", exc)

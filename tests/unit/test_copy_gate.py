@@ -10,6 +10,7 @@ from scripts.copy_gate import (
     CopyGate,
     CopyToken,
     in_time_lock,
+    send_alert,
 )
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -146,3 +147,66 @@ def test_audit_appends_json_lines(tmp_path):
     rec = json.loads(lines[0])
     assert rec["event"] == "COPY_TOKEN_ISSUED" and rec["token_id"] == "x1"
     assert "ts" in rec and "user" in rec
+
+
+# ── send_alert: email fallback when Telegram is unavailable ──────────────────
+# (email is the only channel while Telegram is banned; copy work itself never
+#  depends on any of this — the token is written before send_alert runs.)
+
+def _flags(d):
+    return list(d.glob("critical_alert_*.flag"))
+
+
+def test_send_alert_emails_when_telegram_unavailable(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: None)
+    cfg = _cfg(tmp_path, sentinel_dir=str(tmp_path))
+    send_alert(cfg, "INFO", "Copy token issued", "body")
+    flags = _flags(tmp_path)
+    assert len(flags) == 1                                   # email fallback fired
+    payload = json.loads(flags[0].read_text(encoding="utf-8"))
+    assert payload["title"] == "Copy token issued"
+    assert payload["context"]["severity"] == "INFO"         # correctly labelled, not CRITICAL
+
+
+def test_send_alert_emails_when_telegram_send_fails(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    class _Stub:
+        def send(self, **kw):
+            return SimpleNamespace(sentinel_path=None, success=False)   # Telegram down
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: _Stub())
+    cfg = _cfg(tmp_path, sentinel_dir=str(tmp_path))
+    send_alert(cfg, "WARNING", "Copy blocked (TIME_LOCK)", "body")
+    flags = _flags(tmp_path)
+    assert len(flags) == 1
+    assert json.loads(flags[0].read_text())["context"]["severity"] == "WARNING"
+
+
+def test_send_alert_no_email_spam_when_telegram_delivers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    class _Stub:
+        def send(self, **kw):
+            return SimpleNamespace(sentinel_path=None, success=True)    # delivered
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: _Stub())
+    cfg = _cfg(tmp_path, sentinel_dir=str(tmp_path))
+    send_alert(cfg, "INFO", "Copy token issued", "body")
+    assert _flags(tmp_path) == []                            # no email when Telegram works
+
+
+def test_send_alert_critical_single_sentinel_no_double(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    class _Stub:
+        def send(self, **kw):  # send() itself wrote the CRITICAL sentinel (TG5)
+            return SimpleNamespace(sentinel_path=tmp_path / "from_tg.flag", success=True)
+    monkeypatch.setattr("alerts.telegram_notifier.TelegramNotifier.from_env",
+                        lambda *a, **k: _Stub())
+    cfg = _cfg(tmp_path, sentinel_dir=str(tmp_path))
+    send_alert(cfg, "CRITICAL", "Copy bypass", "body")
+    assert _flags(tmp_path) == []                            # no SECOND sentinel
