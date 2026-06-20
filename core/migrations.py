@@ -49,6 +49,11 @@ Version map
     v29 -> v30 : TGT retry — trades gains needs_tgt_retry / tgt_retry_count /
                  tgt_last_retry_at columns. Rebuild trades (the rebuild copies
                  the intersecting old columns; the new ones take their DEFAULT).
+    v30 -> v31 : Slippage intelligence Phase 1 — three NEW append-only tables
+                 (order_execution_log, trade_slippage_log, market_execution_context).
+                 Pure additions: no MIGRATION_TABLES entry (nothing rebuilt);
+                 schema.sql's CREATE TABLE IF NOT EXISTS + executescript creates
+                 them and the trailing INSERT bumps the version.
 """
 from __future__ import annotations
 

@@ -2068,6 +2068,19 @@ def _main_locked(args, config_dir: Path) -> int:
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 
+    # Slippage intelligence Phase 1 (v31): record raw execution facts to
+    # order_execution_log / trade_slippage_log / market_execution_context via
+    # ASYNC event subscribers — fully decoupled; can never block trade execution.
+    try:
+        from orders.slippage_recorder import SlippageRecorder
+        SlippageRecorder(
+            store, event_bus, get_logger("slippage_recorder"),
+            price_bands=app_config.system.slippage_bands,
+            adapter=broker_adapter,
+        )
+    except Exception as _sr_exc:  # noqa: BLE001 — never break startup
+        _log.warning("slippage_recorder init failed (non-fatal): %s", _sr_exc)
+
     rc_cfg = app_config.system.order_reconciler
     order_reconciler = OrderReconciler(
         state_store=store,

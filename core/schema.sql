@@ -929,9 +929,108 @@ CREATE INDEX IF NOT EXISTS idx_cron_heartbeat_executed_at
 -- core/db_connect.py), ATTACHed as schema `analytics` on every connection so
 -- unqualified `FROM system_metrics[_daily]` still resolves. Kept out of the
 -- trading DB so the nightly .backup stays small and fast.
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLES 31-33: Slippage / execution-intelligence RAW data layer (v31)
+-- Append-only raw FACTS only — all analytics (band/strategy stats, tolerance
+-- recommendations) are computed ON-DEMAND in reports (no aggregate tables, no
+-- stale derived data). Recording is best-effort + decoupled (async event
+-- subscribers) so it can NEVER block or fail trade execution.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- TABLE 31: order_execution_log — one row per filled broker order/leg.
+CREATE TABLE IF NOT EXISTS order_execution_log (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id         TEXT,
+    parent_trade_id  TEXT,
+    signal_id        TEXT,
+    symbol           TEXT NOT NULL,
+    strategy_name    TEXT,
+    leg              TEXT NOT NULL,        -- ENTRY / SL / TGT
+    order_type       TEXT,                 -- LIMIT / SL / CO ...
+    side             TEXT,                 -- BUY / SELL
+    intended_price   REAL,                 -- expected/planned price
+    actual_price     REAL,                 -- avg fill price
+    slippage_rs      REAL,                 -- adverse = positive (paid worse)
+    slippage_pct     REAL,                 -- adverse = positive (OM9 convention)
+    qty              INTEGER,
+    filled_qty       INTEGER,
+    is_partial       INTEGER DEFAULT 0,
+    retry_count      INTEGER DEFAULT 0,
+    status           TEXT,
+    order_timestamp  TEXT,
+    fill_timestamp   TEXT,
+    exchange_timestamp TEXT,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_oel_trade  ON order_execution_log(parent_trade_id);
+CREATE INDEX IF NOT EXISTS idx_oel_date   ON order_execution_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_oel_symbol ON order_execution_log(symbol);
+
+-- TABLE 32: trade_slippage_log — one row per completed trade (roll-up).
+CREATE TABLE IF NOT EXISTS trade_slippage_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id            TEXT,
+    trade_date          DATE NOT NULL,
+    symbol              TEXT NOT NULL,
+    strategy_name       TEXT NOT NULL,
+    side                TEXT NOT NULL,     -- LONG / SHORT
+    qty                 INTEGER,
+    price_band          TEXT,              -- e.g. "200-300" (from slippage_bands)
+    -- entry
+    entry_signal_price  REAL,
+    entry_fill_price    REAL,
+    entry_slippage_rs   REAL,              -- adverse = positive
+    entry_slippage_pct  REAL,
+    -- stop loss
+    sl_trigger_price    REAL,
+    sl_fill_price       REAL,
+    sl_slippage_rs      REAL,              -- adverse = positive
+    sl_slippage_pct     REAL,
+    -- target
+    tgt_price           REAL,
+    tgt_fill_price      REAL,
+    tgt_slippage_rs     REAL,              -- favourable = positive (better fill)
+    tgt_slippage_pct    REAL,
+    -- R:R analysis
+    planned_sl_distance REAL,              -- |entry - sl|
+    planned_rr          REAL,              -- strategy's designed R:R
+    actual_rr           REAL,              -- realised R:R after slippage
+    rr_damage_pct       REAL,              -- THE KEY METRIC: % of risk budget eaten
+    trade_result        TEXT,              -- WIN / LOSS / BREAKEVEN
+    exit_reason         TEXT,              -- SL_HIT / TGT_HIT / EOD / MANUAL ...
+    created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_tsl_date     ON trade_slippage_log(trade_date);
+CREATE INDEX IF NOT EXISTS idx_tsl_strategy ON trade_slippage_log(strategy_name);
+CREATE INDEX IF NOT EXISTS idx_tsl_band     ON trade_slippage_log(price_band);
+CREATE INDEX IF NOT EXISTS idx_tsl_symbol   ON trade_slippage_log(symbol);
+
+-- TABLE 33: market_execution_context — Priority-2, ALL nullable, best-effort.
+-- Bid/ask/spread at execution; absence NEVER blocks recording or execution.
+CREATE TABLE IF NOT EXISTS market_execution_context (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id         TEXT,
+    order_id         TEXT,
+    symbol           TEXT NOT NULL,
+    leg              TEXT,                 -- ENTRY / SL / TGT
+    captured_at      TEXT,
+    ltp              REAL,
+    bid_price        REAL,
+    ask_price        REAL,
+    spread_rs        REAL,
+    spread_pct       REAL,
+    bid_qty          INTEGER,
+    ask_qty          INTEGER,
+    volume_traded    INTEGER,
+    recent_range_pct REAL,
+    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mec_trade  ON market_execution_context(trade_id);
+CREATE INDEX IF NOT EXISTS idx_mec_symbol ON market_execution_context(symbol);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '30');  -- Task (TGT retry): trades adds needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '31');  -- Slippage intelligence Phase 1: +order_execution_log, trade_slippage_log, market_execution_context
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 30  # Task (TGT retry): trades adds needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
+EXPECTED_SCHEMA_VERSION = 31  # Slippage intelligence Phase 1: +order_execution_log / trade_slippage_log / market_execution_context
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1802,6 +1802,62 @@ class StateStore:
                 """,
                 (timestamp, event_type, scenario, details),
             )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Slippage intelligence Phase 1 — best-effort, NEVER-raise inserts (v31).
+    # The recorder runs on async event threads; a logging failure must never
+    # propagate, so every insert is wrapped and returns a bool.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    _OEL_COLS = (
+        "order_id", "parent_trade_id", "signal_id", "symbol", "strategy_name",
+        "leg", "order_type", "side", "intended_price", "actual_price",
+        "slippage_rs", "slippage_pct", "qty", "filled_qty", "is_partial",
+        "retry_count", "status", "order_timestamp", "fill_timestamp",
+        "exchange_timestamp",
+    )
+    _TSL_COLS = (
+        "trade_id", "trade_date", "symbol", "strategy_name", "side", "qty",
+        "price_band", "entry_signal_price", "entry_fill_price",
+        "entry_slippage_rs", "entry_slippage_pct", "sl_trigger_price",
+        "sl_fill_price", "sl_slippage_rs", "sl_slippage_pct", "tgt_price",
+        "tgt_fill_price", "tgt_slippage_rs", "tgt_slippage_pct",
+        "planned_sl_distance", "planned_rr", "actual_rr", "rr_damage_pct",
+        "trade_result", "exit_reason",
+    )
+    _MEC_COLS = (
+        "trade_id", "order_id", "symbol", "leg", "captured_at", "ltp",
+        "bid_price", "ask_price", "spread_rs", "spread_pct", "bid_qty",
+        "ask_qty", "volume_traded", "recent_range_pct",
+    )
+
+    def _best_effort_insert(self, table: str, allowed: tuple, row: dict) -> bool:
+        """Insert the whitelisted columns present in `row` into `table`. Returns
+        False on any error (NEVER raises) — slippage logging is best-effort and
+        must not affect trading. `table`/`allowed` are code constants (no
+        injection); only values are parameterised."""
+        cols = [c for c in allowed if c in row]
+        if not cols:
+            return False
+        try:
+            placeholders = ", ".join("?" for _ in cols)
+            with self.transaction() as cur:
+                cur.execute(
+                    f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+                    tuple(row[c] for c in cols),
+                )
+            return True
+        except Exception:
+            return False
+
+    def insert_order_execution_log(self, row: dict) -> bool:
+        return self._best_effort_insert("order_execution_log", self._OEL_COLS, row)
+
+    def insert_trade_slippage_log(self, row: dict) -> bool:
+        return self._best_effort_insert("trade_slippage_log", self._TSL_COLS, row)
+
+    def insert_market_execution_context(self, row: dict) -> bool:
+        return self._best_effort_insert("market_execution_context", self._MEC_COLS, row)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Daily-report query helpers (DR8)

@@ -972,6 +972,9 @@ class SystemConfig(BaseModel):
     live_feed: LiveFeedConfig = LiveFeedConfig()  # FIX-134 Item 37
     fno_ban: FnoBanConfig = FnoBanConfig()    # FIX-136 Item 44
     scanner_check_delay_sec: float = 5.0      # FIX-D: delay before scanner checks (network stabilization)
+    slippage_bands: list[str] = Field(        # price bands for trade_slippage_log.price_band (v31)
+        default_factory=lambda: ["0-100", "100-200", "200-300", "300-500", "500-1000", "1000+"]
+    )
     force_intraday_only: bool = True          # P0 2026-06-15: force every strategy to INTRADAY (MIS); blocks accidental CNC/DELIVERY orders
 
     @model_validator(mode="after")

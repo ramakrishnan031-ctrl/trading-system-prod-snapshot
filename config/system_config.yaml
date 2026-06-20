@@ -259,6 +259,16 @@ entry_gate:                   # FIX-025: gate release slippage protection
       - { max_price: 500,    max_slippage_rs: 2.00 }   # Rs 200-500
       - { max_price: 999999, max_slippage_rs: 3.00 }   # > Rs 500
 
+# Price bands for the slippage-intelligence layer (trade_slippage_log.price_band, v31).
+# Grouping labels only; re-band freely (e.g. 0-50, 50-150, ...). "Nnn+" = open-ended top.
+slippage_bands:
+  - "0-100"
+  - "100-200"
+  - "200-300"
+  - "300-500"
+  - "500-1000"
+  - "1000+"
+
 paper:                        # H-20/ZA16a: paper-mode fill synthesis
   auto_fill_delay_sec: 0.5    # daemon thread delay before OSM COMPLETE + OrderFilled (>= 0, <= 10)
   ltp_gating_enabled: true    # Audit 6.2 — only fill paper LIMIT/SL when LTP crosses
