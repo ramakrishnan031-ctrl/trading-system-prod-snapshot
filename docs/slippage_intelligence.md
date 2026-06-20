@@ -57,7 +57,23 @@ FROM order_execution_log WHERE parent_trade_id = ? ORDER BY id;
 ## Roadmap
 - **Phase 1 (done):** raw tables + recorder + `rr_damage_pct` + price bands.
 - **Phase 2 (pending):** reports computing the above on-demand (band/strategy stats, calibration).
-- **Phase 3 (pending):** adaptive tolerance engine (Global → Band → Strategy → Symbol hierarchy)
-  feeding `entry_gate.slippage_control` (`tiered_slippage_abort`).
+- **Phase 3a (done, v32):** MANUAL tolerance override hierarchy. `entry_gate.slippage_control.overrides`
+  lets Rama set per-symbol / per-strategy / per-band fractions NOW (from trading knowledge), resolved
+  **Symbol > Strategy > Price Band > Global** (`resolve_slippage_fraction` in `orders/order_placer.py`).
+  The resolved fraction + which rule won (`tolerance_source`) are logged per entry and persisted on
+  `trades` + copied onto `order_execution_log` (new v32 columns `tolerance_fraction_used` /
+  `tolerance_source`) — closing the loop so Phase 3b can later analyse effectiveness (join
+  `trade_slippage_log.rr_damage_pct` on `trade_id`). System Manager EOD shows active overrides + usage.
+- **Phase 3b (pending):** AUTO-recommendation — once data accumulates, suggest override values from the
+  per-band/strategy/symbol `rr_damage_pct` distributions (the manual hierarchy above is the apply path).
 
-Config: `slippage_bands` in `system_config.yaml` (re-bandable). Parity: records paper + live.
+### Phase 3b enablement queries (after data accumulates)
+```sql
+-- Which override rules placed/ate-risk the most, by source:
+SELECT t.tolerance_source, COUNT(*) n,
+       ROUND(AVG(s.rr_damage_pct),1) avg_damage, ROUND(MAX(s.rr_damage_pct),1) worst
+FROM trades t JOIN trade_slippage_log s USING(trade_id)
+GROUP BY t.tolerance_source ORDER BY n DESC;
+```
+
+Config: `slippage_bands` + `slippage_control.overrides` in `system_config.yaml`. Parity: records paper + live.

@@ -287,6 +287,27 @@ sequence (`1, 5, 30 s` then soft_kill) kicks in. `timeouts` = HTTP connect/read 
   **Tune from real data:** every entry logs `entry_slippage_observed` with `fraction_of_sl_used` (how
   much of the SL the slippage ate). Too many aborts → raise `max_slippage_fraction` (e.g. 0.25–0.30).
   NB at 0.22, a ₹0.43 slip on a ₹83 stock with a 2% SL = 26% of SL → aborts; raise to ~0.27 to allow it.
+  - `slippage_control.overrides:` — **Phase 3a: per-symbol / per-strategy / per-band tolerance.** The
+    global `max_slippage_fraction` (0.22) is the default; you can override it for specific names. The
+    effective fraction is resolved **MOST-SPECIFIC-WINS: Symbol > Strategy > Price Band > Global** (the
+    first match wins). Applies to the `sl_fraction` mode only. All three maps are optional and start
+    empty (except one example band) → behaves exactly as the global until you add an override. Fractions
+    must be in `(0, 1]`; a value that looks extreme (`<0.05` or `>0.50`) or a `by_symbol`/`by_strategy`
+    typo (a key that matches no instrument/strategy → the override is silently ignored) is **warned**
+    about at startup. The rule that applied is logged per entry (`tolerance_source`) and recorded on the
+    trade (so the System Manager EOD report and Phase-2 reports can show it). Restart to apply.
+    ```yaml
+    slippage_control:
+      overrides:
+        enabled: true                     # master switch for the whole hierarchy
+        by_price_band: { "0-100": 0.18 }   # keys MUST match a `slippage_bands` label
+        by_strategy:   { }                 # e.g. gap_fade: 0.25  (keys = loaded strategy names)
+        by_symbol:     { }                 # e.g. IDEA: 0.15, RELIANCE: 0.30  (most specific; wins)
+    ```
+    Examples (global 0.22, band `0-100`=0.18, strategy `gap_fade`=0.25, symbol `IDEA`=0.15):
+    IDEA on any strategy → **0.15**; `gap_fade` on a ₹500 stock → **0.25**; `vwap` on a ₹80 stock →
+    **0.18** (band); `vwap` on a ₹300 stock → **0.22** (global); `gap_fade` on IDEA → **0.15** (symbol
+    beats strategy).
 - `max_spread_pct: 0.5` / `min_depth_qty: 500` / `liquidity_check_enabled: true` —
   liquidity gate: skip illiquid names (wide spread / thin book).
 - `min_effective_rr: 1.0` — abort if reward:risk < 1.0 after slippage.

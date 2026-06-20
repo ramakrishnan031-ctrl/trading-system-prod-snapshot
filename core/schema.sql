@@ -198,6 +198,14 @@ CREATE TABLE IF NOT EXISTS trades (
     tgt_retry_count     INTEGER NOT NULL DEFAULT 0,   -- attempts made so far
     tgt_last_retry_at   TEXT,                          -- ISO IST of last attempt (NULL = none yet)
 
+    -- Slippage tolerance override (Phase 3a, v32). Which entry-slippage rule
+    -- supplied the sl_fraction at placement (Symbol > Strategy > Band > Global),
+    -- recorded for transparency + Phase-3b effectiveness analysis (join to
+    -- trade_slippage_log.rr_damage_pct on trade_id). NULL for non-sl_fraction
+    -- modes / recovered trades.
+    tolerance_fraction_used REAL,                      -- resolved fraction (e.g. 0.22 / 0.15)
+    tolerance_source        TEXT,                      -- "symbol:IDEA" / "strategy:gap_fade" / "band:0-100" / "global"
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -960,6 +968,10 @@ CREATE TABLE IF NOT EXISTS order_execution_log (
     order_timestamp  TEXT,
     fill_timestamp   TEXT,
     exchange_timestamp TEXT,
+    -- Slippage tolerance override (Phase 3a, v32) — copied from the parent trade
+    -- onto the execution row so Phase-2/3b reports can see WHICH rule applied.
+    tolerance_fraction_used REAL,    -- resolved sl_fraction at entry (NULL for non-sl_fraction)
+    tolerance_source        TEXT,    -- "symbol:IDEA" / "strategy:gap_fade" / "band:0-100" / "global"
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_oel_trade  ON order_execution_log(parent_trade_id);
@@ -1030,7 +1042,7 @@ CREATE INDEX IF NOT EXISTS idx_mec_symbol ON market_execution_context(symbol);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '31');  -- Slippage intelligence Phase 1: +order_execution_log, trade_slippage_log, market_execution_context
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '32');  -- Slippage tolerance override hierarchy (Phase 3a): +trades/order_execution_log tolerance_fraction_used + tolerance_source
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

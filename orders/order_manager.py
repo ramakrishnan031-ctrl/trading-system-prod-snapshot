@@ -174,6 +174,8 @@ class OrderManager:
         risk_amount: float,
         reservation_id: Optional[str] = None,  # EF-5
         mode: Optional[str] = None,  # v14: PAPER | LIVE
+        tolerance_fraction_used: Optional[float] = None,  # Phase 3a: resolved sl_fraction
+        tolerance_source: Optional[str] = None,           # Phase 3a: which override rule won
     ) -> str:
         """
         Insert a new trade row with status=PENDING_FILL. Returns trade_id.
@@ -182,6 +184,9 @@ class OrderManager:
         EF-5: reservation_id is the fm_ledger reservation that funded this
         trade. Nullable for callers predating the column (recovered trades
         via reconciler). Populated by order_placer from the signal pipeline.
+        Phase 3a: tolerance_fraction_used / tolerance_source record which entry-
+        slippage override rule applied (Symbol > Strategy > Band > Global); both
+        nullable (NULL for non-sl_fraction modes / recovered trades).
         """
         trade_id = new_trade_id()
         now = now_ist().isoformat()
@@ -196,7 +201,8 @@ class OrderManager:
                     margin_reserved, risk_amount,
                     created_at, updated_at,
                     status, entry_mode, order_protocol, recovered_flag,
-                    reservation_id, mode
+                    reservation_id, mode,
+                    tolerance_fraction_used, tolerance_source
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, 0,
@@ -205,6 +211,7 @@ class OrderManager:
                     ?, ?,
                     ?, ?,
                     'PENDING_FILL', 'FULL', ?, 0,
+                    ?, ?,
                     ?, ?
                 )
                 """,
@@ -217,6 +224,7 @@ class OrderManager:
                     now, now,
                     order_protocol,
                     reservation_id, mode,
+                    tolerance_fraction_used, tolerance_source,
                 ),
             )
         self._log.info(

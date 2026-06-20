@@ -258,6 +258,30 @@ entry_gate:                   # FIX-025: gate release slippage protection
       - { max_price: 200,    max_slippage_rs: 1.25 }   # Rs 100-200
       - { max_price: 500,    max_slippage_rs: 2.00 }   # Rs 200-500
       - { max_price: 999999, max_slippage_rs: 3.00 }   # > Rs 500
+    # --- Phase 3a: MANUAL tolerance override hierarchy (sl_fraction mode only) ---
+    # Effective fraction resolves MOST-SPECIFIC-WINS:
+    #   by_symbol > by_strategy > by_price_band > max_slippage_fraction (global 0.22).
+    # All maps OPTIONAL and start EMPTY (except the one example band) -> behave as the
+    # global 0.22 until you add an override. Fractions must be in (0, 1]; values that
+    # look extreme (<0.05 or >0.50) or by_symbol/by_strategy typos are WARNED at startup.
+    # Restart to apply. The chosen rule is logged per entry + recorded on the trade
+    # (tolerance_source) so you can SEE which override applied.
+    overrides:
+      enabled: true
+      # Price-band keys MUST match a label in `slippage_bands` (below). Lower % spreads
+      # are wider on cheap stocks -> a tighter fraction there is the typical first move.
+      by_price_band:
+        "0-100": 0.18         # example — tighter for low-price (wide %-spread) names
+        # "100-200": 0.20
+      # Strategy keys MUST match a loaded strategy name (e.g. gap_fade, vwap_bounce).
+      by_strategy: {}
+        # gap_fade: 0.25      # looser — gap strategies enter into momentum
+        # vwap_bounce: 0.18   # tighter — mean-reversion needs a clean fill
+      # Symbol keys MUST match a tradable instrument (NSE symbol). Most specific — wins
+      # over everything. Use for known-volatile or known-liquid names.
+      by_symbol: {}
+        # IDEA: 0.15          # volatile low-price -> very tight
+        # RELIANCE: 0.30      # liquid large-cap -> can allow a little more
 
 # Price bands for the slippage-intelligence layer (trade_slippage_log.price_band, v31).
 # Grouping labels only; re-band freely (e.g. 0-50, 50-150, ...). "Nnn+" = open-ended top.

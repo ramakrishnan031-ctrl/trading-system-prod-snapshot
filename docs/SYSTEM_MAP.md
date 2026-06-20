@@ -108,9 +108,10 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `main.py` (root) | App entrypoint | launched as `main.py --mode live` |
 
 ### Database  (`data_store/`)
-- `trading_system.db` (~49 MB) — **MAIN** DB (schema **v31**; v30 added trades.needs_tgt_retry/…; **v31
-  added the slippage-intelligence layer: order_execution_log + trade_slippage_log + market_execution_context**).
-  trades, orders, signals, fm_ledger, etc.
+- `trading_system.db` (~49 MB) — **MAIN** DB (schema **v32**; v30 added trades.needs_tgt_retry/…; v31
+  added the slippage-intelligence layer: order_execution_log + trade_slippage_log + market_execution_context;
+  **v32 added trades + order_execution_log `tolerance_fraction_used` / `tolerance_source` for the Phase 3a
+  slippage tolerance override hierarchy**). trades, orders, signals, fm_ledger, etc.
 - `analytics.db` (~44 KB) — analytics split (v28); **ATTACHed** to the main DB at runtime.
 - **Raw sqlite access MUST use `core.db_connect.connect`** (it sets up the ATTACH); plain `sqlite3`
   works only for read-only SELECTs against the main file.
@@ -315,6 +316,31 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-20 — Claude Code — **Slippage tolerance override hierarchy — Phase 3a (MANUAL, schema v32).**
+  Lets Rama set per-symbol / per-strategy / per-price-band entry-slippage tolerances NOW (from trading
+  knowledge), without waiting for the Phase-3b auto-recommender. New `entry_gate.slippage_control.overrides`
+  block (`enabled` + `by_price_band` / `by_strategy` / `by_symbol` maps, all optional/empty except one
+  example band). The effective `sl_fraction` is resolved **MOST-SPECIFIC-WINS: Symbol > Strategy > Price
+  Band > Global** by the pure `resolve_slippage_fraction()` (orders/order_placer.py), threaded into
+  `_slippage_decision` via a new `fraction_override` arg → the override drives the pre-order abort. Resolved
+  up-front in `place()` (band from `signal_trigger_price`/`entry_price` via `get_price_band`) so it both
+  enforces the guard AND is recorded. **Transparency:** `tolerance_source` (e.g. `symbol:IDEA` /
+  `strategy:gap_fade` / `band:0-100` / `global`) + the fraction are logged on every entry
+  (`entry_slippage_observed` + `slippage_guard_exceeded` + the Telegram abort) and **persisted**:
+  **schema v32** adds `tolerance_fraction_used` (REAL) + `tolerance_source` (TEXT) to **trades** (written by
+  `OrderManager.create_trade`) and **order_execution_log** (the async `slippage_recorder` copies them from
+  the parent trade onto the execution row). `MIGRATION_TABLES[32] = [trades, order_execution_log]` rebuilds
+  both (new cols → NULL); `EXPECTED_SCHEMA_VERSION` 31→32. **Validation:** config hard-rejects fractions
+  outside `(0,1]`; `validate_slippage_overrides()` warns at startup on extreme values (<0.05/>0.50) and on
+  `by_symbol`/`by_strategy` keys that match no known instrument/strategy (typo → silently ignored). **System
+  Manager EOD: 10th check** `SLIPPAGE OVERRIDES` (visibility-only — never a violation / never SOFT_KILL):
+  active override counts + per-`tolerance_source` placed/rejected usage today. **Parity:** mode-agnostic,
+  paper + live. Only `sl_fraction` mode consults overrides (flat_tiers/pct unchanged). Closes the loop:
+  Phase 1 records WHAT happened, Phase 3a records WHICH rule applied → Phase 3b can later analyse
+  effectiveness (join `trade_slippage_log.rr_damage_pct` on `trade_id`). **+v31→v32 migration verified on a
+  built DB (DROP-COLUMN-simulated v31 → migrate → cols added, rows preserved, round-trips).** +27 tests
+  (control 20 / recorder 1 / migration 1 + version-pin fixes); 200+ affected tests green. CONFIG_GUIDE.md +
+  slippage_intelligence.md updated. Activates next restart. Commit <pending>.
 - 2026-06-20 — Claude Code — **Slippage intelligence Phase 1 — raw data layer (schema v31).** Permanent
   execution-intelligence tables (RAW facts only; analytics computed on-demand in Phase-2 reports — NO
   aggregate/stale tables). **v31** adds 3 append-only tables to the MAIN DB: `order_execution_log` (per

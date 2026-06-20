@@ -837,13 +837,69 @@ def trigger_soft_kill(store: StateStore, reasons: List[str], day: str) -> bool:
         return False
 
 
+def slippage_overrides_check(store: StateStore, app_config, day: str) -> CheckResult:
+    """Phase 3a — VISIBILITY ONLY (never a violation, never a SOFT_KILL). Shows
+    the active entry-slippage tolerance overrides and how today's trades resolved
+    against each rule, so Rama can see which manual overrides are in force and
+    spot one that may be mis-set (e.g. a symbol override aborting most entries).
+    Abort/fill detail lives in the slippage logs + Phase-2 reports; this is a
+    one-glance summary."""
+    res = CheckResult("🎯 SLIPPAGE TOLERANCE OVERRIDES (Phase 3a)")
+    try:
+        sc = app_config.system.entry_gate.slippage_control
+        mode = getattr(sc, "mode", "?")
+        if mode != "sl_fraction":
+            res.info(f"ℹ️ slippage_control mode = {mode} — override hierarchy applies "
+                     f"only to sl_fraction; nothing to show.")
+            return res
+        ov = getattr(sc, "overrides", None)
+        glob = getattr(sc, "max_slippage_fraction", None)
+        enabled = bool(getattr(ov, "enabled", False)) if ov else False
+        n_sym = len(getattr(ov, "by_symbol", {}) or {}) if ov else 0
+        n_strat = len(getattr(ov, "by_strategy", {}) or {}) if ov else 0
+        n_band = len(getattr(ov, "by_price_band", {}) or {}) if ov else 0
+        res.info(f"ℹ️ Global fraction {glob} | overrides {'ON' if enabled else 'OFF'} — "
+                 f"{n_sym} symbol, {n_strat} strategy, {n_band} band")
+
+        # Today's resolution usage by source (executed vs rejected). Note: REJECTED
+        # counts ANY rejection reason (slippage abort, RR gate, EOD cutoff, …), so
+        # the "review" marker is a hint to check the logs, never a hard signal.
+        rows = store.fetch_all(
+            "SELECT tolerance_source AS src, status, COUNT(*) AS n FROM trades "
+            "WHERE substr(created_at,1,10)=? AND tolerance_source IS NOT NULL "
+            "GROUP BY tolerance_source, status", (day,))
+        usage: dict = {}
+        for r in rows or []:
+            src = r["src"] or "global"
+            d = usage.setdefault(src, {"placed": 0, "rejected": 0, "total": 0})
+            n = int(r["n"] or 0)
+            d["total"] += n
+            if r["status"] in _EXECUTED:
+                d["placed"] += n
+            elif r["status"] == "REJECTED":
+                d["rejected"] += n
+        if not usage:
+            res.info("ℹ️ No trades resolved a tolerance source today.")
+        else:
+            for src in sorted(usage, key=lambda s: -usage[s]["total"]):
+                d = usage[src]
+                # Hint (not a warning) when a NON-global override rejected a lot.
+                hint = ("  ← mostly rejected; review this override (logs)"
+                        if (src != "global" and d["rejected"] >= 3
+                            and d["rejected"] > d["placed"]) else "")
+                res.info(f"ℹ️ {src}: {d['placed']} placed / {d['rejected']} rejected today{hint}")
+    except Exception as exc:
+        res.info(f"ℹ️ slippage override visibility unavailable: {exc}")
+    return res
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Orchestration / CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         db_path: Path, root: Path) -> tuple[str, int, int, List[str]]:
-    """Run all 9 checks (each isolated) and build the report."""
+    """Run all 10 checks (each isolated) and build the report."""
     day = _day(day_date)
     prev = _prev_trading_day(day_date, config_dir)
     specs = [
@@ -856,10 +912,11 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         lambda: compare_with_yesterday(store, day, _day(prev)),
         lambda: tomorrow_readiness_check(store, app_config, day_date, config_dir),
         lambda: security_check(day, root, config_dir),
+        lambda: slippage_overrides_check(store, app_config, day),
     ]
     titles = ["CONFIG vs ACTUAL", "ORDER QUALITY", "REPORT INTEGRITY", "SYSTEM HEALTH",
               "STRATEGY HEALTH", "RISK EVENTS", "vs YESTERDAY", "TOMORROW READINESS",
-              "SECURITY (COPY PROTECTION)"]
+              "SECURITY (COPY PROTECTION)", "SLIPPAGE OVERRIDES"]
     results: List[CheckResult] = []
     for spec, title in zip(specs, titles):
         try:

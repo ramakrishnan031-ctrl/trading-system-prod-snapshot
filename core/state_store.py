@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 31  # Slippage intelligence Phase 1: +order_execution_log / trade_slippage_log / market_execution_context
+EXPECTED_SCHEMA_VERSION = 32  # Slippage tolerance override hierarchy (Phase 3a): +trades/order_execution_log tolerance_fraction_used + tolerance_source
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1815,6 +1815,7 @@ class StateStore:
         "slippage_rs", "slippage_pct", "qty", "filled_qty", "is_partial",
         "retry_count", "status", "order_timestamp", "fill_timestamp",
         "exchange_timestamp",
+        "tolerance_fraction_used", "tolerance_source",   # Phase 3a
     )
     _TSL_COLS = (
         "trade_id", "trade_date", "symbol", "strategy_name", "side", "qty",

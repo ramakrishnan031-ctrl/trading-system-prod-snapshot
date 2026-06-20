@@ -206,7 +206,82 @@ from orders.price_math import (
     marketable_limit_price,
     tier_slippage_tolerance_rs,
 )
+from orders.slippage_recorder import get_price_band
 from orders.smart_tgt_manager import SmartTgtManager
+
+
+def resolve_slippage_fraction(
+    cfg: Any,
+    symbol: str,
+    strategy: str,
+    price_band: Optional[str],
+) -> tuple[float, str]:
+    """Phase 3a — resolve the EFFECTIVE sl_fraction via the manual override
+    hierarchy. Most-specific wins: Symbol > Strategy > Price Band > Global.
+    Returns (fraction, source) where source is e.g. ``"symbol:IDEA"`` /
+    ``"strategy:gap_fade"`` / ``"band:0-100"`` / ``"global"``. Pure (no I/O).
+
+    Only meaningful for the sl_fraction mode; an empty/disabled `overrides`
+    block falls straight through to the global `max_slippage_fraction`."""
+    glob = getattr(cfg, "max_slippage_fraction", 0.22)
+    ov = getattr(cfg, "overrides", None)
+    if ov is not None and getattr(ov, "enabled", False):
+        by_symbol = getattr(ov, "by_symbol", None) or {}
+        if symbol and symbol in by_symbol:
+            return by_symbol[symbol], f"symbol:{symbol}"
+        by_strategy = getattr(ov, "by_strategy", None) or {}
+        if strategy and strategy in by_strategy:
+            return by_strategy[strategy], f"strategy:{strategy}"
+        by_band = getattr(ov, "by_price_band", None) or {}
+        if price_band and price_band in by_band:
+            return by_band[price_band], f"band:{price_band}"
+    return glob, "global"
+
+
+def validate_slippage_overrides(
+    overrides: Any,
+    known_symbols: Optional[set] = None,
+    known_strategies: Optional[set] = None,
+    *,
+    extreme_lo: float = 0.05,
+    extreme_hi: float = 0.50,
+) -> list[str]:
+    """Phase 3a — startup sanity check for the override maps. Returns a list of
+    human-readable WARNING strings (empty = all good). Pure (no I/O / no logging)
+    so it is trivially testable; the caller logs each line. Does NOT reject —
+    hard range rejection (0,1] already happens at config load. Flags:
+      * fractions that look extreme (<extreme_lo or >extreme_hi),
+      * by_symbol keys that match no known instrument (likely typo → silently ignored),
+      * by_strategy keys that match no loaded strategy (likely typo → silently ignored)."""
+    warnings: list[str] = []
+    if overrides is None or not getattr(overrides, "enabled", False):
+        return warnings
+    for label, mapping in (
+        ("by_price_band", getattr(overrides, "by_price_band", None) or {}),
+        ("by_strategy", getattr(overrides, "by_strategy", None) or {}),
+        ("by_symbol", getattr(overrides, "by_symbol", None) or {}),
+    ):
+        for key, frac in mapping.items():
+            if frac < extreme_lo or frac > extreme_hi:
+                warnings.append(
+                    f"slippage override {label}[{key!r}]={frac} looks extreme "
+                    f"(outside {extreme_lo}-{extreme_hi}); double-check it is intended"
+                )
+    if known_symbols is not None:
+        for sym in (getattr(overrides, "by_symbol", None) or {}):
+            if sym not in known_symbols:
+                warnings.append(
+                    f"slippage override by_symbol[{sym!r}] is not a known instrument "
+                    f"— the override will be SILENTLY IGNORED (typo?)"
+                )
+    if known_strategies is not None:
+        for strat in (getattr(overrides, "by_strategy", None) or {}):
+            if strat not in known_strategies:
+                warnings.append(
+                    f"slippage override by_strategy[{strat!r}] is not a loaded strategy "
+                    f"— the override will be SILENTLY IGNORED (typo?)"
+                )
+    return warnings
 
 
 def _compute_slippage_tolerance(
@@ -215,22 +290,28 @@ def _compute_slippage_tolerance(
     sl_price: Optional[float],
     tier_tuples: list,
     max_pct: float,
+    *,
+    fraction_override: Optional[float] = None,
 ) -> tuple[float, Optional[float]]:
     """Entry-slippage tolerance (Rs) for the active mode, plus the hard ceiling.
     Returns (tolerance_rs, sl_distance_rs_or_None). Pure (no I/O) for testing.
 
-      sl_fraction: min(SL_distance × max_slippage_fraction, absolute_cap_rs)
-                   — SL_distance = |signal − sl|; falls back to absolute_cap_rs if
-                   the SL price is unavailable.
+      sl_fraction: min(SL_distance × fraction, absolute_cap_rs)
+                   — SL_distance = |signal − sl|; `fraction` is `fraction_override`
+                   when supplied (Phase 3a per symbol/strategy/band resolution),
+                   else the global `max_slippage_fraction`. Falls back to
+                   absolute_cap_rs if the SL price is unavailable.
       flat_tiers:  per-price-band Rs (tier_tuples).
       pct:         signal_price × max_pct%.
     `hard_max_slippage_rs` is applied as an absolute ceiling in every mode."""
     mode = getattr(cfg, "mode", "sl_fraction")
     sl_dist: Optional[float] = None
     if mode == "sl_fraction":
+        frac = (fraction_override if fraction_override is not None
+                else cfg.max_slippage_fraction)
         if sl_price is not None and sl_price > 0:
             sl_dist = abs(signal_price - sl_price)
-            tol = min(sl_dist * cfg.max_slippage_fraction, cfg.absolute_cap_rs)
+            tol = min(sl_dist * frac, cfg.absolute_cap_rs)
         else:
             tol = cfg.absolute_cap_rs        # SL unavailable -> backstop only
     elif mode == "flat_tiers":
@@ -250,12 +331,17 @@ def _slippage_decision(
     slip_pct: float,
     tier_tuples: list,
     max_pct: float,
+    *,
+    fraction_override: Optional[float] = None,
 ) -> tuple[Optional[str], float, Optional[float]]:
     """Decide whether to abort the entry on slippage. Returns
     (abort_reason_or_None, tolerance_rs, sl_distance_or_None). Pure (no I/O).
     Aborts on the mode tolerance; the flat % is kept as belt-and-suspenders for
-    the non-pct modes when `also_apply_pct_check`."""
-    tol, sl_dist = _compute_slippage_tolerance(cfg, signal_price, sl_price, tier_tuples, max_pct)
+    the non-pct modes when `also_apply_pct_check`. `fraction_override` (Phase 3a)
+    replaces the global sl_fraction when supplied."""
+    tol, sl_dist = _compute_slippage_tolerance(
+        cfg, signal_price, sl_price, tier_tuples, max_pct,
+        fraction_override=fraction_override)
     if slip_rs > tol:
         extra = f", SL_dist=₹{sl_dist:.2f}, {slip_rs / sl_dist * 100:.0f}% of SL" if sl_dist else ""
         return (f"slippage ₹{slip_rs:.2f} > tolerance ₹{tol:.2f} "
@@ -446,6 +532,7 @@ class OrderPlacer:
         price_drift_threshold: float = 0.005,  # FIX-075: 0.5% default drift threshold for margin top-up
         max_entry_slippage_pct: float = 1.0,  # FIX-128: abort if LTP deviates > this % from trigger
         slippage_control: Optional[Any] = None,  # SlippageControlConfig (sl_fraction/flat_tiers/pct)
+        slippage_bands: Optional[list] = None,  # Phase 3a: price-band labels for override resolution
         liquidity_check_enabled: bool = False,  # FIX-134 Item 38
         liquidity_max_spread_pct: float = 0.5,
         liquidity_min_depth_qty: int = 500,
@@ -520,6 +607,9 @@ class OrderPlacer:
             (t.max_price, t.max_slippage_rs)
             for t in getattr(slippage_control, "tiers", None) or []
         ]
+        # Phase 3a: price-band labels for the override hierarchy (Symbol > Strategy
+        # > Band > Global). Empty list -> band overrides never match (fine).
+        self._slippage_bands = list(slippage_bands or [])
         # FIX-134 Item 38: liquidity check before entry
         self._liquidity_check_enabled = liquidity_check_enabled
         self._liquidity_max_spread_pct = liquidity_max_spread_pct
@@ -725,6 +815,24 @@ class OrderPlacer:
             qty=qty, price=entry_price, intent=intent,
         )
 
+        # Phase 3a: resolve the effective entry-slippage fraction via the manual
+        # override hierarchy (Symbol > Strategy > Price Band > Global). Resolved
+        # up-front so it can be both (a) enforced by the slippage guard below and
+        # (b) recorded on the trade row (tolerance_source) for transparency and
+        # later Phase-3b effectiveness analysis. Only the sl_fraction mode uses a
+        # fraction; other modes record no source (their tolerance is tier/pct-based).
+        _tol_fraction: Optional[float] = None
+        _tol_source: Optional[str] = None
+        _scfg0 = self._slippage_control
+        if (_scfg0 is not None and getattr(_scfg0, "enabled", False)
+                and getattr(_scfg0, "mode", "") == "sl_fraction"):
+            _band_price = (signal_trigger_price
+                           if (signal_trigger_price and signal_trigger_price > 0)
+                           else entry_price)
+            _band0 = get_price_band(_band_price, self._slippage_bands)
+            _tol_fraction, _tol_source = resolve_slippage_fraction(
+                _scfg0, symbol, strategy, _band0)
+
         # OP4: create trade row FIRST (status=PENDING_FILL)
         # EF-5: thread reservation_id so the trades row records which fm_ledger
         # reservation funded it; simplifies rehydrate and audit.
@@ -743,6 +851,8 @@ class OrderPlacer:
             risk_amount=risk_amount,
             reservation_id=reservation_id,
             mode=self._mode,
+            tolerance_fraction_used=_tol_fraction,   # Phase 3a
+            tolerance_source=_tol_source,            # Phase 3a
         )
 
         # Link signal → trade
@@ -842,9 +952,13 @@ class OrderPlacer:
                 _slip_pct = _slip_rs / signal_trigger_price * 100
                 _scfg = self._slippage_control
                 if _scfg is not None and getattr(_scfg, "enabled", False):
+                    # Phase 3a: enforce the SAME fraction resolved (and recorded
+                    # on the trade) above, so the override hierarchy drives the
+                    # abort decision. None -> _compute falls back to the global.
                     _abort_reason, _slip_tol, _slip_sl_dist = _slippage_decision(
                         _scfg, signal_trigger_price, sl_price, _slip_rs, _slip_pct,
                         self._slippage_tier_tuples, self._max_entry_slippage_pct,
+                        fraction_override=_tol_fraction,
                     )
                 else:
                     # slippage_control disabled/absent -> legacy flat % guard (FIX-128)
@@ -856,7 +970,8 @@ class OrderPlacer:
                     )
                 # Calibration: always record the observed slippage + how much of the
                 # SL risk-budget it consumed (even within tolerance) so
-                # max_slippage_fraction can be tuned from real numbers.
+                # max_slippage_fraction can be tuned from real numbers. Phase 3a:
+                # also record WHICH override rule supplied the fraction (tolerance_source).
                 self._log.info(
                     "order_placer.entry_slippage_observed",
                     extra={
@@ -868,6 +983,8 @@ class OrderPlacer:
                         "fraction_of_sl_used": (round(_slip_rs / _slip_sl_dist, 3)
                                                 if _slip_sl_dist else None),
                         "mode": getattr(_scfg, "mode", None),
+                        "tolerance_fraction": _tol_fraction,    # Phase 3a
+                        "tolerance_source": _tol_source,        # Phase 3a
                         "aborted": _abort_reason is not None,
                     },
                 )
@@ -886,18 +1003,22 @@ class OrderPlacer:
                             "current_ltp": _slip_ltp,
                             "slippage_rs": round(_slip_rs, 2),
                             "slippage_pct": round(_slip_pct, 3),
+                            "tolerance_fraction": _tol_fraction,    # Phase 3a
+                            "tolerance_source": _tol_source,        # Phase 3a
                             "reason": _abort_reason,
                         },
                     )
                     if self._notifier is not None:
                         try:
+                            _src_note = (f" | rule: {_tol_source}"
+                                         if _tol_source and _tol_source != "global" else "")
                             self._notifier.send(
                                 severity="WARNING",
                                 title=f"[{self._mode}] SLIPPAGE GUARD — {symbol}",
                                 body=(
                                     f"Order aborted: {side} | {_abort_reason}\n"
                                     f"Trigger: ₹{signal_trigger_price:.2f} | "
-                                    f"LTP: ₹{_slip_ltp:.2f} | Slip: ₹{_slip_rs:.2f}"
+                                    f"LTP: ₹{_slip_ltp:.2f} | Slip: ₹{_slip_rs:.2f}{_src_note}"
                                 ),
                                 source_module="order_placer",
                             )

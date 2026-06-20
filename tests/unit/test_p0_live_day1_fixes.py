@@ -284,7 +284,7 @@ class TestExitingStatus:
         # tgt_last_retry_at. EXPECTED_SCHEMA_VERSION must be at least 29.
         from core.state_store import EXPECTED_SCHEMA_VERSION
         assert EXPECTED_SCHEMA_VERSION >= 29
-        assert EXPECTED_SCHEMA_VERSION == 30
+        assert EXPECTED_SCHEMA_VERSION >= 30  # v30 added the TGT-retry cols; later versions keep them
 
     def test_fresh_db_accepts_exiting_status(self, tmp_path: Path) -> None:
         store = StateStore(tmp_path / "exiting.db")

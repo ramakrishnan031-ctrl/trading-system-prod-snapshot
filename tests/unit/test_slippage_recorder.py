@@ -90,6 +90,8 @@ class _FakeStore:
         self.tsl = []
         self.mec = []
         self.trade = None
+        self.tol_frac = None     # Phase 3a: trades.tolerance_fraction_used
+        self.tol_source = None   # Phase 3a: trades.tolerance_source
 
     def insert_order_execution_log(self, row):
         self.oel.append(row); return True
@@ -106,7 +108,9 @@ class _FakeStore:
         if "entry_target_price" in sql:
             return self.trade
         if "FROM trades" in sql:
-            return {"strategy": "gap_go_long"}
+            return {"strategy": "gap_go_long",
+                    "tolerance_fraction_used": self.tol_frac,
+                    "tolerance_source": self.tol_source}
         return None
 
 
@@ -133,6 +137,21 @@ def test_recorder_subscribes_and_records_order_fill():
     assert len(store.oel) == 1 and store.oel[0]["leg"] == "ENTRY"
     assert round(store.oel[0]["slippage_rs"], 2) == 1.0
     assert len(store.mec) == 1   # context row (NULL bid/ask, no adapter)
+
+
+def test_recorder_copies_tolerance_source_to_oel():
+    # Phase 3a: the entry-slippage override rule recorded on the trade is copied
+    # onto the order_execution_log row (read from trades in _enrich_order).
+    store, bus = _FakeStore(), _FakeBus()
+    store.tol_frac, store.tol_source = 0.15, "symbol:IDEA"
+    SlippageRecorder(store, bus, _log(), price_bands=_BANDS)
+    bus.subs["OrderFilled"](OrderFilled(
+        source_module="test", symbol="IDEA", side="BUY", filled_qty=1,
+        avg_fill_price=83.4, expected_price=83.0,
+        internal_order_id="o1", trade_id="t1", filled_at="2026-06-20T10:00:00"))
+    assert len(store.oel) == 1
+    assert store.oel[0]["tolerance_fraction_used"] == 0.15
+    assert store.oel[0]["tolerance_source"] == "symbol:IDEA"
 
 
 def test_recorder_position_closed_rollup():
@@ -164,18 +183,18 @@ def test_recorder_never_raises_on_store_failure():
                                         avg_fill_price=1.0, expected_price=1.0))
 
 
-# ── schema v31 ───────────────────────────────────────────────────────────────
+# ── schema v31+ (slippage tables present; version tracks EXPECTED) ────────────
 
 def test_schema_v31_tables_and_version(tmp_path):
     from core.state_store import EXPECTED_SCHEMA_VERSION, StateStore
-    assert EXPECTED_SCHEMA_VERSION == 31
+    assert EXPECTED_SCHEMA_VERSION >= 31
     store = StateStore(tmp_path / "v31.db")
     try:
         for tbl in ("order_execution_log", "trade_slippage_log", "market_execution_context"):
             r = store.fetch_one(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (tbl,))
             assert r is not None, f"{tbl} not created"
-        assert store.get_schema_version() == 31
+        assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
         # best-effort insert round-trips
         assert store.insert_order_execution_log(
             {"symbol": "X", "leg": "ENTRY", "actual_price": 100.0}) is True

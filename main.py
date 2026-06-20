@@ -2058,6 +2058,7 @@ def _main_locked(args, config_dir: Path) -> int:
         entry_gate_slippage_buffer=app_config.system.entry_gate.slippage_buffer,  # FIX-025
         max_entry_slippage_pct=app_config.system.entry_gate.max_entry_slippage_pct,  # FIX-128
         slippage_control=app_config.system.entry_gate.slippage_control,  # sl_fraction/flat_tiers/pct abort
+        slippage_bands=app_config.system.slippage_bands,  # Phase 3a: bands for override resolution
         notifier=notifier,
         mode=mode_label,
         live_feed=live_feed,  # FIX-061: LTP retry for exit validation errors
@@ -2118,6 +2119,20 @@ def _main_locked(args, config_dir: Path) -> int:
         strategies_dir,
         force_intraday_only=app_config.system.force_intraday_only,  # P0 MIS-only safety
     )
+
+    # Phase 3a: warn (never reject) if a slippage-tolerance override key looks off
+    # — an extreme fraction, or a by_symbol/by_strategy typo that would be SILENTLY
+    # IGNORED at resolution time (now that we know the instrument + strategy sets).
+    # Best-effort; never blocks startup.
+    try:
+        from orders.order_placer import validate_slippage_overrides
+        _ov = app_config.system.entry_gate.slippage_control.overrides
+        _known_syms = {r.symbol for r in instrument_cache.all_rows()}
+        _known_strats = set(strategies.keys())
+        for _w in validate_slippage_overrides(_ov, _known_syms, _known_strats):
+            _log.warning("slippage_overrides: %s", _w)
+    except Exception as _ov_exc:  # noqa: BLE001 — validation must never break startup
+        _log.warning("slippage override validation skipped (non-fatal): %s", _ov_exc)
 
     scorer = QualityScorer(
         weights=app_config.scoring,

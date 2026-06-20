@@ -112,7 +112,8 @@ class SlippageRecorder:
     def _on_order_filled(self, ev: OrderFilled) -> None:
         try:
             order_id = ev.internal_order_id or ev.order_id or None
-            leg, order_type, qty_req, strategy = self._enrich_order(order_id, ev.trade_id)
+            (leg, order_type, qty_req, strategy,
+             tol_frac, tol_source) = self._enrich_order(order_id, ev.trade_id)
             intended = ev.expected_price or None
             actual = ev.avg_fill_price or None
             slip_rs = (adverse_entry_slip(ev.side, intended, actual)
@@ -135,6 +136,8 @@ class SlippageRecorder:
                 "is_partial": 1 if (qty_req and ev.filled_qty and ev.filled_qty < qty_req) else 0,
                 "status": "COMPLETE",
                 "fill_timestamp": ev.filled_at or None,
+                "tolerance_fraction_used": tol_frac,   # Phase 3a (from parent trade)
+                "tolerance_source": tol_source,        # Phase 3a (from parent trade)
             }
             self._store.insert_order_execution_log(row)
             self._record_context(ev.trade_id, order_id, ev.symbol, leg, actual)
@@ -235,9 +238,11 @@ class SlippageRecorder:
 
     # -- enrichment (best-effort DB reads) ------------------------------------
     def _enrich_order(self, order_id, trade_id):
-        """(leg, order_type, qty_requested, strategy) from orders + trades; all
-        None on any miss — never raises."""
-        leg = order_type = qty_req = strategy = None
+        """(leg, order_type, qty_requested, strategy, tolerance_fraction_used,
+        tolerance_source) from orders + trades; all None on any miss — never
+        raises. The two tolerance fields (Phase 3a) record WHICH entry-slippage
+        override rule applied to the parent trade, copied onto the execution row."""
+        leg = order_type = qty_req = strategy = tol_frac = tol_source = None
         try:
             if order_id:
                 r = self._store.fetch_one(
@@ -246,12 +251,16 @@ class SlippageRecorder:
                 if r:
                     leg, order_type, qty_req = r["leg"], r["order_type"], r["qty_requested"]
             if trade_id:
-                r = self._store.fetch_one("SELECT strategy FROM trades WHERE trade_id=?", (trade_id,))
+                r = self._store.fetch_one(
+                    "SELECT strategy, tolerance_fraction_used, tolerance_source "
+                    "FROM trades WHERE trade_id=?", (trade_id,))
                 if r:
                     strategy = r["strategy"]
+                    tol_frac = r["tolerance_fraction_used"]
+                    tol_source = r["tolerance_source"]
         except Exception:
             pass
-        return leg, order_type, qty_req, strategy
+        return leg, order_type, qty_req, strategy, tol_frac, tol_source
 
     def _fetch_trade(self, trade_id) -> Optional[dict]:
         if not trade_id:

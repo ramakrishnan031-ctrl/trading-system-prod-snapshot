@@ -54,6 +54,10 @@ Version map
                  Pure additions: no MIGRATION_TABLES entry (nothing rebuilt);
                  schema.sql's CREATE TABLE IF NOT EXISTS + executescript creates
                  them and the trailing INSERT bumps the version.
+    v31 -> v32 : Slippage tolerance override hierarchy (Phase 3a) — trades and
+                 order_execution_log each gain tolerance_fraction_used (REAL) +
+                 tolerance_source (TEXT). Rebuild both (the rebuild copies the
+                 intersecting old columns; the two new ones take NULL).
 """
 from __future__ import annotations
 
@@ -77,6 +81,7 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     27: ["fm_ledger", "webhook_audit"],
     29: ["trades"],  # FIX-179: widen trades.status CHECK to allow 'EXITING'
     30: ["trades"],  # TGT retry: add needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
+    32: ["trades", "order_execution_log"],  # Phase 3a: add tolerance_fraction_used / tolerance_source
 }
 
 

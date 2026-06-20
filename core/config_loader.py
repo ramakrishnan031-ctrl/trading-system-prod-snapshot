@@ -738,6 +738,42 @@ class SlippageTier(BaseModel):
     max_slippage_rs: float
 
 
+class SlippageOverridesConfig(BaseModel):
+    """Phase 3a — MANUAL override hierarchy for the sl_fraction entry-slippage
+    tolerance. The effective fraction is resolved MOST-SPECIFIC-WINS:
+
+        Symbol  >  Strategy  >  Price Band  >  Global (max_slippage_fraction)
+
+    Every map is optional and starts EMPTY (→ the global fraction applies, so the
+    system behaves exactly as before until Rama adds an override). Rama sets these
+    from trading knowledge NOW (e.g. IDEA: 0.15, RELIANCE: 0.30); Phase 3b will
+    later RECOMMEND values from accumulated slippage data. Only the `sl_fraction`
+    mode consults these (flat_tiers/pct carry their own per-band Rs tolerances).
+
+    `enabled: false` ignores all maps (fast global kill-switch for the hierarchy).
+    Fractions are hard-rejected here unless in (0.0, 1.0]; values that merely look
+    extreme (<0.05 or >0.50) are WARNED about at startup (validate_slippage_overrides),
+    which also flags by_symbol/by_strategy keys that match no known instrument/strategy
+    (typo catch)."""
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    by_price_band: dict[str, float] = Field(default_factory=dict)
+    by_strategy: dict[str, float] = Field(default_factory=dict)
+    by_symbol: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("by_price_band", "by_strategy", "by_symbol")
+    @classmethod
+    def _fractions_in_range(cls, v: dict[str, float], info) -> dict[str, float]:
+        for key, frac in v.items():
+            if not isinstance(frac, (int, float)) or isinstance(frac, bool) \
+                    or not (0.0 < float(frac) <= 1.0):
+                raise ValueError(
+                    f"slippage_control.overrides.{info.field_name}[{key!r}] = {frac!r}: "
+                    f"slippage fraction must be a number in (0.0, 1.0]"
+                )
+        return v
+
+
 class SlippageControlConfig(BaseModel):
     """Entry-slippage abort tolerance — calibratable without code changes. The
     pre-order guard aborts an entry when |LTP − signal_trigger| exceeds a
@@ -745,7 +781,9 @@ class SlippageControlConfig(BaseModel):
       sl_fraction (DEFAULT): tolerance = min(SL_distance × max_slippage_fraction,
                              absolute_cap_rs) — auto-scales with price AND the
                              strategy's SL%; directly caps how much of the risk
-                             budget slippage may eat.
+                             budget slippage may eat. The fraction may be
+                             overridden per symbol/strategy/price-band (Phase 3a,
+                             see `overrides`).
       flat_tiers: per-price-band Rs from `tiers`.
       pct:        signal_price × entry_gate.max_entry_slippage_pct.
     `hard_max_slippage_rs` is an absolute ceiling applied in EVERY mode. (SL is
@@ -754,12 +792,15 @@ class SlippageControlConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
     mode: str = "sl_fraction"               # sl_fraction | flat_tiers | pct
-    max_slippage_fraction: float = 0.22     # sl_fraction: slippage ≤ this × SL distance
+    max_slippage_fraction: float = 0.22     # sl_fraction: GLOBAL default; slippage ≤ this × SL distance
     absolute_cap_rs: float = 5.0            # sl_fraction: backstop (the smaller of the two wins)
     tiers: list[SlippageTier] = Field(default_factory=list)  # flat_tiers mode
     default_max_slippage_rs: float = 2.0    # flat_tiers: fallback when no band matches
     also_apply_pct_check: bool = True       # also apply the flat % (belt+suspenders), non-pct modes
     hard_max_slippage_rs: float = 10.0      # absolute ceiling, ALWAYS applied regardless of mode
+    overrides: SlippageOverridesConfig = Field(  # Phase 3a: per symbol/strategy/band fraction
+        default_factory=SlippageOverridesConfig
+    )
 
     @field_validator("mode")
     @classmethod
