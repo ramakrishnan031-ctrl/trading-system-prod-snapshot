@@ -268,10 +268,13 @@ entry_gate:                   # FIX-025: gate release slippage protection
     # (tolerance_source) so you can SEE which override applied.
     overrides:
       enabled: true
+      # ALL maps start EMPTY -> pure global 0.22 baseline everywhere (clean data
+      # collection first; add overrides later from real evidence). Resolution is
+      # most-specific-wins: by_symbol > by_strategy > by_price_band > global.
       # Price-band keys MUST match a label in `slippage_bands` (below). Lower % spreads
       # are wider on cheap stocks -> a tighter fraction there is the typical first move.
-      by_price_band:
-        "0-100": 0.18         # example — tighter for low-price (wide %-spread) names
+      by_price_band: {}
+        # "0-100": 0.18       # tighter for low-price (wide %-spread) names
         # "100-200": 0.20
       # Strategy keys MUST match a loaded strategy name (e.g. gap_fade, vwap_bounce).
       by_strategy: {}

@@ -290,8 +290,9 @@ sequence (`1, 5, 30 s` then soft_kill) kicks in. `timeouts` = HTTP connect/read 
   - `slippage_control.overrides:` — **Phase 3a: per-symbol / per-strategy / per-band tolerance.** The
     global `max_slippage_fraction` (0.22) is the default; you can override it for specific names. The
     effective fraction is resolved **MOST-SPECIFIC-WINS: Symbol > Strategy > Price Band > Global** (the
-    first match wins). Applies to the `sl_fraction` mode only. All three maps are optional and start
-    empty (except one example band) → behaves exactly as the global until you add an override. Fractions
+    first match wins). Applies to the `sl_fraction` mode only. **All three maps SHIP EMPTY → pure global
+    0.22 baseline everywhere** (clean data collection first; add overrides later from real evidence) →
+    behaves exactly as the global until you add an override. Fractions
     must be in `(0, 1]`; a value that looks extreme (`<0.05` or `>0.50`) or a `by_symbol`/`by_strategy`
     typo (a key that matches no instrument/strategy → the override is silently ignored) is **warned**
     about at startup. The rule that applied is logged per entry (`tolerance_source`) and recorded on the
@@ -299,10 +300,10 @@ sequence (`1, 5, 30 s` then soft_kill) kicks in. `timeouts` = HTTP connect/read 
     ```yaml
     slippage_control:
       overrides:
-        enabled: true                     # master switch for the whole hierarchy
-        by_price_band: { "0-100": 0.18 }   # keys MUST match a `slippage_bands` label
-        by_strategy:   { }                 # e.g. gap_fade: 0.25  (keys = loaded strategy names)
-        by_symbol:     { }                 # e.g. IDEA: 0.15, RELIANCE: 0.30  (most specific; wins)
+        enabled: true                # master switch for the whole hierarchy
+        by_price_band: {}            # ships empty; e.g. { "0-100": 0.18 } (keys = `slippage_bands` labels)
+        by_strategy:   {}            # ships empty; e.g. gap_fade: 0.25  (keys = loaded strategy names)
+        by_symbol:     {}            # ships empty; e.g. IDEA: 0.15, RELIANCE: 0.30 (most specific; wins)
     ```
     Examples (global 0.22, band `0-100`=0.18, strategy `gap_fade`=0.25, symbol `IDEA`=0.15):
     IDEA on any strategy → **0.15**; `gap_fade` on a ₹500 stock → **0.25**; `vwap` on a ₹80 stock →

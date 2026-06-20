@@ -319,8 +319,8 @@ inactive alert-watcher).
 - 2026-06-20 — Claude Code — **Slippage tolerance override hierarchy — Phase 3a (MANUAL, schema v32).**
   Lets Rama set per-symbol / per-strategy / per-price-band entry-slippage tolerances NOW (from trading
   knowledge), without waiting for the Phase-3b auto-recommender. New `entry_gate.slippage_control.overrides`
-  block (`enabled` + `by_price_band` / `by_strategy` / `by_symbol` maps, all optional/empty except one
-  example band). The effective `sl_fraction` is resolved **MOST-SPECIFIC-WINS: Symbol > Strategy > Price
+  block (`enabled` + `by_price_band` / `by_strategy` / `by_symbol` maps, **all ship EMPTY → pure global
+  0.22 baseline everywhere** for clean data collection first). The effective `sl_fraction` is resolved **MOST-SPECIFIC-WINS: Symbol > Strategy > Price
   Band > Global** by the pure `resolve_slippage_fraction()` (orders/order_placer.py), threaded into
   `_slippage_decision` via a new `fraction_override` arg → the override drives the pre-order abort. Resolved
   up-front in `place()` (band from `signal_trigger_price`/`entry_price` via `get_price_band`) so it both

@@ -278,8 +278,8 @@ def test_config_loads_overrides_block():
     from core.config_loader import load_all
     ov = load_all(Path("config")).system.entry_gate.slippage_control.overrides
     assert ov.enabled is True
-    assert ov.by_price_band.get("0-100") == 0.18   # the shipped example
-    assert ov.by_strategy == {} and ov.by_symbol == {}
+    # Ships fully neutral: all maps empty -> pure global 0.22 everywhere.
+    assert ov.by_price_band == {} and ov.by_strategy == {} and ov.by_symbol == {}
 
 
 def test_config_overrides_reject_out_of_range_fraction():
