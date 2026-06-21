@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
-scripts/premarket_healthcheck.py — FIX-146
+scripts/premarket_healthcheck.py — FIX-146  [DEPRECATED 2026-06-21]
+
+DEPRECATED: subsumed by scripts/preflight (Phase A). Its 5 checks were ported
+(parity-tested, tests/unit/test_preflight_parity.py) and the 08:30 cron is now
+`python -m scripts.preflight.orchestrator --phase A`. Kept (NOT cron'd) as a
+2-day rollback safety net; delete after the Monday 22-Jun + Tuesday 23-Jun
+live proof.
 
 Pre-market health check that runs at 08:30 IST (45 min before market open).
 Catches problems early — before token arrives and main system starts.

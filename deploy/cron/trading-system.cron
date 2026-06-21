@@ -68,8 +68,14 @@ SHELL=/bin/bash
 # ── 08:15 IST Mon-Fri | headless TOTP token refresh (FIX-187) ────────────────
 15 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
 
-# ── 08:30 IST Mon-Fri | pre-market health check ─────────────────────────────
-30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/premarket_healthcheck.py >> logs/premarket-healthcheck.log 2>&1
+# ── 08:30 IST Mon-Fri | Pre-flight Phase A — deep infra checks (subsumes premarket_healthcheck) ─
+30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python -m scripts.preflight.orchestrator --phase A >> logs/preflight.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/preflight_phase_a.done
+
+# ── 09:14 IST Mon-Fri | Pre-flight Phase B — engine readiness (app up) ─
+14 9 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python -m scripts.preflight.orchestrator --phase B >> logs/preflight.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/preflight_phase_b.done
+
+# ── 09:15 IST Mon-Fri | Pre-flight Phase C — signal warmup watch (self-terminates ~09:20) ─
+15 9 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python -m scripts.preflight.orchestrator --phase C --watch-sec 285 >> logs/preflight.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/preflight_phase_c.done
 
 # ── 08:35 IST Mon-Fri | fetch F&O ban list from NSE ─────────────────────────
 35 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/fetch_fno_ban.py >> logs/cron-fno-ban.log 2>&1

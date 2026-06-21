@@ -119,14 +119,39 @@ jobs:
     cadence: market_day
     monitored: true
 
-  premarket_healthcheck:
-    script: "scripts/premarket_healthcheck.py"
+  # Pre-flight check (replaces premarket_healthcheck — Phase A subsumes its 5 checks).
+  # detection_method=exit_code_file: pre-flight writes a marker (no DB heartbeat); a
+  # missing marker => NO_SIGNAL (informational). A missed run also surfaces loudly via
+  # the Cron Officer briefing's pre-flight banner (NOT_RUN -> briefing CRITICAL).
+  preflight_phase_a:
+    script: "python -m scripts.preflight.orchestrator --phase A"
     schedule: "08:30 Mon-Fri"
     type: python
-    critical: true
+    critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
+    detection_method: exit_code_file
+
+  preflight_phase_b:
+    script: "python -m scripts.preflight.orchestrator --phase B"
+    schedule: "09:14 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    detection_method: exit_code_file
+
+  preflight_phase_c:
+    script: "python -m scripts.preflight.orchestrator --phase C --watch-sec 285"
+    schedule: "09:15 Mon-Fri"
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    detection_method: exit_code_file
 
   fetch_fno_ban:
     script: "scripts/fetch_fno_ban.py"

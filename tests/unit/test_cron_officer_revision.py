@@ -38,9 +38,12 @@ def test_every_real_job_resolves_to_valid_category():
 
 def test_detection_methods_derived():
     reg = CronRegistry.load(_REAL)
-    assert reg.get("premarket_healthcheck").effective_detection_method == "heartbeat_db"
+    # premarket_healthcheck retired (subsumed by pre-flight Phase A); reconcile_positions
+    # is the heartbeat_db exemplar now.
+    assert reg.get("reconcile_positions").effective_detection_method == "heartbeat_db"
     assert reg.get("log_cleanup").effective_detection_method == "exit_code_file"
     assert reg.get("check_cron_drift").effective_detection_method == "none"
+    assert reg.get("preflight_phase_a").effective_detection_method == "exit_code_file"  # explicit override
 
 
 # ── Phase 3 Bug A: registry key matches the recorded heartbeat name ───────────

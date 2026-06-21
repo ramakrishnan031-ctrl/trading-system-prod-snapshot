@@ -2400,6 +2400,15 @@ def _main_locked(args, config_dir: Path) -> int:
         metrics_provider=signal_processor.get_runtime_metrics,  # FIX-190 (Bug B)
     )
 
+    # Pre-flight on-demand: if this restart landed after the 08:30/09:14 cron slot
+    # but that phase's sentinel shows it didn't run, launch it best-effort (detached;
+    # never blocks startup). No-op on a normal morning (cron already ran the phase).
+    try:
+        from scripts.preflight.startup_hook import run_on_demand_if_missed
+        run_on_demand_if_missed()
+    except Exception as _pf_exc:  # never let the hook break startup
+        get_logger("main").warning("preflight_startup_hook_failed", extra={"error": str(_pf_exc)})
+
     # EOD scheduler daemon thread (MAIN14)
     eod_thread = threading.Thread(
         target=eod.start_polling,
