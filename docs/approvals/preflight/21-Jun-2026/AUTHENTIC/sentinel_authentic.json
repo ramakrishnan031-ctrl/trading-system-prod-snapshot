@@ -1,0 +1,26 @@
+{
+  "run_date": "2026-06-22",
+  "phase_a_status": "CRITICAL",
+  "phase_a_completed_at": "2026-06-21T11:17:01.898298+05:30",
+  "phase_b_status": "NOT_STARTED",
+  "phase_b_completed_at": "",
+  "phase_c_status": "NOT_STARTED",
+  "phase_c_completed_at": "",
+  "overall_status": "CRITICAL_FAILURE",
+  "critical_count": 3,
+  "warning_count": 2,
+  "autofix_count": 0,
+  "blocking_failures": [
+    "Broker/kite_token_file_exists: token file missing: data_store/session/zerodha_token.json",
+    "Broker/kite_token_fresh_today: token file missing: data_store/session/zerodha_token.json",
+    "Broker/kite_instruments_fresh: instruments stale (refreshed 2026-05-03, today 2026-06-22)"
+  ],
+  "warnings_summary": [
+    "Config Integrity/long_strategies_enabled: 9 LONG strategies present (LONG underperforms \u2014 review): first_pullback_long, gap_fade_long, gap_go_long, open_low_breakout_long, positional_momentum_long, positional_sector_rotation\u2026",
+    "State/kill_switch_state: SOFT_KILL from 2026-06-19 \u2014 prior-day; app auto-clears at startup"
+  ],
+  "alert_id": "20260622_authentic_a",
+  "last_updated": "2026-06-21T11:17:01.898298+05:30",
+  "mode": "live",
+  "account": "LFL836"
+}

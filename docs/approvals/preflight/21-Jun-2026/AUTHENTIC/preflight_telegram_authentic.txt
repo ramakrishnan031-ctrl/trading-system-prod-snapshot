@@ -1,0 +1,23 @@
+SUBJECT: [LFL836-BAN] 🔴 CRITICAL — Pre-flight FAILED — 22-Jun
+
+*🚀 Pre\-flight \(Phase A\)*
+`22\-Jun\-2026`  \|  Mode: *live*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status: *CRITICAL\_FAILURE*  🔴
+`Passed   :` *33/44*  ✅
+`Critical :` *3*  🔴
+`Warnings :` *2*  ⚠️
+`Fixed    :` *0*  🔧
+`Skipped  :` *6*  ⏭
+
+Readiness: ▰▰▰▰▰▰▰▰▰▱  `89%`
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 *Critical*
+└ kite\_token\_file\_exists: _token file missing: data\_store/session/zerodha\_token\.json_
+└ kite\_token\_fresh\_today: _token file missing: data\_store/session/zerodha\_token\.json_
+└ kite\_instruments\_fresh: _instruments stale \(refreshed 2026\-05\-03, today 2026\-06\-22\)_
+⚠️ *Warnings*
+└ long\_strategies\_enabled
+└ kill\_switch\_state
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Full details → email
