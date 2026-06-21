@@ -1,0 +1,41 @@
+SUBJECT (clean)    : [LFL836-BAN] ✅ Pre-flight READY — 22-Jun
+SUBJECT (critical) : [LFL836-BAN] 🔴 CRITICAL — Pre-flight FAILED — 22-Jun
+
+--- TELEGRAM (clean) ---
+*🚀 Pre\-flight \(Phase A\)*
+`22\-Jun\-2026`  \|  Mode: *live*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status: *READY*  ✅
+`Passed   :` *30/31*  ✅
+`Critical :` *0*  🔴
+`Warnings :` *0*  ⚠️
+`Fixed    :` *0*  🔧
+`Skipped  :` *1*  ⏭
+
+Readiness: ▰▰▰▰▰▰▰▰▰▰  `100%`
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Full details → email
+
+--- TELEGRAM (critical) ---
+*🚀 Pre\-flight \(Phase A\)*
+`22\-Jun\-2026`  \|  Mode: *live*
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+Status: *CRITICAL\_FAILURE*  🔴
+`Passed   :` *23/31*  ✅
+`Critical :` *2*  🔴
+`Warnings :` *4*  ⚠️
+`Fixed    :` *1*  🔧
+`Skipped  :` *1*  ⏭
+
+Readiness: ▰▰▰▰▰▰▰▰▱▱  `81%`
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔴 *Critical*
+└ open\_positions\_at\_start: _1 open position at start — investigate \(MIS flat overnight\)_
+└ security\_watcher\_alive: _security\_state\.json stale \(920s \> 600s\) — watcher down?_
+⚠️ *Warnings*
+└ vm\_ntp\_sync
+└ db\_schema\_version
+└ kill\_switch\_state
+└ alert\_backlog
+━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Full details → email

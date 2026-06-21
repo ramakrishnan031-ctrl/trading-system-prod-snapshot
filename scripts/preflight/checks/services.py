@@ -1,0 +1,77 @@
+"""
+scripts/preflight/checks/services.py -- Group 2 (OS / support services).
+
+ONLY the always-on support + OS daemons are checked in Phase A. The app-lifecycle
+services (trading-system, trading-watchman) are intentionally NOT here: per Fork 1
+the app auto-starts on token arrival (~08:15-09:00), so being down at 08:30 is
+EXPECTED -- those are checked in Phase B and are never auto-started by pre-flight
+(token-watcher owns that).
+
+Spec-correction (grounding 21-Jun): cron_officer / tgt-retry / reconciler are NOT
+systemd services (cron job / threads) -- removed from this list.
+
+Auto-fix = `sudo -n systemctl start <svc>` (idempotent; ubuntu has NOPASSWD sudo
+on the VM). The readers are module-level so tests can monkeypatch them.
+"""
+from __future__ import annotations
+
+import subprocess
+
+from scripts.preflight.base import Check, CheckContext, CheckResult, Criticality, FixResult
+
+
+def _is_active(service: str) -> bool:
+    try:
+        out = subprocess.run(["systemctl", "is-active", service],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() == "active"
+    except Exception:
+        return False
+
+
+def _start(service: str) -> None:
+    subprocess.run(["sudo", "-n", "systemctl", "start", service],
+                   capture_output=True, text=True, timeout=25)
+
+
+class ServiceActiveCheck(Check):
+    group = "Services"
+    auto_fixable = True
+    fix_action = "systemctl_start_service"
+    expected_duration_ms = 200
+
+    def __init__(self, service: str, criticality: Criticality = Criticality.CRITICAL):
+        self.service = service
+        stem = service.replace(".service", "").replace("-", "_")
+        self.name = f"svc_{stem}"
+        self.criticality = criticality
+
+    def run(self, ctx: CheckContext) -> CheckResult:
+        if _is_active(self.service):
+            return self._passed(f"{self.service} active")
+        return self._failed(f"{self.service} not active")
+
+    def fix(self, ctx: CheckContext) -> FixResult:
+        before = "active" if _is_active(self.service) else "inactive"
+        _start(self.service)
+        active = _is_active(self.service)
+        return FixResult(
+            success=active,
+            action=self.fix_action,
+            before_state=before,
+            after_state="active" if active else "inactive",
+            error_msg="" if active else f"{self.service} still inactive after start",
+        )
+
+
+# Always-on support + OS daemons (NOT trading-system / trading-watchman).
+SUPPORT_SERVICES = (
+    "alert-watcher.service",
+    "token-watcher.service",
+    "security-watcher.service",
+    "cron",
+    "fail2ban",
+    "auditd",
+)
+
+CHECKS = [ServiceActiveCheck(svc) for svc in SUPPORT_SERVICES]
