@@ -18,6 +18,7 @@ from scripts.preflight.checks import (
     recovery,
     security,
     services,
+    signals,
     state,
     vm_health,
 )
@@ -49,3 +50,9 @@ def phase_b_checks() -> List[Check]:
         broker.VmIpUnchangedCheck(),
         state.OpenOrdersCheck(),
     ]
+
+
+def phase_c_checks() -> List[Check]:
+    """Phase C (09:15-09:20) -- passive signal-warmup watch (the orchestrator
+    re-samples these until ~09:20). Read-only; no synthetic signal injected."""
+    return [*signals.CHECKS]

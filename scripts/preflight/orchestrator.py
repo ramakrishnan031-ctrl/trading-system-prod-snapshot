@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from scripts.preflight import autofix, sentinel
 from scripts.preflight.base import Check, CheckContext, CheckResult, Status
 from scripts.preflight.checks import broker as _broker_checks
-from scripts.preflight.checks import phase_a_checks, phase_b_checks
+from scripts.preflight.checks import phase_a_checks, phase_b_checks, phase_c_checks
 from scripts.preflight.report import CheckRecord, PreflightReport, apply_to_sentinel, render_terminal
 
 try:
@@ -56,8 +56,26 @@ def checks_for_phase(phase: str) -> List[Check]:
         return phase_a_checks()
     if phase == "B":
         return phase_b_checks()
-    # Phase C (signal warmup) check-set is added next.
+    if phase == "C":
+        return phase_c_checks()
     return []
+
+
+def watch_phase_c(ctx: CheckContext, checks: List[Check], run_id: str,
+                  watch_sec: int, interval_sec: int) -> PreflightReport:
+    """Passive 09:15-09:20 watch: re-sample the signal checks every interval until the
+    deadline; the verdict is the FINAL sample (signals_received is cumulative, so the
+    last read has the most). A transient blip mid-window doesn't decide the verdict."""
+    deadline = time.monotonic() + max(0, watch_sec)
+    report = run_phase(ctx, checks, run_id)
+    samples = 1
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        time.sleep(min(interval_sec, max(0.0, remaining)))
+        report = run_phase(ctx, checks, run_id)
+        samples += 1
+    _log.info("preflight.phase_c.watch_done", extra={"samples": samples, "watch_sec": watch_sec})
+    return report
 
 
 def is_trading_day(ctx: CheckContext) -> bool:
@@ -139,6 +157,9 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true",
                    help="never mutate (no auto-fix) and never send alerts")
     p.add_argument("--sentinel-path", type=Path, default=sentinel.DEFAULT_SENTINEL_PATH)
+    p.add_argument("--watch-sec", type=int, default=0,
+                   help="Phase C only: passively re-sample for this many seconds (cron ~285)")
+    p.add_argument("--interval-sec", type=int, default=30, help="Phase C re-sample interval")
     return p.parse_args(argv)
 
 
@@ -172,7 +193,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     run_id = make_run_id(args.phase, _now())
-    report = run_phase(ctx, checks, run_id)
+    if args.phase == "C" and args.watch_sec > 0:
+        report = watch_phase_c(ctx, checks, run_id, args.watch_sec, args.interval_sec)
+    else:
+        report = run_phase(ctx, checks, run_id)
 
     _out = render_terminal(report)
     try:
