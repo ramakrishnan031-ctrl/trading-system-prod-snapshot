@@ -49,3 +49,10 @@ ssh trading-vm 'sudo systemctl restart trading-system.service'
 `core/` infra · `broker/` integration+polling · `capital/` risk/kill-switch ·
 `orders/` order lifecycle · `signals/` ingestion · `screening/` scoring ·
 `data/` market data · `alerts/` telegram · `scripts/` ops+gemini · `tests/` (305)
+
+## Pre-flight (`scripts/preflight/`) — daily pre-market readiness, ALERT-ONLY
+3 phases via cron Mon-Fri: **A 08:30** (infra) · **B 09:14** (engine readiness) · **C 09:15→09:20**
+(signal warmup). Sentinel `data_store/preflight/today.json` · log `logs/preflight.log` · markers
+`data_store/cron_marks/preflight_phase_{a,b,c}.done`. Run: `python -m scripts.preflight.orchestrator
+--phase A|B|C [--dry-run --as-of-date YYYY-MM-DD]`. Schema v33 (preflight_runs / preflight_check_results
+/ preflight_autofix_log). Cron Officer briefing embeds its sentinel banner. (Replaced premarket_healthcheck.)

@@ -316,6 +316,26 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-21 — Claude Code — **Pre-flight check system BUILT + ACTIVATED (Monday 22-Jun = first live proof).**
+  New `scripts/preflight/` — a 3-phase daily pre-market readiness check: **Phase A 08:30**
+  (infra, app down), **Phase B 09:14** (engine readiness via `:8080/health`+`/metrics`+DB,
+  app up), **Phase C 09:15→09:20** (passive signal-warmup watch, `--watch-sec 285`). **55
+  checks / 10 groups**; **ALERT-ONLY** (exit 0 always — Rama is the gate, never auto-blocks);
+  **auto-fix only on a DB/OS SAFE whitelist** (in-memory app state = alert-only). Sentinel
+  `data_store/preflight/today.json`; email on CRITICAL/phase-C + Telegram outside the ban
+  (reuses `write_critical_sentinel` content_type=html + `cron_officer._send_telegram_md`).
+  **Cron Officer morning briefing now embeds a pre-flight banner** (reads the sentinel;
+  NOT_RUN/stale → briefing CRITICAL). **premarket_healthcheck SUBSUMED by Phase A** (5
+  checks ported + parity-tested; removed from cron+registry; script kept w/ deprecation
+  header, delete after Mon+Tue proof). **Schema v33** (+preflight_runs / preflight_check_results
+  / preflight_autofix_log; pure additions, no MIGRATION_TABLES; DB-copy tested on the real
+  64MB live DB: 32→33 idempotent, data preserved, integrity ok; live DB migrates at the
+  Monday restart). `main.py` startup hook runs Phase A/B on-demand if a 06:00-09:20 restart
+  missed the cron slot. Cron reinstalled (`crontab -l | diff`=0, 3 preflight lines live, 13
+  markers); snapshots in `data_store/cron_audit/crontab_{pre,post}_install_preflight_21-Jun-2026.txt`.
+  ~150 preflight tests; 116 cron tests unchanged. Commits 165c845 (schema) + d1355e8 (cron+hook)
+  + the preflight feature commits. Memory `preflight_system_21jun`. NB Monday is the live proof;
+  full SYSTEM_MAP cron-table rows + CONFIG_GUIDE update land post-proof.
 - 2026-06-21 — Claude Code — **Cron Officer revision ACTIVATED — crontab reinstalled (the held step done).**
   Rama signed off the HTML samples (clean EOD / morning briefing / Fri-19-Jun dry-run) + Bug A/B/C
   dispositions. **Pre-activation safety:** `bash -n deploy/cron/trading-system.cron` clean; marker-tail
