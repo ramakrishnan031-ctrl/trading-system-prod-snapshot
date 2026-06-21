@@ -160,6 +160,8 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--watch-sec", type=int, default=0,
                    help="Phase C only: passively re-sample for this many seconds (cron ~285)")
     p.add_argument("--interval-sec", type=int, default=30, help="Phase C re-sample interval")
+    p.add_argument("--alert-sentinel-dir", type=Path, default=Path("data_store"),
+                   help="Dir for the email critical_alert_*.flag (alert-watcher reads it)")
     return p.parse_args(argv)
 
 
@@ -219,6 +221,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "critical": report.failed_critical, "warnings": report.warnings,
         "autofixed": report.autofixed, "run_id": run_id,
     })
+
+    # Route the report: email on CRITICAL or the 09:20 final phase; Telegram outside
+    # the ban. Best-effort -- a delivery failure must never crash the run (alert-only).
+    try:
+        from scripts.preflight import deliver as _deliver
+        _deliver.deliver(report, args.config_dir, dry_run=args.dry_run,
+                         sentinel_dir=args.alert_sentinel_dir)
+    except Exception as exc:
+        _log.error("preflight.deliver_failed", extra={"error": str(exc)})
 
     # ALERT-ONLY: success exit even with CRITICAL findings (they go to the
     # report/sentinel/alert, not the exit code).
