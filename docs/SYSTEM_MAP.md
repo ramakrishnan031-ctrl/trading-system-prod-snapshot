@@ -160,7 +160,7 @@ VM:  bare repo post-receive hook  →  git checkout -f  →  /home/ubuntu/system
 
 ---
 
-## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, 34 lines; **source of truth: `config/cron_registry.yaml`** — TASK #3)
+## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, **re-synced 21-Jun via `crontab -l | diff`=0**; **source of truth: `config/cron_registry.yaml`** — TASK #3)
 All market jobs run `cd … && set -a && . ./.env && set +a && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
 To change cron: edit `config/cron_registry.yaml` → regenerate the file → `crontab deploy/cron/trading-system.cron`.
 
@@ -188,7 +188,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 01:05 | daily | sqlite3 `.backup` analytics.db | analytics DB backup (TASK #3) |
 | 02:00 | daily | `find backups -mtime +7 -delete` (both DBs) | backup retention |
 | 02:30 | daily | `db_retention.py` (Sun: `--vacuum`) | DB row prune (TASK #3) |
-| 09:20† | daily | `cron_officer.py --briefing` | Cron Officer morning briefing (was 04:55; †live crontab still 04:55 until reinstall) |
+| 09:20 | daily | `cron_officer.py --briefing` | Cron Officer morning briefing (was 04:55; live since 21-Jun reinstall) |
 | 05:00 | daily | `rm session/zerodha_token.json` | force fresh login |
 | 08:15 | Mon-Fri | `auto_refresh_token.py` | Headless TOTP token refresh (FIX-187; no manual OTP) |
 | 08:30 | Mon-Fri | `premarket_healthcheck.py` | preflight health |
@@ -212,7 +212,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 17:00 | Mon-Fri | `gemini_data_integrity_check.py` | candle integrity |
 | 18:00 | Sun | `gemini_weekly_patterns.py` | weekly patterns |
 | 18:00 | Mon-Fri | `check_cron_drift.py` | cron heartbeat drift (registry-driven) |
-| 18:50† | Mon-Fri | `cron_officer.py --eod-summary` | Cron Officer EOD report (was 18:30; floor 18:45 +5min so it captures system_manager_eod; †live crontab still 18:30 until reinstall) |
+| 18:50 | Mon-Fri | `cron_officer.py --eod-summary` | Cron Officer EOD report (was 18:30; floor 18:45 +5min so it captures system_manager_eod; live since 21-Jun reinstall) |
 | 18:45 | Mon-Fri | `system_manager.py` | System Manager EOD deep cross-check (TASK #5) |
 | 03:00 | 1st of month | `backup_restore_drill.py --quiet` | restore drill |
 | hourly | every | `disk_monitor.py` | disk space |
@@ -316,6 +316,24 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-21 — Claude Code — **Cron Officer revision ACTIVATED — crontab reinstalled (the held step done).**
+  Rama signed off the HTML samples (clean EOD / morning briefing / Fri-19-Jun dry-run) + Bug A/B/C
+  dispositions. **Pre-activation safety:** `bash -n deploy/cron/trading-system.cron` clean; marker-tail
+  safety proven — a broken/unwritable `data_store/cron_marks` dir does NOT alter the job's captured exit
+  (the job runs first, `rc=$?` captures it, the `; mkdir -p … ; echo > …done` tail is append-only and
+  after `;`); the 3 backup lines (db_backup/analytics_backup/backup_retention) preserve the exit code with
+  the marker write strictly AFTER completion. VM snapshots saved:
+  `data_store/cron_audit/crontab_{pre,post}_install_21-Jun-2026.txt` (named for the actual install date —
+  the runbook said 20-Jun, but activation slipped to Sun 21-Jun). **Reinstall:**
+  `crontab deploy/cron/trading-system.cron` (VM file md5 == local `3c6871a8…`) → **`crontab -l | diff` = 0**,
+  **10** exit-code marker lines present, new times live (**briefing 09:20 / EOD 18:50 / system_manager
+  18:45**), old **04:55/18:30 removed**, `cron_marks/` pre-created. Also untracked the accidental
+  `reports/system_manager/2026-06-19.txt` sweep + gitignored `reports/{system_manager,cron_officer}/`
+  (commit **f8edc4a**, pushed → VM tree redeployed). **Sunday 21-Jun (holiday)** suppresses the real
+  morning/EOD reports (expected) — only passive markers fire (disk_monitor hourly, gemini_weekly_patterns
+  18:00). **Monday 22-Jun = first live proof** (09:20 briefing email + 18:50 EOD email; Telegram still
+  banned → `[LFL836-BAN]` subject; **Tue 23-Jun** Telegram auto-resumes and the prefix drops). Registry +
+  officer code were already in 3dd72b0. Memory `cron_officer_revision_20jun` updated → ACTIVATED.
 - 2026-06-20 — Claude Code — **Cron Officer revision — Phase 2-6 (full visibility + Bug A/B fixes + rich
   email/Telegram).** Commit 3dd72b0 (pushed; **crontab reinstall + docs PENDING Rama's dry-run sign-off**).
   EXTENDS `config/cron_registry.yaml` (no fork). **Phase-1 finding:** the 7 "missed" on 19-Jun were **3
@@ -339,8 +357,8 @@ inactive alert-watcher).
   ban window. New CLI `--force-dry-run` / `--as-of-date`. **Verified** (dry-run on the real VM DB, as-of Fri
   19-Jun): **17 done / 3 real-missed / 1 ⏸ pending** (vs old "12/20, 7 missed"); HTML samples in
   `reports/cron_officer/`. +20 tests; 116 cron/alert green; legacy `build_eod_summary`/`build_briefing` kept.
-  See memory `cron_officer_revision_20jun`. NB cron-table times above (09:20/18:50) are the canonical file —
-  the **live crontab still runs 04:55/18:30 until reinstalled** (the held activation step).
+  See memory `cron_officer_revision_20jun`. NB **ACTIVATED 2026-06-21** — the live crontab now == the
+  canonical file (09:20/18:50; `crontab -l | diff`=0); see the 2026-06-21 entry above.
 - 2026-06-20 — Claude Code — **Slippage overrides ship FULLY EMPTY (commit 8fd54a8, follow-up to 2ce54ab).**
   Rama's call: set `by_price_band` to `{}` too (was the lone example `0-100: 0.18`) → every entry resolves to
   the global **0.22** baseline everywhere for clean data collection first; add per-symbol/strategy/band

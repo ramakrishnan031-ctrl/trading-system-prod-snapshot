@@ -1,5 +1,5 @@
 # PATHS — Quick Reference (Trading System v2)
-# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-06-20
+# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-06-21
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
@@ -20,7 +20,7 @@
 | Cron-job markers | `data_store/cron_marks/<job>.done` (exit-code markers the Officer reads) |
 | Cron audit | `data_store/cron_audit/` (Phase-1 findings + daily `job_list_<date>.json` snapshots) |
 | Bare repo (deploy target) | `/home/ubuntu/trading-system.git/` (post-receive checks out tree) |
-| Canonical cron | `deploy/cron/trading-system.cron` (live crontab DIVERGES — see SYSTEM_MAP) |
+| Canonical cron | `deploy/cron/trading-system.cron` (live crontab == file since 21-Jun reinstall; `diff`=0) |
 
 ## Run a command on the VM
 ```bash
