@@ -85,6 +85,11 @@ capital:                      # FM16
     BRACKET_ORDER: 5.0        # BO leverage
 
 position_sizing:              # PS9
+  enabled: true               # Diary #4 tier-multiplier switch.
+                              #   true  = ON  = score-tier × perf-weight sizing (existing, unchanged)
+                              #   false = OFF = flat Rs per order (flat_value_rs below, MUST be set)
+  # flat_value_rs: 5000       # Diary #4: Rs/order when enabled=false. ONE MORE ceiling on top of
+                              #   risk/capital/concentration (those still bind). Uncomment + set to flip OFF.
   risk_per_trade_pct: 0.01    # 1% of total capital at risk per trade (PS2)
   max_concentration_pct: 0.10 # max 10% of total capital in one symbol (PS2)
   min_qty_threshold: 1        # reject signal if final qty below this (PS6)

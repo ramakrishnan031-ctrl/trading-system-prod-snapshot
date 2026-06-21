@@ -1905,7 +1905,25 @@ def _main_locked(args, config_dir: Path) -> int:
         instrument_cache=instrument_cache,  # IC7: lot_size from cache
         lot_skew_rejection_threshold=ps_cfg.lot_skew_rejection_threshold,  # FIX-021
         max_position_value_rs=ps_cfg.max_position_value_rs,  # FIX-144
+        enabled=ps_cfg.enabled,                # Diary #4: tier-multiplier ON/OFF switch
+        flat_value_rs=ps_cfg.flat_value_rs,    # Diary #4: flat Rs/order when OFF
     )
+    # Diary #4: surface the active sizing mode at startup (one info-level line).
+    if ps_cfg.enabled:
+        _tw = ps_cfg.tier_multipliers
+        _log.info(
+            "position_sizing.mode",
+            extra={"mode": "ON",
+                   "tier_weights": {"HIGH": _tw.HIGH, "MEDIUM": _tw.MEDIUM, "LOW": _tw.LOW},
+                   "dynamic_by_winrate": ps_cfg.dynamic_by_winrate},
+        )
+        print(f"Tier multiplier: ON (tier weights: {_tw.HIGH}/{_tw.MEDIUM}/{_tw.LOW} x perf_weights)")
+    else:
+        _log.info(
+            "position_sizing.mode",
+            extra={"mode": "OFF_FLAT", "flat_value_rs": ps_cfg.flat_value_rs},
+        )
+        print(f"Tier multiplier: OFF (flat Rs {ps_cfg.flat_value_rs:.0f}/order, safety ceilings active)")
 
     risk_cfg = app_config.system.risk
     # FIX-190 (Bug H): live test mode — conservative caps for early live sessions

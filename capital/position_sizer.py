@@ -131,6 +131,8 @@ class PositionSizer:
         max_single_order_qty: int = 10000,  # FIX-041: sanity cap on computed qty
         max_position_value_rs: float = 50000.0,  # FIX-144: hard cap on qty*price
         broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
+        enabled: bool = True,                   # Diary #4: ON = score-tier × perf sizing (default)
+        flat_value_rs: Optional[float] = None,  # Diary #4: flat Rs/order; required when enabled=False
     ) -> None:
         self._fm = fund_manager
         self._leverage_map = dict(leverage_map)
@@ -145,6 +147,17 @@ class PositionSizer:
         self._max_single_order_qty = max_single_order_qty  # FIX-041
         self._max_position_value_rs = max_position_value_rs  # FIX-144
         self._broker_adapter = broker_adapter  # FIX-072
+        # Diary #4: sizing mode. enabled=True -> score-tier × perf-weight (unchanged).
+        # enabled=False -> flat Rs/order (Option δ); flat_value_rs is one more ceiling
+        # on top of risk/capital/concentration (those still bind). Config-load also
+        # enforces this, but guard here too (PositionSizer is built directly in tests).
+        self._enabled = enabled
+        self._flat_value_rs = flat_value_rs
+        if not enabled and (flat_value_rs is None or flat_value_rs <= 0):
+            raise ValueError(
+                f"PositionSizer: enabled=False (flat sizing) requires flat_value_rs > 0, "
+                f"got {flat_value_rs!r}"
+            )
 
     def calculate(
         self,
@@ -397,12 +410,32 @@ class PositionSizer:
                 breakdown=breakdown,
             )
 
-        # ── PS5: Tier multiplier + PA4: performance weight (FIX-132 Item 9) ────
-        tier_mult = self._tier_multipliers.get(score_tier, 1.0)
-        effective_mult = tier_mult * max(0.0, perf_weight)  # perf_weight >= 0 guard
-        tiered_qty = int(math.floor(raw_qty * effective_mult))
-        # FIX-133 Item 21: cap at 2x base_qty, floor at 1
-        tiered_qty = max(1, min(tiered_qty, raw_qty * 2))
+        # ── Sizing mode (Diary #4) ─────────────────────────────────────────────
+        tier_mult = self._tier_multipliers.get(score_tier, 1.0)  # configured weight (audit)
+        if self._enabled:
+            # ON: PS5 tier multiplier × PA4 performance weight (FIX-132 Item 9) — unchanged.
+            effective_mult = tier_mult * max(0.0, perf_weight)  # perf_weight >= 0 guard
+            tiered_qty = int(math.floor(raw_qty * effective_mult))
+            # FIX-133 Item 21: cap at 2x base_qty, floor at 1
+            tiered_qty = max(1, min(tiered_qty, raw_qty * 2))
+            breakdown["tier_multiplier_mode"] = "ON"
+            breakdown["tier_weight_applied"] = tier_mult
+            breakdown["perf_weight_applied"] = round(perf_weight, 4)
+            breakdown["flat_value_rs_used"] = None
+            breakdown["qty_by_flat"] = None
+        else:
+            # OFF (Option δ): flat Rs/order. flat_value_rs is one more ceiling on top of
+            # risk/capital/concentration. Score-tier and perf-weight are NOT applied, so
+            # the size is score-neutral. NO floor-at-1: a flat below 1 lot -> BELOW_MIN skip.
+            qty_by_flat = int(math.floor(self._flat_value_rs / entry_price))
+            tiered_qty = min(raw_qty, qty_by_flat)
+            if qty_by_flat < raw_qty:
+                constraint = "FLAT"  # flat is the binding ceiling
+            breakdown["tier_multiplier_mode"] = "OFF_FLAT"
+            breakdown["tier_weight_applied"] = None
+            breakdown["perf_weight_applied"] = None
+            breakdown["flat_value_rs_used"] = self._flat_value_rs
+            breakdown["qty_by_flat"] = qty_by_flat
         breakdown["tiered_qty"] = tiered_qty
         breakdown["tier_mult"] = tier_mult
         breakdown["perf_weight"] = round(perf_weight, 4)
@@ -464,13 +497,21 @@ class PositionSizer:
             )
 
         if final_qty < lot_size or final_qty < self._min_qty_threshold:
-            reason = (
-                f"qty={final_qty} below minimum for {symbol}: "
-                f"tier={score_tier}({tier_mult}) lot_size={lot_size} "
-                f"min_threshold={self._min_qty_threshold} "
-                f"(risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
-                f"conc_qty={qty_by_concentration} tiered={tiered_qty})"
-            )
+            if self._enabled:
+                reason = (
+                    f"qty={final_qty} below minimum for {symbol}: "
+                    f"tier={score_tier}({tier_mult}) lot_size={lot_size} "
+                    f"min_threshold={self._min_qty_threshold} "
+                    f"(risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+                    f"conc_qty={qty_by_concentration} tiered={tiered_qty})"
+                )
+            else:
+                reason = (
+                    f"flat_value_rs Rs{self._flat_value_rs:.0f} below 1 lot at entry "
+                    f"Rs{entry_price:.2f} for {symbol} (qty={final_qty} lot_size={lot_size}); "
+                    f"signal skipped (risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+                    f"conc_qty={qty_by_concentration} flat_qty={breakdown.get('qty_by_flat')})"
+                )
             return SizingResult(
                 success=False,
                 qty=0,
@@ -485,11 +526,21 @@ class PositionSizer:
         margin_required = final_qty * margin_per_share
         risk_amount = final_qty * sl_distance
 
-        reason = (
-            f"{symbol} qty={final_qty} [{constraint}-bound tier={score_tier}({tier_mult})]: "
-            f"risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
-            f"conc_qty={qty_by_concentration} lot_size={lot_size}"
-        )
+        breakdown["binding_constraint"] = constraint.lower()
+        breakdown["actual_position_value_rs"] = round(final_qty * entry_price, 2)
+
+        if self._enabled:
+            reason = (
+                f"{symbol} qty={final_qty} [{constraint}-bound tier={score_tier}({tier_mult})]: "
+                f"risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+                f"conc_qty={qty_by_concentration} lot_size={lot_size}"
+            )
+        else:
+            reason = (
+                f"{symbol} qty={final_qty} [{constraint}-bound FLAT Rs{self._flat_value_rs:.0f}]: "
+                f"risk_qty={qty_by_risk} capital_qty={qty_by_capital} "
+                f"conc_qty={qty_by_concentration} flat_qty={breakdown['qty_by_flat']} lot_size={lot_size}"
+            )
 
         return SizingResult(
             success=True,

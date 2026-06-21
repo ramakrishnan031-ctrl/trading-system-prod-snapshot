@@ -46,7 +46,7 @@ from datetime import date as _date
 from pathlib import Path
 
 import yaml
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -220,6 +220,8 @@ class PositionSizingConfig(BaseModel):
     dynamic_by_winrate: bool = True            # FIX-133 Item 21: enable perf-weighted sizing
     min_multiplier: float = 0.5                # FIX-133 Item 21: floor for perf weight
     max_multiplier: float = 2.0                # FIX-133 Item 21: cap for perf weight
+    enabled: bool = True                       # Diary #4: ON = score-tier × perf sizing (default)
+    flat_value_rs: Optional[float] = None      # Diary #4: flat Rs/order; required (>0) when enabled=False
 
     @field_validator("risk_per_trade_pct")
     @classmethod
@@ -248,6 +250,18 @@ class PositionSizingConfig(BaseModel):
         if not (0 < v <= 1):
             raise ValueError("lot_skew_rejection_threshold must be between 0 (exclusive) and 1 (inclusive)")
         return v
+
+    @model_validator(mode="after")
+    def _validate_flat_value(self) -> "PositionSizingConfig":
+        # Diary #4: OFF (flat) mode requires a positive flat_value_rs; reject startup
+        # otherwise so we never silently run flat sizing with no rupee target.
+        if not self.enabled:
+            if self.flat_value_rs is None or self.flat_value_rs <= 0:
+                raise ValueError(
+                    "tier multiplier disabled (position_sizing.enabled=false) requires "
+                    "position_sizing.flat_value_rs > 0"
+                )
+        return self
 
 
 class SignalProcessorConfig(BaseModel):
