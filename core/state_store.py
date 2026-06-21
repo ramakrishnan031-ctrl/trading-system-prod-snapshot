@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 32  # Slippage tolerance override hierarchy (Phase 3a): +trades/order_execution_log tolerance_fraction_used + tolerance_source
+EXPECTED_SCHEMA_VERSION = 33  # Pre-flight check audit trail: +preflight_runs / preflight_check_results / preflight_autofix_log (pure additions)
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

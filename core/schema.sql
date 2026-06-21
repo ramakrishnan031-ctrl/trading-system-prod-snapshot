@@ -1040,9 +1040,61 @@ CREATE TABLE IF NOT EXISTS market_execution_context (
 CREATE INDEX IF NOT EXISTS idx_mec_trade  ON market_execution_context(trade_id);
 CREATE INDEX IF NOT EXISTS idx_mec_symbol ON market_execution_context(symbol);
 
+-- v32 -> v33 : Pre-flight check audit trail (3 NEW append-only tables). PURE
+-- additions: no MIGRATION_TABLES entry (nothing rebuilt); executescript creates
+-- them (CREATE IF NOT EXISTS) and the trailing INSERT bumps the version.
+
+-- TABLE 34: preflight_runs — one row per pre-flight phase run (A/B/C/FINAL).
+CREATE TABLE IF NOT EXISTS preflight_runs (
+    run_id              TEXT PRIMARY KEY,
+    run_date            TEXT NOT NULL,
+    phase               TEXT NOT NULL,             -- A | B | C
+    started_at          TEXT,
+    completed_at        TEXT,
+    total_checks        INTEGER NOT NULL DEFAULT 0,
+    passed              INTEGER NOT NULL DEFAULT 0,
+    failed_critical     INTEGER NOT NULL DEFAULT 0,
+    warnings            INTEGER NOT NULL DEFAULT 0,
+    autofixes_attempted INTEGER NOT NULL DEFAULT 0,
+    autofixes_succeeded INTEGER NOT NULL DEFAULT 0,
+    overall_status      TEXT,                      -- READY | READY_WITH_WARNINGS | CRITICAL_FAILURE
+    alert_id            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pfr_date ON preflight_runs(run_date);
+
+-- TABLE 35: preflight_check_results — one row per check per run.
+CREATE TABLE IF NOT EXISTS preflight_check_results (
+    run_id          TEXT NOT NULL,
+    run_date        TEXT,
+    check_name      TEXT NOT NULL,
+    check_group     TEXT,
+    criticality     TEXT,                          -- CRITICAL | WARN | INFO
+    status          TEXT,                          -- PASS | FAIL | WARN | AUTOFIXED | SKIPPED
+    duration_ms     INTEGER,
+    details_json    TEXT,
+    fix_attempted   INTEGER NOT NULL DEFAULT 0,
+    fix_result      TEXT                           -- SUCCESS | FAILED | (empty)
+);
+CREATE INDEX IF NOT EXISTS idx_pfcr_run  ON preflight_check_results(run_id);
+CREATE INDEX IF NOT EXISTS idx_pfcr_name ON preflight_check_results(check_name, run_date);
+
+-- TABLE 36: preflight_autofix_log — one row per auto-fix attempt (audit trail).
+CREATE TABLE IF NOT EXISTS preflight_autofix_log (
+    log_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT,
+    check_name      TEXT,
+    attempted_at    TEXT,
+    fix_action      TEXT,
+    before_state    TEXT,
+    after_state     TEXT,
+    result          TEXT,                          -- SUCCESS | FAILED
+    error_msg       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pfal_run ON preflight_autofix_log(run_id);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '32');  -- Slippage tolerance override hierarchy (Phase 3a): +trades/order_execution_log tolerance_fraction_used + tolerance_source
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '33');  -- Pre-flight check audit trail: +preflight_runs / preflight_check_results / preflight_autofix_log
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
