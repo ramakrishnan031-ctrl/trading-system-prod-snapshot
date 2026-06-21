@@ -20,13 +20,23 @@ import subprocess
 from scripts.preflight.base import Check, CheckContext, CheckResult, Criticality, FixResult
 
 
-def _is_active(service: str) -> bool:
+# Periodic-oneshot services (alert-watcher, security-watcher; Restart=always +
+# short RestartSec) spend most of their time in "activating" between cycles --
+# treat that as healthy, else they false-FAIL every few seconds.
+HEALTHY_STATES = ("active", "activating", "reloading")
+
+
+def _active_state(service: str) -> str:
     try:
         out = subprocess.run(["systemctl", "is-active", service],
                              capture_output=True, text=True, timeout=10)
-        return out.stdout.strip() == "active"
+        return out.stdout.strip()
     except Exception:
-        return False
+        return "unknown"
+
+
+def _is_active(service: str) -> bool:
+    return _active_state(service) in HEALTHY_STATES
 
 
 def _start(service: str) -> None:
@@ -47,9 +57,10 @@ class ServiceActiveCheck(Check):
         self.criticality = criticality
 
     def run(self, ctx: CheckContext) -> CheckResult:
-        if _is_active(self.service):
-            return self._passed(f"{self.service} active")
-        return self._failed(f"{self.service} not active")
+        state = _active_state(self.service)
+        if state in HEALTHY_STATES:
+            return self._passed(f"{self.service} {state}")
+        return self._failed(f"{self.service} {state} (expected active)")
 
     def fix(self, ctx: CheckContext) -> FixResult:
         before = "active" if _is_active(self.service) else "inactive"

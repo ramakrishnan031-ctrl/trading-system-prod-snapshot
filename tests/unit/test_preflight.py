@@ -398,7 +398,7 @@ def test_main_happy_path_writes_sentinel(tmp_path, monkeypatch):
     monkeypatch.setattr(vm_health, "_mem_available_bytes", lambda: 2 * GB)
     monkeypatch.setattr(vm_health, "_disk_usage", lambda p: (20 * GB, 30.0))
     monkeypatch.setattr(vm_health, "_ntp_skew_seconds", lambda: 0.05)
-    monkeypatch.setattr(services, "_is_active", lambda s: True)   # no systemctl on PC
+    monkeypatch.setattr(services, "_active_state", lambda s: "active")   # no systemctl on PC
     monkeypatch.setattr(autofix, "_audit", lambda *a, **k: None)  # no stray audit files
     monkeypatch.setattr(security, "_current_hour_ist", lambda: 10)  # deterministic (outside lock)
     monkeypatch.setattr(broker, "_get_public_ip", lambda: "1.2.3.4")

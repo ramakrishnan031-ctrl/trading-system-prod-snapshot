@@ -25,17 +25,19 @@ def test_service_name_derivation():
     assert services.ServiceActiveCheck("cron").name == "svc_cron"
 
 
-def test_service_active_and_inactive(tmp_path, monkeypatch):
-    monkeypatch.setattr(services, "_is_active", lambda s: True)
+def test_service_active_inactive_and_periodic(tmp_path, monkeypatch):
+    monkeypatch.setattr(services, "_active_state", lambda s: "active")
     assert services.ServiceActiveCheck("cron").run(_ctx(tmp_path)).status is Status.PASS
-    monkeypatch.setattr(services, "_is_active", lambda s: False)
+    monkeypatch.setattr(services, "_active_state", lambda s: "activating")  # periodic-oneshot
+    assert services.ServiceActiveCheck("alert-watcher.service").run(_ctx(tmp_path)).status is Status.PASS
+    monkeypatch.setattr(services, "_active_state", lambda s: "failed")
     assert services.ServiceActiveCheck("cron").run(_ctx(tmp_path)).status is Status.FAIL
 
 
 def test_service_fix(tmp_path, monkeypatch):
-    state = {"active": False}
-    monkeypatch.setattr(services, "_is_active", lambda s: state["active"])
-    monkeypatch.setattr(services, "_start", lambda s: state.update(active=True))
+    state = {"s": "inactive"}
+    monkeypatch.setattr(services, "_active_state", lambda svc: state["s"])
+    monkeypatch.setattr(services, "_start", lambda svc: state.update(s="active"))
     chk = services.ServiceActiveCheck("alert-watcher.service")
     ctx = _ctx(tmp_path)
     assert chk.run(ctx).status is Status.FAIL
