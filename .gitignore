@@ -20,6 +20,8 @@ logs/
 # Generated reports
 reports/daily/
 reports/output/*.xlsx
+reports/system_manager/
+reports/cron_officer/
 
 # System manuals (Word docs synced to VM out-of-band, not via git)
 docs/system_manuals/*.docx
