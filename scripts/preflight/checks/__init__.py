@@ -14,6 +14,7 @@ from scripts.preflight.checks import (
     broker,
     config_integrity,
     database,
+    engine,
     recovery,
     security,
     services,
@@ -33,4 +34,18 @@ def phase_a_checks() -> List[Check]:
         *state.CHECKS,
         *security.CHECKS,
         *recovery.CHECKS,
+    ]
+
+
+def phase_b_checks() -> List[Check]:
+    """Phase B (09:14) -- the app is UP (token-watcher started it). Engine readiness
+    via the app's HTTP surface + a fast re-gate of the time-sensitive Phase-A checks."""
+    return [
+        # app process up -- ALERT-ONLY (token-watcher owns lifecycle; never auto-start)
+        services.ServiceActiveCheck("trading-system.service", auto_fixable=False),
+        *engine.CHECKS,                 # app_health, app_metrics, fund_manager_balance, vm_ntp_strict
+        # fast re-gate: token still fresh, public IP unchanged, no new resting orders
+        broker.TokenFreshCheck(),
+        broker.VmIpUnchangedCheck(),
+        state.OpenOrdersCheck(),
     ]

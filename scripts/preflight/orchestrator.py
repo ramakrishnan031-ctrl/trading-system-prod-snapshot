@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from scripts.preflight import autofix, sentinel
 from scripts.preflight.base import Check, CheckContext, CheckResult, Status
 from scripts.preflight.checks import broker as _broker_checks
-from scripts.preflight.checks import phase_a_checks
+from scripts.preflight.checks import phase_a_checks, phase_b_checks
 from scripts.preflight.report import CheckRecord, PreflightReport, apply_to_sentinel, render_terminal
 
 try:
@@ -54,7 +54,9 @@ def make_run_id(phase: str, now: Optional[datetime] = None) -> str:
 def checks_for_phase(phase: str) -> List[Check]:
     if phase == "A":
         return phase_a_checks()
-    # Phase B/C check-sets are added in the next build step (need app up).
+    if phase == "B":
+        return phase_b_checks()
+    # Phase C (signal warmup) check-set is added next.
     return []
 
 

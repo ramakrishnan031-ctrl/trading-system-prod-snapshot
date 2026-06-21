@@ -50,11 +50,15 @@ class ServiceActiveCheck(Check):
     fix_action = "systemctl_start_service"
     expected_duration_ms = 200
 
-    def __init__(self, service: str, criticality: Criticality = Criticality.CRITICAL):
+    def __init__(self, service: str, criticality: Criticality = Criticality.CRITICAL,
+                 auto_fixable: bool = True):
         self.service = service
         stem = service.replace(".service", "").replace("-", "_")
         self.name = f"svc_{stem}"
         self.criticality = criticality
+        # Phase B uses auto_fixable=False for trading-system: a down app is alert-only
+        # (token-watcher owns the lifecycle; pre-flight must not start trading).
+        self.auto_fixable = auto_fixable
 
     def run(self, ctx: CheckContext) -> CheckResult:
         state = _active_state(self.service)
