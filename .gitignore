@@ -23,6 +23,12 @@ reports/output/*.xlsx
 reports/system_manager/
 reports/cron_officer/
 
+# Generated data (regenerated on the VM daily by refresh_instruments.py;
+# must NOT be git-tracked or the deploy hook's `git checkout -f` silently
+# reverts the VM's fresh copy to the committed version — instruments staleness
+# incident 21-Jun-2026).
+config/instruments.csv
+
 # System manuals (Word docs synced to VM out-of-band, not via git)
 docs/system_manuals/*.docx
 
