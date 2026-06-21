@@ -176,6 +176,7 @@ class OrderManager:
         mode: Optional[str] = None,  # v14: PAPER | LIVE
         tolerance_fraction_used: Optional[float] = None,  # Phase 3a: resolved sl_fraction
         tolerance_source: Optional[str] = None,           # Phase 3a: which override rule won
+        sizing_breakdown: Optional[dict] = None,          # Diary #4: PositionSizer.breakdown (sizing audit)
     ) -> str:
         """
         Insert a new trade row with status=PENDING_FILL. Returns trade_id.
@@ -190,6 +191,7 @@ class OrderManager:
         """
         trade_id = new_trade_id()
         now = now_ist().isoformat()
+        bd = sizing_breakdown or {}  # Diary #4: sizing-audit fields (NULL if absent)
         with self._store.transaction() as cur:
             cur.execute(
                 """
@@ -202,7 +204,11 @@ class OrderManager:
                     created_at, updated_at,
                     status, entry_mode, order_protocol, recovered_flag,
                     reservation_id, mode,
-                    tolerance_fraction_used, tolerance_source
+                    tolerance_fraction_used, tolerance_source,
+                    tier_multiplier_mode, tier_weight_applied, perf_weight_applied,
+                    flat_value_rs_used, qty_by_risk, qty_by_capital,
+                    qty_by_concentration, qty_by_flat, binding_constraint,
+                    actual_position_value_rs
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, 0,
@@ -212,7 +218,11 @@ class OrderManager:
                     ?, ?,
                     'PENDING_FILL', 'FULL', ?, 0,
                     ?, ?,
-                    ?, ?
+                    ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?, ?, ?,
+                    ?
                 )
                 """,
                 (
@@ -225,6 +235,10 @@ class OrderManager:
                     order_protocol,
                     reservation_id, mode,
                     tolerance_fraction_used, tolerance_source,
+                    bd.get("tier_multiplier_mode"), bd.get("tier_weight_applied"), bd.get("perf_weight_applied"),
+                    bd.get("flat_value_rs_used"), bd.get("qty_by_risk"), bd.get("qty_by_capital"),
+                    bd.get("qty_by_concentration"), bd.get("qty_by_flat"), bd.get("binding_constraint"),
+                    bd.get("actual_position_value_rs"),
                 ),
             )
         self._log.info(

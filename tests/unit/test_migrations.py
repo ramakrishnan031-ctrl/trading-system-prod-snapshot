@@ -470,3 +470,59 @@ def test_v31_to_v32_tolerance_columns_added(tmp_path):
                          "order_execution_log WHERE symbol='Y'")
     assert r["tolerance_fraction_used"] == 0.25 and r["tolerance_source"] == "strategy:gap_fade"
     store2.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v33 -> v34 — Diary #4: trades sizing-audit columns
+# ─────────────────────────────────────────────────────────────────────────────
+
+_V34_COLS = [
+    "tier_multiplier_mode", "tier_weight_applied", "perf_weight_applied",
+    "flat_value_rs_used", "qty_by_risk", "qty_by_capital",
+    "qty_by_concentration", "qty_by_flat", "binding_constraint",
+    "actual_position_value_rs",
+]
+
+
+def test_v33_to_v34_sizing_audit_columns_added(tmp_path):
+    """A v33 trades (no sizing-audit cols) gains the 10 Diary #4 columns on
+    migration to v34; the existing row is preserved (the new cols read NULL)."""
+    db = tmp_path / "mig3334.db"
+
+    # 1. Build at the current schema (v34) and seed one trade with the new fields.
+    store = StateStore(db)
+    assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION  # 34
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO signals(signal_id,symbol,scanner,strategy,triggered_at,"
+            "received_at,expires_at,status,fingerprint,fingerprint_date) "
+            "VALUES('sig1','X','sc','st','t','t','t','TRADED','fp','2026-06-20')"
+        )
+        cur.execute(
+            "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,"
+            "qty_planned,entry_target_price,sl_initial,tgt_initial,margin_reserved,"
+            "risk_amount,created_at,updated_at,status,order_protocol,"
+            "tier_multiplier_mode,binding_constraint,actual_position_value_rs) "
+            "VALUES('t1','sig1','X','LONG','st',5,100,95,110,20,5,'t','t',"
+            "'PENDING_FILL','CO_PLUS_TGT','OFF_FLAT','flat',500.0)"
+        )
+    store.close()
+
+    # 2. Simulate a real v33 DB: drop the 10 new columns and rewind the version.
+    conn = sqlite3.connect(str(db))
+    for col in _V34_COLS:
+        conn.execute(f"ALTER TABLE trades DROP COLUMN {col}")
+    conn.execute("UPDATE schema_meta SET value='33' WHERE key='schema_version'")
+    conn.commit()
+    assert "binding_constraint" not in {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
+    conn.close()
+
+    # 3. Reopen -> run_migrations rebuilds trades to v34.
+    store2 = StateStore(db)
+    assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION  # 34
+    cols = {r["name"] for r in store2.fetch_all("PRAGMA table_info(trades)")}
+    assert set(_V34_COLS) <= cols
+    assert store2.fetch_one("SELECT COUNT(*) AS n FROM trades")["n"] == 1
+    assert store2.fetch_one(
+        "SELECT binding_constraint FROM trades WHERE trade_id='t1'")["binding_constraint"] is None
+    store2.close()

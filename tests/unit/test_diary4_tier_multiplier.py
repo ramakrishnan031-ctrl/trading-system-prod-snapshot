@@ -190,3 +190,38 @@ def test_pydantic_accepts_off_with_positive_flat():
 def test_sizer_init_rejects_off_without_flat():
     with pytest.raises(ValueError):
         _make_sizer(enabled=False, flat_value_rs=None)
+
+
+# ── End-to-end: breakdown is persisted onto the trades row (v34) ─────────────
+
+def test_create_trade_persists_sizing_breakdown(tmp_path):
+    import logging
+    from core.state_store import StateStore
+    from orders.order_manager import OrderManager
+
+    schema = Path(__file__).parents[2] / "core" / "schema.sql"
+    store = StateStore(tmp_path / "t.db", schema)
+    om = OrderManager(state_store=store, logger=logging.getLogger("t"))
+    now = "2026-06-22T09:30:00+05:30"
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO signals(signal_id,symbol,scanner,strategy,triggered_at,"
+            "received_at,expires_at,status,fingerprint,fingerprint_date) "
+            "VALUES('s1','X','sc','st',?,?,?,'TRADED','fp','2026-06-22')", (now, now, now))
+
+    res = _make_sizer(enabled=False, flat_value_rs=5000.0).calculate(
+        "X", "BUY", 1000.0, 985.0, "INTRADAY", "MEDIUM")
+    tid = om.create_trade(
+        signal_id="s1", symbol="X", direction="LONG", strategy="st", sector=None,
+        qty=res.qty, entry_target_price=1000.0, sl_initial=985.0, tgt_initial=1030.0,
+        order_protocol="LIMIT_TRIPLE", margin_reserved=1000.0, risk_amount=75.0,
+        sizing_breakdown=res.breakdown)
+
+    row = store.fetch_one(f"SELECT * FROM trades WHERE trade_id='{tid}'")
+    assert row["tier_multiplier_mode"] == "OFF_FLAT"
+    assert row["flat_value_rs_used"] == 5000.0
+    assert row["qty_by_flat"] == 5
+    assert row["binding_constraint"] == "flat"
+    assert row["actual_position_value_rs"] == 5000.0
+    assert row["tier_weight_applied"] is None
+    store.close()

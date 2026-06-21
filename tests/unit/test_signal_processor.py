@@ -246,7 +246,8 @@ class _MockOrderPlacer:
 
     def place(self, *, symbol, side, qty, entry_price, sl_price, intent,
               signal_id, reservation_id, strategy="", tgt_price=None,
-              release_ltp=None, signal_trigger_price=None):  # FIX-128
+              release_ltp=None, signal_trigger_price=None,
+              sizing_breakdown=None):  # FIX-128 + Diary #4
         if self._raise:
             raise self._raise
         self.calls.append({

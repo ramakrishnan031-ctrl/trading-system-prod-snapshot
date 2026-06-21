@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 33  # Pre-flight check audit trail: +preflight_runs / preflight_check_results / preflight_autofix_log (pure additions)
+EXPECTED_SCHEMA_VERSION = 34  # Diary #4 sizing audit: trades += tier_multiplier_mode/tier_weight_applied/perf_weight_applied/flat_value_rs_used/qty_by_*/binding_constraint/actual_position_value_rs (rebuild trades)
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

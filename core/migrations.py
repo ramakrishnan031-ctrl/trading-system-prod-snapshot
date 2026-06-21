@@ -58,6 +58,15 @@ Version map
                  order_execution_log each gain tolerance_fraction_used (REAL) +
                  tolerance_source (TEXT). Rebuild both (the rebuild copies the
                  intersecting old columns; the two new ones take NULL).
+    v32 -> v33 : Pre-flight check audit trail — three NEW append-only tables
+                 (preflight_runs, preflight_check_results, preflight_autofix_log).
+                 Pure additions: no MIGRATION_TABLES entry (nothing rebuilt).
+    v33 -> v34 : Diary #4 tier-multiplier switch — trades gains 10 sizing-audit
+                 columns (tier_multiplier_mode, tier_weight_applied,
+                 perf_weight_applied, flat_value_rs_used, qty_by_risk/capital/
+                 concentration/flat, binding_constraint, actual_position_value_rs).
+                 Rebuild trades (rebuild copies the intersecting old columns; the
+                 ten new ones take NULL).
 """
 from __future__ import annotations
 
@@ -82,6 +91,8 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     29: ["trades"],  # FIX-179: widen trades.status CHECK to allow 'EXITING'
     30: ["trades"],  # TGT retry: add needs_tgt_retry / tgt_retry_count / tgt_last_retry_at
     32: ["trades", "order_execution_log"],  # Phase 3a: add tolerance_fraction_used / tolerance_source
+    # 33: pure additions (preflight_* tables) — no rebuild, see schema.sql.
+    34: ["trades"],  # Diary #4: add sizing-audit columns (tier_multiplier_mode etc.); rebuild copies old cols, new ones -> NULL
 }
 
 

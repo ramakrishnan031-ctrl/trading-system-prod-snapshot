@@ -206,6 +206,21 @@ CREATE TABLE IF NOT EXISTS trades (
     tolerance_fraction_used REAL,                      -- resolved fraction (e.g. 0.22 / 0.15)
     tolerance_source        TEXT,                      -- "symbol:IDEA" / "strategy:gap_fade" / "band:0-100" / "global"
 
+    -- Sizing audit (Diary #4, v34). One row per trade = one sizing DECISION: how qty
+    -- was sized — tier x perf (ON) vs flat Rs/order (OFF) — the candidate qtys, which
+    -- constraint bound it, and the final rupee exposure. Populated at create_trade()
+    -- from PositionSizer's breakdown. NULL on recovered / pre-v34 trades.
+    tier_multiplier_mode      TEXT,     -- 'ON' | 'OFF_FLAT'
+    tier_weight_applied       REAL,     -- tier multiplier applied (NULL when OFF)
+    perf_weight_applied       REAL,     -- perf weight applied (NULL when OFF)
+    flat_value_rs_used        REAL,     -- flat Rs/order target (NULL when ON)
+    qty_by_risk               INTEGER,  -- candidate qty from risk_per_trade
+    qty_by_capital            INTEGER,  -- candidate qty from available bucket capital
+    qty_by_concentration      INTEGER,  -- candidate qty from max_concentration_pct
+    qty_by_flat               INTEGER,  -- candidate qty from flat_value_rs (NULL when ON)
+    binding_constraint        TEXT,     -- risk | capital | concentration | flat
+    actual_position_value_rs  REAL,     -- final qty * entry_price
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -1094,7 +1109,7 @@ CREATE INDEX IF NOT EXISTS idx_pfal_run ON preflight_autofix_log(run_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '33');  -- Pre-flight check audit trail: +preflight_runs / preflight_check_results / preflight_autofix_log
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '34');  -- Diary #4 sizing audit: trades += tier_multiplier_mode/tier_weight_applied/perf_weight_applied/flat_value_rs_used/qty_by_{risk,capital,concentration,flat}/binding_constraint/actual_position_value_rs (rebuild trades)
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

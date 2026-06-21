@@ -732,6 +732,7 @@ class OrderPlacer:
         tgt_price: Optional[float] = None,  # SPW6: provided by signal_processor; overrides OP3
         release_ltp: Optional[float] = None,  # FIX-025: gate release LTP for slippage protection
         signal_trigger_price: Optional[float] = None,  # FIX-128: original Chartink trigger for slippage guard
+        sizing_breakdown: Optional[dict] = None,  # Diary #4: PositionSizer.breakdown for the trades sizing audit
     ) -> None:
         """
         Create trade, place entry orders, register fill tracking. (OP1–OP4)
@@ -853,6 +854,7 @@ class OrderPlacer:
             mode=self._mode,
             tolerance_fraction_used=_tol_fraction,   # Phase 3a
             tolerance_source=_tol_source,            # Phase 3a
+            sizing_breakdown=sizing_breakdown,       # Diary #4: sizing audit
         )
 
         # Link signal → trade
