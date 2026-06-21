@@ -316,6 +316,22 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-21 — Claude Code — **Diary #4: tier-multiplier ON/OFF position-sizing switch (Option δ flat-Rs).**
+  `config/system_config.yaml → position_sizing.enabled` (default **true = ON**, byte-unchanged
+  score-tier × perf sizing). **OFF** = flat Rs/order (`flat_value_rs`, Pydantic-validated > 0):
+  flat is ONE MORE ceiling atop risk/capital/concentration (those still bind), score + perf NOT
+  applied, < 1 lot → BELOW_MIN skip. Switch lives in `capital/position_sizer.py calculate()` above
+  any paper/live split (parity clean). **Schema v34**: `trades` += 10 sizing-audit columns
+  (tier_multiplier_mode / tier_weight_applied / perf_weight_applied / flat_value_rs_used /
+  qty_by_{risk,capital,concentration,flat} / binding_constraint / actual_position_value_rs);
+  chosen over order_execution_log (per-leg, fill-time) — one decision per trade, mirrors the
+  tolerance_source precedent. `breakdown` plumbed signal_processor → order_placer.place() →
+  create_trade; v34 = trades 12-step rebuild (MIGRATION_TABLES[34]), DB-copy-tested on the real
+  live DB (32→34 idempotent, data preserved, integrity ok). Mode surfaced in pre-flight Phase A
+  config display + Cron Officer EOD badge. Toggle = edit `enabled` + `systemctl restart`. Monday
+  22-Jun ships default ON = **zero behavioural change** (VM-verified enabled=True/flat=None).
+  ~25 tests; full suite 3560 green. Commits 4c0ba43 + 3382e55 + 57d4ead. Memory
+  `diary_4_tier_multiplier_switch_21jun`.
 - 2026-06-21 — Claude Code — **Pre-flight check system BUILT + ACTIVATED (Monday 22-Jun = first live proof).**
   New `scripts/preflight/` — a 3-phase daily pre-market readiness check: **Phase A 08:30**
   (infra, app down), **Phase B 09:14** (engine readiness via `:8080/health`+`/metrics`+DB,
