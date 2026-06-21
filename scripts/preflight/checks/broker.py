@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -43,6 +43,24 @@ def _file_mdate(path: Path) -> Optional[date]:
         return datetime.fromtimestamp(path.stat().st_mtime).date()
     except OSError:
         return None
+
+
+def _trading_days_behind(mdate: date, as_of: date, config_dir: Path) -> int:
+    """Trading days strictly after mdate up to and including as_of (weekend-aware,
+    so a Friday file on Monday counts as 1, not 3). Falls back to calendar days if
+    the holiday calendar is unavailable."""
+    if mdate >= as_of:
+        return 0
+    try:
+        from utils.holiday_guard import is_trading_day
+    except Exception:
+        return (as_of - mdate).days
+    n, cur = 0, mdate
+    while cur < as_of and n < 400:
+        cur += timedelta(days=1)
+        if is_trading_day(cur, config_dir):
+            n += 1
+    return n
 
 
 def _trigger_token_refresh() -> bool:
@@ -164,13 +182,26 @@ class InstrumentsFreshCheck(Check):
         return ctx.config_dir / "instruments.csv"
 
     def run(self, ctx: CheckContext) -> CheckResult:
+        # Graded by TRADING days behind (Fix option c, 21-Jun): td 0 = refreshed
+        # today PASS; td 1 = last trading day, today's 09:00 refresh pending -> WARN
+        # (no false-CRITICAL at Phase A 08:30 / on Mondays); td >= 2 = a refresh was
+        # actually missed -> CRITICAL.
         p = self._path(ctx)
         if not p.exists():
             return self._failed(f"instruments.csv missing: {p}")
         mdate = _file_mdate(p)
-        if mdate == ctx.as_of_date:
-            return self._passed(f"instruments refreshed today ({mdate})")
-        return self._failed(f"instruments stale (refreshed {mdate}, today {ctx.as_of_date})")
+        if mdate is None:
+            return self._warn("could not read instruments.csv mtime")
+        td = _trading_days_behind(mdate, ctx.as_of_date, ctx.config_dir)
+        if td <= 0:
+            return self._passed(f"instruments refreshed today ({mdate})", trading_days_behind=td)
+        if td == 1:
+            return self._warn(
+                f"instruments from last trading day ({mdate}); today's 09:00 refresh pending",
+                trading_days_behind=td)
+        return self._failed(
+            f"instruments stale: {td} trading days behind (refreshed {mdate})",
+            trading_days_behind=td)
 
     def fix(self, ctx: CheckContext) -> FixResult:
         before = str(_file_mdate(self._path(ctx)))

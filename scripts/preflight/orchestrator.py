@@ -172,7 +172,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     run_id = make_run_id(args.phase, _now())
     report = run_phase(ctx, checks, run_id)
 
-    print(render_terminal(report))
+    _out = render_terminal(report)
+    try:
+        print(_out)
+    except UnicodeEncodeError:
+        # a non-UTF-8 console (e.g. Windows cp1252) must never crash the run
+        print(_out.encode("ascii", "replace").decode("ascii"))
 
     # Persist the sentinel (skipped in dry-run so a rehearsal can't overwrite the
     # real day's state).

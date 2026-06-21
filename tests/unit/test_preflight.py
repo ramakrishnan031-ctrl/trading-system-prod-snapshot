@@ -403,6 +403,9 @@ def test_main_happy_path_writes_sentinel(tmp_path, monkeypatch):
     monkeypatch.setattr(security, "_current_hour_ist", lambda: 10)  # deterministic (outside lock)
     monkeypatch.setattr(broker, "_get_public_ip", lambda: "1.2.3.4")
     monkeypatch.setattr(broker, "_file_mdate", lambda p: date(2026, 6, 22))  # token/instruments fresh
+    # no real broker in unit tests -> force the live-call checks to SKIP, regardless
+    # of whether ZERODHA_API_KEY_* leaked into os.environ from another test
+    monkeypatch.setattr(broker, "build_broker_probe", lambda ctx: None)
     for s in config_integrity.REQUIRED_SECRETS:
         monkeypatch.setenv(s, "x")
     db = make_db(tmp_path)

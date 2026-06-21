@@ -77,11 +77,25 @@ def test_token_fresh_and_fix(tmp_path, monkeypatch):
     assert chk.run(_ctx(tmp_path)).status is Status.PASS
 
 
-def test_instruments_fresh_and_fix(tmp_path, monkeypatch):
+def test_instruments_fresh_grading(tmp_path, monkeypatch):
     ctx = _ctx(tmp_path)
-    (ctx.config_dir / "instruments.csv").write_text("x\n", encoding="utf-8")
-    st = {"d": date(2026, 6, 20)}
+    (ctx.config_dir / "instruments.csv").write_text("symbol,token\n" + "X,1\n" * 200, encoding="utf-8")
+    monkeypatch.setattr(broker, "_file_mdate", lambda p: AS_OF)
+    chk = broker.InstrumentsFreshCheck()
+    monkeypatch.setattr(broker, "_trading_days_behind", lambda m, a, c: 0)
+    assert chk.run(ctx).status is Status.PASS                 # refreshed today
+    monkeypatch.setattr(broker, "_trading_days_behind", lambda m, a, c: 1)
+    assert chk.run(ctx).status is Status.WARN                 # last trading day, refresh pending
+    monkeypatch.setattr(broker, "_trading_days_behind", lambda m, a, c: 3)
+    assert chk.run(ctx).status is Status.FAIL                 # missed -> CRITICAL
+
+
+def test_instruments_fix(tmp_path, monkeypatch):
+    ctx = _ctx(tmp_path)
+    (ctx.config_dir / "instruments.csv").write_text("symbol,token\n", encoding="utf-8")
+    st = {"d": date(2026, 6, 1)}
     monkeypatch.setattr(broker, "_file_mdate", lambda p: st["d"])
+    monkeypatch.setattr(broker, "_trading_days_behind", lambda m, a, c: 0 if st["d"] == AS_OF else 5)
     chk = broker.InstrumentsFreshCheck()
     assert chk.run(ctx).status is Status.FAIL
     monkeypatch.setattr(broker, "_trigger_instruments_refresh", lambda a: st.update(d=AS_OF) or True)

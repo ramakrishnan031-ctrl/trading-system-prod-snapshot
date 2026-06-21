@@ -218,6 +218,33 @@ def _write_csv(csv_path: Path, rows: list[dict]) -> None:
         raise
 
 
+def _check_fresh_write(csv_path: Path, max_age_sec: int = 600,
+                       min_bytes: int = 1000) -> tuple[bool, str]:
+    """Post-write assertion (instruments staleness incident 21-Jun-2026).
+
+    Confirms the file was ACTUALLY written fresh: exists, mtime is recent, size is
+    above a floor, and the header parses. Returns (ok, error). A failure makes
+    main() exit non-zero so the cron heartbeat / exit-code marker catches a silent
+    no-write -- the worst kind of failure (the bug that froze instruments 7 weeks).
+    """
+    import time
+    if not csv_path.exists():
+        return False, f"{csv_path} missing after write"
+    age = time.time() - csv_path.stat().st_mtime
+    if age > max_age_sec:
+        return False, f"{csv_path} mtime {age:.0f}s old (> {max_age_sec}s) -- write did not land"
+    size = csv_path.stat().st_size
+    if size < min_bytes:
+        return False, f"{csv_path} size {size}B below {min_bytes}B floor"
+    try:
+        header = csv_path.read_text(encoding="utf-8").splitlines()[0]
+    except Exception as exc:
+        return False, f"{csv_path} unreadable: {exc}"
+    if "symbol" not in header.lower():
+        return False, f"{csv_path} header looks wrong: {header!r}"
+    return True, ""
+
+
 def validate_instrument_rows(
     rows: list[dict],
     min_count: int = _MIN_ROW_COUNT,
@@ -391,6 +418,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     _write_csv(args.csv, rows)
+    ok, err = _check_fresh_write(args.csv)
+    if not ok:
+        print(f"ERROR: post-write assertion failed: {err}", file=sys.stderr)
+        return 1
     print(f"Wrote {len(rows)} rows to {args.csv}")
     return 0
 
