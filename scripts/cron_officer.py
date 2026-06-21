@@ -377,6 +377,19 @@ def _read_preflight_summary(today: date, root: Path = _ROOT) -> dict:
             "alert_id": s.alert_id}
 
 
+def _tier_mode_line(config_dir: Path) -> str:
+    """Diary #4: one-line position-sizing mode badge for the EOD report."""
+    try:
+        import yaml
+        data = yaml.safe_load((config_dir / "system_config.yaml").read_text(encoding="utf-8")) or {}
+        ps = data.get("position_sizing") or {}
+        if ps.get("enabled", True):
+            return "Tier multiplier today: ON (score-tier x perf sizing)"
+        return f"Tier multiplier today: OFF (flat Rs {ps.get('flat_value_rs')}/order)"
+    except Exception:
+        return "Tier multiplier today: (unknown - config unreadable)"
+
+
 def build_report(registry: CronRegistry, store: StateStore, today: date,
                  config_dir: Path, now_time: time, *, is_eod: bool,
                  root: Path = _ROOT, marks_dir: Path = _MARKS_DIR,
@@ -393,6 +406,8 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
                 for j in registry.all_jobs() if j.excluded_reason]
     extra = [wline,
              "Known: daily_report heartbeat is pending the xlsx redesign (shown ⏸ Pending)."]
+    if is_eod:
+        extra.append(_tier_mode_line(config_dir))  # Diary #4: sizing-mode badge
     severity = _compute_severity(jobs, watcher_stale)
     # Morning briefing embeds the pre-flight banner; a missing/stale sentinel
     # (pre-flight never ran / crashed) escalates the briefing to CRITICAL (spec).

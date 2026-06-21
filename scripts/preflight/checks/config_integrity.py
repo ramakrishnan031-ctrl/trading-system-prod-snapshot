@@ -202,6 +202,36 @@ class CronRegistryValidCheck(Check):
                             "[crontab drift -> Cron Officer check_cron_drift]")
 
 
+class TierMultiplierModeCheck(Check):
+    """Diary #4: surface the active position-sizing mode -- ON (score-tier x perf)
+    vs OFF (flat Rs/order). INFO/visibility only; app_config_valid enforces the
+    OFF-requires-flat_value_rs rule, so this never fails on its own."""
+
+    name = "tier_multiplier_mode"
+    group = "Config Integrity"
+    criticality = Criticality.INFO
+    expected_duration_ms = 30
+
+    def run(self, ctx: CheckContext) -> CheckResult:
+        import yaml
+
+        cfg = ctx.config_dir / "system_config.yaml"
+        try:
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            return self._warn(f"system_config.yaml parse error: {exc}")
+        ps = data.get("position_sizing") or {}
+        if ps.get("enabled", True):
+            tm = ps.get("tier_multipliers") or {}
+            return self._passed(
+                f"Tier multiplier: ON (weights {tm.get('HIGH')}/{tm.get('MEDIUM')}/"
+                f"{tm.get('LOW')} x perf)", mode="ON")
+        flat = ps.get("flat_value_rs")
+        return self._passed(
+            f"Tier multiplier: OFF (flat Rs {flat}/order, safety ceilings active)",
+            mode="OFF_FLAT", flat_value_rs=flat)
+
+
 CHECKS = [
     ConfigFilesPresentCheck(),
     RequiredSecretsCheck(),
@@ -211,4 +241,5 @@ CHECKS = [
     StrategyConfigsValidCheck(),
     LongStrategiesEnabledCheck(),
     CronRegistryValidCheck(),
+    TierMultiplierModeCheck(),
 ]

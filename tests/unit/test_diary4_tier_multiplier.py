@@ -225,3 +225,34 @@ def test_create_trade_persists_sizing_breakdown(tmp_path):
     assert row["actual_position_value_rs"] == 5000.0
     assert row["tier_weight_applied"] is None
     store.close()
+
+
+# ── Phase 5: mode surfaced in pre-flight config display + Cron Officer EOD ────
+
+def _write_ps(tmp_path, body):
+    (tmp_path / "system_config.yaml").write_text("position_sizing:\n" + body, encoding="utf-8")
+
+
+def test_preflight_tier_mode_check_on(tmp_path):
+    from scripts.preflight.base import CheckContext
+    from scripts.preflight.checks.config_integrity import TierMultiplierModeCheck
+    _write_ps(tmp_path, "  enabled: true\n  tier_multipliers:\n    HIGH: 1.0\n    MEDIUM: 0.7\n    LOW: 0.5\n")
+    r = TierMultiplierModeCheck().run(CheckContext(config_dir=tmp_path, db_path=tmp_path / "x.db"))
+    assert "ON" in r.detail and "1.0/0.7/0.5" in r.detail
+
+
+def test_preflight_tier_mode_check_off(tmp_path):
+    from scripts.preflight.base import CheckContext
+    from scripts.preflight.checks.config_integrity import TierMultiplierModeCheck
+    _write_ps(tmp_path, "  enabled: false\n  flat_value_rs: 5000\n")
+    r = TierMultiplierModeCheck().run(CheckContext(config_dir=tmp_path, db_path=tmp_path / "x.db"))
+    assert "OFF" in r.detail and "5000" in r.detail
+
+
+def test_cron_officer_eod_tier_mode_line(tmp_path):
+    from scripts.cron_officer import _tier_mode_line
+    _write_ps(tmp_path, "  enabled: true\n")
+    assert "ON" in _tier_mode_line(tmp_path)
+    _write_ps(tmp_path, "  enabled: false\n  flat_value_rs: 5000\n")
+    line = _tier_mode_line(tmp_path)
+    assert "OFF" in line and "5000" in line
