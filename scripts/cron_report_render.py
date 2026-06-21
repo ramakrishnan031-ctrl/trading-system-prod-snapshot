@@ -62,6 +62,7 @@ class CronReport:
     alert_id: str = ""
     ts_iso: str = ""
     ban_active: bool = False
+    preflight: Optional[dict] = None   # pre-flight sentinel summary -> briefing banner
 
     # ── derived counts ────────────────────────────────────────────────────────
     def _count(self, *statuses: str) -> int:
@@ -250,6 +251,9 @@ def render_briefing_telegram(report: CronReport) -> str:
         if len(pending) > 5:
             lines.append(f"└ `\\.\\.\\. \\+{len(pending) - 5} more`")
     lines += [_DIV, f"📨 EOD report ≈ *{_e('18:50 IST')}*"]
+    if report.preflight:
+        emoji, _a, _b, label = _pf_style(report.preflight)
+        lines.insert(0, f"*🚀 Pre\\-flight:* `{_e(label)}` {emoji}")
     return "\n".join(lines)
 
 
@@ -330,6 +334,11 @@ def render_briefing_plaintext(report: CronReport) -> str:
         L.append(f"  - {j.due_label}  {j.name}")
     L.append("")
     L.append(f"EOD report ≈ 18:50 IST | Alert ID: {report.alert_id}")
+    if report.preflight:
+        _e0, _a, _b, label = _pf_style(report.preflight)
+        L.insert(0, f"Pre-flight: {label} "
+                 f"({report.preflight.get('critical', 0)} crit, "
+                 f"{report.preflight.get('warnings', 0)} warn)")
     return "\n".join(L)
 
 
@@ -499,6 +508,39 @@ def render_eod_html(report: CronReport) -> str:
     )
 
 
+# ── pre-flight banner (embedded at the top of the morning briefing) ─────────────
+_PF_BANNER = {
+    "READY":               ("✅", "#2E7D32", "#E8F5E9", "READY"),
+    "READY_WITH_WARNINGS": ("⚠️", "#F57C00", "#FFF8E1", "READY · warnings"),
+    "CRITICAL_FAILURE":    ("🔴", "#C62828", "#FFEBEE", "CRITICAL"),
+    "NOT_RUN":             ("❓", "#C62828", "#FFEBEE", "NOT RUN — investigate"),
+}
+
+
+def _pf_style(pf: Optional[dict]) -> Tuple[str, str, str, str]:
+    status = (pf or {}).get("status") or "NOT_RUN"
+    return _PF_BANNER.get(status, _PF_BANNER["NOT_RUN"])
+
+
+def _preflight_banner_html(pf: Optional[dict]) -> str:
+    if not pf:
+        return ""
+    emoji, accent, bg, label = _pf_style(pf)
+    if ((pf.get("status") or "NOT_RUN") == "NOT_RUN"):
+        sub = "pre-flight sentinel missing or stale — did pre-flight run?"
+    else:
+        sub = (f'{pf.get("critical", 0)} critical · {pf.get("warnings", 0)} warnings · '
+               f'{pf.get("autofixed", 0)} auto-fixed · id {_esc_html(pf.get("alert_id", ""))}')
+    return (
+        f'<table cellpadding="0" cellspacing="0" width="100%" '
+        f'style="background:{bg};border-radius:6px;margin-bottom:8px;"><tr>'
+        f'<td style="padding:12px 16px;border-left:6px solid {accent};">'
+        f'<div style="font-size:16px;font-weight:bold;color:{accent};">🚀 Pre-flight: {emoji} {_esc_html(label)}</div>'
+        f'<div style="font-size:12px;color:#424242;margin-top:2px;">{sub}</div>'
+        f'</td></tr></table>'
+    )
+
+
 def render_briefing_html(report: CronReport) -> str:
     done = report.completed
     pending = report.pending
@@ -536,7 +578,7 @@ def render_briefing_html(report: CronReport) -> str:
         '<div style="margin-top:12px;font-family:monospace;font-size:11px;color:#616161;">'
         f'EOD report ≈ 18:50 IST &nbsp;|&nbsp; Alert ID: {_esc_html(report.alert_id)}</div>'
     )
-    body = banner + summary + done_sec + pend_sec + footer
+    body = _preflight_banner_html(report.preflight) + banner + summary + done_sec + pend_sec + footer
     return (
         '<html><body style="margin:0;padding:12px;background:#F5F5F5;'
         'font-family:Arial,Helvetica,sans-serif;color:#212121;">'

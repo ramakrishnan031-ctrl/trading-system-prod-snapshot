@@ -362,6 +362,21 @@ def _change_log(registry: CronRegistry, today: date, audit_dir: Path) -> tuple[l
     return added, removed
 
 
+def _read_preflight_summary(today: date, root: Path = _ROOT) -> dict:
+    """Map the pre-flight sentinel -> briefing-banner dict (reuses the sentinel
+    loader). Missing or stale (run_date != today) => NOT_RUN."""
+    try:
+        from scripts.preflight.sentinel import load as _load
+        s = _load(root / "data_store" / "preflight" / "today.json")
+    except Exception:
+        return {"status": "NOT_RUN"}
+    if not s.run_date or s.run_date != today.isoformat():
+        return {"status": "NOT_RUN"}
+    return {"status": s.overall_status, "critical": s.critical_count,
+            "warnings": s.warning_count, "autofixed": s.autofix_count,
+            "alert_id": s.alert_id}
+
+
 def build_report(registry: CronRegistry, store: StateStore, today: date,
                  config_dir: Path, now_time: time, *, is_eod: bool,
                  root: Path = _ROOT, marks_dir: Path = _MARKS_DIR,
@@ -378,14 +393,23 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
                 for j in registry.all_jobs() if j.excluded_reason]
     extra = [wline,
              "Known: daily_report heartbeat is pending the xlsx redesign (shown ⏸ Pending)."]
+    severity = _compute_severity(jobs, watcher_stale)
+    # Morning briefing embeds the pre-flight banner; a missing/stale sentinel
+    # (pre-flight never ran / crashed) escalates the briefing to CRITICAL (spec).
+    preflight = None
+    if not is_eod:
+        preflight = _read_preflight_summary(today, root)
+        if preflight.get("status") == "NOT_RUN":
+            severity = "CRITICAL"
     return CronReport(
         day=today, weekday=today.strftime("%A"),
         mode=mode or _detect_mode(store), is_eod=is_eod, jobs=jobs,
-        severity=_compute_severity(jobs, watcher_stale),
+        severity=severity,
         added=added, removed=removed, excluded=excluded, extra_lines=extra,
         ts_iso=now_ist().isoformat(),
         alert_id=now_ist().strftime("%Y%m%d_%H%M%S") + ("_eod" if is_eod else "_brief"),
         ban_active=registry.officer.ban_active(today),
+        preflight=preflight,
     )
 
 
