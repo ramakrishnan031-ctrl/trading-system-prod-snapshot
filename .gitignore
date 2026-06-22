@@ -73,3 +73,5 @@ memory/
 mempalace.yaml
 CLAUDE_md_and_explanations.txt
 .claude/settings.local.json
+
+sats/
