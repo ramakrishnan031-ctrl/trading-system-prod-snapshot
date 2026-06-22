@@ -316,6 +316,28 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-22 — Claude Code — **Slice 1: fill-time R:R fix (all 4 recalc sites) + SL/TGT after-check (schema v35).**
+  Deployed to `main` (commit a730c63); activates on the VM's next restart (Tue 23-Jun 08:30), when the
+  live DB migrates **v34→v35**. **Bug:** the deferred-exit TGT recalc used order_placer's hardcoded
+  `self._rr_ratio` (default **2.0**, never overridden in `main.py:2063-2087`) instead of the originating
+  strategy's `tgt_risk_reward`; deferred exits are the ONLY TGT that reaches the broker (placement defers,
+  OP-NS1), so the broker TGT was **always 2.0-based** — gap_fade (1.5) / gap_go (2.5) traded at the wrong
+  R:R; FIX-013's "preserve R:R" was unmet. **Fix (A):** strategy R:R frozen at placement
+  (`trades.tgt_risk_reward_applied`, carried on the ENTRY `_FillEntry`), read at fill via
+  `_resolve_fill_rr()` at **all 4** recalc sites — the 3 audited + the **TGT-retry path
+  (`order_placer.py` ~line 2462) the audit missed** (same 2.0 bug); NULL/recovered (pre-v35) →
+  fall back to `self._rr_ratio` 2.0 **+ WARNING**. **After-check (B):** `_verify_exits_placed()` reads
+  the persisted SL/TGT order rows (ground truth; parity-safe — paper+live persist the same rows) and
+  checks price + qty vs intended; **missing/wrong SL = CRITICAL**, **TGT-only = WARN**, **alert-only**
+  (no auto-cancel this slice); verdict in `trades.exits_verified` / `exits_verify_detail` (READ-BACK,
+  unlike the write-only v34 sizing cols); CO SL is broker-managed (bracket) → TGT-only check.
+  **Schema v35:** trades += `tgt_risk_reward_applied` / `exits_verified` / `exits_verify_detail`
+  (rebuild-trades migration, v34 pattern; `EXPECTED_SCHEMA_VERSION` 34→35); **DB-copy gated** on the real
+  live DB (34→35, 77 trades preserved, integrity ok, idempotent). 16 new tests
+  (`tests/unit/test_slice1_rr_aftercheck.py`); full suite = pre-existing baseline, zero new. **Sequencing
+  (Option 2):** strategy YAMLs kept at current values (gap_fade 1.5 / gap_go 2.5 / rest 2.0) for one day so
+  Tuesday's live trades prove the broker honours EACH strategy's distinct R:R; **all 15 → R:R 1.5 lands
+  Wed 24-Jun** after the proof. Branch `slice1-rr-fix-aftercheck-22jun`.
 - 2026-06-22 — Claude Code — **`fetch_fno_ban` endpoint fix + severity downgrade (fail-open for EQ).**
   Monday 08:35 the job emailed a CRITICAL: the old JSON endpoint
   `nseindia.com/api/live-analysis-banned` is dead (**404**). New source = NSE Clearing's daily CSV
