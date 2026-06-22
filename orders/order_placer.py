@@ -2470,11 +2470,14 @@ class OrderPlacer:
         if tgt_price <= 0:
             tgt_price = float(trade["tgt_initial"] or 0.0)
 
-        # Guard 3: never place an unprofitable TGT (wrong side of entry). Skip
-        # WITHOUT placing and keep retrying — the circuit band may relax later.
-        if tgt_price <= 0 \
-                or (direction == "LONG" and tgt_price <= entry_price) \
-                or (direction == "SHORT" and tgt_price >= entry_price):
+        # Guard: never place a TGT we could not compute a positive price for.
+        # De-dup (NOCIL fix): the WRONG-SIDE invariant is now enforced inside the
+        # placeability gate (clamp_exit_into_band) at the single chokepoint —
+        # place_tgt_only refuses a wrong-side / band-too-tight TGT and reports it
+        # via result.unplaceable. The old per-caller Guard-3 wrong-side clause +
+        # the post-clamp place-then-cancel re-check are therefore removed (only
+        # the tgt_price<=0 computation guard remains).
+        if tgt_price <= 0:
             return "skipped_unplaceable"
 
         result = self._engine.place_deferred_tgt_only(
@@ -2487,18 +2490,9 @@ class OrderPlacer:
             # a genuine broker reject -> "failed".
             return "skipped_unplaceable" if result.unplaceable else "failed"
 
+        # The gate-approved (clamped) price actually placed at the broker — used
+        # for the DB row, the OCO fill-map registration, and the log below.
         final_tgt = result.tgt_price
-
-        # Bug D re-check: place_tgt_only clamps to the CURRENT band, which could
-        # push the placed TGT to/under entry. If so cancel it and keep retrying.
-        if final_tgt is not None and (
-            (direction == "LONG" and final_tgt <= entry_price)
-            or (direction == "SHORT" and final_tgt >= entry_price)
-        ):
-            self._cancel_broker_orders(
-                [result.tgt_broker_order_id], reason="tgt_retry_clamped_unprofitable",
-            )
-            return "skipped_unplaceable"
 
         # Persist the TGT order row, then register for software OCO. Same machinery
         # as place_exits so a TGT fill cancels the SL and closes the trade.
