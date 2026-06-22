@@ -849,6 +849,7 @@ class EntryGateConfig(BaseModel):
     liquidity_check_enabled: bool = True  # FIX-134 Item 38: enable/disable
     min_effective_rr: float = 1.0       # FIX-136 Item 54: abort if R:R < this after slippage
     min_pending_rr: float = 0.0         # FIX-141: cancel pending entry if remaining R:R < this (0=disabled)
+    circuit_proximity_reject_enabled: bool = True  # NOCIL fix: pre-fill reject of entries at/beyond the circuit-band exit ceiling (fast-disable lever)
     slippage_control: SlippageControlConfig = Field(  # entry-slippage abort (sl_fraction/flat_tiers/pct)
         default_factory=SlippageControlConfig
     )

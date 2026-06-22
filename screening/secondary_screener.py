@@ -17,6 +17,10 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from core.logger import SafeJSONEncoder  # FIX-104: Reuse instead of duplicating
 from core.time_authority import now_ist
+# Single source of truth for the circuit-band margin: the SAME constant the
+# post-fill placeability gate (orders.price_math.clamp_exit_into_band) uses, so
+# the pre-fill ceiling and the clamp ceiling never drift (NOCIL fix).
+from orders.price_math import DEFAULT_CIRCUIT_MARGIN_PCT
 
 if TYPE_CHECKING:
     from screening.step_executor import StepExecutor
@@ -55,12 +59,17 @@ class SecondaryScreener:
         state_store,
         quote_fn: Callable,
         logger,
+        circuit_proximity_reject_enabled: bool = True,
     ) -> None:
         self._executor = step_executor
         self._scorer = quality_scorer
         self._state_store = state_store
         self._quote_fn = quote_fn
         self._logger = logger
+        # NOCIL fix: pre-fill circuit-proximity reject (framing-b, both legs).
+        # YAML fast-disable lever (default ON, parity-safe). The post-fill
+        # placeability gate is the core safety net and is NOT flag-gated.
+        self._circuit_proximity_reject_enabled = bool(circuit_proximity_reject_enabled)
 
     # -------------------------------------------------------------------------
     # Public API
@@ -105,6 +114,32 @@ class SecondaryScreener:
                 return result
 
         market_data_snapshot = dict(market_data)
+
+        # ── 1b. Pre-fill circuit-proximity rejection (NOCIL fix) ──────────────
+        # Reject doomed-at-fill entries that sit at/beyond the exit-clamp ceiling
+        # (no profitable TGT or valid SL could be placed inside the day's band).
+        # Framing-b, BOTH legs; behind a fast-disable flag. Hard reject, not a
+        # soft score — runs before the 10-step pipeline.
+        cp_reason = self._circuit_proximity_reason(trigger_price, direction, market_data)
+        if cp_reason is not None:
+            self._logger.warning(
+                "secondary_screener [%s/%s]: REJECTED_CIRCUIT_PROXIMITY — %s",
+                signal_id, symbol, cp_reason,
+            )
+            result = ScreeningResult(
+                passed=False,
+                status="REJECTED_CIRCUIT_PROXIMITY",
+                score=0,
+                tier="LOW",
+                rejected_step="circuit_proximity",
+                step_results={},
+                step_statuses={},
+                error_steps=[],
+                latencies_ms={},
+                market_data_snapshot=market_data_snapshot,
+            )
+            self._persist(signal_id, result)
+            return result
 
         # ── 2. Build thresholds from strategy ─────────────────────────────────
         thresholds = {
@@ -264,6 +299,10 @@ class SecondaryScreener:
             "ask": quote.ask,
             "volume": quote.volume,
             "circuit_state": circuit_state,
+            # Raw band values for the pre-fill circuit-proximity reject (NOCIL fix)
+            # + forensic snapshot. None when the quote does not carry them.
+            "upper_circuit": upper,
+            "lower_circuit": lower,
             # v2.1: populated from Quote fields (Kite API response)
             "vwap": getattr(quote, "vwap", None),
             "open": getattr(quote, "open_price", None),
@@ -276,6 +315,68 @@ class SecondaryScreener:
             "prev_close": None,
             "avg_volume_20d": None,
         }
+
+    def _circuit_proximity_reason(
+        self, trigger_price, direction, market_data: dict
+    ) -> Optional[str]:
+        """Pre-fill circuit-proximity reject (NOCIL fix, framing-b, BOTH legs).
+
+        Reject the entry when it sits at/beyond the exit-clamp ceiling — i.e.
+        when NO profitable TGT *or* no valid SL could be placed inside the day's
+        circuit band — so the trade is doomed before it fills. Uses the SAME
+        DEFAULT_CIRCUIT_MARGIN_PCT as the post-fill placeability gate, so the
+        pre-fill ceiling and the clamp ceiling are one source of truth.
+
+            TGT-ceiling: LONG reject if entry >= upper*(1-m); SHORT if entry <= lower*(1+m)
+            SL-ceiling:  LONG reject if entry <= lower*(1+m); SHORT if entry >= upper*(1-m)
+
+        Fail-open: flag OFF, or missing/non-numeric/non-positive band or entry
+        -> None (admit). Degraded-but-profitable R:R remains the R:R gate's job
+        (FIX-136 Item 54), not this rule's. Returns the reason string or None.
+        """
+        if not self._circuit_proximity_reject_enabled:
+            return None
+
+        def _pos_num(x):
+            return (
+                x if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
+                else None
+            )
+
+        upper = _pos_num(market_data.get("upper_circuit"))
+        lower = _pos_num(market_data.get("lower_circuit"))
+        entry = _pos_num(trigger_price)
+        if entry is None or (upper is None and lower is None):
+            return None
+
+        margin = DEFAULT_CIRCUIT_MARGIN_PCT
+        upper_ceiling = upper * (1.0 - margin) if upper is not None else None
+        lower_floor = lower * (1.0 + margin) if lower is not None else None
+        is_long = str(direction).upper() in ("LONG", "BUY")
+
+        if is_long:
+            if upper_ceiling is not None and entry >= upper_ceiling:
+                return (
+                    f"LONG entry {entry} >= upper-ceiling {upper_ceiling:.2f} "
+                    f"(upper_circuit {upper}); no profitable TGT fits the band"
+                )
+            if lower_floor is not None and entry <= lower_floor:
+                return (
+                    f"LONG entry {entry} <= lower-floor {lower_floor:.2f} "
+                    f"(lower_circuit {lower}); no valid SL fits the band"
+                )
+        else:
+            if lower_floor is not None and entry <= lower_floor:
+                return (
+                    f"SHORT entry {entry} <= lower-floor {lower_floor:.2f} "
+                    f"(lower_circuit {lower}); no profitable TGT fits the band"
+                )
+            if upper_ceiling is not None and entry >= upper_ceiling:
+                return (
+                    f"SHORT entry {entry} >= upper-ceiling {upper_ceiling:.2f} "
+                    f"(upper_circuit {upper}); no valid SL fits the band"
+                )
+        return None
 
     def _make_skipped(self, status: str, market_data_snapshot: dict, signal_id: str) -> ScreeningResult:
         """Build a SKIPPED result with empty step data."""

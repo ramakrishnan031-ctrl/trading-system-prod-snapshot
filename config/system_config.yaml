@@ -243,6 +243,7 @@ entry_gate:                   # FIX-025: gate release slippage protection
   liquidity_check_enabled: true  # FIX-134 Item 38: enable/disable liquidity check
   min_effective_rr: 1.0       # FIX-136 Item 54: abort if R:R < 1.0 after slippage
   min_pending_rr: 1.0         # FIX-141: cancel pending entry if remaining R:R drops below this (0=disabled)
+  circuit_proximity_reject_enabled: true  # NOCIL fix (22-Jun): reject entries sitting at/beyond the circuit-band exit ceiling (no profitable TGT or valid SL fits the band). Fast-disable lever — set false to admit as before (the post-fill placeability gate is the always-on core safety net).
   # Entry-slippage abort (pre-order guard). Aborts if |LTP - signal trigger| > tolerance.
   # mode=sl_fraction (DEFAULT): tolerance = min(SL_distance x max_slippage_fraction, absolute_cap_rs)
   #   -> auto-scales with price AND strategy SL%; caps how much of the risk budget slippage eats.

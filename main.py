@@ -2166,6 +2166,8 @@ def _main_locked(args, config_dir: Path) -> int:
         state_store=store,
         quote_fn=broker_adapter.get_quote,
         logger=get_logger("secondary_screener"),
+        # NOCIL fix: pre-fill circuit-proximity reject (fast-disable via YAML).
+        circuit_proximity_reject_enabled=app_config.system.entry_gate.circuit_proximity_reject_enabled,
     )
 
     eod = EodSquareoff(
