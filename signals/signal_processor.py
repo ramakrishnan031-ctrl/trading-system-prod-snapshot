@@ -875,6 +875,7 @@ class SignalProcessor:
                     tgt_price=tgt_price,
                     signal_trigger_price=trigger_price,  # FIX-128: for slippage guard
                     sizing_breakdown=sizing.breakdown,   # Diary #4: sizing audit
+                    tgt_risk_reward=getattr(strategy_obj, "tgt_risk_reward", None),  # Slice 1: freeze strategy R:R for fill-time TGT recalc (None -> fill falls back to default + WARN)
                 )
                 reservation_id = None   # placer owns it now
                 self._bump_metric("entries_placed")  # FIX-190 (Bug B)
@@ -1474,6 +1475,7 @@ class SignalProcessor:
                     release_ltp=release_ltp,  # FIX-025
                     signal_trigger_price=entry.trigger_price,  # FIX-128: for slippage guard
                     sizing_breakdown=sizing.breakdown,   # Diary #4: sizing audit
+                    tgt_risk_reward=getattr(strategy_obj, "tgt_risk_reward", None),  # Slice 1: freeze strategy R:R for fill-time TGT recalc (None -> fill falls back to default + WARN)
                 )
                 reservation_id = None   # placer owns it now
                 self._bump_metric("entries_placed")  # FIX-190 (Bug B)

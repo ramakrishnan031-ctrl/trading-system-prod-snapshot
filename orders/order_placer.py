@@ -449,6 +449,7 @@ class _FillEntry:
         "trade_id", "reservation_id", "symbol", "qty", "leg",
         "order_protocol", "direction",
         "side", "sl_price", "tgt_price", "intent",
+        "tgt_risk_reward",
     )
 
     def __init__(
@@ -464,6 +465,7 @@ class _FillEntry:
         sl_price: float = 0.0,
         tgt_price: float = 0.0,
         intent: str = "",
+        tgt_risk_reward: float = 0.0,   # Slice 1: strategy R:R; 0.0/falsy -> fill uses _rr_ratio fallback
     ) -> None:
         if leg not in _VALID_LEGS:
             raise ValueError(
@@ -481,6 +483,7 @@ class _FillEntry:
         self.sl_price = sl_price
         self.tgt_price = tgt_price
         self.intent = intent
+        self.tgt_risk_reward = tgt_risk_reward
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -733,6 +736,7 @@ class OrderPlacer:
         release_ltp: Optional[float] = None,  # FIX-025: gate release LTP for slippage protection
         signal_trigger_price: Optional[float] = None,  # FIX-128: original Chartink trigger for slippage guard
         sizing_breakdown: Optional[dict] = None,  # Diary #4: PositionSizer.breakdown for the trades sizing audit
+        tgt_risk_reward: Optional[float] = None,  # Slice 1: originating strategy's R:R, frozen for the fill-time TGT recalc
     ) -> None:
         """
         Create trade, place entry orders, register fill tracking. (OP1–OP4)
@@ -855,6 +859,7 @@ class OrderPlacer:
             tolerance_fraction_used=_tol_fraction,   # Phase 3a
             tolerance_source=_tol_source,            # Phase 3a
             sizing_breakdown=sizing_breakdown,       # Diary #4: sizing audit
+            tgt_risk_reward_applied=tgt_risk_reward, # Slice 1: strategy R:R frozen at placement
         )
 
         # Link signal → trade
@@ -1393,6 +1398,9 @@ class OrderPlacer:
                         sl_price=sl_price,
                         tgt_price=tgt_price,
                         intent=intent,
+                        # Slice 1: freeze the strategy R:R so the fill-time TGT
+                        # recalc honours THIS trade's config (0.0 -> _rr_ratio fallback).
+                        tgt_risk_reward=(tgt_risk_reward or 0.0),
                     )
                 successfully_inserted.append(result.entry_internal_id)
                 self._order_monitor.track(
@@ -2453,7 +2461,11 @@ class OrderPlacer:
         if entry_price > 0 and sl_price > 0:
             tgt_price = calc_tgt_price(
                 direction=direction, entry_price=entry_price,
-                sl_price=sl_price, rr_ratio=self._rr_ratio,
+                sl_price=sl_price,
+                # Slice 1: TGT retry must use the same strategy R:R as placement
+                # (read from the stored column; fallback 2.0 + WARNING).
+                rr_ratio=self._resolve_fill_rr(
+                    trade["tgt_risk_reward_applied"], trade_id, symbol),
             )
         if tgt_price <= 0:
             tgt_price = float(trade["tgt_initial"] or 0.0)
@@ -2610,7 +2622,9 @@ class OrderPlacer:
             direction=fill_entry.direction,
             entry_price=avg_fill_price,
             sl_price=fill_entry.sl_price,
-            rr_ratio=self._rr_ratio,
+            # Slice 1: honour THIS trade's strategy R:R (fallback 2.0 + WARNING).
+            rr_ratio=self._resolve_fill_rr(
+                fill_entry.tgt_risk_reward, fill_entry.trade_id, fill_entry.symbol),
         )
         theoretical_tgt = fill_entry.tgt_price
         tgt_delta = actual_tgt_price - theoretical_tgt
@@ -2689,6 +2703,15 @@ class OrderPlacer:
                 trade_id=trade_id, fill_entry=fill_entry,
                 qty_filled=qty_filled, legs=legs, reason=reason,
             )
+            # Slice 1 Part B: record the verdict (readable). No fresh alert — the
+            # SL-only state is an expected, handled condition (FIX-190 Bug C: SL
+            # is standing, TGT is owed to TGTRetryManager).
+            try:
+                self._om.record_exits_verification(
+                    trade_id, 0, "TGT unplaced (SL standing; TGT retry queued)"
+                )
+            except Exception:  # noqa: BLE001 — never break the fill path
+                pass
             return
 
         # Persist SL + TGT rows atomically. Use product derived from intent
@@ -2831,6 +2854,13 @@ class OrderPlacer:
             },
         )
 
+        # Slice 1 Part B: verify SL + TGT landed at the intended price/qty.
+        self._verify_exits_placed(
+            trade_id=trade_id, symbol=fill_entry.symbol, protocol="LIMIT_TRIPLE",
+            intended_sl=fill_entry.sl_price,
+            intended_tgt=actual_tgt_price, qty_filled=qty_filled,
+        )
+
     def _place_co_tgt_exit(
         self,
         *,
@@ -2873,7 +2903,9 @@ class OrderPlacer:
             direction=fill_entry.direction,
             entry_price=avg_fill_price,
             sl_price=fill_entry.sl_price,
-            rr_ratio=self._rr_ratio,
+            # Slice 1: honour THIS trade's strategy R:R (fallback 2.0 + WARNING).
+            rr_ratio=self._resolve_fill_rr(
+                fill_entry.tgt_risk_reward, fill_entry.trade_id, fill_entry.symbol),
         )
         theoretical_tgt = fill_entry.tgt_price
         tgt_delta = actual_tgt_price - theoretical_tgt
@@ -3019,6 +3051,14 @@ class OrderPlacer:
                 "tgt_price": legs.tgt_price,
                 "reason": reason,
             },
+        )
+
+        # Slice 1 Part B: verify the TGT landed at the intended price/qty. SL is
+        # broker-managed inside the CO bracket (intended_sl=None -> skip SL check).
+        self._verify_exits_placed(
+            trade_id=trade_id, symbol=fill_entry.symbol, protocol="CO_PLUS_TGT",
+            intended_sl=None,
+            intended_tgt=actual_tgt_price, qty_filled=qty_filled,
         )
 
     # ── FIX-061: LTP retry helpers ────────────────────────────────────────────
@@ -3209,7 +3249,9 @@ class OrderPlacer:
             direction=fill_entry.direction,
             entry_price=avg_fill_price,
             sl_price=fill_entry.sl_price,
-            rr_ratio=self._rr_ratio,
+            # Slice 1: honour THIS trade's strategy R:R (fallback 2.0 + WARNING).
+            rr_ratio=self._resolve_fill_rr(
+                fill_entry.tgt_risk_reward, fill_entry.trade_id, fill_entry.symbol),
         )
 
         try:
@@ -3387,6 +3429,13 @@ class OrderPlacer:
                     "symbol": symbol,
                     "retry_count": params.retry_count,
                 },
+            )
+
+            # Slice 1 Part B: verify the retried SL + TGT landed correctly.
+            self._verify_exits_placed(
+                trade_id=trade_id, symbol=fill_entry.symbol, protocol="LIMIT_TRIPLE",
+                legs=legs, intended_sl=fill_entry.sl_price,
+                intended_tgt=actual_tgt_price, qty_filled=qty_filled,
             )
 
         except Exception as track_exc:
@@ -3770,6 +3819,182 @@ class OrderPlacer:
                 "order_placer.liquidity_check_error: %s", exc
             )
             return True, ""
+
+    def _resolve_fill_rr(
+        self, candidate_rr: Optional[float], trade_id: str, symbol: str
+    ) -> float:
+        """Slice 1: the R:R to use for a fill-time / TGT-retry recalc.
+
+        Prefer the originating strategy's ratio, frozen at placement (carried on
+        the fill entry as tgt_risk_reward, or persisted on
+        trades.tgt_risk_reward_applied). Fall back to the constructor default
+        (self._rr_ratio, normally 2.0) for trades that have no stored ratio
+        (reconciler-recovered / pre-v35), logging a WARNING so the fallback is
+        visible. This is what makes the broker TGT honour each strategy's
+        configured R:R instead of a single hardcoded ratio.
+        """
+        rr = candidate_rr or 0.0
+        if rr and rr > 0:
+            return float(rr)
+        self._log.warning(
+            "order_placer.rr_fallback_to_default",
+            extra={
+                "trade_id": trade_id,
+                "symbol": symbol,
+                "fallback_rr": self._rr_ratio,
+                "reason": "no strategy tgt_risk_reward (recovered / pre-v35 trade)",
+            },
+        )
+        return self._rr_ratio
+
+    # ── Slice 1 Part B: SL/TGT placement after-check ──────────────────────────
+
+    @staticmethod
+    def _exit_price_mismatch(placed: float, intended: float) -> bool:
+        """True if a placed exit price differs materially from the intended one.
+
+        Tolerance = max(₹0.05, 0.2% of intended): absorbs tick rounding while
+        still catching a real clamp (e.g. a circuit-band move, which shifts the
+        price by far more than that). A missing/zero placed price is a mismatch.
+        """
+        if not placed or not intended:
+            return True
+        eps = max(0.05, abs(intended) * 0.002)
+        return abs(placed - intended) > eps
+
+    def _verify_exits_placed(
+        self,
+        *,
+        trade_id: str,
+        symbol: str,
+        protocol: str,
+        intended_sl: Optional[float],
+        intended_tgt: float,
+        qty_filled: int,
+    ) -> None:
+        """Slice 1 Part B: verify the just-placed SL/TGT exits landed at the
+        intended price + qty. ALERT-ONLY — never cancels or re-places (a bigger
+        decision deferred). Records the verdict on the trade
+        (exits_verified / exits_verify_detail — READ-BACK, unlike the write-only
+        v34 sizing columns).
+
+        Ground truth = the persisted exit order rows (which mirror what was sent
+        to the broker). Parity: both paper and live persist the same rows, so
+        there is no mode branch. LIMIT_TRIPLE persists SL + TGT; CO_PLUS_TGT
+        persists TGT only (its SL lives inside the broker CO bracket).
+
+        Severity: a missing/wrong SL is a protection breach -> CRITICAL; a
+        missing/wrong TGT with the SL intact -> WARN (the position is still
+        protected, it just won't auto-target).
+        """
+        try:
+            orders = self._om.get_orders_for_trade(trade_id)
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "order_placer.exits_verify_read_failed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+            return
+
+        def _live(leg: str) -> list:
+            return [
+                o for o in orders
+                if o.get("leg") == leg
+                and o.get("status") not in _TERMINAL_ORDER_STATUSES
+            ]
+
+        problems: List[str] = []
+        sl_ok = True
+        placed_sl: Optional[float] = None
+        placed_tgt: Optional[float] = None
+
+        # SL: LIMIT_TRIPLE places a standalone SL order. CO_PLUS_TGT carries the
+        # SL inside the broker CO bracket (intended_sl passed as None for CO).
+        if protocol == "LIMIT_TRIPLE" and intended_sl is not None:
+            sl_rows = _live("SL")
+            if not sl_rows:
+                problems.append("SL MISSING (no live SL order)")
+                sl_ok = False
+            else:
+                o = sl_rows[0]
+                placed_sl = float(o.get("trigger_price") or o.get("price") or 0.0)
+                if self._exit_price_mismatch(placed_sl, intended_sl):
+                    problems.append(f"SL trigger {placed_sl:.2f} != intended {intended_sl:.2f}")
+                    sl_ok = False
+                if int(o.get("qty_requested") or 0) != int(qty_filled):
+                    problems.append(f"SL qty {o.get('qty_requested')} != filled {qty_filled}")
+                    sl_ok = False
+
+        # TGT: both protocols place a standalone LIMIT TGT.
+        tgt_ok = True
+        tgt_rows = _live("TGT")
+        if not tgt_rows:
+            problems.append("TGT MISSING (no live TGT order)")
+            tgt_ok = False
+        else:
+            o = tgt_rows[0]
+            placed_tgt = float(o.get("price") or 0.0)
+            if self._exit_price_mismatch(placed_tgt, intended_tgt):
+                problems.append(f"TGT {placed_tgt:.2f} != intended {intended_tgt:.2f}")
+                tgt_ok = False
+            if int(o.get("qty_requested") or 0) != int(qty_filled):
+                problems.append(f"TGT qty {o.get('qty_requested')} != filled {qty_filled}")
+                tgt_ok = False
+
+        verified = 1 if not problems else 0
+        detail = "ok" if verified else "; ".join(problems)
+
+        # Always log intended-vs-actual for both legs (audit trail).
+        self._log.info(
+            "order_placer.exits_verify",
+            extra={
+                "trade_id": trade_id, "symbol": symbol, "protocol": protocol,
+                "verified": verified, "detail": detail, "qty_filled": qty_filled,
+                "intended_sl": intended_sl, "placed_sl": placed_sl,
+                "intended_tgt": intended_tgt, "placed_tgt": placed_tgt,
+            },
+        )
+
+        # Record the verdict (best-effort; never break the fill path).
+        try:
+            self._om.record_exits_verification(trade_id, verified, detail)
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "order_placer.exits_verify_record_failed",
+                extra={"trade_id": trade_id, "error": str(exc)},
+            )
+
+        if verified:
+            return
+
+        # Mismatch -> alert (alert-only this slice; no auto-cancel/re-place).
+        severity = "CRITICAL" if not sl_ok else "WARNING"
+        if not sl_ok:
+            self._log.critical(
+                "order_placer.exits_verify_mismatch EXITS_AFTERCHECK_SL_MISMATCH",
+                extra={"trade_id": trade_id, "symbol": symbol, "detail": detail},
+            )
+        else:
+            self._log.warning(
+                "order_placer.exits_verify_mismatch",
+                extra={"trade_id": trade_id, "symbol": symbol, "detail": detail},
+            )
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity=severity,
+                    title=f"[{self._mode}] EXIT CHECK — {symbol}",
+                    body=(
+                        f"SL/TGT after-check FAILED ({protocol}) for trade {trade_id}:\n"
+                        f"{detail}"
+                    ),
+                    source_module="order_placer",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log.error(
+                    "order_placer.exits_verify_alert_failed",
+                    extra={"trade_id": trade_id, "error": str(exc)},
+                )
 
     def _compute_tgt(self, side: str, entry_price: float, sl_price: float) -> float:
         """OP3: compute tgt_price using R:R ratio (delegates to price_math, FIX-004)."""

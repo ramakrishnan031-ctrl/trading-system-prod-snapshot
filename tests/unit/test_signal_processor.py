@@ -247,13 +247,14 @@ class _MockOrderPlacer:
     def place(self, *, symbol, side, qty, entry_price, sl_price, intent,
               signal_id, reservation_id, strategy="", tgt_price=None,
               release_ltp=None, signal_trigger_price=None,
-              sizing_breakdown=None):  # FIX-128 + Diary #4
+              sizing_breakdown=None, tgt_risk_reward=None):  # FIX-128 + Diary #4 + Slice 1
         if self._raise:
             raise self._raise
         self.calls.append({
             "signal_id": signal_id,
             "symbol": symbol,
             "tgt_price": tgt_price,
+            "tgt_risk_reward": tgt_risk_reward,
         })
 
 

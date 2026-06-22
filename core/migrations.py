@@ -67,6 +67,11 @@ Version map
                  concentration/flat, binding_constraint, actual_position_value_rs).
                  Rebuild trades (rebuild copies the intersecting old columns; the
                  ten new ones take NULL).
+    v34 -> v35 : Slice 1 (R:R fill-time fix + SL/TGT after-check) — trades gains
+                 tgt_risk_reward_applied (REAL, strategy R:R frozen at placement),
+                 exits_verified (INTEGER) + exits_verify_detail (TEXT, the SL/TGT
+                 after-check verdict). Rebuild trades (rebuild copies the
+                 intersecting old columns; the three new ones take NULL).
 """
 from __future__ import annotations
 
@@ -93,6 +98,7 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     32: ["trades", "order_execution_log"],  # Phase 3a: add tolerance_fraction_used / tolerance_source
     # 33: pure additions (preflight_* tables) — no rebuild, see schema.sql.
     34: ["trades"],  # Diary #4: add sizing-audit columns (tier_multiplier_mode etc.); rebuild copies old cols, new ones -> NULL
+    35: ["trades"],  # Slice 1: add tgt_risk_reward_applied / exits_verified / exits_verify_detail; rebuild copies old cols, new ones -> NULL
 }
 
 

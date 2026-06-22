@@ -177,6 +177,7 @@ class OrderManager:
         tolerance_fraction_used: Optional[float] = None,  # Phase 3a: resolved sl_fraction
         tolerance_source: Optional[str] = None,           # Phase 3a: which override rule won
         sizing_breakdown: Optional[dict] = None,          # Diary #4: PositionSizer.breakdown (sizing audit)
+        tgt_risk_reward_applied: Optional[float] = None,  # Slice 1: strategy R:R frozen at placement
     ) -> str:
         """
         Insert a new trade row with status=PENDING_FILL. Returns trade_id.
@@ -208,7 +209,8 @@ class OrderManager:
                     tier_multiplier_mode, tier_weight_applied, perf_weight_applied,
                     flat_value_rs_used, qty_by_risk, qty_by_capital,
                     qty_by_concentration, qty_by_flat, binding_constraint,
-                    actual_position_value_rs
+                    actual_position_value_rs,
+                    tgt_risk_reward_applied
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, 0,
@@ -222,6 +224,7 @@ class OrderManager:
                     ?, ?, ?,
                     ?, ?, ?,
                     ?, ?, ?,
+                    ?,
                     ?
                 )
                 """,
@@ -239,6 +242,7 @@ class OrderManager:
                     bd.get("flat_value_rs_used"), bd.get("qty_by_risk"), bd.get("qty_by_capital"),
                     bd.get("qty_by_concentration"), bd.get("qty_by_flat"), bd.get("binding_constraint"),
                     bd.get("actual_position_value_rs"),
+                    tgt_risk_reward_applied,
                 ),
             )
         self._log.info(
@@ -249,6 +253,23 @@ class OrderManager:
             },
         )
         return trade_id
+
+    def record_exits_verification(
+        self, trade_id: str, verified: int, detail: str
+    ) -> None:
+        """Slice 1 Part B: persist the SL/TGT placement after-check verdict.
+
+        verified = 1 (SL+TGT landed ok) | 0 (mismatch); detail = 'ok' or a
+        human-readable description of what mismatched. Unlike the write-only v34
+        sizing-audit columns, these are READ-BACK by the after-check and are
+        available for audit/reports. Best-effort UPDATE (the fill path must not
+        break if this write fails)."""
+        with self._store.transaction() as cur:
+            cur.execute(
+                "UPDATE trades SET exits_verified = ?, exits_verify_detail = ?, "
+                "updated_at = ? WHERE trade_id = ?",
+                (int(verified), detail, now_ist().isoformat(), trade_id),
+            )
 
     def insert_order(
         self,

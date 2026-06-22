@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 34  # Diary #4 sizing audit: trades += tier_multiplier_mode/tier_weight_applied/perf_weight_applied/flat_value_rs_used/qty_by_*/binding_constraint/actual_position_value_rs (rebuild trades)
+EXPECTED_SCHEMA_VERSION = 35  # Slice 1 R:R fix + SL/TGT after-check: trades += tgt_risk_reward_applied/exits_verified/exits_verify_detail (rebuild trades)
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1316,6 +1316,7 @@ class StateStore:
                 t.status,
                 t.needs_tgt_retry,
                 t.tgt_retry_count,
+                t.tgt_risk_reward_applied,
                 o.product
             FROM trades t
             LEFT JOIN orders o

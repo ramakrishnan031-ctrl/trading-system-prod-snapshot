@@ -221,6 +221,20 @@ CREATE TABLE IF NOT EXISTS trades (
     binding_constraint        TEXT,     -- risk | capital | concentration | flat
     actual_position_value_rs  REAL,     -- final qty * entry_price
 
+    -- R:R fix (Slice 1, v35). The originating strategy's tgt_risk_reward, FROZEN
+    -- at placement so the fill-time TGT recalc honours THIS trade's configured
+    -- R:R instead of order_placer's hardcoded default. Read at fill by
+    -- _place_*_exits; NULL on recovered / pre-v35 trades -> fill falls back to
+    -- order_placer._rr_ratio (2.0) + a WARNING.
+    tgt_risk_reward_applied   REAL,     -- strategy R:R frozen at placement (NULL = use fallback)
+
+    -- SL/TGT placement after-check (Slice 1, v35). Written at fill AFTER the
+    -- deferred SL/TGT exits are placed: did they land at the intended price + qty?
+    -- Unlike the write-only v34 sizing columns, these are READ-BACK (the check
+    -- compares intended vs actual and records the verdict). NULL until exits placed.
+    exits_verified            INTEGER,  -- 1 = SL+TGT verified ok, 0 = mismatch (see detail)
+    exits_verify_detail       TEXT,     -- 'ok' or human-readable mismatch description
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -1109,7 +1123,7 @@ CREATE INDEX IF NOT EXISTS idx_pfal_run ON preflight_autofix_log(run_id);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '34');  -- Diary #4 sizing audit: trades += tier_multiplier_mode/tier_weight_applied/perf_weight_applied/flat_value_rs_used/qty_by_{risk,capital,concentration,flat}/binding_constraint/actual_position_value_rs (rebuild trades)
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '35');  -- Slice 1 R:R fix + SL/TGT after-check: trades += tgt_risk_reward_applied/exits_verified/exits_verify_detail (rebuild trades)
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
