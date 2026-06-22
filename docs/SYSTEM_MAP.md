@@ -341,7 +341,62 @@ inactive alert-watcher).
 - `docs/05_incident_response.md`, `docs/disaster_recovery.md` — incidents
 - `docs/06_deployment_guide.md` — deployment detail
 
+---
+
+## Circuit-band placeability gate (NOCIL fix, 23-Jun-2026)
+**Invariant:** a resting protective exit (SL stop / TGT limit) recalc'd from the fill must land on
+the **correct side of the entry fill** *and* inside the day's circuit band — never a wrong-side,
+instantly-marketable order. (NOCIL 22-Jun: a LONG TGT recalc'd to 197.12 was clamped DOWN to
+`upper×0.98 = 187.00`, **below** the 189.78 fill → instant SELL, 2.35 s scratch mislabeled TGT_HIT.)
+
+- **Primitive (single chokepoint):** `orders/price_math.py` → `clamp_exit_into_band(price, *, leg,
+  direction, entry_fill, upper_circuit, lower_circuit, …) → ClampResult(price, was_clamped,
+  placeable, reason)`. Frozen result; pure (no I/O). Replaces the old side-agnostic
+  `clamp_to_circuit_band`. Margin = `DEFAULT_CIRCUIT_MARGIN_PCT` (0.02) — the **single source** shared
+  with the pre-fill rule. Called from **exactly 3 sites, all in `orders/order_protocol_limit.py`**
+  (SL + TGT in `place_exits`, TGT in `place_tgt_only`); a no-bypass test enforces this.
+- **Leg asymmetry (caller branches on `placeable=False`):** **TGT** unplaceable → hold (SL-only;
+  `tgt_placed=False` → FIX-190 Bug-C → `mark_needs_tgt_retry` → TGTRetryManager). **SL** unplaceable →
+  position cannot be stopped → `raise SLUnplaceableError` (`core/exceptions.py`) → order_placer's
+  existing unprotected-position escalation (`_emergency_market_exit` + `_fire_hard_kill_for_unprotected_position`).
+  `entry_fill` (= settled `avg_fill_price`) is threaded fill→`place_deferred_exits`→`place_exits`.
+- **Pre-fill reject (framing-b, both legs):** `screening/secondary_screener.py` rejects an entry that
+  sits at/beyond the exit-clamp ceiling (`entry ≥ upper×(1−m)` LONG / `≤ lower×(1+m)` SHORT, and the
+  symmetric SL-side) → `REJECTED_CIRCUIT_PROXIMITY`. Fast-disable lever:
+  `entry_gate.circuit_proximity_reject_enabled` (default **true**). The post-fill gate is **not** flagged.
+- **Documented un-gated exceptions (never clamp → no wrong-side risk; test-enforced):** CO-TGT
+  (`order_protocol_co.py` — broker-managed CO SL backstops it) and the G5b recovery SL
+  (`order_reconciler.py` — LTP-guarded). Both fail loud (broker reject), never a silent wrong-side fill.
+- **Parity:** all shared entry/exit code, no mode branch → Paper + Live together. **No schema change.**
+
 ## Changelog
+- 2026-06-23 — Claude Code (VS Code) — **NOCIL circuit-clamp fix: placeability gate + leg-asymmetric handling + dual pre-fill reject + P2 (tgt_retry).**
+  Root cause (22-Jun NOCIL): the FIX-190 Bug-D circuit clamp was **side-agnostic** — a LONG TGT recalc'd
+  above the upper circuit was clamped DOWN to `upper×0.98 = 187.00`, **below** the 189.78 fill, producing an
+  instantly-marketable SELL (2.35 s scratch, net −₹0.56, mislabeled TGT_HIT). Forensics: **1/77 trades**
+  (NOCIL only; mechanism system-wide for LIMIT_TRIPLE, trigger geometric — entry within ~2% of a circuit).
+  The wrong-side guard already existed on the TGT-**retry** path (Guard 3 + a post-clamp re-check, commit
+  `6ee5b7e`) but was **never** retrofitted to the primary `place_exits` site (clamp added earlier in
+  `b4cd434`) — an accidental per-call-site omission; the retry guard had **never fired in prod** (the dead
+  `is_within_market_hours` TypeError, fixed here as P2). **Fix (permanent, primitive layer):**
+  (1) `clamp_to_circuit_band` → `clamp_exit_into_band(... leg, direction, entry_fill ...) → ClampResult`
+  (frozen; adds the leg/direction polarity check vs the fill; the **single chokepoint**, see the section
+  above); (2) the 3 LIMIT_TRIPLE sites consume `.placeable` — **TGT** unplaceable → SL-only/hold (Bug-C →
+  TGTRetryManager), **SL** unplaceable → `SLUnplaceableError` → emergency-close + hard_kill (traced,
+  reuses existing escalation; `_is_ltp_validation_error` returns False for it); `entry_fill=avg_fill_price`
+  threaded through the engine; (3) pre-fill **circuit-proximity reject** in `secondary_screener`
+  (framing-b BOTH legs, `entry_gate.circuit_proximity_reject_enabled`, default true — 0 over-rejection on
+  the 77-trade history); (4) **de-dup** = removed the now-redundant retry-path Guard-3 wrong-side clause +
+  post-clamp place-then-cancel re-check (kept the `tgt_price<=0` computation guard). **P2:**
+  `tgt_retry_manager._run_once_locked` now calls `is_within_market_hours(now.time(), MARKET_OPEN,
+  MARKET_CLOSE)` (was 1-arg → TypeError every cycle, silently disabling the retry sweep). **Scope = Option
+  2:** gate the 3 LIMIT_TRIPLE clamp sites; CO-TGT + G5b-SL are evidence-justified, **test-enforced**
+  never-clamp exceptions (no path silently un-guarded). **No schema change.** Parity: shared code, no mode
+  branch. Tests: +new `tests/unit/test_nocil_clamp_fix.py` (E.1–E.9) + extensions; touched suites **293
+  passing**; full sweep **3640 passed / 3 pre-existing env failures** (`test_interactive_startup`,
+  `test_state_store::…fix156`, `test_system_manager` — confirmed identical on pre-change HEAD `d79c186`,
+  all time/date-of-day dependent, modules untouched). 4 commits (de-dup isolated). Activates next VM
+  restart; `clamp_exit_into_band` / `ClampResult` / `SLUnplaceableError` locations in PATHS.md.
 - 2026-06-22 — Claude Code (VS Code) — **SATS first-scan triage + fixes (Semgrep: 23 findings).**
   Triaged all 23 Semgrep (`p/python` + `p/security-audit`) findings: **22 confirmed false positives**
   (logger-credential-leak rules firing on booleans / env-var NAMES / masked `totp[:3]***` / account ids /

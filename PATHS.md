@@ -50,6 +50,18 @@ ssh trading-vm 'sudo systemctl restart trading-system.service'
 `orders/` order lifecycle · `signals/` ingestion · `screening/` scoring ·
 `data/` market data · `alerts/` telegram · `scripts/` ops+gemini · `tests/` (305)
 
+## Order-exit safety — circuit-band placeability gate (NOCIL fix, 23-Jun)
+| What | Location |
+|---|---|
+| Placeability primitive + result | `orders/price_math.py` → `clamp_exit_into_band()` / `ClampResult` (margin `DEFAULT_CIRCUIT_MARGIN_PCT`) |
+| SL-unplaceable exception | `core/exceptions.py` → `SLUnplaceableError` (→ emergency-close + hard_kill) |
+| The **only** 3 clamp call sites | `orders/order_protocol_limit.py` — `place_exits` (SL+TGT), `place_tgt_only` (TGT) |
+| Pre-fill reject + fast-disable flag | `screening/secondary_screener.py` · config `entry_gate.circuit_proximity_reject_enabled` (default true) |
+| Never-clamp exceptions (test-enforced) | `orders/order_protocol_co.py` (CO-TGT), `orders/order_reconciler.py` (G5b SL) |
+| Tests | `tests/unit/test_nocil_clamp_fix.py` (E.1–E.9), `tests/unit/test_price_math.py` |
+
+Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|
