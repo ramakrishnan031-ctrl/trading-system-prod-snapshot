@@ -329,10 +329,9 @@ live_feed:                        # FIX-134 Item 37: WebSocket reconnect hardeni
   reconnect_backoff_base_seconds: 1
   reconnect_backoff_max_seconds: 30
 
-fno_ban:                          # FIX-136 Item 44: F&O ban list fetch config
-  url: "https://www.nseindia.com/api/live-analysis-banned"
-  fail_closed: true               # if fetch fails, reject ALL F&O signals for the day
-  min_expected_fields: 2          # response items must have at least symbol + name fields
+fno_ban:                          # FIX-136 Item 44 + 22-Jun endpoint fix: F&O ban list fetch
+  url: "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"   # NSE Clearing daily secban CSV
+  fail_closed: false              # FAIL-OPEN: ban-fetch failure does NOT block NSE-EQ; WARN only
 
 # FIX-D: Scanner connectivity check settings
 scanner_check_delay_sec: 5.0  # Delay before scanner checks (network stabilization at startup)

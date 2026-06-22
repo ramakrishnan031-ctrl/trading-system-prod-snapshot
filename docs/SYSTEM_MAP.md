@@ -316,6 +316,20 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-22 — Claude Code — **`fetch_fno_ban` endpoint fix + severity downgrade (fail-open for EQ).**
+  Monday 08:35 the job emailed a CRITICAL: the old JSON endpoint
+  `nseindia.com/api/live-analysis-banned` is dead (**404**). New source = NSE Clearing's daily CSV
+  `https://nsearchives.nseindia.com/content/fo/fo_secban.csv` (browser UA + Accept headers; verified live
+  → today 1 ban: KAYNES). Parser rewritten **JSON→CSV** (`parse_secban_csv`: header date `DD-MMM-YYYY`→ISO,
+  `<serial>,<SYMBOL>` rows; HTML-block-page guard; no-ban = header only). **Finding:** `is_symbol_fno_banned`
+  has **no runtime consumer** (only its own test) — the ban list never gated EQ (or anything), so the old
+  "F&O signals BLOCKED" + fail-closed sentinel was misleading. Failure now **WARN not CRITICAL** and
+  **fail-open**: on 404/timeout/HTML/stale-date → `log.warning` + Telegram WARN (no `critical_alert_*.flag`,
+  **no email**) + heartbeat + **exit 0** (Cron Officer shows done, not failed/missed). Stale CSV (date≠today)
+  is WARN + not stored. `fno_ban.fail_closed` default **true→false** (kept as a knob for a future F&O era;
+  ON still only ever gates F&O via the sentinel, never EQ); removed dead `min_expected_fields`. Config
+  `system_config.yaml` + `FnoBanConfig` updated. Tests rewritten (CSV parser + main() WARN/fail-open/
+  heartbeat/exit-0). No crontab change (same 08:35 schedule + job name). Branch `fix-fno-ban-endpoint-22jun`.
 - 2026-06-21 — Claude Code — **Diary #4: tier-multiplier ON/OFF position-sizing switch (Option δ flat-Rs).**
   `config/system_config.yaml → position_sizing.enabled` (default **true = ON**, byte-unchanged
   score-tier × perf sizing). **OFF** = flat Rs/order (`flat_value_rs`, Pydantic-validated > 0):

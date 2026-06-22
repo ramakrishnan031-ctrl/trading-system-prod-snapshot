@@ -1,28 +1,55 @@
 """
 scripts/fetch_fno_ban.py -- Trading System v2  FIX-136 Item 44
+                            (endpoint fix + severity downgrade, 22-Jun-2026)
 
 Purpose:
-    Fetch today's NSE F&O ban list and store in DB.
-    Stocks in F&O ban cannot have new F&O positions opened.
-    Cash equity trades are unaffected.
+    Fetch today's NSE F&O ban list and store it in the DB.
+    Stocks in F&O ban cannot have NEW F&O positions opened.
+    Cash equity (NSE-EQ) trades are unaffected.
 
-    Run daily at 08:30 IST (before market open).
+    Runs daily at 08:35 IST (before market open).
 
-    FAIL-CLOSED: If API fetch fails or returns unexpected schema,
-    a sentinel row (symbol="__FETCH_FAILED__") is stored. The runtime
-    query function treats this as "all F&O symbols banned" for the day,
-    forcing manual intervention before F&O trading resumes.
+Source (verified live 22-Jun-2026):
+    NSE Clearing's daily "securities in ban" CSV — the same file clearing
+    members consume:
+        https://nsearchives.nseindia.com/content/fo/fo_secban.csv
+
+    The old JSON endpoint (nseindia.com/api/live-analysis-banned) was retired
+    and now returns 404.
+
+    CSV format:
+        Line 1 (header): "Securities in Ban For Trade Date DD-MMM-YYYY:"
+        Lines 2..N     : "<serial>,<SYMBOL>"
+        No bans today  : header line only (no data rows)
+
+    nseindia.com /api/ paths are bot-blocked without browser headers; the
+    nsearchives CSV path is more permissive but we still send a real
+    User-Agent + Accept to be safe.
+
+Failure policy — FAIL-OPEN for EQ (22-Jun-2026 change):
+    The ban list currently has NO runtime consumer that gates NSE-EQ entries
+    (is_symbol_fno_banned() is referenced only by tests). A fetch failure must
+    therefore NOT block trading and must NOT page anyone. On ANY soft failure
+    (404, timeout, network, HTML block page, stale CSV date) we:
+        * log a WARNING (not CRITICAL),
+        * send a WARN alert (Telegram only — NO critical sentinel, NO email),
+        * record the heartbeat, and
+        * exit 0 — the job RAN; the data was just unavailable.
+    This keeps Cron Officer's "failed" count for genuinely broken jobs.
+
+    The fail_closed knob (config: fno_ban.fail_closed, default OFF) preserves
+    the old conservative "block all F&O" sentinel behaviour for a future F&O
+    era — flip it ON only when F&O trading is enabled.
 
 Exit codes:
-    0 -- success (or no bans today)
-    1 -- fetch failed (sentinel stored, CRITICAL alert)
+    0 -- success, no bans, OR soft failure (WARN; fail-open)
+    1 -- hard error only (e.g. cannot open the state store)
 """
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -39,54 +66,107 @@ from core.time_authority import now_ist, today_ist
 
 _FETCH_FAILED_SENTINEL = "__FETCH_FAILED__"
 
+# NSE Clearing daily securities-in-ban CSV (replaces the dead /api/ JSON endpoint).
+_DEFAULT_URL = "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"
+
+_EXPECTED_HEADER_PREFIX = "Securities in Ban For Trade Date"
+
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept": "text/csv,application/csv,text/plain,*/*",
+}
+
+_MONTHS = {
+    "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04", "MAY": "05", "JUN": "06",
+    "JUL": "07", "AUG": "08", "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12",
+}
+_DATE_RE = re.compile(r"(\d{1,2})-([A-Za-z]{3})-(\d{4})")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parse + fetch
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _header_date_iso(header: str) -> Optional[str]:
+    """Extract the trade date from the CSV header as YYYY-MM-DD, or None.
+
+    Locale-independent: uses an explicit month map rather than strptime("%b").
+    """
+    m = _DATE_RE.search(header)
+    if not m:
+        return None
+    day, mon, year = m.group(1), m.group(2).upper(), m.group(3)
+    mm = _MONTHS.get(mon)
+    if mm is None:
+        return None
+    return f"{year}-{mm}-{int(day):02d}"
+
+
+def parse_secban_csv(text: str) -> tuple[Optional[str], list[str]]:
+    """Parse the NSE secban CSV text into (trade_date_iso, [symbols]).
+
+    Pure function — no I/O. Raises RuntimeError on anything that is not a
+    well-formed secban CSV (empty body, HTML error/block page, unexpected
+    header) so the caller can treat it as a soft fetch failure.
+
+    The no-ban case (header only) returns (date, []), which is valid.
+    """
+    if text is None or not text.strip():
+        raise RuntimeError("empty response body")
+
+    head_probe = text.lstrip()[:200].lower()
+    if head_probe.startswith("<") or "<!doctype" in head_probe or "<html" in head_probe:
+        raise RuntimeError("got an HTML page, not CSV (NSE may be blocking the request)")
+
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        raise RuntimeError("no non-empty lines in response")
+
+    header = lines[0]
+    if not header.startswith(_EXPECTED_HEADER_PREFIX):
+        raise RuntimeError(f"unexpected header (schema may have changed): {header[:80]!r}")
+
+    trade_date = _header_date_iso(header)
+
+    symbols: list[str] = []
+    for row in lines[1:]:
+        parts = [p.strip() for p in row.split(",")]
+        # Expected data row: "<serial>,<SYMBOL>". Skip anything malformed.
+        if len(parts) >= 2 and parts[1]:
+            symbols.append(parts[1].upper())
+
+    return trade_date, symbols
+
 
 def fetch_fno_ban_symbols(
     log: logging.Logger,
-    url: str = "https://www.nseindia.com/api/live-analysis-banned",
-    min_expected_fields: int = 2,
-) -> list[str]:
-    """
-    Fetch F&O ban list from NSE API.
-    Returns list of banned symbol names.
-    Raises RuntimeError on any failure (caller decides policy).
+    url: str = _DEFAULT_URL,
+    timeout_sec: float = 15.0,
+) -> tuple[Optional[str], list[str]]:
+    """Fetch + parse the NSE F&O ban CSV.
+
+    Returns (trade_date_iso, [symbols]). Raises on any failure (the caller
+    decides policy — see main()).
     """
     session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-    })
-    session.get("https://www.nseindia.com", timeout=10)
-    resp = session.get(url, timeout=10)
+    session.headers.update(_BROWSER_HEADERS)
+    resp = session.get(url, timeout=timeout_sec)
     resp.raise_for_status()
-    data = resp.json()
 
-    if not isinstance(data, (list, dict)):
-        raise RuntimeError(f"Unexpected response type: {type(data).__name__}")
+    trade_date, symbols = parse_secban_csv(resp.text)
+    log.info(
+        "fetch_fno_ban.fetched",
+        extra={"count": len(symbols), "trade_date": trade_date, "url": url},
+    )
+    return trade_date, symbols
 
-    items = data if isinstance(data, list) else data.get("data", [])
-    if not isinstance(items, list):
-        raise RuntimeError(f"Expected list in response, got {type(items).__name__}")
 
-    symbols = []
-    for item in items:
-        if not isinstance(item, dict):
-            raise RuntimeError(f"Non-dict item in response: {type(item).__name__}")
-        if len(item) < min_expected_fields:
-            raise RuntimeError(
-                f"Item has {len(item)} fields, expected >= {min_expected_fields}: {item}"
-            )
-        sym = (item.get("symbol") or item.get("Symbol") or "").strip()
-        if sym:
-            symbols.append(sym)
-
-    if len(items) > 0 and len(symbols) == 0:
-        raise RuntimeError(
-            f"Response had {len(items)} items but 0 valid symbols — schema may have changed"
-        )
-
-    log.info("fetch_fno_ban.fetched", extra={"count": len(symbols), "url": url})
-    return symbols
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Store + query
+# ──────────────────────────────────────────────────────────────────────────────
 
 def store_fno_ban(
     store: StateStore,
@@ -119,21 +199,29 @@ def store_fetch_failed_sentinel(
     ban_date: str,
     log: logging.Logger,
 ) -> None:
-    """Store sentinel row indicating fetch failure — triggers fail-closed behavior."""
+    """Store the fail-closed sentinel — marks ALL F&O symbols banned for the day.
+
+    Only used when config fno_ban.fail_closed is ON (default OFF). Kept for a
+    future F&O era. Logs at WARNING (not CRITICAL): even when ON, this gates
+    only F&O symbols via is_symbol_fno_banned(); NSE-EQ is never affected.
+    """
     now_str = now_ist().isoformat()
     with store.transaction() as cur:
         cur.execute(
             "INSERT OR REPLACE INTO fno_ban (symbol, ban_date, fetched_at) VALUES (?, ?, ?)",
             (_FETCH_FAILED_SENTINEL, ban_date, now_str),
         )
-    log.critical("fetch_fno_ban.sentinel_stored: F&O signals will be BLOCKED for %s", ban_date)
+    log.warning(
+        "fetch_fno_ban.sentinel_stored (fail_closed ON): F&O symbols treated as banned for %s",
+        ban_date,
+    )
 
 
 def is_symbol_fno_banned(store: StateStore, symbol: str, date: Optional[str] = None) -> bool:
     """Check if a symbol is in today's F&O ban list.
 
-    If the fetch-failed sentinel exists for this date, ALL symbols are
-    considered banned (fail-closed).
+    If the fetch-failed sentinel exists for this date (fail_closed mode), ALL
+    symbols are considered banned.
     """
     date = date or today_ist()
     sentinel = store.fetch_one(
@@ -149,16 +237,64 @@ def is_symbol_fno_banned(store: StateStore, symbol: str, date: Optional[str] = N
     return row is not None
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI / orchestration
+# ──────────────────────────────────────────────────────────────────────────────
+
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="fetch_fno_ban",
-        description="FIX-136: Fetch NSE F&O ban list and store in DB.",
+        description="Fetch the NSE F&O ban list (CSV) and store it in the DB.",
     )
     parser.add_argument("--db", metavar="PATH", default=None)
     parser.add_argument("--date", metavar="YYYY-MM-DD", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--url", metavar="URL", default=None)
     return parser.parse_args(argv)
+
+
+def _send_alert(log: logging.Logger, message: str, level: str = "WARNING") -> None:
+    """Best-effort Telegram alert at the given level.
+
+    WARNING (the default here) goes via the INFO/WARN tier: Telegram-only,
+    dropped on failure, and — crucially — NO critical sentinel is written, so
+    the VM alert-watcher does NOT turn it into an email.
+    """
+    try:
+        from alerts.telegram_notifier import TelegramNotifier
+
+        notifier = TelegramNotifier.from_env()
+        if notifier:
+            notifier.send_alert(message, level=level)
+    except Exception as exc:
+        log.warning("fetch_fno_ban: telegram alert failed: %s", exc)
+
+
+def _soft_fail(
+    log: logging.Logger,
+    store: StateStore,
+    ban_date: str,
+    fail_closed: bool,
+    reason: str,
+) -> int:
+    """Handle a non-fatal fetch/parse failure: WARN, fail-open, exit 0.
+
+    EQ trading is unaffected. If fail_closed is ON (future F&O), also write the
+    conservative sentinel so F&O symbols are blocked.
+    """
+    log.warning("fetch_fno_ban.soft_fail: %s", reason)
+    if fail_closed:
+        try:
+            store_fetch_failed_sentinel(store, ban_date, log)
+        except Exception as exc:
+            log.error("fetch_fno_ban: sentinel store failed: %s", exc)
+    msg = (
+        f"F&O ban list fetch failed ({reason}). NSE-EQ trading unaffected. "
+        f"If trading F&O today, verify the ban list manually at nseclearing.in."
+    )
+    _send_alert(log, msg, level="WARNING")
+    store.close()
+    return 0
 
 
 def main(argv=None) -> int:
@@ -174,54 +310,52 @@ def main(argv=None) -> int:
 
     ban_date = args.date or today_ist()
 
-    url = args.url or "https://www.nseindia.com/api/live-analysis-banned"
+    url = _DEFAULT_URL
+    fail_closed = False
     try:
         from core.config_loader import load_all
+
         cfg = load_all(Path("config"))
         url = cfg.system.fno_ban.url
-        min_fields = cfg.system.fno_ban.min_expected_fields
         fail_closed = cfg.system.fno_ban.fail_closed
     except Exception:
-        min_fields = 2
-        fail_closed = True
+        pass  # defaults: new CSV endpoint, fail-open
 
     if args.url:
         url = args.url
 
+    # ── Fetch (soft-fail on any error) ────────────────────────────────────
     try:
-        symbols = fetch_fno_ban_symbols(log, url=url, min_expected_fields=min_fields)
+        trade_date, symbols = fetch_fno_ban_symbols(log, url=url)
     except Exception as exc:
-        log.critical("fetch_fno_ban.FETCH_FAILED: %s", exc)
-        if fail_closed:
-            store_fetch_failed_sentinel(store, ban_date, log)
-        _send_critical_alert(log, f"F&O ban fetch FAILED: {exc}. F&O signals BLOCKED for {ban_date}.")
-        store.close()
-        return 1
-
-    log.info("fetch_fno_ban.start", extra={"date": ban_date, "count": len(symbols)})
+        return _soft_fail(log, store, ban_date, fail_closed, reason=str(exc))
 
     if args.dry_run:
+        print(f"Trade date in CSV: {trade_date}")
         for sym in symbols:
             print(f"  BAN: {sym}")
-        print(f"Dry run: {len(symbols)} symbols (not stored)")
+        print(f"Dry run: {len(symbols)} symbol(s) (not stored)")
         store.close()
         return 0
 
+    # ── Freshness guard: CSV must be for today (else stale → WARN, no store) ──
+    if trade_date != ban_date:
+        return _soft_fail(
+            log,
+            store,
+            ban_date,
+            fail_closed,
+            reason=f"stale CSV date {trade_date!r} != today {ban_date!r}",
+        )
+
+    # ── Success ───────────────────────────────────────────────────────────
     stored = store_fno_ban(store, symbols, ban_date, log)
-    log.info("fetch_fno_ban.complete", extra={"stored": stored})
+    log.info(
+        "fetch_fno_ban.complete",
+        extra={"date": ban_date, "stored": stored, "symbols": symbols},
+    )
     store.close()
     return 0
-
-
-def _send_critical_alert(log: logging.Logger, message: str) -> None:
-    """Best-effort Telegram CRITICAL alert."""
-    try:
-        from alerts.telegram_notifier import TelegramNotifier
-        notifier = TelegramNotifier.from_env()
-        if notifier:
-            notifier.send_critical(message)
-    except Exception as exc:
-        log.warning("fetch_fno_ban: telegram alert failed: %s", exc)
 
 
 def _cron_main(argv=None) -> int:

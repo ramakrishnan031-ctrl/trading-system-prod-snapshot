@@ -863,11 +863,17 @@ class LiveFeedConfig(BaseModel):
 
 
 class FnoBanConfig(BaseModel):
-    """FIX-136 Item 44: F&O ban list fetch config."""
+    """FIX-136 Item 44 + 22-Jun-2026 endpoint fix: F&O ban list fetch config.
+
+    Source is the NSE Clearing daily securities-in-ban CSV (the old /api/ JSON
+    endpoint was retired). fail_closed defaults OFF (FAIL-OPEN): a fetch failure
+    must not block NSE-EQ trading, since the ban list currently has no runtime
+    consumer. Flip to true only when F&O trading is enabled and a conservative
+    block on fetch failure is wanted.
+    """
     model_config = ConfigDict(extra="forbid")
-    url: str = "https://www.nseindia.com/api/live-analysis-banned"
-    fail_closed: bool = True
-    min_expected_fields: int = 2
+    url: str = "https://nsearchives.nseindia.com/content/fo/fo_secban.csv"
+    fail_closed: bool = False
 
 
 class StrategyCircuitBreakerConfig(BaseModel):
