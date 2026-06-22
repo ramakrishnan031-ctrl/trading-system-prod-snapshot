@@ -3504,6 +3504,65 @@ class TestBl19PlacerRateLimitRetry:
             rejection_reason="",
         )
 
+    def test_e3_sl_unplaceable_is_not_ltp_validation_error(self) -> None:
+        """E.3 wiring: SLUnplaceableError must route to the position-unprotected
+        escalation (emergency close + hard_kill), NOT the LTP exit-retry queue.
+        _is_ltp_validation_error() must return False for it."""
+        from core.exceptions import SLUnplaceableError
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, *_ = self._make_placer_with_mock_engine(
+                Path(tmp), engine_side_effect=[]
+            )
+            assert placer._is_ltp_validation_error(
+                SLUnplaceableError("wrong-side SL", trade_id="t", symbol="X")
+            ) is False
+
+    def test_e8_entry_fill_forwards_settled_avg_as_entry_fill_once(self) -> None:
+        """E.8 (Also-1): the entry-fill handler (_place_limit_triple_exits — the
+        single function both the COMPLETE and partial-terminated fill paths funnel
+        through) places exits EXACTLY ONCE and forwards the settled cumulative
+        avg_fill_price as entry_fill (the NOCIL placeability-gate reference). Locks
+        the partial-fill safety story: a future change that fed a stale/partial
+        fill to the gate would flip entry_fill and fail this test."""
+        from types import SimpleNamespace
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, fm, bus, om, engine_mock = (
+                self._make_placer_with_mock_engine(Path(tmp), engine_side_effect=[])
+            )
+            # SL-only legs -> light persist path (Bug-C); avoids full TGT persist.
+            engine_mock.place_deferred_exits.return_value = SimpleNamespace(
+                tgt_placed=False, sl_broker_order_id="BRK_SL",
+                sl_internal_id="oid_sl", sl_order_type="SL",
+                sl_price=185.0, sl_trigger_price=186.11,
+            )
+            sig_id = _seed_signal(store)
+            trade_id = om.create_trade(
+                signal_id=sig_id, symbol="NOCIL", direction="LONG",
+                strategy="x", sector=None, qty=2,
+                entry_target_price=189.9, sl_initial=186.11, tgt_initial=197.5,
+                order_protocol="LIMIT_TRIPLE",
+                margin_reserved=100.0, risk_amount=10.0,
+            )
+            om.record_entry_fill(
+                trade_id=trade_id, avg_fill_price=189.78, qty_filled=2,
+                filled_at=now_ist().isoformat(),
+            )
+            fe = _FillEntry(
+                trade_id=trade_id, reservation_id="res", symbol="NOCIL", qty=2,
+                leg=_LEG_ENTRY, order_protocol="LIMIT_TRIPLE", direction="LONG",
+                side="BUY", sl_price=186.11, tgt_price=197.5, intent="INTRADAY",
+                tgt_risk_reward=2.0,
+            )
+            SETTLED = 189.78
+            placer._place_limit_triple_exits(
+                trade_id=trade_id, fill_entry=fe, qty_filled=2,
+                avg_fill_price=SETTLED, reason="partial_terminated_test",
+            )
+            assert engine_mock.place_deferred_exits.call_count == 1
+            _, kwargs = engine_mock.place_deferred_exits.call_args
+            assert kwargs["entry_fill"] == SETTLED
+            store.close()
+
     def test_placer_retries_on_429_up_to_max(self) -> None:
         """429 raised twice then success -> engine.execute called 3 times, trade OPEN."""
         import gc

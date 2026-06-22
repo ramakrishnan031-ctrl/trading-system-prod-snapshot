@@ -297,16 +297,20 @@ def test_retry_failed_on_broker_reject():
 def test_retry_unplaceable_when_clamp_makes_tgt_below_entry():
     with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         store = _make_store(Path(tmp))
-        # Upper circuit barely above entry -> the clamp pulls the TGT to/under
-        # entry; retry must cancel it and report unplaceable (keep retrying).
+        # Upper circuit barely above entry -> the clamp would pull the TGT to/under
+        # entry. NOCIL fix: the placeability gate (inside place_tgt_only) refuses it
+        # BEFORE any order is sent, so the retry reports unplaceable (keep retrying)
+        # with NO broker round-trip (no place-then-cancel — the old Bug-D re-check
+        # mechanism the de-dup removed).
         adapter = _MockAdapter(upper=100.5, lower=80.0)
         placer = _make_placer(store, adapter)
         _seed_open_trade(store, "t1", direction="LONG", entry=100.0, sl=98.0, tgt=104.0)
         assert placer.retry_tgt_for_trade("t1") == "skipped_unplaceable"
-        # the clamped order that was placed must have been cancelled
-        assert len(adapter.cancelled) == 1
+        # The wrong-side TGT is never placed -> nothing to cancel.
+        assert len(adapter.placed) == 0
+        assert len(adapter.cancelled) == 0
         assert [o for o in store.get_orders_for_trade("t1") if o["leg"] == "TGT"] == []
-        print("  OK retry cancels a clamp-unprofitable TGT (keeps retrying)")
+        print("  OK retry refuses a clamp-unplaceable TGT pre-broker (keeps retrying)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

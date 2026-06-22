@@ -177,6 +177,29 @@ class OrderRejectedError(BrokerError):
     SEVERITY: str = "ERROR"
 
 
+class SLUnplaceableError(BrokerError):
+    """The protective SL leg cannot be placed on the correct side of the entry
+    fill — the circuit-band clamp would push the stop to/through the fill
+    (instant stop-out). Raised by LimitTripleProtocol.place_exits when the
+    placeability gate (orders.price_math.clamp_exit_into_band) returns
+    placeable=False for the SL leg, BEFORE any order is sent to the broker.
+
+    The position is live and CANNOT be protected by a resting stop, so
+    OrderPlacer escalates via the existing unprotected-position handler:
+    emergency market close + hard_kill. (A TGT-unplaceable is benign by
+    contrast — the SL still stands — and only holds/retries.)
+
+    Distinct from an LTP-validation reject: order_placer._is_ltp_validation_error()
+    returns False for this, so it routes to the emergency-close path, never the
+    LTP exit-retry queue.
+
+    Useful context kwargs:
+        trade_id (str), symbol (str), sl_price (float), entry_fill (float),
+        reason (str): the gate's wrong-side explanation.
+    """
+    SEVERITY: str = "CRITICAL"
+
+
 class BrokerAuthError(BrokerError):
     """
     Authentication or token failure — the broker rejected the API token.

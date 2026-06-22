@@ -140,36 +140,148 @@ if __name__ == "__main__":
     sys.exit(run_all_tests())
 
 
-# ── FIX-190 (Bug D): circuit-band clamp ──────────────────────────────────────
+# ── Circuit-band placeability gate (clamp_exit_into_band) — E.1 matrix ────────
+# Polarity (the crux):
+#   TGT (profit side):     LONG wrong = price <= fill ; SHORT wrong = price >= fill
+#   SL  (protective side): LONG wrong = price >= fill ; SHORT wrong = price <= fill
 
-def test_clamp_tgt_above_upper_circuit_clamps_down():
-    from orders.price_math import clamp_to_circuit_band
-    # THELEELA-like: TGT 505 above upper circuit 503.35 -> clamp to ~2% below.
-    clamped, was = clamp_to_circuit_band(505.0, upper_circuit=503.35, lower_circuit=440.0)
-    assert was is True
-    assert clamped < 503.35
-
-
-def test_clamp_sl_below_lower_circuit_clamps_up():
-    from orders.price_math import clamp_to_circuit_band
-    clamped, was = clamp_to_circuit_band(430.0, upper_circuit=503.35, lower_circuit=440.0)
-    assert was is True
-    assert clamped > 440.0
-
-
-def test_clamp_inside_band_unchanged():
-    from orders.price_math import clamp_to_circuit_band
-    clamped, was = clamp_to_circuit_band(480.0, upper_circuit=503.35, lower_circuit=440.0)
-    assert was is False
-    assert clamped == 480.0
+def test_gate_tgt_long_clamped_below_fill_unplaceable():
+    """NOCIL: LONG TGT 197.12 clamped to upper*0.98=187.00 < fill 189.78."""
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        197.12, leg="TGT", direction="LONG", entry_fill=189.78,
+        upper_circuit=190.82, lower_circuit=127.22,
+    )
+    assert r.was_clamped is True
+    assert r.price == 187.00
+    assert r.placeable is False
+    assert r.price < 189.78
 
 
-def test_clamp_no_band_data_unchanged():
-    from orders.price_math import clamp_to_circuit_band
-    clamped, was = clamp_to_circuit_band(505.0, upper_circuit=None, lower_circuit=None)
-    assert was is False and clamped == 505.0
+def test_gate_tgt_long_clamped_above_fill_placeable():
+    """Reduced-but-profitable target: clamp keeps it above the fill."""
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        130.0, leg="TGT", direction="LONG", entry_fill=100.0,
+        upper_circuit=120.0, lower_circuit=80.0,
+    )
+    assert r.was_clamped is True
+    assert r.price > 100.0
+    assert r.placeable is True
 
 
-def test_clamp_nonpositive_price_unchanged():
-    from orders.price_math import clamp_to_circuit_band
-    assert clamp_to_circuit_band(0.0, 503.0, 440.0) == (0.0, False)
+def test_gate_tgt_short_clamped_above_fill_unplaceable():
+    """SHORT TGT clamped UP off the lower circuit to >= fill -> wrong-side."""
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        90.0, leg="TGT", direction="SHORT", entry_fill=100.0,
+        upper_circuit=130.0, lower_circuit=99.0,
+    )
+    assert r.was_clamped is True
+    assert r.price >= 100.0
+    assert r.placeable is False
+
+
+def test_gate_tgt_short_clamped_below_fill_placeable():
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        85.0, leg="TGT", direction="SHORT", entry_fill=100.0,
+        upper_circuit=130.0, lower_circuit=90.0,
+    )
+    assert r.was_clamped is True
+    assert r.price < 100.0
+    assert r.placeable is True
+
+
+def test_gate_sl_long_clamped_below_fill_is_benign_placeable():
+    """A LONG SL clamped UP off the lower circuit but still BELOW fill is a
+    valid tighter stop -> MUST NOT be rejected (the polarity-overfire guard)."""
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        85.0, leg="SL", direction="LONG", entry_fill=100.0,
+        upper_circuit=130.0, lower_circuit=90.0,
+    )
+    assert r.was_clamped is True
+    assert r.price < 100.0
+    assert r.placeable is True
+
+
+def test_gate_sl_long_clamped_at_or_above_fill_unplaceable():
+    """LONG SL clamped UP to >= fill = instant stop-out -> unplaceable."""
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        95.0, leg="SL", direction="LONG", entry_fill=100.0,
+        upper_circuit=130.0, lower_circuit=99.0,
+    )
+    assert r.price >= 100.0
+    assert r.placeable is False
+
+
+def test_gate_sl_short_clamped_above_fill_is_benign_placeable():
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        115.0, leg="SL", direction="SHORT", entry_fill=100.0,
+        upper_circuit=110.0, lower_circuit=70.0,
+    )
+    assert r.was_clamped is True
+    assert r.price > 100.0
+    assert r.placeable is True
+
+
+def test_gate_sl_short_clamped_at_or_below_fill_unplaceable():
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        115.0, leg="SL", direction="SHORT", entry_fill=100.0,
+        upper_circuit=101.0, lower_circuit=70.0,
+    )
+    assert r.price <= 100.0
+    assert r.placeable is False
+
+
+def test_gate_inside_band_unchanged_placeable():
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        480.0, leg="TGT", direction="LONG", entry_fill=460.0,
+        upper_circuit=503.35, lower_circuit=440.0,
+    )
+    assert r.was_clamped is False
+    assert r.price == 480.0
+    assert r.placeable is True
+
+
+def test_gate_no_band_data_passthrough_placeable():
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        505.0, leg="TGT", direction="LONG", entry_fill=480.0,
+        upper_circuit=None, lower_circuit=None,
+    )
+    assert r.was_clamped is False and r.price == 505.0 and r.placeable is True
+
+
+def test_gate_nonpositive_price_unplaceable():
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        0.0, leg="TGT", direction="LONG", entry_fill=100.0,
+        upper_circuit=503.0, lower_circuit=440.0,
+    )
+    assert r.placeable is False
+
+
+def test_gate_zero_entry_fill_fails_open_placeable():
+    """No fill reference (entry_fill<=0) -> cannot judge side -> fail open."""
+    from orders.price_math import clamp_exit_into_band
+    r = clamp_exit_into_band(
+        187.0, leg="TGT", direction="LONG", entry_fill=0.0,
+        upper_circuit=190.82, lower_circuit=127.22,
+    )
+    assert r.placeable is True
+
+
+def test_gate_invalid_leg_raises():
+    import pytest
+    from orders.price_math import clamp_exit_into_band
+    with pytest.raises(ValueError):
+        clamp_exit_into_band(
+            100.0, leg="ENTRY", direction="LONG", entry_fill=100.0,
+            upper_circuit=110.0, lower_circuit=90.0,
+        )

@@ -16,6 +16,7 @@ Both are accepted; BUY is mapped to LONG, SELL to SHORT.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
 
@@ -220,27 +221,88 @@ def calc_sl_limit_price(
 DEFAULT_CIRCUIT_MARGIN_PCT = 0.02
 
 
-def clamp_to_circuit_band(
+@dataclass(frozen=True)
+class ClampResult:
+    """Outcome of :func:`clamp_exit_into_band` — an exit price clamped into the
+    circuit band AND validated against the entry fill for its (leg, direction).
+
+    Frozen on purpose: ``placeable`` cannot be silently ignored — every caller
+    must branch on it (a wrong-side exit is never sent to the broker).
+
+    Attributes:
+        price:       the clamped, tick-snapped price (meaningful when placeable).
+        was_clamped: True if the band actually moved the input price.
+        placeable:   True iff ``price`` is inside the band AND on the correct side
+                     of the entry fill for this leg+direction. False = UNPLACEABLE:
+                     no in-band price exists on the profit (TGT) / protective (SL)
+                     side of the fill. A wrong-side TGT would be instantly
+                     marketable (the 22-Jun NOCIL scratch); a wrong-side SL would
+                     instant-stop-out. The caller MUST NOT place such an order.
+        reason:      short human-readable explanation (logs / verdicts).
+    """
+    price: float
+    was_clamped: bool
+    placeable: bool
+    reason: str = "ok"
+
+
+def clamp_exit_into_band(
     price: float,
+    *,
+    leg: str,
+    direction: str,
+    entry_fill: float,
     upper_circuit: float | None,
     lower_circuit: float | None,
     tick: float = DEFAULT_TICK,
     margin_pct: float = DEFAULT_CIRCUIT_MARGIN_PCT,
-) -> tuple[float, bool]:
-    """FIX-190 (Bug D): clamp an exit price into the circuit band so the broker
-    cannot reject it for breaching the upper/lower price band (the 19-Jun
-    THELEELA TGT @ above upper-circuit rejection that triggered the cascade).
+) -> ClampResult:
+    """Clamp an exit price into the circuit band, THEN verify the result is on
+    the correct side of the entry fill for ``(leg, direction)``.
 
-    Clamps into ``[lower*(1+margin), upper*(1-margin)]`` — side-agnostic, so it
-    is correct for a TGT above the band (clamped down) or an SL trigger below it
-    (clamped up), for both LONG and SHORT. Re-snaps to a tick multiple (upper
-    bound rounds DOWN to stay inside; lower bound rounds UP). If band data is
-    missing/non-positive the price is returned unchanged.
+    This is the SINGLE chokepoint that stops a clamped exit from becoming a
+    wrong-side, self-defeating order. The 22-Jun NOCIL defect: a LONG TGT
+    recalc'd to 197.12 was clamped DOWN to ``upper*(1-margin)=187.00``, which
+    sat BELOW the 189.78 fill — an instantly-marketable SELL that scratched the
+    trade 2.35s after entry. The band-clamp alone (FIX-190 Bug D) is
+    side-agnostic and cannot see that; this function adds the leg/direction
+    polarity check against the fill.
 
-    Returns ``(clamped_price, was_clamped)``.
+    Band: clamp into ``[lower*(1+margin), upper*(1-margin)]`` (tick-snapped —
+    upper rounds DOWN to stay inside, lower rounds UP).
+
+    Polarity (the crux — must NOT over-fire on benign SL clamps)::
+
+        TGT (profit side):    LONG wrong-side = price <= fill ; SHORT = price >= fill
+        SL  (protective side):LONG wrong-side = price >= fill ; SHORT = price <= fill
+
+    A LONG's SL clamped UP off the lower circuit but still BELOW the fill is a
+    valid, tighter stop -> ``placeable=True`` (NOT rejected).
+
+    Fail-open: if band data is missing/non-positive there is no band to violate
+    -> price passes through unchanged, ``placeable=True``. Likewise if
+    ``entry_fill`` is non-positive (no reference to judge the side against).
+    A non-positive ``price`` is returned ``placeable=False``.
+
+    PURE: no quote I/O — the caller fetches the band (e.g. ``_circuit_limits``).
+
+    Args:
+        leg: "TGT" or "SL".
+        direction: "LONG"/"SHORT" (or "BUY"/"SELL").
+        entry_fill: the actual entry fill price the exit must sit on the right
+            side of (avg_fill_price at placement / entry_actual_price on retry).
     """
+    leg_u = (leg or "").upper()
+    if leg_u not in ("TGT", "SL"):
+        raise ValueError(f"leg must be 'TGT' or 'SL', got {leg!r}")
+    is_long = _is_long(direction)
+
     if price <= 0:
-        return (price, False)
+        return ClampResult(
+            price=price, was_clamped=False, placeable=False,
+            reason="non-positive price",
+        )
+
     clamped = price
     if upper_circuit and upper_circuit > 0:
         upper_safe = round_to_tick(
@@ -255,4 +317,26 @@ def clamp_to_circuit_band(
         if clamped < lower_safe:
             clamped = lower_safe
     was_clamped = abs(clamped - price) > (tick / 2.0)
-    return (clamped, was_clamped)
+
+    # Leg/direction polarity vs the entry fill. entry_fill<=0 -> no reference to
+    # violate -> fail open (placeable).
+    if entry_fill and entry_fill > 0:
+        if leg_u == "TGT":
+            wrong = (clamped <= entry_fill) if is_long else (clamped >= entry_fill)
+            side = "profit"
+        else:  # SL
+            wrong = (clamped >= entry_fill) if is_long else (clamped <= entry_fill)
+            side = "protective"
+        if wrong:
+            return ClampResult(
+                price=clamped, was_clamped=was_clamped, placeable=False,
+                reason=(
+                    f"clamped {leg_u} {clamped} on wrong side of fill "
+                    f"{entry_fill} ({'LONG' if is_long else 'SHORT'}; no in-band "
+                    f"price on the {side} side)"
+                ),
+            )
+
+    return ClampResult(
+        price=clamped, was_clamped=was_clamped, placeable=True, reason="ok",
+    )

@@ -54,14 +54,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 from broker.zerodha_adapter import ZerodhaAdapter
-from core.exceptions import BrokerError, OrderRejectedError
+from core.exceptions import BrokerError, OrderRejectedError, SLUnplaceableError
 from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
 from orders.entry_engine import EntryEngine, EntryResult
 from orders.price_math import (
     DEFAULT_SL_LIMIT_OFFSET_PCT,
     calc_sl_limit_price,
-    clamp_to_circuit_band,
+    clamp_exit_into_band,
 )
 
 
@@ -109,6 +109,9 @@ class TgtOnlyResult:
     tgt_internal_id: Optional[str] = None
     tgt_price: Optional[float] = None
     clamped: bool = False
+    unplaceable: bool = False    # True = placeability gate refused (wrong-side of
+                                 # fill / band too tight), NOT a broker reject ->
+                                 # caller keeps retrying ("skipped_unplaceable")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -250,6 +253,8 @@ class LimitTripleProtocol(EntryEngine):
         intent: str,
         trade_id: str,
         tag: str = "",
+        entry_fill: float = 0.0,  # actual entry fill — the placeability gate's
+                                  # reference (0.0 -> fail open, no polarity check)
     ) -> ExitLegsResult:
         """
         Phase 2: place SL + TGT on exit side at the ACTUAL filled qty (OPL1/OPL7).
@@ -271,22 +276,63 @@ class LimitTripleProtocol(EntryEngine):
         order_tag = truncate_tag_for_broker(tag or trade_id)
         exit_side = _exit_side(entry_side)
 
-        # FIX-190 (Bug D): clamp the SL trigger + TGT into the circuit band so the
-        # broker cannot reject them for breaching the price band (the 19-Jun
-        # THELEELA TGT-above-upper-circuit rejection that triggered the cascade).
-        # Best-effort — if quote/circuit data is unavailable we place as-is and
-        # Bug C handles any resulting TGT rejection (SL-only protection).
+        # Circuit-band PLACEABILITY GATE (NOCIL fix, 22-Jun). FIX-190 (Bug D)
+        # clamped SL/TGT into the band so the broker could not reject them, but
+        # the clamp was side-agnostic: a LONG TGT recalc'd above the upper
+        # circuit was clamped DOWN to upper*(1-margin), which for NOCIL landed
+        # BELOW the entry fill -> an instantly-marketable SELL that scratched the
+        # trade. clamp_exit_into_band now also verifies each leg lands on the
+        # correct side of the fill:
+        #   - SL unplaceable (clamp to/through fill = instant stop-out) -> the
+        #     position cannot be stopped -> raise SLUnplaceableError; OrderPlacer
+        #     emergency-closes + hard_kills (TGT not attempted; SL-first).
+        #   - TGT unplaceable (clamp to wrong side of fill) -> benign, the SL
+        #     still protects -> place SL only + hand the TGT to TGTRetryManager
+        #     (FIX-190 Bug C path). *** THIS IS THE NOCIL FIX. ***
+        # Best-effort on the band fetch: no circuit data -> place as-is (gate
+        # fails open) and Bug C still handles any broker-side TGT rejection.
         upper_c, lower_c = self._circuit_limits(symbol)
+        tgt_unplaceable = False
         if upper_c or lower_c:
-            sl_price, sl_clamped = clamp_to_circuit_band(sl_price, upper_c, lower_c)
-            tgt_price, tgt_clamped = clamp_to_circuit_band(tgt_price, upper_c, lower_c)
-            if sl_clamped or tgt_clamped:
+            sl_res = clamp_exit_into_band(
+                sl_price, leg="SL", direction=entry_side, entry_fill=entry_fill,
+                upper_circuit=upper_c, lower_circuit=lower_c,
+            )
+            if not sl_res.placeable:
+                self._log.critical(
+                    "limit_triple.sl_unplaceable_wrong_side",
+                    extra={
+                        "trade_id": trade_id, "symbol": symbol,
+                        "sl_price": sl_price, "entry_fill": entry_fill,
+                        "upper_circuit": upper_c, "lower_circuit": lower_c,
+                        "reason": sl_res.reason,
+                        "detail": "ENTRY filled; SL cannot be placed on the "
+                                  "protective side of the fill; escalating to "
+                                  "emergency close + hard_kill (no TGT attempted)",
+                    },
+                )
+                raise SLUnplaceableError(
+                    "SL clamp lands on the wrong side of the entry fill",
+                    trade_id=trade_id, symbol=symbol, sl_price=sl_price,
+                    entry_fill=entry_fill, reason=sl_res.reason,
+                )
+            tgt_res = clamp_exit_into_band(
+                tgt_price, leg="TGT", direction=entry_side, entry_fill=entry_fill,
+                upper_circuit=upper_c, lower_circuit=lower_c,
+            )
+            sl_price = sl_res.price
+            tgt_unplaceable = not tgt_res.placeable
+            if not tgt_unplaceable:
+                tgt_price = tgt_res.price
+            if sl_res.was_clamped or tgt_res.was_clamped or tgt_unplaceable:
                 self._log.warning(
                     "limit_triple.exit_price_clamped_to_band",
                     extra={
                         "trade_id": trade_id, "symbol": symbol,
                         "upper_circuit": upper_c, "lower_circuit": lower_c,
-                        "sl_clamped": sl_clamped, "tgt_clamped": tgt_clamped,
+                        "sl_clamped": sl_res.was_clamped,
+                        "tgt_clamped": tgt_res.was_clamped,
+                        "tgt_unplaceable": tgt_unplaceable,
                         "sl_price": sl_price, "tgt_price": tgt_price,
                     },
                 )
@@ -368,6 +414,23 @@ class LimitTripleProtocol(EntryEngine):
                 tgt_placed=False,
             )
 
+        # NOCIL fix: the placeability gate found the clamped TGT would sit on the
+        # wrong side of the fill (instantly marketable). Do NOT place it — the SL
+        # is live, so return SL-only; OrderPlacer routes the TGT to TGTRetryManager
+        # (FIX-190 Bug C), which re-clamps against the band when it relaxes.
+        if tgt_unplaceable:
+            self._log.warning(
+                "limit_triple.tgt_unplaceable_sl_standing",
+                extra={
+                    "trade_id": trade_id, "symbol": symbol, "qty": qty,
+                    "sl_still_standing": sl_placed.broker_order_id,
+                    "tgt_price": tgt_price, "entry_fill": entry_fill,
+                    "detail": "clamped TGT would be wrong-side of the entry fill; "
+                              "placing SL only; TGT deferred to retry",
+                },
+            )
+            return _partial_sl_only()
+
         try:
             tgt_placed = self._adapter.place_order(
                 symbol=symbol,
@@ -438,6 +501,7 @@ class LimitTripleProtocol(EntryEngine):
         intent: str,
         trade_id: str,
         tag: str = "",
+        entry_fill: float = 0.0,  # actual entry fill — placeability-gate reference
     ) -> TgtOnlyResult:
         """
         TGT retry (Task 2026-06-19): place ONLY the TGT LIMIT leg for a trade
@@ -452,11 +516,32 @@ class LimitTripleProtocol(EntryEngine):
         order_tag = truncate_tag_for_broker(tag or trade_id)
         exit_side = _exit_side(entry_side)
 
-        # Bug D: re-clamp on every retry against the CURRENT circuit band.
+        # Bug D: re-clamp on every retry against the CURRENT circuit band, and
+        # gate against the fill (NOCIL fix). A clamp that lands on the wrong side
+        # of the entry fill is UNPLACEABLE (the band is still too tight) -> return
+        # placed=False so TGTRetryManager schedules another attempt; NEVER place a
+        # wrong-side, instantly-marketable target.
         upper_c, lower_c = self._circuit_limits(symbol)
         clamped = False
         if upper_c or lower_c:
-            tgt_price, clamped = clamp_to_circuit_band(tgt_price, upper_c, lower_c)
+            res = clamp_exit_into_band(
+                tgt_price, leg="TGT", direction=entry_side, entry_fill=entry_fill,
+                upper_circuit=upper_c, lower_circuit=lower_c,
+            )
+            if not res.placeable:
+                self._log.warning(
+                    "limit_triple.tgt_retry_unplaceable_wrong_side",
+                    extra={
+                        "trade_id": trade_id, "symbol": symbol, "qty": qty,
+                        "tgt_price": tgt_price, "entry_fill": entry_fill,
+                        "reason": res.reason,
+                        "detail": "clamped TGT still wrong-side of fill; "
+                                  "not placing; will retry when band relaxes",
+                    },
+                )
+                return TgtOnlyResult(placed=False, clamped=True, unplaceable=True)
+            tgt_price = res.price
+            clamped = res.was_clamped
 
         try:
             placed = self._adapter.place_order(

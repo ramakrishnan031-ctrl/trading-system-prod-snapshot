@@ -38,7 +38,11 @@ import threading
 from datetime import datetime
 from typing import Any, List, Optional
 
-from core.market_windows import is_within_market_hours
+from core.market_windows import (
+    DEFAULT_MARKET_CLOSE,
+    DEFAULT_MARKET_OPEN,
+    is_within_market_hours,
+)
 from core.time_authority import now_ist
 
 
@@ -158,7 +162,13 @@ class TGTRetryManager:
         # Guard: only place during market hours (a resting TGT pre-open/overnight
         # is pointless and may be rejected). Skippable for tests.
         now = now_ist()
-        if self._market_hours_guard and not is_within_market_hours(now):
+        # is_within_market_hours(now_t, open_t, close_t) — 3 args (FIX-169 F18).
+        # The prior 1-arg call raised TypeError every cycle, silently disabling
+        # the retry sweep (the bug this P2 fix closes). Mirror the working callers
+        # (token_monitor / gemini_watchman): pass now.time() + the session bounds.
+        if self._market_hours_guard and not is_within_market_hours(
+            now.time(), DEFAULT_MARKET_OPEN, DEFAULT_MARKET_CLOSE
+        ):
             return outcomes
 
         try:

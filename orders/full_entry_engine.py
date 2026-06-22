@@ -121,6 +121,7 @@ class FullEntryEngine(EntryEngine):
         intent: str,
         trade_id: str,
         tag: str = "",
+        entry_fill: float = 0.0,  # actual entry fill -> LIMIT_TRIPLE placeability gate
     ) -> ExitLegsResult:
         """
         FIX-016: Place exit legs AFTER ENTRY fill (naked-short fix).
@@ -164,6 +165,7 @@ class FullEntryEngine(EntryEngine):
                 symbol=symbol, entry_side=entry_side, qty=qty,
                 sl_price=sl_price, tgt_price=tgt_price,
                 intent=intent, trade_id=trade_id, tag=tag,
+                entry_fill=entry_fill,
             )
 
     def place_deferred_tgt_only(
@@ -176,6 +178,7 @@ class FullEntryEngine(EntryEngine):
         intent: str,
         trade_id: str,
         tag: str = "",
+        entry_fill: float = 0.0,  # actual entry fill -> placeability gate
     ):
         """
         TGT retry (Task 2026-06-19): place ONLY the TGT LIMIT leg (LIMIT_TRIPLE)
@@ -187,4 +190,5 @@ class FullEntryEngine(EntryEngine):
         return self._limit.place_tgt_only(
             symbol=symbol, entry_side=entry_side, qty=qty,
             tgt_price=tgt_price, intent=intent, trade_id=trade_id, tag=tag,
+            entry_fill=entry_fill,
         )

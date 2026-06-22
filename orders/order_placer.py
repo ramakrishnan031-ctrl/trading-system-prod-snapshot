@@ -192,7 +192,7 @@ from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
 from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged, PositionClosed
-from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutError, OrderRejectedError
+from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutError, OrderRejectedError, SLUnplaceableError
 from core.ids import new_trade_id, truncate_tag_for_broker
 from core.logger import log_exception
 from core.time_authority import now_ist
@@ -2480,13 +2480,17 @@ class OrderPlacer:
         result = self._engine.place_deferred_tgt_only(
             symbol=symbol, entry_side=entry_side, qty=qty,
             tgt_price=tgt_price, intent=intent, trade_id=trade_id, tag=trade_id,
+            entry_fill=entry_price,  # NOCIL placeability gate reference
         )
         if not result.placed:
-            return "failed"
+            # Gate refused a wrong-side (band-too-tight) TGT -> keep retrying;
+            # a genuine broker reject -> "failed".
+            return "skipped_unplaceable" if result.unplaceable else "failed"
+
+        final_tgt = result.tgt_price
 
         # Bug D re-check: place_tgt_only clamps to the CURRENT band, which could
         # push the placed TGT to/under entry. If so cancel it and keep retrying.
-        final_tgt = result.tgt_price
         if final_tgt is not None and (
             (direction == "LONG" and final_tgt <= entry_price)
             or (direction == "SHORT" and final_tgt >= entry_price)
@@ -2653,6 +2657,7 @@ class OrderPlacer:
                 intent=fill_entry.intent,
                 trade_id=trade_id,
                 tag=trade_id,
+                entry_fill=avg_fill_price,  # NOCIL placeability gate reference
             )
         except Exception as exc:
             # FIX-061: Detect LTP validation errors and add to retry queue
@@ -3070,6 +3075,13 @@ class OrderPlacer:
         Returns True if exception is error code 16418 or message contains
         "Trigger price" or "LTP cannot be validated".
         """
+        # SL-unplaceable is NOT an LTP-validation reject: it must route to the
+        # emergency-close + hard_kill path (position cannot be stopped), never
+        # the LTP exit-retry queue. Guard explicitly even though the keyword
+        # checks below would not match it.
+        if isinstance(exc, SLUnplaceableError):
+            return False
+
         # Check error code 16418
         if isinstance(exc, (BrokerError, OrderRejectedError)):
             error_code = exc.context.get("kite_status_code")
@@ -3265,6 +3277,7 @@ class OrderPlacer:
                 intent=fill_entry.intent,
                 trade_id=trade_id,
                 tag=trade_id,
+                entry_fill=avg_fill_price,  # NOCIL placeability gate reference
             )
         except Exception as exc:
             # Placement failed - handle errors in the except block
