@@ -50,6 +50,23 @@ ssh trading-vm 'sudo systemctl restart trading-system.service'
 `orders/` order lifecycle · `signals/` ingestion · `screening/` scoring ·
 `data/` market data · `alerts/` telegram · `scripts/` ops+gemini · `tests/` (305)
 
+## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
+| What | Path |
+|---|---|
+| SATS root | `D:\Projects\trading-system\sats\` |
+| Bandit venv exe | `sats\bandit-env\Scripts\bandit.exe` (1.9.4) |
+| Semgrep venv exe | `sats\semgrep-env\Scripts\semgrep.exe` (1.167.0) |
+| Scan scripts | `sats\scripts\scan_bandit.bat`, `sats\scripts\scan_semgrep.bat` |
+| Scan reports | `sats\reports\{bandit,semgrep}_<yyyyMMdd_HHmmss>.txt` |
+| Semgrep baseline | `sats\semgrep_baseline.txt` (pinned `65439ff`; only NEW findings reported) |
+
+On-demand only (no hooks/automation) — double-click a `.bat`. Both scan the repo root,
+exclude `venv,sats,.git`, write a timestamped txt report **and** echo it to the console.
+Both `.bat`s set `PYTHONUTF8=1` (else Semgrep/Bandit crash writing the report on Windows cp1252).
+Semgrep rulesets `p/python` + `p/security-audit` (login-free; first run downloads, cached after);
+`scan_semgrep.bat` honours `semgrep_baseline.txt` (delete it for a full scan).
+Bandit reports all severities — add `-ll` for medium+. **Do not** touch the two venvs.
+
 ## Pre-flight (`scripts/preflight/`) — daily pre-market readiness, ALERT-ONLY
 3 phases via cron Mon-Fri: **A 08:30** (infra) · **B 09:14** (engine readiness) · **C 09:15→09:20**
 (signal warmup). Sentinel `data_store/preflight/today.json` · log `logs/preflight.log` · markers

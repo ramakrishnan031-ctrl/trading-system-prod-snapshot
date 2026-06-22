@@ -1,5 +1,5 @@
 # SYSTEM MAP — Trading System v2
-# Last updated: 2026-06-18 by VS Code Claude (Claude Code)
+# Last updated: 2026-06-22 by VS Code Claude (Claude Code)
 # ⚠️ READ THIS BEFORE TOUCHING ANYTHING ⚠️
 
 This is the single authoritative path/ops reference. It complements (does not
@@ -157,6 +157,32 @@ VM:  bare repo post-receive hook  →  git checkout -f  →  /home/ubuntu/system
 ```
 - Git remotes (PC): `origin` **and** `vm` both point to `trading-vm:~/trading-system.git` (duplicate; see Issues).
 - SSH host alias `trading-vm` (key `trading_vm_secure`, passwordless).
+
+### SATS — Static Analysis (PC-only, manual; never deploys)
+`sats/` is **git-ignored** (the scanners never reach the VM). Two pre-installed isolated
+venvs hold the tools; run the scan `.bat`s **on demand** — no hooks, no automation:
+| What | Path |
+|---|---|
+| SATS root | `D:\Projects\trading-system\sats\` |
+| Bandit exe | `sats\bandit-env\Scripts\bandit.exe` (1.9.4) |
+| Semgrep exe | `sats\semgrep-env\Scripts\semgrep.exe` (1.167.0) |
+| Scan scripts | `sats\scripts\scan_bandit.bat`, `sats\scripts\scan_semgrep.bat` |
+| Reports | `sats\reports\{bandit,semgrep}_<yyyyMMdd_HHmmss>.txt` |
+| Semgrep baseline | `sats\semgrep_baseline.txt` (pinned commit; only findings NEW since it are reported) |
+
+- Both scan the repo root (`-r` / target = `D:\Projects\trading-system`), **exclude `venv,sats,.git`**,
+  and write a timestamped txt report + echo it to the console (`chcp 65001`, locale-independent
+  PowerShell timestamp, auto-create `reports\`, tool run ONCE via `-o`/`--output` then `type`).
+- Semgrep rulesets `p/python` + `p/security-audit` (login-free; first run downloads, cached after).
+- Bandit reports all severities; add `-ll` to filter to medium+ if noisy.
+- Bandit `-x` uses **absolute** paths — `bandit/core/manager.py` matches each token both as an
+  fnmatch glob **and** as a path substring.
+- **Windows UTF-8:** both `.bat`s set `PYTHONUTF8=1` — without it Semgrep/Bandit **crash** writing the
+  report (`UnicodeEncodeError`); `chcp 65001` fixes only the console, not Python's cp1252 file writes.
+- **Semgrep baseline:** if `sats\semgrep_baseline.txt` exists, `scan_semgrep.bat` adds
+  `--baseline-commit <hash>` (and runs from the repo root for git) so only findings **NEW** since that
+  commit are shown; delete the file for a full scan. Pinned at `65439ff` (2026-06-22 SATS triage).
+- ⚠️ **Do not** modify / activate / reinstall the two venvs.
 
 ---
 
@@ -316,6 +342,30 @@ inactive alert-watcher).
 - `docs/06_deployment_guide.md` — deployment detail
 
 ## Changelog
+- 2026-06-22 — Claude Code (VS Code) — **SATS first-scan triage + fixes (Semgrep: 23 findings).**
+  Triaged all 23 Semgrep (`p/python` + `p/security-audit`) findings: **22 confirmed false positives**
+  (logger-credential-leak rules firing on booleans / env-var NAMES / masked `totp[:3]***` / account ids /
+  the keyword "token" meaning *instrument_token*; dynamic-urllib on hardcoded/config/localhost URLs;
+  Telegram `exc` cannot leak the bot token — `TelegramNotifier._post_with_retry` swallows all `requests`
+  exceptions) and **1 real fix**: `scripts/preflight/checks/recovery.py` `_ensure_dir` chmod
+  **0o755 → 0o700** (owner-only) on the `logs/` + `data_store/cron_marks/` dirs (least privilege;
+  single-user VM) — commit **ab8b12e**. The file-oriented `insecure-file-permissions` rule still flags the
+  *directory* chmod (suggests 0o644, which would strip the traversal bit) → a documented one-line
+  `# nosemgrep` (Rama-approved) sits directly above the call. **Scan-script fixes (PC-only, gitignored):**
+  both `.bat`s now set `PYTHONUTF8=1` (Semgrep/Bandit crashed writing the report under Windows cp1252);
+  `scan_semgrep.bat` gained an optional **baseline** via `sats\semgrep_baseline.txt` (pinned `65439ff`)
+  so future scans surface only NEW findings (the 22 reviewed FPs suppressed). Post-fix full scan = **22**,
+  recovery.py = **0**. No `# nosemgrep` scattered on the 22 FPs (baseline handles them). See PC Paths →
+  SATS + memory `sats_triage_22jun` / `sats_tooling`.
+- 2026-06-22 — Claude Code (VS Code) — **SATS static-analysis scan scripts created (PC-only, manual).**
+  New `sats\scripts\scan_bandit.bat` + `scan_semgrep.bat` and `sats\reports\` (Bandit 1.9.4 / Semgrep
+  1.167.0 in the pre-existing isolated venvs under `sats\`, which is git-ignored — tools never deploy to
+  the VM). On-demand only (no hooks/automation): each scans the repo root, **excludes `venv,sats,.git`**,
+  writes a timestamped txt report to `sats\reports\` and echoes it (`chcp 65001`, locale-independent
+  PowerShell timestamp, auto-creates `reports\`, tool run ONCE via `-o`/`--output` then `type`). Semgrep
+  rulesets `p/python` + `p/security-audit` (login-free; first run downloads, cached after); Bandit `-x`
+  uses absolute paths (`manager.py` matches each token as glob **and** substring). See PC Paths → SATS +
+  memory `sats_tooling`. Tool venvs left untouched.
 - 2026-06-22 — Claude Code — **Slice 1: fill-time R:R fix (all 4 recalc sites) + SL/TGT after-check (schema v35).**
   Deployed to `main` (commit a730c63); activates on the VM's next restart (Tue 23-Jun 08:30), when the
   live DB migrates **v34→v35**. **Bug:** the deferred-exit TGT recalc used order_placer's hardcoded
