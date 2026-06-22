@@ -12,7 +12,6 @@ from test_order_placer.
 """
 from __future__ import annotations
 
-import logging
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -158,14 +157,27 @@ class TestFillTimeRR:
             assert _tgt_price(adapter) == pytest.approx(102.0)
             store.close()
 
-    def test_missing_stored_rr_falls_back_to_default(self, caplog):
+    def test_missing_stored_rr_falls_back_to_default(self):
+        """A trade with no frozen R:R -> fill recalc uses the 2.0 default."""
         with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-            with caplog.at_level(logging.WARNING):
-                _, store, _, adapter, _ = _place_then_fill(
-                    Path(tmp), rr=0.0, rr_default=2.0, entry=100.0, sl=99.0, avg_fill=100.0,
-                )
+            _, store, _, adapter, _ = _place_then_fill(
+                Path(tmp), rr=0.0, rr_default=2.0, entry=100.0, sl=99.0, avg_fill=100.0,
+            )
             assert _tgt_price(adapter) == pytest.approx(102.0)  # 2.0 fallback
-            assert "rr_fallback_to_default" in caplog.text
+            store.close()
+
+    def test_resolve_fill_rr_warns_on_fallback(self):
+        """_resolve_fill_rr returns the strategy R:R when present (no warning),
+        and falls back to self._rr_ratio + a WARNING when absent. Uses a mock
+        logger so the assertion is isolation-proof (no caplog propagation)."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            placer, store, _, _ = _make_placer(Path(tmp), rr_ratio=2.0)
+            placer._log = MagicMock()
+            assert placer._resolve_fill_rr(1.5, "t1", "SYM") == pytest.approx(1.5)
+            placer._log.warning.assert_not_called()
+            assert placer._resolve_fill_rr(0.0, "t1", "SYM") == pytest.approx(2.0)
+            assert placer._log.warning.called
+            assert "rr_fallback_to_default" in placer._log.warning.call_args[0][0]
             store.close()
 
     def test_stored_rr_matches_placement_rr(self):
