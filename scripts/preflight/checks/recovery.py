@@ -20,7 +20,15 @@ def _project_root(ctx: CheckContext) -> Path:
 def _ensure_dir(path: Path) -> bool:
     path.mkdir(parents=True, exist_ok=True)
     try:
-        os.chmod(path, 0o755)
+        # Owner-only (rwx). These dirs (logs/, data_store/cron_marks/) hold
+        # operational data only the service user needs; nothing on the single-user
+        # VM requires group/other access. Least privilege (SATS triage 2026-06-22).
+        # insecure-file-permissions flags this and suggests 0o644, but that is
+        # FILE-oriented advice: a directory needs the owner traversal (x) bit, so
+        # 0o700 -- not 0o644 -- is the correct least-privilege value here. The
+        # nosemgrep directive below MUST stay on the line directly above os.chmod.
+        # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(path, 0o700)
     except OSError:
         pass
     return path.exists() and os.access(path, os.W_OK)
