@@ -1,5 +1,5 @@
 # SYSTEM MAP — Trading System v2
-# Last updated: 2026-06-22 by VS Code Claude (Claude Code)
+# Last updated: 2026-06-23 by Claude Code (Opus) — FIX-191 false SOFT_KILL + WARN→CRITICAL halt alert + resume caps + ~/tools/
 # ⚠️ READ THIS BEFORE TOUCHING ANYTHING ⚠️
 
 This is the single authoritative path/ops reference. It complements (does not
@@ -53,6 +53,20 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 `/home/ubuntu/systems/venv/`  — Python **3.12.3**. Always invoke as
 `PYTHONPATH=. /home/ubuntu/systems/venv/bin/python ...`.
 Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, requests 2.33.1, pytest 9.0.3.
+
+### Agent CLIs (`~/tools/`, OUTSIDE the project)
+| Path | What | Used by |
+|---|---|---|
+| `~/tools/antigravity/agy` | **Antigravity CLI** (`agy`, ~164 MB binary). Google-AI-Pro OAuth (`~/.gemini/`), NOT an API key. Engine behind the AI-ops crons. Governed by `AGENTS.md` ("Cross-Tool Agent Charter") when run in the project dir. | `scripts/gemini_*.py` (premarket brief, log review, trade coach, data integrity, weekly patterns); `.env` `GEMINI_BIN` |
+| `~/tools/gemini/` | Node-based **Gemini CLI** (package.json + node_modules: @google, keytar, node-pty). | secondary AI tooling |
+| `~/tools/claude/` | **Claude Code CLI** dir. `cron.log` = output of the 4×/day heartbeat (`/usr/bin/claude -p "random 8-char string"` @ 05:30/10:31/15:32/20:33). | claude heartbeat cron |
+
+> ⚠️ **The claude heartbeat cron is NOT under `AGENTS.md` guardrails** (confirmed 23-Jun): it runs
+> `/usr/bin/claude -p` with **no `cd`** (CWD `/home/ubuntu`), and the only `AGENTS.md` files live under
+> `~/systems/trading-system/` (a different tree). No `AGENTS.md`/`CLAUDE.md`/`settings.json` exists at `~` or
+> `~/.claude/`. It is a harmless no-op (random string) today, but **ungoverned** (default tool/permission
+> access). To bring it under guardrails: `cd` the cron into a dir holding an `AGENTS.md` + `.claude/settings.json`,
+> or pass `--permission-mode`/`--allowed-tools` on the cron command.
 
 ### Deploy (git push, NOT scp)
 - Bare repo: `/home/ubuntu/trading-system.git/` with `hooks/post-receive`.
@@ -370,6 +384,33 @@ instantly-marketable order. (NOCIL 22-Jun: a LONG TGT recalc'd to 197.12 was cla
 - **Parity:** all shared entry/exit code, no mode branch → Paper + Live together. **No schema change.**
 
 ## Changelog
+- 2026-06-23 — Claude Code (Opus) — **FIX-191: API-failure breaker is connectivity-only (false SOFT_KILL halt) + halt alert WARN→CRITICAL + resume caps + Telegram restored.**
+  **Incident (live):** at 10:07 a SOFT_KILL auto-tripped on "3 consecutive API failures" and `webhook_receiver`
+  403'd EVERY signal for ~2h (150 webhooks/hr, **0 accepted**) — yet the broker was fine. Root cause: the
+  consecutive-API-failure breaker (FIX-069 intent = transient connectivity outage) counted **business
+  rejections**. `OrderRejectedError extends BrokerError`, and `signal_processor` calls `record_api_failure(be)`
+  on ANY `BrokerError` at placement → 1 broker MIS-block reject + **2 client-side slippage-guard aborts**
+  (`order_placer` raises `OrderRejectedError` BEFORE any broker call) = 3-in-a-row → trip. Only the 2 morning
+  fills (GARUDA, PPLPHARMA, both SL) ever placed; the rest of the day was a **false** halt (consecutive-losses
+  was NOT the cause — only 1 loss had closed at trip time). **Fix (permanent, single chokepoint):**
+  `KillSwitch.record_api_failure` now **WHITELISTS** transient types — counts ONLY `BrokerTimeoutError` /
+  `BrokerRateLimitError`; `OrderRejectedError` (broker reject OR slippage abort), `SLUnplaceableError`,
+  `ProductNotSupportedError`, generic `BrokerError` no longer count; `BrokerAuthError` still excluded (FIX-185).
+  No mode branch (paper+live parity). **Halt-alert severity:** `soft_kill()` notified at `severity="WARN"`,
+  which **drops silently on a Telegram send failure with no email fallback** → today's halt reached Rama through
+  ZERO channels. Raised the SOFT_KILL halt notification **WARN→CRITICAL** (routing only; kill stays SOFT_KILL;
+  uses the existing CRITICAL email-fallback path). Scoped — routine WARN alerts unchanged, `hard_kill` has no
+  notifier send, IP-403/exit alerts already CRITICAL. **Resume caps (parity, 10/5/5):** `max_daily_trades 20→10`,
+  `live_test_max_open_positions 4→5`, `live_test_max_entries_per_day 6→10`, `max_consecutive_losses 2→5`.
+  **Telegram restored** — root cause = **stale bot token** (all 277 historical `failed_alerts.log` "failed to
+  deliver to ['-100…']" were the dead token, not the chat_id; 0 failures today). NOTE: the `telegram_alerts` DB
+  table is **vestigial** — the notifier never writes it (sends via HTTP + sentinels + `failed_alerts.log`), so
+  an empty `telegram_alerts` is NOT evidence of a Telegram problem. Tests: +2
+  (`test_fix191_order_rejected_not_counted`, `test_fix191b_soft_kill_halt_alert_critical_emails`); 34/34
+  kill_switch + 7/7 FIX-132 email-fallback green. Commits `7ff24b2` (FIX-191+caps) + `6bed838` (WARN→CRITICAL).
+  **Deployed + resumed 12:28** (bare HEAD `6bed838`; kill cleared via `clear_kill_switch.py`; caps 5/10/5
+  confirmed in the running process; signals flowing). Still open: F&O/MIS ban pre-screening (TVTODAY reached the
+  broker — its reject no longer trips the kill post-FIX-191, but the pre-screen gap remains a separate item).
 - 2026-06-23 — Claude Code (VS Code) — **NOCIL circuit-clamp fix: placeability gate + leg-asymmetric handling + dual pre-fill reject + P2 (tgt_retry).**
   Root cause (22-Jun NOCIL): the FIX-190 Bug-D circuit clamp was **side-agnostic** — a LONG TGT recalc'd
   above the upper circuit was clamped DOWN to `upper×0.98 = 187.00`, **below** the 189.78 fill, producing an

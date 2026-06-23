@@ -1,5 +1,5 @@
 # PATHS — Quick Reference (Trading System v2)
-# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-06-21
+# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-06-23
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
@@ -21,6 +21,7 @@
 | Cron audit | `data_store/cron_audit/` (Phase-1 findings + daily `job_list_<date>.json` snapshots) |
 | Bare repo (deploy target) | `/home/ubuntu/trading-system.git/` (post-receive checks out tree) |
 | Canonical cron | `deploy/cron/trading-system.cron` (live crontab == file since 21-Jun reinstall; `diff`=0) |
+| Agent CLIs (outside project) | `~/tools/antigravity/agy` (Antigravity/`agy` — drives `gemini_*.py` AI-ops crons) · `~/tools/gemini/` (Gemini CLI, node) · `~/tools/claude/` (Claude Code; 4×/day heartbeat → `cron.log`). ⚠️ claude heartbeat runs from `~` with **no AGENTS.md/CLAUDE.md guardrails** (charter is project-only) — see SYSTEM_MAP |
 
 ## Run a command on the VM
 ```bash
