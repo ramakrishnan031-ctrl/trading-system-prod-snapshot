@@ -24,6 +24,54 @@ def _write(tmp_path: Path, body: str) -> Path:
     return p
 
 
+# ── Phase 3 regression: personal_tooling must NOT define EOD timing ──────────
+
+def test_eod_report_time_excludes_personal_tooling(tmp_path):
+    """A late personal_tooling job (e.g. a 20:33 Claude heartbeat) must NOT push
+    back the trading EOD report time — a heartbeat is not a trading deliverable.
+    Without the last_due_time() exclusion the 22:00 heartbeat below forces EOD to
+    22:05; with it, EOD floors to 18:45 off the real 16:00 job."""
+    reg = load_cron_registry(_write(tmp_path, """
+jobs:
+  real_eod_job:
+    script: x.py
+    schedule: "16:00 daily"
+    type: python
+    cadence: daily
+  late_heartbeat:
+    script: hb
+    schedule: "22:00 daily"
+    type: shell
+    cadence: daily
+    personal_tooling: true
+officer:
+  eod_floor_time: "18:45"
+  eod_gap_minutes: 5
+"""))
+    assert reg.last_due_time(MON, tmp_path) == time(16, 0), "personal job must be ignored"
+    assert reg.eod_report_time(MON, tmp_path) == time(18, 45), "EOD must floor, not wait for 22:00 heartbeat"
+
+    # control: the SAME late job WITHOUT personal_tooling DOES define EOD time
+    reg2 = load_cron_registry(_write(tmp_path, """
+jobs:
+  real_eod_job:
+    script: x.py
+    schedule: "16:00 daily"
+    type: python
+    cadence: daily
+  late_real_job:
+    script: y.py
+    schedule: "22:00 daily"
+    type: python
+    cadence: daily
+officer:
+  eod_floor_time: "18:45"
+  eod_gap_minutes: 5
+"""))
+    assert reg2.eod_report_time(MON, tmp_path) == time(22, 5), \
+        "a non-personal late job SHOULD push EOD (proves exclusion is personal_tooling-specific)"
+
+
 # ── Real registry smoke ─────────────────────────────────────────────────────
 
 

@@ -1,395 +1,615 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Cron Job Registry — SINGLE SOURCE OF TRUTH  (TASK #3 / Cron Officer)
-# ─────────────────────────────────────────────────────────────────────────────
-# Read by: core/cron_registry.py -> scripts/cron_officer.py, scripts/check_cron_drift.py.
-# Update THIS file when adding/removing/changing any cron job, then regenerate
-# deploy/cron/trading-system.cron and re-sync the live crontab (see SYSTEM_MAP).
-#
-# FIX-189 (2026-06-19) — when regenerating deploy/cron/trading-system.cron, the
-# generated file MUST keep two things or every Python job silently dies before
-# it runs: (1) a leading `SHELL=/bin/bash` line, and (2) `. ./.env` (with the
-# `./` slash) — NOT `. .env`. Reason: cron's default /bin/sh is dash, and dash's
-# `.` builtin refuses to source a relative path without a slash. See the header
-# of deploy/cron/trading-system.cron for the full explanation.
-#
-# ENV-EXPORT FIX (2026-06-19) — the source MUST be wrapped in allexport:
-# `set -a && . ./.env && set +a` (NOT a plain `. ./.env`). `.env` uses bare
-# `VAR=value` (no `export`), so a plain source sets shell vars that the child
-# `python` does NOT inherit — every cron job ran without its .env secrets
-# (reconcile_positions 15:45 broker-creds + Telegram both failed for this).
-# `set -a` exports everything defined while sourcing so os.environ sees them.
-# Keep this wrapper on every Python job line on any regeneration.
-#
-# Per-job fields:
-#   script           command/path (informational; canonical cron is generated from this)
-#   schedule         human-readable IST schedule
-#   type             python | shell        (shell jobs cannot emit heartbeats)
-#   critical         true  -> SUCCESS also alerts; FAILED always alerts
-#   market_day_only  true  -> script should skip (SKIPPED heartbeat) on NSE holidays
-#   cadence          daily|market_day|intraday|hourly|weekly|monthly  (drives "due today")
-#   monitored        true  -> check_cron_drift / Cron Officer expect a heartbeat when due
-#   weekday          0=Mon..6=Sun           (weekly cadence only)
-#   day_of_month     1..28                  (monthly cadence only)
+# Cron Job Registry — SINGLE EXECUTABLE SOURCE OF TRUTH (Phase 3).
+# Read by core/cron_registry.py; generates deploy/cron/trading-system.cron
+# via scripts/generate_crontab.py --generate. Edit jobs HERE, regenerate.
+# Generation fields (cron_expression/command/env_wrapper/log_target/marker_name)
+# are authoritative; `schedule` is documentation. enabled:false = not generated.
 
 jobs:
-  # ── Daily (all days) ──────────────────────────────────────────────────────
   log_cleanup:
-    script: "find logs -name '*.log' -mtime +30 -delete"
-    schedule: "00:00 daily"
+    script: find logs -name '*.log' -mtime +30 -delete
+    schedule: 00:00 daily
     type: shell
     critical: false
     market_day_only: false
     cadence: daily
     monitored: false
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 0 * * *
+    command: find /home/ubuntu/systems/trading-system/logs -name '*.log' -mtime +30 -delete
+    env_wrapper: none
+    marker_name: log_cleanup
   db_backup:
-    script: "sqlite3 trading_system.db .backup backups/trading_system-<date>.db"
-    schedule: "01:00 daily"
+    script: sqlite3 trading_system.db .backup backups/trading_system-<date>.db
+    schedule: 01:00 daily
     type: shell
     critical: true
     market_day_only: false
     cadence: daily
     monitored: false
-
-  # NOTE: present in canonical deploy/cron but MISSING from the live crontab as of
-  # 2026-06-18 — analytics.db is currently un-backed-up on the VM. Pending sync.
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 1 * * *
+    command: sqlite3 /home/ubuntu/systems/trading-system/data_store/trading_system.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/trading_system-$(date +\%Y-\%m-\%d).db"
+    env_wrapper: none
+    log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1'
+    marker_name: db_backup
   analytics_backup:
-    script: "sqlite3 analytics.db .backup backups/analytics-<date>.db"
-    schedule: "01:05 daily"
+    script: sqlite3 analytics.db .backup backups/analytics-<date>.db
+    schedule: 01:05 daily
     type: shell
     critical: true
     market_day_only: false
     cadence: daily
     monitored: false
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 5 1 * * *
+    command: sqlite3 /home/ubuntu/systems/trading-system/data_store/analytics.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/analytics-$(date +\%Y-\%m-\%d).db"
+    env_wrapper: none
+    log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1'
+    marker_name: analytics_backup
   backup_retention:
-    script: "find backups (trading_system-*.db | analytics-*.db) -mtime +7 -delete"
-    schedule: "02:00 daily"
+    script: find backups (trading_system-*.db | analytics-*.db) -mtime +7 -delete
+    schedule: 02:00 daily
     type: shell
     critical: false
     market_day_only: false
     cadence: daily
     monitored: false
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 2 * * *
+    command: find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete
+    env_wrapper: none
+    log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1'
+    marker_name: backup_retention
   sentinel_retention:
-    script: "find data_store critical_alert_*.delivered -mtime +7 -delete (never *.flag)"
-    schedule: "02:05 daily"
+    script: find data_store critical_alert_*.delivered -mtime +7 -delete (never *.flag)
+    schedule: 02:05 daily
     type: shell
     critical: false
     market_day_only: false
     cadence: daily
     monitored: false
-
-  # NOTE: present in canonical deploy/cron but MISSING from the live crontab.
-  # PRUNES DB ROWS (Sun run adds --vacuum) — activation is a deliberate decision.
+    enabled: true
+    personal_tooling: false
+    cron_expression: 5 2 * * *
+    command: find /home/ubuntu/systems/trading-system/data_store -maxdepth 1 -name "critical_alert_*.delivered" -mtime +7 -delete
+    env_wrapper: none
+    log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-sentinel-retention.log 2>&1'
+    marker_name: sentinel_retention
   db_retention:
-    script: "scripts/db_retention.py  (Sun: --vacuum)"
-    schedule: "02:30 daily"
+    script: 'scripts/db_retention.py  (Sun: --vacuum)'
+    schedule: 02:30 daily
     type: python
     critical: false
     market_day_only: false
     cadence: daily
     monitored: false
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 30 2 * * 1-6
+    command: scripts/db_retention.py
+    env_wrapper: python
+    log_target: '>> logs/cron-db-retention.log 2>&1'
+    marker_name: db_retention
+  db_retention_vacuum:
+    script: 'scripts/db_retention.py  (Sun: --vacuum)'
+    schedule: 02:30 daily
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+    enabled: true
+    personal_tooling: false
+    cron_expression: 30 2 * * 0
+    command: scripts/db_retention.py --vacuum
+    env_wrapper: python
+    log_target: '>> logs/cron-db-retention.log 2>&1'
+    marker_name: db_retention
   token_cleanup:
-    script: "rm -f data_store/session/zerodha_token.json"
-    schedule: "05:00 daily"
+    script: rm -f data_store/session/zerodha_token.json
+    schedule: 05:00 daily
     type: shell
     critical: false
     market_day_only: false
     cadence: daily
     monitored: false
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 5 * * *
+    command: rm -f /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json
+    env_wrapper: none
+    marker_name: token_cleanup
   cron_officer_briefing:
-    script: "scripts/cron_officer.py --briefing"
-    schedule: "09:20 daily"          # Phase 6: morning briefing post pre-flight (was 04:55)
+    script: scripts/cron_officer.py --briefing
+    schedule: 09:20 daily
     type: python
     critical: true
     market_day_only: false
     cadence: daily
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 20 9 * * *
+    command: scripts/cron_officer.py --briefing
+    env_wrapper: python
+    log_target: '>> logs/cron-officer.log 2>&1'
   disk_monitor:
-    script: "scripts/disk_monitor.py"
-    schedule: "hourly"
+    script: scripts/disk_monitor.py
+    schedule: hourly
     type: python
     critical: false
     market_day_only: false
     cadence: hourly
     monitored: false
-
-  # ── Market day (Mon-Fri, skip NSE holidays) ───────────────────────────────
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 * * * *
+    command: scripts/disk_monitor.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-disk-monitor.log 2>&1'
+    marker_name: disk_monitor
   auto_refresh_token:
-    script: "scripts/auto_refresh_token.py"
-    schedule: "08:15 Mon-Fri"
+    script: scripts/auto_refresh_token.py
+    schedule: 08:15 Mon-Fri
     type: python
     critical: true
     market_day_only: true
     cadence: market_day
     monitored: true
-
-  # Pre-flight check (replaces premarket_healthcheck — Phase A subsumes its 5 checks).
-  # detection_method=exit_code_file: pre-flight writes a marker (no DB heartbeat); a
-  # missing marker => NO_SIGNAL (informational). A missed run also surfaces loudly via
-  # the Cron Officer briefing's pre-flight banner (NOT_RUN -> briefing CRITICAL).
+    enabled: true
+    personal_tooling: false
+    cron_expression: 15 8 * * 1-5
+    command: scripts/auto_refresh_token.py
+    env_wrapper: python
+    log_target: '>> logs/cron-auto-token.log 2>&1'
   preflight_phase_a:
-    script: "python -m scripts.preflight.orchestrator --phase A"
-    schedule: "08:30 Mon-Fri"
+    script: python -m scripts.preflight.orchestrator --phase A
+    schedule: 08:30 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
     detection_method: exit_code_file
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 30 8 * * 1-5
+    command: -m scripts.preflight.orchestrator --phase A
+    env_wrapper: python
+    log_target: '>> logs/preflight.log 2>&1'
+    marker_name: preflight_phase_a
   preflight_phase_b:
-    script: "python -m scripts.preflight.orchestrator --phase B"
-    schedule: "09:14 Mon-Fri"
+    script: python -m scripts.preflight.orchestrator --phase B
+    schedule: 09:14 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
     detection_method: exit_code_file
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 14 9 * * 1-5
+    command: -m scripts.preflight.orchestrator --phase B
+    env_wrapper: python
+    log_target: '>> logs/preflight.log 2>&1'
+    marker_name: preflight_phase_b
   preflight_phase_c:
-    script: "python -m scripts.preflight.orchestrator --phase C --watch-sec 285"
-    schedule: "09:15 Mon-Fri"
+    script: python -m scripts.preflight.orchestrator --phase C --watch-sec 285
+    schedule: 09:15 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
     detection_method: exit_code_file
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 15 9 * * 1-5
+    command: -m scripts.preflight.orchestrator --phase C --watch-sec 285
+    env_wrapper: python
+    log_target: '>> logs/preflight.log 2>&1'
+    marker_name: preflight_phase_c
   fetch_fno_ban:
-    script: "scripts/fetch_fno_ban.py"
-    schedule: "08:35 Mon-Fri"
+    script: scripts/fetch_fno_ban.py
+    schedule: 08:35 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 35 8 * * 1-5
+    command: scripts/fetch_fno_ban.py
+    env_wrapper: python
+    log_target: '>> logs/cron-fno-ban.log 2>&1'
   gemini_premarket_brief:
-    script: "scripts/gemini_premarket_brief.py"
-    schedule: "08:55 Mon-Fri"
+    script: scripts/gemini_premarket_brief.py
+    schedule: 08:55 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 55 8 * * 1-5
+    command: scripts/gemini_premarket_brief.py
+    env_wrapper: python
+    log_target: '>> logs/cron-premarket-brief.log 2>&1'
   refresh_instruments:
-    script: "scripts/refresh_instruments.py --account LFL836"
-    schedule: "09:00 Mon-Fri"
+    script: scripts/refresh_instruments.py --account LFL836
+    schedule: 09:00 Mon-Fri
     type: python
     critical: true
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 9 * * 1-5
+    command: scripts/refresh_instruments.py --account LFL836
+    env_wrapper: python
+    log_target: '>> logs/cron-refresh-instruments.log 2>&1'
   capture_metrics:
-    script: "scripts/capture_metrics_baseline.py"
-    schedule: "*/5 09-15 Mon-Fri"
+    script: scripts/capture_metrics_baseline.py
+    schedule: '*/5 09-15 Mon-Fri'
     type: python
     critical: false
     market_day_only: true
     cadence: intraday
     monitored: false
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: '*/5 9-15 * * 1-5'
+    command: scripts/capture_metrics_baseline.py
+    env_wrapper: python
+    log_target: '>> logs/cron-metrics.log 2>&1'
+    marker_name: capture_metrics
   fetch_daily_candles:
-    script: "scripts/fetch_daily_candles.py"
-    schedule: "15:40 Mon-Fri"
+    script: scripts/fetch_daily_candles.py
+    schedule: 15:40 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 40 15 * * 1-5
+    command: scripts/fetch_daily_candles.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-candle-fetch.log 2>&1'
   reconcile_positions:
-    script: "scripts/reconcile_positions.py --account LFL836"
-    schedule: "15:45 Mon-Fri"
+    script: scripts/reconcile_positions.py --account LFL836
+    schedule: 15:45 Mon-Fri
     type: python
     critical: true
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 45 15 * * 1-5
+    command: scripts/reconcile_positions.py --account LFL836
+    env_wrapper: python
+    log_target: '>> logs/cron-reconcile-positions.log 2>&1'
   eod_cleanup:
-    script: "scripts/eod_cleanup.py"
-    schedule: "15:50 Mon-Fri"
+    script: scripts/eod_cleanup.py
+    schedule: 15:50 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 50 15 * * 1-5
+    command: scripts/eod_cleanup.py
+    env_wrapper: python
+    log_target: '>> logs/cron-eod-cleanup.log 2>&1'
   eod_verify:
-    script: "scripts/eod_verify.py"
-    schedule: "15:55 Mon-Fri"
+    script: scripts/eod_verify.py
+    schedule: 15:55 Mon-Fri
     type: python
     critical: true
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 55 15 * * 1-5
+    command: scripts/eod_verify.py
+    env_wrapper: python
+    log_target: '>> logs/cron-eod-verify.log 2>&1'
   daily_review:
-    script: "reports/daily_review.py"
-    schedule: "16:00 Mon-Fri"
+    script: reports/daily_review.py
+    schedule: 16:00 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 16 * * 1-5
+    command: reports/daily_review.py
+    env_wrapper: python
+    log_target: '>> logs/cron-daily-review.log 2>&1'
   wal_checkpoint:
-    script: "scripts/wal_checkpoint.py"
-    schedule: "16:00 Mon-Fri"
+    script: scripts/wal_checkpoint.py
+    schedule: 16:00 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 16 * * 1-5
+    command: scripts/wal_checkpoint.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/wal_checkpoint.log 2>&1'
   generate_screened_csv:
-    script: "scripts/generate_screened_stocks_csv.py"
-    schedule: "16:01 Mon-Fri"
+    script: scripts/generate_screened_stocks_csv.py
+    schedule: 16:01 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 1 16 * * 1-5
+    command: scripts/generate_screened_stocks_csv.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-screened-stocks.log 2>&1'
   daily_report:
-    script: "python -m reports.daily_report"
-    schedule: "16:05 Mon-Fri"
+    script: python -m reports.daily_report
+    schedule: 16:05 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 5 16 * * 1-5
+    command: -m reports.daily_report
+    env_wrapper: python_nopath
+    log_target: '>> logs/daily_report.log 2>&1'
   trade_journal:
-    script: "scripts/trade_journal.py"
-    schedule: "16:10 Mon-Fri"
+    script: scripts/trade_journal.py
+    schedule: 16:10 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 10 16 * * 1-5
+    command: scripts/trade_journal.py
+    env_wrapper: python
+    log_target: '>> logs/trade_journal.log 2>&1'
   compute_strategy_metrics:
-    script: "scripts/compute_strategy_metrics.py"
-    schedule: "16:15 Mon-Fri"
+    script: scripts/compute_strategy_metrics.py
+    schedule: 16:15 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 15 16 * * 1-5
+    command: scripts/compute_strategy_metrics.py
+    env_wrapper: python
+    log_target: '>> logs/cron-strategy-metrics.log 2>&1'
   metrics_summary:
-    script: "scripts/capture_metrics_baseline.py --summarize"
-    schedule: "16:16 Mon-Fri"
+    script: scripts/capture_metrics_baseline.py --summarize
+    schedule: 16:16 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
-    monitored: false   # shares the 'capture_metrics_baseline' heartbeat name
-
+    monitored: false
+    enabled: true
+    personal_tooling: false
+    cron_expression: 16 16 * * 1-5
+    command: scripts/capture_metrics_baseline.py --summarize
+    env_wrapper: python
+    log_target: '>> logs/cron-metrics.log 2>&1'
+    marker_name: metrics_summary
   gemini_log_review:
-    script: "scripts/gemini_log_review.py"
-    schedule: "16:20 Mon-Fri"
+    script: scripts/gemini_log_review.py
+    schedule: 16:20 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 20 16 * * 1-5
+    command: scripts/gemini_log_review.py
+    env_wrapper: python
+    log_target: '>> logs/cron-gemini-review.log 2>&1'
   gemini_trade_coach:
-    script: "scripts/gemini_trade_coach.py"
-    schedule: "16:40 Mon-Fri"
+    script: scripts/gemini_trade_coach.py
+    schedule: 16:40 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
-  # BUG A FIX (20-Jun): registry key renamed gemini_data_integrity ->
-  # gemini_data_integrity_check to MATCH the heartbeat the script records
-  # (record_heartbeat("gemini_data_integrity_check")). The old key never matched
-  # a heartbeat -> the job was reported "missed" every day despite running fine.
+    enabled: true
+    personal_tooling: false
+    cron_expression: 40 16 * * 1-5
+    command: scripts/gemini_trade_coach.py
+    env_wrapper: python
+    log_target: '>> logs/cron-trade-coach.log 2>&1'
   gemini_data_integrity_check:
-    script: "scripts/gemini_data_integrity_check.py"
-    schedule: "17:00 Mon-Fri"
+    script: scripts/gemini_data_integrity_check.py
+    schedule: 17:00 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 17 * * 1-5
+    command: scripts/gemini_data_integrity_check.py
+    env_wrapper: python
+    log_target: '>> logs/cron-data-integrity.log 2>&1'
   check_cron_drift:
-    script: "scripts/check_cron_drift.py"
-    schedule: "18:00 Mon-Fri"
+    script: scripts/check_cron_drift.py
+    schedule: 18:00 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
-    monitored: false   # the monitor itself; does not self-report
+    monitored: false
     detection_method: none
-    excluded_reason: "the cron drift-monitor itself — no self-signal by design"
-
+    excluded_reason: "the cron drift-monitor itself \u2014 no self-signal by design"
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 18 * * 1-5
+    command: scripts/check_cron_drift.py
+    env_wrapper: python
+    log_target: '>> logs/cron-drift-check.log 2>&1'
   cron_officer_eod:
-    script: "scripts/cron_officer.py --eod-summary"
-    schedule: "18:50 Mon-Fri"        # Phase 6: floor 18:45 + 5min after last job (system_manager_eod 18:45)
+    script: scripts/cron_officer.py --eod-summary
+    schedule: 18:50 Mon-Fri
     type: python
     critical: false
     market_day_only: true
     cadence: market_day
     monitored: true
-
-  system_manager_eod:                       # TASK #5: deep daily cross-check
-    script: "scripts/system_manager.py"
-    schedule: "18:45 Mon-Fri"
+    enabled: true
+    personal_tooling: false
+    cron_expression: 50 18 * * 1-5
+    command: scripts/cron_officer.py --eod-summary
+    env_wrapper: python
+    log_target: '>> logs/cron-officer.log 2>&1'
+  system_manager_eod:
+    script: scripts/system_manager.py
+    schedule: 18:45 Mon-Fri
     type: python
     critical: true
     market_day_only: true
     cadence: market_day
     monitored: true
-
-  # ── Weekly ────────────────────────────────────────────────────────────────
+    enabled: true
+    personal_tooling: false
+    cron_expression: 45 18 * * 1-5
+    command: scripts/system_manager.py
+    env_wrapper: python
+    log_target: '>> logs/system-manager.log 2>&1'
   gemini_weekly_patterns:
-    script: "scripts/gemini_weekly_patterns.py"
-    schedule: "18:00 Sunday"
+    script: scripts/gemini_weekly_patterns.py
+    schedule: 18:00 Sunday
     type: python
     critical: false
     market_day_only: false
     cadence: weekly
-    weekday: 6
     monitored: true
-
-  # ── Monthly ─────────────────────────────────────────────────────────────────
+    weekday: 6
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 18 * * 0
+    command: scripts/gemini_weekly_patterns.py
+    env_wrapper: python
+    log_target: '>> logs/cron-weekly-patterns.log 2>&1'
   backup_restore_drill:
-    script: "scripts/backup_restore_drill.py --quiet"
-    schedule: "03:00 1st-of-month"
+    script: scripts/backup_restore_drill.py --quiet
+    schedule: 03:00 1st-of-month
     type: python
     critical: false
     market_day_only: false
     cadence: monthly
-    day_of_month: 1
     monitored: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Cron Officer settings (Phase 6) — day window, alert timing, Telegram-ban route.
-# Loaded by core/cron_registry.py -> OfficerConfig. All fields optional/defaulted.
-# ─────────────────────────────────────────────────────────────────────────────
+    day_of_month: 1
+    enabled: true
+    personal_tooling: false
+    cron_expression: 0 3 1 * *
+    command: scripts/backup_restore_drill.py --quiet
+    env_wrapper: python
+    log_target: '>> logs/cron-backup-drill.log 2>&1'
+  claude_heartbeat_0530:
+    script: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    schedule: 05:30 daily
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+    detection_method: none
+    excluded_reason: "personal tooling heartbeat \u2014 no trading deliverable"
+    enabled: true
+    personal_tooling: true
+    cron_expression: 30 5 * * *
+    command: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    env_wrapper: claude_cd
+    log_target: '>> /home/ubuntu/tools/claude/cron.log 2>&1'
+  claude_heartbeat_1031:
+    script: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    schedule: 10:31 daily
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+    detection_method: none
+    excluded_reason: "personal tooling heartbeat \u2014 no trading deliverable"
+    enabled: true
+    personal_tooling: true
+    cron_expression: 31 10 * * *
+    command: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    env_wrapper: claude_cd
+    log_target: '>> /home/ubuntu/tools/claude/cron.log 2>&1'
+  claude_heartbeat_1532:
+    script: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    schedule: 15:32 daily
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+    detection_method: none
+    excluded_reason: "personal tooling heartbeat \u2014 no trading deliverable"
+    enabled: true
+    personal_tooling: true
+    cron_expression: 32 15 * * *
+    command: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    env_wrapper: claude_cd
+    log_target: '>> /home/ubuntu/tools/claude/cron.log 2>&1'
+  claude_heartbeat_2033:
+    script: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    schedule: 20:33 daily
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+    detection_method: none
+    excluded_reason: "personal tooling heartbeat \u2014 no trading deliverable"
+    enabled: true
+    personal_tooling: true
+    cron_expression: 33 20 * * *
+    command: /usr/bin/claude -p "Generate a random 8-character string. Print only the string."
+    env_wrapper: claude_cd
+    log_target: '>> /home/ubuntu/tools/claude/cron.log 2>&1'
 officer:
-  day_window_start: "00:00"          # IST — counter window start / daily reset
-  day_window_end: "23:59"            # IST — counter window end (covers midnight jobs)
-  morning_briefing_time: "09:20"     # IST — morning briefing (post pre-flight)
-  eod_floor_time: "18:45"            # IST — earliest the EOD report fires
-  eod_gap_minutes: 5                 # fire +N min after the last expected job
-  # Telegram ban window (IN, until 23-Jun-2026 inclusive). While active, BOTH the
-  # morning briefing and EOD summary route to EMAIL (subject prefixed [LFL836-BAN]).
-  # Auto-clears after the date — no manual toggle.
-  telegram_ban_until: "2026-06-23"
+  day_window_start: 00:00
+  day_window_end: '23:59'
+  morning_briefing_time: 09:20
+  eod_floor_time: '18:45'
+  eod_gap_minutes: 5
+  telegram_ban_until: '2026-06-23'

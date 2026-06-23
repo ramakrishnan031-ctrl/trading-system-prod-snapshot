@@ -173,17 +173,224 @@ def selftest(crontab_text: str) -> int:
     return 0
 
 
+# ── Header for the generated canonical (preserves the FIX-189 / env-export docs) ──
+_CANON_HEADER = """\
+# Cron schedule for Trading System v2 — GENERATED ARTIFACT. DO NOT HAND-EDIT.
+# Source of truth: config/cron_registry.yaml. Regenerate with:
+#   python scripts/generate_crontab.py --generate > deploy/cron/trading-system.cron
+# A pre-receive guard rejects a hand-edited canonical; the daily drift-check
+# compares the live `crontab -l` against this (bidirectional).
+#
+# FIX-189: SHELL=/bin/bash forces bash (dash's `.` can't source a bare relative
+# path). Python jobs source .env via `set -a && . ./.env && set +a` so secrets
+# are EXPORTED into the child process (bare VAR=value otherwise stays shell-local).
+# Markers `; rc=$?; ... > cron_marks/<name>.done` let the Cron Officer read shell/
+# unmonitored jobs at EOD. All times IST (Asia/Kolkata).
+"""
+
+# ── Bootstrap (ONE-TIME migration: live crontab -> enriched registry) ────────
+_META_FIELDS = ("script", "schedule", "type", "critical", "market_day_only",
+                "cadence", "monitored", "weekday", "day_of_month", "category",
+                "heartbeat_required", "detection_method", "excluded_reason")
+_GEN_FIELDS = ("cron_expression", "command", "env_wrapper", "log_target", "marker_name")
+
+# non-marker commands whose job name != script basename
+_SPECIAL_NAME = {
+    "cron_officer.py --briefing": "cron_officer_briefing",
+    "cron_officer.py --eod-summary": "cron_officer_eod",
+    "system_manager.py": "system_manager_eod",
+    "generate_screened_stocks_csv.py": "generate_screened_csv",
+    "-m reports.daily_report": "daily_report",
+    "reports/daily_review.py": "daily_review",
+}
+
+
+def _script_basename(command: str) -> str:
+    toks = command.split()
+    if toks[0] == "-m":
+        return toks[1]
+    base = toks[0].rsplit("/", 1)[-1]
+    return base[:-3] if base.endswith(".py") else base
+
+
+def resolve_job_name(f: dict) -> str:
+    """Map a parsed live line to its registry job name (markers are authoritative)."""
+    cx, cmd, mk = f["cron_expression"], f["command"], f["marker_name"]
+    if f["env_wrapper"] == "claude_cd":
+        mn, hr = cx.split()[0], cx.split()[1]
+        return f"claude_heartbeat_{int(hr):02d}{int(mn):02d}"
+    if mk == "db_retention":
+        return "db_retention_vacuum" if "--vacuum" in cmd else "db_retention"
+    if mk:
+        return mk
+    for needle, name in _SPECIAL_NAME.items():
+        if needle in cmd:
+            return name
+    return _script_basename(cmd)
+
+
+def _human_sched(cron_expr: str) -> str:
+    mn, hr = cron_expr.split()[0], cron_expr.split()[1]
+    if mn.isdigit() and hr.isdigit():
+        return f"{int(hr):02d}:{int(mn):02d} daily"
+    return cron_expr
+
+
+def _index_by_name(text: str) -> dict:
+    out = {}
+    for line in _command_lines(text):
+        f = parse(line)
+        nm = resolve_job_name(f)
+        if nm in out:
+            raise SystemExit(f"STOP-AND-REPORT: duplicate resolved name {nm!r}: {line!r}")
+        out[nm] = f
+    return out
+
+
+def bootstrap(live_text: str, registry_path: Path, canonical_text: str):
+    """Build the enriched jobs dict from LIVE (+ existing metadata). STOP on any
+    registry job that has no live line (would be a drop) or unexpected live job."""
+    import yaml
+    existing = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    existing_jobs = existing.get("jobs", {})
+    officer = existing.get("officer", {})
+    live = _index_by_name(live_text)
+    canon = _index_by_name(canonical_text)
+
+    def merge(meta: dict, gen: dict, *, personal=False) -> dict:
+        job = {k: meta[k] for k in _META_FIELDS if meta.get(k) is not None}
+        job["enabled"] = True                      # reconciliation: declarative, no behaviour change
+        job["personal_tooling"] = bool(meta.get("personal_tooling", personal))
+        for k in _GEN_FIELDS:
+            if gen.get(k) is not None:
+                job[k] = gen[k]
+        return job
+
+    enriched, matched = {}, set()
+    for name, meta in existing_jobs.items():
+        if name == "db_retention":
+            for sub in ("db_retention", "db_retention_vacuum"):
+                if sub not in live:
+                    raise SystemExit(f"STOP-AND-REPORT: db_retention split — {sub} not in live")
+                enriched[sub] = merge(meta, live[sub]); matched.add(sub)
+        elif name == "sentinel_retention":          # registry-only (+1); enrich from canonical
+            if name not in canon:
+                raise SystemExit("STOP-AND-REPORT: sentinel_retention not in canonical")
+            enriched[name] = merge(meta, canon[name])
+        elif name in live:
+            enriched[name] = merge(meta, live[name]); matched.add(name)
+        else:
+            raise SystemExit(f"STOP-AND-REPORT: registry job {name!r} has no live line (drop risk)")
+
+    for name, f in live.items():                    # live-not-registry => must be claude only
+        if name in matched:
+            continue
+        if not name.startswith("claude_heartbeat_"):
+            raise SystemExit(f"STOP-AND-REPORT: unexpected live-not-registry job {name!r}")
+        enriched[name] = {
+            "script": f["command"], "schedule": _human_sched(f["cron_expression"]),
+            "type": "shell", "critical": False, "market_day_only": False,
+            "cadence": "daily", "monitored": False, "detection_method": "none",
+            "excluded_reason": "personal tooling heartbeat — no trading deliverable",
+            "enabled": True, "personal_tooling": True,
+            "cron_expression": f["cron_expression"], "command": f["command"],
+            "env_wrapper": f["env_wrapper"], "log_target": f["log_target"],
+        }
+    return enriched, officer
+
+
+def emit_registry_yaml(enriched: dict, officer: dict) -> str:
+    import yaml
+    body = yaml.safe_dump({"jobs": enriched, "officer": officer},
+                          sort_keys=False, default_flow_style=False, width=4096)
+    header = ("# Cron Job Registry — SINGLE EXECUTABLE SOURCE OF TRUTH (Phase 3).\n"
+              "# Read by core/cron_registry.py; generates deploy/cron/trading-system.cron\n"
+              "# via scripts/generate_crontab.py --generate. Edit jobs HERE, regenerate.\n"
+              "# Generation fields (cron_expression/command/env_wrapper/log_target/marker_name)\n"
+              "# are authoritative; `schedule` is documentation. enabled:false = not generated.\n\n")
+    return header + body
+
+
+def load_jobs(registry_path: Path) -> list[dict]:
+    import yaml
+    data = yaml.safe_load(registry_path.read_text(encoding="utf-8")) or {}
+    out = []
+    for name, job in (data.get("jobs") or {}).items():
+        j = dict(job); j["name"] = name
+        out.append(j)
+    return out
+
+
+def generate_canonical(jobs: list[dict]) -> str:
+    """Emit the canonical crontab text (enabled jobs only), deterministically."""
+    lines = [_CANON_HEADER, SHELL_LINE, ""]
+    for j in jobs:
+        if not j.get("enabled", True):
+            continue
+        lines.append(f"# {j['name']}  [{j.get('schedule','')}]")
+        lines.append(compose(j))
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def gate_check(jobs: list[dict], live_text: str) -> int:
+    """PROOF 1 (set-based): zero drops; the only addition is sentinel_retention."""
+    gen = {compose(j): j["name"] for j in jobs if j.get("enabled", True)}
+    live = set(_command_lines(live_text))
+    drops = live - set(gen)                          # live job NOT generated => DROP (forbidden)
+    adds = {ln: gen[ln] for ln in (set(gen) - live)} # generated, not yet live
+    ok = True
+    if drops:
+        ok = False
+        print(f"GATE FAIL — {len(drops)} DROP(S) (live job not generated):")
+        for d in sorted(drops):
+            print(f"  DROP: {d!r}")
+    unexpected = {ln: nm for ln, nm in adds.items() if nm != "sentinel_retention"}
+    if unexpected:
+        ok = False
+        print(f"GATE FAIL — {len(unexpected)} unexpected addition(s) (expected only sentinel_retention):")
+        for ln, nm in unexpected.items():
+            print(f"  ADD[{nm}]: {ln!r}")
+    if ok:
+        print(f"GATE PASS — zero drops; {len(adds)} reviewed addition(s): "
+              f"{sorted(adds.values())} (expected: ['sentinel_retention']).")
+        return 0
+    return 1
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Self-maintaining cron generator.")
     p.add_argument("--selftest", action="store_true")
-    p.add_argument("--crontab", type=Path, help="live crontab file (for selftest/bootstrap/check)")
+    p.add_argument("--bootstrap", action="store_true", help="live + registry -> enriched registry YAML (stdout)")
+    p.add_argument("--generate", action="store_true", help="enriched registry -> canonical crontab (stdout)")
+    p.add_argument("--gate", action="store_true", help="PROOF 1: generate(registry) vs live (zero drops, +sentinel)")
+    p.add_argument("--crontab", type=Path, help="live crontab file")
+    p.add_argument("--registry", type=Path, default=_ROOT / "config" / "cron_registry.yaml")
+    p.add_argument("--canonical", type=Path, default=_ROOT / "deploy" / "cron" / "trading-system.cron")
     args = p.parse_args(argv)
 
     if args.selftest:
         if not args.crontab or not args.crontab.exists():
-            print("--selftest needs --crontab FILE")
-            return 2
+            print("--selftest needs --crontab FILE"); return 2
         return selftest(args.crontab.read_text(encoding="utf-8"))
+
+    if args.bootstrap:
+        if not args.crontab or not args.crontab.exists():
+            print("--bootstrap needs --crontab FILE (the live crontab)"); return 2
+        enriched, officer = bootstrap(
+            args.crontab.read_text(encoding="utf-8"), args.registry,
+            args.canonical.read_text(encoding="utf-8"))
+        sys.stdout.write(emit_registry_yaml(enriched, officer))
+        return 0
+
+    if args.generate:
+        sys.stdout.write(generate_canonical(load_jobs(args.registry)))
+        return 0
+
+    if args.gate:
+        if not args.crontab or not args.crontab.exists():
+            print("--gate needs --crontab FILE (the live crontab)"); return 2
+        return gate_check(load_jobs(args.registry), args.crontab.read_text(encoding="utf-8"))
 
     p.print_help()
     return 2

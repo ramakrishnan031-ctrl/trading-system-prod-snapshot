@@ -51,6 +51,7 @@ _CADENCE_TO_CATEGORY = {
 # row (python jobs); exit_code_file = a marker the cron line writes ($? + ts);
 # log_marker = a success token grepped from a log; none = not verifiable.
 _VALID_DETECTION = ("heartbeat_db", "exit_code_file", "log_marker", "none")
+_VALID_ENV_WRAPPER = ("none", "python", "python_nopath", "claude_cd")
 
 
 def resolve_category(cadence: str, explicit: Optional[str] = None) -> str:
@@ -81,6 +82,14 @@ class CronJob(BaseModel):
     heartbeat_required: Optional[bool] = None # default = monitored
     detection_method: Optional[str] = None    # default derived from type/monitored
     excluded_reason: Optional[str] = None     # why a job is intentionally not monitored
+    # ── Phase 3: self-maintaining cron — executable source of truth ─────────────
+    enabled: bool = True                       # generated into canonical + drift-checked only if true
+    personal_tooling: bool = False             # contract-exempt; absence severity WARN (heartbeat, no artifact)
+    cron_expression: Optional[str] = None      # literal 5-field cron time (AUTHORITATIVE for generation)
+    command: Optional[str] = None              # core command after the env-wrapper prefix (byte-exact)
+    env_wrapper: Optional[str] = None          # none|python|python_nopath|claude_cd (the line prefix)
+    log_target: Optional[str] = None           # verbatim redirect ('>> logs/x.log 2>&1') or None
+    marker_name: Optional[str] = None          # writes cron_marks/<name>.done; None = no marker
 
     @field_validator("category")
     @classmethod
@@ -94,6 +103,13 @@ class CronJob(BaseModel):
     def _valid_detection(cls, v: Optional[str]) -> Optional[str]:
         if v is not None and v not in _VALID_DETECTION:
             raise ValueError(f"detection_method must be one of {_VALID_DETECTION}, got {v!r}")
+        return v
+
+    @field_validator("env_wrapper")
+    @classmethod
+    def _valid_env_wrapper(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in _VALID_ENV_WRAPPER:
+            raise ValueError(f"env_wrapper must be one of {_VALID_ENV_WRAPPER}, got {v!r}")
         return v
 
     @property
@@ -246,9 +262,13 @@ class CronRegistry:
 
     def last_due_time(self, d: date, config_dir: Path = Path("config")) -> Optional[time]:
         """Latest scheduled HH:MM among jobs due on `d`, EXCLUDING the EOD officer
-        itself (so the officer can fire after the last real job)."""
+        itself (so the officer can fire after the last real job) AND personal_tooling
+        jobs (Phase 3: a heartbeat is not a trading deliverable, so a late personal
+        job — e.g. a 20:33 Claude heartbeat — must NOT push back the trading EOD
+        report time). Sole caller: eod_report_time()."""
         times = [j.due_time for j in self.jobs_due_on(d, config_dir)
-                 if j.due_time is not None and j.name != "cron_officer_eod"]
+                 if j.due_time is not None and j.name != "cron_officer_eod"
+                 and not j.personal_tooling]
         return max(times) if times else None
 
     def eod_report_time(self, d: date, config_dir: Path = Path("config")) -> time:
