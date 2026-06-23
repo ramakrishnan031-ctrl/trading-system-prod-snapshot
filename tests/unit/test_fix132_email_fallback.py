@@ -8,9 +8,12 @@ FIX-132 Item 10: Email fallback for CRITICAL alerts when Telegram fails.
 """
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
 import sys
 import logging
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,13 +39,19 @@ class _EmailFallbackConfig:
     use_tls: bool = True
 
 
+# Throwaway temp dir so test runs never pollute the real data_store/ (sentinels)
+# or logs/ (failed-alerts log). Cleaned up at interpreter exit.
+_TEST_TMP = tempfile.mkdtemp(prefix="test_fix132_")
+atexit.register(lambda: shutil.rmtree(_TEST_TMP, ignore_errors=True))
+
+
 def _make_notifier(email_cfg=None, max_retries=1):
     """Create a notifier with mocked HTTP that always fails."""
     return TelegramNotifier(
         bot_token="test_token",
         chat_ids=["test_chat"],
-        failed_alerts_log_path="logs/test_failed.log",
-        sentinel_dir="data_store",
+        failed_alerts_log_path=str(Path(_TEST_TMP) / "test_failed.log"),
+        sentinel_dir=_TEST_TMP,
         logger=_log(),
         max_retries=max_retries,
         retry_backoff_seconds=0.01,
