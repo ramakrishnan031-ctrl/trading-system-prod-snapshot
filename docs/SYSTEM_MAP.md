@@ -1,5 +1,5 @@
 # SYSTEM MAP — Trading System v2
-# Last updated: 2026-06-23 by Claude Code (Opus) — FIX-191 false SOFT_KILL + WARN→CRITICAL halt alert + resume caps + ~/tools/
+# Last updated: 2026-06-23 by Claude Code (Opus) — Self-maintaining cron framework ARMED (registry→generate→canonical→post-receive auto-install + cron-watchdog 19:30; pre-receive DEFERRED) · FIX-191 false SOFT_KILL + ~/tools/
 # ⚠️ READ THIS BEFORE TOUCHING ANYTHING ⚠️
 
 This is the single authoritative path/ops reference. It complements (does not
@@ -75,6 +75,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 - Bare repo: `/home/ubuntu/trading-system.git/` with `hooks/post-receive`.
 - Hook does: `git --work-tree=/home/ubuntu/systems/trading-system --git-dir=… checkout -f <branch>`.
 - It does **NOT** restart the service. (See PC Paths → SCP Deployment Map.)
+- **Self-maintaining cron (ARMED 23-Jun):** `post-receive` (1336 B, from `deploy/hooks/post-receive`) now ALSO regenerates the crontab from the deployed `cron_registry.yaml` and **auto-installs** it *iff* `generate(registry) == deploy/cron/trading-system.cron` (else WARNs + skips — self-protecting). Replaced the old 329-B checkout-only hook. The **pre-receive** equality guard (`deploy/hooks/pre-receive`) is **DEFERRED — NOT installed** (deliberate, 23-Jun); `pre-commit` (`deploy/hooks/pre-commit`) is local-clone-only. See memory `cron_framework_armed_23jun` + Changelog 23-Jun.
 
 ### Config Files  (`config/`)
 | File | Purpose | Read by |
@@ -87,7 +88,7 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `scan_webhook_map.yaml` | Chartink scan → strategy mapping | `signals/webhook_receiver.py` |
 | `chartink_scanners.yaml` | Scanner definitions | screening/signals |
 | `nse_holidays_2026.yaml` | Trading-holiday calendar | `core/market_windows.py` |
-| `cron_registry.yaml` | **Cron job source of truth** (30 jobs; TASK #3) | `core/cron_registry.py` → `cron_officer`, `check_cron_drift` |
+| `cron_registry.yaml` | **Cron SINGLE EXECUTABLE source of truth** (~41 lines; TASK #3 + 23-Jun framework) → `scripts/generate_crontab.py --generate` emits `deploy/cron/trading-system.cron` (ASCII+LF, deterministic) | `core/cron_registry.py` → `cron_officer`, `check_cron_drift`; `scripts/generate_crontab.py` |
 | `symbol_aliases.yaml` | Symbol normalization | instrument resolution |
 | `accounts.csv` | Account registry (LFL836 primary, paper_capital, env-var names) | `core/account_registry.py` |
 | `accounts_multi_example.csv` | Template/example (NOT loaded) | — |
@@ -206,9 +207,9 @@ venvs hold the tools; run the scan `.bat`s **on demand** — no hooks, no automa
 
 ---
 
-## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron`, **re-synced 21-Jun via `crontab -l | diff`=0**; **source of truth: `config/cron_registry.yaml`** — TASK #3)
+## Cron Jobs  (live `crontab -l` == `deploy/cron/trading-system.cron` == `generate(registry)` — **verified four-way sha256 `1469f905…` 23-Jun; 41 command-lines**; **source of truth: `config/cron_registry.yaml`** — TASK #3 + 23-Jun framework. The table below is an illustrative summary — the canonical/registry are authoritative.)
 All market jobs run `cd … && set -a && . ./.env && set +a && PYTHONPATH=. venv/bin/python <script> >> logs/<log>`.
-To change cron: edit `config/cron_registry.yaml` → regenerate the file → `crontab deploy/cron/trading-system.cron`.
+To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.py --generate --out deploy/cron/trading-system.cron` → commit + push (the `post-receive` hook **auto-installs** on the VM; or manually `crontab deploy/cron/trading-system.cron`). `--gate` proves zero-drops (+ only `sentinel_retention`); `--selftest` proves byte round-trip.
 
 > ⚠️ **FIX-189 (2026-06-19) — cron MUST run under bash.** cron's default `/bin/sh`
 > is **dash**, whose `.` (source) builtin will NOT load a relative path without a
@@ -233,11 +234,12 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 01:00 | daily | sqlite3 `.backup` trading_system.db | nightly DB backup |
 | 01:05 | daily | sqlite3 `.backup` analytics.db | analytics DB backup (TASK #3) |
 | 02:00 | daily | `find backups -mtime +7 -delete` (both DBs) | backup retention |
+| 02:05 | daily | `find data_store -name 'critical_alert_*.delivered' -mtime +7 -delete` | **sentinel_retention** (DELIVERED alerts >7d, NEVER `.flag`; 23-Jun +1) |
 | 02:30 | daily | `db_retention.py` (Sun: `--vacuum`) | DB row prune (TASK #3) |
 | 09:20 | daily | `cron_officer.py --briefing` | Cron Officer morning briefing (was 04:55; live since 21-Jun reinstall) |
 | 05:00 | daily | `rm session/zerodha_token.json` | force fresh login |
 | 08:15 | Mon-Fri | `auto_refresh_token.py` | Headless TOTP token refresh (FIX-187; no manual OTP) |
-| 08:30 | Mon-Fri | `premarket_healthcheck.py` | preflight health |
+| 08:30 / 09:14 / 09:15 | Mon-Fri | `scripts.preflight.orchestrator --phase A/B/C` | Pre-flight readiness, 3 phases (replaced premarket_healthcheck) |
 | 08:35 | Mon-Fri | `fetch_fno_ban.py` | F&O ban list |
 | 08:55 | Mon-Fri | `gemini_premarket_brief.py` | AI premarket brief |
 | 09:00 | Mon-Fri | `refresh_instruments.py --account LFL836` | instrument master |
@@ -263,10 +265,11 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | 03:00 | 1st of month | `backup_restore_drill.py --quiet` | restore drill |
 | hourly | every | `disk_monitor.py` | disk space |
 
-> ✅ **Synced (TASK #3, 18-Jun):** the live crontab now equals `deploy/cron/trading-system.cron`,
-> which is generated from `config/cron_registry.yaml` (the source of truth). The Cron Officer
-> (`scripts/cron_officer.py --check-change`) flags any future drift. Old crontab backed up to
-> `data_store/crontab_backups/`.
+> ✅ **Self-maintaining (23-Jun framework):** live `crontab -l` == canonical == `generate(registry)`
+> (four-way sha256 `1469f905…`, 41 command-lines). `scripts/generate_crontab.py` is the deterministic
+> generator; `scripts/check_cron_drift.py` (18:00) is the bidirectional content-pass drift check; the
+> **post-receive** hook auto-installs on every push (the **pre-receive** equality guard is DEFERRED).
+> Crontab backups at `~/tools/claude/crontab.backup.*` (+ legacy `data_store/crontab_backups/`).
 
 ## Systemd Services  (`/etc/systemd/system/`)
 | Service | ExecStart | Purpose | Notes |
@@ -276,6 +279,7 @@ To change cron: edit `config/cron_registry.yaml` → regenerate the file → `cr
 | `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
 | `security-watcher.service` | `python scripts/security_monitor.py --watch` | **VM Security Manager Phase 1+2** — auth.log + file-integrity monitor (9 checks incl. Phase-2 copy-switch + copy-bypass), [LFL836] alerts | **enabled+active (19-Jun)**. `Type=simple`+`Restart=always`+`RestartSec=60` → periodic (~60s); model = alert-watcher. Reads `/var/log/auth.log` (ubuntu ∈ `adm`). Config `config/security.yaml` (standalone — NOT system_config.yaml, which is `extra="forbid"`). State `data_store/security_state.json`. Alert-ONLY (never blocks). |
+| `cron-watchdog.timer`→`.service` | `venv/bin/python scripts/cron_watchdog.py` (oneshot) | **Tier-2 watch-the-watcher (ARMED 23-Jun)** — asserts `cron_officer_eod` + `check_cron_drift` both heartbeated today, else a CRITICAL sentinel via the **cron-INDEPENDENT** path (alert-watcher emails) | systemd (NOT cron) so it can't fail the way a dead crond / broken shared-env cron would. Fires **19:30 IST daily** (`Persistent=true`); first run **Wed 24-Jun 19:30**. `enabled`+`active`. From `deploy/systemd/cron-watchdog.{service,timer}`. |
 
 > **VM security tooling (Phase 1, 19-Jun)** — also installed at OS level (NOT via git):
 > **fail2ban** (`/etc/fail2ban/jail.local` from `deploy/security/jail.local`; sshd jail, `ignoreself`,
@@ -390,6 +394,8 @@ instantly-marketable order. (NOCIL 22-Jun: a LONG TGT recalc'd to 197.12 was cla
 - **Parity:** all shared entry/exit code, no mode branch → Paper + Live together. **No schema change.**
 
 ## Changelog
+- 2026-06-23 — Claude Code (Opus) — **Self-maintaining cron framework ARMED (registry = executable source of truth → auto-install + watchdog; pre-receive DEFERRED).**
+  Armed the BUILD 1–6 framework (commits →`600e345`, pushed; VM bare HEAD `79c70e8` after the step-4 test commit). `config/cron_registry.yaml` is the **single executable source of truth**; `scripts/generate_crontab.py --generate` deterministically emits `deploy/cron/trading-system.cron` (ASCII+LF; fixed VM-path constants, no host lookup → identical output anywhere). **Equality model:** live `crontab -l` == canonical == `generate(registry)` — verified **four-way sha256 `1469f905…b9a23`** (PC committed / PC generated / VM deployed / VM live); **41 command-lines** (40 + new `sentinel_retention` 02:05). **Pre-arm gates G1–G4 all green** (G1 `--gate` zero-drops + only-`sentinel_retention`; G2 canonical==generate; G3 hooks/watchdog exec + valid shebangs; G4 canonical ASCII+LF), re-proven **natively on the VM** at push/reconcile. **ARMED:** **post-receive** (`~/trading-system.git/hooks/post-receive`, 1336 B) regenerates from the deployed registry + auto-installs the crontab *iff* `generate==canonical` (else WARN + skip — self-protecting); replaced the old 329-B checkout-only hook; proven by empty push `79c70e8` → zero drift. **cron-watchdog** systemd timer (`/etc/systemd/system/cron-watchdog.{service,timer}`) fires **19:30 IST daily** (`Persistent=true`), asserts `cron_officer_eod` + `check_cron_drift` both heartbeated today → CRITICAL sentinel via the **cron-INDEPENDENT** path if missing; **first run Wed 24-Jun 19:30**. **DEFERRED by choice (NOT installed):** **pre-receive** equality guard (`deploy/hooks/pre-receive`) — would hard-reject a push whose canonical != `generate(registry)` (+ blast-radius bound; override `[cron-canonical-override]`); arm later via dry-run (`CRON_GUARD_DRYRUN=1` injected into the *installed* copy) → enforce; break-glass `rm` the hook. Until armed, post-receive still keeps a bad canonical off the live crontab — it just won't reject the push. **pre-commit** (`deploy/hooks/pre-commit`) = local-clone-only. NB today's `check_cron_drift` heartbeat is absent (today's 18:00 ran on pre-deploy code; the deployed `check_cron_drift.py:197-198` self-heartbeats) — benign, self-corrects 24-Jun; do NOT manually trigger the watchdog today. See memory `cron_framework_armed_23jun`.
 - 2026-06-23 — Claude Code (Opus) — **Sentinel retention cron + test-pollution root-cause fix.**
   `data_store/critical_alert_*` had no retention (slow unbounded growth). Added daily **sentinel_retention**
   (02:05): `find data_store -maxdepth 1 -name 'critical_alert_*.delivered' -mtime +7 -delete` — deletes

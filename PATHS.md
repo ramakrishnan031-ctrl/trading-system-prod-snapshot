@@ -21,7 +21,7 @@
 | Alert sentinels + retention | `data_store/critical_alert_*.flag`→`.delivered` (alert-watcher). `sentinel_retention` cron (02:05 daily) deletes `.delivered` >7d, **NEVER** `.flag`; no archive (email is the record). Tests must NOT use `sentinel_dir="data_store"` |
 | Cron audit | `data_store/cron_audit/` (Phase-1 findings + daily `job_list_<date>.json` snapshots) |
 | Bare repo (deploy target) | `/home/ubuntu/trading-system.git/` (post-receive checks out tree) |
-| Canonical cron | `deploy/cron/trading-system.cron` (live crontab == file since 21-Jun reinstall; `diff`=0) |
+| Canonical cron | `deploy/cron/trading-system.cron` = `generate(cron_registry.yaml)` via `scripts/generate_crontab.py` (ASCII+LF). live==canonical==generate (4-way sha256 `1469f905…`, 41 lines, 23-Jun); post-receive auto-installs on push |
 | Agent CLIs (outside project) | `~/tools/antigravity/agy` (Antigravity/`agy` — drives `gemini_*.py` AI-ops crons) · `~/tools/gemini/` (Gemini CLI, node) · `~/tools/claude/` (Claude Code; 4×/day heartbeat → `cron.log`). ✅ heartbeat now `cd`s into `~/tools/claude/` → governed by `AGENTS.md` + `.claude/settings.json` (no .py/DB/systemctl; verified 23-Jun). Live-crontab only (not in canonical cron) — see SYSTEM_MAP |
 
 ## Run a command on the VM
@@ -33,7 +33,8 @@ Raw DB reads: use `core.db_connect.connect` (sets up the v28 ATTACH).
 
 ## Services (`systemctl`)
 `trading-system.service` (main, `main.py --mode live`) · `token-watcher.service` ·
-`alert-watcher.service` · `trading-watchman.service`
+`alert-watcher.service` · `trading-watchman.service` · `security-watcher.service` ·
+`cron-watchdog.timer` (19:30 daily watch-the-watcher, ARMED 23-Jun)
 
 ## PC (developer machine)
 | What | Path / value |
@@ -87,3 +88,16 @@ Bandit reports all severities — add `-ll` for medium+. **Do not** touch the tw
 `data_store/cron_marks/preflight_phase_{a,b,c}.done`. Run: `python -m scripts.preflight.orchestrator
 --phase A|B|C [--dry-run --as-of-date YYYY-MM-DD]`. Schema v33 (preflight_runs / preflight_check_results
 / preflight_autofix_log). Cron Officer briefing embeds its sentinel banner. (Replaced premarket_healthcheck.)
+
+## Self-maintaining cron (registry → canonical → auto-install, ARMED 23-Jun)
+| What | Path / fact |
+|---|---|
+| Source of truth | `config/cron_registry.yaml` (executable) |
+| Generator | `scripts/generate_crontab.py --generate [--out FILE]` → `deploy/cron/trading-system.cron` (ASCII+LF, deterministic). Also `--gate` (zero-drops proof), `--selftest` (byte round-trip), `--bootstrap`, `--check` |
+| Equality | live `crontab -l` == canonical == `generate(registry)` (4-way sha256 `1469f905…`, 41 lines) |
+| **post-receive** (ARMED) | `~/trading-system.git/hooks/post-receive` (from `deploy/hooks/post-receive`) — auto-installs the crontab on every push **iff** `generate==canonical`, else WARN+skip |
+| **pre-receive** (DEFERRED) | `deploy/hooks/pre-receive` — **NOT installed** (by choice 23-Jun); would hard-reject a push whose canonical != generate. Arm: install + inject `CRON_GUARD_DRYRUN=1` (dry-run) → clear to enforce. Break-glass: `rm` the hook |
+| pre-commit (optional) | `deploy/hooks/pre-commit` — local clones only |
+| **cron-watchdog** (ARMED) | `/etc/systemd/system/cron-watchdog.{service,timer}` — systemd (NOT cron); **19:30 IST daily**; asserts `cron_officer_eod`+`check_cron_drift` heartbeated → CRITICAL sentinel (cron-independent) if not. 1st run 24-Jun |
+
+Detail: `docs/SYSTEM_MAP.md` (Deploy + Cron Jobs + Systemd) · memory `cron_framework_armed_23jun`.

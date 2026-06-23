@@ -1,6 +1,6 @@
 # Disaster Recovery Runbook
 
-**Last Updated:** 2026-06-02  
+**Last Updated:** 2026-06-23 (§5 recoverable set: self-maintaining cron framework — registry/canonical/hooks/watchdog)  
 **Owner:** Trading System Operations
 
 ## Overview
@@ -180,7 +180,26 @@ If VM is lost and needs complete rebuild:
 5. Install packages: `pip install -r requirements.txt`
 6. Restore DB from off-site backup (if available)
 7. Configure systemd service
-8. Configure crontab from `deploy/cron/trading-system.cron` (includes the governed `~/tools/claude` heartbeat lines)
+8. **Cron — self-maintaining framework (recoverable set; all git-tracked under `deploy/` + `config/`):**
+   ```bash
+   cd ~/systems/trading-system
+   # a) regenerate the canonical from the source-of-truth registry, then install it:
+   PYTHONPATH=. ~/systems/venv/bin/python scripts/generate_crontab.py --generate --out deploy/cron/trading-system.cron
+   crontab deploy/cron/trading-system.cron            # live == generate(config/cron_registry.yaml)
+   crontab -l > /tmp/live.cron
+   PYTHONPATH=. ~/systems/venv/bin/python scripts/generate_crontab.py --gate --crontab /tmp/live.cron   # expect GATE PASS (zero drops)
+   # b) arm the post-receive auto-install hook (regenerates + installs the crontab on every push):
+   cp deploy/hooks/post-receive ~/trading-system.git/hooks/post-receive && chmod +x ~/trading-system.git/hooks/post-receive
+   # c) DEFERRED (optional): the pre-receive equality guard is intentionally NOT installed — arm later
+   #    via dry-run (CRON_GUARD_DRYRUN=1 in the installed copy) → enforce. Break-glass: rm the hook.
+   # d) install the cron-watchdog (systemd, NOT cron — watch-the-watcher, fires 19:30 IST):
+   sudo cp deploy/systemd/cron-watchdog.service deploy/systemd/cron-watchdog.timer /etc/systemd/system/
+   sudo systemctl daemon-reload && sudo systemctl enable --now cron-watchdog.timer
+   ```
+   Source of truth = `config/cron_registry.yaml`; the canonical, the three `deploy/hooks/*`, and the
+   `deploy/systemd/cron-watchdog.*` units are all git-tracked and re-installable. NB the 4 `~/tools/claude`
+   heartbeat lines live in the **live crontab only** (not the canonical) — re-add them if you want them
+   permanent (see SYSTEM_MAP → Agent CLIs). Detail: memory `cron_framework_armed_23jun`.
 9. Restore agent-tooling guardrails (keeps the Claude heartbeat cron governed — no `.py`/DB/systemctl):
    ```bash
    mkdir -p ~/tools/claude/.claude
