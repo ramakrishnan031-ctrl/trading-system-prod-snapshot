@@ -83,19 +83,57 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+# Restart-aware review window (23-Jun): scope the EOD review to the CURRENTLY-
+# running process so stale pre-restart errors don't surface as "current" (the
+# tgt_retry false alarm) and a heavy-error morning can't consume the line cap
+# before the post-restart window (the window that matters) is ever reviewed.
+_LEVEL_RE = re.compile(r"\b(WARNING|ERROR|CRITICAL)\b")
+_TS_RE = re.compile(r'"ts":"([^"]+)"')
+# main.py:1388 logs this once per process start: 'Trading System v<ver> starting (mode=...)'.
+_START_RE = re.compile(r'"msg":"Trading System v[0-9.]+ starting \(mode=')
+
+
+def _process_start_ts(log_path: Path) -> str | None:
+    """Return the "ts" of the LAST app-start marker line (restart-aware cutoff),
+    or None when absent — in which case the caller reviews the whole file. The
+    LAST marker wins, so a same-day restart scopes to the currently-running run."""
+    if not log_path.exists():
+        return None
+    start_ts: str | None = None
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if _START_RE.search(line):
+                    m = _TS_RE.search(line)
+                    if m:
+                        start_ts = m.group(1)
+    except OSError:
+        return None
+    return start_ts
+
+
 def _extract_warning_plus(log_path: Path, max_lines: int = 500) -> str:
-    """Extract WARNING/ERROR/CRITICAL lines from a log file."""
+    """Extract WARNING/ERROR/CRITICAL lines, RESTART-AWARE: only lines at/after the
+    running process's start (the last startup marker). Stale pre-restart errors are
+    skipped and the cap now covers the post-restart window. Whole-file fallback when
+    no marker is found. Lexicographic ts compare is valid (uniform +05:30, zero-
+    padded ISO8601); a line with no parseable ts is INCLUDED (conservative)."""
     if not log_path.exists():
         return ""
-    pattern = re.compile(r"\b(WARNING|ERROR|CRITICAL)\b")
+    start_ts = _process_start_ts(log_path)
     lines = []
     try:
         with open(log_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
-                if pattern.search(line):
-                    lines.append(line.rstrip())
-                    if len(lines) >= max_lines:
-                        break
+                if not _LEVEL_RE.search(line):
+                    continue
+                if start_ts is not None:
+                    m = _TS_RE.search(line)
+                    if m and m.group(1) < start_ts:
+                        continue                       # pre-restart -> skip
+                lines.append(line.rstrip())
+                if len(lines) >= max_lines:
+                    break
     except OSError:
         return ""
     return "\n".join(lines)
@@ -174,6 +212,7 @@ def run_review(
 
     review_text = _call_gemini_cli(_EOD_PROMPT, data, log)
     if review_text is None:
+        _emit_review_failure_alert(date_iso, output_dir, log)
         return 1
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -216,6 +255,49 @@ def _send_telegram_summary(review_text: str, date_iso: str, log) -> None:
         )
     except Exception as exc:
         log.debug("gemini_log_review: Telegram send failed: %s", exc)
+
+
+def _emit_review_failure_alert(date_iso: str, output_dir: Path, log) -> None:
+    """Full-failure-only (all cascade models exhausted): make a dead review LOUD.
+    Writes a CRITICAL sentinel (the systemd alert-watcher emails it — Telegram-
+    independent, same path cron_watchdog uses) + a best-effort Telegram WARN, and a
+    'REVIEW FAILED' report stub so the absent-report signal is explicit. A
+    degraded-but-completed review (non-None) never reaches here -> stays low-noise."""
+    try:
+        from alerts.critical import write_critical_sentinel
+        write_critical_sentinel(
+            title=f"[LFL836] gemini_log_review FAILED -- no AI EOD review for {date_iso}",
+            body=("All Gemini cascade models were exhausted (quota/timeout); the EOD "
+                  "log review did not run. Investigate agy quota / connectivity. "
+                  "Trading is unaffected (monitoring tooling only)."),
+            source_module="gemini_log_review",
+            sentinel_dir=_ROOT / "data_store",
+            context={"severity": "CRITICAL", "date": date_iso},
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.error("gemini_log_review: failed to write failure sentinel: %s", exc)
+    try:
+        from alerts.telegram_notifier import TelegramNotifier
+        notifier = TelegramNotifier.from_env(logger=log)
+        if notifier:
+            notifier.send(
+                severity="WARN",
+                title=f"gemini_log_review FAILED {date_iso}",
+                body="All Gemini models exhausted; no AI EOD review. See email sentinel.",
+                source_module="gemini_log_review",
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"eod_review_{date_iso}.md").write_text(
+            f"# EOD Review -- {date_iso}\n\n"
+            f"**REVIEW FAILED** -- all Gemini cascade models exhausted (quota/timeout). "
+            f"A CRITICAL sentinel was written. Trading unaffected.\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
 
 def main(argv=None) -> int:
