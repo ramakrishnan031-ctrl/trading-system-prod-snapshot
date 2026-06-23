@@ -65,6 +65,8 @@ ssh trading-vm 'sudo systemctl restart trading-system.service'
 
 Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
 
+**Tick-size snap (single chokepoint, fail-safe 23-Jun):** every broker submission is tick-snapped at `broker/zerodha_adapter.py` → `_snap_order_to_tick` / `_resolve_tick` (fallback `DEFAULT_TICK` 0.05 + throttled WARN on a missing `tick_size`; covers `place_order` **and** `modify_order`, parity). `orders/order_placer._round_to_tick` was **removed** — the adapter is the sole snap point. Tests: `tests/unit/test_tick_failsafe_snap.py`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|
