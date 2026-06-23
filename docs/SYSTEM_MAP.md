@@ -61,12 +61,15 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 | `~/tools/gemini/` | Node-based **Gemini CLI** (package.json + node_modules: @google, keytar, node-pty). | secondary AI tooling |
 | `~/tools/claude/` | **Claude Code CLI** dir. `cron.log` = output of the 4×/day heartbeat (`/usr/bin/claude -p "random 8-char string"` @ 05:30/10:31/15:32/20:33). | claude heartbeat cron |
 
-> ⚠️ **The claude heartbeat cron is NOT under `AGENTS.md` guardrails** (confirmed 23-Jun): it runs
-> `/usr/bin/claude -p` with **no `cd`** (CWD `/home/ubuntu`), and the only `AGENTS.md` files live under
-> `~/systems/trading-system/` (a different tree). No `AGENTS.md`/`CLAUDE.md`/`settings.json` exists at `~` or
-> `~/.claude/`. It is a harmless no-op (random string) today, but **ungoverned** (default tool/permission
-> access). To bring it under guardrails: `cd` the cron into a dir holding an `AGENTS.md` + `.claude/settings.json`,
-> or pass `--permission-mode`/`--allowed-tools` on the cron command.
+> ✅ **The claude heartbeat cron is GOVERNED** (23-Jun): the 4 cron lines now `cd /home/ubuntu/tools/claude`
+> first, loading `~/tools/claude/AGENTS.md` (charter) + `~/tools/claude/.claude/settings.json` (hard
+> `permissions.deny`: `Write/Edit(**/*.py)`, `Read/Write/Edit(**/*.db)` + `Bash(sqlite3:*)`,
+> `Bash(systemctl|sudo|service:*)`, `Write/Edit(~/systems/**)`, read of the trading `.env`, `git push`).
+> Mirrors AGY's prohibitions (no `.py` writes, no DB, no systemctl). **Verified 23-Jun:** heartbeat still
+> works; a `.py` write AND a `.db` read were both blocked (the `.db`-read block — normally default-allowed —
+> proves `settings.json` is loaded). Guardrail files are **VM-local** (outside the repo); crontab backup at
+> `~/tools/claude/crontab.backup.*`. ⚠️ These 4 heartbeat lines live in the **live crontab only** — NOT in
+> `deploy/cron/trading-system.cron`; a future canonical crontab reinstall would drop them (reconcile if you want them permanent).
 
 ### Deploy (git push, NOT scp)
 - Bare repo: `/home/ubuntu/trading-system.git/` with `hooks/post-receive`.
