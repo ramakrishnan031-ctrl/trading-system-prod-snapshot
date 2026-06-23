@@ -71,6 +71,15 @@ jobs:
     cadence: daily
     monitored: false
 
+  sentinel_retention:
+    script: "find data_store critical_alert_*.delivered -mtime +7 -delete (never *.flag)"
+    schedule: "02:05 daily"
+    type: shell
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: false
+
   # NOTE: present in canonical deploy/cron but MISSING from the live crontab.
   # PRUNES DB ROWS (Sun run adds --vacuum) — activation is a deliberate decision.
   db_retention:

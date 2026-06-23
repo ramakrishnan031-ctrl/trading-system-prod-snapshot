@@ -55,6 +55,9 @@ SHELL=/bin/bash
 # ── 02:00 IST daily | 7-day rolling cleanup of backups (main + analytics) ────
 0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/backup_retention.done
 
+# ── 02:05 IST daily | sentinel retention (delete DELIVERED alerts >7d; NEVER *.flag) ─
+5 2 * * * find /home/ubuntu/systems/trading-system/data_store -maxdepth 1 -name "critical_alert_*.delivered" -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-sentinel-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/sentinel_retention.done
+
 # ── 02:30 IST | DB row retention (Mon-Sat prune; Sun prune + VACUUM) ─────────
 30 2 * * 1-6 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py >> logs/cron-db-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/db_retention.done
 30 2 * * 0 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/db_retention.py --vacuum >> logs/cron-db-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/db_retention.done

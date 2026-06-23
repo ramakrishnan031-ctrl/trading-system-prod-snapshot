@@ -18,6 +18,7 @@
 | Accounts | `config/accounts.csv` (primary: LFL836) |
 | Reports | `reports/{daily,daily_review,flow_trace,system_manager,cron_officer,...}/` |
 | Cron-job markers | `data_store/cron_marks/<job>.done` (exit-code markers the Officer reads) |
+| Alert sentinels + retention | `data_store/critical_alert_*.flag`→`.delivered` (alert-watcher). `sentinel_retention` cron (02:05 daily) deletes `.delivered` >7d, **NEVER** `.flag`; no archive (email is the record). Tests must NOT use `sentinel_dir="data_store"` |
 | Cron audit | `data_store/cron_audit/` (Phase-1 findings + daily `job_list_<date>.json` snapshots) |
 | Bare repo (deploy target) | `/home/ubuntu/trading-system.git/` (post-receive checks out tree) |
 | Canonical cron | `deploy/cron/trading-system.cron` (live crontab == file since 21-Jun reinstall; `diff`=0) |

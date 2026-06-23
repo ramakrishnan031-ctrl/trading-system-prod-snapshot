@@ -137,9 +137,12 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 - `data_store/candles/` — candle artifacts.
 - `data_store/critical_alert_*.flag` — CRITICAL sentinels written by `alerts/critical.py`,
   consumed by `alert-watcher.service` (VM) → renamed to `.delivered`. **Local-only/gitignored**
-  (`data_store/` is ignored), so the PC accumulates them whenever the system/tests run there with
-  no watcher — periodically `rm data_store/critical_alert_*.flag` on the PC (VM stays clean via the
-  watcher). VM clean as of 19-Jun (0 `.flag`); PC's 445 stale (mostly test) flags removed 19-Jun.
+  (`data_store/` is ignored). **Retention (23-Jun):** the `sentinel_retention` cron (02:05 daily)
+  deletes `critical_alert_*.delivered` older than 7 days and **NEVER** touches `*.flag` (pending) —
+  email is the authoritative record, so there is no archive. The PC dev tree has no watcher, so test
+  runs that write real sentinels accumulate `.flag` there; **root-caused 23-Jun** by pointing
+  `test_fix132_email_fallback.py`'s `sentinel_dir` at a tmp dir (was `"data_store"`). VM stays clean
+  (0 `.flag`, watcher healthy); PC's 42 test flags removed 23-Jun (445 earlier on 19-Jun).
 
 ### Logs  (`logs/`)
 Daily-dated files: `system_YYYY-MM-DD.log`, `debug_*.log`, `reconciler_*.log`, `trades_*.log`,
@@ -387,6 +390,19 @@ instantly-marketable order. (NOCIL 22-Jun: a LONG TGT recalc'd to 197.12 was cla
 - **Parity:** all shared entry/exit code, no mode branch → Paper + Live together. **No schema change.**
 
 ## Changelog
+- 2026-06-23 — Claude Code (Opus) — **Sentinel retention cron + test-pollution root-cause fix.**
+  `data_store/critical_alert_*` had no retention (slow unbounded growth). Added daily **sentinel_retention**
+  (02:05): `find data_store -maxdepth 1 -name 'critical_alert_*.delivered' -mtime +7 -delete` — deletes
+  DELIVERED alerts >7d, **NEVER** `*.flag`; marker `cron_marks/sentinel_retention.done`; registered in
+  `cron_registry.yaml` + canonical `deploy/cron/trading-system.cron` (mirrors `backup_retention`). Email is
+  the authoritative record, so `.delivered` are just local processed-markers (no archive). **Assessment
+  (23-Jun, VM clock confirmed 23-Jun, NTP-synced):** VM = 61 `.delivered` (104 KB, 18–23 Jun), **0 `.flag`**
+  (alert-watcher healthy → no delivery bug); PC dev tree = 42 `.flag` = test-suite artifacts
+  (`test_fix132_email_fallback.py` wrote real sentinels via `sentinel_dir="data_store"`), deleted (gitignored
+  noise). **Root cause fixed:** `test_fix132` now uses a throwaway tmp dir for `sentinel_dir` +
+  `failed_alerts_log_path` (7/7 green, 0 sentinels written to `data_store/`). `data_store/` gitignored (0
+  tracked sentinels). Two commits (cron / test fix). NOT pushed — cron activates on next push +
+  `crontab deploy/cron/trading-system.cron`. (VM one-time archive skipped — all <7d; cron ages them out.)
 - 2026-06-23 — Claude Code (Opus) — **FIX-191: API-failure breaker is connectivity-only (false SOFT_KILL halt) + halt alert WARN→CRITICAL + resume caps + Telegram restored.**
   **Incident (live):** at 10:07 a SOFT_KILL auto-tripped on "3 consecutive API failures" and `webhook_receiver`
   403'd EVERY signal for ~2h (150 webhooks/hr, **0 accepted**) — yet the broker was fine. Root cause: the
