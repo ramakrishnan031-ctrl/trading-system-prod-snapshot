@@ -1,6 +1,6 @@
-# Cron schedule for Trading System v2 — GENERATED ARTIFACT. DO NOT HAND-EDIT.
+# Cron schedule for Trading System v2 - GENERATED ARTIFACT. DO NOT HAND-EDIT.
 # Source of truth: config/cron_registry.yaml. Regenerate with:
-#   python scripts/generate_crontab.py --generate > deploy/cron/trading-system.cron
+#   python scripts/generate_crontab.py --generate --out deploy/cron/trading-system.cron
 # A pre-receive guard rejects a hand-edited canonical; the daily drift-check
 # compares the live `crontab -l` against this (bidirectional).
 #

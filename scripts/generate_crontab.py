@@ -175,9 +175,9 @@ def selftest(crontab_text: str) -> int:
 
 # ── Header for the generated canonical (preserves the FIX-189 / env-export docs) ──
 _CANON_HEADER = """\
-# Cron schedule for Trading System v2 — GENERATED ARTIFACT. DO NOT HAND-EDIT.
+# Cron schedule for Trading System v2 - GENERATED ARTIFACT. DO NOT HAND-EDIT.
 # Source of truth: config/cron_registry.yaml. Regenerate with:
-#   python scripts/generate_crontab.py --generate > deploy/cron/trading-system.cron
+#   python scripts/generate_crontab.py --generate --out deploy/cron/trading-system.cron
 # A pre-receive guard rejects a hand-edited canonical; the daily drift-check
 # compares the live `crontab -l` against this (bidirectional).
 #
@@ -364,6 +364,7 @@ def main(argv=None) -> int:
     p.add_argument("--bootstrap", action="store_true", help="live + registry -> enriched registry YAML (stdout)")
     p.add_argument("--generate", action="store_true", help="enriched registry -> canonical crontab (stdout)")
     p.add_argument("--gate", action="store_true", help="PROOF 1: generate(registry) vs live (zero drops, +sentinel)")
+    p.add_argument("--out", type=Path, default=None, help="with --generate: write canonical to FILE as ASCII+LF (else stdout)")
     p.add_argument("--crontab", type=Path, help="live crontab file")
     p.add_argument("--registry", type=Path, default=_ROOT / "config" / "cron_registry.yaml")
     p.add_argument("--canonical", type=Path, default=_ROOT / "deploy" / "cron" / "trading-system.cron")
@@ -384,7 +385,14 @@ def main(argv=None) -> int:
         return 0
 
     if args.generate:
-        sys.stdout.write(generate_canonical(load_jobs(args.registry)))
+        text = generate_canonical(load_jobs(args.registry))
+        if args.out:
+            # deterministic LF + ASCII (no platform/encoding variance) so the
+            # pre-receive byte-equality guard holds cross-platform. .encode("ascii")
+            # enforces the ASCII invariant (raises if a job ever introduces non-ASCII).
+            args.out.write_bytes(text.encode("ascii"))
+        else:
+            sys.stdout.write(text)
         return 0
 
     if args.gate:

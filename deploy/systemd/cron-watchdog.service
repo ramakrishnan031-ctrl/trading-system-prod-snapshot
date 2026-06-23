@@ -1,0 +1,15 @@
+# deploy/systemd/cron-watchdog.service — Tier-2 watch-the-watcher (Phase 3).
+# NOT installed by default. Install (one-time, privileged):
+#   sudo cp deploy/systemd/cron-watchdog.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now cron-watchdog.timer
+# Runs under systemd (NOT cron) so it cannot fail the same way as the cron jobs
+# it watches. Alerts via a CRITICAL sentinel (alert-watcher emails it).
+[Unit]
+Description=Cron Watchdog (Trading System) — assert cron_officer_eod + check_cron_drift ran today
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/systems/trading-system
+ExecStart=/home/ubuntu/systems/venv/bin/python scripts/cron_watchdog.py

@@ -1,0 +1,26 @@
+#!/bin/bash
+# deploy/hooks/post-receive — Phase 3 Option A (AUTO-INSTALL the crontab).
+# *** NOT the currently-installed hook *** (the live one is checkout-only).
+# Arm by: cp deploy/hooks/post-receive ~/trading-system.git/hooks/post-receive
+# Precondition for arming: live == generate(registry) already reconciled (incl.
+# sentinel_retention installed to live), so the first auto-install is a no-op.
+# A crontab swap does NOT disrupt in-flight jobs (only future triggers).
+TARGET=/home/ubuntu/systems/trading-system
+GIT_DIR=/home/ubuntu/trading-system.git
+BRANCH=main
+VENV_PY=/home/ubuntu/systems/venv/bin/python
+
+while read -r oldrev newrev ref; do
+  if [ "$ref" = "refs/heads/$BRANCH" ]; then
+    echo "Deploying $BRANCH to $TARGET..."
+    git --work-tree="$TARGET" --git-dir="$GIT_DIR" checkout -f "$BRANCH"
+    cd "$TARGET" || exit 1
+    # belt-and-suspenders: regen from the DEPLOYED registry, verify == deployed canonical
+    if "$VENV_PY" scripts/generate_crontab.py --generate | diff -q - deploy/cron/trading-system.cron >/dev/null 2>&1; then
+      crontab deploy/cron/trading-system.cron && echo "post-receive: crontab AUTO-INSTALLED from canonical."
+    else
+      echo "post-receive: WARNING canonical != generate(registry) on the deployed tree — crontab NOT installed."
+    fi
+    echo "Deployment complete."
+  fi
+done

@@ -1,0 +1,13 @@
+# deploy/systemd/cron-watchdog.timer — fires the watchdog daily at 19:30 IST
+# (after cron_officer_eod 18:50 + check_cron_drift 18:00). OnCalendar uses the
+# system timezone (the VM is Asia/Kolkata). Persistent=true catches a missed run
+# after downtime. Install: see cron-watchdog.service header.
+[Unit]
+Description=Run cron-watchdog daily at 19:30 IST
+
+[Timer]
+OnCalendar=*-*-* 19:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

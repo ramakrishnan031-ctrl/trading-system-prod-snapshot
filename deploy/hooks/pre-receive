@@ -1,0 +1,58 @@
+#!/bin/bash
+# deploy/hooks/pre-receive — Phase 3 cron integrity guard.
+# *** NOT INSTALLED by default. *** Arm by:
+#     cp deploy/hooks/pre-receive ~/trading-system.git/hooks/pre-receive
+#     chmod +x ~/trading-system.git/hooks/pre-receive
+# Arm in DRY-RUN first (CRON_GUARD_DRYRUN=1 in the hook env) — log-only — then
+# switch to enforcing once real pushes confirm zero false-rejects.
+# BREAK-GLASS (restore deploys instantly):  rm ~/trading-system.git/hooks/pre-receive
+#
+# Rejects a push whose committed canonical != generate(committed registry), so a
+# hand-edited deploy/cron/trading-system.cron (drift) is UN-PUSHABLE. Plus a
+# blast-radius bound (mass canonical change => likely generator bug). Override a
+# legitimate large change with [cron-canonical-override] in the head commit msg.
+set -u
+VENV_PY="${VENV_PY:-/home/ubuntu/systems/venv/bin/python}"
+BRANCH="refs/heads/main"
+BLAST_PCT="${CRON_BLAST_PCT:-40}"
+DRYRUN="${CRON_GUARD_DRYRUN:-0}"
+
+reject() {  # honour dry-run: log what WOULD be rejected, but allow the push
+  if [ "$DRYRUN" = "1" ]; then echo "pre-receive[DRY-RUN] WOULD REJECT: $*"; return 0; fi
+  echo "pre-receive: REJECT — $*"; exit 1
+}
+
+while read -r oldrev newrev ref; do
+  [ "$ref" = "$BRANCH" ] || continue
+  TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+  git archive "$newrev" config/cron_registry.yaml deploy/cron/trading-system.cron \
+      scripts/generate_crontab.py 2>/dev/null | tar -x -C "$TMP" 2>/dev/null || true
+  [ -f "$TMP/config/cron_registry.yaml" ] || { rm -rf "$TMP"; continue; }  # push doesn't touch cron
+
+  GEN="$("$VENV_PY" "$TMP/scripts/generate_crontab.py" --generate \
+         --registry "$TMP/config/cron_registry.yaml" 2>/dev/null)" \
+    || reject "generator FAILED on the pushed tree"
+
+  MSG="$(git log -1 --format=%B "$newrev" 2>/dev/null)"
+  OVERRIDE=0; case "$MSG" in *"[cron-canonical-override]"*) OVERRIDE=1 ;; esac
+
+  if ! printf '%s' "$GEN" | diff -q - "$TMP/deploy/cron/trading-system.cron" >/dev/null 2>&1; then
+    if [ "$OVERRIDE" = "1" ]; then
+      echo "pre-receive: canonical != generate(registry) — override token present, allowing."
+    else
+      echo "  Fix: python scripts/generate_crontab.py --generate > deploy/cron/trading-system.cron"
+      echo "  Or:  add [cron-canonical-override] to the commit message."
+      reject "deploy/cron/trading-system.cron != generate(config/cron_registry.yaml)"
+    fi
+  elif git cat-file -e "$oldrev:deploy/cron/trading-system.cron" 2>/dev/null; then
+    OLD="$(git show "$oldrev:deploy/cron/trading-system.cron" 2>/dev/null)"
+    TOTAL=$(printf '%s\n' "$GEN" | grep -cE '^[0-9*]' || true)
+    CHG=$(diff <(printf '%s' "$OLD") <(printf '%s' "$GEN") | grep -cE '^[<>]' || true)
+    if [ "${TOTAL:-0}" -gt 0 ] && [ "$OVERRIDE" != "1" ]; then
+      PCT=$(( CHG * 100 / (TOTAL * 2) ))
+      [ "$PCT" -gt "$BLAST_PCT" ] && reject "canonical changed ~${PCT}% (> ${BLAST_PCT}%): possible generator bug / mass change ([cron-canonical-override] to allow)"
+    fi
+  fi
+  rm -rf "$TMP"; trap - EXIT
+done
+exit 0

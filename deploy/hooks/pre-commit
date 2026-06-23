@@ -1,0 +1,12 @@
+#!/bin/bash
+# deploy/hooks/pre-commit — friction-remover so a normal commit never trips the
+# pre-receive equality guard. Regenerates the canonical from the registry and
+# stages it. Install (local clone): cp deploy/hooks/pre-commit .git/hooks/ && chmod +x.
+set -e
+VENV_PY="${VENV_PY:-python}"
+# Only act when the registry or the generator changed in this commit.
+if git diff --cached --name-only | grep -qE '^(config/cron_registry\.yaml|scripts/generate_crontab\.py)$'; then
+  "$VENV_PY" scripts/generate_crontab.py --generate --out deploy/cron/trading-system.cron
+  git add deploy/cron/trading-system.cron
+  echo "pre-commit: regenerated + staged deploy/cron/trading-system.cron"
+fi
