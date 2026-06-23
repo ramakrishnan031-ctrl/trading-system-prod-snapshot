@@ -148,3 +148,17 @@ SHELL=/bin/bash
 
 # ── Hourly | disk space monitor ─────────────────────────────────────────────
 0 * * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/disk_monitor.py >> logs/cron-disk-monitor.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/disk_monitor.done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PERSONAL TOOLING — Claude Code heartbeat (NOT registry-generated; PRESERVE on
+# any regen from cron_registry.yaml — these are intentionally outside the Cron
+# Officer's monitored set). 4x/day liveness check. GOVERNED: each line `cd`s into
+# ~/tools/claude/ FIRST so it loads AGENTS.md + .claude/settings.json (deny: .py
+# writes, DB/sqlite3, systemctl/sudo/service, writes to ~/systems, trading .env
+# read, git push) — mirrors AGY. Guardrail files are version-controlled at
+# deploy/tools/claude/ (restore on VM rebuild — see disaster recovery doc). Verified 23-Jun.
+# ─────────────────────────────────────────────────────────────────────────────
+30 5 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1
+31 10 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1
+32 15 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1
+33 20 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1

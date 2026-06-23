@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+    "deny": [
+      "Write(**/*.py)",
+      "Edit(**/*.py)",
+      "Read(**/*.db)",
+      "Write(**/*.db)",
+      "Edit(**/*.db)",
+      "Bash(sqlite3:*)",
+      "Bash(systemctl:*)",
+      "Bash(sudo:*)",
+      "Bash(service:*)",
+      "Bash(git push:*)",
+      "Write(~/systems/**)",
+      "Edit(~/systems/**)",
+      "Read(~/systems/trading-system/.env)",
+      "Read(~/systems/trading-system/.env.*)"
+    ]
+  }
+}

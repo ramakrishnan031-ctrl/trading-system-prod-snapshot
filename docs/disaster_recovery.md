@@ -180,9 +180,16 @@ If VM is lost and needs complete rebuild:
 5. Install packages: `pip install -r requirements.txt`
 6. Restore DB from off-site backup (if available)
 7. Configure systemd service
-8. Configure crontab from `deploy/cron/trading-system.cron`
-9. Set environment variables (ZERODHA_*, TELEGRAM_*)
-10. Test startup: `python main.py --interactive`
+8. Configure crontab from `deploy/cron/trading-system.cron` (includes the governed `~/tools/claude` heartbeat lines)
+9. Restore agent-tooling guardrails (keeps the Claude heartbeat cron governed — no `.py`/DB/systemctl):
+   ```bash
+   mkdir -p ~/tools/claude/.claude
+   cp deploy/tools/claude/AGENTS.md             ~/tools/claude/AGENTS.md
+   cp deploy/tools/claude/.claude/settings.json ~/tools/claude/.claude/settings.json
+   ```
+   Also restore `~/tools/antigravity/agy` (Antigravity CLI) + `~/tools/gemini/` for the AI-ops (Gemini) crons.
+10. Set environment variables (ZERODHA_*, TELEGRAM_*)
+11. Test startup: `python main.py --interactive`
 
 ---
 
