@@ -549,6 +549,68 @@ def test_fix191_order_rejected_not_counted(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix191b_soft_kill_halt_alert_critical_emails(tmp_path: Path) -> None:
+    """FIX-191 addendum (23-Jun-2026): the SOFT_KILL HALT notification routes at
+    CRITICAL (was WARN) so it reaches the operator via the CRITICAL email-fallback
+    path when Telegram is down. Severity/routing ONLY — the kill stays a SOFT_KILL
+    with no hard_kill / flatten side effects. (The CRITICAL->email-on-failure leg
+    itself is also covered by tests/unit/test_fix132_email_fallback.py.)
+    """
+    import os
+    from dataclasses import dataclass
+    from unittest.mock import MagicMock, patch
+
+    from alerts.telegram_notifier import TelegramNotifier
+
+    @dataclass
+    class _EmailCfg:
+        enabled: bool = True
+        smtp_host: str = "smtp.gmail.com"
+        smtp_port: int = 587
+        from_addr_env: str = "ALERT_EMAIL_USER"
+        password_env: str = "ALERT_EMAIL_PASSWORD"
+        to_addr_env: str = "ALERT_EMAIL_TO"
+        use_tls: bool = True
+
+    store = _make_store(tmp_path)
+    ks, _, _ = _make_ks(store, threshold=3, auto_trip=True)
+
+    notifier = TelegramNotifier(
+        bot_token="t", chat_ids=["c"],
+        failed_alerts_log_path=str(tmp_path / "failed.log"),
+        sentinel_dir=str(tmp_path),
+        logger=logging.getLogger("test_fix191b"),
+        max_retries=1, retry_backoff_seconds=0.01, rate_limit_per_minute=999,
+        paper_mode=False, email_fallback_config=_EmailCfg(),
+    )
+    ks.set_notifier(notifier, mode="live")
+
+    env = {
+        "ALERT_EMAIL_USER": "a@b.com",
+        "ALERT_EMAIL_PASSWORD": "pw",
+        "ALERT_EMAIL_TO": "ops@b.com",
+    }
+    with patch("requests.post") as mock_post, \
+         patch("smtplib.SMTP") as mock_smtp_cls, \
+         patch.dict(os.environ, env, clear=False):
+        mock_post.return_value = MagicMock(status_code=500)   # Telegram always fails
+        mock_smtp = MagicMock()
+        mock_smtp_cls.return_value = mock_smtp
+
+        ks.soft_kill(
+            reason="Auto-trip: 3 consecutive API failures (threshold=3)",
+            triggered_by="auto_trip",
+        )
+
+        # Operational behaviour unchanged: still SOFT_KILL, not HARD_KILL.
+        assert ks.current_state() == KillState.SOFT_KILL, \
+            "halt alert severity change must NOT alter the kill state"
+        # The halt now reaches email because it is CRITICAL (WARN would have dropped).
+        mock_smtp.sendmail.assert_called_once()
+    print("  OK FIX-191b: SOFT_KILL halt -> CRITICAL -> email fallback on Telegram failure")
+    store.close()
+
+
 def test_record_success_resets_counter(tmp_path: Path) -> None:
     """record_success() resets the failure counter; no auto-trip occurs."""
     store = _make_store(tmp_path)
@@ -1132,6 +1194,7 @@ def run_all_tests() -> int:
         test_record_api_failure_auto_trips,
         test_fix185_broker_auth_error_not_counted,
         test_fix191_order_rejected_not_counted,
+        test_fix191b_soft_kill_halt_alert_critical_emails,
         test_record_success_resets_counter,
         test_enable_auto_trip_false_no_auto_trip,
         test_get_kill_info_has_all_fields,

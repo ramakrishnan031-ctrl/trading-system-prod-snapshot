@@ -485,11 +485,15 @@ class KillSwitch:
             "SOFT_KILL ACTIVATED reason=%s triggered_by=%s", reason, triggered_by
         )
 
-        # Telegram alert (optional; never crash on notifier failure)
+        # HALT alert. FIX-191 addendum (23-Jun-2026): severity CRITICAL (was WARN)
+        # so a trading halt reaches the operator via the notifier's CRITICAL
+        # email-fallback path even when Telegram is down (a halt IS critical-grade;
+        # WARN drops silently on a send failure with no fallback). Routing/severity
+        # ONLY — the kill stays a SOFT_KILL. (Never crash on notifier failure.)
         if self._notifier is not None:
             try:
                 self._notifier.send(
-                    severity="WARN",
+                    severity="CRITICAL",
                     title=f"[{self._mode}] ⚠️ SOFT KILL ACTIVATED",
                     body=(
                         f"Reason: {reason}\n"
