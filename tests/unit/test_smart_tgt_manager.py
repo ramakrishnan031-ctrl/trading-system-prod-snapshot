@@ -53,10 +53,12 @@ class _MockAdapter:
         price: Optional[float] = None,
         qty: Optional[int] = None,
         trigger_price: Optional[float] = None,
+        symbol: Optional[str] = None,
     ) -> _ModifyResult:
         self.calls.append({
             "broker_order_id": broker_order_id,
             "trigger_price": trigger_price,
+            "symbol": symbol,
         })
         if self._per_call:
             success = self._per_call.pop(0)

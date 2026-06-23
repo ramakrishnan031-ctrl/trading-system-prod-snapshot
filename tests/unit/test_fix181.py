@@ -138,17 +138,20 @@ class TestStep1_AdapterSnap:
         )
         assert price == pytest.approx(100.05)
 
-    def test_snap_noop_without_cache(self) -> None:
+    def test_snap_failsafe_without_cache(self) -> None:
+        # 23-Jun FAIL-SAFE (was: passthrough): no cache wired -> fall back to
+        # DEFAULT_TICK (0.05) and SNAP anyway; NEVER return an off-tick price.
         from tests.unit.test_zerodha_adapter import _make_adapter
         adapter, _, _, _, _ = _make_adapter()
-        # cache not wired -> passthrough
         price, trigger = adapter._snap_order_to_tick(
             "RELIANCE", "SL", "SELL", 574.86125, 577.77
         )
-        assert price == 574.86125
-        assert trigger == 577.77
+        assert price == pytest.approx(574.85)    # SL SELL limit DOWN to 0.05
+        assert trigger == pytest.approx(577.75)  # nearest 0.05
 
-    def test_snap_unknown_symbol_passthrough(self) -> None:
+    def test_snap_failsafe_unknown_symbol(self) -> None:
+        # 23-Jun FAIL-SAFE (was: passthrough): tick_size raises -> DEFAULT_TICK
+        # snap, not an un-rounded submit (the silver/ETF off-tick rejection bug).
         from tests.unit.test_zerodha_adapter import _make_adapter
 
         class _RaisingCache:
@@ -160,8 +163,8 @@ class TestStep1_AdapterSnap:
         price, trigger = adapter._snap_order_to_tick(
             "NOPE", "SL", "SELL", 574.86125, 577.77
         )
-        assert price == 574.86125
-        assert trigger == 577.77
+        assert price == pytest.approx(574.85)
+        assert trigger == pytest.approx(577.75)
 
     def test_place_order_live_snaps_price_sent_to_kite(self) -> None:
         """End-to-end: off-tick SL price is snapped before reaching kite."""

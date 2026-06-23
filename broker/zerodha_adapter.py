@@ -118,6 +118,7 @@ from broker.slippage_engine import (
     _round_nearest_to_tick,
     _round_up_to_tick,
 )
+from orders.price_math import DEFAULT_TICK
 from core.config_loader import RateLimitBackoffConfig
 from core.events import EventBus, OrderFilled, PositionClosed
 from core.exceptions import (
@@ -367,6 +368,9 @@ class ZerodhaAdapter:
         self._slippage: Optional[SlippageEngine] = slippage_engine
         # FIX-181: instrument cache for tick-snapping. May be set via setter.
         self._instrument_cache: Optional[Any] = instrument_cache
+        # 23-Jun tick fail-safe: warn-once-per-symbol throttle for a missing
+        # tick_size (the fallback to DEFAULT_TICK is silent otherwise; FIX-170).
+        self._missing_tick_warned: set[str] = set()
         # BL-6: 429 backoff state. Per-category counter drives exponential delay;
         # resets when any call in the category succeeds. Lock guards increments
         # across threads (order_placer, order_monitor, reconciler can all race).
@@ -629,14 +633,31 @@ class ZerodhaAdapter:
         price: Optional[float] = None,
         qty: Optional[int] = None,
         trigger_price: Optional[float] = None,
+        symbol: Optional[str] = None,
     ) -> ModifyResult:
-        """Modify price/qty of a pending order. Returns ModifyResult."""
+        """Modify price/qty of a pending order. Returns ModifyResult.
+
+        `symbol` (when given) lets the adapter snap price + trigger_price to the
+        instrument tick BEFORE the paper/live branch — so Paper and Live both submit
+        tick-aligned values (parity) and no modify can reach Zerodha off-tick.
+        """
         t0 = time.monotonic()
         self._log.info(
             "modify_order call_start",
             extra={"method": "modify_order",
                    "broker_order_id": broker_order_id},
         )
+
+        # 23-Jun: snap price + trigger to the instrument tick BEFORE the paper/live
+        # branch (parity) so no modify reaches Zerodha off-tick. Nearest-tick —
+        # modify carries no order_type/side, and place_order also rounds the SL
+        # trigger to nearest. _resolve_tick is fail-safe (DEFAULT_TICK fallback).
+        if symbol is not None and (price or trigger_price):
+            _mtick = self._resolve_tick(symbol)
+            if price is not None and price > 0:
+                price = _round_nearest_to_tick(price, _mtick)
+            if trigger_price is not None and trigger_price > 0:
+                trigger_price = _round_nearest_to_tick(trigger_price, _mtick)
 
         if self._paper:
             result = ModifyResult(
@@ -889,6 +910,32 @@ class ZerodhaAdapter:
             extra={"method": "set_instrument_cache"},
         )
 
+    def _resolve_tick(self, symbol: str) -> float:
+        """Tick for `symbol`, FAIL-SAFE. Falls back to DEFAULT_TICK (0.05) when the
+        cache is unwired / the symbol is unknown (InstrumentNotFoundError) / the
+        tick is non-positive — and emits a throttled WARN (FIX-170 visibility).
+        NEVER signals "do not round": a 0.05-multiple is also a valid 0.01-multiple,
+        so the fallback keeps the silver/ETF names PLACEABLE instead of an off-tick
+        Zerodha rejection. Residual edge (unknown symbol whose true tick > 0.05) is
+        now ALERTED, not silent."""
+        tick = None
+        if self._instrument_cache is not None:
+            try:
+                tick = self._instrument_cache.tick_size(symbol)
+            except Exception:
+                tick = None
+        if tick is None or tick <= 0:
+            if symbol not in self._missing_tick_warned:
+                self._missing_tick_warned.add(symbol)
+                self._log.warning(
+                    "snap_to_tick.missing_tick_size",
+                    extra={"symbol": symbol, "fallback_tick": DEFAULT_TICK,
+                           "note": "instrument absent / non-positive tick — "
+                                   "using DEFAULT_TICK (FIX-170)"},
+                )
+            return DEFAULT_TICK
+        return tick
+
     def _snap_order_to_tick(
         self,
         symbol: str,
@@ -912,18 +959,11 @@ class ZerodhaAdapter:
           - LIMIT (entry/TGT): round to nearest tick.
           - MARKET / SL-M: price is 0; nothing to snap.
 
-        Best-effort: returns the inputs unchanged when no cache is wired, the
-        symbol is unknown, or the tick is non-positive.
+        FAIL-SAFE: the tick is resolved via _resolve_tick (DEFAULT_TICK fallback +
+        a throttled WARN on a missing/zero tick), so this NEVER returns an
+        un-rounded price — an off-tick price/trigger is exactly what Zerodha rejects.
         """
-        if self._instrument_cache is None:
-            return price, trigger_price
-        try:
-            tick = self._instrument_cache.tick_size(symbol)
-        except Exception:
-            return price, trigger_price
-        if tick is None or tick <= 0:
-            return price, trigger_price
-
+        tick = self._resolve_tick(symbol)
         new_price, new_trigger = price, trigger_price
         if order_type == "SL":
             if price and price > 0:

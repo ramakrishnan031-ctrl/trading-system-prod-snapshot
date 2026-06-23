@@ -588,6 +588,7 @@ class SmartTgtManager:
             result = self._adapter.modify_order(
                 broker_order_id=co_order_id,
                 trigger_price=new_sl,
+                symbol=symbol,
             )
         except Exception as exc:
             self._log.error(

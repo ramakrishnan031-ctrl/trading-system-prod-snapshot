@@ -290,6 +290,7 @@ class BreakevenManager:
                     broker_order_id,
                     price=new_limit,
                     trigger_price=new_trigger,
+                    symbol=info.symbol,
                 )
             except Exception as exc:
                 last_error = str(exc)

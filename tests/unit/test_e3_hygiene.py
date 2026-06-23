@@ -70,10 +70,11 @@ def _make_smart_tgt_gate_for_h6():
             self.modify_calls: List[dict] = []
             self.success: bool = True
 
-        def modify_order(self, broker_order_id, price=None, qty=None, trigger_price=None):
+        def modify_order(self, broker_order_id, price=None, qty=None, trigger_price=None, symbol=None):
             self.modify_calls.append({
                 "broker_order_id": broker_order_id,
                 "trigger_price": trigger_price,
+                "symbol": symbol,
             })
             return _ModifyResult(
                 broker_order_id=broker_order_id,
