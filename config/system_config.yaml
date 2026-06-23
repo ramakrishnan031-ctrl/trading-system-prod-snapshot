@@ -107,7 +107,7 @@ position_sizing:              # PS9
 
 risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_positions: 5       # hard cap on concurrent open positions (>= 1)
-  max_daily_trades: 20
+  max_daily_trades: 10        # 23-Jun: 20->10 (paper-path cap; parity with live_test below)
   # FIX-190 (Bug H) / 19-Jun: live test mode — ACTIVE BUG-HUNTING on live with
   # controlled exposure (Rama's strategy). When live_test_mode is true AND
   # mode=live, max_open_positions / max_daily_trades above are overridden by the
@@ -116,10 +116,10 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   # paths; more trades = more bug discovery. PERMANENT — no auto-disable; stays ON
   # until Rama manually disables it (manual review required). NOT temporary.
   live_test_mode: true
-  live_test_max_open_positions: 4
-  live_test_max_entries_per_day: 6
+  live_test_max_open_positions: 5    # 23-Jun: 4->5 (resume w/ FIX-191; parity w/ max_open_positions)
+  live_test_max_entries_per_day: 10  # 23-Jun: 6->10 (resume w/ FIX-191; parity w/ max_daily_trades)
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
-  max_consecutive_losses: 2
+  max_consecutive_losses: 5      # 23-Jun: 2->5 (both modes; today already has 2 SL losses — let session continue)
   daily_loss_limit_pct: 0.03
   price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement
 

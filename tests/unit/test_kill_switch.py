@@ -503,6 +503,52 @@ def test_fix185_broker_auth_error_not_counted(tmp_path: Path) -> None:
     store.close()
 
 
+def test_fix191_order_rejected_not_counted(tmp_path: Path) -> None:
+    """FIX-191 (23-Jun-2026 false SOFT_KILL): the consecutive-API-failure breaker
+    is connectivity-only. OrderRejectedError must NOT count — whether it is a
+    broker order-reject (e.g. MIS/F&O-ban block) OR the client-side slippage-guard
+    abort (order_placer raises OrderRejectedError BEFORE any broker call). Genuine
+    transient errors (BrokerTimeoutError / BrokerRateLimitError) must still trip.
+    """
+    from core.exceptions import (
+        BrokerRateLimitError,
+        BrokerTimeoutError,
+        OrderRejectedError,
+    )
+
+    store = _make_store(tmp_path)
+    ks, _, _ = _make_ks(store, threshold=3, auto_trip=True)
+
+    # 5 client-side slippage aborts (OrderRejectedError) -> still INACTIVE
+    for _ in range(5):
+        ks.record_api_failure(
+            OrderRejectedError("slippage_exceeded: trigger=115.05 ltp=116.39")
+        )
+    assert ks.current_state() == KillState.INACTIVE, \
+        "OrderRejectedError (slippage abort) must not count toward the auto-trip"
+
+    # 5 broker business-rejects (OrderRejectedError) -> still INACTIVE
+    for _ in range(5):
+        ks.record_api_failure(
+            OrderRejectedError("Zerodha rejected order: MIS orders are blocked")
+        )
+    assert ks.current_state() == KillState.INACTIVE, \
+        "OrderRejectedError (broker reject) must not count toward the auto-trip"
+
+    # Genuine transient errors STILL trip; a non-counted reject interleaved
+    # neither increments nor resets the counter.
+    ks.record_api_failure(BrokerTimeoutError("read timeout"))      # count=1
+    ks.record_api_failure(OrderRejectedError("MIS block"))         # ignored, no reset
+    ks.record_api_failure(BrokerRateLimitError("429 rate limited"))  # count=2
+    assert ks.current_state() == KillState.INACTIVE
+    ks.record_api_failure(BrokerTimeoutError("read timeout"))      # count=3 -> trips
+    assert ks.current_state() == KillState.SOFT_KILL, \
+        "BrokerTimeoutError/BrokerRateLimitError must still auto-trip at threshold"
+    print("  OK FIX-191: OrderRejectedError (slippage + broker) excluded; "
+          "transient timeout/rate-limit still trips")
+    store.close()
+
+
 def test_record_success_resets_counter(tmp_path: Path) -> None:
     """record_success() resets the failure counter; no auto-trip occurs."""
     store = _make_store(tmp_path)
@@ -1085,6 +1131,7 @@ def run_all_tests() -> int:
         test_resume_empty_triggered_by_raises,
         test_record_api_failure_auto_trips,
         test_fix185_broker_auth_error_not_counted,
+        test_fix191_order_rejected_not_counted,
         test_record_success_resets_counter,
         test_enable_auto_trip_false_no_auto_trip,
         test_get_kill_info_has_all_fields,

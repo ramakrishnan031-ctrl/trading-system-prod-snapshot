@@ -70,7 +70,11 @@ _EXIT_ALERT_DEDUP_SEC = 300.0
 # the next signal once the IP is allowlisted).
 _IP403_ALERT_THROTTLE_SEC = 3600.0
 from core.events import EventBus, KillSwitchActivated
-from core.exceptions import BrokerAuthError
+from core.exceptions import (
+    BrokerAuthError,
+    BrokerRateLimitError,
+    BrokerTimeoutError,
+)
 from core.time_authority import now_ist
 
 if TYPE_CHECKING:
@@ -594,6 +598,13 @@ class KillSwitch:
         restart). Such errors are surfaced via CRITICAL logs/alerts at the call
         site and must NOT increment the counter. Callers forward the caught
         exception; ``exc=None`` preserves the legacy "always count" behaviour.
+
+        FIX-191 (23-Jun-2026): generalised to a WHITELIST — only
+        BrokerTimeoutError and BrokerRateLimitError (genuine transient/
+        connectivity failures) count toward the auto-trip. Business rejections
+        (OrderRejectedError from a broker reject OR the client-side slippage
+        guard, ProductNotSupportedError, SLUnplaceableError, generic BrokerError)
+        are NOT outages and never trip this connectivity breaker.
         """
         if isinstance(exc, BrokerAuthError):
             self._log.critical(
@@ -606,6 +617,31 @@ class KillSwitch:
             # no restart) — record_api_failure deliberately does NOT trip here.
             self._maybe_alert_ip403(exc)
             return
+
+        # FIX-191 (23-Jun-2026 false SOFT_KILL): this is a CONNECTIVITY breaker —
+        # it exists to halt trading when the broker API is unreachable (the FIX-069
+        # timeout/rate-limit path). ONLY those two transient types may count. A
+        # business rejection is NOT an outage and must never trip it:
+        #   - OrderRejectedError covers BOTH a broker order-reject (e.g. MIS/F&O-ban
+        #     block) AND the client-side slippage-guard abort (order_placer raises
+        #     OrderRejectedError BEFORE any broker call) — declining a bad fill is
+        #     correct behaviour, not a failure.
+        #   - SLUnplaceableError / ProductNotSupportedError / generic BrokerError are
+        #     likewise not connectivity outages.
+        # On 23-Jun, 1 MIS-block + 2 slippage aborts (all OrderRejectedError) tripped
+        # a false SOFT_KILL that 403'd every signal for the rest of the day. So:
+        # WHITELIST the genuine transient types; log-and-ignore everything else.
+        # exc=None keeps the legacy "always count" path (manual/test callers).
+        if exc is not None and not isinstance(
+            exc, (BrokerTimeoutError, BrokerRateLimitError)
+        ):
+            self._log.warning(
+                "record_api_failure: %s NOT counted toward auto-trip "
+                "(not a transient connectivity error; breaker is connectivity-only)",
+                type(exc).__name__,
+            )
+            return
+
         with self._lock:
             self._api_failure_count += 1
             if (
