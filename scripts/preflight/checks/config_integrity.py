@@ -65,8 +65,11 @@ class RequiredSecretsCheck(Check):
 
 # Rama's hard live-test caps (memory live_test_mode_permanent). Drift here is a
 # CRITICAL alert -- changing them needs Rama, so this is alert-only (no auto-fix).
-LIVE_TEST_EXPECTED_MAX_OPEN = 4
-LIVE_TEST_EXPECTED_MAX_ENTRIES = 6
+# 23-Jun: caps deliberately RAISED to 5/10 on the FIX-191 resume (permanent —
+# see live_test_mode_permanent). This expected envelope tracks the intended live
+# caps; the guard alerts on ACCIDENTAL drift, so it must match the deliberate values.
+LIVE_TEST_EXPECTED_MAX_OPEN = 5
+LIVE_TEST_EXPECTED_MAX_ENTRIES = 10
 
 
 class ConfigYamlValidCheck(Check):

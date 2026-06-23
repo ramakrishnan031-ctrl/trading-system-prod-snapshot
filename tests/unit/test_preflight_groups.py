@@ -102,7 +102,7 @@ def test_config_yaml_valid_and_invalid(tmp_path):
     assert config_integrity.ConfigYamlValidCheck().run(ctx).status is Status.FAIL
 
 
-def _write_sys_config(ctx, *, mode_on=True, mo=4, me=6):
+def _write_sys_config(ctx, *, mode_on=True, mo=5, me=10):
     flag = "true" if mode_on else "false"
     (ctx.config_dir / "system_config.yaml").write_text(
         f"risk:\n  live_test_mode: {flag}\n"
@@ -113,7 +113,7 @@ def _write_sys_config(ctx, *, mode_on=True, mo=4, me=6):
 
 def test_live_test_caps_pass(tmp_path):
     ctx = _ctx(tmp_path)
-    _write_sys_config(ctx, mo=4, me=6)
+    _write_sys_config(ctx, mo=5, me=10)   # 23-Jun deliberate live caps
     assert config_integrity.LiveTestModeCapsCheck().run(ctx).status is Status.PASS
 
 
