@@ -35,7 +35,7 @@ from core.state_store import StateStore
 from core.time_authority import now_ist
 from scripts.cron_report_render import (
     COMPLETED, FAILED, MISSED, NO_SIGNAL, NOT_TRACKED, PENDING,
-    PENDING_REDESIGN, SKIPPED, CronReport, JobOutcome, briefing_subject,
+    PENDING_REDESIGN, RAN_UNVERIFIED, SKIPPED, CronReport, JobOutcome, briefing_subject,
     eod_subject, render_briefing_html, render_briefing_plaintext,
     render_briefing_telegram, render_eod_html, render_eod_plaintext,
     render_eod_telegram,
@@ -390,15 +390,179 @@ def _tier_mode_line(config_dir: Path) -> str:
         return "Tier multiplier today: (unknown - config unreadable)"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3 (self-maintaining cron): ROSTER INTEGRITY + auto-discovery + self-test.
+# FAIL-SAFE: every helper is best-effort and is called wrapped in try/except by
+# build_report — a failure here NEVER crashes the core report (it degrades to an
+# UNKNOWN line). The EOD report is the monitoring OUTPUT; it must not become its
+# own single point of failure.
+# ─────────────────────────────────────────────────────────────────────────────
+_SEV_ORDER = {"INFO": 0, "WARN": 1, "CRITICAL": 2}
+
+
+def _max_sev(a: str, b: str) -> str:
+    return a if _SEV_ORDER.get(a, 0) >= _SEV_ORDER.get(b, 0) else b
+
+
+def _registry_stamp(config_dir: Path) -> str:
+    """Short sha256 of cron_registry.yaml — ties the live roster to its content
+    (git is NOT available in the deployed working tree)."""
+    import hashlib
+    try:
+        return hashlib.sha256((config_dir / "cron_registry.yaml").read_bytes()).hexdigest()[:12]
+    except Exception:
+        return "unknown"
+
+
+def _read_crontab_safe() -> Optional[str]:
+    try:
+        r = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10)
+        return r.stdout
+    except Exception:
+        return None
+
+
+def _auto_discover(registry: CronRegistry, crontab_text: Optional[str]) -> list:
+    """Live crontab lines whose resolved job is NOT in the registry -> runtime
+    RAN_UNVERIFIED JobOutcomes. RUNTIME ONLY — never mutates the registry YAML."""
+    if not crontab_text:
+        return []
+    from scripts.generate_crontab import _command_lines, parse as _parse, resolve_job_name as _rjn
+    reg_names = {j.name for j in registry.all_jobs()}
+    out: list = []
+    for raw in _command_lines(crontab_text):
+        try:
+            f = _parse(raw)
+            nm = _rjn(f)
+        except Exception:
+            continue                       # unparseable -> the drift-check owns it
+        if nm in reg_names:
+            continue
+        due_label, due_sort = "—", time(23, 59)
+        mn, hr = (f["cron_expression"].split() + ["", ""])[:2]
+        if mn.isdigit() and hr.isdigit():
+            due_label, due_sort = f"{int(hr):02d}:{int(mn):02d}", time(int(hr), int(mn))
+        out.append(JobOutcome(nm, "ON_DEMAND", due_label, due_sort, RAN_UNVERIFIED, "none", 0.0,
+                              "in crontab, not in registry — needs registry entry + contract"))
+    return out
+
+
+def _alert_path_health(config_dir: Path, sentinel_dir: Optional[Path] = None) -> tuple[bool, str]:
+    """LOW-NOISE liveness: Telegram reachability via getMe (a read-only probe, NOT
+    a posted message) + an EPHEMERAL sentinel-dir write (cleaned). Healthy = silent
+    (this just feeds the roster block); a DEAD path escalates severity and rides the
+    EOD email (the FIX-191 fallback). Never raises."""
+    import os
+    ok, bits = True, []
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        ok, _ = False, bits.append("telegram: no token")
+    else:
+        try:
+            import requests
+            r = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=6)
+            if r.status_code == 200 and r.json().get("ok"):
+                bits.append("telegram: reachable")
+            else:
+                ok = False; bits.append(f"telegram: getMe HTTP {r.status_code}")
+        except Exception as exc:  # noqa: BLE001
+            ok = False; bits.append(f"telegram: unreachable ({type(exc).__name__})")
+    sdir = sentinel_dir or _resolve_sentinel_dir()
+    try:
+        sdir.mkdir(parents=True, exist_ok=True)
+        probe = sdir / ".cron_officer_selftest.tmp"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        bits.append("sentinel-dir: writable")
+    except Exception as exc:  # noqa: BLE001
+        ok = False; bits.append(f"sentinel-dir: NOT writable ({type(exc).__name__})")
+    return ok, "; ".join(bits)
+
+
+def _roster_integrity(registry: CronRegistry, config_dir: Path, store: Optional[StateStore],
+                      today: date, crontab_text: Optional[str]) -> tuple[list, str]:
+    """The daily ROSTER INTEGRITY block (a-d) + sha256 stamp. Returns (lines,
+    severity). Best-effort per check; a failing sub-check shows UNKNOWN, not a crash."""
+    lines: list[str] = ["ROSTER INTEGRITY"]
+    sev = "INFO"; issues = 0
+
+    # (a) live == generate(registry)
+    try:
+        if crontab_text:
+            from scripts.check_cron_drift import content_drift
+            cd = content_drift(config_dir / "cron_registry.yaml", crontab_text)
+            if cd.absent_critical or cd.unparseable:
+                sev = _max_sev(sev, "CRITICAL"); issues += 1
+                lines.append(f"  (a) live==generate: DRIFT — absent {cd.absent_critical or '-'}, "
+                             f"unparseable {len(cd.unparseable)}")
+            elif cd.absent_warn or cd.unregistered:
+                sev = _max_sev(sev, "WARN"); issues += 1
+                lines.append(f"  (a) live==generate: drift (WARN) — personal-absent "
+                             f"{cd.absent_warn or '-'}, unregistered {len(cd.unregistered)}")
+            else:
+                lines.append("  (a) live == generate(registry): OK")
+        else:
+            lines.append("  (a) live==generate: UNKNOWN (crontab unavailable)")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"  (a) live==generate: UNKNOWN ({type(exc).__name__})")
+
+    # (b) contract coverage (P4 deliverable contracts pending; none silently unmonitored)
+    try:
+        needs = [j.name for j in registry.all_jobs()
+                 if j.enabled and not j.personal_tooling and not j.excluded_reason]
+        lines.append(f"  (b) contract coverage: 0/{len(needs)} deliverable contracts "
+                     "(P4 pending; all jobs accounted for via monitored/excluded/personal)")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"  (b) contract coverage: UNKNOWN ({type(exc).__name__})")
+
+    # (c) alert path alive (low-noise self-test)
+    try:
+        c_ok, c_detail = _alert_path_health(config_dir)
+        if not c_ok:
+            sev = _max_sev(sev, "CRITICAL"); issues += 1
+        lines.append(f"  (c) alert path: {'ALIVE' if c_ok else 'DEAD'} — {c_detail}")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"  (c) alert path: UNKNOWN ({type(exc).__name__})")
+
+    # (d) officer + drift-check both heartbeated today (watch-the-watcher tier-1)
+    try:
+        hb = _today_heartbeats(store, today) if store is not None else {}
+        down = [n for n in ("cron_officer_eod", "check_cron_drift") if n not in hb]
+        if down:
+            sev = _max_sev(sev, "WARN"); issues += 1
+            lines.append(f"  (d) watcher heartbeats: MISSING {down}")
+        else:
+            lines.append("  (d) officer + drift-check both ran: OK")
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"  (d) watcher heartbeats: UNKNOWN ({type(exc).__name__})")
+
+    verdict = "OK" if issues == 0 else f"DEGRADED ({issues})"
+    lines[0] = f"ROSTER INTEGRITY: {verdict}   Registry: {_registry_stamp(config_dir)}"
+    return lines, sev
+
+
 def build_report(registry: CronRegistry, store: StateStore, today: date,
                  config_dir: Path, now_time: time, *, is_eod: bool,
                  root: Path = _ROOT, marks_dir: Path = _MARKS_DIR,
-                 audit_dir: Path = _AUDIT_DIR, mode: Optional[str] = None) -> CronReport:
+                 audit_dir: Path = _AUDIT_DIR, mode: Optional[str] = None,
+                 crontab_text: Optional[str] = None) -> CronReport:
     """Phase 2.4/4: the full per-job report covering EVERY job due today (not
     just the monitored subset), each classified by its detection method."""
     hb = _today_heartbeats(store, today) if store is not None else {}
     due = sorted(registry.jobs_due_on(today, config_dir), key=_sort_key)
     jobs = [_classify_job(j, today, now_time, hb, marks_dir) for j in due]
+
+    # Phase 3 (EOD): auto-discovery of live-not-registry jobs -> RAN_UNVERIFIED.
+    # FAIL-SAFE: a failure here must NOT crash the core report.
+    ct = crontab_text
+    if is_eod and ct is None:
+        ct = _read_crontab_safe()
+    if is_eod:
+        try:
+            jobs.extend(_auto_discover(registry, ct))
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("cron_officer.auto_discover_failed", extra={"error": str(exc)})
+
     # Security-watcher supervision uses REAL wall-clock (not a simulated date).
     wline, watcher_stale = security_watcher_health(root, now_ist())
     added, removed = _change_log(registry, today, audit_dir) if is_eod else ([], [])
@@ -409,6 +573,17 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
     if is_eod:
         extra.append(_tier_mode_line(config_dir))  # Diary #4: sizing-mode badge
     severity = _compute_severity(jobs, watcher_stale)
+
+    # Phase 3 (EOD): ROSTER INTEGRITY block (a-d) + sha256 stamp. FAIL-SAFE — a
+    # failure degrades to an UNKNOWN line; the core report still renders + sends.
+    if is_eod:
+        try:
+            roster_lines, roster_sev = _roster_integrity(registry, config_dir, store, today, ct)
+            extra += roster_lines
+            severity = _max_sev(severity, roster_sev)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("cron_officer.roster_integrity_failed", extra={"error": str(exc)})
+            extra.append("ROSTER INTEGRITY: UNKNOWN — computation failed (core report intact)")
     # Morning briefing embeds the pre-flight banner; a missing/stale sentinel
     # (pre-flight never ran / crashed) escalates the briefing to CRITICAL (spec).
     preflight = None

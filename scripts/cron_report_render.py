@@ -30,8 +30,10 @@ PENDING = "PENDING"                    # due later today (briefing only)
 PENDING_REDESIGN = "PENDING_REDESIGN"  # daily_report — Bug C deferral
 NO_SIGNAL = "NO_SIGNAL"                # exit_code_file marker absent (info only)
 NOT_TRACKED = "NOT_TRACKED"            # detection_method none (visibility only)
+RAN_UNVERIFIED = "RAN_UNVERIFIED"      # auto-discovered (live-not-registry) / no contract yet
 
-# Statuses that drive the headline CRITICAL severity.
+# Statuses that drive the headline CRITICAL severity. RAN_UNVERIFIED is
+# deliberately NOT here — "needs attention", not "broken" (no false-escalation).
 _BAD = (FAILED, MISSED)
 
 
@@ -93,8 +95,18 @@ class CronReport:
         return self._count(PENDING, PENDING_REDESIGN)
 
     @property
+    def ran_unverified(self) -> int:
+        return self._count(RAN_UNVERIFIED)
+
+    @property
     def runtime_sec(self) -> float:
         return sum(j.runtime_sec or 0.0 for j in self.jobs)
+
+    def status_counts(self) -> dict:
+        """Count per status. By construction sums to `total` — no job falls into
+        an uncounted bucket (status-count integrity for the new RAN_UNVERIFIED)."""
+        from collections import Counter
+        return dict(Counter(j.status for j in self.jobs))
 
 
 # ── tested helpers ────────────────────────────────────────────────────────────
@@ -134,6 +146,7 @@ _STATUS = {
     PENDING_REDESIGN: {"emoji": "⏸", "text": "Pending",   "bg": "#FBC02D", "fg": "#000000"},
     NO_SIGNAL:        {"emoji": "▫️", "text": "No signal", "bg": "#9E9E9E", "fg": "#FFFFFF"},
     NOT_TRACKED:      {"emoji": "▫️", "text": "Untracked", "bg": "#BDBDBD", "fg": "#000000"},
+    RAN_UNVERIFIED:   {"emoji": "🆕", "text": "Unverified", "bg": "#1565C0", "fg": "#FFFFFF"},
 }
 
 
