@@ -772,11 +772,10 @@ class OrderPlacer:
                 },
             )
 
-        # IC8: round LIMIT prices to tick_size if instrument_cache wired
-        entry_price = self._round_to_tick(symbol, entry_price)
-        sl_price    = self._round_to_tick(symbol, sl_price)
-        if tgt_price is not None:
-            tgt_price = self._round_to_tick(symbol, tgt_price)
+        # 23-Jun: entry/SL/TGT tick-snapping moved to the SINGLE adapter chokepoint
+        # (zerodha_adapter._snap_order_to_tick, fail-safe). The old IC8
+        # order_placer._round_to_tick (float-floor, fail-open) is removed — the
+        # adapter is now the sole snap point (no per-call-site rounding).
 
         # OP3: use caller-supplied tgt_price if provided; else compute internally
         if tgt_price is None:
@@ -3691,24 +3690,6 @@ class OrderPlacer:
             return tick if tick and tick > 0 else DEFAULT_TICK
         except Exception:
             return DEFAULT_TICK
-
-    def _round_to_tick(self, symbol: str, price: float) -> float:
-        """
-        IC8: Round price to the nearest valid tick for the instrument.
-
-        Uses instrument_cache.tick_size(symbol) if cache is wired.
-        Falls back to the original price if cache is None or symbol missing.
-        """
-        if self._instrument_cache is None:
-            return price
-        try:
-            tick = self._instrument_cache.tick_size(symbol)
-            if tick <= 0:
-                return price
-            import math as _math
-            return round(_math.floor(price / tick) * tick, 10)
-        except Exception:
-            return price
 
     def _fetch_ltp(self, symbol: str) -> Optional[float]:
         """
