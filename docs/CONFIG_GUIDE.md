@@ -32,11 +32,11 @@ This is Rama's reference for changing config settings.
 |---|---|---|
 | Trading mode | **live** | systemd `ExecStart` (`main.py --mode live`) — *not* a config key |
 | Min signal score | **60** | `scoring_weights.yaml → min_pass_score` |
-| Max open positions | **4** | `system_config.yaml → risk.live_test_max_open_positions` (live_test_mode ON) |
-| Max daily trades | **6** | `system_config.yaml → risk.live_test_max_entries_per_day` (live_test_mode ON) |
+| Max open positions | **5** | `system_config.yaml → risk.max_open_positions` |
+| Max daily trades | **10** | `system_config.yaml → risk.max_daily_trades` |
 | Capital | **₹10,000** | `accounts.csv` (paper) / live broker funds (live) |
-| Daily loss limit (absolute) | **₹300** | `system_config.yaml → capital.daily_loss_limit` |
-| Daily loss limit (percent) | **3%** | `system_config.yaml → risk.daily_loss_limit_pct` |
+| Daily loss limit | **3%** (₹300 on ₹10k) | `system_config.yaml → risk.daily_loss_limit_pct` (BUILD 1: sole authority; absolute ₹ key deleted) |
+| Max position value / trade | **40%** (₹4,000 on ₹10k) | `system_config.yaml → position_sizing.max_position_value_pct` (capital-relative reject cap) |
 | Max concentration / symbol | **10%** (₹1,000 on ₹10k) | `system_config.yaml → position_sizing.max_concentration_pct` |
 | Risk per trade | **1%** | `system_config.yaml → position_sizing.risk_per_trade_pct` |
 | Entry window | **10:00 – 15:15** | `system_config.yaml → trading_hours` |
@@ -57,29 +57,24 @@ This is Rama's reference for changing config settings.
 
 These control how much money is at risk. **Read Section 6's safety warnings before raising any of them.**
 
-### daily_loss_limit
-**File:** `system_config.yaml → capital.daily_loss_limit`
-**Current:** `300.0` · **Type:** float (₹) · **Valid:** > 0
-
-**What it does:** The **absolute** rupee loss the account can take in one day before
-the fund manager halts new trades. Measured from realised P&L (`fm_ledger.pnl_delta`).
-Crossing it trips a SOFT_KILL (no new entries; existing positions still managed).
-
-**Example:** `300.0` → stop trading after ₹300 realised loss. `500.0` → allow ₹500.
-
-**Related:** `risk.daily_loss_limit_pct` (the percent-based twin — see below). Both are
-active; whichever trips first wins. See `[[dual_daily_loss_mechanism]]`.
-
-### daily_loss_limit_pct
+### daily_loss_limit_pct  ⭐ BUILD 1 (24-Jun): now the SOLE daily-loss authority
 **File:** `system_config.yaml → risk.daily_loss_limit_pct`
 **Current:** `0.03` · **Type:** float (fraction) · **Valid:** 0–1
 
-**What it does:** The **percentage** daily-loss gate, checked **pre-trade** by the risk
-engine and it *includes unrealised* P&L on open positions. `0.03` = 3% of capital
-(₹300 on ₹10k). This is a separate control from the absolute `capital.daily_loss_limit`
-— one is pre-trade + unrealised (this), the other is post-close + realised.
+**What it does:** The single daily-loss limit, expressed as a fraction of capital.
+`0.03` = 3% (₹300 on ₹10k; ₹3,000 on ₹1L — it scales with the account). It is enforced
+on **two bases** (deliberate, not a duplicate):
+- **Pre-trade** (RiskEngine): blocks new entries once **realised + unrealised** loss hits
+  `daily_loss_limit_pct × capital`.
+- **Post-close** (FundManager, after a trade settles): trips a SOFT_KILL once **realised**
+  loss hits `daily_loss_limit_pct × current capital`.
 
-**Example:** `0.03` → block new entries once total (realised+unrealised) loss hits 3%.
+**BUILD 1 change:** the old absolute `capital.daily_loss_limit` (₹300) was **DELETED**.
+Both checks now derive their ₹ figure from this one pct key, so there is a single
+source of truth and the limit scales with capital automatically. See
+`[[dual_daily_loss_mechanism]]` and `[[build1_config_authority_fixes_24jun]]`.
+
+**Example:** `0.03` → stop after a 3%-of-capital loss. `0.05` → allow 5%.
 
 ### intraday_bucket_pct / positional_bucket_pct
 **File:** `system_config.yaml → capital.intraday_bucket_pct` / `positional_bucket_pct`
@@ -114,21 +109,28 @@ qty to 1–2 shares. Raise to ~0.25 if you want qty≈4. See `[[capital_sizing_a
 
 **Example:** `0.10` → ≤₹1,000/symbol. `0.25` → ≤₹2,500/symbol.
 
-### max_position_value_rs
-**File:** `system_config.yaml → position_sizing.max_position_value_rs`
-**Current:** `2500.0` · **Type:** float (₹)
+### max_position_value_pct  ⭐ BUILD 1 (24-Jun): capital-relative (was fixed ₹)
+**File:** `system_config.yaml → position_sizing.max_position_value_pct`
+**Current:** `0.40` · **Type:** float (fraction) · **Valid:** 0–1
 
-**What it does:** Hard ceiling on qty × price for one order. On ₹10k the 10%
-concentration cap (₹1,000) bites first, so this rarely binds today.
+**What it does:** Hard ceiling on qty × price for one order, as a fraction of capital —
+`cap = max_position_value_pct × capital` (₹4,000 on ₹10k; ₹40,000 on ₹1L). It **REJECTS**
+(does not shrink) an order whose value exceeds the cap. It's a catastrophic-loss / bug
+guard that fires on an **anomaly**, not routine sizing — on ₹10k the 10% concentration
+cap (₹1,000) and 1% risk bite first, so 40% rarely binds.
 
-### risk.max_open_positions / max_daily_trades  ⚠️ overridden by live_test_mode
+**BUILD 1 change:** was a fixed `max_position_value_rs` (₹2,500). That created a hard
+scaling cliff (every order rejected once the account grew past ~₹25k). The pct form
+scales with the account and removes the cliff.
+
+### risk.max_open_positions / max_daily_trades
 **File:** `system_config.yaml → risk.max_open_positions` / `max_daily_trades`
-**Current (base):** `5` / `20`  ·  **Currently effective:** `4` / `6` (see Section 2)
+**Current:** `5` / `10`
 
-**What it does:** Base portfolio caps on concurrent open positions and total entries per
-day. **When `live_test_mode` is ON and mode=live, these are overridden** by the
-`live_test_*` values. To actually change the live cap, edit the `live_test_*` keys
-(Section 2), not these.
+**What it does:** Portfolio caps on concurrent open positions and total entries per day.
+**BUILD 1 (#3):** these are now the **sole** authority in both paper and live — the old
+`live_test_*` override keys were deleted (they had been set equal to these, so the swap
+did nothing). Edit these directly to change the caps.
 
 ### max_sector_exposure_pct
 **File:** `system_config.yaml → risk.max_sector_exposure_pct`
@@ -138,7 +140,7 @@ day. **When `live_test_mode` is ON and mode=live, these are overridden** by the
 
 ### max_consecutive_losses
 **File:** `system_config.yaml → risk.max_consecutive_losses`
-**Current:** `2` · **Type:** integer
+**Current:** `5` · **Type:** integer
 
 **What it does:** After this many losing trades **in a row (today only)**, new signals
 are halted for the day. Day-scoped since FIX-183 (yesterday's losses no longer block
@@ -154,34 +156,16 @@ tier and (if `dynamic_by_winrate`) by the strategy's recent win-rate (floor `min
 
 ---
 
-## Section 2: Live Test Mode (currently ACTIVE)
+## Section 2: ~~Live Test Mode~~ — REMOVED in BUILD 1 (24-Jun)
 
-> **These win over Section 1's base caps whenever the system runs in LIVE mode.**
-> This is a deliberate, **permanent** bug-hunting setup (Rama's strategy): small qty
-> on ₹10k, but enough concurrency/throughput to exercise race paths. No auto-disable.
-> See `[[live_test_mode_permanent]]`.
-
-### live_test_mode
-**File:** `system_config.yaml → risk.live_test_mode`
-**Current:** `true` · **Type:** boolean
-
-**What it does:** Master switch for the test caps. When `true` **and** the process is
-started with `--mode live`, `live_test_max_*` override `risk.max_*`. In paper mode it has
-no effect (paper always runs full base caps). Setting `false` reverts live to base caps
-(5 / 20) — ⚠️ that *removes* the small-exposure safety net.
-
-### live_test_max_open_positions
-**File:** `system_config.yaml → risk.live_test_max_open_positions`
-**Current:** `4` · **Type:** integer
-
-**What it does:** Max concurrent open positions in live test mode. **Effective live cap.**
-
-### live_test_max_entries_per_day
-**File:** `system_config.yaml → risk.live_test_max_entries_per_day`
-**Current:** `6` · **Type:** integer
-
-**What it does:** Max entries placed per day in live test mode. **Effective live cap.**
-This cap is reservation-aware (race-safe) since the Bug B fix — bursts can't overshoot it.
+> **The `live_test_mode` / `live_test_max_open_positions` / `live_test_max_entries_per_day`
+> keys were DELETED.** They had been set equal to the base caps (`max_open_positions: 5`,
+> `max_daily_trades: 10`) for parity, so the live-mode swap in `main.py` was a no-op that
+> only *looked* active — misleading dead config (audit conflict #3). The base caps in
+> Section 1 (`risk.max_open_positions` / `max_daily_trades`) are now the sole authority in
+> **both** paper and live. The deliberate small-exposure bug-hunting posture is unchanged —
+> it's just driven by the base caps directly now. The pre-flight `caps_config_drift` check
+> alerts (CRITICAL) if these drift from 5 / 10. See `[[build1_config_authority_fixes_24jun]]`.
 
 ---
 
@@ -571,7 +555,8 @@ the entry engine consult this. Update it at year-end / when NSE revises the cale
     and re-read from the actual fill — was previously a hardcoded 2.0).
 - `smart_tgt_enabled` + trail trigger/step — trailing-target behaviour.
 - `min_volume_surge`, `min_adr_pct`, `max_spread_pct` — per-strategy entry filters.
-- `max_risk_pct` (1%), `lot_size`, `max_concurrent_positions` — per-strategy sizing/caps.
+- `lot_size`, `max_concurrent_positions` — per-strategy sizing/caps. (BUILD 1: per-strategy
+  `max_risk_pct` was removed — it was dead in live; sizing uses the global `risk_per_trade_pct`.)
 - `entry_start_time`/`entry_end_time`, `active_days` — per-strategy time window (can only
   narrow the global `trading_hours` window, never widen it).
 
@@ -641,27 +626,26 @@ see `[[fix_184_scanner_ua_403]]`.)
 > **Effective: live.** ⚠️ There is **no `mode:` key in any YAML.** To run paper, change
 > the systemd unit's `ExecStart` to `--mode paper` (or launch manually with `--mode paper`).
 
-### Max open positions
-1. `risk.live_test_max_open_positions` (if `live_test_mode` AND mode=live) ← **4**
-2. `risk.max_open_positions` (base) ← 5
-> **Effective: 4** (live_test_mode active).
+### Max open positions  (BUILD 1: single source)
+1. `risk.max_open_positions` ← **5**
+> **Effective: 5.** The `live_test_*` override was removed (#3).
 
-### Max daily trades
-1. `risk.live_test_max_entries_per_day` (if `live_test_mode` AND mode=live) ← **6**
-2. `risk.max_daily_trades` (base) ← 20
-> **Effective: 6** (live_test_mode active). Reservation-aware → bursts can't overshoot.
+### Max daily trades  (BUILD 1: single source)
+1. `risk.max_daily_trades` ← **10**
+> **Effective: 10.** Reservation-aware → bursts can't overshoot. `live_test_*` removed (#3).
 
-### Daily loss limit (two independent controls — *both* active)
-1. `risk.daily_loss_limit_pct` (0.03) — **pre-trade**, includes **unrealised** P&L.
-2. `capital.daily_loss_limit` (₹300) — **post-close**, **realised** only.
-> **Effective: whichever trips first** (both ≈₹300 on ₹10k). They are not redundant —
-> different timing and different P&L basis. See `[[dual_daily_loss_mechanism]]`.
+### Daily loss limit (one pct source, two bases — *both* active)  ⭐ BUILD 1
+1. `risk.daily_loss_limit_pct` (0.03), **pre-trade** — includes **unrealised** P&L.
+2. `risk.daily_loss_limit_pct` (0.03), **post-close** — **realised** only (FundManager).
+> **Effective: 3% × capital on whichever trips first** (₹300 on ₹10k). One source, two
+> bases — not redundant (different timing + P&L basis). The old absolute
+> `capital.daily_loss_limit` was deleted. See `[[dual_daily_loss_mechanism]]`.
 
 ### Position size (smallest cap wins)
 Computed size = min of:
 1. `risk_per_trade_pct` (1% → ~₹100 risk)
 2. `max_concentration_pct` (10% → ₹1,000 notional) ← **usually binds on ₹10k**
-3. `max_position_value_rs` (₹2,500)
+3. `max_position_value_pct` (40% → ₹4,000 on ₹10k) — capital-relative reject backstop
 …then × quality-tier multiplier × win-rate multiplier (floor 0.5 / cap 2.0).
 > **Effective binding cap today: concentration (₹1,000/symbol)** → qty 1–2 shares.
 
@@ -683,7 +667,7 @@ Computed size = min of:
 > **Effective: ON** (master true; primary channel enabled).
 
 ### Max consecutive losses (day scope)
-`risk.max_consecutive_losses` (2) — counts **today's** losses only (FIX-183); a prior
+`risk.max_consecutive_losses` (5) — counts **today's** losses only (FIX-183); a prior
 day's losses never carry over.
 
 ---
@@ -691,11 +675,11 @@ day's losses never carry over.
 ## Common Scenarios
 
 ### I want to test with smaller risk today
-Edit `system_config.yaml`:
+Edit `system_config.yaml` (BUILD 1: edit the base caps directly — `live_test_*` removed):
 ```
 risk:
-  live_test_max_entries_per_day: 1
-  live_test_max_open_positions: 1
+  max_daily_trades: 1
+  max_open_positions: 1
 ```
 Then restart: `deploy/resume.sh`
 
@@ -704,7 +688,7 @@ Then restart: `deploy/resume.sh`
 - Quick/manual: stop the service and run `PYTHONPATH=. venv/bin/python main.py --mode paper`.
 - Durable: edit `trading-system.service` `ExecStart` to `--mode paper`, then
   `sudo systemctl daemon-reload && sudo systemctl restart trading-system`.
-- (Leaving `live_test_mode: true` is fine — it has no effect in paper mode.)
+- (Base caps `max_open_positions` / `max_daily_trades` apply in both paper and live.)
 
 ### I want to silence all alerts temporarily
 Edit `system_config.yaml → alerts.telegram.enabled: false`, then restart.
@@ -712,7 +696,7 @@ Edit `system_config.yaml → alerts.telegram.enabled: false`, then restart.
 
 ### I want to be more conservative on entries
 - **Best knob:** raise `scoring_weights.yaml → min_pass_score` (e.g. 60 → 70).
-- Or lower `risk.live_test_max_entries_per_day`.
+- Or lower `risk.max_daily_trades`.
 - Or tighten `entry_gate.max_spread_pct` / raise `min_effective_rr`.
 
 ### I want bigger position sizes (qty > 1–2)
@@ -733,12 +717,10 @@ Remove its entry from `config/scan_webhook_map.yaml` (no signals route to it). R
 
 Changes here can cause **REAL MONEY LOSS** or disable safety nets:
 
-- `risk.live_test_max_open_positions` / `live_test_max_entries_per_day` — more concurrent /
-  total risk.
-- `risk.live_test_mode: false` — **removes** the small-exposure live caps (reverts to 5/20).
-- `capital.daily_loss_limit` / `risk.daily_loss_limit_pct` — raising lets the account lose more.
+- `risk.max_open_positions` / `max_daily_trades` — more concurrent / total risk.
+- `risk.daily_loss_limit_pct` — raising lets the account lose more before it halts (3% × capital).
 - `scoring_weights.yaml → min_pass_score` — lowering admits weaker signals.
-- `position_sizing.max_concentration_pct` / `max_position_value_rs` — raising increases
+- `position_sizing.max_concentration_pct` / `max_position_value_pct` — raising increases
   per-symbol exposure.
 - `capital.leverage_map` — raising borrows more margin from the broker.
 - `force_intraday_only: false` — allows overnight (CNC) positions.
@@ -768,11 +750,8 @@ sudo systemctl restart trading-system
 # Verify the service is healthy after restart
 curl -s http://localhost:8080/health | jq
 
-# Check what the EFFECTIVE daily cap is right now (should be 6 in live test mode)
-curl -s http://localhost:8080/metrics | jq '.broker_quota_max'
-
-# Confirm live_test_mode is active in the logs (logged CRITICAL at startup)
-grep 'LIVE_TEST_MODE ACTIVE' logs/system_$(date +%F).log
+# Check the effective daily cap right now (base caps are the sole authority — BUILD 1)
+grep -A 6 'risk:' config/system_config.yaml   # max_open_positions / max_daily_trades
 ```
 
 ---
