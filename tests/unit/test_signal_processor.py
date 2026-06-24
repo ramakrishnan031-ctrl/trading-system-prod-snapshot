@@ -1243,9 +1243,11 @@ def test_avg_pipeline_ms_includes_rejections():
 
 def test_positional_tgt_not_equal_entry_price():
     """
-    BL-16: each positional strategy YAML must produce target != entry when
-    run through the real _derive_target pipeline. With RISK_REWARD + ratio 2
-    and an sl distance of 2%, target distance = 4% (well above tgt_min_pct).
+    BL-16: each positional strategy YAML must produce target != entry when run
+    through the real _derive_target pipeline. With RISK_REWARD and an sl distance
+    of 2%, the target distance = 2% × the strategy's own tgt_risk_reward (read from
+    the YAML — Part C standardised all strategies to R:R 1.5, so this is RR-aware
+    rather than hardcoding a ratio).
     """
     from strategies.schema import validate_strategy
     proc, _, _ = _make_proc()
@@ -1265,9 +1267,11 @@ def test_positional_tgt_not_equal_entry_price():
             f"{name}: target distance {distance_pct:.5f} below "
             f"tgt_min_pct {proc._tgt_min_pct:.5f}"
         )
-        # RISK_REWARD with ratio 2 and sl_distance 2% -> tgt distance 4%
-        assert abs(distance_pct - 0.04) < 1e-9, (
-            f"{name}: expected RISK_REWARD distance 4%, got {distance_pct:.5f}"
+        # RISK_REWARD: tgt distance = sl_distance (2%) × the strategy's R:R.
+        expected = 0.02 * cfg.tgt_risk_reward
+        assert abs(distance_pct - expected) < 1e-9, (
+            f"{name}: expected RISK_REWARD distance {expected:.4f} "
+            f"(2%% × R:R {cfg.tgt_risk_reward}), got {distance_pct:.5f}"
         )
         print(
             f"  OK BL-16: {name} entry={entry} sl={sl_long} -> tgt={tgt:.2f} "

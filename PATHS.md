@@ -53,6 +53,17 @@ ssh trading-vm 'sudo systemctl restart trading-system.service'
 `orders/` order lifecycle · `signals/` ingestion · `screening/` scoring ·
 `data/` market data · `alerts/` telegram · `scripts/` ops+gemini · `tests/` (305)
 
+## Strategy control — 3-layer (Slice 2, 24-Jun)
+| What | Location |
+|---|---|
+| Resolver (single source of truth) | `strategies/control.py::strategy_will_trade(strategy, *, trade_type, force_intraday_only)` → `Verdict(will_trade, reason, product)` |
+| LAYER 1 master gate | `system_config.yaml` `trade_type: INTRADAY|DELIVERY|BOTH` (default INTRADAY) → `core/config_loader.py` SystemConfig + validator |
+| LAYER 3 per-strategy switch | `config/strategies/*.yaml` `enabled: true` (all 15) → `strategies/schema.py` `enabled: bool = True` |
+| LAYER 0 breaker (unchanged) | `force_intraday_only` (load-time intent→INTRADAY rewrite in `strategies/loader.py`) |
+| Entry gate (2 sites) | `signals/signal_processor.py` `_process_one` + `continue_from_gate` → `_PipelineReject("STRATEGY_CONTROL")`; placement path UNCHANGED (gate only rejects) |
+| Status table | `scripts/strategy_status.py` (build + html/telegram/plain) → folded into Cron Officer 09:20 briefing (`CronReport.strategy_status`); Type=true intent, Verdict=gate |
+| Default state | trade_type INTRADAY + force_intraday_only true + all 15 enabled → 15 WILL TRADE / 0 WON'T (zero behaviour change). Delivery (CNC) parked → Slice 2.5 |
+
 ## Order-exit safety — circuit-band placeability gate (NOCIL fix, 23-Jun)
 | What | Location |
 |---|---|

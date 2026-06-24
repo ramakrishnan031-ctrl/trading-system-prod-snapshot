@@ -52,6 +52,14 @@ class StrategyConfig(BaseModel):
     intent: str
     order_protocol: str
 
+    # --- Strategy ON/OFF switch (Slice 2, LAYER 3) ---
+    # Per-strategy master switch read by the strategy-control resolver
+    # (strategies/control.strategy_will_trade) at the entry gate + status table.
+    # Default True (opt-in absent → enabled) so adding this field is a zero-behaviour
+    # change for every existing YAML. INDEPENDENT of intent/trade_type: a disabled
+    # strategy never trades regardless of product gating.
+    enabled: bool = True
+
     # --- Entry ---
     entry_method: str
     entry_offset_pct: float = 0.0

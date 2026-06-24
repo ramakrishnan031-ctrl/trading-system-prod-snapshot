@@ -1038,6 +1038,23 @@ class SystemConfig(BaseModel):
         default_factory=lambda: ["0-100", "100-200", "200-300", "300-500", "500-1000", "1000+"]
     )
     force_intraday_only: bool = True          # P0 2026-06-15: force every strategy to INTRADAY (MIS); blocks accidental CNC/DELIVERY orders
+    # Slice 2 (LAYER 1 — master product gate): which product type may trade today.
+    # Read by the strategy-control resolver (strategies/control.strategy_will_trade)
+    # at the entry gate + the status table. INTRADAY (default) = only intent==INTRADAY
+    # strategies trade; DELIVERY = only delivery; BOTH = either. It only GATES (never
+    # rewrites intent — force_intraday_only owns that) so the MIS-only guarantee is
+    # untouched while the breaker is on.
+    trade_type: str = "INTRADAY"
+
+    @field_validator("trade_type")
+    @classmethod
+    def _validate_trade_type(cls, v: str) -> str:
+        allowed = {"INTRADAY", "DELIVERY", "BOTH"}
+        if v not in allowed:
+            raise ValueError(
+                "trade_type must be one of %s, got %r" % (sorted(allowed), v)
+            )
+        return v
 
     @model_validator(mode="after")
     def _cross_field_sanity_checks(self) -> "SystemConfig":

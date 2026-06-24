@@ -376,6 +376,33 @@ def _change_log(registry: CronRegistry, today: date, audit_dir: Path) -> tuple[l
     return added, removed
 
 
+def _strategy_status_payload(config_dir: Path) -> Optional[dict]:
+    """Slice 2: build the morning-briefing STRATEGY STATUS fragments. Reads
+    trade_type + force_intraday_only from system_config.yaml (lightweight — the
+    same values the running app loads) and renders via scripts.strategy_status.
+    Returns None on ANY failure — the briefing must never break on the table."""
+    try:
+        import yaml as _yaml
+        from scripts.strategy_status import (
+            build_status_rows, compact_lists, render_html, render_plaintext,
+        )
+        sc = _yaml.safe_load(
+            (config_dir / "system_config.yaml").read_text(encoding="utf-8")
+        ) or {}
+        tt = sc.get("trade_type", "INTRADAY")
+        fio = bool(sc.get("force_intraday_only", True))
+        rows = build_status_rows(config_dir, trade_type=tt, force_intraday_only=fio)
+        will, wont, err = compact_lists(rows)
+        return {
+            "html": render_html(rows, tt, fio),
+            "plain": render_plaintext(rows, tt),
+            "will": will, "wont": wont, "err": err, "master": tt,
+        }
+    except Exception as exc:  # noqa: BLE001 — never block the briefing
+        _log.warning("cron_officer.strategy_status_failed", extra={"error": str(exc)})
+        return None
+
+
 def _read_preflight_summary(today: date, root: Path = _ROOT) -> dict:
     """Map the pre-flight sentinel -> briefing-banner dict (reuses the sentinel
     loader). Missing or stale (run_date != today) => NOT_RUN."""
@@ -602,10 +629,12 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
     # Morning briefing embeds the pre-flight banner; a missing/stale sentinel
     # (pre-flight never ran / crashed) escalates the briefing to CRITICAL (spec).
     preflight = None
+    strategy_status = None
     if not is_eod:
         preflight = _read_preflight_summary(today, root)
         if preflight.get("status") == "NOT_RUN":
             severity = "CRITICAL"
+        strategy_status = _strategy_status_payload(config_dir)  # Slice 2
     return CronReport(
         day=today, weekday=today.strftime("%A"),
         mode=mode or _detect_mode(store), is_eod=is_eod, jobs=jobs,
@@ -615,6 +644,7 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
         alert_id=now_ist().strftime("%Y%m%d_%H%M%S") + ("_eod" if is_eod else "_brief"),
         ban_active=registry.officer.ban_active(today),
         preflight=preflight,
+        strategy_status=strategy_status,
     )
 
 

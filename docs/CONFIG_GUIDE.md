@@ -575,9 +575,35 @@ the entry engine consult this. Update it at year-end / when NSE revises the cale
 - `entry_start_time`/`entry_end_time`, `active_days` — per-strategy time window (can only
   narrow the global `trading_hours` window, never widen it).
 
-**Disable a strategy:** there's no single `enabled:` toggle in these files — remove the
-strategy's scanner mapping from `scan_webhook_map.yaml` (so no signals route to it), or
-set its time window so it never fires. (Confirm the exact method before relying on it.)
+### Strategy Control — ON/OFF + product type (Slice 2, 24-Jun)
+
+Three plain-English layers decide whether a strategy trades today. A strategy
+**WILL TRADE only if** it is enabled **AND** its product type is allowed by the
+master **AND** the emergency breaker doesn't block it.
+
+- **`enabled:` (per strategy YAML)** — the simple ON/OFF switch. `true` = the
+  strategy can trade; `false` = it never trades (regardless of anything else).
+  Default `true`. **To turn a strategy OFF:** set `enabled: false` in its YAML →
+  commit → push → restart. (This replaces the old "remove the scanner mapping"
+  workaround.) All 15 currently ship `enabled: true`.
+- **`trade_type:` (system_config.yaml)** — the master product gate: `INTRADAY`
+  (default — only intraday strategies trade), `DELIVERY` (only delivery), or
+  `BOTH`. It only GATES which strategies trade; it does **not** itself place CNC.
+- **`force_intraday_only:` (system_config.yaml)** — the emergency breaker (top
+  priority). While `true` (current default), every strategy is forced to trade
+  intraday (MIS); no CNC/delivery order can ever be placed. This is why the three
+  `positional_*` "delivery" strategies currently trade **as intraday**.
+
+**Status table:** the Cron Officer 09:20 briefing (email + Telegram) shows a
+STRATEGY STATUS table — each strategy's Type (its true INTRADAY/DELIVERY nature),
+the master mode, its switch, and the WILL/WON'T TRADE verdict (computed by the
+exact same logic the live entry gate uses, so the table never lies).
+
+⚠️ **Delivery (CNC) is not live yet.** Even with `trade_type: BOTH` + a delivery
+strategy enabled, real overnight delivery needs the **Delivery lifecycle project
+(Slice 2.5)** — square-off exemption, EOD reconcile, overnight carry, GTT — before
+it should go live. Until then keep `trade_type: INTRADAY` (delivery strategies
+keep running safely as intraday).
 
 ### Scanner → strategy mapping
 **File:** `config/scan_webhook_map.yaml`

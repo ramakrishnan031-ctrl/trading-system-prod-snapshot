@@ -65,6 +65,10 @@ class CronReport:
     ts_iso: str = ""
     ban_active: bool = False
     preflight: Optional[dict] = None   # pre-flight sentinel summary -> briefing banner
+    # Slice 2: pre-rendered strategy-status fragments {"html","telegram","plain"}
+    # (morning briefing only). Built in cron_officer.build_report; spliced by the
+    # briefing renderers below so this module stays pure (no config I/O here).
+    strategy_status: Optional[dict] = None
 
     # ── derived counts ────────────────────────────────────────────────────────
     def _count(self, *statuses: str) -> int:
@@ -263,6 +267,21 @@ def render_briefing_telegram(report: CronReport) -> str:
             lines.append(f"├ `{_e(j.due_label)}` {_e(j.name)}")
         if len(pending) > 5:
             lines.append(f"└ `\\.\\.\\. \\+{len(pending) - 5} more`")
+    # Slice 2: compact STRATEGY STATUS. Names go inside ` ` code spans so their
+    # underscores are MarkdownV2-literal (no escaping needed); counts/parens are
+    # escaped. Full table is in the email.
+    ss = report.strategy_status
+    if ss and (ss.get("will") or ss.get("wont") or ss.get("err")):
+        will, wont, err = ss.get("will", []), ss.get("wont", []), ss.get("err", [])
+        def _names(ns):
+            return ", ".join(f"`{n}`" for n in ns) if ns else "—"
+        lines.append(_DIV)
+        lines.append(f"🎯 *Strategy Status* \\(master: {_e(ss.get('master', ''))}\\)")
+        lines.append(f"✅ WILL TRADE \\({len(will)}\\): {_names(will)}")
+        lines.append(f"⛔ WON'T TRADE \\({len(wont)}\\): {_names(wont)}")
+        if err:
+            lines.append(f"⚠️ CONFIG ERROR \\({len(err)}\\): {_names(err)}")
+        lines.append("📧 Full table → email")
     lines += [_DIV, f"📨 EOD report ≈ *{_e('18:50 IST')}*"]
     # A post-ban CRITICAL briefing also sends a full clean HTML email (the compact
     # Telegram list above stays truncated for phones); point Rama to the full view.
@@ -349,6 +368,11 @@ def render_briefing_plaintext(report: CronReport) -> str:
     L.append("PENDING TODAY")
     for j in pending:
         L.append(f"  - {j.due_label}  {j.name}")
+    # Slice 2: STRATEGY STATUS (plain mirror of the email table).
+    if report.strategy_status and report.strategy_status.get("plain"):
+        L.append("")
+        L.append("STRATEGY STATUS")
+        L.append(report.strategy_status["plain"])
     L.append("")
     L.append(f"EOD report ≈ 18:50 IST | Alert ID: {report.alert_id}")
     if report.preflight:
@@ -591,11 +615,15 @@ def render_briefing_html(report: CronReport) -> str:
 
     done_sec = _section("✅ ALREADY COMPLETED", _list((COMPLETED,), "(none yet)"), "#2E7D32")
     pend_sec = _section("⏳ PENDING TODAY", _list((PENDING, PENDING_REDESIGN), "(none)"), "#1565C0")
+    # Slice 2: STRATEGY STATUS table (full, no truncation). Pre-rendered fragment.
+    strat_sec = ""
+    if report.strategy_status and report.strategy_status.get("html"):
+        strat_sec = _section("STRATEGY STATUS", report.strategy_status["html"], "#6A1B9A")
     footer = (
         '<div style="margin-top:12px;font-family:monospace;font-size:11px;color:#616161;">'
         f'EOD report ≈ 18:50 IST &nbsp;|&nbsp; Alert ID: {_esc_html(report.alert_id)}</div>'
     )
-    body = _preflight_banner_html(report.preflight) + banner + summary + done_sec + pend_sec + footer
+    body = _preflight_banner_html(report.preflight) + banner + summary + done_sec + pend_sec + strat_sec + footer
     return (
         '<html><body style="margin:0;padding:12px;background:#F5F5F5;'
         'font-family:Arial,Helvetica,sans-serif;color:#212121;">'

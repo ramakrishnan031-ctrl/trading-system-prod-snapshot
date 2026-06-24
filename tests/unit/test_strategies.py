@@ -465,7 +465,7 @@ def test_defaults_populated_correctly() -> None:
     assert cfg.sl_min_pct == 0.003
     assert cfg.sl_max_pct == 0.05
     assert cfg.tgt_atr_multiplier == 2.5
-    assert cfg.tgt_risk_reward == 2.0
+    assert cfg.tgt_risk_reward == 1.5   # Part C (24-Jun): standardised all 15 to R:R 1.5
     assert cfg.smart_tgt_trail_trigger_pct == 0.005
     assert cfg.smart_tgt_trail_step_pct == 0.003
     assert cfg.pullback_wait_tolerance_pct == 0.005

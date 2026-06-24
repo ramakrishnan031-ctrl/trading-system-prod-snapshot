@@ -8,6 +8,7 @@ description: "Multi-day long position on outperforming sector leaders during sec
 
 direction: "LONG"
 intent: "DELIVERY"
+enabled: true
 order_protocol: "LIMIT_TRIPLE"
 
 entry_method: "LIMIT"

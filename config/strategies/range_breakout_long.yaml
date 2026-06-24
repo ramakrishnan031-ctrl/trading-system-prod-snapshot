@@ -8,6 +8,7 @@ description: "Long entry on breakout above a consolidated intraday range with vo
 
 direction: "LONG"
 intent: "INTRADAY"
+enabled: true
 order_protocol: "CO_PLUS_TGT"
 
 entry_method: "LIMIT"

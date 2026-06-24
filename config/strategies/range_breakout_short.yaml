@@ -7,6 +7,7 @@ description: "Short entry on breakdown below a consolidated intraday range with 
 
 direction: "SHORT"
 intent: "INTRADAY"
+enabled: true
 order_protocol: "CO_PLUS_TGT"
 
 entry_method: "LIMIT"

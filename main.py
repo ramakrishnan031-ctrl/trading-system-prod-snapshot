@@ -2138,6 +2138,31 @@ def _main_locked(args, config_dir: Path) -> int:
         force_intraday_only=app_config.system.force_intraday_only,  # P0 MIS-only safety
     )
 
+    # Slice 2: one-line strategy-control summary at boot (same resolver the entry
+    # gate + status table use) so the WILL/WON'T TRADE state is visible in the log.
+    try:
+        from strategies.control import strategy_will_trade as _swt
+        _tt = app_config.system.trade_type
+        _fio = app_config.system.force_intraday_only
+        _will, _wont = [], []
+        for _nm, _s in sorted(strategies.items()):
+            _v = _swt(_s, trade_type=_tt, force_intraday_only=_fio)
+            (_will if _v.will_trade else _wont).append(
+                _nm if _v.will_trade else f"{_nm} ({_v.reason})"
+            )
+        get_logger("main").info(
+            "strategy_control.summary",
+            extra={
+                "trade_type": _tt, "force_intraday_only": _fio,
+                "will_trade_count": len(_will), "wont_trade_count": len(_wont),
+                "will_trade": _will, "wont_trade": _wont,
+            },
+        )
+    except Exception as _sc_exc:  # never let the summary block startup
+        get_logger("main").warning(
+            "strategy_control.summary_failed", extra={"error": str(_sc_exc)}
+        )
+
     # Phase 3a: warn (never reject) if a slippage-tolerance override key looks off
     # — an extreme fraction, or a by_symbol/by_strategy typo that would be SILENTLY
     # IGNORED at resolution time (now that we know the instrument + strategy sets).
@@ -2268,6 +2293,9 @@ def _main_locked(args, config_dir: Path) -> int:
         quote_fn=broker_adapter.get_quote,
         # FIX-130 Item 6: intraday strategy circuit breaker
         strategy_governor=_build_strategy_governor(store, app_config, notifier, mode_label),
+        # Slice 2: strategy-control gate inputs (LAYER 1 master + LAYER 0 breaker).
+        trade_type=app_config.system.trade_type,
+        force_intraday_only=app_config.system.force_intraday_only,
     )
 
     entry_gate = EntryGate(

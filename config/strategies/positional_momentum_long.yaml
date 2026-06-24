@@ -8,6 +8,7 @@ description: "Multi-day long position on strong momentum stocks with ATR-based r
 
 direction: "LONG"
 intent: "DELIVERY"
+enabled: true
 order_protocol: "LIMIT_TRIPLE"
 
 entry_method: "LIMIT"

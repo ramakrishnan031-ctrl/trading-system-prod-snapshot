@@ -51,6 +51,13 @@ excluded_symbols:
 # when positional/DELIVERY trading is deliberately re-enabled and re-tested.
 force_intraday_only: true
 
+# Slice 2 (LAYER 1 — master product gate): which product type may trade today.
+# INTRADAY (default) = only intraday-intent strategies trade · DELIVERY = only
+# delivery · BOTH = either. Only GATES which strategies trade; it does NOT rewrite
+# intent or place CNC by itself (force_intraday_only above still forces MIS-only).
+# Delivery strategies need the Slice 2.5 delivery lifecycle before going live.
+trade_type: INTRADAY
+
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:
     INTRADAY: "MIS"           # Margin Intraday Squareoff (PR3)

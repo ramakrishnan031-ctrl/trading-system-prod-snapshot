@@ -54,6 +54,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.exceptions import BrokerError, BrokerRateLimitError, BrokerTimeoutError
 from core.time_authority import ist_timezone, now_ist
+from strategies.control import strategy_will_trade  # Slice 2: strategy-control gate
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,8 @@ class SignalProcessor:
         quote_fn=None,                      # FIX-067: quote function for momentum fresh LTP
         strategy_governor=None,             # FIX-130 Item 6: intraday strategy circuit breaker
         perf_weights: Optional[Dict[str, float]] = None,  # FIX-132 Item 9
+        trade_type: str = "INTRADAY",       # Slice 2 LAYER 1: master product gate
+        force_intraday_only: bool = False,  # Slice 2 LAYER 0: read for the control resolver
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -166,6 +169,8 @@ class SignalProcessor:
         self._quote_fn = quote_fn                          # FIX-067: momentum fresh LTP
         self._strategy_governor = strategy_governor        # FIX-130 Item 6: circuit breaker
         self._perf_weights: Dict[str, float] = dict(perf_weights or {})  # FIX-132 Item 9
+        self._trade_type = trade_type                      # Slice 2 LAYER 1
+        self._force_intraday_only = bool(force_intraday_only)  # Slice 2 LAYER 0
 
         # Lifecycle
         self._running = False
@@ -607,6 +612,17 @@ class SignalProcessor:
                     "UNKNOWN_STRATEGY",
                     f"Strategy {strategy_name!r} not in loaded strategies",
                 )
+
+            # Slice 2 — strategy-control gate (LAYERS 1+3). Reject BEFORE any
+            # sizing/reservation if the master trade_type or the per-strategy
+            # ON/OFF switch says this strategy must not trade today. The SAME
+            # resolver drives the status table, so the table can never disagree.
+            _verdict = strategy_will_trade(
+                strategy_obj, trade_type=self._trade_type,
+                force_intraday_only=self._force_intraday_only,
+            )
+            if not _verdict.will_trade:
+                raise _PipelineReject("STRATEGY_CONTROL", _verdict.reason)
 
             # CFG-5 (2026-04-26 audit): per-strategy entry-window enforcement.
             # The global window passed above; now check the narrower
@@ -1294,6 +1310,16 @@ class SignalProcessor:
                     "UNKNOWN_STRATEGY",
                     f"Strategy {strategy_name!r} not in loaded strategies",
                 )
+
+            # Slice 2 — strategy-control gate (LAYERS 1+3), mirroring _process_one
+            # so a pullback-wait resumption respects the master trade_type + the
+            # per-strategy switch exactly like a direct webhook entry.
+            _verdict = strategy_will_trade(
+                strategy_obj, trade_type=self._trade_type,
+                force_intraday_only=self._force_intraday_only,
+            )
+            if not _verdict.will_trade:
+                raise _PipelineReject("STRATEGY_CONTROL", _verdict.reason)
 
             # CFG-5 (2026-04-26 audit): per-strategy entry-window enforcement.
             if not self._mw.is_entry_allowed_for_strategy(now, strategy_obj):
