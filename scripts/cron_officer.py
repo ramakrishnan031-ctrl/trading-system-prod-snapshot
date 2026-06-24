@@ -642,7 +642,12 @@ def _resolve_sentinel_dir() -> Path:
 
 
 def _send_telegram_md(text: str, severity: str, config_dir: Path) -> None:
-    """Best-effort Telegram send with MarkdownV2 (used OUTSIDE the ban window)."""
+    """Best-effort Telegram send with MarkdownV2 (used OUTSIDE the ban window).
+
+    write_sentinel=False: even a CRITICAL report must NOT make the notifier write
+    a bare sentinel here (that bare sentinel was the raw-MarkdownV2 email leak of
+    24-Jun). The clean HTML email backup is written separately by deliver_report.
+    """
     try:
         from alerts.telegram_notifier import TelegramNotifier
         notifier = TelegramNotifier.from_env(logger=_log, config_dir=config_dir)
@@ -651,18 +656,25 @@ def _send_telegram_md(text: str, severity: str, config_dir: Path) -> None:
             return
         try:  # parse_mode best-effort; plain still delivers if unsupported
             notifier.send(severity=severity, title="Cron Officer", body=text,
-                          source_module="cron_officer", parse_mode="MarkdownV2")
+                          source_module="cron_officer", parse_mode="MarkdownV2",
+                          write_sentinel=False)
         except TypeError:
             notifier.send(severity=severity, title="Cron Officer", body=text,
-                          source_module="cron_officer")
+                          source_module="cron_officer", write_sentinel=False)
     except Exception as exc:
         _log.error("cron_officer.telegram_failed", extra={"error": str(exc)})
 
 
 def deliver_report(report: CronReport, config_dir: Path, *, dry_run: bool,
                    sentinel_dir: Optional[Path] = None) -> dict:
-    """Render + route a CronReport. EOD ALWAYS emails (rich HTML + plain mirror);
-    the morning briefing emails ONLY during the Telegram ban, else Telegrams.
+    """Render + route a CronReport. Routing:
+      * EOD report                   -> clean HTML email (always) + Telegram (post-ban)
+      * briefing, during the ban     -> clean HTML email (no Telegram)
+      * briefing, post-ban CRITICAL  -> Telegram + clean HTML email backup (Rama 24-Jun)
+      * briefing, post-ban INFO/WARN -> Telegram only (no email)
+    The Telegram path never writes a sentinel itself (_send_telegram_md ->
+    write_sentinel=False), so the only email is the well-formed HTML one written
+    here — no raw-MarkdownV2 blob can leak into the inbox.
     Returns the rendered parts (dry-run inspection / tests). Never raises."""
     if report.is_eod:
         html, plain, tg = (render_eod_html(report), render_eod_plaintext(report),
@@ -681,7 +693,12 @@ def deliver_report(report: CronReport, config_dir: Path, *, dry_run: bool,
 
     sdir = sentinel_dir or _resolve_sentinel_dir()
     ban = report.ban_active
-    if report.is_eod or ban:        # EOD always emails; briefing emails during ban
+    # One clean HTML email when: EOD (always), during the ban (briefing falls
+    # back to email), OR a post-ban CRITICAL report — a belt-and-suspenders
+    # backup so a critical briefing is never missed even if Telegram is down
+    # (Rama 24-Jun). Post-ban INFO/WARN briefings stay Telegram-only.
+    email_backup = report.is_eod or ban or report.severity == "CRITICAL"
+    if email_backup:
         try:
             write_critical_sentinel(
                 title=f"Cron {'EOD' if report.is_eod else 'Briefing'} {report.day.isoformat()}",
@@ -692,7 +709,7 @@ def deliver_report(report: CronReport, config_dir: Path, *, dry_run: bool,
             )
         except Exception as exc:
             _log.error("cron_officer.email_sentinel_failed", extra={"error": str(exc)})
-    if not ban:                     # Telegram only outside the ban window
+    if not ban:                     # Telegram outside the ban window (no sentinel)
         _send_telegram_md(tg, report.severity, config_dir)
     return parts
 

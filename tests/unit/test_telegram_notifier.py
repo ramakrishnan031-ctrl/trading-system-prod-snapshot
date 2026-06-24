@@ -240,6 +240,32 @@ class TestCriticalTier(unittest.TestCase):
         result = n.send("CRITICAL", "t", "b", "m")
         self.assertIsInstance(result.sentinel_path, Path)
 
+    # ── write_sentinel=False (24-Jun Cron-Officer email-leak fix) ──────────────
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_critical_write_sentinel_false_skips_sentinel(self, mock_post):
+        # CRITICAL with write_sentinel=False must NOT write a sentinel (the caller
+        # owns its own email), yet Telegram delivery is unchanged.
+        mock_post.return_value = _mock_ok()
+        n = _make_notifier(self.tmpdir)
+        result = n.send("CRITICAL", "Briefing", "body", "cron_officer",
+                        write_sentinel=False)
+        self.assertIsNone(result.sentinel_path)
+        self.assertEqual(list((self.tmpdir / "sentinels").glob("*.flag")), [])
+        self.assertTrue(mock_post.called)  # Telegram still fired
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_critical_write_sentinel_false_skips_email_fallback(self, mock_post):
+        # write_sentinel=False also suppresses the Telegram-failure email fallback
+        # (the caller already wrote its own clean email — no duplicate).
+        mock_post.return_value = _mock_status(500)
+        n = _make_notifier(self.tmpdir, max_retries=0)
+        with patch.object(n, "_send_email_fallback") as mock_fb:
+            result = n.send("CRITICAL", "Briefing", "body", "cron_officer",
+                            write_sentinel=False)
+            mock_fb.assert_not_called()
+        self.assertIsNone(result.sentinel_path)
+
 
 # ==============================================================================
 # TestMultiChat
@@ -631,14 +657,23 @@ class TestBl14SendSignatureLocked(unittest.TestCase):
         import inspect
         sig = inspect.signature(TelegramNotifier.send)
         params = list(sig.parameters.keys())
-        # self + 5 declared args in exact order
+        # self + 5 positional args, then write_sentinel (24-Jun: defaulted True so
+        # every existing caller is byte-unchanged; only cron_officer opts out).
         self.assertEqual(
             params,
-            ["self", "severity", "title", "body", "source_module", "context"],
+            ["self", "severity", "title", "body", "source_module", "context",
+             "write_sentinel"],
             f"TelegramNotifier.send signature drifted: {params}. "
             "If this is intentional, update ALL callers (main.py, eod_squareoff, "
             "shadow_tracker, order_reconciler) in the same commit.",
         )
+
+    def test_send_write_sentinel_defaults_true(self):
+        # Default MUST stay True so all non-cron_officer CRITICAL callers keep
+        # their sentinel -> email behaviour unchanged.
+        import inspect
+        sig = inspect.signature(TelegramNotifier.send)
+        self.assertIs(sig.parameters["write_sentinel"].default, True)
 
     def test_send_context_has_default_none(self):
         import inspect

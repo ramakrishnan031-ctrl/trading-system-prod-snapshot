@@ -264,6 +264,10 @@ def render_briefing_telegram(report: CronReport) -> str:
         if len(pending) > 5:
             lines.append(f"└ `\\.\\.\\. \\+{len(pending) - 5} more`")
     lines += [_DIV, f"📨 EOD report ≈ *{_e('18:50 IST')}*"]
+    # A post-ban CRITICAL briefing also sends a full clean HTML email (the compact
+    # Telegram list above stays truncated for phones); point Rama to the full view.
+    if report.severity == "CRITICAL":
+        lines.append("📧 Full list → email")
     if report.preflight:
         emoji, _a, _b, label = _pf_style(report.preflight)
         lines.insert(0, f"*🚀 Pre\\-flight:* `{_e(label)}` {emoji}")

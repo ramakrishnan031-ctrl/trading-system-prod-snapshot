@@ -300,6 +300,7 @@ class TelegramNotifier:
         body: str,
         source_module: str,
         context: dict[str, Any] | None = None,
+        write_sentinel: bool = True,
     ) -> SendResult:
         """
         Send an alert at the given severity tier (TG3, TG4).
@@ -308,6 +309,13 @@ class TelegramNotifier:
             INFO/WARN  -> attempt send; drop silently on failure
             ERROR      -> attempt send; write failed_alerts.log on failure
             CRITICAL   -> write sentinel FIRST, then attempt send (TG5)
+
+        write_sentinel: CRITICAL only. Default True keeps the TG5 behaviour every
+            alerting caller relies on (sentinel -> alert_watcher email). Pass
+            False when the CALLER owns the email backup itself (the Cron Officer
+            briefing/EOD, which writes its own clean HTML email): the Telegram
+            send then does NOT write a bare sentinel, so no raw text can leak
+            into the inbox as a malformed email (24-Jun email-leak fix).
         """
         # TASK-10: master ON/OFF switch (telegram.enabled). Single check point;
         # when disabled the notifier is a silent no-op — no sentinel, no HTTP,
@@ -321,7 +329,8 @@ class TelegramNotifier:
         result = SendResult(success=False, tier=severity)
 
         if severity == "CRITICAL":
-            result = self._handle_critical(title, body, source_module, context or {})
+            result = self._handle_critical(title, body, source_module, context or {},
+                                           write_sentinel=write_sentinel)
         elif severity == "ERROR":
             result = self._handle_error(title, body, source_module, context or {})
         else:
@@ -340,22 +349,31 @@ class TelegramNotifier:
         body: str,
         source_module: str,
         context: dict,
+        write_sentinel: bool = True,
     ) -> SendResult:
-        """CRITICAL: write sentinel first, then attempt Telegram (TG5)."""
+        """CRITICAL: write sentinel first, then attempt Telegram (TG5).
+
+        write_sentinel=False suppresses BOTH the unconditional sentinel AND the
+        Telegram-failure email fallback — used when the caller owns its own email
+        backup (Cron Officer), so the Telegram path can never emit a bare,
+        malformed-email sentinel (24-Jun email-leak fix). Telegram delivery and
+        the failed-alerts log are unchanged.
+        """
         sentinel_path: Path | None = None
 
         if self._paper_mode and not self._send_in_paper_mode:
             # paper_mode with alerts suppressed: still write sentinel but skip HTTP (TG9)
-            try:
-                sentinel_path = write_critical_sentinel(
-                    title=title, body=body,
-                    source_module=source_module, context=context,
-                    sentinel_dir=self._sentinel_dir,
-                )
-            except OSError as exc:
-                self._log.error(
-                    "CRITICAL sentinel write failed (paper_mode): %s", exc
-                )
+            if write_sentinel:
+                try:
+                    sentinel_path = write_critical_sentinel(
+                        title=title, body=body,
+                        source_module=source_module, context=context,
+                        sentinel_dir=self._sentinel_dir,
+                    )
+                except OSError as exc:
+                    self._log.error(
+                        "CRITICAL sentinel write failed (paper_mode): %s", exc
+                    )
             self._log.info(
                 "[CRITICAL][paper_mode] %s -- %s", title, body
             )
@@ -366,16 +384,18 @@ class TelegramNotifier:
                 sentinel_path=sentinel_path,
             )
 
-        # Step 1: write sentinel unconditionally (TG5)
-        try:
-            sentinel_path = write_critical_sentinel(
-                title=title, body=body,
-                source_module=source_module, context=context,
-                sentinel_dir=self._sentinel_dir,
-            )
-        except OSError as exc:
-            # Last-ditch: log error, still try Telegram (TG5)
-            self._log.error("CRITICAL sentinel write failed: %s", exc)
+        # Step 1: write sentinel (TG5) — unless the caller owns the email backup
+        # itself (write_sentinel=False; Cron Officer 24-Jun email-leak fix).
+        if write_sentinel:
+            try:
+                sentinel_path = write_critical_sentinel(
+                    title=title, body=body,
+                    source_module=source_module, context=context,
+                    sentinel_dir=self._sentinel_dir,
+                )
+            except OSError as exc:
+                # Last-ditch: log error, still try Telegram (TG5)
+                self._log.error("CRITICAL sentinel write failed: %s", exc)
 
         # Step 2: attempt Telegram send
         delivered, failed = self._send_to_all_chats("CRITICAL", title, body, source_module, context)
@@ -392,8 +412,10 @@ class TelegramNotifier:
                 chat_ids_attempted=delivered + failed,
             )
 
-        # FIX-132 Item 10: if Telegram failed for ALL channels, try email fallback
-        if not delivered and failed:
+        # FIX-132 Item 10: if Telegram failed for ALL channels, try email fallback.
+        # Skipped when write_sentinel=False — the caller (Cron Officer) already
+        # wrote its own clean HTML email backup, so a second email here would dupe.
+        if write_sentinel and not delivered and failed:
             self._send_email_fallback(title, body, source_module)
 
         return SendResult(

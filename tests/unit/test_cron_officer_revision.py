@@ -222,6 +222,59 @@ def test_deliver_dry_run_writes_nothing(tmp_path):
     assert parts["subject"].startswith("[LFL836-BAN]") and "<html>" in parts["html"]
 
 
+# ── 24-Jun email-leak fix: post-ban CRITICAL briefing routing ─────────────────
+
+def test_deliver_briefing_postban_critical_clean_html_email(tmp_path, monkeypatch):
+    # Post-ban (ban=False) CRITICAL briefing -> Telegram AND a clean HTML email
+    # backup (NOT a raw-MarkdownV2 blob). Isolate the Telegram side.
+    sent = []
+    monkeypatch.setattr(co, "_send_telegram_md", lambda *a, **k: sent.append(a))
+    co.deliver_report(_mk_report(is_eod=False, ban=False, sev="CRITICAL"),
+                      Path("config"), dry_run=False, sentinel_dir=tmp_path)
+    flags = list(tmp_path.glob("critical_alert_*.flag"))
+    assert len(flags) == 1                              # exactly one clean email
+    data = json.loads(flags[0].read_text(encoding="utf-8"))
+    assert data["content_type"] == "text/html"
+    assert data["html_body"] and data["plain_fallback"]
+    assert "<html>" in data["html_body"]                # real HTML …
+    assert "\\(" not in data["html_body"]               # … not MarkdownV2 escaping
+    assert data["subject"].startswith("[LFL836]")       # ban prefix gone
+    assert sent, "Telegram briefing must still be sent post-ban"
+
+
+def test_deliver_briefing_postban_infowarn_telegram_only(tmp_path, monkeypatch):
+    # Post-ban INFO/WARN briefing stays Telegram-only — no email at all.
+    sent = []
+    monkeypatch.setattr(co, "_send_telegram_md", lambda *a, **k: sent.append(a))
+    co.deliver_report(_mk_report(is_eod=False, ban=False, sev="INFO"),
+                      Path("config"), dry_run=False, sentinel_dir=tmp_path)
+    assert list(tmp_path.glob("*.flag")) == []          # no email
+    assert sent                                         # Telegram only
+
+
+def test_deliver_briefing_email_lists_all_jobs_no_truncation(tmp_path, monkeypatch):
+    # Part 2: the EMAIL lists every job (no "+N more"); the compact Telegram render
+    # still truncates. 20 completed + 19 pending = 39 jobs.
+    monkeypatch.setattr(co, "_send_telegram_md", lambda *a, **k: None)
+    jobs = [R.JobOutcome(f"done_job_{i:02d}", "DAILY", f"{i % 24:02d}:00",
+                         time(i % 24), R.COMPLETED, "heartbeat_db") for i in range(20)]
+    jobs += [R.JobOutcome(f"pending_job_{i:02d}", "MARKET_DAY", "15:45",
+                          time(15, 45), R.PENDING, "heartbeat_db") for i in range(19)]
+    rep = R.CronReport(day=MON, weekday="Monday", mode="Live", is_eod=False, jobs=jobs,
+                       severity="CRITICAL", ban_active=False, alert_id="x",
+                       ts_iso="2026-06-22T18:50:00+05:30")
+    co.deliver_report(rep, Path("config"), dry_run=False, sentinel_dir=tmp_path)
+    html = json.loads(next(tmp_path.glob("critical_alert_*.flag"))
+                      .read_text(encoding="utf-8"))["html_body"]
+    for i in range(20):
+        assert f"done_job_{i:02d}" in html              # every completed job
+    for i in range(19):
+        assert f"pending_job_{i:02d}" in html           # every pending job (no cap)
+    # Compact Telegram STILL truncates (next 5 + "+N more").
+    tg = R.render_briefing_telegram(rep)
+    assert "more" in tg and "pending_job_18" not in tg
+
+
 # ── HTML render smoke ─────────────────────────────────────────────────────────
 
 def test_eod_html_has_key_sections():
