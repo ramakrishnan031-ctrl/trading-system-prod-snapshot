@@ -100,7 +100,7 @@ def _make_sizer(
     lot_skew_rejection_threshold: float = 0.25,  # FIX-021
     min_tick_size: float = 0.05,  # FIX-041
     max_single_order_qty: int = 10000,  # FIX-041
-    max_position_value_rs: float = 50000.0,  # FIX-144
+    max_position_value_pct: float = 0.40,  # FIX-144 / BUILD 1 (#2): fraction of capital
 ) -> PositionSizer:
     fm = _MockFundManager(total, intraday_avail, positional_avail)
     return PositionSizer(
@@ -114,7 +114,7 @@ def _make_sizer(
         lot_skew_rejection_threshold=lot_skew_rejection_threshold,
         min_tick_size=min_tick_size,
         max_single_order_qty=max_single_order_qty,
-        max_position_value_rs=max_position_value_rs,
+        max_position_value_pct=max_position_value_pct,
     )
 
 
@@ -727,7 +727,7 @@ def test_fix041_normal_sl_distance_proceeds() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_fix144_position_value_exceeds_cap_rejected() -> None:
-    """FIX-144: qty*price > max_position_value_rs -> POSITION_VALUE_CAP rejection."""
+    """FIX-144: qty*price > max_position_value_pct*capital -> POSITION_VALUE_CAP rejection."""
     logger = _MockLogger()
     # Set up so final_qty * entry_price exceeds cap
     # entry=1000, sl_dist=10 -> qty_by_risk=100
@@ -744,7 +744,7 @@ def test_fix144_position_value_exceeds_cap_rejected() -> None:
         max_concentration_pct=0.10,
         tier_multipliers={"HIGH": 1.0, "MEDIUM": 0.7, "LOW": 0.5},
         logger=logger,
-        max_position_value_rs=5000.0,  # cap at Rs 5k
+        max_position_value_pct=0.05,  # 5% × 100k = Rs 5k cap
     )
     # final_qty=10, price=1000 -> value=10000 > 5000 cap
     r = sizer.calculate("EXPENSIVE", "BUY", 1000.0, 990.0, "INTRADAY", score_tier="HIGH")
@@ -757,13 +757,13 @@ def test_fix144_position_value_exceeds_cap_rejected() -> None:
 
 
 def test_fix144_position_value_within_cap_proceeds() -> None:
-    """FIX-144: qty*price <= max_position_value_rs -> sizing proceeds normally."""
+    """FIX-144: qty*price <= max_position_value_pct*capital -> sizing proceeds normally."""
     sizer = _make_sizer(
         total=100_000,
         intraday_avail=70_000,
         risk_per_trade_pct=0.01,
         max_concentration_pct=0.10,
-        max_position_value_rs=100000.0,  # generous cap
+        max_position_value_pct=1.0,  # 100% × 100k = generous cap
     )
     # entry=1000, sl=990 -> sl_dist=10 -> qty_by_risk=100
     # 100*1000 = 100000 <= 100000 cap -> proceeds
@@ -780,7 +780,7 @@ def test_fix144_cap_logs_critical() -> None:
     logger = _MockLogger()
     sizer = _make_sizer(
         logger=logger,
-        max_position_value_rs=1000.0,  # very low cap
+        max_position_value_pct=0.01,  # 1% × 100k = Rs 1k (very low cap)
     )
     # entry=100, sl=99 -> sl_dist=1 -> qty_by_risk=1000
     # 1000*100 = 100000 >> 1000 cap

@@ -231,7 +231,7 @@ def wired_system(request, tmp_path):
         logger=_logger("fm"),
         intraday_bucket_pct=0.70,
         positional_bucket_pct=0.30,
-        daily_loss_limit=10_000.0,
+        daily_loss_limit_pct=0.02,
         leverage_map=leverage_map,
     )
     fund_manager.initialize(PAPER_CAPITAL)

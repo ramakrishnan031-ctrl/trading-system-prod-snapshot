@@ -149,6 +149,10 @@ def replay_one_signal(
             return result
 
         replay_capital = 100000.0
+        # BUILD 1 (#11, 24-Jun): per-strategy max_risk_pct was removed from the
+        # StrategyConfig schema (dead in live; only replay read it). getattr
+        # falls back to 0.01 — the value every strategy YAML used — so replay
+        # sizing is unchanged.
         risk_pct = getattr(strategy_obj, "max_risk_pct", 0.01)
         risk_rs = replay_capital * risk_pct
         qty = int(math.floor(risk_rs / sl_distance))

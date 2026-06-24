@@ -23,19 +23,29 @@ def _store(tmp_path) -> StateStore:
     return StateStore(tmp_path / "sm.db")
 
 
-def _cfg(max_open=5, max_daily=20, live_test=False, lt_open=1, lt_daily=6,
-         daily_loss_limit=300.0, max_posval=2500.0):
+def _cfg(max_open=5, max_daily=20, daily_loss_limit_pct=0.03, max_posval_pct=0.40):
+    # BUILD 1 (#1/#2/#3): live_test_* fields deleted; limits are now pct-of-capital.
     risk = SimpleNamespace(
         max_open_positions=max_open, max_daily_trades=max_daily,
-        live_test_mode=live_test, live_test_max_open_positions=lt_open,
-        live_test_max_entries_per_day=lt_daily,
+        daily_loss_limit_pct=daily_loss_limit_pct,
     )
     ps = SimpleNamespace(
         risk_per_trade_pct=0.01, max_concentration_pct=0.10,
-        max_position_value_rs=max_posval,
+        max_position_value_pct=max_posval_pct,
     )
-    cap = SimpleNamespace(daily_loss_limit=daily_loss_limit)
+    cap = SimpleNamespace()
     return SimpleNamespace(system=SimpleNamespace(risk=risk, position_sizing=ps, capital=cap))
+
+
+def _seed_capital(store, capital=10_000.0, day="2026-06-19"):
+    """BUILD 1: seed an fm_ledger INIT row so the auditor's capital-relative
+    thresholds (pct × day capital) resolve to a real basis."""
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO fm_ledger (ts, entry_type, amount, bucket, "
+            "balance_before, balance_after) VALUES (?,?,?,?,?,?)",
+            (f"{day}T09:15:00+05:30", "INIT", capital, "both", 0.0, capital),
+        )
 
 
 def _mk_trade(store, tid, *, status="CLOSED", net_pnl=0.0, qty=1, entry=100.0,
@@ -67,9 +77,10 @@ def _mk_trade(store, tid, *, status="CLOSED", net_pnl=0.0, qty=1, entry=100.0,
 
 # ── pure helpers ─────────────────────────────────────────────────────────────
 
-def test_effective_caps_live_test_overrides():
-    assert sm._effective_caps(_cfg(max_open=5, max_daily=20, live_test=False)) == (5, 20, False)
-    assert sm._effective_caps(_cfg(live_test=True, lt_open=1, lt_daily=6)) == (1, 6, True)
+def test_effective_caps_returns_base_caps():
+    # BUILD 1 (#3): live_test override deleted — base caps are the sole authority.
+    assert sm._effective_caps(_cfg(max_open=5, max_daily=20)) == (5, 20)
+    assert sm._effective_caps(_cfg(max_open=3, max_daily=6)) == (3, 6)
 
 
 def test_max_concurrent_positions_sweep(tmp_path):
@@ -86,18 +97,20 @@ def test_max_concurrent_positions_sweep(tmp_path):
 
 def test_config_clean_no_violation(tmp_path):
     s = _store(tmp_path)
-    _mk_trade(s, "t1", net_pnl=20.0, entry=100.0)  # 1 position, within live_test caps
-    r = sm.config_vs_actual_check(s, _cfg(live_test=True, lt_open=1, lt_daily=6), "2026-06-19")
+    _seed_capital(s)  # ₹10k day capital
+    _mk_trade(s, "t1", net_pnl=20.0, entry=100.0)  # 1 position, within caps
+    r = sm.config_vs_actual_check(s, _cfg(), "2026-06-19", tmp_path)
     assert r.violations == 0 and r.soft_kill_reason is None
     s.close()
 
 
 def test_config_daily_trade_cap_violation_triggers_softkill(tmp_path):
     s = _store(tmp_path)
-    for i in range(4):  # 4 trades > live_test max_daily=3
+    _seed_capital(s)
+    for i in range(4):  # 4 trades > max_daily=3
         _mk_trade(s, f"t{i}", entry_time=f"2026-06-19T1{i}:00:00+05:30",
                   exit_time=f"2026-06-19T1{i}:30:00+05:30")
-    r = sm.config_vs_actual_check(s, _cfg(live_test=True, lt_open=1, lt_daily=3), "2026-06-19")
+    r = sm.config_vs_actual_check(s, _cfg(max_daily=3), "2026-06-19", tmp_path)
     assert r.violations >= 1
     assert r.soft_kill_reason is not None and "daily trade cap" in r.soft_kill_reason
     s.close()
@@ -105,8 +118,9 @@ def test_config_daily_trade_cap_violation_triggers_softkill(tmp_path):
 
 def test_config_position_value_violation(tmp_path):
     s = _store(tmp_path)
-    _mk_trade(s, "t1", qty=100, entry=100.0)  # 100*100 = 10,000 > cap 2,500
-    r = sm.config_vs_actual_check(s, _cfg(live_test=True, max_posval=2500.0), "2026-06-19")
+    _seed_capital(s)  # cap = 40% × 10k = ₹4,000
+    _mk_trade(s, "t1", qty=100, entry=100.0)  # 100*100 = 10,000 > cap 4,000
+    r = sm.config_vs_actual_check(s, _cfg(max_posval_pct=0.40), "2026-06-19", tmp_path)
     assert any("position value" in ln.lower() for ln in r.lines)
     assert r.violations >= 1
     s.close()
@@ -114,8 +128,9 @@ def test_config_position_value_violation(tmp_path):
 
 def test_config_daily_loss_violation(tmp_path):
     s = _store(tmp_path)
+    _seed_capital(s)  # limit = 3% × 10k = ₹300
     _mk_trade(s, "t1", net_pnl=-400.0)  # loss 400 > limit 300
-    r = sm.config_vs_actual_check(s, _cfg(live_test=True, daily_loss_limit=300.0), "2026-06-19")
+    r = sm.config_vs_actual_check(s, _cfg(daily_loss_limit_pct=0.03), "2026-06-19", tmp_path)
     assert r.violations >= 1 and "loss" in (r.soft_kill_reason or "").lower()
     s.close()
 

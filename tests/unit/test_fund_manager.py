@@ -54,7 +54,7 @@ def _make_fm(
     store: StateStore,
     intraday_pct: float = 0.70,
     positional_pct: float = 0.30,
-    daily_loss_limit: float = 10_000.0,
+    daily_loss_limit_pct: float = 0.10,  # BUILD 1 (#1): pct of capital (was abs 10_000)
     leverage_map: dict | None = None,
     on_loss_breach=None,
     on_critical=None,
@@ -68,7 +68,7 @@ def _make_fm(
         logger=logger,
         intraday_bucket_pct=intraday_pct,
         positional_bucket_pct=positional_pct,
-        daily_loss_limit=daily_loss_limit,
+        daily_loss_limit_pct=daily_loss_limit_pct,
         leverage_map=leverage_map or _DEFAULT_LEVERAGE,
         on_daily_loss_breach=on_loss_breach,
         on_critical_failure=on_critical,
@@ -442,7 +442,7 @@ def test_daily_loss_limit_breach_fires_callback() -> None:
         store = _make_store(Path(tmp))
         breach_calls: list[int] = []
         fm = _initialized_fm(
-            store, balance=100_000.0, daily_loss_limit=500.0,
+            store, balance=100_000.0, daily_loss_limit_pct=0.005,  # 0.5% × 100k = ₹500
             on_loss_breach=lambda: breach_calls.append(1),
         )
         result = fm.reserve("RELIANCE", 100, 500.0, "INTRADAY")
@@ -542,7 +542,7 @@ def test_drain_intraday_can_still_reserve_delivery() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store = _make_store(Path(tmp))
         # Small balance, small daily_loss so we can drain intraday quickly
-        fm = _initialized_fm(store, balance=10_000.0, daily_loss_limit=999_999.0)
+        fm = _initialized_fm(store, balance=10_000.0, daily_loss_limit_pct=1.0)  # effectively off
         # Drain intraday (7000 avail at 5x lev -> can do 7000/1 = 7000 margin)
         # 7000 qty @ 1.0 INTRADAY -> margin = 7000*1/5 = 1400 ... let's use direct numbers
         # Reserve 7000 margin at once: 70 qty @ 500 / 5x = 7000

@@ -143,7 +143,10 @@ class CapitalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     intraday_bucket_pct: float     # FM16: fraction of total for intraday (0 < x < 1)
     positional_bucket_pct: float   # FM16: fraction of total for positional (0 < x < 1)
-    daily_loss_limit: float        # FM16: absolute rupee cap on daily loss (> 0)
+    # BUILD 1 (#1, 24-Jun-2026): the absolute `daily_loss_limit` (₹) was DELETED.
+    # daily_loss_limit_pct (risk:) is now the SOLE daily-loss authority — the
+    # post-close realized breach (FundManager) derives its ₹ limit as
+    # daily_loss_limit_pct × current capital, the same pct the pre-trade gate uses.
     slm_margin_buffer_pct: float = 0.05  # FIX-090: SL-M margin buffer % (unknown fill price risk)
     sl_limit_offset_pct: float = 0.005   # P0 2026-06-15: limit offset past trigger for SL (stop-limit) legs
     emergency_exit_buffer_pct: float = 0.01  # FIX-181: marketable-LIMIT buffer for emergency/kill exits
@@ -170,13 +173,6 @@ class CapitalConfig(BaseModel):
     def _validate_bucket_pct(cls, v: float) -> float:
         if not (0 < v < 1):
             raise ValueError("bucket_pct must be between 0 and 1 exclusive")
-        return v
-
-    @field_validator("daily_loss_limit")
-    @classmethod
-    def _validate_daily_loss(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("daily_loss_limit must be > 0")
         return v
 
 
@@ -215,7 +211,13 @@ class PositionSizingConfig(BaseModel):
     lot_skew_rejection_threshold: float  # FIX-021: reject if (tiered-final)/tiered > threshold
     min_tick_size: float               # FIX-041: min SL distance (penny stock guard)
     max_single_order_qty: int          # FIX-041: sanity cap on computed qty
-    max_position_value_rs: float       # FIX-144: hard cap on qty*price (catastrophic loss guard)
+    # FIX-144 / BUILD 1 (#2, 24-Jun-2026): capital-relative catastrophic-loss /
+    # bug-guard. The cap = max_position_value_pct × current capital, computed at
+    # sizing time. REJECT (not clamp) if qty*price exceeds it. Was a fixed ₹2500
+    # (a ₹10k-era cap with a hard scaling cliff); now scales with the account.
+    # Routine sizing is still governed by concentration (10%) + risk (1%); this
+    # only fires on an anomaly.
+    max_position_value_pct: float      # FIX-144: hard cap on qty*price as fraction of capital
     tier_multipliers: PositionSizingTierConfig  # PS5
     dynamic_by_winrate: bool = True            # FIX-133 Item 21: enable perf-weighted sizing
     min_multiplier: float = 0.5                # FIX-133 Item 21: floor for perf weight
@@ -249,6 +251,14 @@ class PositionSizingConfig(BaseModel):
     def _validate_lot_skew_threshold(cls, v: float) -> float:
         if not (0 < v <= 1):
             raise ValueError("lot_skew_rejection_threshold must be between 0 (exclusive) and 1 (inclusive)")
+        return v
+
+    @field_validator("max_position_value_pct")
+    @classmethod
+    def _validate_max_position_value_pct(cls, v: float) -> float:
+        # BUILD 1 (#2): capital-relative cap; must be a sane fraction of capital.
+        if not (0 < v <= 1):
+            raise ValueError("max_position_value_pct must be between 0 (exclusive) and 1 (inclusive)")
         return v
 
     @model_validator(mode="after")
@@ -398,13 +408,11 @@ class RiskConfig(BaseModel):
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)
     price_drift_threshold: float = 0.005  # FIX-075: 0.5% default drift threshold for margin top-up
 
-    # FIX-190 (Bug H): live test mode — conservative caps for early live sessions.
-    # When enabled AND running in live mode, main.py overrides max_open_positions
-    # and max_daily_trades with the test-mode caps below. Defaults keep it off so
-    # existing configs/tests are unaffected. Stays ON until manually disabled.
-    live_test_mode: bool = False
-    live_test_max_open_positions: int = 1
-    live_test_max_entries_per_day: int = 3
+    # BUILD 1 (#3, 24-Jun-2026): the FIX-190 live_test_* override fields were
+    # DELETED. The live_test caps had been set EQUAL to the base caps
+    # (max_open_positions=5, max_daily_trades=10) for parity, so the main.py swap
+    # was a no-op that only LOOKED active — misleading dead config. The base caps
+    # above are now the sole authority in both paper and live.
 
     @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses")
     @classmethod
@@ -1061,21 +1069,33 @@ class SystemConfig(BaseModel):
         """
         FIX-147: Cross-field sanity validation. Catches operator typos and
         misconfigurations that individual field validators can't detect.
-        These are WARNINGS logged at startup — they don't block the system
-        but indicate likely configuration errors.
+        Most are WARNINGS logged at startup, but a genuinely contradictory
+        config that would silently stop ALL trading is a STARTUP-BLOCKING
+        error (BUILD 1 #10) — we fail fast rather than boot into a dead state.
         """
         import logging
         log = logging.getLogger("config_sanity")
         warnings = []
 
-        # 1. Daily loss limit vs position_sizing risk
-        # If daily_loss_limit is set but max_position_value_rs could exceed it in one trade
-        if self.position_sizing.max_position_value_rs > self.capital.daily_loss_limit:
-            warnings.append(
-                f"max_position_value_rs ({self.position_sizing.max_position_value_rs}) > "
-                f"daily_loss_limit ({self.capital.daily_loss_limit}) - "
-                f"a single bad trade could exceed daily loss limit"
+        # 0. BUILD 1 (#10, 24-Jun-2026): STARTUP-BLOCKING contradiction.
+        # force_intraday_only rewrites EVERY strategy's intent to INTRADAY (the
+        # MIS-only guarantee). trade_type=DELIVERY then GATES out every INTRADAY
+        # strategy at the entry gate → 0 strategies can ever trade. This is a
+        # silent dead-system footgun, so refuse to boot (fail fast, exit non-zero
+        # via the ValidationError) rather than start and trade nothing.
+        if self.force_intraday_only and self.trade_type == "DELIVERY":
+            raise ValueError(
+                "CONTRADICTORY CONFIG: force_intraday_only=true rewrites all "
+                "strategies to INTRADAY, but trade_type=DELIVERY blocks INTRADAY "
+                "→ 0 strategies would trade. Set force_intraday_only=false to "
+                "trade DELIVERY, or trade_type to INTRADAY/BOTH."
             )
+
+        # BUILD 1 (#2): the old "max_position_value_rs vs daily_loss_limit"
+        # cross-check was REMOVED. Both limits are now pct-of-capital and measure
+        # different things (position VALUE/exposure vs realized LOSS), so the
+        # comparison was apples-to-oranges and would always warn (40% > 3%). The
+        # capital-relative cap is a deliberate bug-guard, not a per-trade loss cap.
 
         # 2. Risk per trade vs daily loss limit
         # If 1% risk * 10 positions = 10% loss, check if that exceeds daily limit
@@ -1340,18 +1360,15 @@ class ScoringStepsConfig(BaseModel):
     signal_age: int
 
 
-class TierMultipliersConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    high: float
-    medium: float
-    low: float
-
-
 class ScoringConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     steps: ScoringStepsConfig
     min_pass_score: int
-    tier_multipliers: TierMultipliersConfig
+    # BUILD 1 (#4, 24-Jun): scoring-side `tier_multipliers` was DELETED. The
+    # position sizer's tier weights come from system_config.position_sizing
+    # .tier_multipliers (0.70/0.50); this scoring-side block (0.75/0.5) was never
+    # read by the sizer — misleading dead config. Tier ASSIGNMENT still uses the
+    # score thresholds below.
     high_score_threshold: int
     medium_score_threshold: int
 

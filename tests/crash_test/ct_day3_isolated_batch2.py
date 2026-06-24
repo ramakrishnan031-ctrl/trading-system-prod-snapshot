@@ -148,7 +148,7 @@ def ct075():
     fm = FundManager(
         state_store=store, bus=bus, logger=logger,
         intraday_bucket_pct=0.70, positional_bucket_pct=0.30,
-        daily_loss_limit=10000.0, kill_switch=ks,
+        daily_loss_limit_pct=0.10, kill_switch=ks,
     )
     fm.initialize(broker_balance=100000.0)
 
@@ -185,7 +185,7 @@ def ct084():
     fm = FundManager(
         state_store=store, bus=bus, logger=logger,
         intraday_bucket_pct=0.70, positional_bucket_pct=0.30,
-        daily_loss_limit=50000.0,
+        daily_loss_limit_pct=0.50,
     )
     fm.initialize(broker_balance=100000.0)
 
@@ -230,7 +230,7 @@ def ct086():
     fm = FundManager(
         state_store=store, bus=bus, logger=logger,
         intraday_bucket_pct=0.70, positional_bucket_pct=0.30,
-        daily_loss_limit=50000.0,
+        daily_loss_limit_pct=0.50,
     )
     fm.initialize(broker_balance=100000.0)
 

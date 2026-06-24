@@ -66,7 +66,6 @@ def _make_mock_app_config():
     sys_cfg.clock.startup_max_skew_sec = 30.0
     sys_cfg.capital.intraday_bucket_pct = 0.7
     sys_cfg.capital.positional_bucket_pct = 0.3
-    sys_cfg.capital.daily_loss_limit = 10000.0
     sys_cfg.capital.leverage_map.INTRADAY = 5.0
     sys_cfg.capital.leverage_map.COVER_ORDER = 6.0
     sys_cfg.capital.leverage_map.DELIVERY = 1.0

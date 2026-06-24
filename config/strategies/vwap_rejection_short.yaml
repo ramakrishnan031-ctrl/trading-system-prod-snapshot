@@ -37,7 +37,6 @@ min_volume_surge: 1.5
 min_adr_pct: 0.005
 max_spread_pct: 0.005
 
-max_risk_pct: 0.01  # FIX-031: 1% risk per trade (was 0.0 which produces qty=0)
 lot_size: 1
 max_concurrent_positions: 2  # FIX-135 Item 42
 

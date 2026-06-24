@@ -31,15 +31,9 @@ from core.logger import get_logger
 CONFIG_DIR = _ROOT / "config"
 
 TEMP_REVERTS = [
-    {
-        "file": "system_config.yaml",
-        "key": "capital.daily_loss_limit",
-        "pattern": r"daily_loss_limit:\s*[\d.]+",
-        "temp_value": "100000.0",
-        "prod_value": "1250.0",
-        "description": "Daily loss limit (5% of Rs 25K)",
-        "risk": "System allows unlimited daily loss without triggering kill switch",
-    },
+    # BUILD 1 (#1, 24-Jun): the `capital.daily_loss_limit` revert entry was
+    # removed — that key is deleted; daily_loss_limit_pct (below) is the sole
+    # daily-loss authority now.
     {
         "file": "system_config.yaml",
         "key": "risk.max_consecutive_losses",

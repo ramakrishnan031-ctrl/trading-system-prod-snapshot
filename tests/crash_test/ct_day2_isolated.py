@@ -205,7 +205,7 @@ def ct051():
     fm = FundManager(
         state_store=store, bus=bus, logger=logger,
         intraday_bucket_pct=0.70, positional_bucket_pct=0.30,
-        daily_loss_limit=10000.0,
+        daily_loss_limit_pct=0.10,
     )
     fm.initialize(broker_balance=100000.0)
     snap_before = fm.get_snapshot()

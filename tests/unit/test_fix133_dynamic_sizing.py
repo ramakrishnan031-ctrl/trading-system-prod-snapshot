@@ -15,14 +15,19 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from capital.fund_manager import CapitalSnapshot
 from capital.position_sizer import PositionSizer, SizingResult
 
 
 def _make_sizer(total=200000.0, risk_pct=0.01, max_conc=0.20):
     fm = MagicMock()
-    fm.total_capital = total
-    fm.available_for_intent.return_value = total
-    fm.snapshot.return_value = {"total": total}
+    # BUILD 1 (#2): provide a real snapshot — the capital-relative position-value
+    # cap reads snap.total, so a bare MagicMock total no longer works.
+    fm.get_snapshot.return_value = CapitalSnapshot(
+        total=total, intraday_avail=total, intraday_reserved=0.0, intraday_used=0.0,
+        positional_avail=total, positional_reserved=0.0, positional_used=0.0,
+        daily_realized_pnl=0.0, ts="2026-06-24T09:20:00",
+    )
     sizer = PositionSizer(
         fund_manager=fm,
         leverage_map={"INTRADAY": 5.0, "POSITIONAL": 1.0},

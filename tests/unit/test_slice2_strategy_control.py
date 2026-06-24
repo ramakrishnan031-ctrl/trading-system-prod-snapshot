@@ -97,9 +97,34 @@ class TestSchemaConfig:
     def test_trade_type_validator_rejects_invalid(self):
         from core.config_loader import SystemConfig, load_all
         data = load_all(_CFG).system.model_dump()
+        # BUILD 1 (#10): disable force_intraday_only so this FIELD-validator test
+        # isn't blocked by the force_intraday_only+DELIVERY cross-field guard
+        # (that contradiction is covered by test_build1_*).
+        data["force_intraday_only"] = False
         data["trade_type"] = "BOGUS"
         with pytest.raises(Exception):
             SystemConfig.model_validate(data)
+        for ok in ("INTRADAY", "DELIVERY", "BOTH"):
+            data["trade_type"] = ok
+            assert SystemConfig.model_validate(data).trade_type == ok
+
+    def test_build1_force_intraday_delivery_blocks_startup(self):
+        """BUILD 1 (#10): force_intraday_only=true + trade_type=DELIVERY is a
+        contradiction (0 strategies would trade) → STARTUP-BLOCKING error."""
+        from pydantic import ValidationError
+        from core.config_loader import SystemConfig, load_all
+        data = load_all(_CFG).system.model_dump()
+        # The contradiction must refuse to construct (fail fast).
+        data["force_intraday_only"] = True
+        data["trade_type"] = "DELIVERY"
+        with pytest.raises(ValidationError, match="CONTRADICTORY CONFIG"):
+            SystemConfig.model_validate(data)
+        # All non-contradictory combos must boot normally.
+        data["force_intraday_only"] = True
+        for ok in ("INTRADAY", "BOTH"):
+            data["trade_type"] = ok
+            assert SystemConfig.model_validate(data).trade_type == ok
+        data["force_intraday_only"] = False
         for ok in ("INTRADAY", "DELIVERY", "BOTH"):
             data["trade_type"] = ok
             assert SystemConfig.model_validate(data).trade_type == ok

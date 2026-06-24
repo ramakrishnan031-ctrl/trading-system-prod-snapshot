@@ -63,13 +63,13 @@ class RequiredSecretsCheck(Check):
         return self._passed(f"all {len(REQUIRED_SECRETS)} required secrets set")
 
 
-# Rama's hard live-test caps (memory live_test_mode_permanent). Drift here is a
-# CRITICAL alert -- changing them needs Rama, so this is alert-only (no auto-fix).
-# 23-Jun: caps deliberately RAISED to 5/10 on the FIX-191 resume (permanent —
-# see live_test_mode_permanent). This expected envelope tracks the intended live
-# caps; the guard alerts on ACCIDENTAL drift, so it must match the deliberate values.
-LIVE_TEST_EXPECTED_MAX_OPEN = 5
-LIVE_TEST_EXPECTED_MAX_ENTRIES = 10
+# Rama's hard risk caps. Drift here is a CRITICAL alert — changing them needs
+# Rama, so this is alert-only (no auto-fix). BUILD 1 (#3, 24-Jun): the FIX-190
+# live_test_* override fields were deleted; max_open_positions / max_daily_trades
+# are now the sole authority in both paper and live, so this guard tracks the
+# BASE caps directly (was the live_test caps, which equalled these for parity).
+CAPS_EXPECTED_MAX_OPEN = 5
+CAPS_EXPECTED_MAX_DAILY = 10
 
 
 class ConfigYamlValidCheck(Check):
@@ -93,8 +93,8 @@ class ConfigYamlValidCheck(Check):
         return self._passed(f"all {len(files)} config/*.yaml parse")
 
 
-class LiveTestModeCapsCheck(Check):
-    name = "live_test_mode_caps"
+class CapsConfigDriftCheck(Check):
+    name = "caps_config_drift"
     group = "Config Integrity"
     criticality = Criticality.CRITICAL
     expected_duration_ms = 40
@@ -110,19 +110,18 @@ class LiveTestModeCapsCheck(Check):
         except Exception as exc:
             return self._failed(f"system_config.yaml parse error: {exc}")
 
+        # BUILD 1 (#3): guard the BASE caps (now the sole authority) for
+        # accidental drift from Rama's intended values.
         risk = data.get("risk") or {}
-        if not risk.get("live_test_mode"):
-            return self._skipped("live_test_mode off — caps not active")
-
-        mo = risk.get("live_test_max_open_positions")
-        me = risk.get("live_test_max_entries_per_day")
-        if mo == LIVE_TEST_EXPECTED_MAX_OPEN and me == LIVE_TEST_EXPECTED_MAX_ENTRIES:
-            return self._passed(f"live_test caps OK (open={mo}, entries/day={me})",
-                                max_open=mo, max_entries=me)
+        mo = risk.get("max_open_positions")
+        me = risk.get("max_daily_trades")
+        if mo == CAPS_EXPECTED_MAX_OPEN and me == CAPS_EXPECTED_MAX_DAILY:
+            return self._passed(f"risk caps OK (max_open={mo}, max_daily={me})",
+                                max_open=mo, max_daily=me)
         return self._failed(
-            f"live_test caps drift: open={mo} (want {LIVE_TEST_EXPECTED_MAX_OPEN}), "
-            f"entries/day={me} (want {LIVE_TEST_EXPECTED_MAX_ENTRIES})",
-            max_open=mo, max_entries=me)
+            f"risk caps drift: max_open={mo} (want {CAPS_EXPECTED_MAX_OPEN}), "
+            f"max_daily={me} (want {CAPS_EXPECTED_MAX_DAILY})",
+            max_open=mo, max_daily=me)
 
 
 class AppConfigValidCheck(Check):
@@ -239,7 +238,7 @@ CHECKS = [
     ConfigFilesPresentCheck(),
     RequiredSecretsCheck(),
     ConfigYamlValidCheck(),
-    LiveTestModeCapsCheck(),
+    CapsConfigDriftCheck(),
     AppConfigValidCheck(),
     StrategyConfigsValidCheck(),
     LongStrategiesEnabledCheck(),

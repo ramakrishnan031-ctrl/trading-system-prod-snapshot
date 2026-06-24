@@ -222,7 +222,7 @@ class FundManager:
         fm = FundManager(store, bus, logger,
                          intraday_bucket_pct=0.70,
                          positional_bucket_pct=0.30,
-                         daily_loss_limit=10000.0,
+                         daily_loss_limit_pct=0.03,
                          leverage_map={"INTRADAY": 5.0, ...})
         fm.initialize(broker_balance=500000.0)
         result = fm.reserve("RELIANCE", 10, 2500.0, "INTRADAY", "sig_abc")
@@ -237,7 +237,10 @@ class FundManager:
         logger: object,
         intraday_bucket_pct: float = 0.70,
         positional_bucket_pct: float = 0.30,
-        daily_loss_limit: float = 10_000.0,
+        # BUILD 1 (#1, 24-Jun): single daily-loss source. The post-close realized
+        # breach ₹ limit = daily_loss_limit_pct × current capital (was a fixed
+        # absolute ₹). Default is the conservative 3%, not the stale 10000 (#A.4).
+        daily_loss_limit_pct: float = 0.03,
         leverage_map: Optional[dict[str, float]] = None,
         on_daily_loss_breach: Optional[Callable[[], None]] = None,
         on_critical_failure: Optional[Callable[[str], None]] = None,
@@ -262,15 +265,17 @@ class FundManager:
                 f"intraday_bucket_pct ({intraday_bucket_pct}) + "
                 f"positional_bucket_pct ({positional_bucket_pct}) must equal 1.0"
             )
-        if daily_loss_limit <= 0:
-            raise ValueError(f"daily_loss_limit must be > 0, got {daily_loss_limit}")
+        if not (0 < daily_loss_limit_pct <= 1):
+            raise ValueError(
+                f"daily_loss_limit_pct must be > 0 and <= 1, got {daily_loss_limit_pct}"
+            )
 
         self._store = state_store
         self._bus = bus
         self._log = logger
         self._intraday_pct = intraday_bucket_pct
         self._positional_pct = positional_bucket_pct
-        self._daily_loss_limit = daily_loss_limit
+        self._daily_loss_limit_pct = daily_loss_limit_pct
         self._leverage_map = dict(leverage_map)
         self._slm_buffer_pct = slm_margin_buffer_pct  # FIX-090
         self._on_loss_breach = on_daily_loss_breach
@@ -1020,13 +1025,20 @@ class FundManager:
                 # behavior: only runs when invariant was OK; on violation
                 # the state is corrupt and the loss check is moot).
                 # FIX-051: Read daily PnL from SQL instead of in-memory accumulator
+                # BUILD 1 (#1, 24-Jun): the ₹ limit is derived from
+                # daily_loss_limit_pct × current capital (self._total) — the SAME
+                # pct the pre-trade gate uses, just on a realized (post-close)
+                # basis. Replaces the deleted absolute capital.daily_loss_limit.
                 today = now_ist().date().isoformat()
                 daily_pnl = self._store.get_daily_realized_net_pnl(today)
-                if daily_pnl <= -self._daily_loss_limit:
+                loss_limit = self._daily_loss_limit_pct * self._total
+                if self._total > 0 and daily_pnl <= -loss_limit:
                     self._log.critical(
                         "fund_manager.daily_loss_breach",
                         extra={"daily_pnl": daily_pnl,
-                               "limit": self._daily_loss_limit},
+                               "limit": loss_limit,
+                               "daily_loss_limit_pct": self._daily_loss_limit_pct,
+                               "capital": self._total},
                     )
                     if self._on_loss_breach is not None:
                         self._on_loss_breach()

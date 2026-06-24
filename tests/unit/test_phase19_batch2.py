@@ -35,7 +35,7 @@ def test_fix090_buffer_applied_on_reserve() -> None:
             store, bus, logger,
             intraday_bucket_pct=0.70,
             positional_bucket_pct=0.30,
-            daily_loss_limit=100000.0,
+            daily_loss_limit_pct=1.0,
             slm_margin_buffer_pct=0.05,
         )
         fm.initialize(broker_balance=100000.0)

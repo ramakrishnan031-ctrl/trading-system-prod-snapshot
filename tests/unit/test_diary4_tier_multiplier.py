@@ -43,7 +43,7 @@ def _make_sizer(total=200000.0, risk_pct=0.01, max_conc=0.20, *,
         risk_per_trade_pct=risk_pct,
         max_concentration_pct=max_conc,
         lot_skew_rejection_threshold=lot_skew,
-        max_position_value_rs=10_000_000.0,   # effectively off; isolate the switch
+        max_position_value_pct=1.0,   # effectively off; isolate the switch
         enabled=enabled,
         flat_value_rs=flat_value_rs,
     )
@@ -65,7 +65,7 @@ def test_schema_default_enabled_is_true():
     cfg = PositionSizingConfig(
         risk_per_trade_pct=0.01, max_concentration_pct=0.10, min_qty_threshold=1,
         lot_skew_rejection_threshold=0.25, min_tick_size=0.05, max_single_order_qty=10000,
-        max_position_value_rs=2500.0,
+        max_position_value_pct=0.40,
         tier_multipliers=PositionSizingTierConfig(HIGH=1.0, MEDIUM=0.7, LOW=0.5),
     )
     assert cfg.enabled is True
@@ -164,7 +164,7 @@ def _ps_kwargs(**over):
     base = dict(
         risk_per_trade_pct=0.01, max_concentration_pct=0.10, min_qty_threshold=1,
         lot_skew_rejection_threshold=0.25, min_tick_size=0.05, max_single_order_qty=10000,
-        max_position_value_rs=2500.0,
+        max_position_value_pct=0.40,
         tier_multipliers=PositionSizingTierConfig(HIGH=1.0, MEDIUM=0.7, LOW=0.5),
     )
     base.update(over)

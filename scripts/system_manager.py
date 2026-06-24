@@ -137,15 +137,34 @@ def _scalar(store: StateStore, sql: str, params=()) -> float:
     return float(val or 0.0)
 
 
-def _effective_caps(app_config) -> tuple[int, int, bool]:
-    """(max_open_positions, max_daily_trades, live_test_active). live_test_mode
-    (assumed live) overrides the raw caps — the same logic main.py applies."""
+def _effective_caps(app_config) -> tuple[int, int]:
+    """(max_open_positions, max_daily_trades). BUILD 1 (#3, 24-Jun): the
+    live_test_mode override was deleted — these base caps are now the sole
+    authority in both paper and live, so no swap remains."""
     r = app_config.system.risk
-    lt = bool(getattr(r, "live_test_mode", False))
-    if lt:
-        return (int(r.live_test_max_open_positions),
-                int(r.live_test_max_entries_per_day), True)
-    return (int(r.max_open_positions), int(r.max_daily_trades), False)
+    return (int(r.max_open_positions), int(r.max_daily_trades))
+
+
+def _day_capital(store: StateStore, app_config, config_dir: Path, day: str) -> tuple[float, str]:
+    """
+    BUILD 1 (#1/#2, 24-Jun): the day's capital used to recompute the now
+    capital-relative audit thresholds. Single, parity-safe source (no broker
+    call): the fm_ledger INIT row for the day. Falls back to the configured
+    account paper_capital (accounts.csv) on a fresh DB / non-trading day so the
+    thresholds are still non-zero. Returns (capital, source)."""
+    cap = store.get_day_opening_capital(day)
+    if cap and cap > 0:
+        return float(cap), "fm_ledger"
+    # Fresh-DB bootstrap — configured starting capital, DB-free, no broker call.
+    try:
+        from core.account_registry import AccountRegistry
+        reg = AccountRegistry.load(config_dir / "accounts.csv")
+        accts = reg.get_enabled_accounts()
+        if accts:
+            return float(accts[0].paper_capital), "accounts.csv(bootstrap)"
+    except Exception:  # noqa: BLE001 — fallback must never crash the audit
+        pass
+    return 0.0, "unavailable"
 
 
 def _max_concurrent_positions(store: StateStore, day: str) -> int:
@@ -195,13 +214,18 @@ def _count_in_log(root: Path, day: str, needle: str) -> int:
 # Check 1 — Config vs Actual
 # ─────────────────────────────────────────────────────────────────────────────
 
-def config_vs_actual_check(store: StateStore, app_config, day: str) -> CheckResult:
+def config_vs_actual_check(store: StateStore, app_config, day: str,
+                           config_dir: Path) -> CheckResult:
     res = CheckResult("📊 CONFIG vs ACTUAL")
     ps = app_config.system.position_sizing
-    cap = app_config.system.capital
-    eff_open, eff_daily, lt = _effective_caps(app_config)
-    if lt:
-        res.info(f"(live_test_mode ON — effective caps: max_open={eff_open}, max_daily={eff_daily})")
+    risk = app_config.system.risk
+    eff_open, eff_daily = _effective_caps(app_config)
+    # BUILD 1 (#1/#2): the daily-loss + position-value caps are now
+    # capital-relative (pct × capital). Source the day's capital from fm_ledger
+    # (accounts.csv fallback) and recompute the ₹ thresholds the same way the
+    # runtime does — single pct source, no broker call.
+    day_capital, cap_src = _day_capital(store, app_config, config_dir, day)
+    res.info(f"(day capital ₹{day_capital:,.0f} via {cap_src})")
 
     # Max concurrent positions
     actual_open = _max_concurrent_positions(store, day)
@@ -227,37 +251,38 @@ def config_vs_actual_check(store: StateStore, app_config, day: str) -> CheckResu
     else:
         res.ok(f"Daily trades: cap {eff_daily} / actual {actual_trades}")
 
-    # Daily loss limit (absolute ₹). Realized = net_pnl of trades closed today.
+    # Daily loss limit. BUILD 1 (#1): ₹ limit = daily_loss_limit_pct × day capital.
+    # Realized = net_pnl of trades closed today.
     realized = _scalar(
         store,
         f"SELECT COALESCE(SUM(net_pnl),0) FROM trades "
         f"WHERE substr(created_at,1,10)=? AND status IN {_CLOSED}",
         (day,),
     )
-    loss_limit = float(getattr(cap, "daily_loss_limit", 0.0) or 0.0)
+    loss_limit = float(risk.daily_loss_limit_pct) * day_capital
     if loss_limit > 0 and realized < -loss_limit:
         res.violation(
-            f"Daily loss: limit ₹{loss_limit:,.0f} / actual ₹{realized:,.2f} — VIOLATION",
+            f"Daily loss: limit ₹{loss_limit:,.0f} ({risk.daily_loss_limit_pct:.0%}) / actual ₹{realized:,.2f} — VIOLATION",
             soft_kill_reason=f"daily loss limit breached (₹{realized:,.2f})",
         )
     else:
-        res.ok(f"Daily loss: limit ₹{loss_limit:,.0f} / actual ₹{realized:,.2f}")
+        res.ok(f"Daily loss: limit ₹{loss_limit:,.0f} ({risk.daily_loss_limit_pct:.0%}) / actual ₹{realized:,.2f}")
 
-    # Max position value (₹) per trade
+    # Max position value per trade. BUILD 1 (#2): cap = max_position_value_pct × day capital.
     max_posval = _scalar(
         store,
         f"SELECT COALESCE(MAX(qty_filled*entry_actual_price),0) FROM trades "
         f"WHERE substr(created_at,1,10)=? AND status IN {_EXECUTED}",
         (day,),
     )
-    cap_posval = float(getattr(ps, "max_position_value_rs", 0.0) or 0.0)
+    cap_posval = float(getattr(ps, "max_position_value_pct", 0.0) or 0.0) * day_capital
     if cap_posval > 0 and max_posval > cap_posval + 0.01:
         res.violation(
-            f"Max position value: cap ₹{cap_posval:,.0f} / actual ₹{max_posval:,.0f} — VIOLATION",
+            f"Max position value: cap ₹{cap_posval:,.0f} ({ps.max_position_value_pct:.0%}) / actual ₹{max_posval:,.0f} — VIOLATION",
             soft_kill_reason=f"position value cap exceeded (₹{max_posval:,.0f})",
         )
     else:
-        res.ok(f"Max position value: cap ₹{cap_posval:,.0f} / actual ₹{max_posval:,.0f}")
+        res.ok(f"Max position value: cap ₹{cap_posval:,.0f} ({ps.max_position_value_pct:.0%}) / actual ₹{max_posval:,.0f}")
 
     # Max risk per trade (₹ risk_amount); informational vs risk_per_trade_pct.
     max_risk = _scalar(
@@ -627,10 +652,9 @@ def tomorrow_readiness_check(store: StateStore, app_config, day_date: date,
     else:
         res.warn(f"Kill switch: {state} — needs deploy/resume.sh before market open")
 
-    # live_test_mode reminder
-    eff_open, eff_daily, lt = _effective_caps(app_config)
-    if lt:
-        res.info(f"ℹ️ live_test_mode ON: tomorrow max_open={eff_open}, max_daily={eff_daily}")
+    # BUILD 1 (#3): base caps are the sole authority now (live_test deleted).
+    eff_open, eff_daily = _effective_caps(app_config)
+    res.info(f"ℹ️ Caps: tomorrow max_open={eff_open}, max_daily={eff_daily}")
     return res
 
 
@@ -903,7 +927,7 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
     day = _day(day_date)
     prev = _prev_trading_day(day_date, config_dir)
     specs = [
-        lambda: config_vs_actual_check(store, app_config, day),
+        lambda: config_vs_actual_check(store, app_config, day, config_dir),
         lambda: order_quality_report(store, day),
         lambda: report_integrity_check(day, root),
         lambda: system_health_check(store, day, db_path, root),

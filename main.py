@@ -1825,7 +1825,10 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("fund_manager"),
         intraday_bucket_pct=cap_cfg.intraday_bucket_pct,
         positional_bucket_pct=cap_cfg.positional_bucket_pct,
-        daily_loss_limit=cap_cfg.daily_loss_limit,
+        # BUILD 1 (#1): single daily-loss source — the post-close realized breach
+        # derives its ₹ limit from the SAME pct the pre-trade gate (RiskEngine)
+        # uses. There is no longer an absolute capital.daily_loss_limit.
+        daily_loss_limit_pct=app_config.system.risk.daily_loss_limit_pct,
         leverage_map=leverage_map,
         on_daily_loss_breach=_make_daily_loss_cb(
             kill_switch=kill_switch,
@@ -1904,7 +1907,7 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("position_sizer"),
         instrument_cache=instrument_cache,  # IC7: lot_size from cache
         lot_skew_rejection_threshold=ps_cfg.lot_skew_rejection_threshold,  # FIX-021
-        max_position_value_rs=ps_cfg.max_position_value_rs,  # FIX-144
+        max_position_value_pct=ps_cfg.max_position_value_pct,  # FIX-144 / BUILD 1 (#2)
         enabled=ps_cfg.enabled,                # Diary #4: tier-multiplier ON/OFF switch
         flat_value_rs=ps_cfg.flat_value_rs,    # Diary #4: flat Rs/order when OFF
     )
@@ -1926,25 +1929,15 @@ def _main_locked(args, config_dir: Path) -> int:
         print(f"Tier multiplier: OFF (flat Rs {ps_cfg.flat_value_rs:.0f}/order, safety ceilings active)")
 
     risk_cfg = app_config.system.risk
-    # FIX-190 (Bug H): live test mode — conservative caps for early live sessions
-    # after the 19-Jun incident. Only applies in LIVE mode (paper runs full caps
-    # for validation). Stays on until manually disabled in config.
-    _eff_max_open = risk_cfg.max_open_positions
-    _eff_max_daily = risk_cfg.max_daily_trades
-    if getattr(risk_cfg, "live_test_mode", False) and args.mode == "live":
-        _eff_max_open = risk_cfg.live_test_max_open_positions
-        _eff_max_daily = risk_cfg.live_test_max_entries_per_day
-        _log.critical(
-            "FIX-190 LIVE_TEST_MODE ACTIVE: max_open_positions=%d, "
-            "max_daily_trades=%d (conservative caps; disable in config when ready)",
-            _eff_max_open, _eff_max_daily,
-        )
-
+    # BUILD 1 (#3, 24-Jun): the FIX-190 live_test_mode swap was REMOVED. The
+    # live_test_* caps had been set equal to the base caps for parity, so the
+    # swap was a no-op that only looked active. The base caps below are now the
+    # sole authority in both paper and live.
     risk_engine = RiskEngine(
         fund_manager=fund_manager,
         state_store=store,
-        max_open_positions=_eff_max_open,
-        max_daily_trades=_eff_max_daily,
+        max_open_positions=risk_cfg.max_open_positions,
+        max_daily_trades=risk_cfg.max_daily_trades,
         max_sector_exposure_pct=risk_cfg.max_sector_exposure_pct,
         max_consecutive_losses=risk_cfg.max_consecutive_losses,
         daily_loss_limit_pct=risk_cfg.daily_loss_limit_pct,
@@ -2328,7 +2321,19 @@ def _main_locked(args, config_dir: Path) -> int:
     eod.post_wire_init()
 
     # ── Phase 0f: Startup reconciliation (MAIN10, RC14) ─────────────────────
+    # BUILD 1 INVARIANT (#12, 24-Jun): this SYNCHRONOUS reconcile_once() MUST
+    # precede signal_processor.start() and the webhook server start (Phase 0g
+    # below). rehydrate_from_open_trades() above re-reserves capital for any
+    # DB-open trade; if that trade is actually flat at the broker (a phantom),
+    # only this reconcile releases the phantom's capital. Because the webhook
+    # (the sole inbound-signal source) and the signal_processor workers do not
+    # start until AFTER this call, NO new signal can be sized/placed while a
+    # phantom still holds capital — capital is correct before any trade. The
+    # ~15s figure is the BACKGROUND reconciler poll (the 2nd+ reconcile), not
+    # this first one. DO NOT REORDER: a guard below asserts this completed
+    # before the pipeline starts.
     recon_actions = order_reconciler.reconcile_once()
+    _startup_reconcile_done = True  # BUILD 1 (#12): boot-order invariant flag
     if recon_actions:
         _log.info(
             "Startup reconciliation: %d action(s) taken", len(recon_actions)
@@ -2404,6 +2409,13 @@ def _main_locked(args, config_dir: Path) -> int:
     if clock_skew_probe is not None:
         clock_skew_probe.start()
     token_monitor.start()  # FIX-128 Fix E: no-op in paper mode
+    # BUILD 1 INVARIANT (#12): the synchronous startup reconcile MUST have run
+    # before the signal pipeline goes live, so phantom-position capital is
+    # corrected before any trade can be sized/placed. See Phase 0f above.
+    assert _startup_reconcile_done, (
+        "boot-order invariant violated: signal_processor.start() reached before "
+        "the synchronous startup reconcile_once() — phantom capital may be unreleased"
+    )
     # signal_processor BEFORE entry_gate (BLOCKER #5 fix): gate may call
     # continue_from_gate() immediately on release; workers must be ready.
     signal_processor.start()

@@ -89,7 +89,6 @@ order_monitor:
 capital:
   intraday_bucket_pct: 0.70
   positional_bucket_pct: 0.30
-  daily_loss_limit: 10000.0
   leverage_map:
     INTRADAY: 5.0
     COVER_ORDER: 6.0
@@ -102,7 +101,7 @@ position_sizing:
   lot_skew_rejection_threshold: 0.25
   min_tick_size: 0.05
   max_single_order_qty: 10000
-  max_position_value_rs: 50000.0
+  max_position_value_pct: 0.40
   tier_multipliers:
     HIGH: 1.0
     MEDIUM: 0.70
@@ -249,10 +248,6 @@ steps:
   circuit_check: 10
   signal_age: 10
 min_pass_score: 60
-tier_multipliers:
-  high: 1.0
-  medium: 0.75
-  low: 0.5
 high_score_threshold: 80
 medium_score_threshold: 65
 """
@@ -346,7 +341,8 @@ def test_system_config_values_match_stubs() -> None:
     assert cfg.system.order_monitor.fill_timeout_sec == 60
     assert cfg.system.capital.intraday_bucket_pct == 0.70
     assert cfg.system.capital.positional_bucket_pct == 0.30
-    assert cfg.system.capital.daily_loss_limit == 10000.0
+    # BUILD 1 (#1): capital.daily_loss_limit deleted — daily_loss_limit_pct is sole authority
+    assert not hasattr(cfg.system.capital, "daily_loss_limit")
     assert cfg.system.capital.leverage_map.INTRADAY == 5.0
     assert cfg.system.capital.leverage_map.DELIVERY == 1.0
     assert cfg.system.position_sizing.risk_per_trade_pct == 0.01
@@ -559,8 +555,8 @@ def test_scoring_weights_and_thresholds() -> None:
     assert cfg.scoring.steps.volume_surge == 15
     assert cfg.scoring.steps.signal_age == 10
     assert cfg.scoring.min_pass_score == 60
-    assert cfg.scoring.tier_multipliers.high == 1.0
-    assert cfg.scoring.tier_multipliers.medium == 0.75
+    # BUILD 1 (#4): scoring-side tier_multipliers deleted (sizer uses system_config)
+    assert not hasattr(cfg.scoring, "tier_multipliers")
     assert cfg.scoring.high_score_threshold == 80
     print("  OK ScoringConfig weights and thresholds match stub YAML")
 

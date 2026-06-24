@@ -69,7 +69,6 @@ def _valid_data() -> dict:
         "min_volume_surge": 1.3,
         "min_adr_pct": 0.005,
         "max_spread_pct": 0.005,
-        "max_risk_pct": 0.01,  # FIX-031: must be > 0
         "lot_size": 1,
         "entry_start_time": "09:30",
         "entry_end_time": "13:30",
@@ -305,7 +304,6 @@ min_score: 0
 min_volume_surge: 1.3
 min_adr_pct: 0.005
 max_spread_pct: 0.005
-max_risk_pct: 0.01
 lot_size: 1
 entry_start_time: "09:30"
 entry_end_time: "13:30"
@@ -472,7 +470,8 @@ def test_defaults_populated_correctly() -> None:
     assert cfg.pullback_wait_timeout_sec == 180
     assert cfg.lot_size == 1
     assert cfg.min_score == 0      # 0 = use global
-    assert cfg.max_risk_pct == 0.01  # FIX-031: must be > 0
+    # BUILD 1 (#11): max_risk_pct deleted from StrategyConfig (dead in live)
+    assert not hasattr(cfg, "max_risk_pct")
     print("  OK defaults_populated_correctly")
 
 

@@ -6,6 +6,17 @@
 #
 # Locked decisions: P1, P2, P4, P8, P11b, P13, P14, P15, Q1, G4, PR8
 # product_map embedded here per CL6 note (no separate broker_product_map.yaml).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILD 1 TAGGING CONVENTION (24-Jun-2026) — feeds the BUILD 2 Config Auditor:
+#   [LAUNCH-PHASE]  = deliberately conservative for early live; review/relax as
+#                     the account scales (e.g. entry_start 10:00). Flagged for
+#                     periodic review.
+#   [PERMANENT]     = permanent architecture; capital-relative or structural, no
+#                     scaling review needed (e.g. daily_loss_limit_pct 3%,
+#                     max_position_value_pct 40%, max_concentration_pct 10%,
+#                     risk_per_trade_pct 1%).
+# ─────────────────────────────────────────────────────────────────────────────
 
 broker:                       # FIX-133 Item 28: multi-broker support
   primary: "zerodha"
@@ -14,7 +25,11 @@ broker:                       # FIX-133 Item 28: multi-broker support
   multi_account_mode: false   # FIX-133 Item 29: enable only when multi-account tested
 
 trading_hours:
-  entry_start: "10:00"        # Live Week 1 (2026-06-16): conservative start; avoid opening-hour volatility
+  entry_start: "10:00"        # [LAUNCH-PHASE] Live Week 1: conservative start; avoid opening-hour volatility. Relax toward 09:20 as the account scales.
+  # #8 (BUILD 1): entry_end and eod_entry_cutoff are both 15:15 but are read by
+  # DIFFERENT paths — entry_end gates the strategy entry window (signal eligibility),
+  # eod_entry_cutoff is FIX-073's absolute order-placement deadline (rate-limiter
+  # guard). They coincide today by intent, not redundancy; keep both.
   entry_end: "15:15"          # Paper Week 2 (2026-04-27): widened from P1 spec 13:30 (still <= eod_squareoff_time 15:17)
   eod_entry_cutoff: "15:15"   # FIX-073: absolute last moment to place order (prevents rate-limiter delays from opening positions after EOD)
   eod_squareoff_time: "15:17" # Square-off trigger; 3-min buffer before RMS auto-sq at 15:20 (P1)
@@ -81,7 +96,9 @@ order_monitor:                # OM14
 capital:                      # FM16
   intraday_bucket_pct: 0.70   # 70% of total capital for intraday (MIS/CO)
   positional_bucket_pct: 0.30 # 30% of total capital for positional (CNC)
-  daily_loss_limit: 300.0
+  # BUILD 1 (#1, 24-Jun): absolute `daily_loss_limit` (was ₹300) DELETED.
+  # daily_loss_limit_pct (under risk:) is the SOLE daily-loss authority — the
+  # post-close realized breach derives ₹ = daily_loss_limit_pct × current capital.
   slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
   sl_limit_offset_pct: 0.005  # P0 2026-06-15: SL legs are SL (stop-limit); limit = trigger ± 0.5% so triggered stops fill (Zerodha rejects SL-M via API)
   emergency_exit_buffer_pct: 0.01  # FIX-181: emergency/kill exits use marketable LIMIT (LTP ± 1%) so they fill but cap worst-case slippage
@@ -103,7 +120,12 @@ position_sizing:              # PS9
   lot_skew_rejection_threshold: 0.25  # FIX-021: reject if (tiered-final)/tiered > 25%; skipped if lot_size=1
   min_tick_size: 0.05         # FIX-041: reject if sl_distance < min_tick (penny stock guard)
   max_single_order_qty: 10000 # FIX-041: sanity cap on computed qty (prevents qty explosion)
-  max_position_value_rs: 2500.0   # hard cap on qty*price (Rs 2.5K = 25% of Rs 10K account)
+  # BUILD 1 (#2, 24-Jun): capital-relative catastrophic-loss / bug-guard.
+  # cap = max_position_value_pct × current capital, REJECT if qty*price exceeds it.
+  # Was a fixed ₹2500 (₹10k-era, scaling cliff at ~₹25k). 40% is intentionally
+  # loose — routine sizing is governed by concentration (10%) + risk (1%); this
+  # only fires on an anomaly. PERMANENT (capital-relative).
+  max_position_value_pct: 0.40   # hard cap on qty*price as fraction of capital
   tier_multipliers:           # PS5: applied after min(risk, capital, conc)
     HIGH: 1.0                 # full size
     MEDIUM: 0.70              # 70% of computed size
@@ -113,21 +135,20 @@ position_sizing:              # PS9
   max_multiplier: 2.0         # cap: best-performing strategy gets at most 200% qty
 
 risk:                         # RE13 — portfolio-level pre-trade gate limits
-  max_open_positions: 5       # hard cap on concurrent open positions (>= 1)
-  max_daily_trades: 10        # 23-Jun: 20->10 (paper-path cap; parity with live_test below)
-  # FIX-190 (Bug H) / 19-Jun: live test mode — ACTIVE BUG-HUNTING on live with
-  # controlled exposure (Rama's strategy). When live_test_mode is true AND
-  # mode=live, max_open_positions / max_daily_trades above are overridden by the
-  # test-mode caps below. Capital ₹10k with small qty/trade (typically 1-2 shares)
-  # naturally caps daily loss; 4 concurrent positions exercises concurrency/race
-  # paths; more trades = more bug discovery. PERMANENT — no auto-disable; stays ON
-  # until Rama manually disables it (manual review required). NOT temporary.
-  live_test_mode: true
-  live_test_max_open_positions: 5    # 23-Jun: 4->5 (resume w/ FIX-191; parity w/ max_open_positions)
-  live_test_max_entries_per_day: 10  # 23-Jun: 6->10 (resume w/ FIX-191; parity w/ max_daily_trades)
+  # BUILD 1 (#3, 24-Jun): these base caps are now the SOLE authority in BOTH
+  # paper and live. The FIX-190 live_test_mode / live_test_max_* override fields
+  # were DELETED — they had been set EQUAL to these base caps (5/10) for parity,
+  # so the main.py swap was a no-op that only LOOKED active (misleading dead
+  # config). Active bug-hunting on live continues via these caps directly.
+  # #7 (BUILD 1): max_open_positions is the PORTFOLIO-wide cap. It binds
+  # alongside each strategy's own max_concurrent_positions (default 2, in the
+  # strategy YAMLs) — different scopes (global vs per-strategy), both apply.
+  # Working as intended; no conflict.
+  max_open_positions: 5       # [PERMANENT-ish] portfolio-wide cap on concurrent open positions (>= 1)
+  max_daily_trades: 10        # hard cap on entries per day (>= 1)
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
-  max_consecutive_losses: 5      # 23-Jun: 2->5 (both modes; today already has 2 SL losses — let session continue)
-  daily_loss_limit_pct: 0.03
+  max_consecutive_losses: 5      # halt after N consecutive losses (both modes)
+  daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT
   price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement
 
 webhook:                      # WR14 — HTTP server settings
@@ -244,6 +265,11 @@ smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
 
 entry_gate:                   # FIX-025: gate release slippage protection
   slippage_buffer: 2.0        # Rs buffer for limit price adjustment at gate release
+  # #5 (BUILD 1): max_entry_slippage_pct and slippage_control are TWO DIFFERENT,
+  # complementary guards — keep both. max_entry_slippage_pct is a coarse %-of-price
+  # abort (FIX-128); slippage_control (below) is the finer SL-fraction/tiered
+  # budget guard. slippage_control.also_apply_pct_check keeps this %-check live
+  # alongside it (belt + suspenders).
   max_entry_slippage_pct: 1.0 # FIX-128: abort if current LTP deviates > 1% from signal trigger price
   max_spread_pct: 0.5         # FIX-134 Item 38: max bid-ask spread % for liquidity check
   min_depth_qty: 500          # FIX-134 Item 38: min depth quantity at best price

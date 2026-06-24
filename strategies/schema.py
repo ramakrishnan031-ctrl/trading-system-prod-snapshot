@@ -102,7 +102,10 @@ class StrategyConfig(BaseModel):
     max_spread_pct: float = 0.005
 
     # --- Risk ---
-    max_risk_pct: float = 0.0    # 0.0 = use global from system_config
+    # BUILD 1 (#11, 24-Jun): per-strategy `max_risk_pct` was DELETED. It was dead
+    # in the live path — the sizer always uses the global position_sizing
+    # .risk_per_trade_pct; only scripts/replay_signals.py ever read it (and it
+    # now defaults to 0.01 there). Removed from schema + all strategy YAMLs.
     lot_size: int = 1
     max_concurrent_positions: int = 2  # FIX-135 Item 42: per-strategy position cap
 
@@ -201,18 +204,6 @@ class StrategyConfig(BaseModel):
     def _val_entry_offset(cls, v: float) -> float:
         if v < 0 or v >= 1:
             raise ValueError("entry_offset_pct must be >= 0 and < 1")
-        return v
-
-    @field_validator("max_risk_pct")
-    @classmethod
-    def _val_max_risk_pct(cls, v: float) -> float:
-        # FIX-031: max_risk_pct=0.0 produces qty=0 → BELOW_MIN rejection
-        # Strategies with 0.0 are silently dead-on-arrival. Require > 0.
-        if v <= 0:
-            raise ValueError(
-                "max_risk_pct must be > 0 (FIX-031: 0 produces qty=0 rejection). "
-                "Typical intraday strategies use 0.01 (1% risk per trade)."
-            )
         return v
 
     @field_validator("min_adr_pct", "max_spread_pct")

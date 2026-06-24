@@ -2045,7 +2045,7 @@ def test_bl3_integration_check7_to_drift_handler_counter_increments(
         logger=logging.getLogger("fm_bl3_smoke"),
         intraday_bucket_pct=0.70,
         positional_bucket_pct=0.30,
-        daily_loss_limit=10_000.0,
+        daily_loss_limit_pct=0.10,
         kill_switch=None,
     )
     fm.initialize(broker_balance=100_000.0)

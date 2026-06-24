@@ -1927,6 +1927,30 @@ class StateStore:
         )
         return row["net_pnl"] if row else 0.0
 
+    def get_day_opening_capital(self, date_iso: str) -> Optional[float]:
+        """
+        BUILD 1 (#1/#2, 24-Jun): return the day's OPENING capital for date_iso,
+        read from the fm_ledger INIT row (FundManager.initialize writes one INIT
+        row per process start with balance_after = the day's starting capital).
+
+        Used by the EOD/pre-flight auditors to recompute the now capital-relative
+        thresholds (daily_loss_limit_pct × capital, max_position_value_pct ×
+        capital) without a broker call — the single, parity-safe (same DB in
+        paper + live) capital source.
+
+        OPENING (not current) basis is deliberate: the threshold should not move
+        intraday as realized PnL swings. Returns None if no INIT row exists for
+        the day (fresh DB / non-trading day) so callers can apply a fallback.
+        """
+        row = self.fetch_one(
+            # O4 (v27): use the indexed stored `date` column (== DATE(ts)).
+            """SELECT balance_after FROM fm_ledger
+               WHERE date = ? AND entry_type = 'INIT'
+               ORDER BY ts ASC LIMIT 1""",
+            (date_iso,),
+        )
+        return float(row["balance_after"]) if row and row["balance_after"] is not None else None
+
     def get_system_events_for_date(self, date_iso: str) -> List[dict]:
         """Return all system_events rows for date_iso (DR8)."""
         rows = self.fetch_all(

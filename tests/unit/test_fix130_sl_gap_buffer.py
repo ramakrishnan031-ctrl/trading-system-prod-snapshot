@@ -57,7 +57,6 @@ def _make_strategy(direction="LONG", sl_pct=0.01, sl_gap_buffer_pct=0.3):
         min_volume_surge=1.3,
         min_adr_pct=0.005,
         max_spread_pct=0.005,
-        max_risk_pct=0.01,
         lot_size=1,
         entry_start_time="09:15",
         entry_end_time="15:30",

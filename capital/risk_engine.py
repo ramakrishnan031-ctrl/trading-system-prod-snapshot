@@ -111,11 +111,15 @@ class RiskEngine:
         engine = RiskEngine(
             fund_manager=fm,
             state_store=store,
-            max_open_positions=10,
-            max_daily_trades=20,
+            # BUILD 1 (#A.4): example values aligned to the live config
+            # (5/10/.../0.03) so this snippet can't seed looser stale caps.
+            # NOTE: RiskEngine takes NO defaults — all caps are required, so a
+            # component built without config fails fast rather than running loose.
+            max_open_positions=5,
+            max_daily_trades=10,
             max_sector_exposure_pct=0.40,
-            max_consecutive_losses=4,
-            daily_loss_limit_pct=0.05,
+            max_consecutive_losses=5,
+            daily_loss_limit_pct=0.03,
             sector_lookup_fn=lambda s: instrument_cache.sector_for(s),
             logger=get_logger(__name__),
             kill_switch=ks,          # optional; None disables KILL_SWITCH check

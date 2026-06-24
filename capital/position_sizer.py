@@ -129,7 +129,9 @@ class PositionSizer:
         lot_skew_rejection_threshold: float = 0.25,  # FIX-021: reject if skew exceeds this
         min_tick_size: float = 0.05,  # FIX-041: min SL distance (penny stock guard)
         max_single_order_qty: int = 10000,  # FIX-041: sanity cap on computed qty
-        max_position_value_rs: float = 50000.0,  # FIX-144: hard cap on qty*price
+        # FIX-144 / BUILD 1 (#2, #A.4): capital-relative hard cap on qty*price.
+        # Default is the conservative 40% (was a stale, far-looser absolute 50000).
+        max_position_value_pct: float = 0.40,
         broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
         enabled: bool = True,                   # Diary #4: ON = score-tier × perf sizing (default)
         flat_value_rs: Optional[float] = None,  # Diary #4: flat Rs/order; required when enabled=False
@@ -145,7 +147,7 @@ class PositionSizer:
         self._lot_skew_rejection_threshold = lot_skew_rejection_threshold  # FIX-021
         self._min_tick_size = min_tick_size  # FIX-041
         self._max_single_order_qty = max_single_order_qty  # FIX-041
-        self._max_position_value_rs = max_position_value_rs  # FIX-144
+        self._max_position_value_pct = max_position_value_pct  # FIX-144 / BUILD 1 (#2)
         self._broker_adapter = broker_adapter  # FIX-072
         # Diary #4: sizing mode. enabled=True -> score-tier × perf-weight (unchanged).
         # enabled=False -> flat Rs/order (Option δ); flat_value_rs is one more ceiling
@@ -464,12 +466,16 @@ class PositionSizer:
                     breakdown=breakdown,
                 )
 
-        # ── FIX-144: Position value cap (catastrophic loss guard) ──────────────
-        # Hard cap on qty*price regardless of how it was computed. Catches:
+        # ── FIX-144 / BUILD 1 (#2): Position value cap (catastrophic-loss / bug-guard) ──
+        # Capital-relative hard cap on qty*price regardless of how it was computed.
+        # cap = max_position_value_pct × current capital (total_capital, fetched
+        # above). REJECT (not clamp) — this fires on an ANOMALY, not routine
+        # sizing (which is governed by concentration 10% + risk 1%). Catches:
         # - Bugs in earlier constraints
         # - High-priced stocks where even small qty is large exposure
         position_value = final_qty * entry_price
-        if position_value > self._max_position_value_rs:
+        max_position_value = self._max_position_value_pct * total_capital
+        if position_value > max_position_value:
             if self._log is not None:
                 self._log.critical(
                     "position_sizer.position_value_cap_exceeded",
@@ -478,7 +484,9 @@ class PositionSizer:
                         "final_qty": final_qty,
                         "entry_price": entry_price,
                         "position_value": position_value,
-                        "max_position_value_rs": self._max_position_value_rs,
+                        "max_position_value": max_position_value,
+                        "max_position_value_pct": self._max_position_value_pct,
+                        "capital": total_capital,
                     },
                 )
             return SizingResult(
@@ -489,7 +497,8 @@ class PositionSizer:
                 bucket=bucket,
                 constraint="POSITION_VALUE_CAP",
                 reason=(
-                    f"position_value={position_value:.2f} > max={self._max_position_value_rs:.2f} "
+                    f"position_value={position_value:.2f} > max={max_position_value:.2f} "
+                    f"({self._max_position_value_pct:.0%} of capital {total_capital:.2f}) "
                     f"for {symbol} (qty={final_qty}, price={entry_price}); "
                     f"rejecting to prevent catastrophic loss"
                 ),

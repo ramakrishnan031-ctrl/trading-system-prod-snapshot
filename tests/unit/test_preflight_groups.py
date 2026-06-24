@@ -102,28 +102,21 @@ def test_config_yaml_valid_and_invalid(tmp_path):
     assert config_integrity.ConfigYamlValidCheck().run(ctx).status is Status.FAIL
 
 
-def _write_sys_config(ctx, *, mode_on=True, mo=5, me=10):
-    flag = "true" if mode_on else "false"
+def _write_sys_config(ctx, *, mo=5, me=10):
+    # BUILD 1 (#3): CapsConfigDriftCheck guards the BASE caps (live_test deleted).
     (ctx.config_dir / "system_config.yaml").write_text(
-        f"risk:\n  live_test_mode: {flag}\n"
-        f"  live_test_max_open_positions: {mo}\n"
-        f"  live_test_max_entries_per_day: {me}\n",
+        f"risk:\n  max_open_positions: {mo}\n"
+        f"  max_daily_trades: {me}\n",
         encoding="utf-8")
 
 
-def test_live_test_caps_pass(tmp_path):
+def test_caps_config_drift_pass(tmp_path):
     ctx = _ctx(tmp_path)
-    _write_sys_config(ctx, mo=5, me=10)   # 23-Jun deliberate live caps
-    assert config_integrity.LiveTestModeCapsCheck().run(ctx).status is Status.PASS
+    _write_sys_config(ctx, mo=5, me=10)   # Rama's intended caps
+    assert config_integrity.CapsConfigDriftCheck().run(ctx).status is Status.PASS
 
 
-def test_live_test_caps_drift_fails(tmp_path):
+def test_caps_config_drift_fails(tmp_path):
     ctx = _ctx(tmp_path)
     _write_sys_config(ctx, mo=3, me=6)
-    assert config_integrity.LiveTestModeCapsCheck().run(ctx).status is Status.FAIL
-
-
-def test_live_test_caps_skipped_when_off(tmp_path):
-    ctx = _ctx(tmp_path)
-    _write_sys_config(ctx, mode_on=False)
-    assert config_integrity.LiveTestModeCapsCheck().run(ctx).status is Status.SKIPPED
+    assert config_integrity.CapsConfigDriftCheck().run(ctx).status is Status.FAIL

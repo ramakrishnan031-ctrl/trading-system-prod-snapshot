@@ -21,10 +21,9 @@ steps:
 
 min_pass_score: 60
 
-tier_multipliers:       # Applied to position size in position_sizer (P10)
-  high: 1.0             # Score ≥ high_score_threshold
-  medium: 0.75          # Score between medium and high thresholds
-  low: 0.5              # Score between min_pass_score and medium threshold
-
+# BUILD 1 (#4, 24-Jun): the scoring-side `tier_multipliers` block was DELETED.
+# Position-size tier weights are owned by system_config.position_sizing
+# .tier_multipliers (0.70/0.50); the sizer never read these (0.75/0.5) — it was
+# misleading dead config. The thresholds below still drive tier ASSIGNMENT.
 high_score_threshold: 80
 medium_score_threshold: 65

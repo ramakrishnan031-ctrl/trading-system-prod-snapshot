@@ -96,7 +96,7 @@ def _make_fm(
         logger=logger or logging.getLogger("test_e2_fm"),
         intraday_bucket_pct=0.70,
         positional_bucket_pct=0.30,
-        daily_loss_limit=10_000.0,
+        daily_loss_limit_pct=0.10,
         leverage_map=_LEVERAGE_MAP,
         kill_switch=kill_switch,
     )
