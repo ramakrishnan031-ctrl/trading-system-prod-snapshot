@@ -123,10 +123,16 @@ def test_config_daily_loss_violation(tmp_path):
 # ── Check 3: report integrity ────────────────────────────────────────────────
 
 def test_report_integrity_missing_and_present(tmp_path):
+    from datetime import date
     root = tmp_path
     (root / "logs").mkdir()
-    (root / "logs" / "system_2026-06-19.log").write_text("x" * 1000, encoding="utf-8")
-    r = sm.report_integrity_check("2026-06-19", root)
+    # Use TODAY's date: report_integrity_check warns when a file's mtime-day != the
+    # checked `day` (an intentional anti-staleness guard). The file is written now,
+    # so its mtime is today — a hardcoded past date ("2026-06-19") made this test
+    # pass ONLY on that calendar day (don't date-couple tests; derive the date).
+    today = date.today().isoformat()
+    (root / "logs" / f"system_{today}.log").write_text("x" * 1000, encoding="utf-8")
+    r = sm.report_integrity_check(today, root)
     # system log present (ok); others missing (warnings)
     assert any("system log" in ln and "✅" in ln for ln in r.lines)
     assert r.warnings >= 1

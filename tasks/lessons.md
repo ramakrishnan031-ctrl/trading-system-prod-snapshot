@@ -20,3 +20,12 @@ lesson; link the commit/branch and the memory note that has the full story.
      the same as "the loop is doing its job."
 
   Branch `tgt-retry-postmortem-24jun`; memory `tgt_retry_crashloop_postmortem_24jun`.
+
+- **2026-06-24 — Don't date-couple tests; derive or inject the date.** A test
+  hardcoded `day="2026-06-19"` and wrote a log file *now* — but the function under
+  test (`report_integrity_check`) compares the file's **mtime-day** to `day` (an
+  intentional anti-staleness guard), so on any day ≠ 19-Jun the mtime didn't match
+  and the assertion flipped. The test passed **only on the calendar day it was
+  written**. Fix: derive the date in the test (`date.today()`) so the file's mtime
+  matches; never hardcode "today" as a literal. (The function was correct — verify
+  which side is actually wrong before "fixing".) Memory `hygiene_pack_24jun`.
