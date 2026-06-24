@@ -63,6 +63,8 @@ class TGTRetryManager:
         enabled: bool = True,
         mode: str = "LIVE",
         market_hours_guard: bool = True,
+        crash_alert_threshold: int = 3,
+        crash_realert_interval_sec: int = 3600,
     ) -> None:
         self._store = state_store
         self._placer = order_placer
@@ -75,6 +77,17 @@ class TGTRetryManager:
         self._enabled = bool(enabled)
         self._mode = mode
         self._market_hours_guard = market_hours_guard
+        # Crash-loop self-detection (post-mortem 24-Jun): the loop must never die,
+        # but a *persistent* cycle exception (e.g. a cross-module signature drift
+        # like the 22-23 Jun is_within_market_hours TypeError) used to spin
+        # silently — 840 ERRORs/day, ZERO alerts, the safety net dead for 2 days.
+        # Now N consecutive failures fire ONE throttled CRITICAL so a dead safety
+        # daemon surfaces in minutes, not days.
+        self._crash_alert_threshold = max(1, int(crash_alert_threshold))
+        self._crash_realert_interval_sec = max(1, int(crash_realert_interval_sec))
+        self._consecutive_failures = 0
+        self._last_crash_alert_at: Optional[datetime] = None
+        self._last_clean_cycle_at: Optional[datetime] = None
 
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -115,11 +128,112 @@ class TGTRetryManager:
             try:
                 self.run_once()
             except Exception as exc:  # the loop must never die
-                self._log.error(
-                    "tgt_retry_manager.cycle_error", extra={"error": str(exc)},
-                    exc_info=True,
-                )
+                self._record_cycle_failure(exc)
+            else:
+                self._record_cycle_success()
             self._stop_event.wait(timeout=self._poll_interval)
+
+    # ── Crash-loop self-detection (post-mortem 24-Jun) ─────────────────────────
+
+    def _record_cycle_success(self) -> None:
+        """A clean cycle (incl. a no-op skip — kill-switch / off-hours / not-due).
+        Reset the failure counter; if we had been crash-looping, log + INFO the
+        recovery so the resolution is as visible as the failure was."""
+        if self._consecutive_failures >= self._crash_alert_threshold:
+            self._log.warning(
+                "tgt_retry_manager.recovered",
+                extra={"after_consecutive_failures": self._consecutive_failures},
+            )
+            self._notify(
+                severity="INFO",
+                title=f"[{self._mode}] TGT retry manager recovered",
+                body=(
+                    f"TGTRetryManager resumed clean cycles after "
+                    f"{self._consecutive_failures} consecutive failures; the TGT "
+                    f"safety net is healthy again."
+                ),
+            )
+        self._consecutive_failures = 0
+        self._last_crash_alert_at = None
+        self._last_clean_cycle_at = now_ist()
+
+    def _record_cycle_failure(self, exc: Exception) -> None:
+        """A cycle raised. Count it; once it crosses the threshold fire ONE
+        throttled CRITICAL — a crash-looping safety daemon must surface in minutes,
+        not sit dead for days (the 22-23 Jun is_within_market_hours regression)."""
+        self._consecutive_failures += 1
+        self._log.error(
+            "tgt_retry_manager.cycle_error",
+            extra={
+                "error": str(exc),
+                "consecutive_failures": self._consecutive_failures,
+            },
+            exc_info=True,
+        )
+        if (
+            self._consecutive_failures >= self._crash_alert_threshold
+            and self._crash_alert_due()
+        ):
+            self._fire_crash_alert(exc)
+
+    def _crash_alert_due(self) -> bool:
+        """First crossing alerts immediately; thereafter at most once per
+        crash_realert_interval_sec while the failure persists (no 840-alert spam)."""
+        if self._last_crash_alert_at is None:
+            return True
+        try:
+            elapsed = (now_ist() - self._last_crash_alert_at).total_seconds()
+        except Exception:
+            return True
+        return elapsed >= self._crash_realert_interval_sec
+
+    def _fire_crash_alert(self, exc: Exception) -> None:
+        self._last_crash_alert_at = now_ist()
+        self._log.critical(
+            "tgt_retry_manager.crash_loop",
+            extra={
+                "consecutive_failures": self._consecutive_failures,
+                "error": str(exc),
+                "exc_type": type(exc).__name__,
+            },
+        )
+        self._notify(
+            severity="CRITICAL",
+            title=f"[{self._mode}] TGT retry manager crash-looping",
+            body=(
+                f"TGTRetryManager has failed {self._consecutive_failures} consecutive "
+                f"cycles (every {self._poll_interval}s): {type(exc).__name__}: {exc}. "
+                f"The TGT safety net is DOWN — a TGT left unplaced by FIX-190 Bug C "
+                f"will not be retried (open positions remain SL-protected). "
+                f"Investigate immediately."
+            ),
+        )
+
+    def health_snapshot(self) -> dict:
+        """Liveness snapshot for the /health endpoint (HC) + pre-flight Phase B.
+        ``ok`` is False iff the worker thread should be running but is dead or in a
+        sustained crash-loop — so a silently-dead safety daemon turns /health 503
+        and shows up as a Phase-B failing check, not just a CRITICAL email."""
+        enabled = self._enabled
+        alive = bool(self._thread is not None and self._thread.is_alive())
+        in_crash_loop = self._consecutive_failures >= self._crash_alert_threshold
+        if not enabled:
+            ok, state = True, "disabled"   # intentionally off is not unhealthy
+        elif not alive:
+            ok, state = False, "dead"
+        elif in_crash_loop:
+            ok, state = False, "crash_loop"
+        else:
+            ok, state = True, "running"
+        return {
+            "ok": ok,
+            "state": state,
+            "consecutive_failures": self._consecutive_failures,
+            "last_clean_cycle_at": (
+                self._last_clean_cycle_at.isoformat()
+                if self._last_clean_cycle_at else None
+            ),
+        }
 
     # ── Core ──────────────────────────────────────────────────────────────────
 

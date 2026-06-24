@@ -472,3 +472,170 @@ def test_theleela_replay_bugc_flag_then_retry_succeeds():
         assert store.get_tgt_retry_candidates() == []
         store.close()
         print("  OK THELEELA replay: Bug C flag -> manager retries -> TGT placed")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Post-mortem 24-Jun: signature-lock + real-call regression + crash-loop guard.
+# tgt_retry crash-looped Mon 22-Jun (840) + Tue 23-Jun (230): it called
+# is_within_market_hours(now) with 1 arg, but FIX-169 F18 created that helper with
+# a 3-arg signature (now_t, open_t, close_t) six days earlier -> born broken, the
+# retry sweep raised TypeError every cycle and was silently dead for two live days.
+# These tests lock the call signature and make a crash-looping daemon SURFACE.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sev_count(notifier, sev):
+    return sum(1 for c in notifier.send.call_args_list
+              if c.kwargs.get("severity") == sev)
+
+
+def _fixed_now(hour, minute=0):
+    """now_ist() pinned to a wall-clock time (market-hours guard is time-of-day
+    only, so this is deterministic on any calendar day)."""
+    return now_ist().replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def _due_candidate_store(tmp):
+    store = _make_store(Path(tmp))
+    _seed_open_trade(store, "t1")
+    store.mark_needs_tgt_retry("t1")
+    _backdate(store)            # last attempt long ago -> due now
+    return store
+
+
+def test_is_within_market_hours_call_signature_locked():
+    """Lock the is_within_market_hours signature the manager depends on. A future
+    change to it (as FIX-169 F18 *created* the 3-arg form) now breaks at test time
+    instead of crash-looping the daemon silently in production."""
+    import inspect
+    import pytest
+    from datetime import time as dtime
+    from core.market_windows import (
+        is_within_market_hours, DEFAULT_MARKET_OPEN, DEFAULT_MARKET_CLOSE,
+    )
+    sig = inspect.signature(is_within_market_hours)
+    params = list(sig.parameters.keys())
+    assert params == ["now_t", "open_t", "close_t"], (
+        f"is_within_market_hours signature drifted: {params}. "
+        "tgt_retry_manager._run_once_locked calls it with 3 positional args "
+        "(now.time(), DEFAULT_MARKET_OPEN, DEFAULT_MARKET_CLOSE) — update that "
+        "call site in orders/tgt_retry_manager.py in the SAME commit."
+    )
+    # The manager's exact call must bind; the 22-23 Jun 1-arg crash call must NOT.
+    sig.bind(dtime(10, 0), DEFAULT_MARKET_OPEN, DEFAULT_MARKET_CLOSE)
+    with pytest.raises(TypeError):
+        sig.bind(dtime(10, 0))
+    print("  OK is_within_market_hours 3-arg call signature locked")
+
+
+def test_manager_real_market_hours_guard_in_hours_no_typeerror():
+    """Regression for the Mon/Tue crash: drive run_once() with the REAL (un-mocked)
+    market-hours guard during market hours. The born-broken 1-arg call raised
+    TypeError here every cycle; the 3-arg call must pass the guard and retry."""
+    with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = _due_candidate_store(tmp)
+        placer = MagicMock()
+        placer.retry_tgt_for_trade.return_value = "placed"
+        m = TGTRetryManager(state_store=store, order_placer=placer, logger=_log(),
+                            notifier=MagicMock(), market_hours_guard=True)
+        # NOTE: is_within_market_hours is NOT patched — the real 3-arg call runs.
+        with patch("orders.tgt_retry_manager.now_ist", return_value=_fixed_now(10)):
+            out = m.run_once()
+        assert out == ["placed"]
+        placer.retry_tgt_for_trade.assert_called_once_with("t1")
+        store.close()
+        print("  OK manager: real 3-arg market-hours guard passes in-hours (no TypeError)")
+
+
+def test_manager_real_market_hours_guard_off_hours_skips():
+    """The same REAL guard must SKIP outside market hours — proving both branches
+    of the 3-arg call work (not just that it doesn't raise)."""
+    with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        store = _due_candidate_store(tmp)
+        placer = MagicMock()
+        m = TGTRetryManager(state_store=store, order_placer=placer, logger=_log(),
+                            market_hours_guard=True)
+        with patch("orders.tgt_retry_manager.now_ist", return_value=_fixed_now(20)):
+            assert m.run_once() == []
+        placer.retry_tgt_for_trade.assert_not_called()
+        store.close()
+        print("  OK manager: real 3-arg market-hours guard skips off-hours")
+
+
+def test_crash_loop_fires_one_throttled_critical_then_recovers():
+    """A persistent cycle exception must surface as ONE CRITICAL after the
+    threshold (not 840/day), stay throttled while it persists, and emit an INFO on
+    recovery — converting the 2-day silent death into a minutes-fast alert."""
+    notifier = MagicMock()
+    m = TGTRetryManager(state_store=None, order_placer=None, logger=_log(),
+                        notifier=notifier, crash_alert_threshold=3,
+                        crash_realert_interval_sec=3600)
+    boom = TypeError("is_within_market_hours() missing 2 required positional arguments")
+    # Below threshold -> no alert yet.
+    m._record_cycle_failure(boom)
+    m._record_cycle_failure(boom)
+    assert _sev_count(notifier, "CRITICAL") == 0
+    # Crossing the threshold -> exactly ONE CRITICAL.
+    m._record_cycle_failure(boom)
+    assert _sev_count(notifier, "CRITICAL") == 1
+    # Persisting -> throttled (still ONE; no 840-alert spam).
+    m._record_cycle_failure(boom)
+    m._record_cycle_failure(boom)
+    assert _sev_count(notifier, "CRITICAL") == 1
+    assert m._consecutive_failures == 5
+    crit = next(c for c in notifier.send.call_args_list
+                if c.kwargs.get("severity") == "CRITICAL")
+    assert "safety net is DOWN" in crit.kwargs["body"]
+    assert m.health_snapshot()["state"] in ("dead", "crash_loop")  # never started
+    # A clean cycle -> reset + INFO recovery.
+    m._record_cycle_success()
+    assert m._consecutive_failures == 0
+    assert m._last_crash_alert_at is None
+    assert _sev_count(notifier, "INFO") == 1
+    print("  OK crash-loop: one throttled CRITICAL -> recovery INFO")
+
+
+def test_crash_loop_realerts_after_throttle_interval():
+    """A still-failing daemon re-alerts once the throttle window elapses (a long
+    outage is not silenced forever after the first email)."""
+    from datetime import timedelta
+    notifier = MagicMock()
+    m = TGTRetryManager(state_store=None, order_placer=None, logger=_log(),
+                        notifier=notifier, crash_alert_threshold=1,
+                        crash_realert_interval_sec=1800)
+    m._record_cycle_failure(RuntimeError("x"))          # alert #1
+    assert _sev_count(notifier, "CRITICAL") == 1
+    m._record_cycle_failure(RuntimeError("x"))          # throttled
+    assert _sev_count(notifier, "CRITICAL") == 1
+    m._last_crash_alert_at = now_ist() - timedelta(seconds=1801)  # window elapsed
+    m._record_cycle_failure(RuntimeError("x"))          # alert #2
+    assert _sev_count(notifier, "CRITICAL") == 2
+    print("  OK crash-loop: re-alerts after the throttle interval")
+
+
+def test_health_snapshot_states():
+    import threading as _threading
+    # disabled -> ok (intentionally off is not unhealthy).
+    snap = TGTRetryManager(state_store=None, order_placer=None,
+                           enabled=False).health_snapshot()
+    assert snap["ok"] is True and snap["state"] == "disabled"
+    # enabled but never started -> dead.
+    m = TGTRetryManager(state_store=None, order_placer=None, enabled=True)
+    assert m.health_snapshot()["ok"] is False
+    assert m.health_snapshot()["state"] == "dead"
+    # simulate a live worker thread (no real spawn) -> running.
+    m._thread = _threading.current_thread()
+    assert m.health_snapshot()["ok"] is True
+    assert m.health_snapshot()["state"] == "running"
+    # failures past threshold -> crash_loop, not ok.
+    m._consecutive_failures = m._crash_alert_threshold
+    assert m.health_snapshot()["ok"] is False
+    assert m.health_snapshot()["state"] == "crash_loop"
+    print("  OK health_snapshot: disabled / dead / running / crash_loop")
+
+
+def test_health_snapshot_stamps_clean_cycle():
+    m = TGTRetryManager(state_store=None, order_placer=None, enabled=True)
+    assert m.health_snapshot()["last_clean_cycle_at"] is None
+    m._record_cycle_success()
+    assert m.health_snapshot()["last_clean_cycle_at"] is not None
+    print("  OK health_snapshot: a clean cycle stamps last_clean_cycle_at")

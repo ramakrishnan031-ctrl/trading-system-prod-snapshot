@@ -90,3 +90,59 @@ class TestHealthRoute:
             resp = self._client().get("/health")
         assert resp.status_code == 503
         assert json.loads(resp.data)["status"] == "degraded"
+
+
+# ── tgt_retry liveness in /health (post-mortem 24-Jun) ───────────────────────
+
+
+class TestHealthTgtRetry:
+    """A silently-dead/crash-looping TGT-retry daemon must turn /health 503 so it
+    shows up as a pre-flight Phase-B failing check, not just a CRITICAL email."""
+
+    def _client(self, provider):
+        store = MagicMock()
+        store.fetch_one.return_value = {"cnt": 0}
+        return _create_app(store, _LOG, tgt_retry_provider=provider).test_client()
+
+    def _green(self):
+        return patch("scripts.healthcheck_server._check_token", return_value={"ok": True}), \
+               patch("scripts.healthcheck_server._check_kill_switch",
+                     return_value={"ok": True, "state": "INACTIVE"})
+
+    def test_no_provider_omits_check(self):
+        # Backward-compatible: without a provider the checks set is unchanged.
+        store = MagicMock()
+        store.fetch_one.return_value = {"cnt": 0}
+        t, k = self._green()
+        with t, k:
+            resp = _create_app(store, _LOG).test_client().get("/health")
+        assert set(json.loads(resp.data)["checks"]) == {"db", "token", "kill_switch"}
+
+    def test_running_healthy_200(self):
+        t, k = self._green()
+        with t, k:
+            resp = self._client(lambda: {"ok": True, "state": "running"}).get("/health")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["status"] == "healthy"
+        assert data["checks"]["tgt_retry"]["state"] == "running"
+
+    def test_crash_loop_degraded_503(self):
+        t, k = self._green()
+        with t, k:
+            resp = self._client(
+                lambda: {"ok": False, "state": "crash_loop",
+                         "consecutive_failures": 7}).get("/health")
+        assert resp.status_code == 503
+        data = json.loads(resp.data)
+        assert data["status"] == "degraded"
+        assert data["checks"]["tgt_retry"]["ok"] is False
+
+    def test_provider_raises_is_not_ok_503(self):
+        def _boom():
+            raise RuntimeError("snapshot failed")
+        t, k = self._green()
+        with t, k:
+            resp = self._client(_boom).get("/health")
+        assert resp.status_code == 503
+        assert json.loads(resp.data)["checks"]["tgt_retry"]["ok"] is False

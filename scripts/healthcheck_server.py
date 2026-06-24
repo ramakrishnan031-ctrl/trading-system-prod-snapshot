@@ -55,7 +55,8 @@ def _check_kill_switch(state_store: Any, logger: Any) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
-def _create_app(state_store: Any, logger: Any, metrics_provider=None) -> Flask:
+def _create_app(state_store: Any, logger: Any, metrics_provider=None,
+                tgt_retry_provider=None) -> Flask:
     app = Flask("healthcheck")
 
     @app.route("/health", methods=["GET"])
@@ -84,6 +85,15 @@ def _create_app(state_store: Any, logger: Any, metrics_provider=None) -> Flask:
             "token": _check_token(),
             "kill_switch": _check_kill_switch(state_store, logger),
         }
+        # Post-mortem 24-Jun: surface the TGT-retry safety daemon's liveness so a
+        # silently-dead/crash-looping worker turns /health 503 (and shows up as a
+        # pre-flight Phase-B failing check), not just a CRITICAL email.
+        if tgt_retry_provider is not None:
+            try:
+                snap = tgt_retry_provider()
+                checks["tgt_retry"] = snap if isinstance(snap, dict) else {"ok": False}
+            except Exception as exc:
+                checks["tgt_retry"] = {"ok": False, "error": str(exc)}
         overall_ok = all(c.get("ok", False) for c in checks.values())
 
         body = json.dumps({
@@ -233,12 +243,15 @@ def start_healthcheck_server(
     port: int = 8080,
     host: str = "0.0.0.0",
     metrics_provider=None,
+    tgt_retry_provider=None,
 ) -> Optional[threading.Thread]:
     """Start the healthcheck HTTP server in a daemon thread (HC2, HC3).
 
     FIX-190 (Bug B): metrics_provider() optionally supplies in-memory runtime
-    counters merged into /metrics (signal processor's get_runtime_metrics)."""
-    app = _create_app(state_store, logger, metrics_provider)
+    counters merged into /metrics (signal processor's get_runtime_metrics).
+    Post-mortem 24-Jun: tgt_retry_provider() optionally supplies the TGT-retry
+    daemon's liveness snapshot, added to the /health checks."""
+    app = _create_app(state_store, logger, metrics_provider, tgt_retry_provider)
 
     from waitress import serve as _waitress_serve
 

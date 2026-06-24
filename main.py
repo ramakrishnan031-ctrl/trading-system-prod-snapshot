@@ -2418,6 +2418,10 @@ def _main_locked(args, config_dir: Path) -> int:
     start_healthcheck_server(
         state_store=store, logger=get_logger("healthcheck"), port=8080,
         metrics_provider=signal_processor.get_runtime_metrics,  # FIX-190 (Bug B)
+        # Post-mortem 24-Jun: surface the TGT-retry safety daemon's liveness on
+        # /health (→ pre-flight Phase B) so a dead/crash-looping worker can't sit
+        # unnoticed for days again.
+        tgt_retry_provider=tgt_retry_manager.health_snapshot,
     )
 
     # Pre-flight on-demand: if this restart landed after the 08:30/09:14 cron slot
