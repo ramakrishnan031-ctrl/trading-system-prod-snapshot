@@ -563,6 +563,12 @@ the entry engine consult this. Update it at year-end / when NSE revises the cale
 - `entry_method`/`entry_offset_pct` — how the entry limit price is set.
 - `sl_method`/`sl_pct`/`sl_min_pct`/`sl_max_pct`/`sl_atr_multiplier` — stop-loss sizing.
 - `tgt_method`/`tgt_risk_reward`/`tgt_pct` — target sizing (RISK_REWARD = R multiple).
+  - **Standardized baseline (24-Jun, Part C):** ALL 15 strategies trade at
+    `tgt_risk_reward: 1.5`. To retune one strategy's target, edit `tgt_risk_reward`
+    in its YAML → commit → push → restart; the new value now reaches the broker
+    correctly (the fill-time R:R fix, Slice 1, 22-Jun: the broker TGT uses each
+    strategy's own R:R, frozen at placement into `trades.tgt_risk_reward_applied`
+    and re-read from the actual fill — was previously a hardcoded 2.0).
 - `smart_tgt_enabled` + trail trigger/step — trailing-target behaviour.
 - `min_volume_surge`, `min_adr_pct`, `max_spread_pct` — per-strategy entry filters.
 - `max_risk_pct` (1%), `lot_size`, `max_concurrent_positions` — per-strategy sizing/caps.

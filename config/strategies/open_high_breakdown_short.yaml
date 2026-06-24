@@ -21,7 +21,7 @@ sl_max_pct: 0.05
 
 tgt_method: "RISK_REWARD"
 tgt_pct: 0.0
-tgt_risk_reward: 2.0
+tgt_risk_reward: 1.5
 tgt_atr_multiplier: 2.5
 
 smart_tgt_enabled: true

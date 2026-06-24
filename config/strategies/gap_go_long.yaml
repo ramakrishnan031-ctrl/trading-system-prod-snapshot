@@ -22,7 +22,7 @@ sl_gap_buffer_pct: 0.3  # FIX-130: widen SL 0.3% during 09:15-09:30 gap-risk win
 
 tgt_method: "RISK_REWARD"
 tgt_pct: 0.0
-tgt_risk_reward: 2.5
+tgt_risk_reward: 1.5
 tgt_atr_multiplier: 2.5
 
 smart_tgt_enabled: true
