@@ -93,6 +93,13 @@ class ExitLegsResult:
     tgt_internal_id: Optional[str] = None
     tgt_price: Optional[float] = None
     tgt_placed: bool = True     # FIX-190 Bug C: False = SL live, TGT not placed
+    # NOCIL after-check (24-Jun): record whether the circuit-band clamp moved each
+    # leg, so the Slice-1 SL/TGT after-check can tell a LEGITIMATE band clamp
+    # (placed == band ceiling) from a real mismatch instead of false-flagging it.
+    # When True, the clamped band ceiling is the placed price (sl_trigger_price /
+    # tgt_price respectively).
+    sl_clamped: bool = False
+    tgt_clamped: bool = False
 
 
 @dataclass(frozen=True)
@@ -293,6 +300,8 @@ class LimitTripleProtocol(EntryEngine):
         # fails open) and Bug C still handles any broker-side TGT rejection.
         upper_c, lower_c = self._circuit_limits(symbol)
         tgt_unplaceable = False
+        sl_was_clamped = False
+        tgt_was_clamped = False
         if upper_c or lower_c:
             sl_res = clamp_exit_into_band(
                 sl_price, leg="SL", direction=entry_side, entry_fill=entry_fill,
@@ -321,9 +330,11 @@ class LimitTripleProtocol(EntryEngine):
                 upper_circuit=upper_c, lower_circuit=lower_c,
             )
             sl_price = sl_res.price
+            sl_was_clamped = sl_res.was_clamped
             tgt_unplaceable = not tgt_res.placeable
             if not tgt_unplaceable:
                 tgt_price = tgt_res.price
+                tgt_was_clamped = tgt_res.was_clamped
             if sl_res.was_clamped or tgt_res.was_clamped or tgt_unplaceable:
                 self._log.warning(
                     "limit_triple.exit_price_clamped_to_band",
@@ -412,6 +423,8 @@ class LimitTripleProtocol(EntryEngine):
                 tgt_internal_id=None,
                 tgt_price=None,
                 tgt_placed=False,
+                sl_clamped=sl_was_clamped,   # SL still placed (may be clamped)
+                tgt_clamped=False,           # no TGT placed in the SL-only path
             )
 
         # NOCIL fix: the placeability gate found the clamped TGT would sit on the
@@ -489,6 +502,8 @@ class LimitTripleProtocol(EntryEngine):
             tgt_broker_order_id=tgt_placed.broker_order_id,
             tgt_internal_id=tgt_placed.internal_order_id,
             tgt_price=tgt_price,
+            sl_clamped=sl_was_clamped,
+            tgt_clamped=tgt_was_clamped,
         )
 
     def place_tgt_only(

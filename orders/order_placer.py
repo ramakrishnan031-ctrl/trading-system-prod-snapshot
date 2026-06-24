@@ -2853,10 +2853,14 @@ class OrderPlacer:
         )
 
         # Slice 1 Part B: verify SL + TGT landed at the intended price/qty.
+        # Pass the circuit-band ceiling each leg was clamped to (if any) so a
+        # legitimate clamp is recognised, not false-flagged (NOCIL after-check fix).
         self._verify_exits_placed(
             trade_id=trade_id, symbol=fill_entry.symbol, protocol="LIMIT_TRIPLE",
             intended_sl=fill_entry.sl_price,
             intended_tgt=actual_tgt_price, qty_filled=qty_filled,
+            sl_clamp_price=(legs.sl_trigger_price if legs.sl_clamped else None),
+            tgt_clamp_price=(legs.tgt_price if legs.tgt_clamped else None),
         )
 
     def _place_co_tgt_exit(
@@ -3438,10 +3442,16 @@ class OrderPlacer:
             )
 
             # Slice 1 Part B: verify the retried SL + TGT landed correctly.
+            # (Pass the per-leg circuit-band ceiling so a legit clamp on the
+            # re-placed exits is recognised. NOTE: the prior `legs=legs` kwarg was
+            # a latent bug — _verify_exits_placed has no `legs` param — masked
+            # because this retry path was itself dead until 23-Jun; fixed here.)
             self._verify_exits_placed(
                 trade_id=trade_id, symbol=fill_entry.symbol, protocol="LIMIT_TRIPLE",
-                legs=legs, intended_sl=fill_entry.sl_price,
+                intended_sl=fill_entry.sl_price,
                 intended_tgt=actual_tgt_price, qty_filled=qty_filled,
+                sl_clamp_price=(legs.sl_trigger_price if legs.sl_clamped else None),
+                tgt_clamp_price=(legs.tgt_price if legs.tgt_clamped else None),
             )
 
         except Exception as track_exc:
@@ -3850,6 +3860,24 @@ class OrderPlacer:
         eps = max(0.05, abs(intended) * 0.002)
         return abs(placed - intended) > eps
 
+    def _explained_by_clamp(
+        self, placed: Optional[float], clamp_price: Optional[float]
+    ) -> bool:
+        """True iff a price mismatch vs the intended exit is FULLY explained by a
+        legitimate circuit-band clamp: the leg WAS clamped (``clamp_price`` is the
+        band ceiling it was clamped to, else None) AND the placed price equals that
+        ceiling within the same tick tolerance.
+
+        The independent ``clamp_price`` (the clamp's computed band output, not the
+        read-back order row) is the key: a placed price that matches NEITHER the
+        intended NOR the band is a REAL mismatch — so a genuine bug on a
+        near-circuit stock still flags. This is NOT blind 'a clamp happened ->
+        suppress'.
+        """
+        if clamp_price is None or not placed:
+            return False
+        return not self._exit_price_mismatch(placed, clamp_price)
+
     def _verify_exits_placed(
         self,
         *,
@@ -3859,6 +3887,8 @@ class OrderPlacer:
         intended_sl: Optional[float],
         intended_tgt: float,
         qty_filled: int,
+        sl_clamp_price: Optional[float] = None,
+        tgt_clamp_price: Optional[float] = None,
     ) -> None:
         """Slice 1 Part B: verify the just-placed SL/TGT exits landed at the
         intended price + qty. ALERT-ONLY — never cancels or re-places (a bigger
@@ -3871,9 +3901,17 @@ class OrderPlacer:
         there is no mode branch. LIMIT_TRIPLE persists SL + TGT; CO_PLUS_TGT
         persists TGT only (its SL lives inside the broker CO bracket).
 
+        Circuit-clamp awareness (24-Jun): when a leg was legitimately clamped into
+        the circuit band (``sl_clamp_price`` / ``tgt_clamp_price`` = the band
+        ceiling it was clamped to), the placed price differs from the pre-clamp
+        intended price by design. That is NOT a mismatch: it is recorded as a note
+        and the leg verifies OK. A difference NOT explained by the band ceiling is
+        still a real mismatch (see ``_explained_by_clamp``).
+
         Severity: a missing/wrong SL is a protection breach -> CRITICAL; a
         missing/wrong TGT with the SL intact -> WARN (the position is still
-        protected, it just won't auto-target).
+        protected, it just won't auto-target). A clamp-explained difference is
+        neither — verified=1, no alert.
         """
         try:
             orders = self._om.get_orders_for_trade(trade_id)
@@ -3892,6 +3930,7 @@ class OrderPlacer:
             ]
 
         problems: List[str] = []
+        notes: List[str] = []          # legitimate-but-noteworthy (e.g. circuit clamp)
         sl_ok = True
         placed_sl: Optional[float] = None
         placed_tgt: Optional[float] = None
@@ -3907,8 +3946,14 @@ class OrderPlacer:
                 o = sl_rows[0]
                 placed_sl = float(o.get("trigger_price") or o.get("price") or 0.0)
                 if self._exit_price_mismatch(placed_sl, intended_sl):
-                    problems.append(f"SL trigger {placed_sl:.2f} != intended {intended_sl:.2f}")
-                    sl_ok = False
+                    if self._explained_by_clamp(placed_sl, sl_clamp_price):
+                        notes.append(
+                            f"SL clamped to circuit band {placed_sl:.2f} "
+                            f"(intended {intended_sl:.2f})"
+                        )
+                    else:
+                        problems.append(f"SL trigger {placed_sl:.2f} != intended {intended_sl:.2f}")
+                        sl_ok = False
                 if int(o.get("qty_requested") or 0) != int(qty_filled):
                     problems.append(f"SL qty {o.get('qty_requested')} != filled {qty_filled}")
                     sl_ok = False
@@ -3923,14 +3968,25 @@ class OrderPlacer:
             o = tgt_rows[0]
             placed_tgt = float(o.get("price") or 0.0)
             if self._exit_price_mismatch(placed_tgt, intended_tgt):
-                problems.append(f"TGT {placed_tgt:.2f} != intended {intended_tgt:.2f}")
-                tgt_ok = False
+                if self._explained_by_clamp(placed_tgt, tgt_clamp_price):
+                    notes.append(
+                        f"TGT clamped to circuit band {placed_tgt:.2f} "
+                        f"(intended {intended_tgt:.2f})"
+                    )
+                else:
+                    problems.append(f"TGT {placed_tgt:.2f} != intended {intended_tgt:.2f}")
+                    tgt_ok = False
             if int(o.get("qty_requested") or 0) != int(qty_filled):
                 problems.append(f"TGT qty {o.get('qty_requested')} != filled {qty_filled}")
                 tgt_ok = False
 
         verified = 1 if not problems else 0
-        detail = "ok" if verified else "; ".join(problems)
+        if problems:
+            detail = "; ".join(problems)
+        elif notes:
+            detail = "; ".join(notes)   # verified=1, but record the legit clamp
+        else:
+            detail = "ok"
 
         # Always log intended-vs-actual for both legs (audit trail).
         self._log.info(
@@ -3940,6 +3996,7 @@ class OrderPlacer:
                 "verified": verified, "detail": detail, "qty_filled": qty_filled,
                 "intended_sl": intended_sl, "placed_sl": placed_sl,
                 "intended_tgt": intended_tgt, "placed_tgt": placed_tgt,
+                "sl_clamp_price": sl_clamp_price, "tgt_clamp_price": tgt_clamp_price,
             },
         )
 

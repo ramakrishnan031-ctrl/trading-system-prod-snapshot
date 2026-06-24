@@ -361,6 +361,234 @@ class TestExitsAfterCheck:
             assert row["exits_verify_detail"] == "ok"
             store.close()
 
+    # ── Circuit-clamp awareness (24-Jun): a legit band clamp is not a mismatch ──
+
+    def _verdict(self, store, trade_id):
+        return store.fetch_one(
+            "SELECT exits_verified, exits_verify_detail FROM trades WHERE trade_id = ?",
+            (trade_id,),
+        )
+
+    def test_clamp_explained_tgt_verified_ok(self):
+        """TGT placed at the circuit band it was clamped to (differs from the
+        pre-clamp intended) -> VERIFIED, recorded as a clamp note, NO alert."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            notifier = _FakeNotifier()
+            placer, store, om, _ = _make_placer(Path(tmp), notifier=notifier)
+            trade_id = _make_trade(placer, store)
+            _seed_exit(om, trade_id, "SL", price=99.0, qty=10, trigger=99.0)   # SL ok
+            _seed_exit(om, trade_id, "TGT", price=216.15, qty=10)             # clamped
+            placer._verify_exits_placed(
+                trade_id=trade_id, symbol="SYM", protocol="LIMIT_TRIPLE",
+                intended_sl=99.0, intended_tgt=220.41, qty_filled=10,
+                tgt_clamp_price=216.15,   # the band ceiling place_exits clamped to
+            )
+            row = self._verdict(store, trade_id)
+            assert row["exits_verified"] == 1
+            assert "clamped to circuit band" in row["exits_verify_detail"]
+            # The after-check raises NO mismatch alert for a legit clamp (the only
+            # notification is the pre-existing INFO 'ORDER PLACED' from place()).
+            sevs = notifier.severities()
+            assert "WARNING" not in sevs and "CRITICAL" not in sevs
+            store.close()
+
+    def test_clamp_explained_sl_verified_ok(self):
+        """An SL legitimately clamped UP off the lower circuit (placed == band)
+        verifies OK — no false CRITICAL."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            notifier = _FakeNotifier()
+            placer, store, om, _ = _make_placer(Path(tmp), notifier=notifier)
+            trade_id = _make_trade(placer, store)
+            _seed_exit(om, trade_id, "SL", price=95.0, qty=10, trigger=95.0)  # clamped up
+            _seed_exit(om, trade_id, "TGT", price=101.5, qty=10)             # TGT ok
+            placer._verify_exits_placed(
+                trade_id=trade_id, symbol="SYM", protocol="LIMIT_TRIPLE",
+                intended_sl=92.0, intended_tgt=101.5, qty_filled=10,
+                sl_clamp_price=95.0,
+            )
+            row = self._verdict(store, trade_id)
+            assert row["exits_verified"] == 1
+            assert "SL clamped to circuit band" in row["exits_verify_detail"]
+            assert "CRITICAL" not in notifier.severities()
+            store.close()
+
+    def test_clamp_flag_set_but_placed_not_band_still_flags(self):
+        """DISCRIMINATOR: placed != intended AND a clamp occurred BUT placed !=
+        the band ceiling -> NOT explained by the clamp -> still a real mismatch.
+        Proves we did not blindly suppress on 'a clamp happened'."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            notifier = _FakeNotifier()
+            placer, store, om, _ = _make_placer(Path(tmp), notifier=notifier)
+            trade_id = _make_trade(placer, store)
+            _seed_exit(om, trade_id, "SL", price=99.0, qty=10, trigger=99.0)  # SL ok
+            _seed_exit(om, trade_id, "TGT", price=210.0, qty=10)             # != band
+            placer._verify_exits_placed(
+                trade_id=trade_id, symbol="SYM", protocol="LIMIT_TRIPLE",
+                intended_sl=99.0, intended_tgt=220.41, qty_filled=10,
+                tgt_clamp_price=216.15,   # band was 216.15 but placed is 210.0
+            )
+            row = self._verdict(store, trade_id)
+            assert row["exits_verified"] == 0
+            assert "TGT 210.00 != intended" in row["exits_verify_detail"]
+            # SL intact -> TGT-only mismatch -> WARN, not CRITICAL.
+            sevs = notifier.severities()
+            assert "WARNING" in sevs and "CRITICAL" not in sevs
+            store.close()
+
+    def test_real_tgt_mismatch_without_clamp_still_warns(self):
+        """No clamp at all (tgt_clamp_price=None) + placed != intended -> the
+        original mismatch behaviour is unchanged."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            notifier = _FakeNotifier()
+            placer, store, om, _ = _make_placer(Path(tmp), notifier=notifier)
+            trade_id = _make_trade(placer, store)
+            _seed_exit(om, trade_id, "SL", price=99.0, qty=10, trigger=99.0)
+            _seed_exit(om, trade_id, "TGT", price=210.0, qty=10)
+            placer._verify_exits_placed(
+                trade_id=trade_id, symbol="SYM", protocol="LIMIT_TRIPLE",
+                intended_sl=99.0, intended_tgt=220.41, qty_filled=10,
+            )
+            row = self._verdict(store, trade_id)
+            assert row["exits_verified"] == 0
+            assert "WARNING" in notifier.severities()
+            store.close()
+
+    def test_missing_sl_still_critical_even_when_tgt_clamped(self):
+        """Clamp-awareness must NOT blind the SL protection check: a missing SL is
+        still CRITICAL even when the TGT was legitimately clamped."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            notifier = _FakeNotifier()
+            placer, store, om, _ = _make_placer(Path(tmp), notifier=notifier)
+            trade_id = _make_trade(placer, store)
+            _seed_exit(om, trade_id, "TGT", price=216.15, qty=10)   # clamped TGT, NO SL
+            placer._verify_exits_placed(
+                trade_id=trade_id, symbol="SYM", protocol="LIMIT_TRIPLE",
+                intended_sl=99.0, intended_tgt=220.41, qty_filled=10,
+                tgt_clamp_price=216.15,
+            )
+            row = self._verdict(store, trade_id)
+            assert row["exits_verified"] == 0
+            assert "SL MISSING" in row["exits_verify_detail"]
+            assert "CRITICAL" in notifier.severities()
+            store.close()
+
+    def test_pacedigitk_shaped_flips_0_to_1(self):
+        """Re-classify the PACEDIGITK (Tue 23-Jun) false positive: SL ok, TGT
+        clamped to the circuit band (216.15) below the pre-clamp intended (220.41).
+        Pre-fix this recorded exits_verified=0; clamp-aware it is VERIFIED."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            notifier = _FakeNotifier()
+            placer, store, om, _ = _make_placer(Path(tmp), notifier=notifier)
+            trade_id = _make_trade(placer, store)
+            _seed_exit(om, trade_id, "SL", price=207.96, qty=10, trigger=207.96)
+            _seed_exit(om, trade_id, "TGT", price=216.15, qty=10)
+            placer._verify_exits_placed(
+                trade_id=trade_id, symbol="PACEDIGITK", protocol="LIMIT_TRIPLE",
+                intended_sl=207.96, intended_tgt=220.41, qty_filled=10,
+                tgt_clamp_price=216.15,
+            )
+            row = self._verdict(store, trade_id)
+            assert row["exits_verified"] == 1          # was 0 pre-fix
+            assert "clamped to circuit band 216.15" in row["exits_verify_detail"]
+            sevs = notifier.severities()
+            assert "WARNING" not in sevs and "CRITICAL" not in sevs
+            store.close()
+
+    def test_clamp_aware_logic_parity_paper_and_live(self):
+        """Parity: the clamp-aware after-check has no mode branch -> a clamped TGT
+        verifies identically in PAPER and LIVE."""
+        details = {}
+        for mode in ("PAPER", "LIVE"):
+            with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                placer, store, om, _ = _make_placer(
+                    Path(tmp), notifier=_FakeNotifier(), mode=mode)
+                trade_id = _make_trade(placer, store)
+                _seed_exit(om, trade_id, "SL", price=99.0, qty=10, trigger=99.0)
+                _seed_exit(om, trade_id, "TGT", price=216.15, qty=10)
+                placer._verify_exits_placed(
+                    trade_id=trade_id, symbol="SYM", protocol="LIMIT_TRIPLE",
+                    intended_sl=99.0, intended_tgt=220.41, qty_filled=10,
+                    tgt_clamp_price=216.15,
+                )
+                details[mode] = self._verdict(store, trade_id)["exits_verify_detail"]
+                store.close()
+        assert details["PAPER"] == details["LIVE"]
+        assert "clamped to circuit band" in details["LIVE"]
+
+
+# ── End-to-end: place_exits clamp -> ExitLegsResult flag -> after-check OK ──
+
+
+class _CircuitQuote:
+    def __init__(self, upper, lower):
+        self.upper_circuit = upper
+        self.lower_circuit = lower
+
+
+class _ClampAdapter(_MockAdapter):
+    """_MockAdapter + circuit bands, so place_exits actually clamps a leg."""
+
+    def __init__(self, *, upper, lower, **kw):
+        super().__init__(**kw)
+        self._upper, self._lower = upper, lower
+
+    def get_quote(self, symbols):
+        return {s: _CircuitQuote(self._upper, self._lower) for s in symbols}
+
+
+def _make_clamp_placer(tmp_path, *, upper, lower, notifier=None, mode="LIVE"):
+    store = _make_store(tmp_path)
+    adapter = _ClampAdapter(upper=upper, lower=lower)
+    engine = FullEntryEngine(
+        co_protocol=CoPlusTgtProtocol(adapter=adapter, logger=_log()),
+        limit_protocol=LimitTripleProtocol(adapter=adapter, logger=_log()),
+        logger=_log(), default_protocol="LIMIT_TRIPLE",
+    )
+    om = OrderManager(store, _log())
+    placer = OrderPlacer(
+        entry_engine=engine, order_manager=om, fund_manager=_MockFundManager(),
+        bus=EventBus(), logger=_log(), order_monitor=MagicMock(spec=OrderMonitor),
+        cost_calculator=MagicMock(spec=CostCalculator), rr_ratio=2.0,
+        default_order_protocol="LIMIT_TRIPLE", product_resolver=_default_resolver(),
+        notifier=notifier, mode=mode,
+    )
+    return placer, store, om, adapter
+
+
+def test_clamped_tgt_end_to_end_verifies_ok():
+    """Full chain: place_exits clamps the TGT into the band -> ExitLegsResult
+    .tgt_clamped=True -> the after-check recognises it -> verified=1, no alert.
+    entry 100 / SL 99 / RR 2.5 -> intended TGT 102.5; upper 103 -> band ceiling
+    100.90 (clamps; still > the 100 fill so it's placeable)."""
+    with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        notifier = _FakeNotifier()
+        placer, store, om, adapter = _make_clamp_placer(
+            Path(tmp), upper=103.0, lower=90.0, notifier=notifier)
+        sig_id = _seed_signal(store)
+        placer.place(symbol="SYM", side="BUY", qty=10, entry_price=100.0,
+                     sl_price=99.0, intent="INTRADAY", signal_id=sig_id,
+                     reservation_id="res1", tgt_risk_reward=2.5)
+        trade_id = store.fetch_one(
+            "SELECT trade_id FROM trades WHERE signal_id = ?", (sig_id,))["trade_id"]
+        fe = _FillEntry(
+            trade_id=trade_id, reservation_id="res1", symbol="SYM", qty=10,
+            leg=_LEG_ENTRY, order_protocol="LIMIT_TRIPLE", direction="LONG",
+            side="BUY", sl_price=99.0, tgt_price=100.0, intent="INTRADAY",
+            tgt_risk_reward=2.5,
+        )
+        adapter.placed.clear()
+        placer._place_limit_triple_exits(
+            trade_id=trade_id, fill_entry=fe, qty_filled=10,
+            avg_fill_price=100.0, reason="test",
+        )
+        row = store.fetch_one(
+            "SELECT exits_verified, exits_verify_detail FROM trades WHERE trade_id = ?",
+            (trade_id,))
+        assert row["exits_verified"] == 1
+        assert "clamped to circuit band" in row["exits_verify_detail"]
+        assert "CRITICAL" not in notifier.severities()
+        store.close()
+
 
 # ── Schema v34 -> v35 migration ───────────────────────────────────────────
 
