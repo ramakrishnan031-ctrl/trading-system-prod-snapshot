@@ -612,4 +612,8 @@ officer:
   morning_briefing_time: 09:20
   eod_floor_time: '18:45'
   eod_gap_minutes: 5
+  # Race-debounce (24-Jun): a job due within N min of the briefing/EOD snapshot
+  # may have just fired and not yet committed its heartbeat -> PENDING not MISSED
+  # (stops the 09:20 cron-cluster false-CRITICAL). Real misses (> N min) still flag.
+  miss_grace_minutes: 2
   telegram_ban_until: '2026-06-23'

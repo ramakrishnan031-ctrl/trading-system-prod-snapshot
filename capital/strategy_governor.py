@@ -147,6 +147,13 @@ class StrategyGovernor:
                     f"Strategy paused for the rest of today."
                 )
                 self._notifier.send(
+                    # WARNING (not CRITICAL): a single-strategy daily-loss pause is
+                    # a protective action working as designed (other strategies keep
+                    # trading), matching the convention (kill_switch HALT = CRITICAL;
+                    # degraded-but-operating = WARNING). Without this REQUIRED arg the
+                    # call raised TypeError every trip and the circuit-breaker alert
+                    # was silently lost (surfaced 24-Jun).
+                    severity="WARNING",
                     title=f"[{self._mode}] STRATEGY PAUSED -- {strategy_name}",
                     body=body,
                     source_module="strategy_governor",

@@ -290,8 +290,12 @@ def _read_marker(name: str, today: date, marks_dir: Path) -> tuple[str, float, s
 
 
 def _classify_job(job: CronJob, today: date, now_time: time,
-                  hb: dict, marks_dir: Path) -> JobOutcome:
-    """One job's outcome via its effective detection method."""
+                  hb: dict, marks_dir: Path, grace_minutes: int = 0) -> JobOutcome:
+    """One job's outcome via its effective detection method.
+
+    ``grace_minutes`` (24-Jun race-debounce): a heartbeat job due within this many
+    minutes of the snapshot may have just fired and not yet committed its
+    heartbeat (the 09:20 cron-cluster race) -> treated as PENDING, not MISSED."""
     cat = job.effective_category
     due_label = _time_label(job).strip()
     due_sort = job.due_time or time(23, 59)
@@ -317,6 +321,16 @@ def _classify_job(job: CronJob, today: date, now_time: time,
             return JobOutcome(job.name, cat, due_label, due_sort, COMPLETED, method, rt, "")
         if job.due_time is not None and now_time < job.due_time:
             return JobOutcome(job.name, cat, due_label, due_sort, PENDING, method, 0.0, "")
+        # Just-fired grace (race-debounce): a job due within grace_minutes of the
+        # snapshot may not have committed its heartbeat yet (the 09:20:00 cluster
+        # race, where now_time == the fixed briefing time == the job's due time).
+        # Hold it as PENDING so a sub-minute commit lag never escalates to a false
+        # CRITICAL; a genuinely missed job (due > grace ago) still returns MISSED.
+        if job.due_time is not None and grace_minutes > 0:
+            overdue_min = (now_time.hour * 60 + now_time.minute) - (
+                job.due_time.hour * 60 + job.due_time.minute)
+            if 0 <= overdue_min <= grace_minutes:
+                return JobOutcome(job.name, cat, due_label, due_sort, PENDING, method, 0.0, "")
         return JobOutcome(job.name, cat, due_label, due_sort, MISSED, method, 0.0, "")
 
     if method == "exit_code_file":
@@ -550,7 +564,8 @@ def build_report(registry: CronRegistry, store: StateStore, today: date,
     just the monitored subset), each classified by its detection method."""
     hb = _today_heartbeats(store, today) if store is not None else {}
     due = sorted(registry.jobs_due_on(today, config_dir), key=_sort_key)
-    jobs = [_classify_job(j, today, now_time, hb, marks_dir) for j in due]
+    grace = max(0, int(getattr(registry.officer, "miss_grace_minutes", 0)))
+    jobs = [_classify_job(j, today, now_time, hb, marks_dir, grace) for j in due]
 
     # Phase 3 (EOD): auto-discovery of live-not-registry jobs -> RAN_UNVERIFIED.
     # FAIL-SAFE: a failure here must NOT crash the core report.

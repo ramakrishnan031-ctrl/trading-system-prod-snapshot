@@ -38,6 +38,20 @@ class _FakeConfig:
         self.lookback_days = lookback_days
 
 
+class _StrictNotifier:
+    """Enforces the REAL TelegramNotifier.send signature (severity is required,
+    keyword-only). The 24-Jun bug — send() called without severity — raised
+    TypeError that the governor swallowed, so the alert was lost; a bare MagicMock
+    hid it. With this, a missing/renamed severity arg leaves `calls` empty."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def send(self, *, severity, title, body, source_module, context=None):
+        self.calls.append({"severity": severity, "title": title,
+                           "body": body, "source_module": source_module})
+
+
 def _make_store(tmp: Path) -> StateStore:
     return StateStore(tmp / "test.db")
 
@@ -179,8 +193,31 @@ class TestStrategyGovernor:
             call_kwargs = notifier.send.call_args
             title = call_kwargs[1].get("title", "") or (call_kwargs[0][0] if call_kwargs[0] else "")
             assert "gap_go_long" in title or "PAUSED" in title
+            # 24-Jun: severity is REQUIRED — lock it so the missing-arg bug can't return.
+            assert call_kwargs[1].get("severity") == "WARNING"
             store.close()
         print("  OK: Telegram notification sent on pause")
+
+    def test_pause_alert_dispatches_with_required_severity(self) -> None:
+        """Regression for the 24-Jun lost-alert bug: against a notifier that
+        enforces the real send() signature, the circuit-breaker alert must
+        actually DISPATCH (severity supplied) — on the buggy code the TypeError
+        was swallowed and `calls` stayed empty."""
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            for i in range(1, 6):
+                _seed_closed_trade(store, "gap_go_long", -100.0, date_offset_days=i)
+            _seed_closed_trade(store, "gap_go_long", -250.0, date_offset_days=0)
+            notifier = _StrictNotifier()
+            gov = StrategyGovernor(store, _FakeConfig(), notifier=notifier, mode="LIVE")
+            gov.check("gap_go_long", time(10, 0))
+
+            assert len(notifier.calls) == 1            # dispatched (0 if severity missing)
+            assert notifier.calls[0]["severity"] == "WARNING"
+            assert "PAUSED" in notifier.calls[0]["title"]
+            assert notifier.calls[0]["source_module"] == "strategy_governor"
+            store.close()
+        print("  OK: pause alert dispatches with required severity=WARNING")
 
 
 if __name__ == "__main__":
@@ -192,6 +229,7 @@ if __name__ == "__main__":
         TestStrategyGovernor().test_no_pause_after_cutoff_time,
         TestStrategyGovernor().test_already_paused_returns_true,
         TestStrategyGovernor().test_telegram_alert_sent_on_pause,
+        TestStrategyGovernor().test_pause_alert_dispatches_with_required_severity,
     ]
     passed = 0
     for t in tests:

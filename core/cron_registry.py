@@ -159,6 +159,11 @@ class OfficerConfig(BaseModel):
     morning_briefing_time: str = "09:20"   # IST; morning Telegram/email trigger
     eod_floor_time: str = "18:45"          # IST; earliest the EOD report fires
     eod_gap_minutes: int = 5               # fire +N min after the last expected job
+    # A job due within this many minutes of the report snapshot may have JUST
+    # fired — its heartbeat can lag the read (the 09:20 cron-cluster race). Treat
+    # it as PENDING, not MISSED, so a sub-minute commit lag never escalates to a
+    # false CRITICAL. A genuinely missed job (due > grace ago) still flags.
+    miss_grace_minutes: int = 2
     telegram_ban_until: Optional[str] = None  # "YYYY-MM-DD" inclusive; None = no ban
 
     def ban_active(self, today: date) -> bool:

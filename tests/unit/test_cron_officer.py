@@ -9,12 +9,17 @@ import pytest
 from core.cron_registry import CronRegistry
 from core.state_store import StateStore
 from scripts.cron_officer import (
+    _classify_job,
+    _compute_severity,
     _cron_hhmm,
     _job_token,
     build_briefing,
     build_change_report,
     build_eod_summary,
     parse_crontab,
+    COMPLETED,
+    MISSED,
+    PENDING,
 )
 
 MON = date(2026, 6, 15)
@@ -115,6 +120,55 @@ class TestEodSummary:
         store.close()
         assert "Completed: 3/3" in msg
         assert critical_miss is False
+
+
+# ── miss-grace debounce (24-Jun: 09:20 heartbeat-commit race) ────────────────
+
+
+class TestMissGraceDebounce:
+    """A heartbeat job due within `grace_minutes` of the snapshot may have JUST
+    fired and not yet committed its heartbeat (the 09:20 cron-cluster race) ->
+    PENDING, not a false MISSED -> no false CRITICAL. A genuine miss (due > grace
+    ago) STILL escalates, so real detection is preserved."""
+
+    def _job_c(self, tmp_path):
+        reg = _mini(tmp_path)  # job_c due 09:10, monitored heartbeat_db, critical
+        return next(j for j in reg.jobs_due_on(MON, tmp_path) if j.name == "job_c")
+
+    def test_just_due_no_heartbeat_within_grace_is_pending(self, tmp_path):
+        # snapshot AT the due time, heartbeat not yet committed -> PENDING (debounce)
+        out = _classify_job(self._job_c(tmp_path), MON, time(9, 10), {}, tmp_path,
+                            grace_minutes=2)
+        assert out.status == PENDING
+
+    def test_just_due_without_grace_is_missed(self, tmp_path):
+        # grace=0 reproduces the pre-fix behaviour (the false MISSED at the boundary)
+        out = _classify_job(self._job_c(tmp_path), MON, time(9, 10), {}, tmp_path,
+                            grace_minutes=0)
+        assert out.status == MISSED
+
+    def test_genuine_miss_past_grace_still_missed(self, tmp_path):
+        # 09:20 snapshot, due 09:10 -> 10 min overdue > 2 min grace -> MISSED
+        out = _classify_job(self._job_c(tmp_path), MON, time(9, 20), {}, tmp_path,
+                            grace_minutes=2)
+        assert out.status == MISSED
+
+    def test_committed_heartbeat_is_completed_regardless_of_grace(self, tmp_path):
+        hb = {"job_c": {"status": "SUCCESS", "duration_sec": 1.0}}
+        out = _classify_job(self._job_c(tmp_path), MON, time(9, 10), hb, tmp_path,
+                            grace_minutes=2)
+        assert out.status == COMPLETED
+
+    def test_within_grace_does_not_escalate_but_real_miss_does(self, tmp_path):
+        job_c = self._job_c(tmp_path)
+        race = _classify_job(job_c, MON, time(9, 10), {}, tmp_path, grace_minutes=2)
+        assert _compute_severity([race], watcher_stale=False) == "INFO"   # no false CRITICAL
+        real = _classify_job(job_c, MON, time(9, 20), {}, tmp_path, grace_minutes=2)
+        assert _compute_severity([real], watcher_stale=False) == "CRITICAL"  # real miss flags
+
+    def test_registry_default_grace_is_two_minutes(self, tmp_path):
+        # the officer-config default (consumed by build_report) is 2 min.
+        assert _mini(tmp_path).officer.miss_grace_minutes == 2
 
 
 # ── crontab parsing + change detection ───────────────────────────────────────
