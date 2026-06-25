@@ -234,6 +234,40 @@ def test_more_than_one_active_gtt_soft_kills(tmp_path: Path):
     assert env.ks.kills and "ownership ambiguity" in env.ks.kills[0]
 
 
+def test_orphan_leaked_system_gtt_forensic_then_deleted(tmp_path: Path):
+    # System GTT we believe is finished (row CLEANED) but still ACTIVE at the broker.
+    env = _setup(tmp_path)
+    _seed_trade(env.store, "t1")
+    res = _place(env)
+    env.store.set_gtt_state_status(int(res.gtt_id), "CLEANED", _NOW)   # we think it's done
+    assert len(env.adapter.get_gtts()) == 1                            # ... but broker still has it
+    out = env.mon.reconcile()
+    assert any(a.startswith("orphan_deleted") for a in out)
+    assert len(env.adapter.get_gtts()) == 0                            # leaked GTT deleted
+    assert env.notifier.sev("WARNING")
+
+
+def test_unknown_human_gtt_left_alone(tmp_path: Path):
+    env = _setup(tmp_path)
+    # a GTT with no gtt_state row at all -> human/external -> NEVER deleted
+    env.adapter._paper_gtts["88888"] = env.adapter._paper_gtt_record(
+        "88888", "INFY", [100.0, 110.0], 105.0, [], status="active")
+    out = env.mon.reconcile()
+    assert "unknown_gtt:88888" in out
+    assert "88888" in env.adapter._paper_gtts                          # NOT deleted
+
+
+def test_50_cap_warning(tmp_path: Path):
+    env = _setup(tmp_path)
+    for i in range(45):
+        gid = str(10_000 + i)
+        env.adapter._paper_gtts[gid] = env.adapter._paper_gtt_record(
+            gid, "SYM", [1.0, 2.0], 1.5, [], status="active")
+    out = env.mon.reconcile()
+    assert any(a.startswith("gtt_cap:") for a in out)
+    assert env.notifier.sev("WARNING")
+
+
 def test_broker_unavailable_defers_no_crash(tmp_path: Path):
     env = _setup(tmp_path)
     _seed_trade(env.store, "t1")

@@ -74,6 +74,29 @@ def test_maybe_run_cnc_monitor_cadence(tmp_path: Path):
     assert mon.reconcile.call_count == 2
 
 
+def test_sweep_stale_orders_never_touches_gtt_state(tmp_path: Path):
+    # 8b: a gtt_state GTT is a LIVE protective leg — EXEMPT from order-cancel sweeps.
+    store = _make_store(tmp_path)
+    _insert_trade(store, "tg", symbol="RAMCOIND", status="OPEN")
+    _gtt_row(store, "tg", "RAMCOIND")
+    # a terminal trade with a stale non-terminal order — the legitimate sweep target
+    _insert_trade(store, "tc", symbol="INFY", status="CLOSED")
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO orders (order_id,trade_id,leg,transaction_type,order_type,"
+            "product,variety,qty_requested,status,placed_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            ("o1", "tc", "SL", "SELL", "SL", "MIS", "regular", 10, "OPEN", _NOW, _NOW),
+        )
+    r = _make_reconciler(store)
+    swept = r.sweep_stale_orders()
+    assert swept == 1
+    assert store.fetch_one("SELECT status FROM orders WHERE order_id='o1'")["status"] == "CANCELLED"
+    # the GTT row is UNTOUCHED — sweeps operate only on the orders table
+    assert store.get_active_gtt_for_trade("tg") is not None
+    assert len(store.get_active_gtt_states()) == 1
+
+
 def test_start_runs_startup_gtt_reconcile(tmp_path: Path):
     store = _make_store(tmp_path)
     adapter = MagicMock()

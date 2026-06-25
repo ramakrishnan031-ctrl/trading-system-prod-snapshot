@@ -112,8 +112,56 @@ class CncGttMonitor:
                 continue  # handled by the M2 soft-kill above
             actions.append(self._handle_row(r, broker_gtts, held_qty, in_hours))
 
-        # Step 5 (orphan sweep + 50-cap) is appended to this routine in its own step.
+        # Step 5: orphan sweep + 50-cap guard (operates on the broker GTT list).
+        actions.extend(self._orphan_sweep_and_cap(broker_gtts, rows))
         return actions
+
+    # ── Step 5: leak / 50-cap (GTTs are EXEMPT from order-cancellation sweeps) ──
+    def _orphan_sweep_and_cap(self, broker_gtts: Dict[str, dict],
+                              active_rows: list) -> List[str]:
+        """Forensic-log-then-delete a LEAKED system GTT (still ACTIVE at the broker but
+        its gtt_state row is non-ACTIVE / the trade is closed); never touch a
+        human/external GTT (no gtt_state row — FIX-182 discipline) nor a still-ACTIVE
+        system GTT (the per-row ladder owns it). WARNING as the active-GTT count nears
+        the 50 broker cap. A gtt_state GTT is a LIVE protective leg — only delete_gtt
+        (deliberate close / dedupe / confirmed orphan) ever removes one; NO sweep does."""
+        out: List[str] = []
+        active_ids = {str(r["gtt_id"]) for r in active_rows}
+        active_broker = {
+            gid: g for gid, g in broker_gtts.items()
+            if str((g.get("status", "") if isinstance(g, dict) else "")).lower() == "active"
+        }
+
+        n = len(active_broker)
+        if n >= _GTT_CAP_WARN:
+            sev = "WARNING" if n < _GTT_CAP_MAX else "CRITICAL"
+            self._alert(sev, "GTT count approaching broker cap",
+                        f"{n} active GTTs at the broker (cap {_GTT_CAP_MAX}).")
+            out.append(f"gtt_cap:{n}")
+
+        for gid, g in active_broker.items():
+            if gid in active_ids:
+                continue  # a healthy system GTT — the per-row ladder owns it
+            row = self._store.get_gtt_state_by_id(gid)
+            if row is None:
+                # unknown GTT: human/external (or a persist-failed system GTT) ->
+                # NEVER delete (protect human GTTs + don't strip protection); log only.
+                self._forensic_log_gtt("unknown_gtt_left_alone", gid, g,
+                                       "no gtt_state row -> treated as human/external")
+                out.append(f"unknown_gtt:{gid}")
+                continue
+            # a SYSTEM GTT we believe is finished (non-ACTIVE row) yet still ACTIVE at
+            # the broker -> a LEAK -> forensic-log FIRST, then delete (Step 5 ordering).
+            self._forensic_log_gtt(
+                "orphan_gtt_leak", gid, g,
+                f"gtt_state status={row['status']} trade={row['trade_id']} but still "
+                f"ACTIVE at broker -> delete")
+            self._alert("WARNING", f"Orphan GTT cleaned — {row['symbol']}",
+                        f"GTT {gid} (trade {row['trade_id']}, row status {row['status']}) "
+                        f"was still live at the broker with no ACTIVE state -> deleted.")
+            self._safe_delete_gtt(gid)
+            out.append(f"orphan_deleted:{gid}")
+        return out
 
     # ── gather (Y4-safe) ──────────────────────────────────────────────────────
     def _gather(self):
@@ -383,6 +431,12 @@ class CncGttMonitor:
         self._log.warning("cnc_gtt_monitor.forensic", extra={
             "event": event, "trade_id": r["trade_id"], "symbol": r["symbol"],
             "gtt_id": r["gtt_id"], "qty": r["qty"], "detail": detail})
+
+    def _forensic_log_gtt(self, event: str, gid: str, bg, detail: str) -> None:
+        """Forensic record for a broker GTT (no gtt_state row in hand) BEFORE deletion."""
+        sym = (bg.get("condition") or {}).get("tradingsymbol", "") if isinstance(bg, dict) else ""
+        self._log.warning("cnc_gtt_monitor.forensic", extra={
+            "event": event, "gtt_id": gid, "symbol": sym, "detail": detail})
 
     def _alert(self, severity: str, title: str, body: str) -> None:
         if self._notifier is None:

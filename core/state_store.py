@@ -1825,6 +1825,16 @@ class StateStore:
         read by the Phase-2 reconcile + the 50-cap guard."""
         return self.fetch_all("SELECT * FROM gtt_state WHERE status = 'ACTIVE'")
 
+    def get_gtt_state_by_id(self, gtt_id) -> Optional[sqlite3.Row]:
+        """Return the gtt_state row for a broker trigger id (any status), or None.
+        Used by the orphan sweep to tell a leaked SYSTEM GTT (row exists, non-ACTIVE)
+        from a human/external GTT (no row at all)."""
+        try:
+            key = int(gtt_id)
+        except (TypeError, ValueError):
+            key = gtt_id
+        return self.fetch_one("SELECT * FROM gtt_state WHERE gtt_id = ?", (key,))
+
     def set_gtt_state_status(self, gtt_id, status: str, updated_at: str) -> int:
         """Transition a gtt_state row's status (ACTIVE->TRIGGERED->CLEANED, or
         ACTIVE->CANCELLED/EXPIRED/REJECTED). Returns rows affected."""
