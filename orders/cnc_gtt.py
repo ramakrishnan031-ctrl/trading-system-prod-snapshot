@@ -84,6 +84,13 @@ class CncGttPlacer:
         with self._lock:
             return self._trade_gtts.get(trade_id)
 
+    def forget(self, trade_id: str) -> None:
+        """SLICE2.5-P2: drop the hot-cache entry for a trade so the NEXT place_for_fill
+        PLACES a fresh GTT instead of MODIFYing the old gtt_id. Used by the reconcile
+        when a GTT vanished at the broker and must be recreated."""
+        with self._lock:
+            self._trade_gtts.pop(trade_id, None)
+
     def place_for_fill(
         self,
         *,

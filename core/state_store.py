@@ -1825,6 +1825,76 @@ class StateStore:
         read by the Phase-2 reconcile + the 50-cap guard."""
         return self.fetch_all("SELECT * FROM gtt_state WHERE status = 'ACTIVE'")
 
+    def set_gtt_state_status(self, gtt_id, status: str, updated_at: str) -> int:
+        """Transition a gtt_state row's status (ACTIVE->TRIGGERED->CLEANED, or
+        ACTIVE->CANCELLED/EXPIRED/REJECTED). Returns rows affected."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE gtt_state SET status = ?, updated_at = ? WHERE gtt_id = ?",
+                (status, updated_at, gtt_id),
+            )
+            return cur.rowcount
+
+    def set_gtt_state_needs_review(self, gtt_id, needs_review: int, updated_at: str) -> int:
+        """Y2: latch (1) / clear (0) the needs_review flag so an anomaly alerts ONCE
+        per state rather than every reconcile cycle. Returns rows affected."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE gtt_state SET needs_review = ?, updated_at = ? WHERE gtt_id = ?",
+                (1 if needs_review else 0, updated_at, gtt_id),
+            )
+            return cur.rowcount
+
+    def touch_gtt_state_verified(self, gtt_id, last_verified_at: str) -> int:
+        """Stamp last_verified_at after a healthy broker re-verify (no other change)."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE gtt_state SET last_verified_at = ?, updated_at = ? WHERE gtt_id = ?",
+                (last_verified_at, last_verified_at, gtt_id),
+            )
+            return cur.rowcount
+
+    def mark_trade_closed_gtt(self, trade_id: str, exit_reason: str = "GTT_EXIT") -> bool:
+        """SLICE2.5-P2: idempotency gate for a GTT-fired exit. OPEN/PARTIAL -> CLOSED
+        with a GTT exit_reason. Returns True iff THIS call transitioned the row — a
+        duplicate observer (postback + reconcile, 3.5e) gets False and MUST NOT
+        double-release capital. Distinct from CLOSED_MANUAL: a GTT exit is
+        SYSTEM-OWNED, not an external/human close."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades SET status = 'CLOSED', exit_reason = ?, updated_at = ?
+                WHERE trade_id = ? AND status IN ('OPEN', 'PARTIAL')
+                """,
+                (exit_reason, _now_ist_iso(), trade_id),
+            )
+            return cur.rowcount > 0
+
+    def record_gtt_close_financials(
+        self,
+        trade_id: str,
+        exit_price: float,
+        net_pnl: float,
+        charges: float = 0.0,
+        exit_time: Optional[str] = None,
+    ) -> bool:
+        """Write exit financials onto a GTT-closed trade (status='CLOSED' with a GTT
+        exit_reason). Guarded by `exit_reason LIKE 'GTT%'` so it can never clobber a
+        normally-closed row. GTT exits pass costs=0.0 (gross==net). Returns True if
+        the row was updated."""
+        ts = exit_time or _now_ist_iso()
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET exit_price = ?, exit_time = COALESCE(exit_time, ?),
+                    gross_pnl = ?, charges = ?, net_pnl = ?, updated_at = ?
+                WHERE trade_id = ? AND status = 'CLOSED' AND exit_reason LIKE 'GTT%'
+                """,
+                (exit_price, ts, net_pnl, charges, net_pnl, ts, trade_id),
+            )
+            return cur.rowcount > 0
+
     # ─────────────────────────────────────────────────────────────────────────
     # Startup-checks helpers (SC4, SC6 — read-only)
     # ─────────────────────────────────────────────────────────────────────────
