@@ -78,6 +78,18 @@ Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
 
 **Tick-size snap (single chokepoint, fail-safe 23-Jun):** every broker submission is tick-snapped at `broker/zerodha_adapter.py` → `_snap_order_to_tick` / `_resolve_tick` (fallback `DEFAULT_TICK` 0.05 + throttled WARN on a missing `tick_size`; covers `place_order` **and** `modify_order`, parity). `orders/order_placer._round_to_tick` was **removed** — the adapter is the sole snap point. Tests: `tests/unit/test_tick_failsafe_snap.py`.
 
+## Duplicate-exit safety — RAMCOIND fix (25-Jun): G5b can no longer over-sell
+| What | Location |
+|---|---|
+| Root | G5b crash-recovery placed a 2nd SL outside the OCO via a TOCTOU race on the lagging local `orders` table → both filled on the stop-hit → −1 over-sell (RAMCOIND 25-Jun; also IRFC 17-Jun / NIACL 22-Jun) |
+| **L2 keystone** invariant | `orders/order_reconciler.py` `_check_duplicate_exits` / `_dedupe_exit_leg` — exactly one live SL (LIMIT_TRIPLE only; CO excluded via `variety='co'`) + one live TGT per open trade; cancels the non-canonical (later-placed) extra, never drops to zero |
+| **L1** G5b guard | `_g5b_crash_recovery_sl` → 10s settling window (`_entry_fill_age_seconds`) + authoritative broker/`_fill_map` check (`_already_has_live_sl`, `_G5B_SETTLING_WINDOW_SEC`) instead of the lagging table |
+| **L3** over-sell / naked | `_check2_orphan_adoption` → `_detect_system_oversell` (CRITICAL + auto-flatten) · `_position_is_naked` (naked → WARNING, never silent; protected human → silent, FIX-182) |
+| **L4** after-check | `orders/order_placer.py` `_verify_exits_placed` → flags `>1` live SL/TGT (`DUPLICATE_SL/TGT`) |
+| Tests | `tests/unit/test_ramcoind_dup_exit_fix.py` · acceptance gate `tests/crash_test/test_ramcoind_oversell_prevented.py` (paper+live: position ends FLAT, never −1) |
+
+No DB schema; parity (shared paper+live, no mode branch). Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-25 · memory `ramcoind_duplicate_sl_incident_25jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|

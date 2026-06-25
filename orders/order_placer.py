@@ -3943,6 +3943,13 @@ class OrderPlacer:
                 problems.append("SL MISSING (no live SL order)")
                 sl_ok = False
             else:
+                if len(sl_rows) > 1:
+                    # LAYER 4 (RAMCOIND fix, 25-Jun): >1 live SL = a same-path double
+                    # place. The cross-path G5b-race duplicate (placed ~1.3s later by
+                    # the reconciler) is caught by the reconciler's continuous one-SL
+                    # invariant (Layer 2); this is the cheap placement-time guard.
+                    problems.append(f"DUPLICATE_SL ({len(sl_rows)} live SL orders)")
+                    sl_ok = False
                 o = sl_rows[0]
                 placed_sl = float(o.get("trigger_price") or o.get("price") or 0.0)
                 if self._exit_price_mismatch(placed_sl, intended_sl):
@@ -3965,6 +3972,10 @@ class OrderPlacer:
             problems.append("TGT MISSING (no live TGT order)")
             tgt_ok = False
         else:
+            if len(tgt_rows) > 1:
+                # LAYER 4 (RAMCOIND fix, 25-Jun): >1 live TGT = a same-path double place.
+                problems.append(f"DUPLICATE_TGT ({len(tgt_rows)} live TGT orders)")
+                tgt_ok = False
             o = tgt_rows[0]
             placed_tgt = float(o.get("price") or 0.0)
             if self._exit_price_mismatch(placed_tgt, intended_tgt):

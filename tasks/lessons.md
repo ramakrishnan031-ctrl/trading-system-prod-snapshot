@@ -29,3 +29,22 @@ lesson; link the commit/branch and the memory note that has the full story.
   written**. Fix: derive the date in the test (`date.today()`) so the file's mtime
   matches; never hardcode "today" as a literal. (The function was correct — verify
   which side is actually wrong before "fixing".) Memory `hygiene_pack_24jun`.
+
+- **2026-06-25 — Don't guard a race by reading state written asynchronously after
+  the event; check an authoritative/current source, and back it with a continuous
+  invariant.** G5b crash-recovery checked the LOCAL `orders` table for an existing SL
+  before placing a recovery one — but that table is written by `order_monitor.track`
+  ~40ms AFTER the broker placement, so the guard read 0 (12ms before the row landed)
+  and placed a DUPLICATE SL outside the OCO. On the stop-hit both filled → a -1 naked
+  over-sell (RAMCOIND 25-Jun; also IRFC/NIACL). Two patterns:
+  1. **A TOCTOU guard must consult a source true AT the event** — the broker order
+     book (reflects the SL the instant it's placed) / an in-memory registry populated
+     at placement, never a table written asynchronously after. A "settling window"
+     (don't crash-recover a fill seconds old — its exits are still being placed)
+     closes the race deterministically and mode-agnostically.
+  2. **Back prevention with a continuous invariant.** The keystone wasn't the guard —
+     it was a reconciler check enforcing "exactly one live SL/TGT per open trade" every
+     cycle, cancelling extras. It needn't win the race; it self-heals any duplicate
+     ~12 min before a typical stop-hit. And a system-created naked position must never
+     be silently disowned as "human".
+  Branch `ramcoind-duplicate-exit-fix-25jun`; memory `ramcoind_duplicate_sl_incident_25jun`.

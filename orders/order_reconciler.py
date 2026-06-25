@@ -133,6 +133,16 @@ def _cancel_reason_being_processed(reason: str) -> bool:
     return any(m in r for m in _CANCEL_BEING_PROCESSED_MARKERS)
 
 
+# LAYER 1 (RAMCOIND fix, 25-Jun): G5b is CRASH recovery. A trade whose entry filled
+# only seconds ago is still having its SL/TGT placed by the normal LIMIT_TRIPLE path,
+# so recovery has no business firing yet. Skipping recovery within this window off the
+# PERSISTED entry-fill time deterministically closes the ~40ms TOCTOU race against the
+# lagging local orders table (the 25-Jun duplicate-SL), in EVERY mode, without
+# depending on broker/_fill_map timing. An old unprotected fill (after a real crash /
+# restart) is well past the window, so genuine recovery still fires.
+_G5B_SETTLING_WINDOW_SEC = 10.0
+
+
 @dataclass
 class ReconciliationAction:
     """
@@ -225,6 +235,10 @@ class OrderReconciler:
         # the G3 capital-drift tolerance so they don't spam CRITICAL alerts.
         self._human_order_symbols: set[str] = set()
         self._human_order_date: Optional[date] = None
+        # LAYER 3 (RAMCOIND fix, 25-Jun): symbols whose SYSTEM_OVERSELL residual has
+        # already been flattened today — so we never double-cover if the cover MARKET
+        # order has not yet cleared the broker position by the next cycle.
+        self._oversell_flattened_symbols: set[str] = set()
         # Default Rs 5000 if cfg omits it (back-compat with older configs) or
         # if cfg is a test mock whose attribute isn't a real number.
         _hot = getattr(cfg, "human_order_margin_tolerance", 5000.0)
@@ -732,6 +746,17 @@ class OrderReconciler:
                 act = self._g5b_crash_recovery_sl(trade, broker_positions=broker_pos)
                 if act is not None:
                     actions.append(act)
+
+        # LAYER 2 (RAMCOIND fix, 25-Jun): one-live-SL / one-live-TGT invariant.
+        # Always-on net BEHIND the Layer-1 G5b guard — cancels any duplicate exit leg
+        # (e.g. a G5b/LIMIT_TRIPLE placement race) within one cycle, long before a
+        # stop-hit, so a duplicate can never become a naked over-sell.
+        try:
+            actions.extend(self._check_duplicate_exits(local_trades))
+        except Exception as exc:
+            self._log.error(
+                "_check_duplicate_exits unhandled error: %s", exc, exc_info=True
+            )
 
         # G3: CAPITAL_DRIFT (RC8)
         cap_act = self._g3_capital_drift(cycle_auth_errors)
@@ -1245,6 +1270,7 @@ class OrderReconciler:
         today = now_ist().date()
         if self._human_order_date != today:
             self._human_order_symbols = set()
+            self._oversell_flattened_symbols = set()   # Layer 3
             self._human_order_date = today
 
     def _check2_orphan_adoption(self, symbol: str, bp) -> ReconciliationAction:
@@ -1279,7 +1305,17 @@ class OrderReconciler:
                 success=True,
             )
 
-        # First detection today.
+        # LAYER 3 (RAMCOIND fix, 25-Jun): is this the system's OWN over-sell — a
+        # duplicate exit leg that filled — rather than a human order? Layers 1+2 should
+        # stop a duplicate ever filling, but if one ever does, a SYSTEM-created naked
+        # position must NOT be silently disowned: flatten it (CRITICAL).
+        if symbol not in self._oversell_flattened_symbols:
+            oversell = self._detect_system_oversell(symbol, bp)
+            if oversell is not None:
+                self._oversell_flattened_symbols.add(symbol)
+                return self._flatten_system_oversell(symbol, bp, oversell)
+
+        # First detection today (genuine human / untracked order).
         self._human_order_symbols.add(symbol)
         self._log.info(
             "CHECK2 HUMAN_ORDER: symbol=%s broker_qty=%d avg_price=%.2f — no "
@@ -1287,6 +1323,29 @@ class OrderReconciler:
             "system trades only; not adopting or protecting. (logged once/day)",
             symbol, bp.qty, bp.avg_price,
         )
+        # LAYER 3 (3b safety-net): a NAKED untracked position (no protective stop at
+        # the broker) must never be silent — surface it once/day as a WARNING (FIX-182
+        # still suppresses per-cycle spam: this fires once on first detection, like the
+        # log line above). A human position WITH its own protection stays silent
+        # (FIX-182 unchanged); and when the broker order source is unavailable we
+        # cannot confirm naked, so we stay quiet (the conservative FIX-182 default).
+        is_naked = self._position_is_naked(symbol, bp)
+        if is_naked and self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="WARNING",
+                    title=f"[{self._mode}] Naked untracked position — {symbol}",
+                    body=(
+                        f"Untracked/operator position {symbol} qty={bp.qty} "
+                        f"avg={bp.avg_price:.2f} — no local trade and NO protective stop "
+                        f"at the broker. Not auto-managed (operator policy); surfaced "
+                        f"once today. If unexpected, check for a manual order or a "
+                        f"system anomaly."
+                    ),
+                    source_module="order_reconciler",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log.error("CHECK2 orphan: notifier.send failed: %s", exc)
 
         return ReconciliationAction(
             check_name="ORPHAN_ADOPTION",
@@ -1296,10 +1355,135 @@ class OrderReconciler:
             description=(
                 f"Human/untracked broker position {symbol} qty={bp.qty} "
                 f"avg_price={bp.avg_price:.2f}; no local trade — not managed by system"
+                + (" [NAKED — alerted]" if is_naked else "")
             ),
-            action_taken="logged once; added to human-order set; not adopted",
+            action_taken=(
+                "logged once; added to human-order set; not adopted"
+                + ("; WARNING (naked)" if is_naked else "")
+            ),
             success=True,
         )
+
+    # LAYER 3 (RAMCOIND fix, 25-Jun): how recently a closed system trade still
+    # explains an over-sell, and how close the residual's avg must be to its exit.
+    _OVERSELL_LOOKBACK_SEC = 300.0
+    _OVERSELL_PRICE_TOL_PCT = 0.02
+
+    def _detect_system_oversell(self, symbol: str, bp) -> Optional[dict]:
+        """Return the recently-closed system trade if ``bp`` matches the SYSTEM
+        over-sell signature (a duplicate exit leg that filled), else None.
+
+        Signature (ALL must hold): a system trade on this symbol CLOSED within the
+        last few minutes; the residual is OPPOSITE that trade's position (a LONG
+        over-sell leaves a short, a SHORT over-buy leaves a long); |qty| ≤ the traded
+        qty; and the residual's avg price ≈ the trade's exit price (the duplicate
+        filled at the SL/exit). Unambiguous-only — anything short of every criterion
+        is treated as a human order, not auto-flattened."""
+        try:
+            row = self._store.fetch_one(
+                "SELECT trade_id, direction, qty_filled, exit_price, exit_time "
+                "FROM trades WHERE symbol = ? AND status IN ('CLOSED','CLOSED_MANUAL') "
+                "AND exit_time IS NOT NULL ORDER BY exit_time DESC LIMIT 1",
+                (symbol,),
+            )
+        except Exception:
+            return None
+        if not row or not row["exit_time"]:
+            return None
+        try:
+            closed_at = datetime.fromisoformat(str(row["exit_time"]))
+            if (now_ist() - closed_at).total_seconds() > self._OVERSELL_LOOKBACK_SEC:
+                return None
+        except Exception:
+            return None
+
+        orphan_qty = int(getattr(bp, "qty", 0) or 0)
+        if orphan_qty == 0:
+            return None
+        direction = str(row["direction"] or "").upper()
+        # over-sell residual is OPPOSITE the trade's position.
+        if direction == "LONG" and orphan_qty >= 0:
+            return None
+        if direction == "SHORT" and orphan_qty <= 0:
+            return None
+        traded = int(row["qty_filled"] or 0)
+        if traded <= 0 or abs(orphan_qty) > traded:
+            return None
+        exit_price = float(row["exit_price"] or 0.0)
+        avg = float(getattr(bp, "avg_price", 0.0) or 0.0)
+        if exit_price > 0 and avg > 0:
+            if abs(avg - exit_price) / exit_price > self._OVERSELL_PRICE_TOL_PCT:
+                return None
+        return dict(row)
+
+    def _flatten_system_oversell(self, symbol: str, bp, oversell: dict) -> ReconciliationAction:
+        """Flatten a SYSTEM over-sell residual with a covering MARKET order + CRITICAL
+        alert. The system created this exposure (a duplicate exit leg filled), so —
+        unlike a human order — it must not stay open."""
+        log = bind_trade(self._log, trade_id=oversell.get("trade_id"))
+        orphan_qty = int(getattr(bp, "qty", 0) or 0)
+        cover_side = "BUY" if orphan_qty < 0 else "SELL"
+        cover_qty = abs(orphan_qty)
+        placed_ok, detail = False, ""
+        try:
+            placed = self._adapter.place_order(
+                symbol=symbol, side=cover_side, qty=cover_qty, price=0.0,
+                order_type="MARKET", intent="INTRADAY", tag="rc_oversell_flat",
+            )
+            placed_ok = True
+            detail = (f"covering {cover_side} {cover_qty} MARKET "
+                      f"(broker_order_id={getattr(placed, 'broker_order_id', '?')})")
+        except Exception as exc:  # noqa: BLE001
+            detail = f"cover order FAILED: {exc} — NAKED residual, MANUAL action required"
+            log.error("CHECK2 SYSTEM_OVERSELL: flatten failed for %s: %s", symbol, exc)
+
+        msg = (
+            f"SYSTEM_OVERSELL: untracked {symbol} qty={orphan_qty} @ "
+            f"{getattr(bp, 'avg_price', 0.0):.2f} matches a duplicate exit leg of trade "
+            f"{oversell.get('trade_id')} (closed {oversell.get('exit_time')}); {detail}"
+        )
+        log.critical("CHECK2 %s", msg)
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{self._mode}] SYSTEM OVER-SELL flattened — {symbol}",
+                    body=msg, source_module="order_reconciler",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log.error("CHECK2 oversell: notifier.send failed: %s", exc)
+
+        return ReconciliationAction(
+            check_name="SYSTEM_OVERSELL",
+            tier="CRITICAL",
+            symbol=symbol,
+            trade_id=oversell.get("trade_id"),
+            description=msg,
+            action_taken=detail,
+            success=placed_ok,
+        )
+
+    def _position_is_naked(self, symbol: str, bp) -> bool:
+        """True if the broker shows NO protective stop for this untracked position (a
+        long needs a SELL stop, a short a BUY stop). Drives the Layer-3b 'never silent
+        for a naked position' alert. Returns False when the broker order source is
+        unavailable — we cannot confirm naked, so we stay quiet (the FIX-182 default,
+        which keeps an operator's own protected manual orders silent)."""
+        if self._broker_orders_fn is None:
+            return False
+        qty = int(getattr(bp, "qty", 0) or 0)
+        if qty == 0:
+            return False
+        protect_side = "SELL" if qty > 0 else "BUY"
+        try:
+            for o in (self._broker_orders_fn() or []):
+                if (str(o.get("symbol", "")) == symbol
+                        and str(o.get("transaction_type", "")).upper() == protect_side
+                        and float(o.get("trigger_price") or 0.0) > 0.0):
+                    return False   # a protective stop exists → not naked
+            return True
+        except Exception:  # noqa: BLE001 — cannot confirm → stay quiet
+            return False
 
     def _check2_inflight_orphan(self, symbol: str, bp, trade) -> ReconciliationAction:
         """
@@ -1946,6 +2130,35 @@ class OrderReconciler:
                 "G5b: existing-SL check failed for %s: %s; proceeding", symbol, exc
             )
 
+        # LAYER 1 (RAMCOIND fix, 25-Jun): the FIX-190 Bug F guard above reads the
+        # LOCAL orders table, which order_monitor.track populates ~40ms AFTER the
+        # broker placement. G5b fell into that TOCTOU window on 25-Jun (its guard
+        # checked 12ms before the SL row landed) and placed a DUPLICATE SL. Two
+        # additional guards that do NOT depend on the lagging table close the race:
+        #
+        # (a) SETTLING WINDOW — recovery has no business firing while the normal exit
+        #     placement is still in flight. Deterministic + mode-agnostic.
+        fill_age = self._entry_fill_age_seconds(trade_id)
+        if fill_age is not None and fill_age < _G5B_SETTLING_WINDOW_SEC:
+            log.info(
+                "G5b skip recovery-SL for %s — entry filled %.1fs ago (< %.0fs settling "
+                "window); LIMIT_TRIPLE exits are still being placed (Layer 1)",
+                symbol, fill_age, _G5B_SETTLING_WINDOW_SEC,
+            )
+            return None
+
+        # (b) AUTHORITATIVE check — the broker reflects an SL the instant it is placed
+        #     (unlike the ~40ms-lagging local table). If a live SL already exists there
+        #     (or in order_placer's in-memory _fill_map when the broker order source is
+        #     unwired), skip. Race-proof belt-and-suspenders behind the settling window.
+        exit_side = "SELL" if direction == "LONG" else "BUY"
+        if self._already_has_live_sl(trade_id, symbol, exit_side):
+            log.info(
+                "G5b skip recovery-SL for %s — a live SL already exists (authoritative "
+                "broker/_fill_map check, Layer 1)", symbol,
+            )
+            return None
+
         # FIX-186 (FIX 3): skip recovery SL when the broker positively reports no
         # live position for this symbol (manual close likely in progress).
         if broker_positions is not None:
@@ -2106,6 +2319,219 @@ class OrderReconciler:
                 action_taken=f"place_order failed: {exc}",
                 success=False,
             )
+
+    # ── LAYER 1 (RAMCOIND 25-Jun): G5b duplicate-SL race guards ─────────────────
+
+    def _entry_fill_age_seconds(self, trade_id: str) -> Optional[float]:
+        """Seconds since this trade's ENTRY filled (from the persisted entry_time),
+        or None if unavailable. Drives the G5b settling window."""
+        try:
+            row = self._store.fetch_one(
+                "SELECT entry_time FROM trades WHERE trade_id = ?", (trade_id,)
+            )
+        except Exception:
+            return None
+        if not row or not row["entry_time"]:
+            return None
+        try:
+            filled = datetime.fromisoformat(str(row["entry_time"]))
+            return (now_ist() - filled).total_seconds()
+        except Exception:
+            return None
+
+    def _already_has_live_sl(self, trade_id: str, symbol: str, exit_side: str) -> bool:
+        """Authoritative 'does a live SL already exist for this trade?'.
+
+        Primary source = the BROKER open-order book (get_open_orders returns only
+        OPEN / TRIGGER PENDING orders, so anything returned is live; an SL is an
+        exit-side order with trigger_price > 0 — get_open_orders carries no
+        order_type, and a TGT LIMIT has trigger 0). This reflects an SL the instant
+        it is placed, unlike the ~40ms-lagging local table. Falls back to
+        order_placer's in-memory _fill_map ONLY when the broker source is unwired
+        (e.g. tests / broker_orders_fn=None)."""
+        if self._broker_orders_fn is not None:
+            try:
+                for o in (self._broker_orders_fn() or []):
+                    if (str(o.get("symbol", "")) == symbol
+                            and str(o.get("transaction_type", "")).upper() == exit_side
+                            and float(o.get("trigger_price") or 0.0) > 0.0):
+                        return True
+                return False
+            except Exception as exc:  # noqa: BLE001 — degrade to the fallback
+                self._log.debug(
+                    "G5b: broker-orders SL check failed for %s: %s", symbol, exc
+                )
+        # Fallback: order_placer._fill_map (populated at placement, ahead of the
+        # local-table write). Used only when the broker source is unavailable.
+        op = self._order_placer
+        if op is not None and hasattr(op, "_fill_map"):
+            try:
+                lock = getattr(op, "_fill_map_lock", None)
+                if lock is not None:
+                    with lock:
+                        entries = list(op._fill_map.values())
+                else:
+                    entries = list(op._fill_map.values())
+                for e in entries:
+                    if (getattr(e, "trade_id", None) == trade_id
+                            and str(getattr(e, "leg", "")).upper() == "SL"):
+                        return True
+            except Exception as exc:  # noqa: BLE001
+                self._log.debug(
+                    "G5b: _fill_map SL check failed for %s: %s", trade_id, exc
+                )
+        return False
+
+    # ── LAYER 2 (RAMCOIND 25-Jun): DUPLICATE-EXIT invariant (the keystone) ──────
+    # Statuses that mean an order leg is no longer live at the broker.
+    _LIVE_EXIT_EXCLUDE = ("CANCELLED", "COMPLETE", "REJECTED", "FAILED", "EXPIRED")
+
+    def _check_duplicate_exits(self, local_trades: list) -> List[ReconciliationAction]:
+        """
+        Enforce EXACTLY ONE live exit leg of each kind per OPEN/PARTIAL trade.
+
+        Root incident (RAMCOIND 25-Jun): G5b crash-recovery placed a 2nd SL OUTSIDE
+        the LIMIT_TRIPLE software OCO (a ~40ms TOCTOU race against the lagging local
+        orders table). Both SLs shared the trigger, so on the stop-hit BOTH filled —
+        +1 closed the long and the duplicate over-sold into a -1 naked short. This
+        invariant runs every cycle and cancels the duplicate (the RAMCOIND dup would
+        have been cancelled ~12 min before its 10:12:49 stop-hit), so the over-sell
+        can never occur regardless of HOW the duplicate arose — the always-on net
+        behind the Layer-1 G5b guard.
+
+        Scope: the SL invariant applies to LIMIT_TRIPLE trades only — a CO_PLUS_TGT
+        trade carries its SL inside the broker CO bracket and has ZERO local SL legs
+        by design (detected here via its CO entry order, variety='co'). The TGT
+        invariant applies to both protocols (each places a standalone LIMIT TGT). We
+        only ever act on a DUPLICATE (>1 live legs); a MISSING leg is CHECK9 / G5b's
+        job, so a CO trade (0 local SL legs) is never touched.
+        """
+        actions: List[ReconciliationAction] = []
+        for trade in local_trades:
+            try:
+                orders = self._order_mgr.get_orders_for_trade(trade["trade_id"])
+            except Exception as exc:
+                self._log.error(
+                    "dup_exits: order lookup failed for %s: %s", trade["trade_id"], exc
+                )
+                continue
+            # CO trades carry the SL in the broker CO bracket (no local SL leg) — never
+            # dedupe their SL (N1). The CO entry order is the only one with variety='co'.
+            is_co = any(str(o.get("variety") or "").lower() == "co" for o in orders)
+            if not is_co:
+                actions.extend(self._dedupe_exit_leg(trade, orders, "SL"))
+            actions.extend(self._dedupe_exit_leg(trade, orders, "TGT"))
+        return actions
+
+    def _dedupe_exit_leg(
+        self, trade, orders: list, leg: str
+    ) -> List[ReconciliationAction]:
+        """Cancel duplicate live ``leg`` orders for one trade, keeping the canonical
+        (earliest-placed) leg. Returns [] when there is nothing to do (0 or 1 live
+        legs). Cancel-safety: only the LATER duplicate(s) are cancelled, exactly one
+        leg is kept, and the kept count is re-verified so the trade is NEVER left
+        naked (a concurrent fill of the canonical during the pass → re-place the SL +
+        CRITICAL)."""
+        live_legs = [
+            o for o in orders
+            if o.get("leg") == leg
+            and str(o.get("status") or "").upper() not in self._LIVE_EXIT_EXCLUDE
+        ]
+        if len(live_legs) <= 1:
+            return []   # 0 or 1 live — nothing to dedupe (a MISSING leg is CHECK9/G5b).
+
+        trade_id = trade["trade_id"]
+        symbol = trade["symbol"]
+        log = bind_trade(self._log, trade_id=trade_id)
+
+        # get_orders_for_trade is ORDER BY placed_at → live_legs[0] is the canonical
+        # leg: placed on the entry fill, before any later G5b/retry duplicate; it owns
+        # the software OCO and is the leg smart_tgt/breakeven trail in place. Keep it.
+        canonical = live_legs[0]
+        canonical_id = canonical.get("order_id")
+        cancelled: List[str] = []
+        for extra in live_legs[1:]:
+            broker_id = extra.get("order_id")
+            if not broker_id or broker_id == canonical_id:
+                continue
+            try:
+                result = self._adapter.cancel_order(broker_id)
+            except Exception as exc:
+                log.warning(
+                    "dup_exits: cancel duplicate %s %s raised: %s", leg, broker_id, exc
+                )
+                continue
+            if getattr(result, "success", False) or _cancel_reason_already_gone(
+                getattr(result, "reason", "")
+            ):
+                # _mark_order_cancelled_local is terminal-guarded → a no-op if the
+                # duplicate already FILLED (its over-sell, if any, is then handled by
+                # CHECK2 SYSTEM_OVERSELL / Layer 3), so a filled order is never
+                # clobbered to CANCELLED.
+                self._mark_order_cancelled_local(broker_id, log)
+                cancelled.append(str(broker_id))
+
+        if not cancelled:
+            return []   # all extras already terminal — nothing actually changed.
+
+        # Cancel-safety (N5): re-verify ≥1 live leg of this kind remains. The canonical
+        # was never targeted, so normally it survives; only a concurrent fill/cancel of
+        # the canonical during this pass could zero it out.
+        tier, severity, replaced = "RECOVERABLE", "WARNING", ""
+        try:
+            remaining = self._store.fetch_all(
+                "SELECT order_id FROM orders WHERE trade_id = ? AND leg = ? "
+                "AND status NOT IN ('CANCELLED','COMPLETE','REJECTED','FAILED','EXPIRED')",
+                (trade_id, leg),
+            )
+        except Exception:
+            remaining = None
+        if remaining is not None and len(remaining) == 0:
+            cur = self._store.fetch_one(
+                "SELECT status FROM trades WHERE trade_id = ?", (trade_id,)
+            )
+            still_open = bool(cur and cur["status"] in ("OPEN", "PARTIAL"))
+            if leg == "SL" and still_open:
+                # The canonical SL raced to terminal during the cancel pass → the
+                # position is momentarily naked. Re-place protective SL NOW via the
+                # (Layer-1-guarded) G5b path rather than wait a cycle. CRITICAL.
+                tier = severity = "CRITICAL"
+                try:
+                    self._g5b_crash_recovery_sl(trade)
+                    replaced = " | re-placed protective SL (canonical raced to fill)"
+                except Exception as exc:  # noqa: BLE001
+                    replaced = f" | re-place FAILED ({exc}) — NAKED, manual action"
+            # A zero-remain TGT is not naked (the SL still protects) → stays WARNING.
+
+        msg = (
+            f"DUPLICATE_{leg}: {symbol} had {len(live_legs)} live {leg} legs — "
+            f"cancelled {len(cancelled)} duplicate(s) {cancelled}, kept canonical "
+            f"{canonical_id}{replaced}"
+        )
+        log.warning("dup_exits: %s", msg)
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity=severity,
+                    title=f"[{self._mode}] Duplicate {leg} cancelled — {symbol}",
+                    body=msg,
+                    source_module="order_reconciler",
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log.error("dup_exits: notifier.send failed: %s", exc)
+
+        return [ReconciliationAction(
+            check_name=f"DUPLICATE_{leg}",
+            tier=tier,
+            symbol=symbol,
+            trade_id=trade_id,
+            description=(
+                f"{len(live_legs)} live {leg} legs (duplicate exit) — kept canonical "
+                f"{canonical_id}, cancelled {cancelled}"
+            ),
+            action_taken=f"cancelled duplicate {leg} {cancelled}{replaced}",
+            success=True,
+        )]
 
     # ── G3: CAPITAL_DRIFT ─────────────────────────────────────────────────────
 
