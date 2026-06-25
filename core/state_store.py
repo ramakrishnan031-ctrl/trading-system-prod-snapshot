@@ -1750,6 +1750,82 @@ class StateStore:
         return self.fetch_all("SELECT * FROM smart_tgt_state")
 
     # ─────────────────────────────────────────────────────────────────────────
+    # gtt_state — durable one-OCO-GTT-per-CNC-trade source of truth (SLICE2.5-P2)
+    # Y6: a trade may accumulate MANY rows over its life (each recreate = new
+    # gtt_id = new row = history); the M2 one-GTT invariant is on status='ACTIVE'.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def insert_gtt_state(
+        self,
+        *,
+        gtt_id,
+        trade_id: str,
+        symbol: str,
+        exit_side: str,
+        qty: int,
+        sl_trigger: float,
+        sl_limit: float,
+        tgt_trigger: float,
+        tgt_limit: float,
+        created_at: str,
+        status: str = "ACTIVE",
+    ) -> None:
+        """Insert a new gtt_state row (ACTIVE by default; last_verified_at = created_at,
+        since a fresh place is confirmed at the broker)."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT INTO gtt_state
+                    (gtt_id, trade_id, symbol, exit_side, qty,
+                     sl_trigger, sl_limit, tgt_trigger, tgt_limit,
+                     status, needs_review, last_verified_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                """,
+                (gtt_id, trade_id, symbol, exit_side, int(qty),
+                 sl_trigger, sl_limit, tgt_trigger, tgt_limit,
+                 status, created_at, created_at, created_at),
+            )
+
+    def update_gtt_state_legs(
+        self,
+        *,
+        gtt_id,
+        qty: int,
+        sl_trigger: float,
+        sl_limit: float,
+        tgt_trigger: float,
+        tgt_limit: float,
+        updated_at: str,
+    ) -> int:
+        """Update an existing gtt_state row after a modify_gtt (a partial fill grew the
+        qty / legs changed). Keeps the SAME gtt_id. Returns rows affected."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE gtt_state
+                   SET qty = ?, sl_trigger = ?, sl_limit = ?,
+                       tgt_trigger = ?, tgt_limit = ?, updated_at = ?
+                 WHERE gtt_id = ?
+                """,
+                (int(qty), sl_trigger, sl_limit, tgt_trigger, tgt_limit, updated_at, gtt_id),
+            )
+            return cur.rowcount
+
+    def get_active_gtt_for_trade(self, trade_id: str) -> Optional[sqlite3.Row]:
+        """Return the single ACTIVE gtt_state row for a trade (None if none).
+        M2: at most one ACTIVE per open trade."""
+        return self.fetch_one(
+            "SELECT * FROM gtt_state WHERE trade_id = ? AND status = 'ACTIVE' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (trade_id,),
+        )
+
+    def get_active_gtt_states(self) -> List[sqlite3.Row]:
+        """All ACTIVE gtt_state rows. Hydrates the placer's hot cache on boot; also
+        read by the Phase-2 reconcile + the 50-cap guard."""
+        return self.fetch_all("SELECT * FROM gtt_state WHERE status = 'ACTIVE'")
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Startup-checks helpers (SC4, SC6 — read-only)
     # ─────────────────────────────────────────────────────────────────────────
 

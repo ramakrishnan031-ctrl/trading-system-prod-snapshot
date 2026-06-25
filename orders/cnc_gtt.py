@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
 from core.exceptions import BrokerError
+from core.time_authority import now_ist
 from orders.price_math import DEFAULT_TICK, calc_gtt_limit_price, round_to_tick
 
 # C8: Kite requires a GTT trigger to sit a minimum distance from the LTP. 0.25% is the
@@ -63,6 +64,7 @@ class CncGttPlacer:
         logger: Any,
         quote_fn: Optional[Callable[[list], dict]] = None,
         tick_fn: Optional[Callable[[str], float]] = None,
+        store: Any = None,
     ) -> None:
         self._adapter = adapter
         self._gtt_sl_off = float(gtt_sl_limit_offset_pct)
@@ -71,7 +73,10 @@ class CncGttPlacer:
         self._log = logger
         self._quote_fn = quote_fn or getattr(adapter, "get_quote", None)
         self._tick_fn = tick_fn or (lambda _s: DEFAULT_TICK)
-        # P1: in-memory one-GTT-per-trade map (durable persistence = Phase 2).
+        # SLICE2.5-P2: durable gtt_state is the source of truth; _trade_gtts is a hot
+        # cache rebuilt from it on boot (hydrate_from_store). store may be None (P1
+        # behaviour / unit tests with no DB) — then this degrades to in-memory only.
+        self._store = store
         self._trade_gtts: Dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -121,6 +126,14 @@ class CncGttPlacer:
         with self._lock:
             self._trade_gtts[trade_id] = gtt_id
 
+        # SLICE2.5-P2: persist to the durable gtt_state (best-effort — the broker GTT
+        # is the authority; a lagging local mirror is healed by the reconcile).
+        self._persist_state(
+            trade_id=trade_id, gtt_id=gtt_id, symbol=symbol, exit_side=exit_side,
+            qty=int(qty), sl_trigger=sl_trigger, sl_limit=sl_limit,
+            tgt_trigger=tgt_trigger, tgt_limit=tgt_limit, modified=modified,
+        )
+
         self._log.info(
             "cnc_gtt.placed",
             extra={
@@ -136,7 +149,69 @@ class CncGttPlacer:
             tgt_trigger=tgt_trigger, tgt_limit=tgt_limit, modified=modified,
         )
 
+    def hydrate_from_store(self) -> int:
+        """SLICE2.5-P2: rebuild the in-memory one-GTT-per-trade cache from the durable
+        gtt_state (ACTIVE rows) on boot, so place_for_fill MODIFIES (never duplicates)
+        a surviving GTT after a restart. Returns the number hydrated. No-op without a
+        store; never raises (a hydrate failure must not block startup)."""
+        if self._store is None:
+            return 0
+        try:
+            rows = self._store.get_active_gtt_states()
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("cnc_gtt: hydrate_from_store failed: %s", exc)
+            return 0
+        n = 0
+        with self._lock:
+            for r in rows:
+                tid = r["trade_id"]
+                gid = r["gtt_id"]
+                if tid and gid is not None:
+                    self._trade_gtts[str(tid)] = str(gid)
+                    n += 1
+        self._log.info("cnc_gtt.hydrated", extra={"count": n})
+        return n
+
     # ── internals ────────────────────────────────────────────────────────────
+    def _persist_state(
+        self, *, trade_id, gtt_id, symbol, exit_side, qty,
+        sl_trigger, sl_limit, tgt_trigger, tgt_limit, modified,
+    ) -> None:
+        """Write the GTT to the durable gtt_state table. A modify (same gtt_id) UPDATEs
+        the existing ACTIVE row; a fresh place INSERTs a new ACTIVE row. Best-effort:
+        the broker GTT already stands, so a persist failure logs ERROR (the reconcile
+        adopts/heals it) rather than failing the entry-fill path."""
+        if self._store is None:
+            return
+        now = now_ist().isoformat()
+        try:
+            if modified:
+                affected = self._store.update_gtt_state_legs(
+                    gtt_id=gtt_id, qty=qty, sl_trigger=sl_trigger, sl_limit=sl_limit,
+                    tgt_trigger=tgt_trigger, tgt_limit=tgt_limit, updated_at=now,
+                )
+                if not affected:
+                    # cache said "existing" but no ACTIVE row to update (e.g. mirror
+                    # lost): fall back to an INSERT so the durable row exists.
+                    self._store.insert_gtt_state(
+                        gtt_id=gtt_id, trade_id=trade_id, symbol=symbol,
+                        exit_side=exit_side, qty=qty, sl_trigger=sl_trigger,
+                        sl_limit=sl_limit, tgt_trigger=tgt_trigger,
+                        tgt_limit=tgt_limit, created_at=now,
+                    )
+            else:
+                self._store.insert_gtt_state(
+                    gtt_id=gtt_id, trade_id=trade_id, symbol=symbol, exit_side=exit_side,
+                    qty=qty, sl_trigger=sl_trigger, sl_limit=sl_limit,
+                    tgt_trigger=tgt_trigger, tgt_limit=tgt_limit, created_at=now,
+                )
+        except Exception as exc:  # noqa: BLE001 — never break placement
+            self._log.error(
+                "cnc_gtt: gtt_state persist FAILED (broker GTT stands; reconcile heals)",
+                extra={"trade_id": trade_id, "gtt_id": gtt_id,
+                       "modified": modified, "error": str(exc)},
+            )
+
     def _safe_tick(self, symbol: str) -> float:
         try:
             t = float(self._tick_fn(symbol))

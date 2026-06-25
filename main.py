@@ -2058,7 +2058,11 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("cnc_gtt"),
         quote_fn=broker_adapter.get_quote,
         tick_fn=broker_adapter._resolve_tick,
+        store=store,  # SLICE2.5-P2: durable gtt_state persistence + boot hydration
     )
+    # SLICE2.5-P2: rebuild the one-GTT-per-trade hot cache from the durable gtt_state
+    # so a restart MODIFIES (never duplicates) a surviving GTT. Never blocks startup.
+    cnc_gtt_placer.hydrate_from_store()
     full_engine = FullEntryEngine(
         co_protocol=co_protocol,
         limit_protocol=limit_protocol,

@@ -161,7 +161,7 @@ def test_paper_place_gtt_returns_mock_id_and_records_legs():
     gid = a.place_gtt(symbol="RAMCOIND", exit_side="SELL", qty=1,
                       sl_trigger=334.40, sl_limit=324.35, tgt_trigger=342.85,
                       tgt_limit=341.10, last_price=337.0)
-    assert gid.startswith("PAPER_GTT_")
+    assert gid.isdigit()  # numeric paper gid (gtt_state.gtt_id is INTEGER PK)
     legs = a._gtt_legs("SELL", 1, 324.35, 341.10, "CNC")
     assert all(o["transaction_type"] == "SELL" and o["product"] == "CNC"
                and o["order_type"] == "LIMIT" and o["quantity"] == 1 for o in legs)
@@ -183,7 +183,7 @@ def test_guard_split_entry_refused_but_gtt_ops_allowed_when_disabled():
     # protective GTT ops ARE allowed even with delivery disabled
     gid = a.place_gtt(symbol="RAMCOIND", exit_side="SELL", qty=1, sl_trigger=334.4,
                       sl_limit=324.3, tgt_trigger=342.8, tgt_limit=341.1, last_price=337.0)
-    assert gid.startswith("PAPER_GTT_")
+    assert gid.isdigit()  # numeric paper gid (gtt_state.gtt_id is INTEGER PK)
     assert a.modify_gtt(gtt_id=gid, symbol="RAMCOIND", exit_side="SELL", qty=2,
                         sl_trigger=334.4, sl_limit=324.3, tgt_trigger=342.8,
                         tgt_limit=341.1, last_price=337.0) == gid

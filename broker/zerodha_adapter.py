@@ -229,6 +229,11 @@ class Quote:
 _VALID_SIDES: frozenset[str] = frozenset({"BUY", "SELL"})
 _VALID_ORDER_TYPES: frozenset[str] = frozenset({"MARKET", "LIMIT", "SL", "SL-M"})
 
+# SLICE2.5-P2: paper GTT ids must be NUMERIC because gtt_state.gtt_id is an INTEGER
+# PRIMARY KEY (live = Kite's integer trigger_id, returned as a numeric string). A
+# high base keeps a paper id clearly out of the range of any real trigger id.
+_PAPER_GTT_ID_BASE: int = 9_000_000_000_000
+
 # ZA3: method -> rate_limiter category
 _CATEGORY_MAP: dict[str, str] = {
     "place_order":      "order",
@@ -415,6 +420,7 @@ class ZerodhaAdapter:
         # get_gtts() dict shape; _paper_holdings is seeded by seed_paper_holding().
         self._paper_gtts: dict[str, dict] = {}
         self._paper_gtts_lock: threading.Lock = threading.Lock()
+        self._paper_gtt_seq: int = 0  # monotonic -> numeric paper gtt_id (INTEGER PK)
         self._paper_holdings: dict[str, dict] = {}
         self._paper_holdings_lock: threading.Lock = threading.Lock()
         # FIX-009: capture the HTTP Date header from the most recent Kite API
@@ -648,8 +654,9 @@ class ZerodhaAdapter:
         legs = self._gtt_legs(exit_side, qty, sl_limit, tgt_limit, product)
         trigger_values = [float(sl_trigger), float(tgt_trigger)]
         if self._paper:
-            gid = f"PAPER_GTT_{new_order_id()}"
             with self._paper_gtts_lock:
+                self._paper_gtt_seq += 1
+                gid = str(_PAPER_GTT_ID_BASE + self._paper_gtt_seq)  # numeric (INTEGER PK)
                 self._paper_gtts[gid] = self._paper_gtt_record(
                     gid, symbol, trigger_values, last_price, legs, status="active")
             self._log.info("place_gtt call_end", extra={
