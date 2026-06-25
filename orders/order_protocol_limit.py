@@ -100,6 +100,12 @@ class ExitLegsResult:
     # tgt_price respectively).
     sl_clamped: bool = False
     tgt_clamped: bool = False
+    # SLICE2.5-P1: when True, this trade's overnight protection is a single broker-side
+    # OCO-GTT (CNC), NOT two day-validity legs. gtt_id is the Kite trigger id (or a
+    # paper mock). order_placer detects is_gtt and finalizes via _finalize_cnc_gtt
+    # (logs the gtt_id; no day-leg persist / _fill_map OCO / day-leg after-check).
+    is_gtt: bool = False
+    gtt_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

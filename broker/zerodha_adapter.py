@@ -347,6 +347,10 @@ class ZerodhaAdapter:
         # (existing tests behave as before). main.py late-binds via
         # set_instrument_cache() once the cache is loaded.
         instrument_cache: Optional[Any] = None,
+        # SLICE2.5-P1: master delivery lock (mirrors system.delivery_enabled). When
+        # False (default), the adapter refuses any CNC order or OCO-GTT — the breaker
+        # for the overnight-protection capability. MIS/CO are unaffected.
+        delivery_enabled: bool = False,
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -368,6 +372,8 @@ class ZerodhaAdapter:
         self._slippage: Optional[SlippageEngine] = slippage_engine
         # FIX-181: instrument cache for tick-snapping. May be set via setter.
         self._instrument_cache: Optional[Any] = instrument_cache
+        # SLICE2.5-P1: master delivery lock (see __init__ param).
+        self._delivery_enabled: bool = delivery_enabled
         # 23-Jun tick fail-safe: warn-once-per-symbol throttle for a missing
         # tick_size (the fallback to DEFAULT_TICK is silent otherwise; FIX-170).
         self._missing_tick_warned: set[str] = set()
@@ -491,6 +497,21 @@ class ZerodhaAdapter:
         # ZA4: resolve product intent -> broker code (may raise ProductNotSupportedError)
         broker_code = self._pr.resolve(intent, "zerodha")
 
+        # SLICE2.5-P1: master delivery lock — refuse a REAL CNC order while delivery is
+        # disabled (belt-and-suspenders behind force_intraday_only). MIS/CO unaffected.
+        # Surfaces a WARNING so a blocked delivery intent is visible, then rejects so
+        # the entry fails cleanly rather than opening an unmanaged CNC position.
+        if broker_code == "CNC" and not self._delivery_enabled:
+            self._log.warning(
+                "place_order BLOCKED: CNC order for %s refused — delivery_enabled=false "
+                "(SLICE2.5-P1 master lock); enable delivery only after the Slice 2.5 "
+                "lifecycle + T2 real-API proof", symbol,
+            )
+            raise OrderRejectedError(
+                "CNC orders are disabled (delivery_enabled=false; SLICE2.5-P1 lock)",
+                symbol=symbol, side=side, qty=qty, price=price, intent=intent,
+            )
+
         # ZA7: allocate internal ID and register with state machine in PENDING
         internal_id = new_order_id()
         self._osm.register(internal_id)
@@ -563,6 +584,111 @@ class ZerodhaAdapter:
                    "result_summary": f"broker_order_id={kite_order_id}"},
         )
         return result
+
+    # ── SLICE2.5-P1: OCO-GTT (overnight CNC protection) ──────────────────────────
+
+    def _gtt_legs(self, exit_side, qty, sl_limit, tgt_limit, product):
+        """The two SELL LIMIT legs of an OCO GTT (SL leg first, TGT leg second)."""
+        return [
+            {"transaction_type": exit_side, "quantity": int(qty), "order_type": "LIMIT",
+             "product": product, "price": float(sl_limit)},
+            {"transaction_type": exit_side, "quantity": int(qty), "order_type": "LIMIT",
+             "product": product, "price": float(tgt_limit)},
+        ]
+
+    def place_gtt(
+        self,
+        *,
+        symbol: str,
+        exit_side: str,                 # both OCO legs use this side (SELL exits a long)
+        qty: int,
+        sl_trigger: float,
+        sl_limit: float,
+        tgt_trigger: float,
+        tgt_limit: float,
+        last_price: float,
+        product: str = "CNC",
+        tag: str = "",
+    ) -> str:
+        """Place ONE two-leg OCO GTT — the persistent overnight protection for a CNC
+        position. Both legs are ``exit_side`` LIMIT, product=CNC, quantity=qty;
+        trigger_values=[sl_trigger, tgt_trigger] (ascending: SL below, TGT above).
+        Returns the GTT id (str). LIVE → kite.place_gtt; PAPER → a mock id + the
+        identical recorded params (parity). Refused while delivery_enabled=false."""
+        if product == "CNC" and not self._delivery_enabled:
+            self._log.warning(
+                "place_gtt BLOCKED: %s — delivery_enabled=false (SLICE2.5-P1 lock)", symbol)
+            raise OrderRejectedError(
+                "GTT/CNC disabled (delivery_enabled=false; SLICE2.5-P1 lock)",
+                symbol=symbol, intent="DELIVERY")
+        legs = self._gtt_legs(exit_side, qty, sl_limit, tgt_limit, product)
+        trigger_values = [float(sl_trigger), float(tgt_trigger)]
+        if self._paper:
+            gid = f"PAPER_GTT_{new_order_id()}"
+            self._log.info("place_gtt call_end", extra={
+                "method": "place_gtt", "mode": "PAPER", "symbol": symbol, "gtt_id": gid,
+                "trigger_values": trigger_values, "qty": qty, "exit_side": exit_side,
+                "legs": legs, "last_price": last_price})
+            return gid
+        self._rl.acquire(_CATEGORY_MAP["place_order"])
+        gtt_type = getattr(self._kite, "GTT_TYPE_OCO", "two-leg")
+        try:
+            resp = self._kite.place_gtt(
+                trigger_type=gtt_type, tradingsymbol=symbol, exchange="NSE",
+                trigger_values=trigger_values, last_price=float(last_price), orders=legs)
+        except Exception as exc:
+            raise self._translate_broker_exception(
+                exc, {"symbol": symbol, "trigger_values": trigger_values}, "place_order"
+            ) from exc
+        self._reset_429_attempts(_CATEGORY_MAP["place_order"])
+        gid = str(resp.get("trigger_id") if isinstance(resp, dict) else resp)
+        self._log.info("place_gtt call_end", extra={
+            "method": "place_gtt", "mode": "LIVE", "symbol": symbol, "gtt_id": gid,
+            "trigger_values": trigger_values, "qty": qty})
+        return gid
+
+    def modify_gtt(
+        self,
+        *,
+        gtt_id: str,
+        symbol: str,
+        exit_side: str,
+        qty: int,
+        sl_trigger: float,
+        sl_limit: float,
+        tgt_trigger: float,
+        tgt_limit: float,
+        last_price: float,
+        product: str = "CNC",
+    ) -> str:
+        """Modify an existing OCO GTT (e.g. a later partial fill grew the qty) — keeps
+        ONE GTT per trade. Returns the (unchanged) GTT id. PAPER logs + returns it."""
+        if product == "CNC" and not self._delivery_enabled:
+            raise OrderRejectedError(
+                "GTT/CNC disabled (delivery_enabled=false; SLICE2.5-P1 lock)",
+                symbol=symbol, intent="DELIVERY")
+        legs = self._gtt_legs(exit_side, qty, sl_limit, tgt_limit, product)
+        trigger_values = [float(sl_trigger), float(tgt_trigger)]
+        if self._paper:
+            self._log.info("modify_gtt call_end", extra={
+                "method": "modify_gtt", "mode": "PAPER", "symbol": symbol,
+                "gtt_id": str(gtt_id), "qty": qty, "trigger_values": trigger_values})
+            return str(gtt_id)
+        self._rl.acquire(_CATEGORY_MAP["place_order"])
+        gtt_type = getattr(self._kite, "GTT_TYPE_OCO", "two-leg")
+        try:
+            self._kite.modify_gtt(
+                trigger_id=int(gtt_id), trigger_type=gtt_type, tradingsymbol=symbol,
+                exchange="NSE", trigger_values=trigger_values,
+                last_price=float(last_price), orders=legs)
+        except Exception as exc:
+            raise self._translate_broker_exception(
+                exc, {"symbol": symbol, "gtt_id": gtt_id}, "place_order") from exc
+        self._reset_429_attempts(_CATEGORY_MAP["place_order"])
+        self._log.info("modify_gtt call_end", extra={
+            "method": "modify_gtt", "mode": "LIVE", "symbol": symbol,
+            "gtt_id": str(gtt_id), "qty": qty})
+        return str(gtt_id)
 
     def cancel_order(
         self,

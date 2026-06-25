@@ -217,6 +217,41 @@ def calc_sl_limit_price(
         )
 
 
+def calc_gtt_limit_price(
+    exit_side: str,
+    trigger_price: float,
+    offset_pct: float,
+    tick_size: float = DEFAULT_TICK,
+) -> float:
+    """SLICE2.5-P1: limit price for ONE leg of a CNC OCO-GTT (Good-Till-Triggered).
+
+    A dedicated helper (NOT calc_sl_limit_price) so the GTT path never inherits the
+    intraday 0.5% SL offset: a GTT SL leg is a DEEP protective limit (e.g. 3%) so an
+    overnight gap-down still fills within the floor, while the GTT TGT leg uses a
+    SMALL offset so it fills at/just-below the target. Same directional, tick-snapped
+    math as the intraday SL limit, but the offset is supplied explicitly by the
+    caller (gtt_sl_limit_offset_pct for SL, sl_limit_offset_pct for TGT):
+
+        SELL leg (exits a LONG):  limit = trigger * (1 - offset_pct), round DOWN
+        BUY  leg (exits a SHORT): limit = trigger * (1 + offset_pct), round UP
+
+    Both OCO legs of a LONG delivery position are SELL (SL sells low, TGT sells high).
+
+    Raises:
+        ValueError: exit_side not BUY/SELL, trigger_price <= 0, or offset_pct < 0.
+    """
+    side = (exit_side or "").upper()
+    if trigger_price <= 0:
+        raise ValueError(f"trigger_price must be > 0 for a GTT leg, got {trigger_price!r}")
+    if offset_pct < 0:
+        raise ValueError(f"offset_pct must be >= 0, got {offset_pct!r}")
+    if side == "SELL":
+        return round_to_tick(trigger_price * (1.0 - offset_pct), tick_size, mode="down")
+    if side == "BUY":
+        return round_to_tick(trigger_price * (1.0 + offset_pct), tick_size, mode="up")
+    raise ValueError(f"exit_side must be 'BUY' or 'SELL', got {exit_side!r}")
+
+
 # FIX-190 (Bug D): default safety margin inside the circuit band (2%).
 DEFAULT_CIRCUIT_MARGIN_PCT = 0.02
 

@@ -65,6 +65,7 @@ from data.candle_store import CandleStore
 from data.live_feed import LiveFeedManager
 from orders.eod_squareoff import EodSquareoff
 from orders.shadow_tracker import ShadowTracker
+from orders.cnc_gtt import CncGttPlacer
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderManager
 from orders.order_placer import OrderPlacer
@@ -1581,6 +1582,8 @@ def _main_locked(args, config_dir: Path) -> int:
         paper_ltp_gating_poll_sec=app_config.system.paper.ltp_gating_poll_sec,
         # BL-6: 429 exponential backoff config (lives under broker_limits.yaml)
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,
+        # SLICE2.5-P1: master delivery lock — refuses real CNC orders/GTTs when false.
+        delivery_enabled=app_config.system.delivery_enabled,
     )
 
     try:
@@ -2043,10 +2046,24 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("order_protocol_limit"),
         sl_limit_offset_pct=app_config.system.capital.sl_limit_offset_pct,  # P0 SL-M->SL
     )
+    # SLICE2.5-P1: OCO-GTT placer — overnight protection for DELIVERY (CNC) trades.
+    # gtt_tgt offset reuses the small intraday sl_limit_offset_pct; gtt_sl offset is the
+    # dedicated deep 3% protective floor. Inert until a DELIVERY intent flows (gated by
+    # delivery_enabled + force_intraday_only).
+    cnc_gtt_placer = CncGttPlacer(
+        broker_adapter,
+        gtt_sl_limit_offset_pct=app_config.system.capital.gtt_sl_limit_offset_pct,
+        gtt_tgt_limit_offset_pct=app_config.system.capital.sl_limit_offset_pct,
+        delivery_enabled=app_config.system.delivery_enabled,
+        logger=get_logger("cnc_gtt"),
+        quote_fn=broker_adapter.get_quote,
+        tick_fn=broker_adapter._resolve_tick,
+    )
     full_engine = FullEntryEngine(
         co_protocol=co_protocol,
         limit_protocol=limit_protocol,
         logger=get_logger("full_entry_engine"),
+        cnc_gtt_placer=cnc_gtt_placer,
     )
     order_manager = OrderManager(
         state_store=store,
@@ -2154,6 +2171,33 @@ def _main_locked(args, config_dir: Path) -> int:
     except Exception as _sc_exc:  # never let the summary block startup
         get_logger("main").warning(
             "strategy_control.summary_failed", extra={"error": str(_sc_exc)}
+        )
+
+    # SLICE2.5-P1: surface the master delivery lock + the combined requirement at boot.
+    _de = app_config.system.delivery_enabled
+    _fio_lock = app_config.system.force_intraday_only
+    _de_ready = (_de and not _fio_lock
+                 and app_config.system.trade_type in ("DELIVERY", "BOTH"))
+    get_logger("main").info(
+        "delivery_lock.status",
+        extra={
+            "delivery_enabled": _de, "force_intraday_only": _fio_lock,
+            "trade_type": app_config.system.trade_type, "cnc_orders_possible": _de_ready,
+            "note": ("real CNC/GTT requires delivery_enabled=true AND "
+                     "force_intraday_only=false AND trade_type in {DELIVERY,BOTH}"),
+        },
+    )
+    if not _de:
+        get_logger("main").warning(
+            "delivery_lock: delivery_enabled=FALSE — all CNC orders/GTTs are REFUSED at "
+            "the broker boundary (SLICE2.5-P1 master lock). A DELIVERY-intent strategy "
+            "either trades intraday (MIS) under force_intraday_only or not at all."
+        )
+    elif _de and _fio_lock:
+        get_logger("main").warning(
+            "delivery_lock: delivery_enabled=TRUE but force_intraday_only=TRUE — the "
+            "breaker still rewrites every strategy to INTRADAY, so NO CNC order can be "
+            "placed. Set force_intraday_only=false to actually trade delivery."
         )
 
     # Phase 3a: warn (never reject) if a slippage-tolerance override key looks off

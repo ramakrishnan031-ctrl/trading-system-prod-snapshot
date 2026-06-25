@@ -149,6 +149,10 @@ class CapitalConfig(BaseModel):
     # daily_loss_limit_pct × current capital, the same pct the pre-trade gate uses.
     slm_margin_buffer_pct: float = 0.05  # FIX-090: SL-M margin buffer % (unknown fill price risk)
     sl_limit_offset_pct: float = 0.005   # P0 2026-06-15: limit offset past trigger for SL (stop-limit) legs
+    # SLICE2.5-P1: DEEP protective limit offset for a CNC OCO-GTT SL leg (separate
+    # from the 0.5% intraday offset). A wider offset (default 3%) so an overnight
+    # gap-down still fills within the floor instead of resting unfilled.
+    gtt_sl_limit_offset_pct: float = 0.03
     emergency_exit_buffer_pct: float = 0.01  # FIX-181: marketable-LIMIT buffer for emergency/kill exits
     leverage_map: LeverageMapConfig  # FM16: per-intent leverage multiplier
 
@@ -158,6 +162,15 @@ class CapitalConfig(BaseModel):
         # 0 is allowed (limit == trigger, tight fill) but negative or >= 10% is a typo.
         if v < 0 or v >= 0.10:
             raise ValueError("sl_limit_offset_pct must be >= 0 and < 0.10 (10%)")
+        return v
+
+    @field_validator("gtt_sl_limit_offset_pct")
+    @classmethod
+    def _validate_gtt_sl_limit_offset(cls, v: float) -> float:
+        # SLICE2.5-P1: a DEEP protective offset (default 3%); must be > 0 (a 0% GTT
+        # SL limit risks resting unfilled on a gap) and < 20% (a wider offset is a typo).
+        if not (0 < v < 0.20):
+            raise ValueError("gtt_sl_limit_offset_pct must be > 0 and < 0.20 (20%)")
         return v
 
     @field_validator("emergency_exit_buffer_pct")
@@ -1046,6 +1059,13 @@ class SystemConfig(BaseModel):
         default_factory=lambda: ["0-100", "100-200", "200-300", "300-500", "500-1000", "1000+"]
     )
     force_intraday_only: bool = True          # P0 2026-06-15: force every strategy to INTRADAY (MIS); blocks accidental CNC/DELIVERY orders
+    # SLICE2.5-P1: master CNC/delivery capability lock. A REAL CNC order or its
+    # OCO-GTT is placed ONLY when delivery_enabled=true AND force_intraday_only=false
+    # AND trade_type in {DELIVERY,BOTH}. Default false — the GTT path is exercised in
+    # Phase 1 only via the paper sim + the explicitly-flagged market-hours test (T2).
+    # The lock is enforced at the broker boundary (zerodha_adapter refuses CNC/GTT
+    # when false). Turning delivery on requires the full Slice 2.5 lifecycle.
+    delivery_enabled: bool = False
     # Slice 2 (LAYER 1 — master product gate): which product type may trade today.
     # Read by the strategy-control resolver (strategies/control.strategy_will_trade)
     # at the entry gate + the status table. INTRADAY (default) = only intent==INTRADAY

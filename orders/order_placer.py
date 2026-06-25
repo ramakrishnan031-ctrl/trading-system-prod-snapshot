@@ -2297,6 +2297,30 @@ class OrderPlacer:
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
+    def _finalize_cnc_gtt(self, trade_id: str, fill_entry: "_FillEntry",
+                          qty_filled: int, legs, reason: str) -> None:
+        """SLICE2.5-P1: finalize a DELIVERY (CNC) trade whose overnight protection is a
+        single broker-side OCO GTT (placed by the centralized gate). Unlike the
+        LIMIT_TRIPLE path there are NO day-leg order rows to persist, NO _fill_map OCO
+        siblings (the GTT IS the OCO at the broker), and the day-leg after-check does
+        not apply. We log the gtt_id and record a verified exit. DURABLE gtt_id
+        persistence (carry-state columns) lands in Phase 2 — P1 is schema-neutral."""
+        self._log.info(
+            "order_placer.cnc_gtt_placed",
+            extra={
+                "trade_id": trade_id, "symbol": fill_entry.symbol, "gtt_id": legs.gtt_id,
+                "qty_filled": qty_filled, "sl_trigger": legs.sl_trigger_price,
+                "sl_limit": legs.sl_price, "tgt_trigger": legs.tgt_price, "reason": reason,
+            },
+        )
+        try:
+            self._om.record_exits_verification(
+                trade_id, 1,
+                f"GTT placed (CNC overnight protection); gtt_id={legs.gtt_id}",
+            )
+        except Exception:  # noqa: BLE001 — never break the fill path
+            pass
+
     def _persist_sl_only_protected(
         self, *, trade_id: str, fill_entry: "_FillEntry",
         qty_filled: int, legs, reason: str,
@@ -2688,6 +2712,14 @@ class OrderPlacer:
                 reason=f"sl_placement_failed: {type(exc).__name__}",
             )
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # SLICE2.5-P1: a DELIVERY (CNC) trade is protected by a single broker-side OCO
+        # GTT (placed by the centralized gate in place_deferred_exits). Finalize and
+        # return — NO day-leg persist, NO _fill_map OCO registration, NO day-leg
+        # after-check (none of which apply to a GTT). INTRADAY path below is unchanged.
+        if getattr(legs, "is_gtt", False):
+            self._finalize_cnc_gtt(trade_id, fill_entry, qty_filled, legs, reason)
             return
 
         # FIX-190 (Bug C): SL placed but TGT could not be placed (e.g. target
@@ -3337,6 +3369,12 @@ class OrderPlacer:
                 reason=f"sl_retry_non_ltp_error: {type(exc).__name__}",
             )
             self._fire_hard_kill_for_unprotected_position(trade_id, exc)
+            return
+
+        # SLICE2.5-P1: DELIVERY (CNC) → finalize the OCO GTT, skip day-leg persistence
+        # (same centralized treatment as the main fill path).
+        if getattr(legs, "is_gtt", False):
+            self._finalize_cnc_gtt(trade_id, fill_entry, qty_filled, legs, "exit_retry")
             return
 
         # FIX-165d: Success path — dedented to be reachable after try/except

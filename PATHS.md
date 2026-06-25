@@ -90,6 +90,18 @@ Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
 
 No DB schema; parity (shared paper+live, no mode branch). Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-25 · memory `ramcoind_duplicate_sl_incident_25jun`.
 
+## Delivery (CNC) — SLICE2.5-P1 (25-Jun): GTT overnight protection (delivery_enabled=false)
+| What | Location |
+|---|---|
+| Master lock | `system_config.yaml` `delivery_enabled` (default **false**) → enforced at the broker boundary (`zerodha_adapter.place_order`/`place_gtt` refuse CNC when off). Real CNC needs delivery_enabled=true AND force_intraday_only=false AND trade_type∈{DELIVERY,BOTH} |
+| GTT placer | `orders/cnc_gtt.py` `CncGttPlacer` — computes the OCO legs (SL limit = trigger − `capital.gtt_sl_limit_offset_pct` 3%; TGT limit = trigger − `sl_limit_offset_pct`), C8 validate, ONE GTT/trade (in-memory map + modify on partial) |
+| Adapter GTT I/O | `broker/zerodha_adapter.py` `place_gtt` / `modify_gtt` — live `kite.place_gtt`/`modify_gtt` (OCO 2× SELL CNC LIMIT); paper mock `PAPER_GTT_*` + same params (parity) |
+| Limit math | `orders/price_math.py` `calc_gtt_limit_price` (dedicated; not the intraday 0.5% path) |
+| Centralized gate | `orders/full_entry_engine.py` `place_deferred_exits` (intent==DELIVERY → GTT, `ExitLegsResult.is_gtt`); `order_placer._finalize_cnc_gtt` (logs gtt_id; no day legs). INTRADAY unchanged |
+| Tests / T2 | `tests/unit/test_cnc_gtt_slice25_p1.py` (T1 paper) · `scripts/t2_cnc_gtt_realtest.py` (market-hours real-API/TPIN proof — the blocker before enabling delivery) |
+
+No DB schema in P1 (gtt_id logged; persistence + GTT monitor = Phase 2). Detail: SYSTEM_MAP Changelog 2026-06-25 · memory `slice25_p1_cnc_gtt_25jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|

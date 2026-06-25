@@ -73,6 +73,12 @@ force_intraday_only: true
 # Delivery strategies need the Slice 2.5 delivery lifecycle before going live.
 trade_type: INTRADAY
 
+# SLICE2.5-P1: master CNC/delivery capability lock (default false). A REAL CNC order
+# or its OCO-GTT is placed ONLY when delivery_enabled=true AND force_intraday_only=false
+# AND trade_type in {DELIVERY,BOTH}. Stays false until the Slice 2.5 lifecycle + the
+# market-hours real-API proof (T2) pass. Enforced at the broker boundary.
+delivery_enabled: false
+
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:
     INTRADAY: "MIS"           # Margin Intraday Squareoff (PR3)
@@ -101,6 +107,7 @@ capital:                      # FM16
   # post-close realized breach derives ₹ = daily_loss_limit_pct × current capital.
   slm_margin_buffer_pct: 0.05 # FIX-090: 5% buffer for SL-M margin (unknown fill price risk)
   sl_limit_offset_pct: 0.005  # P0 2026-06-15: SL legs are SL (stop-limit); limit = trigger ± 0.5% so triggered stops fill (Zerodha rejects SL-M via API)
+  gtt_sl_limit_offset_pct: 0.03  # SLICE2.5-P1: DEEP protective limit offset for a CNC OCO-GTT SL leg (3%); separate from the 0.5% intraday offset so an overnight gap-down still fills within the floor
   emergency_exit_buffer_pct: 0.01  # FIX-181: emergency/kill exits use marketable LIMIT (LTP ± 1%) so they fill but cap worst-case slippage
   leverage_map:
     INTRADAY: 5.0             # MIS leverage

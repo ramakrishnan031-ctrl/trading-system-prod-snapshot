@@ -189,6 +189,9 @@ def _make_adapter(
     paper_ltp_gating_enabled: bool = False,
     paper_ltp_gating_max_wait_sec: float = 1.0,  # short for tests
     paper_ltp_gating_poll_sec: float = 0.05,
+    # SLICE2.5-P1: adapter-mechanics tests grant the delivery capability by default
+    # (CNC orders work); the master-lock behaviour is tested explicitly elsewhere.
+    delivery_enabled: bool = True,
 ) -> tuple[ZerodhaAdapter, MockKite, RateLimiter, OrderStateMachine, Any]:
     """Return (adapter, kite, rl, osm, logger)."""
     from broker.cost_calculator import CostCalculator
@@ -213,6 +216,7 @@ def _make_adapter(
         paper_ltp_gating_enabled=paper_ltp_gating_enabled,
         paper_ltp_gating_max_wait_sec=paper_ltp_gating_max_wait_sec,
         paper_ltp_gating_poll_sec=paper_ltp_gating_poll_sec,
+        delivery_enabled=delivery_enabled,
     )
     return adapter, kite, rl, osm, logger
 

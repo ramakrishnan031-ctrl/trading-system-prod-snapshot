@@ -26,6 +26,9 @@ from __future__ import annotations
 
 import logging
 
+from typing import Optional
+
+from orders.cnc_gtt import CncGttPlacer
 from orders.entry_engine import EntryEngine, EntryResult
 from orders.order_protocol_co import CoPlusTgtProtocol
 from orders.order_protocol_limit import ExitLegsResult, LimitTripleProtocol
@@ -56,11 +59,15 @@ class FullEntryEngine(EntryEngine):
         limit_protocol: LimitTripleProtocol,
         logger: logging.Logger,
         default_protocol: str = "LIMIT_TRIPLE",
+        cnc_gtt_placer: Optional[CncGttPlacer] = None,  # SLICE2.5-P1
     ) -> None:
         self._co = co_protocol
         self._limit = limit_protocol
         self._log = logger
         self._default_protocol = default_protocol
+        # SLICE2.5-P1: places the OCO GTT for DELIVERY (CNC) trades. None → the CNC
+        # gate is inert (no delivery; existing INTRADAY behaviour fully preserved).
+        self._cnc_gtt = cnc_gtt_placer
 
     def execute(
         self,
@@ -134,6 +141,39 @@ class FullEntryEngine(EntryEngine):
             ValueError if order_protocol is not LIMIT_TRIPLE or CO_PLUS_TGT.
             BrokerError on broker-side failure (SL or TGT).
         """
+        # SLICE2.5-P1: a DELIVERY (CNC) trade is protected by ONE broker-side OCO GTT
+        # (survives EOD/overnight), NOT day-validity legs. This is the SINGLE
+        # centralized gate — all order_placer call sites (full / partial / retry) flow
+        # through here, so the MIS/CO path below is byte-for-byte unchanged. Gate is
+        # inert when intent != DELIVERY or no GTT placer is wired.
+        if intent == "DELIVERY" and self._cnc_gtt is not None:
+            exit_side = "SELL" if entry_side == "BUY" else "BUY"
+            res = self._cnc_gtt.place_for_fill(
+                symbol=symbol, exit_side=exit_side, qty=qty,
+                sl_price=sl_price, tgt_price=tgt_price, trade_id=trade_id, tag=tag,
+            )
+            self._log.info(
+                "full_entry_engine.cnc_gtt_exit",
+                extra={
+                    "trade_id": trade_id, "symbol": symbol, "gtt_id": res.gtt_id,
+                    "modified": res.modified, "qty": qty, "exit_side": exit_side,
+                    "sl_trigger": res.sl_trigger, "tgt_trigger": res.tgt_trigger,
+                },
+            )
+            return ExitLegsResult(
+                sl_broker_order_id=f"gtt:{res.gtt_id}",
+                sl_internal_id=f"gtt:{res.gtt_id}",
+                sl_order_type="GTT",
+                sl_trigger_price=res.sl_trigger,
+                sl_price=res.sl_limit,
+                tgt_broker_order_id=f"gtt:{res.gtt_id}",
+                tgt_internal_id=f"gtt:{res.gtt_id}",
+                tgt_price=res.tgt_trigger,
+                tgt_placed=True,
+                is_gtt=True,
+                gtt_id=res.gtt_id,
+            )
+
         if order_protocol == "LIMIT_TRIPLE":
             selected = self._limit
         elif order_protocol == "CO_PLUS_TGT":
