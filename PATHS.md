@@ -90,17 +90,19 @@ Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
 
 No DB schema; parity (shared paper+live, no mode branch). Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-25 · memory `ramcoind_duplicate_sl_incident_25jun`.
 
-## Delivery (CNC) — SLICE2.5-P1 (25-Jun): GTT overnight protection (delivery_enabled=false)
+## Delivery (CNC) — SLICE2.5-P1+P2 (25-Jun): durable GTT overnight protection (delivery_enabled=false)
 | What | Location |
 |---|---|
-| Master lock | `system_config.yaml` `delivery_enabled` (default **false**) → enforced at the broker boundary (`zerodha_adapter.place_order`/`place_gtt` refuse CNC when off). Real CNC needs delivery_enabled=true AND force_intraday_only=false AND trade_type∈{DELIVERY,BOTH} |
-| GTT placer | `orders/cnc_gtt.py` `CncGttPlacer` — computes the OCO legs (SL limit = trigger − `capital.gtt_sl_limit_offset_pct` 3%; TGT limit = trigger − `sl_limit_offset_pct`), C8 validate, ONE GTT/trade (in-memory map + modify on partial) |
-| Adapter GTT I/O | `broker/zerodha_adapter.py` `place_gtt` / `modify_gtt` — live `kite.place_gtt`/`modify_gtt` (OCO 2× SELL CNC LIMIT); paper mock `PAPER_GTT_*` + same params (parity) |
+| Master lock (R2 split) | `system_config.yaml` `delivery_enabled` (default **false**). **P2 guard split:** gates ONLY the CNC **entry** (`zerodha_adapter.place_order`); protective GTT ops (`place_gtt`/`modify_gtt`/`delete_gtt`/`get_gtt(s)`/`get_holdings`) are NOT gated — protection survives disablement. Real CNC entry needs delivery_enabled=true AND force_intraday_only=false AND trade_type∈{DELIVERY,BOTH} |
+| GTT placer | `orders/cnc_gtt.py` `CncGttPlacer` — OCO legs (SL limit = trigger − `capital.gtt_sl_limit_offset_pct` 3%; TGT limit = trigger − `sl_limit_offset_pct`), C8 validate, ONE GTT/trade. **P2:** persists to `gtt_state` (durable), `hydrate_from_store()` rebuilds the hot cache on boot, `forget()` for recreate |
+| Durable state (v36) | `core/schema.sql` **TABLE 37 `gtt_state`** (gtt_id INTEGER PK, status ACTIVE→TRIGGERED→CLEANED/…, needs_review, FK→trades) = the one-per-trade source of truth (replaces P1's in-memory map). `core/state_store.py` DAO (insert/update/get_active/by_id/status/needs_review/verified + `mark_trade_closed_gtt`/`record_gtt_close_financials`) |
+| Reconcile + GTT_EXIT | `orders/cnc_gtt_monitor.py` `CncGttMonitor.reconcile()` — re-verifies each GTT vs broker (get_gtts + holdings + positions), K6 ladder (healthy / **GTT_EXIT** finalise+capital-release / F6 re-protect / recreate / qty-mismatch CRITICAL-once+needs_review / orphan delete / >1-ACTIVE soft-kill) + 50-cap. Wired into `order_reconciler` (startup [4a] + 15-min in-hours [4b]); delivery trades EXCLUDED from the position/SL/exit checks |
+| Adapter GTT/holdings I/O | `broker/zerodha_adapter.py` `place_gtt`/`modify_gtt`/`get_gtt`/`get_gtts`/`delete_gtt`/`get_holdings` — live=Kite, paper=in-memory store (`_paper_gtts`/`_paper_holdings`, `seed_paper_holding`). Paper gtt ids are **NUMERIC** (`_PAPER_GTT_ID_BASE`) since gtt_state.gtt_id is INTEGER PK |
 | Limit math | `orders/price_math.py` `calc_gtt_limit_price` (dedicated; not the intraday 0.5% path) |
 | Centralized gate | `orders/full_entry_engine.py` `place_deferred_exits` (intent==DELIVERY → GTT, `ExitLegsResult.is_gtt`); `order_placer._finalize_cnc_gtt` (logs gtt_id; no day legs). INTRADAY unchanged |
-| Tests / T2 | `tests/unit/test_cnc_gtt_slice25_p1.py` (T1 paper) · `scripts/t2_cnc_gtt_realtest.py` (market-hours real-API/TPIN proof — the blocker before enabling delivery) |
+| Tests / T2 | `tests/unit/test_cnc_gtt_slice25_p1.py` · `test_cnc_gtt_slice25_p2.py` · `test_cnc_gtt_monitor.py` · `test_cnc_gtt_step4_wiring.py` · `scripts/t2_cnc_gtt_realtest.py` (market-hours real-API/TPIN proof — the blocker before enabling delivery) |
 
-No DB schema in P1 (gtt_id logged; persistence + GTT monitor = Phase 2). Detail: SYSTEM_MAP Changelog 2026-06-25 · memory `slice25_p1_cnc_gtt_25jun`.
+P2 = durability + safety (schema v36 `gtt_state`, reconcile, GTT_EXIT, 15-min monitor); delivery_enabled stays **false** (no activation). Detail: SYSTEM_MAP Changelog 2026-06-25 · memory `slice25_p2_gtt_durability_25jun`.
 
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
