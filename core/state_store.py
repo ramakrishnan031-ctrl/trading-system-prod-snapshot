@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 35  # Slice 1 R:R fix + SL/TGT after-check: trades += tgt_risk_reward_applied/exits_verified/exits_verify_detail (rebuild trades)
+EXPECTED_SCHEMA_VERSION = 36  # SLICE2.5-P2: +gtt_state (durable one-OCO-GTT-per-CNC-trade source of truth). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

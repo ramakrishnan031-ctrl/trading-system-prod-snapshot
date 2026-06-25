@@ -72,6 +72,12 @@ Version map
                  exits_verified (INTEGER) + exits_verify_detail (TEXT, the SL/TGT
                  after-check verdict). Rebuild trades (rebuild copies the
                  intersecting old columns; the three new ones take NULL).
+    v35 -> v36 : SLICE2.5-P2 — ONE NEW append-only table, gtt_state (the durable
+                 one-OCO-GTT-per-CNC-trade source of truth that replaces P1's
+                 in-memory CncGttPlacer._trade_gtts map). Pure addition: no
+                 MIGRATION_TABLES entry (nothing rebuilt); schema.sql's CREATE
+                 TABLE IF NOT EXISTS + executescript creates it and the trailing
+                 INSERT bumps the version (same path as v31 slippage / v33 preflight).
 """
 from __future__ import annotations
 

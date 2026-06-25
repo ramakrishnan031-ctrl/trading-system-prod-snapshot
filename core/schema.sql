@@ -1121,9 +1121,59 @@ CREATE TABLE IF NOT EXISTS preflight_autofix_log (
 );
 CREATE INDEX IF NOT EXISTS idx_pfal_run ON preflight_autofix_log(run_id);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 37: gtt_state  (v36 / SLICE2.5-P2)
+-- Durable source of truth for the ONE OCO-GTT (Good-Till-Triggered) that protects
+-- a CNC (delivery) position overnight. Phase 1 (SLICE2.5-P1) held this in an
+-- in-memory map (orders/cnc_gtt.py CncGttPlacer._trade_gtts) that did NOT survive
+-- a restart; Phase 2 persists it here so the startup + 15-min reconcile can
+-- re-verify each GTT against the broker, recreate a missing one, and finalise a
+-- GTT-fired exit. The BROKER GTT is the authority; this table is the local mirror.
+--
+-- Y6 (active-row invariant): a trade may accumulate MULTIPLE rows over its life —
+-- each recreate is a NEW broker gtt_id = a new row = history. The one-GTT-per-trade
+-- invariant (M2) is therefore on status='ACTIVE' rows: at most ONE ACTIVE row per
+-- open trade at any time (not one row ever).
+--
+-- status lifecycle: ACTIVE -> TRIGGERED (broker fired the OCO) -> CLEANED (exit
+-- finalised / orphan swept); or ACTIVE -> CANCELLED|EXPIRED|REJECTED (broker-side
+-- end states). needs_review (Y2) latches a qty-mismatch / ownership anomaly so its
+-- CRITICAL alert fires ONCE per state rather than every reconcile cycle.
+--
+-- PURE ADDITION: created by CREATE TABLE IF NOT EXISTS on the schema re-apply; no
+-- MIGRATION_TABLES entry, nothing rebuilt (same pattern as v31 slippage / v33
+-- preflight tables). The trailing INSERT bumps schema_version to 36.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS gtt_state (
+    gtt_id           INTEGER PRIMARY KEY,        -- broker trigger id
+    trade_id         TEXT NOT NULL,
+    symbol           TEXT NOT NULL,
+    exit_side        TEXT NOT NULL,              -- SELL (both OCO legs exit a long)
+    qty              INTEGER NOT NULL,
+    sl_trigger       REAL NOT NULL,
+    sl_limit         REAL NOT NULL,
+    tgt_trigger      REAL NOT NULL,
+    tgt_limit        REAL NOT NULL,
+    status           TEXT NOT NULL               -- ACTIVE|TRIGGERED|CANCELLED|EXPIRED|REJECTED|CLEANED
+                     CHECK (status IN ('ACTIVE','TRIGGERED','CANCELLED',
+                                       'EXPIRED','REJECTED','CLEANED')),
+    needs_review     INTEGER NOT NULL DEFAULT 0, -- Y2 de-dup latch for anomaly alerts
+    last_verified_at TEXT,                        -- ISO-8601 IST of last broker re-verify
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+
+    FOREIGN KEY (trade_id) REFERENCES trades(trade_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gtt_state_trade_id
+    ON gtt_state(trade_id);
+
+CREATE INDEX IF NOT EXISTS idx_gtt_state_status
+    ON gtt_state(status);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '35');  -- Slice 1 R:R fix + SL/TGT after-check: trades += tgt_risk_reward_applied/exits_verified/exits_verify_detail (rebuild trades)
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '36');  -- SLICE2.5-P2: +gtt_state (durable one-OCO-GTT-per-CNC-trade source of truth). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;
