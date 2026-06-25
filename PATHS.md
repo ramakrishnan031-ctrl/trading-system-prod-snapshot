@@ -102,7 +102,7 @@ No DB schema; parity (shared paper+live, no mode branch). Detail: `docs/SYSTEM_M
 | Centralized gate | `orders/full_entry_engine.py` `place_deferred_exits` (intent==DELIVERY → GTT, `ExitLegsResult.is_gtt`); `order_placer._finalize_cnc_gtt` (logs gtt_id; no day legs). INTRADAY unchanged |
 | Tests / T2 | `tests/unit/test_cnc_gtt_slice25_p1.py` · `test_cnc_gtt_slice25_p2.py` · `test_cnc_gtt_monitor.py` · `test_cnc_gtt_step4_wiring.py` · `scripts/t2_cnc_gtt_realtest.py` (market-hours real-API/TPIN proof — the blocker before enabling delivery) |
 
-P2 = durability + safety (schema v36 `gtt_state`, reconcile, GTT_EXIT, 15-min monitor); delivery_enabled stays **false** (no activation). Detail: SYSTEM_MAP Changelog 2026-06-25 · memory `slice25_p2_gtt_durability_25jun`.
+P2 = durability + safety (schema v36 `gtt_state`, reconcile, GTT_EXIT, 15-min monitor); delivery_enabled stays **false** (no activation). **DEPLOYED to main `bad0aad` 25-Jun ~22:23 (one-time authorized; rule restored); schema v36 applies at the Fri 08:15 boot.** Detail: SYSTEM_MAP Changelog 2026-06-25 · memory `slice25_p2_gtt_durability_25jun`.
 
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
