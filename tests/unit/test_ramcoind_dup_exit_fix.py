@@ -486,3 +486,57 @@ def test_aftercheck_single_legs_ok(tmp_path: Path):
         "SELECT exits_verified, exits_verify_detail FROM trades WHERE trade_id=?", (trade_id,))
     assert row["exits_verified"] == 1 and "DUPLICATE" not in (row["exits_verify_detail"] or "")
     store.close()
+
+
+# ── SHORT-SIDE SYMMETRY (mirror of every layer) ───────────────────────────────
+
+def test_short_duplicate_sl_deduped(tmp_path: Path):
+    """L2 mirror: a SHORT trade with two live BUY-stop SLs → dedupe cancels the later,
+    keeps the canonical (the invariant filters on leg='SL', not direction)."""
+    store = _make_store(tmp_path)
+    _trade(store, "s1", symbol="ABFRL", direction="SHORT", qty_filled=1,
+           sl_initial=102.0, entry=100.0)
+    _order(store, "sl_canon", "s1", leg="SL", txn="BUY",
+           placed_at="2026-06-25T11:00:24+05:30", trigger_price=102.0)
+    _order(store, "sl_dup", "s1", leg="SL", txn="BUY",
+           placed_at="2026-06-25T11:00:26+05:30", trigger_price=102.0)
+    rec = _make_reconciler(store, adapter=_adapter())
+    rec._check_duplicate_exits(store.get_all_open_trades())
+    assert _status(store, "sl_dup") == "CANCELLED"
+    assert _status(store, "sl_canon") == "OPEN"
+    store.close()
+
+
+def test_short_g5b_skips_when_broker_has_live_sl(tmp_path: Path):
+    """L1 mirror: a SHORT trade's SL is a BUY stop; G5b's authoritative check looks for
+    a live BUY SL at the broker and skips → no duplicate."""
+    store = _make_store(tmp_path)
+    old = (now_ist() - timedelta(minutes=30)).isoformat()
+    _trade(store, "s1", symbol="ABFRL", direction="SHORT", qty_filled=1,
+           sl_initial=102.0, entry=100.0, entry_time=old)
+    placed = []
+    broker_sl = lambda: [{"order_id": "sl", "symbol": "ABFRL", "status": "TRIGGER PENDING",
+                          "transaction_type": "BUY", "quantity": 1, "price": 102.5,
+                          "trigger_price": 102.0}]
+    rec = _make_reconciler(store, adapter=_g5b_adapter(placed),
+                           quote_fn=_quote("ABFRL", ltp=100.5), broker_orders_fn=broker_sl)
+    act = rec._g5b_crash_recovery_sl(store.get_all_open_trades()[0], broker_positions=None)
+    assert act is None and placed == []        # SHORT race also skips — no duplicate BUY SL
+    store.close()
+
+
+def test_system_overbuy_on_short_flattened(tmp_path: Path):
+    """L3 mirror: a SHORT closed ~1 min ago at 102; broker shows an untracked +1 @ 102
+    (a duplicate BUY SL filled → an over-BUY) → SYSTEM_OVERSELL → covered with a SELL."""
+    store = _make_store(tmp_path)
+    recent = (now_ist() - timedelta(seconds=60)).isoformat()
+    _trade(store, "s1", symbol="ABFRL", status="CLOSED", direction="SHORT", qty_filled=1,
+           exit_price=102.0, exit_time=recent, entry=100.0)
+    placed, notes = [], []
+    rec = _make_reconciler(store, adapter=_g5b_adapter(placed))
+    rec._notifier = SimpleNamespace(send=lambda **k: notes.append(k))
+    act = rec._check2_orphan_adoption("ABFRL", _bp("ABFRL", +1, 102.0))   # +1 over-buy residual
+    assert act.check_name == "SYSTEM_OVERSELL" and act.tier == "CRITICAL"
+    assert placed and placed[0]["side"] == "SELL" and placed[0]["qty"] == 1
+    assert notes and notes[-1]["severity"] == "CRITICAL"
+    store.close()

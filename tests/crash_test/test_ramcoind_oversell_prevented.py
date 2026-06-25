@@ -140,3 +140,36 @@ def test_layer1_g5b_places_no_duplicate_in_race(tmp_path: Path, mode: str):
     broker.trigger_sl("RAMCOIND")
     assert broker.positions["RAMCOIND"] == 0
     store.close()
+
+
+@pytest.mark.parametrize("mode", ["PAPER", "LIVE"])
+def test_layer2_dedupe_prevents_overbuy_on_short(tmp_path: Path, mode: str):
+    """MIRROR of the RAMCOIND long over-sell: a SHORT LIMIT_TRIPLE trade with a
+    duplicate SL (a BUY stop above entry) → dedupe cancels the duplicate → on the
+    stop-hit the position ends FLAT, never +1 (an over-BUY). Proves the fix is
+    symmetric across direction."""
+    store = _make_store(tmp_path)
+    broker = BrokerSim()
+    broker.place_order(symbol="ABFRL", side="SELL", qty=1, order_type="MARKET")  # short entry → -1
+    assert broker.positions["ABFRL"] == -1
+    canon = broker.place_order(symbol="ABFRL", side="BUY", qty=1, order_type="SL",
+                               trigger_price=102.0)                               # SHORT SL = BUY stop
+    dup = broker.place_order(symbol="ABFRL", side="BUY", qty=1, order_type="SL",
+                             trigger_price=102.0)                                 # duplicate
+
+    _trade(store, "s1", symbol="ABFRL", status="OPEN", direction="SHORT", qty_filled=1,
+           sl_initial=102.0, entry=100.0)
+    _order(store, canon.broker_order_id, "s1", leg="SL", txn="BUY",
+           placed_at="2026-06-25T11:00:24+05:30", trigger_price=102.0)
+    _order(store, dup.broker_order_id, "s1", leg="SL", txn="BUY",
+           placed_at="2026-06-25T11:00:26+05:30", trigger_price=102.0)
+
+    rec = _make_reconciler(store, adapter=broker, broker_orders_fn=broker.get_open_orders)
+    rec._mode = mode
+    rec._check_duplicate_exits(store.get_all_open_trades())
+    live_sl = [o for o in broker.get_open_orders() if o["order_type"] == "SL"]
+    assert len(live_sl) == 1 and live_sl[0]["order_id"] == canon.broker_order_id
+
+    broker.trigger_sl("ABFRL")
+    assert broker.positions["ABFRL"] == 0, "no over-buy — the short is flat"
+    store.close()
