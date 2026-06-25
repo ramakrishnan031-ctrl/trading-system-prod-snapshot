@@ -167,12 +167,12 @@ def test_paper_place_gtt_returns_mock_id_and_records_legs():
                and o["order_type"] == "LIMIT" and o["quantity"] == 1 for o in legs)
 
 
-def test_delivery_lock_refuses_cnc_when_disabled():
+def test_guard_split_entry_refused_but_gtt_ops_allowed_when_disabled():
+    # SLICE2.5-P2 (R2 guard split): delivery_enabled=false REFUSES a NEW CNC entry,
+    # but ALLOWS protective GTT ops (place/modify/get/delete) for an existing
+    # holding — overnight protection must survive disablement.
     a = _paper_adapter(delivery_enabled=False)
-    with pytest.raises(OrderRejectedError, match="delivery_enabled=false"):
-        a.place_gtt(symbol="RAMCOIND", exit_side="SELL", qty=1, sl_trigger=334.4,
-                    sl_limit=324.3, tgt_trigger=342.8, tgt_limit=341.1, last_price=337.0)
-    # a real CNC entry order is also refused at the boundary
+    # a real CNC entry order is still refused at the boundary
     with pytest.raises(OrderRejectedError, match="delivery_enabled=false"):
         a.place_order(symbol="RAMCOIND", side="BUY", qty=1, price=337.0,
                       order_type="LIMIT", intent="DELIVERY")
@@ -180,6 +180,16 @@ def test_delivery_lock_refuses_cnc_when_disabled():
     res = a.place_order(symbol="RAMCOIND", side="BUY", qty=1, price=337.0,
                         order_type="LIMIT", intent="INTRADAY")
     assert res.product == "MIS"
+    # protective GTT ops ARE allowed even with delivery disabled
+    gid = a.place_gtt(symbol="RAMCOIND", exit_side="SELL", qty=1, sl_trigger=334.4,
+                      sl_limit=324.3, tgt_trigger=342.8, tgt_limit=341.1, last_price=337.0)
+    assert gid.startswith("PAPER_GTT_")
+    assert a.modify_gtt(gtt_id=gid, symbol="RAMCOIND", exit_side="SELL", qty=2,
+                        sl_trigger=334.4, sl_limit=324.3, tgt_trigger=342.8,
+                        tgt_limit=341.1, last_price=337.0) == gid
+    assert a.get_gtt(gid)["condition"]["trigger_values"] == [334.4, 342.8]
+    assert a.delete_gtt(gid) == gid
+    assert a.get_gtt(gid) is None
 
 
 # ── D. order_placer finalize: records a verified exit, no day-leg rows ─────────

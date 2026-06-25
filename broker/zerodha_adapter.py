@@ -187,6 +187,17 @@ class Position:
 
 
 @dataclass(frozen=True)
+class Holding:
+    # SLICE2.5-P2: a carried (T+1+) CNC delivery holding from the broker, used by
+    # the overnight-GTT reconcile. qty is TOTAL owned (settled + t1), i.e. the full
+    # quantity the protective GTT must cover.
+    symbol: str
+    qty: int                  # quantity + t1_quantity (everything owned)
+    avg_price: float
+    product: str              # broker code, "CNC" for delivery
+
+
+@dataclass(frozen=True)
 class MarginInfo:
     net: float
     available: float
@@ -228,6 +239,12 @@ _CATEGORY_MAP: dict[str, str] = {
     "get_margins":      "margins",
     "get_trades":       "margins",
     "get_quote":        "quote",
+    # SLICE2.5-P2: GTT lifecycle + holdings. Reads ride the portfolio (margins)
+    # bucket; delete_gtt is a mutation -> the order bucket (like place/modify_gtt).
+    "get_holdings":     "margins",
+    "get_gtt":          "margins",
+    "get_gtts":         "margins",
+    "delete_gtt":       "order",
 }
 
 # kiteconnect order type strings
@@ -392,6 +409,14 @@ class ZerodhaAdapter:
         self._paper_fills: dict[str, dict] = {}
         self._paper_fills_lock: threading.Lock = threading.Lock()
         self._paper_positions: dict[str, dict] = {}
+        # SLICE2.5-P2: paper-backed overnight-protection stores so the Phase-2
+        # reconcile + GTT_EXIT logic run end-to-end in paper (the ONLY live/paper
+        # difference stays the broker I/O boundary). _paper_gtts mirrors Kite's
+        # get_gtts() dict shape; _paper_holdings is seeded by seed_paper_holding().
+        self._paper_gtts: dict[str, dict] = {}
+        self._paper_gtts_lock: threading.Lock = threading.Lock()
+        self._paper_holdings: dict[str, dict] = {}
+        self._paper_holdings_lock: threading.Lock = threading.Lock()
         # FIX-009: capture the HTTP Date header from the most recent Kite API
         # response so get_server_time() can return the broker's actual clock
         # instead of the local RTT midpoint.
@@ -614,17 +639,19 @@ class ZerodhaAdapter:
         position. Both legs are ``exit_side`` LIMIT, product=CNC, quantity=qty;
         trigger_values=[sl_trigger, tgt_trigger] (ascending: SL below, TGT above).
         Returns the GTT id (str). LIVE → kite.place_gtt; PAPER → a mock id + the
-        identical recorded params (parity). Refused while delivery_enabled=false."""
-        if product == "CNC" and not self._delivery_enabled:
-            self._log.warning(
-                "place_gtt BLOCKED: %s — delivery_enabled=false (SLICE2.5-P1 lock)", symbol)
-            raise OrderRejectedError(
-                "GTT/CNC disabled (delivery_enabled=false; SLICE2.5-P1 lock)",
-                symbol=symbol, intent="DELIVERY")
+        identical recorded params (parity).
+
+        SLICE2.5-P2 (R2 guard split): GTT ops are NOT gated on delivery_enabled —
+        protection MUST survive disablement. With delivery off there are no new CNC
+        entries (place_order blocks them), so a GTT op only ever touches a
+        PRE-EXISTING holding (strand-prevention); the entry lock lives on place_order."""
         legs = self._gtt_legs(exit_side, qty, sl_limit, tgt_limit, product)
         trigger_values = [float(sl_trigger), float(tgt_trigger)]
         if self._paper:
             gid = f"PAPER_GTT_{new_order_id()}"
+            with self._paper_gtts_lock:
+                self._paper_gtts[gid] = self._paper_gtt_record(
+                    gid, symbol, trigger_values, last_price, legs, status="active")
             self._log.info("place_gtt call_end", extra={
                 "method": "place_gtt", "mode": "PAPER", "symbol": symbol, "gtt_id": gid,
                 "trigger_values": trigger_values, "qty": qty, "exit_side": exit_side,
@@ -662,14 +689,18 @@ class ZerodhaAdapter:
         product: str = "CNC",
     ) -> str:
         """Modify an existing OCO GTT (e.g. a later partial fill grew the qty) — keeps
-        ONE GTT per trade. Returns the (unchanged) GTT id. PAPER logs + returns it."""
-        if product == "CNC" and not self._delivery_enabled:
-            raise OrderRejectedError(
-                "GTT/CNC disabled (delivery_enabled=false; SLICE2.5-P1 lock)",
-                symbol=symbol, intent="DELIVERY")
+        ONE GTT per trade. Returns the (unchanged) GTT id. PAPER updates the store.
+
+        SLICE2.5-P2 (R2 guard split): not gated on delivery_enabled (see place_gtt)."""
         legs = self._gtt_legs(exit_side, qty, sl_limit, tgt_limit, product)
         trigger_values = [float(sl_trigger), float(tgt_trigger)]
         if self._paper:
+            with self._paper_gtts_lock:
+                rec = self._paper_gtts.get(str(gtt_id))
+                if rec is not None:
+                    rec["condition"]["trigger_values"] = trigger_values
+                    rec["condition"]["last_price"] = float(last_price)
+                    rec["orders"] = legs
             self._log.info("modify_gtt call_end", extra={
                 "method": "modify_gtt", "mode": "PAPER", "symbol": symbol,
                 "gtt_id": str(gtt_id), "qty": qty, "trigger_values": trigger_values})
@@ -689,6 +720,129 @@ class ZerodhaAdapter:
             "method": "modify_gtt", "mode": "LIVE", "symbol": symbol,
             "gtt_id": str(gtt_id), "qty": qty})
         return str(gtt_id)
+
+    # ── SLICE2.5-P2: GTT lifecycle reads/delete + holdings ──────────────────────
+    # live → Kite, paper → in-memory store (identical dict shape). NOT gated on
+    # delivery_enabled (R2 guard split): protection must survive disablement.
+
+    @staticmethod
+    def _paper_gtt_record(gid, symbol, trigger_values, last_price, legs, *, status):
+        """Build a paper GTT entry mirroring Kite's get_gtts() dict shape so the
+        Phase-2 reconcile parses live + paper identically."""
+        return {
+            "id": gid,
+            "status": status,                 # active|triggered|cancelled|expired|rejected|deleted
+            "condition": {
+                "exchange": "NSE",
+                "tradingsymbol": symbol,
+                "trigger_values": list(trigger_values),
+                "last_price": float(last_price),
+            },
+            "orders": list(legs),
+        }
+
+    def get_gtt(self, gtt_id) -> Optional[dict]:
+        """Fetch ONE GTT by trigger id. PAPER returns a copy of the stored record
+        (None if absent). LIVE calls kite.get_gtt (broker errors translated)."""
+        if self._paper:
+            with self._paper_gtts_lock:
+                rec = self._paper_gtts.get(str(gtt_id))
+                return dict(rec) if rec is not None else None
+        self._rl.acquire(_CATEGORY_MAP["get_gtt"])
+        try:
+            res = self._kite.get_gtt(trigger_id=int(gtt_id))
+        except Exception as exc:
+            raise self._translate_broker_exception(exc, {"gtt_id": gtt_id}, "get_gtt") from exc
+        self._reset_429_attempts(_CATEGORY_MAP["get_gtt"])
+        return res
+
+    def get_gtts(self) -> list[dict]:
+        """All GTTs at the broker (active + triggered + …). PAPER returns the
+        in-memory store. Used by the Phase-2 reconcile (missing/orphan/triggered)."""
+        if self._paper:
+            with self._paper_gtts_lock:
+                return [dict(r) for r in self._paper_gtts.values()]
+        self._rl.acquire(_CATEGORY_MAP["get_gtts"])
+        try:
+            res = self._kite.get_gtts()
+        except Exception as exc:
+            raise self._translate_broker_exception(exc, {}, "get_gtts") from exc
+        self._reset_429_attempts(_CATEGORY_MAP["get_gtts"])
+        return list(res or [])
+
+    def delete_gtt(self, gtt_id) -> str:
+        """Delete (cancel) a GTT at the broker; returns the deleted trigger id (str).
+        Used ONLY for deliberate trade-close, >1-GTT dedupe, or confirmed-orphan
+        cleanup (Step 5/8b: NEVER a stale-order sweep). PAPER removes it from the store."""
+        if self._paper:
+            with self._paper_gtts_lock:
+                self._paper_gtts.pop(str(gtt_id), None)
+            self._log.info("delete_gtt call_end", extra={
+                "method": "delete_gtt", "mode": "PAPER", "gtt_id": str(gtt_id)})
+            return str(gtt_id)
+        self._rl.acquire(_CATEGORY_MAP["delete_gtt"])
+        try:
+            self._kite.delete_gtt(trigger_id=int(gtt_id))
+        except Exception as exc:
+            raise self._translate_broker_exception(exc, {"gtt_id": gtt_id}, "delete_gtt") from exc
+        self._reset_429_attempts(_CATEGORY_MAP["delete_gtt"])
+        self._log.info("delete_gtt call_end", extra={
+            "method": "delete_gtt", "mode": "LIVE", "gtt_id": str(gtt_id)})
+        return str(gtt_id)
+
+    def get_holdings(self) -> list[Holding]:
+        """Carried (T+1+) CNC delivery holdings. qty = settled + t1 (everything
+        owned). The Phase-2 reconcile uses this (plus same-day CNC positions from
+        get_positions) to re-verify overnight GTT protection. PAPER returns the
+        seeded _paper_holdings store."""
+        t0 = time.monotonic()
+        self._log.info("get_holdings call_start", extra={"method": "get_holdings"})
+        if self._paper:
+            with self._paper_holdings_lock:
+                holdings = [
+                    Holding(symbol=s, qty=int(h["qty"]),
+                            avg_price=float(h.get("avg_price", 0.0)),
+                            product=str(h.get("product", "CNC")))
+                    for s, h in self._paper_holdings.items() if int(h["qty"]) != 0
+                ]
+            self._log.info("get_holdings call_end", extra={
+                "method": "get_holdings", "duration_ms": int((time.monotonic() - t0) * 1000),
+                "result_summary": f"PAPER {len(holdings)} holdings"})
+            return holdings
+        self._rl.acquire(_CATEGORY_MAP["get_holdings"])
+        try:
+            raw = self._kite.holdings()
+        except Exception as exc:
+            raise self._translate_broker_exception(exc, {}, "get_holdings") from exc
+        self._reset_429_attempts(_CATEGORY_MAP["get_holdings"])
+        holdings = []
+        for row in (raw or []):
+            total = int(row.get("quantity", 0)) + int(row.get("t1_quantity", 0))
+            if total == 0:
+                continue
+            holdings.append(Holding(
+                symbol=str(row.get("tradingsymbol", "")),
+                qty=total,
+                avg_price=float(row.get("average_price", 0.0)),
+                product=str(row.get("product", "CNC")),
+            ))
+        self._log.info("get_holdings call_end", extra={
+            "method": "get_holdings", "duration_ms": int((time.monotonic() - t0) * 1000),
+            "result_summary": f"{len(holdings)} holdings"})
+        return holdings
+
+    def seed_paper_holding(self, symbol: str, qty: int, avg_price: float = 0.0,
+                           product: str = "CNC") -> None:
+        """Test/paper helper: inject (or clear, qty=0) a carried delivery holding so
+        the Phase-2 reconcile + GTT_EXIT logic run end-to-end in paper. No-op in live."""
+        if not self._paper:
+            return
+        with self._paper_holdings_lock:
+            if int(qty) == 0:
+                self._paper_holdings.pop(symbol, None)
+            else:
+                self._paper_holdings[symbol] = {
+                    "qty": int(qty), "avg_price": float(avg_price), "product": product}
 
     def cancel_order(
         self,
