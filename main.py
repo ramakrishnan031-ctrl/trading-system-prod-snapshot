@@ -66,6 +66,7 @@ from data.live_feed import LiveFeedManager
 from orders.eod_squareoff import EodSquareoff
 from orders.shadow_tracker import ShadowTracker
 from orders.cnc_gtt import CncGttPlacer
+from orders.cnc_gtt_monitor import CncGttMonitor
 from orders.full_entry_engine import FullEntryEngine
 from orders.order_manager import OrderManager
 from orders.order_placer import OrderPlacer
@@ -2114,6 +2115,25 @@ def _main_locked(args, config_dir: Path) -> int:
     except Exception as _sr_exc:  # noqa: BLE001 — never break startup
         _log.warning("slippage_recorder init failed (non-fatal): %s", _sr_exc)
 
+    # SLICE2.5-P2: overnight CNC-GTT reconcile — re-verifies / recreates / finalises
+    # the OCO GTT that protects a delivery position. Wired into the reconciler
+    # (startup [4a] + 15-min in-hours cadence [4b]). delivery_enabled=false in Phase 2
+    # (durability + safety only — no activation).
+    from core.time_authority import now_ist as _now_ist_mh
+    _market_hours_fn = lambda: market_windows.is_market_open(_now_ist_mh())  # noqa: E731
+    cnc_gtt_monitor = CncGttMonitor(
+        store=store,
+        adapter=broker_adapter,
+        placer=cnc_gtt_placer,
+        fund_manager=fund_manager,
+        kill_switch=kill_switch,
+        notifier=notifier,
+        bus=event_bus,
+        logger=get_logger("cnc_gtt_monitor"),
+        mode=mode_label,
+        market_hours_fn=_market_hours_fn,
+    )
+
     rc_cfg = app_config.system.order_reconciler
     order_reconciler = OrderReconciler(
         state_store=store,
@@ -2127,6 +2147,8 @@ def _main_locked(args, config_dir: Path) -> int:
         quote_fn=broker_adapter.get_quote,
         broker_orders_fn=broker_adapter.get_open_orders,
         mode=mode_label,
+        cnc_gtt_monitor=cnc_gtt_monitor,        # SLICE2.5-P2 (4a/4b)
+        market_hours_fn=_market_hours_fn,
     )
 
     # Task (2026-06-19): standalone TGT retry — re-place a TGT left unplaced by

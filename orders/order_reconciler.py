@@ -196,6 +196,8 @@ class OrderReconciler:
         broker_orders_fn: Optional[Callable[[], list]] = None,
         mode: str = "LIVE",      # session mode label for alert title
         order_placer: Optional[Any] = None,  # FIX-068: OrderPlacer for timeout recovery
+        cnc_gtt_monitor: Optional[Any] = None,  # SLICE2.5-P2: overnight-GTT reconcile
+        market_hours_fn: Optional[Callable[[], bool]] = None,  # SLICE2.5-P2: cadence gate
     ) -> None:
         self._store = state_store
         self._adapter = adapter
@@ -210,6 +212,14 @@ class OrderReconciler:
         self._mode = mode
         self._order_mgr = OrderManager(state_store, logger)
         self._order_placer = order_placer  # FIX-068
+        # SLICE2.5-P2: overnight CNC-GTT reconcile (startup [4a] + 15-min in-hours
+        # cadence [4b]). When wired, delivery (CNC) trades with an ACTIVE gtt_state
+        # row are EXCLUDED from the position/SL/exit checks below and managed here.
+        self._cnc_gtt_monitor = cnc_gtt_monitor
+        self._market_hours_fn = market_hours_fn or (lambda: True)
+        self._cnc_poll_count = 0
+        self._cnc_first_in_hours_done = False
+        self._cnc_monitor_every = 60  # cycles between full monitor runs (15 min / 15s)
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -273,6 +283,17 @@ class OrderReconciler:
         """
         # FIX-008: check for unexpected CNC overnight positions before trading
         self._check_cnc_overnight_positions()
+
+        # SLICE2.5-P2 (4a): re-verify every overnight GTT against the broker (now
+        # seeing HOLDINGS, not just same-day positions) — recreate a vanished one,
+        # finalise a GTT-fired exit. The monitor's Y4 guard handles a stale/delayed
+        # token at 08:15 (defer + alert, never crash, never treat no-data as flat);
+        # the next in-hours poll retries.
+        if self._cnc_gtt_monitor is not None:
+            try:
+                self._cnc_gtt_monitor.reconcile()
+            except Exception as exc:  # noqa: BLE001 — startup must never crash
+                self._log.error("cnc_gtt_monitor startup reconcile failed: %s", exc)
 
         # Startup reconcile before trading begins
         self.reconcile_once()
@@ -488,6 +509,29 @@ class OrderReconciler:
             if self._stop_event.is_set():
                 break
             self.reconcile_once()
+            self._maybe_run_cnc_monitor()
+
+    def _maybe_run_cnc_monitor(self) -> None:
+        """SLICE2.5-P2 (4b): run the overnight-GTT reconcile on the 15-min cadence,
+        ONLY within market hours; drain the Y1 pre-open queue immediately on the FIRST
+        in-hours cycle (not waiting for the 15-min mark). Reuses this daemon — no new
+        scheduler (mirrors the _should_alert_capital_drift throttle pattern)."""
+        if self._cnc_gtt_monitor is None:
+            return
+        try:
+            in_hours = bool(self._market_hours_fn())
+        except Exception:  # noqa: BLE001 — predicate failure -> treat as out-of-hours
+            in_hours = False
+        if not in_hours:
+            return
+        self._cnc_poll_count += 1
+        first = not self._cnc_first_in_hours_done
+        if first or (self._cnc_poll_count % self._cnc_monitor_every == 0):
+            self._cnc_first_in_hours_done = True
+            try:
+                self._cnc_gtt_monitor.reconcile(in_hours=True)
+            except Exception as exc:  # noqa: BLE001 — never kill the poll thread
+                self._log.error("cnc_gtt_monitor.reconcile failed: %s", exc)
 
     def _note_auth_error(self, cycle_errors: list) -> None:
         """Record a BrokerAuthError occurrence within the current cycle."""
@@ -620,6 +664,18 @@ class OrderReconciler:
 
         local_trades = self._store.get_all_open_trades()
 
+        # SLICE2.5-P2: delivery (CNC) trades with an ACTIVE overnight GTT are managed
+        # by CncGttMonitor (holdings + GTT aware), NOT by the position/SL/exit checks
+        # below — a carried CNC holding lives in holdings() not positions(), so CHECK1
+        # would wrongly mark it CLOSED_MANUAL and G5b/CHECK9 would place a spurious SL.
+        # local_symbols still includes them so CHECK2 won't orphan-adopt a held CNC.
+        try:
+            _delivery_rows = self._store.get_active_gtt_states()
+        except Exception:  # noqa: BLE001 — gtt_state read must never break reconcile
+            _delivery_rows = []
+        delivery_trade_ids = {r["trade_id"] for r in _delivery_rows}
+        delivery_symbols = {r["symbol"] for r in _delivery_rows}
+
         # FIX-186 (FIX 3): keep the broker-position snapshot in scope for the G5b
         # recovery-SL loop below so it can skip symbols the broker no longer holds.
         # None means "snapshot unavailable" (timeout/auth) → G5b proceeds (fail-safe).
@@ -630,6 +686,8 @@ class OrderReconciler:
 
             # Checks 1, 3, 4, 5: iterate local open trades
             for trade in local_trades:
+                if trade["trade_id"] in delivery_trade_ids:
+                    continue  # SLICE2.5-P2: delivery trade -> CncGttMonitor owns it
                 symbol = trade["symbol"]
                 bp = broker_pos.get(symbol)
 
@@ -673,7 +731,7 @@ class OrderReconciler:
             # not abandoned (GICRE incident); otherwise it is a transient fill
             # the normal fill path will complete, so we don't act destructively.
             for symbol, bp in broker_pos.items():
-                if symbol not in local_symbols:
+                if symbol not in local_symbols and symbol not in delivery_symbols:
                     # Task 4 (2026-06-19): a broker position whose only local
                     # record is an EXITING trade is OURS mid-exit, not an orphan.
                     # local_symbols only covers OPEN/PARTIAL (get_all_open_trades),
@@ -721,7 +779,13 @@ class OrderReconciler:
         # on the stale snapshot taken at the top of the cycle — otherwise it
         # places recovery SL orders on positions that were just reconciled
         # closed. Re-query fresh so closed trades drop out of the working set.
-        local_trades = self._store.get_all_open_trades()
+        # SLICE2.5-P2: also exclude delivery trades (CncGttMonitor owns them) so
+        # CHECK9 / G5b / duplicate-exit never place a spurious SL on a GTT-protected
+        # CNC position (its protection is the broker GTT, not a local SL order row).
+        local_trades = [
+            t for t in self._store.get_all_open_trades()
+            if t["trade_id"] not in delivery_trade_ids
+        ]
 
         # FIX-002: MISSING_EXITS — OPEN trade has SL in local DB but not on broker
         # Runs before G5b so naked positions are caught before recovery attempts.
