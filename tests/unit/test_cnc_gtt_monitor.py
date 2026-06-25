@@ -268,6 +268,20 @@ def test_50_cap_warning(tmp_path: Path):
     assert env.notifier.sev("WARNING")
 
 
+def test_alerts_carry_cnc_gtt_monitor_source_and_soft_kill_is_critical(tmp_path: Path):
+    # STEP 6: every alert is source_module="cnc_gtt_monitor"; soft-kill is CRITICAL
+    # (which writes a sentinel -> email fallback via the notifier).
+    env = _setup(tmp_path)
+    _seed_trade(env.store, "t1")
+    _place(env)
+    env.store.insert_gtt_state(gtt_id=556, trade_id="t1", symbol="RAMCOIND",
+                               exit_side="SELL", qty=1, sl_trigger=334.0, sl_limit=324.0,
+                               tgt_trigger=343.0, tgt_limit=342.0, created_at=_NOW)
+    env.mon.reconcile()                              # >1 ACTIVE -> soft-kill
+    assert env.ks.kills and env.notifier.sev("CRITICAL")
+    assert env.notifier.sent and all(s[2] == "cnc_gtt_monitor" for s in env.notifier.sent)
+
+
 def test_broker_unavailable_defers_no_crash(tmp_path: Path):
     env = _setup(tmp_path)
     _seed_trade(env.store, "t1")
