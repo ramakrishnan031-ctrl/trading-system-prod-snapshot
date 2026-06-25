@@ -102,6 +102,17 @@ Bandit reports all severities — add `-ll` for medium+. **Do not** touch the tw
 --phase A|B|C [--dry-run --as-of-date YYYY-MM-DD]`. Schema v33 (preflight_runs / preflight_check_results
 / preflight_autofix_log). Cron Officer briefing embeds its sentinel banner. (Replaced premarket_healthcheck.)
 
+## Config Sanity Auditor — BUILD 2 (25-Jun), the Config Authority enforcement layer
+| What | Location |
+|---|---|
+| Rule engine (single source) | `core/config_auditor.py` → `audit()` / `audit_system_config()` (startup subset `ACG`) / `audit_app_config()` (full A–G) → `ConfigAuditReport` (`AuditFinding`: PASS/INFO/WARN/BLOCK) |
+| Check groups | **A** contradictions (BLOCK, incl. #10) · **B** single-source regression guards · **C** capital-relative sanity (conc < pos-cap ladder) · **D** active-override listing · **E** launch-phase reminders · **F** stale-default guard · **G** cross-field |
+| STARTUP caller (fail-fast BLOCK) | `core/config_loader.py` `SystemConfig._cross_field_sanity_checks` → `raise_if_blocked()` (ValidationError, "CONTRADICTORY CONFIG") |
+| PRE-FLIGHT caller (Phase A → 09:20) | `scripts/preflight/checks/config_sanity.py` (7 rows, group "Config Sanity"; one memoised audit run) |
+| Tests | `tests/unit/test_config_auditor.py` (37) |
+
+Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-25 · memory `build2_config_sanity_auditor_25jun`. No DB schema; parity (no mode branch).
+
 ## Self-maintaining cron (registry → canonical → auto-install, ARMED 23-Jun)
 | What | Path / fact |
 |---|---|

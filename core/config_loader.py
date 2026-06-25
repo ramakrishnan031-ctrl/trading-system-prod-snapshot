@@ -1067,89 +1067,32 @@ class SystemConfig(BaseModel):
     @model_validator(mode="after")
     def _cross_field_sanity_checks(self) -> "SystemConfig":
         """
-        FIX-147: Cross-field sanity validation. Catches operator typos and
-        misconfigurations that individual field validators can't detect.
-        Most are WARNINGS logged at startup, but a genuinely contradictory
-        config that would silently stop ALL trading is a STARTUP-BLOCKING
-        error (BUILD 1 #10) — we fail fast rather than boot into a dead state.
+        Cross-field sanity validation (FIX-147 → BUILD 2, 25-Jun-2026).
+
+        The rules now live in the Config Sanity Auditor (core/config_auditor) — the
+        SINGLE source shared with the 08:30 pre-flight Config Sanity check-group.
+        This model_validator is the STARTUP caller: it runs the config-only group
+        subset (A contradictions, C capital-relative, G cross-field), logs the
+        WARN findings (alert-only), and FAILS FAST on any BLOCK — the BUILD 1 #10
+        force_intraday_only+DELIVERY contradiction — by re-raising it as a
+        ValueError that Pydantic wraps into a ValidationError. Fail fast rather than
+        boot into a silent dead-state. (B single-source, D overrides, E launch-phase
+        and F stale-default need the richer pre-flight context and run there.)
         """
         import logging
+        from core.config_auditor import audit_system_config
+
         log = logging.getLogger("config_sanity")
-        warnings = []
+        report = audit_system_config(self)
 
-        # 0. BUILD 1 (#10, 24-Jun-2026): STARTUP-BLOCKING contradiction.
-        # force_intraday_only rewrites EVERY strategy's intent to INTRADAY (the
-        # MIS-only guarantee). trade_type=DELIVERY then GATES out every INTRADAY
-        # strategy at the entry gate → 0 strategies can ever trade. This is a
-        # silent dead-system footgun, so refuse to boot (fail fast, exit non-zero
-        # via the ValidationError) rather than start and trade nothing.
-        if self.force_intraday_only and self.trade_type == "DELIVERY":
-            raise ValueError(
-                "CONTRADICTORY CONFIG: force_intraday_only=true rewrites all "
-                "strategies to INTRADAY, but trade_type=DELIVERY blocks INTRADAY "
-                "→ 0 strategies would trade. Set force_intraday_only=false to "
-                "trade DELIVERY, or trade_type to INTRADAY/BOTH."
-            )
+        # Fail-fast on contradictions (BLOCK). The joined message carries
+        # "CONTRADICTORY CONFIG" (ConfigContradictionError subclasses ValueError, so
+        # Pydantic wraps it into a ValidationError — preserving the #10 contract).
+        report.raise_if_blocked()
 
-        # BUILD 1 (#2): the old "max_position_value_rs vs daily_loss_limit"
-        # cross-check was REMOVED. Both limits are now pct-of-capital and measure
-        # different things (position VALUE/exposure vs realized LOSS), so the
-        # comparison was apples-to-oranges and would always warn (40% > 3%). The
-        # capital-relative cap is a deliberate bug-guard, not a per-trade loss cap.
-
-        # 2. Risk per trade vs daily loss limit
-        # If 1% risk * 10 positions = 10% loss, check if that exceeds daily limit
-        # (assuming a rough capital estimate from daily_loss_limit / loss_limit_pct)
-        if self.risk.daily_loss_limit_pct < 1.0:  # Only check if not disabled (100%)
-            max_cumulative_risk = self.position_sizing.risk_per_trade_pct * self.risk.max_open_positions
-            if max_cumulative_risk > self.risk.daily_loss_limit_pct * 2:
-                warnings.append(
-                    f"max_open_positions ({self.risk.max_open_positions}) * "
-                    f"risk_per_trade_pct ({self.position_sizing.risk_per_trade_pct:.1%}) = "
-                    f"{max_cumulative_risk:.1%} cumulative risk - "
-                    f"exceeds 2x daily_loss_limit_pct ({self.risk.daily_loss_limit_pct:.1%})"
-                )
-
-        # 3. Entry window sanity
-        # entry_end should be well before eod_squareoff_time
-        from datetime import time as _time
-        def _hhmm(s: str) -> _time:
-            h, m = s.split(":")
-            return _time(int(h), int(m))
-
-        entry_end = _hhmm(self.trading_hours.entry_end)
-        eod_sq = _hhmm(self.trading_hours.eod_squareoff_time)
-        entry_end_mins = entry_end.hour * 60 + entry_end.minute
-        eod_sq_mins = eod_sq.hour * 60 + eod_sq.minute
-
-        if eod_sq_mins - entry_end_mins < 15:
-            warnings.append(
-                f"entry_end ({self.trading_hours.entry_end}) is within 15min of "
-                f"eod_squareoff_time ({self.trading_hours.eod_squareoff_time}) - "
-                f"trades may not have time to hit targets"
-            )
-
-        # 4. Leverage sanity
-        for intent, leverage in [
-            ("INTRADAY", self.capital.leverage_map.INTRADAY),
-            ("COVER_ORDER", self.capital.leverage_map.COVER_ORDER),
-        ]:
-            if leverage > 10:
-                warnings.append(
-                    f"leverage_map.{intent} = {leverage}x seems high - "
-                    f"verify this matches your broker's actual margin"
-                )
-
-        # 5. SL buffer vs min_tick_size
-        if self.position_sizing.min_tick_size < 0.01:
-            warnings.append(
-                f"min_tick_size ({self.position_sizing.min_tick_size}) < 0.01 - "
-                f"may allow micro-fraction SL distances"
-            )
-
-        # Log all warnings
-        for w in warnings:
-            log.warning(f"config_sanity: {w}")
+        # Everything else is alert-only — log each WARN at boot (unchanged behaviour).
+        for finding in report.warns:
+            log.warning("config_sanity: %s", finding.message)
 
         return self
 

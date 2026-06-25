@@ -524,8 +524,8 @@ the entry engine consult this. Update it at year-end / when NSE revises the cale
 - **`/metrics`** → runtime counters incl. the Bug B broker-quota gauges
   (`broker_in_flight`, `broker_filled_today`, `broker_quota_used/max/available`) and the
   signal funnel (`signals_processed`, `entries_placed`, `entries_throttled`, `entries_rejected`).
-  `broker_quota_max` reflects the *effective* daily cap (6 in live test mode) — handy to
-  confirm what the system is actually enforcing.
+  `broker_quota_max` reflects the *effective* daily cap (`risk.max_daily_trades`, now 10
+  — BUILD 1 removed live test mode) — handy to confirm what the system is actually enforcing.
 - **Heartbeats:** every monitored cron emits a heartbeat; `check_cron_drift.py` (18:00) and
   the Cron Officer alert if an expected job goes silent.
 - **System Manager** (`scripts/system_manager.py`, 18:45) runs 8 deep EOD cross-checks
@@ -533,6 +533,55 @@ the entry engine consult this. Update it at year-end / when NSE revises the cale
   vs-yesterday, tomorrow-ready) and can trip tomorrow's SOFT_KILL on a real violation. See
   `[[task_5_system_manager]]`.
 - `clock.probe` / `disk_monitor` (hourly cron) round out health monitoring.
+
+---
+
+## Section 10b: Config Sanity Auditor ⭐ BUILD 2 (25-Jun)
+
+**What it is:** an automatic referee that checks your config makes *sense as a whole*
+(not just that each value is individually valid). It is the enforcement layer of the
+Config Authority work — BUILD 1 cleaned the config, BUILD 2 keeps it clean. It
+**validates and alerts only**; it never changes how trading behaves (the one exception
+is the contradiction BLOCK, which already refused to boot before BUILD 2).
+
+**Where you see it:** the **09:20 pre-flight email + Telegram**, in a section titled
+**Config Sanity** with 7 rows (A–G). It also runs at **startup** — a BLOCK-level
+contradiction stops the app from booting (fail fast, rather than trade nothing silently).
+
+**What each verdict means:**
+- **✅ PASS** — that group is clean.
+- **⚠️ WARN** — boots and trades fine, but something looks off; read it. (e.g. a daily
+  loss limit set above 10%, a slippage override with a typo'd symbol, a deleted key that
+  reappeared in the YAML.)
+- **🔴 BLOCK** — a logical contradiction that would make the system trade *nothing*. The
+  app **refuses to start** until you fix it. Only group A can BLOCK.
+
+**The 7 groups:**
+
+| Row | Checks | Worst verdict |
+|---|---|---|
+| **A — Contradictions** | `force_intraday_only=true` + `trade_type=DELIVERY` (the #10 dead-system guard); trade_type out of domain; "0 strategies would trade" | **BLOCK** |
+| **B — Single-source** | a key BUILD 1 deleted has reappeared (`capital.daily_loss_limit`, `max_position_value_rs`, `live_test_*`, scoring `tier_multipliers`) | WARN |
+| **C — Capital-relative** | pct values in sane ranges + the ladder `max_concentration_pct < max_position_value_pct` (the catastrophe cap must be looser than the routine concentration cap) | WARN |
+| **D — Active overrides** | lists every non-empty slippage override so you SEE what's active each morning; warns on a typo'd/extreme override | INFO/WARN |
+| **E — Launch-phase** | reminds you which params are `[LAUNCH-PHASE]` conservative (today: `entry_start` 10:00) — review as the account scales | INFO |
+| **F — Stale-default** | a component's built-in default has drifted from the YAML (would bite if something is constructed without the config) | WARN |
+| **G — Cross-field** | `entry_end` too close to square-off; leverage > 10×; micro tick size; per-strategy window outside the global one | WARN |
+
+**Sample (the shipped config):**
+```
+Group — Config Sanity  (7/7 ok)
+  A_contradictions   ✅ PASS  no contradictions
+  B_single_source    ✅ PASS  no resurrected deleted keys
+  C_capital_relative ✅ PASS  caps sane (loss 3% <= 10%, conc 10% < pos-cap 40%, risk/trade 1%)
+  D_active_overrides  ✅ PASS  no active slippage overrides — pure global fraction everywhere
+  E_launch_phase      ✅ PASS  entry_start=10:00 [LAUNCH-PHASE] — relax toward 09:20 as the account scales
+  F_stale_defaults    ✅ PASS  component defaults match config intent
+  G_cross_field       ⚠️ WARN  entry_end (15:15) within 15min of eod_squareoff_time (15:17)
+```
+The lone WARN (G) is intentional and long-standing — `entry_end` and square-off are 2
+minutes apart by design. **Code:** `core/config_auditor.py` (rules),
+`scripts/preflight/checks/config_sanity.py` (the 7 rows). No DB schema; same in paper + live.
 
 ---
 

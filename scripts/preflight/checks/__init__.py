@@ -13,6 +13,7 @@ from scripts.preflight.base import Check
 from scripts.preflight.checks import (
     broker,
     config_integrity,
+    config_sanity,
     database,
     engine,
     recovery,
@@ -32,6 +33,7 @@ def phase_a_checks() -> List[Check]:
         *database.CHECKS,
         *broker.CHECKS,
         *config_integrity.CHECKS,
+        *config_sanity.CHECKS,    # BUILD 2: Config Sanity Auditor (groups A-G)
         *state.CHECKS,
         *security.CHECKS,
         *recovery.CHECKS,

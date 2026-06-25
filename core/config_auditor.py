@@ -1,0 +1,611 @@
+"""
+core/config_auditor.py — BUILD 2 (25-Jun-2026): the Config Sanity Auditor.
+
+The enforcement capstone of the Config Authority work. BUILD 1 CLEANED the config
+(single daily-loss source, capital-relative position cap, dead-config cleanup);
+BUILD 2 ENFORCES it stays clean and surfaces violations.
+
+ONE rule engine, two callers (single source of truth — no rule lives twice):
+
+  * STARTUP  — core/config_loader.SystemConfig._cross_field_sanity_checks() calls
+               audit_system_config() with the config-only subset of groups. It logs
+               WARN/INFO findings and raises (fail-fast) on any BLOCK. The #10
+               force_intraday_only+DELIVERY contradiction now lives HERE.
+  * PRE-FLIGHT — scripts/preflight/checks/config_sanity.py calls audit_app_config()
+               with the FULL context (capital + strategies + symbols + raw YAML) and
+               renders the per-group PASS/WARN/BLOCK report into the 08:30 Phase-A
+               check-set → the 09:20 email + Telegram.
+
+DESIGN PRINCIPLE: VALIDATE + ALERT only. The auditor never changes trading
+behaviour. The only hard action is the BLOCK-level contradiction gate, which already
+existed (BUILD 1 #10) and is merely re-homed here. Pure + dependency-light at module
+top (heavy imports are deferred inside the groups that need them) so the startup path
+can call it on every load_all() without cost or import-cycle risk.
+
+Check groups (each finding is PASS / INFO / WARN / BLOCK with a clear message):
+  A. Contradictions ......... logically-dead configs (BLOCK) + pointless ones (WARN)
+  B. Single-source integrity . regression guards: a deleted key reappearing (WARN)
+  C. Capital-relative sanity . pct ranges + the concentration<position-cap ladder (WARN)
+  D. Active-override listing .. T3 visibility of every non-empty override (INFO/WARN)
+  E. Launch-phase reminders ... params anchored to early-live caution (INFO)
+  F. Stale-default guard ...... component constructor defaults vs config intent (WARN)
+  G. Cross-field sanity ....... timing/leverage/tick cross-checks (WARN)
+"""
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Finding / report model
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Severity(enum.Enum):
+    """How loud a single finding is. Ordered worst-last for rollups."""
+    PASS = "PASS"
+    INFO = "INFO"
+    WARN = "WARN"
+    BLOCK = "BLOCK"
+
+
+_SEV_RANK = {Severity.PASS: 0, Severity.INFO: 1, Severity.WARN: 2, Severity.BLOCK: 3}
+
+# Group code -> human title (the report sections, and the pre-flight check names).
+GROUP_TITLES: Dict[str, str] = {
+    "A": "Contradictions",
+    "B": "Single-source integrity",
+    "C": "Capital-relative sanity",
+    "D": "Active overrides",
+    "E": "Launch-phase reminders",
+    "F": "Stale-default guard",
+    "G": "Cross-field sanity",
+}
+GROUP_ORDER = "ABCDEFG"
+
+
+class ConfigContradictionError(ValueError):
+    """Raised by ConfigAuditReport.raise_if_blocked(). Subclasses ValueError so a
+    Pydantic model_validator that lets it propagate is wrapped into a
+    ValidationError exactly like a plain ValueError (preserves the BUILD 1 #10
+    `pytest.raises(ValidationError, match="CONTRADICTORY CONFIG")` contract)."""
+
+
+@dataclass(frozen=True)
+class AuditFinding:
+    group: str                       # one of GROUP_ORDER
+    code: str                        # stable id, e.g. "A1_force_intraday_delivery"
+    severity: Severity
+    message: str
+    metrics: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def group_title(self) -> str:
+        return GROUP_TITLES.get(self.group, self.group)
+
+
+@dataclass
+class ConfigAuditReport:
+    findings: List[AuditFinding] = field(default_factory=list)
+
+    # ── filters ──────────────────────────────────────────────────────────────
+    def by_severity(self, sev: Severity) -> List[AuditFinding]:
+        return [f for f in self.findings if f.severity is sev]
+
+    @property
+    def blocks(self) -> List[AuditFinding]:
+        return self.by_severity(Severity.BLOCK)
+
+    @property
+    def warns(self) -> List[AuditFinding]:
+        return self.by_severity(Severity.WARN)
+
+    @property
+    def infos(self) -> List[AuditFinding]:
+        return self.by_severity(Severity.INFO)
+
+    def for_group(self, group: str) -> List[AuditFinding]:
+        return [f for f in self.findings if f.group == group]
+
+    def worst_in_group(self, group: str) -> Severity:
+        fs = self.for_group(group)
+        if not fs:
+            return Severity.PASS
+        return max((f.severity for f in fs), key=lambda s: _SEV_RANK[s])
+
+    # ── rollups ──────────────────────────────────────────────────────────────
+    @property
+    def verdict(self) -> str:
+        if self.blocks:
+            return "BLOCK"
+        if self.warns:
+            return "WARN"
+        return "PASS"
+
+    @property
+    def actionable(self) -> List[AuditFinding]:
+        """BLOCK + WARN findings (what the operator must read)."""
+        return [f for f in self.findings if f.severity in (Severity.BLOCK, Severity.WARN)]
+
+    def one_line(self) -> str:
+        """Compact verdict for a pre-flight check `detail` / log line."""
+        if self.verdict == "PASS":
+            n_info = len(self.infos)
+            tail = f" ({n_info} info)" if n_info else ""
+            return f"Config sanity: PASS{tail}"
+        items = "; ".join(f"{f.group}:{f.message}" for f in self.actionable[:6])
+        if self.blocks:
+            return f"Config sanity: BLOCK ({len(self.blocks)}) — {items}"
+        return f"Config sanity: {len(self.warns)} warning(s) — {items}"
+
+    def raise_if_blocked(self) -> None:
+        """Fail-fast gate for the startup path. Raises ConfigContradictionError
+        (a ValueError) carrying every BLOCK message joined."""
+        if self.blocks:
+            raise ConfigContradictionError(" | ".join(f.message for f in self.blocks))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Launch-phase registry (group E). The [LAUNCH-PHASE] tag lives in system_config.yaml
+# comments; we encode the INTENT here (the single machine-readable home) rather than
+# parse comments. Add a row when a param is tagged [LAUNCH-PHASE] in the YAML.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class _LaunchParam:
+    path: str
+    getter: Callable[[Any], Any]
+    note: str
+
+
+LAUNCH_PHASE_PARAMS: tuple[_LaunchParam, ...] = (
+    _LaunchParam(
+        path="trading_hours.entry_start",
+        getter=lambda sc: sc.trading_hours.entry_start,
+        note="conservative early-live start (avoids opening-hour volatility); "
+             "relax toward 09:20 as capital/confidence grows",
+    ),
+)
+
+# Stale-default guard registry (group F). Each row asserts a component constructor's
+# DEFAULT still matches config intent — BUILD 1 aligned these; a future edit that
+# changes the YAML but not the code default (or vice-versa) would make a component
+# built without explicit config silently diverge.
+_STALE_DEFAULT_GUARDS: tuple[tuple[str, str, str, Callable[[Any], Any]], ...] = (
+    ("capital.position_sizer", "PositionSizer", "max_position_value_pct",
+     lambda sc: sc.position_sizing.max_position_value_pct),
+    ("capital.fund_manager", "FundManager", "daily_loss_limit_pct",
+     lambda sc: sc.risk.daily_loss_limit_pct),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Group implementations — each returns a list[AuditFinding]
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _group_a_contradictions(sc: Any, strategies: Optional[dict]) -> List[AuditFinding]:
+    """Logically-contradictory configs. The hard ones BLOCK (fail-fast); the
+    'valid but pointless' ones WARN."""
+    out: List[AuditFinding] = []
+
+    # A1 — BUILD 1 #10: force_intraday_only rewrites every strategy to INTRADAY (the
+    # MIS-only guarantee); trade_type=DELIVERY then gates out every INTRADAY strategy
+    # → 0 strategies could ever trade. Silent dead-system footgun → BLOCK.
+    # NB: the message MUST contain "CONTRADICTORY CONFIG" (startup test contract).
+    if getattr(sc, "force_intraday_only", False) and getattr(sc, "trade_type", None) == "DELIVERY":
+        out.append(AuditFinding(
+            "A", "A1_force_intraday_delivery", Severity.BLOCK,
+            "CONTRADICTORY CONFIG: force_intraday_only=true rewrites all strategies "
+            "to INTRADAY, but trade_type=DELIVERY blocks INTRADAY -> 0 strategies "
+            "would trade. Set force_intraday_only=false to trade DELIVERY, or "
+            "trade_type to INTRADAY/BOTH.",
+        ))
+
+    # A2 — belt-and-suspenders: trade_type out of domain. The Pydantic field
+    # validator blocks this first; this only fires if the schema is bypassed.
+    tt = getattr(sc, "trade_type", None)
+    if tt not in ("INTRADAY", "DELIVERY", "BOTH"):
+        out.append(AuditFinding(
+            "A", "A2_trade_type_domain", Severity.BLOCK,
+            f"CONTRADICTORY CONFIG: trade_type={tt!r} is not one of "
+            "INTRADAY/DELIVERY/BOTH.",
+        ))
+
+    # A3 — strategy-dependent: would ANY strategy trade today? trade_type +
+    # force_intraday_only + per-strategy enabled/intent can combine to silence the
+    # whole book (e.g. trade_type=DELIVERY with every delivery strategy disabled).
+    # Valid but pointless → WARN (only when not already blocked above and strategies
+    # are available).
+    if strategies and not out:
+        try:
+            from strategies.control import strategy_will_trade
+            fio = bool(getattr(sc, "force_intraday_only", False))
+            will = [n for n, s in strategies.items()
+                    if strategy_will_trade(s, trade_type=tt, force_intraday_only=fio).will_trade]
+            if not will:
+                out.append(AuditFinding(
+                    "A", "A3_zero_strategies_trade", Severity.WARN,
+                    f"trade_type={tt} + force_intraday_only={fio} + the current "
+                    f"per-strategy enabled/intent leave 0 of {len(strategies)} "
+                    "strategies able to trade — valid but the book is silent.",
+                    metrics={"will_trade_count": 0, "strategy_count": len(strategies)},
+                ))
+        except Exception:  # noqa: BLE001 — strategy probe must never break the audit
+            pass
+
+    if not out:
+        out.append(AuditFinding("A", "A_ok", Severity.PASS, "no contradictions"))
+    return out
+
+
+def _group_b_single_source(raw_system: Optional[dict],
+                           raw_scoring: Optional[dict]) -> List[AuditFinding]:
+    """Regression guards: a key BUILD 1 deleted reappearing in the YAML would
+    resurrect a killed conflict. extra='forbid' already HARD-FAILS a reappearance
+    that is not also re-added to the schema; this WARN catches the subtler case where
+    a future dev re-adds it to BOTH yaml and schema. Needs the raw YAML (the model
+    cannot see stripped keys), so it runs in the pre-flight context only."""
+    out: List[AuditFinding] = []
+    if raw_system is None:
+        return out  # no raw yaml (startup path) → nothing to regression-guard
+
+    cap = (raw_system.get("capital") or {})
+    pos = (raw_system.get("position_sizing") or {})
+    risk = (raw_system.get("risk") or {})
+
+    if "daily_loss_limit" in cap:
+        out.append(AuditFinding(
+            "B", "B1_daily_loss_limit_resurrected", Severity.WARN,
+            "capital.daily_loss_limit reappeared — BUILD 1 deleted it; "
+            "daily_loss_limit_pct (risk:) is the SOLE daily-loss authority. "
+            "Remove the absolute Rs key.",
+        ))
+    if "max_position_value_rs" in pos:
+        out.append(AuditFinding(
+            "B", "B2_max_position_value_rs_resurrected", Severity.WARN,
+            "position_sizing.max_position_value_rs reappeared — BUILD 1 replaced it "
+            "with the capital-relative max_position_value_pct. Remove the Rs key.",
+        ))
+    live_test = sorted(k for k in risk if str(k).startswith("live_test"))
+    if live_test:
+        out.append(AuditFinding(
+            "B", "B3_live_test_mode_resurrected", Severity.WARN,
+            f"risk.{{{', '.join(live_test)}}} reappeared — BUILD 1 deleted the "
+            "live_test_* overrides; the base caps are the sole authority in both modes.",
+        ))
+    if raw_scoring is not None and "tier_multipliers" in (raw_scoring or {}):
+        out.append(AuditFinding(
+            "B", "B4_tier_multipliers_duplicated", Severity.WARN,
+            "scoring_weights.yaml has tier_multipliers — they belong ONLY under "
+            "system_config.position_sizing. Remove the scoring duplicate.",
+        ))
+
+    if not out:
+        out.append(AuditFinding(
+            "B", "B_ok", Severity.PASS,
+            "no resurrected deleted keys (daily_loss_limit / max_position_value_rs / "
+            "live_test_* / scoring tier_multipliers)"))
+    return out
+
+
+def _group_c_capital_relative(sc: Any) -> List[AuditFinding]:
+    """Capital-relative sanity. The bug-guard cap MUST be looser than the routine
+    concentration cap, else it would bind on normal trades. pct values must sit in
+    sane ranges (a 50% daily-loss limit is a config error, not a limit)."""
+    out: List[AuditFinding] = []
+    ps = sc.position_sizing
+    rk = sc.risk
+
+    # C1 — daily loss limit a sane fraction (schema allows up to 1.0; >10% is almost
+    # certainly a typo for a daily limit).
+    dll = rk.daily_loss_limit_pct
+    if not (0 < dll <= 0.10):
+        out.append(AuditFinding(
+            "C", "C1_daily_loss_pct_range", Severity.WARN,
+            f"daily_loss_limit_pct={dll:.1%} is outside the sane 0–10% band "
+            "(a daily loss limit above ~10% of capital is likely a config error).",
+            metrics={"daily_loss_limit_pct": dll}))
+
+    # C2 — the ladder: concentration ≤ position-value cap. The catastrophic-loss cap
+    # is a BACKSTOP; if it is ≤ the routine concentration cap it would fire before
+    # concentration ever binds (wrong — it must be the looser, outer rail).
+    conc = ps.max_concentration_pct
+    posv = ps.max_position_value_pct
+    if posv <= conc:
+        out.append(AuditFinding(
+            "C", "C2_position_cap_not_looser", Severity.WARN,
+            f"max_position_value_pct ({posv:.0%}) must be LOOSER than "
+            f"max_concentration_pct ({conc:.0%}); as set the catastrophic-loss "
+            "backstop would bind before routine concentration sizing.",
+            metrics={"max_position_value_pct": posv, "max_concentration_pct": conc}))
+
+    # C3 — risk per trade a sane fraction.
+    rpt = ps.risk_per_trade_pct
+    if not (0 < rpt <= 0.05):
+        out.append(AuditFinding(
+            "C", "C3_risk_per_trade_range", Severity.WARN,
+            f"risk_per_trade_pct={rpt:.1%} is outside the sane 0–5% band.",
+            metrics={"risk_per_trade_pct": rpt}))
+
+    # C4 — risk per trade should not exceed the per-symbol concentration cap.
+    if rpt > conc:
+        out.append(AuditFinding(
+            "C", "C4_risk_exceeds_concentration", Severity.WARN,
+            f"risk_per_trade_pct ({rpt:.0%}) exceeds max_concentration_pct "
+            f"({conc:.0%}) — a single trade's risk budget is larger than the "
+            "per-symbol exposure cap.",
+            metrics={"risk_per_trade_pct": rpt, "max_concentration_pct": conc}))
+
+    # C5 — cumulative open risk vs the daily loss limit (was the BUILD 1 cross-field
+    # warn). Only meaningful when the daily limit is not effectively disabled (100%).
+    if dll < 1.0:
+        max_cum = rpt * rk.max_open_positions
+        if max_cum > dll * 2:
+            out.append(AuditFinding(
+                "C", "C5_cumulative_risk_vs_daily_loss", Severity.WARN,
+                f"max_open_positions ({rk.max_open_positions}) x risk_per_trade_pct "
+                f"({rpt:.1%}) = {max_cum:.1%} cumulative risk — exceeds 2x "
+                f"daily_loss_limit_pct ({dll:.1%}).",
+                metrics={"cumulative_risk": max_cum}))
+
+    if not out:
+        out.append(AuditFinding(
+            "C", "C_ok", Severity.PASS,
+            f"capital-relative caps sane (loss {dll:.0%} <= 10%, conc {conc:.0%} < "
+            f"pos-cap {posv:.0%}, risk/trade {rpt:.0%})"))
+    return out
+
+
+def _group_d_active_overrides(sc: Any, known_symbols: Optional[set],
+                              known_strategies: Optional[set]) -> List[AuditFinding]:
+    """T3 visibility: list every NON-EMPTY slippage override so Rama SEES active
+    overrides each morning (and never forgets a symbol override that has drifted
+    from the global). Reuses orders.order_placer.validate_slippage_overrides for the
+    typo/extreme WARNs (single source — not reimplemented)."""
+    out: List[AuditFinding] = []
+    try:
+        ov = sc.entry_gate.slippage_control.overrides
+    except Exception:  # noqa: BLE001
+        return [AuditFinding("D", "D_unavailable", Severity.INFO,
+                             "slippage overrides not present in this config")]
+
+    maps = {
+        "by_symbol": dict(getattr(ov, "by_symbol", {}) or {}),
+        "by_strategy": dict(getattr(ov, "by_strategy", {}) or {}),
+        "by_price_band": dict(getattr(ov, "by_price_band", {}) or {}),
+    }
+    active = {k: v for k, v in maps.items() if v}
+    enabled = bool(getattr(ov, "enabled", False))
+
+    if not active:
+        out.append(AuditFinding(
+            "D", "D_none", Severity.INFO,
+            "no active slippage overrides — pure global fraction everywhere"))
+    else:
+        parts = [f"{k}={v}" for k, v in active.items()]
+        state = "enabled" if enabled else "DISABLED (maps ignored)"
+        out.append(AuditFinding(
+            "D", "D_active", Severity.INFO,
+            f"active slippage overrides [{state}]: " + "; ".join(parts),
+            metrics={"active": active, "enabled": enabled}))
+
+    # typo / extreme warnings (reused validator)
+    try:
+        from orders.order_placer import validate_slippage_overrides
+        for w in validate_slippage_overrides(ov, known_symbols, known_strategies):
+            out.append(AuditFinding("D", "D_override_warn", Severity.WARN, w))
+    except Exception:  # noqa: BLE001 — validator import/use must never break the audit
+        pass
+    return out
+
+
+def _group_e_launch_phase(sc: Any) -> List[AuditFinding]:
+    """Surface [LAUNCH-PHASE]-tagged params with a review reminder (INFO)."""
+    out: List[AuditFinding] = []
+    for p in LAUNCH_PHASE_PARAMS:
+        try:
+            val = p.getter(sc)
+        except Exception:  # noqa: BLE001
+            continue
+        out.append(AuditFinding(
+            "E", f"E_{p.path.replace('.', '_')}", Severity.INFO,
+            f"{p.path}={val} [LAUNCH-PHASE] — {p.note}",
+            metrics={"path": p.path, "value": val}))
+    if not out:
+        out.append(AuditFinding("E", "E_none", Severity.INFO, "no launch-phase params"))
+    return out
+
+
+def _group_f_stale_default(sc: Any) -> List[AuditFinding]:
+    """Guard that BUILD-1-aligned component constructor DEFAULTS still match config
+    intent. A component built without explicit config (a default-arg call) that
+    diverges from the YAML is a silent footgun → WARN. Deferred imports + fully
+    guarded (introspection must never break the audit)."""
+    import inspect
+
+    out: List[AuditFinding] = []
+    import importlib
+    for module_path, cls_name, param, getter in _STALE_DEFAULT_GUARDS:
+        try:
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, cls_name)
+            default = inspect.signature(cls.__init__).parameters[param].default
+            cfg_val = getter(sc)
+        except Exception:  # noqa: BLE001 — never crash on a refactor / missing attr
+            continue
+        if default is inspect.Parameter.empty:
+            continue
+        if default != cfg_val:
+            out.append(AuditFinding(
+                "F", f"F_{cls_name}_{param}", Severity.WARN,
+                f"{cls_name}.__init__ default {param}={default} diverges from config "
+                f"{param}={cfg_val} — a {cls_name} built without explicit config "
+                "would use the stale default.",
+                metrics={"component": cls_name, "param": param,
+                         "default": default, "config": cfg_val}))
+    if not out:
+        out.append(AuditFinding(
+            "F", "F_ok", Severity.PASS,
+            "component defaults match config intent (position-value cap + daily-loss pct)"))
+    return out
+
+
+def _group_g_cross_field(sc: Any, strategies: Optional[dict]) -> List[AuditFinding]:
+    """Cross-field sanity that no single-field validator can catch (operator typos)."""
+    from datetime import time as _time
+
+    def _hhmm(s: str) -> _time:
+        h, m = str(s).split(":")
+        return _time(int(h), int(m))
+
+    out: List[AuditFinding] = []
+    th = sc.trading_hours
+
+    # G1 — entry window has time to work before square-off.
+    entry_end = _hhmm(th.entry_end)
+    eod = _hhmm(th.eod_squareoff_time)
+    gap = (eod.hour * 60 + eod.minute) - (entry_end.hour * 60 + entry_end.minute)
+    if gap < 15:
+        out.append(AuditFinding(
+            "G", "G1_entry_end_near_squareoff", Severity.WARN,
+            f"entry_end ({th.entry_end}) is within 15min of eod_squareoff_time "
+            f"({th.eod_squareoff_time}) - trades may not have time to hit targets",
+            metrics={"gap_minutes": gap}))
+
+    # G2 — leverage sanity.
+    lev = sc.capital.leverage_map
+    for intent, value in (("INTRADAY", lev.INTRADAY), ("COVER_ORDER", lev.COVER_ORDER)):
+        if value > 10:
+            out.append(AuditFinding(
+                "G", f"G2_leverage_{intent}", Severity.WARN,
+                f"leverage_map.{intent} = {value}x seems high - verify this matches "
+                "your broker's actual margin",
+                metrics={"intent": intent, "leverage": value}))
+
+    # G3 — micro tick size.
+    mts = sc.position_sizing.min_tick_size
+    if mts < 0.01:
+        out.append(AuditFinding(
+            "G", "G3_min_tick_size", Severity.WARN,
+            f"min_tick_size ({mts}) < 0.01 - may allow micro-fraction SL distances",
+            metrics={"min_tick_size": mts}))
+
+    # G5 — per-strategy entry window within the global envelope (when strategies are
+    # available and expose a window). Defensive getattr — strategies may not declare one.
+    if strategies:
+        g_start = _hhmm(th.entry_start)
+        g_end = _hhmm(th.entry_end)
+        for name, s in strategies.items():
+            ss = getattr(s, "entry_start", None)
+            se = getattr(s, "entry_end", None)
+            try:
+                if ss is not None and _hhmm(ss) < g_start:
+                    out.append(AuditFinding(
+                        "G", f"G5_window_{name}", Severity.WARN,
+                        f"strategy {name} entry_start ({ss}) is before the global "
+                        f"entry_start ({th.entry_start})"))
+                if se is not None and _hhmm(se) > g_end:
+                    out.append(AuditFinding(
+                        "G", f"G5_window_{name}", Severity.WARN,
+                        f"strategy {name} entry_end ({se}) is after the global "
+                        f"entry_end ({th.entry_end})"))
+            except Exception:  # noqa: BLE001
+                continue
+
+    if not out:
+        out.append(AuditFinding("G", "G_ok", Severity.PASS, "cross-field timing/leverage/tick sane"))
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def audit(
+    system: Any,
+    *,
+    raw_system_yaml: Optional[dict] = None,
+    raw_scoring_yaml: Optional[dict] = None,
+    strategies: Optional[dict] = None,
+    known_symbols: Optional[set] = None,
+    known_strategies: Optional[set] = None,
+    capital: Optional[float] = None,   # reserved: ₹ rendering by callers
+    groups: str = GROUP_ORDER,
+) -> ConfigAuditReport:
+    """Run the requested check groups against a SystemConfig (duck-typed).
+
+    `groups` is a string of group letters to run (default all A-G). Callers with
+    limited context pass a subset (the startup path runs ACEG; pre-flight runs all).
+    """
+    findings: List[AuditFinding] = []
+    if "A" in groups:
+        findings += _group_a_contradictions(system, strategies)
+    if "B" in groups:
+        findings += _group_b_single_source(raw_system_yaml, raw_scoring_yaml)
+    if "C" in groups:
+        findings += _group_c_capital_relative(system)
+    if "D" in groups:
+        findings += _group_d_active_overrides(system, known_symbols, known_strategies)
+    if "E" in groups:
+        findings += _group_e_launch_phase(system)
+    if "F" in groups:
+        findings += _group_f_stale_default(system)
+    if "G" in groups:
+        findings += _group_g_cross_field(system, strategies)
+    return ConfigAuditReport(findings=findings)
+
+
+# Startup subset: the groups computable from the SystemConfig alone, with no external
+# context and no heavy imports. A=contradictions (BLOCK gate), C=capital-relative
+# (WARN), G=cross-field (WARN). B/D/F need pre-flight context; E (launch-phase
+# reminders) is a periodic nudge that belongs in the 09:20 pre-flight email, not every
+# process boot — so the startup boot-log stays exactly as it is today.
+STARTUP_GROUPS = "ACG"
+
+
+def audit_system_config(system: Any, *, groups: str = STARTUP_GROUPS) -> ConfigAuditReport:
+    """The startup-path entry point. Called by SystemConfig._cross_field_sanity_checks
+    on every load_all(); pure + cheap. The caller logs the WARN/INFO findings and
+    calls raise_if_blocked()."""
+    return audit(system, groups=groups)
+
+
+def audit_app_config(
+    app_config: Any,
+    *,
+    config_dir: Optional[Any] = None,
+    strategies: Optional[dict] = None,
+    known_symbols: Optional[set] = None,
+    capital: Optional[float] = None,
+    groups: str = GROUP_ORDER,
+) -> ConfigAuditReport:
+    """The pre-flight entry point. Pulls the SystemConfig from a loaded AppConfig and
+    (when config_dir is given) the raw YAML needed by the single-source regression
+    guards (group B). `strategies` keys feed the override typo-check + group A3."""
+    raw_system = raw_scoring = None
+    if config_dir is not None:
+        raw_system = _safe_load_yaml(config_dir, "system_config.yaml")
+        raw_scoring = _safe_load_yaml(config_dir, "scoring_weights.yaml")
+    known_strategies = set(strategies.keys()) if strategies else None
+    return audit(
+        app_config.system,
+        raw_system_yaml=raw_system,
+        raw_scoring_yaml=raw_scoring,
+        strategies=strategies,
+        known_symbols=known_symbols,
+        known_strategies=known_strategies,
+        capital=capital,
+        groups=groups,
+    )
+
+
+def _safe_load_yaml(config_dir: Any, filename: str) -> Optional[dict]:
+    try:
+        import yaml
+        from pathlib import Path
+        path = Path(config_dir) / filename
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001 — raw read is best-effort; group B simply skips
+        return None
