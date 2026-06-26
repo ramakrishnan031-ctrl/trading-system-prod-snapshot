@@ -113,7 +113,7 @@ P2 = durability + safety (schema v36 `gtt_state`, reconcile, GTT_EXIT, 15-min mo
 | SHARED (untouched) | `max_concentration_pct` (position_sizer, total-relative), SECTOR_EXPOSURE, `max_position_value_pct`, the whole intraday cap path |
 | Tests | `tests/unit/test_phase3_delivery_caps_conditional_capital.py` (17: allocation cases + dormancy + delivery caps + ★inertness + ★MIS-regression + no-borrow) |
 
-INERT by construction: flag default false → 70/30 unchanged; force_intraday_only=true coerces every strategy to intent=INTRADAY → bucket=intraday → delivery cap branch never hit + delivery counts 0. No schema; parity. 3854 unit tests / 0 regressions. branch `phase3-delivery-caps-conditional-capital-26jun`, **NOT deployed** (Rama owns; likely batched with Phase 4). Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase3_delivery_caps_conditional_capital_26jun`.
+INERT by construction: flag default false → 70/30 unchanged; force_intraday_only=true coerces every strategy to intent=INTRADAY → bucket=intraday → delivery cap branch never hit + delivery counts 0. No schema; parity. 3854 unit tests / 0 regressions. **DEPLOYED to main `37b3db3` 26-Jun ~13:16 (one-time authorized batch w/ FIX-183-log + Phase 4; rule restored; Muharram holiday self-exit, real boot Mon 08:15; verified DORMANT — fixed 70/30, caps inert).** Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase3_delivery_caps_conditional_capital_26jun`.
 
 ## Delivery (CNC) — SLICE2.5-PHASE-4 (26-Jun): trade_type reject-by-intent gate (CONFIRM + label split)
 | What | Location |
@@ -123,7 +123,7 @@ INERT by construction: flag default false → 70/30 unchanged; force_intraday_on
 | Tests | `tests/unit/test_phase4_trade_type_gate.py` (9: cause-per-layer, reason-unchanged guard, go-live matrix, ★dormancy, ★label split, ★label-bleed, contradictory-combo Auditor BLOCK) |
 | Option B (declared-intent gating) | **PARKED** — would stop the 3 live `positional_*` declared-DELIVERY strategies (trade as coerced-intraday today); a strategy/perf decision, `strategy.enabled` is the cleaner mechanism. Declared intent recoverable via `scripts/strategy_status.py:74` (raw `validate_strategy`), not on the loaded object |
 
-Dormant (INTRADAY+force=true → coerced → accept → split never fires). No schema; parity. 3863 unit tests / 0 regressions. branch `phase4-trade-type-gate-26jun`, **NOT deployed** (Rama owns; one push carries FIX-183-log + Phase 3 + Phase 4). **Completes the Slice 2.5 build side**; next = T2 + C1-watch. Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase4_trade_type_gate_26jun`.
+Dormant (INTRADAY+force=true → coerced → accept → split never fires). No schema; parity. 3863 unit tests / 0 regressions. **DEPLOYED to main `37b3db3` 26-Jun ~13:16 (one-time authorized batch w/ FIX-183-log + Phase 3; rule restored; Muharram holiday self-exit, real boot Mon 08:15; verified DORMANT — gate no-op, Auditor 0 BLOCK).** **Completes the Slice 2.5 build side**; next = T2 + C1-watch. Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase4_trade_type_gate_26jun`.
 
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
