@@ -533,6 +533,24 @@ class OrderReconciler:
             except Exception as exc:  # noqa: BLE001 — never kill the poll thread
                 self._log.error("cnc_gtt_monitor.reconcile failed: %s", exc)
 
+    def _run_gtt_adoption_prepass(self) -> None:
+        """FIX-183: run the CncGttMonitor orphan-GTT adoption pass as a NARROW
+        prepass at the top of every reconcile cycle, so an adopted gtt_state row
+        excludes its carried CNC trade from CHECK1 before CHECK1 can mis-close it
+        (the C2.1 gap). No-op when no monitor is wired. Never raises — a prepass
+        failure must not stop the reconcile's own safety checks from running.
+
+        This is the ONLY safe placement for both paths: startup runs reconcile_once()
+        (order_reconciler.start) and the 15-min poll runs reconcile_once() before the
+        monitor's own reconcile() — so adopting inside reconcile_once (here) precedes
+        its CHECK1 in BOTH, without reordering the existing MIS-path checks."""
+        if self._cnc_gtt_monitor is None:
+            return
+        try:
+            self._cnc_gtt_monitor.adopt_orphan_gtts()
+        except Exception as exc:  # noqa: BLE001 — prepass must never break the cycle
+            self._log.error("cnc_gtt adoption prepass failed: %s", exc)
+
     def _note_auth_error(self, cycle_errors: list) -> None:
         """Record a BrokerAuthError occurrence within the current cycle."""
         cycle_errors.append(1)
@@ -650,6 +668,14 @@ class OrderReconciler:
         """
         actions: List[ReconciliationAction] = []
         cycle_auth_errors: list = []   # RC12: track per-cycle, not per-call
+
+        # FIX-183: ORPHAN-GTT ADOPTION PREPASS — reconstruct any live broker GTT
+        # that has no gtt_state row and correlate it to its open delivery trade,
+        # BEFORE the delivery-exclusion build + CHECK1 below. Closes C2.1: a carried
+        # row-less CNC GTT would otherwise be mis-marked CLOSED_MANUAL by CHECK1 (its
+        # holding lives in holdings(), not positions(), so bp is None). Narrow +
+        # fail-safe: never crashes the cycle, only ever inserts a row or WARNs.
+        self._run_gtt_adoption_prepass()
 
         # ── Fetch broker positions (needed by checks 1-5) ──────────────────
         raw_positions = None

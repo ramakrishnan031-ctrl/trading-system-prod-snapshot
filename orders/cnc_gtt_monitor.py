@@ -72,6 +72,12 @@ class CncGttMonitor:
         # Y1: trades whose GTT was found missing PRE-OPEN, queued to recreate on the
         # FIRST in-hours cycle. spec keyed by trade_id -> recreate spec.
         self._preopen_queue: Dict[str, dict] = {}
+        # FIX-183: gtt_ids already WARNED about as an UNADOPTABLE orphan (0 / >1 open
+        # delivery trades, trade already protected, or unreadable). The adoption
+        # prepass runs every reconcile cycle (~15s) — alert ONCE per gtt_id per
+        # process so it never spams (esp. for benign human GTTs that match the
+        # 0-trades case). Mirrors the reconciler's FIX-182 once-per-symbol discipline.
+        self._adopt_warned: set = set()
         self._lock = threading.Lock()
 
     # ── public ──────────────────────────────────────────────────────────────
@@ -115,6 +121,161 @@ class CncGttMonitor:
         # Step 5: orphan sweep + 50-cap guard (operates on the broker GTT list).
         actions.extend(self._orphan_sweep_and_cap(broker_gtts, rows))
         return actions
+
+    # ── FIX-183: orphan-GTT ADOPTION (reconcile_once prepass) ───────────────────
+    def adopt_orphan_gtts(self) -> List[str]:
+        """Reconstruct any LIVE broker GTT (status 'active') that has NO gtt_state
+        row, correlating it to its open delivery trade — restoring the locked
+        "broker GTT = authority, gtt_state = self-healing mirror" principle.
+
+        Wired as a NARROW prepass at the top of order_reconciler._reconcile() so an
+        adopted row excludes the carried CNC trade from CHECK1 BEFORE CHECK1 can
+        mis-mark it CLOSED_MANUAL (the C2.1 gap: a carried holding lives in
+        holdings(), not positions(), so the reconciler's bp is None).
+
+        Adoption ONLY ever INSERTs a gtt_state row or WARNs — it NEVER deletes a
+        live GTT and never touches an intraday position. Fail-safe: a broker gather
+        failure defers (never crashes, never treats no-data as no-GTTs). Parity:
+        paper get_gtts() returns the identical dict shape. Returns action labels."""
+        try:
+            gtts = self._adapter.get_gtts() or []
+        except Exception as exc:  # noqa: BLE001 — broker down -> skip this prepass
+            self._log.error("cnc_gtt_adoption: get_gtts failed: %s", exc)
+            return ["adopt_deferred:broker_unavailable"]
+
+        out: List[str] = []
+        delivery_by_symbol: Optional[Dict[str, list]] = None  # lazy (only if needed)
+
+        for g in gtts:
+            if not isinstance(g, dict):
+                continue
+            if str(g.get("status", "")).lower() != "active":
+                continue  # only LIVE protection is adoptable (not triggered/cancelled/…)
+            gid = g.get("id")
+            if gid is None:
+                continue
+            if self._store.get_gtt_state_by_id(gid) is not None:
+                continue  # already tracked (any status) — not an orphan
+
+            recon = self._reconstruct_from_broker_gtt(g)
+            if recon is None:
+                out.append(self._warn_adopt_once(
+                    gid, f"adopt_unreadable:{gid}",
+                    "GTT adoption skipped — unreadable GTT",
+                    f"Active broker GTT {gid} has no parseable OCO legs/triggers; "
+                    f"left alone (no gtt_state row created)."))
+                continue
+            symbol = recon["symbol"]
+
+            if delivery_by_symbol is None:
+                delivery_by_symbol = self._delivery_open_trades_by_symbol()
+            candidates = delivery_by_symbol.get(symbol, [])
+
+            if len(candidates) == 0:
+                out.append(self._warn_adopt_once(
+                    gid, f"adopt_no_trade:{symbol}",
+                    f"Orphan GTT — no open delivery trade ({symbol})",
+                    f"Active broker GTT {gid} for {symbol} has no gtt_state row and "
+                    f"no OPEN/PARTIAL CNC trade to adopt onto; left alone for review."))
+                continue
+            if len(candidates) > 1:
+                out.append(self._warn_adopt_once(
+                    gid, f"adopt_ambiguous:{symbol}",
+                    f"Orphan GTT — ambiguous match ({symbol})",
+                    f"Active broker GTT {gid} for {symbol} matches {len(candidates)} "
+                    f"open CNC trades; NOT auto-adopted (manual review)."))
+                continue
+
+            trade = candidates[0]
+            trade_id = trade["trade_id"]
+            if self._store.get_active_gtt_for_trade(trade_id) is not None:
+                out.append(self._warn_adopt_once(
+                    gid, f"adopt_already_active:{symbol}",
+                    f"Orphan GTT — trade already protected ({symbol})",
+                    f"Active broker GTT {gid} for {symbol} (trade {trade_id}) but the "
+                    f"trade already holds an ACTIVE gtt_state row; NOT adopted (two "
+                    f"live GTTs — the monitor's M2/ownership path handles it)."))
+                continue
+
+            try:
+                self._store.insert_gtt_state(
+                    gtt_id=recon["gtt_id"], trade_id=trade_id, symbol=symbol,
+                    exit_side=recon["exit_side"], qty=recon["qty"],
+                    sl_trigger=recon["sl_trigger"], sl_limit=recon["sl_limit"],
+                    tgt_trigger=recon["tgt_trigger"], tgt_limit=recon["tgt_limit"],
+                    created_at=self._now(),
+                )
+            except Exception as exc:  # noqa: BLE001 — never crash the prepass
+                self._log.error("cnc_gtt_adoption: insert failed for %s/%s: %s",
+                                symbol, gid, exc)
+                out.append(f"adopt_insert_failed:{symbol}")
+                continue
+            self._adopt_warned.discard(gid)  # adopted -> clear any stale warn latch
+            self._log.info("cnc_gtt_adoption.adopted", extra={
+                "gtt_id": recon["gtt_id"], "trade_id": trade_id, "symbol": symbol,
+                "qty": recon["qty"], "exit_side": recon["exit_side"],
+                "sl_trigger": recon["sl_trigger"], "sl_limit": recon["sl_limit"],
+                "tgt_trigger": recon["tgt_trigger"], "tgt_limit": recon["tgt_limit"]})
+            out.append(f"adopted:{symbol}")
+        return out
+
+    @staticmethod
+    def _reconstruct_from_broker_gtt(g: dict) -> Optional[dict]:
+        """Derive every gtt_state field (except trade_id) from a broker GTT dict.
+        SL/TGT are split by trigger MAGNITUDE (lower trigger = SL leg, higher =
+        TGT leg) — robust to any broker-side leg reordering. trigger_values and
+        orders are parallel (index i ↔ leg i). Returns None if unparseable."""
+        cond = g.get("condition") or {}
+        symbol = cond.get("tradingsymbol")
+        tvs = cond.get("trigger_values") or []
+        orders = g.get("orders") or []
+        if not symbol or len(tvs) < 2 or len(orders) < 2:
+            return None
+        try:
+            paired = sorted(zip((float(t) for t in tvs), orders), key=lambda p: p[0])
+            (sl_trigger, sl_leg), (tgt_trigger, tgt_leg) = paired[0], paired[-1]
+            sl_limit = float(sl_leg.get("price"))
+            tgt_limit = float(tgt_leg.get("price"))
+            qty = int(sl_leg.get("quantity") or tgt_leg.get("quantity") or 0)
+            exit_side = sl_leg.get("transaction_type") or tgt_leg.get("transaction_type")
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if not exit_side or qty <= 0:
+            return None
+        return {
+            "gtt_id": g.get("id"), "symbol": symbol, "exit_side": exit_side, "qty": qty,
+            "sl_trigger": sl_trigger, "sl_limit": sl_limit,
+            "tgt_trigger": tgt_trigger, "tgt_limit": tgt_limit,
+        }
+
+    def _delivery_open_trades_by_symbol(self) -> Dict[str, list]:
+        """Index OPEN/PARTIAL delivery (CNC) trades by symbol via get_all_open_trades
+        (which carries the ENTRY-leg product through its LEFT JOIN). DUPLICATE_SYMBOL
+        guarantees ≤1 open trade per symbol, so each list is normally 0 or 1."""
+        idx: Dict[str, list] = {}
+        try:
+            rows = self._store.get_all_open_trades() or []
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("cnc_gtt_adoption: get_all_open_trades failed: %s", exc)
+            return idx
+        for t in rows:
+            try:
+                product = str(t["product"] or "").upper()
+            except (KeyError, IndexError, TypeError):
+                product = ""
+            if PRODUCT_TO_INTENT.get(product, "") != "DELIVERY":
+                continue
+            idx.setdefault(t["symbol"], []).append(t)
+        return idx
+
+    def _warn_adopt_once(self, gid, label: str, title: str, body: str) -> str:
+        """WARN about an unadoptable orphan GTT ONCE per gtt_id per process (the
+        prepass runs every cycle — this prevents alert spam, esp. for benign human
+        GTTs that match the 0-trades case). Always returns the action label."""
+        if gid not in self._adopt_warned:
+            self._adopt_warned.add(gid)
+            self._alert("WARNING", title, body, source="cnc_gtt_adoption")
+        return label
 
     # ── Step 5: leak / 50-cap (GTTs are EXEMPT from order-cancellation sweeps) ──
     def _orphan_sweep_and_cap(self, broker_gtts: Dict[str, dict],
@@ -438,12 +599,13 @@ class CncGttMonitor:
         self._log.warning("cnc_gtt_monitor.forensic", extra={
             "event": event, "gtt_id": gid, "symbol": sym, "detail": detail})
 
-    def _alert(self, severity: str, title: str, body: str) -> None:
+    def _alert(self, severity: str, title: str, body: str,
+               *, source: str = "cnc_gtt_monitor") -> None:
         if self._notifier is None:
             return
         try:
             self._notifier.send(severity=severity, title=f"[{self._mode}] {title}",
-                                body=body, source_module="cnc_gtt_monitor")
+                                body=body, source_module=source)
         except Exception as exc:  # noqa: BLE001
             self._log.error("cnc_gtt_monitor: notifier.send failed: %s", exc)
 
