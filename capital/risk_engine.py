@@ -141,6 +141,11 @@ class RiskEngine:
         sector_lookup_fn: Callable[[str], str],
         logger: logging.Logger,
         kill_switch: Optional[object] = None,
+        # SLICE2.5-PHASE-3 (A): SEPARATE delivery (CNC) count caps. Optional with
+        # defaults so existing callers/tests are unaffected; main.py wires the
+        # configured values. Enforced ONLY for a delivery entry (bucket=="positional").
+        max_open_delivery_positions: int = 3,
+        max_daily_delivery_trades: int = 5,
     ) -> None:
         self._fm = fund_manager
         self._store = state_store
@@ -149,6 +154,8 @@ class RiskEngine:
         self._max_sector_pct = max_sector_exposure_pct
         self._max_consec = max_consecutive_losses
         self._daily_loss_pct = daily_loss_limit_pct
+        self._max_open_delivery = max_open_delivery_positions   # PHASE-3 (A)
+        self._max_daily_delivery = max_daily_delivery_trades     # PHASE-3 (A)
         self._sector_fn = sector_lookup_fn
         self._log = logger
         self._ks = kill_switch
@@ -217,6 +224,16 @@ class RiskEngine:
         # the in-flight half. Read here so all date-scoped reads happen once (RE16).
         settled_today = self._store.count_settled_trades_today(today)
 
+        # SLICE2.5-PHASE-3 (A): delivery-scoped counts, read ONLY for a delivery
+        # (CNC) entry (sizing_result.bucket=="positional"). For an intraday entry —
+        # and ALWAYS while force_intraday_only coerces every strategy to INTRADAY —
+        # this guard is False, so ZERO extra DB queries hit the hot intraday path.
+        is_delivery_entry = sizing_result.bucket == "positional"
+        open_delivery_count = (
+            self._store.count_open_delivery_positions() if is_delivery_entry else 0)
+        daily_delivery_count = (
+            self._store.count_daily_delivery_trades(today) if is_delivery_entry else 0)
+
         # Consecutive loss streak (RE10)
         # FIX-183: scope the streak to TODAY. A cross-day streak was a deadlock —
         # it blocks entries, but breaking it needs a winning trade, which the
@@ -267,6 +284,7 @@ class RiskEngine:
             consec, existing_sector_margin, has_dup, kill_active,
             processor_in_flight_count,
             symbol, side, active_direction,
+            open_delivery_count, daily_delivery_count,   # PHASE-3 (A)
         )
 
         # ── Log every call at INFO (RE12) ─────────────────────────────────────
@@ -303,6 +321,8 @@ class RiskEngine:
         symbol: str,
         side: str,
         active_direction: Optional[str],
+        open_delivery_count: int = 0,      # PHASE-3 (A): delivery-scoped open count
+        daily_delivery_count: int = 0,     # PHASE-3 (A): delivery-scoped today count
     ) -> ApprovalResult:
         """Execute checks in RE5 + FIX-018 + FIX-019 order; return the first failure or approval."""
 
@@ -344,54 +364,75 @@ class RiskEngine:
             )
 
         # 4. OPEN_POSITIONS — active (OPEN+PARTIAL+PENDING_FILL) + processor_in_flight < cap
-        # FIX-018: processor_in_flight_count prevents the TOCTOU race where
-        # concurrent signals both pass this check before either inserts into DB.
-        # Bug E (P0 2026-06-15): the DB portion is now a SINGLE atomic count
-        # (active_count) instead of count_open + count_in_flight, closing the
-        # window where a PENDING_FILL->OPEN transition between the two queries
-        # left a position uncounted and let the cap be exceeded.
         checks_run.append("OPEN_POSITIONS")
-        # FIX-181 (off-by-one): processor_in_flight_count is PRE-incremented to
-        # include THIS candidate (signal_processor bumps _in_flight_count before
-        # calling approve), while active_count counts only positions already in
-        # the DB (the candidate is not inserted yet). So active_total ==
-        # max_open means "candidate + (max_open - 1) existing" = max_open total
-        # -> ALLOW. Only active_total > max_open exceeds the cap. The previous
-        # `>=` rejected the legitimate final slot (max=3 only ever held 2).
-        legacy_total = active_count + processor_in_flight_count
+        # SLICE2.5-PHASE-3 (A): a DELIVERY (CNC) entry is capped by its OWN
+        # delivery-scoped count, NOT the intraday/global cap. Keyed on
+        # bucket=="positional" (the proven 1:1 proxy for "this entry will be CNC" —
+        # the resolved product string is not available pre-trade); the count is
+        # product-keyed (ENTRY product=='CNC'). A5 — INTENTIONAL asymmetric coupling:
+        # the intraday/global branch (else) is LEFT UNCHANGED, so it still counts ALL
+        # positions (incl. delivery) -> delivery DOES count toward an intraday entry's
+        # cap, while intraday does NOT count toward the delivery cap. This keeps the
+        # LIVE intraday cap byte-for-byte unchanged (zero regression on the money
+        # path); at current capital, capital binds long before these counts, so the
+        # coupling is academic. Inert while coerced (bucket is never positional then,
+        # and open_delivery_count==0). Revisit full count-independence only if
+        # delivery scales and it matters.
+        if sizing_result.bucket == "positional":
+            if open_delivery_count >= self._max_open_delivery:
+                return reject(
+                    "OPEN_POSITIONS",
+                    f"Delivery position cap reached: {open_delivery_count} open "
+                    f"delivery (CNC), max={self._max_open_delivery}",
+                )
+        else:
+            # FIX-018: processor_in_flight_count prevents the TOCTOU race where
+            # concurrent signals both pass this check before either inserts into DB.
+            # Bug E (P0 2026-06-15): the DB portion is now a SINGLE atomic count
+            # (active_count) instead of count_open + count_in_flight, closing the
+            # window where a PENDING_FILL->OPEN transition between the two queries
+            # left a position uncounted and let the cap be exceeded.
+            # FIX-181 (off-by-one): processor_in_flight_count is PRE-incremented to
+            # include THIS candidate (signal_processor bumps _in_flight_count before
+            # calling approve), while active_count counts only positions already in
+            # the DB (the candidate is not inserted yet). So active_total ==
+            # max_open means "candidate + (max_open - 1) existing" = max_open total
+            # -> ALLOW. Only active_total > max_open exceeds the cap. The previous
+            # `>=` rejected the legitimate final slot (max=3 only ever held 2).
+            legacy_total = active_count + processor_in_flight_count
 
-        # FIX-185 (hard cap / restart-burst TOCTOU): the processor_in_flight
-        # snapshot is taken in signal_processor at increment time, BEFORE the
-        # candidate acquires portfolio_lock, so a burst of signals admitted at
-        # restart could under-count it and let the cap be exceeded (observed: 6
-        # open vs max 5 on the 18-Jun restart). Add an AUTHORITATIVE in-flight
-        # count that does not rely on that snapshot: every accepted entry holds a
-        # fund_manager reservation from reserve() until the entry FILLS (commit
-        # pops it exactly as status flips to OPEN). So OPEN/PARTIAL (open_count)
-        # and live reservations (reserve->fill, includes reserved-not-placed and
-        # PENDING_FILL) partition all in-flight/open positions with no overlap and
-        # no gap. active_count (DB truth, includes PENDING_FILL) is kept as a
-        # floor so a PENDING_FILL row whose in-memory reservation was lost across
-        # a restart is still counted. approve() runs inside portfolio_lock, so
-        # this read is consistent with reserve(). +1 for THIS candidate (it has
-        # not reserved or inserted yet). max() with legacy_total => can only ever
-        # HARDEN the cap, never loosen it (no regression risk).
-        # getattr guard: a fund_manager implementation predating FIX-185 degrades
-        # gracefully to the legacy snapshot-only cap rather than crashing.
-        _count_res = getattr(self._fm, "count_live_reservations", None)
-        reserved_inflight = _count_res() if callable(_count_res) else 0
-        authoritative_total = max(open_count + reserved_inflight, active_count) + 1
+            # FIX-185 (hard cap / restart-burst TOCTOU): the processor_in_flight
+            # snapshot is taken in signal_processor at increment time, BEFORE the
+            # candidate acquires portfolio_lock, so a burst of signals admitted at
+            # restart could under-count it and let the cap be exceeded (observed: 6
+            # open vs max 5 on the 18-Jun restart). Add an AUTHORITATIVE in-flight
+            # count that does not rely on that snapshot: every accepted entry holds a
+            # fund_manager reservation from reserve() until the entry FILLS (commit
+            # pops it exactly as status flips to OPEN). So OPEN/PARTIAL (open_count)
+            # and live reservations (reserve->fill, includes reserved-not-placed and
+            # PENDING_FILL) partition all in-flight/open positions with no overlap and
+            # no gap. active_count (DB truth, includes PENDING_FILL) is kept as a
+            # floor so a PENDING_FILL row whose in-memory reservation was lost across
+            # a restart is still counted. approve() runs inside portfolio_lock, so
+            # this read is consistent with reserve(). +1 for THIS candidate (it has
+            # not reserved or inserted yet). max() with legacy_total => can only ever
+            # HARDEN the cap, never loosen it (no regression risk).
+            # getattr guard: a fund_manager implementation predating FIX-185 degrades
+            # gracefully to the legacy snapshot-only cap rather than crashing.
+            _count_res = getattr(self._fm, "count_live_reservations", None)
+            reserved_inflight = _count_res() if callable(_count_res) else 0
+            authoritative_total = max(open_count + reserved_inflight, active_count) + 1
 
-        effective_total = max(legacy_total, authoritative_total)
-        if effective_total > self._max_open:
-            return reject(
-                "OPEN_POSITIONS",
-                f"Position cap reached: {effective_total} active "
-                f"(db_active[open+partial+pending_fill]={active_count}, "
-                f"open_partial={open_count}, live_reservations={reserved_inflight}, "
-                f"processor_in_flight={processor_in_flight_count}), "
-                f"max={self._max_open}",
-            )
+            effective_total = max(legacy_total, authoritative_total)
+            if effective_total > self._max_open:
+                return reject(
+                    "OPEN_POSITIONS",
+                    f"Position cap reached: {effective_total} active "
+                    f"(db_active[open+partial+pending_fill]={active_count}, "
+                    f"open_partial={open_count}, live_reservations={reserved_inflight}, "
+                    f"processor_in_flight={processor_in_flight_count}), "
+                    f"max={self._max_open}",
+                )
 
         # 5. DAILY_TRADES
         # Bug B (2026-06-19): mirror the FIX-185 OPEN_POSITIONS hardening on the
@@ -417,20 +458,34 @@ class RiskEngine:
         # the next signal retries to reach max -- Rama's requirement. getattr guard
         # degrades to the legacy daily_count if fund_manager predates FIX-185.
         checks_run.append("DAILY_TRADES")
-        _count_res_daily = getattr(self._fm, "count_live_reservations", None)
-        reserved_inflight_daily = _count_res_daily() if callable(_count_res_daily) else 0
-        authoritative_daily = settled_today + reserved_inflight_daily
-        effective_daily = max(daily_count, authoritative_daily)
-        if effective_daily >= self._max_daily:
-            return reject(
-                "DAILY_TRADES",
-                f"Daily trade limit reached: {effective_daily} "
-                f"(db_today={daily_count}, settled_today={settled_today}, "
-                f"live_reservations={reserved_inflight_daily}), "
-                f"max={self._max_daily}",
-            )
+        # SLICE2.5-PHASE-3 (A): a DELIVERY (CNC) entry is capped by its OWN daily
+        # delivery count (today's ENTRY product=='CNC'); an INTRADAY entry keeps the
+        # existing reservation-aware global daily cap (else, UNCHANGED — same A5
+        # asymmetry as OPEN_POSITIONS). Inert while coerced (daily_delivery_count==0).
+        if sizing_result.bucket == "positional":
+            if daily_delivery_count >= self._max_daily_delivery:
+                return reject(
+                    "DAILY_TRADES",
+                    f"Delivery daily trade limit reached: {daily_delivery_count} "
+                    f"delivery (CNC) today, max={self._max_daily_delivery}",
+                )
+        else:
+            _count_res_daily = getattr(self._fm, "count_live_reservations", None)
+            reserved_inflight_daily = _count_res_daily() if callable(_count_res_daily) else 0
+            authoritative_daily = settled_today + reserved_inflight_daily
+            effective_daily = max(daily_count, authoritative_daily)
+            if effective_daily >= self._max_daily:
+                return reject(
+                    "DAILY_TRADES",
+                    f"Daily trade limit reached: {effective_daily} "
+                    f"(db_today={daily_count}, settled_today={settled_today}, "
+                    f"live_reservations={reserved_inflight_daily}), "
+                    f"max={self._max_daily}",
+                )
 
         # 6. CONSECUTIVE_LOSSES (RE10: net_pnl < -1e-6 is a loss)
+        # SLICE2.5-PHASE-3 (A): deliberately SHARED — no delivery variant. The streak
+        # breaker is a portfolio-wide circuit and applies to delivery entries too.
         checks_run.append("CONSECUTIVE_LOSSES")
         if consec >= self._max_consec:
             return reject(

@@ -635,6 +635,42 @@ class StateStore:
         )
         return int(row["n"]) if row else 0
 
+    # ── SLICE2.5-PHASE-3 (A): delivery-scoped (CNC) count caps ─────────────────
+    # Product-keyed via the ENTRY-leg order: a trade is "delivery" iff its ENTRY
+    # order's product is 'CNC' (the actual product written at placement; precedent
+    # = the MIS/CO ENTRY-join at get_intraday_entry_orders / get_all_open_trades).
+    # COUNT(DISTINCT trade_id) so a multi-leg ENTRY (SCALE) counts the trade once.
+    # Inert while force_intraday_only=true: no CNC entry orders are ever written
+    # then, so both methods return 0.
+
+    def count_open_delivery_positions(self) -> int:
+        """Count concurrent open DELIVERY (CNC) positions: trades in OPEN/PARTIAL/
+        PENDING_FILL whose ENTRY-leg order product is 'CNC'. Used by the risk_engine
+        OPEN_POSITIONS delivery branch (SLICE2.5-PHASE-3 A)."""
+        row = self.fetch_one(
+            "SELECT COUNT(DISTINCT t.trade_id) AS n FROM trades t "
+            "JOIN orders o ON o.trade_id = t.trade_id "
+            "                 AND o.leg = 'ENTRY' AND o.product = 'CNC' "
+            "WHERE t.status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
+        )
+        return int(row["n"]) if row else 0
+
+    def count_daily_delivery_trades(self, date_iso: str) -> int:
+        """Count today's EXECUTED DELIVERY (CNC) entries: trades created on date_iso
+        in _EXECUTED_TRADE_STATUSES whose ENTRY-leg order product is 'CNC'. Mirrors
+        count_trades_today's date/status match. Used by the risk_engine DAILY_TRADES
+        delivery branch (SLICE2.5-PHASE-3 A)."""
+        placeholders = ",".join("?" for _ in self._EXECUTED_TRADE_STATUSES)
+        row = self.fetch_one(
+            f"SELECT COUNT(DISTINCT t.trade_id) AS n FROM trades t "
+            f"JOIN orders o ON o.trade_id = t.trade_id "
+            f"                 AND o.leg = 'ENTRY' AND o.product = 'CNC' "
+            f"WHERE SUBSTR(t.created_at, 1, 10) = ? "
+            f"AND t.status IN ({placeholders})",
+            (date_iso, *self._EXECUTED_TRADE_STATUSES),
+        )
+        return int(row["n"]) if row else 0
+
     def count_signals_today(self, date_iso: str) -> int:
         """
         Count all signal rows received on the given IST date (YYYY-MM-DD).

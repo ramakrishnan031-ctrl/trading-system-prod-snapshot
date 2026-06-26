@@ -105,6 +105,16 @@ No DB schema; parity (shared paper+live, no mode branch). Detail: `docs/SYSTEM_M
 
 P2 = durability + safety (schema v36 `gtt_state`, reconcile, GTT_EXIT, 15-min monitor); delivery_enabled stays **false** (no activation). **DEPLOYED to main `bad0aad` 25-Jun ~22:23 (one-time authorized; rule restored); schema v36 applies at the Fri 08:15 boot.** **FIX-183 (26-Jun) adds orphan-GTT adoption** (no schema) — **DEPLOYED to main `af4b784` 26-Jun ~11:11 (one-time authorized; rule restored); 11:11 restart self-exited 0 at the HOLIDAY guard (Muharram), real boot Mon 29-Jun 08:15; verified broker-session-free 5/5 (schema=36, Auditor 0 BLOCK, delivery_enabled=false).** Detail: SYSTEM_MAP Changelog 2026-06-25/26 · memory `slice25_p2_gtt_durability_25jun` · `fix_183_gtt_adoption_26jun`.
 
+## Delivery (CNC) — SLICE2.5-PHASE-3 (26-Jun): delivery count caps + conditional capital (INERT)
+| What | Location |
+|---|---|
+| (A) Delivery count caps | `system_config.yaml` `risk.max_open_delivery_positions`(3)/`max_daily_delivery_trades`(5) → `core/config_loader.py` RiskConfig. Product-keyed counts `core/state_store.py` `count_open_delivery_positions`/`count_daily_delivery_trades` (JOIN orders `leg='ENTRY' AND product='CNC'`, DISTINCT trade_id). Enforced `capital/risk_engine.py::_run_checks` — OPEN_POSITIONS/DAILY_TRADES **branch on `sizing_result.bucket=="positional"`** (else = global check, byte-unchanged; counts read lazily in `approve()`). **A5**: intraday branch unchanged → asymmetric coupling (delivery counts toward intraday cap, not vice-versa) — intentional, keeps live intraday cap byte-identical |
+| (B) Conditional allocation | `system_config.yaml` `capital.conditional_allocation_enabled`(**false**) → `core/config_loader.py` CapitalConfig. Pure `capital/fund_manager.resolve_bucket_allocation()` → effective `(intraday_pct, positional_pct)` (off=fixed split; on: only-intraday 100/0, only-delivery 0/100, both=split, neither=100/0). `main.py` computes `delivery_active`/`intraday_active` + passes effective pcts to FundManager ctor + logs `capital.bucket_allocation`. **FundManager UNCHANGED**; no-borrow already in `reserve()` (consults only the intent's bucket) |
+| SHARED (untouched) | `max_concentration_pct` (position_sizer, total-relative), SECTOR_EXPOSURE, `max_position_value_pct`, the whole intraday cap path |
+| Tests | `tests/unit/test_phase3_delivery_caps_conditional_capital.py` (17: allocation cases + dormancy + delivery caps + ★inertness + ★MIS-regression + no-borrow) |
+
+INERT by construction: flag default false → 70/30 unchanged; force_intraday_only=true coerces every strategy to intent=INTRADAY → bucket=intraday → delivery cap branch never hit + delivery counts 0. No schema; parity. 3854 unit tests / 0 regressions. branch `phase3-delivery-caps-conditional-capital-26jun`, **NOT deployed** (Rama owns; likely batched with Phase 4). Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase3_delivery_caps_conditional_capital_26jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|

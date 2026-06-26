@@ -106,6 +106,44 @@ _VALID_DIRECTIONS: Final[frozenset[str]] = frozenset({"LONG", "SHORT"})
 _INTRADAY_BUCKET = "intraday"
 _POSITIONAL_BUCKET = "positional"
 
+
+def resolve_bucket_allocation(
+    *,
+    conditional_enabled: bool,
+    delivery_active: bool,
+    intraday_active: bool,
+    intraday_pct: float,
+    positional_pct: float,
+) -> tuple[float, float]:
+    """SLICE2.5-PHASE-3 (B): the EFFECTIVE (intraday_pct, positional_pct) split.
+
+    Pure + deterministic (unit-tested directly; main.py calls it and passes the
+    result to FundManager, which is otherwise UNCHANGED). Always sums to 1.0 so
+    the FM12 ctor invariant holds.
+
+      conditional_enabled FALSE (default) -> the fixed config split, byte-for-byte
+                                             unchanged (zero behaviour change).
+      conditional_enabled TRUE:
+        only-intraday (not delivery_active)            -> (1.0, 0.0)
+        only-delivery (delivery_active, not intraday)  -> (0.0, 1.0)
+        BOTH active                                    -> the config split
+        neither active                                 -> (1.0, 0.0)  [safe idle]
+
+    delivery 0% => every delivery reserve() rejects "Insufficient positional
+    capital" and never borrows intraday (the no-borrow guarantee is already in
+    reserve(): it consults ONLY the intent's bucket).
+    """
+    if not conditional_enabled:
+        return intraday_pct, positional_pct
+    if delivery_active and not intraday_active:
+        delivery = 1.0
+    elif delivery_active and intraday_active:
+        delivery = positional_pct
+    else:  # not delivery_active (incl. neither active) -> all intraday
+        delivery = 0.0
+    return 1.0 - delivery, delivery
+
+
 # FIX-113: Invariant tolerance (rupees) for floating-point comparisons.
 # Why 1.0 is appropriate:
 #   - Paper mode: LTP-based fills vs limit-price orders introduce ±0.05-0.50 rounding

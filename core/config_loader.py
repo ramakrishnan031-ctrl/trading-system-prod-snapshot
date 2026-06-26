@@ -143,6 +143,13 @@ class CapitalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     intraday_bucket_pct: float     # FM16: fraction of total for intraday (0 < x < 1)
     positional_bucket_pct: float   # FM16: fraction of total for positional (0 < x < 1)
+    # SLICE2.5-PHASE-3 (B): when TRUE, the intraday/positional split is resolved
+    # CONDITIONALLY from the active trade types (only-intraday->100/0,
+    # only-delivery->0/100, both->the fixed split above) instead of always using the
+    # fixed split. Default FALSE = the fixed split, byte-for-byte unchanged. Computed
+    # in main.py via fund_manager.resolve_bucket_allocation(); FundManager itself only
+    # ever receives the final pcts (it is unchanged).
+    conditional_allocation_enabled: bool = False
     # BUILD 1 (#1, 24-Jun-2026): the absolute `daily_loss_limit` (₹) was DELETED.
     # daily_loss_limit_pct (risk:) is now the SOLE daily-loss authority — the
     # post-close realized breach (FundManager) derives its ₹ limit as
@@ -416,6 +423,13 @@ class RiskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_open_positions: int          # RE13: hard cap on concurrent open positions (>= 1)
     max_daily_trades: int            # RE13: hard cap on trades per day (>= 1)
+    # SLICE2.5-PHASE-3 (A): SEPARATE delivery-scoped count caps, parallel to the
+    # intraday/global caps. Enforced ONLY for a delivery (CNC) entry
+    # (sizing_result.bucket=="positional"); an intraday entry is unaffected. Inert
+    # while force_intraday_only coerces every strategy to INTRADAY (no CNC entries
+    # exist then). Defaults make them optional in YAML.
+    max_open_delivery_positions: int = 3   # hard cap on concurrent open DELIVERY positions (>= 1)
+    max_daily_delivery_trades: int = 5     # hard cap on DELIVERY entries per day (>= 1)
     max_sector_exposure_pct: float   # RE13: max fraction of capital in one sector (> 0, <= 1)
     max_consecutive_losses: int      # RE13: halt after N consecutive losses (>= 1)
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)
@@ -427,7 +441,8 @@ class RiskConfig(BaseModel):
     # was a no-op that only LOOKED active — misleading dead config. The base caps
     # above are now the sole authority in both paper and live.
 
-    @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses")
+    @field_validator("max_open_positions", "max_daily_trades", "max_consecutive_losses",
+                     "max_open_delivery_positions", "max_daily_delivery_trades")
     @classmethod
     def _validate_positive_int(cls, v: int) -> int:
         if v < 1:

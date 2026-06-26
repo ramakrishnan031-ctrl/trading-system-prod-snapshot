@@ -48,7 +48,7 @@ from broker.product_resolver import ProductResolver
 from broker.rate_limiter import RateLimiter
 from broker.zerodha_adapter import ZerodhaAdapter
 from capital.drift_handler import CapitalDriftHandler
-from capital.fund_manager import FundManager
+from capital.fund_manager import FundManager, resolve_bucket_allocation
 from capital.kill_switch import KillSwitch
 from capital.position_sizer import PositionSizer
 from capital.risk_engine import RiskEngine
@@ -1823,12 +1823,41 @@ def _main_locked(args, config_dir: Path) -> int:
     # Filled after EodSquareoff is instantiated below.
     _eod_ref: dict = {"eod": None}
 
+    # SLICE2.5-PHASE-3 (B): conditional capital allocation. Compute the ACTIVE trade
+    # types from the three flags (same predicate as the delivery_lock boot log), then
+    # resolve the EFFECTIVE bucket split. Flag default FALSE -> the fixed config split
+    # (70/30), byte-for-byte unchanged. While force_intraday_only=true (current state)
+    # intraday_active is true (coercion) AND delivery_active false -> 100/0 even if the
+    # flag were on. FundManager is UNCHANGED — it only receives the final pcts.
+    _ph3_delivery_active = (
+        app_config.system.delivery_enabled
+        and not app_config.system.force_intraday_only
+        and app_config.system.trade_type in ("DELIVERY", "BOTH"))
+    _ph3_intraday_active = (
+        app_config.system.trade_type in ("INTRADAY", "BOTH")
+        or app_config.system.force_intraday_only)
+    _ph3_intraday_pct, _ph3_positional_pct = resolve_bucket_allocation(
+        conditional_enabled=cap_cfg.conditional_allocation_enabled,
+        delivery_active=_ph3_delivery_active,
+        intraday_active=_ph3_intraday_active,
+        intraday_pct=cap_cfg.intraday_bucket_pct,
+        positional_pct=cap_cfg.positional_bucket_pct,
+    )
+    _log.info(
+        "capital.bucket_allocation",
+        extra={"conditional_enabled": cap_cfg.conditional_allocation_enabled,
+               "delivery_active": _ph3_delivery_active,
+               "intraday_active": _ph3_intraday_active,
+               "intraday_pct": _ph3_intraday_pct,
+               "positional_pct": _ph3_positional_pct},
+    )
+
     fund_manager = FundManager(
         state_store=store,
         bus=event_bus,
         logger=get_logger("fund_manager"),
-        intraday_bucket_pct=cap_cfg.intraday_bucket_pct,
-        positional_bucket_pct=cap_cfg.positional_bucket_pct,
+        intraday_bucket_pct=_ph3_intraday_pct,        # PHASE-3 (B): effective split
+        positional_bucket_pct=_ph3_positional_pct,    # PHASE-3 (B): effective split
         # BUILD 1 (#1): single daily-loss source — the post-close realized breach
         # derives its ₹ limit from the SAME pct the pre-trade gate (RiskEngine)
         # uses. There is no longer an absolute capital.daily_loss_limit.
@@ -1949,6 +1978,10 @@ def _main_locked(args, config_dir: Path) -> int:
         sector_lookup_fn=lambda sym: instrument_cache.sector(sym),
         logger=get_logger("risk_engine"),
         kill_switch=kill_switch,
+        # SLICE2.5-PHASE-3 (A): separate delivery (CNC) count caps (inert while
+        # force_intraday_only=true — no CNC entries reach the positional branch).
+        max_open_delivery_positions=risk_cfg.max_open_delivery_positions,
+        max_daily_delivery_trades=risk_cfg.max_daily_delivery_trades,
     )
 
     live_feed = LiveFeedManager(
