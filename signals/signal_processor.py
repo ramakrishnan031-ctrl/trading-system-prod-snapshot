@@ -54,7 +54,10 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from core.exceptions import BrokerError, BrokerRateLimitError, BrokerTimeoutError
 from core.time_authority import ist_timezone, now_ist
-from strategies.control import strategy_will_trade  # Slice 2: strategy-control gate
+from strategies.control import (  # Slice 2: strategy-control gate
+    strategy_will_trade,
+    CAUSE_TRADE_TYPE,  # SLICE2.5-PHASE-4: promote a trade_type mismatch to its own label
+)
 
 
 # ---------------------------------------------------------------------------
@@ -622,7 +625,15 @@ class SignalProcessor:
                 force_intraday_only=self._force_intraday_only,
             )
             if not _verdict.will_trade:
-                raise _PipelineReject("STRATEGY_CONTROL", _verdict.reason)
+                # SLICE2.5-PHASE-4: a trade_type×intent mismatch (control LAYER 1×2)
+                # gets its OWN reject label "TRADE_TYPE" (-> REJECTED_TRADE_TYPE + its
+                # own per-check tally) so a delivery go-live can SEE trade_type rejects
+                # distinctly; every other strategy-control reject (disabled switch, the
+                # force-breaker branch) keeps the generic STRATEGY_CONTROL label. Keyed
+                # on the machine-readable verdict.cause, never on the message string.
+                _check = (CAUSE_TRADE_TYPE if _verdict.cause == CAUSE_TRADE_TYPE
+                          else "STRATEGY_CONTROL")
+                raise _PipelineReject(_check, _verdict.reason)
 
             # CFG-5 (2026-04-26 audit): per-strategy entry-window enforcement.
             # The global window passed above; now check the narrower
@@ -1319,7 +1330,15 @@ class SignalProcessor:
                 force_intraday_only=self._force_intraday_only,
             )
             if not _verdict.will_trade:
-                raise _PipelineReject("STRATEGY_CONTROL", _verdict.reason)
+                # SLICE2.5-PHASE-4: a trade_type×intent mismatch (control LAYER 1×2)
+                # gets its OWN reject label "TRADE_TYPE" (-> REJECTED_TRADE_TYPE + its
+                # own per-check tally) so a delivery go-live can SEE trade_type rejects
+                # distinctly; every other strategy-control reject (disabled switch, the
+                # force-breaker branch) keeps the generic STRATEGY_CONTROL label. Keyed
+                # on the machine-readable verdict.cause, never on the message string.
+                _check = (CAUSE_TRADE_TYPE if _verdict.cause == CAUSE_TRADE_TYPE
+                          else "STRATEGY_CONTROL")
+                raise _PipelineReject(_check, _verdict.reason)
 
             # CFG-5 (2026-04-26 audit): per-strategy entry-window enforcement.
             if not self._mw.is_entry_allowed_for_strategy(now, strategy_obj):

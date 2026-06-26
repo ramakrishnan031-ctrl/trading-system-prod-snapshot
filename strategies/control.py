@@ -32,6 +32,17 @@ from typing import Any, Optional
 
 VALID_TRADE_TYPES = {"INTRADAY", "DELIVERY", "BOTH"}
 
+# SLICE2.5-PHASE-4: machine-readable cause codes on the Verdict so the entry gate
+# can split a trade_type×intent mismatch into its OWN reject label WITHOUT string-
+# matching the human-readable reason. CAUSE_TRADE_TYPE is the ONLY one the gate
+# promotes to a distinct "TRADE_TYPE" reject label (so a delivery go-live shows
+# "rejected because trade_type disallows" distinctly); every other cause keeps the
+# generic "STRATEGY_CONTROL" label. The reason strings are unchanged.
+CAUSE_OK = "OK"                       # will_trade=True
+CAUSE_DISABLED = "DISABLED"           # LAYER 3 — per-strategy switch off
+CAUSE_FORCE_BREAKER = "FORCE_BREAKER" # LAYER 0 — force_intraday_only blocks raw DELIVERY
+CAUSE_TRADE_TYPE = "TRADE_TYPE"       # LAYER 1×2 — master trade_type ≠ strategy intent
+
 
 @dataclass(frozen=True)
 class Verdict:
@@ -48,6 +59,9 @@ class Verdict:
     will_trade: bool
     reason: str
     product: Optional[str]
+    # SLICE2.5-PHASE-4: machine-readable cause (default OK so any 3-arg construction
+    # still works). The gate maps CAUSE_TRADE_TYPE -> a distinct reject label.
+    cause: str = CAUSE_OK
 
 
 def strategy_will_trade(
@@ -65,7 +79,8 @@ def strategy_will_trade(
     # LAYER 3 — the switch. Checked first: a disabled strategy never trades,
     # regardless of product gating.
     if not enabled:
-        return Verdict(False, "WON'T TRADE — switch disabled", intent)
+        return Verdict(False, "WON'T TRADE — switch disabled", intent,
+                       cause=CAUSE_DISABLED)
 
     # LAYER 0 — emergency breaker (defensive). In production the loader has already
     # rewritten a DELIVERY strategy's intent to INTRADAY when the breaker is on, so
@@ -77,6 +92,7 @@ def strategy_will_trade(
             "WON'T TRADE — emergency breaker (force_intraday_only) forces "
             "intraday; delivery strategy dormant",
             "INTRADAY",
+            cause=CAUSE_FORCE_BREAKER,
         )
 
     # LAYER 1 × LAYER 2 — master trade_type vs the strategy's (effective) intent.
@@ -85,13 +101,16 @@ def strategy_will_trade(
             False,
             "WON'T TRADE — master INTRADAY blocks this DELIVERY strategy",
             intent,
+            cause=CAUSE_TRADE_TYPE,
         )
     if trade_type == "DELIVERY" and intent != "DELIVERY":
         return Verdict(
             False,
             "WON'T TRADE — master DELIVERY blocks this INTRADAY strategy",
             intent,
+            cause=CAUSE_TRADE_TYPE,
         )
     # trade_type == "BOTH", or a matching intent → permitted.
 
-    return Verdict(True, f"WILL TRADE — enabled, master allows {intent}", intent)
+    return Verdict(True, f"WILL TRADE — enabled, master allows {intent}", intent,
+                   cause=CAUSE_OK)

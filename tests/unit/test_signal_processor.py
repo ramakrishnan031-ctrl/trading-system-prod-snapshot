@@ -363,6 +363,8 @@ def _make_proc(
     drain_poll_sec=0.02,
     signal_expiry_sec=60,
     shadow_tracker=None,
+    trade_type="INTRADAY",          # Slice 2 / PHASE-4: master product gate
+    force_intraday_only=False,      # Slice 2 LAYER 0
 ):
     if sq is None:
         sq = queue.Queue(maxsize=100)
@@ -411,6 +413,8 @@ def _make_proc(
         signal_expiry_sec=signal_expiry_sec,
         shadow_tracker=shadow_tracker,
         quote_fn=None,  # FIX-067: not needed for these tests
+        trade_type=trade_type,                  # Slice 2 / PHASE-4
+        force_intraday_only=force_intraday_only, # Slice 2 LAYER 0
     )
     return proc, sq, store
 

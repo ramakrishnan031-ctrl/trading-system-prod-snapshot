@@ -264,11 +264,14 @@ class TestGate:
         store, _ = _make_store()
         sig_id = "sig_sc_master"
         _insert_queued_signal(store, sig_id, scanner="gap_go_long")
-        # enabled DELIVERY strategy, master INTRADAY, breaker off -> blocked
+        # enabled DELIVERY strategy, master INTRADAY, breaker off -> blocked.
+        # SLICE2.5-PHASE-4: a trade_type×intent mismatch now carries the DISTINCT
+        # "TRADE_TYPE" reject label (was the generic STRATEGY_CONTROL); the disabled-
+        # switch rejects elsewhere in this class still use STRATEGY_CONTROL (no bleed).
         proc = _disabled_proc(store, intent="DELIVERY", enabled=True,
                               trade_type="INTRADAY", force_intraday_only=False)
         _run_one(proc, _now_tup(sig_id, scanner="gap_go_long"), store=store)
-        _assert_rejected(store, sig_id, "REJECTED_STRATEGY_CONTROL")
+        _assert_rejected(store, sig_id, "REJECTED_TRADE_TYPE")
 
     def test_enabled_intraday_not_rejected_by_control_gate(self):
         from tests.unit.test_signal_processor import _make_store

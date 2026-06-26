@@ -115,6 +115,16 @@ P2 = durability + safety (schema v36 `gtt_state`, reconcile, GTT_EXIT, 15-min mo
 
 INERT by construction: flag default false → 70/30 unchanged; force_intraday_only=true coerces every strategy to intent=INTRADAY → bucket=intraday → delivery cap branch never hit + delivery counts 0. No schema; parity. 3854 unit tests / 0 regressions. branch `phase3-delivery-caps-conditional-capital-26jun`, **NOT deployed** (Rama owns; likely batched with Phase 4). Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase3_delivery_caps_conditional_capital_26jun`.
 
+## Delivery (CNC) — SLICE2.5-PHASE-4 (26-Jun): trade_type reject-by-intent gate (CONFIRM + label split)
+| What | Location |
+|---|---|
+| The gate (ALREADY existed, Slice 2) | `strategies/control.py` `strategy_will_trade` LAYER 1×2 — `trade_type` INTRADAY→reject DELIVERY-intent / DELIVERY→reject INTRADAY-intent / BOTH→accept; keyed on EFFECTIVE post-coercion intent. Wired into `signals/signal_processor.py` `_process_one` (~:625) + `continue_from_gate` (~:1330), BEFORE sizing. Dormant under current config |
+| PHASE-4 label split (the one live touch) | `Verdict.cause` field on `control.py` (`CAUSE_OK`/`CAUSE_DISABLED`/`CAUSE_FORCE_BREAKER`/`CAUSE_TRADE_TYPE`). Gate maps `cause==CAUSE_TRADE_TYPE` → `_PipelineReject("TRADE_TYPE")` → `REJECTED_TRADE_TYPE` + own `_stats["rejected"]["TRADE_TYPE"]` tally; all other control rejects stay `STRATEGY_CONTROL`. Keyed on cause, NOT the message string; reason strings + accept/reject logic UNCHANGED |
+| Tests | `tests/unit/test_phase4_trade_type_gate.py` (9: cause-per-layer, reason-unchanged guard, go-live matrix, ★dormancy, ★label split, ★label-bleed, contradictory-combo Auditor BLOCK) |
+| Option B (declared-intent gating) | **PARKED** — would stop the 3 live `positional_*` declared-DELIVERY strategies (trade as coerced-intraday today); a strategy/perf decision, `strategy.enabled` is the cleaner mechanism. Declared intent recoverable via `scripts/strategy_status.py:74` (raw `validate_strategy`), not on the loaded object |
+
+Dormant (INTRADAY+force=true → coerced → accept → split never fires). No schema; parity. 3863 unit tests / 0 regressions. branch `phase4-trade-type-gate-26jun`, **NOT deployed** (Rama owns; one push carries FIX-183-log + Phase 3 + Phase 4). **Completes the Slice 2.5 build side**; next = T2 + C1-watch. Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase4_trade_type_gate_26jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|
