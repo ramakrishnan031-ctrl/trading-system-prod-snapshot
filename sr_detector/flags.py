@@ -84,7 +84,11 @@ def compute_flags_and_retest(
                 retest = _retest_for_long(overhead, params)
             else:
                 flags.append("LOW_CONFIDENCE_STRUCTURE")
-        _breakout_flags(flags, overhead, breakout, params, is_long=True)
+        # Breakout flags evaluate the zone JUST BROKEN (resistance below entry),
+        # not the overhead one — a price that cleared a level is breaking the
+        # level beneath it.
+        _breakout_flags(flags, _broken_zone(resistances, entry, is_long=True),
+                        breakout, params, is_long=True)
     else:
         # Selling into underlying support (mirror).
         underlying = nearest_sup
@@ -94,7 +98,8 @@ def compute_flags_and_retest(
                 retest = _retest_for_short(underlying, params)
             else:
                 flags.append("LOW_CONFIDENCE_STRUCTURE")
-        _breakout_flags(flags, underlying, breakout, params, is_long=False)
+        _breakout_flags(flags, _broken_zone(supports, entry, is_long=False),
+                        breakout, params, is_long=False)
 
     # de-dupe while preserving order
     seen: set = set()
@@ -115,6 +120,19 @@ def _nearest(zones: List[ScoredZone], entry: float, *, prefer_above: bool) -> Op
         preferred = [z for z in zones if z.band_low <= entry]
     pool = preferred or zones
     return min(pool, key=lambda z: abs(z.center - entry))
+
+
+def _broken_zone(zones: List[ScoredZone], entry: float, *, is_long: bool) -> Optional[ScoredZone]:
+    """
+    The zone a breakout is breaking THROUGH: for a long, the resistance just
+    below entry (greatest band_high <= entry); for a short, the support just
+    above entry (smallest band_low >= entry). None if there is no such zone.
+    """
+    if is_long:
+        below = [z for z in zones if z.band_high <= entry]
+        return max(below, key=lambda z: z.band_high) if below else None
+    above = [z for z in zones if z.band_low >= entry]
+    return min(above, key=lambda z: z.band_low) if above else None
 
 
 def _is_into_zone(entry: float, zone: ScoredZone, proximity_pct: float, *, from_below: bool) -> bool:

@@ -166,6 +166,19 @@ def test_no_volume_confirmation_on_low_volume_breakout():
     assert "NO_VOLUME_CONFIRMATION" in fr.flags
 
 
+def test_weak_breakout_targets_broken_zone_even_with_higher_zone():
+    # entry just cleared a lower zone (no follow-through, weak volume) while a
+    # higher zone exists above — the breakout flags must target the BROKEN zone.
+    broken = ScoredZone(500.0, 502.0, "RESISTANCE", 6.0, "HIGH", 5, ("day", "60minute"))
+    higher = ScoredZone(600.0, 601.0, "RESISTANCE", 6.0, "HIGH", 5, ("day", "60minute"))
+    bo = BreakoutContext(last_close=502.3, last_high=503.0, last_low=499.0,
+                         last_volume=700.0, avg_volume=1000.0)
+    fr = compute_flags_and_retest(_cand(502.3), [broken, higher], bo, FlagParams())
+    assert "WEAK_BREAKOUT" in fr.flags
+    assert "NO_VOLUME_CONFIRMATION" in fr.flags
+    assert "BUYING_INTO_RESISTANCE" not in fr.flags
+
+
 def test_short_selling_into_support_mirror():
     z = ScoredZone(480.0, 481.0, "SUPPORT", 6.0, "HIGH", 5, ("day", "60minute"))
     fr = compute_flags_and_retest(_cand(481.5, direction="SHORT"), [z], None, FlagParams())
