@@ -175,6 +175,7 @@ class RetestMonitor:
             candles=candles,
             elapsed_sec=elapsed,
             params=self._params,
+            direction=parked.direction,    # SNR-V2: LONG above resistance / SHORT below support
         )
         if result.confirmed:
             # Release the parking row first (so it can't be re-evaluated), then
@@ -262,11 +263,13 @@ class RetestMonitor:
 
 class RetestDiverter:
     """
-    The pre-placement divert decision (SNR-V2 STEP 3). Reads the ZoneCache
-    SYNCHRONOUSLY (no fetch on the hot path); a long entry sitting inside a
-    HIGH-confidence resistance zone is parked into the RetestMonitor BEFORE any
-    sizing/reservation (so it holds no capital). A miss / non-long / no-HIGH-zone
-    returns False → the caller continues normal placement. Never raises.
+    The pre-placement divert decision (SNR-V2 STEP 3), SYMMETRIC by direction.
+    Reads the ZoneCache SYNCHRONOUSLY (no fetch on the hot path):
+      • a LONG entry sitting inside a HIGH-confidence RESISTANCE zone, or
+      • a SHORT entry sitting inside a HIGH-confidence SUPPORT zone,
+    is parked into the RetestMonitor BEFORE any sizing/reservation (so it holds no
+    capital). A miss / unknown side / no-HIGH-zone returns False → the caller
+    continues normal placement. Never raises.
     """
 
     def __init__(
@@ -289,7 +292,7 @@ class RetestDiverter:
         self._mode = mode
         self._version = detector_version
         self._enabled = bool(getattr(config, "wait_for_retest_enabled", False))
-        self._near_buffer = float(getattr(config, "near_resistance_buffer_pct", 0.3))
+        self._near_buffer = float(getattr(config, "near_zone_buffer_pct", 0.3))
         self._require_conf = str(getattr(config, "require_confidence", "HIGH"))
         self._sl_buffer_pct = float(getattr(config, "sl_buffer_pct", 0.2))
 
@@ -313,26 +316,37 @@ class RetestDiverter:
         score=None,
     ) -> bool:
         """Return True iff the candidate was diverted into WAIT_FOR_RETEST."""
-        if not self._enabled or side != "BUY":     # Phase A is long-only
+        if not self._enabled:
+            return False
+        is_long = side == "BUY"
+        is_short = side == "SELL"
+        if not (is_long or is_short):              # unknown side → normal placement
             return False
         try:
             zs = self._cache.get(symbol)            # synchronous; miss → None
             if zs is None:
                 return False
-            zone = self._matching_zone(zs.resistance, entry_price)
+            # LONG diverts into a resistance zone (sells the rip); SHORT into a
+            # support zone (buys the dip back). Mirror, same matcher.
+            zones = zs.resistance if is_long else zs.support
+            zone = self._matching_zone(zones, entry_price)
             if zone is None:
                 return False
 
             # Dedup: a symbol already parked must not spawn a 2nd MARKET entry
             # (overlap invariant). Drop the duplicate signal rather than placing
-            # it into resistance.
+            # it into the zone.
             if self._monitor.has_symbol(symbol):
                 self._store.update_signal_status(
                     signal_id, "REJECTED_RETEST_DUP",
                     "symbol already parked in WAIT_FOR_RETEST")
                 return True
 
-            structure_sl = zone.band_low * (1.0 - self._sl_buffer_pct / 100.0)
+            # Structure SL: LONG below the reclaimed level, SHORT above the rejected one.
+            if is_long:
+                structure_sl = zone.band_low * (1.0 - self._sl_buffer_pct / 100.0)
+            else:
+                structure_sl = zone.band_high * (1.0 + self._sl_buffer_pct / 100.0)
             parked = ParkedCandidate(
                 signal_id=signal_id, symbol=symbol, direction=direction,
                 zone_band_low=zone.band_low, zone_band_high=zone.band_high,
@@ -353,10 +367,11 @@ class RetestDiverter:
             self._safe_log("error", "retest_diverter: maybe_divert failed for %s: %s", symbol, exc)
             return False
 
-    def _matching_zone(self, resistances, entry: float):
-        """Nearest HIGH-confidence resistance whose band contains the entry."""
+    def _matching_zone(self, zones, entry: float):
+        """Nearest required-confidence zone (resistance for LONG / support for
+        SHORT) whose band contains the entry. Side-agnostic."""
         candidates = [
-            z for z in resistances
+            z for z in zones
             if z.confidence == self._require_conf and z.contains(entry, self._near_buffer)
         ]
         if not candidates:
@@ -364,25 +379,41 @@ class RetestDiverter:
         return min(candidates, key=lambda z: abs(z.center - entry))
 
     def _log_divert_audit(self, parked: ParkedCandidate, zone, structure_sl: float, score) -> None:
-        """Best-effort sr_detector_results row so the V2 divert is auditable."""
+        """Best-effort sr_detector_results row so the V2 divert is auditable.
+        Mirrored by direction: LONG fills the resistance columns + reclaim level
+        (band_high); SHORT fills the support columns + rejection level (band_low)."""
         try:
             import json
             now_iso = self._now_fn().replace(tzinfo=None).isoformat()
+            is_long = parked.direction in ("LONG", "BUY")
+            zone_json = json.dumps(zone.to_dict())
+            if is_long:
+                res_zone, sup_zone = zone_json, None
+                res_conf, sup_conf = zone.confidence, "NONE"
+                evidence = {"resistance_zones": [zone.to_dict()]}
+                flags = ["BUYING_INTO_RESISTANCE", "WAIT_FOR_RETEST_DIVERTED"]
+                proposed_entry = zone.band_high          # reclaim level
+            else:
+                res_zone, sup_zone = None, zone_json
+                res_conf, sup_conf = "NONE", zone.confidence
+                evidence = {"support_zones": [zone.to_dict()]}
+                flags = ["SELLING_INTO_SUPPORT", "WAIT_FOR_RETEST_DIVERTED"]
+                proposed_entry = zone.band_low           # rejection level
             self._store.insert_sr_detector_result({
                 "signal_id": parked.signal_id, "symbol": parked.symbol, "ts": now_iso,
                 "mode": str(self._mode).lower(), "strategy": parked.strategy,
                 "direction": parked.direction,
                 "score": (int(score) if score is not None else None),
                 "intended_entry": parked.entry_price, "actual_fill": None,
-                "nearest_resistance_zone": json.dumps(zone.to_dict()),
-                "nearest_support_zone": None,
+                "nearest_resistance_zone": res_zone,
+                "nearest_support_zone": sup_zone,
                 "dist_to_resistance_pct": None, "dist_to_support_pct": None,
-                "resistance_confidence": zone.confidence, "support_confidence": "NONE",
-                "confluence_evidence": json.dumps({"resistance_zones": [zone.to_dict()]}),
+                "resistance_confidence": res_conf, "support_confidence": sup_conf,
+                "confluence_evidence": json.dumps(evidence),
                 "breakout_volume": None,
-                "flags": json.dumps(["BUYING_INTO_RESISTANCE", "WAIT_FOR_RETEST_DIVERTED"]),
+                "flags": json.dumps(flags),
                 "would_wait_for_retest": 1,
-                "proposed_retest_entry": zone.band_high,
+                "proposed_retest_entry": proposed_entry,
                 "proposed_retest_sl": structure_sl,
                 "structure_status": "OK", "detector_version": self._version,
                 "created_at": now_iso,

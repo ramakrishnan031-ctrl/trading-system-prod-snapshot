@@ -29,10 +29,10 @@ class _MockAdapter:
         return SimpleNamespace(broker_order_id="B1", internal_order_id="I1")
 
 
-def _exec(proto, entry_order_type):
+def _exec(proto, entry_order_type, *, side="BUY", sl_price=219.5, tgt_price=235.0):
     return proto.execute(
-        symbol="ACME", side="BUY", qty=10, entry_price=224.30, sl_price=219.5,
-        tgt_price=235.0, intent="INTRADAY", trade_id="T1", tag="t",
+        symbol="ACME", side=side, qty=10, entry_price=224.30, sl_price=sl_price,
+        tgt_price=tgt_price, intent="INTRADAY", trade_id="T1", tag="t",
         entry_order_type=entry_order_type,
     )
 
@@ -51,7 +51,18 @@ def test_market_route_threads_through_with_zero_price():
     proto = LimitTripleProtocol(adapter=a, logger=_LOG)
     _exec(proto, "MARKET")
     assert a.calls[0]["order_type"] == "MARKET"
+    assert a.calls[0]["side"] == "BUY"
     assert a.calls[0]["price"] == 0.0              # MARKET → price 0 (kite/tick-snap ignore)
+
+
+def test_market_route_short_threads_through_with_zero_price():
+    # SHORT mirror: side-agnostic split — SELL MARKET also goes through at price 0.
+    a = _MockAdapter()
+    proto = LimitTripleProtocol(adapter=a, logger=_LOG)
+    _exec(proto, "MARKET", side="SELL", sl_price=229.0, tgt_price=215.0)
+    assert a.calls[0]["order_type"] == "MARKET"
+    assert a.calls[0]["side"] == "SELL"
+    assert a.calls[0]["price"] == 0.0
 
 
 class _CaptureBus:
@@ -90,3 +101,23 @@ def test_paper_market_fills_at_ltp():
         time.sleep(0.02)
     assert bus.fills, "paper MARKET order never synthesised a fill"
     assert abs(bus.fills[0].avg_fill_price - 226.0) < 1e-6   # filled at LTP (parity with live market fill)
+
+
+def test_paper_market_short_fills_at_ltp():
+    # SHORT mirror: a paper SELL MARKET also synthesises a fill at LTP (parity).
+    bus = _CaptureBus()
+    adapter, _, _, _, _ = _make_adapter(
+        paper=True, quote_provider=_ltp_provider(226.0), bus=bus,
+        paper_ltp_gating_enabled=True, paper_auto_fill_delay_sec=0.02,
+    )
+    placed = adapter.place_order(
+        symbol="ACME", side="SELL", qty=10, price=0.0,
+        order_type="MARKET", intent="INTRADAY",
+    )
+    assert placed.order_type == "MARKET"
+    deadline = time.monotonic() + 3.0
+    while not bus.fills and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert bus.fills, "paper MARKET SHORT order never synthesised a fill"
+    assert bus.fills[0].side == "SELL"
+    assert abs(bus.fills[0].avg_fill_price - 226.0) < 1e-6   # SELL filled at LTP == live behavior

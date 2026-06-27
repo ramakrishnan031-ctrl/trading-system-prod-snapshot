@@ -2547,7 +2547,7 @@ def _main_locked(args, config_dir: Path) -> int:
             _retest_params = RetestParams(
                 timeout_sec=_sr_cfg.retest_timeout_sec,
                 max_away_pct=_sr_cfg.retest_max_away_pct,
-                reclaim_strong_close_frac=_sr_cfg.reclaim_strong_close_frac,
+                confirm_strong_close_frac=_sr_cfg.confirm_strong_close_frac,
                 breakout_margin_pct=_sr_cfg.breakout_margin_pct)
             retest_monitor = RetestMonitor(
                 onem_fetcher=_onem_fetcher, state_store=store, params=_retest_params,

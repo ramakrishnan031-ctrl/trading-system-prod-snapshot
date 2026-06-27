@@ -731,14 +731,14 @@ class SRDetectorConfig(BaseModel):
     max_queue: int = 256
     max_zones_logged: int = 12
 
-    # ── SNR-V2 Phase A: WAIT_FOR_RETEST entry side (default-OFF) ──────────────
-    wait_for_retest_enabled: bool = False    # MASTER flag for Phase A divert+retest
-    near_resistance_buffer_pct: float = 0.3  # entry "inside" the zone tolerance
-    require_confidence: str = "HIGH"         # only this resistance confidence diverts
+    # ── SNR-V2 Phase A: WAIT_FOR_RETEST entry side — SYMMETRIC LONG+SHORT (default-OFF) ──
+    wait_for_retest_enabled: bool = False    # MASTER flag for Phase A divert+retest (both sides)
+    near_zone_buffer_pct: float = 0.3        # entry "inside" the zone tolerance (resistance/support)
+    require_confidence: str = "HIGH"         # only this zone confidence diverts (both sides)
     retest_timeout_sec: float = 1800.0       # give up the wait
-    retest_max_away_pct: float = 1.0         # break-down threshold below band_low
-    reclaim_strong_close_frac: float = 0.6   # close must be in upper N of the 1m range
-    breakout_margin_pct: float = 0.0         # close must exceed band_high by this % (small)
+    retest_max_away_pct: float = 1.0         # wrong-way reject past the band (LONG<band_low / SHORT>band_high)
+    confirm_strong_close_frac: float = 0.6   # close must be in the strong N of the 1m range (upper=LONG/lower=SHORT)
+    breakout_margin_pct: float = 0.0         # close must clear the band by this % (small)
     onem_lookback_days: int = 2              # SHORT 1m window (respect the minute cap)
     zone_cache_ttl_sec: float = 1800.0       # ZoneCache TTL
     zone_rewarm_margin_sec: float = 300.0    # re-warm a cached symbol this long before expiry

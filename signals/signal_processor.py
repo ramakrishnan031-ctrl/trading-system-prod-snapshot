@@ -786,9 +786,11 @@ class SignalProcessor:
                     intent=strategy_obj.intent, tier=screen_result.tier,
                     trigger_price=trigger_price, score=screen_result.score,
                 ):
+                    _into = "long inside HIGH resistance" if side == "BUY" \
+                        else "short inside HIGH support"
                     self._log.info(
                         f"SNR-V2: {symbol} ({signal_id}) diverted to WAIT_FOR_RETEST "
-                        f"(long inside HIGH resistance) — no capital reserved"
+                        f"({_into}) — no capital reserved"
                     )
                     return  # parked (or dropped as dup); do NOT size/reserve/place
 
@@ -1768,16 +1770,27 @@ class SignalProcessor:
                 if paused:
                     raise _PipelineReject("STRATEGY_CIRCUIT_BREAKER", pause_reason)
 
-            # Structure SL below the reclaimed zone; entry estimate = current LTP.
-            structure_sl = parked.zone_band_low * (1.0 - self._retest_sl_buffer_pct / 100.0)
-            entry_est = self._retest_entry_estimate(symbol, parked.zone_band_high)
-            side = "BUY"   # Phase A long-only
+            # Structure SL on the far side of the confirmed zone; entry est = LTP.
+            #   LONG : SL below band_low, break (reclaim) level = band_high.
+            #   SHORT: SL above band_high, break (rejection) level = band_low.
+            is_long = parked.direction in ("LONG", "BUY")
+            side = "BUY" if is_long else "SELL"
+            if is_long:
+                structure_sl = parked.zone_band_low * (1.0 - self._retest_sl_buffer_pct / 100.0)
+                break_level = parked.zone_band_high
+            else:
+                structure_sl = parked.zone_band_high * (1.0 + self._retest_sl_buffer_pct / 100.0)
+                break_level = parked.zone_band_low
+            entry_est = self._retest_entry_estimate(symbol, break_level)
             tier = parked.tier
 
-            if entry_est <= structure_sl:
+            # Entry must sit on the profitable side of the structure SL.
+            bad_structure = (entry_est <= structure_sl) if is_long else (entry_est >= structure_sl)
+            if bad_structure:
                 raise _PipelineReject(
                     "RETEST_BAD_STRUCTURE",
-                    f"entry estimate {entry_est:.2f} <= structure SL {structure_sl:.2f}")
+                    f"entry estimate {entry_est:.2f} vs structure SL {structure_sl:.2f} "
+                    f"(direction={parked.direction})")
 
             try:
                 sizing = self._sizer.calculate(

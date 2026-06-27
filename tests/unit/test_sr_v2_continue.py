@@ -131,6 +131,15 @@ def _parked():
         sizing_inputs={}, added_at=ADDED, state="WAIT_CONFIRM")
 
 
+def _parked_short():
+    # SHORT: support zone [225,226]; after rejection price breaks DOWN below it.
+    return ParkedCandidate(
+        signal_id="SIG1", symbol="ACME", direction="SHORT",
+        zone_band_low=225.0, zone_band_high=226.0, entry_price=227.0, sl_price=232.0,
+        strategy="strat", intent="INTRADAY", tier="A", trigger_price=227.0,
+        sizing_inputs={}, added_at=ADDED, state="WAIT_CONFIRM")
+
+
 def test_confirm_reserves_and_places_market_with_structure_sl():
     sp = _sp()
     sp.continue_from_retest(_parked())
@@ -143,6 +152,33 @@ def test_confirm_reserves_and_places_market_with_structure_sl():
     assert call["tgt_price"] > call["entry_price"]        # R:R TGT above entry
     assert ("SIG1", "PROCESSED", None) in sp._store.status
     assert sp._fm.released == []                          # placer owns the reservation
+
+
+def test_short_confirm_reserves_and_places_market_with_structure_sl_above():
+    sp = _sp()
+    sp._quote_fn = lambda s: {"last_price": 224.0}            # LTP below the broken support
+    sp._derive_target = lambda e, s, st: e - (s - e) * 1.5    # SHORT R:R (mirror)
+    sp.continue_from_retest(_parked_short())
+    assert len(sp._fm.reserved) == 1                          # capital reserved HERE
+    assert len(sp._placer.calls) == 1
+    call = sp._placer.calls[0]
+    assert call["side"] == "SELL"                             # SHORT entry
+    assert call["entry_order_type"] == "MARKET"
+    assert abs(call["entry_price"] - 224.0) < 1e-6            # MARKET entry sized at LTP
+    assert abs(call["sl_price"] - 226.0 * 1.002) < 1e-6       # structure SL = band_high + 0.2% (ABOVE)
+    assert call["sl_price"] > call["entry_price"]             # SHORT SL above entry
+    assert call["tgt_price"] < call["entry_price"]            # SHORT TGT below entry
+    assert ("SIG1", "PROCESSED", None) in sp._store.status
+    assert sp._fm.released == []                              # placer owns the reservation
+
+
+def test_short_bad_structure_when_entry_above_sl_releases_nothing():
+    sp = _sp()
+    sp._quote_fn = lambda s: {"last_price": 227.0}            # LTP ABOVE the structure SL (226.452)
+    sp.continue_from_retest(_parked_short())
+    assert sp._fm.reserved == [] and sp._fm.released == []    # rejected before sizing/reserve
+    assert sp._placer.calls == []
+    assert any(s[1] == "REJECTED_RETEST_BAD_STRUCTURE" for s in sp._store.status)
 
 
 def test_reject_after_reserve_releases_capital():

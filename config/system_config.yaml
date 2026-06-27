@@ -286,19 +286,19 @@ sr_detector:                  # SNR-DETECTOR-V1 — shadow support/resistance de
   w_recency: 0.5
   t_high: 5.0                 # HIGH needs score≥t_high AND ≥2 method-types AND ≥2 TFs
   t_med: 3.0
-  # ── SNR-V2 Phase A: WAIT_FOR_RETEST entry side (DORMANT — master flag off) ──
+  # ── SNR-V2 Phase A: WAIT_FOR_RETEST entry side — SYMMETRIC LONG+SHORT (DORMANT — master flag off) ──
   wait_for_retest_enabled: false   # ★ Phase A master flag (paper+live). false = divert never fires; zero pipeline change
-  near_resistance_buffer_pct: 0.3  # entry counts as "inside" a resistance zone within this %
-  require_confidence: HIGH         # only HIGH-confidence resistance zones divert
+  near_zone_buffer_pct: 0.3        # entry counts as "inside" a zone (resistance=LONG / support=SHORT) within this %
+  require_confidence: HIGH         # only HIGH-confidence zones divert (both sides)
   retest_timeout_sec: 1800         # N — give up the wait (tune)
-  retest_max_away_pct: 1.0         # X — break-down: 1m close >this% below band_low → reject
-  reclaim_strong_close_frac: 0.6   # reclaim close must be in the upper 60% of the 1m candle
-  breakout_margin_pct: 0.0         # 1m close must exceed band_high by this % (0 = any close above)
+  retest_max_away_pct: 1.0         # X — wrong-way reject: 1m close >this% past the band (LONG below band_low / SHORT above band_high)
+  confirm_strong_close_frac: 0.6   # confirm close must be in the strong 60% of the 1m candle (upper=LONG / lower=SHORT)
+  breakout_margin_pct: 0.0         # 1m close must clear the band by this % (0 = any close past); LONG above band_high / SHORT below band_low
   onem_lookback_days: 2            # SHORT 1m fetch window (respects the Zerodha minute cap)
   zone_cache_ttl_sec: 1800         # ZoneCache TTL (warm structure zones for the divert check)
   zone_rewarm_margin_sec: 300      # re-warm a cached symbol this long before its TTL expiry
   retest_poll_interval_sec: 20     # RetestMonitor 1m poll cadence
-  sl_buffer_pct: 0.2               # structure SL = band_low − this% (below the reclaimed level)
+  sl_buffer_pct: 0.2               # structure SL beyond the broken level by this % (LONG below band_low / SHORT above band_high)
 
 smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
   enabled: true               # master switch; if false, OrderPlacer skips SmartTgt wiring

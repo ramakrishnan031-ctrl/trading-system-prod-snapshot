@@ -16,7 +16,7 @@ from tests.unit.test_order_reconciler import _make_store
 
 NOW = datetime(2026, 6, 26, 14, 30)
 ADDED = NOW - timedelta(minutes=5)
-P = RetestParams(timeout_sec=1800.0, max_away_pct=1.0, reclaim_strong_close_frac=0.6)
+P = RetestParams(timeout_sec=1800.0, max_away_pct=1.0, confirm_strong_close_frac=0.6)
 
 
 def _seed_signal(store, signal_id, symbol="ACME"):
@@ -63,6 +63,27 @@ def _confirm_script():
 
 def _breakdown_script():
     return [_candle(ADDED + timedelta(minutes=1), 99.5, 97.0, 98.0)]   # close < 99 → reject
+
+
+def _parked_short(signal_id="SIG1", symbol="ACME"):
+    return ParkedCandidate(
+        signal_id=signal_id, symbol=symbol, direction="SHORT",
+        zone_band_low=100.0, zone_band_high=101.0, entry_price=100.5, sl_price=102.0,
+        strategy="strat", intent="INTRADAY", tier="A", trigger_price=100.6,
+        sizing_inputs={"tier": "A"}, added_at=ADDED, state="WAIT_BREAKOUT")
+
+
+def _short_confirm_script():
+    t = ADDED
+    return [
+        _candle(t + timedelta(minutes=1), 99.5, 97.8, 98.0),     # breakdown (close < 100)
+        _candle(t + timedelta(minutes=2), 100.8, 99.5, 100.5),   # retest touch
+        _candle(t + timedelta(minutes=3), 100.0, 97.0, 97.3),    # rejection strong → CONFIRMED
+    ]
+
+
+def _short_reclaim_script():
+    return [_candle(ADDED + timedelta(minutes=1), 103.0, 101.5, 102.5)]  # close > 102.01 → reject
 
 
 def _monitor(store, candles, on_confirm=None):
@@ -123,6 +144,32 @@ def test_poll_rejects_on_break_down(tmp_path: Path):
     assert m.parked_count() == 0
     sig = store.fetch_one("SELECT status FROM signals WHERE signal_id='SIG1'")
     assert sig["status"] == "RETEST_REJECTED_BREAK_DOWN"
+
+
+def test_short_poll_confirms_and_resumes(tmp_path: Path):
+    store = _make_store(tmp_path)
+    _seed_signal(store, "SIG1")
+    confirmed = []
+    m = _monitor(store, _short_confirm_script(), on_confirm=confirmed.append)
+    m.register(_parked_short())
+    assert m.parked_count() == 1
+    m.poll_once()
+    assert len(confirmed) == 1 and confirmed[0].direction == "SHORT"
+    assert m.parked_count() == 0
+    assert store.get_all_retest_state() == []          # released
+
+
+def test_short_poll_rejects_on_reclaim_up(tmp_path: Path):
+    store = _make_store(tmp_path)
+    _seed_signal(store, "SIG1")
+    confirmed = []
+    m = _monitor(store, _short_reclaim_script(), on_confirm=confirmed.append)
+    m.register(_parked_short())
+    m.poll_once()
+    assert confirmed == []
+    assert m.parked_count() == 0
+    sig = store.fetch_one("SELECT status FROM signals WHERE signal_id='SIG1'")
+    assert sig["status"] == "RETEST_REJECTED_RECLAIM_UP"
 
 
 def test_in_progress_persists_state(tmp_path: Path):
