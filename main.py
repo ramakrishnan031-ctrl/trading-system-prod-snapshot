@@ -1077,6 +1077,7 @@ def _shutdown(
     sr_detector=None,  # SNR-DETECTOR-V1: async S&R observer (None when disabled)
     zone_warmer=None,  # SNR-V2: ZoneWarmer daemon (None when disabled)
     retest_monitor=None,  # SNR-V2: RetestMonitor daemon (None when disabled)
+    structure_exit_manager=None,  # SNR-V2 Phase B: StructureExitManager (None when disabled)
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1113,6 +1114,12 @@ def _shutdown(
             retest_monitor.stop()
         except Exception as exc:
             _log.error("retest_monitor.stop error: %s", exc)
+    # SNR-V2 Phase B: unsubscribe structure-exit from the candle feed (best-effort).
+    if structure_exit_manager is not None:
+        try:
+            structure_exit_manager.stop()
+        except Exception as exc:
+            _log.error("structure_exit_manager.stop error: %s", exc)
     if zone_warmer is not None:
         try:
             zone_warmer.stop()
@@ -2425,8 +2432,12 @@ def _main_locked(args, config_dir: Path) -> int:
     _sr_cfg = app_config.system.sr_detector
     _v1_on = _sr_cfg.enabled
     _v2_on = getattr(_sr_cfg, "wait_for_retest_enabled", False)
+    # SNR-V2 Phase B: structure-aware exit. Shares the ZoneCache/ZoneWarmer infra
+    # (so it builds when EITHER retest or structure-exit is on). Dormant by default.
+    _struct_exit_cfg = app_config.system.structure_exit
+    _struct_exit_on = getattr(_struct_exit_cfg, "structure_exit_enabled", False)
     _sr_fetch_fn = None
-    if _v1_on or _v2_on:
+    if _v1_on or _v2_on or _struct_exit_on:
         _md_kite = _build_market_data_kite(is_paper, kite_client)
         if _md_kite is None:
             _log.warning(
@@ -2457,7 +2468,8 @@ def _main_locked(args, config_dir: Path) -> int:
     zone_warmer = None
     _v2_zone_cache = None
     retest_monitor = None
-    if _v2_on:
+    structure_exit_manager = None
+    if _v2_on or _struct_exit_on:
         try:
             from sr_detector.zone_cache import ZoneCache
             from sr_detector.zone_warmer import ZoneWarmer
@@ -2568,6 +2580,41 @@ def _main_locked(args, config_dir: Path) -> int:
         except Exception as exc:
             _log.error("sr_detector V2 RetestMonitor wiring failed: %s", exc)
             retest_monitor = None
+
+    # SNR-V2 Phase B: StructureExitManager (structure-aware exit). Needs the same
+    # warmed ZoneCache; push-driven by CandleStore 1m closes. Dormant unless
+    # structure_exit_enabled. Single SL owner — do NOT co-enable trailing_sl_enabled.
+    if _struct_exit_on:
+        if _v2_zone_cache is None or zone_warmer is None:
+            _log.error("structure_exit enabled but ZoneCache/ZoneWarmer unavailable "
+                       "(market-data kite?) — structure-exit NOT started")
+        else:
+            try:
+                from orders.structure_exit_manager import StructureExitManager
+                # idempotent: the retest block already started the warmer when _v2_on;
+                # this covers the structure-exit-only (retest off) case.
+                zone_warmer.start()
+                structure_exit_manager = StructureExitManager(
+                    adapter=broker_adapter,
+                    state_store=store,
+                    zone_cache=_v2_zone_cache,
+                    config=_struct_exit_cfg,
+                    logger=get_logger("structure_exit_manager"),
+                    now_fn=time_authority.now_ist,
+                    instrument_cache=instrument_cache,
+                    order_monitor=order_monitor,
+                    candle_store=candle_store,
+                    notifier=notifier,
+                    mode=mode_label,
+                    sl_limit_offset_pct=getattr(
+                        app_config.system.capital, "sl_limit_offset_pct", 0.005),
+                )
+                structure_exit_manager.start()
+                _log.info("sr_detector V2 STRUCTURE_EXIT: ENABLED + started (mode=%s)",
+                          mode_label)
+            except Exception as exc:
+                _log.error("sr_detector V2 StructureExitManager wiring failed: %s", exc)
+                structure_exit_manager = None
 
     entry_gate = EntryGate(
         quote_fn=broker_adapter.get_quote,
@@ -2882,6 +2929,7 @@ def _main_locked(args, config_dir: Path) -> int:
         sr_detector=sr_detector,  # SNR-DETECTOR-V1
         zone_warmer=zone_warmer,  # SNR-V2
         retest_monitor=retest_monitor,  # SNR-V2
+        structure_exit_manager=structure_exit_manager,  # SNR-V2 Phase B
         mode=mode_label,
     )
     return 0

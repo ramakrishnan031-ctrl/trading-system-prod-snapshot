@@ -300,6 +300,14 @@ sr_detector:                  # SNR-DETECTOR-V1 — shadow support/resistance de
   retest_poll_interval_sec: 20     # RetestMonitor 1m poll cadence
   sl_buffer_pct: 0.2               # structure SL beyond the broken level by this % (LONG below band_low / SHORT above band_high)
 
+structure_exit:               # SNR-V2 Phase B — structure-aware exit (trail SL to structure + confirmed-break exit), MIS LIMIT_TRIPLE only
+  structure_exit_enabled: false    # ★ MASTER flag (paper+live). false = StructureExitManager not constructed; zero pipeline change. Single SL owner — do NOT co-enable strategy.trailing_sl_enabled
+  sl_buffer_pct: 0.2               # SL-to-structure buffer (LONG below support.band_low / SHORT above resistance.band_high) — match Phase A
+  break_buffer_pct: 0.0            # extra margin beyond the band for a confirmed break (0 = any close past)
+  require_strong_close: true       # decision (c) — a break requires a strong close (LONG strong-low / SHORT strong-high)
+  break_strong_close_frac: 0.6     # adverse-frac threshold for the break close (in [0,1])
+  min_zone_confidence: HIGH        # decision (b) — only HIGH-confidence zones drive trail/break
+
 smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
   enabled: true               # master switch; if false, OrderPlacer skips SmartTgt wiring
   trigger_pct: 0.005          # arm trailing once price moves this fraction toward target (0.5%)

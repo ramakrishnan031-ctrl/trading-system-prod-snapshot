@@ -767,6 +767,39 @@ class SRDetectorConfig(BaseModel):
         return v
 
 
+class StructureExitConfig(BaseModel):
+    """
+    SNR-V2 Phase B — structure-aware exit (trail SL to structure + confirmed-break
+    exit) for MIS / LIMIT_TRIPLE static-leg trades.
+
+    ONE default-off master flag (`structure_exit_enabled`) gates the whole module
+    in BOTH paper + live. When disabled (the default) StructureExitManager is not
+    constructed and nothing subscribes to the candle feed → zero pipeline change.
+    Single SL owner: do NOT co-enable any strategy.trailing_sl_enabled.
+    """
+    model_config = ConfigDict(extra="forbid")
+    structure_exit_enabled: bool = False     # MASTER flag — OFF
+    sl_buffer_pct: float = 0.2               # SL-to-structure buffer (match Phase A)
+    break_buffer_pct: float = 0.0            # extra margin beyond the band for a break
+    require_strong_close: bool = True        # decision (c) — strong close required
+    break_strong_close_frac: float = 0.6     # adverse-frac threshold for the break close
+    min_zone_confidence: str = "HIGH"        # decision (b) — HIGH only
+
+    @field_validator("min_zone_confidence")
+    @classmethod
+    def _validate_min_zone_confidence(cls, v: str) -> str:
+        if v not in {"HIGH", "MEDIUM", "LOW"}:
+            raise ValueError("structure_exit.min_zone_confidence must be HIGH, MEDIUM, or LOW")
+        return v
+
+    @field_validator("break_strong_close_frac")
+    @classmethod
+    def _validate_break_frac(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("structure_exit.break_strong_close_frac must be in [0, 1]")
+        return v
+
+
 class PaperConfig(BaseModel):
     """
     H-20 / ZA16a: paper-mode fill synthesis settings.
@@ -1144,6 +1177,7 @@ class SystemConfig(BaseModel):
     tgt_retry: TgtRetryConfig = Field(default_factory=TgtRetryConfig)  # Task: standalone TGT retry
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     sr_detector: SRDetectorConfig = Field(default_factory=SRDetectorConfig)  # SNR-DETECTOR-V1: shadow S&R detector (default-off)
+    structure_exit: StructureExitConfig = Field(default_factory=StructureExitConfig)  # SNR-V2 Phase B: structure-aware exit (default-off)
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis

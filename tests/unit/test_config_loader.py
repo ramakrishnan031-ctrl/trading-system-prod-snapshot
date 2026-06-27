@@ -1067,7 +1067,14 @@ def test_no_duplicate_config_keys() -> None:
     # ownership drift between blocks that claim to own the same concept
     # (limits.max_open_positions vs risk.max_open_positions), not flag-name
     # reuse for per-module on/off toggles.
-    _SHARED_FLAG_ALLOWLIST = {"enabled"}
+    #
+    # SNR-V2 Phase B: `sl_buffer_pct` is the same structure-SL-buffer methodology
+    # applied in two independently-owned phases — sr_detector (entry-side WAIT_FOR_
+    # RETEST divert) and structure_exit (exit-side SL trail). They share the 0.2
+    # default by design (parallel knobs) but each owns its own value and may be
+    # tuned apart; this is deliberate parallelism, not the limits/risk ownership
+    # drift BL-17 targets.
+    _SHARED_FLAG_ALLOWLIST = {"enabled", "sl_buffer_pct"}
 
     # Walk: key_name -> list[(block_name, value)]
     appearances: dict[str, list[tuple[str, object]]] = {}
