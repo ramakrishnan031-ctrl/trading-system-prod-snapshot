@@ -276,6 +276,54 @@ def _build_kite_client(app_config):
     return kite
 
 
+def _build_market_data_kite(is_paper: bool, kite_client):
+    """
+    SNR-DETECTOR-V1: return a kite handle usable for READ-ONLY historical data.
+
+    Live: reuse kite_client (== adapter._kite). Paper: kite_client is None
+    (orders are simulated), so build a read-only KiteConnect from the saved
+    token file — the SAME source _make_paper_quote_provider uses for real paper
+    quotes; api_key comes from the token file, NOT a hardcoded key. Orders stay
+    paper-simulated; this handle is for market data only (parity). None if no
+    token (the fetch closure then fails safe → fetch_failed rows).
+    """
+    if not is_paper:
+        return kite_client
+    try:
+        import json
+        from pathlib import Path
+        from kiteconnect import KiteConnect  # type: ignore[import]
+        token_path = Path("data_store/session/zerodha_token.json")
+        if not token_path.exists():
+            return None
+        token_data = json.loads(token_path.read_text())
+        k = KiteConnect(api_key=token_data["api_key"])
+        k.set_access_token(token_data["access_token"])
+        return k
+    except Exception:
+        return None
+
+
+def _make_sr_fetch_fn(market_kite, rate_limiter):
+    """
+    SNR-DETECTOR-V1: a rate-limited historical-fetch closure injected into the
+    pure sr_detector package. Routes every call through
+    rate_limiter.acquire("historical") (spec C pacing); fails safe if no kite
+    handle (the OhlcFetcher records a fetch_failed row, never raises).
+    """
+    def _fetch(instrument_token, from_date, to_date, interval):
+        if market_kite is None:
+            return []
+        rate_limiter.acquire("historical")
+        return market_kite.historical_data(
+            instrument_token=instrument_token,
+            from_date=from_date,
+            to_date=to_date,
+            interval=interval,
+        )
+    return _fetch
+
+
 def _load_holidays(app_config) -> set:
     """Convert NseHolidaysConfig holidays to set[date] (MAIN20)."""
     return {h.date for h in app_config.nse_holidays.holidays}
@@ -1026,6 +1074,7 @@ def _shutdown(
     clock_skew_probe: Optional[BrokerClockSkewProbe] = None,
     token_monitor: Optional[TokenMonitor] = None,  # FIX-128 Fix E
     tgt_retry_manager: Optional[TGTRetryManager] = None,  # Task: TGT retry
+    sr_detector=None,  # SNR-DETECTOR-V1: async S&R observer (None when disabled)
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1049,6 +1098,13 @@ def _shutdown(
         signal_proc.stop()
     except Exception as exc:
         _log.error("signal_processor.stop error: %s", exc)
+    # SNR-DETECTOR-V1: stop the observer worker (after signal_processor so no new
+    # candidates are enqueued). Daemon thread; best-effort.
+    if sr_detector is not None:
+        try:
+            sr_detector.stop()
+        except Exception as exc:
+            _log.error("sr_detector.stop error: %s", exc)
     try:
         entry_gate.stop()
     except Exception as exc:
@@ -2349,6 +2405,35 @@ def _main_locked(args, config_dir: Path) -> int:
         secret_token=os.environ.get("WEBHOOK_SECRET"),
     )
 
+    # SNR-DETECTOR-V1: shadow support/resistance detector (default-off). Built +
+    # started ONLY when system.sr_detector.enabled — otherwise sr_detector stays
+    # None so the SignalProcessor seam is a no-op (zero pipeline change, no extra
+    # thread; dormant on deploy). Parity: same wiring in paper + live.
+    sr_detector = None
+    _sr_cfg = app_config.system.sr_detector
+    if _sr_cfg.enabled:
+        try:
+            from sr_detector import build_sr_detector
+            _md_kite = _build_market_data_kite(is_paper, kite_client)
+            if _md_kite is None:
+                _log.warning(
+                    "sr_detector enabled but no market-data kite handle "
+                    "(no token?) — fetches will fail safe (fetch_failed rows)"
+                )
+            sr_detector = build_sr_detector(
+                config=_sr_cfg,
+                fetch_fn=_make_sr_fetch_fn(_md_kite, rate_limiter),
+                instrument_cache=instrument_cache,
+                store=store,
+                logger=get_logger("sr_detector"),
+                mode=mode_label,
+            )
+            sr_detector.start()
+            _log.info("sr_detector: ENABLED and started (mode=%s)", mode_label)
+        except Exception as exc:  # never let the detector break startup
+            _log.error("sr_detector wiring failed (continuing without it): %s", exc)
+            sr_detector = None
+
     sp_cfg = app_config.system.signal_processor
     signal_processor = SignalProcessor(
         signal_queue=signal_queue,
@@ -2381,6 +2466,8 @@ def _main_locked(args, config_dir: Path) -> int:
         # has an active simulated inning (real trade closed, shadow inning
         # still running) so real + shadow positions never overlap.
         shadow_tracker=shadow_tracker,
+        # SNR-DETECTOR-V1: async non-gating S&R observer (None when disabled).
+        sr_detector=sr_detector,
         # SP7: wire in_flight release so processed signals don't stay locked
         in_flight_release_fn=webhook_receiver.release_in_flight,
         # Use same expiry as webhook_receiver (config signal_queue.expiry_sec)
@@ -2704,6 +2791,7 @@ def _main_locked(args, config_dir: Path) -> int:
         clock_skew_probe=clock_skew_probe,
         token_monitor=token_monitor,  # FIX-128 Fix E
         tgt_retry_manager=tgt_retry_manager,  # Task: TGT retry
+        sr_detector=sr_detector,  # SNR-DETECTOR-V1
         mode=mode_label,
     )
     return 0

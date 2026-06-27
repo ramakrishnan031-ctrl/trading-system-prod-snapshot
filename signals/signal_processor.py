@@ -136,6 +136,7 @@ class SignalProcessor:
         notifier=None,                      # TelegramNotifier; optional
         mode: str = "LIVE",                 # session mode label for alert title
         shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
+        sr_detector=None,                   # SNR-DETECTOR-V1: async non-gating S&R observer, optional
         rate_limiter=None,                  # FIX-007: optional RateLimiter for order pre-check
         quote_fn=None,                      # FIX-067: quote function for momentum fresh LTP
         strategy_governor=None,             # FIX-130 Item 6: intraday strategy circuit breaker
@@ -168,6 +169,7 @@ class SignalProcessor:
         self._notifier = notifier                          # Telegram alerts (optional)
         self._mode = mode                                  # session mode label
         self._shadow_tracker = shadow_tracker              # B.5 / Audit 5.1
+        self._sr_detector = sr_detector                    # SNR-DETECTOR-V1 (None = dormant)
         self._rate_limiter = rate_limiter                  # FIX-007: optional pre-check
         self._quote_fn = quote_fn                          # FIX-067: momentum fresh LTP
         self._strategy_governor = strategy_governor        # FIX-130 Item 6: circuit breaker
@@ -422,6 +424,52 @@ class SignalProcessor:
                 "signal_processor: signal-alert notifier.send failed for %s: %s",
                 symbol, exc,
             )
+
+    def _sr_observe(
+        self,
+        *,
+        symbol: str,
+        strategy_name: str,
+        score,                  # int | None
+        entry_price: float,
+        sl_price: float,
+        tgt_price: float,
+        qty: int,
+        direction: str,
+        signal_id: str,
+        intent: str,
+    ) -> None:
+        """
+        SNR-DETECTOR-V1: hand a PLACED candidate to the async, non-gating S&R
+        detector. Called ONLY after the order reached placement (spec cond. a).
+        Builds the candidate snapshot and enqueues it — the detector returns
+        immediately and does its slow work (3 historical fetches → confluence →
+        flags → shadow-log row) on its own background worker. This must NEVER
+        delay placement or raise into the pipeline, so it is fully guarded and a
+        no-op when the detector is not wired (flag off → sr_detector=None).
+        """
+        if self._sr_detector is None:
+            return
+        try:
+            from sr_detector import Candidate
+            cand = Candidate(
+                signal_id=signal_id,
+                symbol=symbol,
+                strategy=strategy_name,
+                direction=str(direction),
+                intended_entry=float(entry_price),
+                sl_price=float(sl_price),
+                tgt_price=float(tgt_price),
+                qty=int(qty),
+                intent=str(intent),
+                mode=str(self._mode).lower(),
+                ts=now_ist(),
+                score=(int(score) if score is not None else None),
+            )
+            self._sr_detector.observe(cand)
+        except Exception as exc:
+            # Observer must never affect the pipeline (parity with shadow side-effects).
+            self._log.error("sr_detector observe failed for %s: %s", symbol, exc)
 
     # ------------------------------------------------------------------
     # Heartbeat helper (FIX-011)
@@ -968,6 +1016,21 @@ class SignalProcessor:
             with self._stats_lock:
                 self._stats["processed"] += 1
                 self._stats["placed"] += 1
+
+            # SNR-DETECTOR-V1: non-gating observer — runs only now that the order
+            # reached placement. Enqueues + returns immediately (never blocks/raises).
+            self._sr_observe(
+                symbol=symbol,
+                strategy_name=strategy_name,
+                score=screen_result.score,
+                entry_price=fresh_entry_price,
+                sl_price=sl_price,
+                tgt_price=tgt_price,
+                qty=sizing.qty,
+                direction=strategy_obj.direction,
+                signal_id=signal_id,
+                intent=strategy_obj.intent,
+            )
 
         except _PipelineReject as rej:
             self._log.info(
@@ -1535,6 +1598,20 @@ class SignalProcessor:
             with self._stats_lock:
                 self._stats["processed"] += 1
                 self._stats["placed"] += 1
+
+            # SNR-DETECTOR-V1: non-gating observer (gate-release path; score N/A).
+            self._sr_observe(
+                symbol=symbol,
+                strategy_name=strategy_name,
+                score=None,
+                entry_price=entry_price,
+                sl_price=sl_price,
+                tgt_price=tgt_price,
+                qty=sizing.qty,
+                direction=direction,
+                signal_id=signal_id,
+                intent=strategy_obj.intent,
+            )
 
         except _PipelineReject as rej:
             self._log.info(

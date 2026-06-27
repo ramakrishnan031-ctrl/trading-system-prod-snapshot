@@ -685,6 +685,67 @@ class ShadowTrackerConfig(BaseModel):
         return v
 
 
+class SRDetectorConfig(BaseModel):
+    """
+    SNR-DETECTOR-V1 — shadow support/resistance detector config.
+
+    ONE default-off flag (`enabled`) gates the whole module in BOTH paper + live.
+    Every other field is a confluence/zone tuning knob (config-tuned during the
+    visual-review phase). When disabled (the default) the detector is not even
+    constructed (main.py passes sr_detector=None) → zero pipeline change.
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    timeframes: list[str] = Field(default_factory=lambda: ["day", "60minute", "30minute"])
+    lookback_days: int = 180
+    cache_ttl_sec: float = 1800.0
+    # pivots (N bars each side; per-TF override via pivot_n_by_tf)
+    default_pivot_n: int = 5
+    pivot_n_by_tf: dict[str, int] = Field(default_factory=dict)
+    # zones / merge
+    cluster_pct: float = 0.5
+    merge_pct: float = 0.4
+    band_buffer_pct: float = 0.1
+    # volume profile
+    volume_bins: int = 24
+    volume_node_frac: float = 0.7
+    # breakout / flags
+    breakout_avg_window: int = 20
+    entry_proximity_pct: float = 1.0
+    volume_surge_mult: float = 1.5
+    weak_breakout_frac: float = 0.25
+    retest_sl_buffer_pct: float = 0.3
+    # confluence weights + thresholds
+    w_swing: float = 1.0
+    w_volume: float = 1.0
+    w_multi_tf: float = 1.0
+    w_prior_day: float = 1.0
+    w_round: float = 0.5
+    w_recency: float = 0.5
+    t_high: float = 5.0
+    t_med: float = 3.0
+    touch_cap: int = 4
+    recency_window_days: float = 90.0
+    recency_min_factor: float = 0.0
+    # worker / logging
+    max_queue: int = 256
+    max_zones_logged: int = 12
+
+    @field_validator("timeframes")
+    @classmethod
+    def _validate_timeframes(cls, v: list[str]) -> list[str]:
+        allowed = {"day", "60minute", "30minute", "15minute", "5minute"}
+        if not v:
+            raise ValueError("sr_detector.timeframes must not be empty")
+        bad = [tf for tf in v if tf not in allowed]
+        if bad:
+            raise ValueError(
+                "sr_detector.timeframes has unsupported intervals %s; allowed %s"
+                % (bad, sorted(allowed))
+            )
+        return v
+
+
 class PaperConfig(BaseModel):
     """
     H-20 / ZA16a: paper-mode fill synthesis settings.
@@ -1061,6 +1122,7 @@ class SystemConfig(BaseModel):
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
     tgt_retry: TgtRetryConfig = Field(default_factory=TgtRetryConfig)  # Task: standalone TGT retry
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
+    sr_detector: SRDetectorConfig = Field(default_factory=SRDetectorConfig)  # SNR-DETECTOR-V1: shadow S&R detector (default-off)
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
     paper: PaperConfig                        # H-20/ZA16a: paper fill synthesis

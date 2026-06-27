@@ -125,6 +125,19 @@ INERT by construction: flag default false → 70/30 unchanged; force_intraday_on
 
 Dormant (INTRADAY+force=true → coerced → accept → split never fires). No schema; parity. 3863 unit tests / 0 regressions. **DEPLOYED to main `37b3db3` 26-Jun ~13:16 (one-time authorized batch w/ FIX-183-log + Phase 3; rule restored; Muharram holiday self-exit, real boot Mon 08:15; verified DORMANT — gate no-op, Auditor 0 BLOCK).** **Completes the Slice 2.5 build side**; next = T2 + C1-watch. Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase4_trade_type_gate_26jun`.
 
+## S&R Detector V1 (SNR-DETECTOR-V1, 27-Jun) — shadow support/resistance detector (default-OFF)
+| What | Location |
+|---|---|
+| Master flag (default OFF) | `system_config.yaml` `sr_detector.enabled: false` → `core/config_loader.py` `SRDetectorConfig` (`SystemConfig.sr_detector`). Disabled ⇒ detector NOT constructed (`main.py` passes `sr_detector=None`) ⇒ zero pipeline change. Other fields = confluence/zone tuning knobs |
+| Pure package | `sr_detector/` (imports only core/+stdlib): `models`, `fetch` (token + 3-TF windows + session cache + fail-safe), `pivots`, `zones` (clusters + volume profile), `confluence` (multi-method/multi-TF → HIGH/MED/LOW + evidence), `flags` (BUYING_INTO_RESISTANCE / WEAK_BREAKOUT / NO_VOLUME_CONFIRMATION / LOW_CONFIDENCE_STRUCTURE / NO_CLEAR_STRUCTURE + retest PROPOSAL), `detector` (single bg worker; observe/start/stop) |
+| Seam (async, non-gating) | `signals/signal_processor.py` `_sr_observe(...)` AFTER a successful `place()` in BOTH `_process_one` + `continue_from_gate`; enqueues + returns immediately; never blocks/raises. Built+injected in `main.py` (ctor param `sr_detector`) only when enabled; stopped in `_shutdown` |
+| Fetch (rate-limited) | `main.py` `_make_sr_fetch_fn(market_kite, rate_limiter)` → `rate_limiter.acquire("historical")` then `kite.historical_data(...)`; `_build_market_data_kite(is_paper, kite_client)` (live=kite_client; paper=read-only kite from token file — api_key NOT hardcoded). Adapter UNTOUCHED |
+| Table (schema v37) | `core/schema.sql` TABLE 38 `sr_detector_results` (MAIN db; FK→signals; pure addition). DAO `core/state_store.py` `insert_sr_detector_result`/`get_sr_results_for_backfill`/`update_sr_outcome`. .backup-tested v36→v37 clean — **AWAITING Rama nod before live apply** |
+| EOD backfill | `scripts/sr_detector_backfill.py` (join sr_detector_results→trades by signal_id; fills actual_*/win_loss/pnl; terminal-only). `scripts/sr_corp_action_spotcheck.py` = one-time split-adjust check (VM/live) |
+| Tests | `tests/unit/test_sr_detector_{units,fetch,observer,backfill}.py` (37; incl. ★non-blocking + ★dormancy/parity + real-store v37 + seam) |
+
+SHADOW-only (no reject/SL/TGT/STM/entry change). Parity (paper+live; row tagged `mode`). branch `snr-detector-v1-27jun`, NOT pushed. Detail: `docs/SYSTEM_MAP.md` header · memory `snr_detector_v1_27jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|

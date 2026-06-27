@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 36  # SLICE2.5-P2: +gtt_state (durable one-OCO-GTT-per-CNC-trade source of truth). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 37  # SNR-DETECTOR-V1: +sr_detector_results (shadow S&R detect/confluence/flags). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1562,6 +1562,69 @@ class StateStore:
                 (signal_id, score, tier, status,
                  step_results_json, latencies_json, market_data_snapshot_json, ts,
                  eligible_score),
+            )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # S&R Detector V1 shadow log (SNR-DETECTOR-V1, schema v37)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # Insert column order — single source so the SQL and the value tuple cannot
+    # drift. actual_*/win_loss/pnl/hypothetical_retest_result are EOD-backfilled
+    # and intentionally absent here (default NULL).
+    _SR_INSERT_COLS = (
+        "signal_id", "symbol", "ts", "mode", "strategy", "direction", "score",
+        "intended_entry", "actual_fill", "nearest_resistance_zone",
+        "nearest_support_zone", "dist_to_resistance_pct", "dist_to_support_pct",
+        "resistance_confidence", "support_confidence", "confluence_evidence",
+        "breakout_volume", "flags", "would_wait_for_retest", "proposed_retest_entry",
+        "proposed_retest_sl", "structure_status", "detector_version", "created_at",
+    )
+
+    def insert_sr_detector_result(self, row: dict) -> None:
+        """
+        Persist one shadow S&R observation (append-only). Imitates the
+        screener_results write: explicit columns inside a transaction. The caller
+        (sr_detector.detector._write) already guards against exceptions; the
+        explicit column set means a missing key surfaces clearly in tests rather
+        than a silent NULL.
+        """
+        cols = self._SR_INSERT_COLS
+        placeholders = ", ".join("?" for _ in cols)
+        values = tuple(row.get(c) for c in cols)
+        with self.transaction() as cur:
+            cur.execute(
+                f"INSERT INTO sr_detector_results ({', '.join(cols)}) "
+                f"VALUES ({placeholders})",
+                values,
+            )
+
+    def get_sr_results_for_backfill(self, date_iso: str) -> list:
+        """
+        Return sr_detector_results rows for date_iso (by ts date) still awaiting
+        outcome backfill (actual_result IS NULL). Used by the EOD backfill step.
+        """
+        return self.fetch_all(
+            "SELECT id, signal_id, symbol, direction FROM sr_detector_results "
+            "WHERE date(ts) = ? AND actual_result IS NULL",
+            (date_iso,),
+        )
+
+    def update_sr_outcome(
+        self,
+        sr_id: int,
+        *,
+        actual_fill: Optional[float],
+        actual_result: Optional[str],
+        win_loss: Optional[str],
+        pnl: Optional[float],
+    ) -> None:
+        """Backfill the EOD outcome columns for one sr_detector_results row."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE sr_detector_results "
+                "SET actual_fill = ?, actual_result = ?, win_loss = ?, pnl = ? "
+                "WHERE id = ?",
+                (actual_fill, actual_result, win_loss, pnl, sr_id),
             )
 
     # ─────────────────────────────────────────────────────────────────────────

@@ -1171,9 +1171,65 @@ CREATE INDEX IF NOT EXISTS idx_gtt_state_trade_id
 CREATE INDEX IF NOT EXISTS idx_gtt_state_status
     ON gtt_state(status);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 38: sr_detector_results   (SNR-DETECTOR-V1, schema v37)
+-- One row per PLACED candidate observed by the async, non-gating S&R detector.
+-- SHADOW analytics only — detect + confluence + flags + retest PROPOSAL; nothing
+-- here gates or modifies an order. actual_*/win_loss/pnl/hypothetical_retest_result
+-- are backfilled by the EOD outcome step (scripts/sr_detector_backfill.py) and are
+-- NULL at insert time.
+--
+-- PURE ADDITION: created by CREATE TABLE IF NOT EXISTS on the schema re-apply; no
+-- MIGRATION_TABLES entry, nothing rebuilt (same pattern as v31 slippage / v33
+-- preflight / v36 gtt_state). The trailing INSERT bumps schema_version to 37.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS sr_detector_results (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id                   TEXT NOT NULL,
+    symbol                      TEXT NOT NULL,
+    ts                          TEXT NOT NULL,          -- candidate ts (ISO-8601 IST)
+    mode                        TEXT NOT NULL,          -- 'paper' | 'live'
+    strategy                    TEXT,
+    direction                   TEXT,
+    score                       INTEGER,                -- nullable (gate-release path has none)
+    intended_entry              REAL,
+    actual_fill                 REAL,                   -- backfilled (EOD)
+    nearest_resistance_zone     TEXT,                   -- JSON zone snapshot
+    nearest_support_zone        TEXT,                   -- JSON zone snapshot
+    dist_to_resistance_pct      REAL,
+    dist_to_support_pct         REAL,
+    resistance_confidence       TEXT,                   -- HIGH|MEDIUM|LOW|NONE
+    support_confidence          TEXT,                   -- HIGH|MEDIUM|LOW|NONE
+    confluence_evidence         TEXT,                   -- JSON: methods/TFs/touches per zone
+    breakout_volume             REAL,
+    flags                       TEXT,                   -- JSON array of flag strings
+    would_wait_for_retest       INTEGER NOT NULL DEFAULT 0,
+    proposed_retest_entry       REAL,
+    proposed_retest_sl          REAL,
+    structure_status            TEXT,                   -- OK|NO_CLEAR_STRUCTURE|FETCH_FAILED
+    detector_version            TEXT NOT NULL,
+    -- backfilled by the EOD outcome step (nullable now):
+    actual_result               TEXT,
+    win_loss                    TEXT,
+    pnl                         REAL,
+    hypothetical_retest_result  TEXT,
+    created_at                  TEXT NOT NULL,
+
+    FOREIGN KEY (signal_id) REFERENCES signals(signal_id)   -- O1 (mirrors screener_results)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sr_detector_results_signal_id
+    ON sr_detector_results(signal_id);
+
+CREATE INDEX IF NOT EXISTS idx_sr_detector_results_ts
+    ON sr_detector_results(ts);
+
+CREATE INDEX IF NOT EXISTS idx_sr_detector_results_mode
+    ON sr_detector_results(mode);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '36');  -- SLICE2.5-P2: +gtt_state (durable one-OCO-GTT-per-CNC-trade source of truth). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '37');  -- SNR-DETECTOR-V1: +sr_detector_results (shadow S&R detect/confluence/flags/retest-proposal). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

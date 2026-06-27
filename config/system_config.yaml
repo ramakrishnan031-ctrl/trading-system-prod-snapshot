@@ -266,6 +266,27 @@ shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   max_innings: 3              # SH4: total innings (1 real + up to 2 simulated)
   alert_per_inning: true      # SH7: send Telegram INFO on each inning close
 
+sr_detector:                  # SNR-DETECTOR-V1 — shadow support/resistance detector
+  enabled: false              # ★ THE one default-off master flag (paper + live). false = not constructed; zero pipeline change
+  timeframes: ["day", "60minute", "30minute"]  # structure TFs (one historical fetch each)
+  lookback_days: 180          # 6 months back (fits one request per interval)
+  cache_ttl_sec: 1800         # intra-session (symbol, interval) re-fetch suppression
+  default_pivot_n: 5          # swing-pivot N bars each side (per-TF override: pivot_n_by_tf)
+  cluster_pct: 0.5            # pivots within this % cluster into one zone band
+  merge_pct: 0.4              # zones within this % merge across timeframes
+  band_buffer_pct: 0.1        # proximity buffer when testing a level against a band
+  entry_proximity_pct: 1.0    # entry within this % of a HIGH zone → "into" it
+  volume_surge_mult: 1.5      # breakout volume must exceed this × avg for confirmation
+  # confluence weights + HIGH/MEDIUM thresholds (tuned during the visual-review phase)
+  w_swing: 1.0
+  w_volume: 1.0
+  w_multi_tf: 1.0
+  w_prior_day: 1.0
+  w_round: 0.5
+  w_recency: 0.5
+  t_high: 5.0                 # HIGH needs score≥t_high AND ≥2 method-types AND ≥2 TFs
+  t_med: 3.0
+
 smart_tgt:                    # BL-7b: SmartTgtManager deployment-wide defaults
   enabled: true               # master switch; if false, OrderPlacer skips SmartTgt wiring
   trigger_pct: 0.005          # arm trailing once price moves this fraction toward target (0.5%)
