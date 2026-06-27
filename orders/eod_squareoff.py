@@ -148,6 +148,9 @@ class EodSquareoff:
         self._limit_grace_sec = limit_grace_sec
         # FIX-046: entry_gate reference
         self._entry_gate = entry_gate
+        # SNR-V2: RetestMonitor reference (late-bound via set_retest_monitor) so
+        # parked WAIT_FOR_RETEST candidates are cleared at square-off too.
+        self._retest_monitor = None
 
         # FIX-186 (FIX 2): optional stale-order sweep callable (wired post-construction
         # by main.py to OrderReconciler.sweep_stale_orders). Invoked after the
@@ -178,6 +181,10 @@ class EodSquareoff:
         would silently drop the event.
         """
         self._check_restart_recovery()
+
+    def set_retest_monitor(self, monitor) -> None:
+        """SNR-V2: wire the RetestMonitor so EOD clears parked candidates."""
+        self._retest_monitor = monitor
 
     def set_stale_order_sweep(self, sweep_fn) -> None:
         """
@@ -294,6 +301,15 @@ class EodSquareoff:
             except Exception as exc:  # noqa: BLE001
                 self._log.error(f"FIX-046: gate clear_all() failed: {exc}")
                 # Continue with EOD sequence even if gate clear fails
+
+        # SNR-V2: clear parked WAIT_FOR_RETEST candidates (in-memory + retest_state)
+        # so none survive into the next session (mirrors FIX-046 for the gate).
+        if self._retest_monitor is not None:
+            try:
+                n = self._retest_monitor.clear_all()
+                self._log.info(f"SNR-V2: cleared {n} parked retest candidate(s) at EOD")
+            except Exception as exc:  # noqa: BLE001
+                self._log.error(f"SNR-V2: retest_monitor.clear_all() failed: {exc}")
 
         # M-3 (write-ahead): mark IN_PROGRESS before doing anything. A crash
         # between here and the COMPLETE update leaves the row IN_PROGRESS,

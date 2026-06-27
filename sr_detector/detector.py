@@ -26,8 +26,7 @@ from datetime import datetime
 from statistics import mean
 from typing import Dict, List, Optional
 
-from sr_detector.confluence import ConfluenceContext, ScoringParams, score_zones
-from sr_detector.flags import BreakoutContext, FlagParams, compute_flags_and_retest
+from sr_detector.flags import BreakoutContext, compute_flags_and_retest
 from sr_detector.models import (
     STRUCT_FETCH_FAILED,
     STRUCT_NONE,
@@ -35,8 +34,12 @@ from sr_detector.models import (
     Candidate,
     SRAnalysis,
 )
-from sr_detector.pivots import find_swing_pivots
-from sr_detector.zones import cluster_zones, volume_profile_nodes
+from sr_detector.zone_builder import (
+    build_flag_params,
+    build_scoring_params,
+    build_zone_knobs,
+    scored_zones_from_candles,
+)
 
 _SENTINEL = object()
 DETECTOR_VERSION = "snr-v1"
@@ -63,37 +66,14 @@ class SRDetector:
         self._version = detector_version
         self._enabled = bool(_attr(config, "enabled", False))
 
-        self._intervals: List[str] = list(_attr(config, "timeframes", ["day", "60minute", "30minute"]))
-        self._default_pivot_n = int(_attr(config, "default_pivot_n", 5))
-        self._pivot_n_by_tf: Dict[str, int] = dict(_attr(config, "pivot_n_by_tf", {}) or {})
-        self._cluster_pct = float(_attr(config, "cluster_pct", 0.5))
-        self._band_buffer_pct = float(_attr(config, "band_buffer_pct", 0.1))
-        self._volume_bins = int(_attr(config, "volume_bins", 24))
-        self._volume_node_frac = float(_attr(config, "volume_node_frac", 0.7))
+        # SNR-V2: the zone-building params + the pivots→zones→confluence sequence
+        # are shared with the ZoneWarmer via sr_detector.zone_builder (one path).
+        self._knobs = build_zone_knobs(config)
+        self._scoring = build_scoring_params(config)
+        self._flagp = build_flag_params(config)
+        self._intervals: List[str] = list(self._knobs.intervals)
         self._breakout_avg_window = int(_attr(config, "breakout_avg_window", 20))
         self._max_zones_logged = int(_attr(config, "max_zones_logged", 12))
-
-        self._scoring = ScoringParams(
-            w_swing=float(_attr(config, "w_swing", 1.0)),
-            w_volume=float(_attr(config, "w_volume", 1.0)),
-            w_multi_tf=float(_attr(config, "w_multi_tf", 1.0)),
-            w_prior_day=float(_attr(config, "w_prior_day", 1.0)),
-            w_round=float(_attr(config, "w_round", 0.5)),
-            w_recency=float(_attr(config, "w_recency", 0.5)),
-            t_high=float(_attr(config, "t_high", 5.0)),
-            t_med=float(_attr(config, "t_med", 3.0)),
-            touch_cap=int(_attr(config, "touch_cap", 4)),
-            merge_pct=float(_attr(config, "merge_pct", 0.4)),
-            band_buffer_pct=float(_attr(config, "band_buffer_pct", 0.1)),
-            recency_min_factor=float(_attr(config, "recency_min_factor", 0.0)),
-        )
-        self._flagp = FlagParams(
-            entry_proximity_pct=float(_attr(config, "entry_proximity_pct", 1.0)),
-            volume_surge_mult=float(_attr(config, "volume_surge_mult", 1.5)),
-            weak_breakout_frac=float(_attr(config, "weak_breakout_frac", 0.25)),
-            retest_sl_buffer_pct=float(_attr(config, "retest_sl_buffer_pct", 0.3)),
-        )
-        self._recency_window_days = float(_attr(config, "recency_window_days", 90.0))
 
         self._q: queue.Queue = queue.Queue(maxsize=int(_attr(config, "max_queue", 256)))
         self._worker: Optional[threading.Thread] = None
@@ -171,25 +151,9 @@ class SRDetector:
                 note="fetch_failed",
             )
 
-        zones_by_tf = {}
-        for tf, candles in tf_candles.items():
-            n = self._pivot_n_by_tf.get(tf, self._default_pivot_n)
-            pivots = find_swing_pivots(candles, left=n, right=n)
-            zones_by_tf[tf] = cluster_zones(pivots, cluster_pct=self._cluster_pct, timeframe=tf)
-
-        daily = tf_candles.get("day") or next(iter(tf_candles.values()))
-        prior_levels = self._prior_day_levels(daily)
-        volume_nodes = tuple(volume_profile_nodes(
-            daily, bins=self._volume_bins, node_frac=self._volume_node_frac))
+        scored = scored_zones_from_candles(
+            tf_candles, knobs=self._knobs, scoring=self._scoring, now=self._safe_now())
         breakout = self._breakout_context(tf_candles)
-
-        ctx = ConfluenceContext(
-            prior_day_levels=prior_levels,
-            volume_nodes=volume_nodes,
-            now=self._safe_now(),
-            recency_window_days=self._recency_window_days,
-        )
-        scored = score_zones(zones_by_tf, ctx, self._scoring)
         fr = compute_flags_and_retest(candidate, scored, breakout, self._flagp)
 
         status = STRUCT_OK if scored else STRUCT_NONE
@@ -206,12 +170,6 @@ class SRDetector:
             retest=fr.retest,
             evidence=self._evidence(scored),
         )
-
-    def _prior_day_levels(self, daily) -> tuple:
-        if not daily:
-            return ()
-        prior = daily[-2] if len(daily) >= 2 else daily[-1]
-        return (prior.high, prior.low, prior.close)
 
     def _breakout_context(self, tf_candles: Dict[str, list]) -> Optional[BreakoutContext]:
         intr = tf_candles.get("30minute") or tf_candles.get("60minute") or tf_candles.get("day")

@@ -737,6 +737,7 @@ class OrderPlacer:
         signal_trigger_price: Optional[float] = None,  # FIX-128: original Chartink trigger for slippage guard
         sizing_breakdown: Optional[dict] = None,  # Diary #4: PositionSizer.breakdown for the trades sizing audit
         tgt_risk_reward: Optional[float] = None,  # Slice 1: originating strategy's R:R, frozen for the fill-time TGT recalc
+        entry_order_type: str = "LIMIT",  # SNR-V2: "MARKET" for the WAIT_FOR_RETEST confirm entry (default LIMIT = every existing caller unchanged)
     ) -> None:
         """
         Create trade, place entry orders, register fill tracking. (OP1–OP4)
@@ -1175,6 +1176,7 @@ class OrderPlacer:
                     intent=intent,
                     trade_id=trade_id,
                     order_protocol=order_protocol,
+                    entry_order_type=entry_order_type,  # SNR-V2: MARKET for the retest entry
                 )
                 break  # success
             except OrderRejectedError as rej_exc:

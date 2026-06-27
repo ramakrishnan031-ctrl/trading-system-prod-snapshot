@@ -125,6 +125,21 @@ INERT by construction: flag default false → 70/30 unchanged; force_intraday_on
 
 Dormant (INTRADAY+force=true → coerced → accept → split never fires). No schema; parity. 3863 unit tests / 0 regressions. **DEPLOYED to main `37b3db3` 26-Jun ~13:16 (one-time authorized batch w/ FIX-183-log + Phase 3; rule restored; Muharram holiday self-exit, real boot Mon 08:15; verified DORMANT — gate no-op, Auditor 0 BLOCK).** **Completes the Slice 2.5 build side**; next = T2 + C1-watch. Detail: SYSTEM_MAP Changelog 2026-06-26 · memory `slice25_phase4_trade_type_gate_26jun`.
 
+## S&R V2 Phase A (SNR-V2, 27-Jun) — WAIT_FOR_RETEST entry side (default-OFF, schema v38)
+| What | Location |
+|---|---|
+| Master flag (default OFF) | `system_config.yaml` `sr_detector.wait_for_retest_enabled: false` (extends the V1 block) → `SRDetectorConfig`. Off ⇒ ZoneWarmer/RetestMonitor/Diverter NOT constructed ⇒ divert + enqueue are no-ops ⇒ byte-identical |
+| Divert (pre-placement) | `signals/signal_processor.py` `_process_one` AFTER side, BEFORE sizing/reserve(`:818`) → `RetestDiverter.maybe_divert` (`screening/retest_monitor.py`). Reads `ZoneCache` SYNC (miss/non-long/no-HIGH → fall through); parks into RetestMonitor; `signals.status=RETEST_WAITING`; audit row to `sr_detector_results`. NO capital held |
+| Confirm state machine | `sr_detector/retest_confirm.py` `evaluate()` — pure FOLD: WAIT_BREAKOUT→WAIT_RETEST(close>band_high)→WAIT_CONFIRM(re-enter band)→CONFIRMED(close>band_high + strong close); REJECT on timeout / close < band_low·(1−max_away%) |
+| Monitor (restart-safe) | `screening/retest_monitor.py` `RetestMonitor` daemon — polls fresh 1m (OhlcFetcher lookback=`onem_lookback_days`, no cache), CONFIRMED→`continue_from_retest`, REJECT→release; rehydrates from `retest_state`; `has_symbol` dedup |
+| Resume (MARKET entry) | `signals/signal_processor.py` `continue_from_retest` (sibling of continue_from_gate) — re-check KS/window/control/governor (NOT 60s expiry); size+reserve (capital HERE); place MARKET, SL=band_low·(1−`sl_buffer_pct`%), R:R TGT |
+| MARKET route | `entry_order_type` (default LIMIT) threaded `order_placer.place → full_entry_engine.execute → {LimitTriple,CoPlusTgt}.execute → adapter.place_order` (MARKET→price=0). Adapter already supports MARKET; paper `_synth_fill` fills at LTP (parity) |
+| Zone cache + warmer | `sr_detector/zone_cache.py` ZoneCache (resistance+support, TTL) · `sr_detector/zone_warmer.py` ZoneWarmer (daemon; enqueued at `signal_processor._dispatcher_loop._warm_zones`) · `sr_detector/zone_builder.py` (DRY zone-build shared with V1 detector) |
+| Schema (v37→v38) | `core/schema.sql` TABLE 39 `retest_state` (pure add, FK→signals) + signals.status CHECK `OR GLOB 'RETEST_*'`; `MIGRATION_TABLES[38]=["signals"]` (FK-safe rebuild). DAO `core/state_store.py` insert/update/release/clear_all/get_all_retest_state. EOD clear via `eod_squareoff.set_retest_monitor` |
+| Tests | `tests/unit/test_sr_v2_{retest_confirm,zone_cache,divert,monitor,market_path,continue}.py` (38) |
+
+SHADOW→ACTIVE only when the flag is on; long-only (Phase A). Phase B (SL-reposition / support-break exit) parked — support zones already cached. branch `snr-v2-phaseA-27jun` (on V1), NOT pushed; schema awaiting nod. Detail: `docs/SYSTEM_MAP.md` header · memory `snr_v2_phaseA_27jun`.
+
 ## S&R Detector V1 (SNR-DETECTOR-V1, 27-Jun) — shadow support/resistance detector (default-OFF)
 | What | Location |
 |---|---|

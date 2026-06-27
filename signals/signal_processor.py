@@ -137,6 +137,8 @@ class SignalProcessor:
         mode: str = "LIVE",                 # session mode label for alert title
         shadow_tracker=None,                # B.5 / Audit 5.1: ShadowTracker, optional
         sr_detector=None,                   # SNR-DETECTOR-V1: async non-gating S&R observer, optional
+        zone_warmer=None,                   # SNR-V2: ZoneWarmer — enqueue symbol on signal arrival
+        retest_sl_buffer_pct: float = 0.2,  # SNR-V2: structure SL = band_low − this% (continue_from_retest)
         rate_limiter=None,                  # FIX-007: optional RateLimiter for order pre-check
         quote_fn=None,                      # FIX-067: quote function for momentum fresh LTP
         strategy_governor=None,             # FIX-130 Item 6: intraday strategy circuit breaker
@@ -170,6 +172,9 @@ class SignalProcessor:
         self._mode = mode                                  # session mode label
         self._shadow_tracker = shadow_tracker              # B.5 / Audit 5.1
         self._sr_detector = sr_detector                    # SNR-DETECTOR-V1 (None = dormant)
+        self._zone_warmer = zone_warmer                    # SNR-V2 (None = no warming)
+        self._retest_diverter = None                       # SNR-V2 — set via set_retest_diverter()
+        self._retest_sl_buffer_pct = float(retest_sl_buffer_pct)  # SNR-V2
         self._rate_limiter = rate_limiter                  # FIX-007: optional pre-check
         self._quote_fn = quote_fn                          # FIX-067: momentum fresh LTP
         self._strategy_governor = strategy_governor        # FIX-130 Item 6: circuit breaker
@@ -290,6 +295,27 @@ class SignalProcessor:
     # Dispatcher loop (SP5)
     # ------------------------------------------------------------------
 
+    def set_retest_diverter(self, diverter) -> None:
+        """SNR-V2: late-bind the RetestDiverter (built after the RetestMonitor,
+        which needs continue_from_retest). None keeps the divert dormant."""
+        self._retest_diverter = diverter
+
+    def _warm_zones(self, signal_tuple) -> None:
+        """SNR-V2: enqueue a signal's symbol for zone warming so the cache is hot
+        by the time (or soon after) the pipeline reaches the divert check. Fully
+        guarded — never affects dispatch."""
+        if self._zone_warmer is None:
+            return
+        try:
+            if isinstance(signal_tuple, dict):
+                symbol = signal_tuple.get("symbol")
+            else:
+                symbol = signal_tuple[2]
+            if symbol:
+                self._zone_warmer.enqueue(symbol)
+        except Exception:
+            pass
+
     def _dispatcher_loop(self) -> None:
         """
         Single dispatcher thread.  Pulls signal tuples from the queue and
@@ -301,6 +327,7 @@ class SignalProcessor:
                 signal_tuple = self._queue.get(timeout=self._drain_poll_sec)
             except Exception:  # queue.Empty
                 continue
+            self._warm_zones(signal_tuple)   # SNR-V2: warm in parallel with processing
             if self._executor is not None:
                 self._executor.submit(self._process_one_safe, signal_tuple)
 
@@ -745,6 +772,25 @@ class SignalProcessor:
             # ("BUY"/"SELL") for downstream modules (position_sizer, order_placer).
             _dir = strategy_obj.direction
             side = "BUY" if _dir in ("LONG", "BUY") else "SELL"
+
+            # SNR-V2 Phase A: WAIT_FOR_RETEST pre-placement divert. Runs BEFORE any
+            # sizing/reservation, so a parked candidate holds NO capital. Reads the
+            # ZoneCache SYNCHRONOUSLY (never fetches on the hot path); a miss /
+            # non-long / no-HIGH-zone falls through to normal placement. Dormant
+            # unless the master flag is on (diverter stays None when disabled).
+            if self._retest_diverter is not None and self._retest_diverter.enabled:
+                if self._retest_diverter.maybe_divert(
+                    signal_id=signal_id, symbol=symbol, side=side,
+                    direction=strategy_obj.direction, entry_price=entry_price,
+                    sl_price=sl_price, strategy_name=strategy_name,
+                    intent=strategy_obj.intent, tier=screen_result.tier,
+                    trigger_price=trigger_price, score=screen_result.score,
+                ):
+                    self._log.info(
+                        f"SNR-V2: {symbol} ({signal_id}) diverted to WAIT_FOR_RETEST "
+                        f"(long inside HIGH resistance) — no capital reserved"
+                    )
+                    return  # parked (or dropped as dup); do NOT size/reserve/place
 
             # ----------------------------------------------------------
             # Step 5: Position sizing
@@ -1664,6 +1710,244 @@ class SignalProcessor:
             with self._stats_lock:
                 self._stats["total_ms"] += elapsed_ms
                 self._stats["pipeline_total"] += 1
+
+    # ------------------------------------------------------------------
+    # SNR-V2 Phase A — WAIT_FOR_RETEST resume (sibling of continue_from_gate)
+    # ------------------------------------------------------------------
+
+    def continue_from_retest(self, parked) -> None:
+        """
+        Resume a CONFIRMED WAIT_FOR_RETEST candidate. Re-checks kill-switch /
+        market-window / strategy-control / governor (NOT the :607 60s expiry —
+        this is a park-and-resume), then sizes + reserves (capital reserved HERE
+        for the first time) and places a MARKET entry with a STRUCTURE SL below
+        the reclaimed zone + an R:R-preserving TGT. Called from RetestMonitor's
+        poll thread on CONFIRMED. ``parked`` is a ParkedCandidate (typed as object
+        to avoid a circular import).
+        """
+        signal_id = parked.signal_id
+        symbol = parked.symbol
+        strategy_name = parked.strategy
+        start_mono = time.monotonic()
+        reservation_id: Optional[str] = None
+        in_flight_incremented = False
+
+        try:
+            self._store.update_signal_status(signal_id, "PROCESSING")
+            self._bump_metric("signals_processed")
+
+            # Last-mile gates (NO 60s expiry — park-and-resume).
+            if self._ks and self._ks.is_active("entry"):
+                raise _PipelineReject("KILL_SWITCH", "Kill switch is active")
+            now = now_ist()
+            if not self._mw.is_entry_allowed(now):
+                raise _PipelineReject("OUTSIDE_ENTRY_WINDOW", "Outside entry window")
+
+            strategy_obj = self._strategies.get(strategy_name)
+            if strategy_obj is None:
+                raise _PipelineReject("UNKNOWN_STRATEGY", f"Strategy {strategy_name!r} not loaded")
+
+            _verdict = strategy_will_trade(
+                strategy_obj, trade_type=self._trade_type,
+                force_intraday_only=self._force_intraday_only,
+            )
+            if not _verdict.will_trade:
+                _check = (CAUSE_TRADE_TYPE if _verdict.cause == CAUSE_TRADE_TYPE
+                          else "STRATEGY_CONTROL")
+                raise _PipelineReject(_check, _verdict.reason)
+
+            if not self._mw.is_entry_allowed_for_strategy(now, strategy_obj):
+                raise _PipelineReject(
+                    "OUTSIDE_ENTRY_WINDOW",
+                    f"Outside per-strategy entry window "
+                    f"({strategy_obj.entry_start_time}-{strategy_obj.entry_end_time})",
+                )
+
+            if self._strategy_governor is not None:
+                paused, pause_reason = self._strategy_governor.check(strategy_name, now.time())
+                if paused:
+                    raise _PipelineReject("STRATEGY_CIRCUIT_BREAKER", pause_reason)
+
+            # Structure SL below the reclaimed zone; entry estimate = current LTP.
+            structure_sl = parked.zone_band_low * (1.0 - self._retest_sl_buffer_pct / 100.0)
+            entry_est = self._retest_entry_estimate(symbol, parked.zone_band_high)
+            side = "BUY"   # Phase A long-only
+            tier = parked.tier
+
+            if entry_est <= structure_sl:
+                raise _PipelineReject(
+                    "RETEST_BAD_STRUCTURE",
+                    f"entry estimate {entry_est:.2f} <= structure SL {structure_sl:.2f}")
+
+            try:
+                sizing = self._sizer.calculate(
+                    symbol, side, entry_est, structure_sl, strategy_obj.intent,
+                    tier, strategy_obj.lot_size,
+                    perf_weight=self._perf_weights.get(strategy_obj.name, 1.0),
+                )
+            except BrokerError as be:
+                if self._ks:
+                    self._ks.record_api_failure(be)
+                raise _PipelineReject("SIZING_BROKER_ERROR", str(be)) from be
+            if not sizing.success:
+                raise _PipelineReject(f"SIZING_{sizing.constraint}", sizing.reason)
+
+            tgt_price = self._derive_target(entry_est, structure_sl, strategy_obj)
+
+            with self._in_flight_lock:
+                self._in_flight_count += 1
+                processor_in_flight = self._in_flight_count
+                in_flight_incremented = True
+
+            max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
+            strat_open = self._store.fetch_one(
+                "SELECT COUNT(*) AS n FROM trades WHERE strategy = ? AND status IN ('OPEN', 'PARTIAL')",
+                (strategy_name,),
+            )
+            strat_open_count = int(strat_open["n"]) if strat_open else 0
+            if strat_open_count >= max_strat_pos:
+                raise _PipelineReject(
+                    "STRATEGY_POSITION_LIMIT",
+                    f"{strategy_name} has {strat_open_count}/{max_strat_pos} open positions")
+
+            with self._fm.portfolio_lock:
+                try:
+                    approval = self._risk.approve(
+                        symbol, side, strategy_obj.intent, sizing, signal_id,
+                        processor_in_flight_count=processor_in_flight)
+                except BrokerError as be:
+                    if self._ks:
+                        self._ks.record_api_failure(be)
+                    raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
+                if not approval.approved:
+                    raise _PipelineReject(approval.failed_check, approval.reason)
+                try:
+                    reservation = self._fm.reserve(
+                        symbol, sizing.qty, entry_est, strategy_obj.intent, signal_id)
+                except BrokerError as be:
+                    if self._ks:
+                        self._ks.record_api_failure(be)
+                    raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
+                if not reservation.success:
+                    raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
+                reservation_id = reservation.reservation_id
+                self._store.update_signal_status(signal_id, "RESERVED")
+
+            if self._placer is None:
+                try:
+                    self._fm.release(reservation_id, "no_order_placer")
+                except Exception as rel_exc:
+                    self._log.error(f"Failed to release reservation {reservation_id}: {rel_exc}")
+                reservation_id = None
+                self._store.update_signal_status(signal_id, "PROCESSED_NO_PLACER")
+                with self._stats_lock:
+                    self._stats["processed_no_placer"] += 1
+                return
+
+            self._emit_signal_alert(
+                symbol=symbol, strategy_name=strategy_name, score=None,
+                entry_price=entry_est, sl_price=structure_sl, tgt_price=tgt_price,
+                qty=sizing.qty, direction=parked.direction)
+
+            if self._ks and self._ks.is_active("entry"):
+                if reservation_id:
+                    self._fm.release(reservation_id, "kill_switch_after_retest_pipeline")
+                    reservation_id = None
+                raise _PipelineReject("KILL_SWITCH_LATE", "Kill switch active before placement (retest)")
+            if self._stop_event.is_set():
+                if reservation_id:
+                    self._fm.release(reservation_id, "shutdown_before_retest_placement")
+                    reservation_id = None
+                raise _PipelineReject("SHUTDOWN", "System shutdown before placement (retest)")
+
+            _tr = self._entry_throttle.admit(symbol)
+            if not _tr.allowed:
+                if reservation_id:
+                    self._fm.release(reservation_id, "entry_throttled")
+                    reservation_id = None
+                self._bump_metric("entries_throttled")
+                raise _PipelineReject("ENTRY_THROTTLED", f"Entry throttled: {_tr.reason}")
+
+            try:
+                self._placer.place(
+                    symbol=symbol, side=side, qty=sizing.qty,
+                    entry_price=entry_est, sl_price=structure_sl,
+                    intent=strategy_obj.intent, signal_id=signal_id,
+                    reservation_id=reservation_id, strategy=strategy_name,
+                    tgt_price=tgt_price, signal_trigger_price=parked.trigger_price,
+                    sizing_breakdown=sizing.breakdown,
+                    tgt_risk_reward=getattr(strategy_obj, "tgt_risk_reward", None),
+                    entry_order_type="MARKET",   # SNR-V2: reclaim confirmed → MARKET entry
+                )
+                reservation_id = None
+                self._bump_metric("entries_placed")
+            except BrokerError as be:
+                if self._ks:
+                    self._ks.record_api_failure(be)
+                raise
+
+            self._store.update_signal_status(signal_id, "PROCESSED")
+            with self._stats_lock:
+                self._stats["processed"] += 1
+                self._stats["placed"] += 1
+
+            self._sr_observe(
+                symbol=symbol, strategy_name=strategy_name, score=None,
+                entry_price=entry_est, sl_price=structure_sl, tgt_price=tgt_price,
+                qty=sizing.qty, direction=parked.direction,
+                signal_id=signal_id, intent=strategy_obj.intent)
+
+        except _PipelineReject as rej:
+            self._log.info(f"Retest signal {signal_id} ({symbol}) rejected at {rej.check}: {rej.reason}")
+            if rej.check != "ENTRY_THROTTLED":
+                self._bump_metric("entries_rejected")
+            self._store.update_signal_status(signal_id, f"REJECTED_{rej.check}", rej.reason)
+            if reservation_id:
+                try:
+                    self._fm.release(reservation_id, f"rejected_{rej.check.lower()}")
+                except Exception as rel_exc:
+                    self._log.error(f"Failed to release reservation {reservation_id}: {rel_exc}")
+            with self._stats_lock:
+                bucket = self._stats["rejected"]
+                bucket[rej.check] = bucket.get(rej.check, 0) + 1
+
+        except Exception as exc:
+            self._log.error(
+                f"Pipeline exception for retest signal {signal_id} ({symbol}): "
+                f"{exc}\n{traceback.format_exc()}")
+            self._store.update_signal_status(signal_id, "PLACEMENT_FAILED", str(exc))
+            if reservation_id:
+                try:
+                    self._fm.release(reservation_id, "placement_failed")
+                except Exception as rel_exc:
+                    self._log.error(f"Failed to release reservation {reservation_id}: {rel_exc}")
+            with self._stats_lock:
+                bucket = self._stats["rejected"]
+                bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
+
+        finally:
+            if in_flight_incremented:
+                try:
+                    with self._in_flight_lock:
+                        self._in_flight_count -= 1
+                except Exception as lock_exc:
+                    self._log.error(f"_in_flight_count decrement failed (retest): {lock_exc}")
+            elapsed_ms = (time.monotonic() - start_mono) * 1000
+            with self._stats_lock:
+                self._stats["total_ms"] += elapsed_ms
+                self._stats["pipeline_total"] += 1
+
+    def _retest_entry_estimate(self, symbol: str, fallback: float) -> float:
+        """Current LTP for MARKET-entry sizing/risk; fall back to the reclaim level."""
+        try:
+            if self._quote_fn is not None:
+                q = self._quote_fn(symbol)
+                ltp = q.get("last_price") if q else None
+                if ltp and ltp > 0:
+                    return float(ltp)
+        except Exception as exc:
+            self._log.warning(f"retest entry estimate quote failed for {symbol}: {exc}")
+        return float(fallback)
 
     # ------------------------------------------------------------------
     # Metrics (SP13, SPW9)

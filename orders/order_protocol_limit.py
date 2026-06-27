@@ -176,6 +176,7 @@ class LimitTripleProtocol(EntryEngine):
         intent: str,
         trade_id: str,
         tag: str = "",
+        entry_order_type: str = "LIMIT",   # SNR-V2: "MARKET" for the retest entry
     ) -> EntryResult:
         """
         Phase 1: place ENTRY LIMIT only (OPL1/OPL2/OPL6).
@@ -196,12 +197,16 @@ class LimitTripleProtocol(EntryEngine):
         )
 
         try:
+            # SNR-V2: a MARKET entry (the retest-confirm path) passes price=0 — kite
+            # and the tick-snap both ignore price for MARKET, and the fill (live or
+            # paper synth) lands at LTP. The default LIMIT path is byte-unchanged.
+            _entry_order_price = 0.0 if entry_order_type == "MARKET" else entry_price
             entry_placed = self._adapter.place_order(
                 symbol=symbol,
                 side=side,
                 qty=qty,
-                price=entry_price,
-                order_type="LIMIT",
+                price=_entry_order_price,
+                order_type=entry_order_type,
                 intent=intent,
                 tag=order_tag,
             )

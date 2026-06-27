@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS signals (
                             OR status GLOB 'REJECTED*'
                             OR status GLOB 'DROPPED_*'
                             OR status GLOB 'SKIPPED_*'
-                            OR status GLOB 'GATE_*'),
+                            OR status GLOB 'GATE_*'
+                            OR status GLOB 'RETEST_*'),  -- SNR-V2: WAIT_FOR_RETEST parking states
     rejection_reason    TEXT,                        -- nullable, free text or step name
     trade_id            TEXT,                        -- nullable FK; set if signal became a trade
     trigger_price       REAL,                        -- price from Chartink at trigger time
@@ -1227,9 +1228,49 @@ CREATE INDEX IF NOT EXISTS idx_sr_detector_results_ts
 CREATE INDEX IF NOT EXISTS idx_sr_detector_results_mode
     ON sr_detector_results(mode);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 39: retest_state   (SNR-V2 Phase A, schema v38)
+-- One row per candidate DIVERTED into the WAIT_FOR_RETEST monitor (a LONG entry
+-- detected inside a HIGH resistance zone, BEFORE any capital reservation). The
+-- restart-safe parking store (mirrors gate_state): RetestMonitor rehydrates from
+-- it on boot and deletes the row atomically on release (confirm / reject / EOD).
+-- NO capital is held while parked — reservation happens only at confirm-resume.
+--
+-- PURE ADDITION (same pattern as v36 gtt_state / v37 sr_detector_results); the
+-- trailing INSERT bumps schema_version to 38.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS retest_state (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id       TEXT NOT NULL,
+    symbol          TEXT NOT NULL,
+    direction       TEXT NOT NULL,           -- LONG (Phase A is long-only)
+    zone_band_low   REAL NOT NULL,
+    zone_band_high  REAL NOT NULL,
+    entry_price     REAL NOT NULL,           -- original derived entry (pre-divert)
+    sl_price        REAL NOT NULL,           -- original derived SL (pre-divert)
+    strategy        TEXT NOT NULL,
+    intent          TEXT NOT NULL,
+    tier            TEXT,
+    state           TEXT NOT NULL            -- WAIT_BREAKOUT | WAIT_RETEST | WAIT_CONFIRM
+                    CHECK (state IN ('WAIT_BREAKOUT', 'WAIT_RETEST', 'WAIT_CONFIRM')),
+    trigger_price   REAL,
+    sizing_inputs   TEXT,                    -- JSON snapshot of inputs to re-size at confirm
+    timeout_at      TEXT,                    -- ISO-8601 IST deadline
+    added_at        TEXT NOT NULL,           -- ISO-8601 IST at divert (the retest clock start)
+    created_at      TEXT NOT NULL,
+
+    FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_retest_state_signal_id
+    ON retest_state(signal_id);
+
+CREATE INDEX IF NOT EXISTS idx_retest_state_symbol
+    ON retest_state(symbol);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '37');  -- SNR-DETECTOR-V1: +sr_detector_results (shadow S&R detect/confluence/flags/retest-proposal). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '38');  -- SNR-V2 Phase A: +retest_state (restart-safe WAIT_FOR_RETEST parking). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

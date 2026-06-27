@@ -731,6 +731,27 @@ class SRDetectorConfig(BaseModel):
     max_queue: int = 256
     max_zones_logged: int = 12
 
+    # ── SNR-V2 Phase A: WAIT_FOR_RETEST entry side (default-OFF) ──────────────
+    wait_for_retest_enabled: bool = False    # MASTER flag for Phase A divert+retest
+    near_resistance_buffer_pct: float = 0.3  # entry "inside" the zone tolerance
+    require_confidence: str = "HIGH"         # only this resistance confidence diverts
+    retest_timeout_sec: float = 1800.0       # give up the wait
+    retest_max_away_pct: float = 1.0         # break-down threshold below band_low
+    reclaim_strong_close_frac: float = 0.6   # close must be in upper N of the 1m range
+    breakout_margin_pct: float = 0.0         # close must exceed band_high by this % (small)
+    onem_lookback_days: int = 2              # SHORT 1m window (respect the minute cap)
+    zone_cache_ttl_sec: float = 1800.0       # ZoneCache TTL
+    zone_rewarm_margin_sec: float = 300.0    # re-warm a cached symbol this long before expiry
+    retest_poll_interval_sec: float = 20.0   # RetestMonitor poll cadence
+    sl_buffer_pct: float = 0.2               # structure SL = band_low − this%
+
+    @field_validator("require_confidence")
+    @classmethod
+    def _validate_require_confidence(cls, v: str) -> str:
+        if v not in {"HIGH", "MEDIUM", "LOW"}:
+            raise ValueError("sr_detector.require_confidence must be HIGH, MEDIUM, or LOW")
+        return v
+
     @field_validator("timeframes")
     @classmethod
     def _validate_timeframes(cls, v: list[str]) -> list[str]:

@@ -96,6 +96,7 @@ class CoPlusTgtProtocol(EntryEngine):
         intent: str,
         trade_id: str,
         tag: str = "",
+        entry_order_type: str = "LIMIT",   # SNR-V2: accepted for engine symmetry; CO ignores it (CO entry is always order_type="SL")
     ) -> EntryResult:
         """
         FIX-016 Phase 1: Place CO entry only. TGT deferred to fill event.

@@ -77,7 +77,7 @@ def _now_ist_iso() -> str:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 37  # SNR-DETECTOR-V1: +sr_detector_results (shadow S&R detect/confluence/flags). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 38  # SNR-V2 Phase A: +retest_state (restart-safe WAIT_FOR_RETEST parking). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -2470,6 +2470,64 @@ class StateStore:
         """Return every persisted gate_state row as a list of dicts."""
         with self.transaction() as cur:
             cur.execute("SELECT * FROM gate_state ORDER BY added_at ASC")
+            rows = cur.fetchall()
+        return [dict(r) for r in rows]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SNR-V2 Phase A — retest_state (WAIT_FOR_RETEST parking; mirrors gate_state)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    _RETEST_INSERT_COLS = (
+        "signal_id", "symbol", "direction", "zone_band_low", "zone_band_high",
+        "entry_price", "sl_price", "strategy", "intent", "tier", "state",
+        "trigger_price", "sizing_inputs", "timeout_at", "added_at", "created_at",
+    )
+
+    def insert_retest_state(self, row: dict) -> None:
+        """
+        Persist a diverted WAIT_FOR_RETEST candidate. Idempotent INSERT OR REPLACE
+        keyed on signal_id (a re-divert / re-add of the same signal does not raise).
+        """
+        cols = self._RETEST_INSERT_COLS
+        placeholders = ", ".join("?" for _ in cols)
+        with self.transaction() as cur:
+            cur.execute(
+                f"INSERT OR REPLACE INTO retest_state "
+                f"(id, {', '.join(cols)}) "
+                f"VALUES ((SELECT id FROM retest_state WHERE signal_id = ?), {placeholders})",
+                (row.get("signal_id"),) + tuple(row.get(c) for c in cols),
+            )
+
+    def update_retest_state(self, signal_id: str, state: str) -> None:
+        """Advance the persisted state snapshot for a parked candidate."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE retest_state SET state = ? WHERE signal_id = ?",
+                (state, signal_id),
+            )
+
+    def release_retest_state(self, signal_id: str, status: str, reason: str = "") -> None:
+        """
+        Atomically delete the retest_state row AND update the signal status in one
+        transaction (mirrors release_gate_state) — no zombie row with a stale status.
+        """
+        with self.transaction() as cur:
+            cur.execute("DELETE FROM retest_state WHERE signal_id = ?", (signal_id,))
+            cur.execute(
+                "UPDATE signals SET status = ?, rejection_reason = ? WHERE signal_id = ?",
+                (status, reason if reason else None, signal_id),
+            )
+
+    def clear_all_retest_state(self) -> int:
+        """Clear all retest_state rows (EOD cleanup). Returns count deleted."""
+        with self.transaction() as cur:
+            cur.execute("DELETE FROM retest_state")
+            return cur.rowcount
+
+    def get_all_retest_state(self) -> list[dict]:
+        """Return every persisted retest_state row as a list of dicts."""
+        with self.transaction() as cur:
+            cur.execute("SELECT * FROM retest_state ORDER BY added_at ASC")
             rows = cur.fetchall()
         return [dict(r) for r in rows]
 

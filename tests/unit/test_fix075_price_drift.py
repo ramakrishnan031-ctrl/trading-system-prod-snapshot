@@ -95,7 +95,7 @@ class _FakeEngine:
     def __init__(self, adapter):
         self._adapter = adapter
 
-    def execute(self, symbol, side, qty, entry_price, sl_price, tgt_price, intent, trade_id, order_protocol):
+    def execute(self, symbol, side, qty, entry_price, sl_price, tgt_price, intent, trade_id, order_protocol, entry_order_type="LIMIT"):
         placed = self._adapter.place_order(
             symbol=symbol,
             side=side,

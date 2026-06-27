@@ -1075,6 +1075,8 @@ def _shutdown(
     token_monitor: Optional[TokenMonitor] = None,  # FIX-128 Fix E
     tgt_retry_manager: Optional[TGTRetryManager] = None,  # Task: TGT retry
     sr_detector=None,  # SNR-DETECTOR-V1: async S&R observer (None when disabled)
+    zone_warmer=None,  # SNR-V2: ZoneWarmer daemon (None when disabled)
+    retest_monitor=None,  # SNR-V2: RetestMonitor daemon (None when disabled)
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1105,6 +1107,17 @@ def _shutdown(
             sr_detector.stop()
         except Exception as exc:
             _log.error("sr_detector.stop error: %s", exc)
+    # SNR-V2: stop the retest monitor + zone warmer daemons (best-effort).
+    if retest_monitor is not None:
+        try:
+            retest_monitor.stop()
+        except Exception as exc:
+            _log.error("retest_monitor.stop error: %s", exc)
+    if zone_warmer is not None:
+        try:
+            zone_warmer.stop()
+        except Exception as exc:
+            _log.error("zone_warmer.stop error: %s", exc)
     try:
         entry_gate.stop()
     except Exception as exc:
@@ -2405,34 +2418,68 @@ def _main_locked(args, config_dir: Path) -> int:
         secret_token=os.environ.get("WEBHOOK_SECRET"),
     )
 
-    # SNR-DETECTOR-V1: shadow support/resistance detector (default-off). Built +
-    # started ONLY when system.sr_detector.enabled — otherwise sr_detector stays
-    # None so the SignalProcessor seam is a no-op (zero pipeline change, no extra
-    # thread; dormant on deploy). Parity: same wiring in paper + live.
-    sr_detector = None
+    # SNR-DETECTOR-V1 + V2: shared market-data fetch closure, built ONCE if EITHER
+    # the V1 observer or the V2 WAIT_FOR_RETEST feature is enabled. Both default OFF
+    # → nothing constructed → zero pipeline change (dormant on deploy). Parity: the
+    # same wiring runs in paper + live (market data is real in both).
     _sr_cfg = app_config.system.sr_detector
-    if _sr_cfg.enabled:
+    _v1_on = _sr_cfg.enabled
+    _v2_on = getattr(_sr_cfg, "wait_for_retest_enabled", False)
+    _sr_fetch_fn = None
+    if _v1_on or _v2_on:
+        _md_kite = _build_market_data_kite(is_paper, kite_client)
+        if _md_kite is None:
+            _log.warning(
+                "sr_detector/retest enabled but no market-data kite handle "
+                "(no token?) — fetches will fail safe (fetch_failed rows)"
+            )
+        _sr_fetch_fn = _make_sr_fetch_fn(_md_kite, rate_limiter)
+
+    # SNR-DETECTOR-V1 shadow observer (post-place; non-gating).
+    sr_detector = None
+    if _v1_on:
         try:
             from sr_detector import build_sr_detector
-            _md_kite = _build_market_data_kite(is_paper, kite_client)
-            if _md_kite is None:
-                _log.warning(
-                    "sr_detector enabled but no market-data kite handle "
-                    "(no token?) — fetches will fail safe (fetch_failed rows)"
-                )
             sr_detector = build_sr_detector(
-                config=_sr_cfg,
-                fetch_fn=_make_sr_fetch_fn(_md_kite, rate_limiter),
-                instrument_cache=instrument_cache,
-                store=store,
-                logger=get_logger("sr_detector"),
-                mode=mode_label,
+                config=_sr_cfg, fetch_fn=_sr_fetch_fn,
+                instrument_cache=instrument_cache, store=store,
+                logger=get_logger("sr_detector"), mode=mode_label,
             )
             sr_detector.start()
             _log.info("sr_detector: ENABLED and started (mode=%s)", mode_label)
         except Exception as exc:  # never let the detector break startup
             _log.error("sr_detector wiring failed (continuing without it): %s", exc)
             sr_detector = None
+
+    # SNR-V2 Phase A: ZoneCache + ZoneWarmer (built BEFORE SignalProcessor so the
+    # warmer can be injected). The RetestMonitor + Diverter are built AFTER sp
+    # (they need continue_from_retest). All dormant when wait_for_retest_enabled=false.
+    zone_warmer = None
+    _v2_zone_cache = None
+    retest_monitor = None
+    if _v2_on:
+        try:
+            from sr_detector.zone_cache import ZoneCache
+            from sr_detector.zone_warmer import ZoneWarmer
+            from sr_detector.fetch import OhlcFetcher
+            from sr_detector.zone_builder import build_scoring_params, build_zone_knobs
+            _v2_knobs = build_zone_knobs(_sr_cfg)
+            _v2_scoring = build_scoring_params(_sr_cfg)
+            _v2_zone_cache = ZoneCache(
+                ttl_sec=_sr_cfg.zone_cache_ttl_sec, now_fn=time_authority.now_ist)
+            _structure_fetcher = OhlcFetcher(
+                _sr_fetch_fn, instrument_cache, lookback_days=_sr_cfg.lookback_days,
+                logger=get_logger("sr_zone_warmer"), now_fn=time_authority.now_ist,
+                cache_ttl_sec=_sr_cfg.cache_ttl_sec)
+            zone_warmer = ZoneWarmer(
+                fetcher=_structure_fetcher, cache=_v2_zone_cache, knobs=_v2_knobs,
+                scoring=_v2_scoring, logger=get_logger("sr_zone_warmer"),
+                now_fn=time_authority.now_ist,
+                rewarm_margin_sec=_sr_cfg.zone_rewarm_margin_sec)
+        except Exception as exc:
+            _log.error("sr_detector V2 ZoneWarmer wiring failed (no retest): %s", exc)
+            zone_warmer = None
+            _v2_zone_cache = None
 
     sp_cfg = app_config.system.signal_processor
     signal_processor = SignalProcessor(
@@ -2468,6 +2515,9 @@ def _main_locked(args, config_dir: Path) -> int:
         shadow_tracker=shadow_tracker,
         # SNR-DETECTOR-V1: async non-gating S&R observer (None when disabled).
         sr_detector=sr_detector,
+        # SNR-V2 Phase A: ZoneWarmer (enqueue on arrival) + structure-SL buffer.
+        zone_warmer=zone_warmer,
+        retest_sl_buffer_pct=_sr_cfg.sl_buffer_pct,
         # SP7: wire in_flight release so processed signals don't stay locked
         in_flight_release_fn=webhook_receiver.release_in_flight,
         # Use same expiry as webhook_receiver (config signal_queue.expiry_sec)
@@ -2480,6 +2530,44 @@ def _main_locked(args, config_dir: Path) -> int:
         trade_type=app_config.system.trade_type,
         force_intraday_only=app_config.system.force_intraday_only,
     )
+
+    # SNR-V2 Phase A: RetestMonitor + Diverter (need signal_processor.continue_from_
+    # retest, so built here). The diverter is late-bound into signal_processor; the
+    # monitor is rehydrated from retest_state and started; both daemons stop in
+    # _shutdown. eod clears parked candidates at square-off. Dormant when off.
+    if _v2_on and zone_warmer is not None and _v2_zone_cache is not None:
+        try:
+            from sr_detector.fetch import OhlcFetcher
+            from sr_detector.retest_confirm import RetestParams
+            from screening.retest_monitor import RetestDiverter, RetestMonitor
+            _onem_fetcher = OhlcFetcher(
+                _sr_fetch_fn, instrument_cache, lookback_days=_sr_cfg.onem_lookback_days,
+                logger=get_logger("sr_retest_monitor"), now_fn=time_authority.now_ist,
+                cache_ttl_sec=0.0)  # fresh 1m each poll (no cache)
+            _retest_params = RetestParams(
+                timeout_sec=_sr_cfg.retest_timeout_sec,
+                max_away_pct=_sr_cfg.retest_max_away_pct,
+                reclaim_strong_close_frac=_sr_cfg.reclaim_strong_close_frac,
+                breakout_margin_pct=_sr_cfg.breakout_margin_pct)
+            retest_monitor = RetestMonitor(
+                onem_fetcher=_onem_fetcher, state_store=store, params=_retest_params,
+                on_confirm=signal_processor.continue_from_retest,
+                logger=get_logger("sr_retest_monitor"), now_fn=time_authority.now_ist,
+                poll_interval_sec=_sr_cfg.retest_poll_interval_sec)
+            _retest_diverter = RetestDiverter(
+                zone_cache=_v2_zone_cache, monitor=retest_monitor, state_store=store,
+                config=_sr_cfg, logger=get_logger("sr_retest_diverter"),
+                now_fn=time_authority.now_ist, mode=mode_label)
+            signal_processor.set_retest_diverter(_retest_diverter)
+            eod.set_retest_monitor(retest_monitor)
+            restored = retest_monitor.rehydrate()
+            zone_warmer.start()
+            retest_monitor.start()
+            _log.info("sr_detector V2 WAIT_FOR_RETEST: ENABLED + started "
+                      "(mode=%s, rehydrated=%d)", mode_label, restored)
+        except Exception as exc:
+            _log.error("sr_detector V2 RetestMonitor wiring failed: %s", exc)
+            retest_monitor = None
 
     entry_gate = EntryGate(
         quote_fn=broker_adapter.get_quote,
@@ -2792,6 +2880,8 @@ def _main_locked(args, config_dir: Path) -> int:
         token_monitor=token_monitor,  # FIX-128 Fix E
         tgt_retry_manager=tgt_retry_manager,  # Task: TGT retry
         sr_detector=sr_detector,  # SNR-DETECTOR-V1
+        zone_warmer=zone_warmer,  # SNR-V2
+        retest_monitor=retest_monitor,  # SNR-V2
         mode=mode_label,
     )
     return 0

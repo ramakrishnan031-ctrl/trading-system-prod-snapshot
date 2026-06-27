@@ -82,6 +82,7 @@ class FullEntryEngine(EntryEngine):
         trade_id: str,
         tag: str = "",
         order_protocol: str = "",  # overrides default_protocol when provided
+        entry_order_type: str = "LIMIT",  # SNR-V2: "MARKET" for the retest entry
     ) -> EntryResult:
         """
         Route to the appropriate protocol (FEE1–FEE4).
@@ -114,6 +115,7 @@ class FullEntryEngine(EntryEngine):
             symbol=symbol, side=side, qty=qty,
             entry_price=entry_price, sl_price=sl_price, tgt_price=tgt_price,
             intent=intent, trade_id=trade_id, tag=tag,
+            entry_order_type=entry_order_type,
         )
 
     def place_deferred_exits(

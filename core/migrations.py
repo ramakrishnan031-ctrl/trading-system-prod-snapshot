@@ -105,6 +105,8 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     # 33: pure additions (preflight_* tables) — no rebuild, see schema.sql.
     34: ["trades"],  # Diary #4: add sizing-audit columns (tier_multiplier_mode etc.); rebuild copies old cols, new ones -> NULL
     35: ["trades"],  # Slice 1: add tgt_risk_reward_applied / exits_verified / exits_verify_detail; rebuild copies old cols, new ones -> NULL
+    # 36 (gtt_state) + 37 (sr_detector_results): pure additions — no rebuild, see schema.sql.
+    38: ["signals"],  # SNR-V2: widen signals.status CHECK to allow GLOB 'RETEST_*' (WAIT_FOR_RETEST parking)
 }
 
 
