@@ -2162,13 +2162,13 @@ class OrderPlacer:
 
         net_pnl = (closed_row or {}).get("net_pnl", gross_pnl - charges)
 
-        # v14: compute and persist MFE/MAE from candle data
-        try:
-            exc_data = self._om._store.compute_trade_excursions(trade_id)
-            if exc_data:
-                self._om._store.insert_trade_excursion(trade_id=trade_id, **exc_data)
-        except Exception as exc:
-            self._log.debug("order_placer.excursion_compute_failed: %s", exc)
+        # MFE/MAE excursions are reconstructed POST-EOD by
+        # scripts/reconstruct_excursions.py (Option B, 2026-06-28), NOT on this
+        # hot exit path. Two reasons: (1) at an intraday exit the candles for the
+        # day do not exist yet — they are produced by the 15:40 backfill — so a
+        # compute here always returned None; (2) the fill path must not depend on
+        # candle availability. The old in-line compute + silent DEBUG swallow was
+        # removed (it was the source of the empty trade_excursions table).
 
         # Telegram alert: TARGET HIT / STOP LOSS HIT (optional).
         # EOD exits are intentionally excluded — covered by EOD DAILY SUMMARY.

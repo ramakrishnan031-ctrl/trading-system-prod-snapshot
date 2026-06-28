@@ -746,9 +746,16 @@ CREATE INDEX IF NOT EXISTS idx_gate_state_added_at
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 19: trade_excursions  (v14)
--- Per-trade MFE/MAE and entry candle snapshot. Written on trade close.
+-- Per-trade MFE/MAE and entry candle snapshot. Written POST-EOD by
+-- scripts/reconstruct_excursions.py (MFE/MAE Option B, 2026-06-28) — NOT on the
+-- hot exit path (intraday-exit candles don't exist until the 15:40 backfill).
 -- Enables trade quality analysis (how much heat was taken, how much
 -- profit was left on the table).
+-- SIGN CONVENTION (SIGNED): mfe_pct = best FAVOURABLE move vs entry (MAY be
+-- negative if the trade never traded favourable); mae_pct = worst ADVERSE move
+-- vs entry (MAY be positive if it never went adverse). Direction-signed
+-- (LONG/SHORT inverted), NOT floored at zero. 1-min-candle reconstruction, so a
+-- sub-minute trade gets no row.
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS trade_excursions (
     trade_id           TEXT PRIMARY KEY,
@@ -1268,9 +1275,44 @@ CREATE INDEX IF NOT EXISTS idx_retest_state_signal_id
 CREATE INDEX IF NOT EXISTS idx_retest_state_symbol
     ON retest_state(symbol);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 40: excursion_reconstruction_runs   (MFE/MAE Option B, schema v39)
+-- One row per scripts/reconstruct_excursions.py run (daily EOD or historical
+-- backfill). Audit trail for the post-EOD MFE/MAE reconstruction: how many
+-- closed trades were examined and how each resolved. Every examined trade lands
+-- in EXACTLY one of three buckets:
+--   trades_written                 — trade_excursions row written
+--   trades_skipped_unreconstructable — PERMANENT non-writable (NULL/invalid
+--                                    window, or 0-candle window despite candles
+--                                    present). Logged + non-alarming.
+--   trades_failed                  — transient/unexpected (compute/insert threw,
+--                                    or candles unavailable e.g. no token).
+--                                    Alarming + retryable.
+-- HARD GUARD (asserted by the script): written + skipped + failed == examined
+-- (a broken identity means a trade vanished silently → the run FAILS loudly).
+--
+-- PURE ADDITION (same pattern as v37 sr_detector_results / v38 retest_state); no
+-- MIGRATION_TABLES entry, nothing rebuilt. The trailing INSERT bumps to v39.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS excursion_reconstruction_runs (
+    run_id                          TEXT PRIMARY KEY,       -- uuid4 hex
+    mode                            TEXT NOT NULL,          -- 'daily' | 'backfill'
+    started_at                      TEXT NOT NULL,          -- ISO-8601 IST
+    completed_at                    TEXT NOT NULL,          -- ISO-8601 IST
+    trades_examined                 INTEGER NOT NULL,
+    trades_written                  INTEGER NOT NULL,
+    trades_skipped_unreconstructable INTEGER NOT NULL,
+    trades_failed                   INTEGER NOT NULL,
+    status                          TEXT NOT NULL,          -- OK | OK_WITH_NOTES | FAILED
+    notes                           TEXT                    -- human-readable summary
+);
+
+CREATE INDEX IF NOT EXISTS idx_excursion_recon_runs_started
+    ON excursion_reconstruction_runs(started_at);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '38');  -- SNR-V2 Phase A: +retest_state (restart-safe WAIT_FOR_RETEST parking). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '39');  -- MFE/MAE Option B: +excursion_reconstruction_runs (post-EOD reconstruction audit). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

@@ -67,7 +67,10 @@ SHELL=/bin/bash
 */5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/capture_metrics.done
 
 # fetch_daily_candles  [15:40 Mon-Fri]
-40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1
+40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/fetch_daily_candles.done
+
+# reconstruct_excursions  [15:50 Mon-Fri]
+50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/reconstruct_excursions.py --daily >> logs/cron-excursions.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/reconstruct_excursions.done
 
 # reconcile_positions  [15:45 Mon-Fri]
 45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py --account LFL836 >> logs/cron-reconcile-positions.log 2>&1

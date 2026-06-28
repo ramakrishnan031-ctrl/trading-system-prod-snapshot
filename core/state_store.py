@@ -73,11 +73,32 @@ def _now_ist_iso() -> str:
     return datetime.now(_IST).isoformat()
 
 
+def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
+    """Parse a stored timestamp to a tz-aware IST datetime.
+
+    Handles BOTH stored formats: naive-IST 'YYYY-MM-DD HH:MM:SS' (the 15:40
+    candle backfill) AND ISO-8601 with a +05:30 offset (trade entry/exit
+    times). A naive value is assumed IST; an aware value is converted to IST.
+    Returns None if empty/unparseable. Used ONLY for excursion-window
+    comparison (compute_trade_excursions) — it does not change how timestamps
+    are stored anywhere.
+    """
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace(" ", "T"))
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=_IST)
+    return dt.astimezone(_IST)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 38  # SNR-V2 Phase A: +retest_state (restart-safe WAIT_FOR_RETEST parking). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 39  # MFE/MAE Option B: +excursion_reconstruction_runs (post-EOD reconstruction audit). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -1697,6 +1718,24 @@ class StateStore:
         Compute MFE/MAE from candles table for a closed trade (v14).
         Returns dict with mfe_price/pct, mae_price/pct, entry candle OHLC,
         or None if insufficient data.
+
+        SIGN CONVENTION (SIGNED — full information; confirmed 2026-06-28):
+        MFE = best FAVOURABLE move vs entry; it MAY be negative if the trade
+        never traded favourable (a never-green long / never-red short). MAE =
+        worst ADVERSE move vs entry; it MAY be positive if it never went
+        adverse. mfe_pct/mae_pct are direction-signed (LONG vs SHORT inverted)
+        and NOT floored at zero — the literal best/worst excursion is kept.
+        Reconstructed from 1-min candles, so sub-minute trades yield no row.
+
+        DATETIME-SAFE COMPARISON (MFE/MAE Option B, 2026-06-28): candles.ts is
+        stored naive-IST ('YYYY-MM-DD HH:MM:SS', the 15:40 EOD backfill) while
+        trades.*_time are ISO-8601 +05:30. A lexical `ts BETWEEN` silently
+        matched ZERO candles (' ' < 'T' at index 10) → the root cause of the
+        empty trade_excursions table. We now parse BOTH sides to tz-aware
+        Asia/Kolkata datetimes and compare as datetimes. The `date` column
+        (indexed, == substr(ts,1,10)) is a cheap pre-filter; the parsed-datetime
+        window is authoritative. Candle STORAGE format is unchanged — only the
+        comparison here. The direction math below is unchanged.
         """
         trade = self.fetch_one(
             "SELECT symbol, direction, entry_actual_price, entry_time, exit_time "
@@ -1710,14 +1749,24 @@ class StateStore:
         if not entry_price or entry_price <= 0:
             return None
 
-        rows = self.fetch_all(
+        entry_dt = _parse_ist_dt(trade["entry_time"])
+        exit_dt = _parse_ist_dt(trade["exit_time"])
+        if entry_dt is None or exit_dt is None:
+            return None
+
+        candidates = self.fetch_all(
             """
             SELECT open, high, low, close, ts FROM candles
-            WHERE symbol = ? AND ts >= ? AND ts <= ?
+            WHERE symbol = ? AND date BETWEEN ? AND ?
             ORDER BY ts
             """,
-            (trade["symbol"], trade["entry_time"], trade["exit_time"]),
+            (trade["symbol"], entry_dt.date().isoformat(), exit_dt.date().isoformat()),
         )
+        rows = []
+        for r in candidates:
+            cdt = _parse_ist_dt(r["ts"])
+            if cdt is not None and entry_dt <= cdt <= exit_dt:
+                rows.append(r)
         if not rows:
             return None
 
@@ -1751,6 +1800,39 @@ class StateStore:
             "entry_candle_low": first["low"],
             "entry_candle_close": first["close"],
         }
+
+    def insert_excursion_reconstruction_run(
+        self,
+        *,
+        run_id: str,
+        mode: str,
+        started_at: str,
+        completed_at: str,
+        trades_examined: int,
+        trades_written: int,
+        trades_skipped_unreconstructable: int,
+        trades_failed: int,
+        status: str,
+        notes: Optional[str] = None,
+    ) -> None:
+        """Write one excursion_reconstruction_runs audit row (schema v39).
+
+        One row per scripts/reconstruct_excursions.py run (mode 'daily' |
+        'backfill'). Idempotent on run_id via INSERT OR REPLACE.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO excursion_reconstruction_runs
+                    (run_id, mode, started_at, completed_at, trades_examined,
+                     trades_written, trades_skipped_unreconstructable,
+                     trades_failed, status, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, mode, started_at, completed_at, trades_examined,
+                 trades_written, trades_skipped_unreconstructable,
+                 trades_failed, status, notes),
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # SmartTgtManager helpers (ST14 + ST15)

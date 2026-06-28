@@ -285,6 +285,22 @@ jobs:
     command: scripts/fetch_daily_candles.py
     env_wrapper: python_nopath
     log_target: '>> logs/cron-candle-fetch.log 2>&1'
+    marker_name: fetch_daily_candles
+  reconstruct_excursions:
+    script: scripts/reconstruct_excursions.py --daily
+    schedule: 15:50 Mon-Fri
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 50 15 * * 1-5
+    command: scripts/reconstruct_excursions.py --daily
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-excursions.log 2>&1'
+    marker_name: reconstruct_excursions
   reconcile_positions:
     script: scripts/reconcile_positions.py --account LFL836
     schedule: 15:45 Mon-Fri

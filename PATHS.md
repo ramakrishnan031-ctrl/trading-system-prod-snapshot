@@ -169,6 +169,21 @@ NO schema change; default-OFF dormant; paper==live (real-adapter parity test). b
 
 SHADOW-only (no reject/SL/TGT/STM/entry change). Parity (paper+live; row tagged `mode`). branch `snr-detector-v1-27jun`, NOT pushed. Detail: `docs/SYSTEM_MAP.md` header · memory `snr_detector_v1_27jun`.
 
+## MFE/MAE excursions — Option B post-EOD reconstruction (28-Jun, DEPLOYED, schema v39)
+| What | Location |
+|---|---|
+| Root cause | `candles.ts` (space/naive, 15:40 `fetch_daily_candles`) vs `trades.*_time` (ISO-T+05:30) compared LEXICALLY in `compute_trade_excursions` → 0 candles → empty `trade_excursions`; compute also ran on the hot intraday-exit path before candles exist |
+| Datetime-safe compare | `core/state_store.py` `compute_trade_excursions` (parse both → tz-aware IST via `_parse_ist_dt`, pre-filter the indexed `date` col; storage format UNCHANGED; **direction math verbatim**) |
+| Reconstruction job | `scripts/reconstruct_excursions.py` — post-EOD; PID lock `data_store/locks/`, cron_heartbeat, `ensure_candles` fetch-if-missing (token-file kite, paper+live parity), `INSERT OR REPLACE` idempotent. Modes `--daily/--date/--all-closed/--dry-run` |
+| Taxonomy / guard | WRITTEN / WOULD_FETCH (dry-run preview) / SKIPPED_UNRECONSTRUCTABLE (NULL-exit OR sub-minute<1m) / FAILED (→ CRITICAL sentinel). Guard `written+would_fetch+skipped+failed==examined` |
+| Audit table (v39) | `core/schema.sql` TABLE 40 `excursion_reconstruction_runs` (pure addition) + DAO `insert_excursion_reconstruction_run` |
+| Removed | the dead compute + silent DEBUG swallow in `orders/order_placer.py::_handle_exit_fill` (`_persist_candle` UNTOUCHED — separate ticket) |
+| Cron | `reconstruct_excursions --daily` **15:50 Mon-Fri** (`50 15 * * 1-5`, own marker) + `fetch_daily_candles` now emits `cron_marks/fetch_daily_candles.done` |
+| **SIGN convention** | **SIGNED** — `mfe_pct` = best favourable move vs entry (MAY be negative if never-favourable); `mae_pct` = worst adverse (MAY be positive if never-adverse); direction-signed, NOT floored. 1-min reconstruction (sub-minute trades get no row) |
+| Tests | `tests/unit/test_reconstruct_excursions.py` (15) |
+
+3B/3C historical backfill (`--all-closed`) DEFERRED → next trading day + live token (expect written=41 / skipped=5 / failed=0). Detail: `docs/SYSTEM_MAP.md` header · memory `mfe_mae_excursions_empty_28jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|
