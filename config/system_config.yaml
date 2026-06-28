@@ -267,7 +267,7 @@ shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
   alert_per_inning: true      # SH7: send Telegram INFO on each inning close
 
 sr_detector:                  # SNR-DETECTOR-V1 — shadow support/resistance detector
-  enabled: false              # ★ THE one default-off master flag (paper + live). false = not constructed; zero pipeline change
+  enabled: true               # ★ SNR-V1 shadow ARMED — committed true 28-Jun (durability > the old repo-default-false/safe-revert). Master flag (paper+live); false = not constructed
   timeframes: ["day", "60minute", "30minute"]  # structure TFs (one historical fetch each)
   lookback_days: 180          # 6 months back (fits one request per interval)
   cache_ttl_sec: 1800         # intra-session (symbol, interval) re-fetch suppression
