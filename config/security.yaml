@@ -43,10 +43,15 @@ security:
   # many seconds. 6h = one nudge, not a 60s stream.
   realert_cooldown_sec: 21600
 
-  # Known-good SSH baseline (from the 19-Jun audit). check_authorized_keys
-  # alerts if the count grows or a non-matching fingerprint appears.
+  # Known-good SSH baseline. check_authorized_keys alerts if the count grows or
+  # a non-matching fingerprint appears. This committed value is the DEFAULT; an
+  # operator override (data_store/security/ssh_key_baseline.json, written by
+  # scripts/approve_ssh_keys.py) takes precedence when present and survives
+  # deploys. After ANY legitimate SSH key rotation, run `approve_ssh_keys --apply`.
+  # 28-Jun-2026: baseline updated DrHT9… -> uDRN8… for Rama's LEGITIMATE key
+  # rotation (Airtel/Tamil-Nadu IP 223.237.190.224, ED25519 "oracle-vm-2026").
   expected_ssh_keys: 1
-  expected_key_fingerprint: "SHA256:DrHT9VviCBFmeg+RBwO3wZhw+EwzhjRD/G2ceKntEqM"
+  expected_key_fingerprint: "SHA256:uDRN8BJTmfNGFfCLofbnXkIGtWF6qTtrREQrQJGKduk"
 
   # Auth source (ubuntu is in group adm → readable without sudo).
   authlog_path: /var/log/auth.log

@@ -110,6 +110,53 @@ def test_authkeys_missing_is_critical(tmp_path):
     assert any(f.severity == "CRITICAL" and "missing" in f.title.lower() for f in out)
 
 
+# ── list-aware baseline + durable operator override (28-Jun re-baseline) ─────
+
+def test_authkeys_unexpected_flagged_vs_single_baseline(tmp_path, monkeypatch):
+    ak = tmp_path / "authorized_keys"; ak.write_text("ssh-ed25519 AAAAfake k\n")
+    cfg = _cfg(tmp_path, expected_key_fingerprint="SHA256:GOOD", expected_ssh_keys=1)
+    monkeypatch.setattr(sm, "authorized_keys_fingerprints", lambda p: ["SHA256:EVIL"])
+    out = check_authorized_keys(cfg, {})
+    assert any(f.severity == "CRITICAL" and "UNEXPECTED" in f.title for f in out)
+
+
+def test_authkeys_ok_when_fp_matches_single_baseline(tmp_path, monkeypatch):
+    ak = tmp_path / "authorized_keys"; ak.write_text("ssh-ed25519 AAAAfake k\n")
+    cfg = _cfg(tmp_path, expected_key_fingerprint="SHA256:GOOD", expected_ssh_keys=1)
+    monkeypatch.setattr(sm, "authorized_keys_fingerprints", lambda p: ["SHA256:GOOD"])
+    out = check_authorized_keys(cfg, {})
+    assert not any("UNEXPECTED" in f.title or "COUNT" in f.title for f in out)
+
+
+def test_authkeys_list_baseline_accepts_multiple_and_flags_new(tmp_path, monkeypatch):
+    ak = tmp_path / "authorized_keys"; ak.write_text("ssh-ed25519 AAAAfake k\n")
+    cfg = _cfg(tmp_path, expected_key_fingerprints=["SHA256:A", "SHA256:B"], expected_ssh_keys=2)
+    monkeypatch.setattr(sm, "authorized_keys_fingerprints", lambda p: ["SHA256:A", "SHA256:B"])
+    assert not any("UNEXPECTED" in f.title or "COUNT" in f.title for f in check_authorized_keys(cfg, {}))
+    monkeypatch.setattr(sm, "authorized_keys_fingerprints", lambda p: ["SHA256:A", "SHA256:B", "SHA256:X"])
+    assert any("UNEXPECTED" in f.title for f in check_authorized_keys(cfg, {}))
+
+
+def test_apply_operator_ssh_baseline_overlays_and_replaces(tmp_path):
+    import json
+    cfg = SecConfig(); cfg.expected_key_fingerprint = "SHA256:OLD"; cfg.expected_ssh_keys = 1
+    ov = tmp_path / "ssh_key_baseline.json"
+    ov.write_text(json.dumps({"fingerprints": ["SHA256:NEW1", "SHA256:NEW2"], "count": 2}))
+    rec = sm.apply_operator_ssh_baseline(cfg, ov)
+    assert rec is not None
+    assert cfg.expected_key_fingerprints == ["SHA256:NEW1", "SHA256:NEW2"]
+    assert cfg.expected_key_fingerprint == ""        # single baseline REPLACED, not augmented
+    assert cfg.expected_ssh_keys == 2
+
+
+def test_apply_operator_ssh_baseline_absent_is_noop(tmp_path):
+    cfg = SecConfig(); cfg.expected_key_fingerprint = "SHA256:OLD"
+    rec = sm.apply_operator_ssh_baseline(cfg, tmp_path / "nope.json")
+    assert rec is None
+    assert cfg.expected_key_fingerprint == "SHA256:OLD"   # unchanged
+    assert cfg.expected_key_fingerprints == []
+
+
 # ── new-IP, spike, sudo, files ──────────────────────────────────────────────
 
 def test_new_ip_baseline_then_alert():

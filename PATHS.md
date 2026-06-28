@@ -184,6 +184,17 @@ SHADOW-only (no reject/SL/TGT/STM/entry change). Parity (paper+live; row tagged 
 
 3B/3C historical backfill (`--all-closed`) DEFERRED → next trading day + live token (expect written=41 / skipped=5 / failed=0). Detail: `docs/SYSTEM_MAP.md` header · memory `mfe_mae_excursions_empty_28jun`.
 
+## SSH key baseline / re-baseline (security_monitor) — 28-Jun
+| What | Location |
+|---|---|
+| Monitor + check | `scripts/security_monitor.py` `check_authorized_keys` (list-aware) — CRITICAL on a fingerprint not in the allowed set or count > baseline |
+| Committed default baseline | `config/security.yaml` `security.expected_key_fingerprint` (single) — git-tracked; a deploy's `checkout -f` resets it |
+| **Durable operator override** | `data_store/security/ssh_key_baseline.json` (NOT git-tracked) — `apply_operator_ssh_baseline` overlays it (wins when present); survives deploys |
+| **Re-baseline after a legit rotation** | `python scripts/approve_ssh_keys.py` (dry-run diff) → `--apply` (writes the override + re-seeds `security_state.json` + ALWAYS Telegrams). Operator-run only; never auto/monitor-triggered |
+| Current authorized key (28-Jun) | `SHA256:uDRN8BJTmfNGFfCLofbnXkIGtWF6qTtrREQrQJGKduk` (ED25519 `oracle-vm-2026`) — Rama's legit rotation, NOT a compromise |
+
+Detail: `docs/SYSTEM_MAP.md` security-watcher row · memory `ssh_key_rebaseline_28jun`.
+
 ## SATS — static analysis (PC-only, manual; `sats/` is git-ignored, never deploys)
 | What | Path |
 |---|---|

@@ -62,6 +62,10 @@ _log = logging.getLogger("security_monitor")
 _IST = timezone(timedelta(hours=5, minutes=30))
 _DEFAULT_CONFIG = _ROOT / "config" / "security.yaml"
 _DEFAULT_STATE = _ROOT / "data_store" / "security_state.json"
+# Operator-approved SSH baseline override — written by scripts/approve_ssh_keys.py.
+# Lives OUTSIDE git so a deploy's `checkout -f` cannot revert a legitimate
+# re-baseline (the root cause of repeated false-positive CRITICALs).
+_DEFAULT_OPERATOR_SSH_BASELINE = _ROOT / "data_store" / "security" / "ssh_key_baseline.json"
 _DEFAULT_AUTHLOG = Path("/var/log/auth.log")
 
 # auth.log timestamp (rsyslog ISO): 2026-06-19T22:43:11.803963+05:30 <host> sshd[..]: ...
@@ -98,7 +102,8 @@ class SecConfig:
     sudo_alert: bool = True
     realert_cooldown_sec: int = 21600           # 6h: don't re-alert the same identity sooner
     expected_ssh_keys: int = 1
-    expected_key_fingerprint: str = ""
+    expected_key_fingerprint: str = ""          # committed single-key baseline (legacy)
+    expected_key_fingerprints: list = field(default_factory=list)  # operator-override list (set by apply_operator_ssh_baseline)
     sudo_whitelist_prefixes: list = field(default_factory=lambda: [
         "/usr/bin/systemctl", "/bin/systemctl", "/usr/bin/grep", "/usr/bin/tail",
         "/usr/bin/cat", "/usr/bin/fail2ban-client", "/usr/sbin/augenrules",
@@ -143,6 +148,33 @@ class SecConfig:
         if not cfg.watched_files:
             cfg.watched_files = _default_watched_files()
         return cfg
+
+
+def apply_operator_ssh_baseline(
+    cfg: "SecConfig", path: Path = _DEFAULT_OPERATOR_SSH_BASELINE
+) -> Optional[dict]:
+    """Overlay an OPERATOR-approved SSH key baseline onto cfg, if present.
+
+    Written by scripts/approve_ssh_keys.py after a LEGITIMATE key rotation. It
+    lives outside git (data_store/security/ssh_key_baseline.json) so a deploy's
+    `checkout -f` cannot revert it — fixing the root cause of the repeated
+    false-positive CRITICALs. When present it REPLACES the committed
+    expected_key_fingerprint(s) + count (operator intent is authoritative).
+    Returns the loaded record, or None if the override is absent/unreadable.
+    """
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    fps = rec.get("fingerprints")
+    if isinstance(fps, list) and fps:
+        cfg.expected_key_fingerprints = [str(f) for f in fps]
+        cfg.expected_key_fingerprint = ""        # override REPLACES the single-key config
+        try:
+            cfg.expected_ssh_keys = int(rec.get("count", len(fps)))
+        except (TypeError, ValueError):
+            cfg.expected_ssh_keys = len(fps)
+    return rec
 
 
 def _default_watched_files() -> list:
@@ -440,8 +472,14 @@ def check_authorized_keys(cfg: SecConfig, state: dict) -> list[Finding]:
                             "NEW SSH KEY DETECTED",
                             f"authorized_keys changed. Now {len(fps)} key(s): "
                             f"{', '.join(fps) or '?'}. If this was not you, the VM may be compromised."))
+    # Allowed = the operator-override list (apply_operator_ssh_baseline) if set,
+    # else the committed single expected_key_fingerprint. List-aware so a
+    # legitimate multi-key rotation can be baselined without false positives.
+    allowed = set(cfg.expected_key_fingerprints)
     if cfg.expected_key_fingerprint:
-        unexpected = [f for f in fps if f != cfg.expected_key_fingerprint]
+        allowed.add(cfg.expected_key_fingerprint)
+    if allowed:
+        unexpected = [f for f in fps if f not in allowed]
         if unexpected:
             out.append(Finding("CRITICAL", f"authkeys:unexpected:{','.join(sorted(unexpected))[:40]}",
                                "UNEXPECTED SSH KEY present",
@@ -732,6 +770,7 @@ def main(argv=None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     cfg = SecConfig.load(args.config)
+    apply_operator_ssh_baseline(cfg)   # overlay the durable operator override, if any
     authlog = Path(cfg.authlog_path)
     now = datetime.now(_IST)
     baseline = args.baseline
