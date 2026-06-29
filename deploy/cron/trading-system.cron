@@ -72,8 +72,8 @@ SHELL=/bin/bash
 # reconstruct_excursions  [15:50 Mon-Fri]
 50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/reconstruct_excursions.py --daily >> logs/cron-excursions.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/reconstruct_excursions.done
 
-# control_tower_size_logger  [17:05 Mon-Fri]
-5 17 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python ops/control_tower/size_logger.py >> logs/cron-control-tower.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/control_tower_size_logger.done
+# control_tower  [17:05 Mon-Fri]
+5 17 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python ops/control_tower/runner.py >> logs/cron-control-tower.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/control_tower.done
 
 # reconcile_positions  [15:45 Mon-Fri]
 45 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/reconcile_positions.py --account LFL836 >> logs/cron-reconcile-positions.log 2>&1

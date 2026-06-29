@@ -1,5 +1,5 @@
 # PATHS — Quick Reference (Trading System v2)
-# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-06-23
+# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-06-29
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
@@ -8,7 +8,7 @@
 |---|---|
 | Project root (running tree) | `/home/ubuntu/systems/trading-system/` |
 | Python venv (shared) | `/home/ubuntu/systems/venv/bin/python` (3.12.3) |
-| Main DB (v32) | `data_store/trading_system.db` |
+| Main DB (v40) | `data_store/trading_system.db` |
 | Analytics DB (ATTACHed) | `data_store/analytics.db` |
 | Broker token | `data_store/session/zerodha_token.json` |
 | Secrets | `.env` (root) + systemd drop-in (NOT in git) |
@@ -21,7 +21,7 @@
 | Alert sentinels + retention | `data_store/critical_alert_*.flag`→`.delivered` (alert-watcher). `sentinel_retention` cron (02:05 daily) deletes `.delivered` >7d, **NEVER** `.flag`; no archive (email is the record). Tests must NOT use `sentinel_dir="data_store"` |
 | Cron audit | `data_store/cron_audit/` (Phase-1 findings + daily `job_list_<date>.json` snapshots) |
 | Bare repo (deploy target) | `/home/ubuntu/trading-system.git/` (post-receive checks out tree) |
-| Canonical cron | `deploy/cron/trading-system.cron` = `generate(cron_registry.yaml)` via `scripts/generate_crontab.py` (ASCII+LF). live==canonical==generate (4-way sha256 `1469f905…`, 41 lines, 23-Jun); post-receive auto-installs on push |
+| Canonical cron | `deploy/cron/trading-system.cron` = `generate(cron_registry.yaml)` via `scripts/generate_crontab.py` (ASCII+LF). live==canonical==generate; **43 command-lines** (29-Jun: +`reconstruct_excursions` 15:50 +`control_tower` 17:05, superseding the standalone size-logger); post-receive auto-installs on push (regenerate the sha after a registry change) |
 | Agent CLIs (outside project) | `~/tools/antigravity/agy` (Antigravity/`agy` — drives `gemini_*.py` AI-ops crons) · `~/tools/gemini/` (Gemini CLI, node) · `~/tools/claude/` (Claude Code; 4×/day heartbeat → `cron.log`). ✅ heartbeat now `cd`s into `~/tools/claude/` → governed by `AGENTS.md` + `.claude/settings.json` (no .py/DB/systemctl; verified 23-Jun). Live-crontab only (not in canonical cron) — see SYSTEM_MAP |
 
 ## Run a command on the VM
@@ -51,7 +51,8 @@ ssh trading-vm 'sudo systemctl restart trading-system.service'
 ## Top-level packages
 `core/` infra · `broker/` integration+polling · `capital/` risk/kill-switch ·
 `orders/` order lifecycle · `signals/` ingestion · `screening/` scoring ·
-`data/` market data · `alerts/` telegram · `scripts/` ops+gemini · `tests/` (305)
+`data/` market data · `alerts/` telegram · `scripts/` ops+gemini ·
+`ops/control_tower/` VM ops aggregator (Phase 1) · `tests/` (305)
 
 ## Strategy control — 3-layer (Slice 2, 24-Jun)
 | What | Location |
@@ -230,12 +231,26 @@ Bandit reports all severities — add `-ll` for medium+. **Do not** touch the tw
 
 Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-25 · memory `build2_config_sanity_auditor_25jun`. No DB schema; parity (no mode branch).
 
+## Control Tower (`ops/control_tower/`) — VM ops aggregator (Phase 1, 29-Jun)
+| What | Location |
+|---|---|
+| Daily runner | `ops/control_tower/runner.py` — cron **17:05 Mon-Fri**; size-logger FIRST (trend size cols) → aggregator (detection + findings lifecycle + health + status + reporter). **Skips non-trading days** (SKIPPED heartbeat — no false alerts; `--force` bypasses). `marker_name`/heartbeat `control_tower`; superseded the standalone 1a size-logger cron |
+| Aggregator | `ops/control_tower/aggregator.py` `run_aggregation(...)` — 4 read-only adapters (security `last_run.json` / cron heartbeats+markers / `config_auditor` / excursion runs) + freshness engine (`freshness.py`) + disk findings (`disk.py`); `self_job="control_tower"` excludes the in-flight runner from its OWN cron freshness check (check_cron_drift @18:00 is its external monitor) |
+| Reporter | `ops/control_tower/reporter.py` — (A) noise-controlled Telegram DELTA (CRITICAL always unless acked; HIGH only if NEW/reopened; MED/LOW/INFO never) via the **REAL** `TelegramNotifier`; (B) pull report `data_store/control_tower/report_<date>.{html,csv}` (full picture, never pushed) |
+| ACK CLI | `ops/control_tower/cli.py` → `ct list` / `ct ack <id>` / `ct unack <id>` (ACK suppresses a finding from the health score; unack reopens) |
+| Severity / health | `ops/control_tower/severity.py` — security WARNING→MEDIUM (dynamic-IP fatigue), CRITICAL→CRITICAL; config BLOCK→CRITICAL, WARN→HIGH. Bands (`health.py`, OPEN-only): ≤50 HEALTHY / ≤150 WARNING / ≤300 ATTENTION / else CRITICAL (weights C100/H50/M20/L5). Disk thresholds (`disk.py`): HIGH ≥85% / CRITICAL ≥95%; backup-growth ≥500MB, log-growth ≥300MB (history-gated) |
+| Tables (schema v40) | `control_tower_findings` (dedup category/resource/reason; OPEN→ACKNOWLEDGED→RESOLVED) · `_runs` · `_trends` (per-date sizes+health) · `_status` (per run_date roll-up + `last_successful_run`) · `_freshness` (per stage) |
+| Security input | `data_store/security/last_run.json` (written by `scripts/security_monitor.py`; the aggregator's security adapter reads it) |
+| Tests | `tests/unit/test_control_tower_phase1{a,b,c,d}.py` |
+
+`daily_report` now records a `cron_heartbeat("daily_report")` on successful xlsx write (Phase 1d source-fix for the 23-Jun false "daily_report missed"). Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-29 · memory `control_tower_phase1a_29jun`.
+
 ## Self-maintaining cron (registry → canonical → auto-install, ARMED 23-Jun)
 | What | Path / fact |
 |---|---|
 | Source of truth | `config/cron_registry.yaml` (executable) |
 | Generator | `scripts/generate_crontab.py --generate [--out FILE]` → `deploy/cron/trading-system.cron` (ASCII+LF, deterministic). Also `--gate` (zero-drops proof), `--selftest` (byte round-trip), `--bootstrap`, `--check` |
-| Equality | live `crontab -l` == canonical == `generate(registry)` (4-way sha256 `1469f905…`, 41 lines) |
+| Equality | live `crontab -l` == canonical == `generate(registry)` (43 command-lines as of 29-Jun; regenerate the sha after a registry change) |
 | **post-receive** (ARMED) | `~/trading-system.git/hooks/post-receive` (from `deploy/hooks/post-receive`) — auto-installs the crontab on every push **iff** `generate==canonical`, else WARN+skip |
 | **pre-receive** (DEFERRED) | `deploy/hooks/pre-receive` — **NOT installed** (by choice 23-Jun); would hard-reject a push whose canonical != generate. Arm: install + inject `CRON_GUARD_DRYRUN=1` (dry-run) → clear to enforce. Break-glass: `rm` the hook |
 | pre-commit (optional) | `deploy/hooks/pre-commit` — local clones only |

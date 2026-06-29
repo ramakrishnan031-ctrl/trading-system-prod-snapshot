@@ -30,6 +30,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -1825,6 +1826,7 @@ def main(argv=None) -> int:
     from core.state_store import StateStore
     store = StateStore(db_path)
 
+    started = time.perf_counter()
     try:
         output_path = generate_daily_report(
             store=store,
@@ -1833,6 +1835,14 @@ def main(argv=None) -> int:
             config_dir=config_dir,
         )
         print(f"Report generated: {output_path}")
+
+        # Observability (Control Tower Phase 1d): record a SUCCESS heartbeat so
+        # the cron framework (and the tower's cron freshness check) can verify
+        # the xlsx was actually produced. Without this the job ran but emitted
+        # no heartbeat/marker -> a recurring false "daily_report missed" finding
+        # (the 23-Jun gap). record_heartbeat never raises; job_name MUST match
+        # the cron_registry key "daily_report".
+        record_daily_report_heartbeat(db_path, "SUCCESS", time.perf_counter() - started)
 
         if args.notify:
             try:
@@ -1848,7 +1858,22 @@ def main(argv=None) -> int:
     except Exception as e:
         log.exception("Report generation failed")
         print(f"ERROR: {e}", file=sys.stderr)
+        record_daily_report_heartbeat(
+            db_path, "FAILED", time.perf_counter() - started,
+            message=f"{type(e).__name__}: {e}")
         return 2
+
+
+def record_daily_report_heartbeat(db_path: Path, status: str,
+                                  duration_sec: float, message=None) -> None:
+    """Record the daily_report cron heartbeat (never raises into the job)."""
+    try:
+        from utils.cron_heartbeat import record_heartbeat
+        record_heartbeat("daily_report", status=status,
+                         duration_sec=duration_sec, message=message,
+                         db_path=db_path)
+    except Exception:  # pragma: no cover — defensive; heartbeat is best-effort
+        pass
 
 
 if __name__ == "__main__":

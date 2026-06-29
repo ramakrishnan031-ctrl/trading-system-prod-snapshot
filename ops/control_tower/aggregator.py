@@ -101,10 +101,17 @@ def _marker_today(markers_dir: Path, name, today: str) -> bool:
     return datetime.fromtimestamp(p.stat().st_mtime, _IST).isoformat()[:10] == today
 
 
-def read_cron(conn, config_dir: Path, markers_dir: Path, now: datetime) -> SourceResult:
+def read_cron(conn, config_dir: Path, markers_dir: Path, now: datetime,
+              exclude=frozenset()) -> SourceResult:
     from core.cron_registry import load_cron_registry
     reg = load_cron_registry(Path(config_dir) / "cron_registry.yaml")
     expected = reg.expected_heartbeat_jobs(now.date(), Path(config_dir), before_time=now.time())
+    # SELF-REFERENCE GUARD: the tower runner cannot have a completion heartbeat
+    # for the run that is CURRENTLY executing (its heartbeat + .done marker are
+    # written only after run_aggregation returns) -> never flag it as missed
+    # here. check_cron_drift (18:00) is its external monitor. Default empty set
+    # leaves the manual/standalone aggregator + existing tests byte-identical.
+    expected = [j for j in expected if j.name not in exclude]
     d = now.strftime("%Y-%m-%d")
     hb: dict = {}
     for row in conn.execute(
@@ -183,7 +190,8 @@ def read_excursion(conn) -> SourceResult:
 
 # ── orchestrator (1b detection + 1c lifecycle/health/status/report) ───────────
 def run_aggregation(db_path, root, config_dir, now: datetime | None = None,
-                    write: bool = True, notifier=None, report_dir=None) -> dict:
+                    write: bool = True, notifier=None, report_dir=None,
+                    self_job: str | None = None) -> dict:
     now = now or datetime.now(_IST)
     scan_iso = now.isoformat()
     date_str = now.strftime("%Y-%m-%d")
@@ -198,9 +206,10 @@ def run_aggregation(db_path, root, config_dir, now: datetime | None = None,
         # must not falsely resolve its category's findings).
         ran: set = set()
         sources: list[SourceResult] = []
+        cron_exclude = frozenset({self_job}) if self_job else frozenset()
         for fn, cats in (
             (lambda: read_security(root, now), ("security",)),
-            (lambda: read_cron(conn, config_dir, markers_dir, now), ("cron",)),
+            (lambda: read_cron(conn, config_dir, markers_dir, now, cron_exclude), ("cron",)),
             (lambda: read_config(config_dir), ("config",)),
             (lambda: read_excursion(conn), ("excursion",)),
         ):
