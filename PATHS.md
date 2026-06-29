@@ -22,7 +22,7 @@
 | Broker token | `data_store/session/zerodha_token.json` |
 | Secrets | `.env` (root) + systemd drop-in (NOT in git) |
 | Logs | `logs/system_YYYY-MM-DD.log`, `reconciler_*.log`, `trades_*.log`, `cron-*.log` |
-| Master config | `config/system_config.yaml` |
+| Master config | `config/system_config.yaml` (T5 29-Jun: `trading_hours.entry_end` 15:15→**15:00** = the per-strategy reality; `eod_entry_cutoff` stays 15:15) |
 | Cron source of truth | `config/cron_registry.yaml` (→ `core/cron_registry.py`; `officer:` block = Cron Officer settings) |
 | Accounts | `config/accounts.csv` (primary: LFL836) |
 | Reports | `reports/{daily,daily_review,flow_trace,system_manager,cron_officer,...}/` |

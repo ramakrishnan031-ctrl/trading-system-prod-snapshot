@@ -823,8 +823,10 @@ def test_trading_hours_yaml_pins_operator_chosen_window() -> None:
     enforced the P1 spec (09:30/13:30); paper Week 2 widened it to
     09:20/15:15; Live Week 1 narrows the start to 10:00 (conservative,
     avoids opening-hour volatility). This test pins the current live
-    window (10:00/15:15) so the values can't silently drift back to the
+    window (10:00/15:00) so the values can't silently drift back to the
     prior 09:25 namesake or to a typo without a corresponding test edit.
+    (T5 29-Jun: entry_end aligned 15:15->15:00 to match the per-strategy
+    entry_end_time=15:00; committed so a checkout -f can't revert it.)
 
     Regression guards still in place:
       - 09:25 (the original namesake) is asserted absent.
@@ -837,12 +839,12 @@ def test_trading_hours_yaml_pins_operator_chosen_window() -> None:
     th = raw.get("trading_hours", {})
     assert th.get("entry_start") == "10:00", \
         f"Expected 10:00 (Live Week 1 conservative start), got {th.get('entry_start')}"
-    assert th.get("entry_end") == "15:15", \
-        f"Expected 15:15 (paper Week 2 widened), got {th.get('entry_end')}"
+    assert th.get("entry_end") == "15:00", \
+        f"Expected 15:00 (T5 29-Jun: aligned to per-strategy 15:00), got {th.get('entry_end')}"
     assert th.get("entry_start") != "09:25", \
         "09:25 namesake must never return (CFG-1 regression guard)"
     assert th.get("eod_squareoff_time") == "15:17"
-    print("  OK Production YAML trading_hours match Live Week 1 (10:00/15:15/15:17)")
+    print("  OK Production YAML trading_hours match Live Week 1 (10:00/15:00/15:17)")
 
 
 def test_invalid_date_in_nse_holidays_raises_config_schema_error() -> None:

@@ -138,6 +138,51 @@ def test_is_entry_allowed_for_strategy_default_matches_global():
     assert mw.is_entry_allowed_for_strategy(TRADING_DAY(13, 30), s) is False
 
 
+def test_t5_global_entry_end_1500_caps_entries():
+    """T5 (29-Jun): global entry_end aligned 15:15->15:00. An entry after 15:00 is
+    rejected (end is exclusive)."""
+    mw = MarketWindows(entry_start=time(10, 0), entry_end=time(15, 0))
+    assert mw.is_entry_allowed(TRADING_DAY(14, 59, 59)) is True
+    assert mw.is_entry_allowed(TRADING_DAY(15, 0)) is False
+    assert mw.is_entry_allowed(TRADING_DAY(15, 5)) is False
+
+
+def test_t5_strategy_default_1515_now_capped_by_global_1500():
+    """T5 hardening: a strategy left at the schema default entry_end_time=15:15 can
+    no longer enter 15:00-15:15 -- the global 15:00 binds (was 15:15)."""
+    class _Strat:
+        entry_start_time = "09:25"
+        entry_end_time = "15:15"
+    mw = MarketWindows(entry_start=time(10, 0), entry_end=time(15, 0))
+    s = _Strat()
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(14, 59), s) is True
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(15, 5), s) is False  # global 15:00 binds
+
+
+def test_t5_strategy_missing_entry_end_inherits_global_1500():
+    """A strategy that omits its own entry_end_time falls back to the global window
+    -> bounded by 15:00 (was 15:15)."""
+    class _Strat:
+        pass  # no per-strategy times -> AttributeError -> global window binds
+    mw = MarketWindows(entry_start=time(10, 0), entry_end=time(15, 0))
+    s = _Strat()
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(14, 59), s) is True
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(15, 5), s) is False
+
+
+def test_t5_existing_1500_strategy_unchanged():
+    """Regression: a strategy with entry_end_time=15:00 (every current strategy)
+    behaves identically before/after T5."""
+    class _Strat:
+        entry_start_time = "09:25"
+        entry_end_time = "15:00"
+    mw = MarketWindows(entry_start=time(10, 0), entry_end=time(15, 0))
+    s = _Strat()
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(14, 59, 59), s) is True
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(15, 0), s) is False
+    assert mw.is_entry_allowed_for_strategy(TRADING_DAY(15, 1), s) is False
+
+
 def test_is_eod_squareoff_due_holiday_or_weekend():
     mw = MarketWindows(holidays={date(2026, 4, 15)})
     # Holiday -> never due.

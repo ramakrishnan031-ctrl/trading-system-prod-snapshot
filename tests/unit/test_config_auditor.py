@@ -207,9 +207,14 @@ class TestGroupFStaleDefault:
 
 class TestGroupGCrossField:
     def test_entry_end_near_squareoff_warns(self, base_system):
-        # real config: entry_end 15:15, squareoff 15:17 -> within 15min -> WARN.
-        r = audit(base_system, groups="G")
-        assert any(f.code == "G1_entry_end_near_squareoff" for f in r.warns)
+        # G1 logic: an entry_end within 15min of squareoff WARNs. T5 (29-Jun)
+        # aligned the LIVE config to entry_end=15:00 (17min before squareoff 15:17),
+        # so the live config no longer warns -- assert the LOGIC via explicit 15:15.
+        s = _mut(base_system, trading_hours__entry_end="15:15")
+        assert any(f.code == "G1_entry_end_near_squareoff" for f in audit(s, groups="G").warns)
+        # T5 outcome: the live config (entry_end=15:00) must NOT warn.
+        assert not any(f.code == "G1_entry_end_near_squareoff"
+                       for f in audit(base_system, groups="G").warns)
 
     def test_comfortable_window_passes(self, base_system):
         s = _mut(base_system, trading_hours__entry_end="14:00")
@@ -294,9 +299,10 @@ class TestPreflightIntegration:
         from scripts.preflight.checks.config_sanity import CHECKS
         ctx = self._ctx()
         results = {c.name: c.run(ctx) for c in CHECKS}
-        # A clean, G warns (entry-window) on the shipped config.
+        # A clean; after T5 (entry_end 15:15->15:00) the G entry-window WARN is gone,
+        # so G_cross_field is now clean too on the shipped config.
         assert results["A_contradictions"].status is Status.PASS
-        assert results["G_cross_field"].status is Status.WARN
+        assert results["G_cross_field"].status is Status.PASS
         # none of the group rows hard-fail on the shipped config
         assert all(r.status is not Status.FAIL for r in results.values())
 
