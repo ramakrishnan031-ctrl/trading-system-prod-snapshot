@@ -18,7 +18,7 @@
 | Project root (running tree) | `/home/ubuntu/systems/trading-system/` |
 | Python venv (shared) | `/home/ubuntu/systems/venv/bin/python` (3.12.3) |
 | Main DB (v40) | `data_store/trading_system.db` |
-| Analytics DB (ATTACHed) | `data_store/analytics.db` |
+| Analytics DB (ATTACHed) | `data_store/analytics.db` (holds `system_metrics`/`_daily`; T1 29-Jun: `disk_used_pct` now shutil-based — was −1.0 (psutil absent); cpu/mem still −1.0) |
 | Broker token | `data_store/session/zerodha_token.json` |
 | Secrets | `.env` (root) + systemd drop-in (NOT in git) |
 | Logs | `logs/system_YYYY-MM-DD.log`, `reconciler_*.log`, `trades_*.log`, `cron-*.log` |

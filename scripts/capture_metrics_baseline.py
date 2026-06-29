@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -117,12 +118,14 @@ def _get_open_fds() -> int:
 
 
 def _get_disk_used_pct() -> float:
-    try:
-        import psutil
-        usage = psutil.disk_usage(str(_ROOT))
-        return usage.percent
-    except ImportError:
-        return -1.0
+    # T1 (29-Jun): compute disk via stdlib shutil. psutil is absent from the VM
+    # venv, so the old `psutil.disk_usage()` path raised ImportError and returned
+    # the -1.0 sentinel for the metric's whole life. shutil needs no dependency
+    # and mirrors size_logger.py / disk_monitor.py (the disk authority). Disk is
+    # system-wide, so _ROOT's mount is representative. (cpu/mem/fds still use
+    # psutil and stay -1.0 -- separate ticket, intentionally untouched here.)
+    usage = shutil.disk_usage(_ROOT)
+    return round(usage.used / usage.total * 100.0, 2) if usage.total else -1.0
 
 
 def capture_snapshot(db_path: str, log, dry_run: bool = False) -> dict:
@@ -275,7 +278,13 @@ def _check_drift(db_path: str, date_iso: str, summary: dict, log) -> None:
         alerts.append(f"CPU: {summary['cpu_pct']['max_val']:.1f}% (hist max: {hist_cpu:.1f}%)")
     if hist_mem and summary["memory_mb"]["max_val"] > hist_mem * _DRIFT_THRESHOLD:
         alerts.append(f"Memory: {summary['memory_mb']['max_val']:.1f}MB (hist max: {hist_mem:.1f}MB)")
-    if hist_disk and summary["disk_used_pct"]["max_val"] > hist_disk * _DRIFT_THRESHOLD:
+    # Disk drift branch intentionally INERT: disk alerting is owned by
+    # disk_monitor.py (hourly, shutil, warning/critical thresholds + cleanup +
+    # Telegram). T1 repaired disk_used_pct (was -1.0 -> now a valid %), which
+    # makes hist_disk truthy and would otherwise REVIVE this redundant branch.
+    # Keep it gated off so the repair adds no duplicate disk notifications.
+    # (cpu/mem branches are left as-is; they stay dead at -1.0/0.0.)
+    if False and hist_disk and summary["disk_used_pct"]["max_val"] > hist_disk * _DRIFT_THRESHOLD:
         alerts.append(f"Disk: {summary['disk_used_pct']['max_val']:.1f}% (hist max: {hist_disk:.1f}%)")
     if hist_db and summary["db_size_mb"]["max_val"] > hist_db * _DRIFT_THRESHOLD:
         alerts.append(f"DB size: {summary['db_size_mb']['max_val']:.1f}MB (hist max: {hist_db:.1f}MB)")

@@ -261,6 +261,24 @@ class TestDriftDetection:
         mock_tg.assert_not_called()
         log.warning.assert_not_called()
 
+    @patch.object(_mod, "_send_telegram")
+    def test_disk_drift_branch_inert_even_with_valid_spike(self, mock_tg, db_path, log):
+        # T1: disk_used_pct is repaired (valid hist now), but disk alerting is
+        # owned by disk_monitor.py. A clear disk spike (95% vs hist 40%) must NOT
+        # fire here -- the drift branch is intentionally gated off. cpu/mem/db are
+        # kept below threshold so disk is the only thing that *could* alert.
+        self._seed_history(db_path, "2026-06-02", cpu_max=50.0, mem_max=200.0,
+                           disk_max=40.0, db_max=5.0)
+        summary = {
+            "cpu_pct": {"max_val": 10.0},
+            "memory_mb": {"max_val": 50.0},
+            "disk_used_pct": {"max_val": 95.0},   # 95 > 40*0.8=32 -> would alert if not gated
+            "db_size_mb": {"max_val": 1.0},
+        }
+        _mod._check_drift(db_path, "2026-06-03", summary, log)
+        mock_tg.assert_not_called()
+        log.warning.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Tests: main()
@@ -325,6 +343,23 @@ class TestHelpers:
         result = _mod._get_memory_mb()
         assert isinstance(result, float)
 
-    def test_get_disk_used_pct_returns_number(self):
+    def test_get_disk_used_pct_is_valid_percent(self):
+        # T1: shutil-based now -> a real percentage, never the -1.0 psutil sentinel.
+        import shutil as _shutil
         result = _mod._get_disk_used_pct()
         assert isinstance(result, float)
+        assert result != -1.0
+        assert 0.0 < result <= 100.0, result
+        u = _shutil.disk_usage(_mod._ROOT)
+        expected = round(u.used / u.total * 100.0, 2)
+        assert abs(result - expected) <= 1.0, (result, expected)
+
+    def test_db_and_log_size_unchanged_regression(self, tmp_path):
+        # T1 must not perturb the pathlib-based size metrics.
+        f = tmp_path / "x.db"
+        f.write_bytes(b"a" * (2 * 1024 * 1024))  # 2 MB
+        assert abs(_mod._get_db_size_mb(str(f)) - 2.0) < 0.01
+        logd = tmp_path / "logs"
+        logd.mkdir()
+        (logd / "a.log").write_bytes(b"b" * (1024 * 1024))  # 1 MB
+        assert abs(_mod._get_log_size_mb(logd) - 1.0) < 0.01
