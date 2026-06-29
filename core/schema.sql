@@ -1334,9 +1334,11 @@ CREATE TABLE IF NOT EXISTS control_tower_findings (
     location            TEXT,                   -- path / table / host detail
     reason              TEXT NOT NULL,          -- why this is a finding
     recommended_action  TEXT,
-    status              TEXT NOT NULL DEFAULT 'OPEN',   -- OPEN | RESOLVED | ACK | SUPPRESSED
+    status              TEXT NOT NULL DEFAULT 'OPEN',   -- OPEN | ACKNOWLEDGED | RESOLVED
     first_seen          TEXT NOT NULL,
     last_seen           TEXT NOT NULL,
+    acked_at            TEXT,                           -- 1c: set when an operator acks
+    resolved_at         TEXT,                           -- 1c: set on auto-resolve (no longer detected)
     remarks             TEXT
 );
 -- DEDUP IDENTITY = (category, resource_name, reason): the aggregator UPSERTs

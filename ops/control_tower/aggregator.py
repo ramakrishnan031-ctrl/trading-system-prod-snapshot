@@ -24,9 +24,11 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from core import db_connect  # noqa: E402
-from ops.control_tower import disk, freshness  # noqa: E402
+from ops.control_tower import disk, freshness, health, reporter  # noqa: E402
+from ops.control_tower import status as ctstatus  # noqa: E402
 from ops.control_tower.db import (  # noqa: E402
-    ensure_indexes, replace_freshness, upsert_finding, write_run,
+    auto_resolve_stale, ensure_indexes, get_findings, open_severities,
+    prior_status_map, replace_freshness, upsert_finding, write_run,
 )
 from ops.control_tower.model import Finding, SourceResult  # noqa: E402
 from ops.control_tower.severity import (  # noqa: E402
@@ -179,64 +181,130 @@ def read_excursion(conn) -> SourceResult:
                         findings, detail=f"latest={status}")
 
 
-# ── orchestrator ──────────────────────────────────────────────────────────────
+# ── orchestrator (1b detection + 1c lifecycle/health/status/report) ───────────
 def run_aggregation(db_path, root, config_dir, now: datetime | None = None,
-                    write: bool = True) -> dict:
+                    write: bool = True, notifier=None, report_dir=None) -> dict:
     now = now or datetime.now(_IST)
-    started_iso = now.isoformat()
+    scan_iso = now.isoformat()
+    date_str = now.strftime("%Y-%m-%d")
     t0 = _time.perf_counter()
     conn = db_connect.connect(Path(db_path), attach=True)
     try:
         ensure_indexes(conn)
         markers_dir = Path(root) / "data_store" / "cron_marks"
-        sources = [
-            read_security(root, now),
-            read_cron(conn, config_dir, markers_dir, now),
-            read_config(config_dir),
-            read_excursion(conn),
-        ]
-        fresh_rows, fresh_findings = freshness.evaluate(conn, now, markers_dir)
-        _sizes, disk_findings = disk.evaluate(conn, root, db_path, now.strftime("%Y-%m-%d"))
 
-        all_findings = [f for s in sources for f in s.findings] + fresh_findings + disk_findings
-        counts = {sev: sum(1 for f in all_findings if f.severity == sev)
+        # detection — each check tagged with the categories it OWNS, added to
+        # `ran` ONLY on success (the auto-resolve guard: a check that errored
+        # must not falsely resolve its category's findings).
+        ran: set = set()
+        sources: list[SourceResult] = []
+        for fn, cats in (
+            (lambda: read_security(root, now), ("security",)),
+            (lambda: read_cron(conn, config_dir, markers_dir, now), ("cron",)),
+            (lambda: read_config(config_dir), ("config",)),
+            (lambda: read_excursion(conn), ("excursion",)),
+        ):
+            try:
+                sources.append(fn())
+                ran.update(cats)
+            except Exception as exc:  # noqa: BLE001
+                _log.error("control_tower adapter %s failed: %s", cats, exc)
+        try:
+            fresh_rows, fresh_findings = freshness.evaluate(conn, now, markers_dir)
+            ran.add("freshness")
+        except Exception as exc:  # noqa: BLE001
+            _log.error("control_tower freshness failed: %s", exc)
+            fresh_rows, fresh_findings = [], []
+        try:
+            sizes, disk_findings = disk.evaluate(conn, root, db_path, date_str)
+            ran.update(("disk", "backup"))
+        except Exception as exc:  # noqa: BLE001
+            _log.error("control_tower disk failed: %s", exc)
+            sizes, disk_findings = {}, []
+
+        detected = [f for s in sources for f in s.findings] + fresh_findings + disk_findings
+        counts = {sev: sum(1 for f in detected if f.severity == sev)
                   for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW")}
-        checks_run = len(sources) + len(fresh_rows) + 1   # +1 disk check
+        checks_run = len(sources) + len(fresh_rows) + 1
         run_id = uuid.uuid4().hex
+        source_status = {s.source: s.status for s in sources}
+        result = {"run_id": run_id, "sources": source_status,
+                  "findings_total": len(detected), "counts": counts,
+                  "freshness": {r["stage"]: r["status"] for r in fresh_rows},
+                  "checks_run": checks_run}
+        if not write:
+            return result
 
-        if write:
-            for f in all_findings:
-                upsert_finding(conn, f, started_iso)
-            replace_freshness(conn, now.strftime("%Y-%m-%d"), fresh_rows)
-            write_run(conn, {
-                "run_id": run_id, "started_at": started_iso,
-                "completed_at": datetime.now(_IST).isoformat(),
-                "duration_s": round(_time.perf_counter() - t0, 3),
-                "checks_run": checks_run, "findings_total": len(all_findings),
-                "critical_count": counts["CRITICAL"], "high_count": counts["HIGH"],
-                "medium_count": counts["MEDIUM"], "low_count": counts["LOW"],
-                "status": "OK_WITH_FINDINGS" if all_findings else "OK",
-            })
-            conn.commit()
-        return {
-            "run_id": run_id, "sources": {s.source: s.status for s in sources},
-            "findings_total": len(all_findings), "counts": counts,
-            "freshness": {r["stage"]: r["status"] for r in fresh_rows},
-            "checks_run": checks_run,
-        }
+        prior = prior_status_map(conn)              # pre-UPSERT — for the push delta
+        for f in detected:
+            upsert_finding(conn, f, scan_iso)
+        resolved_n = auto_resolve_stale(conn, ran, scan_iso, scan_iso)
+        replace_freshness(conn, date_str, fresh_rows)
+        write_run(conn, {
+            "run_id": run_id, "started_at": scan_iso,
+            "completed_at": datetime.now(_IST).isoformat(),
+            "duration_s": round(_time.perf_counter() - t0, 3),
+            "checks_run": checks_run, "findings_total": len(detected),
+            "critical_count": counts["CRITICAL"], "high_count": counts["HIGH"],
+            "medium_count": counts["MEDIUM"], "low_count": counts["LOW"],
+            "status": "OK_WITH_FINDINGS" if detected else "OK",
+        })
+
+        # 1c: health (OPEN only, ACK suppressed) + status roll-up
+        open_sev = open_severities(conn)
+        score, overall = health.score_and_band(open_sev)
+        health.write_trend_health(conn, date_str, score, open_sev)
+        fresh_status = ctstatus.freshness_status(fresh_rows)
+        ctstatus.write_status(
+            conn, date_str, source_status=source_status, fresh_status=fresh_status,
+            disk_pct=sizes.get("disk_used_pct"), backup_mb=sizes.get("backup_size_mb"),
+            critical=sum(1 for s in open_sev if s == "CRITICAL"),
+            high=sum(1 for s in open_sev if s == "HIGH"),
+            overall=overall, last_successful_run=scan_iso)
+        conn.commit()
+
+        # 1c: reporter (Telegram delta + pull report) — after the commit
+        qualifying = reporter.select_push(detected, prior)
+        pushed = reporter.maybe_push(notifier, overall, qualifying)
+        report_paths = None
+        if report_dir is not None:
+            trends_rows = conn.execute(
+                "SELECT date, disk_used_pct, backup_size_mb, log_size_mb, db_size_mb "
+                "FROM control_tower_trends ORDER BY date DESC LIMIT 7").fetchall()
+            report_paths = reporter.write_pull_report(
+                report_dir, date_str, overall=overall, score=score,
+                source_status=source_status, fresh_status=fresh_status,
+                findings_rows=get_findings(conn, ("OPEN", "ACKNOWLEDGED", "RESOLVED")),
+                freshness_rows=fresh_rows, trends_rows=trends_rows, root=root)
+
+        result.update({"health_score": score, "overall_status": overall,
+                       "resolved": resolved_n, "pushed": pushed,
+                       "qualifying": len(qualifying), "report": report_paths})
+        return result
     finally:
         conn.close()
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Control Tower aggregator (Phase 1b)")
+    ap = argparse.ArgumentParser(description="Control Tower aggregator (Phase 1c)")
     ap.add_argument("--db", default=str(_ROOT / "data_store" / "trading_system.db"))
     ap.add_argument("--root", default=str(_ROOT))
     ap.add_argument("--config-dir", default=str(_ROOT / "config"))
+    ap.add_argument("--report-dir", default=None, help="write the HTML/CSV pull report here")
+    ap.add_argument("--telegram", action="store_true", help="enable the Telegram delta push")
     ap.add_argument("--no-write", action="store_true", help="compute but do not write rows")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    summary = run_aggregation(args.db, args.root, args.config_dir, write=not args.no_write)
+    notifier = None
+    if args.telegram:
+        try:
+            from alerts.telegram_notifier import TelegramNotifier
+            notifier = TelegramNotifier.from_env(logger=_log)
+        except Exception as exc:  # noqa: BLE001
+            _log.error("control_tower: Telegram notifier unavailable: %s", exc)
+    summary = run_aggregation(args.db, args.root, args.config_dir,
+                              write=not args.no_write, notifier=notifier,
+                              report_dir=args.report_dir)
     _log.info("control_tower.aggregator: %s", summary)
     return 0
 
