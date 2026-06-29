@@ -3,6 +3,15 @@
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
+> ⏰ **Timezone (T4, 29-Jun) — NEVER `TZ='Asia/Kolkata' date` in Git Bash.** MSYS2 ships no
+> zoneinfo, so that form silently returns **UTC** (off by 5:30 — the 29-Jun "13:47 vs 19:22"
+> defect). For IST use `scripts/ist_now.sh` (authoritative, reuses `now_ist()`), or `now_ist()`,
+> or `date -u` (UTC), or `TZ='IST-5:30' date`. **Before any deploy/restart:** run
+> `python scripts/deploy_preflight.py` (anchors on `date -u` + the VM: PC↔VM UTC agreement ≤120s
+> **+ VM-authoritative market-open gate** — refuses a mid-session deploy). `scripts/check_tz.sh`
+> is the loud self-check (correctly FAILS on this MSYS2 PC). App + VM are unaffected (`now_ist()`
+> = fixed +5:30, zoneinfo-free; VM NTP-synced) — this is an operator-tooling guard only.
+
 ## VM (161.118.187.249, user `ubuntu`, IST)
 | What | Path |
 |---|---|
