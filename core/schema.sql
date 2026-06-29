@@ -1310,9 +1310,101 @@ CREATE TABLE IF NOT EXISTS excursion_reconstruction_runs (
 CREATE INDEX IF NOT EXISTS idx_excursion_recon_runs_started
     ON excursion_reconstruction_runs(started_at);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLES 41-45: control_tower_* — VM Operations Control Tower (Phase 1a, v40)
+-- An AGGREGATOR subsystem (ops/control_tower/) that READS existing monitors and
+-- adds data-freshness + disk/backup checks. Phase 1a creates the FOUNDATION
+-- tables only (the size-logger seeds control_tower_trends; the aggregator/report
+-- that populate findings/runs/status/freshness arrive in 1b/1c).
+--
+-- PURE ADDITION (same pattern as v37 sr_detector_results / v39
+-- excursion_reconstruction_runs): no MIGRATION_TABLES entry, nothing rebuilt;
+-- CREATE TABLE IF NOT EXISTS on the schema re-apply. The trailing INSERT bumps
+-- schema_version to 40.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- TABLE 41: control_tower_findings — one row per distinct issue (deduped).
+CREATE TABLE IF NOT EXISTS control_tower_findings (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_time           TEXT NOT NULL,          -- ISO IST of the scan that (re)detected it
+    category            TEXT NOT NULL,          -- security | cron | config | freshness | disk | backup
+    severity            TEXT NOT NULL,          -- CRITICAL | HIGH | MEDIUM | LOW | INFO
+    resource_type       TEXT,                   -- table | file | service | mount | job | dir
+    resource_name       TEXT,                   -- e.g. 'candles', 'security-watcher', '/dev/sda1'
+    location            TEXT,                   -- path / table / host detail
+    reason              TEXT NOT NULL,          -- why this is a finding
+    recommended_action  TEXT,
+    status              TEXT NOT NULL DEFAULT 'OPEN',   -- OPEN | RESOLVED | ACK | SUPPRESSED
+    first_seen          TEXT NOT NULL,
+    last_seen           TEXT NOT NULL,
+    remarks             TEXT
+);
+-- DEDUP IDENTITY = (category, resource_name, reason): the aggregator UPSERTs
+-- last_seen/scan_time/status on re-detection rather than inserting a duplicate.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ct_findings_dedup
+    ON control_tower_findings(category, resource_name, reason);
+CREATE INDEX IF NOT EXISTS idx_ct_findings_status
+    ON control_tower_findings(status, severity);
+
+-- TABLE 42: control_tower_runs — one row per tower run (the 17:00 + Sun-18:00 jobs).
+CREATE TABLE IF NOT EXISTS control_tower_runs (
+    run_id          TEXT PRIMARY KEY,           -- uuid4 hex
+    started_at      TEXT NOT NULL,              -- ISO IST
+    completed_at    TEXT,                       -- ISO IST (NULL while running / on crash)
+    duration_s      REAL,
+    checks_run      INTEGER NOT NULL DEFAULT 0,
+    findings_total  INTEGER NOT NULL DEFAULT 0,
+    critical_count  INTEGER NOT NULL DEFAULT 0,
+    high_count      INTEGER NOT NULL DEFAULT 0,
+    medium_count    INTEGER NOT NULL DEFAULT 0,
+    low_count       INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'RUNNING'  -- RUNNING | OK | OK_WITH_FINDINGS | FAILED
+);
+CREATE INDEX IF NOT EXISTS idx_ct_runs_started ON control_tower_runs(started_at);
+
+-- TABLE 43: control_tower_trends — one row per DATE (PK). The Phase-1a size-logger
+-- UPSERTs the four size fields; the aggregator (1b/1c) fills health_score + counts.
+CREATE TABLE IF NOT EXISTS control_tower_trends (
+    date            TEXT PRIMARY KEY,           -- YYYY-MM-DD IST
+    health_score    INTEGER,                    -- 0-100 (aggregator, 1b/1c)
+    critical_count  INTEGER,
+    high_count      INTEGER,
+    medium_count    INTEGER,
+    disk_used_pct   REAL,                       -- FRESH (shutil.disk_usage), NOT system_metrics
+    backup_size_mb  REAL,
+    log_size_mb     REAL,
+    db_size_mb      REAL
+);
+
+-- TABLE 44: control_tower_status — ChatGPT B: one current-status row per run_date.
+CREATE TABLE IF NOT EXISTS control_tower_status (
+    run_date            TEXT PRIMARY KEY,       -- YYYY-MM-DD IST (last run of the day wins)
+    security_status     TEXT,                   -- OK | WARN | CRITICAL | UNKNOWN
+    cron_status         TEXT,
+    config_status       TEXT,
+    freshness_status    TEXT,
+    disk_pct            REAL,
+    backup_size_mb      REAL,
+    critical_count      INTEGER,
+    high_count          INTEGER,
+    overall_status      TEXT,                   -- ChatGPT D top-line (1c)
+    last_successful_run TEXT                    -- ISO IST of the last OK run
+);
+
+-- TABLE 45: control_tower_freshness — ChatGPT C: per-stage data-pipeline freshness.
+CREATE TABLE IF NOT EXISTS control_tower_freshness (
+    run_date        TEXT NOT NULL,              -- YYYY-MM-DD IST
+    stage           TEXT NOT NULL,              -- candles|signals|orders|executions|reconstruction|eod
+    expected_by     TEXT,                       -- ISO IST deadline
+    actual_at       TEXT,                       -- ISO IST when it happened (NULL = missing)
+    delay_minutes   INTEGER,                    -- actual - expected (NULL if missing / NA)
+    status          TEXT NOT NULL               -- OK | LATE | MISSING | NA
+);
+CREATE INDEX IF NOT EXISTS idx_ct_freshness_run ON control_tower_freshness(run_date, stage);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '39');  -- MFE/MAE Option B: +excursion_reconstruction_runs (post-EOD reconstruction audit). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '40');  -- Control Tower Phase 1a: +control_tower_findings/runs/trends/status/freshness (5 tables). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

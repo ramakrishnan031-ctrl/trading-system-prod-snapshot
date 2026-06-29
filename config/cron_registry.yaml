@@ -301,6 +301,21 @@ jobs:
     env_wrapper: python_nopath
     log_target: '>> logs/cron-excursions.log 2>&1'
     marker_name: reconstruct_excursions
+  control_tower_size_logger:
+    script: ops/control_tower/size_logger.py
+    schedule: 17:05 Mon-Fri
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: market_day
+    monitored: false
+    enabled: true
+    personal_tooling: false
+    cron_expression: 5 17 * * 1-5
+    command: ops/control_tower/size_logger.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-control-tower.log 2>&1'
+    marker_name: control_tower_size_logger
   reconcile_positions:
     script: scripts/reconcile_positions.py --account LFL836
     schedule: 15:45 Mon-Fri

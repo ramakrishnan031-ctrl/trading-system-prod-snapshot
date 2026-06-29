@@ -98,7 +98,7 @@ def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 39  # MFE/MAE Option B: +excursion_reconstruction_runs (post-EOD reconstruction audit). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 40  # Control Tower Phase 1a: +control_tower_findings/runs/trends/status/freshness (5 tables). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

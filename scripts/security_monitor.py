@@ -67,6 +67,12 @@ _DEFAULT_STATE = _ROOT / "data_store" / "security_state.json"
 # re-baseline (the root cause of repeated false-positive CRITICALs).
 _DEFAULT_OPERATOR_SSH_BASELINE = _ROOT / "data_store" / "security" / "ssh_key_baseline.json"
 _DEFAULT_AUTHLOG = Path("/var/log/auth.log")
+# F1 (Control Tower Phase 1a): a small queryable "last run" status the Control
+# Tower reads — security findings are otherwise only Telegram + sentinels.
+_DEFAULT_LAST_RUN = _ROOT / "data_store" / "security" / "last_run.json"
+# Count of checks executed by the most recent run_pass(); set as a side effect so
+# the F1 status writer reports checks_run without re-deriving the list.
+_LAST_PASS_CHECK_COUNT = 0
 
 # auth.log timestamp (rsyslog ISO): 2026-06-19T22:43:11.803963+05:30 <host> sshd[..]: ...
 _TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[.\d]*[+\-]\d{2}:\d{2})")
@@ -722,6 +728,40 @@ def _maybe_copy_audit(cfg: SecConfig, f: Finding, now: datetime) -> None:
     _append_copy_audit(cfg, event, now, detail=f.body[:300])
 
 
+# Severity mapping for the F1 status: security uses CRITICAL | WARNING | INFO;
+# the Control Tower vocabulary is CRITICAL | HIGH | MEDIUM | LOW | INFO.
+_F1_SEV_MAP = {"CRITICAL": "CRITICAL", "WARNING": "HIGH", "INFO": "INFO"}
+_F1_SEV_RANK = {"CRITICAL": 3, "HIGH": 2, "INFO": 1}
+
+
+def _write_last_run_status(path: Path, findings: list, checks_run: int,
+                           now: datetime) -> None:
+    """F1 (Control Tower Phase 1a) — ADDITIVE side-artefact: write a small,
+    queryable last-run status atomically (.tmp -> os.replace). It NEVER changes
+    a finding, an alert, or the security state; best-effort (logs + swallows
+    OSError) so it can never break a monitoring pass."""
+    max_sev = "INFO"
+    for f in findings:
+        mapped = _F1_SEV_MAP.get(str(getattr(f, "severity", "")).upper(), "INFO")
+        if _F1_SEV_RANK.get(mapped, 1) > _F1_SEV_RANK.get(max_sev, 1):
+            max_sev = mapped
+    payload = {
+        "version": 1,
+        "timestamp": now.isoformat(),
+        "checks_run": int(checks_run),
+        "findings_count": len(findings),
+        "max_severity": max_sev,
+        "clean": len(findings) == 0,
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        _log.error("security_monitor: last_run.json write failed: %s", exc)
+
+
 def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
              baseline: bool) -> list[Finding]:
     """Run all checks (each isolated). Returns findings (pre-dedup)."""
@@ -750,6 +790,8 @@ def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
         lambda: check_copy_protection_switch(cfg, state, now),   # Phase 2
         lambda: check_copy_bypass(cfg, state, now),              # Phase 2
     ]
+    global _LAST_PASS_CHECK_COUNT
+    _LAST_PASS_CHECK_COUNT = len(checks)
     for chk in checks:
         try:
             findings.extend(chk())
@@ -811,6 +853,9 @@ def main(argv=None) -> int:
         _maybe_copy_audit(cfg, f, now)   # Phase 3: persist copy events for the EOD summary
         _log.warning("security_monitor ALERT [%s] %s — %s", f.severity, f.title, f.body)
     save_state(args.state, state)
+    # F1 (ADDITIVE): queryable last-run status for the Control Tower. Written
+    # AFTER alerts/state so it can never influence a security decision.
+    _write_last_run_status(_DEFAULT_LAST_RUN, findings, _LAST_PASS_CHECK_COUNT, now)
     _log.info("security_monitor: pass complete (%d finding(s), %d new alert(s))",
               len(findings), len(fresh))
     # exit 0 always (watcher must keep running); severity is in the alerts.
