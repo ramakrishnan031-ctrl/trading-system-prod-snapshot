@@ -22,7 +22,7 @@ SHELL=/bin/bash
 5 1 * * * sqlite3 /home/ubuntu/systems/trading-system/data_store/analytics.db ".backup /home/ubuntu/systems/trading-system/data_store/backups/analytics-$(date +\%Y-\%m-\%d).db" >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/analytics_backup.done
 
 # backup_retention  [02:00 daily]
-0 2 * * * find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/backup_retention.done
+0 2 * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_retention.py --apply >> logs/cron-backup-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/backup_retention.done
 
 # sentinel_retention  [02:05 daily]
 5 2 * * * find /home/ubuntu/systems/trading-system/data_store -maxdepth 1 -name "critical_alert_*.delivered" -mtime +7 -delete >> /home/ubuntu/systems/trading-system/logs/cron-sentinel-retention.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/sentinel_retention.done

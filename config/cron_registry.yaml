@@ -50,19 +50,19 @@ jobs:
     log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1'
     marker_name: analytics_backup
   backup_retention:
-    script: find backups (trading_system-*.db | analytics-*.db) -mtime +7 -delete
+    script: scripts/backup_retention.py --apply (category-aware keep-N reaper; replaces find -mtime +7)
     schedule: 02:00 daily
-    type: shell
+    type: python
     critical: false
     market_day_only: false
     cadence: daily
-    monitored: false
+    monitored: true
     enabled: true
     personal_tooling: false
     cron_expression: 0 2 * * *
-    command: find /home/ubuntu/systems/trading-system/data_store/backups \( -name "trading_system-*.db" -o -name "analytics-*.db" \) -mtime +7 -delete
-    env_wrapper: none
-    log_target: '>> /home/ubuntu/systems/trading-system/logs/cron-db-backup.log 2>&1'
+    command: scripts/backup_retention.py --apply
+    env_wrapper: python
+    log_target: '>> logs/cron-backup-retention.log 2>&1'
     marker_name: backup_retention
   sentinel_retention:
     script: find data_store critical_alert_*.delivered -mtime +7 -delete (never *.flag)

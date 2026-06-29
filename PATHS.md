@@ -28,6 +28,7 @@
 | Reports | `reports/{daily,daily_review,flow_trace,system_manager,cron_officer,...}/` |
 | Cron-job markers | `data_store/cron_marks/<job>.done` (exit-code markers the Officer reads) |
 | Alert sentinels + retention | `data_store/critical_alert_*.flag`→`.delivered` (alert-watcher). `sentinel_retention` cron (02:05 daily) deletes `.delivered` >7d, **NEVER** `.flag`; no archive (email is the record). Tests must NOT use `sentinel_dir="data_store"` |
+| DB backups + retention | `data_store/backups/` — daily `trading_system-*`/`analytics-*.db` (cron 01:00/01:05) + `pre_*` deploy/ad-hoc backups. **T2 retention** = `backup_retention.py --apply` (cron 02:00, monitored): category-aware keep-N (pre_*=20 / daily=14), dry-run default, never-delete-newest, scoped globs, >10-delete sanity cap. Replaced the old daily-only `find -mtime +7` |
 | Cron audit | `data_store/cron_audit/` (Phase-1 findings + daily `job_list_<date>.json` snapshots) |
 | Bare repo (deploy target) | `/home/ubuntu/trading-system.git/` (post-receive checks out tree) |
 | Canonical cron | `deploy/cron/trading-system.cron` = `generate(cron_registry.yaml)` via `scripts/generate_crontab.py` (ASCII+LF). live==canonical==generate; **43 command-lines** (29-Jun: +`reconstruct_excursions` 15:50 +`control_tower` 17:05, superseding the standalone size-logger); post-receive auto-installs on push (regenerate the sha after a registry change) |
