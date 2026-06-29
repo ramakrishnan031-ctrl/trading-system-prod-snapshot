@@ -147,9 +147,10 @@ def test_t5_global_entry_end_1500_caps_entries():
     assert mw.is_entry_allowed(TRADING_DAY(15, 5)) is False
 
 
-def test_t5_strategy_default_1515_now_capped_by_global_1500():
-    """T5 hardening: a strategy left at the schema default entry_end_time=15:15 can
-    no longer enter 15:00-15:15 -- the global 15:00 binds (was 15:15)."""
+def test_t5_strategy_1515_capped_by_global_1500():
+    """T5 hardening: a strategy that sets a later entry_end_time=15:15 (e.g. a future
+    override, or the pre-T5 schema default) can no longer enter 15:00-15:15 -- the
+    global 15:00 binds. (Schema default is itself 15:00 since the T5 followup.)"""
     class _Strat:
         entry_start_time = "09:25"
         entry_end_time = "15:15"

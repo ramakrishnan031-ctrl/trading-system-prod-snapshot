@@ -111,7 +111,7 @@ class StrategyConfig(BaseModel):
 
     # --- Time ---
     entry_start_time: str = "09:20"  # Must match system_config.yaml entry_start
-    entry_end_time: str = "15:15"    # Must match system_config.yaml entry_end
+    entry_end_time: str = "15:00"    # Matches trading_hours.entry_end = 15:00 (T5 29-Jun)
     active_days: List[str] = ["MON", "TUE", "WED", "THU", "FRI"]
 
     # ── Field validators ─────────────────────────────────────────────────────
