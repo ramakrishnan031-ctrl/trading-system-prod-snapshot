@@ -1345,6 +1345,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ct_findings_dedup
     ON control_tower_findings(category, resource_name, reason);
 CREATE INDEX IF NOT EXISTS idx_ct_findings_status
     ON control_tower_findings(status, severity);
+CREATE INDEX IF NOT EXISTS idx_ct_findings_last_seen   -- 1b query path (auto-resolve sweep)
+    ON control_tower_findings(last_seen);
 
 -- TABLE 42: control_tower_runs — one row per tower run (the 17:00 + Sun-18:00 jobs).
 CREATE TABLE IF NOT EXISTS control_tower_runs (

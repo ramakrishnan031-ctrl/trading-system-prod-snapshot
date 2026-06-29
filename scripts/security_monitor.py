@@ -728,10 +728,11 @@ def _maybe_copy_audit(cfg: SecConfig, f: Finding, now: datetime) -> None:
     _append_copy_audit(cfg, event, now, detail=f.body[:300])
 
 
-# Severity mapping for the F1 status: security uses CRITICAL | WARNING | INFO;
-# the Control Tower vocabulary is CRITICAL | HIGH | MEDIUM | LOW | INFO.
-_F1_SEV_MAP = {"CRITICAL": "CRITICAL", "WARNING": "HIGH", "INFO": "INFO"}
-_F1_SEV_RANK = {"CRITICAL": 3, "HIGH": 2, "INFO": 1}
+# F1 records the source's NATIVE max severity (CRITICAL | WARNING | INFO). The
+# native->tower mapping (WARNING->MEDIUM) lives in the Control Tower aggregator
+# (ops/control_tower/severity.py) — ONE reviewable place that drives 1c paging —
+# so the source stays in its own vocabulary. (Refined per the 1b §1A decision.)
+_F1_SEV_RANK = {"CRITICAL": 3, "WARNING": 2, "INFO": 1}
 
 
 def _write_last_run_status(path: Path, findings: list, checks_run: int,
@@ -742,9 +743,9 @@ def _write_last_run_status(path: Path, findings: list, checks_run: int,
     OSError) so it can never break a monitoring pass."""
     max_sev = "INFO"
     for f in findings:
-        mapped = _F1_SEV_MAP.get(str(getattr(f, "severity", "")).upper(), "INFO")
-        if _F1_SEV_RANK.get(mapped, 1) > _F1_SEV_RANK.get(max_sev, 1):
-            max_sev = mapped
+        s = str(getattr(f, "severity", "")).upper()
+        if _F1_SEV_RANK.get(s, 0) > _F1_SEV_RANK.get(max_sev, 0):
+            max_sev = s
     payload = {
         "version": 1,
         "timestamp": now.isoformat(),

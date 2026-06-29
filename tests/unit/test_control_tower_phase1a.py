@@ -131,13 +131,15 @@ def test_last_run_status_clean(tmp_path):
     }
 
 
-def test_last_run_status_severity_mapping(tmp_path):
+def test_last_run_status_records_native_max_severity(tmp_path):
+    # F1 records the NATIVE security severity (CRITICAL|WARNING|INFO); the
+    # native->tower map lives in the aggregator (ops/control_tower/severity.py).
     p = tmp_path / "last_run.json"
     now = datetime(2026, 6, 29, 13, 15, tzinfo=_IST)
     findings = [sm.Finding("WARNING", "k1", "t", "b"), sm.Finding("INFO", "k2", "t", "b")]
     sm._write_last_run_status(p, findings, 9, now)
     d = json.loads(p.read_text(encoding="utf-8"))
-    assert d["max_severity"] == "HIGH"          # WARNING -> HIGH
+    assert d["max_severity"] == "WARNING"       # native, not tower-mapped
     assert d["findings_count"] == 2 and d["clean"] is False
     sm._write_last_run_status(p, findings + [sm.Finding("CRITICAL", "k3", "t", "b")], 9, now)
     assert json.loads(p.read_text(encoding="utf-8"))["max_severity"] == "CRITICAL"
