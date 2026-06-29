@@ -110,7 +110,7 @@ class StrategyConfig(BaseModel):
     max_concurrent_positions: int = 2  # FIX-135 Item 42: per-strategy position cap
 
     # --- Time ---
-    entry_start_time: str = "09:20"  # Must match system_config.yaml entry_start
+    entry_start_time: str = "10:00"  # Matches trading_hours.entry_start = 10:00 (T5 29-Jun)
     entry_end_time: str = "15:00"    # Matches trading_hours.entry_end = 15:00 (T5 29-Jun)
     active_days: List[str] = ["MON", "TUE", "WED", "THU", "FRI"]
 
