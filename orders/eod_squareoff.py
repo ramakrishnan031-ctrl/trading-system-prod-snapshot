@@ -545,6 +545,41 @@ class EodSquareoff:
         except (TypeError, ValueError):
             return 0.0
 
+    @staticmethod
+    def _disp_dir(trade: dict) -> str:
+        """Normalise a trade's direction to LONG/SHORT for display.
+
+        trades.direction is NOT NULL (LONG|SHORT) for real rows; we still
+        coerce defensively (BUY→LONG, SELL→SHORT, unknown→LONG)."""
+        d = str(trade.get("direction") or "").upper()
+        return "SHORT" if d in ("SHORT", "SELL") else "LONG"
+
+    # exit_reason (SL_HIT/TGT_HIT/EOD/MANUAL/TIMEOUT/CIRCUIT_BREAKER/…) → short
+    # tag for the per-trade detail sub-line.
+    _EXIT_TAGS = {
+        "SL_HIT": "SL", "SL": "SL",
+        "TGT_HIT": "TGT", "TGT": "TGT",
+        "EOD": "EOD",
+        "MANUAL": "MAN", "MAN": "MAN",
+        "TIMEOUT": "TO", "TO": "TO",
+        "CIRCUIT_BREAKER": "CB",
+    }
+
+    @classmethod
+    def _exit_tag(cls, exit_reason) -> str:
+        r = str(exit_reason or "").upper()
+        if r in cls._EXIT_TAGS:
+            return cls._EXIT_TAGS[r]
+        return r[:3] if r else "—"
+
+    @staticmethod
+    def _summary_entry_px(trade: dict):
+        """Actual fill price preferred; fall back to the planned LIMIT."""
+        px = trade.get("entry_actual_price")
+        if px is None:
+            px = trade.get("entry_target_price")
+        return px
+
     def _human_order_symbols_for_date(self, date_str: str) -> list[str]:
         """FIX-182: distinct symbols flagged ORPHAN_ADOPTION today (human /
         untracked broker positions the system did not place). Best-effort;
@@ -605,23 +640,53 @@ class EodSquareoff:
             )
             return
 
-        total_pnl = sum(self._summary_net_pnl(t) for t in closed)
-        wins = [t for t in closed if self._summary_net_pnl(t) > 0]
-        losses = [t for t in closed if self._summary_net_pnl(t) <= 0]
-        win_n = len(wins)
-        loss_n = len(losses)
+        body = self._format_summary_body(closed, human_symbols, log=self._log)
+        self._notifier.send(
+            severity="INFO",
+            title=f"[{self._mode}] 📊 DAILY SUMMARY — {date_str}",
+            body=body,
+            source_module="eod_squareoff",
+        )
+
+    @staticmethod
+    def _format_summary_body(
+        closed: list[dict],
+        human_symbols: list[str],
+        log: "logging.Logger | None" = None,
+    ) -> str:
+        """Build the redesigned EOD DAILY SUMMARY body from closed trades.
+
+        PURE (no I/O) so it is unit-testable and render-able offline against
+        real trade rows. `closed` is the list of trades in
+        _SUMMARY_CLOSED_STATUSES; `human_symbols` are today's untracked symbols.
+
+        Layout (29-Jun redesign):
+            P&L | Win rate
+            Avg R | Capital used
+            Best / Worst  (+ DIRECTION | exit_reason)
+            Long Trades / Short Trades split  (counts + W/L + P&L)
+            Strategies:  🟢 long / 🔴 short, each with per-trade detail sub-lines
+            Smart TGT: FIXED/TRAIL/DEFEND
+            Human/untracked orders
+        """
+        log = log or logging.getLogger("eod_squareoff")
+        npnl = EodSquareoff._summary_net_pnl
+        disp = EodSquareoff._disp_dir
+
         total_n = len(closed)
+        total_pnl = sum(npnl(t) for t in closed)
+        win_n = sum(1 for t in closed if npnl(t) > 0)
+        loss_n = total_n - win_n          # net_pnl <= 0 counts as a loss (unchanged)
         win_rate_pct = (win_n / total_n * 100.0) if total_n else 0.0
 
-        best = max(closed, key=self._summary_net_pnl)
-        worst = min(closed, key=self._summary_net_pnl)
-
-        best_pnl = self._summary_net_pnl(best)
-        worst_pnl = self._summary_net_pnl(worst)
+        best = max(closed, key=npnl)
+        worst = min(closed, key=npnl)
+        best_pnl = npnl(best)
+        worst_pnl = npnl(worst)
         best_reason = best.get("exit_reason") or "—"
         worst_reason = worst.get("exit_reason") or "—"
 
-        # Avg R = avg of (net_pnl / risk_amount) across closed trades.
+        # Avg R = avg of (net_pnl / risk_amount) across closed trades. (unchanged)
         r_values = []
         for t in closed:
             risk = t.get("risk_amount")
@@ -630,10 +695,10 @@ class EodSquareoff:
             except Exception:
                 risk_f = 0.0
             if risk_f > 0:
-                r_values.append(self._summary_net_pnl(t) / risk_f)
+                r_values.append(npnl(t) / risk_f)
         avg_r = (sum(r_values) / len(r_values)) if r_values else 0.0
 
-        # Capital used = sum of margin_reserved for closed trades.
+        # Capital used = sum of margin_reserved for closed trades. (unchanged)
         capital_used = 0.0
         for t in closed:
             mr = t.get("margin_reserved")
@@ -641,68 +706,92 @@ class EodSquareoff:
                 capital_used += float(mr) if mr is not None else 0.0
             except (TypeError, ValueError) as exc:
                 # LOG-1 (2026-04-26 audit): never silent on data conversion.
-                self._log.warning(
+                log.warning(
                     "eod_squareoff.margin_float_failed",
-                    extra={
-                        "trade_id": t.get("trade_id"),
-                        "mr": mr,
-                        "error": str(exc),
-                    },
+                    extra={"trade_id": t.get("trade_id"), "mr": mr, "error": str(exc)},
                 )
 
-        # Strategy breakdown.
+        # Long/Short split — computed from ACTUAL trade directions; the W and L
+        # counts here total the overall win_n/loss_n above.
+        def _split(rows: list[dict]):
+            w = sum(1 for t in rows if npnl(t) > 0)
+            return len(rows), w, len(rows) - w, sum(npnl(t) for t in rows)
+
+        longs = [t for t in closed if disp(t) == "LONG"]
+        shorts = [t for t in closed if disp(t) == "SHORT"]
+        long_n, long_w, long_l, long_pnl = _split(longs)
+        short_n, short_w, short_l, short_pnl = _split(shorts)
+
+        # Strategy breakdown — keep the trade list per strategy for the detail
+        # sub-lines, plus its direction (single-direction strategies → 🟢/🔴).
         strat_stats: dict = {}
         for t in closed:
             name = t.get("strategy") or "unknown"
-            entry = strat_stats.setdefault(
-                name, {"trades": 0, "wins": 0, "pnl": 0.0}
-            )
-            entry["trades"] += 1
-            if self._summary_net_pnl(t) > 0:
-                entry["wins"] += 1
-            entry["pnl"] += self._summary_net_pnl(t)
+            e = strat_stats.setdefault(name, {"trades": [], "wins": 0, "pnl": 0.0})
+            e["trades"].append(t)
+            if npnl(t) > 0:
+                e["wins"] += 1
+            e["pnl"] += npnl(t)
+
+        def _strat_dir(e: dict) -> str:
+            n_long = sum(1 for t in e["trades"] if disp(t) == "LONG")
+            return "LONG" if n_long * 2 >= len(e["trades"]) else "SHORT"
 
         # Smart TGT bucket breakdown: CO_PLUS_TGT = TRAIL-eligible, rest = FIXED.
         trail_n = sum(1 for t in closed if t.get("order_protocol") == "CO_PLUS_TGT")
         fixed_n = total_n - trail_n
         defend_n = 0   # not implemented
 
-        pnl_sign = "+" if total_pnl >= 0 else "-"
-        best_sign = "+" if best_pnl >= 0 else "-"
-        worst_sign = "+" if worst_pnl >= 0 else "-"
+        def _money(v: float) -> str:
+            return f"{'+' if v >= 0 else '-'}₹{abs(v):,.2f}"
 
         lines = [
             "",
-            f"P&L: {pnl_sign}₹{abs(total_pnl):,.2f} | "
+            f"P&L: {_money(total_pnl)} | "
             f"Win rate: {win_rate_pct:.1f}% ({win_n}W {loss_n}L)",
-            f"Best:  {best.get('symbol', '?')} "
-            f"{best_sign}₹{abs(best_pnl):,.2f} ({best_reason})",
-            f"Worst: {worst.get('symbol', '?')} "
-            f"{worst_sign}₹{abs(worst_pnl):,.2f} ({worst_reason})",
+            "",
             f"Avg R: {avg_r:+.2f} | Capital used: ₹{capital_used:,.2f}",
+            "",
+            f"Best:  {best.get('symbol', '?')} {_money(best_pnl)} "
+            f"({disp(best)} | {best_reason})",
+            f"Worst: {worst.get('symbol', '?')} {_money(worst_pnl)} "
+            f"({disp(worst)} | {worst_reason})",
+            "",
+            f"🟢 Long Trades : {long_n} ({long_w}W {long_l}L) | P&L: {_money(long_pnl)}",
+            f"🔴 Short Trades: {short_n} ({short_w}W {short_l}L) | P&L: {_money(short_pnl)}",
             "",
             "Strategies:",
         ]
-        for name, s in strat_stats.items():
-            s_wr = (s["wins"] / s["trades"] * 100.0) if s["trades"] else 0.0
-            s_sign = "+" if s["pnl"] >= 0 else "-"
-            lines.append(
-                f"  {name} {s['trades']}T {s_wr:.0f}%WR "
-                f"{s_sign}₹{abs(s['pnl']):,.2f}"
-            )
-        lines.append("")
-        lines.append(
-            f"Smart TGT: FIXED={fixed_n} TRAIL={trail_n} DEFEND={defend_n}"
-        )
-        if human_note:
-            lines.append(human_note.lstrip("\n"))
 
-        self._notifier.send(
-            severity="INFO",
-            title=f"[{self._mode}] 📊 DAILY SUMMARY — {date_str}",
-            body="\n".join(lines),
-            source_module="eod_squareoff",
+        # 🟢 long strategies first, then 🔴 short; each ordered by P&L desc.
+        ordered = sorted(
+            strat_stats.items(),
+            key=lambda kv: (0 if _strat_dir(kv[1]) == "LONG" else 1, -kv[1]["pnl"]),
         )
+        for name, e in ordered:
+            n = len(e["trades"])
+            s_wr = (e["wins"] / n * 100.0) if n else 0.0
+            emoji = "🟢" if _strat_dir(e) == "LONG" else "🔴"
+            lines.append(f"{emoji} {name}  {n}T {s_wr:.0f}%WR  {_money(e['pnl'])}")
+            for t in e["trades"]:
+                ep = EodSquareoff._summary_entry_px(t)
+                xp = t.get("exit_price")
+                ep_s = f"₹{float(ep):,.2f}" if ep is not None else "—"
+                xp_s = f"₹{float(xp):,.2f}" if xp is not None else "—"
+                lines.append(
+                    f"      • {t.get('symbol', '?')} - {disp(t)} - "
+                    f"{ep_s} - {xp_s} ({EodSquareoff._exit_tag(t.get('exit_reason'))}) - "
+                    f"{_money(npnl(t))}"
+                )
+
+        lines.append("")
+        lines.append(f"Smart TGT: FIXED={fixed_n} TRAIL={trail_n} DEFEND={defend_n}")
+        if human_symbols:
+            lines.append(
+                f"Human/untracked orders today: {', '.join(human_symbols)} "
+                f"(not managed by system)"
+            )
+        return "\n".join(lines)
 
     def _cancel_pending_entries(self) -> tuple[int, int, int]:
         """

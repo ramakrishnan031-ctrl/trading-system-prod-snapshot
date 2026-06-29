@@ -430,7 +430,11 @@ class SignalProcessor:
             risk_pct = (risk_amt / capital_at_risk * 100.0) if capital_at_risk else 0.0
             est_profit = abs(float(tgt_price) - float(entry_price)) * int(qty)
             score_str = f"{int(score)}/100" if score is not None else "N/A"
+            # Direction line FIRST (LONG/SHORT). direction may arrive as
+            # LONG/SHORT/BUY/SELL → normalise to LONG/SHORT for display.
+            dir_disp = "SHORT" if str(direction).upper() in ("SHORT", "SELL") else "LONG"
             body = (
+                f"Direction: {dir_disp}\n"
                 f"Strategy: {strategy_name} | Score: {score_str}\n"
                 f"Priority rank: #1 of 1 candidates | SIP: NO\n"
                 f"Entry: ₹{float(entry_price):,.2f} (LIMIT) | "

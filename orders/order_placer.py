@@ -720,6 +720,34 @@ class OrderPlacer:
 
     # ── public interface ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _format_order_placed_body(
+        *,
+        direction: str,
+        entry_price: float,
+        qty: int,
+        now_hm: str,
+        sl_price: float,
+        tgt_price: float,
+        smart_on: bool,
+    ) -> str:
+        """Build the ORDER PLACED Telegram body (pure → unit-testable).
+
+        29-Jun: Direction (LONG/SHORT) is the FIRST line. `direction` is already
+        LONG/SHORT in place(), but normalise defensively (BUY→LONG, SELL→SHORT).
+        """
+        dir_disp = "SHORT" if str(direction).upper() in ("SHORT", "SELL") else "LONG"
+        smart_line = (
+            "Smart TGT monitoring: ACTIVE (FIXED mode)"
+            if smart_on else "Smart TGT monitoring: disabled"
+        )
+        return (
+            f"Direction: {dir_disp}\n"
+            f"Fill: ₹{entry_price:,.2f} | Qty: {qty} | {now_hm} IST\n"
+            f"SL: ₹{sl_price:,.2f} ✓ | TGT: ₹{tgt_price:,.2f} ✓\n"
+            f"{smart_line}"
+        )
+
     def place(
         self,
         *,
@@ -1546,14 +1574,10 @@ class OrderPlacer:
                     and self._smart_tgt_config is not None
                     and getattr(self._smart_tgt_config, "enabled", False)
                 )
-                smart_line = (
-                    "Smart TGT monitoring: ACTIVE (FIXED mode)"
-                    if smart_on else "Smart TGT monitoring: disabled"
-                )
-                body = (
-                    f"Fill: ₹{entry_price:,.2f} | Qty: {qty} | {now_hm} IST\n"
-                    f"SL: ₹{sl_price:,.2f} ✓ | TGT: ₹{tgt_price:,.2f} ✓\n"
-                    f"{smart_line}"
+                body = self._format_order_placed_body(
+                    direction=direction, entry_price=entry_price, qty=qty,
+                    now_hm=now_hm, sl_price=sl_price, tgt_price=tgt_price,
+                    smart_on=smart_on,
                 )
                 self._notifier.send(
                     severity="INFO",
