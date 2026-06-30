@@ -227,7 +227,7 @@ class MisFilterConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False     # master switch; False = no filtering (dormant)
     shadow: bool = True       # when enabled: True = log would-drop only; False = actually reject
-    ttl_days: int = 5         # re-test TTL in calendar days (>= 1)
+    ttl_days: int = 1         # re-test TTL in calendar days (>= 1; default 1 = daily re-test)
 
     @field_validator("ttl_days")
     @classmethod

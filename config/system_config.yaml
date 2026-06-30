@@ -98,7 +98,7 @@ product_map:                  # PR8: broker -> {INTENT -> broker_code}
 mis_filter:
   enabled: false              # master switch; false = fully dormant (existing flow byte-identical)
   shadow: true                # when enabled: true = log would-drop only; false = actually reject
-  ttl_days: 5                 # re-test TTL in calendar days; blocked symbol re-allowed after this (>= 1)
+  ttl_days: 1                 # re-test TTL in calendar days; blocked symbol re-allowed NEXT day (>= 1; default 1 = daily re-test)
 
 clock:
   warn_skew_sec: 2.0          # G4 tier 1: log warning
