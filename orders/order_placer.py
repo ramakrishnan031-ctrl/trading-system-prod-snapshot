@@ -2065,6 +2065,39 @@ class OrderPlacer:
                 )
                 # Do NOT re-raise: trade is open; reconciler + manual ops as backstop
 
+    @staticmethod
+    def _format_exit_alert(
+        *,
+        exit_reason: str,
+        symbol: str,
+        exit_price: float,
+        direction: str,
+        net_pnl: float,
+        mode: str,
+    ) -> tuple[str, str]:
+        """Pure formatter for the real-time TGT/SL exit alert → (title, body).
+
+        Label (emoji + word) comes from the canonical exit_reason; the P&L SIGN
+        comes from the SIGNED net P&L — the SAME value persisted in trades.net_pnl
+        and rendered by the EOD daily summary — NEVER a leg/outcome assumption. So a
+        loss shows "-₹X" and a profit "+₹X" in BOTH the TGT and SL branches. (The old
+        TGT_HIT branch hardcoded pnl_sign="+", mis-showing a loss as a gain, e.g. the
+        30-Jun CGCL manual-modify close: net -₹6.07 was alerted as "+₹6.07".) The
+        label still derives from exit_reason so the alert stays consistent with the
+        stored field + EOD summary (which both label this case by the filled leg).
+        """
+        if exit_reason == "TGT_HIT":
+            emoji, title_word = "🎯", "TARGET HIT"
+        else:  # SL_HIT
+            emoji, title_word = "🔴", "STOP LOSS HIT"
+        pnl_sign = "+" if float(net_pnl) >= 0 else "-"
+        title = f"[{mode}] {emoji} {title_word} — {symbol}"
+        body = (
+            f"Exit: ₹{float(exit_price):,.2f} | Direction: {direction}\n"
+            f"Net P&L: {pnl_sign}₹{abs(float(net_pnl)):,.2f}"
+        )
+        return title, body
+
     def _handle_exit_fill(self, event: OrderFilled, fill_entry: "_FillEntry") -> None:
         """
         Close the trade and release used capital on SL/TGT/EOD fill (BL-7d + BL-10a).
@@ -2198,21 +2231,17 @@ class OrderPlacer:
         # EOD exits are intentionally excluded — covered by EOD DAILY SUMMARY.
         if self._notifier is not None and exit_reason in ("TGT_HIT", "SL_HIT"):
             try:
-                if exit_reason == "TGT_HIT":
-                    emoji = "🎯"
-                    title_word = "TARGET HIT"
-                    pnl_sign = "+"
-                else:
-                    emoji = "🔴"
-                    title_word = "STOP LOSS HIT"
-                    pnl_sign = "+" if net_pnl >= 0 else "-"
-                body = (
-                    f"Exit: ₹{float(exit_price):,.2f} | Direction: {direction}\n"
-                    f"Net P&L: {pnl_sign}₹{abs(float(net_pnl)):,.2f}"
+                title, body = self._format_exit_alert(
+                    exit_reason=exit_reason,
+                    symbol=fill_entry.symbol,
+                    exit_price=exit_price,
+                    direction=direction,
+                    net_pnl=net_pnl,
+                    mode=self._mode,
                 )
                 self._notifier.send(
                     severity="INFO",
-                    title=f"[{self._mode}] {emoji} {title_word} — {fill_entry.symbol}",
+                    title=title,
                     body=body,
                     source_module="order_placer",
                 )
