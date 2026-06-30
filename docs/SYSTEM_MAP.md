@@ -397,6 +397,24 @@ instantly-marketable order. (NOCIL 22-Jun: a LONG TGT recalc'd to 197.12 was cla
   (`order_reconciler.py` — LTP-guarded). Both fail loud (broker reject), never a silent wrong-side fill.
 - **Parity:** all shared entry/exit code, no mode branch → Paper + Live together. **No schema change.**
 
+## MIS Learned Blocklist (source-free, 30-Jun) — NO_FILL Mechanism B fix
+Fixes the broker MIS-block no-fills (Zerodha refuses MIS/intraday on non-MIS-list
+stocks; `force_intraday_only` can't fall back to CNC → ~19 trades/9 symbols wasted,
+0 fills ever). **Step 0 proved NO clean MIS source exists** (no API; RMS-dynamic
+intraday; fragile/inconsistent Google Sheets) → so **NO daily list, NO `mis_tradable`
+table, NO cron, NO schema, NO external source.** Instead: observe the broker's own 400.
+
+| What | Location |
+|---|---|
+| Store + detector | `core/mis_blocklist.py` — `is_mis_block_rejection(exc)` (matches "mis orders are currently blocked") + `MisLearnedBlocklist` (persisted JSON `data_store/mis_blocklist.json` `{SYMBOL: last_blocked_date}`; thread-safe, atomic write, restart-safe, corrupt→fail-open) |
+| RECORD (always-on) | `orders/order_placer.py::_handle_placement_failure` appends ONE guarded `record_block(symbol)` on a MIS-block 400; **every existing step unchanged**. Flag-independent so the list warms up while dormant |
+| RE-TEST TTL | blocked iff in store AND `(today − last) < ttl_days` (default 5 calendar days). Expiry → allowed to re-test; fresh 400 refreshes; a trade self-corrects. Avoids permanent false-drop |
+| DROP (flag-gated) | `screening/secondary_screener.py::screen()` step-0 hook → `REJECTED_NOT_MIS_TRADABLE` (signals.status GLOB 'REJECTED*' — no schema). Only when resolved product == MIS (future-proof via injected `resolve_product`). Logs every would-drop |
+| Flag | `config/system_config.yaml` `mis_filter` (`core/config_loader.py` MisFilterConfig): `enabled:false` (default → DORMANT/byte-identical), `shadow:true` (log-only when enabled), `ttl_days:5`. Rollout OFF→enabled+shadow→shadow:false |
+| Wiring / tests | `main.py` ONE shared instance → OrderPlacer (record) + SecondaryScreener (read). `tests/unit/test_mis_blocklist.py` (22). Parity: recording fires only on the live 400 (paper never 400s) |
+
+> STAGED on branch `mis-tradability-filter-30jun`; NOT pushed. Daily-list path investigated + rejected in Step 0 (no clean source). Detail: memory `mis_learned_blocklist_30jun`.
+
 ## Control Tower (`ops/control_tower/`) — VM Operations monitoring (Phase 1, 29-Jun)
 A READ-ONLY aggregator that reads the EXISTING monitors and adds data-freshness +
 disk/backup checks. It NEVER blocks or acts on trading.

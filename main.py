@@ -60,6 +60,7 @@ from core.exceptions import CapitalStateInconsistent, TradingSystemError
 from core.instrument_cache import InstrumentCache
 from core.logger import get_logger, setup_logging
 from core.market_windows import MarketWindows
+from core.mis_blocklist import MisLearnedBlocklist
 from core.state_store import StateStore
 from data.candle_store import CandleStore
 from data.live_feed import LiveFeedManager
@@ -2184,6 +2185,16 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("order_manager"),
         bus=event_bus,  # BL-12: subscribes to OrderStatusChanged
     )
+    # MIS Learned Blocklist (source-free; Step 0 proved no clean MIS source exists).
+    # Shared instance: the OrderPlacer 400-handler RECORDS broker MIS-blocks into it;
+    # the SecondaryScreener READS it to pre-drop future MIS signals (within a re-test
+    # TTL). Recording is always-on; the screener DROP is gated by mis_filter.enabled.
+    mis_blocklist = MisLearnedBlocklist(
+        path=Path("data_store/mis_blocklist.json"),
+        ttl_days=app_config.system.mis_filter.ttl_days,
+        logger=get_logger("mis_blocklist"),
+    )
+
     order_placer = OrderPlacer(
         entry_engine=full_engine,
         order_manager=order_manager,
@@ -2208,6 +2219,7 @@ def _main_locked(args, config_dir: Path) -> int:
         market_windows=market_windows,  # FIX-073: EOD entry cutoff check
         min_effective_rr=app_config.system.entry_gate.min_effective_rr,  # FIX-136 Item 54
         emergency_exit_buffer_pct=app_config.system.capital.emergency_exit_buffer_pct,  # FIX-181
+        mis_blocklist=mis_blocklist,  # MIS learned blocklist: record broker MIS-blocks
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 
@@ -2365,6 +2377,11 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("secondary_screener"),
         # NOCIL fix: pre-fill circuit-proximity reject (fast-disable via YAML).
         circuit_proximity_reject_enabled=app_config.system.entry_gate.circuit_proximity_reject_enabled,
+        # MIS learned blocklist: pre-drop MIS-blocked symbols (default OFF -> dormant).
+        mis_blocklist=mis_blocklist,
+        mis_filter_enabled=app_config.system.mis_filter.enabled,
+        mis_filter_shadow=app_config.system.mis_filter.shadow,
+        resolve_product=lambda intent: product_resolver.resolve(intent, "zerodha"),
     )
 
     eod = EodSquareoff(
