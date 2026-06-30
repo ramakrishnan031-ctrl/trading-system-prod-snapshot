@@ -72,6 +72,9 @@ SHELL=/bin/bash
 # reconstruct_excursions  [15:50 Mon-Fri]
 50 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/reconstruct_excursions.py --daily >> logs/cron-excursions.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/reconstruct_excursions.done
 
+# sr_detector_backfill  [15:58 Mon-Fri]
+58 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/sr_detector_backfill.py >> logs/cron-sr-detector-backfill.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/sr_detector_backfill.done
+
 # control_tower  [17:05 Mon-Fri]
 5 17 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python ops/control_tower/runner.py >> logs/cron-control-tower.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/control_tower.done
 

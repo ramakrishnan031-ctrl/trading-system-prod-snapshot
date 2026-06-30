@@ -301,6 +301,22 @@ jobs:
     env_wrapper: python_nopath
     log_target: '>> logs/cron-excursions.log 2>&1'
     marker_name: reconstruct_excursions
+  sr_detector_backfill:
+    script: scripts/sr_detector_backfill.py
+    schedule: 15:58 Mon-Fri
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    detection_method: exit_code_file
+    enabled: true
+    personal_tooling: false
+    cron_expression: 58 15 * * 1-5
+    command: scripts/sr_detector_backfill.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-sr-detector-backfill.log 2>&1'
+    marker_name: sr_detector_backfill
   control_tower:
     script: ops/control_tower/runner.py
     schedule: 17:05 Mon-Fri
