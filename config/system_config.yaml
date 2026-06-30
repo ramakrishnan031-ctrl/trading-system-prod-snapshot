@@ -89,6 +89,17 @@ product_map:                  # PR8: broker -> {INTENT -> broker_code}
     COVER_ORDER: "CO"         # Cover Order -- bracket with built-in SL (PR3)
     BRACKET_ORDER: ""         # Zerodha discontinued BO; empty = not supported (PR3)
 
+# MIS Learned Blocklist (source-free; Step 0 30-Jun proved no clean MIS source exists).
+# Observes the broker's own "MIS orders are currently blocked" 400 and pre-drops future
+# MIS-intent signals for the symbol at the secondary screener (REJECTED_NOT_MIS_TRADABLE),
+# within a re-test TTL. See core/mis_blocklist.py. The 400 is ALWAYS recorded (so the list
+# warms up); only the screener DROP is gated by `enabled`. Rollout: false -> enabled+shadow
+# (validate vs real 400s) -> shadow:false (active).
+mis_filter:
+  enabled: false              # master switch; false = fully dormant (existing flow byte-identical)
+  shadow: true                # when enabled: true = log would-drop only; false = actually reject
+  ttl_days: 5                 # re-test TTL in calendar days; blocked symbol re-allowed after this (>= 1)
+
 clock:
   warn_skew_sec: 2.0          # G4 tier 1: log warning
   alert_skew_sec: 5.0         # G4 tier 2: Telegram alert, continue trading

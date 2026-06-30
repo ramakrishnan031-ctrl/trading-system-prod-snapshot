@@ -195,6 +195,7 @@ from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderSt
 from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutError, OrderRejectedError, SLUnplaceableError
 from core.ids import new_trade_id, truncate_tag_for_broker
 from core.logger import log_exception
+from core.mis_blocklist import is_mis_block_rejection
 from core.time_authority import now_ist
 from orders.entry_engine import EntryResult
 from orders.full_entry_engine import FullEntryEngine
@@ -541,6 +542,7 @@ class OrderPlacer:
         liquidity_min_depth_qty: int = 500,
         min_effective_rr: float = 0.0,  # FIX-136 Item 54: abort if R:R below this after slippage
         emergency_exit_buffer_pct: float = EMERGENCY_EXIT_BUFFER_PCT,  # FIX-181
+        mis_blocklist: Optional[Any] = None,  # MIS learned blocklist (record-only here; None = inert)
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -618,6 +620,10 @@ class OrderPlacer:
         self._liquidity_max_spread_pct = liquidity_max_spread_pct
         self._liquidity_min_depth_qty = liquidity_min_depth_qty
         self._min_effective_rr = min_effective_rr
+        # MIS learned blocklist: record-only sink here (the screener reads it).
+        # None = inert (no record). Recording is independent of the screener filter
+        # flag so the list warms up even while the filter is dormant.
+        self._mis_blocklist = mis_blocklist
 
         # OP6: subscribe to OrderFilled (synchronous; no deadlock risk — the
         # paper-synth lock is released before bus.publish() is called).
@@ -4184,6 +4190,18 @@ class OrderPlacer:
             self._fm.release(reservation_id, f"placement_failed: {exc}")
         except Exception as cap_exc:
             log_exception(self._log, cap_exc)
+
+        # MIS learned blocklist (source-free): if the broker rejected this entry
+        # because MIS/intraday is blocked for the symbol, record it so the screener
+        # can pre-drop future MIS signals for it (within a re-test TTL). Best-effort
+        # and ALWAYS-on (independent of the screener filter flag) so the list warms
+        # up while the filter is dormant. Every step above is UNCHANGED; this only
+        # ADDS a record. (Step 0: no clean MIS source exists — the 400 is the truth.)
+        if self._mis_blocklist is not None and symbol and is_mis_block_rejection(exc):
+            try:
+                self._mis_blocklist.record_block(symbol)
+            except Exception as bl_exc:
+                self._log.error("order_placer: mis_blocklist.record_block failed: %s", bl_exc)
 
     def _cancel_oco_siblings(
         self,

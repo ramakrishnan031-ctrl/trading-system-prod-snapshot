@@ -216,6 +216,27 @@ class OrderMonitorConfig(BaseModel):
         return v
 
 
+class MisFilterConfig(BaseModel):
+    """MIS Learned Blocklist — source-free pre-drop of MIS-blocked symbols.
+
+    Default OFF -> fully dormant (existing flow byte-identical). When enabled,
+    `shadow` controls log-only vs actual reject. `ttl_days` is the re-test window:
+    a symbol blocked by the broker's MIS-400 is pre-dropped for this many calendar
+    days, then allowed through to re-test (self-correcting). See core/mis_blocklist.py.
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False     # master switch; False = no filtering (dormant)
+    shadow: bool = True       # when enabled: True = log would-drop only; False = actually reject
+    ttl_days: int = 5         # re-test TTL in calendar days (>= 1)
+
+    @field_validator("ttl_days")
+    @classmethod
+    def _validate_ttl_days(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("mis_filter.ttl_days must be >= 1")
+        return v
+
+
 class PositionSizingTierConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     HIGH: float     # PS5: tier multiplier for HIGH quality signals (1.0 = full size)
@@ -1161,6 +1182,7 @@ class SystemConfig(BaseModel):
     signal_queue: SignalQueueConfig
     special_sessions: dict[str, dict[str, str]] | None = None  # FIX-094: date -> {market_open, market_close, eod_squareoff_time}
     excluded_symbols: list[str] = []          # FIX-C: symbols rejected at webhook edge
+    mis_filter: MisFilterConfig = Field(default_factory=MisFilterConfig)  # MIS learned blocklist (default OFF)
     product_map: dict[str, dict[str, str]]  # broker -> {INTENT -> code} (PR8)
     clock: ClockConfig
     order_monitor: OrderMonitorConfig         # OM14

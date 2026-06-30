@@ -89,6 +89,16 @@ Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
 
 **Tick-size snap (single chokepoint, fail-safe 23-Jun):** every broker submission is tick-snapped at `broker/zerodha_adapter.py` → `_snap_order_to_tick` / `_resolve_tick` (fallback `DEFAULT_TICK` 0.05 + throttled WARN on a missing `tick_size`; covers `place_order` **and** `modify_order`, parity). `orders/order_placer._round_to_tick` was **removed** — the adapter is the sole snap point. Tests: `tests/unit/test_tick_failsafe_snap.py`.
 
+## MIS Learned Blocklist (source-free, 30-Jun) — NO_FILL Mechanism B
+| What | Location |
+|---|---|
+| Store (JSON, no DB) | `data_store/mis_blocklist.json` `{SYMBOL: last_blocked_date}` (git-ignored runtime; atomic write) |
+| Module | `core/mis_blocklist.py` — `MisLearnedBlocklist` (record/is_blocked + TTL) + `is_mis_block_rejection(exc)` |
+| Record (always-on) | `orders/order_placer.py::_handle_placement_failure` (ONE guarded `record_block` on MIS-block 400; existing steps unchanged) |
+| Drop (flag-gated) | `screening/secondary_screener.py::screen()` → `REJECTED_NOT_MIS_TRADABLE` (only when product==MIS) |
+| Flag | `config/system_config.yaml` `mis_filter` (enabled:false/shadow:true/ttl_days:5) → `core/config_loader.py` MisFilterConfig |
+| Tests | `tests/unit/test_mis_blocklist.py` (22). STAGED branch `mis-tradability-filter-30jun`, NOT pushed. NO schema/cron/external-source |
+
 ## Duplicate-exit safety — RAMCOIND fix (25-Jun): G5b can no longer over-sell
 | What | Location |
 |---|---|

@@ -60,6 +60,10 @@ class SecondaryScreener:
         quote_fn: Callable,
         logger,
         circuit_proximity_reject_enabled: bool = True,
+        mis_blocklist=None,                       # core.mis_blocklist.MisLearnedBlocklist | None
+        mis_filter_enabled: bool = False,         # master switch (default OFF -> dormant)
+        mis_filter_shadow: bool = True,           # when enabled: True = log-only, False = actually reject
+        resolve_product: Optional[Callable] = None,  # intent -> product code ("MIS"/...); broker-free closure
     ) -> None:
         self._executor = step_executor
         self._scorer = quality_scorer
@@ -70,6 +74,13 @@ class SecondaryScreener:
         # YAML fast-disable lever (default ON, parity-safe). The post-fill
         # placeability gate is the core safety net and is NOT flag-gated.
         self._circuit_proximity_reject_enabled = bool(circuit_proximity_reject_enabled)
+        # MIS learned blocklist (source-free): pre-drop a symbol the broker has
+        # recently MIS-blocked. Default OFF -> dormant. Recording happens in the
+        # order_placer 400-handler; the screener only READS the learned set here.
+        self._mis_blocklist = mis_blocklist
+        self._mis_filter_enabled = bool(mis_filter_enabled)
+        self._mis_filter_shadow = bool(mis_filter_shadow)
+        self._resolve_product = resolve_product
 
     # -------------------------------------------------------------------------
     # Public API
@@ -94,6 +105,31 @@ class SecondaryScreener:
         SS5: Persist result to state_store (P18). DB failures logged
              but do not prevent returning ScreeningResult.
         """
+        # ── 0. MIS learned-blocklist pre-drop (source-free; observes the broker's 400) ──
+        # Drop a signal for a symbol the broker has recently MIS-blocked, BEFORE we
+        # spend the quote + 10-step funnel on a doomed-at-placement entry. Applied only
+        # when the resolved product is MIS (future-proof for CNC/delivery). Gated by
+        # mis_filter_enabled; in shadow mode we log the would-drop but let it continue.
+        # Needs no market data — pure symbol/intent lookup, so it runs first.
+        if self._mis_filter_enabled and self._mis_blocklist is not None:
+            if self._is_mis_blocked_decision(symbol, intent, direction, signal_id):
+                if not self._mis_filter_shadow:
+                    result = ScreeningResult(
+                        passed=False,
+                        status="REJECTED_NOT_MIS_TRADABLE",
+                        score=0,
+                        tier="LOW",
+                        rejected_step="mis_tradable",
+                        step_results={},
+                        step_statuses={},
+                        error_steps=[],
+                        latencies_ms={},
+                        market_data_snapshot={},
+                    )
+                    self._persist(signal_id, result)
+                    return result
+                # shadow=True -> the would-drop is logged inside the helper; fall through.
+
         # ── 1. Fetch market data if not provided ──────────────────────────────
         if market_data is None:
             try:
@@ -377,6 +413,35 @@ class SecondaryScreener:
                     f"(upper_circuit {upper}); no valid SL fits the band"
                 )
         return None
+
+    def _is_mis_blocked_decision(
+        self, symbol: str, intent: str, direction: str, signal_id: str
+    ) -> bool:
+        """True iff this signal is a would-drop as not-MIS-tradable.
+
+        Gating: only when the resolved product is MIS (future-proof for CNC/delivery);
+        fail-open on resolve errors. LOGS every would-drop (req 4): symbol, direction,
+        last_blocked_date, days-since, mode (shadow/active). Returns True for BOTH
+        shadow and active — the caller decides whether to actually reject.
+        """
+        # Future-proof product gate: only MIS orders can be MIS-blocked.
+        if self._resolve_product is not None:
+            try:
+                product = self._resolve_product(intent)
+            except Exception:
+                return False  # cannot confirm product -> do not drop (fail-open)
+            if product != "MIS":
+                return False
+        if not self._mis_blocklist.is_blocked(symbol):
+            return False
+        last, days = self._mis_blocklist.info(symbol)
+        mode = "shadow" if self._mis_filter_shadow else "active"
+        self._logger.warning(
+            "secondary_screener [%s/%s]: REJECTED_NOT_MIS_TRADABLE (%s) — symbol "
+            "MIS-blocked on %s (%s days ago, ttl re-test); direction=%s",
+            signal_id, symbol, mode, last, days, direction,
+        )
+        return True
 
     def _make_skipped(self, status: str, market_data_snapshot: dict, signal_id: str) -> ScreeningResult:
         """Build a SKIPPED result with empty step data."""
