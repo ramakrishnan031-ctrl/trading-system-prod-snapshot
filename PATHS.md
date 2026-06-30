@@ -3,6 +3,8 @@
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
+> 📌 **Deferred board (30-Jun) — only TWO open** (else closed/deployed/dormant): **(1) S&R V1 calibration** — DEFERRED/collecting; reopen DATA-gated (~50 fills + ~8–10 BIR-filled W/L, checkpoint ≈14-Jul) → PASS→Phase A / RECALIBRATE→zone params. **(2) Delivery Slice 2.5 T2** — BUILT/DORMANT; reopen **1-Jul** (prereq = ensure-flat fix to `scripts/t2_cnc_gtt_realtest.py`) → supervised qty=1 live proof → harden §4 edges → carry pilot → CLOSED. Detail: SYSTEM_MAP "Deferred items board" + memory `sr_v1_calibration_deferred_30jun` / `delivery_slice25_status_30jun`.
+
 > ⏰ **Timezone (T4, 29-Jun) — NEVER `TZ='Asia/Kolkata' date` in Git Bash.** MSYS2 ships no
 > zoneinfo, so that form silently returns **UTC** (off by 5:30 — the 29-Jun "13:47 vs 19:22"
 > defect). For IST use `scripts/ist_now.sh` (authoritative, reuses `now_ist()`), or `now_ist()`,

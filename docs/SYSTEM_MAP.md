@@ -441,6 +441,13 @@ disk/backup checks. It NEVER blocks or acts on trading.
 - Deferred T1/T2/T3 (NOT Phase 1): disk-metric repair, a retention job, weekly
   advisory scanners (the Sun-18:10 slot). Detail: memory `control_tower_phase1a_29jun`.
 
+## Deferred items board (30-Jun) — ONLY TWO open
+Everything else is closed / deployed / dormant / awaiting normal production evidence.
+| # | Item | Status | Reopen gate | Continuation |
+|---|---|---|---|---|
+| 1 | **S&R V1 calibration** | DEFERRED — collecting (V1 shadow LIVE; Phase A/B dormant) | **DATA-gated**: ~50 FILLED + ~8–10 BIR-FILLED W/L (checkpoint ≈14-Jul; verdict ~3–4 wk) | zone-accuracy review (watch TSFINV too-wide-zone) + BIR W/L → PASS→Phase A per `SR_V2_MERGE_VALIDATION_RUNBOOK` / RECALIBRATE→zone params only. Backfill cron `sr_detector_backfill`@15:58 feeds it nightly. Memory `sr_v1_calibration_deferred_30jun` |
+| 2 | **Delivery Slice 2.5 (T2)** | BUILT/DORMANT/AWAITING_T2_VALIDATION | **readiness-gated: 1-Jul** (prereq = ensure-flat fix to `t2_cnc_gtt_realtest.py`) | fix → optional paper rehearsal → supervised ~11:30 IST run (qty=1, no flag flips) → verify PASS → harden §4 edges → paper-carry → live-carry pilot → CLOSED. Memory `delivery_slice25_status_30jun` |
+
 ## Delivery (Slice 2.5) — STATUS: BUILT / DORMANT / AWAITING_T2_VALIDATION (30-Jun)
 The CNC/delivery lifecycle is **built + deployed to main but DORMANT and never exercised**
 (`gtt_state` = 0 rows ever; flags OFF: `delivery_enabled=false`, `conditional_allocation_enabled=false`,
@@ -450,7 +457,10 @@ monitor (`orders/cnc_gtt_monitor.py`) wired into the reconciler, FIX-183 orphan-
 caps + conditional capital (`risk_engine`/`fund_manager`), P4 trade_type gate. Square-off paths exempt CNC
 in LIVE (`eod_squareoff` MIS/CO-only; `order_monitor` 15:15 delegates to EOD; reconciler skips ACTIVE-gtt_state trades).
 **Next gate = the T2 live round-trip proof** (`scripts/t2_cnc_gtt_realtest.py`, Rama-supervised, market hours,
-REAL money — direct-API, does NOT flip live flags). **Residual risks before go-live:** config foot-gun
+REAL money — direct-API, does NOT flip live flags). **REOPEN = 1-Jul** (Rama's choice; prereq = the
+ensure-flat safety fix to the proof script — the `finally` must square the held position, not just delete
+the GTT). Then: optional paper rehearsal → supervised ~11:30 IST run → verify PASS → harden/defer the §4
+edges → paper-carry → supervised live-carry pilot → mark CLOSED. **Residual risks before go-live:** config foot-gun
 (enable delivery without `conditional_allocation_enabled=true` → 70% capital stranded), GTT-linkage-loss
 reconciler edge (carried CNC mis-closed if both gtt_state row + broker GTT vanish), paper-mode EOD mis-square
 (paper adapter mislabels CNC as MIS), DDPI is broker-account-only. Detail: memory `delivery_slice25_status_30jun`.
