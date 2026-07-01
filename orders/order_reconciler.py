@@ -2122,6 +2122,12 @@ class OrderReconciler:
 
         side = "SELL" if direction == "LONG" else "BUY"
 
+        # FIX (01-Jul-2026): truncate the tag — a full trade_id ('trd_'+32hex = 36 chars)
+        # exceeds Zerodha's 20-char tag limit and REJECTED this emergency exit (the naked-
+        # position last line of defense; 1-Jul BANSALWIRE). Mirrors the entry-leg pattern
+        # (_flatten_broker_position :1680). The adapter boundary now also guards this, so
+        # this is belt-and-suspenders — but keep it so the persisted order tag matches too.
+        from core.ids import truncate_tag_for_broker
         try:
             placed = self._adapter.place_order(
                 symbol=symbol,
@@ -2130,7 +2136,7 @@ class OrderReconciler:
                 price=0.0,
                 order_type="MARKET",
                 intent=intent,
-                tag=trade_id,
+                tag=truncate_tag_for_broker(trade_id),
             )
             log.critical(
                 "check9: EMERGENCY MARKET EXIT placed for %s %s qty=%d "

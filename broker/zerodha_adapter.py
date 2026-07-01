@@ -129,7 +129,7 @@ from core.exceptions import (
     InvalidTransitionError,
     OrderRejectedError,
 )
-from core.ids import new_order_id
+from core.ids import new_order_id, truncate_tag_for_broker
 from core.logger import log_exception
 from core.time_authority import now_ist
 
@@ -567,6 +567,16 @@ class ZerodhaAdapter:
             "symbol": symbol, "side": side, "qty": qty,
             "price": price, "intent": intent, "broker_code": broker_code,
         }
+        # DEFENSIVE BOUNDARY GUARD (01-Jul-2026): this is THE single order-submission
+        # chokepoint to Kite. Truncate an over-length tag HERE so no caller can EVER
+        # have an order rejected by Zerodha for tag length (>20 chars) — most critically
+        # a naked-position EMERGENCY flatten (order_reconciler _emergency_market_close
+        # previously passed the full 36-char trade_id → "Invalid tags: max allowed tag
+        # length is 20" → the last line of defense failed to place). Idempotent (an
+        # already-short tag is unchanged); None/"" passed through untouched; broker↔trade
+        # matching is by order_id, never the tag, so truncation loses no traceability.
+        if tag:
+            tag = truncate_tag_for_broker(tag)
         try:
             kite_order_id = self._kite.place_order(
                 variety=variety,
