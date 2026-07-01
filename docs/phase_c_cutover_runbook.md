@@ -1,6 +1,12 @@
 # Phase C — Report-generator cutover runbook (deploy + first-run + rollback)
 
-**Date prepared:** 2026-07-01 (IST). **Prepared by:** VS Code Claude. **Executed by:** Rama (OFF-MARKET).
+> **STATUS: DEPLOYED 2026-07-01 ~21:37 IST (off-market) → `main 01e07b7`.** Whole report redesign + cutover
+> pushed (ff `f6de000..01e07b7`); post-receive auto-installed the crontab. v41 migration applied; manual-run gate
+> PASSED (7-sheet 1 MB workbook, net=3.24 ties to Phase B, heartbeat SUCCESS). `daily_review` was **DELETED**
+> (git rm, not disabled — per Rama's directive); `daily_report` kept for the bake-in. This doc is retained as the
+> executed-steps record + the live **rollback** procedure. Sections below are the as-run steps.
+
+**Date prepared:** 2026-07-01 (IST). **Prepared by:** VS Code Claude. **Executed by:** VS Code Claude on Rama's execute-now directive (OFF-MARKET).
 **Change:** cut the EOD report over from the old generators to the redesigned DB-pure
 `reports/daily_trade_review.py`. Retire `daily_review.py`; keep `daily_report.py` in parallel for a
 short bake-in.

@@ -425,12 +425,13 @@ their capital sheets; `daily_report.py` false-MATCH reconciliation; broken signa
 
 ## Tier-1 report COMPLETE — all 7 sheets built + cross-validated (01-Jul-2026)
 Dashboard + the six detail sheets are built, each with a passing build-gate. Phase B done (above); Phase-B.1 fixes done.
-- **Phase C — PREPARED (01-Jul, Rama pushes OFF-MARKET).** Cronned `daily_trade_review` @ 16:07 Mon-Fri
-  (`config/cron_registry.yaml`, monitored → heartbeat); `daily_review` retired (`enabled:false`, kept for rollback);
-  `daily_report` kept in parallel for a ~3–5-day bake-in. `main()` `--date` defaults to today IST; records a
-  `cron_heartbeat`. `core/cron_registry.py::expected_heartbeat_jobs` skips disabled jobs (no false MISSED for the
-  retired job). `scripts/system_manager.py` gains an EOD check for the new xlsx. The cron change auto-installs on push
-  (post-receive). **W13 guardrail:** keep `shadow_tracker.enabled` + the `innings` table (Multi-Inning view deferred).
-  Deploy + first-run + rollback: **`docs/phase_c_cutover_runbook.md`**.
+- **Phase C — DEPLOYED (01-Jul ~21:37 IST, `main 01e07b7`).** `daily_trade_review` LIVE @ 16:07 Mon-Fri
+  (`config/cron_registry.yaml`, monitored → heartbeat); `daily_review` **DELETED** (git rm module + dedicated test +
+  registry entry per Rama's directive — git history is the rollback; its `reports/daily/` outputs removed);
+  `daily_report` kept in parallel for a ~3–5-day bake-in. `main()` `--date` defaults to today IST + records a
+  `cron_heartbeat`. `scripts/system_manager.py` gained an EOD check for the new xlsx. v41 migration applied on deploy;
+  the manual-run gate PASSED (7-sheet 1 MB workbook, net=3.24 ties to Phase B, heartbeat SUCCESS). **W13 guardrail
+  honoured:** `shadow_tracker.enabled` + the `innings` table untouched (Multi-Inning view deferred).
+  As-run steps + rollback: **`docs/phase_c_cutover_runbook.md`**.
 
 _Last updated: 2026-07-01 — W0 seeded Config_data; Orders + Signals + Reconciliation + Config + Strategies + Slippage + Dashboard built (all 7 sheets, cross-gates passed, tab order Dashboard·Reconciliation·Orders·Signals·Strategies·Slippage·Config); **Phase B parallel-run DONE (double-confirmed CONDITIONAL GO)**; **Phase-B.1 fixes DONE** (FIX 1 win%-denominator / FIX 2 per-date coverage % / FIX 3 "filled"→"entered" label; 56 tests pass; re-verified on affected dates, 3 honesty gates still hold); metric definitions recorded (win%/filled/entered/coverage); **W13 Multi-Inning deferral logged with Phase-C guardrails**. **★ NEXT = Phase C (retire daily_review + re-cron; keep shadow_tracker enabled + innings table).**_
