@@ -2361,6 +2361,133 @@ def test_check9_places_emergency_exit_when_none_pending(tmp_path: Path) -> None:
     print("  OK CHECK9: emergency exit placed when none pending (FIX-155)")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CHECK9 race-aware naked-position confirm (01-Jul-2026) — FACET 1 + FACET 2
+#   FACET 1: the SL's absence from broker OPEN orders is AMBIGUOUS (it may have
+#            just FILLED — the SL-fill race — rather than vanished). Confirm against
+#            BROKER TRUTH (order history + live position) before declaring naked.
+#            This is the fix for the 1-Jul BANSALWIRE false-positive SOFT_KILL.
+#   FACET 2: before the emergency MARKET exit actually sells, re-check the live
+#            broker qty and never sell more than is held (no oversell into a short).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_check9_race_sl_filled_at_broker_not_naked(tmp_path: Path) -> None:
+    """FACET 1: the SL is absent from broker OPEN orders because it just FILLED
+    (COMPLETE at broker) — the SL-fill race, NOT a naked position. The LOCAL status
+    still lags (order_monitor's 2s poll), so FIX-155b's local COMPLETE guard misses
+    it — exactly the 1-Jul BANSALWIRE false-positive. CHECK9 must NOT flag naked,
+    NOT place an emergency exit, and NOT soft_kill.
+    (FAILS on pre-FACET-1 code; PASSES on the fix.)"""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_race", symbol="BANSALWIRE", direction="LONG", status="OPEN")
+    # Local SL row still TRIGGER_PENDING — order_monitor hasn't marked it COMPLETE yet.
+    _insert_order(store, "BROKER_SL_RACE", "t_race", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=100.0)
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])  # SL gone from OPEN orders (it filled)
+
+    adapter = MagicMock()
+    # Broker TRUTH: the SL order is COMPLETE (filled) — the race, not naked.
+    adapter.get_order_history.return_value = [SimpleNamespace(status="COMPLETE")]
+    adapter.get_positions.return_value = [_Position("BANSALWIRE", qty=10, avg_price=105.0)]
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+
+    rec = _make_reconciler(store, adapter=adapter, kill_switch=kill_switch,
+                           broker_orders_fn=broker_orders_fn)
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 0, "SL COMPLETE at broker (fill race) — must NOT flag naked"
+    kill_switch.soft_kill.assert_not_called()
+    market_calls = [c for c in adapter.place_order.call_args_list
+                    if c.kwargs.get("order_type") == "MARKET"]
+    assert len(market_calls) == 0, "must NOT place an emergency exit during the SL-fill race"
+    store.close()
+    print("  OK CHECK9 FACET1: SL-fill race not flagged naked (1-Jul BANSALWIRE)")
+
+
+def test_check9_genuine_naked_broker_confirmed_still_fires(tmp_path: Path) -> None:
+    """FACET 1: the SL genuinely vanished (broker history shows CANCELLED, NOT
+    COMPLETE) AND the broker still shows an OPEN position → genuinely naked → CHECK9
+    MUST still fire (soft_kill + emergency exit). Proves FACET 1 does not neuter the
+    real naked-position protection."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_gen", symbol="SBIN", direction="LONG", status="OPEN")
+    _insert_order(store, "BROKER_SL_GONE", "t_gen", leg="SL",
+                  product="MIS", status="TRIGGER_PENDING", trigger_price=970.0)
+
+    kill_switch = MagicMock()
+    broker_orders_fn = MagicMock(return_value=[])
+
+    adapter = MagicMock()
+    adapter.get_order_history.return_value = [SimpleNamespace(status="CANCELLED")]  # NOT filled
+    adapter.get_positions.return_value = [_Position("SBIN", qty=50, avg_price=984.0)]  # still open
+    adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    adapter.place_order.return_value = _PlacedOrder(
+        internal_order_id="i1", broker_order_id="EMG_REAL", symbol="SBIN",
+        side="SELL", qty=50, price=0.0, order_type="MARKET")
+
+    rec = _make_reconciler(store, adapter=adapter, kill_switch=kill_switch,
+                           broker_orders_fn=broker_orders_fn)
+    actions = rec.reconcile_once()
+
+    missing = [a for a in actions if a.check_name == "MISSING_EXITS"]
+    assert len(missing) == 1, "genuine naked (SL cancelled + position open) MUST still fire"
+    kill_switch.soft_kill.assert_called_once()
+    adapter.place_order.assert_called_once()
+    store.close()
+    print("  OK CHECK9 FACET1: genuine naked (broker-confirmed) still fires")
+
+
+def test_check9_facet2_oversell_guard_skips_when_broker_flat(tmp_path: Path) -> None:
+    """FACET 2 (OVERSELL GUARD): _emergency_market_close re-checks the LIVE broker
+    position and SKIPS the sell when the broker is already FLAT (the SL filled between
+    the naked flag and the exit). Now that the tag fix lets this order actually place,
+    this prevents overselling the tracked qty into an unintended short.
+    (On pre-FACET-2 code the guard is absent → it would place the sell.)"""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_flat", symbol="SBIN", direction="LONG", status="OPEN", qty_filled=50)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = []  # broker FLAT
+    rec = _make_reconciler(store, adapter=adapter)
+
+    trade = {"trade_id": "t_flat", "symbol": "SBIN", "direction": "LONG",
+             "qty_filled": 50, "product": "MIS"}
+    result = rec._emergency_market_close(trade, logging.getLogger("test"))
+
+    assert result == "skipped(already_flat)", f"expected skip; got {result}"
+    adapter.place_order.assert_not_called()
+    store.close()
+    print("  OK CHECK9 FACET2: oversell guard skips emergency sell when broker flat")
+
+
+def test_check9_facet2_oversell_guard_clamps_to_held_qty(tmp_path: Path) -> None:
+    """FACET 2: when the broker holds FEWER shares than tracked (a partial SL-fill
+    race), the emergency exit sells ONLY the held qty — never oversells the diff."""
+    store = _make_store(tmp_path)
+    _insert_trade(store, "t_clamp", symbol="SBIN", direction="LONG", status="OPEN", qty_filled=50)
+
+    adapter = MagicMock()
+    adapter.get_positions.return_value = [_Position("SBIN", qty=20, avg_price=980.0)]  # only 20 held
+    adapter.place_order.return_value = _PlacedOrder(
+        internal_order_id="i", broker_order_id="EMG", symbol="SBIN", side="SELL",
+        qty=20, price=0.0, order_type="MARKET")
+    rec = _make_reconciler(store, adapter=adapter)
+
+    trade = {"trade_id": "t_clamp", "symbol": "SBIN", "direction": "LONG",
+             "qty_filled": 50, "product": "MIS"}   # tracked 50, broker holds 20
+    result = rec._emergency_market_close(trade, logging.getLogger("test"))
+
+    adapter.place_order.assert_called_once()
+    _, kwargs = adapter.place_order.call_args
+    assert kwargs["qty"] == 20, f"must clamp to held 20 (no oversell), got {kwargs.get('qty')}"
+    assert "placed(" in result
+    store.close()
+    print("  OK CHECK9 FACET2: oversell guard clamps sell qty to broker-held")
+
+
 def test_check9_skips_closed_manual_trade(tmp_path: Path) -> None:
     """FIX-157: CHECK9 must skip trades that were closed as CLOSED_MANUAL by
     an earlier check (CHECK 1) in the same reconciliation cycle. CLOSED_MANUAL

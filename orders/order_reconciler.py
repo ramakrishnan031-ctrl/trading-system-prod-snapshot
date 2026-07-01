@@ -2010,6 +2010,15 @@ class OrderReconciler:
                 )
                 continue
 
+            # RACE-AWARE CONFIRM (01-Jul-2026, FACET 1): the SL's absence from broker
+            # open-orders is AMBIGUOUS — it may have just FILLED (the SL-fill race:
+            # position closing, NOT naked) rather than vanished. The local-COMPLETE guard
+            # (FIX-155b) above lags the broker (order_monitor's 2s fill poll), which is why
+            # the 1-Jul BANSALWIRE stop-loss was mis-read as naked → false SOFT_KILL. Confirm
+            # against BROKER TRUTH (SL fill status + live position) before declaring naked.
+            if not self._confirm_genuinely_naked(broker_sl_id, symbol, self._log):
+                continue
+
             # Naked position: local SL record exists but broker has no matching order.
             # FIX-129 (Item 26): stamp SL_MISSING before alerting.
             try:
@@ -2095,6 +2104,62 @@ class OrderReconciler:
 
         return actions
 
+    def _confirm_genuinely_naked(self, broker_sl_id: str, symbol: str, log) -> bool:
+        """Race-aware broker-truth re-check before declaring a naked position (01-Jul-2026).
+
+        The SL's absence from the broker's OPEN-order list is AMBIGUOUS: it may have just
+        FILLED (the common SL-fill race — the position is closing normally, NOT naked) or
+        genuinely VANISHED (cancelled/rejected — potentially a naked position). Only a LIVE
+        broker query disambiguates; the LOCAL order status LAGS the broker fill
+        (order_monitor's 2s poll), which is exactly why CHECK9's local FIX-155b
+        COMPLETE-check missed the 1-Jul BANSALWIRE stop-loss and false-flagged it naked →
+        spurious SOFT_KILL + a would-be emergency sell (which, with the tag fix, would now
+        oversell into a short).
+
+        Returns True (genuinely naked → act) ONLY if the SL did NOT fill AND the broker
+        still shows an open position. Returns False (NOT naked → skip: no emergency exit,
+        no soft_kill) if the SL FILLED (status COMPLETE) OR the position is FLAT.
+
+        Fail-safe: if BOTH broker queries fail (broker-blind), conservatively returns True
+        — a false CRITICAL alert is safer than a missed naked position, and FACET 2's live
+        re-check in the emergency exit still prevents any oversell. Parity: same adapter
+        methods in paper + live.
+        """
+        saw_truth = False
+        # (1) Did the SL actually FILL? absent-from-open because COMPLETE = the race.
+        try:
+            hist = self._adapter.get_order_history(broker_sl_id)
+            if hist:
+                saw_truth = True
+                last = str(getattr(hist[-1], "status", "")).upper()
+                if last == "COMPLETE":
+                    log.info("check9: SL %s is COMPLETE (filled) at broker — position closing "
+                             "normally, NOT naked (SL-fill race)", broker_sl_id)
+                    return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("check9: get_order_history(%s) failed during naked-confirm: %s",
+                        broker_sl_id, exc)
+        # (2) Is the position actually still open at the broker? naked REQUIRES a position.
+        try:
+            held = 0
+            for _p in (self._adapter.get_positions() or []):
+                if _p.symbol == symbol:
+                    held = int(_p.qty)
+                    break
+            saw_truth = True
+            if held == 0:
+                log.info("check9: broker position for %s is FLAT — NOT naked (position already "
+                         "closed)", symbol)
+                return False
+        except Exception as exc:  # noqa: BLE001
+            log.warning("check9: get_positions() failed during naked-confirm for %s: %s",
+                        symbol, exc)
+        if not saw_truth:
+            log.warning("check9: could not confirm broker truth for %s (both queries failed) "
+                        "— conservatively treating as naked", symbol)
+        # SL not confirmed-filled AND position not confirmed-flat (or broker-blind) -> naked.
+        return True
+
     def _emergency_market_close(self, trade, log) -> str:
         """
         FIX-148 (GAP 4): Place emergency MARKET exit for a naked position.
@@ -2121,6 +2186,31 @@ class OrderReconciler:
             return "skipped(zero_qty)"
 
         side = "SELL" if direction == "LONG" else "BUY"
+
+        # FACET 2 (01-Jul-2026, OVERSELL GUARD): re-check the LIVE broker position right
+        # before selling. The naked flag can race with a just-filled SL (the position may
+        # already be flat); now that the tag fix lets this exit actually place, selling the
+        # tracked qty into a flat/reduced book would OVERSELL into an unintended short. Sell
+        # only what is genuinely held; skip if flat or unconfirmable (never sell what isn't
+        # there). Parity: uses the same adapter.get_positions() in paper + live.
+        try:
+            live_held = 0
+            for _p in (self._adapter.get_positions() or []):
+                if _p.symbol == symbol:
+                    live_held = abs(int(_p.qty))
+                    break
+        except Exception as exc:  # noqa: BLE001
+            log.error("check9: get_positions() failed in emergency exit for %s (%s) — cannot "
+                      "confirm held qty; SKIPPING sell to avoid oversell", symbol, exc)
+            return "skipped(position_unconfirmed)"
+        if live_held <= 0:
+            log.info("check9: broker position for %s already FLAT — skipping emergency sell "
+                     "(no oversell)", symbol)
+            return "skipped(already_flat)"
+        if live_held < qty:
+            log.warning("check9: broker holds %d %s but tracked qty=%d — selling only the held "
+                        "qty (no oversell)", live_held, symbol, qty)
+        qty = min(qty, live_held)   # never sell more than is actually held at the broker
 
         # FIX (01-Jul-2026): truncate the tag — a full trade_id ('trd_'+32hex = 36 chars)
         # exceeds Zerodha's 20-char tag limit and REJECTED this emergency exit (the naked-

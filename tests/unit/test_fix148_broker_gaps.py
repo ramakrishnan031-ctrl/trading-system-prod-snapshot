@@ -151,6 +151,11 @@ class _FakeAdapter:
     def get_positions(self):
         return self._positions
 
+    def get_order_history(self, broker_order_id):
+        # FACET 1 (01-Jul): no fill history by default → naked is decided by the
+        # live position (tests set _positions to model a genuine naked position).
+        return []
+
     def get_margins(self):
         return MagicMock(net=100000.0)
 
@@ -344,6 +349,10 @@ class TestGap4NakedPosition:
             _seed_sl_order(store, broker_order_id="SL001")
 
             adapter = _FakeAdapter()
+            # FACET 1 (01-Jul): a GENUINE naked position — the broker still HOLDS it,
+            # only the SL order vanished. Without a live position CHECK9 now correctly
+            # declines to flatten (the SL-fill race, not a naked position).
+            adapter._positions = [MagicMock(symbol="RELIANCE", qty=100)]
 
             def broker_orders_fn():
                 return []
@@ -377,6 +386,9 @@ class TestGap4NakedPosition:
             _seed_sl_order(store, broker_order_id="SL001")
 
             adapter = _FakeAdapter()
+            # FACET 1 (01-Jul): genuine naked SHORT — broker still holds -100 (signed),
+            # only the SL vanished.
+            adapter._positions = [MagicMock(symbol="RELIANCE", qty=-100)]
 
             def broker_orders_fn():
                 return []
@@ -401,6 +413,8 @@ class TestGap4NakedPosition:
             _seed_sl_order(store, broker_order_id="SL001")
 
             adapter = _FakeAdapter()
+            # FACET 1 (01-Jul): genuine naked position — broker still holds it.
+            adapter._positions = [MagicMock(symbol="RELIANCE", qty=100)]
             notifier = _FakeNotifier()
 
             def broker_orders_fn():

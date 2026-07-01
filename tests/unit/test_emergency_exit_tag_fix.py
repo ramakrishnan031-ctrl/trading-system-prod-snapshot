@@ -101,6 +101,11 @@ class _RecordingAdapter:
     def __init__(self) -> None:
         self.last_tag: object = "__unset__"
 
+    def get_positions(self):
+        # FACET 2 (01-Jul): report the live position so the oversell guard confirms
+        # the held qty before selling (genuine naked — the broker still holds it).
+        return [SimpleNamespace(symbol="IDEA", qty=1)]
+
     def place_order(self, **kwargs):
         self.last_tag = kwargs.get("tag")
         return SimpleNamespace(broker_order_id="REC123")
