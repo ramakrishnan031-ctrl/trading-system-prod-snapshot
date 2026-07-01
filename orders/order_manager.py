@@ -83,8 +83,8 @@ class OrderInsertSpec:
 # ─────────────────────────────────────────────────────────────────────────────
 # exit_reason taxonomy (BL-10a)
 #
-# Written to trades.exit_reason by close_trade(). Shadow_tracker and
-# daily_review consume this field; unknown values collapse to "EOD" in
+# Written to trades.exit_reason by close_trade(). Shadow_tracker and the EOD
+# reports consume this field; unknown values collapse to "EOD" in
 # shadow_tracker's reason_map. The frozenset below is the canonical set
 # any new caller must use.
 # ─────────────────────────────────────────────────────────────────────────────

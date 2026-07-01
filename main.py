@@ -54,6 +54,7 @@ from capital.position_sizer import PositionSizer
 from capital.risk_engine import RiskEngine
 from core.account_registry import AccountRegistry
 from core.config_loader import load_all
+from core.config_snapshotter import snapshot_config
 from core.config_validator import config_validator
 from core.events import EventBus, CapitalDriftDetected, KillSwitchActivated
 from core.exceptions import CapitalStateInconsistent, TradingSystemError
@@ -1827,6 +1828,29 @@ def _main_locked(args, config_dir: Path) -> int:
     # in live mode (adapter.get_margins() reads real broker margins there).
     if is_paper:
         broker_adapter.set_paper_capital(selected_account.paper_capital)
+
+    # ── W0: config snapshot (daily-report redesign foundation) ───────────────
+    # Persist the FULL resolved runtime config to config_snapshots so the daily
+    # report's Config sheet — and any historically-correct report re-run — can
+    # read the config AS IT WAS on this date, DB-purely. Fires in BOTH paper and
+    # live (config resolution is identical); mode is a column. Placed after the
+    # mode is FINAL (post interactive flip) and after --status/--dry-run/failed-
+    # startup have already returned. Idempotent per (date, config_hash): a same-
+    # config restart is a no-op; a config change on a same-day restart writes a
+    # new row. Non-fatal — a snapshot failure must never block trading startup.
+    try:
+        snapshot_config(
+            store,
+            app_config,
+            snapshot_date=today_iso,
+            snapshot_ts=time_authority.now_ist_iso(),
+            account_id=selected_account.account_id,
+            mode=("PAPER" if is_paper else "LIVE"),
+            trade_type=app_config.system.trade_type,
+            logger=_log,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.error("config_snapshotter: snapshot failed (non-fatal): %s", exc)
 
     # ── Phase 0e: Construct subsystems (MAIN8) ───────────────────────────────
     alert_cfg = app_config.system.alerts

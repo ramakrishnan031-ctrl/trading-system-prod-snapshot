@@ -201,7 +201,6 @@ _SPECIAL_NAME = {
     "system_manager.py": "system_manager_eod",
     "generate_screened_stocks_csv.py": "generate_screened_csv",
     "-m reports.daily_report": "daily_report",
-    "reports/daily_review.py": "daily_review",
 }
 
 

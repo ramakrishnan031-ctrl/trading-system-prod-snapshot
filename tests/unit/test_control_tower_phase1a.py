@@ -32,8 +32,8 @@ def _fresh_store(tmp_path) -> StateStore:
 def test_schema_is_v40_with_five_control_tower_tables(tmp_path):
     store = _fresh_store(tmp_path)
     try:
-        assert EXPECTED_SCHEMA_VERSION == 40
-        assert store.get_schema_version() == 40
+        assert EXPECTED_SCHEMA_VERSION >= 40   # control_tower_* tables present since v40 (W0 later bumped to 41)
+        assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
         rows = store.fetch_all(
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name LIKE 'control_tower_%'")

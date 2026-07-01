@@ -98,7 +98,7 @@ def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 40  # Control Tower Phase 1a: +control_tower_findings/runs/trends/status/freshness (5 tables). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 41  # W0 (report-redesign foundation): +config_snapshots (resolved-config-per-date). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -2452,7 +2452,8 @@ class StateStore:
 
         Joins innings -> trades -> signals to attach signal_id and scanner_name.
         Returns list[dict] ordered by (trade_id, inning_number).
-        The caller (daily_review) pivots this flat list into per-trade rows.
+        The caller pivots this flat list into per-trade rows (the multi-inning
+        report view — deferred to W13; formerly reports/daily_review.py, retired).
         """
         rows = self.fetch_all(
             """

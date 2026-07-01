@@ -374,20 +374,9 @@ jobs:
     command: scripts/eod_verify.py
     env_wrapper: python
     log_target: '>> logs/cron-eod-verify.log 2>&1'
-  daily_review:
-    script: reports/daily_review.py
-    schedule: 16:00 Mon-Fri
-    type: python
-    critical: false
-    market_day_only: true
-    cadence: market_day
-    monitored: true
-    enabled: true
-    personal_tooling: false
-    cron_expression: 0 16 * * 1-5
-    command: reports/daily_review.py
-    env_wrapper: python
-    log_target: '>> logs/cron-daily-review.log 2>&1'
+  # daily_review — DELETED 01-Jul-2026 (Phase C cutover); superseded by daily_trade_review
+  # (16:07). Entry removed entirely (not disabled) per Rama's directive; the module is
+  # `git rm`-ed so git history is the rollback. Its output (reports/daily/) had NO consumer.
   wal_checkpoint:
     script: scripts/wal_checkpoint.py
     schedule: 16:00 Mon-Fri
@@ -430,6 +419,25 @@ jobs:
     command: -m reports.daily_report
     env_wrapper: python_nopath
     log_target: '>> logs/daily_report.log 2>&1'
+  # ADDED 01-Jul-2026 (Phase C cutover) — the redesigned DB-pure report, supersedes
+  # the deleted daily_review and eventually daily_report (kept in parallel for a
+  # short bake-in). Runs 16:07 = AFTER excursion reconstruction (15:50), eod_verify
+  # (15:55), wal_checkpoint (16:00) and daily_report (16:05); BEFORE trade_journal
+  # (16:10). monitored → writes a cron_heartbeat("daily_trade_review") on success.
+  daily_trade_review:
+    script: reports/daily_trade_review.py
+    schedule: 16:07 Mon-Fri
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 7 16 * * 1-5
+    command: reports/daily_trade_review.py
+    env_wrapper: python
+    log_target: '>> logs/cron-daily-trade-review.log 2>&1'
   trade_journal:
     script: scripts/trade_journal.py
     schedule: 16:10 Mon-Fri

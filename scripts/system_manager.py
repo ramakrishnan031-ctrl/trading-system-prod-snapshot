@@ -390,6 +390,11 @@ def report_integrity_check(day: str, root: Path) -> CheckResult:
             res.ok(f"{label}: {size//1024 or 1} KB")
 
     _check("daily_report.xlsx", root / "reports/output" / f"daily_report_{day}.xlsx", 2000)
+    # daily_trade_review = the redesigned report (Phase C, 01-Jul-2026); the primary
+    # deliverable going forward. daily_report.xlsx stays checked during the parallel
+    # bake-in and is removed here when daily_report is retired.
+    _check("daily_trade_review.xlsx",
+           root / "reports/output" / f"daily_trade_review_report_{day}.xlsx", 2000)
     _check("watchman.md", root / "reports/watchman" / f"watchman_{day}.md", 200)
     _check("flow_trace.md", root / "reports/flow_trace" / f"trace_{day}.md", 100)
     _check("system log", root / "logs" / f"system_{day}.log", 500)

@@ -87,9 +87,6 @@ SHELL=/bin/bash
 # eod_verify  [15:55 Mon-Fri]
 55 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_verify.py >> logs/cron-eod-verify.log 2>&1
 
-# daily_review  [16:00 Mon-Fri]
-0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_review.py >> logs/cron-daily-review.log 2>&1
-
 # wal_checkpoint  [16:00 Mon-Fri]
 0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/wal_checkpoint.py >> logs/wal_checkpoint.log 2>&1
 
@@ -98,6 +95,9 @@ SHELL=/bin/bash
 
 # daily_report  [16:05 Mon-Fri]
 5 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python -m reports.daily_report >> logs/daily_report.log 2>&1
+
+# daily_trade_review  [16:07 Mon-Fri]
+7 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python reports/daily_trade_review.py >> logs/cron-daily-trade-review.log 2>&1
 
 # trade_journal  [16:10 Mon-Fri]
 10 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/trade_journal.py >> logs/trade_journal.log 2>&1

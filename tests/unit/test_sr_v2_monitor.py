@@ -97,7 +97,7 @@ def _monitor(store, candles, on_confirm=None):
 
 def test_schema_v38_table_exists(tmp_path: Path):
     store = _make_store(tmp_path)
-    assert store.get_schema_version() == 40   # Control Tower Phase 1a bumped 39→40 (control_tower_* tables); retest_state still present
+    assert store.get_schema_version() == 41   # W0 bumped 40→41 (+config_snapshots); retest_state still present
     row = store.fetch_one(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='retest_state'")
     assert row is not None

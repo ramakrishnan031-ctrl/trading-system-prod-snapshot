@@ -1406,9 +1406,40 @@ CREATE TABLE IF NOT EXISTS control_tower_freshness (
 );
 CREATE INDEX IF NOT EXISTS idx_ct_freshness_run ON control_tower_freshness(run_date, stage);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 46: config_snapshots   (W0 — daily-report redesign foundation, schema v41)
+-- One row per distinct resolved-config seen on a date. The SYSTEM writes the FULL
+-- effective config (core/config_snapshotter.snapshot_config, at startup after
+-- config is resolved) so the daily report's Config sheet — and any historically-
+-- correct report re-run — reads the config AS IT WAS on that date, DB-purely
+-- (the report reads ONLY this table, never YAML).
+--
+-- Idempotent by (snapshot_date, config_hash): a same-config restart is a no-op; a
+-- config change on a same-day restart writes a NEW row (timestamps distinguish
+-- them). config_hash = sha256 of the stable/sorted config_json (also seeds a
+-- future config-drift alert — NOT built here).
+--
+-- PURE ADDITION (same pattern as v37 sr_detector_results / v39
+-- excursion_reconstruction_runs / v40 control_tower_*): no MIGRATION_TABLES entry,
+-- nothing rebuilt; CREATE TABLE IF NOT EXISTS on the schema re-apply. The trailing
+-- INSERT bumps schema_version to 41.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS config_snapshots (
+    snapshot_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_date   TEXT NOT NULL,      -- YYYY-MM-DD IST (the run/trading date)
+    snapshot_ts     TEXT NOT NULL,      -- ISO-8601 IST — when the row was written
+    account_id      TEXT,               -- primary/selected account (e.g. 'LFL836')
+    mode            TEXT,               -- 'PAPER' | 'LIVE'
+    trade_type      TEXT,               -- 'INTRADAY' | 'DELIVERY' | 'BOTH'
+    config_hash     TEXT NOT NULL,      -- sha256 of config_json (stable/sorted)
+    config_json     TEXT NOT NULL       -- FULL resolved AppConfig (model_dump json)
+);
+CREATE INDEX IF NOT EXISTS idx_config_snapshots_date
+    ON config_snapshots(snapshot_date);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '40');  -- Control Tower Phase 1a: +control_tower_findings/runs/trends/status/freshness (5 tables). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '41');  -- W0: +config_snapshots (report-redesign foundation). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

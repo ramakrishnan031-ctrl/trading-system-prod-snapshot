@@ -4,12 +4,12 @@ tests/unit/test_time_authority_sweep.py
 Regression guards for H-17 / E.1 — every former datetime.now() bypass now
 flows through core.time_authority.now_ist().
 
-Covers the 6 call sites replaced in E.1:
+Covers the call sites replaced in E.1 (the reports/daily_review.py:_now_ist_date
+site was retired with that module in the Phase-C report cutover, 01-Jul-2026):
   - orders/shadow_tracker.py:_parse_ts (empty branch)
   - orders/shadow_tracker.py:_parse_ts (invalid branch)
   - orders/order_reconciler.py:_now_ist
   - capital/risk_engine.py:approve (today = now_ist().date())
-  - reports/daily_review.py:_now_ist_date
   - alerts/critical.py:write_critical_sentinel
 
 The two explicitly SKIPPED sites (state_store.py:64, utils/startup_checks.py:627)
@@ -35,7 +35,6 @@ import capital.risk_engine as risk_engine_mod
 import core.time_authority as time_authority_mod
 import orders.order_reconciler as reconciler_mod
 import orders.shadow_tracker as shadow_tracker_mod
-import reports.daily_review as daily_review_mod
 
 _IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 _FIXED_TS = datetime(2026, 4, 20, 9, 30, 0, tzinfo=_IST)
@@ -103,19 +102,6 @@ def test_risk_engine_approve_sources_date_from_now_ist() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# daily_review._now_ist_date
-# ─────────────────────────────────────────────────────────────────────────────
-
-def test_daily_review_now_ist_date_uses_time_authority() -> None:
-    """_now_ist_date() returns now_ist().strftime('%Y-%m-%d')."""
-    with patch.object(daily_review_mod, "now_ist", return_value=_FIXED_TS) as mock_ni:
-        result = daily_review_mod._now_ist_date()
-    assert mock_ni.call_count == 1
-    assert result == "2026-04-20"
-    print("  OK H-17: daily_review._now_ist_date uses now_ist")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # alerts/critical.write_critical_sentinel
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -148,7 +134,6 @@ def run_all_tests() -> int:
         test_shadow_tracker_parse_ts_invalid_uses_now_ist,
         test_order_reconciler_now_ist_uses_time_authority,
         test_risk_engine_approve_sources_date_from_now_ist,
-        test_daily_review_now_ist_date_uses_time_authority,
         test_alerts_critical_sentinel_uses_time_authority,
     ]
     print("=" * 70)

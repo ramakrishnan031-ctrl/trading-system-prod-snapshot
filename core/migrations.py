@@ -78,6 +78,12 @@ Version map
                  MIGRATION_TABLES entry (nothing rebuilt); schema.sql's CREATE
                  TABLE IF NOT EXISTS + executescript creates it and the trailing
                  INSERT bumps the version (same path as v31 slippage / v33 preflight).
+    v36 -> v41 : all pure additions (NO MIGRATION_TABLES entry, nothing rebuilt) —
+                 v37 sr_detector_results, v38 retest_state (also widened
+                 signals.status CHECK — that one IS a rebuild, see MIGRATION_TABLES),
+                 v39 excursion_reconstruction_runs, v40 control_tower_* (5 tables),
+                 v41 config_snapshots (W0 report-redesign foundation: the FULL
+                 resolved config per date, written by core/config_snapshotter.py).
 """
 from __future__ import annotations
 
