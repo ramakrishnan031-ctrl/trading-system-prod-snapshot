@@ -225,6 +225,42 @@ SHADOW-only (no reject/SL/TGT/STM/entry change). Parity (paper+live; row tagged 
 
 3B/3C historical backfill (`--all-closed`) DEFERRED → next trading day + live token (expect written=41 / skipped=5 / failed=0). Detail: `docs/SYSTEM_MAP.md` header · memory `mfe_mae_excursions_empty_28jun`.
 
+## B-1 daily-loss unrealized-MTM design (02-Jul, read-only)
+| What | Location |
+|---|---|
+| Investigation + permanent-fix design | `docs/design/b1_daily_loss_unrealized_mtm_design_02jul2026.md` |
+| The dead gate | `capital/risk_engine.py:497-512` (sums `get_total_unrealized_mtm()`) |
+| The un-called writers | `capital/fund_manager.py:1404` update / `:1416` remove / `:1435` get_total (dict at `:368`, separate from invariant) |
+| LTP source (parity-clean) | `broker_adapter.get_quote` (paper = `_make_paper_quote_provider`, real Kite quotes, `main.py:1669/377-482`) |
+| Proposed hook | `order_reconciler` 15s cycle → `_refresh_unrealized_mtm()` (set-based prune) |
+| Rollout | shadow (`daily_loss_include_unrealized=false`, log would-reject) → enforce; **build before P1** |
+
+Detail: memory `b1_daily_loss_unrealized_mtm_design_02jul`.
+
+## Audit remediation status + P1/P2 dependency map (02-Jul, read-only)
+| What | Location |
+|---|---|
+| Status table + dependency map | `docs/audit/audit_remediation_status_02jul2026.md` |
+| Deployed baseline | `origin/main = 9becf8c` (C-1 scrub + C-2 phase-2 + A-1/E-1 live) |
+| OPEN HIGH (fix before/with P1) | **B-1** daily-loss `unrealized_mtm` dead — `risk_engine.py:497-510` + writers test-only `fund_manager.py:1404/1416` |
+| PARTIAL HIGH (after P1, Rama's call) | **C-2** network — `system_config.yaml:179,187` (`bind_host:0.0.0.0`, `require_hmac:false`) |
+| Push queue (unpushed) | `fix-c1-completion-02jul@aa02f9f` (stacks A-2 `fd09a38` + C-1) · `fix-t2-import-02jul@b826ae0` parked |
+
+Detail: memory `audit_remediation_status_02jul`.
+
+## P1 EOD broker-sync / observer assessment (02-Jul, read-only)
+| What | Location |
+|---|---|
+| Assessment + gap list + build seq | `docs/design/p1_eod_broker_sync_assessment_02jul2026.md` |
+| EOD cron chain | `reconcile_positions.py`@15:45 (standalone, positions, detect-only) · `eod_cleanup.py`@15:50 (DB only) · `eod_verify.py`@15:55 (**local-only, FALSE-VERIFY**) · `cron_officer --eod-summary`@18:50 |
+| In-process (process-dependent) | `orders/eod_squareoff.py`@15:17 (flatten) · `orders/order_reconciler.py` 15s CHECK1-9 loop |
+| Observer | `ops/control_tower/` runner@17:05 (freshness only, no broker session) |
+| Orphaned / dead | `scripts/reconcile_pnl.py` (NOT scheduled; would ERROR on generic creds) |
+| Capital sync to broker | `FundManager.sync_from_broker` — startup + 09:15 one-shot ONLY (never EOD/periodic) |
+| Key bug | `eod_verify.py:61` queries `system_net_pnl`/`broker_net_pnl`; real cols `system_pnl`/`broker_pnl` (`core/schema.sql:783-785`) |
+
+Detail: memory `p1_eod_broker_sync_assessment_02jul`.
+
 ## C-1 credential-exposure inventory (02-Jul, read-only)
 | What | Location |
 |---|---|
