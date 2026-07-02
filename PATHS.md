@@ -3,7 +3,7 @@
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
-> 📌 **Deferred board (30-Jun) — only TWO open** (else closed/deployed/dormant): **(1) S&R V1 calibration** — DEFERRED/collecting; reopen DATA-gated (~50 fills + ~8–10 BIR-filled W/L, checkpoint ≈14-Jul) → PASS→Phase A / RECALIBRATE→zone params. **(2) Delivery Slice 2.5 T2** — BUILT/DORMANT; reopen **1-Jul** (prereq = ensure-flat fix to `scripts/t2_cnc_gtt_realtest.py`) → supervised qty=1 live proof → harden §4 edges → carry pilot → CLOSED. Detail: SYSTEM_MAP "Deferred items board" + memory `sr_v1_calibration_deferred_30jun` / `delivery_slice25_status_30jun`.
+> 📌 **Deferred board (30-Jun) — only TWO open** (else closed/deployed/dormant): **(1) S&R V1 calibration** — DEFERRED/collecting; reopen DATA-gated (~50 fills + ~8–10 BIR-filled W/L, checkpoint ≈14-Jul) → PASS→Phase A / RECALIBRATE→zone params. **(2) Delivery Slice 2.5 T2** — **DEFERRED (02-Jul attempt; live NEVER run — proof script bit-rotted)**. Pre-checks PASSED (deploy both fixes live; delivery-lock gate GREEN). Drift in `scripts/t2_cnc_gtt_realtest.py`: L71 `core.`→`broker.order_state_machine`, L83 `RateLimiter(cfg.broker_limits)`, L319 `store=None`→wire (else no `gtt_state` row). Reopen after an OFF-MARKET whole-script repair + full static audit vs main.py → clean dry-run → commit → push off-market → run COMPLETE T2. Parked `fix-t2-import-02jul`@b826ae0 (L71 only, unpushed). Detail: SYSTEM_MAP "Deferred items board" + memory `sr_v1_calibration_deferred_30jun` / `delivery_slice25_status_30jun`.
 
 > ⏰ **Timezone (T4, 29-Jun) — NEVER `TZ='Asia/Kolkata' date` in Git Bash.** MSYS2 ships no
 > zoneinfo, so that form silently returns **UTC** (off by 5:30 — the 29-Jun "13:47 vs 19:22"
@@ -24,7 +24,7 @@
 | Broker token | `data_store/session/zerodha_token.json` |
 | Secrets | `.env` (root) + systemd drop-in (NOT in git) |
 | Logs | `logs/system_YYYY-MM-DD.log`, `reconciler_*.log`, `trades_*.log`, `cron-*.log` |
-| Master config | `config/system_config.yaml` (T5 29-Jun: `trading_hours.entry_end` 15:15→**15:00** = the per-strategy reality; `eod_entry_cutoff` stays 15:15) |
+| Master config | `config/system_config.yaml` (T5 29-Jun: `trading_hours.entry_end` 15:15→**15:00** = the per-strategy reality; `eod_entry_cutoff` stays 15:15. **C-2 02-Jul:** `webhook.per_ip_{rate_limit_enabled,burst,refill_per_sec}` added [token-bucket, 429]; `WEBHOOK_SECRET` now required in BOTH modes [`main.required_startup_secrets`]; bind still `0.0.0.0`/`require_hmac:false` pending the Phase-3 network decision — memory `c2_webhook_lockdown_02jul`) |
 | Cron source of truth | `config/cron_registry.yaml` (→ `core/cron_registry.py`; `officer:` block = Cron Officer settings) |
 | Accounts | `config/accounts.csv` (primary: LFL836) |
 | Reports | `reports/{daily,daily_review,flow_trace,system_manager,cron_officer,...}/` |
@@ -114,6 +114,22 @@ Detail: `docs/SYSTEM_MAP.md` → "Circuit-band placeability gate".
 | Tests | `tests/unit/test_ramcoind_dup_exit_fix.py` · acceptance gate `tests/crash_test/test_ramcoind_oversell_prevented.py` (paper+live: position ends FLAT, never −1) |
 
 No DB schema; parity (shared paper+live, no mode branch). Detail: `docs/SYSTEM_MAP.md` Changelog 2026-06-25 · memory `ramcoind_duplicate_sl_incident_25jun`.
+
+## Naked-orphan ROOT-CAUSE fix — A-1 (timeout) + E-1 (crash), 02-Jul (branch `fix-a1e1-orphan-recovery-02jul`, UNPUSHED)
+| What | Location |
+|---|---|
+| Root | An ENTRY that reached the broker but whose local `orders` row never persisted (A-1 place-timeout / E-1 crash-mid-place) was marked FAILED + capital released WITHOUT confirming broker absence → filled → disowned as human → **naked position** till 15:17 EOD. Enabler: the broker `tag` was written but never read |
+| Broker oracle | `broker/zerodha_adapter.py` `get_all_orders()` — ALL of today's orders (any status) WITH `tag`+`product`; live `kite.orders()`, paper `_paper_fills` (tag+product retained across the synth-fill merge) |
+| Correlation (PURE) | `orders/order_reconciler.py` `correlate_entry_by_tag()` — recompute `truncate_tag_for_broker(trade_id)`, side-filter to the ENTRY leg → MATCH / ABSENT / AMBIGUOUS (48-bit collision narrowed by symbol+qty) |
+| Unified recovery PREPASS | `_recover_in_flight_entries()` → `_adopt_or_fail()` — runs at the TOP of every `_reconcile()` (startup sync `reconcile_once()` + 15-min poll), BEFORE CHECK1/G5b, so an adopted-OPEN trade is SL'd (G5b) + TGT-retried the SAME cycle. Both feeds (timeout `UNKNOWN_IN_FLIGHT` queue + crash orphaned-`PENDING`) → ONE path |
+| Decisions | terminal+filled→ADOPT (protect; partial-then-CANCEL included) · terminal+zero-fill→FAILED+release (only evidence-based release) · non-terminal→DEFER (reserve kept) · ABSENT→FAILED after 3-poll budget · broker-unreachable→DEFER set · AMBIGUOUS→CRITICAL alert+defer · HARD_KILL+fill→FLATTEN (commit→EXITING→oversell-guarded emergency close) |
+| Crash-cleanup reroute | `broker/order_monitor.py` `_cleanup_orphaned_pending_trades` — now DETECT-ONLY (WARNING; NO blind FAILED / NO orphan-release), defers to the reconciler recovery |
+| Capital (crash-aware, exactly-once) | `capital/fund_manager.py` `commit_adopted_entry` / `restore_adopted_reservation` / `release_adopted_reservation` (+ `_restore_reserve_from_ledger`/`_resolve_reservation_id`/`_commit_exists`) — reconstruct a crash-lost reservation from the durable `fm_ledger` RESERVE row, then commit/release; three-balance invariant holds |
+| State transitions | `core/state_store.py` `adopt_recovery_trade_to_open` (extended: atomic status flip + fill-field backfill) · `mark_recovery_trade_exiting` (HARD_KILL) · `fail_recovery_trade` |
+| Preserved | RAMCOIND L1-L4 · CHECK9 (FACET-1 race-aware + FACET-2 oversell) · G5b (entry_time backfilled to `created_at` so the 10s settling window doesn't defer the recovery SL). Old `_check_unknown_in_flight` (blind FAILED) REMOVED. NO schema |
+| Tests | `tests/unit/test_a1e1_recovery_matrix.py` (7 capital-proof cases + 13-row matrix incl. same-cycle-G5b integration + paper-parity) · `tests/unit/test_a1e1_orphan_recovery.py` (units) · `tests/unit/test_fix068_timeout_recovery.py` (order-placer side kept) |
+
+Parity (one recovery path, both modes; live Kite / paper `_paper_fills` oracle). Detail: `docs/design/a1_e1_orphan_fix_design_02jul2026.md` · `docs/SYSTEM_MAP.md` Changelog 2026-07-02 · memory `a1_e1_orphan_fix_impl_02jul`.
 
 ## Delivery (CNC) — SLICE2.5-P1+P2 (25-Jun): durable GTT overnight protection (delivery_enabled=false)
 | What | Location |
@@ -307,7 +323,7 @@ Phase B (parallel-run, 6 dates ×2 model runs) + Phase-B.1 fixes = double-confir
 | Equality | live `crontab -l` == canonical == `generate(registry)` (43 command-lines as of 29-Jun; regenerate the sha after a registry change) |
 | **post-receive** (ARMED) | `~/trading-system.git/hooks/post-receive` (from `deploy/hooks/post-receive`) — auto-installs the crontab on every push **iff** `generate==canonical`, else WARN+skip |
 | **pre-receive** (DEFERRED) | `deploy/hooks/pre-receive` — **NOT installed** (by choice 23-Jun); would hard-reject a push whose canonical != generate. Arm: install + inject `CRON_GUARD_DRYRUN=1` (dry-run) → clear to enforce. Break-glass: `rm` the hook |
-| pre-commit (optional) | `deploy/hooks/pre-commit` — local clones only |
+| pre-commit (local clones) | `deploy/hooks/pre-commit` — cron regen on registry change **+ C-1 secret scan** (`deploy/hooks/secret_scan.py`, 02-Jul): blocks a real credential / real `.env` / non-placeholder `.env.example`. Install: `cp deploy/hooks/pre-commit .git/hooks/ && chmod +x`; tests `tests/unit/test_secret_scan.py` |
 | **cron-watchdog** (ARMED) | `/etc/systemd/system/cron-watchdog.{service,timer}` — systemd (NOT cron); **19:30 IST daily**; asserts `cron_officer_eod`+`check_cron_drift` heartbeated → CRITICAL sentinel (cron-independent) if not. 1st run 24-Jun |
 
 Detail: `docs/SYSTEM_MAP.md` (Deploy + Cron Jobs + Systemd) · memory `cron_framework_armed_23jun`.

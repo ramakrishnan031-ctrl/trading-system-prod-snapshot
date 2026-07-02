@@ -1741,7 +1741,8 @@ class ZerodhaAdapter:
         restarts, same session). Paper: every ``_paper_fills`` entry (the paper
         oracle) with its retained tag. Returns dicts: ``order_id``, ``tag``,
         ``status``, ``transaction_type``, ``symbol``, ``quantity``,
-        ``filled_quantity``, ``average_price``, ``trigger_price``.
+        ``filled_quantity``, ``average_price``, ``trigger_price``, ``product``.
+        ``product`` lets the recovery backfill the missing ENTRY orders row.
         """
         if self._paper:
             with self._paper_fills_lock:
@@ -1756,6 +1757,7 @@ class ZerodhaAdapter:
                         "filled_quantity": info.get("filled_qty", 0),
                         "average_price": info.get("avg_price", 0.0),
                         "trigger_price": info.get("trigger_price", 0.0),
+                        "product": info.get("product", "") or "",
                     }
                     for bid, info in self._paper_fills.items()
                 ]
@@ -1786,6 +1788,7 @@ class ZerodhaAdapter:
                 "filled_quantity": o.get("filled_quantity", 0),
                 "average_price": o.get("average_price", 0.0),
                 "trigger_price": o.get("trigger_price", 0.0),
+                "product": o.get("product", "") or "",
             }
             for o in (all_orders or [])
         ]
@@ -1946,8 +1949,10 @@ class ZerodhaAdapter:
                 "symbol": symbol, "side": side, "qty": qty,
                 "price": price, "trigger_price": trigger_price,
                 # A-1/E-1: retain the broker tag so get_all_orders() can
-                # tag-correlate this paper order (parity with the live path).
+                # tag-correlate this paper order (parity with the live path);
+                # product lets the recovery backfill the ENTRY orders row.
                 "tag": truncate_tag_for_broker(tag) if tag else "",
+                "product": broker_code or "",
             }
 
         # ZA16a: paper mode synthesizes the broker fill that live mode

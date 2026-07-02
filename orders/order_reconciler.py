@@ -162,6 +162,26 @@ class ReconciliationAction:
 # ── A-1/E-1: tag-correlation recovery (naked-orphan fix) ────────────────────
 _ENTRY_SIDE = {"LONG": "BUY", "SHORT": "SELL"}
 
+# Recovery-state trades whose ENTRY may be live at the broker but has no local
+# orders row (timeout / crash). These broker statuses partition the correlated
+# ENTRY order: filled (protect it), still resting (defer, stay protected), or
+# genuinely dead (FAILED + release). Kite uses "TRIGGER PENDING" for a resting
+# stop and "OPEN"/"AMO REQ RECEIVED"/… for a resting limit.
+_RECOVERY_FILLED_STATUSES = frozenset({"COMPLETE"})
+_RECOVERY_DEAD_STATUSES = frozenset({"REJECTED", "CANCELLED"})
+# A broker order is TERMINAL (no further fills possible) once COMPLETE / REJECTED /
+# CANCELLED. Recovery only adopts (protects) or FAILEDs on a TERMINAL order: a
+# terminal order with filled_quantity>0 is a real position (even a partial-then-
+# cancel) that MUST be protected, never disowned; a terminal order with zero fill
+# genuinely did not fill -> safe FAILED. A non-terminal (still-resting) order —
+# even one partially filled — is DEFERRED so its final qty is adopted once it
+# settles, avoiding an SL placed for a qty that then grows.
+_RECOVERY_TERMINAL_STATUSES = _RECOVERY_FILLED_STATUSES | _RECOVERY_DEAD_STATUSES
+# Poll budget before a broker-reachable ABSENCE is trusted as FAILED (guards the
+# order-propagation window; ~45s at the 15s reconcile poll, matching FIX-068).
+_RECOVERY_ABSENCE_POLL_BUDGET = 3
+_RECOVERY_STATES = ("UNKNOWN_IN_FLIGHT", "PENDING", "PENDING_FILL")
+
 
 def correlate_entry_by_tag(trade_id, direction, symbol, qty, all_orders):
     """Correlate a broker ENTRY order back to a local recovery-state trade by its
@@ -728,6 +748,18 @@ class OrderReconciler:
         # fail-safe: never crashes the cycle, only ever inserts a row or WARNs.
         self._run_gtt_adoption_prepass()
 
+        # A-1/E-1: UNIFIED IN-FLIGHT-ENTRY RECOVERY PREPASS. Correlate every
+        # timed-out (UNKNOWN_IN_FLIGHT) or crashed (orphaned-PENDING) entry back
+        # to its broker order by tag and adopt-and-protect (or FAILED-and-release
+        # only on confirmed absence). Runs HERE — before CHECK1 and the G5b loop —
+        # so an adopted-OPEN trade gets its recovery SL (G5b) + TGT retry in this
+        # SAME cycle rather than sitting naked for a full poll interval. Replaces
+        # the old post-G5b _check_unknown_in_flight (timeout-only, blind FAILED).
+        # Never raises (see the method); a recovery failure must not stop the
+        # safety checks below.
+        if self._order_placer is not None:
+            actions.extend(self._recover_in_flight_entries())
+
         # ── Fetch broker positions (needed by checks 1-5) ──────────────────
         raw_positions = None
         try:
@@ -931,21 +963,9 @@ class OrderReconciler:
                 exc, exc_info=True,
             )
 
-        # FIX-068: CHECK_UNKNOWN_IN_FLIGHT -- poll broker for timeout-recovery trades
-        if self._order_placer is not None:
-            try:
-                actions.extend(self._check_unknown_in_flight())
-            except BrokerTimeoutError:
-                self._log.warning(
-                    "order_reconciler: check_unknown_in_flight timed out; skipping"
-                )
-            except BrokerAuthError:
-                self._note_auth_error(cycle_auth_errors)
-            except Exception as exc:
-                self._log.error(
-                    "_check_unknown_in_flight unhandled error: %s",
-                    exc, exc_info=True,
-                )
+        # A-1/E-1: the in-flight-entry recovery now runs as a PREPASS at the top
+        # of this cycle (see _recover_in_flight_entries above) — not here — so an
+        # adopted-OPEN entry is protected by the G5b loop above in the same cycle.
 
         # RC12: update consecutive auth-error counter once per cycle
         self._finalise_auth_counter(had_auth_error=bool(cycle_auth_errors))
@@ -3101,155 +3121,465 @@ class OrderReconciler:
 
         return actions
 
-    def _check_unknown_in_flight(self) -> List[ReconciliationAction]:
-        """
-        FIX-068: CHECK_UNKNOWN_IN_FLIGHT -- reconcile timeout-recovery trades.
+    # ── A-1/E-1: UNIFIED in-flight-entry RECOVERY (naked-orphan root-cause fix) ──
+    # Replaces the old FIX-068 _check_unknown_in_flight (timeout-only, blind-FAILED
+    # after 3 polls, keyed on a broker_order_id a timed-out entry never learned).
+    # Runs as a PREPASS at the top of the cycle (see _reconcile) so an adopted-OPEN
+    # trade is protected by G5b + the TGT retry within the SAME cycle. BOTH feeds —
+    # the timeout UNKNOWN_IN_FLIGHT queue AND the crash orphaned-PENDING set — flow
+    # through the ONE _adopt_or_fail path: adopt-and-protect a broker-confirmed
+    # entry, or FAILED-and-release ONLY on broker-confirmed absence (never blind).
 
-        For each trade in UNKNOWN_IN_FLIGHT state (added by order_placer when
-        BrokerTimeoutError occurs), poll broker via adapter.get_orders() to
-        determine actual order state.
-
-        Policy:
-          - Found at broker as OPEN/FILLED → update local state, hand to
-            OrderMonitor for tracking, remove from recovery queue.
-          - Not found after 3 polls (45s at 15s/poll) → mark FAILED, release
-            capital, remove from recovery queue.
-          - Broker unreachable → keep UNKNOWN_IN_FLIGHT, increment poll count,
-            retry next cycle.
-
-        Returns list of ReconciliationActions (one per trade processed).
-        """
+    def _recover_in_flight_entries(self) -> List[ReconciliationAction]:
+        """A-1/E-1 unified recovery prepass. Correlate every in-flight-entry
+        recovery trade back to its broker ENTRY by tag, then adopt (protect) or
+        FAILED (release) on evidence. Never raises — a recovery failure must not
+        stop the cycle's own safety checks. Gated: no broker call when there is
+        nothing to recover."""
         actions: List[ReconciliationAction] = []
 
-        # Get timeout recovery trades from order_placer
-        timeout_trades = self._order_placer.get_timeout_recovery_trades()
-        if not timeout_trades:
+        try:
+            timeout_ids = (
+                self._order_placer.get_timeout_recovery_trades()
+                if self._order_placer is not None else []
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("recovery: get_timeout_recovery_trades failed: %s", exc)
+            timeout_ids = []
+        try:
+            crash_rows = self._store.get_orphaned_pending_trades()
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("recovery: get_orphaned_pending_trades failed: %s", exc)
+            crash_rows = []
+
+        # Unified, de-duplicated work list: trade_id -> feed source. (A trade
+        # cannot be in both feeds — timeout sets UNKNOWN_IN_FLIGHT, crash stays
+        # PENDING — but dedupe defensively so it can never be adopted twice.)
+        work: dict = {}
+        for tid in (timeout_ids or []):
+            work[tid] = "timeout"
+        for r in (crash_rows or []):
+            work.setdefault(r["trade_id"], "crash")
+        if not work:
+            return actions   # nothing to recover -> no broker call
+
+        # ONE broker orderbook read for the whole recovery set. Unreachable ->
+        # DEFER the ENTIRE set (never FAILED / release on a blind poll).
+        try:
+            all_orders = self._adapter.get_all_orders()
+        except (BrokerTimeoutError, BrokerAuthError) as exc:
+            self._log.warning(
+                "recovery: get_all_orders unreachable (%s); deferring %d recovery "
+                "trade(s) — no FAILED, no release", type(exc).__name__, len(work),
+            )
+            return actions
+        except Exception as exc:  # noqa: BLE001
+            self._log.error(
+                "recovery: get_all_orders failed: %s; deferring recovery set", exc
+            )
             return actions
 
-        # Get broker orders (may raise BrokerTimeoutError/BrokerAuthError)
-        broker_orders_list = self._adapter.get_open_orders()
-        broker_orders = {
-            str(o.get("order_id", "")): o
-            for o in (broker_orders_list or [])
-            if o.get("order_id")
-        }
+        hard_kill = False
+        try:
+            hard_kill = self._ks is not None and self._ks.is_active("exit")
+        except Exception:  # noqa: BLE001
+            hard_kill = False
 
-        for trade_id in timeout_trades:
-            # Increment poll count
-            self._timeout_poll_counts[trade_id] = self._timeout_poll_counts.get(trade_id, 0) + 1
-            poll_count = self._timeout_poll_counts[trade_id]
-
-            # Get trade details
+        for trade_id, source in work.items():
             try:
-                trade_row = self._order_mgr.get_trade(trade_id)
-            except Exception as exc:
+                trade_row = self._store.fetch_one(
+                    "SELECT * FROM trades WHERE trade_id = ?", (trade_id,)
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._log.error("recovery: fetch trade %s failed: %s", trade_id, exc)
+                continue
+            if trade_row is None:
+                self._forget_recovery_trade(trade_id, source)
+                continue
+            # Defensive: only act on a genuine recovery state (another path may
+            # have resolved it between the feed read and now).
+            if (trade_row["status"] or "") not in _RECOVERY_STATES:
+                self._forget_recovery_trade(trade_id, source)
+                continue
+            try:
+                act = self._adopt_or_fail(
+                    trade_row, all_orders, source=source, hard_kill=hard_kill
+                )
+            except Exception as exc:  # noqa: BLE001
                 self._log.error(
-                    "check_unknown_in_flight: get_trade_by_id failed for %s: %s",
-                    trade_id, exc,
+                    "recovery: _adopt_or_fail failed for %s: %s",
+                    trade_id, exc, exc_info=True,
                 )
-                continue
-
-            if not trade_row:
-                self._log.warning(
-                    "check_unknown_in_flight: trade %s not found in DB", trade_id
-                )
-                self._order_placer.remove_from_timeout_recovery(trade_id)
-                self._timeout_poll_counts.pop(trade_id, None)
-                continue
-
-            symbol = trade_row.get("symbol", "")
-            log = bind_trade(self._log, trade_id=trade_id)
-
-            # Check if we have orders for this trade at the broker
-            trade_orders = self._store.get_orders_for_trade(trade_id)
-            found_at_broker = False
-            for order_row in (trade_orders or []):
-                broker_order_id = order_row.get("order_id", "")
-                if broker_order_id in broker_orders:
-                    found_at_broker = True
-                    broker_order = broker_orders[broker_order_id]
-                    broker_status = broker_order.get("status", "").upper()
-
-                    log.info(
-                        "check_unknown_in_flight: order %s found at broker, status=%s",
-                        broker_order_id, broker_status,
-                    )
-
-                    # Update local order state and hand to OrderMonitor
-                    # This is a simplified recovery - in production you'd want to:
-                    # 1. Update order status in DB
-                    # 2. If FILLED, trigger OrderFilled event
-                    # 3. Register with OrderMonitor if not terminal
-                    # For now, just mark as resolved and let normal reconciliation handle it
-                    actions.append(ReconciliationAction(
-                        check_name="UNKNOWN_IN_FLIGHT_RESOLVED",
-                        tier="RECOVERABLE",
-                        symbol=symbol,
-                        trade_id=trade_id,
-                        description=f"Timeout recovery: order {broker_order_id} found at broker with status {broker_status}",
-                        action_taken=f"updated_local_state poll_count={poll_count}",
-                        success=True,
-                    ))
-                    break
-
-            if found_at_broker:
-                # Remove from timeout recovery queue
-                self._order_placer.remove_from_timeout_recovery(trade_id)
-                self._timeout_poll_counts.pop(trade_id, None)
-                # Update trade status from UNKNOWN_IN_FLIGHT to PENDING_FILL
-                # (normal reconciliation will handle the rest)
-                try:
-                    self._order_mgr.update_trade_status(trade_id, "PENDING_FILL")
-                except Exception as exc:
-                    log.error("check_unknown_in_flight: update_trade_status failed: %s", exc)
-
-            elif poll_count >= 3:
-                # Not found after 3 polls (45s) - mark FAILED and release capital
-                log.critical(
-                    "check_unknown_in_flight: order not found at broker after 3 polls, marking FAILED"
-                )
-
-                # Get reservation_id from timeout recovery queue
-                recovery_entry = self._order_placer.remove_from_timeout_recovery(trade_id)
-                self._timeout_poll_counts.pop(trade_id, None)
-
-                reservation_id = recovery_entry.get("reservation_id") if recovery_entry else None
-
-                try:
-                    self._order_mgr.update_trade_status(trade_id, "FAILED")
-                except Exception as exc:
-                    log.error("check_unknown_in_flight: update_trade_status FAILED: %s", exc)
-
-                if reservation_id:
-                    try:
-                        self._fm.release(reservation_id, f"timeout_not_found_after_{poll_count}_polls")
-                    except Exception as exc:
-                        log.error("check_unknown_in_flight: capital release failed: %s", exc)
-
-                actions.append(ReconciliationAction(
-                    check_name="UNKNOWN_IN_FLIGHT_TIMEOUT",
-                    tier="UNRECOVERABLE",
-                    symbol=symbol,
-                    trade_id=trade_id,
-                    description=f"Order not found at broker after {poll_count} polls (45s), marked FAILED",
-                    action_taken="marked_failed released_capital",
-                    success=True,
-                ))
-
-            else:
-                # Still polling, keep in UNKNOWN_IN_FLIGHT
-                log.info(
-                    "check_unknown_in_flight: poll %d/3, order not yet found",
-                    poll_count,
-                )
-                actions.append(ReconciliationAction(
-                    check_name="UNKNOWN_IN_FLIGHT_POLLING",
-                    tier="COSMETIC",
-                    symbol=symbol,
-                    trade_id=trade_id,
-                    description=f"Polling broker for timeout recovery (poll {poll_count}/3)",
-                    action_taken="none",
-                    success=True,
-                ))
-
+                act = None
+            if act is not None:
+                actions.append(act)
         return actions
+
+    def _forget_recovery_trade(self, trade_id: str, source: str) -> None:
+        """Drop a resolved trade from the in-memory recovery bookkeeping. The
+        crash feed (get_orphaned_pending_trades) self-clears once the ENTRY row is
+        backfilled or the trade leaves PENDING; only the timeout queue + poll
+        counter need explicit cleanup."""
+        if source == "timeout" and self._order_placer is not None:
+            try:
+                self._order_placer.remove_from_timeout_recovery(trade_id)
+            except Exception as exc:  # noqa: BLE001
+                self._log.debug("recovery: remove_from_timeout_recovery failed: %s", exc)
+        self._timeout_poll_counts.pop(trade_id, None)
+
+    def _adopt_or_fail(
+        self, trade_row, all_orders, *, source: str, hard_kill: bool
+    ) -> Optional[ReconciliationAction]:
+        """THE single recovery decision: correlate the trade's ENTRY at the broker
+        by tag, then route to adopt-and-protect / defer / FAILED-and-release.
+        Objectives: never call a system order human; never release before
+        broker-absence is confirmed; never leave a filled position unmanaged;
+        never adopt twice."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        direction = trade_row["direction"] or ""
+        qty = int(trade_row["qty_planned"] or 0)
+        log = bind_trade(self._log, trade_id=trade_id)
+
+        kind, order = correlate_entry_by_tag(
+            trade_id, direction, symbol, qty, all_orders
+        )
+
+        if kind == "AMBIGUOUS":
+            return self._recovery_ambiguous(trade_row, log)
+        if kind == "ABSENT":
+            return self._recovery_absent(trade_row, source, log)
+
+        # MATCH: decide on the broker ENTRY order's TERMINAL-ity + fill.
+        status = (order.get("status") or "").upper()
+        filled = int(order.get("filled_quantity") or 0)
+        if status in _RECOVERY_TERMINAL_STATUSES:
+            if filled > 0:
+                # A real position — even a partial-then-CANCEL — must be adopted
+                # and protected, NEVER disowned as human (the naked-orphan bug).
+                return self._recovery_adopt_filled(
+                    trade_row, order, source, log, hard_kill
+                )
+            # Terminal with zero fill: it genuinely did not fill -> safe FAILED.
+            return self._recovery_fail_dead(trade_row, source, status, log)
+        # Non-terminal (still RESTING at the broker, possibly partially filled):
+        # keep capital correct + defer; re-correlated next cycle so the FINAL qty
+        # is adopted once it settles (COMPLETE / CANCELLED-with-partial), avoiding
+        # an SL placed for a qty that then grows.
+        return self._recovery_defer_resting(trade_row, order, log)
+
+    def _recovery_absent(
+        self, trade_row, source: str, log
+    ) -> Optional[ReconciliationAction]:
+        """No entry-side order carries our tag. Broker is reachable (get_all_orders
+        succeeded) but confirm over a small poll budget (order-propagation window)
+        before FAILED — then release capital (the ONLY evidence-based release)."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        n = self._timeout_poll_counts.get(trade_id, 0) + 1
+        self._timeout_poll_counts[trade_id] = n
+        if n < _RECOVERY_ABSENCE_POLL_BUDGET:
+            log.info(
+                "recovery: %s ABSENT at broker (poll %d/%d) — deferring FAILED",
+                trade_id, n, _RECOVERY_ABSENCE_POLL_BUDGET,
+            )
+            return ReconciliationAction(
+                check_name="RECOVERY_ABSENT_POLLING", tier="COSMETIC",
+                symbol=symbol, trade_id=trade_id,
+                description=f"Entry absent at broker (poll {n}/{_RECOVERY_ABSENCE_POLL_BUDGET})",
+                action_taken="defer", success=True,
+            )
+        # Confirmed absent -> FAILED (atomic guard) + release (crash-aware).
+        if not self._store.fail_recovery_trade(trade_id):
+            log.info("recovery: %s already resolved before FAILED — skip release", trade_id)
+            self._forget_recovery_trade(trade_id, source)
+            return None
+        try:
+            self._fm.release_adopted_reservation(
+                trade_row, reason=f"recovery_absent_after_{n}_polls"
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("recovery: release_adopted_reservation failed for %s: %s", trade_id, exc)
+        self._forget_recovery_trade(trade_id, source)
+        log.critical(
+            "recovery: %s confirmed ABSENT at broker after %d polls -> FAILED + "
+            "capital released", trade_id, n,
+        )
+        return ReconciliationAction(
+            check_name="RECOVERY_ABSENT_FAILED", tier="UNRECOVERABLE",
+            symbol=symbol, trade_id=trade_id,
+            description=f"Entry not at broker after {n} polls -> FAILED",
+            action_taken="marked_failed released_capital", success=True,
+        )
+
+    def _recovery_fail_dead(
+        self, trade_row, source: str, status: str, log
+    ) -> Optional[ReconciliationAction]:
+        """The correlated ENTRY is REJECTED / CANCELLED at the broker — it
+        genuinely did not fill. FAILED + release (safe; positive evidence)."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        if not self._store.fail_recovery_trade(trade_id):
+            self._forget_recovery_trade(trade_id, source)
+            return None
+        try:
+            self._fm.release_adopted_reservation(
+                trade_row, reason=f"recovery_entry_{status.lower()}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("recovery: release_adopted_reservation failed for %s: %s", trade_id, exc)
+        self._forget_recovery_trade(trade_id, source)
+        log.warning(
+            "recovery: %s ENTRY %s at broker -> FAILED + capital released",
+            trade_id, status,
+        )
+        return ReconciliationAction(
+            check_name="RECOVERY_ENTRY_DEAD", tier="RECOVERABLE",
+            symbol=symbol, trade_id=trade_id,
+            description=f"Entry {status} at broker -> FAILED",
+            action_taken="marked_failed released_capital", success=True,
+        )
+
+    def _recovery_defer_resting(
+        self, trade_row, order, log
+    ) -> Optional[ReconciliationAction]:
+        """The correlated ENTRY is still RESTING at the broker (not filled). Keep
+        its RESERVE present in memory (crash lost it) so available capital is not
+        over-counted, then defer — a later cycle re-correlates it (fill -> adopt,
+        cancel/reject -> FAILED). No entry-row backfill, so the crash feed re-scans
+        it; no timeout-queue removal, so the timeout feed re-polls it."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        try:
+            self._fm.restore_adopted_reservation(trade_row)
+        except Exception as exc:  # noqa: BLE001
+            log.error("recovery: restore_adopted_reservation failed for %s: %s", trade_id, exc)
+        # It IS at the broker -> reset the absence poll budget.
+        self._timeout_poll_counts.pop(trade_id, None)
+        log.info(
+            "recovery: %s ENTRY resting at broker (status=%s) — reserve ensured, "
+            "deferring; will adopt on fill", trade_id, order.get("status"),
+        )
+        return ReconciliationAction(
+            check_name="RECOVERY_ENTRY_RESTING", tier="COSMETIC",
+            symbol=symbol, trade_id=trade_id,
+            description=f"Entry resting at broker (status={order.get('status')}); deferring",
+            action_taken="reserve_ensured defer", success=True,
+        )
+
+    def _recovery_adopt_filled(
+        self, trade_row, order, source: str, log, hard_kill: bool
+    ) -> Optional[ReconciliationAction]:
+        """THE naked-orphan fix: the correlated ENTRY is FILLED (COMPLETE) at the
+        broker — a real position. Adopt it and PROTECT it (never disown as human,
+        never leave naked), or FLATTEN it under an active HARD_KILL."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        filled_qty = int(order.get("filled_quantity") or order.get("quantity") or 0)
+        avg_price = float(order.get("average_price") or 0.0)
+        broker_order_id = str(order.get("order_id") or "")
+        product = ((order.get("product") or "").upper()) or "MIS"
+        # entry_time proxy = trade.created_at (tz-aware IST, guaranteed older than
+        # the G5b settling window since it precedes placement) so the same-cycle
+        # G5b recovery-SL is NOT wrongly deferred by a fresh timestamp.
+        filled_at = (trade_row["created_at"] or now_ist().isoformat())
+
+        if filled_qty <= 0:
+            # COMPLETE but zero filled qty is contradictory — defer, don't act.
+            log.warning("recovery: %s COMPLETE but filled_qty<=0; deferring", trade_id)
+            return None
+
+        if hard_kill:
+            return self._recovery_flatten_under_kill(
+                trade_row, source, filled_qty, avg_price, filled_at,
+                product, broker_order_id, log,
+            )
+
+        # 1) Atomic adopt: recovery-state -> OPEN + backfill the fill fields in ONE
+        #    transaction (exactly-once; a second cycle sees a non-recovery state).
+        if not self._store.adopt_recovery_trade_to_open(
+            trade_id, avg_fill_price=avg_price, qty_filled=filled_qty,
+            filled_at=filled_at,
+        ):
+            log.info("recovery: %s already adopted by another cycle — no-op", trade_id)
+            self._forget_recovery_trade(trade_id, source)
+            return None
+
+        # 2) Capital: crash-aware commit (restore the reserve if a crash lost it,
+        #    then reserved -> used). Exactly ONE commit per trade.
+        try:
+            self._fm.commit_adopted_entry(trade_row, avg_price, filled_qty)
+        except Exception as exc:  # noqa: BLE001
+            # commit_to_used already fired hard_kill (BL-4). The position is
+            # adopted + OPEN, so G5b still protects it this cycle; surface loudly.
+            log.critical("recovery: commit_adopted_entry failed for %s: %s", trade_id, exc)
+
+        # 3) Backfill the ENTRY orders row (traceability + product for G5b/reports).
+        self._backfill_entry_order_row(
+            trade_id, broker_order_id, trade_row, filled_qty, avg_price, product, log
+        )
+
+        # 4) Owe a TGT -> flag TGTRetryManager. The SL comes from G5b THIS cycle
+        #    (recovery runs as a prepass, before the G5b loop).
+        try:
+            self._store.mark_needs_tgt_retry(trade_id)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("recovery: mark_needs_tgt_retry failed for %s: %s", trade_id, exc)
+
+        self._forget_recovery_trade(trade_id, source)
+        log.critical(
+            "recovery: ADOPTED filled entry %s qty=%d avg=%.2f broker_order_id=%s "
+            "-> OPEN; G5b places the SL this cycle, TGT retry flagged (was heading "
+            "for FAILED -> naked)", trade_id, filled_qty, avg_price, broker_order_id,
+        )
+        self._alert_recovery_adopted(trade_row, symbol, filled_qty, avg_price)
+        return ReconciliationAction(
+            check_name="RECOVERY_ADOPTED_FILLED", tier="RECOVERABLE",
+            symbol=symbol, trade_id=trade_id,
+            description=(
+                f"Adopted broker-filled entry {symbol} qty={filled_qty} "
+                f"avg={avg_price:.2f} (source={source}) -> OPEN + protected"
+            ),
+            action_taken="adopted_open committed_capital tgt_retry_flagged", success=True,
+        )
+
+    def _recovery_flatten_under_kill(
+        self, trade_row, source: str, filled_qty: int, avg_price: float,
+        filled_at: str, product: str, broker_order_id: str, log,
+    ) -> Optional[ReconciliationAction]:
+        """HARD_KILL + matched FILLED entry: FLATTEN, never resume. Commit capital
+        (reserved -> used, so the ledger reflects the position we truly hold), flip
+        straight to EXITING (excludes G5b/CHECK1 -> no protective SL races the
+        flatten), backfill the entry row, then place the oversell-guarded emergency
+        market close. Finalized (release_used) by _check_stuck_exiting -> CHECK1."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        if not self._store.mark_recovery_trade_exiting(
+            trade_id, avg_fill_price=avg_price, qty_filled=filled_qty,
+            filled_at=filled_at,
+        ):
+            log.info("recovery(kill): %s already resolved — no-op", trade_id)
+            self._forget_recovery_trade(trade_id, source)
+            return None
+        try:
+            self._fm.commit_adopted_entry(trade_row, avg_price, filled_qty)
+        except Exception as exc:  # noqa: BLE001
+            log.critical("recovery(kill): commit_adopted_entry failed for %s: %s", trade_id, exc)
+        self._backfill_entry_order_row(
+            trade_id, broker_order_id, trade_row, filled_qty, avg_price, product, log
+        )
+        # Re-fetch so the emergency close reads the backfilled EXITING row
+        # (qty_filled / direction).
+        fresh = self._store.fetch_one(
+            "SELECT * FROM trades WHERE trade_id = ?", (trade_id,)
+        )
+        result = self._emergency_market_close(fresh if fresh is not None else trade_row, log)
+        self._forget_recovery_trade(trade_id, source)
+        log.critical(
+            "recovery: HARD_KILL matched filled entry %s -> EXITING + emergency "
+            "flatten (%s)", trade_id, result,
+        )
+        return ReconciliationAction(
+            check_name="RECOVERY_KILL_FLATTEN", tier="CRITICAL",
+            symbol=symbol, trade_id=trade_id,
+            description=(
+                f"HARD_KILL: matched filled entry {symbol} qty={filled_qty} "
+                f"flattened (never adopted into a kill)"
+            ),
+            action_taken=f"exiting flatten={result}", success=True,
+        )
+
+    def _recovery_ambiguous(
+        self, trade_row, log
+    ) -> Optional[ReconciliationAction]:
+        """>1 entry-side order shares our tag even after symbol+qty narrowing — a
+        real 48-bit tag collision (astronomically rare). NEVER blind-adopt (could
+        mis-own another trade's order) and NEVER release (the entry may be live).
+        Defer + CRITICAL alert for manual resolution — capital stays reserved
+        (conservative) and the trade is not disowned as human."""
+        trade_id = trade_row["trade_id"]
+        symbol = trade_row["symbol"] or ""
+        log.critical(
+            "recovery: AMBIGUOUS tag collision for %s (%s) — >1 broker entry shares "
+            "the tag; NOT auto-adopting or releasing. MANUAL review required.",
+            trade_id, symbol,
+        )
+        if self._notifier is not None:
+            try:
+                self._notifier.send(
+                    severity="CRITICAL",
+                    title=f"[{self._mode}] Recovery AMBIGUOUS — {symbol}",
+                    body=(
+                        f"In-flight-entry recovery for {trade_id} ({symbol}) found >1 "
+                        f"broker order sharing its tag (a rare tag collision). The "
+                        f"system will NOT auto-adopt or release capital — manual "
+                        f"resolution required. Capital stays reserved; the trade is "
+                        f"held in recovery."
+                    ),
+                    source_module="order_reconciler",
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error("recovery: AMBIGUOUS notifier.send failed: %s", exc)
+        return ReconciliationAction(
+            check_name="RECOVERY_AMBIGUOUS", tier="CRITICAL",
+            symbol=symbol, trade_id=trade_id,
+            description=f"Tag collision for {trade_id}; manual review (no adopt, no release)",
+            action_taken="deferred alerted", success=True,
+        )
+
+    def _backfill_entry_order_row(
+        self, trade_id: str, broker_order_id: str, trade_row, filled_qty: int,
+        avg_price: float, product: str, log,
+    ) -> None:
+        """Restore the missing ENTRY orders row (the local record the timeout/crash
+        never persisted) keyed by the matched broker_order_id, marked COMPLETE.
+        Idempotent — skips if an ENTRY row already exists for this trade."""
+        if not broker_order_id:
+            return
+        try:
+            for o in (self._store.get_orders_for_trade(trade_id) or []):
+                if (o["leg"] or "").upper() == "ENTRY":
+                    return   # already present -> idempotent no-op
+        except Exception:  # noqa: BLE001
+            pass
+        direction = trade_row["direction"] or "LONG"
+        side = "BUY" if direction == "LONG" else "SELL"
+        try:
+            self._order_mgr.insert_order(
+                trade_id=trade_id, broker_order_id=broker_order_id, leg="ENTRY",
+                transaction_type=side, order_type="LIMIT", product=product,
+                variety="regular",
+                qty_requested=int(trade_row["qty_planned"] or filled_qty),
+                price=float(trade_row["entry_target_price"] or avg_price),
+            )
+            # Reflect the true broker state (COMPLETE) so CHECK6/reports don't see
+            # a phantom PENDING entry.
+            self._order_mgr.update_order_status(
+                broker_order_id, "COMPLETE", qty_filled=filled_qty,
+                avg_fill_price=avg_price,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("recovery: backfill ENTRY orders row failed for %s: %s", trade_id, exc)
+
+    def _alert_recovery_adopted(
+        self, trade_row, symbol: str, filled_qty: int, avg_price: float
+    ) -> None:
+        """WARNING alert: an adopted, now-protected filled entry. Surfaced once (the
+        adoption is a one-shot transition) so the operator knows a timed-out/crashed
+        entry was recovered rather than lost."""
+        if self._notifier is None:
+            return
+        try:
+            self._notifier.send(
+                severity="WARNING",
+                title=f"[{self._mode}] Recovered in-flight entry — {symbol}",
+                body=(
+                    f"A timed-out/crashed ENTRY for {symbol} ({trade_row['trade_id']}) "
+                    f"was found FILLED at the broker (qty={filled_qty} avg={avg_price:.2f}) "
+                    f"and ADOPTED -> OPEN + protected (SL via recovery, TGT retry). "
+                    f"Previously this became a naked orphan."
+                ),
+                source_module="order_reconciler",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("recovery: adopted notifier.send failed: %s", exc)

@@ -158,6 +158,21 @@ _INVARIANT_TOLERANCE = 1.0
 from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 
 
+def _row_get(row: Any, key: str) -> Any:
+    """Safe field access for a sqlite3.Row OR a dict (A-1/E-1 recovery reads
+    trade rows from both). sqlite3.Row raises IndexError on a missing column;
+    a dict returns None via .get. Returns None on any miss."""
+    if row is None:
+        return None
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        try:
+            return row.get(key)   # dict-like
+        except AttributeError:
+            return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Return-type dataclasses
 # ─────────────────────────────────────────────────────────────────────────────
@@ -962,6 +977,130 @@ class FundManager:
                 )
             raise
 
+    # ── A-1/E-1: capital for ADOPTED recovery entries ─────────────────────────
+    # An ENTRY that reached the broker but whose local orders row never persisted
+    # (timeout / crash) is recovered by the reconciler's tag-correlation pass.
+    # These three methods are the ONLY capital touch-points for that recovery, so
+    # release/commit stays in exactly one place (the caller never mutates buckets
+    # directly). All three are crash-aware: rehydrate_from_open_trades replays
+    # only OPEN/PARTIAL trades, so a crashed PENDING/UNKNOWN_IN_FLIGHT entry's
+    # reservation is NOT in memory at startup — it must be reconstructed from the
+    # durable fm_ledger RESERVE row before it can be committed or released.
+
+    def commit_adopted_entry(
+        self,
+        trade_row: Any,
+        actual_fill_price: float,
+        actual_qty: int,
+    ) -> Optional[CommitResult]:
+        """Commit capital for an ADOPTED, broker-confirmed FILLED entry whose
+        normal fill path (OrderPlacer._handle_entry_fill -> commit_to_used) never
+        ran (A-1 timeout / E-1 crash).
+
+        Crash-aware:
+          * reservation PRESENT in memory (timeout — same process still holds it)
+              -> commit_to_used (existing accounting; excess/SL-M buffer handled
+                 exactly as a normal fill).
+          * reservation ABSENT (crash — rehydrate skipped the PENDING trade)
+              -> restore the RESERVE in-memory from the durable fm_ledger RESERVE
+                 row, THEN commit_to_used -> reserved becomes used.
+
+        Exactly ONE COMMIT per trade: if a COMMIT ledger row already exists for
+        the reservation this is a no-op (returns None). The caller's atomic
+        trade-state guard (state_store.adopt_recovery_trade_to_open) is the
+        primary exactly-once gate; this ledger check is defence in depth so a
+        second cycle can never restore-and-double-commit.
+
+        Returns the CommitResult, or None if there is nothing to commit (no
+        reservation resolvable, or already committed). On a genuine commit
+        failure, commit_to_used's BL-4 handler fires hard_kill and re-raises.
+        """
+        with self._lock:
+            self._assert_initialized()
+            rid = self._resolve_reservation_id(trade_row)
+            # Exactly-one-commit guard BEFORE any in-memory restore, so an
+            # already-committed trade (whose reservation was popped by the first
+            # commit) is never re-reserved from the ledger.
+            if rid and self._commit_exists(rid):
+                self._log.info(
+                    "fund_manager.commit_adopted_entry_already_committed",
+                    extra={"reservation_id": rid},
+                )
+                return None
+            # Restore the reserve if a crash lost it (idempotent no-op if present).
+            rid = self._restore_reserve_from_ledger(trade_row)
+            if rid is None:
+                self._log.critical(
+                    "fund_manager.commit_adopted_entry_no_reservation",
+                    extra={"trade_id": _row_get(trade_row, "trade_id")},
+                )
+                return None
+        # Lock released: commit_to_used manages its own lock and defers its BL-4
+        # hard_kill to AFTER lock release (C.1), so we must NOT call it while
+        # holding self._lock. RLock reentrancy would keep the lock held across
+        # hard_kill's downstream (rate_limiter / broker cancel) and risk deadlock.
+        return self.commit_to_used(rid, actual_fill_price, actual_qty)
+
+    def restore_adopted_reservation(self, trade_row: Any) -> bool:
+        """For an ADOPTED entry still RESTING at the broker (OPEN / TRIGGER
+        PENDING — not yet filled), ensure its RESERVE is present in memory so
+        available capital is not over-counted while the order is live.
+
+        Timeout case: the reservation is already in memory (no-op). Crash case:
+        it is reconstructed from the durable fm_ledger RESERVE row. Idempotent —
+        safe to call every recovery cycle until the entry fills (commit) or
+        terminalises (release). Returns True iff a reservation is present after.
+        """
+        with self._lock:
+            self._assert_initialized()
+            rid = self._restore_reserve_from_ledger(trade_row)
+            if rid is None:
+                return False
+            # Restoring moves avail -> reserved (total unchanged) -> invariant
+            # holds. C.1: capture, defer hard_kill to after lock release.
+            try:
+                self._check_invariant("restore_adopted_reservation", rid)
+            except CapitalInvariantViolation as exc:
+                _violation = exc
+            else:
+                _violation = None
+        if _violation is not None:
+            self._handle_invariant_violation(_violation)
+            raise _violation
+        return True
+
+    def release_adopted_reservation(
+        self, trade_row: Any, reason: str = ""
+    ) -> bool:
+        """Release the capital for a recovery trade being marked FAILED — the
+        entry was broker-confirmed ABSENT, or REJECTED/CANCELLED (it genuinely
+        did not fill). This is the ONLY evidence-based capital-release point for
+        the recovery path.
+
+        Crash-aware:
+          * reservation PRESENT (timeout) -> release() (existing path).
+          * reservation ABSENT (crash)    -> in-memory available already excludes
+            this margin (rehydrate skipped the PENDING trade), but the fm_ledger
+            still carries an orphaned RESERVE row. Restore the reserve, THEN
+            release() — net in-memory change is ZERO and a balancing RELEASE row
+            is written so the ledger chain (RESERVE -> RELEASE) is consistent.
+            No double-release (memory nets to zero; the ledger balances once).
+
+        Idempotent — returns False (no-op) if there is nothing to release.
+        """
+        with self._lock:
+            self._assert_initialized()
+            rid = self._resolve_reservation_id(trade_row)
+            if not rid:
+                return False
+            if rid not in self._reservations:
+                # crash-absent: reconstruct so release() has an in-memory
+                # reservation to pop AND writes the balancing RELEASE ledger row.
+                if self._restore_reserve_from_ledger(trade_row) is None:
+                    return False   # no reservation and no RESERVE row -> nothing to do
+        # Lock released before release() (same C.1 deadlock reasoning as commit).
+        return self.release(rid, reason=reason)
+
     def release_used(
         self,
         symbol: str,
@@ -1705,6 +1844,103 @@ class FundManager:
         self._bucket_add_used(res.bucket, actual_margin)
         if excess != 0.0:
             self._bucket_add_avail(res.bucket, excess)
+
+    # ── A-1/E-1 recovery-capital helpers (MUST hold self._lock) ────────────────
+
+    def _resolve_reservation_id(self, trade_row: Any) -> Optional[str]:
+        """reservation_id for a recovery trade row: prefer the EF-5
+        trades.reservation_id column, else the signal_id -> first fm_ledger
+        RESERVE row lookup (same two-hop fallback _replay_open_trade uses)."""
+        rid = _row_get(trade_row, "reservation_id")
+        if rid:
+            return rid
+        sig = _row_get(trade_row, "signal_id")
+        if sig:
+            return self._store.get_reservation_id_for_signal(sig)
+        return None
+
+    def _commit_exists(self, reservation_id: str) -> bool:
+        """True if a COMMIT row already exists for this reservation — the
+        exactly-one-commit guard for commit_adopted_entry (defence in depth
+        behind the caller's atomic trade-state transition)."""
+        row = self._store.fetch_one(
+            "SELECT 1 FROM fm_ledger WHERE reservation_id = ? "
+            "AND entry_type = 'COMMIT' LIMIT 1",
+            (reservation_id,),
+        )
+        return row is not None
+
+    def _restore_reserve_from_ledger(self, trade_row: Any) -> Optional[str]:
+        """Reconstruct the in-memory RESERVE for a recovery trade whose
+        reservation was lost to a crash (rehydrate_from_open_trades replays only
+        OPEN/PARTIAL trades, so a crashed PENDING/UNKNOWN_IN_FLIGHT entry's
+        reserve is never re-applied at startup).
+
+        Idempotent: returns the reservation_id unchanged if it is ALREADY present
+        in memory (the timeout / same-process case, or a prior recovery cycle)
+        WITHOUT re-applying it. Otherwise reads the durable fm_ledger RESERVE row
+        (the source of truth) and re-applies it via _apply_reserve WITHOUT
+        writing the ledger (that row already exists) — mirroring the RESERVE leg
+        of _replay_open_trade. Returns None if there is nothing to restore
+        (no reservation id resolvable, or no RESERVE row).
+
+        MUST be called with self._lock held (mutates buckets via _apply_reserve).
+        """
+        rid = self._resolve_reservation_id(trade_row)
+        if not rid:
+            return None
+        if rid in self._reservations:
+            return rid   # already present — do NOT double-apply (idempotent)
+
+        row = self._store.fetch_one(
+            """
+            SELECT ts, amount, bucket, signal_id FROM fm_ledger
+            WHERE reservation_id = ? AND entry_type = 'RESERVE'
+            ORDER BY ledger_id ASC LIMIT 1
+            """,
+            (rid,),
+        )
+        if row is None:
+            return None
+
+        bucket = row["bucket"]
+        margin = float(row["amount"])
+        # Intent must route to the SAME bucket the RESERVE used; derive it from
+        # the ledger bucket (authoritative), NOT product — a crashed trade has no
+        # orders row to read product from. Mirrors _replay_open_trade's fallback.
+        intent = "INTRADAY" if bucket == _INTRADAY_BUCKET else "DELIVERY"
+        # symbol/qty/price are informational on the reservation record; the
+        # commit math uses res.margin (from the ledger) + res.intent.
+        symbol = _row_get(trade_row, "symbol") or ""
+        try:
+            qty = int(_row_get(trade_row, "qty_planned") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        try:
+            price = float(_row_get(trade_row, "entry_target_price") or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
+
+        self._apply_reserve(
+            reservation_id=rid,
+            bucket=bucket,
+            margin=margin,
+            symbol=symbol,
+            qty=qty,
+            price=price,
+            intent=intent,
+            signal_id=row["signal_id"],
+            ts=row["ts"],
+        )
+        self._log.warning(
+            "fund_manager.reserve_restored_for_recovery",
+            extra={
+                "reservation_id": rid, "bucket": bucket,
+                "margin": margin, "symbol": symbol,
+                "reason": "crash lost the in-memory reservation; restored from ledger",
+            },
+        )
+        return rid
 
     # ── bucket helpers ────────────────────────────────────────────────────────
 

@@ -994,15 +994,19 @@ def test_fix024_rehydrate_empty_db_no_error() -> None:
 
 def test_fix071_partb_orphaned_pending_trade_cleanup() -> None:
     """
-    FIX-071 Part B: Simulate restart with a PENDING trade that has no orders row.
+    FIX-071 Part B / A-1+E-1: restart with a PENDING trade that has no orders row.
 
     Scenario: System crashed after FIX-071 Part A's status update (trade.status=PENDING)
     but before engine.execute() returned (so no orders row exists).
 
+    A-1/E-1 (2026-07-02) changed the contract: order_monitor NO LONGER marks these
+    FAILED / fires the orphan callback (that blind FAILED was the naked-orphan bug —
+    the crashed entry may be live or already filled at the broker). It now DETECTS
+    only (WARNING log) and DEFERS to the reconciler's tag-correlation recovery.
+
     Assert:
-    - Trade is marked FAILED
-    - Orphan callback is fired (to release capital)
-    - CRITICAL log entry is created
+    - Trade is LEFT in PENDING (so the reconciler's orphaned-PENDING feed sees it)
+    - Orphan callback is NOT fired (no blind capital release)
     - Rehydration proceeds without error
     """
     with TemporaryDirectory() as tmp:
@@ -1045,29 +1049,28 @@ def test_fix071_partb_orphaned_pending_trade_cleanup() -> None:
         assert count == 0, f"Expected 0 rehydrated orders, got {count}"
         assert monitor.watched_count() == 0, "Orphaned trade should not be watched"
 
-        # Assert: Orphan callback was fired
-        assert len(orphan_calls) == 1, f"Expected 1 orphan callback, got {len(orphan_calls)}"
-        assert orphan_calls[0][0] == trade_id, "Orphan callback should receive trade_id"
-        assert orphan_calls[0][1] == "", "Orphan callback should receive empty broker_id"
+        # A-1/E-1: Orphan callback must NOT fire (no blind capital release).
+        assert len(orphan_calls) == 0, f"Expected 0 orphan callbacks, got {len(orphan_calls)}"
 
-        # Assert: Trade status is now FAILED
+        # A-1/E-1: Trade LEFT in PENDING for the reconciler recovery to correlate.
         with store.transaction() as cur:
             row = cur.execute(
                 "SELECT status FROM trades WHERE trade_id = ?", (trade_id,)
             ).fetchone()
             assert row is not None, "Trade should exist"
-            assert row["status"] == "FAILED", f"Expected FAILED, got {row['status']}"
+            assert row["status"] == "PENDING", f"Expected PENDING (deferred), got {row['status']}"
 
         store.close()
-        print("  OK FIX-071 Part B: orphaned PENDING trade cleaned up on rehydration")
+        print("  OK FIX-071 Part B: orphaned PENDING trade DEFERRED to reconciler recovery")
 
 
 def test_fix071_partb_pending_trade_with_null_broker_id() -> None:
     """
     FIX-071 Part B defensive case: PENDING trade with orders row but NULL broker_order_id.
 
-    This shouldn't happen normally but we guard against it. The cleanup logic
-    should catch it via the "OR o.order_id = ''" condition in the query.
+    This shouldn't happen normally but we guard against it. The detection query
+    catches it via the "OR o.order_id = ''" condition. A-1/E-1: detection now
+    DEFERS to the reconciler recovery (no blind FAILED / no orphan callback).
     """
     with TemporaryDirectory() as tmp:
         store = _make_store(Path(tmp))
@@ -1111,16 +1114,16 @@ def test_fix071_partb_pending_trade_with_null_broker_id() -> None:
         monitor, _, _, _ = _make_monitor(on_orphan=on_orphan)
         count = monitor.rehydrate_from_store(store)
 
-        # Assert: cleanup logic caught it
+        # A-1/E-1: detection defers to the reconciler — no rehydrate, no callback.
         assert count == 0, f"Expected 0 rehydrated orders, got {count}"
-        assert len(orphan_calls) == 1, f"Expected 1 orphan callback, got {len(orphan_calls)}"
+        assert len(orphan_calls) == 0, f"Expected 0 orphan callbacks, got {len(orphan_calls)}"
 
-        # Assert: Trade marked FAILED
+        # A-1/E-1: Trade LEFT in PENDING (deferred), NOT blind-FAILED.
         with store.transaction() as cur:
             row = cur.execute(
                 "SELECT status FROM trades WHERE trade_id = ?", (trade_id,)
             ).fetchone()
-            assert row["status"] == "FAILED", f"Expected FAILED, got {row['status']}"
+            assert row["status"] == "PENDING", f"Expected PENDING (deferred), got {row['status']}"
 
         store.close()
         print("  OK FIX-071 Part B: PENDING trade with NULL broker_id cleaned up")

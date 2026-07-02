@@ -335,15 +335,22 @@ class OrderMonitor:
 
     def _cleanup_orphaned_pending_trades(self, state_store) -> None:
         """
-        FIX-071 Part B: Find and clean up PENDING trades with no orders rows.
+        FIX-071 Part B / A-1+E-1: DETECT crashed PENDING trades (status=PENDING,
+        no orders rows — the process died after FIX-071 Part A's status update but
+        before engine.execute() returned).
 
-        These are trades where the system crashed after FIX-071 Part A's
-        status update (trades.status = PENDING) but before engine.execute()
-        returned (so no orders rows exist yet). They cannot be monitored
-        (no broker_order_id) and must be marked FAILED with capital released.
+        A-1/E-1 (2026-07-02): this method NO LONGER marks these FAILED or releases
+        capital. The old blind FAILED was the E-1 naked-orphan bug: the crashed
+        entry may actually be LIVE (or already FILLED) at the broker, so releasing
+        capital + disowning it left a naked, unmonitored position when it filled.
 
-        Fires the orphan callback for each trade to trigger capital release
-        via OrderPlacer's on_orphan handler.
+        Recovery is now owned SOLELY by the order_reconciler's unified in-flight-
+        entry recovery (_recover_in_flight_entries), which correlates each crashed
+        PENDING trade to its broker order by tag and adopts-and-protects it (or
+        FAILED-and-releases ONLY on broker-confirmed absence). That prepass runs on
+        the SYNCHRONOUS startup reconcile (main.py) BEFORE this rehydrate, and on
+        every 15-min cycle — so there is exactly ONE correlation + one capital
+        decision. Here we only log for visibility; we never touch trade state.
         """
         try:
             orphaned = state_store.get_orphaned_pending_trades()
@@ -357,38 +364,20 @@ class OrderMonitor:
             return
 
         for trade in orphaned:
-            trade_id = trade["trade_id"]
-            symbol = trade["symbol"]
-
-            # Mark trade as FAILED in database
-            try:
-                with state_store.transaction() as cur:
-                    cur.execute(
-                        "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
-                        ("FAILED", now_ist().isoformat(), trade_id),
-                    )
-            except Exception as exc:  # noqa: BLE001
-                self._log.error(
-                    "order_monitor cleanup_orphaned_pending: "
-                    "update failed trade_id=%s error=%s",
-                    trade_id, exc,
-                )
-                continue
-
-            # Fire orphan callback to release capital (no broker_order_id available)
-            self._log.critical(
+            # DETECT-ONLY: never FAILED, never release, never on_orphan (that was
+            # the E-1 bug). The reconciler recovery adopts-or-fails on broker
+            # evidence. Left in PENDING so the recovery's orphaned-PENDING feed
+            # picks it up.
+            self._log.warning(
                 "order_monitor.orphaned_pending_trade_detected",
                 extra={
-                    "trade_id": trade_id,
-                    "symbol": symbol,
-                    "reason": "FIX-071 Part B: PENDING trade with no orders rows",
-                    "action": "marked FAILED, capital released via orphan callback",
+                    "trade_id": trade["trade_id"],
+                    "symbol": trade["symbol"],
+                    "reason": "crashed PENDING trade with no orders rows",
+                    "action": "DEFERRED to order_reconciler tag-correlation recovery "
+                              "(no blind FAILED / no blind capital release — A-1/E-1)",
                 },
             )
-
-            if self._on_orphan is not None:
-                # Use trade_id as both internal_id and broker_id since we have no broker_id
-                self._on_orphan(trade_id, "")
 
     def rehydrate_from_store(self, state_store) -> int:
         """

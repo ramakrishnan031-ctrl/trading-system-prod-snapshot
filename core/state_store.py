@@ -1287,7 +1287,14 @@ class StateStore:
             )
             return cur.rowcount > 0
 
-    def adopt_recovery_trade_to_open(self, trade_id: str) -> bool:
+    def adopt_recovery_trade_to_open(
+        self,
+        trade_id: str,
+        *,
+        avg_fill_price: Optional[float] = None,
+        qty_filled: Optional[int] = None,
+        filled_at: Optional[str] = None,
+    ) -> bool:
         """A-1/E-1: atomically flip a recovery-state trade to OPEN when its broker
         entry is ADOPTED (timeout UNKNOWN_IN_FLIGHT / crash PENDING / PENDING_FILL).
 
@@ -1295,18 +1302,70 @@ class StateStore:
         call won the transition, so concurrent reconciler cycles (or the crash +
         timeout feeds converging) can never adopt the same trade twice. Sets
         recovered_flag=1 for the audit trail. Capital is committed by the caller
-        AFTER a True return (exactly-once)."""
+        AFTER a True return (exactly-once).
+
+        When the adopted entry is FILLED (COMPLETE at broker), the caller passes
+        the broker's ACTUAL fill price / qty / timestamp; they are backfilled in
+        the SAME atomic UPDATE as the status flip, so the exactly-once guard and
+        the entry-fill record are one transaction. G5b (recovery SL), the TGT
+        retry, and the reports then see a well-formed OPEN trade. entry_time is
+        set to the broker's real fill time (NOT now) so G5b's settling window —
+        which keys on entry-fill age — does not wrongly defer the recovery SL.
+        Any field left None is unchanged (a resting-entry adoption uses none)."""
+        set_clauses = ["status = 'OPEN'", "recovered_flag = 1", "updated_at = ?"]
+        params: list = [_now_ist_iso()]
+        if avg_fill_price is not None:
+            set_clauses.append("entry_actual_price = ?")
+            params.append(float(avg_fill_price))
+        if qty_filled is not None:
+            set_clauses.append("qty_filled = ?")
+            params.append(int(qty_filled))
+        if filled_at is not None:
+            set_clauses.append("entry_time = ?")
+            params.append(filled_at)
+        params.append(trade_id)
+        with self.transaction() as cur:
+            cur.execute(
+                f"""
+                UPDATE trades
+                SET {', '.join(set_clauses)}
+                WHERE trade_id = ?
+                  AND status IN ('UNKNOWN_IN_FLIGHT', 'PENDING', 'PENDING_FILL')
+                """,
+                params,
+            )
+            return cur.rowcount > 0
+
+    def mark_recovery_trade_exiting(
+        self,
+        trade_id: str,
+        *,
+        avg_fill_price: float,
+        qty_filled: int,
+        filled_at: str,
+    ) -> bool:
+        """A-1/E-1 HARD_KILL: a matched, FILLED adopted entry seen under an ACTIVE
+        HARD_KILL must be FLATTENED, never resumed. Atomically flip the recovery-
+        state trade straight to EXITING (which excludes it from the G5b / CHECK1
+        OPEN-or-PARTIAL loop, so no protective SL is placed alongside the flatten)
+        and backfill the fill fields so the emergency flatten and the eventual
+        stuck-EXITING finalize (_check1_manual_close -> release_used) compute the
+        real P&L. Guarded like adopt_recovery_trade_to_open -> exactly-once."""
         with self.transaction() as cur:
             cur.execute(
                 """
                 UPDATE trades
-                SET status = 'OPEN',
+                SET status = 'EXITING',
                     recovered_flag = 1,
+                    entry_actual_price = ?,
+                    qty_filled = ?,
+                    entry_time = ?,
                     updated_at = ?
                 WHERE trade_id = ?
                   AND status IN ('UNKNOWN_IN_FLIGHT', 'PENDING', 'PENDING_FILL')
                 """,
-                (_now_ist_iso(), trade_id),
+                (float(avg_fill_price), int(qty_filled), filled_at,
+                 _now_ist_iso(), trade_id),
             )
             return cur.rowcount > 0
 
