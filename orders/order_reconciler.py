@@ -159,6 +159,57 @@ class ReconciliationAction:
     success: bool
 
 
+# ── A-1/E-1: tag-correlation recovery (naked-orphan fix) ────────────────────
+_ENTRY_SIDE = {"LONG": "BUY", "SHORT": "SELL"}
+
+
+def correlate_entry_by_tag(trade_id, direction, symbol, qty, all_orders):
+    """Correlate a broker ENTRY order back to a local recovery-state trade by its
+    broker tag (A-1/E-1). PURE function (no I/O) → unit-testable.
+
+    Recovery scenario: an ENTRY reached the broker but its local orders row was never
+    persisted (timeout / crash), so it must be found at the broker WITHOUT a
+    broker_order_id. Every production entry is tagged ``truncate_tag_for_broker(trade_id)``
+    (structural guarantee — place() has no tag param); entry+SL+TGT SHARE that tag, so
+    candidates are filtered to the ENTRY leg by side.
+
+    ``all_orders`` = ``adapter.get_all_orders()`` dicts (keys: tag, transaction_type,
+    symbol, quantity, status, order_id, …). Returns ``(kind, order)``:
+      - ("MATCH", order)     exactly one entry-side order carries our tag (or a unique
+                             symbol+qty narrowing of a tag collision)
+      - ("ABSENT", None)     no entry-side order carries our tag
+      - ("AMBIGUOUS", None)  >1 candidate even after symbol+qty narrowing (a real 48-bit
+                             tag collision — astronomically rare) → caller must NOT
+                             blind-adopt: protect/flatten + flag for manual.
+    """
+    from core.ids import truncate_tag_for_broker  # local import (file convention)
+
+    expected_tag = truncate_tag_for_broker(trade_id or "")
+    entry_side = _ENTRY_SIDE.get((direction or "").upper())
+    if not expected_tag or entry_side is None:
+        return ("ABSENT", None)
+
+    cands = [
+        o for o in (all_orders or [])
+        if (o.get("tag") or "") == expected_tag
+        and (o.get("transaction_type") or "").upper() == entry_side
+    ]
+    if len(cands) == 1:
+        return ("MATCH", cands[0])
+    if not cands:
+        return ("ABSENT", None)
+
+    # >1 share tag+side (tag collision). Narrow by symbol + qty before giving up.
+    narrowed = [
+        o for o in cands
+        if (o.get("symbol") or "") == (symbol or "")
+        and int(o.get("quantity") or 0) == int(qty or 0)
+    ]
+    if len(narrowed) == 1:
+        return ("MATCH", narrowed[0])
+    return ("AMBIGUOUS", None)
+
+
 class OrderReconciler:
     """
     Reconciles local trade state against the live broker state (RC1-RC20).

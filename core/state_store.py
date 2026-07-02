@@ -1287,6 +1287,47 @@ class StateStore:
             )
             return cur.rowcount > 0
 
+    def adopt_recovery_trade_to_open(self, trade_id: str) -> bool:
+        """A-1/E-1: atomically flip a recovery-state trade to OPEN when its broker
+        entry is ADOPTED (timeout UNKNOWN_IN_FLIGHT / crash PENDING / PENDING_FILL).
+
+        Mirrors the mark_trade_manually_closed atomic guard: returns True iff THIS
+        call won the transition, so concurrent reconciler cycles (or the crash +
+        timeout feeds converging) can never adopt the same trade twice. Sets
+        recovered_flag=1 for the audit trail. Capital is committed by the caller
+        AFTER a True return (exactly-once)."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET status = 'OPEN',
+                    recovered_flag = 1,
+                    updated_at = ?
+                WHERE trade_id = ?
+                  AND status IN ('UNKNOWN_IN_FLIGHT', 'PENDING', 'PENDING_FILL')
+                """,
+                (_now_ist_iso(), trade_id),
+            )
+            return cur.rowcount > 0
+
+    def fail_recovery_trade(self, trade_id: str) -> bool:
+        """A-1/E-1: atomically mark a recovery-state trade FAILED — ONLY to be called
+        once broker ABSENCE is confirmed (never on a blind/unreachable poll). Guarded
+        so a late adoption cannot be clobbered and capital is released exactly once by
+        the caller AFTER a True return."""
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                UPDATE trades
+                SET status = 'FAILED',
+                    updated_at = ?
+                WHERE trade_id = ?
+                  AND status IN ('UNKNOWN_IN_FLIGHT', 'PENDING')
+                """,
+                (_now_ist_iso(), trade_id),
+            )
+            return cur.rowcount > 0
+
     # ── TGT retry (Task, 2026-06-19) ─────────────────────────────────────────
     # A LIMIT_TRIPLE trade whose SL is live but whose TGT could not be placed
     # (FIX-190 Bug C) is flagged needs_tgt_retry=1; TGTRetryManager re-attempts
