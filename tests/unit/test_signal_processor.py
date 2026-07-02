@@ -2173,8 +2173,149 @@ def test_fix048_queue_full_abandons_signal() -> None:
 # Standalone runner
 # ---------------------------------------------------------------------------
 
+# ═══════════════════════════════════════════════════════════════════════════
+# A-2 (02-Jul-2026) — a place() timeout must NOT be retried (duplicate-entry fix)
+#
+# order_placer already sets the trade UNKNOWN_IN_FLIGHT and KEEPS its reservation
+# (FIX-068); the 15s reconciler recovery is the SOLE owner. So on a place() timeout
+# signal_processor must: (a) NOT re-queue (no duplicate order), (b) NOT release the
+# reservation (singular ownership), (c) mark the signal TIMEOUT, still
+# recording the API failure. BrokerRateLimitError (raised PRE-submission) KEEPS its
+# retry. These cover the design's signal_processor-side matrix rows (4 rate-limit,
+# 5 reservation-held, 6 throttle-off, 7 paper-parity) + the core "one order, not two";
+# reconciler-side rows 1/2/3/8 (adopt/defer/FAILED/flatten) live in
+# test_a1e1_recovery_matrix.py.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _CountingTimeoutPlacer:
+    """Mirrors order_placer on timeout: raises BrokerTimeoutError WITHOUT releasing the
+    reservation (order_placer keeps it). Counts attempts to prove there is no retry."""
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def place(self, **kwargs):
+        self.attempts += 1
+        from core.exceptions import BrokerTimeoutError
+        raise BrokerTimeoutError("place_order timed out", operation="place_order")
+
+
+class _CountingRateLimitPlacer:
+    """Client-side rate-limit: raised PRE-submission (nothing sent) -> retry-safe."""
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    def place(self, **kwargs):
+        self.attempts += 1
+        from core.exceptions import BrokerRateLimitError
+        raise BrokerRateLimitError("bucket exhausted", category="order")
+
+
+class _AlwaysAdmitThrottle:
+    enabled = False
+
+    def admit(self, symbol):
+        class _R:
+            allowed = True
+            reason = ""
+        return _R()
+
+
+def test_a2_timeout_no_requeue_keeps_reservation_marks_unknown() -> None:
+    """A-2 core + row 5: timeout -> ONE place attempt (no retry/duplicate), reservation
+    HELD (recovery owns it), signal TIMEOUT, API failure recorded."""
+    store, _ = _make_store()
+    sig_id = "sig_a2_to_main"
+    _insert_queued_signal(store, sig_id)
+    sq = queue.Queue(maxsize=100)
+    fm = _MockFundManager()
+    ks = _MockKillSwitch()
+    placer = _CountingTimeoutPlacer()
+    proc, _, _ = _make_proc(store=store, sq=sq, fm=fm, ks=ks, placer=placer)
+
+    proc._process_one_safe(_now_tup(sig_id))
+
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] == "TIMEOUT", row["status"]          # not PLACEMENT_FAILED
+    assert fm.released == [], f"reservation must be HELD, got {fm.released}"   # the capital crux
+    assert sq.empty(), "signal must NOT be re-queued (no duplicate entry)"
+    assert placer.attempts == 1, f"exactly ONE place attempt, got {placer.attempts}"
+    assert ks.failure_count == 1, "API failure must still be recorded"
+    print("  OK A-2 timeout -> TIMEOUT, reservation held, no re-queue, one attempt")
+
+
+def test_a2_ratelimit_still_requeued_regression() -> None:
+    """A-2 row 4 (regression guard): BrokerRateLimitError is raised PRE-submission ->
+    still re-queued for retry (idempotent, nothing was sent). NOT TIMEOUT."""
+    store, _ = _make_store()
+    sig_id = "sig_a2_rl"
+    _insert_queued_signal(store, sig_id)
+    sq = queue.Queue(maxsize=100)
+    fm = _MockFundManager()
+    placer = _CountingRateLimitPlacer()
+    proc, _, _ = _make_proc(store=store, sq=sq, fm=fm, placer=placer)
+
+    proc._process_one_safe(_now_tup(sig_id))
+
+    assert not sq.empty(), "rate-limit must STILL re-queue the signal (retry preserved)"
+    requeued = sq.get_nowait()
+    # FIX-069 re-queues a dict (with retry metadata), not the raw tuple.
+    assert requeued["signal_id"] == sig_id
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] != "TIMEOUT", "rate-limit is not the timeout path"
+    assert placer.attempts == 1
+    print("  OK A-2 rate-limit -> still re-queued (retry preserved), not TIMEOUT")
+
+
+def test_a2_timeout_no_duplicate_even_with_throttle_disabled() -> None:
+    """A-2 row 6: idempotency no longer depends on the entry throttle. With the throttle
+    OFF (which under the OLD retry would let the re-queued signal place a 2nd order), the
+    timeout still yields exactly ONE attempt and no re-queue."""
+    store, _ = _make_store()
+    sig_id = "sig_a2_nothrottle"
+    _insert_queued_signal(store, sig_id)
+    sq = queue.Queue(maxsize=100)
+    fm = _MockFundManager()
+    placer = _CountingTimeoutPlacer()
+    proc, _, _ = _make_proc(store=store, sq=sq, fm=fm, placer=placer)
+    proc._entry_throttle = _AlwaysAdmitThrottle()   # throttle would NOT mask a retry
+
+    proc._process_one_safe(_now_tup(sig_id))
+
+    assert sq.empty(), "no re-queue even with the throttle disabled"
+    assert placer.attempts == 1
+    row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+    assert row["status"] == "TIMEOUT"
+    print("  OK A-2 throttle-off -> still one order (idempotency is throttle-independent)")
+
+
+def test_a2_timeout_parity_paper_and_live() -> None:
+    """A-2 row 7: the timeout handler has NO mode branch — the same _process_one path runs
+    in paper and live (the mock placer stands in for either adapter). Behaviour identical."""
+    for mode in ("PAPER", "LIVE"):
+        store, _ = _make_store()
+        sig_id = f"sig_a2_parity_{mode}"
+        _insert_queued_signal(store, sig_id)
+        sq = queue.Queue(maxsize=100)
+        fm = _MockFundManager()
+        placer = _CountingTimeoutPlacer()
+        proc, _, _ = _make_proc(store=store, sq=sq, fm=fm, placer=placer)
+        proc._mode = mode   # label only; _process_one does not branch on it
+
+        proc._process_one_safe(_now_tup(sig_id))
+
+        row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+        assert row["status"] == "TIMEOUT", (mode, row["status"])
+        assert fm.released == [], (mode, fm.released)
+        assert sq.empty() and placer.attempts == 1, mode
+    print("  OK A-2 parity: identical timeout behaviour PAPER and LIVE")
+
+
 def run_all_tests() -> int:
     tests = [
+        test_a2_timeout_no_requeue_keeps_reservation_marks_unknown,
+        test_a2_ratelimit_still_requeued_regression,
+        test_a2_timeout_no_duplicate_even_with_throttle_disabled,
+        test_a2_timeout_parity_paper_and_live,
         test_start_launches_dispatcher_and_workers,
         test_stop_drains_within_5s,
         test_is_running_before_start,

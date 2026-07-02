@@ -298,6 +298,39 @@ class TestGate:
         proc.continue_from_gate(entry)
         _assert_rejected(store, sig_id, "REJECTED_STRATEGY_CONTROL")
 
+    def test_continue_from_gate_timeout_keeps_reservation(self):
+        """A-2 (02-Jul): a place() timeout on the gate-release continuation must NOT fall
+        through to PLACEMENT_FAILED (which released the reservation order_placer KEPT for
+        the UNKNOWN_IN_FLIGHT trade). New: ONE attempt, reservation HELD, signal TIMEOUT."""
+        from tests.unit.test_signal_processor import _make_store
+        from core.exceptions import BrokerTimeoutError
+        store, _ = _make_store()
+        sig_id = "sig_sc_gate_to"
+        _insert_queued_signal(store, sig_id, scanner="gap_go_long")
+        proc = _disabled_proc(store, intent="INTRADAY", enabled=True,
+                              force_intraday_only=True)
+
+        class _TimeoutPlacer:
+            def __init__(self):
+                self.calls = []
+
+            def place(self, **kw):
+                self.calls.append(kw)
+                raise BrokerTimeoutError("place_order timed out", operation="place_order")
+
+        tp = _TimeoutPlacer()
+        proc._placer = tp
+        entry = SimpleNamespace(
+            signal_id=sig_id, symbol="RELIANCE", strategy_name="gap_go_long_v1",
+            entry_price=2500.0, sl_price=2450.0, tgt_price=2600.0,
+            direction="LONG", tier="HIGH", trigger_price=2500.0,
+        )
+        proc.continue_from_gate(entry)
+        assert len(tp.calls) == 1, f"exactly ONE place attempt, got {len(tp.calls)}"
+        row = store.fetch_one("SELECT status FROM signals WHERE signal_id=?", (sig_id,))
+        assert row["status"] == "TIMEOUT", row["status"]
+        assert proc._fm.released == [], f"reservation must be HELD, got {proc._fm.released}"
+
     def test_parity_gate_identical_paper_and_live(self):
         # The resolver/gate is pure (no mode branch): same verdict regardless of
         # the SignalProcessor mode label.

@@ -181,6 +181,32 @@ def test_short_bad_structure_when_entry_above_sl_releases_nothing():
     assert any(s[1] == "REJECTED_RETEST_BAD_STRUCTURE" for s in sp._store.status)
 
 
+class _TimeoutPlacer:
+    """Raises BrokerTimeoutError on place() WITHOUT releasing the reservation — mirrors
+    order_placer's FIX-068 behaviour (trade -> UNKNOWN_IN_FLIGHT, reservation KEPT)."""
+    def __init__(self):
+        self.calls = []
+
+    def place(self, **kw):
+        from core.exceptions import BrokerTimeoutError
+        self.calls.append(kw)
+        raise BrokerTimeoutError("place_order timed out", operation="place_order")
+
+
+def test_retest_timeout_keeps_reservation_and_marks_unknown():
+    """A-2: a place() timeout on the retest continuation must NOT fall through to the
+    PLACEMENT_FAILED handler (which released the reservation order_placer KEPT for the
+    UNKNOWN_IN_FLIGHT trade). New behaviour: ONE attempt, reservation HELD (recovery
+    owns it), signal TIMEOUT. (OLD code released -> a second capital owner.)"""
+    sp = _sp()
+    sp._placer = _TimeoutPlacer()
+    sp.continue_from_retest(_parked())
+    assert len(sp._fm.reserved) == 1                 # capital reserved at the continuation
+    assert len(sp._placer.calls) == 1                # exactly ONE place attempt (no retry)
+    assert sp._fm.released == []                      # reservation HELD — recovery owns it
+    assert any(s[1] == "TIMEOUT" for s in sp._store.status), sp._store.status
+
+
 def test_reject_after_reserve_releases_capital():
     sp = _sp(throttle_ok=False)   # throttle rejects AFTER reserve
     sp.continue_from_retest(_parked())

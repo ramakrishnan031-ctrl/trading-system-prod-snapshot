@@ -1006,11 +1006,32 @@ class SignalProcessor:
                 )
                 reservation_id = None   # placer owns it now
                 self._bump_metric("entries_placed")  # FIX-190 (Bug B)
-            except (BrokerRateLimitError, BrokerTimeoutError) as transient_err:
-                # FIX-069: Transient errors during placement -> re-queue with retry limit
-                # These errors are recoverable - broker may be temporarily unavailable
-                # or rate-limited. Re-queue signal for retry but keep lock held to
-                # prevent duplicate admission. Max 3 retries (45s total with 15s delays).
+            except BrokerTimeoutError as timeout_err:
+                # A-2 (02-Jul): a place() timeout is AMBIGUOUS — the order may already
+                # be live at the broker. Do NOT retry (a retry = a second, duplicate
+                # entry / 2x exposure — the entry throttle only masks it). order_placer
+                # has already set the trade UNKNOWN_IN_FLIGHT and KEPT its reservation
+                # (FIX-068); the 15s reconciler recovery (_recover_in_flight_entries) is
+                # the SOLE owner — it correlates the entry by tag and adopts+protects (or
+                # FAILs on confirmed broker-absence) and reconstructs capital. So: record
+                # the API failure, mark the SIGNAL TIMEOUT (the TRADE stays authoritative
+                # UNKNOWN_IN_FLIGHT — TIMEOUT is an already-allowed signal status, so no
+                # schema/report change), relinquish the reservation handle
+                # WITHOUT releasing it (recovery owns it — SINGULAR ownership), free the
+                # symbol lock (requeued stays False), and return. Parity: paper simulates
+                # the timeout through this same handler.
+                if self._ks:
+                    self._ks.record_api_failure(timeout_err)
+                self._store.update_signal_status(
+                    signal_id, "TIMEOUT", str(timeout_err)
+                )
+                reservation_id = None   # recovery owns the reservation — do NOT release
+                return
+
+            except BrokerRateLimitError as transient_err:
+                # FIX-069: a client-side rate-limit is raised PRE-submission (nothing was
+                # sent to the broker) -> re-queuing for retry is idempotent. Keep lock
+                # held to prevent duplicate admission. Max 3 retries (45s total, 15s each).
                 if self._ks:
                     self._ks.record_api_failure(transient_err)
 
@@ -1639,6 +1660,20 @@ class SignalProcessor:
                 )
                 reservation_id = None   # placer owns it now
                 self._bump_metric("entries_placed")  # FIX-190 (Bug B)
+            except BrokerTimeoutError as timeout_err:
+                # A-2 (02-Jul): an ambiguous place() timeout must NOT fall through to the
+                # PLACEMENT_FAILED handler (which would RELEASE the reservation that
+                # order_placer KEPT for the UNKNOWN_IN_FLIGHT trade — a second capital
+                # owner). The 15s reconciler recovery owns it. Mark the signal TIMEOUT,
+                # keep the reservation (SINGULAR ownership), return. (No retry here — the
+                # gate path never re-queued; this only removes the double-release.)
+                if self._ks:
+                    self._ks.record_api_failure(timeout_err)
+                self._store.update_signal_status(
+                    signal_id, "TIMEOUT", str(timeout_err)
+                )
+                reservation_id = None   # recovery owns the reservation — do NOT release
+                return
             except BrokerError as be:
                 if self._ks:
                     self._ks.record_api_failure(be)
@@ -1898,6 +1933,19 @@ class SignalProcessor:
                 )
                 reservation_id = None
                 self._bump_metric("entries_placed")
+            except BrokerTimeoutError as timeout_err:
+                # A-2 (02-Jul): ambiguous place() timeout — do NOT fall through to the
+                # PLACEMENT_FAILED handler (it would RELEASE the reservation order_placer
+                # KEPT for the UNKNOWN_IN_FLIGHT trade). The 15s reconciler recovery owns
+                # it. Mark the signal TIMEOUT, keep the reservation (SINGULAR ownership),
+                # return.
+                if self._ks:
+                    self._ks.record_api_failure(timeout_err)
+                self._store.update_signal_status(
+                    signal_id, "TIMEOUT", str(timeout_err)
+                )
+                reservation_id = None   # recovery owns the reservation — do NOT release
+                return
             except BrokerError as be:
                 if self._ks:
                     self._ks.record_api_failure(be)
