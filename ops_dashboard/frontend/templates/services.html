@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Service Health{% endblock %}
+{% block nav_services %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/services')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Systemd Units + Trader</h2>
+    <div class="svc-strip">
+      <template x-for="u in data.units || []" :key="u.unit">
+        <div class="svc-chip" :class="'svc-' + u.state">
+          <span class="svc-dot"></span><span class="svc-name" x-text="u.unit"></span>
+          <span class="svc-state" x-text="u.state"></span>
+        </div>
+      </template>
+      <div class="svc-chip" :class="data.trader && data.trader.trader_alive ? 'svc-active' : 'svc-failed'">
+        <span class="svc-dot"></span><span class="svc-name">trader :8080/health</span>
+        <span class="svc-state" x-text="data.trader && data.trader.trader_alive ? 'reachable' : 'unreachable'"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Cron — expected vs actual (registry-joined)
+      <span class="panel-sub" x-text="data.today || ''"></span>
+    </h2>
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Job</th><th>Schedule</th><th>Monitored</th><th>Heartbeat today</th><th>Status</th></tr></thead>
+      <tbody>
+        <template x-for="c in data.cron || []" :key="c.job">
+          <tr>
+            <td><span x-text="c.job"></span><span class="cap-inert" x-show="c.critical" x-cloak>CRITICAL</span></td>
+            <td class="mono" x-text="c.cron_expression || '—'"></td>
+            <td x-text="c.monitored ? 'yes' : 'no'"></td>
+            <td class="ev-ts" x-text="c.heartbeat ? c.heartbeat.executed_at : '—'"></td>
+            <td><span class="fam-pill" :class="c.status === 'SUCCESS' ? 'famp-accepted' : (c.status === 'FAILED' ? 'famp-rejected' : 'famp-expired')" x-text="c.status"></span></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Control Tower — open findings</h2>
+    <table class="cap-table">
+      <thead><tr><th>Time</th><th>Category</th><th>Severity</th><th>Resource</th><th>Reason</th></tr></thead>
+      <tbody>
+        <template x-for="(f, i) in data.control_tower_findings || []" :key="i">
+          <tr><td class="ev-ts" x-text="f.scan_time"></td><td x-text="f.category"></td>
+            <td><span class="fam-pill" :class="f.severity === 'CRITICAL' ? 'famp-rejected' : 'famp-expired'" x-text="f.severity"></span></td>
+            <td x-text="f.resource_name"></td><td class="wrapcell" x-text="f.reason"></td></tr>
+        </template>
+        <tr x-show="!data.control_tower_findings || data.control_tower_findings.length === 0" x-cloak>
+          <td colspan="5" class="ev-empty">No open findings.</td></tr>
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

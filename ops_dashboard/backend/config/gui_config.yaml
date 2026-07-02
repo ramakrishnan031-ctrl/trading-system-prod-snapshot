@@ -11,6 +11,26 @@ paths:
   logs_dir:     "D:/Projects/trading-system/logs"
   reports_dir:  "D:/Projects/trading-system/reports/output"
   config_dir:   "D:/Projects/trading-system/config"
+  data_store:   "D:/Projects/trading-system/data_store"   # sentinel flags (M15, read-only)
+
+# --- Strategy scorecard thresholds (G2b-2 §1.1; pure function strategy_score.py) ---
+scorecard:
+  red_pnl_floor: -500.0        # net P&L ≤ this → RED
+  red_failed_orders: 3         # FAILED orders today ≥ this → RED
+  red_consec_losses: 3         # per-strategy trailing losing closes ≥ this → RED
+  yellow_silence_min: 90       # last-signal age > this (in entry window) → YELLOW
+  yellow_win_rate_pct: 40.0    # win rate < this with ≥ yellow_min_closed decided → YELLOW
+  yellow_min_closed: 3
+  yellow_failed_orders: 1      # FAILED orders today ≥ this → YELLOW
+  yellow_capacity_pct: 90.0    # position-capacity used ≥ this % → YELLOW (no per-strategy ₹ cap exists)
+
+# --- Silence detection (G2b-2 §1.2; last-signal-age tiers, entry-window gated) ---
+silence:
+  green_max_min: 30            # 🟢 ≤ 30m
+  yellow_max_min: 120          # 🟡 30–120m · 🔴 > 120m or none
+
+# --- Reports download (M19). Q3 pending with Rama → DEFAULT FALSE. ---
+reports_download_enabled: false
 
 # --- Server ---
 server:

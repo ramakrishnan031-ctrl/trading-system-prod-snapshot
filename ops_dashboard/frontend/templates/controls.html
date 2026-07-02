@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Controls{% endblock %}
+{% block nav_controls %}active{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2 class="panel-title">Controls</h2>
+  <div class="empty-state">
+    <div class="es-icon">🎛️</div>
+    <div class="es-title">Controls arrive in G3</div>
+    <div class="es-body">
+      This dashboard is <b>read-only by design</b> (G2 scope). The locked G3 control set —
+      each of which requires a NEW production API (G0 §3: none has a programmatic
+      entry point today):
+      <ul class="g3-list">
+        <li>Pause / Resume strategy</li>
+        <li>Enable / Disable strategy or scanner</li>
+        <li>Kill pending orders (all / per-strategy / per-symbol)</li>
+        <li>Manual square-off / single-position exit</li>
+        <li>Emergency trading halt (trigger SOFT/HARD kill)</li>
+        <li>Restart services</li>
+      </ul>
+      Until G3, the only operator surfaces remain <span class="mono">scripts/clear_kill_switch.py</span>
+      and <span class="mono">systemctl restart</span> over SSH.
+    </div>
+  </div>
+</section>
+{% endblock %}

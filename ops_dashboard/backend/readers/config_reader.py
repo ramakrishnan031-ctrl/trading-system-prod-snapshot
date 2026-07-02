@@ -102,6 +102,36 @@ def get_scan_webhook_map(cfg: dict) -> dict:
     return out
 
 
+def get_cron_jobs(cfg: dict) -> dict:
+    """Parse config/cron_registry.yaml read-only → {job_name: {monitored,
+    enabled, cron_expression, marker_name}} (M11 expected-heartbeat join).
+    Root key is `jobs:`; the `officer:` block is settings, not a job.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "cron_registry.yaml")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    jobs = raw.get("jobs") or {}
+    if not isinstance(jobs, dict):
+        return {}
+    out: dict = {}
+    for name, entry in jobs.items():
+        if not isinstance(entry, dict):
+            continue
+        out[str(name)] = {
+            "monitored": bool(entry.get("monitored", False)),
+            "enabled": bool(entry.get("enabled", True)),
+            "cron_expression": entry.get("cron_expression"),
+            "marker_name": entry.get("marker_name"),
+            "critical": bool(entry.get("critical", False)),
+        }
+    return out
+
+
 def dotted(config: dict, path: str, default: Any = None) -> Any:
     """Navigate a dotted key path into a nested dict; default if any hop misses."""
     cur: Any = config

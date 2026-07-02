@@ -79,6 +79,25 @@
     </section>
   </div>
 
+  <!-- ── §1.5 TOP / WORST widget (no navigation needed) ── -->
+  <section class="panel" x-show="bestWorst()" x-cloak>
+    <h2 class="panel-title">Best &amp; Worst strategy today</h2>
+    <div class="bw-grid">
+      <template x-for="side in ['best', 'worst']" :key="side">
+        <div class="bw-card" :class="'bw-' + side" x-show="bestWorst()">
+          <span class="bn-label" x-text="side === 'best' ? '🏆 Best' : '⚠️ Worst'"></span>
+          <span class="bw-name" x-text="bestWorst() ? bestWorst()[side].basic.display_name : ''"></span>
+          <span class="bw-pnl" :class="bestWorst() && bestWorst()[side].performance.net_pnl < 0 ? 'num-neg' : 'num-pos'"
+                x-text="bestWorst() ? money(bestWorst()[side].performance.net_pnl) : ''"></span>
+          <span class="bn-sub" x-text="bestWorst() ? (
+            (bestWorst()[side].trading.win_rate !== null ? bestWorst()[side].trading.win_rate + '% win · ' : '') +
+            bestWorst()[side].signals.received + ' signals · ' +
+            (bestWorst()[side].trading.open + bestWorst()[side].trading.closed) + ' trades') : ''"></span>
+        </div>
+      </template>
+    </div>
+  </section>
+
   <!-- ── STRATEGY STRIP (compact top/worst; full tower at /strategies) ── -->
   <section class="panel">
     <h2 class="panel-title">Strategies — Top / Worst today
@@ -120,6 +139,11 @@ function dashPage() {
       const rows = this.strategies.rows || [];
       if (rows.length <= 6) return rows;
       return rows.slice(0, 3).concat(rows.slice(-3));   // top 3 + worst 3 (rank order)
+    },
+    bestWorst() {
+      const rows = this.strategies.rows || [];
+      if (!rows.length) return null;
+      return { best: rows[0], worst: rows[rows.length - 1] };   // net-P&L rank order
     },
     ago(sec) {
       if (sec === null || sec === undefined) return "";

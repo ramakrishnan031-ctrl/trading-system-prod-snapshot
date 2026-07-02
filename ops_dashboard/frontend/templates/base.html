@@ -52,16 +52,38 @@
     </div>
   </header>
 
-  <nav class="topnav">
-    <a class="nav-link {% block nav_dashboard %}{% endblock %}" href="/">Dashboard</a>
-    <a class="nav-link {% block nav_strategies %}{% endblock %}" href="/strategies">Strategies</a>
-    <a class="nav-link {% block nav_signals %}{% endblock %}" href="/signals">Signals</a>
-    <a class="nav-link {% block nav_orders %}{% endblock %}" href="/orders">Orders</a>
-    <a class="nav-link {% block nav_positions %}{% endblock %}" href="/positions">Positions</a>
-    <a class="nav-link {% block nav_holdings %}{% endblock %}" href="/holdings">Holdings</a>
-    <a class="nav-link {% block nav_capacity %}{% endblock %}" href="/capacity">Capacity</a>
-    <span class="nav-note">M7–M20 arrive in G2b-2</span>
-    <span class="nav-status" x-show="lastError" x-cloak x-text="lastError"></span>
+  <nav class="topnav topnav-multi">
+    <div class="nav-row">
+      <span class="nav-group">Trade</span>
+      <a class="nav-link {% block nav_dashboard %}{% endblock %}" href="/">Dashboard</a>
+      <a class="nav-link {% block nav_strategies %}{% endblock %}" href="/strategies">Strategies</a>
+      <a class="nav-link {% block nav_signals %}{% endblock %}" href="/signals">Signals</a>
+      <a class="nav-link {% block nav_orders %}{% endblock %}" href="/orders">Orders</a>
+      <a class="nav-link {% block nav_positions %}{% endblock %}" href="/positions">Positions</a>
+      <a class="nav-link {% block nav_holdings %}{% endblock %}" href="/holdings">Holdings</a>
+      <span class="nav-group">Risk&amp;Capital</span>
+      <a class="nav-link {% block nav_risk %}{% endblock %}" href="/risk">Risk</a>
+      <a class="nav-link {% block nav_capital %}{% endblock %}" href="/capital">Capital</a>
+      <a class="nav-link {% block nav_exposure %}{% endblock %}" href="/exposure">Exposure</a>
+      <a class="nav-link {% block nav_pnl %}{% endblock %}" href="/pnl">P&amp;L</a>
+      <a class="nav-link {% block nav_capacity %}{% endblock %}" href="/capacity">Capacity</a>
+      <span class="nav-status" x-show="lastError" x-cloak x-text="lastError"></span>
+    </div>
+    <div class="nav-row">
+      <span class="nav-group">System</span>
+      <a class="nav-link {% block nav_services %}{% endblock %}" href="/services">Services</a>
+      <a class="nav-link {% block nav_vm %}{% endblock %}" href="/vm">VM</a>
+      <a class="nav-link {% block nav_logs %}{% endblock %}" href="/logs">Logs</a>
+      <a class="nav-link {% block nav_audit %}{% endblock %}" href="/audit">Audit</a>
+      <a class="nav-link {% block nav_alerts %}{% endblock %}" href="/alerts">Alerts</a>
+      <span class="nav-group">Analytics</span>
+      <a class="nav-link {% block nav_slippage %}{% endblock %}" href="/slippage">Slippage</a>
+      <a class="nav-link {% block nav_execution %}{% endblock %}" href="/execution">Execution</a>
+      <a class="nav-link {% block nav_statistics %}{% endblock %}" href="/statistics">Statistics</a>
+      <a class="nav-link {% block nav_reports %}{% endblock %}" href="/reports">Reports</a>
+      <a class="nav-link {% block nav_config %}{% endblock %}" href="/config">Config</a>
+      <a class="nav-link nav-g3 {% block nav_controls %}{% endblock %}" href="/controls">Controls (G3)</a>
+    </div>
   </nav>
 
   <main class="content">

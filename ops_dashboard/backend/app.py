@@ -24,10 +24,13 @@ from flask import (
     session, url_for,
 )
 
+from .api.analytics import analytics_api
 from .api.capacity import capacity_api
 from .api.dashboard import dashboard_api
 from .api.pipeline import pipeline_api
+from .api.risk_capital import risk_capital_api
 from .api.strategies import strategies_api
+from .api.system import system_api
 from .api.trading import trading_api
 from .auth import LoginAttemptTracker, auth_bp
 
@@ -78,6 +81,9 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
     app.register_blueprint(capacity_api)
     app.register_blueprint(strategies_api)
     app.register_blueprint(trading_api)
+    app.register_blueprint(risk_capital_api)
+    app.register_blueprint(system_api)
+    app.register_blueprint(analytics_api)
 
     @app.before_request
     def _enforce_login():
@@ -95,12 +101,16 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
 
     # G2b-1 screens (Alpine-over-JSON; each fetches its own /api/* endpoint).
     _PAGES = {
-        "strategies": "strategies.html",
-        "signals": "signals.html",
-        "orders": "orders.html",
-        "positions": "positions.html",
-        "holdings": "holdings.html",
-        "capacity": "capacity.html",
+        "strategies": "strategies.html", "signals": "signals.html",
+        "orders": "orders.html", "positions": "positions.html",
+        "holdings": "holdings.html", "capacity": "capacity.html",
+        "risk": "risk.html", "capital": "capital.html",
+        "exposure": "exposure.html", "pnl": "pnl.html",
+        "services": "services.html", "vm": "vm.html", "logs": "logs.html",
+        "audit": "audit.html", "alerts": "alerts.html",
+        "slippage": "slippage.html", "execution": "execution.html",
+        "statistics": "statistics.html", "reports": "reports.html",
+        "config": "config.html", "controls": "controls.html",
     }
 
     @app.route("/<page>", methods=["GET"])

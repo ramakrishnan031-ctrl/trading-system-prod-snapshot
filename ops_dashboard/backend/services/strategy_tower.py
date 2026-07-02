@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..readers import config_reader, db_reader
-from . import freshness
+from . import freshness, strategy_score
 
 RANK_KEYS = ("net_pnl", "win_rate", "expectancy", "success_rate")
 
@@ -77,6 +77,10 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
     perf = db_reader.strategy_perf_stats(cfg, today)
     open_cap = db_reader.strategy_open_capital(cfg)
     opening = db_reader.opening_capital(cfg, today)
+    reject_split = db_reader.strategy_reject_split(cfg, today)   # failure strip
+    loss_streaks = db_reader.strategy_loss_streaks(cfg)          # scorecard input
+    score_th = cfg.get("scorecard") or {}
+    silence_th = cfg.get("silence") or {}
 
     # Strategy -> its scanner set (N:1 supported); unmapped scanners -> shared rows.
     scanners_of: dict = {}
@@ -142,7 +146,53 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
         expected_sig = freshness.expected_activity(cfg, "received", now)
         expected_trade = freshness.expected_activity(cfg, "orders_created", now)
 
+        # ── G2b-2 §1.1/1.2: scorecard + silence (pure, threshold-driven) ──
+        sig_age_sec = freshness.age_seconds(f["last_signal"], now)
+        sig_age_min = round(sig_age_sec / 60.0, 1) if sig_age_sec is not None else None
+        enabled_flag = bool(conf.get("enabled", True)) if name in strategies else None
+        in_entry = freshness.in_entry_window(cfg, now)
+        capacity_pct = (round(100.0 * open_count / max_conc, 1) if max_conc > 0 else None)
+        badge = strategy_score.score({
+            "enabled": enabled_flag,
+            "expected_activity": expected_sig,
+            "last_signal_age_min": sig_age_min,
+            "failed_orders": int(o["rejected"]),
+            "consec_losses": int(loss_streaks.get(name, 0)),
+            "net_pnl": net,
+            "win_rate": win_rate,
+            "closed_decided": wins + losses,
+            "capacity_used_pct": capacity_pct,
+            "in_entry_window": in_entry,
+        }, score_th, silence_th)
+        silence = strategy_score.silence_tier(sig_age_min, expected_sig, silence_th)
+        rej = reject_split.get(name, {"risk_rej": 0, "capital_rej": 0})
+
         rows.append({
+            "scorecard": badge,                                  # §1.1 badge + reasons
+            "silence": silence,                                  # §1.2 last-signal tier
+            "funnel": {                                          # §1.3 mini funnel
+                "received": received,
+                "accepted": int(f["accepted"]),
+                "orders_created": created,
+                "filled": filled,
+                "trades_closed": int(p["closed_trades"]),
+            },
+            "failures": {                                        # §1.4 failure strip
+                "risk_rej": int(rej["risk_rej"]),
+                "capital_rej": int(rej["capital_rej"]),
+                "order_rej": int(o["rejected"]),
+                "duplicate": int(f["duplicated"]),
+                "expired": int(f["expired"]),
+            },
+            "capital_view": {                                    # §1.6 (honest basis)
+                "allocation_configured": None,                   # no per-strategy ₹ cap exists
+                "allocation_basis": "global bucket",
+                "capital_used": round(float(oc["margin"]), 2),
+                "capital_remaining": capital_remaining,
+                "positions_configured": max_conc,
+                "positions_used": open_count,
+                "positions_remaining": max(0, max_conc - open_count),
+            },
             "basic": {
                 "name": name,
                 "display_name": conf.get("display_name", name),

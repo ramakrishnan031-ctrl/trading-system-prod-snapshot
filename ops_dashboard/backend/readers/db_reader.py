@@ -756,3 +756,390 @@ def signals_stored_count(cfg: dict, today: str) -> int:
     with _ro(cfg) as conn:
         return _count(conn, "SELECT COUNT(*) FROM signals WHERE received_at LIKE ?",
                       (today + "%",))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-2 — Strategy tower enhancements
+# ─────────────────────────────────────────────────────────────────────────────
+
+def strategy_reject_split(cfg: dict, today: str) -> dict:
+    """Per-strategy risk-rejected vs capital-rejected counts today (failure strip)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, "
+            "COALESCE(SUM(CASE WHEN status IN (" + _in_clause(_RISK_REJECT_STATUSES) + ") THEN 1 ELSE 0 END),0) AS risk_rej, "
+            "COALESCE(SUM(CASE WHEN status IN (" + _in_clause(_CAPITAL_REJECT_STATUSES) + ") THEN 1 ELSE 0 END),0) AS capital_rej "
+            "FROM signals WHERE received_at LIKE ? GROUP BY strategy",
+            (*_RISK_REJECT_STATUSES, *_CAPITAL_REJECT_STATUSES, today + "%"),
+        ).fetchall()
+    return {r["strategy"]: {"risk_rej": int(r["risk_rej"]), "capital_rej": int(r["capital_rej"])}
+            for r in rows}
+
+
+def strategy_loss_streaks(cfg: dict) -> dict:
+    """Per-strategy trailing losing-close streak (rolling, like the global one).
+
+    NULL net_pnl rows are skipped; a win/breakeven ends the streak.
+    """
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, net_pnl FROM trades "
+            "WHERE status IN (" + _in_clause(states) + ") AND net_pnl IS NOT NULL "
+            "AND exit_time IS NOT NULL ORDER BY exit_time DESC LIMIT 500",
+            states,
+        ).fetchall()
+    streaks: dict = {}
+    done: set = set()
+    for r in rows:
+        s = r["strategy"]
+        if s in done:
+            continue
+        if float(r["net_pnl"]) < 0:
+            streaks[s] = streaks.get(s, 0) + 1
+        else:
+            done.add(s)
+            streaks.setdefault(s, 0)
+    return streaks
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-2 — M7 Risk / M8 Capital / M9 Exposure / M10 P&L
+# ─────────────────────────────────────────────────────────────────────────────
+
+def open_risk_amount_sum(cfg: dict) -> float:
+    states = _OPEN_STATES
+    with _ro(cfg) as conn:
+        val = _scalar(conn,
+                      "SELECT COALESCE(SUM(risk_amount),0.0) FROM trades "
+                      "WHERE status IN (" + _in_clause(states) + ")", states)
+    return round(float(val or 0.0), 2)
+
+
+def ledger_entries(cfg: dict, today: str, limit: int = 500) -> list:
+    """fm_ledger rows today, newest first (M8 append-only ledger view)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT ledger_id, ts, entry_type, amount, bucket, balance_before, "
+            "balance_after, reason, trade_id, margin_delta, pnl_delta, costs "
+            "FROM fm_ledger WHERE date=? ORDER BY ledger_id DESC LIMIT ?",
+            (today, max(1, min(int(limit), 500))),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def equity_curve_points(cfg: dict, today: str) -> list:
+    """Cumulative realized P&L over today's RELEASE_USED rows, ts ASC (M10)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT ts, pnl_delta FROM fm_ledger "
+            "WHERE date=? AND entry_type='RELEASE_USED' ORDER BY ts ASC",
+            (today,),
+        ).fetchall()
+    cum = 0.0
+    out = []
+    for r in rows:
+        cum += float(r["pnl_delta"] or 0.0)
+        out.append({"ts": r["ts"], "cum_pnl": round(cum, 2)})
+    return out
+
+
+def pnl_summary_today(cfg: dict, today: str) -> dict:
+    """Realized totals from trades CLOSED today (net/gross/charges + splits)."""
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(COALESCE(net_pnl,0)),0.0) AS net, "
+            "COALESCE(SUM(COALESCE(gross_pnl,0)),0.0) AS gross, "
+            "COUNT(*) AS closed "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ?",
+            (*states, today + "%"),
+        ).fetchone()
+        per_strat = conn.execute(
+            "SELECT strategy, COALESCE(SUM(COALESCE(net_pnl,0)),0.0) AS net, "
+            "COUNT(*) AS closed FROM trades "
+            "WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ? "
+            "GROUP BY strategy ORDER BY net DESC",
+            (*states, today + "%"),
+        ).fetchall()
+        per_dir = conn.execute(
+            "SELECT direction, COALESCE(SUM(COALESCE(net_pnl,0)),0.0) AS net, "
+            "COUNT(*) AS closed FROM trades "
+            "WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ? "
+            "GROUP BY direction",
+            (*states, today + "%"),
+        ).fetchall()
+    net, gross = float(row["net"]), float(row["gross"])
+    return {
+        "net": round(net, 2), "gross": round(gross, 2),
+        "charges": round(gross - net, 2), "closed": int(row["closed"]),
+        "per_strategy": [{"strategy": r["strategy"], "net": round(float(r["net"]), 2),
+                          "closed": int(r["closed"])} for r in per_strat],
+        "per_direction": [{"direction": r["direction"], "net": round(float(r["net"]), 2),
+                           "closed": int(r["closed"])} for r in per_dir],
+    }
+
+
+def exposure_breakdown(cfg: dict, top_n: int = 10) -> dict:
+    """Gross open exposure + per-strategy and per-symbol splits (M9)."""
+    states = _OPEN_STATES
+    value_expr = ("COALESCE(actual_position_value_rs, "
+                  "qty_filled*COALESCE(entry_actual_price, entry_target_price))")
+    with _ro(cfg) as conn:
+        total = _scalar(conn,
+                        "SELECT COALESCE(SUM(" + value_expr + "),0.0) FROM trades "
+                        "WHERE status IN (" + _in_clause(states) + ")", states)
+        per_strat = conn.execute(
+            "SELECT strategy, SUM(" + value_expr + ") AS v, "
+            "COALESCE(SUM(margin_reserved),0.0) AS margin, COUNT(*) AS n "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "GROUP BY strategy ORDER BY v DESC", states,
+        ).fetchall()
+        per_symbol = conn.execute(
+            "SELECT symbol, SUM(" + value_expr + ") AS v, COUNT(*) AS n "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "GROUP BY symbol ORDER BY v DESC LIMIT ?",
+            (*states, max(1, int(top_n))),
+        ).fetchall()
+    return {
+        "gross_exposure": round(float(total or 0.0), 2),
+        "per_strategy": [{"strategy": r["strategy"], "value": round(float(r["v"] or 0), 2),
+                          "margin": round(float(r["margin"]), 2), "positions": int(r["n"])}
+                         for r in per_strat],
+        "per_symbol": [{"symbol": r["symbol"], "value": round(float(r["v"] or 0), 2),
+                        "positions": int(r["n"])} for r in per_symbol],
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-2 — M11 Services / M14 Audit / M15 Alerts
+# ─────────────────────────────────────────────────────────────────────────────
+
+def latest_heartbeats(cfg: dict, today: str) -> dict:
+    """Latest cron_heartbeat per job today: {job: {executed_at, status}}."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT job_name, MAX(executed_at) AS executed_at, status "
+            "FROM cron_heartbeat WHERE executed_at LIKE ? GROUP BY job_name",
+            (today + "%",),
+        ).fetchall()
+    return {r["job_name"]: {"executed_at": r["executed_at"], "status": r["status"]}
+            for r in rows}
+
+
+def control_tower_open_findings(cfg: dict, limit: int = 100) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT scan_time, category, severity, resource_name, reason, status "
+                "FROM control_tower_findings WHERE status='OPEN' "
+                "ORDER BY scan_time DESC LIMIT ?", (int(limit),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []   # table absent on older DBs — honest empty
+    return [dict(r) for r in rows]
+
+
+def audit_feed(cfg: dict, today: str, table: Optional[str] = None,
+               severity: Optional[str] = None, limit: int = 200) -> list:
+    """Unified audit feed (M14): normalized {ts, source, severity, summary}
+    over 6 sources, merged newest-first in Python (single pass per table)."""
+    limit = max(1, min(int(limit), 500))
+    rows: list = []
+
+    def _safe(fn):
+        try:
+            return fn()
+        except sqlite3.OperationalError:
+            return []
+
+    with _ro(cfg) as conn:
+        if table in (None, "system_events"):
+            rows += [{"ts": r["timestamp"], "source": "system_events",
+                      "severity": "INFO",
+                      "summary": r["event_type"] + (f" [{r['scenario']}]" if r["scenario"] else "")}
+                     for r in _safe(lambda: conn.execute(
+                         "SELECT timestamp, event_type, scenario FROM system_events "
+                         "WHERE timestamp LIKE ? ORDER BY timestamp DESC LIMIT ?",
+                         (today + "%", limit)).fetchall())]
+        if table in (None, "reconciliation_log"):
+            sev_map = {"COSMETIC": "INFO", "RECOVERABLE": "WARN", "UNRECOVERABLE": "CRITICAL"}
+            rows += [{"ts": r["ts"], "source": "reconciliation_log",
+                      "severity": sev_map.get(r["tier"], "WARN"),
+                      "summary": f"{r['check_name']} {r['symbol']}: {r['action_taken']}"
+                                 + ("" if r["success"] else " (FAILED)")}
+                     for r in _safe(lambda: conn.execute(
+                         "SELECT ts, check_name, tier, symbol, action_taken, success "
+                         "FROM reconciliation_log WHERE ts LIKE ? "
+                         "ORDER BY ts DESC LIMIT ?", (today + "%", limit)).fetchall())]
+        if table in (None, "webhook_audit"):
+            rows += [{"ts": r["ts"], "source": "webhook_audit",
+                      "severity": "WARN" if int(r["response_code"]) >= 400 else "INFO",
+                      "summary": f"POST /webhook/{r['scanner_name']} -> {r['response_code']} "
+                                 f"(+{r['signals_accepted']}/-{r['signals_rejected']})"}
+                     for r in _safe(lambda: conn.execute(
+                         "SELECT ts, scanner_name, response_code, signals_accepted, "
+                         "signals_rejected FROM webhook_audit WHERE date=? "
+                         "ORDER BY ts DESC LIMIT ?", (today, limit)).fetchall())]
+        if table in (None, "eod_verification"):
+            rows += [{"ts": r["verified_at"], "source": "eod_verification",
+                      "severity": "INFO" if r["status"] == "VERIFIED" else "CRITICAL",
+                      "summary": f"EOD {r['status']} (open={r['open_trades']}, "
+                                 f"pending={r['pending_orders']})"}
+                     for r in _safe(lambda: conn.execute(
+                         "SELECT verified_at, status, open_trades, pending_orders "
+                         "FROM eod_verification WHERE date=? LIMIT ?",
+                         (today, limit)).fetchall())]
+        if table in (None, "preflight"):
+            rows += [{"ts": r["completed_at"] or r["started_at"], "source": "preflight",
+                      "severity": "INFO" if r["overall_status"] == "READY" else
+                                  ("WARN" if r["overall_status"] == "READY_WITH_WARNINGS" else "CRITICAL"),
+                      "summary": f"Preflight {r['phase']}: {r['overall_status']} "
+                                 f"({r['passed']}/{r['total_checks']} passed)"}
+                     for r in _safe(lambda: conn.execute(
+                         "SELECT phase, started_at, completed_at, total_checks, passed, "
+                         "overall_status FROM preflight_runs WHERE run_date=? "
+                         "ORDER BY started_at DESC LIMIT ?", (today, limit)).fetchall())]
+        if table in (None, "control_tower"):
+            rows += [{"ts": r["scan_time"], "source": "control_tower",
+                      "severity": r["severity"],
+                      "summary": f"[{r['category']}] {r['resource_name'] or ''}: {r['reason']}"}
+                     for r in _safe(lambda: conn.execute(
+                         "SELECT scan_time, category, severity, resource_name, reason "
+                         "FROM control_tower_findings WHERE scan_time LIKE ? "
+                         "ORDER BY scan_time DESC LIMIT ?", (today + "%", limit)).fetchall())]
+
+    if severity:
+        rows = [r for r in rows if (r["severity"] or "").upper() == severity.upper()]
+    rows.sort(key=lambda r: r["ts"] or "", reverse=True)
+    return rows[:limit]
+
+
+def telegram_alerts_today(cfg: dict, today: str, limit: int = 200) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT sent_at, severity, title, status, attempts, source_module "
+                "FROM telegram_alerts WHERE sent_at LIKE ? "
+                "ORDER BY sent_at DESC LIMIT ?", (today + "%", int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-2 — M16 Slippage / M17 Execution / M18 Statistics / M20 Config history
+# ─────────────────────────────────────────────────────────────────────────────
+
+def slippage_rows_today(cfg: dict, today: str, limit: int = 500) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT trade_id, symbol, strategy_name, side, qty, price_band, "
+                "entry_signal_price, entry_fill_price, entry_slippage_rs, "
+                "sl_slippage_rs, tgt_slippage_rs, planned_sl_distance, "
+                "planned_rr, actual_rr, rr_damage_pct, trade_result, exit_reason "
+                "FROM trade_slippage_log WHERE trade_date=? "
+                "ORDER BY id DESC LIMIT ?", (today, int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def execution_log_today(cfg: dict, today: str, limit: int = 500) -> list:
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT order_id, parent_trade_id, symbol, strategy_name, leg, side, "
+                "intended_price, actual_price, slippage_rs, qty, filled_qty, "
+                "is_partial, retry_count, status, order_timestamp, fill_timestamp "
+                "FROM order_execution_log WHERE order_timestamp LIKE ? "
+                "ORDER BY id DESC LIMIT ?", (today + "%", int(limit)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in rows]
+
+
+def latency_rows_today(cfg: dict, today: str) -> list:
+    """Per-trade latency triple for bucket histograms (M17)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT signal_to_order_ms, order_to_fill_ms, total_latency_ms "
+            "FROM trades WHERE created_at LIKE ? AND status NOT GLOB 'REJECTED*'",
+            (today + "%",),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def statistics_bundle(cfg: dict, today: str) -> dict:
+    """M18: closed-trade stats + MFE/MAE join + LONG/SHORT split (today)."""
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        per_dir = conn.execute(
+            "SELECT direction, COUNT(*) AS closed, "
+            "COALESCE(SUM(CASE WHEN net_pnl>0 THEN 1 ELSE 0 END),0) AS wins, "
+            "COALESCE(SUM(CASE WHEN net_pnl<0 THEN 1 ELSE 0 END),0) AS losses, "
+            "COALESCE(SUM(COALESCE(net_pnl,0)),0.0) AS net, "
+            "COALESCE(SUM(CASE WHEN net_pnl>0 THEN net_pnl ELSE 0 END),0.0) AS win_sum, "
+            "COALESCE(SUM(CASE WHEN net_pnl<0 THEN net_pnl ELSE 0 END),0.0) AS loss_sum, "
+            "COALESCE(AVG(CASE WHEN risk_amount>0 THEN net_pnl/risk_amount END),0.0) AS avg_r "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ? "
+            "GROUP BY direction",
+            (*states, today + "%"),
+        ).fetchall()
+        exc = conn.execute(
+            "SELECT t.trade_id, t.symbol, t.strategy, t.direction, t.net_pnl, "
+            "e.mfe_pct, e.mae_pct "
+            "FROM trades t LEFT JOIN trade_excursions e ON e.trade_id=t.trade_id "
+            "WHERE t.status IN (" + _in_clause(states) + ") AND t.exit_time LIKE ? "
+            "ORDER BY t.exit_time DESC LIMIT 200",
+            (*states, today + "%"),
+        ).fetchall()
+        inn = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(is_real),0) AS real_n FROM innings"
+        ).fetchone()
+    return {
+        "per_direction": [dict(r) for r in per_dir],
+        "trades_with_excursions": [dict(r) for r in exc],
+        "innings": {"total": int(inn["n"]), "real": int(inn["real_n"])},
+    }
+
+
+def config_snapshot_history(cfg: dict, limit: int = 30) -> list:
+    """Recent snapshots (date, ts, hash) newest-first for drift/last-change (M20)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT snapshot_date, snapshot_ts, config_hash FROM config_snapshots "
+            "ORDER BY snapshot_ts DESC LIMIT ?", (int(limit),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def config_snapshot_for_date(cfg: dict, date_iso: str) -> Optional[dict]:
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT snapshot_date, snapshot_ts, config_hash, config_json "
+            "FROM config_snapshots WHERE snapshot_date=? "
+            "ORDER BY snapshot_ts DESC LIMIT 1", (date_iso,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def system_metrics_disk_history(cfg: dict, limit: int = 60) -> list:
+    """Historical disk_used_pct from analytics.system_metrics (M12).
+
+    cpu/mem columns are -1.0 sentinels on the VM (psutil absent) — only disk is
+    real; callers state that gap, never chart the sentinels.
+    """
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT ts, disk_used_pct FROM system_metrics "
+                "ORDER BY id DESC LIMIT ?", (int(limit),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [dict(r) for r in reversed(rows)]

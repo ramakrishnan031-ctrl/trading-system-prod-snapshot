@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Daily P&L{% endblock %}
+{% block nav_pnl %}active{% endblock %}
+{% block content %}
+<div x-data="pnlPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Daily P&L
+      <span class="panel-sub" x-text="(data.today || '') + (data.mode ? ' · mode ' + data.mode : '')"></span>
+    </h2>
+    <div class="big-grid" x-show="data.summary" x-cloak>
+      <div class="bignum" :class="data.summary && data.summary.net < 0 ? 'bn-red' : 'bn-green'"><span class="bn-label">Net</span><span class="bn-val" x-text="data.summary ? money(data.summary.net) : ''"></span></div>
+      <div class="bignum"><span class="bn-label">Gross</span><span class="bn-val" x-text="data.summary ? money(data.summary.gross) : ''"></span></div>
+      <div class="bignum"><span class="bn-label">Charges</span><span class="bn-val" x-text="data.summary ? money(data.summary.charges) : ''"></span></div>
+      <div class="bignum"><span class="bn-label">Closed Trades</span><span class="bn-val" x-text="data.summary ? data.summary.closed : ''"></span></div>
+    </div>
+
+    <h2 class="panel-title" style="margin-top:14px">Intraday equity curve (realized, fm_ledger)</h2>
+    <div class="curve-wrap">
+      <svg viewBox="0 0 600 160" preserveAspectRatio="none" class="curve-svg">
+        <line x1="0" :y1="zeroY()" x2="600" :y2="zeroY()" class="curve-zero"/>
+        <polyline :points="curvePoints()" class="curve-line" fill="none"/>
+      </svg>
+      <div class="curve-meta">
+        <span x-text="(data.equity_curve || []).length + ' points'"></span>
+        <span x-text="data.curve_note || ''"></span>
+        <span x-text="data.mode_note || ''"></span>
+      </div>
+    </div>
+
+    <div class="two-col" style="margin-top:14px">
+      <div>
+        <h2 class="panel-title">Per strategy</h2>
+        <table class="cap-table"><thead><tr><th>Strategy</th><th>Closed</th><th>Net</th></tr></thead><tbody>
+          <template x-for="r in (data.summary ? data.summary.per_strategy : []) || []" :key="r.strategy">
+            <tr><td x-text="r.strategy"></td><td class="cap-num" x-text="r.closed"></td>
+              <td class="cap-num" :class="r.net > 0 ? 'num-pos' : (r.net < 0 ? 'num-neg' : '')" x-text="money(r.net)"></td></tr>
+          </template>
+        </tbody></table>
+      </div>
+      <div>
+        <h2 class="panel-title">By direction</h2>
+        <table class="cap-table"><thead><tr><th>Direction</th><th>Closed</th><th>Net</th></tr></thead><tbody>
+          <template x-for="r in (data.summary ? data.summary.per_direction : []) || []" :key="r.direction">
+            <tr><td x-text="r.direction"></td><td class="cap-num" x-text="r.closed"></td>
+              <td class="cap-num" :class="r.net > 0 ? 'num-pos' : (r.net < 0 ? 'num-neg' : '')" x-text="money(r.net)"></td></tr>
+          </template>
+        </tbody></table>
+      </div>
+    </div>
+  </section>
+</div>
+<script>
+function pnlPage() {
+  return Object.assign(pageBase("/api/pnl"), {
+    _range() {
+      const pts = (this.data.equity_curve || []).map(p => p.cum_pnl);
+      if (!pts.length) return {min: -1, max: 1};
+      let min = Math.min(0, ...pts), max = Math.max(0, ...pts);
+      if (min === max) { min -= 1; max += 1; }
+      return {min, max};
+    },
+    zeroY() { const {min, max} = this._range(); return 150 - 140 * (0 - min) / (max - min) + 5; },
+    curvePoints() {
+      const pts = this.data.equity_curve || [];
+      if (!pts.length) return "";
+      const {min, max} = this._range();
+      const step = pts.length > 1 ? 600 / (pts.length - 1) : 0;
+      return pts.map((p, i) =>
+        (i * step).toFixed(1) + "," + (150 - 140 * (p.cum_pnl - min) / (max - min) + 5).toFixed(1)
+      ).join(" ");
+    },
+  });
+}
+</script>
+{% endblock %}

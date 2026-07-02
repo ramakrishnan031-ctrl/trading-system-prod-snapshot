@@ -29,11 +29,36 @@
             <span class="chip-rank" :class="viewRank(r.basic.name) === 1 ? 'rank-one' : ''"
                   x-text="'#' + viewRank(r.basic.name)"></span>
             <span class="tw-name" x-text="r.basic.display_name"></span>
+            <span class="score-badge" :class="'score-' + (r.scorecard ? r.scorecard.badge : 'GRAY')"
+                  :title="r.scorecard && r.scorecard.reasons.length ? ('why: ' + r.scorecard.reasons.join(' · ')) : 'all checks green'"
+                  x-text="r.scorecard ? r.scorecard.badge : ''"></span>
             <span class="dot" :class="r.basic.enabled === false ? 'dot-off' : (r.basic.enabled === true ? 'dot-on' : 'dot-unk')"></span>
             <span class="tw-dir" x-text="r.basic.direction || ''"></span>
             <span class="tw-mode" x-text="r.basic.mode || ''"></span>
           </div>
           <div class="tw-scanners" x-text="'scanners: ' + (r.basic.scanners.length ? r.basic.scanners.join(', ') : '—')"></div>
+          <div class="score-reasons" x-show="r.scorecard && r.scorecard.reasons.length" x-cloak
+               x-text="'why: ' + (r.scorecard ? r.scorecard.reasons.join(' · ') : '')"></div>
+
+          <!-- §1.2 silence + §1.3 mini funnel + §1.4 failure strip -->
+          <div class="tw-quickrow">
+            <span class="silence" :class="r.silence && r.silence.color ? ('sil-' + r.silence.color) : 'sil-plain'"
+                  x-text="'Last Signal: ' + (r.silence && r.silence.age_min !== null ? Math.round(r.silence.age_min) + 'm ago' : 'none today')"></span>
+            <span class="failstrip">
+              <span title="risk-rejected">R:<b x-text="r.failures ? r.failures.risk_rej : 0"></b></span>
+              <span title="capital-rejected">C:<b x-text="r.failures ? r.failures.capital_rej : 0"></b></span>
+              <span title="order-rejected">O:<b x-text="r.failures ? r.failures.order_rej : 0"></b></span>
+              <span title="duplicate">D:<b x-text="r.failures ? r.failures.duplicate : 0"></b></span>
+              <span title="expired">E:<b x-text="r.failures ? r.failures.expired : 0"></b></span>
+            </span>
+          </div>
+          <div class="mini-funnel" x-show="r.funnel" x-cloak>
+            <div class="mf-step"><b x-text="r.funnel.received"></b><span>Received</span></div>
+            <div class="mf-step"><b x-text="r.funnel.accepted"></b><span>Accepted</span></div>
+            <div class="mf-step"><b x-text="r.funnel.orders_created"></b><span>Orders</span></div>
+            <div class="mf-step"><b x-text="r.funnel.filled"></b><span>Filled</span></div>
+            <div class="mf-step"><b x-text="r.funnel.trades_closed"></b><span>Closed</span></div>
+          </div>
 
           <div class="tw-groups">
             <div class="twg"><h4>Signals</h4>
@@ -61,12 +86,12 @@
               <div class="twg-row"><span>best / worst</span><b x-text="dash(r.performance.best_trade) + ' / ' + dash(r.performance.worst_trade)"></b></div>
               <div class="twg-row"><span>expectancy</span><b x-text="dash(r.performance.expectancy)"></b></div>
             </div>
-            <div class="twg"><h4>Risk</h4>
+            <div class="twg"><h4>Risk / Capital</h4>
+              <div class="twg-row"><span>allocation</span><b x-text="r.capital_view && r.capital_view.allocation_configured !== null ? money(r.capital_view.allocation_configured) : r.capital_view.allocation_basis"></b></div>
               <div class="twg-row"><span>capital used</span><b x-text="money(r.risk.capital_used)"></b></div>
               <div class="twg-row"><span>capital left</span><b x-text="r.risk.capital_remaining !== null ? money(r.risk.capital_remaining) : '—'"></b>
               </div>
-              <div class="twg-row"><span>positions</span><b x-text="r.risk.active_positions + ' / ' + r.risk.max_concurrent"></b></div>
-              <div class="twg-row"><span>capacity left</span><b x-text="r.risk.position_capacity_remaining"></b></div>
+              <div class="twg-row"><span>positions</span><b x-text="r.capital_view.positions_used + ' / ' + r.capital_view.positions_configured + ' (left ' + r.capital_view.positions_remaining + ')'"></b></div>
             </div>
             <div class="twg"><h4>Health</h4>
               <div class="twg-row"><span>last signal</span><b :class="'stale-' + r.health.last_signal_staleness" x-text="tstr(r.health.last_signal)"></b></div>

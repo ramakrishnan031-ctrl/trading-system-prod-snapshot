@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Audit Trail{% endblock %}
+{% block nav_audit %}active{% endblock %}
+{% block content %}
+<div x-data="auditPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Audit Trail <span class="panel-sub" x-text="data.date || ''"></span></h2>
+    <div class="filters">
+      <input class="flt" type="date" x-model="fDate" @change="page=1; load()">
+      <select class="flt" x-model="fTable" @change="page=1; load()">
+        <option value="">all sources</option>
+        <option>system_events</option><option>reconciliation_log</option>
+        <option>webhook_audit</option><option>eod_verification</option>
+        <option>preflight</option><option>control_tower</option>
+      </select>
+      <select class="flt" x-model="fSeverity" @change="page=1; load()">
+        <option value="">all severities</option>
+        <option>INFO</option><option>WARN</option><option>CRITICAL</option>
+        <option>HIGH</option><option>MEDIUM</option><option>LOW</option>
+      </select>
+      <button class="rt-btn" @click="page = Math.max(1, page-1); load()">&laquo; prev</button>
+      <span class="panel-sub" x-text="'page ' + page + ' · ' + (data.total || 0) + ' rows'"></span>
+      <button class="rt-btn" @click="page = page+1; load()">next &raquo;</button>
+    </div>
+    <table class="cap-table">
+      <thead><tr><th>Time</th><th>Source</th><th>Severity</th><th>Summary</th></tr></thead>
+      <tbody>
+        <template x-for="(r, i) in data.rows || []" :key="i">
+          <tr>
+            <td class="ev-ts" x-text="r.ts"></td>
+            <td class="mono" x-text="r.source"></td>
+            <td><span class="fam-pill" :class="sevClass(r.severity)" x-text="r.severity"></span></td>
+            <td class="wrapcell" style="max-width:none" x-text="r.summary"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
+          <td colspan="4" class="ev-empty">No audit rows for the selected filters.</td></tr>
+      </tbody>
+    </table>
+  </section>
+</div>
+<script>
+function auditPage() {
+  return Object.assign(pageBase("/api/audit"), {
+    fDate: "", fTable: "", fSeverity: "", page: 1,
+    qs() {
+      const p = new URLSearchParams();
+      if (this.fDate) p.set("date", this.fDate);
+      if (this.fTable) p.set("table", this.fTable);
+      if (this.fSeverity) p.set("severity", this.fSeverity);
+      p.set("page", this.page);
+      return "?" + p.toString();
+    },
+    sevClass(s) {
+      if (s === "CRITICAL" || s === "HIGH") return "famp-rejected";
+      if (s === "WARN" || s === "MEDIUM") return "famp-duplicated";
+      return "famp-accepted";
+    },
+  });
+}
+</script>
+{% endblock %}

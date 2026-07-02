@@ -32,7 +32,10 @@ if _ROOT not in sys.path:
 from backend.services import freshness  # noqa: E402
 from backend import app as app_module    # noqa: E402
 
+from datetime import timedelta  # noqa: E402
+
 TODAY = freshness.ist_today_iso()
+YDAY = (freshness.ist_now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 DDL = [
@@ -59,7 +62,8 @@ DDL = [
         entry_target_price REAL, entry_actual_price REAL, sl_initial REAL, tgt_initial REAL,
         margin_reserved REAL, risk_amount REAL, created_at TEXT, entry_time TEXT, exit_time TEXT,
         exit_reason TEXT, gross_pnl REAL, net_pnl REAL, status TEXT,
-        actual_position_value_rs REAL, order_to_fill_ms INTEGER)""",
+        actual_position_value_rs REAL, signal_to_order_ms INTEGER, order_to_fill_ms INTEGER,
+        total_latency_ms INTEGER)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
         entry_type TEXT NOT NULL, amount REAL, bucket TEXT, balance_before REAL, balance_after REAL,
         signal_id TEXT, reservation_id TEXT, reason TEXT, session_id TEXT, direction TEXT,
@@ -82,6 +86,47 @@ DDL = [
     """CREATE TABLE gtt_state (gtt_id INTEGER PRIMARY KEY, trade_id TEXT, status TEXT,
         exit_side TEXT, qty INTEGER, sl_trigger REAL, sl_limit REAL, tgt_trigger REAL,
         tgt_limit REAL, needs_review INTEGER DEFAULT 0)""",
+    """CREATE TABLE cron_heartbeat (id INTEGER PRIMARY KEY AUTOINCREMENT, job_name TEXT,
+        executed_at TEXT, status TEXT DEFAULT 'SUCCESS', duration_sec REAL, message TEXT)""",
+    """CREATE TABLE reconciliation_log (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT,
+        check_name TEXT, tier TEXT, symbol TEXT, trade_id TEXT, description TEXT,
+        action_taken TEXT, success INTEGER)""",
+    """CREATE TABLE eod_verification (date TEXT PRIMARY KEY, open_trades INTEGER DEFAULT 0,
+        pending_orders INTEGER DEFAULT 0, pnl_variance REAL DEFAULT 0.0,
+        status TEXT DEFAULT 'VERIFIED', verified_at TEXT)""",
+    """CREATE TABLE preflight_runs (run_id TEXT PRIMARY KEY, run_date TEXT, phase TEXT,
+        started_at TEXT, completed_at TEXT, total_checks INTEGER DEFAULT 0,
+        passed INTEGER DEFAULT 0, failed_critical INTEGER DEFAULT 0, warnings INTEGER DEFAULT 0,
+        autofixes_attempted INTEGER DEFAULT 0, autofixes_succeeded INTEGER DEFAULT 0,
+        overall_status TEXT, alert_id TEXT)""",
+    """CREATE TABLE preflight_check_results (run_id TEXT, run_date TEXT, check_name TEXT,
+        check_group TEXT, criticality TEXT, status TEXT, duration_ms INTEGER,
+        details_json TEXT, fix_attempted INTEGER DEFAULT 0, fix_result TEXT)""",
+    """CREATE TABLE control_tower_findings (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_time TEXT, category TEXT, severity TEXT, resource_type TEXT, resource_name TEXT,
+        location TEXT, reason TEXT, recommended_action TEXT, status TEXT DEFAULT 'OPEN',
+        first_seen TEXT, last_seen TEXT, acked_at TEXT, resolved_at TEXT, remarks TEXT)""",
+    """CREATE TABLE telegram_alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, sent_at TEXT,
+        severity TEXT, title TEXT, body TEXT, status TEXT DEFAULT 'PENDING',
+        attempts INTEGER DEFAULT 0, source_module TEXT)""",
+    """CREATE TABLE trade_slippage_log (id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id TEXT,
+        trade_date DATE, symbol TEXT, strategy_name TEXT, side TEXT, qty INTEGER,
+        price_band TEXT, entry_signal_price REAL, entry_fill_price REAL,
+        entry_slippage_rs REAL, entry_slippage_pct REAL, sl_trigger_price REAL,
+        sl_fill_price REAL, sl_slippage_rs REAL, sl_slippage_pct REAL, tgt_price REAL,
+        tgt_fill_price REAL, tgt_slippage_rs REAL, tgt_slippage_pct REAL,
+        planned_sl_distance REAL, planned_rr REAL, actual_rr REAL, rr_damage_pct REAL,
+        trade_result TEXT, exit_reason TEXT, created_at TEXT)""",
+    """CREATE TABLE order_execution_log (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id TEXT,
+        parent_trade_id TEXT, signal_id TEXT, symbol TEXT, strategy_name TEXT, leg TEXT,
+        order_type TEXT, side TEXT, intended_price REAL, actual_price REAL, slippage_rs REAL,
+        slippage_pct REAL, qty INTEGER, filled_qty INTEGER, is_partial INTEGER DEFAULT 0,
+        retry_count INTEGER DEFAULT 0, status TEXT, order_timestamp TEXT, fill_timestamp TEXT,
+        exchange_timestamp TEXT, tolerance_fraction_used REAL, tolerance_source TEXT,
+        created_at TEXT)""",
+    """CREATE TABLE trade_excursions (trade_id TEXT PRIMARY KEY, mfe_price REAL, mfe_pct REAL,
+        mae_price REAL, mae_pct REAL, entry_candle_open REAL, entry_candle_high REAL,
+        entry_candle_low REAL, entry_candle_close REAL, updated_at TEXT)""",
 ]
 
 DDL_V42_EXTRA = [
@@ -244,11 +289,12 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
             "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,"
             "margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
-            "gross_pnl,net_pnl,status,actual_position_value_rs,order_to_fill_ms) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "gross_pnl,net_pnl,status,actual_position_value_rs,signal_to_order_ms,"
+            "order_to_fill_ms,total_latency_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 1000.0, 1001.0,
              990.0, 1015.0, 5000.0, 100.0, _ts("10:05:00"), _ts("10:06:00"), _ts(et),
-             reason, pnl + 5, pnl, "CLOSED", 10000.0, 850),
+             reason, pnl + 5, pnl, "CLOSED", 10000.0, 120, 850, 970),
         )
     opens = [("trd_o1", "gap_fade_long"), ("trd_o2", "gap_fade_long"),
              ("trd_o3", "vwap_bounce_long"), ("trd_o4", "range_breakout_long")]
@@ -257,11 +303,12 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
             "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,"
             "margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
-            "gross_pnl,net_pnl,status,actual_position_value_rs,order_to_fill_ms) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "gross_pnl,net_pnl,status,actual_position_value_rs,signal_to_order_ms,"
+            "order_to_fill_ms,total_latency_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 1000.0, 1001.0,
              990.0, 1015.0, 5000.0, 100.0, _ts("11:00:00"), _ts("11:01:00"), None,
-             None, None, None, "OPEN", 10000.0, 900),
+             None, None, None, "OPEN", 10000.0, 150, 900, 1050),
         )
 
     # ── Innings: trd_o1 is on inning 2 (re-entry); others have no innings row. ──
@@ -288,11 +335,68 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
               "margin_reserved,charges_today,updated_at) VALUES(1,?,?,?,?,?,?)",
               (55000.0, -25.0, 42000.0, 3000.0, 10.0, _ts("15:15:00")))
 
-    # ── config snapshot ──
+    # ── config snapshots: yesterday (different hash — risk.max_daily_trades=9)
+    #    + today. Drives the M20 drift banner + last-change-date (V4). ──
+    y_system = json.loads(json.dumps(_SNAPSHOT_SYSTEM))
+    y_system["risk"]["max_daily_trades"] = 9
+    c.execute("INSERT INTO config_snapshots(snapshot_date,snapshot_ts,account_id,mode,trade_type,"
+              "config_hash,config_json) VALUES(?,?,?,?,?,?,?)",
+              (YDAY, f"{YDAY}T08:15:30+05:30", "LFL836", "PAPER", "INTRADAY",
+               "cafebabe" * 8, json.dumps({"system": y_system})))
     config_json = json.dumps({"system": _SNAPSHOT_SYSTEM, "scoring": {}, "slippage": {}})
     c.execute("INSERT INTO config_snapshots(snapshot_date,snapshot_ts,account_id,mode,trade_type,"
               "config_hash,config_json) VALUES(?,?,?,?,?,?,?)",
               (TODAY, _ts("08:15:30"), "LFL836", "PAPER", "INTRADAY", "deadbeef" * 8, config_json))
+
+    # ── G2b-2 seeds ──
+    for job, tm in (("eod_verify", "15:55:10"), ("daily_trade_review", "16:07:20")):
+        c.execute("INSERT INTO cron_heartbeat(job_name,executed_at,status,duration_sec) "
+                  "VALUES(?,?,?,?)", (job, _ts(tm), "SUCCESS", 4.2))
+    c.execute("INSERT INTO reconciliation_log(ts,check_name,tier,symbol,trade_id,description,"
+              "action_taken,success) VALUES(?,?,?,?,?,?,?,?)",
+              (_ts("12:30:00"), "MANUAL_CLOSE", "RECOVERABLE", "AAA", "trd_c3",
+               "external close detected", "marked CLOSED_MANUAL", 1))
+    c.execute("INSERT INTO eod_verification(date,open_trades,pending_orders,pnl_variance,"
+              "status,verified_at) VALUES(?,?,?,?,?,?)",
+              (TODAY, 0, 0, 0.0, "VERIFIED", _ts("15:55:30")))
+    c.execute("INSERT INTO preflight_runs(run_id,run_date,phase,started_at,completed_at,"
+              "total_checks,passed,overall_status) VALUES(?,?,?,?,?,?,?,?)",
+              ("pf_a_1", TODAY, "A", _ts("08:30:00"), _ts("08:31:00"), 12, 12, "READY"))
+    c.execute("INSERT INTO preflight_check_results(run_id,run_date,check_name,check_group,"
+              "criticality,status) VALUES(?,?,?,?,?,?)",
+              ("pf_a_1", TODAY, "vm_ram", "VM Health", "CRITICAL", "PASS"))
+    c.execute("INSERT INTO control_tower_findings(scan_time,category,severity,resource_type,"
+              "resource_name,reason,status,first_seen,last_seen) VALUES(?,?,?,?,?,?,?,?,?)",
+              (_ts("17:05:00"), "disk", "HIGH", "mount", "/dev/sda1",
+               "disk 87% used", "OPEN", _ts("17:05:00"), _ts("17:05:00")))
+    c.execute("INSERT INTO telegram_alerts(sent_at,severity,title,status,attempts,source_module) "
+              "VALUES(?,?,?,?,?,?)",
+              (_ts("15:10:05"), "INFO", "SL_HIT AAA gap_fade_long", "SENT", 1, "order_placer"))
+    c.execute("INSERT INTO telegram_alerts(sent_at,severity,title,status,attempts,source_module) "
+              "VALUES(?,?,?,?,?,?)",
+              (_ts("12:00:05"), "CRITICAL", "order FAILED: invalid tag", "SENT", 1, "order_reconciler"))
+    # slippage: row 1 BREACHES the sl_fraction budget (tol = min(0.22×10, 5) = 2.2 < 3.0);
+    # row 2 does not (0.5 < 2.2).
+    c.execute("INSERT INTO trade_slippage_log(trade_id,trade_date,symbol,strategy_name,side,qty,"
+              "price_band,entry_signal_price,entry_fill_price,entry_slippage_rs,"
+              "planned_sl_distance,planned_rr,actual_rr,rr_damage_pct,trade_result,exit_reason) "
+              "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              ("trd_c1", TODAY, "AAA", "gap_fade_long", "LONG", 10, "200-300",
+               1000.0, 1003.0, 3.0, 10.0, 1.5, 1.1, 27.0, "LOSS", "SL_HIT"))
+    c.execute("INSERT INTO trade_slippage_log(trade_id,trade_date,symbol,strategy_name,side,qty,"
+              "price_band,entry_signal_price,entry_fill_price,entry_slippage_rs,"
+              "planned_sl_distance,planned_rr,actual_rr,rr_damage_pct,trade_result,exit_reason) "
+              "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              ("trd_c4", TODAY, "AAA", "gap_fade_long", "LONG", 10, "200-300",
+               1000.0, 1000.5, 0.5, 10.0, 1.5, 1.45, 4.0, "WIN", "TGT_HIT"))
+    for oid, leg, slip in (("ord_e_0", "ENTRY", 1.0), ("ord_sl_0", "SL", 0.2)):
+        c.execute("INSERT INTO order_execution_log(order_id,parent_trade_id,symbol,strategy_name,"
+                  "leg,side,intended_price,actual_price,slippage_rs,qty,filled_qty,status,"
+                  "order_timestamp,fill_timestamp) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (oid, "trd_c1", "AAA", "gap_fade_long", leg, "BUY", 1000.0,
+                   1000.0 + slip, slip, 10, 10, "COMPLETE", _ts("10:39:30"), _ts("10:40:00")))
+    c.execute("INSERT INTO trade_excursions(trade_id,mfe_pct,mae_pct,updated_at) VALUES(?,?,?,?)",
+              ("trd_c1", 1.2, -0.8, _ts("15:50:00")))
 
     # ── events ──
     for et, scn, tm in (("STARTUP", "COLD", "08:15:00"), ("RECOVERY", None, "08:16:00"),
@@ -363,6 +467,52 @@ def _write_strategies(config_dir: str) -> None:
     # minimal system_config.yaml for the YAML-fallback path
     with open(os.path.join(config_dir, "system_config.yaml"), "w", encoding="utf-8") as fh:
         yaml.safe_dump(_SNAPSHOT_SYSTEM, fh, sort_keys=False)
+    # cron_registry.yaml (M11 expected-vs-actual join)
+    registry = {"jobs": {
+        "eod_verify": {"monitored": True, "enabled": True, "critical": True,
+                       "cron_expression": "55 15 * * 1-5", "marker_name": "eod_verify"},
+        "daily_trade_review": {"monitored": True, "enabled": True, "critical": False,
+                               "cron_expression": "7 16 * * 1-5",
+                               "marker_name": "daily_trade_review"},
+        "silent_job": {"monitored": True, "enabled": True, "critical": False,
+                       "cron_expression": "0 12 * * 1-5", "marker_name": "silent_job"},
+        "retired_job": {"monitored": True, "enabled": False, "critical": False,
+                        "cron_expression": "0 1 * * *", "marker_name": "retired_job"},
+    }, "officer": {"briefing": "09:20"}}
+    with open(os.path.join(config_dir, "cron_registry.yaml"), "w", encoding="utf-8") as fh:
+        yaml.safe_dump(registry, fh, sort_keys=False)
+
+
+def _write_runtime_dirs(tmp_path) -> dict:
+    """Logs / reports / data_store fixture trees (M13/M15/M19)."""
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    # structured JSON-lines system log (10 lines, one ERROR, one with trade_id)
+    with open(logs_dir / f"system_{TODAY}.log", "w", encoding="utf-8") as fh:
+        for i in range(8):
+            fh.write(json.dumps({"ts": f"{TODAY}T10:0{i}:00", "level": "INFO",
+                                 "logger": "core.system", "msg": f"heartbeat {i}"}) + "\n")
+        fh.write(json.dumps({"ts": f"{TODAY}T12:00:00", "level": "ERROR",
+                             "logger": "order_placer", "msg": "placement failed",
+                             "trade_id": "trd_c2", "order_id": "ord_fail_1"}) + "\n")
+        fh.write(json.dumps({"ts": f"{TODAY}T13:00:00", "level": "INFO",
+                             "logger": "order_placer", "msg": "SL filled",
+                             "trade_id": "trd_c1"}) + "\n")
+    with open(logs_dir / f"debug_{TODAY}.log", "w", encoding="utf-8") as fh:
+        fh.write("plain debug line 1\nplain debug line 2\n")
+    with open(logs_dir / "failed_alerts.log", "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": f"{TODAY}T12:00:06", "title": "telegram send failed"}) + "\n")
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir(exist_ok=True)
+    for name in (f"daily_trade_review_report_{TODAY}.xlsx", f"daily_report_{TODAY}.xlsx"):
+        with open(reports_dir / name, "wb") as fh:
+            fh.write(b"PK\x03\x04" + b"x" * 2048)   # xlsx-magic dummy
+    data_store = tmp_path / "data_store"
+    data_store.mkdir(exist_ok=True)
+    with open(data_store / "critical_alert_20260703_120006.flag", "w", encoding="utf-8") as fh:
+        fh.write("order FAILED: invalid tag")
+    return {"logs_dir": str(logs_dir), "reports_dir": str(reports_dir),
+            "data_store": str(data_store)}
 
 
 @pytest.fixture(params=[41, 42], ids=["v41", "v42"])
@@ -384,12 +534,16 @@ def gui_config(tmp_path, schema_version):
     _build_db(main_db, schema_version)
     _build_analytics(analytics_db)
     _write_strategies(config_dir)
+    runtime = _write_runtime_dirs(tmp_path)
     return {
         "paths": {
             "main_db": main_db, "analytics_db": analytics_db,
-            "logs_dir": str(tmp_path / "logs"), "reports_dir": str(tmp_path / "reports"),
-            "config_dir": config_dir,
+            "logs_dir": runtime["logs_dir"], "reports_dir": runtime["reports_dir"],
+            "config_dir": config_dir, "data_store": runtime["data_store"],
         },
+        "scorecard": {},           # library defaults (strategy_score.DEFAULT_SCORECARD)
+        "silence": {},
+        "reports_download_enabled": False,
         "server": {"bind_host": "127.0.0.1", "bind_port": 8500, "session_cookie_secure": False},
         "trader_metrics": {
             "health_url": "http://127.0.0.1:8080/health",

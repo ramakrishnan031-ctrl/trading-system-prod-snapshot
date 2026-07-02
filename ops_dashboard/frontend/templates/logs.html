@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block nav_logs %}active{% endblock %}
+{% block content %}
+<div x-data="logsPage()" x-init="load()">
+  <section class="panel">
+    <h2 class="panel-title">Logs Viewer
+      <span class="panel-sub">read-only · whitelisted dir · tail-from-end (≤2000 lines) · download disabled</span>
+    </h2>
+
+    <div class="filters">
+      <select class="flt" x-model="file" @change="load()">
+        <option value="">— pick a log file —</option>
+        <template x-for="f in files" :key="f.name">
+          <option :value="f.name" x-text="f.name + ' (' + Math.round(f.size_bytes/1024) + ' KB)'"></option>
+        </template>
+      </select>
+      <input class="flt" type="number" min="10" max="2000" x-model.number="n" @change="load()" title="tail lines">
+      <select class="flt" x-model="level" @change="load()">
+        <option value="">all levels</option>
+        <option>DEBUG</option><option>INFO</option><option>WARNING</option>
+        <option>ERROR</option><option>CRITICAL</option>
+      </select>
+      <input class="flt" placeholder="free text" x-model.debounce.500ms="q" @change="load()">
+      <input class="flt" placeholder="signal/trade/order id" x-model.debounce.500ms="refId" @change="load()">
+      <span class="panel-sub" x-show="meta.file" x-cloak
+            x-text="meta.count + ' rows · scanned ' + Math.round(meta.bytes_read/1024) + ' KB of ' + Math.round(meta.file_size/1024) + ' KB'"></span>
+    </div>
+
+    <div class="tbl-scroll" x-show="rows.length" x-cloak>
+      <table class="cap-table log-table">
+        <thead><tr><th>Time</th><th>Level</th><th>Logger</th><th>Message</th><th>IDs</th></tr></thead>
+        <tbody>
+          <template x-for="(r, i) in rows" :key="i">
+            <tr :class="r.level ? ('lvl-' + r.level) : ''">
+              <td class="ev-ts" x-text="r.ts || '—'"></td>
+              <td><span class="fam-pill" :class="lvlClass(r.level)" x-text="r.level || 'raw'"></span></td>
+              <td class="mono" x-text="r.logger || ''"></td>
+              <td class="logmsg" x-text="r.msg"></td>
+              <td class="mono" x-text="[r.signal_id, r.trade_id, r.order_id].filter(Boolean).map(s => s.slice(0,10)).join(' ')"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div class="empty-state" x-show="!file" x-cloak>
+      <div class="es-icon">🗒️</div>
+      <div class="es-title">Pick a log file</div>
+      <div class="es-body">JSON-lines files (system / trades / reconciler) render as a filterable
+        table; plain-text files render raw. Only files inside the logs directory are accessible.</div>
+    </div>
+  </section>
+</div>
+<script>
+function logsPage() {
+  return {
+    files: [], rows: [], meta: {}, file: "", n: 200, level: "", q: "", refId: "",
+    async load() {
+      const p = new URLSearchParams();
+      if (this.file) p.set("file", this.file);
+      if (this.n) p.set("n", this.n);
+      if (this.level) p.set("level", this.level);
+      if (this.q) p.set("q", this.q);
+      if (this.refId) p.set("id", this.refId);
+      const r = await fetch("/api/logs" + (p.toString() ? "?" + p.toString() : ""),
+                            { credentials: "same-origin" });
+      if (r.status === 401) { window.location = "/login"; return; }
+      const d = await r.json();
+      if (d.files) { this.files = d.files; this.rows = []; this.meta = {}; return; }
+      this.rows = d.rows || [];
+      this.meta = d;
+    },
+    lvlClass(lvl) {
+      if (lvl === "ERROR" || lvl === "CRITICAL") return "famp-rejected";
+      if (lvl === "WARNING") return "famp-duplicated";
+      if (lvl === "INFO") return "famp-accepted";
+      return "famp-expired";
+    },
+  };
+}
+</script>
+{% endblock %}
