@@ -301,6 +301,10 @@ class OrderReconciler:
         self._poll_count: int = 0
         self._alerted_discrepancies: Dict[tuple, dict] = {}  # (trade_id, check_name) -> {alert_count, next_alert_at_poll}
 
+        # B-1: unrealized-MTM refresh observability counters
+        self._mtm_refresh_success: int = 0
+        self._mtm_refresh_failure: int = 0
+
         # FIX-068: Track poll counts for UNKNOWN_IN_FLIGHT trades
         # Maps trade_id -> poll_count (incremented each cycle; FAILED after 3)
         self._timeout_poll_counts: Dict[str, int] = {}
@@ -966,6 +970,18 @@ class OrderReconciler:
         # A-1/E-1: the in-flight-entry recovery now runs as a PREPASS at the top
         # of this cycle (see _recover_in_flight_entries above) — not here — so an
         # adopted-OPEN entry is protected by the G5b loop above in the same cycle.
+
+        # B-1: refresh per-position unrealized MTM for the pre-trade daily-loss gate
+        # (advisory; never touches capital accounting). Never raises — a refresh
+        # failure must not stop the cycle's safety checks.
+        try:
+            self._refresh_unrealized_mtm()
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("_refresh_unrealized_mtm unhandled error: %s", exc, exc_info=True)
+            try:
+                self._fm.mark_unrealized_mtm_refreshed(available=False)
+            except Exception:  # noqa: BLE001
+                pass
 
         # RC12: update consecutive auth-error counter once per cycle
         self._finalise_auth_counter(had_auth_error=bool(cycle_auth_errors))
@@ -2791,6 +2807,78 @@ class OrderReconciler:
         )]
 
     # ── G3: CAPITAL_DRIFT ─────────────────────────────────────────────────────
+
+    def _refresh_unrealized_mtm(self) -> None:
+        """B-1: recompute per-position unrealized MTM from (open trades × current LTP)
+        and publish it to the FundManager for the pre-trade daily-loss gate.
+
+        SET-BASED: updates every OPEN/PARTIAL trade and PRUNES any MTM entry no longer
+        open, so a trade closed by ANY path (SL/TGT/manual/EOD) drops out with no
+        per-close-path hook and no stale entry can wrongly inflate the daily loss.
+
+        Parity: `quote_fn` = get_quote returns a REAL LTP in both paper (via the paper
+        quote provider) and live — ONE code path, no `if paper` branch. The compute
+        `(ltp − avg_fill) × qty × sign` is mode-agnostic.
+
+        ADVISORY ONLY: never touches reservations / _total / the 3-balance invariant.
+        On a quote outage → mark the MTM UNAVAILABLE so the gate degrades to
+        realized-only + WARN (never block-all, never fabricate, never silent)."""
+        try:
+            open_trades = self._store.get_all_open_trades() or []
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("mtm_refresh: get_all_open_trades failed: %s", exc)
+            self._fm.mark_unrealized_mtm_refreshed(available=False)
+            self._mtm_refresh_failure += 1
+            return
+
+        # Prune FIRST so a just-closed trade never lingers even if the quote call fails.
+        open_ids = {t["trade_id"] for t in open_trades}
+        try:
+            self._fm.prune_unrealized_mtm(open_ids)
+        except Exception as exc:  # noqa: BLE001
+            self._log.error("mtm_refresh: prune failed: %s", exc)
+
+        if not open_trades:
+            # Nothing open → MTM is trivially 0 and fresh.
+            self._fm.mark_unrealized_mtm_refreshed(available=True)
+            self._mtm_refresh_success += 1
+            return
+
+        symbols = sorted({t["symbol"] for t in open_trades if t["symbol"]})
+        try:
+            quotes = self._quote_fn(symbols)   # dict: symbol -> Quote(last_price=...)
+        except Exception as exc:  # noqa: BLE001
+            # Outage → keep last-known values but mark UNAVAILABLE → gate degrades.
+            self._log.warning("mtm_refresh: quote_fn failed (%s); MTM marked unavailable", exc)
+            self._fm.mark_unrealized_mtm_refreshed(available=False)
+            self._mtm_refresh_failure += 1
+            return
+
+        updated = 0
+        for t in open_trades:
+            q = quotes.get(t["symbol"]) if quotes else None
+            ltp = float(getattr(q, "last_price", 0.0) or 0.0) if q is not None else 0.0
+            avg = float(t["entry_actual_price"] or 0.0)
+            qty = int(t["qty_filled"] or 0)
+            if ltp <= 0 or avg <= 0 or qty <= 0:
+                continue   # missing quote / not-yet-filled → skip (leave last-known)
+            sign = 1.0 if (t["direction"] or "").upper() == "LONG" else -1.0
+            self._fm.update_unrealized_mtm(t["trade_id"], (ltp - avg) * qty * sign)
+            updated += 1
+
+        if updated == 0:
+            # Positions open but no usable quote for any → treat as unavailable so the
+            # gate does not rely on a map that looks "fresh" but is empty/stale.
+            self._fm.mark_unrealized_mtm_refreshed(available=False)
+            self._mtm_refresh_failure += 1
+            self._log.warning("mtm_refresh: no usable quotes for %d open position(s)", len(open_trades))
+        else:
+            self._fm.mark_unrealized_mtm_refreshed(available=True)
+            self._mtm_refresh_success += 1
+            self._log.debug(
+                "mtm_refresh: %d/%d positions updated (success=%d failure=%d)",
+                updated, len(open_trades), self._mtm_refresh_success, self._mtm_refresh_failure,
+            )
 
     def _g3_capital_drift(
         self, cycle_auth_errors: list

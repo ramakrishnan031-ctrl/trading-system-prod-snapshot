@@ -173,6 +173,7 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 5      # halt after N consecutive losses (both modes)
   daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT
+  daily_loss_include_unrealized: false  # B-1 (02-Jul): SHADOW default — reconciler populates unrealized MTM + gate LOGS would_reject, but ENFORCES realized-only. Flip true to enforce realized+unrealized (validate first).
   price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement
 
 webhook:                      # WR14 — HTTP server settings

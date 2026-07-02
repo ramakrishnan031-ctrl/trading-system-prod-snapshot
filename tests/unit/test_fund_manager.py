@@ -716,6 +716,69 @@ def test_fix035_get_total_unrealized_mtm_sums_all_trades() -> None:
     print("  OK FIX-035: get_total_unrealized_mtm sums all trades")
 
 
+# ── B-1 (02-Jul): MTM freshness + set-based prune + invariant-untouched ──────────
+def test_b1_mtm_freshness_status() -> None:
+    """B-1: get_unrealized_mtm_status() = (total, is_fresh). Fresh only after a
+    successful refresh mark; an outage mark (available=False) makes it not-fresh."""
+    import time as _t
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        total, fresh = fm.get_unrealized_mtm_status()
+        assert total == 0.0 and fresh is False            # nothing refreshed yet
+        fm.update_unrealized_mtm("t1", -500.0)
+        fm.mark_unrealized_mtm_refreshed(available=True)
+        total, fresh = fm.get_unrealized_mtm_status()
+        assert total == -500.0 and fresh is True
+        fm.mark_unrealized_mtm_refreshed(available=False)  # outage
+        _, fresh = fm.get_unrealized_mtm_status()
+        assert fresh is False
+        # aged past the staleness window → stale even though available
+        fm.mark_unrealized_mtm_refreshed(available=True)
+        fm._mtm_refreshed_at = _t.monotonic() - (fm._MTM_STALE_AFTER_SEC + 5.0)
+        _, fresh = fm.get_unrealized_mtm_status()
+        assert fresh is False
+        store.close()
+    print("  OK B-1: MTM freshness (available + age)")
+
+
+def test_b1_prune_set_based() -> None:
+    """B-1: prune_unrealized_mtm drops any trade_id not in the keep-set — removal for a
+    trade closed by ANY path without a per-close hook."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        fm.update_unrealized_mtm("open1", -100.0)
+        fm.update_unrealized_mtm("open2", 50.0)
+        fm.update_unrealized_mtm("closed1", -999.0)   # left the open set
+        removed = fm.prune_unrealized_mtm({"open1", "open2"})
+        assert removed == 1
+        assert fm.get_total_unrealized_mtm() == -50.0  # closed1 pruned (no stale inflation)
+        store.close()
+    print("  OK B-1: set-based prune drops closed trades")
+
+
+def test_b1_mtm_does_not_touch_capital_invariant() -> None:
+    """B-1: unrealized-MTM writes are ADVISORY — total / bucket avail/reserved/used
+    (and thus the 3-balance invariant) are UNCHANGED by MTM update/prune/mark."""
+    with tempfile.TemporaryDirectory() as tmp:
+        store = _make_store(Path(tmp))
+        fm = _initialized_fm(store, balance=100_000.0)
+        b = fm.get_snapshot()
+        fm.update_unrealized_mtm("t1", -5_000.0)
+        fm.update_unrealized_mtm("t2", 2_000.0)
+        fm.mark_unrealized_mtm_refreshed(available=True)
+        fm.prune_unrealized_mtm({"t1"})
+        a = fm.get_snapshot()
+        assert a.total == b.total
+        assert (a.intraday_avail, a.intraday_reserved, a.intraday_used) == \
+               (b.intraday_avail, b.intraday_reserved, b.intraday_used)
+        assert (a.positional_avail, a.positional_reserved, a.positional_used) == \
+               (b.positional_avail, b.positional_reserved, b.positional_used)
+        store.close()
+    print("  OK B-1: MTM writes leave capital/invariant untouched")
+
+
 def test_fix035_remove_unrealized_mtm_cleans_up() -> None:
     """FIX-035: remove_unrealized_mtm removes closed trade from tracking."""
     with tempfile.TemporaryDirectory() as tmp:

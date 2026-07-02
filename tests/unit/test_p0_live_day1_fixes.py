@@ -360,6 +360,10 @@ class _MockFundManager:
     def get_total_unrealized_mtm(self) -> float:
         return 0.0
 
+    def get_unrealized_mtm_status(self):
+        """B-1: (total, is_fresh) — read by the daily-loss gate."""
+        return 0.0, True
+
     def count_live_reservations(self) -> int:
         """FIX-185: authoritative in-flight count (none in this mock)."""
         return 0

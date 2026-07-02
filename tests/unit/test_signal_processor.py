@@ -234,6 +234,10 @@ class _MockFundManager:
         """FIX-035: Return total unrealized MTM."""
         return 0.0
 
+    def get_unrealized_mtm_status(self):
+        """B-1: (total, is_fresh) — read by the daily-loss gate."""
+        return 0.0, True
+
     def count_live_reservations(self):
         """FIX-185: authoritative in-flight count (no live reservations in mock)."""
         return 0

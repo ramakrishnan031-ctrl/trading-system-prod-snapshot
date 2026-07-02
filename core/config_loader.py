@@ -474,6 +474,12 @@ class RiskConfig(BaseModel):
     max_sector_exposure_pct: float   # RE13: max fraction of capital in one sector (> 0, <= 1)
     max_consecutive_losses: int      # RE13: halt after N consecutive losses (>= 1)
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)
+    # B-1 (02-Jul): ENFORCE flag for the daily-loss gate's unrealized-MTM term.
+    # false = SHADOW (the reconciler populates MTM + the gate LOGS would_reject_with_
+    # unrealized but ENFORCES realized-only → zero behaviour change). true = enforce
+    # realized+unrealized. Default false so the fix ships dark and is validated before
+    # it changes a capital gate. Reversible by flipping this flag.
+    daily_loss_include_unrealized: bool = False
     price_drift_threshold: float = 0.005  # FIX-075: 0.5% default drift threshold for margin top-up
 
     # BUILD 1 (#3, 24-Jun-2026): the FIX-190 live_test_* override fields were
