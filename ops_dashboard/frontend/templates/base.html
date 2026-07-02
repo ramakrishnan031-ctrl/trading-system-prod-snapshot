@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Ops Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body x-data="opsDashboard()" x-init="init()">
+
+  <!-- Halt banner (RED) — overlays everything when SOFT/HARD kill is active -->
+  <div class="halt-banner" x-show="summary.kill_switch && summary.kill_switch.halted" x-cloak>
+    <span class="halt-tag" x-text="summary.kill_switch ? summary.kill_switch.state : ''"></span>
+    <span x-text="summary.kill_switch ? (summary.kill_switch.reason || 'kill switch active') : ''"></span>
+    <span class="halt-since" x-text="summary.kill_switch && summary.kill_switch.triggered_at ? ('since ' + summary.kill_switch.triggered_at) : ''"></span>
+  </div>
+
+  <!-- Pinned summary bar -->
+  <header class="summary-bar">
+    <div class="sb-item">
+      <span class="sb-label">Trader</span>
+      <span class="sb-pill" :class="summary.trader_alive ? 'pill-ok' : 'pill-down'"
+            x-text="summary.trader_alive ? 'UP' : 'DOWN'"></span>
+    </div>
+    <div class="sb-item">
+      <span class="sb-label">Mode</span>
+      <span class="sb-pill pill-mode" x-text="summary.mode || '—'"></span>
+    </div>
+    <div class="sb-item">
+      <span class="sb-label">Kill</span>
+      <span class="sb-pill" :class="summary.kill_switch && summary.kill_switch.halted ? 'pill-down' : 'pill-ok'"
+            x-text="summary.kill_switch ? summary.kill_switch.state : '—'"></span>
+    </div>
+    <div class="sb-item">
+      <span class="sb-label">Phase</span>
+      <span class="sb-pill pill-phase" x-text="summary.phase || '—'"></span>
+    </div>
+    <div class="sb-item"><span class="sb-label">Received</span><span class="sb-num" x-text="c('received')"></span></div>
+    <div class="sb-item"><span class="sb-label">Trades</span><span class="sb-num" x-text="c('trades_today')"></span></div>
+    <div class="sb-item"><span class="sb-label">Open</span><span class="sb-num" x-text="c('open_positions')"></span></div>
+    <div class="sb-item">
+      <span class="sb-label">Net P&L</span>
+      <span class="sb-num" :class="netClass()" x-text="money(c('net_pnl_today'))"></span>
+    </div>
+    <div class="sb-item sb-clock">
+      <span class="sb-label">IST</span>
+      <span class="sb-num" x-text="summary.ist_now || '—'"></span>
+      <span class="sb-poll" x-text="'poll ' + Math.round(pollMs/1000) + 's'"></span>
+    </div>
+    <div class="sb-item sb-right">
+      <form method="post" action="/logout"><button class="btn-logout" type="submit">Log out</button></form>
+    </div>
+  </header>
+
+  <nav class="topnav">
+    <a class="nav-link active" href="/">Dashboard</a>
+    <span class="nav-note">M2–M20 arrive in G2b</span>
+    <span class="nav-status" x-show="lastError" x-cloak x-text="lastError"></span>
+  </nav>
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <script src="/static/htmx.min.js"></script>
+  <script>
+  // JSON-first APIs rendered reactively via Alpine; the poll interval is driven
+  // by /api/dashboard.freshness.poll_ms (5s active / 60s off) — the "htmx
+  // polling wiring" requirement, implemented over JSON so the API contract
+  // (tests/test_api_contract.py) stays a clean JSON schema.
+  function opsDashboard() {
+    return {
+      summary: {}, freshness: {}, service_health: [], events: [],
+      pipeline: { stages: [], halt: {} }, capacity: { rows: [] },
+      strategy: { rows: [] },
+      pollMs: 60000, lastError: "", _timer: null,
+
+      async init() { await this.refresh(); this.schedule(); },
+      schedule() {
+        if (this._timer) clearTimeout(this._timer);
+        this._timer = setTimeout(async () => { await this.refresh(); this.schedule(); }, this.pollMs);
+      },
+      async getJson(url) {
+        const r = await fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+        if (r.status === 401) { window.location = "/login"; throw new Error("auth"); }
+        if (!r.ok) throw new Error(url + " -> " + r.status);
+        return await r.json();
+      },
+      async refresh() {
+        try {
+          const [d, p, cap, s] = await Promise.all([
+            this.getJson("/api/dashboard"),
+            this.getJson("/api/pipeline"),
+            this.getJson("/api/capacity"),
+            this.getJson("/api/strategy_panel"),
+          ]);
+          this.summary = d.summary || {};
+          this.freshness = d.freshness || {};
+          this.service_health = d.service_health || [];
+          this.events = d.events || [];
+          this.pipeline = p || { stages: [], halt: {} };
+          this.capacity = cap || { rows: [] };
+          this.strategy = s || { rows: [] };
+          this.pollMs = (d.freshness && d.freshness.poll_ms) ? d.freshness.poll_ms : 60000;
+          this.lastError = "";
+        } catch (e) {
+          if (String(e.message) !== "auth") this.lastError = "refresh failed: " + e.message;
+        }
+      },
+      c(k) { return (this.summary.counters && this.summary.counters[k] != null) ? this.summary.counters[k] : 0; },
+      money(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toFixed(2); },
+      netClass() { const n = Number(this.c('net_pnl_today')); return n > 0 ? "num-pos" : (n < 0 ? "num-neg" : ""); },
+      ago(sec) {
+        if (sec === null || sec === undefined) return "";
+        sec = Math.round(sec);
+        if (sec < 60) return sec + "s ago";
+        if (sec < 3600) return Math.round(sec / 60) + "m ago";
+        return Math.round(sec / 3600) + "h ago";
+      },
+      fmtCap(v, unit) {
+        if (v === null || v === undefined) return "—";
+        if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2);
+        return String(v);
+      },
+    };
+  }
+  </script>
+  <script defer src="/static/alpine.min.js"></script>
+</body>
+</html>

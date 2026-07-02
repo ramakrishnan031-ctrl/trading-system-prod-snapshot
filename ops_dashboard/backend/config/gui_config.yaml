@@ -1,0 +1,60 @@
+# ops_dashboard/backend/config/gui_config.yaml
+# ISOLATED GUI configuration. Isolation rule I1: production constants are
+# DUPLICATED here BY VALUE — the GUI never imports a production package.
+# All DB access is READ-ONLY (I2). GUI binds loopback only (I6).
+
+# --- Absolute paths to the production data (opened READ-ONLY, mode=ro) ---
+# PC dev values. G2c deployment overrides these with the VM paths.
+paths:
+  main_db:      "D:/Projects/trading-system/data_store/trading_system.db"
+  analytics_db: "D:/Projects/trading-system/data_store/analytics.db"
+  logs_dir:     "D:/Projects/trading-system/logs"
+  reports_dir:  "D:/Projects/trading-system/reports/output"
+  config_dir:   "D:/Projects/trading-system/config"
+
+# --- Server ---
+server:
+  bind_host: "127.0.0.1"   # I6: loopback only, NEVER 0.0.0.0
+  bind_port: 8500
+  threads: 4
+
+# --- Trader health probe (production healthcheck server, read-only HTTP GET) ---
+trader_metrics:
+  health_url:  "http://127.0.0.1:8080/health"
+  metrics_url: "http://127.0.0.1:8080/metrics"
+  timeout_sec: 2
+
+# --- Poll cadence (htmx) ---
+poll:
+  market_ms: 5000    # 5s during market hours / active window
+  off_ms:    60000   # 60s off-hours (freshness endpoint drives the switch)
+
+# --- Production systemd units (host_reader queries `systemctl is-active`) ---
+units:
+  - "trading-system.service"
+  - "token-watcher.service"
+  - "alert-watcher.service"
+  - "trading-watchman.service"
+  - "security-watcher.service"
+  - "cron-watchdog.timer"
+
+# --- Market clock (DUPLICATED from config/system_config.yaml trading_hours) ---
+# freshness.py uses these to decide whether silence is normal right now.
+market_clock:
+  market_open:       "09:15"
+  entry_start:       "10:00"
+  entry_end:         "15:00"
+  eod_squareoff:     "15:17"
+  market_close:      "15:30"
+  active_weekdays:   [0, 1, 2, 3, 4]   # Mon-Fri (Python weekday(): Mon=0)
+
+# --- Auth (single user). Populated by `python -m backend.auth --setup`. ---
+# NEVER store plaintext. password_hash = pbkdf2_hmac(sha256) salted;
+# totp_secret = base32 for pyotp. Empty until setup is run.
+auth:
+  username: ""
+  password_hash: ""     # format: "pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>"
+  totp_secret: ""       # base32; empty disables TOTP (dev only)
+  max_failures: 5
+  lockout_minutes: 15
+  session_lifetime_minutes: 60

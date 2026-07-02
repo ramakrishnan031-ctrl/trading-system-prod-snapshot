@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ops Dashboard — Login</title>
+  <!-- Self-contained: static assets require auth, so the login page inlines its CSS. -->
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+           font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           background: #0d1117; color: #e6edf3; }
+    .card { width: 340px; background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+            padding: 28px 26px; box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+    h1 { font-size: 1.15rem; margin: 0 0 4px; }
+    .sub { color: #8b949e; font-size: .82rem; margin: 0 0 20px; }
+    label { display: block; font-size: .78rem; color: #8b949e; margin: 12px 0 4px; }
+    input { width: 100%; padding: 9px 11px; background: #0d1117; border: 1px solid #30363d;
+            border-radius: 6px; color: #e6edf3; font-size: .95rem; }
+    input:focus { outline: none; border-color: #388bfd; }
+    button { width: 100%; margin-top: 20px; padding: 10px; background: #238636; border: 0;
+             border-radius: 6px; color: #fff; font-weight: 600; font-size: .95rem; cursor: pointer; }
+    button:hover { background: #2ea043; }
+    .err { margin-top: 14px; padding: 9px 11px; background: #3d1418; border: 1px solid #6e2530;
+           border-radius: 6px; color: #ffb4bb; font-size: .82rem; }
+    .foot { margin-top: 16px; color: #6e7681; font-size: .72rem; text-align: center; }
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="/login" autocomplete="off">
+    <h1>Ops Dashboard</h1>
+    <p class="sub">Trading system control tower — read-only</p>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autofocus required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required>
+    <label for="totp">Authenticator code</label>
+    <input id="totp" name="totp" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="6-digit TOTP">
+    <button type="submit">Sign in</button>
+    <div class="foot">127.0.0.1:8500 · single user</div>
+  </form>
+</body>
+</html>
