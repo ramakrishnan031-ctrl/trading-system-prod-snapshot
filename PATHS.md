@@ -386,3 +386,15 @@ Phase B (parallel-run, 6 dates ×2 model runs) + Phase-B.1 fixes = double-confir
 | **cron-watchdog** (ARMED) | `/etc/systemd/system/cron-watchdog.{service,timer}` — systemd (NOT cron); **19:30 IST daily**; asserts `cron_officer_eod`+`check_cron_drift` heartbeated → CRITICAL sentinel (cron-independent) if not. 1st run 24-Jun |
 
 Detail: `docs/SYSTEM_MAP.md` (Deploy + Cron Jobs + Systemd) · memory `cron_framework_armed_23jun`.
+
+## Off-market deploy plan — A-2 · C-1 · B-1 · P1 batch (02-Jul, for 03-Jul+)
+| What | Path / fact |
+|---|---|
+| Runbook | `docs/ops/offmarket_deploy_plan_03jul2026.md` — push/verify/shadow/cutover for the four-fix batch |
+| Baseline | `main == origin/main == 9becf8c`, **schema v41** |
+| Push order | GATE = 03-Jul 08:15 boot of `9becf8c` clean → then after-17:05/weekend (never 15:30–17:05): merge **C-1** `fix-c1-completion-02jul` (carries A-2 `fd09a38`) → **B-1** `fix-b1-daily-loss-mtm-02jul` `f5fd4d9` → **P1** `fix-p1-eod-broker-reconcile-02jul` `4817032` → `git push origin main` |
+| Schema | v41 → **v42** (P1 only; pure-add `eod_broker_reconciliation`; back up both DB files first) |
+| Shadow flags (default OFF) | `risk.daily_loss_include_unrealized: false` (B-1) · `eod_reconcile.authoritative: false` (P1) |
+| Activation | A-2 + B-1 at Mon 06-Jul 08:15 boot · P1 first shadow EOD Mon 06-Jul 15:58 · crontab `@15:58` on push |
+| Cutover (earliest) | B-1 enforce ≈ Mon 13-Jul · P1 authoritative + retire `eod_verify`/`reconcile_pnl` ≈ Mon 20-Jul (≥2 clean shadow weeks + ledger-dimension deepening + demonstrated UNVERIFIED) |
+| Deferred (not in batch) | C-1 history-purge · optional api_key rotate · C-2 network Phase-3 · P1 ledger-deepening · T2 full-repair · W10 double-cost |

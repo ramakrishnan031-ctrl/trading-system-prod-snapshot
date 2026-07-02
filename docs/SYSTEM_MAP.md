@@ -1179,3 +1179,14 @@ reconciler edge (carried CNC mis-closed if both gtt_state row + broker GTT vanis
   _burst / _per_symbol / entries_admitted). Single chokepoint at both `place()` sites; DROP on
   throttle (no queuing). 13 unit tests incl. 19-Jun 5-in-5s burst replay (→1 admitted) + thread-safety
   (50 concurrent → exactly burst_max). Activates next restart.
+- 2026-07-02 — Claude Code — **Off-market deploy plan for the A-2/C-1/B-1/P1 batch** (planning doc,
+  `docs/ops/offmarket_deploy_plan_03jul2026.md`). Push AFTER the 03-Jul 08:15 boot of `9becf8c` proves
+  clean, in an after-17:05/weekend window (never 15:30–17:05). One push: merge **C-1** (carries A-2 `fd09a38`)
+  → **B-1** `f5fd4d9` → **P1** `4817032` into `main`, then `git push origin main` (post-receive installs the
+  `@15:58` crontab). Schema **v41→v42** (P1 only, pure-add `eod_broker_reconciliation`; back up DB first).
+  A-2+B-1 activate Mon 06-Jul 08:15 boot; P1 first shadow EOD Mon 06-Jul 15:58. Both shadow flags default OFF
+  (`daily_loss_include_unrealized=false`, `eod_reconcile.authoritative=false`). Merges verified clean
+  (B-1/P1 disjoint hunks in `system_config.yaml`+`config_loader.py`). Earliest B-1 enforce ≈ Mon 13-Jul;
+  earliest P1 authoritative + eod_verify/reconcile_pnl retirement ≈ Mon 20-Jul (after ≥2 clean shadow weeks +
+  ledger-dimension deepening + a demonstrated UNVERIFIED). No HIGH/CRIT open outside the batch except deferred
+  C-2 network Phase-3. NO push in this pass.
