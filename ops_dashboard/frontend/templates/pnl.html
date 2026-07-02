@@ -27,6 +27,33 @@
       </div>
     </div>
 
+    <!-- B8/A9: closed trades today -->
+    <h2 class="panel-title" style="margin-top:14px">Closed trades — today</h2>
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Qty</th><th>Entry</th>
+        <th>Exit</th><th>Exit time</th><th>Reason</th><th>Charges</th><th>Net</th></tr></thead>
+      <tbody>
+        <template x-for="t in data.closed_trades || []" :key="t.trade_id">
+          <tr>
+            <td x-text="t.symbol"></td>
+            <td x-text="t.strategy"></td>
+            <td x-text="t.direction"></td>
+            <td class="cap-num num" x-text="t.qty_filled"></td>
+            <td class="cap-num num" x-text="dash(t.entry_actual_price)"></td>
+            <td class="cap-num num" x-text="dash(t.exit_price)"></td>
+            <td class="ev-ts" x-text="t.exit_time ? t.exit_time.slice(11,19) : '—'"></td>
+            <td x-text="dash(t.exit_reason)"></td>
+            <td class="cap-num num" x-text="money(t.charges)"></td>
+            <td class="cap-num num" :class="t.net_pnl > 0 ? 'num-pos' : (t.net_pnl < 0 ? 'num-neg' : '')" x-text="money(t.net_pnl)"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.closed_trades || data.closed_trades.length === 0" x-cloak>
+          <td colspan="10" class="ev-empty">No closed trades today.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
     <div class="two-col" style="margin-top:14px">
       <div>
         <h2 class="panel-title">Per strategy</h2>

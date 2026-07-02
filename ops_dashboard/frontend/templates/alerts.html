@@ -18,7 +18,7 @@
         <template x-for="(a, i) in data.alerts || []" :key="i">
           <tr>
             <td class="ev-ts" x-text="a.sent_at"></td>
-            <td><span class="fam-pill" :class="a.severity === 'CRITICAL' || a.severity === 'ERROR' ? 'famp-rejected' : (a.severity === 'WARN' ? 'famp-duplicated' : 'famp-accepted')" x-text="a.severity"></span></td>
+            <td><span class="fam-pill" :class="a.severity === 'CRITICAL' || a.severity === 'ERROR' ? 'sev-chip sev-CRITICAL' : (a.severity === 'WARN' ? 'sev-chip sev-WARNING' : 'sev-chip sev-INFO')" x-text="a.severity"></span></td>
             <td class="wrapcell" x-text="a.title"></td>
             <td x-text="a.status"></td>
             <td class="cap-num" x-text="a.attempts"></td>

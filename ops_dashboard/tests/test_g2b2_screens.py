@@ -284,3 +284,51 @@ def test_all_new_apis_require_auth(app):
                "/api/slippage", "/api/execution", "/api/statistics", "/api/reports",
                "/api/config"):
         assert anon.get(ep).status_code == 401, ep
+
+
+# ── G2b-3 (V3): kill chip blink is bound ONLY to HARD_KILL ──
+def test_hard_kill_state_reflected_and_blink_binding(gui_config, app, today):
+    import sqlite3 as _sq
+    # template source: the ONLY chip-blink binding is the HARD_KILL ternary
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "frontend", "templates", "base.html")
+    src = open(base, encoding="utf-8").read()
+    assert src.count("chip-blink") == 1
+    assert "state === 'HARD_KILL' ? 'chip-blink'" in src
+    # halt banner: blink animation only on the HARD_KILL class (CSS)
+    css = open(os.path.join(os.path.dirname(base), "..", "static", "style.css"),
+               encoding="utf-8").read()
+    assert ".halt-banner.halt-HARD_KILL" in css and "animation: pulse" in css
+    assert ".halt-banner { animation: none; }" in css
+
+    # seeded HARD_KILL (test-side write to the TEST's own fixture DB; the GUI
+    # itself stays read-only) → /api/dashboard reflects it
+    conn = _sq.connect(gui_config["paths"]["main_db"])
+    conn.execute("UPDATE kill_switch_state SET state='HARD_KILL', "
+                 "reason='capital drift 2600', triggered_at=? WHERE id=1",
+                 (f"{today}T11:11:00+05:30",))
+    conn.commit()
+    conn.close()
+    c = app.test_client()
+    with c.session_transaction() as sess:
+        sess["user"] = "tester"
+    ks = c.get("/api/dashboard").get_json()["summary"]["kill_switch"]
+    assert ks["state"] == "HARD_KILL" and ks["halted"] is True
+    assert ks["reason"] == "capital drift 2600"
+
+
+# ── G2b-3 (B8): /api/pnl gains closed_trades (ADDITIVE — old fields untouched) ──
+def test_pnl_closed_trades_additive(client):
+    d = client.get("/api/pnl").get_json()
+    # pre-existing contract intact
+    assert {"summary", "equity_curve", "curve_note", "mode_note"} <= set(d)
+    ct = d["closed_trades"]
+    assert len(ct) == 4
+    assert ct[0]["exit_time"] > ct[-1]["exit_time"]      # newest first
+    row = {t["trade_id"]: t for t in ct}["trd_c4"]
+    assert row["symbol"] == "AAA" and row["strategy"] == "gap_fade_long"
+    assert row["qty_filled"] == 10
+    assert row["entry_actual_price"] == 1001.0
+    assert row["exit_price"] == 1021.0                   # 1001 + 200/10
+    assert row["exit_reason"] == "TGT_HIT"
+    assert row["charges"] == 5.0 and row["net_pnl"] == 200.0

@@ -59,7 +59,7 @@
       <tbody>
         <template x-for="(r, i) in data.reconciliation_actions || []" :key="i">
           <tr><td class="ev-ts" x-text="r.ts"></td>
-            <td><span class="fam-pill" :class="r.severity === 'CRITICAL' ? 'famp-rejected' : (r.severity === 'WARN' ? 'famp-duplicated' : 'famp-accepted')" x-text="r.severity"></span></td>
+            <td><span class="fam-pill" :class="r.severity === 'CRITICAL' ? 'sev-chip sev-CRITICAL' : (r.severity === 'WARN' ? 'sev-chip sev-WARNING' : 'sev-chip sev-INFO')" x-text="r.severity"></span></td>
             <td class="wrapcell" style="max-width:none" x-text="r.summary"></td></tr>
         </template>
         <tr x-show="!data.reconciliation_actions || data.reconciliation_actions.length === 0" x-cloak>

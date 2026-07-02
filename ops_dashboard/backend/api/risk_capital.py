@@ -119,4 +119,6 @@ def get_pnl():
         "summary": summary,
         "equity_curve": db_reader.equity_curve_points(cfg, today),   # fm_ledger seq
         "curve_note": "cumulative fm_ledger RELEASE_USED.pnl_delta (realized only)",
+        # B8/A9 (additive — G2a byte-compat precedent): closed trades detail.
+        "closed_trades": db_reader.closed_trades_today(cfg, today),
     })

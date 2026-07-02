@@ -71,9 +71,9 @@ function logsPage() {
       this.meta = d;
     },
     lvlClass(lvl) {
-      if (lvl === "ERROR" || lvl === "CRITICAL") return "famp-rejected";
-      if (lvl === "WARNING") return "famp-duplicated";
-      if (lvl === "INFO") return "famp-accepted";
+      if (lvl === "ERROR" || lvl === "CRITICAL") return "sev-chip sev-CRITICAL";
+      if (lvl === "WARNING") return "sev-chip sev-WARNING";
+      if (lvl === "INFO") return "sev-chip sev-INFO";
       return "famp-expired";
     },
   };

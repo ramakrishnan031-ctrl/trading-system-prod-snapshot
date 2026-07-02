@@ -71,3 +71,33 @@ def test_c_venv_has_no_kiteconnect():
         "kiteconnect IS installed in the GUI venv — isolation I4 violated. "
         "Run tests inside ops_dashboard/.venv (no broker packages)."
     )
+
+
+def test_d_no_cdn_or_network_refs_in_frontend():
+    """V4 (G2b-3): no http(s):// in our templates/CSS except loopback.
+
+    The GUI must be fully self-contained — no CDN loads. The two VENDORED
+    minified libs (htmx.min.js / alpine.min.js) are exempt: they contain
+    documentation-URL string literals in error messages, which fetch nothing;
+    they are local files served from /static, not CDN references.
+    """
+    frontend = os.path.join(os.path.dirname(_BACKEND_DIR), "frontend")
+    offenders = []
+    for dirpath, _dirs, files in os.walk(frontend):
+        for fname in files:
+            if fname.endswith(".min.js"):
+                continue   # vendored libs (see docstring)
+            path = os.path.join(dirpath, fname)
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    for lineno, line in enumerate(fh, 1):
+                        for hit in ("http://", "https://"):
+                            idx = line.find(hit)
+                            while idx != -1:
+                                rest = line[idx + len(hit):]
+                                if not (rest.startswith("127.0.0.1") or rest.startswith("localhost")):
+                                    offenders.append(f"{path}:{lineno}: {line.strip()[:100]}")
+                                idx = line.find(hit, idx + 1)
+            except OSError:
+                continue
+    assert not offenders, "External URL(s) in frontend (CDN forbidden):\n" + "\n".join(offenders)

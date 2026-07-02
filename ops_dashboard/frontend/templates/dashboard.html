@@ -4,6 +4,36 @@
 {% block content %}
 <div x-data="dashPage()" x-init="load()" @ops-refresh.window="load()">
 
+  <!-- ── B1/A1: hero KPI row ── -->
+  <section class="hero-grid">
+    <div class="hero-card" :class="pnlNet() < 0 ? 'hero-neg' : 'hero-pos'">
+      <span class="bn-label">P&amp;L Today</span>
+      <span class="hero-val num" x-text="money(pnlNet())"></span>
+      <svg class="spark" viewBox="0 0 120 36" preserveAspectRatio="none" aria-hidden="true">
+        <polyline :points="sparkPoints()" fill="none" class="spark-line"/>
+      </svg>
+      <span class="bn-note">realized (fm_ledger)</span>
+    </div>
+    <div class="hero-card">
+      <span class="bn-label">Capital Used</span>
+      <span class="hero-val num" x-text="capRow('intraday_capital') && capRow('intraday_capital').pct !== null ? capRow('intraday_capital').pct + '%' : '—'"></span>
+      <span class="hero-bar"><span class="hero-fill" :style="'width:' + Math.min(100, (capRow('intraday_capital') || {}).pct || 0) + '%'"></span></span>
+      <span class="bn-note" x-text="capRow('intraday_capital') ? (fmtCap(capRow('intraday_capital').used, 'rs') + ' of ' + fmtCap(capRow('intraday_capital').limit, 'rs')) : ''"></span>
+    </div>
+    <div class="hero-card">
+      <span class="bn-label">Active Positions</span>
+      <span class="hero-val num" x-text="capRow('max_open_positions') ? (capRow('max_open_positions').used + ' / ' + capRow('max_open_positions').limit) : '—'"></span>
+      <span class="hero-bar"><span class="hero-fill" :style="'width:' + Math.min(100, (capRow('max_open_positions') || {}).pct || 0) + '%'"></span></span>
+      <span class="bn-note" x-text="capRow('max_open_positions') && capRow('max_open_positions').remaining !== null ? (capRow('max_open_positions').remaining + ' slots left') : ''"></span>
+    </div>
+    <div class="hero-card" :class="lossStatusClass()">
+      <span class="bn-label">Daily Loss Used</span>
+      <span class="hero-val num" x-text="capRow('daily_loss_limit') && capRow('daily_loss_limit').pct !== null ? capRow('daily_loss_limit').pct + '%' : '—'"></span>
+      <span class="hero-bar"><span class="hero-fill" :style="'width:' + Math.min(100, (capRow('daily_loss_limit') || {}).pct || 0) + '%'"></span></span>
+      <span class="bn-note" x-text="capRow('daily_loss_limit') ? (fmtCap(capRow('daily_loss_limit').used, 'rs') + ' of ' + fmtCap(capRow('daily_loss_limit').limit, 'rs')) : ''"></span>
+    </div>
+  </section>
+
   <!-- ── PIPELINE: big colored funnel cards ── -->
   <section class="panel">
     <h2 class="panel-title">Signal → Trade Pipeline
@@ -123,17 +153,39 @@
 function dashPage() {
   return Object.assign(pageBase("/api/pipeline"), {
     pipeline: { stages: [], halt: {} }, capacity: { rows: [] }, strategies: { rows: [] },
+    pnl: {},
     async load() {
       try {
-        const [p, cap, s] = await Promise.all([
+        const [p, cap, s, pnl] = await Promise.all([
           fetch("/api/pipeline", {credentials:"same-origin"}).then(r => r.json()),
           fetch("/api/capacity", {credentials:"same-origin"}).then(r => r.json()),
           fetch("/api/strategies", {credentials:"same-origin"}).then(r => r.json()),
+          fetch("/api/pnl", {credentials:"same-origin"}).then(r => r.json()),
         ]);
         this.pipeline = p || { stages: [], halt: {} };
         this.capacity = cap || { rows: [] };
         this.strategies = s || { rows: [] };
+        this.pnl = pnl || {};
       } catch (e) { /* bar shows the error state */ }
+    },
+    capRow(key) { return (this.capacity.rows || []).find(r => r.key === key) || null; },
+    pnlNet() { return this.pnl.summary ? this.pnl.summary.net : 0; },
+    lossStatusClass() {
+      const r = this.capRow('daily_loss_limit');
+      if (!r || r.pct === null) return "";
+      if (r.pct >= 100) return "hero-neg";
+      if (r.pct >= 80) return "hero-warn";
+      return "";
+    },
+    sparkPoints() {
+      const pts = (this.pnl.equity_curve || []).map(p => p.cum_pnl);
+      if (pts.length < 2) return "";
+      let min = Math.min(0, ...pts), max = Math.max(0, ...pts);
+      if (min === max) { min -= 1; max += 1; }
+      const step = 120 / (pts.length - 1);
+      return pts.map((v, i) =>
+        (i * step).toFixed(1) + "," + (34 - 32 * (v - min) / (max - min) + 1).toFixed(1)
+      ).join(" ");
     },
     stripRows() {
       const rows = this.strategies.rows || [];

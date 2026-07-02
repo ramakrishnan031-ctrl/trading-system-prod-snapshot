@@ -1143,3 +1143,19 @@ def system_metrics_disk_history(cfg: dict, limit: int = 60) -> list:
         except sqlite3.OperationalError:
             return []
     return [dict(r) for r in reversed(rows)]
+
+
+def closed_trades_today(cfg: dict, today: str, limit: int = 200) -> list:
+    """Closed trades today for the P&L screen (B8/A9) — display columns only."""
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT trade_id, symbol, strategy, direction, qty_filled, "
+            "entry_actual_price, exit_price, exit_time, exit_reason, "
+            "COALESCE(charges, COALESCE(gross_pnl,0)-COALESCE(net_pnl,0)) AS charges, "
+            "net_pnl FROM trades "
+            "WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ? "
+            "ORDER BY exit_time DESC LIMIT ?",
+            (*states, today + "%", int(limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]

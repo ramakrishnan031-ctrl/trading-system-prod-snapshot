@@ -61,7 +61,7 @@ DDL = [
         strategy TEXT, sector TEXT, qty_planned INTEGER, qty_filled INTEGER,
         entry_target_price REAL, entry_actual_price REAL, sl_initial REAL, tgt_initial REAL,
         margin_reserved REAL, risk_amount REAL, created_at TEXT, entry_time TEXT, exit_time TEXT,
-        exit_reason TEXT, gross_pnl REAL, net_pnl REAL, status TEXT,
+        exit_reason TEXT, exit_price REAL, charges REAL, gross_pnl REAL, net_pnl REAL, status TEXT,
         actual_position_value_rs REAL, signal_to_order_ms INTEGER, order_to_fill_ms INTEGER,
         total_latency_ms INTEGER)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
@@ -289,12 +289,13 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
             "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,"
             "margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
-            "gross_pnl,net_pnl,status,actual_position_value_rs,signal_to_order_ms,"
-            "order_to_fill_ms,total_latency_ms) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "exit_price,charges,gross_pnl,net_pnl,status,actual_position_value_rs,"
+            "signal_to_order_ms,order_to_fill_ms,total_latency_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 1000.0, 1001.0,
              990.0, 1015.0, 5000.0, 100.0, _ts("10:05:00"), _ts("10:06:00"), _ts(et),
-             reason, pnl + 5, pnl, "CLOSED", 10000.0, 120, 850, 970),
+             reason, 1001.0 + pnl / 10.0, 5.0, pnl + 5, pnl, "CLOSED", 10000.0,
+             120, 850, 970),
         )
     opens = [("trd_o1", "gap_fade_long"), ("trd_o2", "gap_fade_long"),
              ("trd_o3", "vwap_bounce_long"), ("trd_o4", "range_breakout_long")]

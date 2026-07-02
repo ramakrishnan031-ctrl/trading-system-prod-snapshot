@@ -32,7 +32,7 @@
                 <td class="cap-num" x-text="row.type === 'quota' ? fmtCap(row.used, row.unit) : '—'"></td>
                 <td class="cap-num" x-text="row.type === 'quota' && row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
                 <td>
-                  <template x-if="row.type === 'quota' && row.pct !== null">
+                  <template x-if="row.type === 'quota'">
                     <span class="cap-bar"><span class="cap-fill" :style="'width:' + Math.min(100, row.pct || 0) + '%'"></span></span>
                   </template>
                   <span class="cap-status" x-text="row.status"></span>

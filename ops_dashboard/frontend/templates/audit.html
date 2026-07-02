@@ -52,9 +52,9 @@ function auditPage() {
       return "?" + p.toString();
     },
     sevClass(s) {
-      if (s === "CRITICAL" || s === "HIGH") return "famp-rejected";
-      if (s === "WARN" || s === "MEDIUM") return "famp-duplicated";
-      return "famp-accepted";
+      if (s === "CRITICAL" || s === "HIGH") return "sev-chip sev-CRITICAL";
+      if (s === "WARN" || s === "MEDIUM") return "sev-chip sev-WARNING";
+      return "sev-chip sev-INFO";
     },
   });
 }
