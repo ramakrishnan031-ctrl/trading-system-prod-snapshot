@@ -550,7 +550,7 @@ class ZerodhaAdapter:
         if self._paper:
             result = self._paper_place_order(
                 internal_id, symbol, side, qty, price, order_type, broker_code,
-                trigger_price=trigger_price, variety=variety,
+                trigger_price=trigger_price, variety=variety, tag=tag,
             )
             ms = int((time.monotonic() - t0) * 1000)
             self._log.info(
@@ -1729,6 +1729,67 @@ class ZerodhaAdapter:
             if o.get("status", "").upper() in open_statuses
         ]
 
+    def get_all_orders(self) -> list[dict]:
+        """A-1/E-1: ALL of today's broker orders (ANY status) WITH the broker ``tag``.
+
+        The tag-correlation recovery (order_reconciler) matches a timed-out/crashed
+        ENTRY back to its local trade by ``truncate_tag_for_broker(trade_id)``. That
+        needs (a) every state, not just OPEN — a filled entry is COMPLETE, not in
+        get_open_orders(); and (b) the ``tag``, which get_open_orders() drops.
+
+        Live: ``kite.orders()`` unfiltered (the day's orderbook persists across our
+        restarts, same session). Paper: every ``_paper_fills`` entry (the paper
+        oracle) with its retained tag. Returns dicts: ``order_id``, ``tag``,
+        ``status``, ``transaction_type``, ``symbol``, ``quantity``,
+        ``filled_quantity``, ``average_price``, ``trigger_price``.
+        """
+        if self._paper:
+            with self._paper_fills_lock:
+                return [
+                    {
+                        "order_id": bid,
+                        "tag": info.get("tag", "") or "",
+                        "status": info.get("status", ""),
+                        "transaction_type": info.get("side", ""),
+                        "symbol": info.get("symbol", ""),
+                        "quantity": info.get("qty", 0),
+                        "filled_quantity": info.get("filled_qty", 0),
+                        "average_price": info.get("avg_price", 0.0),
+                        "trigger_price": info.get("trigger_price", 0.0),
+                    }
+                    for bid, info in self._paper_fills.items()
+                ]
+        try:
+            self._rl.acquire(_CATEGORY_MAP["get_margins"])  # reuse quota bucket
+            all_orders = self._kite.orders()
+        except Exception as exc:
+            raise self._translate_broker_exception(exc, {}, "get_margins") from exc
+        self._reset_429_attempts(_CATEGORY_MAP["get_margins"])
+
+        def _tag_of(o: dict) -> str:
+            # Kite returns the sent tag as ``tag`` (and, newer API, ``tags`` list).
+            t = o.get("tag") or ""
+            if not t:
+                tags = o.get("tags")
+                if isinstance(tags, list) and tags:
+                    t = str(tags[0])
+            return t or ""
+
+        return [
+            {
+                "order_id": o.get("order_id", ""),
+                "tag": _tag_of(o),
+                "status": o.get("status", ""),
+                "transaction_type": o.get("transaction_type", ""),
+                "symbol": o.get("tradingsymbol", ""),
+                "quantity": o.get("quantity", 0),
+                "filled_quantity": o.get("filled_quantity", 0),
+                "average_price": o.get("average_price", 0.0),
+                "trigger_price": o.get("trigger_price", 0.0),
+            }
+            for o in (all_orders or [])
+        ]
+
     # ── private helpers ───────────────────────────────────────────────────────
 
     # ── BL-6: 429 handling ────────────────────────────────────────────────────
@@ -1867,6 +1928,7 @@ class ZerodhaAdapter:
         broker_code: str,
         trigger_price: float = 0.0,
         variety: str = "regular",
+        tag: str = "",
     ) -> PlacedOrder:
         """
         Simulate order placement in paper mode (ZA10 + ZA16a).
@@ -1883,6 +1945,9 @@ class ZerodhaAdapter:
                 "status": "SUBMITTED", "filled_qty": 0, "avg_price": 0.0,
                 "symbol": symbol, "side": side, "qty": qty,
                 "price": price, "trigger_price": trigger_price,
+                # A-1/E-1: retain the broker tag so get_all_orders() can
+                # tag-correlate this paper order (parity with the live path).
+                "tag": truncate_tag_for_broker(tag) if tag else "",
             }
 
         # ZA16a: paper mode synthesizes the broker fill that live mode
@@ -2030,9 +2095,14 @@ class ZerodhaAdapter:
                 return
 
             with self._paper_fills_lock:
-                self._paper_fills[broker_order_id] = {
-                    "status": "COMPLETE", "filled_qty": qty, "avg_price": fill_price,
-                }
+                # A-1/E-1: MERGE (do not replace) so symbol/side/tag from the
+                # SUBMITTED record survive onto the COMPLETE record — get_all_orders()
+                # needs them to tag-correlate a filled paper order.
+                _rec = self._paper_fills.get(broker_order_id, {})
+                _rec.update(
+                    {"status": "COMPLETE", "filled_qty": qty, "avg_price": fill_price}
+                )
+                self._paper_fills[broker_order_id] = _rec
                 pos = self._paper_positions.get(symbol, {"qty": 0, "avg_price": 0.0})
                 old_qty = pos["qty"]
                 old_avg = pos["avg_price"]
