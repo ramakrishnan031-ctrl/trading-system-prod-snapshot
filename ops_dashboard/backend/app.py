@@ -41,9 +41,33 @@ _DEFAULT_CONFIG = os.path.join(_HERE, "config", "gui_config.yaml")
 _LOGIN_EXEMPT = {"auth.login_get", "auth.login_post"}
 
 
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Recursive dict merge — overlay wins on scalar/list conflicts."""
+    out = dict(base)
+    for key, val in overlay.items():
+        if isinstance(val, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], val)
+        else:
+            out[key] = val
+    return out
+
+
 def load_gui_config(config_path: str = _DEFAULT_CONFIG) -> dict:
+    """Load gui_config.yaml, then deep-merge gui_config.local.yaml if present.
+
+    The LOCAL overlay (git-ignored, chmod 600 on the VM) carries deployment
+    values + auth secrets, so the bare-repo hook's `checkout -f` on future
+    pushes can never clobber them (G2c deployment survival requirement).
+    """
     with open(config_path, "r", encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+        cfg = yaml.safe_load(fh) or {}
+    local_path = os.path.join(os.path.dirname(config_path), "gui_config.local.yaml")
+    if os.path.isfile(local_path):
+        with open(local_path, "r", encoding="utf-8") as fh:
+            overlay = yaml.safe_load(fh) or {}
+        if isinstance(overlay, dict):
+            cfg = _deep_merge(cfg, overlay)
+    return cfg
 
 
 def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = None) -> Flask:

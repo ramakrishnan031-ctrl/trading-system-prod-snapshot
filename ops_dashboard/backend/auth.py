@@ -181,8 +181,14 @@ def logout():
 # ─────────────────────────────────────────────────────────────────────────────
 def _write_auth_block(config_path: str, username: str, password_hash: str,
                       totp_secret: str) -> None:
-    with open(config_path, "r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
+    # Missing file is fine — on the VM, --setup targets the git-ignored
+    # gui_config.local.yaml overlay (created here on first run; chmod 600
+    # is the operator's step per deployment/INSTALL.md).
+    if os.path.isfile(config_path):
+        with open(config_path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+    else:
+        data = {}
     auth = data.get("auth", {}) or {}
     auth.update({
         "username": username,

@@ -66,3 +66,34 @@ def test_session_cookie_flags(gui_config):
     assert app.config["SESSION_COOKIE_SAMESITE"] == "Strict"
     # Secure is config-gated (off for loopback-HTTP dev; on under TLS in G2c)
     assert app.config["SESSION_COOKIE_SECURE"] is False
+
+
+def test_local_overlay_deep_merge(tmp_path):
+    """G2c: gui_config.local.yaml deep-merges over the base (checkout-f-safe
+    VM secrets/paths). Overlay wins; untouched base keys survive."""
+    import yaml as _yaml
+    base = {"paths": {"main_db": "pc.db", "logs_dir": "pc-logs"},
+            "server": {"bind_host": "127.0.0.1", "session_cookie_secure": False},
+            "reports_download_enabled": False}
+    overlay = {"paths": {"main_db": "/vm/trading_system.db"},
+               "server": {"session_cookie_secure": True},
+               "auth": {"username": "rama", "password_hash": "x", "totp_secret": "y"}}
+    (tmp_path / "gui_config.yaml").write_text(_yaml.safe_dump(base), encoding="utf-8")
+    (tmp_path / "gui_config.local.yaml").write_text(_yaml.safe_dump(overlay), encoding="utf-8")
+    cfg = app_module.load_gui_config(str(tmp_path / "gui_config.yaml"))
+    assert cfg["paths"]["main_db"] == "/vm/trading_system.db"   # overlay wins
+    assert cfg["paths"]["logs_dir"] == "pc-logs"                # base survives
+    assert cfg["server"]["session_cookie_secure"] is True
+    assert cfg["server"]["bind_host"] == "127.0.0.1"
+    assert cfg["auth"]["username"] == "rama"
+
+
+def test_auth_setup_creates_missing_local_file(tmp_path):
+    """--setup targets the (possibly absent) local overlay on the VM."""
+    from backend.auth import _write_auth_block
+    path = str(tmp_path / "gui_config.local.yaml")
+    _write_auth_block(path, "rama", "pbkdf2_sha256$1$aa$bb", "SECRET")
+    import yaml as _yaml
+    data = _yaml.safe_load(open(path, encoding="utf-8"))
+    assert data["auth"]["username"] == "rama"
+    assert data["auth"]["totp_secret"] == "SECRET"

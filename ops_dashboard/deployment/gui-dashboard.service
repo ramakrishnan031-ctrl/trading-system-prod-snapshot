@@ -1,0 +1,26 @@
+# ops_dashboard/deployment/gui-dashboard.service
+# Ops Dashboard (read-only GUI) — G2c STEP 4.1.
+#
+# Install (manual, NOT via the git hook — hooks never manage services):
+#   sudo cp ops_dashboard/deployment/gui-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now gui-dashboard
+#
+# Deliberately NO BindsTo/Wants on trading-system.service: the GUI must
+# survive trader restarts — the trader-down banner is a feature, not a fault.
+[Unit]
+Description=Ops Dashboard (read-only trading GUI, loopback:8500 behind Tailscale)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/systems/trading-system/ops_dashboard
+ExecStart=/home/ubuntu/systems/trading-system/ops_dashboard/venv/bin/python -m backend.app
+Restart=always
+RestartSec=10
+# Read-only posture: the app opens SQLite mode=ro and binds 127.0.0.1 only
+# (enforced in code; refuses non-loopback binds). No secrets in the unit —
+# auth lives in backend/config/gui_config.local.yaml (chmod 600, git-ignored).
+
+[Install]
+WantedBy=multi-user.target

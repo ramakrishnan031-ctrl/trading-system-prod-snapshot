@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 # Local auth secrets may be written into gui_config.yaml by `--setup`; keep the
 # committed copy free of real secrets (the committed file ships empty auth fields).
+# VM deployment overlay (paths + auth secrets; chmod 600). checkout -f safe.
+backend/config/gui_config.local.yaml
