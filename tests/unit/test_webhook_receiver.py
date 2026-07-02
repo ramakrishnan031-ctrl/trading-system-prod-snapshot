@@ -881,7 +881,13 @@ def test_concurrent_posts_queue_consistent():
 
 def test_performance_100_posts_under_5_seconds():
     """100 single-stock POSTs complete in < 5 seconds (handler latency smoke test)."""
-    receiver, sq, _ = _make_receiver(capacity=200)
+    # C-2 (02-Jul-2026): this measures raw handler throughput from ONE client IP.
+    # Disable the per-IP rate limiter here — a genuine single-IP flood of 100 is
+    # correctly capped at burst=60 (see test_c2_webhook_lockdown), which is not
+    # what this latency smoke test is exercising.
+    cfg = _make_config(capacity=200)
+    cfg.system.webhook = types.SimpleNamespace(per_ip_rate_limit_enabled=False)
+    receiver, sq, _ = _make_receiver(capacity=200, config=cfg)
 
     start = time.monotonic()
     with receiver.app.test_client() as client:

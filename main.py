@@ -192,6 +192,22 @@ def _parse_args(argv: Optional[list] = None) -> argparse.Namespace:
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+def required_startup_secrets(primary_account_id: str) -> list[str]:
+    """Env-var names that MUST be set before startup, in BOTH paper and live.
+
+    C-2 (02-Jul-2026): WEBHOOK_SECRET is required in EVERY mode -- the webhook must
+    never be unauthenticated (paper previously omitted it, a parity/security gap:
+    an unset secret made the paper webhook accept unsigned requests). Consumed by
+    run_all_startup_checks, which fails fast if any name is unset.
+    """
+    return [
+        f"ZERODHA_API_KEY_{primary_account_id}",
+        f"ZERODHA_API_SECRET_{primary_account_id}",
+        "TELEGRAM_BOT_TOKEN",
+        "WEBHOOK_SECRET",
+    ]
+
+
 def _http_fetch(url: str, timeout_sec: float = 5.0):
     """Minimal stdlib HTTP fetcher for startup checks.
 
@@ -1678,16 +1694,11 @@ def _main_locked(args, config_dir: Path) -> int:
         return 3
 
     _primary_id = account_registry.primary().account_id
-    required_secrets = [
-        f"ZERODHA_API_KEY_{_primary_id}",
-        f"ZERODHA_API_SECRET_{_primary_id}",
-        "TELEGRAM_BOT_TOKEN",
-    ]
-    # BL-15: in live mode the webhook must validate HMAC on every inbound
-    # request, which requires a shared secret. Paper stays permissive so
-    # the operator can POST test payloads with curl without fuss.
-    if not is_paper:
-        required_secrets.append("WEBHOOK_SECRET")
+    # C-2 (02-Jul-2026): WEBHOOK_SECRET is required in BOTH paper and live -- the
+    # webhook is never unauthenticated in any mode (paper-parity fix; paper was
+    # previously exempt, so an unset secret left the paper webhook open). Fail-fast
+    # at startup, exactly like live.
+    required_secrets = required_startup_secrets(_primary_id)
 
     # BL-20: pre-load InstrumentCache so run_all_startup_checks can enforce
     # a minimum row count (guards against startup on a stub/stale CSV).

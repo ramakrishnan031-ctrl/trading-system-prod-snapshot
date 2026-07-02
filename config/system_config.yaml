@@ -184,8 +184,13 @@ webhook:                      # WR14 — HTTP server settings
                               # firewall/security-group restrictions to
                               # constrain the actual reachable surface.
   bind_port: 5000             # port to listen on
-  require_hmac: false         # Chartink cannot sign payloads; use ?token= auth (WEBHOOK_SECRET env var required in live mode)
+  require_hmac: false         # Chartink cannot sign payloads; use ?token= auth (WEBHOOK_SECRET required in BOTH modes as of C-2 02-Jul)
   dedup_window_seconds: 300   # FIX-131 Item 17: 5-min fingerprint bucket (was 60s/1-min)
+  # C-2 (02-Jul-2026): per-source-IP rate limit (token bucket). Burst-tolerant for
+  # Chartink's open-bell burst (~40 signals from one IP); caps sustained flooding -> 429.
+  per_ip_rate_limit_enabled: true
+  per_ip_burst: 60
+  per_ip_refill_per_sec: 5.0
 
 signal_processor:             # SP15 — worker pool settings
   worker_count: 5             # ThreadPoolExecutor workers (1-50)

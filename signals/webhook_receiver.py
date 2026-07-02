@@ -55,6 +55,48 @@ from core.ids import new_signal_id
 from core.time_authority import ist_timezone, now_ist
 
 
+class _PerIpRateLimiter:
+    """Thread-safe per-source-IP token bucket (C-2, 02-Jul-2026).
+
+    Bounds request flooding from a single IP while tolerating Chartink's
+    legitimate open-bell burst (~40 signals from one IP): each IP gets ``burst``
+    tokens, refilled at ``refill_per_sec`` (one token per request; empty -> deny).
+    ``now`` is injectable for deterministic tests. Idle, fully-refilled buckets are
+    evicted lazily so the map can't grow unbounded under a spoofed-IP flood.
+    """
+
+    def __init__(self, burst: int, refill_per_sec: float, *, max_ips: int = 8192) -> None:
+        self._burst: float = float(max(1, int(burst)))
+        self._refill: float = max(0.0, float(refill_per_sec))
+        self._max_ips: int = max_ips
+        self._buckets: dict[str, list[float]] = {}   # ip -> [tokens, last_ts]
+        self._lock = threading.Lock()
+
+    def allow(self, ip: str, *, now: Optional[float] = None) -> bool:
+        ts = time.monotonic() if now is None else now
+        with self._lock:
+            b = self._buckets.get(ip)
+            if b is None:
+                if len(self._buckets) >= self._max_ips:
+                    self._evict_idle(ts)
+                self._buckets[ip] = [self._burst - 1.0, ts]
+                return True
+            tokens = min(self._burst, b[0] + (ts - b[1]) * self._refill)
+            if tokens < 1.0:
+                b[0], b[1] = tokens, ts
+                return False
+            b[0], b[1] = tokens - 1.0, ts
+            return True
+
+    def _evict_idle(self, now: float) -> None:
+        # Evict on IDLE TIME, not token count (the stored count is stale — it
+        # doesn't reflect refill-since-last). A bucket untouched for >60s is idle;
+        # if that IP returns it simply starts full again (harmless, it was quiet).
+        stale = [ip for ip, (_tok, last) in self._buckets.items() if (now - last) > 60.0]
+        for ip in stale:
+            self._buckets.pop(ip, None)
+
+
 class WebhookReceiver:
     """
     Thin validating HTTP gateway for Chartink scanner webhooks.
@@ -147,6 +189,15 @@ class WebhookReceiver:
         self._dedup_window_seconds: int = max(60, _dedup_sec)
         self._dedup_cache = TTLCache(maxsize=10000, ttl=self._dedup_window_seconds)
         self._dedup_lock = threading.Lock()
+
+        # C-2 (02-Jul-2026): per-source-IP rate limiter (token bucket). Disabled -> None.
+        _rl_on = bool(getattr(_webhook_cfg, "per_ip_rate_limit_enabled", True))
+        if _rl_on:
+            _burst = int(getattr(_webhook_cfg, "per_ip_burst", 60) or 60)
+            _refill = float(getattr(_webhook_cfg, "per_ip_refill_per_sec", 5.0) or 5.0)
+            self._ip_limiter: Optional[_PerIpRateLimiter] = _PerIpRateLimiter(_burst, _refill)
+        else:
+            self._ip_limiter = None
 
         self.app = Flask(__name__)
         self.app.config["TESTING"] = False
@@ -299,6 +350,20 @@ class WebhookReceiver:
                 scanner_name, source_ip, payload_size, 503, 0, 0, duration_ms,
             )
             return jsonify({"error": "Service shutting down; retry later"}), 503
+
+        # C-2 (02-Jul-2026): per-source-IP rate limit. Bounds a single IP flooding
+        # /webhook; Chartink's open-bell burst is absorbed by the token bucket. On
+        # exceed -> 429 (before auth/parse/queue work, so a flood is cheap to reject).
+        if self._ip_limiter is not None and not self._ip_limiter.allow(source_ip):
+            duration_ms = int((time.monotonic() - start_mono) * 1000)
+            self._write_audit(
+                scanner_name, source_ip, payload_size, 429, 0, 0, duration_ms,
+            )
+            self._log.warning(
+                "webhook/%s: per-IP rate limit exceeded for %s -> 429",
+                scanner_name, source_ip,
+            )
+            return jsonify({"error": "Rate limit exceeded; slow down"}), 429
 
         response_code = 500
         accepted_count = 0

@@ -374,6 +374,26 @@ class WebhookConfig(BaseModel):
     bind_port: int    # WR14: port to bind (default 5000)
     require_hmac: bool  # WR14: if True, reject requests missing valid HMAC
     dedup_window_seconds: int = 300  # FIX-131 Item 17: fingerprint bucket width
+    # C-2 (02-Jul-2026): per-source-IP rate limit (token bucket). Bounds flooding
+    # from a single source while tolerating Chartink's legitimate open-bell burst
+    # (~40 signals from one IP). Keyed on request.remote_addr; 429 on exceed.
+    per_ip_rate_limit_enabled: bool = True
+    per_ip_burst: int = 60              # tokens for an instantaneous burst
+    per_ip_refill_per_sec: float = 5.0  # sustained requests/sec/IP after the burst
+
+    @field_validator("per_ip_burst")
+    @classmethod
+    def _validate_per_ip_burst(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("webhook.per_ip_burst must be >= 1")
+        return v
+
+    @field_validator("per_ip_refill_per_sec")
+    @classmethod
+    def _validate_per_ip_refill(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError("webhook.per_ip_refill_per_sec must be >= 0")
+        return v
 
 
 class EodSquareoffConfig(BaseModel):
