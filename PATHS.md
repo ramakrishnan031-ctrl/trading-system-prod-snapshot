@@ -225,17 +225,25 @@ SHADOW-only (no reject/SL/TGT/STM/entry change). Parity (paper+live; row tagged 
 
 3B/3C historical backfill (`--all-closed`) DEFERRED → next trading day + live token (expect written=41 / skipped=5 / failed=0). Detail: `docs/SYSTEM_MAP.md` header · memory `mfe_mae_excursions_empty_28jun`.
 
-## B-1 daily-loss unrealized-MTM design (02-Jul, read-only)
+## B-1 daily-loss unrealized-MTM — IMPLEMENTED (02-Jul, f5fd4d9, off main, unpushed, SHADOW)
 | What | Location |
 |---|---|
-| Investigation + permanent-fix design | `docs/design/b1_daily_loss_unrealized_mtm_design_02jul2026.md` |
-| The dead gate | `capital/risk_engine.py:497-512` (sums `get_total_unrealized_mtm()`) |
-| The un-called writers | `capital/fund_manager.py:1404` update / `:1416` remove / `:1435` get_total (dict at `:368`, separate from invariant) |
-| LTP source (parity-clean) | `broker_adapter.get_quote` (paper = `_make_paper_quote_provider`, real Kite quotes, `main.py:1669/377-482`) |
-| Proposed hook | `order_reconciler` 15s cycle → `_refresh_unrealized_mtm()` (set-based prune) |
-| Rollout | shadow (`daily_loss_include_unrealized=false`, log would-reject) → enforce; **build before P1** |
+| Design + impl | `docs/design/b1_daily_loss_unrealized_mtm_design_02jul2026.md`; memory `b1_daily_loss_unrealized_mtm_impl_02jul` |
+| Gate | `capital/risk_engine.py` DAILY_LOSS — reads `get_unrealized_mtm_status()`; flag-gated (shadow default) |
+| Reconciler refresh | `orders/order_reconciler._refresh_unrealized_mtm()` (15s, get_quote, set-based prune) |
+| FundManager | `mark_unrealized_mtm_refreshed` / `get_unrealized_mtm_status` / `prune_unrealized_mtm` (`_unrealized_mtm` separate dict) |
+| Flag | `system_config.yaml risk.daily_loss_include_unrealized: false` (shadow → flip true to enforce) |
 
-Detail: memory `b1_daily_loss_unrealized_mtm_design_02jul`.
+## P1 broker-authoritative EOD reconcile — BUILD DESIGN (02-Jul, read-only)
+| What | Location |
+|---|---|
+| Build design | `docs/design/p1_eod_broker_reconcile_build_design_02jul2026.md`; memory `p1_eod_broker_reconcile_build_design_02jul` |
+| New job (proposed) | `scripts/eod_broker_reconcile.py` @15:58, standalone creds, replaces `eod_verify` false-VERIFY |
+| Emits | VERIFIED / ISSUES / UNVERIFIED (broker-unreachable ⇒ UNVERIFIED) → new `eod_broker_reconciliation` table (pure-add) |
+| Subsumes / consumes | `reconcile_pnl` (fix cols + real creds) · `reconcile_positions` output (no VERIFIED-vs-15:45-CRITICAL contradiction) |
+| Rollout | `eod_reconcile.authoritative=false` shadow → cutover retires `eod_verify`. DETECT+VERIFY+ALERT only (auto-fix = P3) |
+
+Detail: memory `b1_daily_loss_unrealized_mtm_impl_02jul` + `p1_eod_broker_reconcile_build_design_02jul`.
 
 ## Audit remediation status + P1/P2 dependency map (02-Jul, read-only)
 | What | Location |
