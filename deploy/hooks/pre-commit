@@ -3,7 +3,24 @@
 # pre-receive equality guard. Regenerates the canonical from the registry and
 # stages it. Install (local clone): cp deploy/hooks/pre-commit .git/hooks/ && chmod +x.
 set -e
+# Resolve a python: repo venv first (dev PC), then PATH. Overridable via $VENV_PY.
+VENV_PY="${VENV_PY:-}"
+if [ -z "$VENV_PY" ]; then
+  for _c in venv/Scripts/python.exe venv/bin/python python python3; do
+    if command -v "$_c" >/dev/null 2>&1 || [ -x "$_c" ]; then VENV_PY="$_c"; break; fi
+  done
+fi
 VENV_PY="${VENV_PY:-python}"
+
+# C-1 (02-Jul-2026): secret scan — BLOCK committing a real credential (Zerodha
+# api_key/secret or TOTP seed, telegram bot token, webhook secret, a real .env,
+# or a non-placeholder .env.example). Priority guard: runs first, before anything
+# is generated/staged. Logic + tests: deploy/hooks/secret_scan.py.
+if ! "$VENV_PY" deploy/hooks/secret_scan.py; then
+  echo "pre-commit: SECRET SCAN blocked this commit (see BLOCKED lines above)." >&2
+  exit 1
+fi
+
 # Only act when the registry or the generator changed in this commit.
 if git diff --cached --name-only | grep -qE '^(config/cron_registry\.yaml|scripts/generate_crontab\.py)$'; then
   "$VENV_PY" scripts/generate_crontab.py --generate --out deploy/cron/trading-system.cron
