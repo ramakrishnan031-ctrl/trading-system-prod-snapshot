@@ -11,7 +11,6 @@ from __future__ import annotations
 from typing import Optional
 
 from ..readers import db_reader, metrics_client
-from . import capacity as capacity_svc
 from . import freshness
 
 

@@ -16,8 +16,11 @@ import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
-# trades that are "currently open" (not date-filtered)
-_OPEN_STATES = ("OPEN", "PARTIAL", "PENDING_FILL", "EXITING")
+# trades that are "currently open" (not date-filtered). PUBLIC contract:
+# the G0 §2.2 open-set — /api/positions echoes this list and a contract test
+# pins it exactly.
+OPEN_STATES = ("OPEN", "PARTIAL", "PENDING_FILL", "EXITING")
+_OPEN_STATES = OPEN_STATES  # internal alias used by the query helpers
 # trades that represent a completed position lifecycle
 _CLOSED_STATES = ("CLOSED", "CLOSED_MANUAL")
 
@@ -441,3 +444,315 @@ def recent_events(cfg: dict, limit: int = 10) -> list:
             (int(limit),),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-1 — Strategy Control Tower (services/strategy_tower.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _bucket_case_sql() -> str:
+    """Signal-status → family bucket (docs/G2b1_strategy_attribution.md §0.3).
+
+    expired    = REJECTED_EXPIRED / legacy EXPIRED (processor age gate)
+    duplicated = DUPLICATE (post-insert race only; bulk dedup is pre-insert)
+    rejected   = REJECTED*/DROPPED_*/SKIPPED_*/QUEUE_FULL/PLACEMENT_FAILED/TIMEOUT
+    accepted   = everything else (QUEUED/PROCESSING/RESERVED/PROCESSED*/PASSED/
+                 TRADED/ACCEPTED/GATE_*/RETEST_*)
+    """
+    return (
+        "CASE "
+        "WHEN status IN ('REJECTED_EXPIRED','EXPIRED') THEN 'expired' "
+        "WHEN status = 'DUPLICATE' THEN 'duplicated' "
+        "WHEN status GLOB 'REJECTED*' OR status GLOB 'DROPPED_*' "
+        "  OR status GLOB 'SKIPPED_*' "
+        "  OR status IN ('QUEUE_FULL','PLACEMENT_FAILED','TIMEOUT') THEN 'rejected' "
+        "ELSE 'accepted' END"
+    )
+
+
+def strategy_signal_funnel(cfg: dict, today: str) -> dict:
+    """Per-strategy stored-signal funnel today: {strategy: {accepted, rejected,
+    duplicated, expired, stored, last_signal}}."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, " + _bucket_case_sql() + " AS bucket, COUNT(*) AS n, "
+            "MAX(received_at) AS last_ts "
+            "FROM signals WHERE received_at LIKE ? GROUP BY strategy, bucket",
+            (today + "%",),
+        ).fetchall()
+    out: dict = {}
+    for r in rows:
+        s = out.setdefault(r["strategy"], {
+            "accepted": 0, "rejected": 0, "duplicated": 0, "expired": 0,
+            "stored": 0, "last_signal": None,
+        })
+        s[r["bucket"]] = int(r["n"])
+        s["stored"] += int(r["n"])
+        if s["last_signal"] is None or (r["last_ts"] and r["last_ts"] > s["last_signal"]):
+            s["last_signal"] = r["last_ts"]
+    return out
+
+
+def webhook_by_scanner(cfg: dict, today: str) -> dict:
+    """Per-scanner webhook_audit aggregates today (received = accepted+rejected)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT scanner_name, "
+            "COALESCE(SUM(signals_accepted),0) AS accepted, "
+            "COALESCE(SUM(signals_rejected),0) AS rejected, "
+            "COUNT(*) AS posts, MAX(ts) AS last_ts "
+            "FROM webhook_audit WHERE date = ? GROUP BY scanner_name",
+            (today,),
+        ).fetchall()
+    return {
+        r["scanner_name"]: {
+            "received": int(r["accepted"]) + int(r["rejected"]),
+            "accepted": int(r["accepted"]), "rejected": int(r["rejected"]),
+            "posts": int(r["posts"]), "last_ts": r["last_ts"],
+        }
+        for r in rows
+    }
+
+
+def strategy_order_stats(cfg: dict, today: str) -> dict:
+    """Per-strategy order funnel today (ALL legs, joined via trades.strategy).
+
+    Buckets (attribution doc R5): created=all rows; submitted=status<>'PENDING';
+    filled=COMPLETE; rejected=FAILED; cancelled=CANCELLED.
+    """
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT t.strategy AS strategy, "
+            "COUNT(*) AS created, "
+            "COALESCE(SUM(CASE WHEN o.status<>'PENDING' THEN 1 ELSE 0 END),0) AS submitted, "
+            "COALESCE(SUM(CASE WHEN o.status='COMPLETE' THEN 1 ELSE 0 END),0) AS filled, "
+            "COALESCE(SUM(CASE WHEN o.status='FAILED' THEN 1 ELSE 0 END),0) AS rejected, "
+            "COALESCE(SUM(CASE WHEN o.status='CANCELLED' THEN 1 ELSE 0 END),0) AS cancelled, "
+            "MAX(CASE WHEN o.status='FAILED' THEN o.placed_at END) AS last_failed_ts "
+            "FROM orders o JOIN trades t ON t.trade_id = o.trade_id "
+            "WHERE o.placed_at LIKE ? GROUP BY t.strategy",
+            (today + "%",),
+        ).fetchall()
+    return {r["strategy"]: {k: (int(r[k]) if k != "last_failed_ts" else r[k])
+                            for k in ("created", "submitted", "filled",
+                                      "rejected", "cancelled", "last_failed_ts")}
+            for r in rows}
+
+
+def strategy_perf_stats(cfg: dict, today: str) -> dict:
+    """Per-strategy trading+performance today (trades created today).
+
+    ROI denominator (attribution doc R4): Σ margin_reserved over today's trades.
+    """
+    closed = _CLOSED_STATES
+    opens = _OPEN_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, "
+            "COUNT(*) AS trades, "
+            "COALESCE(SUM(CASE WHEN status IN (" + _in_clause(opens) + ") THEN 1 ELSE 0 END),0) AS open_trades, "
+            "COALESCE(SUM(CASE WHEN status IN (" + _in_clause(closed) + ") THEN 1 ELSE 0 END),0) AS closed_trades, "
+            "COALESCE(SUM(CASE WHEN net_pnl>0 THEN 1 ELSE 0 END),0) AS wins, "
+            "COALESCE(SUM(CASE WHEN net_pnl<0 THEN 1 ELSE 0 END),0) AS losses, "
+            "COALESCE(SUM(COALESCE(net_pnl,0)),0.0) AS net_pnl, "
+            "COALESCE(SUM(COALESCE(gross_pnl,0)),0.0) AS gross_pnl, "
+            "COALESCE(SUM(CASE WHEN net_pnl>0 THEN net_pnl ELSE 0 END),0.0) AS win_sum, "
+            "COALESCE(SUM(CASE WHEN net_pnl<0 THEN net_pnl ELSE 0 END),0.0) AS loss_sum, "
+            "MAX(net_pnl) AS best_trade, MIN(net_pnl) AS worst_trade, "
+            "COALESCE(SUM(margin_reserved),0.0) AS capital_used_today, "
+            "MAX(created_at) AS last_trade_ts, "
+            "MAX(CASE WHEN net_pnl>0 THEN exit_time END) AS last_win_ts, "
+            "MAX(CASE WHEN net_pnl<0 THEN exit_time END) AS last_loss_ts "
+            "FROM trades WHERE created_at LIKE ? AND status NOT GLOB 'REJECTED*' "
+            "GROUP BY strategy",
+            (*opens, *closed, today + "%"),
+        ).fetchall()
+    out: dict = {}
+    for r in rows:
+        d = dict(r)
+        for k in ("net_pnl", "gross_pnl", "win_sum", "loss_sum", "capital_used_today"):
+            d[k] = float(d[k])
+        out[r["strategy"]] = d
+    return out
+
+
+def strategy_open_capital(cfg: dict) -> dict:
+    """Per-strategy margin_reserved over CURRENTLY-OPEN trades (not date-bound)."""
+    states = _OPEN_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, COALESCE(SUM(margin_reserved),0.0) AS margin, "
+            "COUNT(*) AS open_count FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "GROUP BY strategy",
+            states,
+        ).fetchall()
+    return {r["strategy"]: {"margin": float(r["margin"]), "open_count": int(r["open_count"])}
+            for r in rows}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-1 — Trading modules M2-M5 (list queries; filtered, parameterized, capped)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_LIST_CAP = 500
+
+
+def list_signals(cfg: dict, today: str, scanner: Optional[str] = None,
+                 strategy: Optional[str] = None, family: Optional[str] = None,
+                 limit: int = _LIST_CAP) -> list:
+    """Stored signals for a date, newest first, optional filters.
+
+    family in {accepted, rejected, duplicated, expired} filters the derived
+    bucket (attribution doc §0.3).
+    """
+    sql = (
+        "SELECT signal_id, received_at, scanner, strategy, symbol, status, "
+        "rejection_reason, fingerprint, " + _bucket_case_sql() + " AS family "
+        "FROM signals WHERE received_at LIKE ?"
+    )
+    params: list = [today + "%"]
+    if scanner:
+        sql += " AND scanner = ?"
+        params.append(scanner)
+    if strategy:
+        sql += " AND strategy = ?"
+        params.append(strategy)
+    if family:
+        sql = "SELECT * FROM (" + sql + ") WHERE family = ?"
+        params.append(family)
+    sql += " ORDER BY received_at DESC LIMIT ?"
+    params.append(max(1, min(int(limit), _LIST_CAP)))
+    with _ro(cfg) as conn:
+        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
+def list_orders(cfg: dict, today: str, leg: Optional[str] = None,
+                status: Optional[str] = None, strategy: Optional[str] = None,
+                symbol: Optional[str] = None, limit: int = _LIST_CAP) -> list:
+    """Orders for a date (placed_at), newest first, joined to trades for
+    strategy/symbol; place→fill latency computed in SQL (ms)."""
+    sql = (
+        "SELECT o.order_id, o.trade_id, o.leg, o.status, o.qty_requested, "
+        "o.qty_filled, o.avg_fill_price, o.placed_at, o.filled_at, "
+        "o.rejection_reason, o.superseded_by, t.symbol AS symbol, "
+        "t.strategy AS strategy, t.order_to_fill_ms AS entry_fill_latency_ms, "
+        "CAST((julianday(o.filled_at) - julianday(o.placed_at)) * 86400000 AS INTEGER) "
+        "  AS place_to_fill_ms "
+        "FROM orders o LEFT JOIN trades t ON t.trade_id = o.trade_id "
+        "WHERE o.placed_at LIKE ?"
+    )
+    params: list = [today + "%"]
+    if leg:
+        sql += " AND o.leg = ?"
+        params.append(leg)
+    if status:
+        sql += " AND o.status = ?"
+        params.append(status)
+    if strategy:
+        sql += " AND t.strategy = ?"
+        params.append(strategy)
+    if symbol:
+        sql += " AND t.symbol = ?"
+        params.append(symbol)
+    sql += " ORDER BY o.placed_at DESC LIMIT ?"
+    params.append(max(1, min(int(limit), _LIST_CAP)))
+    with _ro(cfg) as conn:
+        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
+def open_positions_list(cfg: dict) -> list:
+    """Open-set trades (M4). Open-set = _OPEN_STATES exactly (contract-tested).
+
+    inning_no = MAX(innings.inning_number) for the trade (NULL → renders '—').
+    """
+    states = _OPEN_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT t.trade_id, t.symbol, t.strategy, t.direction, t.status, "
+            "t.qty_filled, t.qty_planned, t.entry_actual_price, t.entry_target_price, "
+            "t.sl_initial, t.tgt_initial, t.risk_amount, t.margin_reserved, "
+            "t.created_at, t.entry_time, "
+            "(SELECT MAX(i.inning_number) FROM innings i WHERE i.trade_id = t.trade_id) "
+            "  AS inning_no "
+            "FROM trades t WHERE t.status IN (" + _in_clause(states) + ") "
+            "ORDER BY t.created_at DESC",
+            states,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def holdings_list(cfg: dict) -> list:
+    """gtt_state mirror rows (M5). Broker is authority; this is the local mirror."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT gtt_id, trade_id, status, exit_side, qty, sl_trigger, "
+            "sl_limit, tgt_trigger, tgt_limit, needs_review "
+            "FROM gtt_state ORDER BY gtt_id DESC LIMIT ?",
+            (_LIST_CAP,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G2b-1 — Capacity completion (DB-readable actuals for deferred guards)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def exposure_extremes(cfg: dict) -> dict:
+    """Worst per-symbol / per-sector open exposure ₹ + the largest single open
+    position value (concentration / sector / position-value-cap rows)."""
+    states = _OPEN_STATES
+    value_expr = ("COALESCE(actual_position_value_rs, "
+                  "qty_filled*COALESCE(entry_actual_price, entry_target_price))")
+    with _ro(cfg) as conn:
+        sym = conn.execute(
+            "SELECT symbol, SUM(" + value_expr + ") AS v "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "GROUP BY symbol ORDER BY v DESC LIMIT 1",
+            states,
+        ).fetchone()
+        sec = conn.execute(
+            "SELECT COALESCE(sector,'UNKNOWN') AS sector, SUM(" + value_expr + ") AS v "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "GROUP BY sector ORDER BY v DESC LIMIT 1",
+            states,
+        ).fetchone()
+        biggest = conn.execute(
+            "SELECT MAX(" + value_expr + ") AS v "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ")",
+            states,
+        ).fetchone()
+    return {
+        "worst_symbol": (sym["symbol"], float(sym["v"] or 0.0)) if sym else (None, 0.0),
+        "worst_sector": (sec["sector"], float(sec["v"] or 0.0)) if sec else (None, 0.0),
+        "largest_position_value": float(biggest["v"]) if biggest and biggest["v"] else 0.0,
+    }
+
+
+def max_order_qty_today(cfg: dict, today: str) -> int:
+    with _ro(cfg) as conn:
+        val = _scalar(conn, "SELECT MAX(qty_requested) FROM orders WHERE placed_at LIKE ?",
+                      (today + "%",))
+    return int(val) if val is not None else 0
+
+
+def entries_in_window(cfg: dict, since_iso: str) -> int:
+    """ENTRY orders placed at/after an ISO timestamp (entry-burst actual)."""
+    with _ro(cfg) as conn:
+        return _count(conn,
+                      "SELECT COUNT(*) FROM orders WHERE leg='ENTRY' AND placed_at >= ?",
+                      (since_iso,))
+
+
+def rate_limited_posts_today(cfg: dict, today: str) -> int:
+    """webhook_audit 429 count today (per-IP limiter's DB-visible proxy; D7)."""
+    with _ro(cfg) as conn:
+        return _count(conn,
+                      "SELECT COUNT(*) FROM webhook_audit WHERE date=? AND response_code=429",
+                      (today,))
+
+
+def signals_stored_count(cfg: dict, today: str) -> int:
+    """Total signals rows stored today (the honest per-signal denominator)."""
+    with _ro(cfg) as conn:
+        return _count(conn, "SELECT COUNT(*) FROM signals WHERE received_at LIKE ?",
+                      (today + "%",))

@@ -53,8 +53,14 @@
   </header>
 
   <nav class="topnav">
-    <a class="nav-link active" href="/">Dashboard</a>
-    <span class="nav-note">M2–M20 arrive in G2b</span>
+    <a class="nav-link {% block nav_dashboard %}{% endblock %}" href="/">Dashboard</a>
+    <a class="nav-link {% block nav_strategies %}{% endblock %}" href="/strategies">Strategies</a>
+    <a class="nav-link {% block nav_signals %}{% endblock %}" href="/signals">Signals</a>
+    <a class="nav-link {% block nav_orders %}{% endblock %}" href="/orders">Orders</a>
+    <a class="nav-link {% block nav_positions %}{% endblock %}" href="/positions">Positions</a>
+    <a class="nav-link {% block nav_holdings %}{% endblock %}" href="/holdings">Holdings</a>
+    <a class="nav-link {% block nav_capacity %}{% endblock %}" href="/capacity">Capacity</a>
+    <span class="nav-note">M7–M20 arrive in G2b-2</span>
     <span class="nav-status" x-show="lastError" x-cloak x-text="lastError"></span>
   </nav>
 
@@ -64,15 +70,12 @@
 
   <script src="/static/htmx.min.js"></script>
   <script>
-  // JSON-first APIs rendered reactively via Alpine; the poll interval is driven
-  // by /api/dashboard.freshness.poll_ms (5s active / 60s off) — the "htmx
-  // polling wiring" requirement, implemented over JSON so the API contract
-  // (tests/test_api_contract.py) stays a clean JSON schema.
+  // Root component: polls /api/dashboard for the pinned bar + freshness-driven
+  // cadence (5s market / 60s off), then broadcasts 'ops-refresh' so the active
+  // page component fetches ITS endpoint (Alpine-over-JSON, G2a-accepted pattern).
   function opsDashboard() {
     return {
       summary: {}, freshness: {}, service_health: [], events: [],
-      pipeline: { stages: [], halt: {} }, capacity: { rows: [] },
-      strategy: { rows: [] },
       pollMs: 60000, lastError: "", _timer: null,
 
       async init() { await this.refresh(); this.schedule(); },
@@ -88,21 +91,14 @@
       },
       async refresh() {
         try {
-          const [d, p, cap, s] = await Promise.all([
-            this.getJson("/api/dashboard"),
-            this.getJson("/api/pipeline"),
-            this.getJson("/api/capacity"),
-            this.getJson("/api/strategy_panel"),
-          ]);
+          const d = await this.getJson("/api/dashboard");
           this.summary = d.summary || {};
           this.freshness = d.freshness || {};
           this.service_health = d.service_health || [];
           this.events = d.events || [];
-          this.pipeline = p || { stages: [], halt: {} };
-          this.capacity = cap || { rows: [] };
-          this.strategy = s || { rows: [] };
           this.pollMs = (d.freshness && d.freshness.poll_ms) ? d.freshness.poll_ms : 60000;
           this.lastError = "";
+          window.dispatchEvent(new CustomEvent("ops-refresh"));
         } catch (e) {
           if (String(e.message) !== "auth") this.lastError = "refresh failed: " + e.message;
         }
@@ -122,6 +118,26 @@
         if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2);
         return String(v);
       },
+    };
+  }
+  // Shared page-component helpers (each page's x-data spreads these in).
+  function pageBase(endpoint) {
+    return {
+      data: {}, loading: true, loadError: "",
+      async load() {
+        try {
+          const r = await fetch(endpoint + this.qs(), { credentials: "same-origin",
+            headers: { "Accept": "application/json" } });
+          if (r.status === 401) { window.location = "/login"; return; }
+          if (!r.ok) throw new Error(endpoint + " -> " + r.status);
+          this.data = await r.json();
+          this.loadError = "";
+        } catch (e) { this.loadError = String(e.message || e); }
+        finally { this.loading = false; }
+      },
+      qs() { return ""; },
+      money(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toFixed(2); },
+      dash(v) { return (v === null || v === undefined || v === "") ? "—" : v; },
     };
   }
   </script>

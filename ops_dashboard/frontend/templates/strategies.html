@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Strategies — Control Tower{% endblock %}
+{% block nav_strategies %}active{% endblock %}
+{% block content %}
+<div x-data="strategiesPage()" x-init="load()" @ops-refresh.window="load()">
+
+  <section class="panel">
+    <h2 class="panel-title">Strategy Control Tower
+      <span class="panel-sub" x-text="data.enabled_count != null ? (data.enabled_count + ' enabled / ' + data.count + ' total · ' + (data.today || '')) : ''"></span>
+    </h2>
+
+    <!-- Ranking view toggle -->
+    <div class="rank-toggle">
+      <span class="rt-label">Rank by:</span>
+      <template x-for="k in rankKeys" :key="k.key">
+        <button class="rt-btn" :class="rankBy === k.key ? 'rt-active' : ''"
+                @click="rankBy = k.key" x-text="k.label"></button>
+      </template>
+      <span class="rt-label" style="margin-left:12px">Order:</span>
+      <button class="rt-btn" :class="!worstFirst ? 'rt-active' : ''" @click="worstFirst=false">Top first</button>
+      <button class="rt-btn" :class="worstFirst ? 'rt-active' : ''" @click="worstFirst=true">Worst first</button>
+    </div>
+
+    <!-- Strategy cards: one per strategy, all 7 groups -->
+    <div class="tower-grid">
+      <template x-for="r in orderedRows()" :key="r.basic.name">
+        <div class="tower-card" :class="r.basic.enabled === false ? 'tower-off' : ''">
+          <div class="tw-head">
+            <span class="chip-rank" :class="viewRank(r.basic.name) === 1 ? 'rank-one' : ''"
+                  x-text="'#' + viewRank(r.basic.name)"></span>
+            <span class="tw-name" x-text="r.basic.display_name"></span>
+            <span class="dot" :class="r.basic.enabled === false ? 'dot-off' : (r.basic.enabled === true ? 'dot-on' : 'dot-unk')"></span>
+            <span class="tw-dir" x-text="r.basic.direction || ''"></span>
+            <span class="tw-mode" x-text="r.basic.mode || ''"></span>
+          </div>
+          <div class="tw-scanners" x-text="'scanners: ' + (r.basic.scanners.length ? r.basic.scanners.join(', ') : '—')"></div>
+
+          <div class="tw-groups">
+            <div class="twg"><h4>Signals</h4>
+              <div class="twg-row"><span>received</span><b x-text="r.signals.received"></b></div>
+              <div class="twg-row"><span>accepted</span><b x-text="r.signals.accepted"></b></div>
+              <div class="twg-row"><span>rejected</span><b x-text="r.signals.rejected"></b></div>
+              <div class="twg-row"><span>dup / expired</span><b x-text="r.signals.duplicated + ' / ' + r.signals.expired"></b></div>
+            </div>
+            <div class="twg"><h4>Processing</h4>
+              <div class="twg-row"><span>created</span><b x-text="r.processing.created"></b></div>
+              <div class="twg-row"><span>submitted</span><b x-text="r.processing.submitted"></b></div>
+              <div class="twg-row"><span>filled</span><b x-text="r.processing.filled"></b></div>
+              <div class="twg-row"><span>rej / cxl</span><b x-text="r.processing.rejected + ' / ' + r.processing.cancelled"></b></div>
+            </div>
+            <div class="twg"><h4>Trading</h4>
+              <div class="twg-row"><span>open / closed</span><b x-text="r.trading.open + ' / ' + r.trading.closed"></b></div>
+              <div class="twg-row"><span>W / L</span><b x-text="r.trading.wins + ' / ' + r.trading.losses"></b></div>
+              <div class="twg-row"><span>win rate</span><b x-text="r.trading.win_rate !== null ? r.trading.win_rate + '%' : '—'"></b></div>
+              <div class="twg-row"><span>avg W / L</span><b x-text="dash(r.trading.avg_win) + ' / ' + dash(r.trading.avg_loss)"></b></div>
+            </div>
+            <div class="twg"><h4>Performance</h4>
+              <div class="twg-row"><span>net P&L</span><b :class="r.performance.net_pnl > 0 ? 'num-pos' : (r.performance.net_pnl < 0 ? 'num-neg' : '')" x-text="money(r.performance.net_pnl)"></b></div>
+              <div class="twg-row"><span>gross / charges</span><b x-text="money(r.performance.gross_pnl) + ' / ' + money(r.performance.charges)"></b></div>
+              <div class="twg-row"><span>ROI</span><b x-text="r.performance.roi_pct !== null ? r.performance.roi_pct + '%' : '—'"></b></div>
+              <div class="twg-row"><span>best / worst</span><b x-text="dash(r.performance.best_trade) + ' / ' + dash(r.performance.worst_trade)"></b></div>
+              <div class="twg-row"><span>expectancy</span><b x-text="dash(r.performance.expectancy)"></b></div>
+            </div>
+            <div class="twg"><h4>Risk</h4>
+              <div class="twg-row"><span>capital used</span><b x-text="money(r.risk.capital_used)"></b></div>
+              <div class="twg-row"><span>capital left</span><b x-text="r.risk.capital_remaining !== null ? money(r.risk.capital_remaining) : '—'"></b>
+              </div>
+              <div class="twg-row"><span>positions</span><b x-text="r.risk.active_positions + ' / ' + r.risk.max_concurrent"></b></div>
+              <div class="twg-row"><span>capacity left</span><b x-text="r.risk.position_capacity_remaining"></b></div>
+            </div>
+            <div class="twg"><h4>Health</h4>
+              <div class="twg-row"><span>last signal</span><b :class="'stale-' + r.health.last_signal_staleness" x-text="tstr(r.health.last_signal)"></b></div>
+              <div class="twg-row"><span>last trade</span><b :class="'stale-' + r.health.last_trade_staleness" x-text="tstr(r.health.last_trade)"></b></div>
+              <div class="twg-row"><span>last success</span><b x-text="tstr(r.health.last_successful_trade)"></b></div>
+              <div class="twg-row"><span>last failure</span><b x-text="tstr(r.health.last_failure)"></b></div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Scanner-level unattributable rows (attribution rule R1) -->
+    <div x-show="data.scanner_level && data.scanner_level.length" x-cloak style="margin-top:14px">
+      <h2 class="panel-title">Unattributed scanners</h2>
+      <table class="cap-table">
+        <thead><tr><th>Scanner</th><th>Label</th><th>Received</th><th>Accepted</th><th>Rejected</th></tr></thead>
+        <tbody>
+          <template x-for="s in data.scanner_level" :key="s.scanner">
+            <tr>
+              <td x-text="s.scanner"></td>
+              <td><span class="cap-inert" x-text="s.label"></span></td>
+              <td class="cap-num" x-text="s.received"></td>
+              <td class="cap-num" x-text="s.accepted"></td>
+              <td class="cap-num" x-text="s.rejected"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+function strategiesPage() {
+  return Object.assign(pageBase("/api/strategies"), {
+    rankBy: "net_pnl", worstFirst: false,
+    rankKeys: [
+      { key: "net_pnl", label: "Net P&L" },
+      { key: "win_rate", label: "Win Rate" },
+      { key: "expectancy", label: "Expectancy" },
+      { key: "success_rate", label: "Success Rate" },
+    ],
+    orderedRows() {
+      const rows = this.data.rows || [];
+      const order = (this.data.rankings || {})[this.rankBy] || rows.map(r => r.basic.name);
+      const byName = {}; rows.forEach(r => byName[r.basic.name] = r);
+      let out = order.map(n => byName[n]).filter(Boolean);
+      if (this.worstFirst) out = out.slice().reverse();
+      return out;
+    },
+    viewRank(name) {
+      const order = (this.data.rankings || {})[this.rankBy] || [];
+      const i = order.indexOf(name);
+      return i >= 0 ? i + 1 : "—";
+    },
+    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(5, 19) : "—"; },
+  });
+}
+</script>
+{% endblock %}

@@ -27,7 +27,8 @@ from flask import (
 from .api.capacity import capacity_api
 from .api.dashboard import dashboard_api
 from .api.pipeline import pipeline_api
-from .api.strategy import strategy_api
+from .api.strategies import strategies_api
+from .api.trading import trading_api
 from .auth import LoginAttemptTracker, auth_bp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,7 +76,8 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
     app.register_blueprint(dashboard_api)
     app.register_blueprint(pipeline_api)
     app.register_blueprint(capacity_api)
-    app.register_blueprint(strategy_api)
+    app.register_blueprint(strategies_api)
+    app.register_blueprint(trading_api)
 
     @app.before_request
     def _enforce_login():
@@ -90,6 +92,23 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
     @app.route("/", methods=["GET"])
     def dashboard_page():
         return render_template("dashboard.html")
+
+    # G2b-1 screens (Alpine-over-JSON; each fetches its own /api/* endpoint).
+    _PAGES = {
+        "strategies": "strategies.html",
+        "signals": "signals.html",
+        "orders": "orders.html",
+        "positions": "positions.html",
+        "holdings": "holdings.html",
+        "capacity": "capacity.html",
+    }
+
+    @app.route("/<page>", methods=["GET"])
+    def module_page(page: str):
+        template = _PAGES.get(page)
+        if template is None:
+            return "Not found", 404
+        return render_template(template)
 
     @app.errorhandler(500)
     def _internal_error(exc):  # noqa: ANN001

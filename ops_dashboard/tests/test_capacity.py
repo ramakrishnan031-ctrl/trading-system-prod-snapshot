@@ -56,3 +56,70 @@ def test_delivery_rows_inert(gui_config, today):
         assert rows[key]["inert"] is True
         assert rows[key]["status"] == "INERT"
         assert rows[key]["used"] == 0
+
+
+# ── G2b-1: grouped capacity screen ──
+def test_groups_present(gui_config, today):
+    _, out = _rows(gui_config, today)
+    names = [g["name"] for g in out["groups"]]
+    assert names == ["Orders", "Positions", "Capital", "Risk", "Strategy", "System-guards"]
+
+
+def _group(gui_config, today, name):
+    _, out = _rows(gui_config, today)
+    for g in out["groups"]:
+        if g["name"] == name:
+            return {r["key"]: r for r in g["rows"]}
+    raise AssertionError(name)
+
+
+def test_orders_group_rows(gui_config, today):
+    g = _group(gui_config, today, "Orders")
+    assert g["max_daily_trades"]["used"] == 8
+    burst = g["entry_burst"]
+    assert burst["limit"] == 3 and isinstance(burst["used"], int)
+    qty = g["max_single_order_qty"]
+    assert qty["used"] == 10 and qty["limit"] == 10000
+    assert g["min_gap_between_entries"]["type"] == "config_only"
+    assert g["entry_window"]["type"] == "window"
+    assert g["entry_window"]["status"] in ("INSIDE", "OUTSIDE")
+
+
+def test_capital_group_exposure_rows(gui_config, today):
+    g = _group(gui_config, today, "Capital")
+    conc = g["max_concentration"]
+    # all 4 open positions are symbol AAA @ value 10000 → worst symbol = 40000
+    assert conc["used"] == 40000.0 and conc["limit"] == 10000.0   # 0.10 × 100000
+    assert conc["status"] == "BREACH"                              # honest: seed breaches it
+    assert "AAA" in conc["note"]
+    sect = g["max_sector_exposure"]
+    assert sect["used"] == 40000.0 and sect["limit"] == 40000.0    # 0.40 × 100000
+    posval = g["max_position_value"]
+    assert posval["used"] == 10000.0 and posval["limit"] == 40000.0
+
+
+def test_risk_group_config_rows(gui_config, today):
+    g = _group(gui_config, today, "Risk")
+    assert g["max_consecutive_losses"]["used"] == 3
+    kill = g["kill_api_failure"]
+    assert kill["type"] == "config_only"
+    assert kill["configured"]["threshold"] == 3
+    assert kill["kill_state"] == "INACTIVE"
+    assert g["drift_thresholds"]["configured"]["soft_kill"] == 1000.0
+
+
+def test_system_guards_group(gui_config, today):
+    g = _group(gui_config, today, "System-guards")
+    ip = g["per_ip_rate_limit"]
+    assert ip["type"] == "config_only"
+    assert ip["configured"]["burst"] == 60
+    assert ip["rate_limited_today"] == 0          # D7 proxy: 429s today, never fabricated
+    assert g["signal_queue"]["status"] == "UNAVAILABLE"
+    assert g["slippage_budget"]["configured"]["max_fraction_of_sl"] == 0.22
+    assert g["smart_tgt"]["configured"]["trigger_pct"] == 0.005
+
+
+def test_strategy_group_pointer(gui_config, today):
+    g = _group(gui_config, today, "Strategy")
+    assert g["tier_multipliers"]["configured"]["tiers"]["MEDIUM"] == 0.70
+    assert "Strategy Tower" in g["per_strategy_caps"]["configured"]["where"]

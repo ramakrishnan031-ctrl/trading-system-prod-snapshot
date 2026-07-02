@@ -1,11 +1,18 @@
 """
 Shared pytest fixtures: synthetic v41 + v42 fixture DBs built from minimal-but-
 faithful DDL (column names/types match core/schema.sql for every column the
-readers touch) and seeded to cover Rama's V4 funnel example plus capacity,
-strategy, consecutive-loss and event data.
+readers touch), seeded to cover:
 
-Isolation: this builds standalone SQLite files in a tmp dir + a tmp config dir;
-nothing from the production tree is imported or written.
+  * Rama's V4 funnel (100 received / 85 validated / 10 dup / 5 rej / 70 created
+    / 60 filled) — split across scanners for attribution
+  * a SILENT enabled strategy (first_pullback_long — configured, zero rows)
+  * an ALL-LOSING strategy (vwap_bounce_long — 0W/2L + a FAILED order)
+  * an N:1 scanner case (gap_fade_long_alt → gap_fade_long, attribution exact)
+  * an UNMAPPED scanner (momentum_combo — must surface as "scanner-level (shared)")
+  * an EXPIRED signal (REJECTED_EXPIRED), a CANCELLED order, a superseded chain
+  * innings (inning# for one open trade) + an empty gtt_state (holdings)
+
+Isolation: standalone SQLite files + a tmp config dir; no production imports.
 """
 from __future__ import annotations
 
@@ -28,8 +35,6 @@ from backend import app as app_module    # noqa: E402
 TODAY = freshness.ist_today_iso()
 
 
-# Faithful minimal DDL (only columns the readers use; FK omitted so seed order
-# is free and read-only connections don't enforce integrity).
 DDL = [
     "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     """CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), session_date TEXT,
@@ -43,14 +48,18 @@ DDL = [
         date TEXT GENERATED ALWAYS AS (substr(ts,1,10)) STORED)""",
     """CREATE TABLE signals (signal_id TEXT PRIMARY KEY, symbol TEXT, scanner TEXT, strategy TEXT,
         triggered_at TEXT, received_at TEXT, expires_at TEXT, status TEXT NOT NULL,
-        rejection_reason TEXT, trade_id TEXT, trigger_price REAL, webhook_payload TEXT)""",
+        rejection_reason TEXT, trade_id TEXT, trigger_price REAL, fingerprint TEXT,
+        webhook_payload TEXT)""",
     """CREATE TABLE orders (order_id TEXT PRIMARY KEY, trade_id TEXT, leg TEXT, transaction_type TEXT,
         order_type TEXT, product TEXT, variety TEXT, qty_requested INTEGER, status TEXT,
-        qty_filled INTEGER DEFAULT 0, placed_at TEXT, filled_at TEXT, updated_at TEXT)""",
+        qty_filled INTEGER DEFAULT 0, avg_fill_price REAL, placed_at TEXT, filled_at TEXT,
+        updated_at TEXT, rejection_reason TEXT, superseded_by TEXT)""",
     """CREATE TABLE trades (trade_id TEXT PRIMARY KEY, signal_id TEXT, symbol TEXT, direction TEXT,
         strategy TEXT, sector TEXT, qty_planned INTEGER, qty_filled INTEGER,
+        entry_target_price REAL, entry_actual_price REAL, sl_initial REAL, tgt_initial REAL,
         margin_reserved REAL, risk_amount REAL, created_at TEXT, entry_time TEXT, exit_time TEXT,
-        exit_reason TEXT, gross_pnl REAL, net_pnl REAL, status TEXT, actual_position_value_rs REAL)""",
+        exit_reason TEXT, gross_pnl REAL, net_pnl REAL, status TEXT,
+        actual_position_value_rs REAL, order_to_fill_ms INTEGER)""",
     """CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL,
         entry_type TEXT NOT NULL, amount REAL, bucket TEXT, balance_before REAL, balance_after REAL,
         signal_id TEXT, reservation_id TEXT, reason TEXT, session_id TEXT, direction TEXT,
@@ -67,6 +76,12 @@ DDL = [
         config_hash TEXT, config_json TEXT)""",
     """CREATE TABLE system_events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT,
         event_type TEXT, scenario TEXT, details TEXT)""",
+    """CREATE TABLE innings (id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id TEXT,
+        inning_number INTEGER, is_real INTEGER, exit_reason TEXT,
+        UNIQUE(trade_id, inning_number))""",
+    """CREATE TABLE gtt_state (gtt_id INTEGER PRIMARY KEY, trade_id TEXT, status TEXT,
+        exit_side TEXT, qty INTEGER, sl_trigger REAL, sl_limit REAL, tgt_trigger REAL,
+        tgt_limit REAL, needs_review INTEGER DEFAULT 0)""",
 ]
 
 DDL_V42_EXTRA = [
@@ -75,7 +90,7 @@ DDL_V42_EXTRA = [
         authoritative INTEGER DEFAULT 0, mismatch INTEGER)""",
 ]
 
-# System config embedded in the config_snapshot (limits capacity reads).
+# System config embedded in the config_snapshot (drives capacity + tower limits).
 _SNAPSHOT_SYSTEM = {
     "force_intraday_only": True,
     "trade_type": "INTRADAY",
@@ -83,9 +98,42 @@ _SNAPSHOT_SYSTEM = {
         "max_daily_trades": 10, "max_open_positions": 5,
         "max_open_delivery_positions": 3, "max_daily_delivery_trades": 5,
         "max_consecutive_losses": 5, "daily_loss_limit_pct": 0.03,
+        "max_sector_exposure_pct": 0.40,
     },
     "capital": {"intraday_bucket_pct": 0.70, "positional_bucket_pct": 0.30},
     "signal_queue": {"capacity": 300, "backpressure_pct": 0.80},
+    "position_sizing": {
+        "max_concentration_pct": 0.10, "max_position_value_pct": 0.40,
+        "max_single_order_qty": 10000,
+        "tier_multipliers": {"HIGH": 1.0, "MEDIUM": 0.70, "LOW": 0.50},
+        "dynamic_by_winrate": True, "min_multiplier": 0.5, "max_multiplier": 2.0,
+    },
+    "signal_processor": {
+        "entry_burst_max": 3, "entry_burst_window_sec": 60,
+        "min_gap_between_entries_sec": 20, "per_symbol_cooldown_sec": 300,
+    },
+    "webhook": {
+        "per_ip_rate_limit_enabled": True, "per_ip_burst": 60,
+        "per_ip_refill_per_sec": 5.0, "dedup_window_seconds": 300,
+    },
+    "kill_switch": {"api_failure_threshold": 3, "enable_auto_trip": True},
+    "drift_handler": {"log_only_threshold_rs": 250.0, "soft_kill_threshold_rs": 1000.0,
+                      "hard_kill_threshold_rs": 2500.0, "consecutive_cycles_before_escalate": 3},
+    "strategy_circuit_breaker": {"enabled": True, "loss_multiplier": 2.0,
+                                 "cutoff_time": "12:00", "lookback_days": 10},
+    "circuit_breaker": {"partial_fill_timeout_minutes": 5, "force_close_time": "15:15",
+                        "max_api_failures": 3},
+    "order_reconciler": {"capital_drift_tolerance": 50.0, "capital_drift_tolerance_pct": 0.10,
+                         "human_order_margin_tolerance": 5000.0},
+    "clock": {"warn_skew_sec": 2.0, "alert_skew_sec": 5.0, "halt_skew_sec": 30.0},
+    "live_feed": {"max_reconnect_attempts": 10},
+    "entry_gate": {
+        "max_entry_slippage_pct": 1.0,
+        "slippage_control": {"mode": "sl_fraction", "max_slippage_fraction": 0.22,
+                             "absolute_cap_rs": 5.0, "hard_max_slippage_rs": 10.0},
+    },
+    "smart_tgt": {"enabled": True, "trigger_pct": 0.005, "step_pct": 0.003,
+                  "max_modify_failures": 3},
 }
 
 
@@ -107,94 +155,122 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
         (_ts("08:15:00"),),
     )
 
-    # ── Webhook funnel: received=100, validated=85, rejected_total=15 ──
-    c.execute(
-        "INSERT INTO webhook_audit(ts,scanner_name,source_ip,payload_size_bytes,response_code,"
-        "signals_accepted,signals_rejected,duration_ms) VALUES(?,?,?,?,?,?,?,?)",
-        (_ts("10:31:00"), "gap_fade_long", "1.2.3.4", 900, 200, 85, 15, 12),
-    )
+    # ── Webhook funnel: totals 100 received / 85 accepted / 15 rejected, split
+    #    across scanners: gap_fade_long 50/8 · gap_fade_long_alt 10/2 (N:1) ·
+    #    vwap_bounce_long 20/3 · momentum_combo 5/2 (UNMAPPED → shared label) ──
+    for scanner, acc, rej in (("gap_fade_long", 50, 8), ("gap_fade_long_alt", 10, 2),
+                              ("vwap_bounce_long", 20, 3), ("momentum_combo", 5, 2)):
+        c.execute(
+            "INSERT INTO webhook_audit(ts,scanner_name,source_ip,payload_size_bytes,response_code,"
+            "signals_accepted,signals_rejected,duration_ms) VALUES(?,?,?,?,?,?,?,?)",
+            (_ts("10:31:00"), scanner, "1.2.3.4", 900, 200, acc, rej, 12),
+        )
 
-    # ── Signals: 10 DUPLICATE + 3 risk-reject + 2 capital-reject + per-strategy QUEUED ──
-    sid = 0
-    for _ in range(10):
-        sid += 1
+    # ── Signals: 10 DUPLICATE + 3 risk-rej + 1 expired (gap_fade_long),
+    #    2 capital-rej (vwap), 8 QUEUED (gap_fade_long) ──
+    def sig(sid, strat, status, hh="10:32:00", scanner=None):
         c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
                   "VALUES(?,?,?,?,?,?)",
-                  (f"sig_dup_{sid}", "AAA", "gap_fade_long", "gap_fade_long", _ts("10:32:00"), "DUPLICATE"))
+                  (sid, "AAA", scanner or strat, strat, _ts(hh), status))
+    for i in range(10):
+        sig(f"sig_dup_{i}", "gap_fade_long", "DUPLICATE")
     for i in range(3):
-        sid += 1
-        c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
-                  "VALUES(?,?,?,?,?,?)",
-                  (f"sig_risk_{i}", "BBB", "gap_fade_long", "gap_fade_long", _ts("10:33:00"),
-                   "REJECTED_DAILY_LOSS"))
+        sig(f"sig_risk_{i}", "gap_fade_long", "REJECTED_DAILY_LOSS", "10:33:00")
+    sig("sig_exp_0", "gap_fade_long", "REJECTED_EXPIRED", "10:33:30")
     for i in range(2):
-        sid += 1
-        c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
-                  "VALUES(?,?,?,?,?,?)",
-                  (f"sig_cap_{i}", "CCC", "vwap_bounce_long", "vwap_bounce_long", _ts("10:34:00"),
-                   "REJECTED_CAPITAL"))
+        sig(f"sig_cap_{i}", "vwap_bounce_long", "REJECTED_CAPITAL", "10:34:00")
     for i in range(8):
-        sid += 1
-        c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
-                  "VALUES(?,?,?,?,?,?)",
-                  (f"sig_q_{i}", "DDD", "gap_fade_long", "gap_fade_long", _ts("10:35:00"), "QUEUED"))
+        sig(f"sig_q_{i}", "gap_fade_long", "QUEUED", "10:35:00")
 
-    # ── Orders: 70 ENTRY placed (60 COMPLETE, 10 CANCELLED) + 8 SL + 12 TGT fills ──
+    # ── Orders: 70 ENTRY placed (60 COMPLETE, 10 CANCELLED). The first 8 ENTRY
+    #    orders belong to the 8 REAL trades (per-strategy PROCESSING join). ──
+    real_trades = ["trd_c1", "trd_c2", "trd_c3", "trd_c4",
+                   "trd_o1", "trd_o2", "trd_o3", "trd_o4"]
     for i in range(70):
         st = "COMPLETE" if i < 60 else "CANCELLED"
         filled = _ts("10:40:00") if st == "COMPLETE" else None
+        trade_id = real_trades[i] if i < 8 else f"trd_e_{i}"
         c.execute(
             "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
             "qty_requested,status,placed_at,filled_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (f"ord_e_{i}", f"trd_e_{i}", "ENTRY", "BUY", "LIMIT", "MIS", "regular", 10, st,
+            (f"ord_e_{i}", trade_id, "ENTRY", "BUY", "LIMIT", "MIS", "regular", 10, st,
              _ts("10:39:00"), filled, _ts("10:40:00")),
         )
+    # Exit fills: 8 SL + 12 TGT COMPLETE. ord_sl_0 → trd_c1 (gap SL_HIT close);
+    # ord_tgt_0 → trd_c4 (gap TGT_HIT close). Others on synthetic trades.
     for i in range(8):
+        tid = "trd_c1" if i == 0 else f"trd_e_{i+10}"
         c.execute(
             "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
             "qty_requested,status,placed_at,filled_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (f"ord_sl_{i}", f"trd_e_{i}", "SL", "SELL", "SL", "MIS", "regular", 10, "COMPLETE",
+            (f"ord_sl_{i}", tid, "SL", "SELL", "SL", "MIS", "regular", 10, "COMPLETE",
              _ts("11:00:00"), _ts("13:00:00"), _ts("13:00:00")),
         )
     for i in range(12):
+        tid = "trd_c4" if i == 0 else f"trd_e_{i+30}"
         c.execute(
             "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
             "qty_requested,status,placed_at,filled_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (f"ord_tgt_{i}", f"trd_e_{i}", "TGT", "SELL", "LIMIT", "MIS", "regular", 10, "COMPLETE",
+            (f"ord_tgt_{i}", tid, "TGT", "SELL", "LIMIT", "MIS", "regular", 10, "COMPLETE",
              _ts("11:00:00"), _ts("13:30:00"), _ts("13:30:00")),
         )
+    # Superseded chain: an old CANCELLED SL on trd_c1, replaced by ord_sl_0.
+    c.execute(
+        "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
+        "qty_requested,status,placed_at,filled_at,updated_at,superseded_by) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("ord_sl_old", "trd_c1", "SL", "SELL", "SL", "MIS", "regular", 10, "CANCELLED",
+         _ts("10:45:00"), None, _ts("11:00:00"), "ord_sl_0"),
+    )
+    # A FAILED order (rejection) on the all-losing strategy's trade (trd_c2, vwap).
+    c.execute(
+        "INSERT INTO orders(order_id,trade_id,leg,transaction_type,order_type,product,variety,"
+        "qty_requested,status,placed_at,filled_at,updated_at,rejection_reason) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("ord_fail_1", "trd_c2", "SL", "SELL", "SL", "MIS", "regular", 10, "FAILED",
+         _ts("12:00:00"), None, _ts("12:00:00"), "Invalid tags: max allowed tag length is 20"),
+    )
 
-    # ── Trades: 8 created today (4 CLOSED today + 4 OPEN) ──
-    # Closed: consecutive-loss streak=3 (latest 3 losses, then a win by exit_time).
+    # ── Trades: 8 created today — 4 CLOSED + 4 OPEN.
+    #    Streak by exit_time DESC: c1(-100), c2(-50), c3(-75) → 3 losses, then c4 win. ──
     closed = [
-        # trade_id, strategy, exit_time, exit_reason, net_pnl
-        ("trd_c1", "gap_fade_long",     "15:10:00", "SL_HIT", -100.0),
-        ("trd_c2", "vwap_bounce_long",  "15:05:00", "EOD",     -50.0),
-        ("trd_c3", "vwap_bounce_long",  "15:00:00", "MANUAL",  -75.0),
-        ("trd_c4", "gap_fade_long",     "14:50:00", "TGT_HIT", 200.0),
+        ("trd_c1", "gap_fade_long",    "15:10:00", "SL_HIT", -100.0),
+        ("trd_c2", "vwap_bounce_long", "15:05:00", "EOD",     -50.0),
+        ("trd_c3", "vwap_bounce_long", "15:00:00", "MANUAL",  -75.0),
+        ("trd_c4", "gap_fade_long",    "14:50:00", "TGT_HIT", 200.0),
     ]
     for tid, strat, et, reason, pnl in closed:
         c.execute(
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
-            "qty_filled,margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
-            "gross_pnl,net_pnl,status,actual_position_value_rs) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 5000.0, 100.0,
-             _ts("10:05:00"), _ts("10:06:00"), _ts(et), reason, pnl + 5, pnl, "CLOSED", 10000.0),
+            "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,"
+            "margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
+            "gross_pnl,net_pnl,status,actual_position_value_rs,order_to_fill_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 1000.0, 1001.0,
+             990.0, 1015.0, 5000.0, 100.0, _ts("10:05:00"), _ts("10:06:00"), _ts(et),
+             reason, pnl + 5, pnl, "CLOSED", 10000.0, 850),
         )
     opens = [("trd_o1", "gap_fade_long"), ("trd_o2", "gap_fade_long"),
              ("trd_o3", "vwap_bounce_long"), ("trd_o4", "range_breakout_long")]
     for tid, strat in opens:
         c.execute(
             "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
-            "qty_filled,margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
-            "gross_pnl,net_pnl,status,actual_position_value_rs) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 5000.0, 100.0,
-             _ts("11:00:00"), _ts("11:01:00"), None, None, None, None, "OPEN", 10000.0),
+            "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,"
+            "margin_reserved,risk_amount,created_at,entry_time,exit_time,exit_reason,"
+            "gross_pnl,net_pnl,status,actual_position_value_rs,order_to_fill_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tid, f"sig_{tid}", "AAA", "LONG", strat, "IT", 10, 10, 1000.0, 1001.0,
+             990.0, 1015.0, 5000.0, 100.0, _ts("11:00:00"), _ts("11:01:00"), None,
+             None, None, None, "OPEN", 10000.0, 900),
         )
 
-    # ── fm_ledger: INIT total=100000 (70k intraday + 30k positional); losses=450 ──
+    # ── Innings: trd_o1 is on inning 2 (re-entry); others have no innings row. ──
+    c.execute("INSERT INTO innings(trade_id,inning_number,is_real,exit_reason) VALUES(?,?,?,?)",
+              ("trd_o1", 1, 1, "SL"))
+    c.execute("INSERT INTO innings(trade_id,inning_number,is_real,exit_reason) VALUES(?,?,?,?)",
+              ("trd_o1", 2, 0, "OPEN"))
+
+    # ── fm_ledger: INIT total=100000; realized losses 450 + one win 200 ──
     c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after) "
               "VALUES(?,?,?,?,?,?)", (_ts("08:15:01"), "INIT", 70000.0, "intraday", 0.0, 70000.0))
     c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after) "
@@ -205,14 +281,14 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
                   (_ts(f"15:1{i}:00"), "RELEASE_USED", 0.0, "intraday", 0.0, 0.0, loss, 2.0))
     c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after,"
               "pnl_delta,costs) VALUES(?,?,?,?,?,?,?,?)",
-              (_ts("14:50:00"), "RELEASE_USED", 0.0, "intraday", 0.0, 0.0, 200.0, 2.0))  # a win
+              (_ts("14:50:00"), "RELEASE_USED", 0.0, "intraday", 0.0, 0.0, 200.0, 2.0))
 
     # ── capital_snapshot: used 42000 / pending 3000 ──
     c.execute("INSERT INTO capital_snapshot(id,cash_floor,realized_pnl_today,margin_used,"
               "margin_reserved,charges_today,updated_at) VALUES(1,?,?,?,?,?,?)",
               (55000.0, -25.0, 42000.0, 3000.0, 10.0, _ts("15:15:00")))
 
-    # ── config snapshot (limits source) ──
+    # ── config snapshot ──
     config_json = json.dumps({"system": _SNAPSHOT_SYSTEM, "scoring": {}, "slippage": {}})
     c.execute("INSERT INTO config_snapshots(snapshot_date,snapshot_ts,account_id,mode,trade_type,"
               "config_hash,config_json) VALUES(?,?,?,?,?,?,?)",
@@ -256,12 +332,15 @@ def _build_analytics(path: str) -> None:
 
 
 def _write_strategies(config_dir: str) -> None:
+    """5 configured strategies: gap_fade_long (3-cap), vwap_bounce_long (all-losing),
+    range_breakout_long, first_pullback_long (SILENT enabled), gap_fade_short (disabled)."""
     sdir = os.path.join(config_dir, "strategies")
     os.makedirs(sdir, exist_ok=True)
     strategies = [
         ("gap_fade_long", "LONG", True, 3),
         ("vwap_bounce_long", "LONG", True, 2),
         ("range_breakout_long", "LONG", True, 2),
+        ("first_pullback_long", "LONG", True, 2),   # silent — configured, zero rows
         ("gap_fade_short", "SHORT", False, 2),
     ]
     for name, direction, enabled, cap in strategies:
@@ -272,7 +351,16 @@ def _write_strategies(config_dir: str) -> None:
                 "order_protocol": "CO_PLUS_TGT", "max_concurrent_positions": cap,
                 "entry_start_time": "09:25", "entry_end_time": "15:00",
             }, fh, sort_keys=False)
-    # a minimal system_config.yaml for the YAML-fallback path
+    # scan_webhook_map: 1:1 for each strategy + N:1 (gap_fade_long_alt → gap_fade_long).
+    # momentum_combo is deliberately ABSENT (unmapped → "scanner-level (shared)").
+    scan_map = {"scanners": {}}
+    for name, _d, _e, _c in strategies:
+        scan_map["scanners"][name] = {"strategy": name, "chartink_url": f"https://x/{name}"}
+    scan_map["scanners"]["gap_fade_long_alt"] = {"strategy": "gap_fade_long",
+                                                 "chartink_url": "https://x/alt"}
+    with open(os.path.join(config_dir, "scan_webhook_map.yaml"), "w", encoding="utf-8") as fh:
+        yaml.safe_dump(scan_map, fh, sort_keys=False)
+    # minimal system_config.yaml for the YAML-fallback path
     with open(os.path.join(config_dir, "system_config.yaml"), "w", encoding="utf-8") as fh:
         yaml.safe_dump(_SNAPSHOT_SYSTEM, fh, sort_keys=False)
 
@@ -315,11 +403,8 @@ def gui_config(tmp_path, schema_version):
             "eod_squareoff": "15:17", "market_close": "15:30", "active_weekdays": [0, 1, 2, 3, 4],
         },
         "auth": {
-            "username": "tester",
-            # pbkdf2 hash of "secret123" (generated via backend.auth.hash_password)
-            "password_hash": "",
-            "totp_secret": "", "max_failures": 5, "lockout_minutes": 15,
-            "session_lifetime_minutes": 60,
+            "username": "tester", "password_hash": "", "totp_secret": "",
+            "max_failures": 5, "lockout_minutes": 15, "session_lifetime_minutes": 60,
         },
     }
 

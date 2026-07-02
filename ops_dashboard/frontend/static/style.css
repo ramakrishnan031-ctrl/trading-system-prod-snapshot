@@ -134,3 +134,90 @@ tr.st-AWAITING .cap-status, tr.st-UNAVAILABLE .cap-status { color: var(--dim); }
 
 @keyframes blink { 0%,100% { box-shadow: 0 0 0 0 rgba(210,153,34,.0);} 50% { box-shadow: 0 0 0 3px rgba(210,153,34,.55);} }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* ── G2b-1 additions ── */
+.panel-link { color: var(--blue); text-decoration: none; font-size: .74rem; }
+.panel-link:hover { text-decoration: underline; }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .76rem; }
+.tbl-scroll { overflow-x: auto; }
+
+/* Strategy strip (dashboard) */
+.strat-strip { display: flex; flex-wrap: wrap; gap: 10px; }
+.strat-chip { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; min-width: 150px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+  text-decoration: none; color: var(--text); }
+.strat-chip:hover { border-color: var(--blue); }
+.chip-pos { border-left: 4px solid var(--green); }
+.chip-neg { border-left: 4px solid var(--red); }
+.chip-rank { font-size: .66rem; font-weight: 800; color: var(--purple); }
+.chip-rank.rank-one { color: #ffd33d; }
+.chip-name { font-size: .8rem; font-weight: 600; }
+.chip-pnl { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.chip-sub { font-size: .66rem; color: var(--muted); }
+
+/* Rank toggle */
+.rank-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.rt-label { font-size: .7rem; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.rt-btn { background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+  padding: 4px 10px; border-radius: 999px; font-size: .74rem; cursor: pointer; }
+.rt-btn.rt-active { background: rgba(56,139,253,.15); color: var(--blue); border-color: var(--blue); }
+
+/* Strategy Control Tower cards */
+.tower-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 14px; }
+.tower-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+.tower-off { opacity: .55; }
+.tw-head { display: flex; align-items: center; gap: 8px; }
+.tw-name { font-weight: 700; font-size: .95rem; }
+.tw-dir { font-size: .68rem; color: var(--muted); }
+.tw-mode { margin-left: auto; font-size: .66rem; color: var(--purple); }
+.tw-scanners { font-size: .66rem; color: var(--dim); margin: 4px 0 10px; }
+.tw-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.twg { background: var(--panel); border: 1px solid rgba(48,54,61,.6); border-radius: 8px; padding: 8px 10px; }
+.twg h4 { margin: 0 0 6px; font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+.twg-row { display: flex; justify-content: space-between; font-size: .76rem; padding: 1.5px 0; }
+.twg-row span { color: var(--muted); }
+.twg-row b { font-variant-numeric: tabular-nums; }
+
+/* HEALTH staleness colors */
+.stale-OK { color: var(--pos); }
+.stale-WARN { color: var(--orange); }
+.stale-STALE { color: var(--neg); }
+.stale-NONE { color: var(--dim); }
+
+/* Filters + list pages */
+.filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.flt { background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+  padding: 6px 9px; border-radius: 6px; font-size: .8rem; }
+.flt:focus { outline: none; border-color: var(--blue); }
+.wrapcell { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .74rem; color: var(--muted); }
+.cfgcell { display: inline-block; max-width: 420px; white-space: normal; color: var(--muted); }
+.cap-note { font-size: .7rem; color: var(--dim); max-width: 260px; }
+.cap-group { margin-bottom: 18px; }
+.cap-group-title { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--blue); margin: 0 0 6px; }
+
+/* Family pills (signals/orders) */
+.fam-pill { font-size: .68rem; font-weight: 700; padding: 1.5px 7px; border-radius: 999px; }
+.famp-accepted { background: rgba(46,160,67,.18); color: var(--pos); }
+.famp-rejected { background: rgba(218,54,51,.2); color: var(--neg); }
+.famp-duplicated { background: rgba(163,113,247,.16); color: var(--purple); }
+.famp-expired { background: rgba(139,148,158,.16); color: var(--muted); }
+tr.fam-rejected td:first-child { border-left: 3px solid var(--red); }
+tr.fam-duplicated td:first-child { border-left: 3px solid var(--purple); }
+tr.ost-FAILED td:first-child { border-left: 3px solid var(--red); }
+tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
+
+/* Denominator strip (signals) */
+.denom-strip { display: flex; flex-wrap: wrap; gap: 14px; margin-bottom: 12px; padding: 10px 12px;
+  background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; }
+.dn { display: flex; flex-direction: column; gap: 1px; }
+.dn span { font-size: .64rem; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+.dn b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+
+/* Info banner + empty state (holdings) */
+.info-banner { background: rgba(56,139,253,.1); border: 1px solid rgba(56,139,253,.4);
+  color: var(--blue); padding: 8px 12px; border-radius: 8px; font-size: .8rem; margin-bottom: 12px; }
+.empty-state { text-align: center; padding: 44px 20px; }
+.es-icon { font-size: 2.2rem; }
+.es-title { font-weight: 700; margin: 8px 0 6px; }
+.es-body { color: var(--muted); font-size: .82rem; max-width: 560px; margin: 0 auto; line-height: 1.5; }

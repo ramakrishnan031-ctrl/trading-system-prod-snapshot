@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Positions{% endblock %}
+{% block nav_positions %}active{% endblock %}
+{% block content %}
+<div x-data="positionsPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Open Positions
+      <span class="panel-sub">
+        <span x-text="(data.count != null ? data.count : 0) + (data.max_open_positions ? ' / ' + data.max_open_positions + ' max' : '')"></span>
+        · <a class="panel-link" href="/capacity">capacity →</a>
+      </span>
+    </h2>
+
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr>
+        <th>Symbol</th><th>Strategy</th><th>Dir</th><th>Mode</th><th>Status</th><th>Qty</th>
+        <th>Entry</th><th>SL</th><th>TGT</th><th>Risk ₹</th><th>Margin ₹</th>
+        <th>Unrealized</th><th>Age</th><th>Inning#</th>
+      </tr></thead>
+      <tbody>
+        <template x-for="p in data.rows || []" :key="p.trade_id">
+          <tr>
+            <td x-text="p.symbol"></td>
+            <td x-text="p.strategy"></td>
+            <td x-text="p.direction"></td>
+            <td x-text="data.mode || '—'"></td>
+            <td><span class="fam-pill famp-expired" x-text="p.status"></span></td>
+            <td class="cap-num" x-text="p.qty_filled + '/' + p.qty_planned"></td>
+            <td class="cap-num" x-text="dash(p.entry_actual_price != null ? p.entry_actual_price : p.entry_target_price)"></td>
+            <td class="cap-num" x-text="dash(p.sl_initial)"></td>
+            <td class="cap-num" x-text="dash(p.tgt_initial)"></td>
+            <td class="cap-num" x-text="dash(p.risk_amount)"></td>
+            <td class="cap-num" x-text="dash(p.margin_reserved)"></td>
+            <td class="cap-num" title="G4" x-text="'—'"></td>
+            <td x-text="age(p.entry_time || p.created_at)"></td>
+            <td class="cap-num" x-text="dash(p.inning_no)"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
+          <td colspan="14" class="ev-empty">No open positions.</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="panel-sub" style="margin-top:8px">
+      Unrealized P&L is not persisted by the trading system (G4 — live LTP needs a
+      broker session); shown as “—” by design. Open-set statuses:
+      <span class="mono" x-text="(data.open_states || []).join(', ')"></span>
+    </p>
+  </section>
+</div>
+
+<script>
+function positionsPage() {
+  return Object.assign(pageBase("/api/positions"), {
+    age(ts) {
+      if (!ts) return "—";
+      const t = Date.parse(String(ts));
+      if (isNaN(t)) return "—";
+      const s = Math.max(0, (Date.now() - t) / 1000);
+      if (s < 3600) return Math.round(s / 60) + "m";
+      return (s / 3600).toFixed(1) + "h";
+    },
+  });
+}
+</script>
+{% endblock %}

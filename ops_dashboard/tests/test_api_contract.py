@@ -26,29 +26,88 @@ def test_capacity_contract(client):
     r = client.get("/api/capacity")
     assert r.status_code == 200
     d = r.get_json()
-    assert len(d["rows"]) == 8
+    assert len(d["rows"]) == 8            # G2a dashboard-widget contract preserved
     assert {"key", "label", "used", "limit", "remaining", "status", "unit"} <= set(d["rows"][0])
+    assert len(d["groups"]) == 6          # G2b-1 grouped screen
+    assert {"name", "rows"} <= set(d["groups"][0])
 
 
-def test_strategy_contract(client):
-    r = client.get("/api/strategy_panel")
+def test_strategies_contract(client):
+    r = client.get("/api/strategies")
     assert r.status_code == 200
     d = r.get_json()
-    assert d["count"] == 4
-    assert {"name", "enabled", "trades", "net_pnl", "rank", "max_concurrent"} <= set(d["rows"][0])
+    assert d["count"] == 5
+    row = d["rows"][0]
+    assert {"basic", "signals", "processing", "trading", "performance",
+            "risk", "health"} <= set(row)                  # the 7 Rama groups
+    assert {"name", "enabled", "scanners", "mode", "rank"} <= set(row["basic"])
+    assert set(d["rankings"]) == {"net_pnl", "win_rate", "expectancy", "success_rate"}
+    assert isinstance(d["scanner_level"], list)
+
+
+def test_strategy_detail_contract(client):
+    r = client.get("/api/strategies/gap_fade_long")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["strategy"]["basic"]["name"] == "gap_fade_long"
+    assert set(d["rankings"]) == {"net_pnl", "win_rate", "expectancy", "success_rate"}
+    assert client.get("/api/strategies/nope").status_code == 404
+
+
+def test_signals_contract(client):
+    d = client.get("/api/signals").get_json()
+    assert {"date", "denominator", "count", "rows"} <= set(d)
+    assert {"received", "accepted", "rejected", "duplicated_stored", "stored"} <= set(d["denominator"])
+    if d["rows"]:
+        assert {"signal_id", "received_at", "scanner", "strategy", "symbol",
+                "status", "family"} <= set(d["rows"][0])
+
+
+def test_orders_contract(client):
+    d = client.get("/api/orders").get_json()
+    assert {"date", "count", "rows"} <= set(d)
+    if d["rows"]:
+        assert {"order_id", "trade_id", "leg", "status", "qty_requested", "qty_filled",
+                "placed_at", "filled_at", "rejection_reason", "superseded_by",
+                "symbol", "strategy", "place_to_fill_ms"} <= set(d["rows"][0])
+
+
+def test_positions_contract(client):
+    d = client.get("/api/positions").get_json()
+    assert {"mode", "count", "max_open_positions", "open_states",
+            "unrealized_note", "rows"} <= set(d)
+    if d["rows"]:
+        assert {"trade_id", "symbol", "strategy", "direction", "qty_filled",
+                "sl_initial", "tgt_initial", "risk_amount", "margin_reserved",
+                "inning_no"} <= set(d["rows"][0])
+
+
+def test_holdings_contract(client):
+    d = client.get("/api/holdings").get_json()
+    assert {"banner", "count", "rows"} <= set(d)
 
 
 def test_auth_required_api(app):
     anon = app.test_client()   # no session
-    assert anon.get("/api/dashboard").status_code == 401
-    assert anon.get("/api/pipeline").status_code == 401
+    for ep in ("/api/dashboard", "/api/pipeline", "/api/capacity", "/api/strategies",
+               "/api/signals", "/api/orders", "/api/positions", "/api/holdings"):
+        assert anon.get(ep).status_code == 401, ep
 
 
-def test_auth_required_page_redirects(app):
+def test_auth_required_pages_redirect(app):
     anon = app.test_client()
-    r = anon.get("/")
-    assert r.status_code == 302
-    assert "/login" in r.headers.get("Location", "")
+    for page in ("/", "/strategies", "/signals", "/orders", "/positions",
+                 "/holdings", "/capacity"):
+        r = anon.get(page)
+        assert r.status_code == 302, page
+        assert "/login" in r.headers.get("Location", "")
+
+
+def test_pages_render_when_authed(client):
+    for page in ("/", "/strategies", "/signals", "/orders", "/positions",
+                 "/holdings", "/capacity"):
+        r = client.get(page)
+        assert r.status_code == 200, page
 
 
 def test_login_page_is_reachable_without_auth(app):

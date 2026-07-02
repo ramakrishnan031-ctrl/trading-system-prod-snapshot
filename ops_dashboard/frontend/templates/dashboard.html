@@ -1,113 +1,139 @@
 {% extends "base.html" %}
 {% block title %}Ops Dashboard — Control Tower{% endblock %}
+{% block nav_dashboard %}active{% endblock %}
 {% block content %}
+<div x-data="dashPage()" x-init="load()" @ops-refresh.window="load()">
 
-<!-- ── PIPELINE: big colored funnel cards ── -->
-<section class="panel">
-  <h2 class="panel-title">Signal → Trade Pipeline
-    <span class="panel-sub" x-text="pipeline.today ? ('· ' + pipeline.today) : ''"></span>
-  </h2>
-  <div class="pipeline-grid">
-    <template x-for="st in pipeline.stages" :key="st.key">
-      <div class="pcard" :class="['color-' + st.color, st.active ? 'is-active' : '']">
-        <div class="pcard-name" x-text="st.name"></div>
-        <div class="pcard-count" x-text="st.count"></div>
-        <div class="pcard-foot">
-          <span class="pcard-color" x-text="st.color"></span>
-          <span class="pcard-age" x-show="st.last_event_age_sec !== null" x-cloak
-                x-text="ago(st.last_event_age_sec)"></span>
-        </div>
-      </div>
-    </template>
-  </div>
-</section>
-
-<div class="two-col">
-  <!-- ── DAILY CAPACITY MONITOR ── -->
+  <!-- ── PIPELINE: big colored funnel cards ── -->
   <section class="panel">
-    <h2 class="panel-title">Daily Capacity Monitor
-      <span class="panel-sub" x-text="capacity.config_source ? ('· ' + capacity.config_source) : ''"></span>
+    <h2 class="panel-title">Signal → Trade Pipeline
+      <span class="panel-sub" x-text="pipeline.today ? ('· ' + pipeline.today) : ''"></span>
     </h2>
-    <table class="cap-table">
-      <thead><tr><th>Limit</th><th>Used</th><th>Cap</th><th>Left</th><th>Status</th></tr></thead>
-      <tbody>
-        <template x-for="row in capacity.rows" :key="row.key">
-          <tr :class="'st-' + (row.status || 'OK')">
-            <td>
-              <span x-text="row.label"></span>
-              <span class="cap-inert" x-show="row.inert" x-cloak>INERT</span>
-            </td>
-            <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
-            <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
-            <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
-            <td>
-              <span class="cap-bar"><span class="cap-fill" :style="'width:' + Math.min(100, row.pct || 0) + '%'"></span></span>
-              <span class="cap-status" x-text="row.status"></span>
-            </td>
-          </tr>
-        </template>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- ── SERVICE HEALTH + EVENTS ── -->
-  <section class="panel">
-    <h2 class="panel-title">Service Health</h2>
-    <div class="svc-strip">
-      <template x-for="u in service_health" :key="u.unit">
-        <div class="svc-chip" :class="'svc-' + u.state">
-          <span class="svc-dot"></span>
-          <span class="svc-name" x-text="u.unit.replace('.service','').replace('.timer','')"></span>
-          <span class="svc-state" x-text="u.state"></span>
+    <div class="pipeline-grid">
+      <template x-for="st in pipeline.stages" :key="st.key">
+        <div class="pcard" :class="['color-' + st.color, st.active ? 'is-active' : '']">
+          <div class="pcard-name" x-text="st.name"></div>
+          <div class="pcard-count" x-text="st.count"></div>
+          <div class="pcard-foot">
+            <span class="pcard-color" x-text="st.color"></span>
+            <span class="pcard-age" x-show="st.last_event_age_sec !== null" x-cloak
+                  x-text="ago(st.last_event_age_sec)"></span>
+          </div>
         </div>
       </template>
     </div>
-
-    <h2 class="panel-title" style="margin-top:1rem">Recent Events</h2>
-    <ul class="events">
-      <template x-for="(ev, i) in events" :key="i">
-        <li>
-          <span class="ev-ts" x-text="ev.timestamp"></span>
-          <span class="ev-type" x-text="ev.event_type"></span>
-          <span class="ev-scn" x-show="ev.scenario" x-cloak x-text="ev.scenario"></span>
-        </li>
-      </template>
-      <li x-show="events.length === 0" x-cloak class="ev-empty">No recent events.</li>
-    </ul>
   </section>
+
+  <div class="two-col">
+    <!-- ── DAILY CAPACITY MONITOR (primary 8 rows; full screen at /capacity) ── -->
+    <section class="panel">
+      <h2 class="panel-title">Daily Capacity Monitor
+        <span class="panel-sub"><a class="panel-link" href="/capacity">all limits →</a></span>
+      </h2>
+      <table class="cap-table">
+        <thead><tr><th>Limit</th><th>Used</th><th>Cap</th><th>Left</th><th>Status</th></tr></thead>
+        <tbody>
+          <template x-for="row in capacity.rows" :key="row.key">
+            <tr :class="'st-' + (row.status || 'OK')">
+              <td>
+                <span x-text="row.label"></span>
+                <span class="cap-inert" x-show="row.inert" x-cloak>INERT</span>
+              </td>
+              <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
+              <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
+              <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
+              <td>
+                <span class="cap-bar"><span class="cap-fill" :style="'width:' + Math.min(100, row.pct || 0) + '%'"></span></span>
+                <span class="cap-status" x-text="row.status"></span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ── SERVICE HEALTH + EVENTS ── -->
+    <section class="panel">
+      <h2 class="panel-title">Service Health</h2>
+      <div class="svc-strip">
+        <template x-for="u in service_health" :key="u.unit">
+          <div class="svc-chip" :class="'svc-' + u.state">
+            <span class="svc-dot"></span>
+            <span class="svc-name" x-text="u.unit.replace('.service','').replace('.timer','')"></span>
+            <span class="svc-state" x-text="u.state"></span>
+          </div>
+        </template>
+      </div>
+
+      <h2 class="panel-title" style="margin-top:1rem">Recent Events</h2>
+      <ul class="events">
+        <template x-for="(ev, i) in events" :key="i">
+          <li>
+            <span class="ev-ts" x-text="ev.timestamp"></span>
+            <span class="ev-type" x-text="ev.event_type"></span>
+            <span class="ev-scn" x-show="ev.scenario" x-cloak x-text="ev.scenario"></span>
+          </li>
+        </template>
+        <li x-show="events.length === 0" x-cloak class="ev-empty">No recent events.</li>
+      </ul>
+    </section>
+  </div>
+
+  <!-- ── STRATEGY STRIP (compact top/worst; full tower at /strategies) ── -->
+  <section class="panel">
+    <h2 class="panel-title">Strategies — Top / Worst today
+      <span class="panel-sub"><a class="panel-link" href="/strategies">full control tower →</a></span>
+    </h2>
+    <div class="strat-strip">
+      <template x-for="r in stripRows()" :key="r.basic.name">
+        <a class="strat-chip" :href="'/strategies'"
+           :class="r.performance.net_pnl > 0 ? 'chip-pos' : (r.performance.net_pnl < 0 ? 'chip-neg' : '')">
+          <span class="chip-rank" x-text="'#' + r.basic.rank"></span>
+          <span class="chip-name" x-text="r.basic.display_name"></span>
+          <span class="chip-pnl" x-text="money(r.performance.net_pnl)"></span>
+          <span class="chip-sub" x-text="r.trading.wins + 'W/' + r.trading.losses + 'L · ' + r.risk.active_positions + ' open'"></span>
+        </a>
+      </template>
+      <span x-show="!strategies.rows || strategies.rows.length === 0" x-cloak class="ev-empty">No strategy activity.</span>
+    </div>
+  </section>
+
 </div>
 
-<!-- ── STRATEGY PANEL ── -->
-<section class="panel">
-  <h2 class="panel-title">Strategies
-    <span class="panel-sub" x-text="strategy.rows ? (strategy.enabled_count + ' enabled / ' + strategy.count + ' total') : ''"></span>
-  </h2>
-  <table class="strat-table">
-    <thead>
-      <tr><th>#</th><th>Strategy</th><th>Dir</th><th>On</th><th>Signals</th><th>Trades</th>
-      <th>W</th><th>L</th><th>Win%</th><th>Net P&L</th><th>Open/Cap</th></tr>
-    </thead>
-    <tbody>
-      <template x-for="row in strategy.rows" :key="row.name">
-        <tr :class="row.enabled === false ? 'strat-off' : ''">
-          <td x-text="row.rank"></td>
-          <td>
-            <span x-text="row.display_name"></span>
-            <span class="strat-unconf" x-show="!row.configured" x-cloak>?</span>
-          </td>
-          <td x-text="row.direction || '—'"></td>
-          <td><span class="dot" :class="row.enabled === false ? 'dot-off' : (row.enabled === true ? 'dot-on' : 'dot-unk')"></span></td>
-          <td x-text="row.signals"></td>
-          <td x-text="row.trades"></td>
-          <td x-text="row.wins"></td>
-          <td x-text="row.losses"></td>
-          <td x-text="row.win_rate !== null ? (row.win_rate + '%') : '—'"></td>
-          <td :class="row.net_pnl > 0 ? 'num-pos' : (row.net_pnl < 0 ? 'num-neg' : '')" x-text="money(row.net_pnl)"></td>
-          <td x-text="row.open_count + '/' + row.max_concurrent"></td>
-        </tr>
-      </template>
-    </tbody>
-  </table>
-</section>
-
+<script>
+function dashPage() {
+  return Object.assign(pageBase("/api/pipeline"), {
+    pipeline: { stages: [], halt: {} }, capacity: { rows: [] }, strategies: { rows: [] },
+    async load() {
+      try {
+        const [p, cap, s] = await Promise.all([
+          fetch("/api/pipeline", {credentials:"same-origin"}).then(r => r.json()),
+          fetch("/api/capacity", {credentials:"same-origin"}).then(r => r.json()),
+          fetch("/api/strategies", {credentials:"same-origin"}).then(r => r.json()),
+        ]);
+        this.pipeline = p || { stages: [], halt: {} };
+        this.capacity = cap || { rows: [] };
+        this.strategies = s || { rows: [] };
+      } catch (e) { /* bar shows the error state */ }
+    },
+    stripRows() {
+      const rows = this.strategies.rows || [];
+      if (rows.length <= 6) return rows;
+      return rows.slice(0, 3).concat(rows.slice(-3));   // top 3 + worst 3 (rank order)
+    },
+    ago(sec) {
+      if (sec === null || sec === undefined) return "";
+      sec = Math.round(sec);
+      if (sec < 60) return sec + "s ago";
+      if (sec < 3600) return Math.round(sec / 60) + "m ago";
+      return Math.round(sec / 3600) + "h ago";
+    },
+    fmtCap(v, unit) {
+      if (v === null || v === undefined) return "—";
+      if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2);
+      return String(v);
+    },
+  });
+}
+</script>
 {% endblock %}

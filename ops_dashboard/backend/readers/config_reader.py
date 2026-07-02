@@ -76,6 +76,32 @@ def get_strategies(cfg: dict) -> dict:
     return out
 
 
+def get_scan_webhook_map(cfg: dict) -> dict:
+    """Parse config/scan_webhook_map.yaml read-only → {scanner: strategy}.
+
+    Format (S14, validated by strategies/loader.py:93-137 by value): each
+    scanner entry carries exactly ONE `strategy` key, so scanner→strategy is
+    1:1 or N:1 — never 1:N (attribution doc §0.1). Missing file → {}.
+    """
+    path = os.path.join(cfg["paths"]["config_dir"], "scan_webhook_map.yaml")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    scanners = raw.get("scanners") or {}
+    if not isinstance(scanners, dict):
+        return {}
+    out: dict = {}
+    for scanner, entry in scanners.items():
+        strategy = entry.get("strategy") if isinstance(entry, dict) else entry
+        if strategy:
+            out[str(scanner)] = str(strategy)
+    return out
+
+
 def dotted(config: dict, path: str, default: Any = None) -> Any:
     """Navigate a dotted key path into a nested dict; default if any hop misses."""
     cur: Any = config

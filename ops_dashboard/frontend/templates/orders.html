@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Orders{% endblock %}
+{% block nav_orders %}active{% endblock %}
+{% block content %}
+<div x-data="ordersPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Orders <span class="panel-sub" x-text="data.date || ''"></span></h2>
+
+    <div class="filters">
+      <input class="flt" type="date" x-model="fDate" @change="load()">
+      <select class="flt" x-model="fLeg" @change="load()">
+        <option value="">all legs</option>
+        <option>ENTRY</option><option>SL</option><option>TGT</option>
+        <option>EOD</option><option>CO</option><option>CANCEL</option>
+      </select>
+      <input class="flt" placeholder="status (e.g. COMPLETE)" x-model.debounce.400ms="fStatus" @change="load()">
+      <input class="flt" placeholder="strategy" x-model.debounce.400ms="fStrategy" @change="load()">
+      <input class="flt" placeholder="symbol" x-model.debounce.400ms="fSymbol" @change="load()">
+      <span class="panel-sub" x-text="(data.count != null ? data.count : 0) + ' rows'"></span>
+    </div>
+
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr>
+        <th>Order</th><th>Trade</th><th>Leg</th><th>Symbol</th><th>Strategy</th><th>Status</th>
+        <th>Qty</th><th>Avg fill</th><th>Placed</th><th>Filled</th>
+        <th>Fill ms</th><th>Reject reason</th><th>Superseded</th>
+      </tr></thead>
+      <tbody>
+        <template x-for="o in data.rows || []" :key="o.order_id">
+          <tr :class="'ost-' + o.status">
+            <td class="mono" x-text="short(o.order_id)"></td>
+            <td class="mono" x-text="short(o.trade_id)"></td>
+            <td x-text="o.leg"></td>
+            <td x-text="dash(o.symbol)"></td>
+            <td x-text="dash(o.strategy)"></td>
+            <td><span class="fam-pill" :class="stClass(o.status)" x-text="o.status"></span></td>
+            <td class="cap-num" x-text="o.qty_filled + '/' + o.qty_requested"></td>
+            <td class="cap-num" x-text="dash(o.avg_fill_price)"></td>
+            <td class="ev-ts" x-text="tstr(o.placed_at)"></td>
+            <td class="ev-ts" x-text="tstr(o.filled_at)"></td>
+            <td class="cap-num" x-text="dash(o.place_to_fill_ms)"></td>
+            <td class="wrapcell" x-text="dash(o.rejection_reason)"></td>
+            <td><span x-show="o.superseded_by" x-cloak class="cap-inert"
+                      :title="o.superseded_by" x-text="'→ ' + short(o.superseded_by)"></span></td>
+          </tr>
+        </template>
+        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
+          <td colspan="13" class="ev-empty">No orders for the selected filters.</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+</div>
+
+<script>
+function ordersPage() {
+  return Object.assign(pageBase("/api/orders"), {
+    fDate: "", fLeg: "", fStatus: "", fStrategy: "", fSymbol: "",
+    qs() {
+      const p = new URLSearchParams();
+      if (this.fDate) p.set("date", this.fDate);
+      if (this.fLeg) p.set("leg", this.fLeg);
+      if (this.fStatus) p.set("status", this.fStatus);
+      if (this.fStrategy) p.set("strategy", this.fStrategy);
+      if (this.fSymbol) p.set("symbol", this.fSymbol);
+      const s = p.toString();
+      return s ? "?" + s : "";
+    },
+    short(id) { return id ? String(id).slice(0, 12) : "—"; },
+    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : "—"; },
+    stClass(st) {
+      if (st === "COMPLETE") return "famp-accepted";
+      if (st === "FAILED") return "famp-rejected";
+      if (st === "CANCELLED") return "famp-duplicated";
+      return "famp-expired";
+    },
+  });
+}
+</script>
+{% endblock %}
