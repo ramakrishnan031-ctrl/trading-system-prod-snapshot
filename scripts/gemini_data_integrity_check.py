@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sqlite3
 import sys
@@ -42,7 +43,9 @@ from core.time_authority import today_ist
 DB_PATH = _ROOT / "data_store" / "trading_system.db"
 TOKEN_PATH = _ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR = _ROOT / "reports" / "integrity"
-API_KEY = "pvahsvuu3xjsefc7"
+# C-1 (02-Jul): api_key read from env (.env loaded above), NEVER hardcoded —
+# survives a future api_key rotation and never re-exposes a secret.
+API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
 
 from scripts.agy_runner import run_data_integrity as _agy_integrity
 
@@ -137,6 +140,10 @@ def _fetch_zerodha_candles(symbol: str, instrument_token: int, date_iso: str, lo
         return None
 
     if not access_token:
+        return None
+
+    if not API_KEY:
+        log.warning("integrity_check: ZERODHA_API_KEY_LFL836 not set (.env) for %s", symbol)
         return None
 
     try:

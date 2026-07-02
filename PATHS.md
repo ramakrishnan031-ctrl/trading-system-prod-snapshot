@@ -225,6 +225,19 @@ SHADOW-only (no reject/SL/TGT/STM/entry change). Parity (paper+live; row tagged 
 
 3B/3C historical backfill (`--all-closed`) DEFERRED → next trading day + live token (expect written=41 / skipped=5 / failed=0). Detail: `docs/SYSTEM_MAP.md` header · memory `mfe_mae_excursions_empty_28jun`.
 
+## C-1 credential-exposure inventory (02-Jul, read-only)
+| What | Location |
+|---|---|
+| Full inventory + remediation plan | `docs/audit/c1_credential_exposure_inventory_02jul2026.md` (names/locations only, no values) |
+| Source audit | `docs/audit/system_security_audit_02jul2026.md` (§ C-1) |
+| Remote (exposure surface) | `origin = trading-vm:~/trading-system.git` (VM bare repo, SSH) — **NO public forge** → internal-only |
+| Only real-secret commit | `9f58848` (`.env.example`, 10 vars) — scrubbed by `7bc3367`; HEAD = `FILL_WHEN_READY` placeholders |
+| Live api_key in tracked scripts (HEAD) | `scripts/fetch_daily_candles.py:30`, `scripts/gemini_data_integrity_check.py:45`, `scripts/reconstruct_excursions.py:61` (LFL836 api_key — ACTIVE, non-authenticating alone) |
+| Prevention (LIVE) | placeholder `.env.example` · gitignored+untracked `.env` · secret-scan hook `deploy/hooks/{pre-commit,secret_scan.py}` |
+| Status | 6 exposed secrets DEAD (rotated 02-Jul) · 2 api_keys ACTIVE · history-purge PLANNED (memory `c1_secret_remediation_02jul`) |
+
+Detail: memory `c1_secret_remediation_02jul` + `post_rotation_creds_02jul`.
+
 ## SSH key baseline / re-baseline (security_monitor) — 28-Jun
 | What | Location |
 |---|---|

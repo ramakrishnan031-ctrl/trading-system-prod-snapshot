@@ -372,10 +372,19 @@ inactive alert-watcher).
 - `docs/design/a2_timeout_retry_design_02jul2026.md` — **IMPLEMENTED (committed, unpushed)** for audit A-2: `BrokerTimeoutError` was retried at `signal_processor.py` (combined with the retry-safe `BrokerRateLimitError`) → pipeline re-runs → **second `place_order` = duplicate/2× exposure**; masked only by the entry throttle (a rate-limiter, not idempotency). order_placer already defers (`UNKNOWN_IN_FLIGHT` + queue, `:1291-1323`) and the A-1/E-1 reconciler (`_recover_in_flight_entries`, 15 s poll) already OWNS the timed-out entry. **Fix (all 3 placement paths — `_process_one`/`continue_from_gate`/`continue_from_retest`): a dedicated `except BrokerTimeoutError` that does NOT re-queue, does NOT release the reservation (recovery owns it — singular ownership), marks the signal `TIMEOUT` (an already-CHECK-allowed, already-report-mapped status → NO schema/report change; NOT a new `PLACEMENT_UNKNOWN`, which the `signals.status` CHECK constraint would reject), frees the lock, returns. `BrokerRateLimitError` KEEPS its retry (pre-submission).** Trade stays `UNKNOWN_IN_FLIGHT`; paper/live parity; RAMCOIND/CHECK9/G5b/FIX-068 preserved; no order_placer/reconciler/schema/config/cron change. 6 A-2 tests + 408 regression green. Memory `a2_timeout_retry_impl_02jul`. **Deploy AFTER the 03-Jul 08:15 A-1/E-1 boot confirms clean.**
 - `docs/audit/` — point-in-time audits (cross-reference, don't duplicate). Latest:
   **`docs/audit/system_security_audit_02jul2026.md`** (02-Jul full security & integrity audit,
-  investigate-only) — 1 CRITICAL (**C-1: live creds incl. TOTP seeds committed in `.env.example`
-  → rotate + purge history**) + 4 HIGH (A-1 timeout→naked position · A-2 timeout-retry double-entry ·
-  B-1 daily-loss unrealized-MTM term is dead code · C-2 webhook 0.0.0.0+no-HMAC). Fixes NOT yet
-  applied; memory `system_audit_02jul`. Prior: `system_flow_review_15jun2026.md`,
+  investigate-only) — 1 CRITICAL (**C-1: live creds committed in `.env.example`**) + 4 HIGH (A-1
+  timeout→naked [FIXED, deployed `9becf8c`] · A-2 timeout-retry double-entry [FIXED, committed
+  `fd09a38`] · B-1 daily-loss unrealized-MTM term is dead code · C-2 webhook 0.0.0.0+no-HMAC
+  [locked down]). memory `system_audit_02jul`.
+  **C-1 exposure INVENTORY (02-Jul, read-only):** `docs/audit/c1_credential_exposure_inventory_02jul2026.md`
+  — remote is INTERNAL-ONLY (`trading-vm:~/trading-system.git` bare repo, NO public forge); real `.env`
+  NEVER tracked; the ONLY real-secret commit is **`9f58848`** (`.env.example`, 10 vars — scrubbed by
+  `7bc3367`), plus the **LFL836 api_key** hardcoded in 3 scripts at HEAD
+  (`scripts/{fetch_daily_candles.py:30, gemini_data_integrity_check.py:45, reconstruct_excursions.py:61}`).
+  Post the 02-Jul rotation: **6 exposed secrets DEAD**, **2 api_keys ACTIVE but non-authenticating alone**.
+  Prevention LIVE (placeholder `.env.example`, gitignored `.env`, secret-scan hook). Outstanding (Rama's
+  ops call): optional rotate the 2 api_keys + clean the 3 scripts; defense-in-depth history-purge (plan in
+  memory `c1_secret_remediation_02jul`) — do before any public push. Prior: `system_flow_review_15jun2026.md`,
   `system_audit_14jun2026.md`, `db_schema_review_15jun2026.md`.
 
 ---

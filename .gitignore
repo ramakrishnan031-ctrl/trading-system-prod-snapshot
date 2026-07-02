@@ -5,6 +5,9 @@
 # Credentials — NEVER commit
 .env
 env
+# Rotated-credential spreadsheet — plaintext seeds, must NEVER be committable
+# (the C-1 secret scanner does not scan .xlsx; gitignore + deletion are the controls)
+credentials.xlsx
 
 # SQLite databases
 *.db

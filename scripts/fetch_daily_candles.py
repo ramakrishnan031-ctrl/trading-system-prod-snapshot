@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -23,11 +24,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:  # TASK #3: cron heartbeat import works without PYTHONPATH=.
     sys.path.insert(0, str(ROOT))
+
+# C-1 (02-Jul): load .env so the api_key resolves under cron (matches
+# scripts/reconcile_positions.py / auto_refresh_token.py). Double-load is a no-op.
+from dotenv import load_dotenv
+load_dotenv(ROOT / ".env")
+
 TOKEN_PATH  = ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR  = ROOT / "data_store" / "candles"
 DB_PATH     = ROOT / "data_store" / "trading_system.db"
 
-API_KEY = "pvahsvuu3xjsefc7"
+# C-1 (02-Jul): api_key read from env (.env), NEVER hardcoded — survives a future
+# api_key rotation (Rama updates .env; no code change) and never re-exposes a secret.
+API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
 
 
 def _get_traded_symbols(date_iso: str) -> list[str]:
@@ -169,6 +178,10 @@ def main(argv=None) -> None:
 
     if not TOKEN_PATH.exists():
         print(f"ERROR: Token not found at {TOKEN_PATH}")
+        sys.exit(1)
+
+    if not API_KEY:
+        print("ERROR: ZERODHA_API_KEY_LFL836 not set (.env not loaded / var missing)")
         sys.exit(1)
 
     with open(TOKEN_PATH) as f:

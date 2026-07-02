@@ -101,3 +101,50 @@ def test_normal_code_not_flagged():
 def test_placeholder_values_allowed():
     for val in ("FILL_WHEN_READY", "<your_key>", "CHANGE_ME", "your_api_key", "xxxxxx", "${API_KEY}"):
         assert secret_scan.scan_content("cfg", f"API_KEY={val}") == [], val
+
+
+# ── .xlsx layer (C-1 gap: a binary credentials.xlsx bypasses the text scanner) ──
+def _xlsx_bytes(rows) -> bytes:
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_xlsx_credentials_secret_cells_blocked():
+    # a credentials.xlsx with real-looking secret cells must be caught
+    data = _xlsx_bytes([
+        ["Account_ID", "Kite_Password", "API_Key", "API_Secret", "2FA_Code"],
+        ["LFL836", "shortpw12", "apikey1234567xyz", _fake_api_secret(), _fake_base32_totp()],
+    ])
+    findings = secret_scan.scan_xlsx("credentials.xlsx", data)
+    assert any("xlsx_secret_value" in f for f in findings), findings
+
+
+def test_xlsx_bot_token_cell_blocked():
+    data = _xlsx_bytes([["Telegram", "Bot_Token"], ["1", _fake_telegram_token()]])
+    findings = secret_scan.scan_xlsx("creds.xlsx", data)
+    assert any("xlsx_bot_token" in f for f in findings), findings
+
+
+def test_xlsx_clean_workbook_passes():
+    # a benign spreadsheet (short values, no secret shapes) is NOT false-positived
+    data = _xlsx_bytes([
+        ["Symbol", "Qty", "Note"],
+        ["RELIANCE", 100, "ok"],
+        ["INFY", 50, "hold"],
+    ])
+    assert secret_scan.scan_xlsx("reports/output/x.xlsx", data) == []
+
+
+def test_xlsx_unparseable_fails_closed():
+    # an .xlsx we cannot open must BLOCK (a binary we can't inspect could hide a secret)
+    findings = secret_scan.scan_xlsx("credentials.xlsx", b"PK\x03\x04 not really a workbook")
+    assert findings, "unparseable .xlsx must be blocked (fail closed)"
+    assert any(("xlsx_unparseable" in f) or ("xlsx_unscannable" in f) for f in findings), findings

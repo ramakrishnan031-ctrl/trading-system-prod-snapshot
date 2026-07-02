@@ -11,6 +11,9 @@ Blocks a commit that stages a real credential. Layers:
      secret-looking value) must be a placeholder. This is the exact failure C-1
      exposed (real values committed in the template + git history). Non-secret
      template defaults (LOG_LEVEL=INFO) are intentionally allowed.
+  4. `.xlsx` workbooks are parsed cell-by-cell (`scan_xlsx`) and scanned for the same
+     secret shapes -- a binary spreadsheet (e.g. `credentials.xlsx`) would otherwise
+     bypass the text scanner. FAIL CLOSED: an un-inspectable .xlsx is BLOCKED.
 
 `scan_content(path, text) -> list[str]` is a PURE function (no git) so it is unit
 -testable. `scan_staged()` scans `git diff --cached` content and is what the
@@ -126,6 +129,46 @@ def scan_content(path: str, text: str) -> list[str]:
     return findings
 
 
+def scan_xlsx(path: str, data: bytes) -> list[str]:
+    """Scan an .xlsx workbook's cell values for secret shapes.
+
+    C-1 gap: a binary .xlsx (e.g. `credentials.xlsx`) bypasses the text scanner
+    entirely (scan_staged skips null-byte blobs). This inspects every cell string.
+    FAIL CLOSED: if the workbook cannot be parsed (openpyxl missing / corrupt), BLOCK
+    — an un-inspectable spreadsheet could hide a credential. Findings never contain
+    the value (only file[sheet] + rule)."""
+    try:
+        import io
+        import openpyxl
+    except Exception:  # noqa: BLE001
+        return [f"{path}: cannot scan .xlsx — openpyxl unavailable; refusing to commit an "
+                f"un-inspectable spreadsheet (rule=xlsx_unscannable)"]
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as exc:  # noqa: BLE001
+        return [f"{path}: cannot open .xlsx ({type(exc).__name__}); refusing to commit an "
+                f"un-inspectable spreadsheet (rule=xlsx_unparseable)"]
+    findings: list[str] = []
+    seen: set = set()
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(values_only=True):
+            for cell in row:
+                if cell is None:
+                    continue
+                v = str(cell).strip()
+                if not v:
+                    continue
+                rule = None
+                if _BOT_TOKEN_RE.search(v):
+                    rule = "xlsx_bot_token"
+                elif _looks_secret(v):
+                    rule = "xlsx_secret_value"
+                if rule and (ws.title, rule) not in seen:
+                    seen.add((ws.title, rule))
+                    findings.append(f"{path} [sheet={ws.title}]: real-looking secret in a cell (rule={rule})")
+    return findings
+
+
 def _staged_files() -> list[str]:
     out = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM", "-z"],
@@ -143,6 +186,13 @@ def scan_staged() -> int:
         return 0
     findings: list[str] = []
     for f in files:
+        # .xlsx is binary (a zip) → read the staged blob as BYTES and parse cells
+        # (the text path below would skip it as binary — the C-1 credentials.xlsx gap).
+        if f.lower().endswith(".xlsx"):
+            raw = subprocess.run(["git", "show", f":{f}"], capture_output=True)  # bytes
+            if raw.returncode == 0 and raw.stdout:
+                findings.extend(scan_xlsx(f, raw.stdout))
+            continue
         # Decode git output as UTF-8 explicitly: on Windows text=True would use the
         # locale codec (cp1252) and crash on UTF-8 bytes (arrows/em-dashes in files).
         blob = subprocess.run(
