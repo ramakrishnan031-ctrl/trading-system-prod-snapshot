@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Alerts{% endblock %}
+{% block nav_alerts %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/alerts')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Alerts <span class="panel-sub" x-text="data.today || ''"></span></h2>
+    <div class="halt-banner" x-show="data.sentinels && data.sentinels.length" x-cloak style="position:static">
+      <span class="halt-tag">SENTINEL</span>
+      <span x-text="(data.sentinels || []).length + ' critical_alert flag(s) present in data_store'"></span>
+    </div>
+    <div class="info-banner" x-text="data.note || ''"></div>
+
+    <h2 class="panel-title">Telegram alerts — today</h2>
+    <table class="cap-table">
+      <thead><tr><th>Sent</th><th>Severity</th><th>Title</th><th>Status</th><th>Attempts</th><th>Module</th></tr></thead>
+      <tbody>
+        <template x-for="(a, i) in data.alerts || []" :key="i">
+          <tr>
+            <td class="ev-ts" x-text="a.sent_at"></td>
+            <td><span class="fam-pill" :class="a.severity === 'CRITICAL' || a.severity === 'ERROR' ? 'sev-chip sev-CRITICAL' : (a.severity === 'WARN' ? 'sev-chip sev-WARNING' : 'sev-chip sev-INFO')" x-text="a.severity"></span></td>
+            <td class="wrapcell" x-text="a.title"></td>
+            <td x-text="a.status"></td>
+            <td class="cap-num" x-text="a.attempts"></td>
+            <td class="mono" x-text="a.source_module || ''"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.alerts || data.alerts.length === 0" x-cloak>
+          <td colspan="6" class="ev-empty">No Telegram alerts today.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 class="panel-title" style="margin-top:14px">failed_alerts.log (tail)</h2>
+    <pre class="logpre" x-show="data.failed_alerts_tail && data.failed_alerts_tail.length" x-cloak
+         x-text="(data.failed_alerts_tail || []).join('\n')"></pre>
+    <span class="ev-empty" x-show="!data.failed_alerts_tail || data.failed_alerts_tail.length === 0" x-cloak>
+      No failed-alert entries (file absent or empty).</span>
+  </section>
+</div>
+{% endblock %}

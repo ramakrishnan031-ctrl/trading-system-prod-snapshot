@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Capital{% endblock %}
+{% block nav_capital %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/capital')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Capital <span class="panel-sub" x-text="data.today || ''"></span></h2>
+    <div class="big-grid">
+      <div class="bignum"><span class="bn-label">Opening (INIT)</span><span class="bn-val" x-text="data.opening_capital != null ? money(data.opening_capital) : '—'"></span></div>
+      <div class="bignum"><span class="bn-label">Intraday Allocated</span><span class="bn-val" x-text="data.buckets && data.buckets.intraday_allocated != null ? money(data.buckets.intraday_allocated) : '—'"></span><span class="bn-sub" x-text="data.buckets && data.buckets.intraday_pct != null ? (Math.round(data.buckets.intraday_pct*100) + '% bucket') : ''"></span></div>
+      <div class="bignum"><span class="bn-label">Used</span><span class="bn-val" x-text="money(data.used)"></span><span class="bn-sub" x-text="'pending ' + money(data.pending)"></span></div>
+      <div class="bignum"><span class="bn-label">Remaining</span><span class="bn-val" x-text="data.remaining != null ? money(data.remaining) : '—'"></span></div>
+      <div class="bignum"><span class="bn-label">Deployed</span><span class="bn-val" x-text="data.deployed_pct != null ? data.deployed_pct + '%' : '—'"></span></div>
+      <div class="bignum" :class="Number(data.realized_pnl_today) < 0 ? 'bn-red' : 'bn-green'"><span class="bn-label">Realized P&L</span><span class="bn-val" x-text="money(data.realized_pnl_today)"></span></div>
+    </div>
+    <h2 class="panel-title" style="margin-top:14px">fm_ledger — today (append-only, newest first)</h2>
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Time</th><th>Type</th><th>Bucket</th><th>Amount</th><th>Margin Δ</th><th>P&L Δ</th><th>Costs</th><th>Balance after</th><th>Reason</th></tr></thead>
+      <tbody>
+        <template x-for="l in data.ledger || []" :key="l.ledger_id">
+          <tr>
+            <td class="ev-ts" x-text="l.ts ? l.ts.slice(11,19) : ''"></td>
+            <td><span class="fam-pill" :class="'lt-' + l.entry_type" x-text="l.entry_type"></span></td>
+            <td x-text="l.bucket"></td>
+            <td class="cap-num" x-text="money(l.amount)"></td>
+            <td class="cap-num" x-text="money(l.margin_delta)"></td>
+            <td class="cap-num" :class="l.pnl_delta > 0 ? 'num-pos' : (l.pnl_delta < 0 ? 'num-neg' : '')" x-text="money(l.pnl_delta)"></td>
+            <td class="cap-num" x-text="money(l.costs)"></td>
+            <td class="cap-num" x-text="money(l.balance_after)"></td>
+            <td class="wrapcell" x-text="dash(l.reason)"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.ledger || data.ledger.length === 0" x-cloak><td colspan="9" class="ev-empty">No ledger entries today.</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

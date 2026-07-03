@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Statistics{% endblock %}
+{% block nav_statistics %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/statistics')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Trade Statistics
+      <span class="panel-sub" x-text="(data.today || '') + (data.innings ? (' · innings ' + data.innings.total + ' (' + data.innings.real + ' real)') : '')"></span>
+    </h2>
+
+    <h2 class="panel-title">LONG vs SHORT (permanent split)</h2>
+    <div class="big-grid">
+      <template x-for="d in data.per_direction || []" :key="d.direction">
+        <div class="bignum" style="align-items:flex-start">
+          <span class="bn-label" x-text="d.direction"></span>
+          <span class="bn-val" :class="d.net > 0 ? 'num-pos' : (d.net < 0 ? 'num-neg' : '')" x-text="money(d.net)"></span>
+          <span class="bn-sub" x-text="d.closed + ' closed · ' + d.wins + 'W/' + d.losses + 'L' + (d.win_rate !== null ? ' · ' + d.win_rate + '%' : '')"></span>
+          <span class="bn-note" x-text="'avg R ' + d.avg_r + (d.expectancy !== null ? ' · expectancy ₹' + d.expectancy : '')"></span>
+        </div>
+      </template>
+    </div>
+
+    <h2 class="panel-title" style="margin-top:14px">Closed trades + MFE/MAE (today)</h2>
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Symbol</th><th>Strategy</th><th>Dir</th><th>Net</th><th>MFE %</th><th>MAE %</th></tr></thead>
+      <tbody>
+        <template x-for="t in data.trades_with_excursions || []" :key="t.trade_id">
+          <tr>
+            <td x-text="t.symbol"></td><td x-text="t.strategy"></td><td x-text="t.direction"></td>
+            <td class="cap-num" :class="t.net_pnl > 0 ? 'num-pos' : (t.net_pnl < 0 ? 'num-neg' : '')" x-text="dash(t.net_pnl)"></td>
+            <td class="cap-num" x-text="dash(t.mfe_pct)"></td>
+            <td class="cap-num" x-text="dash(t.mae_pct)"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.trades_with_excursions || data.trades_with_excursions.length === 0" x-cloak>
+          <td colspan="6" class="ev-empty">No closed trades today.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="panel-sub">MFE/MAE are SIGNED (may be negative/positive respectively — never floored);
+      blank = excursion not reconstructed for that trade.</p>
+  </section>
+</div>
+{% endblock %}

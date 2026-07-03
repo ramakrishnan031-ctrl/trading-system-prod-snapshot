@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}VM Health{% endblock %}
+{% block nav_vm %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/vm')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">VM Health (live)</h2>
+    <div class="big-grid">
+      <div class="bignum">
+        <span class="bn-label">RAM Available</span>
+        <span class="bn-val" x-text="data.live && data.live.mem_available_kb != null ? (data.live.mem_available_kb/1048576).toFixed(2) + ' GB' : 'unavailable'"></span>
+        <span class="bn-sub" x-show="data.live && !data.live.available" x-cloak>non-Linux dev box</span>
+      </div>
+      <div class="bignum">
+        <span class="bn-label">Load Avg</span>
+        <span class="bn-val" x-text="data.live && data.live.loadavg ? data.live.loadavg.map(v => v.toFixed(2)).join(' / ') : 'unavailable'"></span>
+      </div>
+      <div class="bignum">
+        <span class="bn-label">Disk /</span>
+        <span class="bn-val" x-text="data.live && data.live.disk_root ? data.live.disk_root.used_pct + '%' : '—'"></span>
+        <span class="bn-sub" x-text="data.live && data.live.disk_root ? (data.live.disk_root.free_gb + ' GB free') : ''"></span>
+      </div>
+      <div class="bignum">
+        <span class="bn-label">Disk data</span>
+        <span class="bn-val" x-text="data.live && data.live.disk_data ? data.live.disk_data.used_pct + '%' : '—'"></span>
+        <span class="bn-sub" x-text="data.live && data.live.disk_data ? (data.live.disk_data.free_gb + ' GB free') : ''"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">History</h2>
+    <div class="info-banner"
+         x-text="data.cpu_ram_history ? ('CPU/RAM history: ' + data.cpu_ram_history.note) : ''"></div>
+    <h2 class="panel-title" style="margin-top:10px">Disk used % (system_metrics)</h2>
+    <table class="cap-table"><thead><tr><th>Time</th><th>Disk used %</th></tr></thead><tbody>
+      <template x-for="(r, i) in data.disk_history || []" :key="i">
+        <tr><td class="ev-ts" x-text="r.ts"></td><td class="cap-num" x-text="r.disk_used_pct"></td></tr>
+      </template>
+      <tr x-show="!data.disk_history || data.disk_history.length === 0" x-cloak>
+        <td colspan="2" class="ev-empty">No system_metrics history in this DB.</td></tr>
+    </tbody></table>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Slippage{% endblock %}
+{% block nav_slippage %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/slippage')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Slippage
+      <span class="panel-sub" x-text="(data.today || '') + (data.model ? (' · model ' + data.model.mode + ' (' + data.model.max_slippage_fraction + '×SL, cap ₹' + data.model.absolute_cap_rs + ')') : '')"></span>
+    </h2>
+
+    <h2 class="panel-title">Per-trade decomposition (today)</h2>
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Symbol</th><th>Strategy</th><th>Side</th><th>Entry slip ₹</th>
+        <th>SL slip ₹</th><th>TGT slip ₹</th><th>Tolerance ₹</th><th>Breach</th>
+        <th>Planned RR</th><th>Actual RR</th><th>RR damage %</th><th>Result</th></tr></thead>
+      <tbody>
+        <template x-for="(r, i) in data.rows || []" :key="i">
+          <tr :class="r.breach ? 'st-BREACH' : ''">
+            <td x-text="r.symbol"></td><td x-text="r.strategy_name"></td><td x-text="r.side"></td>
+            <td class="cap-num" x-text="dash(r.entry_slippage_rs)"></td>
+            <td class="cap-num" x-text="dash(r.sl_slippage_rs)"></td>
+            <td class="cap-num" x-text="dash(r.tgt_slippage_rs)"></td>
+            <td class="cap-num" x-text="dash(r.tolerance_rs)"></td>
+            <td><span x-show="r.breach" x-cloak class="fam-pill famp-rejected">BREACH</span></td>
+            <td class="cap-num" x-text="dash(r.planned_rr)"></td>
+            <td class="cap-num" x-text="dash(r.actual_rr)"></td>
+            <td class="cap-num" x-text="dash(r.rr_damage_pct)"></td>
+            <td x-text="dash(r.trade_result)"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
+          <td colspan="12" class="ev-empty">No slippage rows today.</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="two-col" style="margin-top:14px">
+      <div>
+        <h2 class="panel-title">Per strategy</h2>
+        <table class="cap-table"><thead><tr><th>Strategy</th><th>Trades</th><th>Entry slip ₹</th><th>Breaches</th><th>Avg RR dmg %</th></tr></thead><tbody>
+          <template x-for="a in data.per_strategy || []" :key="a.strategy">
+            <tr><td x-text="a.strategy"></td><td class="cap-num" x-text="a.trades"></td>
+              <td class="cap-num" x-text="a.entry_slip_rs"></td>
+              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td>
+              <td class="cap-num" x-text="dash(a.avg_rr_damage_pct)"></td></tr>
+          </template>
+        </tbody></table>
+      </div>
+      <div>
+        <h2 class="panel-title">Worst today (entry slip)</h2>
+        <table class="cap-table"><thead><tr><th>Symbol</th><th>Strategy</th><th>Entry slip ₹</th><th>Breach</th></tr></thead><tbody>
+          <template x-for="(w, i) in data.worst || []" :key="i">
+            <tr><td x-text="w.symbol"></td><td x-text="w.strategy_name"></td>
+              <td class="cap-num" x-text="dash(w.entry_slippage_rs)"></td>
+              <td><span x-show="w.breach" x-cloak class="fam-pill famp-rejected">BREACH</span></td></tr>
+          </template>
+        </tbody></table>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

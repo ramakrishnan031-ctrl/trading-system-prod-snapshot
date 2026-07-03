@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Risk{% endblock %}
+{% block nav_risk %}active{% endblock %}
+{% block content %}
+<div x-data="riskPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Risk Monitor <span class="panel-sub" x-text="data.today || ''"></span></h2>
+    <div class="big-grid">
+      <div class="bignum" :class="stcls(data.daily_loss)">
+        <span class="bn-label">Daily Loss (₹)</span>
+        <span class="bn-val" x-text="data.daily_loss ? money(data.daily_loss.used) : '—'"></span>
+        <span class="bn-sub" x-text="data.daily_loss && data.daily_loss.limit ? ('limit ' + money(data.daily_loss.limit)) : 'limit —'"></span>
+        <span class="bn-note" x-text="data.daily_loss ? data.daily_loss.source_note : ''"></span>
+      </div>
+      <div class="bignum" :class="stcls(data.consecutive_losses)">
+        <span class="bn-label">Consecutive Losses</span>
+        <span class="bn-val" x-text="data.consecutive_losses ? data.consecutive_losses.used : '—'"></span>
+        <span class="bn-sub" x-text="data.consecutive_losses ? ('limit ' + data.consecutive_losses.limit) : ''"></span>
+      </div>
+      <div class="bignum" :class="data.kill_switch && data.kill_switch.halted ? 'bn-red' : 'bn-green'">
+        <span class="bn-label">Kill Switch</span>
+        <span class="bn-val" x-text="data.kill_switch ? data.kill_switch.state : '—'"></span>
+        <span class="bn-sub" x-text="data.kill_switch && data.kill_switch.since ? ('since ' + data.kill_switch.since) : ''"></span>
+        <span class="bn-note" x-text="data.kill_switch ? (data.kill_switch.reason || '') : ''"></span>
+      </div>
+      <div class="bignum" :class="stcls(data.open_positions)">
+        <span class="bn-label">Open Positions</span>
+        <span class="bn-val" x-text="data.open_positions ? (data.open_positions.used + ' / ' + data.open_positions.limit) : '—'"></span>
+      </div>
+      <div class="bignum">
+        <span class="bn-label">Open Risk (Σ risk_amount)</span>
+        <span class="bn-val" x-text="money(data.open_risk_amount)"></span>
+        <span class="bn-sub" x-text="data.opening_capital ? ('opening ' + money(data.opening_capital)) : ''"></span>
+      </div>
+    </div>
+    <p class="panel-sub">Daily-loss source = fm_ledger RELEASE_USED (decision D2); get_daily_realized_net_pnl avoided (W10 double-subtracts costs).</p>
+  </section>
+</div>
+<script>
+function riskPage() {
+  return Object.assign(pageBase("/api/risk"), {
+    stcls(x) {
+      if (!x || x.limit == null || x.used == null) return "";
+      if (x.used >= x.limit) return "bn-red";
+      if (x.used >= 0.8 * x.limit) return "bn-orange";
+      return "bn-green";
+    },
+  });
+}
+</script>
+{% endblock %}

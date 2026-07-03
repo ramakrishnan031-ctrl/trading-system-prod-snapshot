@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Capacity{% endblock %}
+{% block nav_capacity %}active{% endblock %}
+{% block content %}
+<div x-data="capacityPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Capacity Monitor — all configured limits
+      <span class="panel-sub" x-text="meta()"></span>
+    </h2>
+
+    <template x-for="g in data.groups || []" :key="g.name">
+      <div class="cap-group">
+        <h3 class="cap-group-title" x-text="g.name"></h3>
+        <table class="cap-table">
+          <thead><tr><th style="width:26%">Limit</th><th>Configured</th><th>Used</th>
+            <th>Remaining</th><th>Status</th><th>Note</th></tr></thead>
+          <tbody>
+            <template x-for="row in g.rows" :key="row.key">
+              <tr :class="'st-' + (row.status || 'OK')">
+                <td>
+                  <span x-text="row.label"></span>
+                  <span class="cap-inert" x-show="row.inert" x-cloak>INERT</span>
+                </td>
+                <td class="cap-num">
+                  <template x-if="row.type === 'quota'">
+                    <span x-text="fmtCap(row.limit, row.unit)"></span>
+                  </template>
+                  <template x-if="row.type !== 'quota'">
+                    <span class="mono cfgcell" x-text="cfgStr(row.configured)"></span>
+                  </template>
+                </td>
+                <td class="cap-num" x-text="row.type === 'quota' ? fmtCap(row.used, row.unit) : '—'"></td>
+                <td class="cap-num" x-text="row.type === 'quota' && row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
+                <td>
+                  <template x-if="row.type === 'quota'">
+                    <span class="cap-bar"><span class="cap-fill" :style="'width:' + Math.min(100, row.pct || 0) + '%'"></span></span>
+                  </template>
+                  <span class="cap-status" x-text="row.status"></span>
+                </td>
+                <td class="cap-note" x-text="row.note || (row.rate_limited_today != null ? ('429s today: ' + row.rate_limited_today) : '')"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </template>
+  </section>
+</div>
+
+<script>
+function capacityPage() {
+  return Object.assign(pageBase("/api/capacity"), {
+    meta() {
+      if (!this.data.today) return "";
+      const oc = this.data.opening_capital;
+      return this.data.today + " · config: " + (this.data.config_source || "?")
+        + (oc ? " · opening ₹" + oc : "");
+    },
+    fmtCap(v, unit) {
+      if (v === null || v === undefined) return "—";
+      if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2);
+      return String(v);
+    },
+    cfgStr(c) {
+      if (c === null || c === undefined) return "—";
+      if (typeof c !== "object") return String(c);
+      return Object.entries(c).map(([k, v]) => k + "=" + (v === null ? "—" : (typeof v === "object" ? JSON.stringify(v) : v))).join(" · ");
+    },
+  });
+}
+</script>
+{% endblock %}

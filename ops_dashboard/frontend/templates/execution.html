@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Execution{% endblock %}
+{% block nav_execution %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/execution')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Execution — latency distributions
+      <span class="panel-sub" x-text="data.today || ''"></span>
+    </h2>
+    <div class="big-grid">
+      <template x-for="metric in ['signal_to_order_ms', 'order_to_fill_ms', 'total_latency_ms']" :key="metric">
+        <div class="bignum" style="align-items:stretch">
+          <span class="bn-label" x-text="metric.replaceAll('_',' ')"></span>
+          <template x-for="b in (data.latency && data.latency[metric] ? data.latency[metric].buckets : [])" :key="b.bucket">
+            <div class="hbar-row">
+              <span class="hbar-label" style="width:96px" x-text="b.bucket"></span>
+              <span class="hbar"><span class="hbar-fill" :style="'width:' + (data.latency[metric].n ? Math.round(100*b.count/data.latency[metric].n) : 0) + '%'"></span></span>
+              <span class="hbar-val" x-text="b.count"></span>
+            </div>
+          </template>
+          <span class="bn-sub" x-text="(data.latency && data.latency[metric] ? data.latency[metric].n : 0) + ' samples'"></span>
+        </div>
+      </template>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">order_execution_log — today</h2>
+    <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Order</th><th>Symbol</th><th>Strategy</th><th>Leg</th><th>Side</th>
+        <th>Intended</th><th>Actual</th><th>Slip ₹</th><th>Qty</th><th>Partial</th><th>Retries</th><th>Status</th></tr></thead>
+      <tbody>
+        <template x-for="(r, i) in data.execution_log || []" :key="i">
+          <tr>
+            <td class="mono" x-text="(r.order_id || '').slice(0,12)"></td>
+            <td x-text="r.symbol"></td><td x-text="dash(r.strategy_name)"></td>
+            <td x-text="r.leg"></td><td x-text="dash(r.side)"></td>
+            <td class="cap-num" x-text="dash(r.intended_price)"></td>
+            <td class="cap-num" x-text="dash(r.actual_price)"></td>
+            <td class="cap-num" x-text="dash(r.slippage_rs)"></td>
+            <td class="cap-num" x-text="r.filled_qty + '/' + r.qty"></td>
+            <td x-text="r.is_partial ? 'yes' : ''"></td>
+            <td class="cap-num" x-text="r.retry_count"></td>
+            <td x-text="dash(r.status)"></td>
+          </tr>
+        </template>
+        <tr x-show="!data.execution_log || data.execution_log.length === 0" x-cloak>
+          <td colspan="12" class="ev-empty">No execution-log rows today.</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Reconciler actions — today</h2>
+    <table class="cap-table">
+      <thead><tr><th>Time</th><th>Severity</th><th>Action</th></tr></thead>
+      <tbody>
+        <template x-for="(r, i) in data.reconciliation_actions || []" :key="i">
+          <tr><td class="ev-ts" x-text="r.ts"></td>
+            <td><span class="fam-pill" :class="r.severity === 'CRITICAL' ? 'sev-chip sev-CRITICAL' : (r.severity === 'WARN' ? 'sev-chip sev-WARNING' : 'sev-chip sev-INFO')" x-text="r.severity"></span></td>
+            <td class="wrapcell" style="max-width:none" x-text="r.summary"></td></tr>
+        </template>
+        <tr x-show="!data.reconciliation_actions || data.reconciliation_actions.length === 0" x-cloak>
+          <td colspan="3" class="ev-empty">No reconciler actions today.</td></tr>
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

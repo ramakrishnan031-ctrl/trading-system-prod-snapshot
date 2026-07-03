@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Ops Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body x-data="opsDashboard()" x-init="init()">
+<div class="shell">
+
+  <!-- ── A3: icon sidebar (visual nav; collapses to icon-only on mobile) ── -->
+  {% macro icon(name) -%}
+    <svg class="nv-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    {%- if name == 'dashboard' -%}<rect x="1.5" y="1.5" width="5" height="5" rx="1"/><rect x="9.5" y="1.5" width="5" height="5" rx="1"/><rect x="1.5" y="9.5" width="5" height="5" rx="1"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/>
+    {%- elif name == 'strategies' -%}<path d="M3 14V2l9 3-9 3"/>
+    {%- elif name == 'signals' -%}<circle cx="8" cy="8" r="1.5"/><path d="M4.5 11.5a5 5 0 0 1 0-7M11.5 4.5a5 5 0 0 1 0 7"/>
+    {%- elif name == 'orders' -%}<path d="M3 4h10M3 8h10M3 12h7"/>
+    {%- elif name == 'positions' -%}<circle cx="8" cy="8" r="5"/><path d="M8 1v3M8 12v3M1 8h3M12 8h3"/>
+    {%- elif name == 'holdings' -%}<path d="M2 5l6-3 6 3v6l-6 3-6-3zM2 5l6 3 6-3M8 8v6"/>
+    {%- elif name == 'risk' -%}<path d="M8 2l6.5 11.5h-13zM8 7v3M8 12.2v.3"/>
+    {%- elif name == 'capital' -%}<circle cx="8" cy="8" r="6"/><path d="M5.5 5.5h5M5.5 8h5M6 5.5c2.5 0 3 1.5 3 2.5s-1 2.5-3 4"/>
+    {%- elif name == 'exposure' -%}<circle cx="8" cy="8" r="6"/><path d="M8 2v6l4.5 4"/>
+    {%- elif name == 'pnl' -%}<path d="M2 13l3.5-4 3 2.5L14 4M14 4h-3.5M14 4v3.5"/>
+    {%- elif name == 'capacity' -%}<path d="M2 13a6 6 0 0 1 12 0M8 13L11 8"/>
+    {%- elif name == 'services' -%}<circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.5 3.5l1.4 1.4M11.1 11.1l1.4 1.4M12.5 3.5l-1.4 1.4M4.9 11.1l-1.4 1.4"/>
+    {%- elif name == 'vm' -%}<rect x="2" y="2.5" width="12" height="4.5" rx="1"/><rect x="2" y="9" width="12" height="4.5" rx="1"/><path d="M4.5 4.75h.01M4.5 11.25h.01"/>
+    {%- elif name == 'logs' -%}<path d="M4 1.5h6l3 3v10H4zM10 1.5v3h3M6 8h5M6 11h5"/>
+    {%- elif name == 'audit' -%}<path d="M8 1.5l5.5 2v4c0 3.5-2.5 6-5.5 7-3-1-5.5-3.5-5.5-7v-4z"/><path d="M5.8 8l1.6 1.6L10.5 6.4"/>
+    {%- elif name == 'alerts' -%}<path d="M8 2a4 4 0 0 1 4 4c0 3 1 4 1.5 4.5h-11C3 10 4 9 4 6a4 4 0 0 1 4-4zM6.5 13a1.5 1.5 0 0 0 3 0"/>
+    {%- elif name == 'slippage' -%}<path d="M2 8h3l2-4 2 8 2-4h3"/>
+    {%- elif name == 'execution' -%}<path d="M9 1.5L3 9h4l-1 5.5L12 7H8z"/>
+    {%- elif name == 'statistics' -%}<path d="M3 13V9M7 13V5M11 13V7M15 13H1"/>
+    {%- elif name == 'reports' -%}<path d="M3 1.5h8l2 2v11H3zM6 8h4M6 11h4M6 5h2"/>
+    {%- elif name == 'config' -%}<path d="M2 5h8M12 5h2M2 11h2M6 11h8"/><circle cx="11" cy="5" r="1.5"/><circle cx="5" cy="11" r="1.5"/>
+    {%- elif name == 'controls' -%}<circle cx="8" cy="8" r="6"/><path d="M8 8l3-2"/>
+    {%- endif -%}
+    </svg>
+  {%- endmacro %}
+  <aside class="sidebar">
+    <div class="sb-brand" title="Ops Dashboard">OPS</div>
+    <div class="nv-group">Trade</div>
+    <a class="nv-item {% block nav_dashboard %}{% endblock %}" href="/">{{ icon('dashboard') }}<span class="nv-label">Dashboard</span></a>
+    <a class="nv-item {% block nav_strategies %}{% endblock %}" href="/strategies">{{ icon('strategies') }}<span class="nv-label">Strategies</span></a>
+    <a class="nv-item {% block nav_signals %}{% endblock %}" href="/signals">{{ icon('signals') }}<span class="nv-label">Signals</span></a>
+    <a class="nv-item {% block nav_orders %}{% endblock %}" href="/orders">{{ icon('orders') }}<span class="nv-label">Orders</span></a>
+    <a class="nv-item {% block nav_positions %}{% endblock %}" href="/positions">{{ icon('positions') }}<span class="nv-label">Positions</span></a>
+    <a class="nv-item {% block nav_holdings %}{% endblock %}" href="/holdings">{{ icon('holdings') }}<span class="nv-label">Holdings</span></a>
+    <div class="nv-group">Risk &amp; Capital</div>
+    <a class="nv-item {% block nav_risk %}{% endblock %}" href="/risk">{{ icon('risk') }}<span class="nv-label">Risk</span></a>
+    <a class="nv-item {% block nav_capital %}{% endblock %}" href="/capital">{{ icon('capital') }}<span class="nv-label">Capital</span></a>
+    <a class="nv-item {% block nav_exposure %}{% endblock %}" href="/exposure">{{ icon('exposure') }}<span class="nv-label">Exposure</span></a>
+    <a class="nv-item {% block nav_pnl %}{% endblock %}" href="/pnl">{{ icon('pnl') }}<span class="nv-label">P&amp;L</span></a>
+    <a class="nv-item {% block nav_capacity %}{% endblock %}" href="/capacity">{{ icon('capacity') }}<span class="nv-label">Capacity</span></a>
+    <div class="nv-group">System</div>
+    <a class="nv-item {% block nav_services %}{% endblock %}" href="/services">{{ icon('services') }}<span class="nv-label">Services</span></a>
+    <a class="nv-item {% block nav_vm %}{% endblock %}" href="/vm">{{ icon('vm') }}<span class="nv-label">VM</span></a>
+    <a class="nv-item {% block nav_logs %}{% endblock %}" href="/logs">{{ icon('logs') }}<span class="nv-label">Logs</span></a>
+    <a class="nv-item {% block nav_audit %}{% endblock %}" href="/audit">{{ icon('audit') }}<span class="nv-label">Audit</span></a>
+    <a class="nv-item {% block nav_alerts %}{% endblock %}" href="/alerts">{{ icon('alerts') }}<span class="nv-label">Alerts</span></a>
+    <div class="nv-group">Analytics</div>
+    <a class="nv-item {% block nav_slippage %}{% endblock %}" href="/slippage">{{ icon('slippage') }}<span class="nv-label">Slippage</span></a>
+    <a class="nv-item {% block nav_execution %}{% endblock %}" href="/execution">{{ icon('execution') }}<span class="nv-label">Execution</span></a>
+    <a class="nv-item {% block nav_statistics %}{% endblock %}" href="/statistics">{{ icon('statistics') }}<span class="nv-label">Statistics</span></a>
+    <a class="nv-item {% block nav_reports %}{% endblock %}" href="/reports">{{ icon('reports') }}<span class="nv-label">Reports</span></a>
+    <a class="nv-item {% block nav_config %}{% endblock %}" href="/config">{{ icon('config') }}<span class="nv-label">Config</span></a>
+    <a class="nv-item nv-dim {% block nav_controls %}{% endblock %}" href="/controls">{{ icon('controls') }}<span class="nv-label">Controls (G3)</span></a>
+  </aside>
+
+  <div class="main-col">
+    <!-- Halt banner — amber for SOFT_KILL, red+blink ONLY for HARD_KILL -->
+    <div class="halt-banner" x-show="summary.kill_switch && summary.kill_switch.halted" x-cloak
+         :class="summary.kill_switch ? 'halt-' + summary.kill_switch.state : ''">
+      <span class="halt-tag" x-text="summary.kill_switch ? summary.kill_switch.state : ''"></span>
+      <span x-text="summary.kill_switch ? (summary.kill_switch.reason || 'kill switch active') : ''"></span>
+      <span class="halt-since" x-text="summary.kill_switch && summary.kill_switch.triggered_at ? ('since ' + summary.kill_switch.triggered_at) : ''"></span>
+    </div>
+
+    <!-- Pinned summary bar -->
+    <header class="summary-bar">
+      <div class="sb-item">
+        <span class="sb-label">Trader</span>
+        <span class="sb-pill" :class="summary.trader_alive ? 'pill-ok' : 'pill-down'"
+              x-text="summary.trader_alive ? 'UP' : 'DOWN'"></span>
+      </div>
+      <div class="sb-item">
+        <span class="sb-label">Mode</span>
+        <!-- A4: display-only pill — PAPER green / LIVE red. NOT a toggle. -->
+        <span class="sb-pill" :class="summary.mode === 'LIVE' ? 'pill-live' : 'pill-paper'"
+              x-text="summary.mode || '—'"></span>
+      </div>
+      <div class="sb-item">
+        <span class="sb-label">Kill</span>
+        <!-- A5: prominent kill chip; blink ONLY on HARD_KILL. Display-only. -->
+        <span class="sb-pill kill-chip"
+              :class="[
+                'kill-' + (summary.kill_switch ? summary.kill_switch.state : 'INACTIVE'),
+                summary.kill_switch && summary.kill_switch.state === 'HARD_KILL' ? 'chip-blink' : ''
+              ]"
+              :title="summary.kill_switch && summary.kill_switch.halted
+                      ? ((summary.kill_switch.reason || '') + ' · since ' + (summary.kill_switch.triggered_at || ''))
+                      : 'kill switch inactive'"
+              x-text="summary.kill_switch ? summary.kill_switch.state : '—'"></span>
+      </div>
+      <div class="sb-item">
+        <span class="sb-label">Phase</span>
+        <span class="sb-pill pill-phase" x-text="summary.phase || '—'"></span>
+      </div>
+      <div class="sb-item"><span class="sb-label">Received</span><span class="sb-num num" x-text="c('received')"></span></div>
+      <div class="sb-item"><span class="sb-label">Trades</span><span class="sb-num num" x-text="c('trades_today')"></span></div>
+      <div class="sb-item"><span class="sb-label">Open</span><span class="sb-num num" x-text="c('open_positions')"></span></div>
+      <div class="sb-item">
+        <span class="sb-label">Net P&L</span>
+        <span class="sb-num num" :class="netClass()" x-text="money(c('net_pnl_today'))"></span>
+      </div>
+      <div class="sb-item sb-clock">
+        <span class="sb-label">IST</span>
+        <span class="sb-num num" x-text="summary.ist_now || '—'"></span>
+        <span class="sb-poll" x-text="'poll ' + Math.round(pollMs/1000) + 's'"></span>
+      </div>
+      <div class="sb-item sb-right">
+        <form method="post" action="/logout"><button class="btn-logout" type="submit">Log out</button></form>
+      </div>
+      <span class="nav-status" x-show="lastError" x-cloak x-text="lastError"></span>
+    </header>
+
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+  <script src="/static/htmx.min.js"></script>
+  <script>
+  // Root component: polls /api/dashboard for the pinned bar + freshness-driven
+  // cadence (5s market / 60s off), then broadcasts 'ops-refresh' so the active
+  // page component fetches ITS endpoint (Alpine-over-JSON, G2a-accepted pattern).
+  function opsDashboard() {
+    return {
+      summary: {}, freshness: {}, service_health: [], events: [],
+      pollMs: 60000, lastError: "", _timer: null,
+
+      async init() { await this.refresh(); this.schedule(); },
+      schedule() {
+        if (this._timer) clearTimeout(this._timer);
+        this._timer = setTimeout(async () => { await this.refresh(); this.schedule(); }, this.pollMs);
+      },
+      async getJson(url) {
+        const r = await fetch(url, { credentials: "same-origin", headers: { "Accept": "application/json" } });
+        if (r.status === 401) { window.location = "/login"; throw new Error("auth"); }
+        if (!r.ok) throw new Error(url + " -> " + r.status);
+        return await r.json();
+      },
+      async refresh() {
+        try {
+          const d = await this.getJson("/api/dashboard");
+          this.summary = d.summary || {};
+          this.freshness = d.freshness || {};
+          this.service_health = d.service_health || [];
+          this.events = d.events || [];
+          this.pollMs = (d.freshness && d.freshness.poll_ms) ? d.freshness.poll_ms : 60000;
+          this.lastError = "";
+          window.dispatchEvent(new CustomEvent("ops-refresh"));
+        } catch (e) {
+          if (String(e.message) !== "auth") this.lastError = "refresh failed: " + e.message;
+        }
+      },
+      c(k) { return (this.summary.counters && this.summary.counters[k] != null) ? this.summary.counters[k] : 0; },
+      money(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toFixed(2); },
+      netClass() { const n = Number(this.c('net_pnl_today')); return n > 0 ? "num-pos" : (n < 0 ? "num-neg" : ""); },
+      ago(sec) {
+        if (sec === null || sec === undefined) return "";
+        sec = Math.round(sec);
+        if (sec < 60) return sec + "s ago";
+        if (sec < 3600) return Math.round(sec / 60) + "m ago";
+        return Math.round(sec / 3600) + "h ago";
+      },
+      fmtCap(v, unit) {
+        if (v === null || v === undefined) return "—";
+        if (unit === "rs") return (Number(v) < 0 ? "-₹" : "₹") + Math.abs(Number(v)).toFixed(2);
+        return String(v);
+      },
+    };
+  }
+  // Shared page-component helpers (each page's x-data spreads these in).
+  function pageBase(endpoint) {
+    return {
+      data: {}, loading: true, loadError: "",
+      async load() {
+        try {
+          const r = await fetch(endpoint + this.qs(), { credentials: "same-origin",
+            headers: { "Accept": "application/json" } });
+          if (r.status === 401) { window.location = "/login"; return; }
+          if (!r.ok) throw new Error(endpoint + " -> " + r.status);
+          this.data = await r.json();
+          this.loadError = "";
+        } catch (e) { this.loadError = String(e.message || e); }
+        finally { this.loading = false; }
+      },
+      qs() { return ""; },
+      money(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toFixed(2); },
+      dash(v) { return (v === null || v === undefined || v === "") ? "—" : v; },
+    };
+  }
+  </script>
+  <script defer src="/static/alpine.min.js"></script>
+</body>
+</html>

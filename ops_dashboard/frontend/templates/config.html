@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Config{% endblock %}
+{% block nav_config %}active{% endblock %}
+{% block content %}
+<div x-data="configPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Config View (read-only)
+      <span class="panel-sub" x-show="data.header" x-cloak
+            x-text="'snapshot ' + (data.header ? (data.header.snapshot_ts || '—') : '') +
+                    ' · hash ' + (data.header ? (data.header.config_hash || '—') : '') +
+                    ' · last change ' + (data.header && data.header.last_change_date ? data.header.last_change_date : '—')"></span>
+    </h2>
+
+    <!-- DRIFT BANNER -->
+    <div class="drift-banner" x-show="data.drift && data.drift.active" x-cloak>
+      <span class="halt-tag">CONFIG DRIFT</span>
+      <span x-text="'today\'s hash differs from ' + (data.drift ? data.drift.yesterday : '') + ' — changed keys:'"></span>
+      <template x-for="c in (data.drift ? data.drift.changed : [])" :key="c.key">
+        <span class="drift-key" x-text="c.key + ' (' + c.group + ')'"></span>
+      </template>
+    </div>
+    <div class="info-banner" x-show="data.drift && !data.drift.active" x-cloak
+         x-text="data.drift && data.drift.note ? data.drift.note : 'No config drift vs yesterday.'"></div>
+
+    <template x-for="g in data.groups || []" :key="g.name">
+      <div class="cap-group">
+        <h3 class="cap-group-title" x-text="g.name"></h3>
+        <div class="cfg-block" x-show="Object.keys(g.data || {}).length" x-cloak>
+          <template x-for="[k, v] in Object.entries(g.data || {})" :key="k">
+            <div class="cfg-row">
+              <span class="cfg-key mono" x-text="k"></span>
+              <pre class="cfg-val" x-text="typeof v === 'object' ? JSON.stringify(v, null, 1) : String(v)"></pre>
+            </div>
+          </template>
+        </div>
+        <span class="ev-empty" x-show="!Object.keys(g.data || {}).length" x-cloak>empty</span>
+      </div>
+    </template>
+  </section>
+</div>
+<script>
+function configPage() { return pageBase("/api/config"); }
+</script>
+{% endblock %}

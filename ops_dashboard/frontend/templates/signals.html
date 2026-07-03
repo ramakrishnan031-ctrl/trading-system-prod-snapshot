@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Signals{% endblock %}
+{% block nav_signals %}active{% endblock %}
+{% block content %}
+<div x-data="signalsPage()" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Signals <span class="panel-sub" x-text="data.date || ''"></span></h2>
+
+    <!-- Denominator strip: the pre-insert ~82% drop stays visible -->
+    <div class="denom-strip" x-show="data.denominator" x-cloak>
+      <div class="dn"><span>Received (webhook)</span><b x-text="data.denominator ? data.denominator.received : ''"></b></div>
+      <div class="dn"><span>Accepted</span><b x-text="data.denominator ? data.denominator.accepted : ''"></b></div>
+      <div class="dn"><span>Rejected (incl. pre-insert dupes)</span><b x-text="data.denominator ? data.denominator.rejected : ''"></b></div>
+      <div class="dn"><span>Stored</span><b x-text="data.denominator ? data.denominator.stored : ''"></b></div>
+      <div class="dn"><span>Stored dupes</span><b x-text="data.denominator ? data.denominator.duplicated_stored : ''"></b></div>
+    </div>
+
+    <div class="filters">
+      <input class="flt" type="date" x-model="fDate" @change="load()">
+      <input class="flt" placeholder="scanner" x-model.debounce.400ms="fScanner" @change="load()">
+      <input class="flt" placeholder="strategy" x-model.debounce.400ms="fStrategy" @change="load()">
+      <select class="flt" x-model="fFamily" @change="load()">
+        <option value="">all families</option>
+        <option value="accepted">accepted</option>
+        <option value="rejected">rejected</option>
+        <option value="duplicated">duplicated</option>
+        <option value="expired">expired</option>
+      </select>
+      <span class="panel-sub" x-text="(data.count != null ? data.count : 0) + ' rows'"></span>
+    </div>
+
+    <table class="cap-table">
+      <thead><tr><th>Time</th><th>Scanner</th><th>Strategy</th><th>Symbol</th>
+        <th>Status</th><th>Reject reason</th><th>Dupe</th></tr></thead>
+      <tbody>
+        <template x-for="s in data.rows || []" :key="s.signal_id">
+          <tr :class="'fam-' + s.family">
+            <td class="ev-ts" x-text="tstr(s.received_at)"></td>
+            <td x-text="s.scanner"></td>
+            <td x-text="s.strategy"></td>
+            <td x-text="s.symbol"></td>
+            <td><span class="fam-pill" :class="'famp-' + s.family" x-text="s.status"></span></td>
+            <td class="wrapcell" x-text="dash(s.rejection_reason)"></td>
+            <td><span x-show="s.family === 'duplicated'" x-cloak class="cap-inert">DUP</span></td>
+          </tr>
+        </template>
+        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
+          <td colspan="7" class="ev-empty">No stored signals for the selected filters.</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<script>
+function signalsPage() {
+  return Object.assign(pageBase("/api/signals"), {
+    fDate: "", fScanner: "", fStrategy: "", fFamily: "",
+    qs() {
+      const p = new URLSearchParams();
+      if (this.fDate) p.set("date", this.fDate);
+      if (this.fScanner) p.set("scanner", this.fScanner);
+      if (this.fStrategy) p.set("strategy", this.fStrategy);
+      if (this.fFamily) p.set("family", this.fFamily);
+      const s = p.toString();
+      return s ? "?" + s : "";
+    },
+    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : "—"; },
+  });
+}
+</script>
+{% endblock %}

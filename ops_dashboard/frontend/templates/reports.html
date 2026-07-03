@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block nav_reports %}active{% endblock %}
+{% block content %}
+<div x-data="pageBase('/api/reports')" x-init="load()" @ops-refresh.window="load()">
+  <section class="panel">
+    <h2 class="panel-title">Daily Reports
+      <span class="panel-sub"
+            x-text="(data.count || 0) + ' files · total ' + Math.round((data.total_size_bytes || 0)/1048576) + ' MB'"></span>
+    </h2>
+    <div class="info-banner" x-text="data.retention_note || ''"></div>
+    <table class="cap-table">
+      <thead><tr><th>File</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+      <tbody>
+        <template x-for="f in data.files || []" :key="f.name">
+          <tr>
+            <td class="mono" x-text="f.name"></td>
+            <td class="cap-num" x-text="Math.round(f.size_bytes/1024) + ' KB'"></td>
+            <td class="ev-ts" x-text="new Date(f.mtime * 1000).toISOString().slice(0,16).replace('T',' ')"></td>
+            <td>
+              <button class="rt-btn" :disabled="!data.download_enabled"
+                      :title="data.download_enabled ? 'download' : data.download_note"
+                      @click="data.download_enabled && (window.location = '/api/reports/download?file=' + encodeURIComponent(f.name))">
+                download</button>
+            </td>
+          </tr>
+        </template>
+        <tr x-show="!data.files || data.files.length === 0" x-cloak>
+          <td colspan="4" class="ev-empty">No report files found.</td></tr>
+      </tbody>
+    </table>
+    <p class="panel-sub" x-text="data.download_note || ''"></p>
+  </section>
+</div>
+{% endblock %}
