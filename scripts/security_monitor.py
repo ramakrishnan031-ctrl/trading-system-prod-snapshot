@@ -12,7 +12,8 @@ What it watches (read-only):
   3. failed/invalid login rate          -> spike vs baseline (WARNING)
   4. successful logins from a NEW IP    -> possible stolen key (WARNING)
   5. sensitive-file content hashes      -> .env/sshd_config/sudoers/units (CRITICAL/WARNING)
-  6. active SSH session count           -> over configured limit (WARNING, alert not block)
+  6. active SSH session count           -> over configured limit (WARNING, alert not block;
+                                            per-IP breakdown enriched with best-effort GeoIP)
   7. root login probes                  -> anomalous spike (INFO)
   8. copy_protection ON->OFF transition -> someone disabled the gate (CRITICAL)  [Phase 2]
   9. auditd copy_attempt bypass         -> outbound scp/sftp/rsync w/o a token (CRITICAL)  [Phase 2]
@@ -41,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -286,6 +288,51 @@ def established_ssh_peers() -> list[str]:
         return peers
     except Exception:
         return []
+
+
+# GeoIP enrichment: no local MaxMind GeoLite2 DB is installed on the VM (needs
+# a MaxMind account/license key — Rama would have to provision that). Falling
+# back to the free, no-key ip-api.com lookup used in the earlier diagnostic.
+# Best-effort only: never blocks or delays the alert on lookup failure, and
+# cached (state["geoip_cache"]) so a recurring IP is not re-queried every pass.
+_GEOIP_TIMEOUT_SEC = 2.0
+_GEOIP_CACHE_TTL_DAYS = 30
+
+
+def geoip_lookup(ip: str, cache: dict, now: datetime) -> str:
+    """"<City>, <CC> — <ISP/Org>" for `ip`, "local" for private/loopback/link-local,
+    or "" if the lookup fails/is inconclusive. Reads/writes `cache` in place."""
+    try:
+        addr = ipaddress.ip_address(ip)
+        if addr.is_private or addr.is_loopback or addr.is_link_local:
+            return "local"
+    except ValueError:
+        return ""
+    entry = cache.get(ip)
+    if entry:
+        try:
+            cached_ts = datetime.fromisoformat(entry.get("ts", ""))
+            if (now - cached_ts).total_seconds() < _GEOIP_CACHE_TTL_DAYS * 86400:
+                return entry.get("label", "")
+        except (ValueError, TypeError):
+            pass
+    label = ""
+    try:
+        import requests
+        resp = requests.get(
+            f"http://ip-api.com/json/{ip}",
+            params={"fields": "status,country,countryCode,city,isp,org"},
+            timeout=_GEOIP_TIMEOUT_SEC,
+        )
+        data = resp.json()
+        if data.get("status") == "success":
+            place = ", ".join(p for p in (data.get("city"), data.get("countryCode")) if p)
+            org = data.get("org") or data.get("isp") or ""
+            label = f"{place} — {org}" if org else place
+    except Exception:
+        label = ""
+    cache[ip] = {"label": label, "ts": now.isoformat()}
+    return label
 
 
 def session_ip_breakdown(peers: list[str], lines: list[str], now: datetime,
@@ -608,11 +655,14 @@ def check_active_sessions(cfg: SecConfig, state: dict, authlog_lines: list[str],
     state["last_session_peers"] = sorted(set(peers))
     if n > cfg.max_active_sessions:
         breakdown = session_ip_breakdown(peers, authlog_lines, now)
+        geo_cache = state.setdefault("geoip_cache", {})
         per_ip = []
         for ip in sorted(breakdown):
             b = breakdown[ip]
             since = b["earliest"].strftime("%H:%M:%S") if b["earliest"] else "?"
-            per_ip.append(f"{ip} x{b['count']} ({'/'.join(b['users'])}, since {since})")
+            geo = geoip_lookup(ip, geo_cache, now)
+            geo_part = f", {geo}" if geo else ""
+            per_ip.append(f"{ip} x{b['count']} ({'/'.join(b['users'])}, since {since}{geo_part})")
         return [Finding("WARNING", f"sessions:{n}:{','.join(sorted(set(peers)))[:60]}",
                         "Active SSH sessions over limit",
                         f"{n} active SSH sessions (limit {cfg.max_active_sessions}). "
