@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import math
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Final, Optional
@@ -364,8 +365,15 @@ class FundManager:
         # FM6: active reservations
         self._reservations: dict[str, _Reservation] = {}
 
-        # FIX-035: unrealized MTM tracking per trade_id
+        # FIX-035 / B-1: unrealized MTM tracking per trade_id. ADVISORY ONLY — this
+        # dict is NOT part of the 3-balance invariant (available+reserved+used==total)
+        # and never touches _total / reservations / buckets. It is read by the
+        # pre-trade daily-loss gate; the order_reconciler 15s cycle populates+prunes it
+        # (see _refresh_unrealized_mtm). Freshness is stamped so the gate can fall back
+        # to realized-only when the MTM is stale/unavailable (never silently).
         self._unrealized_mtm: dict[str, float] = {}
+        self._mtm_refreshed_at: Optional[float] = None   # time.monotonic() of last refresh
+        self._mtm_available: bool = False                # False until a successful refresh / on outage
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -1433,6 +1441,45 @@ class FundManager:
         """
         with self._lock:
             return sum(self._unrealized_mtm.values())
+
+    # ── B-1: MTM freshness + set-based prune (populated by order_reconciler) ──────
+    _MTM_STALE_AFTER_SEC: float = 45.0   # 3× the 15s reconciler cadence: tolerate one
+    #                                      missed refresh, STALE after ~2 missed cycles.
+
+    def mark_unrealized_mtm_refreshed(self, available: bool) -> None:
+        """B-1: stamp the last MTM refresh. `available=True` after a successful
+        get_quote refresh; `False` on a quote outage (so the gate degrades to
+        realized-only immediately, not only once the age threshold trips)."""
+        with self._lock:
+            self._mtm_refreshed_at = time.monotonic()
+            self._mtm_available = bool(available)
+
+    def get_unrealized_mtm_status(self) -> tuple[float, bool]:
+        """B-1: return (total_unrealized, is_fresh). is_fresh is True only when the
+        last refresh succeeded AND is within _MTM_STALE_AFTER_SEC. The daily-loss gate
+        uses the unrealized term ONLY when fresh; otherwise it runs realized-only+WARN
+        (never fabricates, never silently drops it)."""
+        with self._lock:
+            total = sum(self._unrealized_mtm.values())
+            fresh = (
+                self._mtm_available
+                and self._mtm_refreshed_at is not None
+                and (time.monotonic() - self._mtm_refreshed_at) <= self._MTM_STALE_AFTER_SEC
+            )
+            return total, fresh
+
+    def prune_unrealized_mtm(self, keep_trade_ids) -> int:
+        """B-1: SET-BASED removal — drop any MTM entry whose trade_id is NOT in
+        `keep_trade_ids` (the current OPEN/PARTIAL set). This makes removal correct
+        for a trade closed by ANY path (SL/TGT/manual/EOD) without hooking each close
+        path, and prevents a stale entry from wrongly inflating the daily loss.
+        Returns the number pruned."""
+        keep = set(keep_trade_ids or ())
+        with self._lock:
+            stale = [tid for tid in self._unrealized_mtm if tid not in keep]
+            for tid in stale:
+                self._unrealized_mtm.pop(tid, None)
+            return len(stale)
 
     def reset_daily_pnl(self) -> None:
         """Reset daily realized PnL to 0 at EOD. reserved/used NOT reset (FM14).

@@ -2086,6 +2086,8 @@ def _main_locked(args, config_dir: Path) -> int:
         max_sector_exposure_pct=risk_cfg.max_sector_exposure_pct,
         max_consecutive_losses=risk_cfg.max_consecutive_losses,
         daily_loss_limit_pct=risk_cfg.daily_loss_limit_pct,
+        # B-1 (02-Jul): enforce unrealized MTM in the daily-loss gate (SHADOW default).
+        daily_loss_include_unrealized=risk_cfg.daily_loss_include_unrealized,
         # HIGH #2: sector from instrument_cache (was lambda: "UNKNOWN")
         sector_lookup_fn=lambda sym: instrument_cache.sector(sym),
         logger=get_logger("risk_engine"),

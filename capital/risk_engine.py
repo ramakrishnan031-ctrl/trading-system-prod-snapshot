@@ -146,6 +146,9 @@ class RiskEngine:
         # configured values. Enforced ONLY for a delivery entry (bucket=="positional").
         max_open_delivery_positions: int = 3,
         max_daily_delivery_trades: int = 5,
+        # B-1 (02-Jul): enforce the unrealized-MTM term in the DAILY_LOSS gate.
+        # Default False = SHADOW (log would_reject, enforce realized-only).
+        daily_loss_include_unrealized: bool = False,
     ) -> None:
         self._fm = fund_manager
         self._store = state_store
@@ -154,6 +157,7 @@ class RiskEngine:
         self._max_sector_pct = max_sector_exposure_pct
         self._max_consec = max_consecutive_losses
         self._daily_loss_pct = daily_loss_limit_pct
+        self._daily_loss_include_unrealized = daily_loss_include_unrealized
         self._max_open_delivery = max_open_delivery_positions   # PHASE-3 (A)
         self._max_daily_delivery = max_daily_delivery_trades     # PHASE-3 (A)
         self._sector_fn = sector_lookup_fn
@@ -494,21 +498,50 @@ class RiskEngine:
                 f"max={self._max_consec}",
             )
 
-        # 7. DAILY_LOSS — abs(realized_pnl + unrealized_mtm) >= limit_pct * total (RE7, FIX-035)
+        # 7. DAILY_LOSS — abs(realized + unrealized_mtm) >= limit_pct * total (RE7, FIX-035, B-1)
+        # B-1 (02-Jul): the unrealized-MTM term used to be dead (its writers were never
+        # called → always 0 → realized-only). It is now populated by the reconciler's
+        # 15s refresh. Enforcement is gated by daily_loss_include_unrealized:
+        #   OFF (shadow) → LOG what realized+unrealized WOULD do, but ENFORCE realized-only.
+        #   ON            → ENFORCE realized+unrealized (only when the MTM is FRESH).
+        # If the MTM is stale/unavailable (quote outage / just-restarted), fall back to
+        # realized-only + WARN — never block-all, never fabricate, never silent.
         checks_run.append("DAILY_LOSS")
+        limit = self._daily_loss_pct * snap.total
         daily_pnl = snap.daily_realized_pnl
-        unrealized_mtm = self._fm.get_total_unrealized_mtm()
-        total_pnl = daily_pnl + unrealized_mtm
-        if (
-            total_pnl < 0
-            and snap.total > 0
-            and abs(total_pnl) >= self._daily_loss_pct * snap.total
-        ):
+        unrealized_mtm, mtm_fresh = self._fm.get_unrealized_mtm_status()
+
+        # The value the gate ACTUALLY enforces on: realized + unrealized only when the
+        # enforce flag is ON and the MTM is fresh; realized-only otherwise.
+        use_unrealized = self._daily_loss_include_unrealized and mtm_fresh
+        enforced_pnl = daily_pnl + (unrealized_mtm if use_unrealized else 0.0)
+        # The value that INCLUDES unrealized when fresh — for shadow observability.
+        shadow_pnl = daily_pnl + (unrealized_mtm if mtm_fresh else 0.0)
+
+        if self._daily_loss_include_unrealized and not mtm_fresh:
+            self._log.warning(
+                "risk_engine.daily_loss.mtm_unavailable: enforcing realized-only "
+                "(unrealized MTM stale/unavailable) realized=%.2f limit=%.2f",
+                daily_pnl, limit,
+            )
+        # Shadow observability: would realized+unrealized reject when realized-only does NOT?
+        if snap.total > 0 and mtm_fresh and not use_unrealized:
+            would_reject = shadow_pnl < 0 and abs(shadow_pnl) >= limit
+            enforced_reject = enforced_pnl < 0 and abs(enforced_pnl) >= limit
+            if would_reject and not enforced_reject:
+                self._log.info(
+                    "risk_engine.daily_loss.would_reject_with_unrealized: shadow=%.2f "
+                    "(realized=%.2f + unrealized=%.2f) >= limit=%.2f — NOT enforced "
+                    "(daily_loss_include_unrealized=false)",
+                    shadow_pnl, daily_pnl, unrealized_mtm, limit,
+                )
+
+        if enforced_pnl < 0 and snap.total > 0 and abs(enforced_pnl) >= limit:
+            u_note = f" + unrealized={unrealized_mtm:.2f}" if use_unrealized else " (realized-only)"
             return reject(
                 "DAILY_LOSS",
-                f"Daily loss limit hit: total_pnl={total_pnl:.2f} "
-                f"(realized={daily_pnl:.2f} + unrealized={unrealized_mtm:.2f}), "
-                f"limit={self._daily_loss_pct * snap.total:.2f}",
+                f"Daily loss limit hit: total_pnl={enforced_pnl:.2f} "
+                f"(realized={daily_pnl:.2f}{u_note}), limit={limit:.2f}",
             )
 
         # 8. SECTOR_EXPOSURE — existing + this trade <= max_pct * total (RE6)

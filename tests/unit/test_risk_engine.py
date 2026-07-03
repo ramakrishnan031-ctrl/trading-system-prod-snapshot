@@ -66,6 +66,7 @@ class _MockFundManager:
     def __init__(self, snap: CapitalSnapshot) -> None:
         self._snap = snap
         self._unrealized_mtm = 0.0
+        self._mtm_fresh = True   # B-1: freshness flag the gate reads
         self._live_reservations = 0  # FIX-185: authoritative in-flight count
 
     def get_snapshot(self) -> CapitalSnapshot:
@@ -74,6 +75,10 @@ class _MockFundManager:
     def get_total_unrealized_mtm(self) -> float:
         """FIX-035: Return total unrealized MTM."""
         return self._unrealized_mtm
+
+    def get_unrealized_mtm_status(self) -> tuple[float, bool]:
+        """B-1: (total_unrealized, is_fresh) — what the daily-loss gate now reads."""
+        return self._unrealized_mtm, self._mtm_fresh
 
     def count_live_reservations(self) -> int:
         """FIX-185: authoritative count of uncommitted entry reservations."""
@@ -154,6 +159,7 @@ def _make_engine(
     daily_loss_pct: float = 0.05,
     sector_fn: Any = _sector_fn,
     kill_switch: Any = None,
+    daily_loss_include_unrealized: bool = False,
 ) -> RiskEngine:
     log = logging.getLogger("test_risk_engine")
     log.handlers.clear()
@@ -170,6 +176,7 @@ def _make_engine(
         sector_lookup_fn=sector_fn,
         logger=log,
         kill_switch=kill_switch,
+        daily_loss_include_unrealized=daily_loss_include_unrealized,
     )
 
 
@@ -760,7 +767,9 @@ def test_fix035_daily_loss_includes_unrealized_mtm(tmp_path: Path) -> None:
     fm = _MockFundManager(snap)
     fm._unrealized_mtm = -35_000.0  # Set unrealized MTM
     ks = _MockKillSwitch(active=False)
-    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05)
+    # B-1: the unrealized term is now enforced only when the flag is ON (shadow-default).
+    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=True)
 
     result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
 
@@ -784,7 +793,8 @@ def test_fix035_daily_loss_unrealized_keeps_under_limit(tmp_path: Path) -> None:
     fm = _MockFundManager(snap)
     fm._unrealized_mtm = -25_000.0
     ks = _MockKillSwitch(active=False)
-    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=True)
 
     result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
 
@@ -804,7 +814,8 @@ def test_fix035_daily_loss_unrealized_offsets_realized_loss(tmp_path: Path) -> N
     fm = _MockFundManager(snap)
     fm._unrealized_mtm = 30_000.0  # Open positions showing profit
     ks = _MockKillSwitch(active=False)
-    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05)
+    engine = _make_engine(store, fm, handler, kill_switch=ks, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=True)
 
     result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-001")
 
@@ -1168,9 +1179,100 @@ def test_determinism_same_inputs_same_result(tmp_path: Path) -> None:
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ═══════════════════════════════════════════════════════════════════════════
+# B-1 (02-Jul) — daily-loss gate: unrealized-MTM term (shadow default / enforce flag)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _infos(handler: _CapturingHandler) -> list[str]:
+    return [r.getMessage() for r in handler.records]
+
+
+def test_b1_shadow_off_enforces_realized_only_but_logs_would_reject(tmp_path: Path) -> None:
+    """SHADOW (flag off): realized alone (−30k) does NOT breach the 50k limit, but
+    realized+unrealized (−60k) WOULD. The gate must ENFORCE realized-only (approve) yet
+    LOG would_reject_with_unrealized. (Fail-on-old: old summed a dead 0 → same approve,
+    but NO would_reject signal; here the term is live and logged.)"""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0, daily_pnl=-30_000.0))
+    fm._unrealized_mtm = -30_000.0
+    fm._mtm_fresh = True
+    engine = _make_engine(store, fm, handler, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=False)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-b1")
+
+    assert result.approved, "shadow mode must enforce realized-only (−30k < 50k limit)"
+    assert any("would_reject_with_unrealized" in m for m in _infos(handler)), \
+        f"expected shadow would_reject log; got {_infos(handler)}"
+    print("  OK B-1 shadow: enforces realized-only + logs would_reject_with_unrealized")
+    store.close()
+
+
+def test_b1_enforce_on_rejects_on_realized_plus_unrealized(tmp_path: Path) -> None:
+    """ENFORCE (flag on) + fresh MTM: realized (−30k) + unrealized (−30k) = −60k ≥ 50k
+    → REJECT DAILY_LOSS, which realized-only (−30k) would have MISSED."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0, daily_pnl=-30_000.0))
+    fm._unrealized_mtm = -30_000.0
+    fm._mtm_fresh = True
+    engine = _make_engine(store, fm, handler, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=True)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-b1")
+
+    assert not result.approved and result.failed_check == "DAILY_LOSS", result.failed_check
+    print("  OK B-1 enforce: rejects on realized+unrealized the realized-only gate missed")
+    store.close()
+
+
+def test_b1_enforce_on_but_stale_falls_back_to_realized_only_with_warn(tmp_path: Path) -> None:
+    """ENFORCE (flag on) but MTM STALE/UNAVAILABLE: the gate must fall back to
+    realized-only (approve, since −30k < 50k) and WARN — never block-all, never use a
+    stale unrealized term."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0, daily_pnl=-30_000.0))
+    fm._unrealized_mtm = -30_000.0     # would breach if used…
+    fm._mtm_fresh = False              # …but it's stale → must be ignored
+    engine = _make_engine(store, fm, handler, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=True)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-b1")
+
+    assert result.approved, "stale MTM must degrade to realized-only (approve)"
+    assert any("mtm_unavailable" in w for w in handler.warnings()), \
+        f"expected mtm_unavailable WARN; got {handler.warnings()}"
+    print("  OK B-1 enforce+stale: realized-only fallback + WARN (never block-all)")
+    store.close()
+
+
+def test_b1_enforce_realized_only_still_rejects_regression(tmp_path: Path) -> None:
+    """Regression: with enforce ON and realized alone breaching (−60k), the gate still
+    rejects (unrealized term absent) — the realized arm is intact."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0, daily_pnl=-60_000.0))
+    fm._unrealized_mtm = 0.0
+    fm._mtm_fresh = True
+    engine = _make_engine(store, fm, handler, daily_loss_pct=0.05,
+                          daily_loss_include_unrealized=True)
+
+    result = engine.approve("RELIANCE", "BUY", "INTRADAY", _make_sizing(), "sig-b1")
+
+    assert not result.approved and result.failed_check == "DAILY_LOSS"
+    print("  OK B-1 realized-only breach still rejects (regression)")
+    store.close()
+
+
 def run_all_tests() -> int:
     """Run all tests sequentially. Returns 0 on success, 1 on any failure."""
     tests = [
+        test_b1_shadow_off_enforces_realized_only_but_logs_would_reject,
+        test_b1_enforce_on_rejects_on_realized_plus_unrealized,
+        test_b1_enforce_on_but_stale_falls_back_to_realized_only_with_warn,
+        test_b1_enforce_realized_only_still_rejects_regression,
         test_all_checks_pass,
         test_kill_switch_active_rejects,
         test_kill_switch_none_skips_check,
