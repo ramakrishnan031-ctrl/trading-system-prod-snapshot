@@ -116,6 +116,7 @@ class SecConfig:
         "/usr/bin/systemctl", "/bin/systemctl", "/usr/bin/grep", "/usr/bin/tail",
         "/usr/bin/cat", "/usr/bin/fail2ban-client", "/usr/sbin/augenrules",
         "/usr/sbin/auditctl", "/usr/sbin/ausearch", "/usr/bin/journalctl",
+        "/usr/bin/ss", "/usr/bin/ps",
     ])
     watched_files: list = field(default_factory=list)
     authlog_path: str = str(_DEFAULT_AUTHLOG)
@@ -271,23 +272,72 @@ def scan_authlog(lines: list[str], since: datetime) -> dict:
     }
 
 
-def established_ssh_peers() -> list[str]:
-    """Peer IPs of ESTABLISHED connections to local :22 (via ss). [] on error."""
+_SS_PID_RE = re.compile(r"pid=(\d+)")
+
+
+def established_ssh_connections() -> list[dict]:
+    """[{"ip": str, "pid": Optional[int]}] for ESTABLISHED :22 peers (via `sudo -n
+    ss`, NOPASSWD-whitelisted). sudo is required for the process/pid column: a
+    plain `ss` run as `ubuntu` cannot see the pid of the root-owned sshd [priv]
+    parent, only its own. [] on any error."""
     try:
         out = subprocess.run(
-            ["ss", "-tnH", "state", "established", "( sport = :22 )"],
-            capture_output=True, text=True, timeout=10,
+            ["sudo", "-n", "ss", "-tnHp", "state", "established", "( sport = :22 )"],
+            capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL,
         )
-        peers = []
+        conns = []
         for line in out.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 4:
                 peer = parts[3].rsplit(":", 1)[0].strip("[]")
-                if peer:
-                    peers.append(peer)
-        return peers
+                if not peer:
+                    continue
+                pids = _SS_PID_RE.findall(line)
+                conns.append({"ip": peer, "pid": int(pids[-1]) if pids else None})
+        return conns
     except Exception:
         return []
+
+
+def established_ssh_peers() -> list[str]:
+    """Peer IPs only (one entry per connection, dupes preserved) — thin
+    back-compat wrapper over established_ssh_connections()."""
+    return [c["ip"] for c in established_ssh_connections()]
+
+
+_PS_LINE_RE = re.compile(r"^(\S+\s+\S+\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)$")
+_PS_SSHD_USER_RE = re.compile(r"^sshd:\s+(\S+)")
+
+
+def process_start_and_user(pid: Optional[int]) -> tuple:
+    """(start_time, user) for `pid` via `sudo -n ps -o lstart=,args=`
+    (NOPASSWD-whitelisted). Best-effort: (None, None) if the pid is already
+    gone/unreadable — common for a scanning connection that sshd closes
+    within ~1-2s of the `ss` snapshot that caught it mid-preauth."""
+    if not pid:
+        return None, None
+    try:
+        out = subprocess.run(
+            ["sudo", "-n", "ps", "-o", "lstart=,args=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+        )
+        line = out.stdout.strip()
+        if not line:
+            return None, None
+        m = _PS_LINE_RE.match(line)
+        if not m:
+            return None, None
+        start = datetime.strptime(
+            re.sub(r"\s+", " ", m.group(1)), "%a %b %d %H:%M:%S %Y"
+        ).replace(tzinfo=_IST)
+        user = None
+        um = _PS_SSHD_USER_RE.match(m.group(2))
+        if um:
+            u = um.group(1).split("@")[0]
+            user = None if u.lower() == "unknown" else u
+        return start, user
+    except Exception:
+        return None, None
 
 
 # GeoIP enrichment: no local MaxMind GeoLite2 DB is installed on the VM (needs
@@ -335,13 +385,22 @@ def geoip_lookup(ip: str, cache: dict, now: datetime) -> str:
     return label
 
 
-def session_ip_breakdown(peers: list[str], lines: list[str], now: datetime,
+def session_ip_breakdown(conns: list[dict], lines: list[str], now: datetime,
                          lookback_hours: int = 24) -> dict:
-    """Per-IP breakdown of the current established SSH peers: count, user(s),
-    and earliest login time seen for that IP in auth.log within `lookback_hours`
-    (best-effort proxy for "session since" — auth.log has no session-close-aware
-    mapping back to a specific `ss` connection, so this is an approximation good
-    enough for an alert, not a security boundary)."""
+    """Per-IP breakdown of the current established SSH connections: count,
+    user(s), and an earliest-seen time — never "?".
+
+    Primary source: "Accepted publickey" events for that IP in auth.log within
+    `lookback_hours` (best-effort proxy for "session since" — auth.log has no
+    session-close-aware mapping back to a specific `ss` connection, so this is
+    an approximation good enough for an alert, not a security boundary).
+
+    Fallback (no Accepted event — e.g. a scan/bot connection `ss` catches
+    mid-preauth, never completes auth): the connection's sshd PID's own
+    process-start time + attempted user via `process_start_and_user`. If even
+    that PID has already exited (common — these connections live ~1-2s), the
+    final fallback is `now` (we DID just observe the connection via `ss`, so
+    that is still a true lower bound) with user "unauthenticated"."""
     since = now - timedelta(hours=lookback_hours)
     logins: dict[str, list[tuple[Optional[datetime], str]]] = {}
     for line in lines:
@@ -352,15 +411,26 @@ def session_ip_breakdown(peers: list[str], lines: list[str], now: datetime,
         if m:
             user, ip = m.group(1), m.group(2)
             logins.setdefault(ip, []).append((ts, user))
-    peer_counts: dict[str, int] = {}
-    for ip in peers:
-        peer_counts[ip] = peer_counts.get(ip, 0) + 1
+    by_ip: dict[str, list[dict]] = {}
+    for c in conns:
+        by_ip.setdefault(c["ip"], []).append(c)
     out: dict = {}
-    for ip, count in peer_counts.items():
+    for ip, ip_conns in by_ip.items():
         events = logins.get(ip, [])
-        users = sorted({u for _, u in events}) or ["?"]
+        users = sorted({u for _, u in events})
         times = [t for t, _ in events if t is not None]
-        out[ip] = {"count": count, "users": users, "earliest": min(times) if times else None}
+        earliest = min(times) if times else None
+        if earliest is None:
+            for c in ip_conns:
+                start, pid_user = process_start_and_user(c.get("pid"))
+                if start is not None and (earliest is None or start < earliest):
+                    earliest = start
+                if pid_user and pid_user not in users:
+                    users.append(pid_user)
+            if earliest is None:
+                earliest = now
+        out[ip] = {"count": len(ip_conns), "users": sorted(users) or ["unauthenticated"],
+                   "earliest": earliest}
     return out
 
 
@@ -649,21 +719,22 @@ def check_watched_files(cfg: SecConfig, state: dict) -> list[Finding]:
 
 def check_active_sessions(cfg: SecConfig, state: dict, authlog_lines: list[str],
                           now: datetime) -> list[Finding]:
-    peers = established_ssh_peers()
-    n = len(peers)
+    conns = established_ssh_connections()
+    peer_ips = [c["ip"] for c in conns]
+    n = len(conns)
     state["last_session_count"] = n
-    state["last_session_peers"] = sorted(set(peers))
+    state["last_session_peers"] = sorted(set(peer_ips))
     if n > cfg.max_active_sessions:
-        breakdown = session_ip_breakdown(peers, authlog_lines, now)
+        breakdown = session_ip_breakdown(conns, authlog_lines, now)
         geo_cache = state.setdefault("geoip_cache", {})
         per_ip = []
         for ip in sorted(breakdown):
             b = breakdown[ip]
-            since = b["earliest"].strftime("%H:%M:%S") if b["earliest"] else "?"
+            since = b["earliest"].strftime("%H:%M:%S")
             geo = geoip_lookup(ip, geo_cache, now)
             geo_part = f", {geo}" if geo else ""
             per_ip.append(f"{ip} x{b['count']} ({'/'.join(b['users'])}, since {since}{geo_part})")
-        return [Finding("WARNING", f"sessions:{n}:{','.join(sorted(set(peers)))[:60]}",
+        return [Finding("WARNING", f"sessions:{n}:{','.join(sorted(set(peer_ips)))[:60]}",
                         "Active SSH sessions over limit",
                         f"{n} active SSH sessions (limit {cfg.max_active_sessions}). "
                         + " | ".join(per_ip) +
