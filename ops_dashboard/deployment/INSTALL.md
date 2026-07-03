@@ -107,12 +107,51 @@ curl -fsSL https://tailscale.com/install.sh | sh     # official repo installer
 sudo tailscale up                                    # Rama authenticates node → HIS tailnet
 # Rama (admin console, one-time): DNS → enable MagicDNS; then
 #   DNS → HTTPS Certificates → Enable HTTPS.
-sudo tailscale serve --bg https / http://127.0.0.1:8500
+sudo tailscale serve --bg http://127.0.0.1:8500      # NEW CLI — old 'serve --bg https / <target>'
+                                                     #   positional form was REMOVED (E3, 03-Jul);
+                                                     #   this one-arg form = HTTPS:443 / → target
 tailscale serve status                               # record https://<machine>.<tailnet>.ts.net
 ```
 Verify: PC browser (same tailnet) → URL → login+TOTP → dashboard; phone
 (Tailscale app) same; any non-tailnet network → unreachable. Once, after
 18:00 IST: page loads (time-lock is copy-gate-only — empirical check).
+
+### Access — LIVE (confirmed 03-Jul-2026, E3)
+- **VM hostname:** `trading-system`  ·  **Tailscale machine:** `trading-system`
+  ·  **Tailnet:** `tail1cdc6d.ts.net`  ·  **Tailnet IP:** `100.74.84.44`
+- **URL (bookmark this):** **https://trading-system.tail1cdc6d.ts.net**
+- **Listener proof:** app stays `127.0.0.1:8500` (loopback only); `tailscaled`
+  serves `:443` bound to the tailnet IP (`100.74.84.44:443` + tailnet IPv6) —
+  **no `0.0.0.0` public listener** was added.
+- **Access diagram:**
+  ```
+  browser/phone (on Rama's tailnet)
+      │  HTTPS (Let's Encrypt cert via tailscaled)
+      ▼
+  trading-system.tail1cdc6d.ts.net  (100.74.84.44:443, tailscaled)
+      │  reverse-proxy, loopback
+      ▼
+  gui-dashboard  →  127.0.0.1:8500  (Flask/Waitress, READ-ONLY DBs)
+  ```
+
+### Rebuild from scratch / recovery
+- **New device (PC or phone):** install Tailscale → sign in as
+  `ramakrishnan031@gmail.com` → open the URL → login (user + password + TOTP).
+  No VM change needed; the node just joins the existing tailnet.
+- **Lost phone / lost authenticator (⇒ lost TOTP):** re-mint on the VM (§3):
+  `venv/bin/python -m backend.auth --setup --username <user> --config
+  backend/config/gui_config.local.yaml` → scan the new secret into the new
+  authenticator → `chmod 600` the overlay. Old password+TOTP pair dies instantly.
+- **VM re-added to tailnet (node reset):** `sudo tailscale up` (re-auth as the
+  Google account) → re-run the §5 `serve` command → `tailscale serve status`.
+- **SSH-tunnel fallback (only if Tailscale itself is down):**
+  ```bash
+  ssh -L 8500:127.0.0.1:8500 ubuntu@161.118.187.249   # then browse http://127.0.0.1:8500
+  ```
+  Caveat: the app sets `session_cookie_secure: true`, so login over plain
+  `http://` through the tunnel will not persist the session cookie — the tunnel
+  is a "reach the port / health-check" fallback, not a full login path. Tailscale
+  (HTTPS) remains the only supported interactive access.
 
 ## 6. systemd unit (manual install; survives trader restarts by design)
 ```bash
