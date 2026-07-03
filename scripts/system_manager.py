@@ -303,8 +303,8 @@ def config_vs_actual_check(store: StateStore, app_config, day: str,
 def order_quality_report(store: StateStore, day: str) -> CheckResult:
     res = CheckResult("📈 ORDER QUALITY")
     trades = store.fetch_all(
-        f"SELECT trade_id,symbol,direction,entry_target_price,entry_actual_price,"
-        f"sl_initial,tgt_initial,exit_price,exit_reason,net_pnl,status "
+        f"SELECT trade_id,symbol,direction,strategy,entry_target_price,entry_actual_price,"
+        f"sl_initial,tgt_initial,exit_price,exit_reason,gross_pnl,charges,net_pnl,status "
         f"FROM trades WHERE substr(created_at,1,10)=? AND status IN {_CLOSED} "
         f"ORDER BY exit_time",
         (day,),
@@ -315,9 +315,13 @@ def order_quality_report(store: StateStore, day: str) -> CheckResult:
 
     entry_slips: list[float] = []
     exit_slips: list[float] = []
+    gross_total = charges_total = net_total = 0.0
     for t in trades:
-        sym, dirn = t["symbol"], t["direction"]
+        sym, dirn, strat = t["symbol"], t["direction"], t["strategy"] or "(none)"
         plan_e, fill_e = t["entry_target_price"], t["entry_actual_price"]
+        gross_total += float(t["gross_pnl"] or 0)
+        charges_total += float(t["charges"] or 0)
+        net_total += float(t["net_pnl"] or 0)
         if plan_e and fill_e and plan_e > 0:
             slip = (fill_e - plan_e) / plan_e
             entry_slips.append(slip)
@@ -329,7 +333,7 @@ def order_quality_report(store: StateStore, day: str) -> CheckResult:
             planned_exit = t["tgt_initial"]
         if planned_exit and t["exit_price"] and planned_exit > 0:
             exit_slips.append((t["exit_price"] - planned_exit) / planned_exit)
-        res.info(f"  {sym} {dirn} {t['exit_reason'] or '—'}: "
+        res.info(f"  {strat} → {sym} {dirn} {t['exit_reason'] or '—'}: "
                  f"entry ₹{plan_e or 0:.2f}→₹{fill_e or 0:.2f}, "
                  f"exit ₹{t['exit_price'] or 0:.2f}, P&L ₹{t['net_pnl'] or 0:.2f}")
 
@@ -354,6 +358,13 @@ def order_quality_report(store: StateStore, day: str) -> CheckResult:
         return f"{(sum(xs)/len(xs)*100):+.3f}%" if xs else "n/a"
 
     res.info(_BAR)
+    # gross vs net: the broker positions page shows GROSS (pre-charges); this
+    # report's P&L (here and the daily-loss/vs-yesterday lines below) is NET
+    # (post brokerage+STT+exchange+GST+SEBI+stamp) — this line makes the two
+    # reconcile instead of looking like a discrepancy (03-Jul: ₹3.55 gap on a
+    # ₹-12.52/₹-16.07 day was confirmed to be exactly the day's total charges).
+    res.info(f"P&L: gross ₹{gross_total:,.2f} | charges ₹{charges_total:,.2f} | "
+             f"net ₹{net_total:,.2f} (broker positions page shows GROSS)")
     res.info(f"Trades: {len(trades)} | Avg entry slip: {_avg(entry_slips)} | "
              f"Avg exit slip: {_avg(exit_slips)}")
     (res.ok if partials == 0 else res.warn)(f"Partial fills: {partials}")
@@ -487,37 +498,66 @@ def system_health_check(store: StateStore, day: str, db_path: Path, root: Path) 
 # Check 5 — Strategy Health
 # ─────────────────────────────────────────────────────────────────────────────
 
-def trade_strategy_health(store: StateStore, day: str) -> CheckResult:
+def _enabled_strategy_names(config_dir: Path) -> list[str]:
+    """Strategy names with `enabled: true` in config/strategies/*.yaml — the
+    universe for STRATEGY HEALTH so a strategy with zero trades today still
+    gets a line, not just the ones `trades` happens to have rows for today.
+    Best-effort: [] if the dir/files are unreadable (never crashes the check)."""
+    names: list[str] = []
+    try:
+        import yaml
+        for f in sorted((config_dir / "strategies").glob("*.yaml")):
+            try:
+                raw = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            except Exception:
+                continue
+            if raw.get("enabled", True) and raw.get("name"):
+                names.append(str(raw["name"]))
+    except Exception:
+        pass
+    return names
+
+
+def trade_strategy_health(store: StateStore, day: str, config_dir: Path) -> CheckResult:
     res = CheckResult("📉 STRATEGY HEALTH")
     rows = store.fetch_all(
         f"SELECT COALESCE(strategy,'(none)') s, direction, net_pnl FROM trades "
         f"WHERE substr(created_at,1,10)=? AND status IN {_CLOSED}",
         (day,),
     )
-    if not rows:
-        res.info("No closed trades today — no per-strategy stats.")
+    by: dict[str, dict] = {}
+    for r in rows:
+        d = by.setdefault(r["s"], {"n": 0, "wins": 0, "pnl": 0.0})
+        d["n"] += 1
+        d["pnl"] += float(r["net_pnl"] or 0)
+        if (r["net_pnl"] or 0) > 0:
+            d["wins"] += 1
+
+    all_names = sorted(set(_enabled_strategy_names(config_dir)) | set(by.keys()))
+    if not all_names:
+        res.info("No strategies configured and no closed trades today.")
     else:
-        by: dict[str, dict] = {}
-        for r in rows:
-            d = by.setdefault(r["s"], {"n": 0, "wins": 0, "pnl": 0.0})
-            d["n"] += 1
-            d["pnl"] += float(r["net_pnl"] or 0)
-            if (r["net_pnl"] or 0) > 0:
-                d["wins"] += 1
-        for s, d in sorted(by.items()):
+        if not rows:
+            res.info("No closed trades today — 0-trade line per enabled strategy below.")
+        for s in all_names:
+            d = by.get(s)
+            if d is None:
+                res.info(f"  {s}: 0 trades, — win, ₹0.00")
+                continue
             wr = d["wins"] / d["n"] * 100 if d["n"] else 0
             line = f"  {s}: {d['n']} trades, {wr:.0f}% win, ₹{d['pnl']:+.2f}"
             if d["n"] >= 2 and wr == 0:
                 res.warn(line + " — 0% win rate today")
             else:
                 res.info(line)
-        # LONG vs SHORT split (memory: LONG historically weaker)
-        longs = [r for r in rows if r["direction"] == "LONG"]
-        shorts = [r for r in rows if r["direction"] == "SHORT"]
+        if rows:
+            # LONG vs SHORT split (memory: LONG historically weaker)
+            longs = [r for r in rows if r["direction"] == "LONG"]
+            shorts = [r for r in rows if r["direction"] == "SHORT"]
 
-        def _wr(xs):
-            return (sum(1 for r in xs if (r["net_pnl"] or 0) > 0) / len(xs) * 100) if xs else 0
-        res.info(f"  LONG {len(longs)} ({_wr(longs):.0f}% win) | SHORT {len(shorts)} ({_wr(shorts):.0f}% win)")
+            def _wr(xs):
+                return (sum(1 for r in xs if (r["net_pnl"] or 0) > 0) / len(xs) * 100) if xs else 0
+            res.info(f"  LONG {len(longs)} ({_wr(longs):.0f}% win) | SHORT {len(shorts)} ({_wr(shorts):.0f}% win)")
 
     # Demotions / disables from strategy_metrics (today)
     sm = store.fetch_all(
@@ -821,8 +861,13 @@ def generate_full_report(results: List[CheckResult], day_date: date) -> tuple[st
     return "\n".join(lines), v, w, reasons
 
 
-def _send(severity: str, title: str, body: str, config_dir: Path, dry_run: bool) -> None:
-    """Telegram + (CRITICAL → sentinel → alert-watcher email). Mirrors cron_officer."""
+def _send(severity: str, title: str, body: str, config_dir: Path, dry_run: bool,
+          sentinel_dir: str = "data_store") -> None:
+    """Telegram (always attempt) + email (ALWAYS — every EOD report, not just
+    CRITICAL days). Mirrors cron_officer's EOD email_backup: the Telegram send
+    uses write_sentinel=False so a WARNING/INFO day doesn't rely on the
+    notifier's CRITICAL-only sentinel path to reach the inbox, and a violation
+    day doesn't get double-sentineled into two emails."""
     if dry_run:
         print(f"[DRY-RUN] would send {severity}: {title}")
         return
@@ -831,10 +876,17 @@ def _send(severity: str, title: str, body: str, config_dir: Path, dry_run: bool)
         notifier = TelegramNotifier.from_env(logger=_log, config_dir=config_dir)
         if notifier is None:
             _log.info("system_manager.telegram_unconfigured")
-            return
-        notifier.send(severity=severity, title=title, body=body, source_module="system_manager")
+        else:
+            notifier.send(severity=severity, title=title, body=body,
+                          source_module="system_manager", write_sentinel=False)
     except Exception as exc:
         _log.error("system_manager.send_failed", extra={"error": str(exc)})
+    try:
+        from alerts.critical import write_critical_sentinel
+        write_critical_sentinel(title=title, body=body, source_module="system_manager",
+                                context={"severity": severity}, sentinel_dir=sentinel_dir)
+    except Exception as exc:
+        _log.error("system_manager.email_sentinel_failed", extra={"error": str(exc)})
 
 
 def _save_report(report: str, day: str, root: Path) -> Optional[Path]:
@@ -936,7 +988,7 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         lambda: order_quality_report(store, day),
         lambda: report_integrity_check(day, root),
         lambda: system_health_check(store, day, db_path, root),
-        lambda: trade_strategy_health(store, day),
+        lambda: trade_strategy_health(store, day, config_dir),
         lambda: risk_events_check(store, day, root),
         lambda: compare_with_yesterday(store, day, _day(prev)),
         lambda: tomorrow_readiness_check(store, app_config, day_date, config_dir),
@@ -1004,7 +1056,8 @@ def main(argv=None) -> int:
         severity = "CRITICAL" if (violations or reasons) else "INFO"
         title = ("System Manager EOD — ACTION REQUIRED" if severity == "CRITICAL"
                  else "System Manager EOD — clean")
-        _send(severity, title, report, args.config_dir, args.dry_run)
+        sentinel_dir = str(getattr(app_config.system.alerts, "sentinel_dir", "data_store"))
+        _send(severity, title, report, args.config_dir, args.dry_run, sentinel_dir)
 
         record_heartbeat(
             "system_manager_eod",
