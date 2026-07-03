@@ -19,14 +19,37 @@ venv/bin/pip install -r backend/requirements.txt
 venv/bin/pip show kiteconnect && echo "FAIL I4" || echo "OK: no kiteconnect"
 ```
 
-## 2. Production config — the LOCAL OVERLAY (checkout-f-safe)
+## 2. Production config — the LOCAL OVERLAY (checkout-f-safe, **PC-created pre-GO**)
 The committed `backend/config/gui_config.yaml` ships PC-dev values and EMPTY
 auth. Production values + secrets live in **`backend/config/gui_config.local.yaml`**
-(git-ignored; deep-merged over the base at app start) so future pushes can
-never clobber them.
+(git-ignored — `ops_dashboard/.gitignore:9`; deep-merged over the base at app
+start) so future pushes can never clobber them.
 
-```bash
-cat > backend/config/gui_config.local.yaml <<'YAML'
+**The overlay is created ON THE PC before the deploy** (03-Jul decision): the
+file holds only machine-independent strings (salted password hash + TOTP
+secret + path/flag values), so PC-create + PC→VM transfer ≡ VM-create. The
+copy-protection gate is VM→PC only; PC→VM scp is unrestricted.
+
+### 2a. PC, pre-GO (Rama at the keyboard, ~5 min)
+```powershell
+cd D:\Projects\trading-system\ops_dashboard
+# 1) credentials — Rama TYPES the password at the prompt (never echoed);
+#    the command prints the TOTP secret + otpauth:// URI: scan into the
+#    phone authenticator IMMEDIATELY; never paste either into chats/commits.
+.venv\Scripts\python -m backend.auth --setup --username <user> --config backend\config\gui_config.local.yaml
+
+# 2) local login smoke (overlay is auth-only at this point → base PC-dev
+#    paths + secure=false apply → deterministic browser check):
+.venv\Scripts\python -m backend.app
+#    browser http://127.0.0.1:8500 → login user+password+6-digit TOTP →
+#    dashboard shell renders → Ctrl+C. (A working login IS the TOTP
+#    confirmation.)
+
+# 3) append the production block below to backend\config\gui_config.local.yaml
+#    (editor paste — the block contains no secrets; ordering vs --setup does
+#    not matter: _write_auth_block merges and never clobbers other keys):
+```
+```yaml
 paths:
   main_db:      "/home/ubuntu/systems/trading-system/data_store/trading_system.db"
   analytics_db: "/home/ubuntu/systems/trading-system/data_store/analytics.db"
@@ -37,17 +60,39 @@ paths:
 server:
   session_cookie_secure: true    # G2a lock — TLS terminates at tailscaled
 reports_download_enabled: false  # Q3 locked
-YAML
-chmod 600 backend/config/gui_config.local.yaml
+```
+Windows note: NTFS has no chmod 600 — PC-side protection = the file stays
+inside the project tree, is git-ignored, and its contents are never pasted
+anywhere. The VM copy gets the real `chmod 600` in 2b.
+
+### 2b. VM, deploy night (after the GUI push lands — replaces the old
+interactive step 3; Rama's live involvement is now only the §5 Tailscale
+login confirmation)
+```bash
+scp D:/Projects/trading-system/ops_dashboard/backend/config/gui_config.local.yaml \
+    trading-vm:/home/ubuntu/systems/trading-system/ops_dashboard/backend/config/
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system/ops_dashboard && \
+  chmod 600 backend/config/gui_config.local.yaml && \
+  grep -cE "^(paths:|server:|reports_download_enabled: false)" backend/config/gui_config.local.yaml && \
+  grep -cE "(session_cookie_secure: true|main_db:|username:|password_hash:|totp_secret:)" backend/config/gui_config.local.yaml'
+# expect 3 + 5 — key NAMES only; never cat the file into a terminal you share.
 ```
 
-## 3. Auth setup (Rama present — types the password; QR to his phone)
+## 3. Auth — rotation / recovery (VM, over SSH; the ONLY reasons to re-run)
+Credentials were created in 2a. Re-run setup **on the VM** only to rotate:
 ```bash
+cd /home/ubuntu/systems/trading-system/ops_dashboard
 venv/bin/python -m backend.auth --setup --username <user> \
   --config backend/config/gui_config.local.yaml
-# (omit --password → interactive prompt; NEVER echo secrets to logs/reports)
 chmod 600 backend/config/gui_config.local.yaml
 ```
+- **Suspected leak** (overlay contents ever exposed): re-run → NEW hash + NEW
+  TOTP secret; the old pair is dead immediately.
+- **Lost phone**: same re-run via SSH — scan the fresh QR into the new phone.
+- SECURITY (permanent): never commit the overlay (git-ignored by design);
+  never paste its contents — `password_hash`, `totp_secret`, the otpauth URI —
+  into chats, reports, logs or commit messages; treat the printed TOTP secret
+  as burned the moment it appears on any shared screen.
 
 ## 4. Smoke (manual, then stop)
 ```bash
@@ -91,7 +136,7 @@ sudo tailscale serve reset          # stops HTTPS proxying (node may stay in tai
 ```bash
 cd ops_dashboard && python -m venv .venv
 .venv/Scripts/python -m pip install -r backend/requirements.txt
-.venv/Scripts/python -m backend.auth --setup --username <you> --password <pw>
+.venv/Scripts/python -m backend.auth --setup --username <you>   # interactive password prompt
 .venv/Scripts/python -m backend.app        # http://127.0.0.1:8500
 ```
 Tests: `.venv/Scripts/python -m pytest tests -q` (v41 + v42 fixtures).
