@@ -288,6 +288,35 @@ def established_ssh_peers() -> list[str]:
         return []
 
 
+def session_ip_breakdown(peers: list[str], lines: list[str], now: datetime,
+                         lookback_hours: int = 24) -> dict:
+    """Per-IP breakdown of the current established SSH peers: count, user(s),
+    and earliest login time seen for that IP in auth.log within `lookback_hours`
+    (best-effort proxy for "session since" — auth.log has no session-close-aware
+    mapping back to a specific `ss` connection, so this is an approximation good
+    enough for an alert, not a security boundary)."""
+    since = now - timedelta(hours=lookback_hours)
+    logins: dict[str, list[tuple[Optional[datetime], str]]] = {}
+    for line in lines:
+        ts = parse_line_ts(line)
+        if ts is not None and ts < since:
+            continue
+        m = _ACCEPTED_RE.search(line)
+        if m:
+            user, ip = m.group(1), m.group(2)
+            logins.setdefault(ip, []).append((ts, user))
+    peer_counts: dict[str, int] = {}
+    for ip in peers:
+        peer_counts[ip] = peer_counts.get(ip, 0) + 1
+    out: dict = {}
+    for ip, count in peer_counts.items():
+        events = logins.get(ip, [])
+        users = sorted({u for _, u in events}) or ["?"]
+        times = [t for t, _ in events if t is not None]
+        out[ip] = {"count": count, "users": users, "earliest": min(times) if times else None}
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 2: copy-bypass auditd parsing (pure helpers; unit-tested)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -571,16 +600,24 @@ def check_watched_files(cfg: SecConfig, state: dict) -> list[Finding]:
     return out
 
 
-def check_active_sessions(cfg: SecConfig, state: dict) -> list[Finding]:
+def check_active_sessions(cfg: SecConfig, state: dict, authlog_lines: list[str],
+                          now: datetime) -> list[Finding]:
     peers = established_ssh_peers()
     n = len(peers)
     state["last_session_count"] = n
     state["last_session_peers"] = sorted(set(peers))
     if n > cfg.max_active_sessions:
+        breakdown = session_ip_breakdown(peers, authlog_lines, now)
+        per_ip = []
+        for ip in sorted(breakdown):
+            b = breakdown[ip]
+            since = b["earliest"].strftime("%H:%M:%S") if b["earliest"] else "?"
+            per_ip.append(f"{ip} x{b['count']} ({'/'.join(b['users'])}, since {since})")
         return [Finding("WARNING", f"sessions:{n}:{','.join(sorted(set(peers)))[:60]}",
                         "Active SSH sessions over limit",
                         f"{n} active SSH sessions (limit {cfg.max_active_sessions}). "
-                        f"IPs: {', '.join(sorted(set(peers)))}. (Alert only — not blocked.)")]
+                        + " | ".join(per_ip) +
+                        ". (Alert only — not blocked.)")]
     return []
 
 
@@ -787,7 +824,7 @@ def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
         lambda: check_root_probe_spike(cfg, scan_hour, now),
         lambda: check_sudo_events(cfg, scan_window),
         lambda: check_watched_files(cfg, state),
-        lambda: check_active_sessions(cfg, state),
+        lambda: check_active_sessions(cfg, state, lines, now),
         lambda: check_copy_protection_switch(cfg, state, now),   # Phase 2
         lambda: check_copy_bypass(cfg, state, now),              # Phase 2
     ]
