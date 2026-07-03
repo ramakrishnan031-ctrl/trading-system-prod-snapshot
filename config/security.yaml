@@ -38,6 +38,8 @@ security:
     - /usr/bin/grep
     - /usr/bin/tail
     - /usr/bin/cat
+    - /usr/bin/ss    # security_monitor's own established_ssh_connections() (needs sudo for the pid column)
+    - /usr/bin/ps    # security_monitor's own process_start_and_user() (session-alert "since ?" fallback)
 
   # Don't re-alert the same identity (same new key/IP/file-hash) within this
   # many seconds. 6h = one nudge, not a 60s stream.
