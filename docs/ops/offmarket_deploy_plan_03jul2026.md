@@ -85,7 +85,7 @@ fix-c1-completion-02jul  (docs-carrier; CONTAINS A-2 as ancestor)
      3d34357  docs(audit): P1 assessment + remediation map + B-1 design
      a0c8605  docs(design): P1 build design + flip B-1 pointer
      b5660f6  docs: flip P1 pointer to IMPLEMENTED          ← current HEAD
-     (+ this deploy-plan doc commit, appended here at deploy time)
+     (+ this deploy-plan doc commit + the 03-Jul data_store/ path-fix commit — branch tip)
 
 fix-b1-daily-loss-mtm-02jul
   └─ f5fd4d9  feat(b1): wire live unrealized MTM into the daily-loss gate (SHADOW default)
@@ -129,10 +129,11 @@ git checkout main
 git merge --ff-only origin/main                      # confirm main == origin/main == 9becf8c (no-op)
 
 # BACK UP THE DB FIRST (P1 migrates v41 -> v42). On the VM:
-#   cp ~/systems/trading-system/data/trading_system.db{,.pre-v42-$(date +%F)}
-#   cp ~/systems/trading-system/data/analytics.db{,.pre-v42-$(date +%F)}   # two-file DB (v28 split)
+# (real DBs = data_store/ per PATHS.md L24-25; data/ is a 0-byte relic since 18-May — verified live 03-Jul)
+#   cp ~/systems/trading-system/data_store/trading_system.db{,.pre-v42-$(date +%F)}
+#   cp ~/systems/trading-system/data_store/analytics.db{,.pre-v42-$(date +%F)}   # two-file DB (v28 split)
 
-git merge --ff-only fix-c1-completion-02jul          # main -> b5660f6 (+deploy doc); brings A-2 + C-1 + docs
+git merge --ff-only fix-c1-completion-02jul          # main -> C-1 tip (b5660f6 + deploy-plan/path-fix docs); brings A-2 + C-1 + docs
 git merge --no-ff  fix-b1-daily-loss-mtm-02jul  -m "merge B-1: daily-loss unrealized-MTM (SHADOW default)"
 git merge --no-ff  fix-p1-eod-broker-reconcile-02jul -m "merge P1: broker-authoritative EOD reconcile (SHADOW, schema v42)"
 
@@ -145,7 +146,7 @@ grep -n "authoritative: false" config/system_config.yaml                    # sh
 git push origin main                                 # -> trading-vm bare repo; post-receive installs crontab
 ```
 
-- `fix-c1` is a linear fast-forward of `main` (`--ff-only` succeeds → `main` becomes `b5660f6`+doc).
+- `fix-c1` is a linear fast-forward of `main` (`--ff-only` succeeds → `main` becomes the C-1 tip = `b5660f6` + the deploy-plan/path-fix doc commits).
 - `fix-b1` / `fix-p1` are each a single divergent commit → `--no-ff` merge commits (both proven clean).
 - Prefer merge commits over rebasing the branches (preserves the reviewed commit hashes A-2 `fd09a38`,
   B-1 `f5fd4d9`, P1 `4817032`). If Rama wants a linear history instead, rebase B-1 then P1 onto the advancing
@@ -183,6 +184,7 @@ VM paths: repo `~/systems/trading-system`, venv `~/systems/venv`. Run from the r
 - [ ] **HEAD parity:** `git -C ~/systems/trading-system rev-parse HEAD` == the pushed `main` HEAD (bare `HEAD` == working-tree `HEAD`; zero drift).
 - [ ] **Crontab:** `crontab -l | grep eod_broker_reconcile` shows `58 15 * * 1-5 ... scripts/eod_broker_reconcile.py`; and `crontab -l == deploy/cron/trading-system.cron == generate(registry)` (self-maintaining cron invariant).
 - [ ] **Schema v42:** ``PYTHONPATH=. ~/systems/venv/bin/python -c "from core.state_store import StateStore; s=StateStore(); print(s.schema_version())"`` → `42` (or grep the migration line in the boot/first-run log). `eod_broker_reconciliation` table exists.
+      Read-only form: `sqlite3 ~/systems/trading-system/data_store/trading_system.db "SELECT value FROM schema_meta WHERE key='schema_version'; SELECT count(*) FROM sqlite_master WHERE type='table' AND name='eod_broker_reconciliation';"` → `42` / `1`.
 - [ ] **Shadow flags OFF (both):**
       `grep -A1 daily_loss_include_unrealized config/system_config.yaml` → `false`;
       `grep -A2 '^eod_reconcile' config/system_config.yaml` → `authoritative: false`.
@@ -210,6 +212,7 @@ Both fixes are **dark**. Watch them for real, then flip. Nothing enforces until 
 ### 5.2 P1 — EOD broker-reconcile (flip `eod_reconcile.authoritative` false→true + retire `eod_verify`)
 
 **Observe (from Mon 06-Jul 15:58, one row/day in `eod_broker_reconciliation`):**
+`sqlite3 ~/systems/trading-system/data_store/trading_system.db "SELECT date, overall_status, eod_verify_status, mismatch, self_consistency FROM eod_broker_reconciliation ORDER BY date DESC LIMIT 7;"`
 - [ ] **Mismatch capture:** rows where `mismatch=1` (P1's `overall_status` disagrees with same-day `eod_verify_status`) — these are exactly the **`eod_verify` false-VERIFYs caught in the wild** (eod_verify is local-DB-only and cannot see a broker/local divergence). Confirm each mismatch is P1 being *right*.
 - [ ] **UNVERIFIED fires correctly:** on a **real broker-unreachable EOD**, `overall_status` must be `UNVERIFIED` (never a false `VERIFIED`). Force at least one **weekend dry-run** with creds unreachable to prove the UNVERIFIED path (a REQUIRED dimension unavailable ⇒ UNVERIFIED, no partial-pass).
 - [ ] **Day-P&L ties out:** P1's broker day-realized vs local realized (`pnl_status`, ±`pnl_tolerance`=₹100) reconciles, and P1's numbers tie to `daily_trade_review` (the Dashboard/Reconciliation sheets) for the same date.
@@ -298,7 +301,9 @@ is C-2 network Phase-3, which is an infrastructure decision (not a code push) an
 - **A-2 / C-1 / B-1 / P1 code:** `git revert` the relevant merge commit(s) and push; restart the trader.
 - **B-1 / P1 behaviour:** just flip the shadow flag back to `false` (no revert needed) + restart — instant, safe.
 - **Schema v42:** pure-add; nothing to roll back. If ever needed, the pre-push DB backups
-  (`*.pre-v42-<date>`) are the fallback (v42-code will re-migrate them).
+  (`*.pre-v42-<date>`) are the fallback (v42-code will re-migrate them). Restore (trader stopped, on the VM):
+  `cp ~/systems/trading-system/data_store/trading_system.db.pre-v42-<date> ~/systems/trading-system/data_store/trading_system.db`
+  (+ the same for `analytics.db`).
 - **Crontab:** `post-receive` only installs when `generate==canonical`; a bad state WARN-skips (live crontab
   unchanged). Break-glass: reinstall the prior canonical crontab.
 
