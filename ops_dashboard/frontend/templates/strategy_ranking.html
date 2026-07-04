@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, medal %}
+{% block title %}AlgoCore Systems — Strategy Ranking{% endblock %}
+{% block nav_strategy_ranking %}active{% endblock %}
+{% block content %}
+{# G5c: leaderboard over the period-scoped strategy aggregation. Mode toggle
+   re-sorts the SAME dataset (rankings[mode]); ties stable by name. Medals top-3.
+   System Score only (L8). #}
+<div x-data="rankingPage()" x-init="load(); $watch('pPeriod', () => load()); $watch('pFrom', () => load()); $watch('pTo', () => load())" @ops-refresh.window="load()">
+  <h2 class="panel-title">Strategy Ranking
+    <span class="panel-sub" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span></h2>
+
+  {% call kpi_row() %}
+    {{ kpi_card("Best", "best('net_pnl')", tone="pos") }}
+    {{ kpi_card("Highest ROI", "best('roi')", tone="info") }}
+    {{ kpi_card("Highest Win %", "best('win_rate')", tone="info") }}
+    {{ kpi_card("Highest PF", "best('profit_factor')", tone="info") }}
+    {{ kpi_card("Most Trades", "best('trade_count')", tone="info") }}
+  {% endcall %}
+
+  {{ period_selector() }}
+  <div class="rank-toggle">
+    <span class="rt-label">Rank by:</span>
+    <template x-for="m in modeList" :key="m.key">
+      <button class="rt-btn" :class="mode===m.key ? 'rt-active' : ''" @click="mode=m.key" x-text="m.label"></button>
+    </template>
+    {{ export_button("Export Ranking") }}
+  </div>
+
+  <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Rank</th><th>Strategy</th><th>Trades</th><th>Wins</th><th>Losses</th>
+        <th>Win %</th><th>ROI %</th><th>PF</th><th>Gross</th><th>Net</th><th>Avg</th><th>Best</th><th>Worst</th></tr></thead>
+      <tbody>
+        <template x-for="(m, i) in ordered()" :key="m.strategy">
+          <tr>
+            <td>{{ medal("i+1") }}</td>
+            <td x-text="m.strategy"></td>
+            <td class="cap-num" x-text="m.trades"></td>
+            <td class="cap-num" x-text="m.wins"></td><td class="cap-num" x-text="m.losses"></td>
+            <td class="cap-num" x-text="dash(m.win_rate)"></td>
+            <td class="cap-num" x-text="dash(m.roi_pct)"></td>
+            <td class="cap-num" x-text="dash(m.profit_factor)"></td>
+            <td class="cap-num" x-text="money(m.gross)"></td>
+            <td class="cap-num" :class="m.net>0?'num-pos':(m.net<0?'num-neg':'')" x-text="money(m.net)"></td>
+            <td class="cap-num" x-text="money(m.avg_trade)"></td>
+            <td class="cap-num" x-text="dash(m.best)"></td><td class="cap-num" x-text="dash(m.worst)"></td>
+          </tr>
+        </template>
+        <tr x-show="!(data.rows||[]).length" x-cloak><td colspan="13" class="ev-empty">No closed trades in this period.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script>
+function rankingPage() {
+  return Object.assign(pageBase("/api/strategy-ranking"), periodMixin("today"), {
+    mode: "net_pnl",
+    modeList: [{key:"net_pnl",label:"Net P&L"},{key:"roi",label:"ROI"},{key:"win_rate",label:"Win %"},
+               {key:"profit_factor",label:"Profit Factor"},{key:"trade_count",label:"Trade Count"}],
+    qs() { return this.pQuery(); },
+    ordered() {
+      const order = (this.data.rankings || {})[this.mode] || [];
+      const by = this.data.by_name || {};
+      return order.map(n => by[n]).filter(Boolean);
+    },
+    best(mode) {
+      const order = (this.data.rankings || {})[mode] || [];
+      return order.length ? order[0] : "—";
+    },
+  });
+}
+</script>
+{% endblock %}

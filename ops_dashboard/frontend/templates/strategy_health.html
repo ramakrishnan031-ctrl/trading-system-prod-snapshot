@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, events_alerts_panel %}
+{% block title %}AlgoCore Systems — Strategy Health{% endblock %}
+{% block nav_strategy_health %}active{% endblock %}
+{% block content %}
+{# G5c: operational health. States (mapped from the G2b scorecard badge + silence,
+   documented in analytics_period.py): Healthy/Quiet/Warning/Silent/Disabled. Health
+   Score only (L8). Silence colored only inside expected-activity windows (freshness). #}
+<div x-data="healthPage()" x-init="load(); loadAlerts(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
+  <h2 class="panel-title">Strategy Health <span class="panel-sub" x-text="data.today || ''"></span></h2>
+
+  {% call kpi_row() %}
+    {{ kpi_card("Healthy", "cnt('Healthy')", tone="pos") }}
+    {{ kpi_card("Quiet", "cnt('Quiet')", tone="info") }}
+    {{ kpi_card("Warning", "cnt('Warning')", tone="warn") }}
+    {{ kpi_card("Silent", "cnt('Silent')", tone="neg") }}
+    {{ kpi_card("Disabled", "cnt('Disabled')", tone="info") }}
+  {% endcall %}
+
+  {{ period_selector() }}
+  <div class="filters">{{ export_button("Export Health") }}
+    <span class="panel-sub">period drives the signals-trend column; state/silence are as-of-now</span></div>
+
+  <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Strategy</th><th>State</th><th>Health</th><th>Last Signal</th><th>Last Trade</th>
+        <th>Signals (today)</th><th>Signals (period)</th><th>Orders</th><th>Trades</th><th>Rejections (R/C/O/D/E)</th></tr></thead>
+      <tbody>
+        <template x-for="r in data.rows || []" :key="r.strategy">
+          <tr>
+            <td x-text="r.display_name"></td>
+            <td><span class="status-chip" :class="stateClass(r.state)" x-text="r.state"></span></td>
+            <td class="cap-num" x-text="r.health_score !== null ? r.health_score : '—'"></td>
+            <td class="ev-ts" x-text="tstr(r.last_signal)"></td>
+            <td class="ev-ts" x-text="tstr(r.last_trade)"></td>
+            <td class="cap-num" x-text="r.signals_today"></td>
+            <td class="cap-num" x-text="r.signals_period"></td>
+            <td class="cap-num" x-text="r.orders_today"></td>
+            <td class="cap-num" x-text="r.trades_today"></td>
+            <td class="mono" x-text="r.rejections.risk+'/'+r.rejections.capital+'/'+r.rejections.order+'/'+r.rejections.duplicate+'/'+r.rejections.expired"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  {{ events_alerts_panel(events_expr="[]", alerts_expr="alerts", title="Warnings & Alerts") }}
+</div>
+<script>
+function healthPage() {
+  return Object.assign(pageBase("/api/strategy-health"), periodMixin("week"), {
+    alerts: [],
+    qs() { return this.pQuery(); },
+    async loadAlerts() { try { const r = await fetch("/api/alerts",{credentials:"same-origin"}); const d = await r.json(); this.alerts = (d&&d.alerts)||[]; } catch(e){} },
+    cnt(s) { return (this.data.counts || {})[s] || 0; },
+    stateClass(s) { return {Healthy:"sil-GREEN",Quiet:"sil-plain",Warning:"sil-YELLOW",Silent:"sil-RED",Disabled:"sil-plain"}[s] || "sil-plain"; },
+    tstr(ts) { return ts ? String(ts).replace("T"," ").slice(5,19) : "—"; },
+  });
+}
+</script>
+{% endblock %}

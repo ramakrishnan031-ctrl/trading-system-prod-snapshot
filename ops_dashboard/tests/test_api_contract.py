@@ -114,4 +114,4 @@ def test_login_page_is_reachable_without_auth(app):
     anon = app.test_client()
     r = anon.get("/login")
     assert r.status_code == 200
-    assert b"Ops Dashboard" in r.data
+    assert b"AlgoCore Systems" in r.data

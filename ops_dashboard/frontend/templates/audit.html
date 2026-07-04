@@ -1,61 +1,48 @@
 {% extends "base.html" %}
-{% block title %}Audit Trail{% endblock %}
+{% from "components.html" import kpi_row, kpi_card, filter_bar, data_table, export_button %}
+{% block title %}AlgoCore Systems — Audit{% endblock %}
 {% block nav_audit %}active{% endblock %}
 {% block content %}
+{# G5b: Audit accountability feed over 6 sources (audit_feed UNCHANGED). User /
+   who-changed / auth-events / control-actions are a GAP (G-5) — single-user, no
+   control writes; shown honestly, never fabricated. #}
 <div x-data="auditPage()" x-init="load()" @ops-refresh.window="load()">
+
+  {% call kpi_row() %}
+    {{ kpi_card("Total Events", "data.total || 0", tone="info") }}
+    {{ kpi_card("Critical", "sev('CRITICAL')", tone="neg") }}
+    {{ kpi_card("Warnings", "sev('WARN')", tone="warn") }}
+    {{ kpi_card("Last Event", "(data.rows && data.rows.length) ? tsShort(data.rows[0].ts) : '—'", tone="info") }}
+  {% endcall %}
+
   <section class="panel">
-    <h2 class="panel-title">Audit Trail <span class="panel-sub" x-text="data.date || ''"></span></h2>
-    <div class="filters">
-      <input class="flt" type="date" x-model="fDate" @change="page=1; load()">
-      <select class="flt" x-model="fTable" @change="page=1; load()">
-        <option value="">all sources</option>
-        <option>system_events</option><option>reconciliation_log</option>
-        <option>webhook_audit</option><option>eod_verification</option>
-        <option>preflight</option><option>control_tower</option>
-      </select>
-      <select class="flt" x-model="fSeverity" @change="page=1; load()">
-        <option value="">all severities</option>
-        <option>INFO</option><option>WARN</option><option>CRITICAL</option>
-        <option>HIGH</option><option>MEDIUM</option><option>LOW</option>
-      </select>
-      <button class="rt-btn" @click="page = Math.max(1, page-1); load()">&laquo; prev</button>
-      <span class="panel-sub" x-text="'page ' + page + ' · ' + (data.total || 0) + ' rows'"></span>
-      <button class="rt-btn" @click="page = page+1; load()">next &raquo;</button>
-    </div>
-    <table class="cap-table">
-      <thead><tr><th>Time</th><th>Source</th><th>Severity</th><th>Summary</th></tr></thead>
-      <tbody>
-        <template x-for="(r, i) in data.rows || []" :key="i">
-          <tr>
-            <td class="ev-ts" x-text="r.ts"></td>
-            <td class="mono" x-text="r.source"></td>
-            <td><span class="fam-pill" :class="sevClass(r.severity)" x-text="r.severity"></span></td>
-            <td class="wrapcell" style="max-width:none" x-text="r.summary"></td>
-          </tr>
-        </template>
-        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
-          <td colspan="4" class="ev-empty">No audit rows for the selected filters.</td></tr>
-      </tbody>
-    </table>
+    <h2 class="panel-title">Audit
+      <span class="panel-sub">accountability feed · user / who-changed not captured (G-5 — single-user, no control writes)</span>
+    </h2>
+
+    {{ filter_bar([
+      {"key":"date","label":"Date","type":"date"},
+      {"key":"table","label":"Source","type":"select","options":["system_events","reconciliation_log","webhook_audit","eod_verification","preflight","control_tower"]},
+      {"key":"severity","label":"Severity","type":"select","options":["INFO","WARN","CRITICAL"]},
+    ]) }}
+    {{ export_button("Export Audit") }}
+
+    {{ data_table("audit", [
+      {"key":"ts","label":"Time","kind":"ts"},
+      {"key":"source","label":"Category"},
+      {"key":"severity","label":"Severity"},
+      {"key":"summary","label":"Detail"},
+    ], rows_expr="data.rows") }}
   </section>
 </div>
 <script>
 function auditPage() {
-  return Object.assign(pageBase("/api/audit"), {
-    fDate: "", fTable: "", fSeverity: "", page: 1,
-    qs() {
-      const p = new URLSearchParams();
-      if (this.fDate) p.set("date", this.fDate);
-      if (this.fTable) p.set("table", this.fTable);
-      if (this.fSeverity) p.set("severity", this.fSeverity);
-      p.set("page", this.page);
-      return "?" + p.toString();
-    },
-    sevClass(s) {
-      if (s === "CRITICAL" || s === "HIGH") return "sev-chip sev-CRITICAL";
-      if (s === "WARN" || s === "MEDIUM") return "sev-chip sev-WARNING";
-      return "sev-chip sev-INFO";
-    },
+  return Object.assign(pageBase("/api/audit"),
+    tableMixin({ defaultSize: 50 }),
+    filterMixin([{ key: "date" }, { key: "table" }, { key: "severity" }]), {
+    qs() { const q = this.fQuery(); return q ? q + "&size=200" : "?size=200"; },
+    sev(s) { return (this.data.rows || []).filter(r => (r.severity || "") === s).length; },
+    tsShort(ts) { return ts ? String(ts).replace("T", " ").slice(0, 19) : "—"; },
   });
 }
 </script>

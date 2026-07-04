@@ -1,17 +1,32 @@
 {% extends "base.html" %}
-{% block title %}Config{% endblock %}
+{% from "components.html" import kpi_row, kpi_card, export_button %}
+{% block title %}AlgoCore Systems — Configuration{% endblock %}
 {% block nav_config %}active{% endblock %}
 {% block content %}
+{# G5b: Today's Configuration Center. Read-only over config_snapshots.config_json
+   (config_view). "Changed By" is a GAP (G-5) — the system captures no per-change
+   author; shown honestly, never fabricated. Endpoint /api/config UNCHANGED. #}
 <div x-data="configPage()" x-init="load()" @ops-refresh.window="load()">
+
+  {% call kpi_row() %}
+    {{ kpi_card("Trade Mode", "data.header ? (data.header.mode || '—') : '—'", tone="info") }}
+    {{ kpi_card("Config Hash", "data.header ? (data.header.config_hash || '—') : '—'", tone="info") }}
+    {{ kpi_card("Last Change", "data.header && data.header.last_change_date ? data.header.last_change_date : '—'", tone="info") }}
+    {{ kpi_card("Snapshot", "data.header ? (data.header.snapshot_date || '—') : '—'", tone="info") }}
+  {% endcall %}
+
+  <div class="filters">
+    <input class="flt" placeholder="search config keys / values" x-model.debounce.300ms="search">
+    {{ export_button("Export Config") }}
+    <span class="panel-sub">Change author not captured (G-5 — single-user, no per-change attribution)</span>
+  </div>
+
   <section class="panel">
-    <h2 class="panel-title">Config View (read-only)
+    <h2 class="panel-title">Today's Configuration
       <span class="panel-sub" x-show="data.header" x-cloak
-            x-text="'snapshot ' + (data.header ? (data.header.snapshot_ts || '—') : '') +
-                    ' · hash ' + (data.header ? (data.header.config_hash || '—') : '') +
-                    ' · last change ' + (data.header && data.header.last_change_date ? data.header.last_change_date : '—')"></span>
+            x-text="'snapshot ' + (data.header ? (data.header.snapshot_ts || '—') : '') + ' · hash ' + (data.header ? (data.header.config_hash || '—') : '')"></span>
     </h2>
 
-    <!-- DRIFT BANNER -->
     <div class="drift-banner" x-show="data.drift && data.drift.active" x-cloak>
       <span class="halt-tag">CONFIG DRIFT</span>
       <span x-text="'today\'s hash differs from ' + (data.drift ? data.drift.yesterday : '') + ' — changed keys:'"></span>
@@ -23,22 +38,37 @@
          x-text="data.drift && data.drift.note ? data.drift.note : 'No config drift vs yesterday.'"></div>
 
     <template x-for="g in data.groups || []" :key="g.name">
-      <div class="cap-group">
+      <div class="cap-group" x-show="groupVisible(g)" x-cloak>
         <h3 class="cap-group-title" x-text="g.name"></h3>
         <div class="cfg-block" x-show="Object.keys(g.data || {}).length" x-cloak>
           <template x-for="[k, v] in Object.entries(g.data || {})" :key="k">
-            <div class="cfg-row">
+            <div class="cfg-row" x-show="matchRow(k, v)" x-cloak>
               <span class="cfg-key mono" x-text="k"></span>
               <pre class="cfg-val" x-text="typeof v === 'object' ? JSON.stringify(v, null, 1) : String(v)"></pre>
             </div>
           </template>
         </div>
-        <span class="ev-empty" x-show="!Object.keys(g.data || {}).length" x-cloak>empty</span>
+        <span class="ev-empty" x-show="!Object.keys(g.data || {}).length" x-cloak
+              x-text="'empty — not present in snapshot'"></span>
       </div>
     </template>
   </section>
 </div>
 <script>
-function configPage() { return pageBase("/api/config"); }
+function configPage() {
+  return Object.assign(pageBase("/api/config"), {
+    search: "",
+    matchRow(k, v) {
+      if (!this.search) return true;
+      const s = this.search.toLowerCase();
+      return String(k).toLowerCase().includes(s) ||
+             JSON.stringify(v || "").toLowerCase().includes(s);
+    },
+    groupVisible(g) {
+      if (!this.search) return true;
+      return Object.entries(g.data || {}).some(([k, v]) => this.matchRow(k, v));
+    },
+  });
+}
 </script>
 {% endblock %}

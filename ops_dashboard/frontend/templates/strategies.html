@@ -2,6 +2,7 @@
 {% block title %}Strategies — Control Tower{% endblock %}
 {% block nav_strategies %}active{% endblock %}
 {% block content %}
+{% from "components.html" import export_button, data_table %}
 <div x-data="strategiesPage()" x-init="load()" @ops-refresh.window="load()">
 
   <section class="panel">
@@ -9,8 +10,34 @@
       <span class="panel-sub" x-text="data.enabled_count != null ? (data.enabled_count + ' enabled / ' + data.count + ' total · ' + (data.today || '')) : ''"></span>
     </h2>
 
-    <!-- Ranking view toggle -->
+    <!-- View toggle: dense table (global standard) vs the 7-group cards -->
     <div class="rank-toggle">
+      <span class="rt-label">View:</span>
+      <button class="rt-btn" :class="viewMode==='table' ? 'rt-active' : ''" @click="viewMode='table'">Table</button>
+      <button class="rt-btn" :class="viewMode==='cards' ? 'rt-active' : ''" @click="viewMode='cards'">Cards</button>
+      {{ export_button("Export Strategies") }}
+    </div>
+
+    <div x-show="viewMode==='table'" x-cloak>
+    {{ data_table("strategies", [
+      {"key":"strategy","label":"Strategy"},
+      {"key":"family","label":"Family"},
+      {"key":"signals","label":"Signals","kind":"num"},
+      {"key":"orders","label":"Orders","kind":"num"},
+      {"key":"trades","label":"Trades","kind":"num"},
+      {"key":"success","label":"Success %","kind":"num"},
+      {"key":"win_rate","label":"Win %","kind":"num"},
+      {"key":"pnl","label":"P&L","kind":"money"},
+      {"key":"profit_factor","label":"PF","kind":"num"},
+      {"key":"sl_hits","label":"SL hits","kind":"num"},
+      {"key":"tgt_hits","label":"TGT hits","kind":"num"},
+      {"key":"roi","label":"ROI %","kind":"num"},
+      {"key":"status","label":"Status"},
+    ], rows_expr="tableRows()") }}
+    </div>
+
+    <!-- Ranking view toggle (cards) -->
+    <div class="rank-toggle" x-show="viewMode==='cards'" x-cloak>
       <span class="rt-label">Rank by:</span>
       <template x-for="k in rankKeys" :key="k.key">
         <button class="rt-btn" :class="rankBy === k.key ? 'rt-active' : ''"
@@ -22,7 +49,7 @@
     </div>
 
     <!-- Strategy cards: one per strategy, all 7 groups -->
-    <div class="tower-grid">
+    <div class="tower-grid" x-show="viewMode==='cards'" x-cloak>
       <template x-for="r in orderedRows()" :key="r.basic.name">
         <div class="tower-card" :class="r.basic.enabled === false ? 'tower-off' : ''">
           <div class="tw-head">
@@ -33,7 +60,7 @@
                   :title="r.scorecard && r.scorecard.reasons.length ? ('why: ' + r.scorecard.reasons.join(' · ')) : 'all checks green'"
                   x-text="r.scorecard ? r.scorecard.badge : ''"></span>
             <span class="dot" :class="r.basic.enabled === false ? 'dot-off' : (r.basic.enabled === true ? 'dot-on' : 'dot-unk')"></span>
-            <span class="tw-dir" x-text="r.basic.direction || ''"></span>
+            <span class="tw-dir" x-text="(r.basic.direction || '') + (r.family ? ' · ' + r.family : '')"></span>
             <span class="tw-mode" x-text="r.basic.mode || ''"></span>
           </div>
           <div class="tw-scanners" x-text="'scanners: ' + (r.basic.scanners.length ? r.basic.scanners.join(', ') : '—')"></div>
@@ -85,6 +112,8 @@
               <div class="twg-row"><span>ROI</span><b x-text="r.performance.roi_pct !== null ? r.performance.roi_pct + '%' : '—'"></b></div>
               <div class="twg-row"><span>best / worst</span><b x-text="dash(r.performance.best_trade) + ' / ' + dash(r.performance.worst_trade)"></b></div>
               <div class="twg-row"><span>expectancy</span><b x-text="dash(r.performance.expectancy)"></b></div>
+              <div class="twg-row"><span>profit factor</span><b x-text="dash(r.performance.profit_factor)"></b></div>
+              <div class="twg-row"><span>SL / TGT hits</span><b x-text="r.sl_tgt_hits.sl_hits + ' / ' + r.sl_tgt_hits.tgt_hits"></b></div>
             </div>
             <div class="twg"><h4>Risk / Capital</h4>
               <div class="twg-row"><span>allocation</span><b x-text="r.capital_view && r.capital_view.allocation_configured !== null ? money(r.capital_view.allocation_configured) : r.capital_view.allocation_basis"></b></div>
@@ -127,8 +156,21 @@
 
 <script>
 function strategiesPage() {
-  return Object.assign(pageBase("/api/strategies"), {
-    rankBy: "net_pnl", worstFirst: false,
+  return Object.assign(pageBase("/api/strategies"), tableMixin({ defaultSize: 60 }), {
+    viewMode: "table", rankBy: "net_pnl", worstFirst: false,
+    tableRows() {
+      return (this.data.rows || []).map(r => ({
+        strategy: r.basic.display_name, family: r.family,
+        signals: r.signals.received, orders: r.processing.created,
+        trades: r.trading.open + r.trading.closed, success: r.success_rate,
+        win_rate: r.trading.win_rate, pnl: r.performance.net_pnl,
+        profit_factor: r.performance.profit_factor,
+        sl_hits: r.sl_tgt_hits.sl_hits, tgt_hits: r.sl_tgt_hits.tgt_hits,
+        roi: r.performance.roi_pct, last_signal: r.health.last_signal,
+        status: r.basic.enabled === false ? "DISABLED"
+                : (r.silence && r.silence.color ? r.silence.color : "ACTIVE"),
+      }));
+    },
     rankKeys: [
       { key: "net_pnl", label: "Net P&L" },
       { key: "win_rate", label: "Win Rate" },

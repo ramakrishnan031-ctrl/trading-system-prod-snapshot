@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "components.html" import kpi_row, kpi_card, period_selector, export_button, medal %}
+{% block title %}AlgoCore Systems — Scanner Attribution{% endblock %}
+{% block nav_scanner_attribution %}active{% endblock %}
+{% block content %}
+{# G5c: which scanner creates the best opportunities. Funnel Signals→Accepted→
+   Orders→Trades per scanner (scanner_for_trades join). Opportunity Quality Score
+   = 100 × accept_rate × trade_conversion × win_rate (documented; factors 0 when a
+   denominator is 0, never fabricated). Unmapped scanner → "scanner-level (shared)". #}
+<div x-data="scannerPage()" x-init="load(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
+  <h2 class="panel-title">Scanner Attribution
+    <span class="panel-sub" x-text="data.from ? (data.from + ' → ' + data.to) : ''"></span></h2>
+
+  {% call kpi_row() %}
+    {{ kpi_card("Scanners", "data.count || 0", tone="info") }}
+    {{ kpi_card("Best (net)", "(data.rows && data.rows.length) ? data.rows[0].scanner : '—'", tone="pos") }}
+    {{ kpi_card("Highest Quality", "topQuality()", tone="info") }}
+  {% endcall %}
+
+  {{ period_selector() }}
+  <div class="filters">{{ export_button("Export Scanners") }}
+    <span class="panel-sub" x-text="data.orders_note || ''"></span></div>
+
+  <div class="tbl-scroll">
+    <table class="cap-table">
+      <thead><tr><th>Rank</th><th>Scanner</th><th>Linked Strategy</th><th>Signals</th><th>Accepted</th>
+        <th>Orders</th><th>Trades</th><th>Win %</th><th>PF</th><th>Net</th><th>Quality</th></tr></thead>
+      <tbody>
+        <template x-for="(r, i) in data.rows || []" :key="r.scanner">
+          <tr>
+            <td>{{ medal("i+1") }}</td>
+            <td x-text="r.scanner"></td>
+            <td><span :class="r.linked_strategy==='scanner-level (shared)' ? 'cap-inert' : ''" x-text="r.linked_strategy"></span></td>
+            <td class="cap-num" x-text="r.received"></td>
+            <td class="cap-num" x-text="r.accepted"></td>
+            <td class="cap-num" x-text="r.orders"></td>
+            <td class="cap-num" x-text="r.trades"></td>
+            <td class="cap-num" x-text="dash(r.win_rate)"></td>
+            <td class="cap-num" x-text="dash(r.profit_factor)"></td>
+            <td class="cap-num" :class="r.net>0?'num-pos':(r.net<0?'num-neg':'')" x-text="money(r.net)"></td>
+            <td class="cap-num" x-text="r.quality_score"></td>
+          </tr>
+        </template>
+        <tr x-show="!(data.rows||[]).length" x-cloak><td colspan="11" class="ev-empty">No scanner activity in this period.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script>
+function scannerPage() {
+  return Object.assign(pageBase("/api/scanner-attribution"), periodMixin("today"), {
+    qs() { return this.pQuery(); },
+    topQuality() {
+      const rs = (this.data.rows || []).slice().sort((a,b) => b.quality_score - a.quality_score);
+      return rs.length ? (rs[0].scanner + ' (' + rs[0].quality_score + ')') : "—";
+    },
+  });
+}
+</script>
+{% endblock %}

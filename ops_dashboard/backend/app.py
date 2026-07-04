@@ -25,8 +25,10 @@ from flask import (
 )
 
 from .api.analytics import analytics_api
+from .api.analytics2 import analytics2_api
 from .api.capacity import capacity_api
 from .api.dashboard import dashboard_api
+from .api.operations import operations_api
 from .api.pipeline import pipeline_api
 from .api.risk_capital import risk_capital_api
 from .api.strategies import strategies_api
@@ -108,6 +110,18 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
     app.register_blueprint(risk_capital_api)
     app.register_blueprint(system_api)
     app.register_blueprint(analytics_api)
+    app.register_blueprint(analytics2_api)   # G5c NEW analytics endpoints (additive)
+    app.register_blueprint(operations_api)   # G5d Operations endpoints (additive)
+
+    @app.context_processor
+    def _inject_gui_flags():
+        # G5a: expose read-only feature flags to every template (ExportButton, L7).
+        # Both default OFF; enabling table export is Rama's Q3 decision. Additive —
+        # no route/endpoint/schema touched.
+        return {"gui_flags": {
+            "table_export_enabled": bool(cfg.get("table_export_enabled", False)),
+            "reports_download_enabled": bool(cfg.get("reports_download_enabled", False)),
+        }}
 
     @app.before_request
     def _enforce_login():
@@ -135,6 +149,18 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
         "slippage": "slippage.html", "execution": "execution.html",
         "statistics": "statistics.html", "reports": "reports.html",
         "config": "config.html", "controls": "controls.html",
+        # G5b: consolidated Capital & Risk (composes /api/risk+capital+exposure+capacity).
+        # The old /risk /capital /exposure /capacity routes above are PRESERVED.
+        "capital-risk": "capital_risk.html",
+        # G5c NEW analytics screens (additive routes; nav placeholders → live).
+        "strategy-ranking": "strategy_ranking.html",
+        "strategy-health": "strategy_health.html",
+        "scanner-attribution": "scanner_attribution.html",
+        "trades": "trade_explorer.html",
+        "pnl-analytics": "pnl_analytics.html",
+        # G5d Operations/Investigation screens (additive routes).
+        "live-activity": "live_activity.html",
+        "trade-logs": "trade_logs.html",
     }
 
     @app.route("/<page>", methods=["GET"])

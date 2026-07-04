@@ -66,6 +66,26 @@ def get_slippage():
         agg["avg_rr_damage_pct"] = round(agg["_rrsum"] / agg["_rrn"], 2) if agg["_rrn"] else None
         del agg["_rrsum"], agg["_rrn"]
     worst.sort(key=lambda r: float(r.get("entry_slippage_rs") or 0.0), reverse=True)
+
+    # ── G5b additive: scanner / symbol / price-bucket rankings + through-day trend.
+    # Existing keys above are byte-unchanged; these are NEW response keys. ──
+    scanners = db_reader.scanner_for_trades(cfg, [r.get("trade_id") for r in rows])
+
+    def _slip_agg(key_fn, label_key):
+        out: dict = {}
+        for r in rows:
+            k = key_fn(r)
+            a = out.setdefault(k, {label_key: k, "trades": 0, "entry_slip_rs": 0.0,
+                                   "breaches": 0, "worst_rs": 0.0})
+            a["trades"] += 1
+            slip = float(r.get("entry_slippage_rs") or 0.0)
+            a["entry_slip_rs"] = round(a["entry_slip_rs"] + slip, 4)
+            a["breaches"] += 1 if r.get("breach") else 0
+            a["worst_rs"] = round(max(a["worst_rs"], slip), 4)
+        for a in out.values():
+            a["avg_slip_rs"] = round(a["entry_slip_rs"] / a["trades"], 4) if a["trades"] else 0.0
+        return sorted(out.values(), key=lambda a: -a["entry_slip_rs"])
+
     return jsonify({
         "today": today,
         "model": {"mode": slc.get("mode"), "max_slippage_fraction": frac,
@@ -73,6 +93,10 @@ def get_slippage():
         "count": len(rows), "rows": rows,
         "worst": worst[:10],
         "per_strategy": sorted(per_strategy.values(), key=lambda a: -a["entry_slip_rs"]),
+        "per_scanner": _slip_agg(lambda r: scanners.get(r.get("trade_id")) or "unattributed", "scanner"),
+        "per_symbol": _slip_agg(lambda r: r.get("symbol") or "—", "symbol"),
+        "price_buckets": _slip_agg(lambda r: r.get("price_band") or "—", "band"),
+        "trend": db_reader.slippage_trend_today(cfg, today),
     })
 
 

@@ -1,0 +1,223 @@
+{#
+  ops_dashboard/frontend/templates/components.html — G5a shared component macros.
+
+  Alpine-over-JSON (G2 precedent): each macro renders MARKUP that binds to the
+  page's Alpine scope. Interactive components (DataTable/FilterBar/PeriodSelector)
+  assume the page spread the matching mixin from /static/components.js into its
+  x-data (tableMixin / filterMixin / periodMixin). Presentational macros bind to
+  whatever expression the caller passes.
+
+  Screens consume these in G5b+:
+      {% from "components.html" import data_table, kpi_row, score_chip %}
+  G5a ships them render-ready + tested; NO screen is wired in G5a.
+
+  Expression parameters (…_expr) are Alpine JS expressions injected verbatim into
+  directives — pass simple dotted paths (e.g. "data.rows"). Text parameters
+  (label/title) are auto-escaped normally.
+
+  Single score only (L8): score_chip renders the System Score (screener_results.score).
+  The redesign deliberately dropped the old second score label — none appears here.
+#}
+
+{# 1 ── DataTable: sortable ▲▼ every column + rows-per-page. Place inside an
+      element whose x-data includes tableMixin(). rows_expr = the page's array. #}
+{% macro data_table(id, columns, rows_expr="data.rows", empty_text="No rows for the current filters.") %}
+<div class="dt" data-dt="{{ id }}">
+  <div class="tbl-scroll">
+    <table class="dt-table">
+      <thead><tr>
+        {% for col in columns %}
+        <th class="dt-th{{ ' dt-num' if col.get('kind') in ('num','money') else '' }}"
+            {% if col.get('sortable', True) %}role="button" tabindex="0"
+            @click="tSort('{{ col.key }}')" @keyup.enter="tSort('{{ col.key }}')"{% endif %}>
+          <span class="dt-lbl">{{ col.label }}</span>
+          {% if col.get('sortable', True) %}<span class="dt-arrow" x-text="tArrow('{{ col.key }}')"></span>{% endif %}
+        </th>
+        {% endfor %}
+      </tr></thead>
+      <tbody>
+        <template x-for="(row, _i) in tPaged({{ rows_expr|safe }})" :key="_i">
+          <tr>
+            {% for col in columns %}
+            <td class="dt-td{{ ' dt-num mono' if col.get('kind') in ('num','money') else '' }}{{ ' mono' if col.get('kind')=='mono' else '' }}{{ ' ev-ts' if col.get('kind')=='ts' else '' }}"
+                x-text="tCell(row['{{ col.key }}'], '{{ col.get('kind','text') }}')"></td>
+            {% endfor %}
+          </tr>
+        </template>
+        <tr x-show="!({{ rows_expr|safe }}) || ({{ rows_expr|safe }}).length === 0" x-cloak>
+          <td colspan="{{ columns|length }}" class="ev-empty">{{ empty_text }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="dt-foot">
+    <div class="dt-pager">
+      <button class="dt-pg" type="button" @click="tPage = Math.max(1, tPage-1)" :disabled="tPage<=1">‹ Prev</button>
+      <span class="dt-pginfo" x-text="'Page ' + tPage + ' / ' + tPageCount({{ rows_expr|safe }})"></span>
+      <button class="dt-pg" type="button"
+              @click="tPage = Math.min(tPageCount({{ rows_expr|safe }}), tPage+1)"
+              :disabled="tPage >= tPageCount({{ rows_expr|safe }})">Next ›</button>
+    </div>
+    <label class="dt-size">Rows per page
+      <select class="flt" x-model.number="tPageSize" @change="tPage = 1">
+        <template x-for="n in tPageSizes" :key="n"><option :value="n" x-text="n"></option></template>
+      </select>
+    </label>
+  </div>
+</div>
+{% endmacro %}
+
+{# 2 ── FilterBar: assumes filterMixin() (fVals/fReset). filters = list of
+      {key,label,type(text|select|date),options?,placeholder?}. #}
+{% macro filter_bar(filters, on_change="load()") %}
+<div class="filters">
+  {% for f in filters %}
+    {% if f.type == 'select' %}
+    <select class="flt" x-model="fVals['{{ f.key }}']" @change="{{ on_change|safe }}" aria-label="{{ f.label }}">
+      <option value="">{{ f.label }}</option>
+      {% for o in f.get('options', []) %}<option value="{{ o }}">{{ o }}</option>{% endfor %}
+    </select>
+    {% elif f.type == 'date' %}
+    <input class="flt" type="date" x-model="fVals['{{ f.key }}']" @change="{{ on_change|safe }}" title="{{ f.label }}">
+    {% else %}
+    <input class="flt" placeholder="{{ f.get('placeholder', f.label) }}"
+           x-model.debounce.400ms="fVals['{{ f.key }}']" @change="{{ on_change|safe }}">
+    {% endif %}
+  {% endfor %}
+  <button class="rt-btn" type="button" @click="fReset(); {{ on_change|safe }}">Reset filters</button>
+</div>
+{% endmacro %}
+
+{# 3 ── KpiRow / KpiCard: tone in {info,pos,neg,warn}. value_expr = Alpine expr. #}
+{% macro kpi_card(label, value_expr, tone="info", href="", unit="") %}
+{% if href %}<a class="kpi-card kpi-{{ tone }}" href="{{ href }}">{% else %}<div class="kpi-card kpi-{{ tone }}">{% endif %}
+  <span class="kpi-label">{{ label }}</span>
+  <span class="kpi-val num" x-text="{{ value_expr|safe }}"></span>
+  {% if unit %}<span class="kpi-unit">{{ unit }}</span>{% endif %}
+{% if href %}</a>{% else %}</div>{% endif %}
+{% endmacro %}
+
+{% macro kpi_row() %}
+<div class="kpi-row">{{ caller() }}</div>
+{% endmacro %}
+
+{# 4 ── PeriodSelector: assumes periodMixin() (pPeriod/pSet/pFrom/pTo). #}
+{% macro period_selector() %}
+<div class="period-sel" role="tablist" aria-label="Period">
+  {% for key, lbl in [('today','Today'),('week','Week'),('month','Month'),('custom','Custom')] %}
+  <button class="ps-btn" type="button" :class="pPeriod==='{{ key }}' ? 'ps-active' : ''"
+          @click="pSet('{{ key }}')">{{ lbl }}</button>
+  {% endfor %}
+  <span class="ps-range" x-show="pPeriod==='custom'" x-cloak>
+    <input class="flt" type="date" x-model="pFrom" aria-label="From"><span class="ps-arrow">→</span>
+    <input class="flt" type="date" x-model="pTo" aria-label="To">
+  </span>
+</div>
+{% endmacro %}
+
+{# 5 ── EventsAlertsPanel (L10): the merged Recent-Events + Alerts panel. Render-
+      only in G5a. alerts_expr shape = /api/alerts.alerts; events_expr = recent_events. #}
+{% macro events_alerts_panel(events_expr="events", alerts_expr="alerts", title="Recent Events & Alerts") %}
+<section class="panel ea-panel">
+  <h3 class="panel-title">{{ title }}</h3>
+  <ul class="events ea-list">
+    <template x-for="(a, ai) in ({{ alerts_expr|safe }} || [])" :key="'a'+ai">
+      <li>
+        <span class="ev-ts" x-text="(a.sent_at || a.ts || '').replace('T',' ').slice(11,19)"></span>
+        <span class="sev-chip" :class="'sev-' + (a.severity || 'INFO')" x-text="a.severity || 'INFO'"></span>
+        <span x-text="a.title || a.summary || ''"></span>
+      </li>
+    </template>
+    <template x-for="(e, ei) in ({{ events_expr|safe }} || [])" :key="'e'+ei">
+      <li>
+        <span class="ev-ts" x-text="(e.timestamp || e.ts || '').replace('T',' ').slice(11,19)"></span>
+        <span class="ev-type" x-text="e.event_type || e.source || 'event'"></span>
+        <span class="ev-scn" x-show="e.scenario" x-cloak x-text="e.scenario"></span>
+        <span x-text="e.summary || ''"></span>
+      </li>
+    </template>
+    <li class="ev-empty"
+        x-show="(!({{ alerts_expr|safe }}) || !({{ alerts_expr|safe }}).length) && (!({{ events_expr|safe }}) || !({{ events_expr|safe }}).length)"
+        x-cloak>No recent activity.</li>
+  </ul>
+</section>
+{% endmacro %}
+
+{# 6 ── TwoStatePanel (L3/L9): AVAILABLE renders the caller() slot; UNAVAILABLE
+      renders the honest state. NEVER fabricates a value. #}
+{% macro two_state_panel(available_expr, reason="Pending Broker Source (G4/P1)") %}
+<div class="two-state">
+  <template x-if="{{ available_expr|safe }}">
+    <div class="ts-available">{{ caller() }}</div>
+  </template>
+  <template x-if="!({{ available_expr|safe }})">
+    <div class="ts-unavailable">
+      <span class="ts-icon" aria-hidden="true">⃠</span>
+      <div class="ts-body">
+        <span class="ts-reason">{{ reason }}</span>
+        <span class="ts-note">Broker is the authority — this value is not reachable read-only and is never inferred.</span>
+      </div>
+    </div>
+  </template>
+</div>
+{% endmacro %}
+
+{# 7 ── ExportButton (L7): flag-gated, DEFAULT OFF. Reads gui_flags injected by
+      the app context processor; renders DISABLED until table_export_enabled. #}
+{% macro export_button(label="Export XLSX", target="") %}
+{% set _on = (gui_flags.table_export_enabled if gui_flags is defined else False) %}
+<button class="btn-export" type="button"
+        {% if not _on %}disabled title="Export disabled — Q3 (copy-protection acceptance) pending with Rama"{% else %}data-export-target="{{ target }}"{% endif %}>
+  ⬇ {{ label }}
+</button>
+{% endmacro %}
+
+{# 8 ── ScoreChip (L8): System Score ONLY (screener_results.score). #}
+{% macro score_chip(value_expr, label="System Score") %}
+<span class="score-chip" title="System Score — screener_results.score">
+  <span class="sc-k">{{ label }}</span>
+  <span class="sc-v num" x-text="(({{ value_expr|safe }}) === null || ({{ value_expr|safe }}) === undefined) ? '—' : ({{ value_expr|safe }})"></span>
+</span>
+{% endmacro %}
+
+{# 9 ── LeaderboardMedals: 🥇🥈🥉 for ranks 1-3, else #n. #}
+{% macro medal(rank_expr) %}
+<span class="medal" x-text="(function(r){return r===1?'🥇':(r===2?'🥈':(r===3?'🥉':'#'+r));})({{ rank_expr|safe }})"></span>
+{% endmacro %}
+
+{# 10 ── StatusChip (extend): standardized state pill. prefix maps to CSS class. #}
+{% macro status_chip(state_expr, prefix="st") %}
+<span class="status-chip" :class="'{{ prefix }}-' + (({{ state_expr|safe }}) || 'UNKNOWN')"
+      x-text="({{ state_expr|safe }}) || '—'"></span>
+{% endmacro %}
+
+{# 11 ── FunnelPipelineCard (extend): renders the given stages 1:1 (13 come from
+      /api/pipeline, whose 13-stage contract is UNTOUCHED in G5a). #}
+{% macro funnel_pipeline_card(stages_expr="stages") %}
+<div class="pipeline-grid">
+  <template x-for="(s, si) in ({{ stages_expr|safe }} || [])" :key="s.key || si">
+    <div class="pcard" :class="['color-' + (s.color || 'GRAY'), s.active ? 'is-active' : '']">
+      <span class="pcard-name" x-text="s.name"></span>
+      <span class="pcard-count" x-text="s.count"></span>
+      <div class="pcard-foot">
+        <span class="pcard-color" x-text="s.color"></span>
+        <span x-text="(s.last_event || '').replace('T',' ').slice(11,19)"></span>
+      </div>
+    </div>
+  </template>
+</div>
+{% endmacro %}
+
+{# 12 ── LifecycleTimeline (extend): vertical stage timeline with timestamps.
+      steps_expr shape = [{label, ts, state}]. Render-only in G5a. #}
+{% macro lifecycle_timeline(steps_expr="steps") %}
+<ol class="lifecycle">
+  <template x-for="(st, li) in ({{ steps_expr|safe }} || [])" :key="li">
+    <li class="lc-step" :class="'lc-' + (st.state || 'pending')">
+      <span class="lc-dot" aria-hidden="true"></span>
+      <span class="lc-label" x-text="st.label"></span>
+      <span class="lc-ts" x-text="st.ts ? String(st.ts).replace('T',' ').slice(0,19) : '—'"></span>
+    </li>
+  </template>
+</ol>
+{% endmacro %}

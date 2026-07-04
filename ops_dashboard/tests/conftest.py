@@ -36,6 +36,7 @@ from datetime import timedelta  # noqa: E402
 
 TODAY = freshness.ist_today_iso()
 YDAY = (freshness.ist_now() - timedelta(days=1)).strftime("%Y-%m-%d")
+TENDAYS = (freshness.ist_now() - timedelta(days=10)).strftime("%Y-%m-%d")   # G5c: month-only
 
 
 DDL = [
@@ -127,6 +128,9 @@ DDL = [
     """CREATE TABLE trade_excursions (trade_id TEXT PRIMARY KEY, mfe_price REAL, mfe_pct REAL,
         mae_price REAL, mae_pct REAL, entry_candle_open REAL, entry_candle_high REAL,
         entry_candle_low REAL, entry_candle_close REAL, updated_at TEXT)""",
+    # G5c: screener score = System Score (L8). Absent in the pre-G5c fixture.
+    """CREATE TABLE screener_results (id INTEGER PRIMARY KEY AUTOINCREMENT,
+        signal_id TEXT, score INTEGER, created_at TEXT)""",
 ]
 
 DDL_V42_EXTRA = [
@@ -317,6 +321,42 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
               ("trd_o1", 1, 1, "SL"))
     c.execute("INSERT INTO innings(trade_id,inning_number,is_real,exit_reason) VALUES(?,?,?,?)",
               ("trd_o1", 2, 0, "OPEN"))
+
+    # G5b scanner-attribution fixtures: YESTERDAY-dated linking signals for the two
+    # slippage trades so trades.signal_id → signals.scanner resolves. Yesterday-dated
+    # ⇒ invisible to every today-scoped signal count (all signal reads filter
+    # received_at LIKE today), so existing per-strategy signal assertions are unmoved.
+    for tid, scn in (("trd_c1", "gap_fade_long"), ("trd_c4", "gap_fade_long")):
+        c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
+                  "VALUES(?,?,?,?,?,?)",
+                  (f"sig_{tid}", "AAA", scn, "gap_fade_long", f"{YDAY}T10:00:00+05:30", "TRADED"))
+
+    # G5c: screener scores (System Score, L8) for the trade-linked signals.
+    for sid in ("sig_trd_c1", "sig_trd_c4"):
+        c.execute("INSERT INTO screener_results(signal_id,score,created_at) VALUES(?,?,?)",
+                  (sid, 72, _ts("10:30:00")))
+
+    # G5c multi-day trades for the period layer — gap_fade_long closed on YDAY
+    # (within trailing-7) + TENDAYS (trailing-30 only). created_at+exit_time dated
+    # that day ⇒ invisible to today-scoped counts; ALL older than today's 14:50 win
+    # ⇒ loss-streak assertions (global + per-strategy) are unmoved.
+    def _mkclosed(tid, day, reason, net, hh="14:00:00"):
+        ts = f"{day}T{hh}+05:30"
+        c.execute(
+            "INSERT INTO trades(trade_id,signal_id,symbol,direction,strategy,sector,qty_planned,"
+            "qty_filled,entry_target_price,entry_actual_price,sl_initial,tgt_initial,margin_reserved,"
+            "risk_amount,created_at,entry_time,exit_time,exit_reason,exit_price,charges,gross_pnl,"
+            "net_pnl,status,actual_position_value_rs,signal_to_order_ms,order_to_fill_ms,total_latency_ms) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (tid, f"sig_{tid}", "AAA", "LONG", "gap_fade_long", "IT", 10, 10, 1000.0, 1001.0,
+             990.0, 1015.0, 5000.0, 100.0, ts, ts, ts, reason, 1001.0 + net / 10.0, 5.0,
+             net + 5, net, "CLOSED", 10000.0, 120, 850, 970))
+        c.execute("INSERT INTO signals(signal_id,symbol,scanner,strategy,received_at,status) "
+                  "VALUES(?,?,?,?,?,?)",
+                  (f"sig_{tid}", "AAA", "gap_fade_long", "gap_fade_long", ts, "TRADED"))
+    _mkclosed("trd_w1", YDAY, "SL_HIT", -30.0)
+    _mkclosed("trd_w2", YDAY, "TGT_HIT", 80.0)
+    _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0)
 
     # ── fm_ledger: INIT total=100000; realized losses 450 + one win 200 ──
     c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after) "

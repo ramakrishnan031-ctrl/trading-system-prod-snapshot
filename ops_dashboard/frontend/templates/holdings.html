@@ -1,27 +1,50 @@
 {% extends "base.html" %}
-{% block title %}Holdings{% endblock %}
+{% from "components.html" import kpi_row, kpi_card, two_state_panel, export_button %}
+{% block title %}AlgoCore Systems — Holdings{% endblock %}
 {% block nav_holdings %}active{% endblock %}
 {% block content %}
+{# G5d broker-first reconciliation (L3: Broker→System→Delta). The SYSTEM/expected
+   side (gtt_state mirror + trade context) renders fully. The BROKER side + Delta +
+   Reconciliation Status are UNAVAILABLE (two_state_panel, G-1/P1) — the P1 broker-
+   reconcile table is not live (Phase A), so we NEVER fabricate a broker qty or a
+   delta. Reconciliation activates when P1 ships. #}
 <div x-data="holdingsPage()" x-init="load()" @ops-refresh.window="load()">
-  <section class="panel">
-    <h2 class="panel-title">Holdings (CNC / GTT mirror)</h2>
+  {% call kpi_row() %}
+    {{ kpi_card("System Holdings", "data.count || 0", tone="info") }}
+    {{ kpi_card("Broker Holdings", "'—'", tone="info") }}
+    {{ kpi_card("Mismatches", "'—'", tone="info") }}
+  {% endcall %}
 
-    <div class="info-banner" x-text="data.banner || 'Broker is authority — local mirror; delivery parked (Slice 2.5)'"></div>
+  <section class="panel">
+    <h2 class="panel-title">Holdings — Broker-First Reconciliation</h2>
+    <div class="info-banner">Broker is the final source of truth · System = expected state · Delta = difference. The broker side activates when P1 (eod_broker_reconciliation) ships.</div>
+
+    <!-- BROKER side + Delta + Reconciliation Status = honest UNAVAILABLE -->
+    {% call two_state_panel("false", reason="Broker Qty / Delta / Reconciliation Status — Pending Broker Source (G4/P1)") %}<span></span>{% endcall %}
+
+    <div class="filters" style="margin-top:10px">{{ export_button("Export Holdings") }}</div>
 
     <template x-if="data.rows && data.rows.length > 0">
+      <div class="tbl-scroll">
       <table class="cap-table">
         <thead><tr>
-          <th>GTT</th><th>Trade</th><th>Status</th><th>Side</th><th>Qty</th>
+          <th>Trade Date</th><th>Time</th><th>Strategy</th><th>Symbol</th><th>Product</th><th>System Qty</th>
+          <th>Avg Price</th><th>Broker Qty</th><th>Delta Qty</th><th>Recon Status</th>
           <th>SL trig/limit</th><th>TGT trig/limit</th><th>Review</th>
         </tr></thead>
         <tbody>
           <template x-for="h in data.rows" :key="h.gtt_id">
             <tr>
-              <td class="mono" x-text="h.gtt_id"></td>
-              <td class="mono" x-text="h.trade_id ? String(h.trade_id).slice(0, 12) : '—'"></td>
-              <td><span class="fam-pill" :class="h.status === 'ACTIVE' ? 'famp-accepted' : 'famp-expired'" x-text="h.status"></span></td>
-              <td x-text="h.exit_side"></td>
+              <td class="ev-ts" x-text="h.created_at ? String(h.created_at).slice(0,10) : '—'"></td>
+              <td class="ev-ts" x-text="h.created_at ? String(h.created_at).replace('T',' ').slice(11,19) : '—'"></td>
+              <td x-text="h.strategy || '—'"></td>
+              <td x-text="h.symbol || '—'"></td>
+              <td>CNC</td>
               <td class="cap-num" x-text="h.qty"></td>
+              <td class="cap-num" x-text="dash(h.avg_price)"></td>
+              <td class="cap-num ts-reason" title="Pending Broker Source (G4/P1)">—</td>
+              <td class="cap-num ts-reason" title="Pending Broker Source (G4/P1)">—</td>
+              <td><span class="cap-inert">pending broker</span></td>
               <td class="cap-num" x-text="dash(h.sl_trigger) + ' / ' + dash(h.sl_limit)"></td>
               <td class="cap-num" x-text="dash(h.tgt_trigger) + ' / ' + dash(h.tgt_limit)"></td>
               <td><span x-show="h.needs_review" x-cloak class="cap-inert">REVIEW</span></td>
@@ -29,22 +52,18 @@
           </template>
         </tbody>
       </table>
+      </div>
     </template>
 
-    <!-- Designed empty state — this WILL be the normal view today -->
     <div class="empty-state" x-show="!data.rows || data.rows.length === 0" x-cloak>
       <div class="es-icon">📦</div>
-      <div class="es-title">No overnight holdings</div>
-      <div class="es-body">
-        Delivery (CNC) trading is parked behind Slice 2.5 (<span class="mono">delivery_enabled: false</span>).
-        When a CNC position is protected by an OCO-GTT, its local mirror
-        (<span class="mono">gtt_state</span>) appears here. The broker's GTT book is always
-        the authority — this screen never mutates anything.
-      </div>
+      <div class="es-title">No overnight holdings (system side)</div>
+      <div class="es-body">Delivery (CNC) is parked behind Slice 2.5 (<span class="mono">delivery_enabled: false</span>).
+        When a CNC position is protected by an OCO-GTT, its local mirror (<span class="mono">gtt_state</span>)
+        appears here as the SYSTEM side. The broker side + delta light up only when P1 ships — never faked.</div>
     </div>
   </section>
 </div>
-
 <script>
 function holdingsPage() { return pageBase("/api/holdings"); }
 </script>

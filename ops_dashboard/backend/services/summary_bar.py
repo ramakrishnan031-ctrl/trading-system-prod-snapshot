@@ -47,6 +47,7 @@ def build_summary(cfg: dict, today: Optional[str] = None, now=None,
             "net_pnl_today": round(cap["realized_pnl_today"], 2),
             "realized_loss_today": round(db_reader.realized_loss_today(cfg, today), 2),
             "opening_capital": round(opening, 2) if opening is not None else None,
+            "profit_factor": db_reader.profit_factor_today(cfg, today),   # G5b (additive)
         },
         "ist_now": now.strftime("%Y-%m-%d %H:%M:%S"),
     }

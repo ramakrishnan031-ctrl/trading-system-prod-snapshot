@@ -1,14 +1,33 @@
 {% extends "base.html" %}
-{% block title %}Slippage{% endblock %}
+{% from "components.html" import kpi_row, kpi_card, period_selector, export_button %}
+{% block title %}AlgoCore Systems — Slippage Analytics{% endblock %}
 {% block nav_slippage %}active{% endblock %}
 {% block content %}
-<div x-data="pageBase('/api/slippage')" x-init="load()" @ops-refresh.window="load()">
+{# G5b: Slippage Analytics. Today's rows + the existing breach model UNCHANGED;
+   scanner / symbol / price-bucket rankings + through-day trend are NEW additive
+   keys. Multi-day (Week/Month) arrives with the G5c P&L date-range layer — the
+   PeriodSelector emits but is not wired here (honest: shows Today only). #}
+<div x-data="slippagePage()" x-init="load()" @ops-refresh.window="load()">
+
+  {% call kpi_row() %}
+    {{ kpi_card("Total Orders", "data.count || 0", tone="info") }}
+    {{ kpi_card("Breaches", "breaches()", tone="neg") }}
+    {{ kpi_card("Avg Entry Slip ₹", "avgSlip()", tone="warn") }}
+    {{ kpi_card("Worst Slip ₹", "(data.worst && data.worst.length) ? dash(data.worst[0].entry_slippage_rs) : '—'", tone="neg") }}
+  {% endcall %}
+
   <section class="panel">
-    <h2 class="panel-title">Slippage
+    <h2 class="panel-title">Slippage Analytics
       <span class="panel-sub" x-text="(data.today || '') + (data.model ? (' · model ' + data.model.mode + ' (' + data.model.max_slippage_fraction + '×SL, cap ₹' + data.model.absolute_cap_rs + ')') : '')"></span>
     </h2>
 
-    <h2 class="panel-title">Per-trade decomposition (today)</h2>
+    {{ period_selector() }}
+    <div class="filters">
+      {{ export_button("Export Slippage") }}
+      <span class="panel-sub" x-show="pPeriod !== 'today'" x-cloak>Week/Month arrive with the G5c date-range layer — showing Today.</span>
+    </div>
+
+    <h3 class="panel-title">Per-trade decomposition (today)</h3>
     <div class="tbl-scroll">
     <table class="cap-table">
       <thead><tr><th>Symbol</th><th>Strategy</th><th>Side</th><th>Entry slip ₹</th>
@@ -37,7 +56,7 @@
 
     <div class="two-col" style="margin-top:14px">
       <div>
-        <h2 class="panel-title">Per strategy</h2>
+        <h3 class="panel-title">Per strategy</h3>
         <table class="cap-table"><thead><tr><th>Strategy</th><th>Trades</th><th>Entry slip ₹</th><th>Breaches</th><th>Avg RR dmg %</th></tr></thead><tbody>
           <template x-for="a in data.per_strategy || []" :key="a.strategy">
             <tr><td x-text="a.strategy"></td><td class="cap-num" x-text="a.trades"></td>
@@ -48,16 +67,60 @@
         </tbody></table>
       </div>
       <div>
-        <h2 class="panel-title">Worst today (entry slip)</h2>
-        <table class="cap-table"><thead><tr><th>Symbol</th><th>Strategy</th><th>Entry slip ₹</th><th>Breach</th></tr></thead><tbody>
-          <template x-for="(w, i) in data.worst || []" :key="i">
-            <tr><td x-text="w.symbol"></td><td x-text="w.strategy_name"></td>
-              <td class="cap-num" x-text="dash(w.entry_slippage_rs)"></td>
-              <td><span x-show="w.breach" x-cloak class="fam-pill famp-rejected">BREACH</span></td></tr>
+        <h3 class="panel-title">Per scanner <span class="panel-sub">(attribution via signals.scanner)</span></h3>
+        <table class="cap-table"><thead><tr><th>Scanner</th><th>Trades</th><th>Avg slip ₹</th><th>Worst ₹</th><th>Breaches</th></tr></thead><tbody>
+          <template x-for="a in data.per_scanner || []" :key="a.scanner">
+            <tr><td x-text="a.scanner"></td><td class="cap-num" x-text="a.trades"></td>
+              <td class="cap-num" x-text="a.avg_slip_rs"></td>
+              <td class="cap-num" x-text="a.worst_rs"></td>
+              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td></tr>
+          </template>
+          <tr x-show="!(data.per_scanner || []).length" x-cloak><td colspan="5" class="ev-empty">No scanner-attributed trades.</td></tr>
+        </tbody></table>
+      </div>
+    </div>
+
+    <div class="two-col" style="margin-top:14px">
+      <div>
+        <h3 class="panel-title">Per symbol</h3>
+        <table class="cap-table"><thead><tr><th>Symbol</th><th>Trades</th><th>Avg slip ₹</th><th>Worst ₹</th><th>Breaches</th></tr></thead><tbody>
+          <template x-for="a in data.per_symbol || []" :key="a.symbol">
+            <tr><td x-text="a.symbol"></td><td class="cap-num" x-text="a.trades"></td>
+              <td class="cap-num" x-text="a.avg_slip_rs"></td><td class="cap-num" x-text="a.worst_rs"></td>
+              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td></tr>
+          </template>
+        </tbody></table>
+      </div>
+      <div>
+        <h3 class="panel-title">Price-band buckets</h3>
+        <table class="cap-table"><thead><tr><th>Band</th><th>Orders</th><th>Avg slip ₹</th><th>Worst ₹</th><th>Exceeded</th></tr></thead><tbody>
+          <template x-for="a in data.price_buckets || []" :key="a.band">
+            <tr><td x-text="a.band"></td><td class="cap-num" x-text="a.trades"></td>
+              <td class="cap-num" x-text="a.avg_slip_rs"></td><td class="cap-num" x-text="a.worst_rs"></td>
+              <td class="cap-num" :class="a.breaches ? 'num-neg' : ''" x-text="a.breaches"></td></tr>
           </template>
         </tbody></table>
       </div>
     </div>
+
+    <h3 class="panel-title" style="margin-top:14px">Through-day trend (avg entry slip by hour)</h3>
+    <table class="cap-table" style="max-width:520px"><thead><tr><th>Hour (IST)</th><th>Orders</th><th>Avg slip ₹</th></tr></thead><tbody>
+      <template x-for="t in data.trend || []" :key="t.hour">
+        <tr><td x-text="t.hour + ':00'"></td><td class="cap-num" x-text="t.n"></td><td class="cap-num" x-text="t.avg_slippage"></td></tr>
+      </template>
+      <tr x-show="!(data.trend || []).length" x-cloak><td colspan="3" class="ev-empty">No timestamped slippage rows.</td></tr>
+    </tbody></table>
   </section>
 </div>
+<script>
+function slippagePage() {
+  return Object.assign(pageBase("/api/slippage"), periodMixin("today"), {
+    breaches() { return (this.data.rows || []).filter(r => r.breach).length; },
+    avgSlip() {
+      const rs = (this.data.rows || []).map(r => Number(r.entry_slippage_rs || 0));
+      return rs.length ? (rs.reduce((a, b) => a + b, 0) / rs.length).toFixed(2) : "—";
+    },
+  });
+}
+</script>
 {% endblock %}
