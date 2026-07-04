@@ -1,11 +1,24 @@
 {% extends "base.html" %}
-{% block title %}Logs{% endblock %}
+{% from "components.html" import kpi_row, kpi_card, export_button %}
+{% block title %}AlgoCore Systems — System Logs{% endblock %}
 {% block nav_logs %}active{% endblock %}
 {% block content %}
+{# G5b: System Logs console. Reuses log_reader (whitelist/tail/parse UNCHANGED).
+   KPI severity counts derived client-side from the returned rows. Resolution
+   status/time is a GAP (G-5) — logs don't track it; shown honestly. #}
 <div x-data="logsPage()" x-init="load()">
+
+  {% call kpi_row() %}
+    {{ kpi_card("Rows", "rows.length", tone="info") }}
+    {{ kpi_card("Info", "sev('INFO')", tone="pos") }}
+    {{ kpi_card("Warnings", "sev('WARNING')", tone="warn") }}
+    {{ kpi_card("Errors", "sev('ERROR')", tone="neg") }}
+    {{ kpi_card("Critical", "sev('CRITICAL')", tone="neg") }}
+  {% endcall %}
+
   <section class="panel">
-    <h2 class="panel-title">Logs Viewer
-      <span class="panel-sub">read-only · whitelisted dir · tail-from-end (≤2000 lines) · download disabled</span>
+    <h2 class="panel-title">System Logs
+      <span class="panel-sub">read-only · whitelisted dir · tail-from-end (≤2000 lines) · download disabled · resolution status not tracked (G-5)</span>
     </h2>
 
     <div class="filters">
@@ -23,6 +36,7 @@
       </select>
       <input class="flt" placeholder="free text" x-model.debounce.500ms="q" @change="load()">
       <input class="flt" placeholder="signal/trade/order id" x-model.debounce.500ms="refId" @change="load()">
+      {{ export_button("Export Logs") }}
       <span class="panel-sub" x-show="meta.file" x-cloak
             x-text="meta.count + ' rows · scanned ' + Math.round(meta.bytes_read/1024) + ' KB of ' + Math.round(meta.file_size/1024) + ' KB'"></span>
     </div>
@@ -34,7 +48,7 @@
           <template x-for="(r, i) in rows" :key="i">
             <tr :class="r.level ? ('lvl-' + r.level) : ''">
               <td class="ev-ts" x-text="r.ts || '—'"></td>
-              <td><span class="fam-pill" :class="lvlClass(r.level)" x-text="r.level || 'raw'"></span></td>
+              <td><span class="sev-chip" :class="lvlClass(r.level)" x-text="r.level || 'raw'"></span></td>
               <td class="mono" x-text="r.logger || ''"></td>
               <td class="logmsg" x-text="r.msg"></td>
               <td class="mono" x-text="[r.signal_id, r.trade_id, r.order_id].filter(Boolean).map(s => s.slice(0,10)).join(' ')"></td>
@@ -70,11 +84,12 @@ function logsPage() {
       this.rows = d.rows || [];
       this.meta = d;
     },
+    sev(lvl) { return this.rows.filter(r => (r.level || "") === lvl).length; },
     lvlClass(lvl) {
-      if (lvl === "ERROR" || lvl === "CRITICAL") return "sev-chip sev-CRITICAL";
-      if (lvl === "WARNING") return "sev-chip sev-WARNING";
-      if (lvl === "INFO") return "sev-chip sev-INFO";
-      return "famp-expired";
+      if (lvl === "ERROR" || lvl === "CRITICAL") return "sev-CRITICAL";
+      if (lvl === "WARNING") return "sev-WARNING";
+      if (lvl === "INFO") return "sev-INFO";
+      return "";
     },
   };
 }

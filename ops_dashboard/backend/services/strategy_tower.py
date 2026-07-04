@@ -29,6 +29,15 @@ _STALE_WARN_SEC = 30 * 60
 _STALE_RED_SEC = 2 * 60 * 60
 
 
+def _family_of(name: str) -> str:
+    """UI grouping key (G5b): base strategy name without the direction suffix
+    (gap_fade_long → gap_fade). Pure; no config dependency."""
+    for suf in ("_long", "_short"):
+        if name.endswith(suf):
+            return name[: -len(suf)]
+    return name
+
+
 def _win_rate(wins: int, losses: int) -> Optional[float]:
     decided = wins + losses
     return round(100.0 * wins / decided, 1) if decided > 0 else None
@@ -79,6 +88,7 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
     opening = db_reader.opening_capital(cfg, today)
     reject_split = db_reader.strategy_reject_split(cfg, today)   # failure strip
     loss_streaks = db_reader.strategy_loss_streaks(cfg)          # scorecard input
+    sltgt = db_reader.strategy_sltgt_hits(cfg, today)            # G5b: SL/TGT exit counts
     score_th = cfg.get("scorecard") or {}
     silence_th = cfg.get("silence") or {}
 
@@ -118,6 +128,8 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
         wins, losses = int(p["wins"]), int(p["losses"])
         win_rate = _win_rate(wins, losses)
         expectancy = _expectancy(wins, losses, float(p["win_sum"]), float(p["loss_sum"]))
+        loss_sum = float(p["loss_sum"])
+        profit_factor = round(float(p["win_sum"]) / abs(loss_sum), 2) if loss_sum < 0 else None
         created, filled = int(o["created"]), int(o["filled"])
         success_rate = round(100.0 * filled / created, 1) if created > 0 else None
 
@@ -230,6 +242,7 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
                 "capital_used_today": round(cap_used_today, 2),
                 "best_trade": p["best_trade"], "worst_trade": p["worst_trade"],
                 "expectancy": expectancy,
+                "profit_factor": profit_factor,       # G5b (additive)
             },
             "risk": {
                 "capital_used": round(float(oc["margin"]), 2),   # open reservations now
@@ -257,6 +270,8 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
                 "success_rate": success_rate if success_rate is not None else -1.0,
             },
             "success_rate": success_rate,
+            "family": _family_of(name),                          # G5b: UI grouping
+            "sl_tgt_hits": sltgt.get(name, {"sl_hits": 0, "tgt_hits": 0}),  # G5b (additive)
         })
 
     # Rankings: each key desc; ties (and metric-less rows, coerced to -1e18)

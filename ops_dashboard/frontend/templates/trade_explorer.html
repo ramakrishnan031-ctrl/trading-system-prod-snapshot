@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% from "components.html" import kpi_row, kpi_card, period_selector, filter_bar, data_table, export_button, lifecycle_timeline, score_chip %}
+{% block title %}AlgoCore Systems — Trade Explorer{% endblock %}
+{% block nav_trade_explorer %}active{% endblock %}
+{% block content %}
+{# G5c: one trade = one story. Per-trade forensic table (trades ⋈ signals ⋈ orders
+   ⋈ execution) + a lifecycle drill. Per-stage validation/risk/capital timings are
+   NOT persisted (G-2) → the timeline shows them as honest "not captured". System
+   Score only (L8). READ-ONLY. #}
+<div x-data="explorerPage()" x-init="load(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
+  <h2 class="panel-title">Trade Explorer
+    <span class="panel-sub" x-text="(data.count!=null?data.count+' trades · ':'') + (data.from ? (data.from+' → '+data.to) : '')"></span></h2>
+
+  {{ period_selector() }}
+  {{ filter_bar([
+    {"key":"strategy","label":"Strategy"},
+    {"key":"symbol","label":"Symbol"},
+    {"key":"direction","label":"Direction","type":"select","options":["LONG","SHORT"]},
+  ]) }}
+  {{ export_button("Export Trades") }}
+
+  {{ data_table("trades", [
+    {"key":"trade_date","label":"Date","kind":"date"},
+    {"key":"trade_time","label":"Time"},
+    {"key":"strategy","label":"Strategy"},
+    {"key":"scanner","label":"Scanner"},
+    {"key":"symbol","label":"Symbol"},
+    {"key":"direction","label":"Dir"},
+    {"key":"system_score","label":"Score","kind":"num"},
+    {"key":"qty","label":"Qty","kind":"num"},
+    {"key":"entry","label":"Entry","kind":"num"},
+    {"key":"exit","label":"Exit","kind":"num"},
+    {"key":"net","label":"Net","kind":"money"},
+    {"key":"exit_reason","label":"Exit"},
+    {"key":"status","label":"Status"},
+  ], rows_expr="data.rows") }}
+
+  <p class="panel-sub">Click a Trade ID below to open its story.</p>
+  <div class="filters">
+    <input class="flt" placeholder="trade id → story" x-model="storyId">
+    <button class="rt-btn" @click="openStory()">Open story</button>
+  </div>
+
+  <!-- Trade story drill -->
+  <section class="panel" x-show="story.trade_id" x-cloak>
+    <h3 class="panel-title">Trade Story <span class="panel-sub" x-text="story.trade_id"></span></h3>
+    <div class="failstrip" style="margin-bottom:8px">
+      <span>Scanner: <b x-text="story.scanner || '—'"></b></span>
+      <span>{{ score_chip("story.system_score") }}</span>
+      <span>Exit: <b x-text="(story.trade && story.trade.exit_reason) || '—'"></b></span>
+      <span>Net: <b x-text="story.trade ? money(story.trade.net_pnl) : '—'"></b></span>
+    </div>
+    {{ lifecycle_timeline("story.timeline") }}
+    <p class="panel-sub" x-text="story.timeline_note || ''"></p>
+    <details x-show="story.raw_payload" x-cloak><summary class="panel-sub">Raw Chartink payload (signals.webhook_payload)</summary>
+      <pre class="logpre" x-text="story.raw_payload"></pre></details>
+  </section>
+</div>
+<script>
+function explorerPage() {
+  return Object.assign(pageBase("/api/trades"), tableMixin({ defaultSize: 100 }),
+    periodMixin("week"), filterMixin([{key:"strategy"},{key:"symbol"},{key:"direction"}]), {
+    storyId: "", story: {},
+    qs() { const f = this.fQuery(); const p = this.pQuery(); return p + (f ? "&" + f.slice(1) : ""); },
+    async openStory() {
+      const id = (this.storyId || "").trim();
+      if (!id) return;
+      const r = await fetch("/api/trade-story/" + encodeURIComponent(id), {credentials:"same-origin"});
+      this.story = r.ok ? await r.json() : { trade_id: id, timeline: [], timeline_note: "trade not found" };
+    },
+  });
+}
+</script>
+{% endblock %}

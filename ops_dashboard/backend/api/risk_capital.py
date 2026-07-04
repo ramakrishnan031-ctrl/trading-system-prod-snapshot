@@ -100,6 +100,8 @@ def get_exposure():
         "margin_used": round(usage["margin_used"], 2),
         "margin_vs_capital_pct": (round(100.0 * usage["margin_used"] / opening, 1)
                                   if opening else None),
+        # G5b additive (Capital & Risk exposure zone): long/short/net split.
+        "by_direction": db_reader.exposure_by_direction(cfg),
     })
     return jsonify(data)
 

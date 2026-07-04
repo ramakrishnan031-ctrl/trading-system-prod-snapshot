@@ -1,30 +1,45 @@
 {% extends "base.html" %}
-{% block title %}Positions{% endblock %}
+{% from "components.html" import kpi_row, kpi_card, two_state_panel, export_button %}
+{% block title %}AlgoCore Systems — Positions{% endblock %}
 {% block nav_positions %}active{% endblock %}
 {% block content %}
+{# G5d two-state: the SYSTEM side (DB-backed) renders fully; the BROKER-derived
+   fields (live LTP / MTM / unrealized / current RR) are honestly UNAVAILABLE
+   (two_state_panel, G-1) — never simulated or inferred. mode is a data attribute. #}
 <div x-data="positionsPage()" x-init="load()" @ops-refresh.window="load()">
-  <section class="panel">
-    <h2 class="panel-title">Open Positions
-      <span class="panel-sub">
-        <span x-text="(data.count != null ? data.count : 0) + (data.max_open_positions ? ' / ' + data.max_open_positions + ' max' : '')"></span>
-        · <a class="panel-link" href="/capacity">capacity →</a>
-      </span>
-    </h2>
+  {% call kpi_row() %}
+    {{ kpi_card("Open Positions", "data.count || 0", tone="info") }}
+    {{ kpi_card("Long", "side('LONG')", tone="pos") }}
+    {{ kpi_card("Short", "side('SHORT')", tone="neg") }}
+    {{ kpi_card("Capital Used", "money(capUsed())", tone="warn") }}
+    {{ kpi_card("Mode", "data.mode || '—'", tone="info") }}
+  {% endcall %}
 
-    <div class="tbl-scroll">
+  <section class="panel">
+    <h2 class="panel-title">Open Positions — System View
+      <span class="panel-sub"><span x-text="(data.count!=null?data.count:0) + (data.max_open_positions ? ' / '+data.max_open_positions+' max' : '')"></span> · <a class="panel-link" href="/capacity">capacity →</a></span>
+    </h2>
+    <div class="filters">{{ export_button("Export Positions") }}</div>
+
+    <!-- Broker-derived block: honest UNAVAILABLE (never fabricated) -->
+    {% call two_state_panel("false", reason="Live LTP / MTM / Unrealized / Current RR — Pending Broker Source (G4)") %}<span></span>{% endcall %}
+
+    <div class="tbl-scroll" style="margin-top:10px">
     <table class="cap-table">
       <thead><tr>
-        <th>Symbol</th><th>Strategy</th><th>Dir</th><th>Mode</th><th>Status</th><th>Qty</th>
-        <th>Entry</th><th>SL</th><th>TGT</th><th>Risk ₹</th><th>Margin ₹</th>
-        <th>Unrealized</th><th>Age</th><th>Inning#</th>
+        <th>Trade Date</th><th>Time</th><th>Strategy</th><th>Scanner</th><th>Symbol</th><th>Dir</th>
+        <th>Status</th><th>Qty</th><th>Entry (system)</th><th>SL (system)</th><th>TGT (system)</th>
+        <th>Risk ₹</th><th>Margin ₹</th><th>MTM</th><th>Age</th><th>Inning#</th>
       </tr></thead>
       <tbody>
         <template x-for="p in data.rows || []" :key="p.trade_id">
           <tr>
-            <td x-text="p.symbol"></td>
+            <td class="ev-ts" x-text="dstr(p.created_at)"></td>
+            <td class="ev-ts" x-text="tstr(p.entry_time || p.created_at)"></td>
             <td x-text="p.strategy"></td>
+            <td x-text="p.scanner || '—'"></td>
+            <td x-text="p.symbol"></td>
             <td x-text="p.direction"></td>
-            <td x-text="data.mode || '—'"></td>
             <td><span class="fam-pill famp-expired" x-text="p.status"></span></td>
             <td class="cap-num" x-text="p.qty_filled + '/' + p.qty_planned"></td>
             <td class="cap-num" x-text="dash(p.entry_actual_price != null ? p.entry_actual_price : p.entry_target_price)"></td>
@@ -32,35 +47,30 @@
             <td class="cap-num" x-text="dash(p.tgt_initial)"></td>
             <td class="cap-num" x-text="dash(p.risk_amount)"></td>
             <td class="cap-num" x-text="dash(p.margin_reserved)"></td>
-            <td class="cap-num" title="G4" x-text="'—'"></td>
+            <td class="cap-num ts-reason" title="Pending Broker Source (G4)">—</td>
             <td x-text="age(p.entry_time || p.created_at)"></td>
             <td class="cap-num" x-text="dash(p.inning_no)"></td>
           </tr>
         </template>
-        <tr x-show="!data.rows || data.rows.length === 0" x-cloak>
-          <td colspan="14" class="ev-empty">No open positions.</td>
-        </tr>
+        <tr x-show="!data.rows || data.rows.length === 0" x-cloak><td colspan="16" class="ev-empty">No open positions.</td></tr>
       </tbody>
     </table>
     </div>
-    <p class="panel-sub" style="margin-top:8px">
-      Unrealized P&L is not persisted by the trading system (G4 — live LTP needs a
-      broker session); shown as “—” by design. Open-set statuses:
-      <span class="mono" x-text="(data.open_states || []).join(', ')"></span>
-    </p>
+    <p class="panel-sub" style="margin-top:8px">The MTM column is broker-authoritative and not reachable read-only (G4) — shown as “—”, never inferred. Open-set: <span class="mono" x-text="(data.open_states||[]).join(', ')"></span></p>
   </section>
 </div>
-
 <script>
 function positionsPage() {
   return Object.assign(pageBase("/api/positions"), {
+    side(d) { return (this.data.rows || []).filter(p => p.direction === d).length; },
+    capUsed() { return (this.data.rows || []).reduce((a, p) => a + (Number(p.margin_reserved) || 0), 0); },
+    dstr(ts) { return ts ? String(ts).slice(0, 10) : "—"; },
+    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(11, 19) : "—"; },
     age(ts) {
       if (!ts) return "—";
-      const t = Date.parse(String(ts));
-      if (isNaN(t)) return "—";
+      const t = Date.parse(String(ts)); if (isNaN(t)) return "—";
       const s = Math.max(0, (Date.now() - t) / 1000);
-      if (s < 3600) return Math.round(s / 60) + "m";
-      return (s / 3600).toFixed(1) + "h";
+      return s < 3600 ? Math.round(s / 60) + "m" : (s / 3600).toFixed(1) + "h";
     },
   });
 }

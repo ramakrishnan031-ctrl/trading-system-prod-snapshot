@@ -145,6 +145,35 @@ def age_seconds(ts: Optional[str], now: Optional[datetime] = None) -> Optional[f
     return max(0.0, (now - dt).total_seconds())
 
 
+def resolve_period(period: Optional[str], from_date: Optional[str] = None,
+                   to_date: Optional[str] = None, now: Optional[datetime] = None) -> tuple:
+    """G5c multi-period resolver → (from_date, to_date) as YYYY-MM-DD in IST.
+
+    today  → (today, today)
+    week   → trailing 7 days incl. today  (today-6 .. today)
+    month  → trailing 30 days incl. today (today-29 .. today)
+    custom → (from_date, to_date) if both valid YYYY-MM-DD, else today
+
+    Trailing windows (not calendar week/month) are used so the boundary is
+    deterministic and IST-anchored (reuses ist_now; no zoneinfo). Reported for
+    Rama/Web-Claude review. Read-only; no mode branch (parity).
+    """
+    now = now or ist_now()
+    today = now.strftime("%Y-%m-%d")
+
+    def _valid(d):
+        return bool(d) and len(d) == 10 and d[4] == "-" and d[7] == "-"
+
+    p = (period or "today").lower()
+    if p == "custom" and _valid(from_date) and _valid(to_date):
+        return (from_date, to_date) if from_date <= to_date else (to_date, from_date)
+    if p == "week":
+        return (now - timedelta(days=6)).strftime("%Y-%m-%d"), today
+    if p == "month":
+        return (now - timedelta(days=29)).strftime("%Y-%m-%d"), today
+    return today, today
+
+
 def freshness_state(cfg: dict, now: Optional[datetime] = None) -> dict:
     """Bundle for the frontend: phase, active flag, poll interval."""
     now = now or ist_now()

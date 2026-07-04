@@ -1,27 +1,70 @@
 {% extends "base.html" %}
-{% block title %}Controls{% endblock %}
+{% from "components.html" import kpi_row, kpi_card %}
+{% block title %}AlgoCore Systems — Controls{% endblock %}
 {% block nav_controls %}active{% endblock %}
 {% block content %}
-<section class="panel">
-  <h2 class="panel-title">Controls</h2>
-  <div class="empty-state">
-    <div class="es-icon">🎛️</div>
-    <div class="es-title">Controls arrive in G3</div>
-    <div class="es-body">
-      This dashboard is <b>read-only by design</b> (G2 scope). The locked G3 control set —
-      each of which requires a NEW production API (G0 §3: none has a programmatic
-      entry point today):
-      <ul class="g3-list">
-        <li>Pause / Resume strategy</li>
-        <li>Enable / Disable strategy or scanner</li>
-        <li>Kill pending orders (all / per-strategy / per-symbol)</li>
-        <li>Manual square-off / single-position exit</li>
-        <li>Emergency trading halt (trigger SOFT/HARD kill)</li>
-        <li>Restart services</li>
-      </ul>
-      Until G3, the only operator surfaces remain <span class="mono">scripts/clear_kill_switch.py</span>
-      and <span class="mono">systemctl restart</span> over SSH.
-    </div>
+{# G5d: READ-ONLY Controls summary (L4). ZERO write path — this template contains
+   NO form / button / POST. Composes /api/controls-summary from config + kill-switch
+   + strategy flags. The G3 Future Controls section is a disabled placeholder. #}
+<div x-data="controlsPage()" x-init="load()" @ops-refresh.window="load()">
+  <h2 class="panel-title">Controls <span class="panel-sub">read-only summary · view only · no runtime writes (G3)</span></h2>
+
+  {% call kpi_row() %}
+    {{ kpi_card("Trading Mode", "data.trade_type ? data.trade_type.label : '—'", tone="info") }}
+    {{ kpi_card("Strategies Enabled", "data.strategies ? (data.strategies.enabled_count + ' / ' + data.strategies.total) : '—'", tone="info") }}
+    {{ kpi_card("Telegram Alerts", "telegramLabel()", tone="info") }}
+    {{ kpi_card("Kill Switch", "data.kill_switch ? data.kill_switch.state : '—'", tone="info") }}
+  {% endcall %}
+
+  <div class="two-col">
+    <section class="panel">
+      <h3 class="panel-title">Active Runtime Limits</h3>
+      <div class="cfg-block">
+        <div class="cfg-row"><span class="cfg-key">Max Daily Trades</span><span x-text="lim('max_daily_trades')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">Max Open Positions</span><span x-text="lim('max_open_positions')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">Max Concentration</span><span x-text="pctOf('max_concentration_pct')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">Daily Loss Limit</span><span x-text="pctOf('daily_loss_limit_pct')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">Trade Type</span><span x-text="data.trade_type ? (data.trade_type.trade_type + ' · force_intraday=' + data.trade_type.force_intraday_only) : '—'"></span></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h3 class="panel-title">Kill Switch</h3>
+      <div class="cfg-block">
+        <div class="cfg-row"><span class="cfg-key">State</span><span x-text="ks('state')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">Reason</span><span x-text="ks('reason')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">Since</span><span x-text="ks('since')"></span></div>
+        <div class="cfg-row"><span class="cfg-key">By</span><span x-text="ks('by')"></span></div>
+      </div>
+      <p class="panel-sub" x-show="data.telegram_alerts" x-cloak x-text="data.telegram_alerts ? data.telegram_alerts.note : ''"></p>
+    </section>
   </div>
-</section>
+
+  <section class="panel">
+    <h3 class="panel-title">Enabled Strategies <span class="panel-sub" x-text="data.strategies ? data.strategies.enabled_count + ' of ' + data.strategies.total : ''"></span></h3>
+    <div class="tw-scanners" x-text="(data.strategies && data.strategies.enabled.length) ? data.strategies.enabled.join(', ') : '—'"></div>
+  </section>
+
+  <section class="panel">
+    <h3 class="panel-title">G3 Future Controls</h3>
+    <div class="empty-state">
+      <div class="es-icon">🎛️</div>
+      <div class="es-title">Future — G3 control plane (not implemented)</div>
+      <div class="es-body" x-text="data.future_controls ? data.future_controls.note : 'A control plane requires G3 design; no write path exists.'"></div>
+    </div>
+  </section>
+</div>
+<script>
+function controlsPage() {
+  return Object.assign(pageBase("/api/controls-summary"), {
+    lim(k) { const v = (this.data.limits || {})[k]; return (v === null || v === undefined) ? "—" : v; },
+    pctOf(k) { const v = (this.data.limits || {})[k]; return (v === null || v === undefined) ? "—" : (v * 100).toFixed(0) + "%"; },
+    ks(k) { const s = this.data.kill_switch || {}; return (s[k] === null || s[k] === undefined || s[k] === "") ? "—" : s[k]; },
+    telegramLabel() {
+      const t = this.data.telegram_alerts;
+      if (!t) return "—";
+      return t.configured === null ? "not set in snapshot" : (t.configured ? "ON" : "OFF");
+    },
+  });
+}
+</script>
 {% endblock %}

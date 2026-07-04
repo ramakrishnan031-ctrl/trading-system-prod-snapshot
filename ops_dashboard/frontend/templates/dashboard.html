@@ -1,8 +1,26 @@
 {% extends "base.html" %}
-{% block title %}Ops Dashboard — Control Tower{% endblock %}
+{% block title %}AlgoCore Systems — Dashboard{% endblock %}
 {% block nav_dashboard %}active{% endblock %}
 {% block content %}
+{% from "components.html" import kpi_row, kpi_card %}
 <div x-data="dashPage()" x-init="load()" @ops-refresh.window="load()">
+
+  <!-- Merged Alerts banner (L10 — Alerts has no standalone menu) -->
+  <div class="info-banner" x-show="alerts.length" x-cloak>
+    <span class="sev-chip sev-CRITICAL" x-show="critAlerts()" x-cloak x-text="critAlerts() + ' critical'"></span>
+    <span x-text="alerts.length + ' alert(s) today' + (alerts[0] ? (' · latest: ' + (alerts[0].title || '')) : '')"></span>
+  </div>
+
+  <!-- TODAY'S TRADING SUMMARY (clickable KPIs → deep-link routes) -->
+  {% call kpi_row() %}
+    {{ kpi_card("Signals Received", "dashData.summary ? dashData.summary.counters.received : 0", tone="info", href="/signals") }}
+    {{ kpi_card("Trades Today", "dashData.summary ? dashData.summary.counters.trades_today : 0", tone="info", href="/pnl") }}
+    {{ kpi_card("Open", "dashData.summary ? dashData.summary.counters.open_positions : 0", tone="info", href="/positions") }}
+    {{ kpi_card("Wins / Losses", "wins() + ' / ' + losses()", tone="info") }}
+    {{ kpi_card("Win %", "winRate()", tone="pos") }}
+    {{ kpi_card("Profit Factor", "(dashData.summary && dashData.summary.counters.profit_factor != null) ? dashData.summary.counters.profit_factor : '—'", tone="info") }}
+    {{ kpi_card("Net P&L", "money(pnlNet())", tone="info", href="/pnl") }}
+  {% endcall %}
 
   <!-- ── B1/A1: hero KPI row ── -->
   <section class="hero-grid">
@@ -153,21 +171,29 @@
 function dashPage() {
   return Object.assign(pageBase("/api/pipeline"), {
     pipeline: { stages: [], halt: {} }, capacity: { rows: [] }, strategies: { rows: [] },
-    pnl: {},
+    pnl: {}, dashData: {}, alerts: [],
     async load() {
       try {
-        const [p, cap, s, pnl] = await Promise.all([
+        const [p, cap, s, pnl, dsh, al] = await Promise.all([
           fetch("/api/pipeline", {credentials:"same-origin"}).then(r => r.json()),
           fetch("/api/capacity", {credentials:"same-origin"}).then(r => r.json()),
           fetch("/api/strategies", {credentials:"same-origin"}).then(r => r.json()),
           fetch("/api/pnl", {credentials:"same-origin"}).then(r => r.json()),
+          fetch("/api/dashboard", {credentials:"same-origin"}).then(r => r.json()),
+          fetch("/api/alerts", {credentials:"same-origin"}).then(r => r.json()),
         ]);
         this.pipeline = p || { stages: [], halt: {} };
         this.capacity = cap || { rows: [] };
         this.strategies = s || { rows: [] };
         this.pnl = pnl || {};
+        this.dashData = dsh || {};
+        this.alerts = (al && al.alerts) || [];
       } catch (e) { /* bar shows the error state */ }
     },
+    wins() { return (this.strategies.rows || []).reduce((a, r) => a + (r.trading ? r.trading.wins : 0), 0); },
+    losses() { return (this.strategies.rows || []).reduce((a, r) => a + (r.trading ? r.trading.losses : 0), 0); },
+    winRate() { const w = this.wins(), l = this.losses(); return (w + l) ? Math.round(100 * w / (w + l)) + '%' : '—'; },
+    critAlerts() { return (this.alerts || []).filter(a => a.severity === 'CRITICAL').length; },
     capRow(key) { return (this.capacity.rows || []).find(r => r.key === key) || null; },
     pnlNet() { return this.pnl.summary ? this.pnl.summary.net : 0; },
     lossStatusClass() {

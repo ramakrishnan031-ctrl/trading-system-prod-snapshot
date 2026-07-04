@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "components.html" import kpi_row, kpi_card %}
+{% block title %}AlgoCore Systems — Live Activity{% endblock %}
+{% block nav_live_activity %}active{% endblock %}
+{% block content %}
+{# G5d: the single merged attention surface (L10). One reverse-chronological feed
+   over 7 read-only sources — signals · orders · trades · system events · capital
+   (fm_ledger) · risk (kill). No standalone Alerts screen; /alerts stays 200 by
+   direct URL. Poll cadence follows freshness (5s market / 60s off). #}
+<div x-data="activityPage()" x-init="load()" @ops-refresh.window="load()">
+  {% call kpi_row() %}
+    {{ kpi_card("Events", "data.count || 0", tone="info") }}
+    {{ kpi_card("Signals/min", "perMin('SIGNAL')", tone="info") }}
+    {{ kpi_card("Orders/min", "perMin('ORDER')", tone="info") }}
+    {{ kpi_card("Trades/min", "perMin('TRADE')", tone="info") }}
+    {{ kpi_card("Sources", "(data.types||[]).length", tone="info") }}
+  {% endcall %}
+
+  <section class="panel">
+    <h2 class="panel-title">Live Activity — Mission Control Feed
+      <span class="panel-sub" x-text="'sources: ' + (data.types||[]).join(' · ')"></span></h2>
+    <div class="filters">
+      <button class="rt-btn" :class="filter==='' ? 'rt-active':''" @click="filter=''">All</button>
+      <template x-for="t in data.types || []" :key="t">
+        <button class="rt-btn" :class="filter===t ? 'rt-active':''" @click="filter=t" x-text="t"></button>
+      </template>
+    </div>
+    <ul class="events">
+      <template x-for="(e, i) in shown()" :key="i">
+        <li>
+          <span class="ev-ts" x-text="(e.ts||'').replace('T',' ').slice(11,19)"></span>
+          <span class="sev-chip" :class="typeClass(e.type)" x-text="e.type"></span>
+          <a class="panel-link" :href="e.link || '#'" x-text="e.summary"></a>
+        </li>
+      </template>
+      <li class="ev-empty" x-show="!shown().length" x-cloak>No activity.</li>
+    </ul>
+  </section>
+</div>
+<script>
+function activityPage() {
+  return Object.assign(pageBase("/api/activity"), {
+    filter: "",
+    shown() { const rows = this.data.rows || []; return this.filter ? rows.filter(e => e.type === this.filter) : rows; },
+    perMin(t) {
+      const rows = (this.data.rows || []).filter(e => e.type === t);
+      if (rows.length < 2) return rows.length;
+      const ts = rows.map(e => Date.parse(String(e.ts))).filter(n => !isNaN(n));
+      if (ts.length < 2) return rows.length;
+      const mins = Math.max(1, (Math.max(...ts) - Math.min(...ts)) / 60000);
+      return (rows.length / mins).toFixed(1);
+    },
+    typeClass(t) {
+      return {SIGNAL:"sev-INFO",ORDER:"sev-INFO",TRADE:"sev-INFO",SYSTEM:"sev-WARNING",
+              CAPITAL:"sev-INFO",RISK:"sev-CRITICAL"}[t] || "sev-INFO";
+    },
+  });
+}
+</script>
+{% endblock %}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Ops Dashboard{% endblock %}</title>
+  <title>{% block title %}AlgoCore Systems{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body x-data="opsDashboard()" x-init="init()">
@@ -37,34 +37,40 @@
     {%- endif -%}
     </svg>
   {%- endmacro %}
+  {% macro nav_soon(ic, label) -%}
+  <span class="nv-item nv-soon" aria-disabled="true" title="{{ label }} — available in a later G5 sub-phase">{{ icon(ic) }}<span class="nv-label">{{ label }}</span><span class="nv-soon-tag">soon</span></span>
+  {%- endmacro %}
   <aside class="sidebar">
-    <div class="sb-brand" title="Ops Dashboard">OPS</div>
-    <div class="nv-group">Trade</div>
-    <a class="nv-item {% block nav_dashboard %}{% endblock %}" href="/">{{ icon('dashboard') }}<span class="nv-label">Dashboard</span></a>
+    <div class="sb-brand" title="AlgoCore Systems · Operations Control Tower">AlgoCore</div>
+    <a class="nv-item nv-top {% block nav_dashboard %}{% endblock %}" href="/">{{ icon('dashboard') }}<span class="nv-label">Dashboard</span></a>
+
+    <div class="nv-group">Trading</div>
     <a class="nv-item {% block nav_strategies %}{% endblock %}" href="/strategies">{{ icon('strategies') }}<span class="nv-label">Strategies</span></a>
     <a class="nv-item {% block nav_signals %}{% endblock %}" href="/signals">{{ icon('signals') }}<span class="nv-label">Signals</span></a>
     <a class="nv-item {% block nav_orders %}{% endblock %}" href="/orders">{{ icon('orders') }}<span class="nv-label">Orders</span></a>
     <a class="nv-item {% block nav_positions %}{% endblock %}" href="/positions">{{ icon('positions') }}<span class="nv-label">Positions</span></a>
     <a class="nv-item {% block nav_holdings %}{% endblock %}" href="/holdings">{{ icon('holdings') }}<span class="nv-label">Holdings</span></a>
-    <div class="nv-group">Risk &amp; Capital</div>
-    <a class="nv-item {% block nav_risk %}{% endblock %}" href="/risk">{{ icon('risk') }}<span class="nv-label">Risk</span></a>
-    <a class="nv-item {% block nav_capital %}{% endblock %}" href="/capital">{{ icon('capital') }}<span class="nv-label">Capital</span></a>
-    <a class="nv-item {% block nav_exposure %}{% endblock %}" href="/exposure">{{ icon('exposure') }}<span class="nv-label">Exposure</span></a>
-    <a class="nv-item {% block nav_pnl %}{% endblock %}" href="/pnl">{{ icon('pnl') }}<span class="nv-label">P&amp;L</span></a>
-    <a class="nv-item {% block nav_capacity %}{% endblock %}" href="/capacity">{{ icon('capacity') }}<span class="nv-label">Capacity</span></a>
-    <div class="nv-group">System</div>
-    <a class="nv-item {% block nav_services %}{% endblock %}" href="/services">{{ icon('services') }}<span class="nv-label">Services</span></a>
-    <a class="nv-item {% block nav_vm %}{% endblock %}" href="/vm">{{ icon('vm') }}<span class="nv-label">VM</span></a>
-    <a class="nv-item {% block nav_logs %}{% endblock %}" href="/logs">{{ icon('logs') }}<span class="nv-label">Logs</span></a>
-    <a class="nv-item {% block nav_audit %}{% endblock %}" href="/audit">{{ icon('audit') }}<span class="nv-label">Audit</span></a>
-    <a class="nv-item {% block nav_alerts %}{% endblock %}" href="/alerts">{{ icon('alerts') }}<span class="nv-label">Alerts</span></a>
+
     <div class="nv-group">Analytics</div>
-    <a class="nv-item {% block nav_slippage %}{% endblock %}" href="/slippage">{{ icon('slippage') }}<span class="nv-label">Slippage</span></a>
-    <a class="nv-item {% block nav_execution %}{% endblock %}" href="/execution">{{ icon('execution') }}<span class="nv-label">Execution</span></a>
-    <a class="nv-item {% block nav_statistics %}{% endblock %}" href="/statistics">{{ icon('statistics') }}<span class="nv-label">Statistics</span></a>
-    <a class="nv-item {% block nav_reports %}{% endblock %}" href="/reports">{{ icon('reports') }}<span class="nv-label">Reports</span></a>
-    <a class="nv-item {% block nav_config %}{% endblock %}" href="/config">{{ icon('config') }}<span class="nv-label">Config</span></a>
-    <a class="nv-item nv-dim {% block nav_controls %}{% endblock %}" href="/controls">{{ icon('controls') }}<span class="nv-label">Controls (G3)</span></a>
+    <a class="nv-item {% block nav_strategy_ranking %}{% endblock %}" href="/strategy-ranking">{{ icon('statistics') }}<span class="nv-label">Strategy Ranking</span></a>
+    <a class="nv-item {% block nav_strategy_health %}{% endblock %}" href="/strategy-health">{{ icon('services') }}<span class="nv-label">Strategy Health</span></a>
+    <a class="nv-item {% block nav_scanner_attribution %}{% endblock %}" href="/scanner-attribution">{{ icon('signals') }}<span class="nv-label">Scanner Attribution</span></a>
+    <a class="nv-item {% block nav_trade_explorer %}{% endblock %}" href="/trades">{{ icon('audit') }}<span class="nv-label">Trade Explorer</span></a>
+    <a class="nv-item {% block nav_pnl_analytics %}{% endblock %}" href="/pnl-analytics">{{ icon('pnl') }}<span class="nv-label">P&L Analytics</span></a>
+    <a class="nv-item {% block nav_slippage %}{% endblock %}" href="/slippage">{{ icon('slippage') }}<span class="nv-label">Slippage Analytics</span></a>
+    <a class="nv-item {% block nav_execution %}{% endblock %}" href="/execution">{{ icon('execution') }}<span class="nv-label">Execution Analytics</span></a>
+
+    <div class="nv-group">Operations</div>
+    <a class="nv-item {% block nav_live_activity %}{% endblock %}" href="/live-activity">{{ icon('signals') }}<span class="nv-label">Live Activity</span></a>
+    <a class="nv-item {% block nav_system_health %}{% endblock %}" href="/services">{{ icon('vm') }}<span class="nv-label">System Health</span></a>
+    <a class="nv-item {% block nav_capital_risk %}{% endblock %}" href="/capital-risk">{{ icon('capital') }}<span class="nv-label">Capital &amp; Risk</span></a>
+    <a class="nv-item {% block nav_config %}{% endblock %}" href="/config">{{ icon('config') }}<span class="nv-label">Configuration</span></a>
+    <a class="nv-item {% block nav_controls %}{% endblock %}" href="/controls">{{ icon('controls') }}<span class="nv-label">Controls</span></a>
+
+    <div class="nv-group">Investigation</div>
+    <a class="nv-item {% block nav_audit %}{% endblock %}" href="/audit">{{ icon('audit') }}<span class="nv-label">Audit</span></a>
+    <a class="nv-item {% block nav_trade_logs %}{% endblock %}" href="/trade-logs">{{ icon('logs') }}<span class="nv-label">Trade Logs</span></a>
+    <a class="nv-item {% block nav_logs %}{% endblock %}" href="/logs">{{ icon('logs') }}<span class="nv-label">System Logs</span></a>
   </aside>
 
   <div class="main-col">
@@ -203,6 +209,7 @@
     };
   }
   </script>
+  <script src="/static/components.js"></script>
   <script defer src="/static/alpine.min.js"></script>
 </body>
 </html>

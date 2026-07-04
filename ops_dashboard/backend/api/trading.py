@@ -83,6 +83,11 @@ def get_positions():
     today = freshness.ist_today_iso()
     session = db_reader.get_session_info(cfg)
     rows = db_reader.open_positions_list(cfg)
+    # G5d additive: scanner attribution (system side). Broker MTM/LTP/RR stay
+    # UNAVAILABLE (two-state) — never inferred.
+    scanners = db_reader.scanner_for_trades(cfg, [r.get("trade_id") for r in rows])
+    for r in rows:
+        r["scanner"] = scanners.get(r.get("trade_id")) or "—"
     sc = config_reader.get_system_config(cfg, today)
     max_open = None
     if isinstance(sc, dict):
@@ -97,6 +102,9 @@ def get_positions():
         "max_open_positions": max_open,
         "open_states": list(db_reader.OPEN_STATES),    # contract-tested constant
         "unrealized_note": "G4",              # unrealized column renders '—' (tooltip G4)
+        # G5d two-state: the broker-derived fields are honestly UNAVAILABLE.
+        "unavailable": {"fields": ["ltp", "mtm", "unrealized", "current_rr"],
+                        "reason": "Pending Broker Source (G4)"},
         "rows": rows,
     })
 

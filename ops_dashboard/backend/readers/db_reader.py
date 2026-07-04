@@ -682,12 +682,17 @@ def open_positions_list(cfg: dict) -> list:
 
 
 def holdings_list(cfg: dict) -> list:
-    """gtt_state mirror rows (M5). Broker is authority; this is the local mirror."""
+    """gtt_state mirror rows (M5) enriched with trade context (G5d: symbol/strategy/
+    date/avg_price via LEFT JOIN trades). This is the SYSTEM/expected side only;
+    the BROKER side + delta stay UNAVAILABLE (G-1/P1) — no reader invents them."""
     with _ro(cfg) as conn:
         rows = conn.execute(
-            "SELECT gtt_id, trade_id, status, exit_side, qty, sl_trigger, "
-            "sl_limit, tgt_trigger, tgt_limit, needs_review "
-            "FROM gtt_state ORDER BY gtt_id DESC LIMIT ?",
+            "SELECT g.gtt_id, g.trade_id, g.status, g.exit_side, g.qty, g.sl_trigger, "
+            "g.sl_limit, g.tgt_trigger, g.tgt_limit, g.needs_review, "
+            "t.symbol AS symbol, t.strategy AS strategy, t.created_at AS created_at, "
+            "t.entry_actual_price AS avg_price "
+            "FROM gtt_state g LEFT JOIN trades t ON t.trade_id = g.trade_id "
+            "ORDER BY g.gtt_id DESC LIMIT ?",
             (_LIST_CAP,),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -1159,3 +1164,279 @@ def closed_trades_today(cfg: dict, today: str, limit: int = 200) -> list:
             (*states, today + "%", int(limit)),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G5b — additive read-only helpers. All map to EXISTING tables (NO schema change):
+# scanner→trade join · per-strategy SL/TGT hits · long/short exposure split ·
+# profit factor · slippage through-day trend. Read-only (mode=ro) like every
+# reader above; short-lived connection; parameterized.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def scanner_for_trades(cfg: dict, trade_ids) -> dict:
+    """{trade_id: scanner} via ``trades.signal_id → signals.scanner`` — the exact
+    attribution path (Phase A §3.1; mutual FK schema.sql:105-114). Trades whose
+    signal row is absent are omitted (honest — no fabricated scanner). SHARED with
+    the G5c Scanner-Attribution screen."""
+    ids = tuple(dict.fromkeys(t for t in (trade_ids or []) if t))
+    if not ids:
+        return {}
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT t.trade_id AS trade_id, s.scanner AS scanner "
+            "FROM trades t JOIN signals s ON s.signal_id = t.signal_id "
+            "WHERE t.trade_id IN (" + _in_clause(ids) + ")",
+            ids,
+        ).fetchall()
+    return {r["trade_id"]: r["scanner"] for r in rows}
+
+
+def strategy_sltgt_hits(cfg: dict, today: str) -> dict:
+    """Per-strategy SL_HIT / TGT_HIT exit counts over trades closed today."""
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, "
+            "COALESCE(SUM(CASE WHEN exit_reason='SL_HIT' THEN 1 ELSE 0 END),0) AS sl_hits, "
+            "COALESCE(SUM(CASE WHEN exit_reason='TGT_HIT' THEN 1 ELSE 0 END),0) AS tgt_hits "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ? "
+            "GROUP BY strategy",
+            (*states, today + "%"),
+        ).fetchall()
+    return {r["strategy"]: {"sl_hits": int(r["sl_hits"]), "tgt_hits": int(r["tgt_hits"])}
+            for r in rows}
+
+
+def exposure_by_direction(cfg: dict) -> dict:
+    """Long / Short / Net open exposure (₹) + position counts (Capital & Risk)."""
+    states = _OPEN_STATES
+    value_expr = ("COALESCE(actual_position_value_rs, "
+                  "qty_filled*COALESCE(entry_actual_price, entry_target_price))")
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT direction, COALESCE(SUM(" + value_expr + "),0.0) AS v, COUNT(*) AS n "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") GROUP BY direction",
+            states,
+        ).fetchall()
+    by = {r["direction"]: (float(r["v"] or 0.0), int(r["n"])) for r in rows}
+    long_v, long_n = by.get("LONG", (0.0, 0))
+    short_v, short_n = by.get("SHORT", (0.0, 0))
+    return {
+        "long_value": round(long_v, 2), "short_value": round(short_v, 2),
+        "net_value": round(long_v - short_v, 2),
+        "long_positions": long_n, "short_positions": short_n,
+    }
+
+
+def profit_factor_today(cfg: dict, today: str) -> Optional[float]:
+    """Σ winning net_pnl / Σ|losing net_pnl| over trades closed today. None when
+    there are no losses (undefined) → callers render '—'."""
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN net_pnl>0 THEN net_pnl ELSE 0 END),0.0) AS wins, "
+            "COALESCE(SUM(CASE WHEN net_pnl<0 THEN -net_pnl ELSE 0 END),0.0) AS losses "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") AND exit_time LIKE ?",
+            (*states, today + "%"),
+        ).fetchone()
+    wins, losses = float(row["wins"]), float(row["losses"])
+    return round(wins / losses, 2) if losses > 0 else None
+
+
+def slippage_trend_today(cfg: dict, today: str) -> list:
+    """Through-day avg entry slippage bucketed by entry hour (join to trades for
+    entry_time). Honest empty when the join yields no timestamps."""
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT substr(t.entry_time,12,2) AS hh, "
+                "AVG(sl.entry_slippage_rs) AS avg_slip, COUNT(*) AS n "
+                "FROM trade_slippage_log sl JOIN trades t ON t.trade_id = sl.trade_id "
+                "WHERE sl.trade_date=? AND t.entry_time IS NOT NULL "
+                "GROUP BY hh ORDER BY hh",
+                (today,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    return [{"hour": r["hh"], "avg_slippage": round(float(r["avg_slip"] or 0.0), 4),
+             "n": int(r["n"])} for r in rows if r["hh"]]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G5c — multi-period readers (date-range scoped) + trade-story + System Score.
+# All read-only; map to EXISTING tables; NO schema change. `from_date`/`to_date`
+# are YYYY-MM-DD (freshness.resolve_period); the range is INCLUSIVE on the day.
+# The existing today-scoped readers are UNTOUCHED — these are new functions.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def closed_trades_range(cfg: dict, from_date: str, to_date: str, limit: int = 2000) -> list:
+    """Closed trades whose EXIT DAY falls in [from_date, to_date] — the spine for
+    Strategy Ranking + P&L Analytics. Scanner is joined in the service via
+    scanner_for_trades (signal→scanner)."""
+    states = _CLOSED_STATES
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT trade_id, signal_id, strategy, direction, symbol, "
+            "qty_filled, entry_actual_price, entry_target_price, exit_price, "
+            "entry_time, exit_time, created_at, exit_reason, "
+            "COALESCE(gross_pnl,0) AS gross_pnl, COALESCE(net_pnl,0) AS net_pnl, "
+            "COALESCE(charges, COALESCE(gross_pnl,0)-COALESCE(net_pnl,0)) AS charges, "
+            "COALESCE(margin_reserved,0) AS margin_reserved, COALESCE(risk_amount,0) AS risk_amount "
+            "FROM trades WHERE status IN (" + _in_clause(states) + ") "
+            "AND substr(exit_time,1,10) BETWEEN ? AND ? "
+            "ORDER BY exit_time DESC LIMIT ?",
+            (*states, from_date, to_date, int(limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def trades_in_range(cfg: dict, from_date: str, to_date: str, strategy: Optional[str] = None,
+                    direction: Optional[str] = None, symbol: Optional[str] = None,
+                    limit: int = 500) -> list:
+    """All trades CREATED in [from_date, to_date] (open + closed) for the Trade
+    Explorer table. Scanner + System Score joined in the service."""
+    sql = (
+        "SELECT trade_id, signal_id, strategy, direction, symbol, status, "
+        "qty_planned, qty_filled, entry_actual_price, entry_target_price, "
+        "sl_initial, tgt_initial, exit_price, entry_time, exit_time, created_at, "
+        "exit_reason, gross_pnl, net_pnl, "
+        "COALESCE(charges, COALESCE(gross_pnl,0)-COALESCE(net_pnl,0)) AS charges, "
+        "risk_amount, margin_reserved "
+        "FROM trades WHERE substr(created_at,1,10) BETWEEN ? AND ?"
+    )
+    params: list = [from_date, to_date]
+    if strategy:
+        sql += " AND strategy = ?"; params.append(strategy)
+    if direction:
+        sql += " AND direction = ?"; params.append(direction)
+    if symbol:
+        sql += " AND symbol = ?"; params.append(symbol)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(max(1, min(int(limit), _LIST_CAP)))
+    with _ro(cfg) as conn:
+        return [dict(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+
+
+def signals_scanner_funnel_range(cfg: dict, from_date: str, to_date: str) -> dict:
+    """Per-scanner stored-signal funnel over [from_date, to_date] (received day):
+    {scanner: {accepted, rejected, duplicated, expired, stored, last_signal}}."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT scanner, " + _bucket_case_sql() + " AS bucket, COUNT(*) AS n, "
+            "MAX(received_at) AS last_ts FROM signals "
+            "WHERE substr(received_at,1,10) BETWEEN ? AND ? GROUP BY scanner, bucket",
+            (from_date, to_date),
+        ).fetchall()
+    out: dict = {}
+    for r in rows:
+        s = out.setdefault(r["scanner"], {"accepted": 0, "rejected": 0, "duplicated": 0,
+                                          "expired": 0, "stored": 0, "last_signal": None})
+        s[r["bucket"]] = int(r["n"])
+        s["stored"] += int(r["n"])
+        if s["last_signal"] is None or (r["last_ts"] and r["last_ts"] > s["last_signal"]):
+            s["last_signal"] = r["last_ts"]
+    return out
+
+
+def strategy_signal_counts_range(cfg: dict, from_date: str, to_date: str) -> dict:
+    """Per-strategy stored-signal count over a range (Strategy Health trend)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT strategy, COUNT(*) AS n FROM signals "
+            "WHERE substr(received_at,1,10) BETWEEN ? AND ? GROUP BY strategy",
+            (from_date, to_date),
+        ).fetchall()
+    return {r["strategy"]: int(r["n"]) for r in rows}
+
+
+def screener_scores(cfg: dict, signal_ids) -> dict:
+    """{signal_id: System Score} from screener_results.score (L8 single score).
+    Graceful empty when the table/rows are absent (honest — no fabricated score)."""
+    ids = tuple(dict.fromkeys(s for s in (signal_ids or []) if s))
+    if not ids:
+        return {}
+    with _ro(cfg) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT signal_id, MAX(score) AS score FROM screener_results "
+                "WHERE signal_id IN (" + _in_clause(ids) + ") GROUP BY signal_id",
+                ids,
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+    return {r["signal_id"]: (int(r["score"]) if r["score"] is not None else None) for r in rows}
+
+
+def trade_story_parts(cfg: dict, trade_id: str) -> dict:
+    """Single-trade assembly for the Trade Explorer / Trade Logs lifecycle:
+    the trade + its signal (scanner/score/payload) + orders + execution rows.
+    Per-stage validation/risk/capital timings are NOT persisted (G-2) — the
+    caller renders those stages as an honest 'not captured', never invented."""
+    with _ro(cfg) as conn:
+        trow = conn.execute(
+            "SELECT trade_id, signal_id, strategy, direction, symbol, status, "
+            "qty_planned, qty_filled, entry_target_price, entry_actual_price, "
+            "sl_initial, tgt_initial, exit_price, entry_time, exit_time, created_at, "
+            "exit_reason, gross_pnl, net_pnl, risk_amount, margin_reserved "
+            "FROM trades WHERE trade_id = ?", (trade_id,)).fetchone()
+        if trow is None:
+            return {}
+        trade = dict(trow)
+        srow = conn.execute(
+            "SELECT signal_id, scanner, strategy, symbol, received_at, triggered_at, "
+            "status, rejection_reason, webhook_payload FROM signals WHERE signal_id = ?",
+            (trade["signal_id"],)).fetchone()
+        orders = conn.execute(
+            "SELECT order_id, leg, status, transaction_type, order_type, qty_requested, "
+            "qty_filled, avg_fill_price, placed_at, filled_at, rejection_reason "
+            "FROM orders WHERE trade_id = ? ORDER BY placed_at", (trade_id,)).fetchall()
+        try:
+            execs = conn.execute(
+                "SELECT order_id, leg, side, intended_price, actual_price, slippage_rs, "
+                "order_timestamp, fill_timestamp, exchange_timestamp "
+                "FROM order_execution_log WHERE parent_trade_id = ? ORDER BY id", (trade_id,)).fetchall()
+        except sqlite3.OperationalError:
+            execs = []
+    return {
+        "trade": trade,
+        "signal": dict(srow) if srow else None,
+        "orders": [dict(o) for o in orders],
+        "execution": [dict(e) for e in execs],
+    }
+
+
+def webhook_by_scanner_range(cfg: dict, from_date: str, to_date: str) -> dict:
+    """Per-scanner webhook_audit aggregates over [from_date, to_date] (received =
+    accepted+rejected). Range variant of webhook_by_scanner (Scanner Attribution)."""
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT scanner_name, COALESCE(SUM(signals_accepted),0) AS accepted, "
+            "COALESCE(SUM(signals_rejected),0) AS rejected, COUNT(*) AS posts, "
+            "MAX(ts) AS last_ts FROM webhook_audit WHERE date BETWEEN ? AND ? "
+            "GROUP BY scanner_name",
+            (from_date, to_date),
+        ).fetchall()
+    return {r["scanner_name"]: {"received": int(r["accepted"]) + int(r["rejected"]),
+                                "accepted": int(r["accepted"]), "rejected": int(r["rejected"]),
+                                "posts": int(r["posts"]), "last_ts": r["last_ts"]}
+            for r in rows}
+
+
+def recon_actions_for_trades(cfg: dict, trade_ids) -> dict:
+    """{trade_id: [{ts, check, action, success}]} from reconciliation_log (G5d
+    Trade Logs — what the system did to each trade). Read-only, existing table."""
+    ids = tuple(dict.fromkeys(t for t in (trade_ids or []) if t))
+    if not ids:
+        return {}
+    with _ro(cfg) as conn:
+        rows = conn.execute(
+            "SELECT trade_id, ts, check_name, action_taken, success FROM reconciliation_log "
+            "WHERE trade_id IN (" + _in_clause(ids) + ") ORDER BY ts",
+            ids,
+        ).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["trade_id"], []).append(
+            {"ts": r["ts"], "check": r["check_name"], "action": r["action_taken"],
+             "success": bool(r["success"])})
+    return out

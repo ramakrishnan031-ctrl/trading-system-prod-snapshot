@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% from "components.html" import period_selector, filter_bar, data_table, export_button %}
+{% block title %}AlgoCore Systems — Trade Logs{% endblock %}
+{% block nav_trade_logs %}active{% endblock %}
+{% block content %}
+{# G5d: trade-centric forensic console. Trade rows (full attribution: strategy,
+   scanner, date/time, exit_reason, System Score) + the reconciler actions the
+   system took per trade (reconciliation_log). A ref_id search opens the raw log
+   lines via /api/logs (log_reader ref_id — UNTOUCHED). Distinct from System Logs. #}
+<div x-data="tradeLogsPage()" x-init="load(); $watch('pPeriod', () => load())" @ops-refresh.window="load()">
+  <h2 class="panel-title">Trade Logs
+    <span class="panel-sub" x-text="(data.count!=null?data.count+' trades · ':'') + (data.from ? (data.from+' → '+data.to) : '')"></span></h2>
+
+  {{ period_selector() }}
+  {{ filter_bar([
+    {"key":"strategy","label":"Strategy"},
+    {"key":"scanner","label":"Scanner"},
+    {"key":"exit_reason","label":"Exit Reason"},
+  ]) }}
+  {{ export_button("Export Trade Logs") }}
+
+  {{ data_table("trade-logs", [
+    {"key":"trade_date","label":"Date","kind":"date"},
+    {"key":"trade_time","label":"Time"},
+    {"key":"trade_id","label":"Trade","kind":"mono"},
+    {"key":"strategy","label":"Strategy"},
+    {"key":"scanner","label":"Scanner"},
+    {"key":"symbol","label":"Symbol"},
+    {"key":"direction","label":"Dir"},
+    {"key":"system_score","label":"Score","kind":"num"},
+    {"key":"exit_reason","label":"Exit"},
+    {"key":"net","label":"Net","kind":"money"},
+    {"key":"recon_n","label":"Recon actions","kind":"num"},
+    {"key":"status","label":"Status"},
+  ], rows_expr="logRows()") }}
+
+  <!-- Raw log-line drill (reuses /api/logs ref_id) -->
+  <section class="panel">
+    <h3 class="panel-title">Raw log lines by reference id</h3>
+    <div class="filters">
+      <input class="flt" placeholder="trade / order / signal id" x-model="refId">
+      <select class="flt" x-model="logFile"><option value="">latest system log</option>
+        <template x-for="f in logFiles" :key="f.name"><option :value="f.name" x-text="f.name"></option></template></select>
+      <button class="rt-btn" @click="drill()">Show log lines</button>
+    </div>
+    <table class="cap-table log-table" x-show="logLines.length" x-cloak>
+      <thead><tr><th>Time</th><th>Level</th><th>Logger</th><th>Message</th></tr></thead>
+      <tbody><template x-for="(r,i) in logLines" :key="i">
+        <tr><td class="ev-ts" x-text="r.ts||'—'"></td>
+          <td><span class="sev-chip" :class="lvl(r.level)" x-text="r.level||'raw'"></span></td>
+          <td class="mono" x-text="r.logger||''"></td><td class="logmsg" x-text="r.msg"></td></tr>
+      </template></tbody>
+    </table>
+    <p class="panel-sub" x-show="logLines.length===0 && refIdSearched" x-cloak>No log lines for that id in the selected file.</p>
+  </section>
+</div>
+<script>
+function tradeLogsPage() {
+  return Object.assign(pageBase("/api/trade-logs"), periodMixin("week"),
+    (typeof tableMixin === "function" ? tableMixin({defaultSize:100}) : {}),
+    (typeof filterMixin === "function" ? filterMixin([{key:"strategy"},{key:"scanner"},{key:"exit_reason"}]) : {}), {
+    refId: "", logFile: "", logFiles: [], logLines: [], refIdSearched: false,
+    qs() { const f = this.fQuery(); const p = this.pQuery(); return p + (f ? "&" + f.slice(1) : ""); },
+    logRows() { return (this.data.rows || []).map(r => Object.assign({}, r, {recon_n: (r.recon_actions || []).length})); },
+    async drill() {
+      this.refIdSearched = true;
+      const p = new URLSearchParams();
+      p.set("file", this.logFile || ("system_" + (this.data.to || "").slice(0,10) + ".log"));
+      if (this.refId) p.set("id", this.refId);
+      const r = await fetch("/api/logs?" + p.toString(), {credentials:"same-origin"});
+      const d = await r.json();
+      this.logFiles = d.files || this.logFiles;
+      this.logLines = d.rows || [];
+    },
+    lvl(l) { return (l==="ERROR"||l==="CRITICAL")?"sev-CRITICAL":(l==="WARNING"?"sev-WARNING":(l==="INFO"?"sev-INFO":"")); },
+  });
+}
+</script>
+{% endblock %}
