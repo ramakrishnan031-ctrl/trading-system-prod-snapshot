@@ -533,7 +533,15 @@ class OrderManager:
         existing = self.get_trade(trade_id)
         if existing is None:
             raise ValueError(f"close_trade: trade {trade_id!r} not found")
-        if existing.get("status") not in ("OPEN", "PARTIAL"):
+        # H-2: EXITING is a TRANSITIONAL state (core/schema.sql:155 — set by an
+        # emergency/HARD_KILL flatten while the MARKET exit is in flight); the
+        # exit fill is MEANT to close it. Accept it alongside OPEN/PARTIAL so the
+        # fill completes the full close+release with REAL costs immediately,
+        # instead of being misread as a double-close and deferred ~30 min to the
+        # reconciler's costs=0.0 _check_stuck_exiting fallback. Truly-terminal
+        # states (CLOSED/CLOSED_MANUAL/FAILED/CANCELLED/REJECTED*/PENDING*) still
+        # raise → the double-close guard is preserved.
+        if existing.get("status") not in ("OPEN", "PARTIAL", "EXITING"):
             raise ValueError(
                 f"close_trade: trade {trade_id!r} has terminal status "
                 f"{existing.get('status')!r} "
