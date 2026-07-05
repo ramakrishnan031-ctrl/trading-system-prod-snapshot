@@ -1738,10 +1738,15 @@ class OrderReconciler:
             # bp.qty > 0 = long position -> SELL to flatten; < 0 = short -> BUY.
             exit_side = "SELL" if bp.qty > 0 else "BUY"
             # Best-effort LTP via quote_fn (same source the reconciler already uses).
+            # M-O1: quote_fn is adapter.get_quote — it takes BARE symbols and keys
+            # its result by bare symbol (it prepends NSE: internally). Passing
+            # "NSE:{symbol}" made it query NSE:NSE:SYM → miss → ltp None → raw
+            # MARKET, defeating the FIX-181 cap. Mirror the bare-symbol idiom the
+            # other quote sites use (:1329 / :2859).
             ltp = None
             try:
-                raw = self._quote_fn([f"NSE:{symbol}"])
-                q = raw.get(f"NSE:{symbol}") if raw else None
+                raw = self._quote_fn([symbol])
+                q = raw.get(symbol) if raw else None
                 if q is not None:
                     ltp = float(getattr(q, "last_price", 0) or 0) or None
             except Exception:
