@@ -974,7 +974,7 @@ class KillSwitch:
         into a naked position. Best-effort; broker truth > DB."""
         try:
             rows = self._store.fetch_all(
-                "SELECT order_id, broker_order_id, leg FROM orders "
+                "SELECT order_id, leg FROM orders "
                 "WHERE trade_id = ? AND leg IN ('SL','TGT') "
                 "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
                 (trade_id,),
@@ -991,18 +991,21 @@ class KillSwitch:
             # missing the column (e.g. a test mock or odd payload) must never
             # crash the flatten — just skip it.
             try:
-                boid = r["broker_order_id"]
                 oid = r["order_id"]
             except (KeyError, IndexError, TypeError):
                 continue
-            if not boid:
+            if not oid:
                 continue
             try:
-                self._adapter.cancel_order(boid)
+                # Wave-2 P1 (H-1 twin): order_id IS the broker-assigned id
+                # (schema.sql:271). The old dead column broker_order_id made this
+                # SELECT raise on every call, so the HARD_KILL flatten never
+                # cancelled its resting SL/TGT. Cancel + finalize by the real order_id.
+                self._adapter.cancel_order(oid)
             except Exception as exc:
                 self._log.warning(
                     "kill_switch: cancel resting %s order %s failed: %s",
-                    r["leg"], boid, exc,
+                    r["leg"], oid, exc,
                 )
                 continue
             try:
