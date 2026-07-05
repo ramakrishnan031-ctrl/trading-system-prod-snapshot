@@ -1157,6 +1157,15 @@ class KillSwitch:
                 handled_symbols.add(psym)
                 attempted += 1
                 exit_side = "SELL" if pqty > 0 else "BUY"
+                # H-5: exit under the SAME product the position is held in — mirror
+                # the first pass (Bug C). Kite nets per product, so an orphan CNC
+                # position swept with an MIS (intent=INTRADAY) exit does NOT offset
+                # it: the CNC position stays AND a fresh naked MIS short is created.
+                # Map the position's product to its intent (MIS→INTRADAY,
+                # CNC/NRML→DELIVERY); absent product → INTRADAY.
+                sweep_intent = _PRODUCT_TO_INTENT.get(
+                    getattr(pos, "product", "") or "", "INTRADAY"
+                )
                 self._log.critical(
                     "kill_switch: SWEEP orphan broker position %s qty=%d — no "
                     "matching local trade; flattening (FIX-181)",
@@ -1172,7 +1181,7 @@ class KillSwitch:
                         qty=abs(pqty),
                         order_type=exit_order_type,
                         price=exit_price,
-                        intent="INTRADAY",
+                        intent=sweep_intent,
                         tag="ks_hard_kill_sweep",
                     )
                     if not order_result.broker_order_id:
@@ -1181,7 +1190,7 @@ class KillSwitch:
                     self._log.critical(
                         "kill_switch: SWEEP exit failed for %s: %s", psym, sweep_exc
                     )
-                    failed_trades.append(("sweep", psym, exit_side, abs(pqty), "INTRADAY"))
+                    failed_trades.append(("sweep", psym, exit_side, abs(pqty), sweep_intent))
         except Exception as exc:
             self._log.error("kill_switch: broker position sweep failed: %s", exc)
 
