@@ -1219,12 +1219,23 @@ class KillSwitch:
 
             still_failed = []
             for trade_id, symbol, exit_side, qty, intent in failed_trades:
-                # Part 11: broker-flat pre-check. If the position is already flat
-                # (closed manually at broker, or a prior exit filled), do NOT
-                # place another order — that would open a new naked position.
-                # Drop it; order_reconciler CHECK 1 will close the trade row and
-                # release capital properly on its next cycle (avoids double-release).
-                if self._is_position_flat(symbol):
+                # H-4: re-derive (close_side, close_qty) from the CURRENT signed
+                # broker net on EVERY retry — mirror the first pass
+                # (determine_close_direction) — instead of re-firing the STALE
+                # first-pass qty. After an ambiguous first exit that partially
+                # filled (A-2 BrokerTimeoutError class), the residual is < the
+                # captured qty; re-firing the stale full qty oversells into a new
+                # naked reverse. determine_close_direction returns (None, 0) when
+                # the broker confirms flat (this SUBSUMES the old binary
+                # _is_position_flat gate — closed manually / a prior exit filled),
+                # and falls back to the captured (exit_side, qty) only on a broker
+                # read error (err toward flattening — unchanged from the old
+                # cannot-confirm-flat path). Fresh get_positions per retry is the
+                # same one call the flat pre-check already made.
+                close_side, close_qty = determine_close_direction(
+                    self._adapter, symbol, exit_side, qty
+                )
+                if close_side is None or close_qty <= 0:
                     self._log.info(
                         "kill_switch: trade %s (%s) already flat at broker; "
                         "resolved without re-firing exit", trade_id, symbol,
@@ -1234,12 +1245,12 @@ class KillSwitch:
                 try:
                     # FIX-181: marketable LIMIT (LTP ± buffer), MARKET fallback.
                     exit_order_type, exit_price = self._marketable_exit_params(
-                        symbol, exit_side
+                        symbol, close_side
                     )
                     order_result = self._adapter.place_order(
                         symbol=symbol,
-                        side=exit_side,
-                        qty=qty,
+                        side=close_side,
+                        qty=close_qty,
                         order_type=exit_order_type,
                         price=exit_price,
                         intent=intent,
@@ -1265,7 +1276,7 @@ class KillSwitch:
                     self._log.critical(
                         "kill_switch: retry failed for trade %s: %s", trade_id, exc
                     )
-                    still_failed.append((trade_id, symbol, exit_side, qty, intent))
+                    still_failed.append((trade_id, symbol, close_side, close_qty, intent))
 
             failed_trades = still_failed
 
