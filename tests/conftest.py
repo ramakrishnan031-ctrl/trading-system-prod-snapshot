@@ -5,7 +5,9 @@ Ensures project root is in sys.path so all imports work correctly, and (23-Jun)
 isolates the REAL sentinel directory so no test can write a CRITICAL alert into
 the live data_store (the VM alert-watcher would email it).
 """
+import sqlite3
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -72,3 +74,87 @@ def _isolate_real_sentinels(tmp_path, monkeypatch):
         if mod is not None and hasattr(mod, "write_critical_sentinel"):
             monkeypatch.setattr(mod, "write_critical_sentinel", guarded, raising=False)
     yield
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Schema-backed test harness (Wave 1, H-1) — REUSABLE INFRA
+# ═════════════════════════════════════════════════════════════════════════════
+# Materializes the REAL core/schema.sql into a fresh in-memory sqlite DB so a
+# query naming a column/table that does not exist FAILS exactly as it does in
+# production. This is the whole point: the H-1 class (orders.broker_order_id —
+# the real PK is order_id) is a query-vs-schema mismatch that a hand-written mock
+# schema would hide. So: NEVER a mock schema, NEVER a _MockStore — schema.sql on
+# disk is the single source of truth.
+#
+# Later waves attach more money-path queries here and may add the two-DB analytics
+# ATTACH (core/analytics_schema.sql) if a path touches candles/system_metrics —
+# not required for a single-table orders query. FK enforcement is left at the
+# sqlite default (OFF) so a focused single-table test needs no parent chain; a
+# test that wants it can `conn.execute("PRAGMA foreign_keys = ON")`.
+
+_SCHEMA_PATH = project_root / "core" / "schema.sql"
+
+
+def build_real_schema_db() -> sqlite3.Connection:
+    """Return a fresh in-memory sqlite connection with core/schema.sql applied
+    (row_factory=sqlite3.Row, mirroring StateStore). Reusable across waves."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+    return conn
+
+
+class RealSchemaStore:
+    """Minimal StateStore-shaped accessor over a real-schema connection. NOT a
+    mock: fetch_all/fetch_one/transaction run real SQL against the real schema,
+    so a bad column raises OperationalError exactly as production StateStore does.
+    Exposes only the surface money-path code touches."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+
+    def fetch_all(self, sql: str, params: tuple = ()):
+        cur = self.conn.execute(sql, params)
+        try:
+            return cur.fetchall()
+        finally:
+            cur.close()
+
+    def fetch_one(self, sql: str, params: tuple = ()):
+        cur = self.conn.execute(sql, params)
+        try:
+            return cur.fetchone()
+        finally:
+            cur.close()
+
+    @contextmanager
+    def transaction(self):
+        cur = self.conn.cursor()
+        try:
+            yield cur
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        finally:
+            cur.close()
+
+
+@pytest.fixture
+def real_schema_db():
+    """Fresh in-memory DB with the REAL schema; yields the sqlite3.Connection."""
+    conn = build_real_schema_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def real_schema_store():
+    """Fresh in-memory DB with the REAL schema; yields a RealSchemaStore over it."""
+    conn = build_real_schema_db()
+    try:
+        yield RealSchemaStore(conn)
+    finally:
+        conn.close()

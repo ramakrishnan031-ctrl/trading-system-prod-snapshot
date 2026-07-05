@@ -3611,7 +3611,7 @@ class OrderPlacer:
         emergency flatten so they don't survive as orphans. Best-effort."""
         try:
             rows = self._om._store.fetch_all(
-                "SELECT broker_order_id FROM orders WHERE trade_id = ? "
+                "SELECT order_id FROM orders WHERE trade_id = ? "
                 "AND leg IN ('SL','TGT') "
                 "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
                 (trade_id,),
@@ -3619,9 +3619,11 @@ class OrderPlacer:
             # Defensive: best-effort in a forced-exit path — a missing column or
             # odd payload (e.g. a test mock store) must never crash. Build the id
             # list inside the try so iterating a non-iterable result is caught.
+            # H-1: order_id is the orders PK / broker-assigned id (schema.sql:271);
+            # the old dead column broker_order_id raised OperationalError every call.
             ids = [
-                r["broker_order_id"] for r in (rows or [])
-                if r["broker_order_id"]
+                r["order_id"] for r in (rows or [])
+                if r["order_id"]
             ]
         except Exception as exc:
             self._log.warning(
