@@ -40,6 +40,7 @@ import hashlib
 import hmac as _hmac
 import json
 import queue
+import re
 import sqlite3
 import threading
 import time
@@ -546,6 +547,17 @@ class WebhookReceiver:
         today_iso: str = received_at.date().isoformat()
         expiry_sec: int = sq_cfg.expiry_sec
 
+        # S-1B.1 (2026-07-05): sanitize the copy PERSISTED to
+        # signals.webhook_payload so the webhook secret never lands at rest.
+        # Chartink echoes the configured URL (incl. ?token=<SECRET>) inside the
+        # body's `webhook_url` field, and the raw body is stored verbatim below.
+        # STORAGE-ONLY: the parsed `body` used for signal processing (stocks/
+        # trigger_prices/triggered_at/scan_name, already extracted above) is
+        # untouched, and auth (:410-432) ran before this — redaction is post-auth.
+        stored_payload = self._sanitize_payload_for_storage(
+            raw_body.decode("utf-8", errors="replace")
+        )
+
         results = []
         accepted_count = 0
         rejected_count = 0
@@ -576,7 +588,7 @@ class WebhookReceiver:
             item = self._process_signal(
                 scanner_name, symbol, price_str,
                 triggered_at, received_at, today_iso, expiry_sec,
-                webhook_payload=raw_body.decode("utf-8", errors="replace"),
+                webhook_payload=stored_payload,
             )
             results.append(item)
             if item["status"] == "ACCEPTED":
@@ -598,6 +610,41 @@ class WebhookReceiver:
         if current_depth >= warn_threshold:
             resp.headers["X-Queue-Warning"] = "high"
         return resp, http_status
+
+    # ------------------------------------------------------------------
+    # Persisted-payload sanitizer (S-1B.1)
+    # ------------------------------------------------------------------
+
+    def _sanitize_payload_for_storage(self, payload: str) -> str:
+        """S-1B.1: redact the webhook secret from the copy persisted to
+        signals.webhook_payload. Chartink echoes the configured webhook URL --
+        including ``?token=<SECRET>`` -- inside the body's ``webhook_url`` field,
+        so storing the raw body verbatim would leak the secret plaintext at rest.
+
+        STORAGE-ONLY: the argument is only ever written to the DB; the parsed
+        ``body`` used for signal processing is never passed here, and auth
+        (:410-432) runs before this and is unchanged. Belt-and-suspenders, all
+        applied to the stored copy:
+          (a) replace the literal secret value wherever it appears;
+          (b) regex-redact any ``token=<value>`` query param;
+          (c) blank the ``webhook_url`` field value (ignored by parsing).
+        Useful audit fields (stocks/trigger_prices/triggered_at/scan_name) are
+        preserved.
+        """
+        sanitized = payload
+        # (a) literal secret anywhere -> placeholder
+        if self._secret:
+            sanitized = sanitized.replace(self._secret, "<REDACTED>")
+        # (b) any token=<value> (value up to & " ' whitespace or end-of-string)
+        sanitized = re.sub(r"token=[^&\"'\s]+", "token=<REDACTED>", sanitized)
+        # (c) blank the webhook_url field value entirely (JSON string, tolerant
+        #     of escaped chars); it is ignored by parsing
+        sanitized = re.sub(
+            r'("webhook_url"\s*:\s*)"(?:[^"\\]|\\.)*"',
+            r'\1"<REDACTED>"',
+            sanitized,
+        )
+        return sanitized
 
     # ------------------------------------------------------------------
     # Per-signal processing (WR9, WR10, WR17)

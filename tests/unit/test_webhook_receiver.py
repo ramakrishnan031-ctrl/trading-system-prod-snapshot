@@ -1515,8 +1515,136 @@ def test_fixc_no_excluded_symbols_passthrough() -> None:
     print("  OK FIX-C: no excluded_symbols attribute - all symbols pass through")
 
 
+# ---------------------------------------------------------------------------
+# S-1B.1 — webhook secret must NEVER persist to signals.webhook_payload.
+# Chartink echoes ?token=<SECRET> inside the body's `webhook_url` field and the
+# raw body is stored verbatim, so without redaction the secret lands plaintext
+# at rest. Redaction is STORAGE-ONLY: auth (:410-432) + parsing are unchanged.
+# ---------------------------------------------------------------------------
+
+# A deliberately-fake, placeholder-shaped token (starts with "dummy" so the
+# pre-commit secret scanner recognises it as a non-secret). The redaction logic
+# is value-agnostic, so this exercises the code path identically to a real token.
+_S1B1_FIXTURE = "dummy0webhook0token0for0s1b10tests0not0a0real0secret00000000dead"
+
+
+def _chartink_body_with_token(secret, stocks="RELIANCE,TCS",
+                              prices="2500.0,3400.5", scanner="gap_go_long"):
+    """A realistic Chartink body that echoes the configured URL (incl.
+    ?token=<secret>) in webhook_url, plus the sibling fields Chartink sends."""
+    return {
+        "stocks": stocks,
+        "trigger_prices": prices,
+        "triggered_at": _now_str(),
+        "scan_name": scanner,
+        "scan_url": scanner.replace("_", "-"),
+        "alert_name": scanner.upper().replace("_", " "),
+        "webhook_url": f"http://161.118.187.249:5000/webhook/{scanner}?token={secret}",
+    }
+
+
+def test_s1b1_secret_never_persists_to_webhook_payload():
+    """S-1B.1 CORE (red/green): a Chartink body whose webhook_url carries
+    ?token=<secret> must be stored with the secret redacted, while the signal
+    rows are still created with the correct stocks/prices.
+    RED (unfixed): stored webhook_payload contains the secret + token=<secret>."""
+    receiver, sq, store = _make_receiver(secret=_S1B1_FIXTURE)
+    body = _chartink_body_with_token(_S1B1_FIXTURE)
+    with receiver.app.test_client() as client:
+        resp = client.post(f"/webhook/gap_go_long?token={_S1B1_FIXTURE}", json=body)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["accepted"] == 2, data
+
+    rows = store.fetch_all(
+        "SELECT symbol, trigger_price, webhook_payload FROM signals ORDER BY symbol"
+    )
+    assert len(rows) == 2
+    by_symbol = {r["symbol"]: r for r in rows}
+    # signal rows created with the correct parsed values (processing intact)
+    assert set(by_symbol) == {"RELIANCE", "TCS"}
+    assert by_symbol["RELIANCE"]["trigger_price"] == 2500.0
+    assert by_symbol["TCS"]["trigger_price"] == 3400.5
+    # the SECRET must NOT appear in the stored payload in EITHER form
+    for r in rows:
+        stored = r["webhook_payload"]
+        assert _S1B1_FIXTURE not in stored, "SECRET LEAKED into webhook_payload"
+        assert f"token={_S1B1_FIXTURE}" not in stored
+        assert "<REDACTED>" in stored
+        # useful audit fields preserved
+        assert "RELIANCE" in stored and "2500.0" in stored
+    store.close()
+    print("  OK S-1B.1: secret redacted from stored webhook_payload; rows intact")
+
+
+def test_s1b1_parsing_unchanged_plain_payload():
+    """S-1B.1 guard: a plain payload (no webhook_url/token) parses and persists
+    exactly as before — stocks/prices/triggered_at/scan_name produce the signal;
+    the sanitizer is a no-op on a body with no secret."""
+    receiver, sq, store = _make_receiver(secret=_S1B1_FIXTURE)
+    payload = _valid_payload(stocks="RELIANCE", prices="2500.0")
+    with receiver.app.test_client() as client:
+        resp = client.post(f"/webhook/gap_go_long?token={_S1B1_FIXTURE}", json=payload)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["accepted"] == 1
+    signal_id = data["results"][0]["signal_id"]
+    assert sq.qsize() == 1 and sq.get_nowait()[0] == signal_id
+    row = store.fetch_one("SELECT * FROM signals WHERE signal_id = ?", (signal_id,))
+    assert row["status"] == "QUEUED"
+    assert row["symbol"] == "RELIANCE"
+    assert row["trigger_price"] == 2500.0
+    # stocks preserved; nothing spuriously redacted on a token-free body
+    assert "RELIANCE" in row["webhook_payload"]
+    assert "<REDACTED>" not in row["webhook_payload"]
+    store.close()
+    print("  OK S-1B.1: parsing/persist unchanged for a token-free payload")
+
+
+def test_s1b1_auth_unchanged():
+    """S-1B.1 guard: redaction is post-auth and storage-only — ?token=<secret>
+    still authenticates (200) and a wrong token still 401s (auth untouched)."""
+    # correct token -> 200
+    receiver, _, store = _make_receiver(secret=_S1B1_FIXTURE)
+    with receiver.app.test_client() as client:
+        ok = client.post(f"/webhook/gap_go_long?token={_S1B1_FIXTURE}",
+                         json=_valid_payload())
+    assert ok.status_code == 200, ok.get_data(as_text=True)
+    store.close()
+    # wrong token -> 401 (Invalid token)
+    receiver2, _, store2 = _make_receiver(secret=_S1B1_FIXTURE)
+    with receiver2.app.test_client() as client:
+        bad = client.post("/webhook/gap_go_long?token=WRONG", json=_valid_payload())
+    assert bad.status_code == 401, bad.get_data(as_text=True)
+    assert bad.get_json()["error"] == "Invalid token"
+    store2.close()
+    print("  OK S-1B.1: auth unchanged (correct token 200 / wrong token 401)")
+
+
+def test_s1b1_secret_redacted_even_outside_webhook_url():
+    """S-1B.1 defensive: the secret appearing in ANY field (not just webhook_url)
+    is still redacted from storage (rule (a): literal-value replace)."""
+    receiver, _, store = _make_receiver(secret=_S1B1_FIXTURE)
+    payload = _valid_payload(stocks="RELIANCE", prices="2500.0")
+    payload["alert_name"] = f"leaky {_S1B1_FIXTURE} tail"   # secret in a stray field
+    with receiver.app.test_client() as client:
+        resp = client.post(f"/webhook/gap_go_long?token={_S1B1_FIXTURE}", json=payload)
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    row = store.fetch_one(
+        "SELECT webhook_payload FROM signals ORDER BY received_at DESC LIMIT 1"
+    )
+    assert _S1B1_FIXTURE not in row["webhook_payload"], "SECRET LEAKED (non-URL field)"
+    assert "<REDACTED>" in row["webhook_payload"]
+    store.close()
+    print("  OK S-1B.1: secret redacted even when it appears outside webhook_url")
+
+
 def run_all_tests() -> int:
     tests = [
+        test_s1b1_secret_never_persists_to_webhook_payload,
+        test_s1b1_parsing_unchanged_plain_payload,
+        test_s1b1_auth_unchanged,
+        test_s1b1_secret_redacted_even_outside_webhook_url,
         test_health_endpoint_returns_200,
         test_valid_single_stock_accepted,
         test_valid_multi_stock_all_accepted,
