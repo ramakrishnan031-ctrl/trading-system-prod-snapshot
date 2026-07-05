@@ -3715,6 +3715,191 @@ class TestBl19PlacerRateLimitRetry:
                     store.close()
                 gc.collect()
 
+    # ── Wave 2 · H-10: place() result=None backstop ──────────────────────────
+    # The FIX-072 16388 (insufficient-margin) branch does
+    # `retried_16388 = True; continue`, borrowing an iteration of the SHARED
+    # 429 attempt budget. If the FIRST 16388 lands on the FINAL loop attempt,
+    # the `continue` steps past range()'s last index -> execute() never re-ran,
+    # no rejection handler fired, and `result` stays None. Pre-fix, the
+    # subsequent `if not result.success` dereferenced None -> AttributeError
+    # (not a BrokerError), so _handle_placement_failure never ran -> trade
+    # stuck PENDING + reservation leaked. Fix: a `if result is None:` backstop
+    # routes it through the same failure handler (release + FAILED) and raises
+    # a proper BrokerError.
+
+    @staticmethod
+    def _reject_16388() -> OrderRejectedError:
+        """A broker 16388 insufficient-margin rejection (context-tagged)."""
+        return OrderRejectedError(
+            "insufficient margin (16388)",
+            kite_status_code=16388,
+            rejection_reason="Insufficient funds",
+        )
+
+    def test_h10_final_attempt_16388_none_result_backstop(self) -> None:
+        """H-10 CORE (the bug): a FIRST 16388 on the FINAL loop attempt leaves
+        result=None. GREEN (fixed): _handle_placement_failure runs -> trade
+        FAILED, reservation RELEASED, and the raised exception is a BrokerError
+        (NOT an AttributeError, NOT OrderRejectedError). RED (unfixed): the
+        `if not result.success` deref raises AttributeError, trade stays
+        PENDING, reservation not released."""
+        import gc
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = None
+            try:
+                # max_placer_retries=1 -> 2 attempts (0,1). A 429 on attempt 0
+                # consumes budget; the first 16388 on attempt 1 (== max) then
+                # `continue`s past the loop -> result None (shared-budget starve).
+                side_effects = [
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.01, attempt=1,
+                    ),
+                    self._reject_16388(),
+                ]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=1,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                with pytest.raises(BrokerError) as exc_info:
+                    placer.place(
+                        symbol="RELIANCE", side="BUY", qty=10,
+                        entry_price=2500.0, sl_price=2450.0,
+                        intent="INTRADAY", signal_id=sig_id,
+                        reservation_id="res_h10_none",
+                    )
+
+                # (d) proper BrokerError, never an AttributeError
+                assert not isinstance(exc_info.value, AttributeError)
+                assert isinstance(exc_info.value, BrokerError)
+                # engine ran twice (429 attempt 0 + 16388 attempt 1); the 16388
+                # retry was starved by the shared budget (never re-executed).
+                assert engine_mock.execute.call_count == 2, (
+                    f"Expected 2 engine calls (429 + final 16388), "
+                    f"got {engine_mock.execute.call_count}"
+                )
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert len(rows) == 1
+                # (a)+(c) _handle_placement_failure ran -> FAILED
+                assert rows[0]["status"] == "FAILED", (
+                    f"Expected FAILED via _handle_placement_failure, "
+                    f"got {rows[0]['status']} (RED = stuck PENDING)"
+                )
+                # (b) reservation released (no capacity leak)
+                assert "res_h10_none" in fm.released, (
+                    f"Expected reservation released, got released={fm.released} "
+                    f"(RED = leaked reservation)"
+                )
+                print("  OK H-10: final-attempt 16388 None-result -> BrokerError, FAILED + release")
+            finally:
+                if store is not None:
+                    store.close()
+                gc.collect()
+
+    def test_h10_nonfinal_16388_retry_still_succeeds(self) -> None:
+        """H-10 guard: a 16388 on a NON-final attempt still retries with fresh
+        margin and succeeds -> the legitimate FIX-072 retry is unbroken (trade
+        OPEN/PENDING, no release, engine called twice)."""
+        import gc
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = None
+            try:
+                side_effects = [
+                    self._reject_16388(),        # attempt 0 -> invalidate + retry
+                    self._ok_entry_result(),     # attempt 1 -> success
+                ]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=3,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_h10_retry_ok",
+                )
+
+                assert engine_mock.execute.call_count == 2, (
+                    f"Expected 2 engine calls (16388 + retry success), "
+                    f"got {engine_mock.execute.call_count}"
+                )
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert len(rows) == 1
+                assert rows[0]["status"] == "PENDING", (
+                    f"Expected PENDING after 16388 retry success, "
+                    f"got {rows[0]['status']}"
+                )
+                assert fm.released == [], (
+                    f"Reservation must NOT be released on retry success, "
+                    f"got released={fm.released}"
+                )
+                print("  OK H-10: non-final 16388 -> retry with fresh margin -> success (unbroken)")
+            finally:
+                if store is not None:
+                    store.close()
+                gc.collect()
+
+    def test_h10_429_backoff_unaffected(self) -> None:
+        """H-10 regression guard: a normal 429 backoff path (429 x2 then success)
+        is untouched by the None backstop -> trade PENDING, no release."""
+        import gc
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = None
+            try:
+                side_effects = [
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.01, attempt=1,
+                    ),
+                    BrokerRateLimit429Error(
+                        "broker 429 on place_order",
+                        operation="place_order", category="order",
+                        delay_sec=0.02, attempt=2,
+                    ),
+                    self._ok_entry_result(),
+                ]
+                placer, store, fm, bus, om, engine_mock = (
+                    self._make_placer_with_mock_engine(
+                        Path(tmp), engine_side_effect=side_effects,
+                        max_placer_retries=3,
+                    )
+                )
+                sig_id = _seed_signal(store)
+
+                placer.place(
+                    symbol="RELIANCE", side="BUY", qty=10,
+                    entry_price=2500.0, sl_price=2450.0,
+                    intent="INTRADAY", signal_id=sig_id,
+                    reservation_id="res_h10_429",
+                )
+
+                assert engine_mock.execute.call_count == 3
+                rows = store.fetch_all(
+                    "SELECT status FROM trades WHERE signal_id = ?", (sig_id,)
+                )
+                assert len(rows) == 1
+                assert rows[0]["status"] == "PENDING"
+                assert fm.released == []
+                print("  OK H-10: normal 429 backoff unaffected by the None backstop")
+            finally:
+                if store is not None:
+                    store.close()
+                gc.collect()
+
     def test_placer_retry_does_not_sleep_directly(self) -> None:
         """
         Path A invariant: the placer retry loop does NOT sleep. Backoff is

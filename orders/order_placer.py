@@ -1344,6 +1344,32 @@ class OrderPlacer:
                 )
                 raise
 
+        # H-10: guard the None case before the `result.success` deref below.
+        # The retry loop can exit with `result` still None: the FIX-072 16388
+        # (insufficient-margin) branch does `retried_16388 = True; continue`,
+        # borrowing an iteration of the SHARED 429 attempt budget. If the FIRST
+        # 16388 lands on the FINAL loop attempt (attempt == max_429_retries),
+        # the `continue` steps past range()'s last index -- execute() never
+        # re-ran, no rejection handler fired, and `result` is None. Without this
+        # guard `if not result.success` would raise AttributeError (not a
+        # BrokerError), so _handle_placement_failure never runs -> the trade
+        # stays PENDING and the fund-manager reservation is leaked for the
+        # session. Route the None case through the SAME failure handler every
+        # other placement error uses (release reservation + mark FAILED), then
+        # raise a proper BrokerError. No AttributeError path remains.
+        # 16388 == order REJECTED by the broker, so there is NO open position
+        # here -- failing without the (best-effort) fresh-margin retry is safe.
+        if result is None:
+            none_err = BrokerError(
+                "Entry engine produced no result: retry budget exhausted "
+                "before any placement outcome (16388 margin retry starved on "
+                "the final attempt)"
+            )
+            self._handle_placement_failure(
+                trade_id, reservation_id, signal_id, none_err, symbol=symbol,
+            )
+            raise none_err
+
         if not result.success:
             # OP-BL8f: soft failure (CoPlusTgt: CO live, TGT dead). Cancel the
             # CO via _handle_placement_failure(broker_order_ids=...) so the
