@@ -404,6 +404,15 @@ _TERMINAL_ORDER_STATUSES: frozenset = frozenset(
 # FIX-061: Exit retry params for LTP validation errors
 # ─────────────────────────────────────────────────────────────────────────────
 
+# H-3: stale-entry TTL for the exit-retry queue. A legitimate exit retry fires on
+# the FIRST valid LTP tick (seconds during market hours), so it always fires well
+# inside this window; a fire delayed past it means the feed was silent for minutes,
+# by when G5b (~15-30s recovery SL) + the reconciler duplicate-exit/CHECK defense
+# have already protected the position — so a stale entry is dropped, not placed.
+# 180s ~= 6x the ~30s G5b recovery bound and well under the 15-min reconciler cycle.
+_EXIT_RETRY_TTL_SEC: float = 180.0
+
+
 @dataclass
 class _ExitRetryParams:
     """
@@ -421,6 +430,9 @@ class _ExitRetryParams:
     reason: str
     retry_count: int = 0
     MAX_RETRIES: int = 3
+    # H-3: enqueue time (now_ist) for the stale-entry TTL — set in
+    # _add_to_exit_retry; a fire older than _EXIT_RETRY_TTL_SEC is dropped.
+    enqueued_at: Any = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3222,6 +3234,7 @@ class OrderPlacer:
                 avg_fill_price=avg_fill_price,
                 reason=reason,
                 retry_count=0,
+                enqueued_at=now_ist(),  # H-3: for the stale-entry TTL
             )
 
         # Subscribe to LiveFeed if available and not already subscribed
@@ -3325,7 +3338,52 @@ class OrderPlacer:
         On success: logs info and returns.
         On failure: increments retry_count.
         After MAX_RETRIES: triggers soft_kill and logs CRITICAL.
+
+        H-3: re-read fresh trade state and mirror retry_tgt_for_trade's guards
+        BEFORE placing. A stale snapshot must never (a) place exits on a trade that
+        has since closed — a naked reverse on a flat position — nor (b) place a
+        SECOND SL on a trade a G5b recovery SL already protects (the duplicate-SL /
+        RAMCOIND oversell class). Entries the LTP feed never serviced within the
+        TTL are dropped rather than fired very-late.
         """
+        trade_id = params.trade_id
+        symbol = params.fill_entry.symbol
+        store = self._om._store
+
+        # H-3: drop a stale queue entry (see _EXIT_RETRY_TTL_SEC).
+        if params.enqueued_at is not None:
+            age_sec = (now_ist() - params.enqueued_at).total_seconds()
+            if age_sec > _EXIT_RETRY_TTL_SEC:
+                self._log.warning(
+                    "order_placer.exit_retry_dropped_stale",
+                    extra={"trade_id": trade_id, "symbol": symbol,
+                           "age_sec": round(age_sec, 1),
+                           "ttl_sec": _EXIT_RETRY_TTL_SEC},
+                )
+                return
+
+        # H-3: re-read the trade; NEVER place exits on a closed/gone trade.
+        trade = store.get_trade_for_tgt_retry(trade_id)
+        if trade is None or trade["status"] not in ("OPEN", "PARTIAL"):
+            self._log.warning(
+                "order_placer.exit_retry_skipped_closed",
+                extra={"trade_id": trade_id, "symbol": symbol,
+                       "status": None if trade is None else trade["status"]},
+            )
+            return
+
+        # H-3: if a non-terminal SL already exists (e.g. a G5b recovery SL placed
+        # while this retry waited for a tick), do NOT place a second SL. The SL leg
+        # is covered; place only the genuinely-missing TGT via retry_tgt_for_trade,
+        # which re-guards status/SL/idempotency and no-ops if a TGT already exists.
+        if store.get_sl_order_for_trade(trade_id) is not None:
+            self._log.info(
+                "order_placer.exit_retry_sl_exists_place_tgt_only",
+                extra={"trade_id": trade_id, "symbol": symbol},
+            )
+            self.retry_tgt_for_trade(trade_id)
+            return
+
         params.retry_count += 1
         trade_id = params.trade_id
         symbol = params.fill_entry.symbol
