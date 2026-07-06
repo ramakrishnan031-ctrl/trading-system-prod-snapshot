@@ -102,9 +102,12 @@ class TestEodVerification:
         return s
 
     def test_clean_day_verified(self, store):
+        # HONEST-VERIFY (07-Jul): a clean LIVE day with NO broker-P&L feeder row is
+        # now PENDING (P&L NOT CHECKED), not a false VERIFIED. Positions/orders clean.
         from scripts.eod_verify import run_eod_verification
         result = run_eod_verification(store, "2026-05-31")
-        assert result["status"] == "VERIFIED"
+        assert result["status"] == "PENDING"
+        assert result["pnl_status"] == "NOT_CHECKED"
         assert result["open_trades"] == 0
         assert result["pending_orders"] == 0
 
@@ -132,7 +135,8 @@ class TestEodVerification:
             "SELECT * FROM eod_verification WHERE date = ?", ("2026-05-31",)
         )
         assert row is not None
-        assert row["status"] == "VERIFIED"
+        # HONEST-VERIFY: live, no broker-P&L feeder → PENDING (not a false VERIFIED).
+        assert row["status"] == "PENDING"
 
     def test_parity_paper_and_live(self, store):
         """EOD verification is mode-agnostic."""
