@@ -33,6 +33,7 @@ from typing import Callable, Optional
 from core.logger import log_exception
 from core.market_windows import is_within_market_hours
 from core.time_authority import now_ist
+from broker.auth_recovery import classify_broker_auth_error
 
 
 class TokenMonitor:
@@ -130,14 +131,37 @@ class TokenMonitor:
         try:
             self._profile_fn()
             self._log.debug("token_monitor.check_ok")
+            # H-13: token confirmed VALID -> re-arm the expiry latch so a FUTURE
+            # expiry alerts again. The latch is once-per-EPISODE (suppress repeats
+            # while the token stays dead), NOT once-per-process; without this reset
+            # one expiry (or one transient blip mis-fired as expiry) permanently
+            # disarmed detection until a restart.
+            if self._expiry_fired:
+                self._log.info(
+                    "token_monitor.token_recovered — expiry latch reset "
+                    "(future expiry will alert again)"
+                )
+            self._expiry_fired = False
             return True
         except Exception as exc:
             log_exception(self._log, exc)
-            self._log.critical(
-                "token_monitor.token_expired_or_invalid",
-                extra={"error": str(exc), "error_type": type(exc).__name__},
-            )
-            self._handle_expiry(str(exc))
+            # H-13: classify — only a GENUINE token-invalid signal is an expiry.
+            # A transient error (network timeout / 5xx / rate-limit) must NOT fire
+            # a false CRITICAL + SOFT_KILL and must NOT latch (latching would
+            # permanently disarm real-expiry detection). Leave the latch untouched
+            # on a transient so a real expiry is still caught on a later check.
+            if self._is_token_expiry(exc):
+                self._log.critical(
+                    "token_monitor.token_expired_or_invalid",
+                    extra={"error": str(exc), "error_type": type(exc).__name__},
+                )
+                self._handle_expiry(str(exc))
+            else:
+                self._log.warning(
+                    "token_monitor.transient_check_error — token NOT invalidated; "
+                    "no expiry alert, latch untouched",
+                    extra={"error": str(exc), "error_type": type(exc).__name__},
+                )
             return False
 
     def _is_market_hours(self) -> bool:
@@ -147,8 +171,29 @@ class TokenMonitor:
             return True
         return is_within_market_hours(now_ist().time(), self._market_open_t, self._market_close_t)
 
+    def _is_token_expiry(self, exc: Exception) -> bool:
+        """H-13: True ONLY for a genuine token-invalid/expired signal (fire the
+        expiry sequence); False for transient errors (network/5xx/rate-limit —
+        do NOT latch, do NOT soft_kill).
+
+        Classifies on BOTH the exception TYPE (kiteconnect ``TokenException``,
+        matched by name so this module needs no hard kiteconnect import) AND the
+        message via ``auth_recovery.classify_broker_auth_error`` — so a raw kite
+        TokenException OR a translated ``BrokerAuthError("token/auth failure")``
+        both count as expiry, while a ``NetworkException`` / ``DataException`` /
+        connection timeout classifies as transient and is ignored. An
+        ``IP_NOT_ALLOWLISTED`` result means the token is VALID (do not fire).
+        """
+        if type(exc).__name__ == "TokenException":
+            return True
+        try:
+            return classify_broker_auth_error(exc) == "TOKEN_EXPIRED"
+        except Exception:
+            # A classifier failure must never itself manufacture a false expiry.
+            return False
+
     def _handle_expiry(self, reason: str) -> None:
-        """Fire expiry sequence once per session."""
+        """Fire expiry sequence once per episode (re-armed on a later valid check)."""
         if self._expiry_fired:
             return
         self._expiry_fired = True
