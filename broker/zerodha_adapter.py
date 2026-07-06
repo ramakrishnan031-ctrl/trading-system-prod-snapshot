@@ -1073,8 +1073,15 @@ class ZerodhaAdapter:
             with self._paper_fills_lock:
                 positions = [
                     Position(
+                        # H-12 (Wave-3 parity): return the SIGNED net qty the paper
+                        # book already tracks (info["qty"] = long > 0, short < 0;
+                        # written at the fill site) — NOT abs(). Mirrors the live
+                        # branch (kite "net" quantity is signed), so reverse-aware
+                        # consumers (determine_close_direction, the HARD_KILL /
+                        # emergency-exit / EOD flatten sweeps) pick the correct
+                        # flatten direction in paper exactly as they do in live.
                         symbol=sym,
-                        qty=abs(info["qty"]),
+                        qty=info["qty"],
                         avg_price=info["avg_price"],
                         product=info.get("product", "MIS"),
                         side=info["side"],
