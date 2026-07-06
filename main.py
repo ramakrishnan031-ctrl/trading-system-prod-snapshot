@@ -116,19 +116,36 @@ _broker_auth_failed = False
 # FIX-062: Token invalidation on auth error
 # ─────────────────────────────────────────────────────────────────────────────
 
+# H-11: canonical broker-token path. MUST match the loader — main.py live startup
+# is_token_valid()/load_token() (:1800/:1806), _load() (:314/:399/:1637), the token
+# refresh (scripts/auto_refresh_token.py) and PATHS.md all use
+# data_store/session/zerodha_token.json. Before H-11 _invalidate_token used
+# Path("zerodha_token.json") (process CWD), so on a BrokerAuthError the dead token
+# in data_store/session/ was NEVER renamed — _invalidate_token logged "not found,
+# skipping" and the FIX-062 auth-restart-loop guard was inert (the service could
+# loop on a revoked token). Pointing at the real path re-arms the guard.
+_TOKEN_PATH = Path("data_store/session/zerodha_token.json")
+_TOKEN_INVALID_PATH = _TOKEN_PATH.with_suffix(".invalid")
+
+
 def _invalidate_token() -> None:
     """
-    FIX-062: Rename zerodha_token.json to zerodha_token.invalid.
+    FIX-062 / H-11: Rename the REAL broker token
+    (data_store/session/zerodha_token.json -> .invalid) so the dead token is gone.
 
-    Called when BrokerAuthError occurs to prevent infinite restart loop.
-    Systemd restarts will not proceed if token file is missing.
+    Called when BrokerAuthError occurs to prevent an infinite restart loop: with
+    the token renamed, the next non-interactive live start fails fast at the
+    is_token_valid() gate (main.py: "Token missing or expired" -> return 6) instead
+    of restarting straight back onto the same revoked token.
     os.rename() is atomic on Linux.
     """
-    token_path = Path("zerodha_token.json")
-    invalid_path = Path("zerodha_token.invalid")
+    token_path = _TOKEN_PATH
+    invalid_path = _TOKEN_INVALID_PATH
 
     if not token_path.exists():
-        _log.warning("_invalidate_token: zerodha_token.json not found, skipping rename")
+        _log.warning(
+            "_invalidate_token: %s not found, skipping rename", token_path
+        )
         return
 
     try:

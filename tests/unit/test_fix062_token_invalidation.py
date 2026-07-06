@@ -22,8 +22,9 @@ def test_invalidate_token_renames_file() -> None:
         try:
             os.chdir(tmp)
 
-            # Create token file
-            token_path = Path("zerodha_token.json")
+            # H-11: create the token at the REAL loader path (was CWD before fix)
+            token_path = Path("data_store/session/zerodha_token.json")
+            token_path.parent.mkdir(parents=True, exist_ok=True)
             token_path.write_text('{"access_token": "test123"}')
 
             # Import and call
@@ -33,7 +34,7 @@ def test_invalidate_token_renames_file() -> None:
 
             # Assert renamed
             assert not token_path.exists(), "Token file should be removed"
-            invalid_path = Path("zerodha_token.invalid")
+            invalid_path = Path("data_store/session/zerodha_token.invalid")
             assert invalid_path.exists(), "Invalid token file should exist"
             assert invalid_path.read_text() == '{"access_token": "test123"}'
 
@@ -145,8 +146,9 @@ def test_shutdown_invalidates_token_if_flag_set() -> None:
         try:
             os.chdir(tmp)
 
-            # Create token file
-            token_path = Path("zerodha_token.json")
+            # H-11: create the token at the REAL loader path (was CWD before fix)
+            token_path = Path("data_store/session/zerodha_token.json")
+            token_path.parent.mkdir(parents=True, exist_ok=True)
             token_path.write_text('{"access_token": "test123"}')
 
             import main as main_module
@@ -174,7 +176,7 @@ def test_shutdown_invalidates_token_if_flag_set() -> None:
 
             # Assert token was invalidated
             assert not token_path.exists(), "Token file should be removed"
-            invalid_path = Path("zerodha_token.invalid")
+            invalid_path = Path("data_store/session/zerodha_token.invalid")
             assert invalid_path.exists(), "Invalid token file should exist"
 
             print("  OK shutdown invalidates token when flag set")
@@ -192,8 +194,9 @@ def test_shutdown_does_not_invalidate_if_flag_not_set() -> None:
         try:
             os.chdir(tmp)
 
-            # Create token file
-            token_path = Path("zerodha_token.json")
+            # H-11: create the token at the REAL loader path (was CWD before fix)
+            token_path = Path("data_store/session/zerodha_token.json")
+            token_path.parent.mkdir(parents=True, exist_ok=True)
             token_path.write_text('{"access_token": "test123"}')
 
             import main as main_module
