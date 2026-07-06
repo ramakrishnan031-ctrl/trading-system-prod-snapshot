@@ -314,7 +314,10 @@ class ShadowTracker:
         # FIX-013: Recalculate TGT from actual entry price to preserve R:R.
         # SL stays anchored to original strategy level (matches order_placer).
         try:
-            strategy_name = trade["strategy_name"] if "strategy_name" in trade.keys() else ""
+            # H-8: the trades column is `strategy` (schema.sql:124), NOT
+            # `strategy_name` — the old key was always absent, so this branch
+            # produced "" and the FIX-013 RISK_REWARD TGT recalc below never ran.
+            strategy_name = trade["strategy"] if "strategy" in trade.keys() else ""
         except (KeyError, AttributeError):
             strategy_name = ""
         if strategy_name and self._strategies and strategy_name in self._strategies:
