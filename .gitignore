@@ -78,3 +78,7 @@ CLAUDE_md_and_explanations.txt
 .claude/settings.local.json
 
 sats/
+
+# GUI redesign design-spec source .txt (consumed by the completed G5 redesign;
+# Audit-B Phase-1 flagged gui/ as untracked debt). Kept local, not deployed.
+gui/
