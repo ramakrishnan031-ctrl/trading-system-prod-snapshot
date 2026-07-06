@@ -15,7 +15,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Callable, Deque, Dict, List, Optional
 
 from core.time_authority import now_ist
@@ -47,23 +47,13 @@ class _Accumulator:
     window_start: datetime  # FIX-049: minute boundary for this accumulator
     volume: int = 0  # FIX-135 Item 46: accumulated volume from ticks
 
-    def update(self, ltp: float, exchange_timestamp: Optional[datetime] = None, volume: int = 0) -> bool:
-        """FIX-049: Update accumulator with new tick. Returns False if tick discarded (late).
+    def update(self, ltp: float, volume: int = 0) -> None:
+        """Update the accumulator with a new tick (LTP + volume).
 
-        Args:
-            ltp: Last traded price
-            exchange_timestamp: Optional exchange timestamp of the tick. If provided and
-                              tick belongs to an already-closed minute, it's discarded.
-
-        Returns:
-            True if tick was accepted, False if discarded (late tick from previous minute)
+        H-9 (Wave-3): the FIX-049 `exchange_timestamp` late-tick discard was removed
+        (it was dead — never wired — and a landmine; see CandleStore.on_tick). Every
+        tick routed here is accepted; window assignment is clock-driven upstream.
         """
-        # FIX-049: Discard ticks from already-closed minutes
-        if exchange_timestamp is not None:
-            if exchange_timestamp < self.window_start:
-                # Tick is from a previous minute that's already closed
-                return False
-
         if ltp > self.high:
             self.high = ltp
         if ltp < self.low:
@@ -71,7 +61,6 @@ class _Accumulator:
         self.close = ltp
         self.tick_count += 1
         self.volume += volume
-        return True
 
 
 class CandleStore:
@@ -101,8 +90,15 @@ class CandleStore:
         self._history: Dict[int, Deque[CandleData]] = {}
         self._on_close_cbs: List[Callable[[CandleData], None]] = []
         self._token_map: Dict[int, str] = {}
-        # FIX-049: Track last closed window to detect late ticks
+        # FIX-049 / H-9: the last window that actually CLOSED (one interval before
+        # the boundary the timer fired on). No longer gates ticks (the late-tick
+        # discard was removed in H-9); retained as a correct, observable timestamp
+        # used by the synthetic-only guard log.
         self._last_closed_window: Optional[datetime] = None
+        # H-9 landmine guard: count consecutive closes that emitted ONLY synthetic
+        # (carry-forward) candles, i.e. zero real ticks — surfaces a starved feed
+        # instead of letting the store silently drift 100% synthetic.
+        self._consecutive_synthetic_only: int = 0
 
         self._stop_event = threading.Event()
         self._timer_thread: Optional[threading.Thread] = None
@@ -171,48 +167,28 @@ class CandleStore:
 
             return removed_count
 
-    def on_tick(self, instrument_token: int, ltp: float, ts: datetime, exchange_timestamp: Optional[datetime] = None, volume: int = 0) -> None:
-        """LF11: Accumulate LTP + volume into current candle window.
+    def on_tick(self, instrument_token: int, ltp: float, ts: datetime, volume: int = 0) -> None:
+        """LF11: Accumulate LTP + volume into the current (clock-driven) candle window.
 
-        Audit 3.4: exchange ohlc from tick is NEVER used here.
-        FIX-049: exchange_timestamp param added. If provided and tick belongs to
-                 an already-closed minute, the tick is discarded and DEBUG logged.
-        FIX-135 Item 46: volume param added for tick volume accumulation.
+        Audit 3.4: exchange OHLC from the tick is NEVER used here.
+        FIX-135 Item 46: volume accumulated from ticks.
+
+        H-9 (Wave-3): the FIX-049 `exchange_timestamp` late-tick discard was REMOVED.
+        It was dead — the live tick dispatcher never passed exchange_timestamp, so it
+        never ran — and, combined with the `_last_closed_window` off-by-one, it was a
+        LANDMINE: had anyone wired it, every current-minute tick would satisfy
+        `tick_window <= last_closed` and be discarded, driving the store 100%
+        synthetic (plus a latent naive/aware TypeError). Removed by construction so a
+        real tick can never be dropped as "late". Candle windows are clock-driven
+        (the timer thread closes on `now_ist()` boundaries), so `ts` (the received/
+        exchange tick time) is retained for the caller interface but is INFORMATIONAL
+        ONLY — it neither gates nor windows anything.
         """
         with self._lock:
-            # FIX-049: Check if tick belongs to an already-closed window
-            if exchange_timestamp is not None and self._last_closed_window is not None:
-                tick_window = exchange_timestamp.replace(second=0, microsecond=0, tzinfo=None)
-                last_closed_naive = self._last_closed_window.replace(tzinfo=None)
-                if tick_window <= last_closed_naive:
-                    # Late tick from already-closed window → discard
-                    symbol = self._token_map.get(instrument_token, str(instrument_token))
-                    self._log.debug(
-                        f"CandleStore: discarded late tick for {symbol} "
-                        f"(exchange_ts={exchange_timestamp.isoformat()}, "
-                        f"tick_window={tick_window.isoformat()}, "
-                        f"last_closed={self._last_closed_window.isoformat()})"
-                    )
-                    return
-
-            # FIX-049: Calculate current window start (minute boundary)
-            now = exchange_timestamp if exchange_timestamp is not None else now_ist()
-            window_start = now.replace(second=0, microsecond=0)
-
+            window_start = now_ist().replace(second=0, microsecond=0)
             if instrument_token in self._accum:
-                # Update existing accumulator
-                accepted = self._accum[instrument_token].update(ltp, exchange_timestamp, volume)
-                if not accepted:
-                    # FIX-049: Late tick from same window but before accumulator window_start
-                    # (This shouldn't normally happen, but kept as defense-in-depth)
-                    symbol = self._token_map.get(instrument_token, str(instrument_token))
-                    self._log.debug(
-                        f"CandleStore: discarded late tick for {symbol} "
-                        f"(exchange_ts={exchange_timestamp.isoformat() if exchange_timestamp else 'None'}, "
-                        f"window_start={self._accum[instrument_token].window_start.isoformat()})"
-                    )
+                self._accum[instrument_token].update(ltp, volume)
             else:
-                # Create new accumulator for this window
                 self._accum[instrument_token] = _Accumulator(
                     open=ltp, high=ltp, low=ltp, close=ltp, tick_count=1,
                     window_start=window_start, volume=volume,
@@ -284,15 +260,22 @@ class CandleStore:
         it while calling user callbacks (LF17: no nesting, no deadlock risk).
         """
         close_ts = now_ist()
-        # FIX-049: Track the window we're closing (for late tick detection)
+        # H-9: the timer fires AT the boundary (e.g. 10:01:00) to close the window
+        # that just ENDED (10:00). `window_being_closed` here is the interval that
+        # STARTS now; the window that actually closed is one interval earlier.
         window_being_closed = close_ts.replace(second=0, microsecond=0)
 
         # Section 1: snapshot and reset accumulators, identify synthetic candidates
         with self._lock:
             to_close = dict(self._accum)
             self._accum.clear()
-            # FIX-049: Update last closed window timestamp
-            self._last_closed_window = window_being_closed
+            # H-9 off-by-one fix: last-closed = the interval that just ended, i.e.
+            # ONE interval before the boundary the timer fired on (was stamping the
+            # new/current window). Harmless today (no live reader) but correct, and
+            # it defuses the late-tick landmine had the discard ever been re-wired.
+            self._last_closed_window = window_being_closed - timedelta(
+                seconds=self._candle_interval_sec
+            )
             token_map_snapshot = dict(self._token_map)
             # FIX-020: tokens with no ticks but previous history → synthetic candle
             tokens_with_no_ticks = set(token_map_snapshot.keys()) - set(to_close.keys())
@@ -302,6 +285,27 @@ class CandleStore:
                 if hist and len(hist) > 0:
                     # Emit synthetic candle with prev_close price
                     synthetic_candidates[token] = hist[-1].close
+
+            # H-9 landmine guard: if a close emits ONLY synthetic (carry-forward)
+            # candles despite mapped tokens — zero real ticks this interval — the
+            # feed may be starved/misconfigured. Make it LOUD instead of letting the
+            # store drift 100% synthetic unnoticed (the state the late-tick landmine
+            # would have caused). Reset on any real candle.
+            if to_close:
+                self._consecutive_synthetic_only = 0
+            elif synthetic_candidates:
+                self._consecutive_synthetic_only += 1
+                if (self._consecutive_synthetic_only == 3
+                        or self._consecutive_synthetic_only % 30 == 0):
+                    self._log.warning(
+                        "CandleStore: %d consecutive interval(s) with ZERO real "
+                        "ticks (last_closed=%s, %d token(s) carry-forward only) — "
+                        "tick feed may be starved/misconfigured; candles are synthetic",
+                        self._consecutive_synthetic_only,
+                        self._last_closed_window.isoformat()
+                        if self._last_closed_window else "n/a",
+                        len(synthetic_candidates),
+                    )
 
         # Build CandleData objects outside lock
         candles: List[CandleData] = []
