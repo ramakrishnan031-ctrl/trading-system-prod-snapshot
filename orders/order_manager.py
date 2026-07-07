@@ -533,21 +533,25 @@ class OrderManager:
         existing = self.get_trade(trade_id)
         if existing is None:
             raise ValueError(f"close_trade: trade {trade_id!r} not found")
-        # H-2: EXITING is a TRANSITIONAL state (core/schema.sql:155 — set by an
-        # emergency/HARD_KILL flatten while the MARKET exit is in flight); the
-        # exit fill is MEANT to close it. Accept it alongside OPEN/PARTIAL so the
-        # fill completes the full close+release with REAL costs immediately,
-        # instead of being misread as a double-close and deferred ~30 min to the
-        # reconciler's costs=0.0 _check_stuck_exiting fallback. Truly-terminal
-        # states (CLOSED/CLOSED_MANUAL/FAILED/CANCELLED/REJECTED*/PENDING*) still
-        # raise → the double-close guard is preserved.
-        if existing.get("status") not in ("OPEN", "PARTIAL", "EXITING"):
-            raise ValueError(
-                f"close_trade: trade {trade_id!r} has terminal status "
-                f"{existing.get('status')!r} "
-                f"(exit_time={existing.get('exit_time')!r}); "
-                f"refusing to overwrite"
-            )
+        # D-1 / U3 (Wave-5, 2026-07-07): the from-state guard is now enforced
+        # ATOMICALLY inside the UPDATE's WHERE clause (status IN the live set)
+        # rather than by this read-then-check-then-write pre-check, which was a
+        # TOCTOU — two concurrent finalizers could both read OPEN, both pass, and
+        # both write CLOSED + release capital twice (double-release). The WHERE
+        # turns the finalize into a compare-and-swap: exactly ONE caller flips the
+        # row (rowcount == 1 → release ONCE); a loser (row already terminal, or it
+        # never opened) gets rowcount == 0 and we raise the SAME ValueError the
+        # caller already maps to "already closed → skip the capital release"
+        # (order_placer.py:2249). Because the WHERE excludes terminal from-states,
+        # this path never trips trg_trades_terminal_status_guard.
+        #
+        # H-2: EXITING stays in the live set (an emergency/HARD_KILL flatten leaves
+        # a trade EXITING while its MARKET exit is in flight; the exit fill is MEANT
+        # to close it, with REAL costs, immediately). Truly-terminal states
+        # (CLOSED/CLOSED_MANUAL/FAILED/CANCELLED/REJECTED*) and the not-yet-open
+        # PENDING* states fall through to rowcount == 0 — the double-close guard is
+        # preserved, now race-free.
+        prior_status = existing.get("status")
 
         if exit_qty != existing.get("qty_filled", 0):
             self._log.warning(
@@ -611,6 +615,7 @@ class OrderManager:
                     cost_stamp_duty = ?,
                     updated_at      = ?
                 WHERE trade_id = ?
+                  AND status IN ('OPEN', 'PARTIAL', 'EXITING')
                 """,
                 (now, exit_price, exit_reason,
                  gross_pnl, charges, net_pnl,
@@ -621,6 +626,27 @@ class OrderManager:
                  cb.gst if cb else None,
                  cb.stamp_duty if cb else None,
                  now, trade_id),
+            )
+            won = cur.rowcount == 1
+        if not won:
+            # D-1: lost the finalize race (row already terminal) or the trade
+            # never opened (PENDING*). Raise the signal the caller already maps to
+            # "already closed → skip the capital release" so capital is released
+            # exactly once. No status was written (0 rows) — nothing to undo, and
+            # trg_trades_terminal_status_guard is never tripped (WHERE excluded the
+            # terminal from-states before the trigger could fire).
+            self._log.warning(
+                "close_trade.cas_no_op",
+                extra={
+                    "trade_id": trade_id,
+                    "prior_status": prior_status,
+                    "exit_reason": exit_reason,
+                },
+            )
+            raise ValueError(
+                f"close_trade: trade {trade_id!r} not in a closeable state "
+                f"(prior_status={prior_status!r}); another finalizer already "
+                f"closed it or it never opened — refusing to double-close"
             )
         self._log.info(
             "trade_closed",

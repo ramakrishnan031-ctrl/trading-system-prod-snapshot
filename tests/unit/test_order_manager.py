@@ -173,7 +173,7 @@ def test_close_trade_rejects_double_close(tmp_path: Path) -> None:
         gross_pnl=500.0,
         charges=25.0,
     )
-    with pytest.raises(ValueError, match="terminal status"):
+    with pytest.raises(ValueError, match="closeable state"):
         om.close_trade(
             trade_id=trade_id,
             exit_price=2560.0,
@@ -273,7 +273,7 @@ def test_close_trade_rejects_pending_fill(tmp_path: Path) -> None:
     om = _make_om(store)
     trade_id = _seed_trade(store, om)
 
-    with pytest.raises(ValueError, match="terminal status"):
+    with pytest.raises(ValueError, match="closeable state"):
         om.close_trade(
             trade_id=trade_id, exit_price=2550.0, exit_qty=10,
             exit_reason="MANUAL_CLOSE", gross_pnl=0.0, charges=0.0,
@@ -297,7 +297,7 @@ def test_close_trade_rejects_closed_manual(tmp_path: Path) -> None:
     row = store.fetch_one("SELECT status FROM trades WHERE trade_id = ?", (trade_id,))
     assert row["status"] == "CLOSED_MANUAL"
 
-    with pytest.raises(ValueError, match="terminal status"):
+    with pytest.raises(ValueError, match="closeable state"):
         om.close_trade(
             trade_id=trade_id, exit_price=2550.0, exit_qty=10,
             exit_reason="SL_HIT", gross_pnl=-250.0, charges=25.0,

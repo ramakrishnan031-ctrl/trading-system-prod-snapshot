@@ -254,6 +254,38 @@ CREATE INDEX IF NOT EXISTS idx_trades_created_at
 CREATE INDEX IF NOT EXISTS idx_trades_signal_id
     ON trades(signal_id);
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Terminal-state write guard (Wave-5, 2026-07-07) — Audit-B Phase-4 rec #5.
+-- The trades.status CHECK above validates the value SET, not TRANSITIONS: a raw
+-- UPDATE could reopen an absorbing/terminal row (e.g. CLOSED -> OPEN), which the
+-- reconciler would then try to re-protect / re-exit after capital was already
+-- released. This trigger is the data-layer keystone: it forbids CHANGING status
+-- once the row is terminal, catching EVERY writer including any future raw SQL.
+--
+-- Scope is deliberately a TERMINAL-LOCK, not a full transition matrix — every
+-- legal edge (OPEN/PARTIAL/EXITING -> CLOSED incl. H-2 EXITING->CLOSED, the
+-- recovery flows, EXITING->OPEN revert) originates from a NON-terminal state and
+-- is untouched. Two narrowing conditions keep it from over-firing:
+--   * BEFORE UPDATE OF status  -> fires ONLY when an UPDATE writes the status
+--     column, so the exit-financial backfills (record_manual_close_financials,
+--     record_gtt_close_financials) that write price/pnl onto an already-CLOSED
+--     row WITHOUT touching status pass through untouched.
+--   * WHEN NEW.status <> OLD.status -> idempotent same-status writes pass.
+-- RAISE(ABORT) surfaces in Python as sqlite3.IntegrityError and rolls back only
+-- the offending statement. This is a BEHAVIOUR-ONLY pure add: CREATE TRIGGER IF
+-- NOT EXISTS is re-applied idempotently by executescript on every boot (after any
+-- migration rebuild), so it needs NO schema_version bump (stays v41).
+CREATE TRIGGER IF NOT EXISTS trg_trades_terminal_status_guard
+BEFORE UPDATE OF status ON trades
+FOR EACH ROW
+WHEN (OLD.status IN ('CLOSED', 'CLOSED_MANUAL', 'FAILED', 'CANCELLED')
+      OR OLD.status GLOB 'REJECTED*')
+BEGIN
+    SELECT CASE WHEN NEW.status <> OLD.status
+        THEN RAISE(ABORT, 'illegal terminal-state transition on trades.status')
+    END;
+END;
+
 -- ═════════════════════════════════════════════════════════════════════════════
 -- TABLE 4: orders
 -- One row per broker order. A single trade has multiple orders over its
