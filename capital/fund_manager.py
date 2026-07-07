@@ -1602,16 +1602,12 @@ class FundManager:
             # FIX-051: _daily_pnl removed; SQL (fm_ledger.pnl_delta) is the source of truth.
             # The -margin/+margin legs of the CLOSED lifecycle cancel to zero,
             # so we don't touch reserved/used here.
-            pnl_rows = self._store.fetch_all(
-                """
-                SELECT pnl_delta, bucket FROM fm_ledger
-                WHERE entry_type = 'RELEASE_USED'
-                  AND ts >= ?
-                  AND pnl_delta != 0
-                ORDER BY ledger_id ASC
-                """,
-                (start_of_today_iso,),
-            )
+            # M-C1: the SINGLE source of the today-RELEASE_USED row-selection,
+            # shared with today_realized_pnl_carryover() (the live-seed Σ). Sharing
+            # one query guarantees the live-seed subtraction and this re-addition
+            # operate on the EXACT same rows + pnl_delta sign → they cancel to
+            # broker.net by construction (no live warm-restart double-count).
+            pnl_rows = self._today_release_used_pnl_rows(start_of_today_iso)
             replayed_pnl_rows = 0
             for row in pnl_rows:
                 pnl = float(row["pnl_delta"])
@@ -1664,6 +1660,55 @@ class FundManager:
             "replayed_pnl_rows": replayed_pnl_rows,
             "anomalies": anomalies,
         }
+
+    def _today_release_used_pnl_rows(self, start_of_today_iso: str) -> list:
+        """The fm_ledger RELEASE_USED rows for today (realized-PnL carryover).
+
+        The SINGLE source of this row-selection, shared by rehydrate Phase 2
+        (which re-applies the PnL per bucket) and today_realized_pnl_carryover()
+        (the live-seed subtraction, M-C1). Sharing one query guarantees the seed
+        subtraction and the Phase-2 re-addition operate on the EXACT same rows +
+        pnl_delta sign, so they cancel to broker.net by construction.
+        """
+        return self._store.fetch_all(
+            """
+            SELECT pnl_delta, bucket FROM fm_ledger
+            WHERE entry_type = 'RELEASE_USED'
+              AND ts >= ?
+              AND pnl_delta != 0
+            ORDER BY ledger_id ASC
+            """,
+            (start_of_today_iso,),
+        )
+
+    def today_realized_pnl_carryover(
+        self, start_of_today_iso: Optional[str] = None
+    ) -> float:
+        """Σ of today's RELEASE_USED pnl_delta — EXACTLY the rows rehydrate
+        Phase 2 re-applies (via the shared _today_release_used_pnl_rows helper).
+
+        M-C1 (2026-07-07): on a LIVE mid-day warm restart the broker's net margin
+        ALREADY reflects today's realized PnL, but rehydrate Phase 2 re-adds that
+        same PnL per bucket → the live capital seed double-counts it. main.py
+        subtracts this carryover from the LIVE seed (seed = broker.net - Sigma) so
+        seed + Phase 2 == broker.net by construction: no double-count, and no
+        phantom -today_pnl drift on the next sync_from_broker.
+
+        SIGNED: a loss day -> Sigma < 0 -> seed = broker.net + |loss|, then Phase 2
+        adds the negative back to the base. Cold boot (no closed trades) ->
+        Sigma = 0 -> seed unchanged. Read-only (no capital state; no initialize
+        required) so it is safe to call BEFORE initialize() at startup. PAPER does
+        NOT call this: its static paper_capital seed already excludes today's PnL,
+        which is why paper was already correct (the parity reference).
+        """
+        if start_of_today_iso is None:
+            start_of_today_iso = now_ist().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).isoformat()
+        return sum(
+            float(row["pnl_delta"])
+            for row in self._today_release_used_pnl_rows(start_of_today_iso)
+        )
 
     def _replay_open_trade(
         self,

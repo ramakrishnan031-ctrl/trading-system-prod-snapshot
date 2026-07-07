@@ -2004,7 +2004,20 @@ def _main_locked(args, config_dir: Path) -> int:
     if args.mode == "paper":
         _startup_capital = selected_account.paper_capital
     else:
-        _startup_capital = broker_adapter.get_margins().net
+        # M-C1 (2026-07-07): the broker's net margin on a mid-day warm restart
+        # ALREADY includes today's realized PnL, but rehydrate Phase 2 re-applies
+        # that same PnL (fm_ledger RELEASE_USED carryover) -> the live seed would
+        # double-count it (inflated reservable capital + a phantom -today_pnl drift
+        # on the next sync_from_broker). Subtract today's realized-PnL carryover
+        # from the seed so seed + Phase 2 == broker.net BY CONSTRUCTION. The Sigma
+        # is over the EXACT same fm_ledger rows Phase 2 walks (shared helper), so
+        # the cancellation is exact incl. sign (loss day -> Sigma<0 -> seed rises).
+        # Cold boot: 0 closed trades -> Sigma=0 -> seed = broker.net (unchanged).
+        # PAPER is UNTOUCHED: its static paper_capital seed correctly excludes PnL.
+        _startup_capital = (
+            broker_adapter.get_margins().net
+            - fund_manager.today_realized_pnl_carryover()
+        )
     fund_manager.initialize(_startup_capital)
 
     # F.1 / EF-7: paper-mode regression guard. Post-E.7, adapter.get_margins()
