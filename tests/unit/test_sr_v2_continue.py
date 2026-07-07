@@ -118,7 +118,9 @@ def _sp(*, throttle_ok=True, mw_allowed=True):
     sp._stats = {"processed": 0, "placed": 0, "rejected": {}, "processed_no_placer": 0,
                  "total_ms": 0.0, "pipeline_total": 0}
     sp._stats_lock = threading.Lock()
-    sp._quote_fn = lambda s: {"last_price": 226.5}
+    # D1 (FIX-067/M-S1): get_quote takes a LIST and returns dict[str, Quote] keyed by
+    # bare symbol (.last_price attr). SimpleNamespace duck-types the Quote the SUT reads.
+    sp._quote_fn = lambda syms: {s: SimpleNamespace(last_price=226.5) for s in syms}
     sp._log = _LOG
     # override bound helpers that need wider state
     sp._derive_target = lambda e, s, st: e + (e - s) * 1.5
@@ -161,7 +163,7 @@ def test_confirm_reserves_and_places_market_with_structure_sl():
 
 def test_short_confirm_reserves_and_places_market_with_structure_sl_above():
     sp = _sp()
-    sp._quote_fn = lambda s: {"last_price": 224.0}            # LTP below the broken support
+    sp._quote_fn = lambda syms: {s: SimpleNamespace(last_price=224.0) for s in syms}  # LTP below the broken support (D1 shape)
     sp._derive_target = lambda e, s, st: e - (s - e) * 1.5    # SHORT R:R (mirror)
     sp.continue_from_retest(_parked_short())
     assert len(sp._fm.reserved) == 1                          # capital reserved HERE
@@ -179,7 +181,7 @@ def test_short_confirm_reserves_and_places_market_with_structure_sl_above():
 
 def test_short_bad_structure_when_entry_above_sl_releases_nothing():
     sp = _sp()
-    sp._quote_fn = lambda s: {"last_price": 227.0}            # LTP ABOVE the structure SL (226.452)
+    sp._quote_fn = lambda syms: {s: SimpleNamespace(last_price=227.0) for s in syms}  # LTP ABOVE the structure SL 226.452 (D1 shape)
     sp.continue_from_retest(_parked_short())
     assert sp._fm.reserved == [] and sp._fm.released == []    # rejected before sizing/reserve
     assert sp._placer.calls == []

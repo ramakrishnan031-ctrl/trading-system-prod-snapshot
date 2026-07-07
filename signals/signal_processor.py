@@ -836,6 +836,51 @@ class SignalProcessor:
                     return  # parked (or dropped as dup); do NOT size/reserve/place
 
             # ----------------------------------------------------------
+            # FIX-067 / M-S1 (Wave-5): momentum fresh-LTP re-anchor.
+            # Momentum strategies (pullback_wait_enabled=false) place immediately;
+            # the webhook trigger_price can be stale by 2+ s of pipeline time. Fetch
+            # the live LTP and RE-ANCHOR the ENTIRE placement basis onto it — entry +
+            # SL here, and (downstream, because they all derive from these) target,
+            # sizing.qty, and reserved capital — so sized risk == actual risk and
+            # reserved capital == order value (audit M-S1: all four were stale-anchored).
+            #   D1 (plumbing): get_quote takes a LIST and returns dict[str, Quote]
+            #   (frozen dataclass, attr .last_price), keyed by bare symbol. The old
+            #   `_quote_fn(symbol)` + `.get("last_price")` was inert (a bare string was
+            #   iterated per-char; Quote has no .get) so the fresh branch silently fell
+            #   back to stale in BOTH modes — mirror the 7 correct get_quote callers.
+            # Placed AFTER the retest diverter (its routing zone-check keeps its
+            # trigger-derived basis — unchanged) and BEFORE sizing/reserve, so the H-7
+            # per-strategy-cap + reserve section inside portfolio_lock stays atomic and
+            # untouched (it is count-based, orthogonal to price). Pullback strategies
+            # skip this (EntryGate already waits for current price). trigger_price is
+            # preserved for FIX-128's slippage guard, which now sizes its tolerance off
+            # the fresh SL. Parity: paper get_quote returns the same dict[str, Quote].
+            if not strategy_obj.pullback_wait_enabled and self._quote_fn is not None:
+                live_ltp = None
+                try:
+                    quotes = self._quote_fn([symbol])
+                    q = quotes.get(symbol) if quotes else None
+                    live_ltp = float(q.last_price) if q is not None else None
+                except Exception as exc:
+                    self._log.warning(
+                        f"FIX-067 momentum fresh quote fetch error for {symbol}: {exc}"
+                    )
+                if live_ltp and live_ltp > 0:
+                    self._log.info(
+                        f"FIX-067 momentum fresh quote: {symbol} stale={trigger_price:.2f} "
+                        f"live={live_ltp:.2f} delta={live_ltp - trigger_price:+.2f} "
+                        f"— re-anchoring entry/SL/TGT/sizing/reservation"
+                    )
+                    entry_price, sl_price = self._derive_prices(
+                        live_ltp, strategy_obj, now_time=now.time()
+                    )
+                else:
+                    self._log.warning(
+                        f"FIX-067 momentum fresh quote unavailable for {symbol} "
+                        f"(ltp={live_ltp}); using stale webhook price"
+                    )
+
+            # ----------------------------------------------------------
             # Step 5: Position sizing
             # ----------------------------------------------------------
             try:
@@ -932,47 +977,17 @@ class SignalProcessor:
                     self._stats["processed_no_placer"] += 1
                 return
 
-            # Derive target price (SPW5, SPW6)
+            # Derive target price (SPW5, SPW6). Uses the (possibly fresh-re-anchored)
+            # entry_price/sl_price from the FIX-067/M-S1 momentum block above, so the
+            # target sits on the same fresh basis as entry/SL/qty/reservation.
             tgt_price = self._derive_target(entry_price, sl_price, strategy_obj)
-
-            # FIX-067: Fresh quote for momentum strategies (pullback_wait_enabled=false)
-            # Momentum signals process immediately; webhook trigger_price may be stale
-            # by the time we reach placement (2+ seconds of pipeline processing).
-            # Fetch live LTP to avoid placing LIMIT at stale price into moved market.
-            # Pullback strategies (pullback_wait_enabled=true) do NOT use this path
-            # (they go through EntryGate which already waits for current price).
-            fresh_entry_price = entry_price  # Default: use derived price
-            if not strategy_obj.pullback_wait_enabled and self._quote_fn is not None:
-                try:
-                    quote = self._quote_fn(symbol)
-                    live_ltp = quote.get("last_price") if quote else None
-                    if live_ltp and live_ltp > 0:
-                        price_delta = live_ltp - trigger_price
-                        self._log.info(
-                            f"FIX-067 momentum fresh quote: {symbol} stale={trigger_price:.2f} "
-                            f"live={live_ltp:.2f} delta={price_delta:+.2f}"
-                        )
-                        # Use live LTP as new anchor for entry price derivation
-                        fresh_entry_price, _ = self._derive_prices(
-                            live_ltp, strategy_obj, now_time=now.time()
-                        )
-                    else:
-                        self._log.warning(
-                            f"FIX-067 momentum fresh quote failed for {symbol}: "
-                            f"invalid LTP ({live_ltp}), using stale webhook price"
-                        )
-                except Exception as exc:
-                    self._log.warning(
-                        f"FIX-067 momentum fresh quote failed for {symbol}: {exc}, "
-                        f"using stale webhook price"
-                    )
 
             # Telegram alert: INTRADAY SIGNAL (fires before order placement)
             self._emit_signal_alert(
                 symbol=symbol,
                 strategy_name=strategy_name,
                 score=screen_result.score,
-                entry_price=fresh_entry_price,
+                entry_price=entry_price,
                 sl_price=sl_price,
                 tgt_price=tgt_price,
                 qty=sizing.qty,
@@ -1022,7 +1037,7 @@ class SignalProcessor:
                     symbol=symbol,
                     side=side,
                     qty=sizing.qty,
-                    entry_price=fresh_entry_price,  # FIX-067: use fresh price
+                    entry_price=entry_price,  # FIX-067/M-S1: fresh-re-anchored (or stale fallback)
                     sl_price=sl_price,
                     intent=strategy_obj.intent,
                     signal_id=signal_id,
@@ -1125,7 +1140,7 @@ class SignalProcessor:
                 symbol=symbol,
                 strategy_name=strategy_name,
                 score=screen_result.score,
-                entry_price=fresh_entry_price,
+                entry_price=entry_price,  # FIX-067/M-S1: the actual placed (fresh-re-anchored) entry
                 sl_price=sl_price,
                 tgt_price=tgt_price,
                 qty=sizing.qty,
@@ -2019,8 +2034,13 @@ class SignalProcessor:
         """Current LTP for MARKET-entry sizing/risk; fall back to the reclaim level."""
         try:
             if self._quote_fn is not None:
-                q = self._quote_fn(symbol)
-                ltp = q.get("last_price") if q else None
+                # D1 (FIX-067/M-S1): get_quote takes a LIST and returns dict[str, Quote]
+                # (frozen dataclass, attr .last_price), keyed by bare symbol. The old
+                # `_quote_fn(symbol)` + `.get("last_price")` was inert (silently fell to
+                # the reclaim-level fallback, never the live LTP). Mirror get_quote callers.
+                quotes = self._quote_fn([symbol])
+                q = quotes.get(symbol) if quotes else None
+                ltp = float(q.last_price) if q is not None else None
                 if ltp and ltp > 0:
                     return float(ltp)
         except Exception as exc:
