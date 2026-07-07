@@ -586,6 +586,43 @@ class SignalProcessor:
     # Core pipeline (SP6, SPW3)
     # ------------------------------------------------------------------
 
+    def _enforce_strategy_position_cap(self, strategy_name: str, strategy_obj) -> None:
+        """H-7 (Wave-5): enforce the per-strategy concurrent-position cap ATOMICALLY.
+
+        MUST be called while holding self._fm.portfolio_lock, immediately before
+        reserve(), so the count reflects every reservation already committed under the
+        lock — closing the TOCTOU where a Chartink burst (one webhook -> N symbols -> up
+        to `worker_count` workers on the SAME strategy) each read the same stale
+        outside-lock count and all passed, blowing a cap of N.
+
+        Authoritative count (mirrors risk_engine's global FIX-185 OPEN_POSITIONS): the
+        strategy's OPEN/PARTIAL trades (DB) + its live fund_manager reservations, floored
+        by the DB active count (incl. PENDING_FILL) so a reservation lost across a restart
+        is still caught; +1 for THIS candidate (it has neither reserved nor inserted a row
+        yet). Reject when that exceeds the cap. De-duplicates the three former
+        outside-lock copies (was H-7).
+        """
+        max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
+        row = self._store.fetch_one(
+            "SELECT "
+            "SUM(CASE WHEN status IN ('OPEN','PARTIAL') THEN 1 ELSE 0 END) AS open_partial, "
+            "SUM(CASE WHEN status IN ('OPEN','PARTIAL','PENDING_FILL') THEN 1 ELSE 0 END) AS active "
+            "FROM trades WHERE strategy = ?",
+            (strategy_name,),
+        )
+        open_partial = int(row["open_partial"]) if row and row["open_partial"] is not None else 0
+        active_incl_pending = int(row["active"]) if row and row["active"] is not None else 0
+        reserved = self._fm.count_live_reservations_for_strategy(strategy_name)
+        # +1 = THIS candidate. max() with the DB floor can only HARDEN, never loosen.
+        effective = max(open_partial + reserved, active_incl_pending) + 1
+        if effective > max_strat_pos:
+            raise _PipelineReject(
+                "STRATEGY_POSITION_LIMIT",
+                f"{strategy_name} at cap: {effective - 1}/{max_strat_pos} open+in-flight "
+                f"(open_partial={open_partial}, reserved={reserved}, "
+                f"active_incl_pending={active_incl_pending})",
+            )
+
     def _process_one(self, signal_tuple) -> None:
         """
         Run the full processing pipeline for one signal (SP6, SPW3).
@@ -839,20 +876,11 @@ class SignalProcessor:
                 in_flight_incremented = True  # FIX-165c
                 processor_in_flight = self._in_flight_count
 
-            # FIX-135 Item 42: per-strategy position cap
-            max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
-            strat_open = self._store.fetch_one(
-                "SELECT COUNT(*) AS n FROM trades WHERE strategy = ? AND status IN ('OPEN', 'PARTIAL')",
-                (strategy_name,),
-            )
-            strat_open_count = int(strat_open["n"]) if strat_open else 0
-            if strat_open_count >= max_strat_pos:
-                raise _PipelineReject(
-                    "STRATEGY_POSITION_LIMIT",
-                    f"{strategy_name} has {strat_open_count}/{max_strat_pos} open positions",
-                )
-
             with self._fm.portfolio_lock:
+                # H-7 (Wave-5): the per-strategy cap is enforced ATOMICALLY inside
+                # portfolio_lock, immediately before reserve(), so a Chartink burst can't
+                # slip past a stale pre-lock count. One deduped check for all 3 paths.
+                self._enforce_strategy_position_cap(strategy_name, strategy_obj)
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -868,7 +896,8 @@ class SignalProcessor:
 
                 try:
                     reservation = self._fm.reserve(
-                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id
+                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id,
+                        strategy=strategy_name,   # H-7 (Wave-5): tag for the per-strategy cap
                     )
                 except BrokerError as be:
                     if self._ks:
@@ -1537,20 +1566,10 @@ class SignalProcessor:
                 processor_in_flight = self._in_flight_count
                 in_flight_incremented = True  # FIX-165c (gate path)
 
-            # FIX-135 Item 42: per-strategy position cap (gate path)
-            max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
-            strat_open = self._store.fetch_one(
-                "SELECT COUNT(*) AS n FROM trades WHERE strategy = ? AND status IN ('OPEN', 'PARTIAL')",
-                (strategy_name,),
-            )
-            strat_open_count = int(strat_open["n"]) if strat_open else 0
-            if strat_open_count >= max_strat_pos:
-                raise _PipelineReject(
-                    "STRATEGY_POSITION_LIMIT",
-                    f"{strategy_name} has {strat_open_count}/{max_strat_pos} open positions",
-                )
-
             with self._fm.portfolio_lock:
+                # H-7 (Wave-5): per-strategy cap enforced atomically inside portfolio_lock
+                # (gate path). One deduped check for all 3 paths.
+                self._enforce_strategy_position_cap(strategy_name, strategy_obj)
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -1566,7 +1585,8 @@ class SignalProcessor:
 
                 try:
                     reservation = self._fm.reserve(
-                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id
+                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id,
+                        strategy=strategy_name,   # H-7 (Wave-5): tag for the per-strategy cap
                     )
                 except BrokerError as be:
                     if self._ks:
@@ -1851,18 +1871,10 @@ class SignalProcessor:
                 processor_in_flight = self._in_flight_count
                 in_flight_incremented = True
 
-            max_strat_pos = getattr(strategy_obj, "max_concurrent_positions", 2)
-            strat_open = self._store.fetch_one(
-                "SELECT COUNT(*) AS n FROM trades WHERE strategy = ? AND status IN ('OPEN', 'PARTIAL')",
-                (strategy_name,),
-            )
-            strat_open_count = int(strat_open["n"]) if strat_open else 0
-            if strat_open_count >= max_strat_pos:
-                raise _PipelineReject(
-                    "STRATEGY_POSITION_LIMIT",
-                    f"{strategy_name} has {strat_open_count}/{max_strat_pos} open positions")
-
             with self._fm.portfolio_lock:
+                # H-7 (Wave-5): per-strategy cap enforced atomically inside portfolio_lock
+                # (retest path). One deduped check for all 3 paths.
+                self._enforce_strategy_position_cap(strategy_name, strategy_obj)
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -1875,7 +1887,8 @@ class SignalProcessor:
                     raise _PipelineReject(approval.failed_check, approval.reason)
                 try:
                     reservation = self._fm.reserve(
-                        symbol, sizing.qty, entry_est, strategy_obj.intent, signal_id)
+                        symbol, sizing.qty, entry_est, strategy_obj.intent, signal_id,
+                        strategy=strategy_name)   # H-7 (Wave-5): tag for the per-strategy cap
                 except BrokerError as be:
                     if self._ks:
                         self._ks.record_api_failure(be)

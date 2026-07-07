@@ -232,6 +232,7 @@ class _Reservation:
     signal_id: Optional[str]
     ts: str
     slm_buffer: float = 0.0  # FIX-090: buffer held for SL-M margin
+    strategy: Optional[str] = None  # H-7 (Wave-5): tag for the per-strategy cap count
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -476,6 +477,7 @@ class FundManager:
         price: float,
         intent: str,
         signal_id: Optional[str] = None,
+        strategy: Optional[str] = None,   # H-7 (Wave-5): tag reservation for the per-strategy cap
     ) -> ReservationResult:
         """
         Atomically compute margin and reserve it from the appropriate bucket (FM5).
@@ -558,6 +560,7 @@ class FundManager:
                 signal_id=signal_id,
                 ts=ts,
                 slm_buffer=slm_buffer,  # FIX-090
+                strategy=strategy,      # H-7 (Wave-5)
             )
 
             # C.1: capture violation, defer hard_kill to after lock release.
@@ -1387,6 +1390,19 @@ class FundManager:
         with self._lock:
             return len(self._reservations)
 
+    def count_live_reservations_for_strategy(self, strategy: str) -> int:
+        """H-7 (Wave-5): live (uncommitted) entry reservations for ONE strategy — the
+        per-strategy analog of count_live_reservations (FIX-185). Every accepted entry
+        holds one reservation from reserve() until it FILLS (commit pops it as the trade
+        flips to OPEN) or fails (release pops it), so OPEN/PARTIAL trades and live
+        reservations partition the strategy's positions with no overlap and no gap. This
+        is the authoritative count of the strategy's reserved-but-not-yet-OPEN positions.
+        Read under self._lock; a caller already holding portfolio_lock (an RLock)
+        re-acquires safely, so the signal_processor per-strategy cap check + reserve() is
+        ONE atomic critical section (the H-7 TOCTOU fix)."""
+        with self._lock:
+            return sum(1 for r in self._reservations.values() if r.strategy == strategy)
+
     def get_snapshot(self) -> CapitalSnapshot:
         """Return a frozen, consistent point-in-time view of capital state (FM8).
 
@@ -1848,6 +1864,7 @@ class FundManager:
         signal_id: Optional[str],
         ts: str,
         slm_buffer: float = 0.0,  # FIX-090
+        strategy: Optional[str] = None,  # H-7 (Wave-5)
     ) -> None:
         """Move margin from avail to reserved; record the reservation.
 
@@ -1869,6 +1886,7 @@ class FundManager:
             signal_id=signal_id,
             ts=ts,
             slm_buffer=slm_buffer,  # FIX-090
+            strategy=strategy,      # H-7 (Wave-5)
         )
 
     def _apply_release(self, reservation_id: str) -> None:

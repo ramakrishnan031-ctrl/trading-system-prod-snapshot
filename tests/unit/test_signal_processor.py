@@ -213,7 +213,7 @@ class _MockFundManager:
     def portfolio_lock(self):
         return self._lock
 
-    def reserve(self, symbol, qty, price, intent, signal_id=None):
+    def reserve(self, symbol, qty, price, intent, signal_id=None, strategy=None):
         if self._raise:
             raise self._raise
         return self._reserve_result
@@ -240,6 +240,10 @@ class _MockFundManager:
 
     def count_live_reservations(self):
         """FIX-185: authoritative in-flight count (no live reservations in mock)."""
+        return 0
+
+    def count_live_reservations_for_strategy(self, strategy):
+        """H-7 (Wave-5): per-strategy in-flight count (no live reservations in mock)."""
         return 0
 
 

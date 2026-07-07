@@ -59,6 +59,9 @@ class _FM:
         self.released.append((rid, reason))
         return True
 
+    def count_live_reservations_for_strategy(self, strategy):
+        return 0
+
 
 class _Placer:
     def __init__(self):
@@ -76,7 +79,9 @@ class _Store:
         self.status.append((sid, status, reason))
 
     def fetch_one(self, sql, params=()):
-        return {"n": 0}     # per-strategy open-position count
+        # H-7: the per-strategy cap query now aliases open_partial/active; return every
+        # key the real StateStore would (no open positions in these retest tests).
+        return {"n": 0, "open_partial": 0, "active": 0}
 
 
 class _MW:
