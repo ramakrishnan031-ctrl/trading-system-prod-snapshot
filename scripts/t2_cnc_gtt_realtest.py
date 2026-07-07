@@ -10,6 +10,17 @@ CNC sell of that share completes with NO manual CDSL TPIN/DDPI prompt.
     during market hours. It is NEVER auto-run, never wired into a cron, never imported.
     It refuses without the explicit confirmation flag, refuses outside market hours.
 
+ISOLATED DURABLE STATE (throwaway DB, 07-Jul): the CNC-GTT lifecycle (SLICE2.5-P2)
+persists to a `gtt_state` table so the P2 pass criterion (a durable ACTIVE row that
+mirrors the broker GTT) is verifiable. This proof MUST NOT touch the live
+`trading_system.db`: it builds a fresh, THROWAWAY StateStore under
+`data_store/t2_proof_<ts>/t2_proof.db` (its own subdir, so the sibling analytics.db is
+isolated too — never the live `data_store/analytics.db`), seeds the FK parents
+(signals -> trades, trade_id='t2') the `gtt_state` FK requires, and wires that store
+into the CncGttPlacer. The prod store cannot be used: `gtt_state.trade_id` FKs to
+`trades(trade_id)` with `PRAGMA foreign_keys=ON`, so a synthetic trade_id would FK-fail
+(and would risk leaving a stale-ACTIVE row that the next real boot would hydrate).
+
 SELF-SAFE ON EVERY EXIT PATH (ensure-flat, 30-Jun): no failure path leaves a naked or
 unprotected CNC position. Specifically —
   • the square SELL is POLLED to COMPLETE *before* the GTT is deleted (the position is
@@ -27,10 +38,13 @@ USAGE (on the VM, market hours):
 
     Modes:
       (default)      single-session: BUY 1 CNC (confirm fill) → place OCO GTT →
-                     get_gtt verify → CNC SELL square (poll COMPLETE = the no-TPIN
-                     proof) → delete the GTT only once flat. ensure-flat on every exit.
-      --dry-run      rehearsal: builds the adapter + reads LTP + prints the plan;
-                     places NO real orders (no confirm flag / market-hours gate needed).
+                     get_gtt verify + durable gtt_state row (throwaway DB) → CNC SELL
+                     square (poll COMPLETE = the no-TPIN proof) → delete the GTT only
+                     once flat. ensure-flat on every exit.
+      --dry-run      rehearsal: builds the PAPER adapter + throwaway store, places a
+                     PAPER OCO GTT through the store-wired placer, verifies a gtt_state
+                     row landed in the THROWAWAY DB, then cleans up. Places NO real
+                     orders, touches NO live DB (no confirm flag / market-hours gate).
       --arm-overnight: BUY 1 CNC → place OCO GTT → verify → STOP (HOLD, do NOT square).
                      The definitive TPIN test: hold overnight, then NEXT DAY run
                      --close-overnight (or let the GTT trigger).
@@ -38,8 +52,9 @@ USAGE (on the VM, market hours):
                      and delete the GTT ONLY if the sell completed (else KEEP the GTT).
 
 PASS CRITERIA: real CNC buy filled · real OCO GTT placed + get_gtt shows product=CNC,
-qty=1, two SELL legs, [SL,TGT] ascending · the CNC sell completed (status COMPLETE)
-with ZERO manual TPIN intervention. Report the result to Rama.
+qty=1, two SELL legs, [SL,TGT] ascending · a durable ACTIVE gtt_state row mirrors it ·
+the CNC sell completed (status COMPLETE) with ZERO manual TPIN intervention. Report the
+result to Rama.
 """
 from __future__ import annotations
 
@@ -47,8 +62,21 @@ import argparse
 import sys
 import time
 from datetime import time as dt_time
+from pathlib import Path
 
 _TERMINAL = {"COMPLETE", "REJECTED", "CANCELLED"}
+
+# Fixed reference price for the PAPER --dry-run GTT so the store-wiring proof is
+# deterministic and needs no live quote. sl/tgt straddle it for the C8 distance gate.
+_PAPER_DRY_RUN_REF_PRICE = 100.0
+
+# Synthetic identity for the isolated proof (seeded into the throwaway DB's FK chain).
+_T2_TRADE_ID = "t2"
+_T2_SIGNAL_ID = "t2_signal"
+
+# The live DBs the proof must NEVER touch (isolation guard).
+_LIVE_MAIN_DB = Path("data_store/trading_system.db")
+_LIVE_ANALYTICS_DB = Path("data_store/analytics.db")
 
 
 def _is_market_hours() -> bool:
@@ -57,18 +85,34 @@ def _is_market_hours() -> bool:
     return dt_time(9, 15) <= now <= dt_time(15, 30)
 
 
+def _paper_quote_provider(symbols):
+    """Synthetic quote_provider for the PAPER adapter — paper get_quote requires one
+    (else NotImplementedError). Returns a fixed reference price per symbol so the paper
+    GTT path (place_for_fill's mandatory LTP + C8 straddle check) works with NO live
+    broker session. Live mode passes quote_provider=None and uses the real kite quote."""
+    from broker.zerodha_adapter import Quote
+    from core.time_authority import now_ist
+    ts = now_ist()
+    return {
+        s: Quote(symbol=s, last_price=_PAPER_DRY_RUN_REF_PRICE,
+                 bid=_PAPER_DRY_RUN_REF_PRICE, ask=_PAPER_DRY_RUN_REF_PRICE,
+                 volume=0, ts=ts)
+        for s in symbols
+    }
+
+
 def _build_live_adapter(account: str, paper: bool = False):
     """A minimal adapter with delivery_enabled=True (this script is the gated
     exception that exercises the real GTT path before the master lock is flipped).
-    paper=True (for --dry-run) simulates fills/GTT and places nothing real."""
+    paper=True (for --dry-run) simulates fills/GTT, places nothing real, and injects a
+    synthetic quote_provider so the paper GTT path has its mandatory LTP."""
     import json, os
-    from pathlib import Path
     from kiteconnect import KiteConnect
     from broker.zerodha_adapter import ZerodhaAdapter
     from broker.product_resolver import ProductResolver
     from broker.cost_calculator import CostCalculator
     from broker.rate_limiter import RateLimiter
-    from core.order_state_machine import OrderStateMachine
+    from broker.order_state_machine import OrderStateMachine   # drift #1: broker.*, not core.*
     from core.config_loader import load_all
     from core.logger import get_logger
 
@@ -80,15 +124,85 @@ def _build_live_adapter(account: str, paper: bool = False):
 
     adapter = ZerodhaAdapter(
         kite_client=kite,
-        rate_limiter=RateLimiter(cfg.broker_limits.rate_limits),
+        # drift #2: RateLimiter takes the whole BrokerLimitsConfig (mirrors main.py:1640);
+        # BrokerLimitsConfig has no `.rate_limits` attribute.
+        rate_limiter=RateLimiter(cfg.broker_limits),
         product_resolver=ProductResolver(cfg.system.product_map),
         cost_calculator=CostCalculator(cfg.broker_costs),
         state_machine=OrderStateMachine(),
         logger=get_logger("t2_cnc_gtt"),
         paper_mode=paper,
         delivery_enabled=True,   # the gated exception — see module docstring
+        quote_provider=_paper_quote_provider if paper else None,
     )
     return adapter, kite, cfg
+
+
+# ── throwaway (ISOLATED) durable store for the gtt_state proof ────────────────────
+def _throwaway_store_path() -> Path:
+    """A fresh, per-run throwaway main-DB path in its OWN subdir. The subdir matters:
+    StateStore ATTACHes an analytics.db that sits BESIDE the main DB
+    (core.db_connect.analytics_path_for = parent/analytics.db), so a bare
+    data_store/t2_proof_<ts>.db would ATTACH the LIVE data_store/analytics.db. The
+    subdir isolates the analytics sibling too."""
+    from core.time_authority import now_ist
+    stamp = now_ist().strftime("%Y%m%d_%H%M%S")
+    return Path("data_store") / f"t2_proof_{stamp}" / "t2_proof.db"
+
+
+def _assert_isolated(db_path: Path) -> None:
+    """Refuse to run if the store path (or its analytics sibling) could be a LIVE DB.
+    The T2 proof MUST touch only a throwaway DB."""
+    from core.db_connect import analytics_path_for
+    resolved = db_path.resolve()
+    resolved_analytics = analytics_path_for(db_path).resolve()
+    if db_path.name == _LIVE_MAIN_DB.name or resolved == _LIVE_MAIN_DB.resolve():
+        raise SystemExit(f"T2 isolation guard: refusing the live main DB ({resolved})")
+    if resolved_analytics == _LIVE_ANALYTICS_DB.resolve():
+        raise SystemExit(
+            f"T2 isolation guard: the analytics sibling would be the LIVE analytics.db "
+            f"({resolved_analytics}) — use a dedicated subdir")
+
+
+def _open_throwaway_store(log):
+    """Build a fresh, ISOLATED StateStore for the T2 proof (never the live DB) and seed
+    the FK parents `gtt_state.trade_id` requires. Returns (store, db_path).
+
+    FK chain (verified vs schema.sql, PRAGMA foreign_keys=ON):
+      gtt_state.trade_id -> trades(trade_id) -> signals(signal_id).
+    The 03-Jul spec said "seed one trades row"; the trades.signal_id NOT-NULL FK to
+    signals means a signals PARENT row is required first, else the trades INSERT itself
+    FK-fails. So we seed signals (trade_id=NULL) THEN trades (trade_id='t2')."""
+    from core.state_store import StateStore
+    from core.time_authority import now_ist
+
+    db_path = _throwaway_store_path()
+    _assert_isolated(db_path)
+    store = StateStore(db_path)          # a fresh file self-migrates the full schema (v41)
+
+    now = now_ist().isoformat()
+    ref = _PAPER_DRY_RUN_REF_PRICE
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT INTO signals "
+            "(signal_id, symbol, scanner, strategy, triggered_at, received_at, "
+            " expires_at, status, fingerprint, fingerprint_date) "
+            "VALUES (?, 'IDEA', 't2_proof', 't2_proof', ?, ?, ?, 'PROCESSED', ?, ?)",
+            (_T2_SIGNAL_ID, now, now, now, f"t2fp_{_T2_SIGNAL_ID}", now[:10]),
+        )
+        cur.execute(
+            "INSERT INTO trades "
+            "(trade_id, signal_id, symbol, direction, strategy, qty_planned, "
+            " entry_target_price, sl_initial, tgt_initial, margin_reserved, "
+            " risk_amount, created_at, status, order_protocol, updated_at) "
+            "VALUES (?, ?, 'IDEA', 'LONG', 't2_proof', 1, ?, ?, ?, 0, 0, ?, 'OPEN', "
+            " 'LIMIT_TRIPLE', ?)",
+            (_T2_TRADE_ID, _T2_SIGNAL_ID, ref, round(ref * 0.97, 1),
+             round(ref * 1.05, 1), now, now),
+        )
+    log.info("t2: throwaway store ready at %s (seeded signals+trades trade_id=%s)",
+             db_path, _T2_TRADE_ID)
+    return store, db_path
 
 
 def _ltp(kite, symbol: str) -> float:
@@ -154,10 +268,20 @@ def _delete_gtt(kite, gtt_id, log) -> None:
         log.error("cleanup: delete_gtt note: %s", exc)
 
 
-def run_single_session(adapter, kite, gtt_placer, symbol: str, qty: int, log,
+def _cancel_gtt_state(store, gtt_id, log) -> None:
+    """Best-effort: mark the durable gtt_state row CANCELLED on cleanup so the throwaway
+    store carries no stale-ACTIVE row (parity with prod SmartTgt/monitor lifecycle)."""
+    try:
+        from core.time_authority import now_ist
+        store.set_gtt_state_status(int(gtt_id), "CANCELLED", now_ist().isoformat())
+    except Exception as exc:  # noqa: BLE001
+        log.error("cleanup: gtt_state CANCELLED note: %s", exc)
+
+
+def run_single_session(adapter, kite, gtt_placer, store, symbol: str, qty: int, log,
                        *, arm_overnight: bool = False) -> int:
-    """BUY → GTT → verify → (square|hold). Self-safe: GTT deleted ONLY when flat;
-    held position squared on every exit. Returns 0 on PASS, non-zero otherwise."""
+    """BUY → GTT → verify (broker + durable gtt_state) → (square|hold). Self-safe: GTT
+    deleted ONLY when flat; held position squared on every exit. Returns 0 on PASS."""
     flat = True               # no position yet
     intentional_hold = False  # arm-overnight holds on purpose
     gtt_id = None
@@ -179,22 +303,28 @@ def run_single_session(adapter, kite, gtt_placer, symbol: str, qty: int, log,
         sl_price = round(ltp * 0.97, 1)      # ~3% below for the test
         tgt_price = round(ltp * 1.05, 1)     # ~5% above for the test
         res = gtt_placer.place_for_fill(symbol=symbol, exit_side="SELL", qty=qty,
-                                        sl_price=sl_price, tgt_price=tgt_price, trade_id="t2")
+                                        sl_price=sl_price, tgt_price=tgt_price,
+                                        trade_id=_T2_TRADE_ID)
         gtt_id = res.gtt_id
         log.info("2) OCO GTT placed: gtt_id=%s sl_trigger=%s tgt_trigger=%s sl_limit=%s tgt_limit=%s",
                  gtt_id, res.sl_trigger, res.tgt_trigger, res.sl_limit, res.tgt_limit)
 
-        # 3) verify via get_gtt ──────────────────────────────────────────────────────
+        # 3) verify via get_gtt (broker) AND the durable gtt_state row (P2 criterion) ─
         g = kite.get_gtt(int(gtt_id))
         cond, orders = g.get("condition", {}), g.get("orders", [])
         log.info("3) get_gtt: type=%s triggers=%s legs=%s", g.get("type"),
                  cond.get("trigger_values"),
                  [(o.get("transaction_type"), o.get("product"), o.get("quantity")) for o in orders])
-        ok = (str(g.get("type")).lower() in ("two-leg", "oco")
-              and all(o.get("product") == "CNC" and o.get("transaction_type") == "SELL"
-                      and o.get("quantity") == qty for o in orders)
-              and len(orders) == 2)
-        log.info("   GTT verified: %s", ok)
+        broker_ok = (str(g.get("type")).lower() in ("two-leg", "oco")
+                     and all(o.get("product") == "CNC" and o.get("transaction_type") == "SELL"
+                             and o.get("quantity") == qty for o in orders)
+                     and len(orders) == 2)
+        active_row = store.get_active_gtt_for_trade(_T2_TRADE_ID)
+        store_ok = (active_row is not None and str(active_row["gtt_id"]) == str(gtt_id)
+                    and active_row["status"] == "ACTIVE" and int(active_row["qty"]) == qty)
+        log.info("   verified: broker=%s durable_gtt_state(P2)=%s (row present=%s)",
+                 broker_ok, store_ok, active_row is not None)
+        ok = broker_ok and store_ok
 
         if arm_overnight:
             intentional_hold = True  # keep position + GTT for the overnight TPIN test
@@ -227,6 +357,7 @@ def run_single_session(adapter, kite, gtt_placer, symbol: str, qty: int, log,
         if gtt_id and not intentional_hold:
             if flat:
                 _delete_gtt(kite, gtt_id, log)
+                _cancel_gtt_state(store, gtt_id, log)  # keep the durable mirror consistent
             else:
                 log.critical("cleanup: position NOT confirmed flat — GTT %s KEPT for protection; "
                              "MANUAL square required.", gtt_id)
@@ -255,22 +386,76 @@ def run_close_overnight(adapter, kite, symbol: str, qty: int, gtt_id_str: str, l
     return 1
 
 
-def run_dry_run(kite, symbol: str, qty: int, sl_off: float, tgt_small: float, log) -> int:
-    """Rehearsal: read LTP + print the plan. Places NO real orders."""
-    log.info("DRY-RUN: no real orders will be placed.")
+def run_dry_run(adapter, kite, gtt_placer, store, store_path, symbol: str, qty: int, log) -> int:
+    """Rehearsal — places NO real orders, touches NO live DB. Proves drift #3 + the
+    throwaway-DB store wiring END-TO-END: the store-wired PAPER placer places a paper
+    OCO GTT and a durable gtt_state row lands in the THROWAWAY DB; then verify + clean
+    up. Returns 0 iff the store row + paper GTT + isolation all check out."""
+    log.info("DRY-RUN: no real orders; PAPER adapter + THROWAWAY store only.")
+    if not getattr(adapter, "_paper", False):
+        log.critical("DRY-RUN abort: adapter is NOT in paper mode (would risk a real call).")
+        return 1
+
+    # (informational) best-effort real LTP for context — NEVER used for the proof.
     try:
-        ltp = _ltp(kite, symbol)
+        real_ltp = _ltp(kite, symbol)
+        log.info("DRY-RUN: real LTP for %s = %s (context only).", symbol, real_ltp)
     except Exception as exc:  # noqa: BLE001
-        ltp = 0.0
-        log.warning("DRY-RUN: LTP fetch failed (%s); using 0.0 for the plan.", exc)
-    sl_price = round(ltp * 0.97, 1)
-    tgt_price = round(ltp * 1.05, 1)
-    log.info("DRY-RUN PLAN (LTP=%s): BUY %d %s CNC MARKET (confirm fill) -> place OCO GTT "
-             "(SL~%s / TGT~%s) -> get_gtt verify -> CNC SELL %d square (poll COMPLETE = no-TPIN "
-             "proof) -> delete GTT only once flat.", ltp, qty, symbol, sl_price, tgt_price, qty)
-    log.info("DRY-RUN: on the real run, ensure-flat squares any held position on every exit and "
-             "the GTT is NEVER deleted on a failed square.")
-    return 0
+        log.info("DRY-RUN: real LTP fetch skipped (%s); proof uses synthetic %.2f.",
+                 exc, _PAPER_DRY_RUN_REF_PRICE)
+
+    ref = _PAPER_DRY_RUN_REF_PRICE
+    sl_price, tgt_price = round(ref * 0.97, 1), round(ref * 1.05, 1)
+    log.info("DRY-RUN PLAN: BUY %d %s CNC -> OCO GTT (SL~%s/TGT~%s straddling %.2f) -> "
+             "verify durable gtt_state row in the throwaway DB -> square -> delete GTT "
+             "once flat. ensure-flat squares any held position on every exit.",
+             qty, symbol, sl_price, tgt_price, ref)
+
+    # 1) exercise the STORE-WIRED placer (paper) -> writes the durable gtt_state row.
+    res = gtt_placer.place_for_fill(symbol=symbol, exit_side="SELL", qty=qty,
+                                    sl_price=sl_price, tgt_price=tgt_price,
+                                    trade_id=_T2_TRADE_ID, tag="t2_dryrun")
+    log.info("DRY-RUN: paper GTT placed gtt_id=%s (sl_trigger=%s tgt_trigger=%s)",
+             res.gtt_id, res.sl_trigger, res.tgt_trigger)
+
+    # 2) VERIFY the durable gtt_state row landed in the THROWAWAY DB (drift #3 proof).
+    row = store.get_active_gtt_for_trade(_T2_TRADE_ID)
+    active = store.get_active_gtt_states()
+    store_ok = (row is not None and str(row["gtt_id"]) == str(res.gtt_id)
+                and row["status"] == "ACTIVE" and int(row["qty"]) == qty
+                and row["trade_id"] == _T2_TRADE_ID)
+    log.info("DRY-RUN: gtt_state ACTIVE rows=%d; row-for-%s present=%s match=%s",
+             len(active), _T2_TRADE_ID, row is not None, store_ok)
+
+    # 3) VERIFY the paper broker GTT mirrors it (product=CNC, two SELL legs).
+    g = adapter.get_gtt(int(res.gtt_id)) or {}
+    orders = g.get("orders", [])
+    gtt_ok = (len(orders) == 2 and all(o.get("product") == "CNC"
+              and o.get("transaction_type") == "SELL" for o in orders))
+    log.info("DRY-RUN: paper get_gtt legs=%s gtt_ok=%s",
+             [(o.get("transaction_type"), o.get("product"), o.get("quantity")) for o in orders],
+             gtt_ok)
+
+    # 4) CLEANUP — mark the gtt_state row CANCELLED + drop the paper GTT (no stale ACTIVE).
+    _cancel_gtt_state(store, res.gtt_id, log)
+    try:
+        adapter.delete_gtt(int(res.gtt_id))
+    except Exception as exc:  # noqa: BLE001
+        log.error("DRY-RUN: paper delete_gtt note: %s", exc)
+    remaining = len(store.get_active_gtt_states())
+    log.info("DRY-RUN: cleanup done; ACTIVE gtt_state rows now=%d", remaining)
+
+    # 5) ISOLATION confirmations.
+    resolved = store_path.resolve()
+    isolated = (store_path.name != _LIVE_MAIN_DB.name
+                and resolved != _LIVE_MAIN_DB.resolve())
+    log.info("DRY-RUN ISOLATION: durable store db=%s (throwaway=%s); the live "
+             "trading_system.db is NOT opened by this run.", resolved, isolated)
+
+    ok = store_ok and gtt_ok and isolated and remaining == 0
+    log.info("DRY-RUN RESULT: %s (store_ok=%s gtt_ok=%s isolated=%s clean=%s)",
+             "PASS" if ok else "FAIL", store_ok, gtt_ok, isolated, remaining == 0)
+    return 0 if ok else 1
 
 
 def main(argv=None) -> int:
@@ -282,7 +467,8 @@ def main(argv=None) -> int:
     p.add_argument("--account", default="LFL836")
     p.add_argument("--qty", type=int, default=1)
     p.add_argument("--dry-run", action="store_true", dest="dry_run",
-                   help="rehearsal: build adapter + read LTP + print plan; place NOTHING")
+                   help="rehearsal: paper adapter + throwaway store, prove the gtt_state "
+                        "wiring; place NOTHING, touch NO live DB")
     p.add_argument("--arm-overnight", action="store_true",
                    help="buy + place GTT + verify, then STOP (no square) for the TPIN test")
     p.add_argument("--close-overnight", metavar="GTT_ID", default=None,
@@ -309,19 +495,34 @@ def main(argv=None) -> int:
     print(f"=== T2 real-API proof: {sym} x{qty} (account {args.account})"
           f"{' [DRY-RUN]' if args.dry_run else ''} ===")
 
-    if args.dry_run:
-        return run_dry_run(kite, sym, qty, sl_off, tgt_small, log)
-
+    # close-overnight sells + deletes a GTT by id; it needs no placer/durable store.
     if args.close_overnight:
         return run_close_overnight(adapter, kite, sym, qty, args.close_overnight, log)
 
+    # Build the THROWAWAY (isolated) durable store + seed its FK chain + the STORE-WIRED
+    # placer (drift #3: store= was omitted -> None -> no gtt_state row). Used by BOTH
+    # the dry-run proof and the live single-session proof so the P2 lifecycle is
+    # verifiable without ever touching the live trading_system.db.
     from orders.cnc_gtt import CncGttPlacer
-    gtt_placer = CncGttPlacer(
-        adapter, gtt_sl_limit_offset_pct=sl_off, gtt_tgt_limit_offset_pct=tgt_small,
-        delivery_enabled=True, logger=log,
-        quote_fn=adapter.get_quote, tick_fn=adapter._resolve_tick)
-    return run_single_session(adapter, kite, gtt_placer, sym, qty, log,
-                              arm_overnight=args.arm_overnight)
+    store, store_path = _open_throwaway_store(log)
+    try:
+        gtt_placer = CncGttPlacer(
+            adapter, gtt_sl_limit_offset_pct=sl_off, gtt_tgt_limit_offset_pct=tgt_small,
+            delivery_enabled=True, logger=log,
+            quote_fn=adapter.get_quote, tick_fn=adapter._resolve_tick,
+            store=store,   # SLICE2.5-P2 durable gtt_state persistence (drift #3 fix)
+        )
+        gtt_placer.hydrate_from_store()   # mirrors main.py; 0 on a fresh throwaway store
+
+        if args.dry_run:
+            return run_dry_run(adapter, kite, gtt_placer, store, store_path, sym, qty, log)
+        return run_single_session(adapter, kite, gtt_placer, store, sym, qty, log,
+                                  arm_overnight=args.arm_overnight)
+    finally:
+        try:
+            store.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 if __name__ == "__main__":
