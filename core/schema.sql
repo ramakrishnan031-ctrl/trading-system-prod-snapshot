@@ -1471,7 +1471,42 @@ CREATE INDEX IF NOT EXISTS idx_config_snapshots_date
 
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '41');  -- W0: +config_snapshots (report-redesign foundation). Pure addition — no rebuild.
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 47: eod_broker_reconciliation   (P1 — broker-authoritative EOD verdict, v42)
+-- One row per date: the broker-authoritative EOD reconcile verdict that REPLACES
+-- eod_verify's local-only false-VERIFY. Written by scripts/eod_broker_reconcile.py
+-- @15:58 (standalone, own creds → runs even if the trading process was DOWN at EOD).
+-- Per-dimension statuses + an overall verdict VERIFIED | ISSUES | UNVERIFIED. The
+-- REQUIRED dims (positions, orders, broker day-realized P&L) unavailable ⇒ overall
+-- UNVERIFIED (never a false VERIFIED). MARGIN is SUPPLEMENTAL, reliability-gated →
+-- NOT_CHECKED post-15:45 (never blocks VERIFIED). LEDGER = the fm_ledger 3-balance
+-- invariant (local, always available). Paper = SELF_CONSISTENCY (labeled), never
+-- broker-authoritative. Shadow columns record the same-day eod_verify verdict +
+-- mismatch for cutover readiness. PURE ADDITION (no rebuild). Trailing INSERT → v42.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS eod_broker_reconciliation (
+    date               TEXT NOT NULL PRIMARY KEY,   -- YYYY-MM-DD IST
+    mode               TEXT NOT NULL,               -- LIVE | PAPER
+    self_consistency   INTEGER NOT NULL DEFAULT 0,  -- 1 in paper (no independent broker)
+    authoritative      INTEGER NOT NULL DEFAULT 0,  -- 0=shadow, 1=authoritative
+    broker_reachable   INTEGER NOT NULL DEFAULT 0,
+    positions_status   TEXT,   -- VERIFIED | ISSUES | UNVERIFIED   (REQUIRED)
+    orders_status      TEXT,   -- VERIFIED | ISSUES | UNVERIFIED   (REQUIRED)
+    pnl_status         TEXT,   -- VERIFIED | ISSUES | UNVERIFIED   (REQUIRED; broker day-realized vs local)
+    ledger_status      TEXT,   -- VERIFIED | ISSUES               (local invariant)
+    margin_status      TEXT,   -- VERIFIED | ISSUES | NOT_CHECKED (SUPPLEMENTAL, reliability-gated)
+    overall_status     TEXT NOT NULL,   -- VERIFIED | ISSUES | UNVERIFIED
+    eod_verify_status  TEXT,   -- same-day eod_verify verdict (shadow comparison)
+    mismatch           INTEGER,-- 1 if P1 disagrees with eod_verify (shadow readiness)
+    detail             TEXT,   -- human-readable per-dimension notes (NEVER a secret)
+    verified_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_eod_broker_reconciliation_date
+    ON eod_broker_reconciliation(date);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '42');  -- P1: +eod_broker_reconciliation (broker-authoritative EOD verdict). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

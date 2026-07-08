@@ -1201,6 +1201,18 @@ class TgtRetryConfig(BaseModel):
         return v
 
 
+class EodReconcileConfig(BaseModel):
+    """P1 (02-Jul): broker-authoritative EOD reconcile (scripts/eod_broker_reconcile.py).
+    authoritative=false = SHADOW (P1 runs alongside eod_verify, writes its verdict + the
+    shadow comparison, alerts at INFO, gates nothing). true = P1 is THE authoritative EOD
+    verdict (ISSUES/UNVERIFIED at CRITICAL). Default false → ships dark; flip after shadow
+    observation, then retire eod_verify. pnl_tolerance = ₹ band on broker-day-realized vs
+    local realized before the P&L dimension is ISSUES."""
+    model_config = ConfigDict(extra="forbid")
+    authoritative: bool = False
+    pnl_tolerance: float = 100.0
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     broker: BrokerConfig = BrokerConfig()  # FIX-133 Item 28
@@ -1222,6 +1234,7 @@ class SystemConfig(BaseModel):
     alerts: AlertsConfig                      # TG12/AW11: alert subsystem config
     logging: LoggingConfig                    # FIX-099: logging subsystem config
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
+    eod_reconcile: EodReconcileConfig = Field(default_factory=EodReconcileConfig)  # P1: broker-authoritative EOD reconcile (shadow default)
     tgt_retry: TgtRetryConfig = Field(default_factory=TgtRetryConfig)  # Task: standalone TGT retry
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     sr_detector: SRDetectorConfig = Field(default_factory=SRDetectorConfig)  # SNR-DETECTOR-V1: shadow S&R detector (default-off)
