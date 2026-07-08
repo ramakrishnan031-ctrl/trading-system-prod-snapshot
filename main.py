@@ -1753,7 +1753,12 @@ def _main_locked(args, config_dir: Path) -> int:
         instrument_cache=instrument_cache,  # BL-20
         db_path=str(Path("data_store/trading_system.db")),  # FIX-169 F34
         log_dir=Path("logs"),  # FIX-169 F34
-        min_free_disk_gb=getattr(app_config.system, "min_free_disk_gb", 1.0),
+        # F-1 (audit 02-Jul): the field lives on the nested logging config, not on
+        # SystemConfig (which is extra="forbid" and has no such attribute) — the old
+        # getattr(app_config.system, "min_free_disk_gb", 1.0) therefore ALWAYS fell
+        # back to 1.0, silently ignoring the operator-configured 2 GB floor. Read the
+        # real path so the configured startup disk floor is applied.
+        min_free_disk_gb=app_config.system.logging.min_free_disk_gb,
     )
 
     if args.dry_run:
@@ -2863,6 +2868,23 @@ def _main_locked(args, config_dir: Path) -> int:
         _log.critical("Webhook endpoint not reachable at %s", webhook_url)
         _shutdown_event.set()
 
+    # E-4 (audit 02-Jul): expose the core daemon poll threads' liveness on /health.
+    # order_monitor / order_reconciler / eod_scheduler gate health (a dead poll
+    # thread is unambiguously bad); live_feed connection is reported but non-gating
+    # (a feed disconnect auto-heals via reconnect and must not false-alarm monitors).
+    def _daemon_liveness() -> dict:
+        def _alive(fn) -> bool:
+            try:
+                return bool(fn())
+            except Exception:
+                return False
+        return {
+            "order_monitor": {"ok": _alive(order_monitor.is_alive)},
+            "order_reconciler": {"ok": _alive(order_reconciler.is_alive)},
+            "eod_scheduler": {"ok": _alive(eod.is_alive)},
+            "live_feed": {"ok": True, "connected": _alive(live_feed.is_connected)},
+        }
+
     # FIX-132 Item 15: external health monitor on port 8080
     start_healthcheck_server(
         state_store=store, logger=get_logger("healthcheck"), port=8080,
@@ -2871,6 +2893,7 @@ def _main_locked(args, config_dir: Path) -> int:
         # /health (→ pre-flight Phase B) so a dead/crash-looping worker can't sit
         # unnoticed for days again.
         tgt_retry_provider=tgt_retry_manager.health_snapshot,
+        daemon_liveness_provider=_daemon_liveness,  # E-4
     )
 
     # Pre-flight on-demand: if this restart landed after the 08:30/09:14 cron slot

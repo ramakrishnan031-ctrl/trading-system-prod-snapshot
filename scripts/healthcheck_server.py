@@ -28,7 +28,11 @@ _start_time = time.monotonic()
 
 
 def _check_token() -> dict:
-    """FIX-188: token validity (reuses scripts.zerodha_login.is_token_valid)."""
+    """FIX-188: token validity (reuses scripts.zerodha_login.is_token_valid).
+
+    C-3 (audit 02-Jul): do NOT expose account_id or raw exception strings in the
+    payload — report a presence boolean + the (non-secret) expiry only.
+    """
     try:
         from pathlib import Path
         from scripts.zerodha_login import is_token_valid, load_token
@@ -37,13 +41,16 @@ def _check_token() -> dict:
         tok = load_token(token_path) or {}
         account_id = tok.get("account_id", "")
         ok = bool(account_id) and is_token_valid(account_id, token_path)
-        return {"ok": bool(ok), "account_id": account_id or None, "expires_at": tok.get("expires_at")}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": bool(ok), "account_present": bool(account_id), "expires_at": tok.get("expires_at")}
+    except Exception:
+        return {"ok": False, "error": "token_check_failed"}
 
 
 def _check_kill_switch(state_store: Any, logger: Any) -> dict:
-    """FIX-188: kill switch state from system_state (ok iff INACTIVE)."""
+    """FIX-188: kill switch state from system_state (ok iff INACTIVE).
+
+    C-3: genericise the raw exception string in the payload.
+    """
     try:
         row = state_store.fetch_one(
             "SELECT state, reason FROM kill_switch_state WHERE id = 1", ()
@@ -51,12 +58,12 @@ def _check_kill_switch(state_store: Any, logger: Any) -> dict:
         state = row["state"] if (row and row["state"]) else "INACTIVE"
         reason = (row["reason"] or "") if row else ""
         return {"ok": state == "INACTIVE", "state": state, "reason": reason}
-    except Exception as exc:
-        return {"ok": False, "error": str(exc)}
+    except Exception:
+        return {"ok": False, "error": "kill_switch_check_failed"}
 
 
 def _create_app(state_store: Any, logger: Any, metrics_provider=None,
-                tgt_retry_provider=None) -> Flask:
+                tgt_retry_provider=None, daemon_liveness_provider=None) -> Flask:
     app = Flask("healthcheck")
 
     @app.route("/health", methods=["GET"])
@@ -76,7 +83,8 @@ def _create_app(state_store: Any, logger: Any, metrics_provider=None,
             )
             trades_today = int(row["cnt"] or 0) if row else 0
         except Exception as exc:
-            db_check = {"ok": False, "error": str(exc)}
+            # C-3: keep the real error in the server log, not the (unauth) payload.
+            db_check = {"ok": False, "error": "db_check_failed"}
             logger.error("healthcheck.trades_query_failed", extra={"error": str(exc)})
 
         # FIX-188: broaden /health beyond the DB — token validity + kill switch.
@@ -92,8 +100,23 @@ def _create_app(state_store: Any, logger: Any, metrics_provider=None,
             try:
                 snap = tgt_retry_provider()
                 checks["tgt_retry"] = snap if isinstance(snap, dict) else {"ok": False}
-            except Exception as exc:
-                checks["tgt_retry"] = {"ok": False, "error": str(exc)}
+            except Exception:
+                checks["tgt_retry"] = {"ok": False, "error": "tgt_retry_provider_failed"}
+        # E-4 (audit 02-Jul): surface the core daemon poll threads' liveness so a
+        # silently-dead order_monitor / order_reconciler / eod_scheduler turns
+        # /health 503 (and a pre-flight Phase-B failure) instead of ceasing
+        # crash-recovery-SL / CHECK9 / orphan cleanup / capital-drift unnoticed.
+        # The provider returns {name: {ok, ...}} — merged so each gates overall_ok.
+        # live_feed connection is reported but non-gating (a feed disconnect
+        # auto-heals via reconnect and must not false-alarm uptime monitors).
+        if daemon_liveness_provider is not None:
+            try:
+                dsnap = daemon_liveness_provider()
+                if isinstance(dsnap, dict):
+                    for name, sub in dsnap.items():
+                        checks[name] = sub if isinstance(sub, dict) else {"ok": bool(sub)}
+            except Exception:
+                checks["daemons"] = {"ok": False, "error": "daemon_liveness_provider_failed"}
         overall_ok = all(c.get("ok", False) for c in checks.values())
 
         body = json.dumps({
@@ -241,9 +264,10 @@ def start_healthcheck_server(
     state_store: Any,
     logger: Any,
     port: int = 8080,
-    host: str = "0.0.0.0",
+    host: str = "127.0.0.1",  # C-3: loopback-only — /health + /metrics expose P&L / capital / kill-switch posture. Was 0.0.0.0.
     metrics_provider=None,
     tgt_retry_provider=None,
+    daemon_liveness_provider=None,
 ) -> Optional[threading.Thread]:
     """Start the healthcheck HTTP server in a daemon thread (HC2, HC3).
 
@@ -251,7 +275,8 @@ def start_healthcheck_server(
     counters merged into /metrics (signal processor's get_runtime_metrics).
     Post-mortem 24-Jun: tgt_retry_provider() optionally supplies the TGT-retry
     daemon's liveness snapshot, added to the /health checks."""
-    app = _create_app(state_store, logger, metrics_provider, tgt_retry_provider)
+    app = _create_app(state_store, logger, metrics_provider, tgt_retry_provider,
+                      daemon_liveness_provider)
 
     from waitress import serve as _waitress_serve
 

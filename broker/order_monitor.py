@@ -516,6 +516,13 @@ class OrderMonitor:
             self._thread.join(timeout=5.0)
         self._log.info("order_monitor.stop")
 
+    def is_alive(self) -> bool:
+        """E-4 (audit 02-Jul): read-only liveness for /health. True iff the poll
+        thread is running. order_monitor deliberately stops itself after 3
+        consecutive auth failures — surfacing that here makes the stoppage visible
+        to external uptime monitors instead of only indirectly via the kill switch."""
+        return self._thread is not None and self._thread.is_alive()
+
     def cancel_all_entry_orders(self) -> int:
         """
         FIX-129 (Item 45): Cancel all tracked ENTRY-leg orders at graceful shutdown.

@@ -394,6 +394,13 @@ class OrderReconciler:
             self._thread = None
         self._log.info("order_reconciler stopped")
 
+    def is_alive(self) -> bool:
+        """E-4 (audit 02-Jul): read-only liveness for /health. True iff the poll
+        thread is running. If the reconciler stops, crash-recovery-SL / CHECK9 /
+        orphan cleanup / capital-drift all silently cease — so its death must be
+        externally visible."""
+        return self._thread is not None and self._thread.is_alive()
+
     def sweep_stale_orders(self) -> int:
         """
         FIX-186 (FIX 2): defense-in-depth sweep. Mark any non-terminal local

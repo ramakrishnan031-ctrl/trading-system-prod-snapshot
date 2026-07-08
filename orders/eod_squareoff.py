@@ -277,6 +277,16 @@ class EodSquareoff:
         t.start()
         self._log.info("EOD squareoff polling thread started (interval=%ds)", poll_interval_sec)
 
+    def is_alive(self) -> bool:
+        """E-4 (audit 02-Jul): read-only liveness for /health. True iff the EOD
+        polling thread (started via start_polling) is running — so a dead EOD
+        scheduler, which would leave positions un-squared at 15:15, is visible to
+        external uptime monitors. Returns False if start_polling was never used
+        (external-scheduler mode)."""
+        with self._lock:
+            t = getattr(self, "_polling_thread", None)
+        return t is not None and t.is_alive()
+
     # ── internal implementation ───────────────────────────────────────────────
 
     def _fire(self, now: datetime, *, recovery_fire: bool) -> EodFireResult:

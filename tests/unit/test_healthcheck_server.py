@@ -46,7 +46,8 @@ class TestCheckToken:
                    return_value={"account_id": "LFL836", "expires_at": "2026-06-19T05:00:00+05:30"}), \
              patch("scripts.zerodha_login.is_token_valid", return_value=True):
             r = _check_token()
-        assert r["ok"] is True and r["account_id"] == "LFL836"
+        # C-3: account_id is NOT exposed; only a presence boolean.
+        assert r["ok"] is True and r["account_present"] is True and "account_id" not in r
 
     def test_missing_token(self):
         with patch("scripts.zerodha_login.load_token", return_value=None):
@@ -146,3 +147,109 @@ class TestHealthTgtRetry:
             resp = self._client(_boom).get("/health")
         assert resp.status_code == 503
         assert json.loads(resp.data)["checks"]["tgt_retry"]["ok"] is False
+
+
+# ── C-3: bind + payload scrub (audit 02-Jul) ─────────────────────────────────
+
+
+class TestC3BindAndScrub:
+    def test_default_bind_is_loopback(self):
+        """C-3: the server must default to 127.0.0.1, not 0.0.0.0 — /metrics + /health
+        expose P&L / capital / kill-switch posture."""
+        import inspect
+        from scripts.healthcheck_server import start_healthcheck_server
+        assert inspect.signature(start_healthcheck_server).parameters["host"].default == "127.0.0.1"
+
+    def test_token_check_omits_account_id_and_raw_error(self):
+        # account_id must never appear; a failing check yields a GENERIC error string.
+        with patch("scripts.zerodha_login.load_token", side_effect=RuntimeError("secret path /home/x")):
+            r = _check_token()
+        assert r["ok"] is False
+        assert "account_id" not in r
+        assert r.get("error") == "token_check_failed"
+        assert "secret path" not in json.dumps(r)
+
+    def test_kill_switch_error_is_generic(self):
+        s = MagicMock()
+        s.fetch_one.side_effect = RuntimeError("sqlite: /abs/path corrupt")
+        r = _check_kill_switch(s, _LOG)
+        assert r["ok"] is False and r.get("error") == "kill_switch_check_failed"
+        assert "/abs/path" not in json.dumps(r)
+
+    def test_health_db_error_is_generic_in_payload(self):
+        # The raw DB exception is logged server-side but genericised in the response.
+        store = MagicMock()
+        store.fetch_one.side_effect = RuntimeError("sqlite disk image /secret is malformed")
+        with patch("scripts.healthcheck_server._check_token", return_value={"ok": True}), \
+             patch("scripts.healthcheck_server._check_kill_switch", return_value={"ok": True, "state": "INACTIVE"}):
+            resp = _create_app(store, _LOG).test_client().get("/health")
+        data = json.loads(resp.data)
+        assert data["checks"]["db"]["error"] == "db_check_failed"
+        assert "/secret" not in resp.data.decode()
+
+
+# ── E-4: core daemon liveness on /health (audit 02-Jul) ──────────────────────
+
+
+class TestHealthDaemonLiveness:
+    def _client(self, provider):
+        store = MagicMock()
+        store.fetch_one.return_value = {"cnt": 0}
+        return _create_app(store, _LOG, daemon_liveness_provider=provider).test_client()
+
+    def _green(self):
+        return patch("scripts.healthcheck_server._check_token", return_value={"ok": True}), \
+               patch("scripts.healthcheck_server._check_kill_switch",
+                     return_value={"ok": True, "state": "INACTIVE"})
+
+    def _all_alive(self):
+        return {
+            "order_monitor": {"ok": True},
+            "order_reconciler": {"ok": True},
+            "eod_scheduler": {"ok": True},
+            "live_feed": {"ok": True, "connected": True},
+        }
+
+    def test_all_alive_healthy_200(self):
+        t, k = self._green()
+        with t, k:
+            resp = self._client(lambda: self._all_alive()).get("/health")
+        assert resp.status_code == 200
+        checks = json.loads(resp.data)["checks"]
+        assert {"order_monitor", "order_reconciler", "eod_scheduler", "live_feed"} <= set(checks)
+
+    def test_dead_reconciler_degraded_503(self):
+        snap = self._all_alive()
+        snap["order_reconciler"] = {"ok": False}
+        t, k = self._green()
+        with t, k:
+            resp = self._client(lambda: snap).get("/health")
+        assert resp.status_code == 503
+        assert json.loads(resp.data)["checks"]["order_reconciler"]["ok"] is False
+
+    def test_live_feed_disconnect_is_non_gating_200(self):
+        # A feed disconnect (auto-heals via reconnect) must NOT 503 the endpoint.
+        snap = self._all_alive()
+        snap["live_feed"] = {"ok": True, "connected": False}
+        t, k = self._green()
+        with t, k:
+            resp = self._client(lambda: snap).get("/health")
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["checks"]["live_feed"]["connected"] is False
+
+    def test_no_provider_backward_compatible(self):
+        store = MagicMock()
+        store.fetch_one.return_value = {"cnt": 0}
+        t, k = self._green()
+        with t, k:
+            resp = _create_app(store, _LOG).test_client().get("/health")
+        assert set(json.loads(resp.data)["checks"]) == {"db", "token", "kill_switch"}
+
+    def test_provider_raises_reports_failure_503(self):
+        def _boom():
+            raise RuntimeError("provider blew up")
+        t, k = self._green()
+        with t, k:
+            resp = self._client(_boom).get("/health")
+        assert resp.status_code == 503
+        assert json.loads(resp.data)["checks"]["daemons"]["ok"] is False

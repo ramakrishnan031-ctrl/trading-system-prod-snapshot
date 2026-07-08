@@ -142,6 +142,13 @@ def save_token(
     Creates parent directories if needed.
     """
     token_path.parent.mkdir(parents=True, exist_ok=True)
+    # C-4 (audit 02-Jul): the token file holds the broker access_token + api_key.
+    # Restrict the session dir to owner-only so the secret isn't world-readable
+    # (relied on umask before, typically 0755/0644). POSIX; best-effort on Windows.
+    try:
+        os.chmod(token_path.parent, 0o700)
+    except OSError:
+        pass
     now_ist = datetime.now(ist_timezone())
     expires_at = now_ist.replace(hour=5, minute=0, second=0, microsecond=0)
     if expires_at <= now_ist:
@@ -156,8 +163,17 @@ def save_token(
         "saved_at": now_ist.isoformat(),
         "expires_at": expires_at.isoformat(),
     }
-    with open(token_path, "w", encoding="utf-8") as fh:
+    # C-4: create the token file owner-only (0600). os.open sets the mode AT
+    # creation so there is no world-readable window; the follow-up chmod also
+    # tightens a pre-existing file (a prior run may have left it 0644). POSIX;
+    # best-effort on Windows (which honours only the read-only bit).
+    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump(record, fh, indent=2)
+    try:
+        os.chmod(token_path, 0o600)
+    except OSError:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────

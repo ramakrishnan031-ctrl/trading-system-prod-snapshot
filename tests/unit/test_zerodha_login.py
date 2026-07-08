@@ -158,6 +158,58 @@ def test_save_token_creates_correct_json(tmp_path: Path) -> None:
     assert "expires_at" in record
 
 
+@pytest.mark.skipif(sys.platform.startswith("win"),
+                    reason="C-4: POSIX permission bits are not enforced on Windows")
+def test_save_token_file_is_owner_only(tmp_path: Path) -> None:
+    """C-4: the token file (holds access_token + api_key) is written owner-only
+    0600 and the session dir is 0700 — not left to umask (typically 0644/0755)."""
+    import os
+    import stat
+    p = tmp_path / "session" / "zerodha_token.json"
+    save_token("LFL836", "zerodha", "my_api_key", "my_access_token", p)
+    assert stat.S_IMODE(os.stat(p).st_mode) == 0o600, oct(os.stat(p).st_mode)
+    assert stat.S_IMODE(os.stat(p.parent).st_mode) == 0o700, oct(os.stat(p.parent).st_mode)
+
+
+def test_save_token_invokes_chmod_0600_file_0700_dir(tmp_path: Path, monkeypatch) -> None:
+    """C-4 (cross-platform): save_token restricts the file to 0600 and the session
+    dir to 0700. Verified via the chmod calls so it holds on Windows too (where the
+    mode-assertion tests skip because POSIX bits aren't enforced)."""
+    import os
+    calls: list = []
+    real_chmod = os.chmod
+
+    def _spy(path, mode, *a, **k):
+        calls.append((os.path.normcase(str(path)), mode))
+        try:
+            return real_chmod(path, mode, *a, **k)
+        except OSError:
+            pass
+
+    monkeypatch.setattr(os, "chmod", _spy)
+    p = tmp_path / "session" / "zerodha_token.json"
+    save_token("LFL836", "zerodha", "k", "t", p)
+    modes = dict(calls)
+    assert modes.get(os.path.normcase(str(p))) == 0o600
+    assert modes.get(os.path.normcase(str(p.parent))) == 0o700
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"),
+                    reason="C-4: POSIX permission bits are not enforced on Windows")
+def test_save_token_tightens_preexisting_world_readable_file(tmp_path: Path) -> None:
+    """C-4: a pre-existing 0644 token file is tightened to 0600 on the next write
+    (covers a file created before this fix, before the next daily refresh rewrites it)."""
+    import os
+    import stat
+    d = tmp_path / "session"
+    d.mkdir(parents=True)
+    p = d / "zerodha_token.json"
+    p.write_text("{}", encoding="utf-8")
+    os.chmod(p, 0o644)
+    save_token("LFL836", "zerodha", "k", "t", p)
+    assert stat.S_IMODE(os.stat(p).st_mode) == 0o600, oct(os.stat(p).st_mode)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Login URL construction
 # ─────────────────────────────────────────────────────────────────────────────
