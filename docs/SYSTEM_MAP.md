@@ -71,6 +71,24 @@ For a one-screen quick reference, see [`/PATHS.md`](../PATHS.md).
 > `live_test_mode=true` (4 positions / 6 trades-per-day, permanent). See memory
 > `fix_190_incident`. (FIX-189 dash-cron / market-window / EOD-self-exit separate.)
 
+> **GUI redesign, one-screen-at-a-time (started 08-Jul-2026):** Screen 01
+> (Login) **DONE** — branch `gui-redesign-login-08jul`@`3537632`, off
+> `main`@`271d24f`, LOCAL/UNPUSHED. Presentation-only, single file
+> (`ops_dashboard/frontend/templates/login.html` — self-contained, since
+> `/static/*` requires auth per the `_LOGIN_EXEMPT` guard in `backend/app.py`,
+> so no separate hero asset file could be served without touching that
+> guard). Gap analysis: `ops_dashboard/docs/redesign/01_login_gap.md` —
+> corrects the task premise (the deployed login had **no hero pane at all**;
+> `gui/01. Login-Screen.png` is a target mockup, never previously
+> implemented in this repo, confirmed via full git-history search). Added:
+> 40/55 hero/card split (mobile ≤780px hides hero, card centered), inline
+> SVG chip+heraldic-eagle hero (pins on all 4 sides, neon-blue glow, no
+> external file/CDN), field placeholders, footer shield icon, two-tone
+> title, Inter/IBM Plex Sans stack (matches `style.css` G5a convention).
+> Zero backend/route/API/auth changes (confirmed via diff — only
+> `login.html` touched). 354/354 tests pass incl. CDN/isolation gates.
+> Awaiting Rama's browser sign-off before Screen 02 (Dashboard) starts.
+
 ## Pre-Work Checklist
 - [ ] Read this file (and `PATHS.md`).
 - [ ] Identify exactly which files/paths you will touch.
