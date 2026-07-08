@@ -1211,6 +1211,30 @@ class OrderPlacer:
         result: Optional[EntryResult] = None
         retried_16388 = False  # FIX-072: track if we've already retried margin rejection
         for attempt in range(max_429_retries + 1):
+            # ── A-3: last-mile kill_switch re-check (entry-path TOCTOU fix) ────
+            # OP-LM1 (~:944) runs BEFORE the pre-submit network I/O above
+            # (_fetch_ltp / drift re-quote / _check_liquidity), so a SOFT_KILL
+            # activated by another thread during that window is not caught and one
+            # entry can leak past a just-activated kill (soft_kill has no
+            # order-cancellation backstop; only hard_kill cancels). Re-check here,
+            # immediately before the submit, AFTER all that I/O. INSIDE the loop so
+            # a kill arriving during a 429 backoff is caught on the retry (BL-19
+            # already cancelled the prior attempt's legs, so re-check-then-reject is
+            # safe). Raised OUTSIDE the try below so the loop's OrderRejectedError
+            # handler cannot catch-and-retry it. The trade is PENDING here (set
+            # ~:959) -> PENDING->FAILED is a legal non-terminal transition, so the
+            # terminal-state write guard stays silent. Reuses OP-LM1's exact
+            # failure path (release reservation + mark FAILED); no broker order
+            # exists yet, so there is nothing to cancel and no orphan.
+            if self._kill_switch is not None and self._kill_switch.is_active("entry"):
+                ks_exc = OrderRejectedError(
+                    "kill_switch_active_last_mile_presubmit",
+                    trade_id=trade_id, signal_id=signal_id, symbol=symbol,
+                )
+                self._handle_placement_failure(
+                    trade_id, reservation_id, signal_id, ks_exc, symbol=symbol
+                )
+                raise ks_exc
             try:
                 result = self._engine.execute(
                     symbol=symbol,
