@@ -332,6 +332,28 @@ class StateStore:
         # None for a brand-new database.
         old_version = self._read_existing_version(conn)
 
+        # Fresh audit §B.1 (2026-07-08): FAIL-FAST on a NEWER database. The
+        # executescript() below is UNCONDITIONAL — it re-creates the terminal-guard
+        # trigger and re-stamps schema_version on every boot — and the migrate gate
+        # is `old_version < EXPECTED`. So WITHOUT this guard a DB stamped NEWER than
+        # the running code (e.g. a v42 P1 database opened by v41 code after a code
+        # revert) skips migration, then executescript SILENTLY STAMPS THE VERSION
+        # DOWN to EXPECTED and boots clean — a silent downgrade that strands the
+        # newer schema's tables and masks the mismatch. Refuse loudly HERE, before
+        # executescript can touch anything (so the stored version is left intact for
+        # diagnosis). Mode-agnostic: paper and live both open the DB through this
+        # single path. Rollback of a newer schema (e.g. P1/v42) must therefore be
+        # via its config flag (authoritative:false), NOT a code revert. A brand-new
+        # DB (old_version is None) falls through to a normal fresh build, untouched.
+        if old_version is not None and old_version > EXPECTED_SCHEMA_VERSION:
+            raise SchemaVersionMismatch(
+                f"Database schema v{old_version} is NEWER than this code expects "
+                f"(v{EXPECTED_SCHEMA_VERSION}) — refusing to run. Applying schema.sql "
+                f"would silently downgrade the stored version and strand the newer "
+                f"schema. Roll back via config (e.g. authoritative:false), not a code "
+                f"revert — or run the matching newer code."
+            )
+
         # Migrate BEFORE applying schema.sql. An existing DB created before a
         # constraint/FK/generated-column was added needs its affected tables
         # rebuilt — CREATE TABLE IF NOT EXISTS silently skips an existing table,
