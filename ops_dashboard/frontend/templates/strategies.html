@@ -133,16 +133,23 @@
                 <span class="st-glyph" :class="dirCls(r.direction)" x-html="dirGlyph(r.direction)"></span>
                 <span x-text="r.strategy"></span>
               </td>
-              <td class="st-scan" :title="r.scanner_full">
-                <span x-text="r.scanner"></span><span class="st-scan-n" x-show="r.scanner_extra" x-cloak x-text="r.scanner_extra"></span>
-              </td>
               <td class="rt num" x-text="fmtInt(r.signals)"></td>
               <td class="rt num" x-text="fmtInt(r.orders)"></td>
               <td class="rt num" x-text="fmtInt(r.trades)"></td>
               <td class="rt num" x-text="pctFmt(r.success)"></td>
               <td class="rt num" x-text="pctFmt(r.win_rate)"></td>
               <td class="rt num" :class="r.pnl > 0 ? 'txt-green' : (r.pnl < 0 ? 'txt-red' : '')" x-text="money(r.pnl)"></td>
-              <td class="rt num" x-text="money(r.used)"></td>
+              <td class="rt num" x-text="moneyIntOrDash(r.allocated)"></td>
+              <td class="rt num" x-text="moneyInt(r.used)"></td>
+              <td class="rt num" x-text="moneyIntOrDash(r.remaining)"></td>
+              <td class="rt">
+                <span x-show="r.usage === null" x-cloak>—</span>
+                <span class="st-usage" x-show="r.usage !== null" x-cloak>
+                  <span class="st-usage-pct num" x-text="r.usage + '%'"></span>
+                  <span class="st-usage-bar"><span class="st-usage-fill" :class="'uf-' + capTier(r.usage)"
+                        :style="'width:' + Math.min(100, Math.max(0, r.usage || 0)) + '%'"></span></span>
+                </span>
+              </td>
               <td class="rt num" x-text="clockOf(r.last_signal)"></td>
               <td class="rt num" x-text="clockOf(r.last_trade)"></td>
               <td><span class="st-status" :class="'sts-' + r.status" x-text="r.status"></span></td>
@@ -205,14 +212,16 @@ function strategiesPage() {
     af: { strategy: "", scanner: "", status: "", trade_type: "", direction: "" },
     cols: [
       { key: "strategy", label: "Strategy" },
-      { key: "scanner", label: "Scanner" },
       { key: "signals", label: "Signals", num: true },
       { key: "orders", label: "Orders", num: true },
       { key: "trades", label: "Trades", num: true },
       { key: "success", label: "Success %", num: true },
       { key: "win_rate", label: "Win %", num: true },
       { key: "pnl", label: "P&L (₹)", num: true },
+      { key: "allocated", label: "Allocated (₹)", num: true },
       { key: "used", label: "Used (₹)", num: true },
+      { key: "remaining", label: "Remaining (₹)", num: true },
+      { key: "usage", label: "Usage %", num: true },
       { key: "last_signal", label: "Last Signal", num: true },
       { key: "last_trade", label: "Last Trade", num: true },
       { key: "status", label: "Status" },
@@ -228,11 +237,6 @@ function strategiesPage() {
     ],
 
     // ── mapping ────────────────────────────────────────────────────────────
-    scannerCell(scanners) {
-      const s = scanners || [];
-      if (!s.length) return { primary: "—", extra: "", full: "—" };
-      return { primary: s[0], extra: s.length > 1 ? "+" + (s.length - 1) : "", full: s.join(", ") };
-    },
     statusOf(r) {
       const c = r.silence && r.silence.color;
       if (c === "RED") return "SILENT";
@@ -241,11 +245,16 @@ function strategiesPage() {
     },
     rowsMapped() {
       return (this.data.rows || []).map(r => {
-        const sc = this.scannerCell(r.basic.scanners);
+        // Capital: no per-strategy ₹ cap exists — Allocated is the shared global
+        // intraday bucket (= used + remaining); "—" when the bucket isn't set yet.
+        const cv = r.capital_view || {};
+        const used = Number(cv.capital_used || 0);
+        const rem = (cv.capital_remaining === null || cv.capital_remaining === undefined) ? null : Number(cv.capital_remaining);
+        const alloc = (rem === null) ? null : (used + rem);
+        const usage = (alloc && alloc > 0) ? Math.round(1000 * used / alloc) / 10 : null;
         return {
           name: r.basic.name, strategy: r.basic.display_name,
           direction: r.basic.direction, trade_type: r.basic.trade_type,
-          scanner: sc.primary, scanner_extra: sc.extra, scanner_full: sc.full,
           scanners: r.basic.scanners || [],
           signals: Number(r.signals.received || 0),
           orders: Number(r.processing.created || 0),
@@ -253,7 +262,7 @@ function strategiesPage() {
           success: (r.success_rate === null || r.success_rate === undefined) ? null : r.success_rate,
           win_rate: (r.trading.win_rate === null || r.trading.win_rate === undefined) ? null : r.trading.win_rate,
           pnl: Number(r.performance.net_pnl || 0),
-          used: Number((r.capital_view && r.capital_view.capital_used) || 0),
+          allocated: alloc, used: used, remaining: rem, usage: usage,
           last_signal: r.health.last_signal, last_trade: r.health.last_trade,
           status: this.statusOf(r), family: r.family,
         };
@@ -330,6 +339,9 @@ function strategiesPage() {
 
     // ── formatters / glyphs ──────────────────────────────────────────────────
     money(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+    moneyInt(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.round(Math.abs(n)).toLocaleString("en-IN"); },
+    moneyIntOrDash(v) { return (v === null || v === undefined) ? "—" : this.moneyInt(v); },
+    capTier(pct) { const p = Number(pct || 0); return p >= 80 ? "crit" : (p >= 60 ? "warn" : "ok"); },
     fmtInt(v) { return Number(v || 0).toLocaleString("en-IN"); },
     pctFmt(v) { return (v === null || v === undefined || v < 0) ? "—" : (v + "%"); },
     clockOf(ts) { if (!ts) return "—"; const s = String(ts).replace("T", " "); return s.slice(11, 19) || "—"; },

@@ -760,13 +760,13 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .st-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .strat-page .st-show { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
 .strat-page .st-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.strat-page .st-tbl th { text-align: left; padding: 8px 10px; font-size: 12px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .03em; color: var(--dim); border-bottom: 1px solid var(--border);
+.strat-page .st-tbl th { text-align: left; padding: 8px 7px; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .02em; color: var(--dim); border-bottom: 1px solid var(--border);
   white-space: nowrap; cursor: pointer; user-select: none; }
 .strat-page .st-tbl th.rt { text-align: right; }
 .strat-page .st-tbl th:hover { color: var(--muted); }
-.strat-page .st-arw { margin-left: 4px; color: var(--blue); }
-.strat-page .st-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+.strat-page .st-arw { margin-left: 3px; color: var(--blue); }
+.strat-page .st-tbl td { padding: 9px 7px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
 .strat-page .st-tbl tbody tr:hover { background: var(--card); }
 .strat-page .st-tbl .rt { text-align: right; font-variant-numeric: tabular-nums; }
 .strat-page .st-name { display: flex; align-items: center; gap: 9px; font-weight: 600; }
@@ -781,6 +781,17 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .strat-page .sts-ACTIVE { color: var(--pos); background: rgba(var(--t-green), .15); }
 .strat-page .sts-QUIET  { color: var(--orange); background: rgba(var(--t-orange), .15); }
 .strat-page .sts-SILENT { color: var(--neg); background: rgba(var(--t-red), .15); }
+/* in-table capital Usage% bar (reuses .uf-ok/warn/crit from the dashboard block) */
+.strat-page .st-usage { display: inline-flex; align-items: center; gap: 7px; justify-content: flex-end; }
+.strat-page .st-usage-pct { font-variant-numeric: tabular-nums; color: var(--muted); }
+.strat-page .st-usage-bar { width: 46px; height: 5px; background: var(--bg); border-radius: 3px; overflow: hidden; flex: 0 0 auto; }
+.strat-page .st-usage-fill { display: block; height: 100%; border-radius: 3px; }
+/* Export XLSX — prominent (green) even while flag-gated, per the approved mockup */
+.strat-page .btn-export { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 14px;
+  font-size: 13px; font-weight: 600; border-radius: 8px; color: var(--pos);
+  background: rgba(var(--t-green), .12); border: 1px solid rgba(var(--t-green), .45); cursor: pointer; }
+.strat-page .btn-export[disabled] { opacity: .9; cursor: not-allowed; }
+.strat-page .btn-export:hover:not([disabled]) { background: rgba(var(--t-green), .2); }
 .strat-page .st-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .strat-page .st-count { font-size: 12.5px; color: var(--muted); }
 .strat-page .st-pager { display: flex; align-items: center; gap: 12px; }
