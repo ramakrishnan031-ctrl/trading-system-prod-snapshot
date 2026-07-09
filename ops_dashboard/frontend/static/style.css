@@ -548,7 +548,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
   display: inline-flex; align-items: center; justify-content: center; }
 .dash-page .kc-ic svg { width: 15px; height: 15px; }
 .dash-page .kc-label { font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.15; }
-.dash-page .kc-val { font-size: 28px; font-weight: 800; line-height: 1.02;
+.dash-page .kc-val { font-size: 29px; font-weight: 800; line-height: 1.02;
   font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .dash-page .kc-foot { display: flex; align-items: flex-end; justify-content: space-between;
   gap: 6px; margin-top: auto; }
@@ -571,7 +571,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 
 /* ── SIGNAL → TRADE PIPELINE — 13 stage cards, colored top-rail, arrows ── */
 .dash-page .pl-rail { display: flex; gap: 14px; overflow-x: auto; padding: 2px 2px 8px; }
-.dash-page .pl-card { position: relative; flex: 1 1 0; min-width: 90px; padding: 10px 9px;
+.dash-page .pl-card { position: relative; flex: 1 1 0; min-width: 90px; padding: 13px 9px;
   background: var(--card); border: 1px solid var(--card-bd); border-top: 3px solid var(--gray);
   border-radius: 9px; display: flex; flex-direction: column; gap: 5px; }
 .dash-page .pl-card:not(:last-child)::after { content: "→"; position: absolute; right: -11px;
