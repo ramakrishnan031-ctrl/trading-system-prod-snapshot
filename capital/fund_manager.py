@@ -2178,13 +2178,22 @@ class FundManager:
         total_reserved = self._intraday_reserved + self._positional_reserved
         total_used = self._intraday_used + self._positional_used
         try:
-            # H-1: per-bucket INV6 guard. Global sum check alone can hide
-            # bucket overflow (one bucket negative, other positive enough to
-            # offset, sum passes). Checking each bucket against its cap
-            # surfaces NEGATIVE_MARGIN_AVAILABLE when reserved+used exceeds
-            # the bucket's share of _total (e.g. after sync_from_broker
-            # shrinks the broker balance).
-            if self._intraday_avail < -_INVARIANT_TOLERANCE:
+            # H-1 + M-C3: per-bucket INV6 non-negativity guard. The global sum
+            # check alone hides per-bucket corruption — one partition negative,
+            # another positive enough to offset, so the global sum passes (e.g. a
+            # wrong-bucket release drives positional_used < 0 while its avail stays
+            # >= 0; or sync_from_broker shrinks the balance). H-1 caught only a
+            # NEGATIVE avail; M-C3 extends the trigger to a negative per-bucket USED
+            # or RESERVED too (neither can EVER legitimately be < 0), surfacing the
+            # "borrow" case as NEGATIVE_MARGIN_* instead of silence. Non-negativity
+            # ONLY: assert_capital_invariant runs here solely when a partition is
+            # already negative, so its INV6 field-guard raises BEFORE the equality
+            # check — a legitimate PnL-shifted per-bucket split (avail+reserved+used
+            # != total*pct) is never reached, so this cannot false-fire (a false
+            # CapitalInvariantViolation -> hard_kill).
+            if (self._intraday_avail < -_INVARIANT_TOLERANCE
+                    or self._intraday_used < -_INVARIANT_TOLERANCE
+                    or self._intraday_reserved < -_INVARIANT_TOLERANCE):
                 assert_capital_invariant(
                     margin_available=self._intraday_avail,
                     margin_reserved=self._intraday_reserved,
@@ -2196,7 +2205,9 @@ class FundManager:
                     reservation_id=context_id,
                     tolerance=_INVARIANT_TOLERANCE,
                 )
-            if self._positional_avail < -_INVARIANT_TOLERANCE:
+            if (self._positional_avail < -_INVARIANT_TOLERANCE
+                    or self._positional_used < -_INVARIANT_TOLERANCE
+                    or self._positional_reserved < -_INVARIANT_TOLERANCE):
                 assert_capital_invariant(
                     margin_available=self._positional_avail,
                     margin_reserved=self._positional_reserved,
