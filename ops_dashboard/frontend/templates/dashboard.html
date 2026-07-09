@@ -3,7 +3,7 @@
 {% block nav_dashboard %}active{% endblock %}
 {% block content %}
 {% from "components.html" import kpi_row, kpi_card %}
-<div x-data="dashPage()" x-init="load()" @ops-refresh.window="load()">
+<div x-data="dashPage()" x-init="load()" @ops-refresh.window="load()" class="dash-page">
 
   <!-- Merged Alerts banner (L10 — Alerts has no standalone menu) -->
   <div class="info-banner" x-show="alerts.length" x-cloak>
@@ -65,7 +65,7 @@
           <div class="pcard-foot">
             <span class="pcard-color" x-text="st.color"></span>
             <span class="pcard-age" x-show="st.last_event_age_sec !== null" x-cloak
-                  x-text="ago(st.last_event_age_sec)"></span>
+                  x-text="'Last: ' + lastEventClock(st.last_event_age_sec)"></span>
           </div>
         </div>
       </template>
@@ -78,26 +78,29 @@
       <h2 class="panel-title">Daily Capacity Monitor
         <span class="panel-sub"><a class="panel-link" href="/capacity">all limits →</a></span>
       </h2>
-      <table class="cap-table">
-        <thead><tr><th>Limit</th><th>Used</th><th>Cap</th><th>Left</th><th>Status</th></tr></thead>
-        <tbody>
-          <template x-for="row in capacity.rows" :key="row.key">
-            <tr :class="'st-' + (row.status || 'OK')">
-              <td>
-                <span x-text="row.label"></span>
-                <span class="cap-inert" x-show="row.inert" x-cloak>INERT</span>
-              </td>
-              <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
-              <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
-              <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
-              <td>
-                <span class="cap-bar"><span class="cap-fill" :style="'width:' + Math.min(100, row.pct || 0) + '%'"></span></span>
-                <span class="cap-status" x-text="row.status"></span>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
+      <div class="tbl-scroll">
+        <table class="cap-table">
+          <thead><tr><th>Limit</th><th>Used</th><th>Cap</th><th>Left</th><th>Usage %</th><th>Status</th></tr></thead>
+          <tbody>
+            <template x-for="row in capacity.rows" :key="row.key">
+              <tr :class="'st-' + (row.status || 'OK')">
+                <td>
+                  <span x-text="row.label"></span>
+                  <span class="cap-inert" x-show="row.inert" x-cloak>INERT</span>
+                </td>
+                <td class="cap-num" x-text="fmtCap(row.used, row.unit)"></td>
+                <td class="cap-num" x-text="fmtCap(row.limit, row.unit)"></td>
+                <td class="cap-num" x-text="row.remaining !== null ? fmtCap(row.remaining, row.unit) : '—'"></td>
+                <td class="cap-num" x-text="(row.pct !== null && row.pct !== undefined) ? row.pct + '%' : '—'"></td>
+                <td>
+                  <span class="cap-bar"><span class="cap-fill" :style="'width:' + Math.min(100, row.pct || 0) + '%'"></span></span>
+                  <span class="cap-status" x-text="row.status"></span>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <!-- ── SERVICE HEALTH + EVENTS ── -->
@@ -127,42 +130,54 @@
     </section>
   </div>
 
-  <!-- ── §1.5 TOP / WORST widget (no navigation needed) ── -->
-  <section class="panel" x-show="bestWorst()" x-cloak>
-    <h2 class="panel-title">Best &amp; Worst strategy today</h2>
-    <div class="bw-grid">
-      <template x-for="side in ['best', 'worst']" :key="side">
-        <div class="bw-card" :class="'bw-' + side" x-show="bestWorst()">
-          <span class="bn-label" x-text="side === 'best' ? '🏆 Best' : '⚠️ Worst'"></span>
-          <span class="bw-name" x-text="bestWorst() ? bestWorst()[side].basic.display_name : ''"></span>
-          <span class="bw-pnl" :class="bestWorst() && bestWorst()[side].performance.net_pnl < 0 ? 'num-neg' : 'num-pos'"
-                x-text="bestWorst() ? money(bestWorst()[side].performance.net_pnl) : ''"></span>
-          <span class="bn-sub" x-text="bestWorst() ? (
-            (bestWorst()[side].trading.win_rate !== null ? bestWorst()[side].trading.win_rate + '% win · ' : '') +
-            bestWorst()[side].signals.received + ' signals · ' +
-            (bestWorst()[side].trading.open + bestWorst()[side].trading.closed) + ' trades') : ''"></span>
+  <!-- ── STRATEGY SUMMARY (compact) — replaces Best/Worst cards + per-strategy chip strip.
+       Total/Active/Quiet/Silent read the existing per-row silence tier (silence.color:
+       GREEN/YELLOW/RED/null, computed server-side in strategy_tower.py) rather than a new field. ── -->
+  <section class="panel">
+    <h2 class="panel-title">Strategy Summary
+      <span class="panel-sub"><a class="panel-link" href="/strategies">view all strategies →</a></span>
+    </h2>
+    <div class="strat-summary-grid">
+      <div class="bignum">
+        <span class="bn-label">Strategies</span>
+        <span class="bn-val num" x-text="stratCounts().total"></span>
+        <span class="bn-note">Total</span>
+      </div>
+      <div class="bignum bn-green">
+        <span class="bn-label">Active</span>
+        <span class="bn-val num" x-text="stratCounts().active"></span>
+        <span class="bn-note">Running</span>
+      </div>
+      <div class="bignum bn-orange">
+        <span class="bn-label">Quiet</span>
+        <span class="bn-val num" x-text="stratCounts().quiet"></span>
+        <span class="bn-note">No trades</span>
+      </div>
+      <div class="bignum bn-red">
+        <span class="bn-label">Silent</span>
+        <span class="bn-val num" x-text="stratCounts().silent"></span>
+        <span class="bn-note">Inactive</span>
+      </div>
+      <template x-if="bestWorst()">
+        <div class="bw-card bw-best">
+          <span class="bn-label">Best</span>
+          <span class="bw-name" x-text="bestWorst().best.basic.display_name"></span>
+          <span class="bw-pnl" :class="bestWorst().best.performance.net_pnl < 0 ? 'num-neg' : 'num-pos'"
+                x-text="money(bestWorst().best.performance.net_pnl)"></span>
+          <span class="bn-note">P&amp;L</span>
+        </div>
+      </template>
+      <template x-if="bestWorst()">
+        <div class="bw-card bw-worst">
+          <span class="bn-label">Worst</span>
+          <span class="bw-name" x-text="bestWorst().worst.basic.display_name"></span>
+          <span class="bw-pnl" :class="bestWorst().worst.performance.net_pnl < 0 ? 'num-neg' : 'num-pos'"
+                x-text="money(bestWorst().worst.performance.net_pnl)"></span>
+          <span class="bn-note">P&amp;L</span>
         </div>
       </template>
     </div>
-  </section>
-
-  <!-- ── STRATEGY STRIP (compact top/worst; full tower at /strategies) ── -->
-  <section class="panel">
-    <h2 class="panel-title">Strategies — Top / Worst today
-      <span class="panel-sub"><a class="panel-link" href="/strategies">full control tower →</a></span>
-    </h2>
-    <div class="strat-strip">
-      <template x-for="r in stripRows()" :key="r.basic.name">
-        <a class="strat-chip" :href="'/strategies'"
-           :class="r.performance.net_pnl > 0 ? 'chip-pos' : (r.performance.net_pnl < 0 ? 'chip-neg' : '')">
-          <span class="chip-rank" x-text="'#' + r.basic.rank"></span>
-          <span class="chip-name" x-text="r.basic.display_name"></span>
-          <span class="chip-pnl" x-text="money(r.performance.net_pnl)"></span>
-          <span class="chip-sub" x-text="r.trading.wins + 'W/' + r.trading.losses + 'L · ' + r.risk.active_positions + ' open'"></span>
-        </a>
-      </template>
-      <span x-show="!strategies.rows || strategies.rows.length === 0" x-cloak class="ev-empty">No strategy activity.</span>
-    </div>
+    <span x-show="!strategies.rows || strategies.rows.length === 0" x-cloak class="ev-empty">No strategy activity.</span>
   </section>
 
 </div>
@@ -213,22 +228,34 @@ function dashPage() {
         (i * step).toFixed(1) + "," + (34 - 32 * (v - min) / (max - min) + 1).toFixed(1)
       ).join(" ");
     },
-    stripRows() {
-      const rows = this.strategies.rows || [];
-      if (rows.length <= 6) return rows;
-      return rows.slice(0, 3).concat(rows.slice(-3));   // top 3 + worst 3 (rank order)
-    },
     bestWorst() {
       const rows = this.strategies.rows || [];
       if (!rows.length) return null;
       return { best: rows[0], worst: rows[rows.length - 1] };   // net-P&L rank order
     },
-    ago(sec) {
-      if (sec === null || sec === undefined) return "";
-      sec = Math.round(sec);
-      if (sec < 60) return sec + "s ago";
-      if (sec < 3600) return Math.round(sec / 60) + "m ago";
-      return Math.round(sec / 3600) + "h ago";
+    stratCounts() {
+      const rows = this.strategies.rows || [];
+      let active = 0, quiet = 0, silent = 0;
+      rows.forEach(r => {
+        const c = r.silence && r.silence.color;
+        if (c === 'RED') silent++;
+        else if (c === 'YELLOW') quiet++;
+        else active++;   // GREEN, or null = outside an expected-activity window (no alarm)
+      });
+      return { total: rows.length, active, quiet, silent };
+    },
+    lastEventClock(sec) {
+      const ref = this.dashData && this.dashData.summary ? this.dashData.summary.ist_now : null;
+      if (sec === null || sec === undefined || !ref) return "—";
+      const parts = ref.split(" ");
+      if (parts.length < 2) return "—";
+      const [hh, mm, ss] = parts[1].split(":").map(Number);
+      let total = hh * 3600 + mm * 60 + ss - Math.round(sec);
+      total = ((total % 86400) + 86400) % 86400;
+      const h2 = String(Math.floor(total / 3600)).padStart(2, "0");
+      const m2 = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+      const s2 = String(Math.floor(total % 60)).padStart(2, "0");
+      return h2 + ":" + m2 + ":" + s2;
     },
     fmtCap(v, unit) {
       if (v === null || v === undefined) return "—";

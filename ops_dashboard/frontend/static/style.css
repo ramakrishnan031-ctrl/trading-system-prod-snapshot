@@ -32,7 +32,6 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .pill-down { background: var(--neg-tint); color: var(--neg); animation: pulse 1.2s infinite; }
 .pill-mode { background: var(--accent-tint); color: var(--blue); }
 .pill-phase { background: var(--purple-tint); color: var(--purple); }
-.sb-clock { margin-left: auto; }
 .sb-poll { font-size: .62rem; color: var(--dim); }
 .sb-right { margin-left: 8px; }
 .btn-logout { background: transparent; border: 1px solid var(--border); color: var(--muted);
@@ -45,7 +44,7 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .nav-status { margin-left: auto; color: var(--orange); font-size: .75rem; }
 
 /* ── Layout ── */
-.content { padding: 16px; max-width: 1500px; margin: 0 auto; }
+.content { padding: 16px; max-width: 1600px; margin: 0 auto; }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 16px; margin-bottom: 16px; }
 .panel-title { font-size: .95rem; margin: 0 0 12px; display: flex; align-items: baseline; gap: 8px; }
@@ -138,20 +137,6 @@ tr.st-AWAITING .cap-status, tr.st-UNAVAILABLE .cap-status { color: var(--dim); }
 .panel-link:hover { text-decoration: underline; }
 .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: .76rem; }
 .tbl-scroll { overflow-x: auto; }
-
-/* Strategy strip (dashboard) */
-.strat-strip { display: flex; flex-wrap: wrap; gap: 10px; }
-.strat-chip { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; min-width: 150px;
-  background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
-  text-decoration: none; color: var(--text); }
-.strat-chip:hover { border-color: var(--blue); }
-.chip-pos { border-left: 4px solid var(--green); }
-.chip-neg { border-left: 4px solid var(--red); }
-.chip-rank { font-size: .66rem; font-weight: 800; color: var(--purple); }
-.chip-rank.rank-one { color: #ffd33d; }
-.chip-name { font-size: .8rem; font-weight: 600; }
-.chip-pnl { font-size: 1.05rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-.chip-sub { font-size: .66rem; color: var(--muted); }
 
 /* Rank toggle */
 .rank-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -256,8 +241,7 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 .mf-step b { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .mf-step span { font-size: .56rem; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); }
 
-/* Best/Worst widget (dashboard) */
-.bw-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* Best/Worst cards — reused by the Strategy Summary panel (dashboard) */
 .bw-card { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
   padding: 14px; display: flex; flex-direction: column; gap: 4px; }
 .bw-best { border-left: 4px solid var(--green); }
@@ -308,7 +292,7 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
   .content { padding: 10px; }
   .pipeline-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
   .pcard-count { font-size: 1.7rem; }
-  .big-grid, .bw-grid, .tower-grid { grid-template-columns: 1fr; }
+  .big-grid, .strat-summary-grid, .tower-grid { grid-template-columns: 1fr; }
   .cfg-row { grid-template-columns: 1fr; }
   .cap-table th, .cap-table td { padding: 5px 4px; font-size: .72rem; }
 }
@@ -329,7 +313,7 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 }
 
 /* B5/A6 — mono numerals everywhere numbers render */
-.num, .sb-num, .bn-val, .cap-num, .pcard-count, .hero-val, .chip-pnl, .bw-pnl,
+.num, .sb-num, .bn-val, .cap-num, .pcard-count, .hero-val, .bw-pnl,
 .mf-step b, .twg-row b, .hbar-val, .dn b { font-family: var(--font-mono); }
 
 /* B3/A3 — icon sidebar shell */
@@ -337,7 +321,8 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 .sidebar { width: 180px; flex: 0 0 auto; background: var(--surface); border-right: 1px solid var(--border);
   padding: 10px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .sb-brand { font-weight: 900; letter-spacing: .2em; color: var(--accent); padding: 4px 16px 10px;
-  font-size: .85rem; }
+  font-size: .85rem; display: flex; align-items: center; gap: 8px; }
+.sb-brand-mark { flex: 0 0 auto; border-radius: 6px; }
 .nv-group { font-size: .58rem; text-transform: uppercase; letter-spacing: .1em; color: var(--dim);
   padding: 10px 16px 4px; }
 .nv-item { display: flex; align-items: center; gap: 9px; padding: 6px 14px; color: var(--muted);
@@ -497,3 +482,53 @@ a.kpi-card:hover { border-color: var(--accent); }
 
 /* Medal rank tint reuse in leaderboards */
 .rank-1 { color: var(--gold); } .rank-2 { color: var(--silver); } .rank-3 { color: var(--bronze); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   == Screen 02 — Dashboard redesign ==
+   Scoped to .dash-page (dashboard.html's content root) wherever the touched
+   class is shared with other, not-yet-redesigned screens, so nothing here
+   bleeds into them. Rules for classes exclusive to dashboard.html (pcard*,
+   svc-strip, hero-*, bw-card, the new strat-summary-grid) are unscoped.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Fill the available column width. The shared `.content` uses `margin:0 auto`
+   inside the flex-column `.main-col`; on the cross axis that auto-margin overrides
+   `align-items:stretch`, so the block shrink-wraps to its content and floats in a
+   narrow centered band with large blank gutters — the Screen-01 spacing issue the
+   spec calls out ("expand naturally", "avoid large unused blank regions"). Giving it
+   a definite `width:100%` makes it fill the column up to `max-width:1600px`, and the
+   existing `margin:0 auto` then only centers it once the viewport exceeds 1600px.
+   Scoped via :has() so no other (not-yet-redesigned) screen is affected. */
+main.content:has(> .dash-page) { width: 100%; }
+
+/* Section/card spacing (spec: sections 20-24px, cards/grid gap 16px) */
+.dash-page .panel { margin-bottom: 22px; }
+.dash-page .kpi-row, .dash-page .hero-grid, .dash-page .pipeline-grid, .dash-page .two-col {
+  gap: 16px;
+}
+.dash-page .kpi-card { min-height: 92px; }   /* equal-height safety net across wrapped rows */
+
+/* 13px readability floor for dashboard content text (long monitoring
+   sessions) — scoped here rather than sitewide since these classes are
+   shared with screens not yet redesigned. */
+.dash-page .pcard-name, .dash-page .svc-state, .dash-page .ev-ts, .dash-page .ev-type,
+.dash-page .bn-label, .dash-page .bn-note, .dash-page .cap-status, .dash-page .panel-sub {
+  font-size: 13px;
+}
+
+/* Strategy Summary (compact) — replaces the old Best/Worst block + chip strip */
+.strat-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 16px; align-items: stretch; }
+.strat-summary-grid .bignum, .strat-summary-grid .bw-card { min-height: 84px; }
+
+/* The 16px gap above widens each minmax()-based grid track's effective
+   minimum just enough to overflow at narrow widths (measured: 19px at
+   390px). kpi-row/hero-grid/pipeline-grid/two-col are shared with 16 other
+   templates already tuned at the original 12px gap sitewide -- revert to it
+   below the existing mobile breakpoint instead of changing their shared base. */
+@media (max-width: 640px) {
+  .dash-page .kpi-row, .dash-page .hero-grid, .dash-page .pipeline-grid,
+  .dash-page .two-col, .strat-summary-grid {
+    gap: 10px;
+  }
+}
