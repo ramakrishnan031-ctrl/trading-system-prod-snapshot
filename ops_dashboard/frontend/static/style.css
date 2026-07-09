@@ -23,7 +23,7 @@ body { margin: 0; background: var(--bg); color: var(--text);
 
 /* ── Summary bar ── */
 .summary-bar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; gap: 16px;
-  align-items: center; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  align-items: center; padding: 9px 40px 9px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .sb-item { display: flex; flex-direction: column; gap: 4px; }
 .sb-label { font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
 .sb-num { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -592,7 +592,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .dash-page .pl-PURPLE { border-top-color: var(--purple); }  .dash-page .pl-PURPLE .pl-count { color: var(--purple); }
 
 /* ── 3-COLUMN OPS ROW ── */
-.dash-page .mc-3col { display: grid; grid-template-columns: 45fr 25fr 30fr; gap: 16px; align-items: start; }
+/* Capacity + Service Health widened (single-line labels), Recent Events trimmed;
+   margin-bottom matches the standard 16px section rhythm so Strategy Summary below
+   isn't attached to this row. */
+.dash-page .mc-3col { display: grid; grid-template-columns: 46fr 29fr 25fr; gap: 16px;
+  align-items: start; margin-bottom: 16px; }
 @media (max-width: 1400px) { .dash-page .mc-3col { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 900px)  { .dash-page .mc-3col { grid-template-columns: 1fr; } }
 .dash-page .mc-3col .mc-panel { margin-bottom: 0; }
@@ -604,7 +608,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .dash-page .cap-tbl td { padding: 9px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
 .dash-page .cap-tbl tr:last-child td { border-bottom: none; }
 .dash-page .cap-tbl .rt { text-align: right; }
-.dash-page .cap-lim { font-weight: 600; }
+.dash-page .cap-lim { font-weight: 600; white-space: nowrap; }
 .dash-page .cap-new { margin-left: 6px; padding: 1px 5px; font-size: 9px; font-weight: 700;
   color: var(--blue); background: rgba(var(--t-blue), .14); border-radius: 4px; vertical-align: middle; }
 .dash-page .usage { display: flex; align-items: center; gap: 9px; min-width: 128px; }
@@ -631,7 +635,7 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .dash-page .svc-tbl th.rt, .dash-page .svc-tbl td.rt { text-align: right; }
 .dash-page .svc-tbl td { padding: 9px 6px; border-bottom: 1px solid var(--border-soft); }
 .dash-page .svc-tbl tr:last-child td { border-bottom: none; }
-.dash-page .svc-name { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.dash-page .svc-name { display: flex; align-items: center; gap: 9px; font-weight: 600; white-space: nowrap; }
 .dash-page .svc-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; }
 .dash-page .dot-ok { background: var(--green); box-shadow: 0 0 0 3px rgba(var(--t-green), .18); }
 .dash-page .dot-down { background: var(--red); box-shadow: 0 0 0 3px rgba(var(--t-red), .18); }
