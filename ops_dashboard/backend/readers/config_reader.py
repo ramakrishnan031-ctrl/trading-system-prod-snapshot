@@ -14,6 +14,7 @@ No production import: YAML is parsed by value (I1). Files are only ever read.
 """
 from __future__ import annotations
 
+import csv
 import glob
 import json
 import os
@@ -130,6 +131,45 @@ def get_cron_jobs(cfg: dict) -> dict:
             "critical": bool(entry.get("critical", False)),
         }
     return out
+
+
+def load_accounts(cfg: dict) -> list:
+    """All rows of config/accounts.csv as header-keyed dicts, read-only. [] on any
+    error (missing dir/file, malformed CSV) so the header falls back gracefully."""
+    config_dir = (cfg.get("paths") or {}).get("config_dir")
+    if not config_dir:
+        return []
+    path = os.path.join(config_dir, "accounts.csv")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, newline="", encoding="utf-8") as fh:
+            return list(csv.DictReader(fh))
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return []
+
+
+def active_account(cfg: dict, account_id: Optional[str] = None) -> dict:
+    """The currently-selected trading account row from config/accounts.csv.
+
+    Prefers the live session's account_id; else the primary (is_primary=TRUE),
+    else the first enabled row, else the first row. {} if the roster is unreadable.
+    Columns (by value): account_id, broker, label (= client name), is_primary,
+    enabled, ...
+    """
+    rows = load_accounts(cfg)
+    if not rows:
+        return {}
+    if account_id:
+        wanted = str(account_id).strip()
+        for r in rows:
+            if (r.get("account_id") or "").strip() == wanted:
+                return r
+    for flag in ("is_primary", "enabled"):
+        for r in rows:
+            if str(r.get(flag, "")).strip().upper() == "TRUE":
+                return r
+    return rows[0]
 
 
 def dotted(config: dict, path: str, default: Any = None) -> Any:

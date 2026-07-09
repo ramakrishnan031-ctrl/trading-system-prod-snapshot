@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..readers import db_reader, metrics_client
+from ..readers import config_reader, db_reader, metrics_client
 from . import freshness
 
 
@@ -20,6 +20,9 @@ def build_summary(cfg: dict, today: Optional[str] = None, now=None,
     today = today or freshness.ist_today_iso(now)
 
     session = db_reader.get_session_info(cfg)
+    # Header identity: resolve Broker ID + Client Name from the account roster
+    # (config/accounts.csv, read-only) for the session's active account.
+    account = config_reader.active_account(cfg, session.get("account_id"))
     ks = db_reader.get_kill_switch(cfg)
     th = trader_health if trader_health is not None else metrics_client.get_trader_health(cfg)
     funnel = db_reader.webhook_funnel(cfg, today)
@@ -29,7 +32,9 @@ def build_summary(cfg: dict, today: Optional[str] = None, now=None,
 
     return {
         "mode": session.get("mode"),               # PAPER | LIVE (data attribute)
-        "account_id": session.get("account_id"),
+        "account_id": session.get("account_id") or account.get("account_id"),   # Broker ID
+        "client_name": account.get("label"),       # from config/accounts.csv (roster label)
+        "broker": session.get("broker") or account.get("broker"),
         "trade_type": session.get("trade_type"),
         "trader_alive": bool(th.get("trader_alive")),
         "kill_switch": {

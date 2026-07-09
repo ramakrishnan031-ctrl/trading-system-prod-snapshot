@@ -22,8 +22,8 @@ body { margin: 0; background: var(--bg); color: var(--text);
 .halt-since { margin-left: auto; opacity: .85; font-weight: 400; font-size: .85rem; }
 
 /* ── Summary bar ── */
-.summary-bar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; gap: 18px;
-  align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+.summary-bar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; gap: 16px;
+  align-items: center; padding: 6px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
 .sb-item { display: flex; flex-direction: column; gap: 2px; }
 .sb-label { font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
 .sb-num { font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -323,10 +323,10 @@ tr.ost-CANCELLED td:first-child { border-left: 3px solid var(--purple); }
 .sb-brand { font-weight: 900; letter-spacing: .2em; color: var(--accent); padding: 4px 16px 10px;
   font-size: .85rem; display: flex; align-items: center; gap: 8px; }
 .sb-brand-mark { flex: 0 0 auto; border-radius: 6px; }
-.nv-group { font-size: .58rem; text-transform: uppercase; letter-spacing: .1em; color: var(--dim);
+.nv-group { font-size: .62rem; text-transform: uppercase; letter-spacing: .1em; color: var(--dim);
   padding: 10px 16px 4px; }
 .nv-item { display: flex; align-items: center; gap: 9px; padding: 6px 14px; color: var(--muted);
-  text-decoration: none; font-size: .8rem; border-left: 3px solid transparent; }
+  text-decoration: none; font-size: .85rem; border-left: 3px solid transparent; }
 .nv-item:hover { color: var(--text); background: var(--surface-2); }
 .nv-item.active { color: var(--text); background: var(--accent-tint);
   border-left-color: var(--accent); }
@@ -497,7 +497,7 @@ a.kpi-card:hover { border-color: var(--accent); }
    block shrink-wraps + centers into a narrow band (the Screen-01 gutter issue).
    `width:100%` makes it fill up to max-width:1600 and only center beyond it.
    Scoped via :has() so no other screen changes. */
-main.content:has(> .dash-page) { width: 100%; }
+main.content:has(> .dash-page) { width: 100%; max-width: 1800px; padding: 2px 12px 12px; }
 
 .dash-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
@@ -514,7 +514,7 @@ main.content:has(> .dash-page) { width: 100%; }
 .dash-page .panel.mc-panel { background: var(--panel); border: 1px solid var(--border);
   border-radius: 12px; padding: 15px 18px 16px; margin-bottom: 16px; }
 .dash-page .mc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-.dash-page .mc-title { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: .06em;
+.dash-page .mc-title { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .06em;
   text-transform: uppercase; color: var(--ink); }
 .dash-page .mc-arw { color: var(--blue); font-weight: 700; }
 .dash-page .mc-flow { font-size: 12px; font-weight: 600; color: var(--blue); }
@@ -543,8 +543,8 @@ main.content:has(> .dash-page) { width: 100%; }
 .dash-page .kc-ic { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px;
   display: inline-flex; align-items: center; justify-content: center; }
 .dash-page .kc-ic svg { width: 15px; height: 15px; }
-.dash-page .kc-label { font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1.15; }
-.dash-page .kc-val { font-size: 26px; font-weight: 800; line-height: 1.02;
+.dash-page .kc-label { font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.15; }
+.dash-page .kc-val { font-size: 28px; font-weight: 800; line-height: 1.02;
   font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .dash-page .kc-foot { display: flex; align-items: flex-end; justify-content: space-between;
   gap: 6px; margin-top: auto; }
@@ -572,10 +572,10 @@ main.content:has(> .dash-page) { width: 100%; }
   border-radius: 9px; display: flex; flex-direction: column; gap: 6px; }
 .dash-page .pl-card:not(:last-child)::after { content: "→"; position: absolute; right: -11px;
   top: 50%; transform: translateY(-50%); color: var(--dim); font-size: 13px; line-height: 1; z-index: 1; }
-.dash-page .pl-name { font-size: 10.5px; font-weight: 600; color: var(--muted);
+.dash-page .pl-name { font-size: 11.5px; font-weight: 600; color: var(--muted);
   line-height: 1.18; min-height: 2.36em; display: -webkit-box; -webkit-line-clamp: 2;
   -webkit-box-orient: vertical; overflow: hidden; }
-.dash-page .pl-count { font-size: 22px; font-weight: 800; line-height: 1;
+.dash-page .pl-count { font-size: 24px; font-weight: 800; line-height: 1;
   font-variant-numeric: tabular-nums; }
 .dash-page .pl-last { font-size: 10px; color: var(--dim); white-space: nowrap; }
 .dash-page .pl-active { box-shadow: 0 0 0 1px rgba(var(--t-yellow), .45); }
@@ -668,8 +668,8 @@ main.content:has(> .dash-page) { width: 100%; }
   .dash-page .ss-bw, .dash-page .ss-all { grid-column: span 2; } }
 .dash-page .ss-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px;
   background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; }
-.dash-page .ss-k { font-size: 12px; font-weight: 600; color: var(--muted); }
-.dash-page .ss-v { font-size: 30px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.dash-page .ss-k { font-size: 13px; font-weight: 600; color: var(--muted); }
+.dash-page .ss-v { font-size: 32px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
 .dash-page .ss-n { font-size: 11px; color: var(--dim); }
 .dash-page .ss-green .ss-v { color: var(--pos); }
 .dash-page .ss-orange .ss-v { color: var(--orange); }
