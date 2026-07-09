@@ -7,3 +7,10 @@ __pycache__/
 # committed copy free of real secrets (the committed file ships empty auth fields).
 # VM deployment overlay (paths + auth secrets; chmod 600). checkout -f safe.
 backend/config/gui_config.local.yaml
+
+# Asset policy (all screens): production ships ONLY optimized assets (.web.webp / .webp / .svg).
+# Raw editable masters (PNG/JPG/JPEG from image-gen) stay LOCAL-ONLY — never committed/deployed.
+# Force-add with `git add -f` only if a raster is genuinely the final production asset.
+assets/**/*.png
+assets/**/*.jpg
+assets/**/*.jpeg

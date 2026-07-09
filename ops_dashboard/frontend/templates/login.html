@@ -6,9 +6,9 @@
   <title>AlgoCore Systems — Login</title>
   <!-- Self-contained: static assets require auth (see backend/app.py _LOGIN_EXEMPT),
        so the login page inlines its CSS and hero art (base64 WebP, no external request).
-       Hero source of truth: ops_dashboard/assets/illustrations/login/login-chip-eagle.png
-       Inlined derivative:   ops_dashboard/assets/illustrations/login/login-chip-eagle.web.webp
-       mix-blend-mode:lighten drops the asset's matte-black background over the panel gradient. -->
+       Production hero asset (committed): assets/illustrations/login/login-chip-eagle.web.webp
+       — its bytes are base64-inlined below; mix-blend-mode:lighten drops the matte-black bg
+       over the panel gradient. Editable master PNG is LOCAL-ONLY (git-ignored, never shipped). -->
   <style>
     :root {
       color-scheme: dark;
