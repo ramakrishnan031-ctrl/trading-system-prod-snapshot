@@ -497,7 +497,10 @@ a.kpi-card:hover { border-color: var(--accent); }
    block shrink-wraps + centers into a narrow band (the Screen-01 gutter issue).
    `width:100%` makes it fill up to max-width:1600 and only center beyond it.
    Scoped via :has() so no other screen changes. */
-main.content:has(> .dash-page) { width: 100%; max-width: 2100px; padding: 0 8px 10px; }
+/* Left-align (not centered) + minimal left padding so the deck begins right at
+   the sidebar edge — removes the centering left-gutter on wide monitors. A ~12px
+   top padding sets the small gap below the status strip (spec: 10-14px). */
+main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padding: 12px 10px 10px 4px; }
 
 .dash-page {
   --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
@@ -513,9 +516,6 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; padding: 0 8px 
 /* ── Panel shell + section head (spec: header 14-16px, strong weight) ── */
 .dash-page .panel.mc-panel { background: var(--panel); border: 1px solid var(--border);
   border-radius: 12px; padding: 13px 18px 15px; margin-bottom: 16px; }
-/* first section hugs the header — reclaims the panel's top offset so content
-   sits high under the (now taller) status strip without touching card padding. */
-.dash-page > section.mc-panel:first-of-type { padding-top: 6px; }
 .dash-page .info-banner { margin-bottom: 8px; padding: 6px 12px; }
 .dash-page .mc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .dash-page .mc-title { margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .06em;
@@ -573,11 +573,11 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; padding: 0 8px 
 .dash-page .pl-rail { display: flex; gap: 14px; overflow-x: auto; padding: 2px 2px 8px; }
 .dash-page .pl-card { position: relative; flex: 1 1 0; min-width: 90px; padding: 10px 9px;
   background: var(--card); border: 1px solid var(--card-bd); border-top: 3px solid var(--gray);
-  border-radius: 9px; display: flex; flex-direction: column; gap: 6px; }
+  border-radius: 9px; display: flex; flex-direction: column; gap: 5px; }
 .dash-page .pl-card:not(:last-child)::after { content: "→"; position: absolute; right: -11px;
   top: 50%; transform: translateY(-50%); color: var(--dim); font-size: 13px; line-height: 1; z-index: 1; }
-.dash-page .pl-name { font-size: 12.5px; font-weight: 600; color: var(--muted);
-  line-height: 1.15; min-height: 2.3em; display: -webkit-box; -webkit-line-clamp: 2;
+.dash-page .pl-name { font-size: 13.5px; font-weight: 600; color: var(--muted);
+  line-height: 1.12; min-height: 2.24em; display: -webkit-box; -webkit-line-clamp: 2;
   -webkit-box-orient: vertical; overflow: hidden; }
 .dash-page .pl-count { font-size: 26px; font-weight: 800; line-height: 1;
   font-variant-numeric: tabular-nums; }

@@ -32,9 +32,13 @@ def build_summary(cfg: dict, today: Optional[str] = None, now=None,
 
     return {
         "mode": session.get("mode"),               # PAPER | LIVE (data attribute)
-        "account_id": session.get("account_id") or account.get("account_id"),   # Broker ID
-        "client_name": account.get("label"),       # from config/accounts.csv (roster label)
-        "broker": session.get("broker") or account.get("broker"),
+        # Broker ID / Client Name: prefer the account-roster values (the roster is
+        # what the trading engine uses to pick the active account, is_primary), so a
+        # placeholder session row (e.g. account_id="default" off-market) never leaks
+        # into the header. Roster row = session's account if present, else primary.
+        "account_id": account.get("account_id") or session.get("account_id"),   # Broker ID
+        "client_name": account.get("label"),        # roster label (e.g. "Kandasamy")
+        "broker": account.get("broker") or session.get("broker"),
         "trade_type": session.get("trade_type"),
         "trader_alive": bool(th.get("trader_alive")),
         "kill_switch": {
