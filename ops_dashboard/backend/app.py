@@ -133,6 +133,15 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
             return jsonify({"error": "authentication required"}), 401
         return redirect(url_for("auth.login_get"))
 
+    @app.after_request
+    def _no_store(resp):  # noqa: ANN001
+        # Live operator dashboard: never let the browser serve a stale page/asset
+        # after a redeploy (heuristic HTML caching had users seeing old screens).
+        # Loopback single-user, so caching buys nothing — always revalidate.
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
     @app.route("/", methods=["GET"])
     def dashboard_page():
         return render_template("dashboard.html")
