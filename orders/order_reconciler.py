@@ -1107,6 +1107,7 @@ class OrderReconciler:
                     entry_price=float(entry_price),
                     direction=direction,
                     costs=0.0,
+                    trade_id=trade_id,   # M-C7: reverse the persisted committed margin
                 )
                 steps.append(f"capital_released(pnl={release_result.pnl_delta:.2f})")
             except Exception as exc:
@@ -1898,6 +1899,7 @@ class OrderReconciler:
                         entry_price=float(entry_price),
                         direction=direction,
                         costs=0.0,
+                        trade_id=trade_id,   # M-C7: reverse the persisted committed margin
                     )
                     steps.append(
                         f"partial_capital_released(qty={closed_qty} "

@@ -2348,6 +2348,7 @@ class OrderPlacer:
                 entry_price=entry_price,
                 direction=direction,
                 costs=charges,
+                trade_id=trade_id,   # M-C7: reverse the persisted committed margin
             )
         except Exception as exc:
             log_exception(self._log, exc)
