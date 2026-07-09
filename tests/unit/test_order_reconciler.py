@@ -932,7 +932,10 @@ def test_check2_orphan_adoption(tmp_path: Path) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_check4_partial_close(tmp_path: Path) -> None:
-    """PARTIAL_CLOSE: local qty_filled > broker qty → update qty_filled."""
+    """PARTIAL_CLOSE: local qty_filled > broker qty → update qty_filled AND (M-O2)
+    release capital + book PnL for the closed portion via fm.release_used."""
+    from capital.fund_manager import ReleaseResult
+
     store = _make_store(tmp_path)
     _insert_trade(store, "t1", symbol="WIPRO", status="OPEN", qty_filled=10)
     _insert_order(store, "ord1", "t1", leg="ENTRY", product="MIS", status="COMPLETE")
@@ -940,10 +943,14 @@ def test_check4_partial_close(tmp_path: Path) -> None:
     adapter = MagicMock()
     adapter.get_positions.return_value = [_Position("WIPRO", qty=7, avg_price=400.0)]
     adapter.get_margins.return_value = _MarginInfo(net=100_000.0, available=80_000.0, used=20_000.0)
+    adapter.get_trades.return_value = []   # exit-price falls to LTP/entry proxy
 
     fm = MagicMock()
     snap = MagicMock(); snap.total = 100_000.0
     fm.get_snapshot.return_value = snap
+    # M-O2: CHECK4 now calls release_used for the closed portion; return a real result.
+    fm.release_used.return_value = ReleaseResult(
+        reservation_id="", margin_released=1500.0, bucket="intraday", pnl_delta=0.0)
 
     rec = _make_reconciler(store, adapter=adapter, fund_manager=fm)
     actions = rec.reconcile_once()
@@ -957,8 +964,16 @@ def test_check4_partial_close(tmp_path: Path) -> None:
     row = store.fetch_one("SELECT qty_filled FROM trades WHERE trade_id=?", ("t1",))
     assert row["qty_filled"] == 7, f"Expected 7, got {row['qty_filled']}"
 
+    # M-O2: capital released for the closed portion (closed_qty = 10 - 7 = 3),
+    # exactly once (the qty CAS latch); trade stays OPEN (no terminal write).
+    fm.release_used.assert_called_once()
+    assert fm.release_used.call_args.kwargs["exit_qty"] == 3
+    assert row["qty_filled"] == 7
+    status = store.fetch_one("SELECT status FROM trades WHERE trade_id=?", ("t1",))
+    assert status["status"] in ("OPEN", "PARTIAL")
+
     store.close()
-    print("  OK CHECK4 PARTIAL_CLOSE: qty_filled updated to broker qty")
+    print("  OK CHECK4 PARTIAL_CLOSE: qty_filled updated + M-O2 capital released (closed_qty)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
