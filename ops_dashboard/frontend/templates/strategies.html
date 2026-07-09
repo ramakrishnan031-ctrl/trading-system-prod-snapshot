@@ -2,196 +2,367 @@
 {% block title %}Strategies — Control Tower{% endblock %}
 {% block nav_strategies %}active{% endblock %}
 {% block content %}
-{% from "components.html" import export_button, data_table %}
-<div x-data="strategiesPage()" x-init="load()" @ops-refresh.window="load()">
+{% from "components.html" import export_button %}
+<div x-data="strategiesPage()" x-init="load()" @ops-refresh.window="load()" class="dash-page strat-page">
 
-  <section class="panel">
-    <h2 class="panel-title">Strategy Control Tower
-      <span class="panel-sub" x-text="data.enabled_count != null ? (data.enabled_count + ' enabled / ' + data.count + ' total · ' + (data.today || '')) : ''"></span>
-    </h2>
+  <!-- Merged Alerts banner -->
+  <div class="info-banner" x-show="alerts && alerts.length" x-cloak>
+    <span x-text="alerts.length + ' alert(s) today'"></span>
+  </div>
 
-    <!-- View toggle: dense table (global standard) vs the 7-group cards -->
-    <div class="rank-toggle">
-      <span class="rt-label">View:</span>
-      <button class="rt-btn" :class="viewMode==='table' ? 'rt-active' : ''" @click="viewMode='table'">Table</button>
-      <button class="rt-btn" :class="viewMode==='cards' ? 'rt-active' : ''" @click="viewMode='cards'">Cards</button>
-      {{ export_button("Export Strategies") }}
+  <!-- ── Title ── -->
+  <div class="pg-title">
+    <h1>Strategies</h1>
+    <span class="pg-sub">Strategy Control Tower</span>
+  </div>
+
+  <!-- ═══ SUMMARY KPIs (8) ═══ -->
+  <div class="sk-deck">
+    <template x-for="k in kpiCards()" :key="k.key">
+      <div class="kc" :class="'kc-' + k.tone">
+        <div class="kc-top">
+          <span class="kc-ic" :class="'ic-' + k.tone" x-html="stratIcon(k.key)"></span>
+          <span class="kc-label" x-text="k.label"></span>
+        </div>
+        <span class="kc-val num" x-text="k.val"></span>
+        <div class="kc-foot"><span class="kc-sub" :class="k.subClass || ''" x-text="k.sub"></span></div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══ FILTERS ═══ -->
+  <section class="panel mc-panel">
+    <div class="mc-head"><h2 class="mc-title">Filters</h2></div>
+    <div class="flt-row">
+      <label class="flt-field">
+        <span class="flt-k">Date Range</span>
+        <input class="flt-c" type="date" x-model="f.date">
+      </label>
+      <label class="flt-field">
+        <span class="flt-k">Strategy</span>
+        <select class="flt-c" x-model="f.strategy">
+          <option value="">All Strategies</option>
+          <template x-for="s in strategyOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+        </select>
+      </label>
+      <label class="flt-field">
+        <span class="flt-k">Scanner</span>
+        <select class="flt-c" x-model="f.scanner">
+          <option value="">All Scanners</option>
+          <template x-for="s in scannerOptions()" :key="s"><option :value="s" x-text="s"></option></template>
+        </select>
+      </label>
+      <label class="flt-field">
+        <span class="flt-k">Status</span>
+        <select class="flt-c" x-model="f.status">
+          <option value="">All Status</option>
+          <option value="ACTIVE">Active</option>
+          <option value="QUIET">Quiet</option>
+          <option value="SILENT">Silent</option>
+        </select>
+      </label>
+      <label class="flt-field">
+        <span class="flt-k">Trade Type</span>
+        <select class="flt-c" x-model="f.trade_type">
+          <option value="">All Types</option>
+          <option value="Intraday">Intraday</option>
+          <option value="Delivery">Delivery</option>
+        </select>
+      </label>
+      <label class="flt-field">
+        <span class="flt-k">Direction</span>
+        <select class="flt-c" x-model="f.direction">
+          <option value="">All Directions</option>
+          <option value="LONG">Long</option>
+          <option value="SHORT">Short</option>
+        </select>
+      </label>
+      <div class="flt-actions">
+        <button class="btn-ghost" type="button" @click="resetFilters()">Reset Filters</button>
+        <button class="btn-primary" type="button" @click="applyFilters()">Apply Filters</button>
+      </div>
     </div>
+  </section>
 
-    <div x-show="viewMode==='table'" x-cloak>
-    {{ data_table("strategies", [
-      {"key":"strategy","label":"Strategy"},
-      {"key":"family","label":"Family"},
-      {"key":"signals","label":"Signals","kind":"num"},
-      {"key":"orders","label":"Orders","kind":"num"},
-      {"key":"trades","label":"Trades","kind":"num"},
-      {"key":"success","label":"Success %","kind":"num"},
-      {"key":"win_rate","label":"Win %","kind":"num"},
-      {"key":"pnl","label":"P&L","kind":"money"},
-      {"key":"profit_factor","label":"PF","kind":"num"},
-      {"key":"sl_hits","label":"SL hits","kind":"num"},
-      {"key":"tgt_hits","label":"TGT hits","kind":"num"},
-      {"key":"roi","label":"ROI %","kind":"num"},
-      {"key":"status","label":"Status"},
-    ], rows_expr="tableRows()") }}
-    </div>
-
-    <!-- Ranking view toggle (cards) -->
-    <div class="rank-toggle" x-show="viewMode==='cards'" x-cloak>
-      <span class="rt-label">Rank by:</span>
-      <template x-for="k in rankKeys" :key="k.key">
-        <button class="rt-btn" :class="rankBy === k.key ? 'rt-active' : ''"
-                @click="rankBy = k.key" x-text="k.label"></button>
-      </template>
-      <span class="rt-label" style="margin-left:12px">Order:</span>
-      <button class="rt-btn" :class="!worstFirst ? 'rt-active' : ''" @click="worstFirst=false">Top first</button>
-      <button class="rt-btn" :class="worstFirst ? 'rt-active' : ''" @click="worstFirst=true">Worst first</button>
-    </div>
-
-    <!-- Strategy cards: one per strategy, all 7 groups -->
-    <div class="tower-grid" x-show="viewMode==='cards'" x-cloak>
-      <template x-for="r in orderedRows()" :key="r.basic.name">
-        <div class="tower-card" :class="r.basic.enabled === false ? 'tower-off' : ''">
-          <div class="tw-head">
-            <span class="chip-rank" :class="viewRank(r.basic.name) === 1 ? 'rank-one' : ''"
-                  x-text="'#' + viewRank(r.basic.name)"></span>
-            <span class="tw-name" x-text="r.basic.display_name"></span>
-            <span class="score-badge" :class="'score-' + (r.scorecard ? r.scorecard.badge : 'GRAY')"
-                  :title="r.scorecard && r.scorecard.reasons.length ? ('why: ' + r.scorecard.reasons.join(' · ')) : 'all checks green'"
-                  x-text="r.scorecard ? r.scorecard.badge : ''"></span>
-            <span class="dot" :class="r.basic.enabled === false ? 'dot-off' : (r.basic.enabled === true ? 'dot-on' : 'dot-unk')"></span>
-            <span class="tw-dir" x-text="(r.basic.direction || '') + (r.family ? ' · ' + r.family : '')"></span>
-            <span class="tw-mode" x-text="r.basic.mode || ''"></span>
-          </div>
-          <div class="tw-scanners" x-text="'scanners: ' + (r.basic.scanners.length ? r.basic.scanners.join(', ') : '—')"></div>
-          <div class="score-reasons" x-show="r.scorecard && r.scorecard.reasons.length" x-cloak
-               x-text="'why: ' + (r.scorecard ? r.scorecard.reasons.join(' · ') : '')"></div>
-
-          <!-- §1.2 silence + §1.3 mini funnel + §1.4 failure strip -->
-          <div class="tw-quickrow">
-            <span class="silence" :class="r.silence && r.silence.color ? ('sil-' + r.silence.color) : 'sil-plain'"
-                  x-text="'Last Signal: ' + (r.silence && r.silence.age_min !== null ? Math.round(r.silence.age_min) + 'm ago' : 'none today')"></span>
-            <span class="failstrip">
-              <span title="risk-rejected">R:<b x-text="r.failures ? r.failures.risk_rej : 0"></b></span>
-              <span title="capital-rejected">C:<b x-text="r.failures ? r.failures.capital_rej : 0"></b></span>
-              <span title="order-rejected">O:<b x-text="r.failures ? r.failures.order_rej : 0"></b></span>
-              <span title="duplicate">D:<b x-text="r.failures ? r.failures.duplicate : 0"></b></span>
-              <span title="expired">E:<b x-text="r.failures ? r.failures.expired : 0"></b></span>
+  <!-- ═══ STRATEGY HIERARCHY ═══ -->
+  <section class="panel mc-panel">
+    <div class="mc-head"><h2 class="mc-title">Strategy Hierarchy</h2></div>
+    <div class="hier-grid">
+      <template x-for="h in hierarchy()" :key="h.name">
+        <div class="hier-card">
+          <span class="hier-name" x-text="h.name"></span>
+          <span class="hier-legs">
+            <span class="hier-connector"></span>
+            <span class="hier-leg">
+              <span class="hier-dir hier-long" :class="h.long ? '' : 'hier-muted'">Long</span>
+              <span class="hier-dir hier-short" :class="h.short ? '' : 'hier-muted'">Short</span>
             </span>
-          </div>
-          <div class="mini-funnel" x-show="r.funnel" x-cloak>
-            <div class="mf-step"><b x-text="r.funnel.received"></b><span>Received</span></div>
-            <div class="mf-step"><b x-text="r.funnel.accepted"></b><span>Accepted</span></div>
-            <div class="mf-step"><b x-text="r.funnel.orders_created"></b><span>Orders</span></div>
-            <div class="mf-step"><b x-text="r.funnel.filled"></b><span>Filled</span></div>
-            <div class="mf-step"><b x-text="r.funnel.trades_closed"></b><span>Closed</span></div>
-          </div>
-
-          <div class="tw-groups">
-            <div class="twg"><h4>Signals</h4>
-              <div class="twg-row"><span>received</span><b x-text="r.signals.received"></b></div>
-              <div class="twg-row"><span>accepted</span><b x-text="r.signals.accepted"></b></div>
-              <div class="twg-row"><span>rejected</span><b x-text="r.signals.rejected"></b></div>
-              <div class="twg-row"><span>dup / expired</span><b x-text="r.signals.duplicated + ' / ' + r.signals.expired"></b></div>
-            </div>
-            <div class="twg"><h4>Processing</h4>
-              <div class="twg-row"><span>created</span><b x-text="r.processing.created"></b></div>
-              <div class="twg-row"><span>submitted</span><b x-text="r.processing.submitted"></b></div>
-              <div class="twg-row"><span>filled</span><b x-text="r.processing.filled"></b></div>
-              <div class="twg-row"><span>rej / cxl</span><b x-text="r.processing.rejected + ' / ' + r.processing.cancelled"></b></div>
-            </div>
-            <div class="twg"><h4>Trading</h4>
-              <div class="twg-row"><span>open / closed</span><b x-text="r.trading.open + ' / ' + r.trading.closed"></b></div>
-              <div class="twg-row"><span>W / L</span><b x-text="r.trading.wins + ' / ' + r.trading.losses"></b></div>
-              <div class="twg-row"><span>win rate</span><b x-text="r.trading.win_rate !== null ? r.trading.win_rate + '%' : '—'"></b></div>
-              <div class="twg-row"><span>avg W / L</span><b x-text="dash(r.trading.avg_win) + ' / ' + dash(r.trading.avg_loss)"></b></div>
-            </div>
-            <div class="twg"><h4>Performance</h4>
-              <div class="twg-row"><span>net P&L</span><b :class="r.performance.net_pnl > 0 ? 'num-pos' : (r.performance.net_pnl < 0 ? 'num-neg' : '')" x-text="money(r.performance.net_pnl)"></b></div>
-              <div class="twg-row"><span>gross / charges</span><b x-text="money(r.performance.gross_pnl) + ' / ' + money(r.performance.charges)"></b></div>
-              <div class="twg-row"><span>ROI</span><b x-text="r.performance.roi_pct !== null ? r.performance.roi_pct + '%' : '—'"></b></div>
-              <div class="twg-row"><span>best / worst</span><b x-text="dash(r.performance.best_trade) + ' / ' + dash(r.performance.worst_trade)"></b></div>
-              <div class="twg-row"><span>expectancy</span><b x-text="dash(r.performance.expectancy)"></b></div>
-              <div class="twg-row"><span>profit factor</span><b x-text="dash(r.performance.profit_factor)"></b></div>
-              <div class="twg-row"><span>SL / TGT hits</span><b x-text="r.sl_tgt_hits.sl_hits + ' / ' + r.sl_tgt_hits.tgt_hits"></b></div>
-            </div>
-            <div class="twg"><h4>Risk / Capital</h4>
-              <div class="twg-row"><span>allocation</span><b x-text="r.capital_view && r.capital_view.allocation_configured !== null ? money(r.capital_view.allocation_configured) : r.capital_view.allocation_basis"></b></div>
-              <div class="twg-row"><span>capital used</span><b x-text="money(r.risk.capital_used)"></b></div>
-              <div class="twg-row"><span>capital left</span><b x-text="r.risk.capital_remaining !== null ? money(r.risk.capital_remaining) : '—'"></b>
-              </div>
-              <div class="twg-row"><span>positions</span><b x-text="r.capital_view.positions_used + ' / ' + r.capital_view.positions_configured + ' (left ' + r.capital_view.positions_remaining + ')'"></b></div>
-            </div>
-            <div class="twg"><h4>Health</h4>
-              <div class="twg-row"><span>last signal</span><b :class="'stale-' + r.health.last_signal_staleness" x-text="tstr(r.health.last_signal)"></b></div>
-              <div class="twg-row"><span>last trade</span><b :class="'stale-' + r.health.last_trade_staleness" x-text="tstr(r.health.last_trade)"></b></div>
-              <div class="twg-row"><span>last success</span><b x-text="tstr(r.health.last_successful_trade)"></b></div>
-              <div class="twg-row"><span>last failure</span><b x-text="tstr(r.health.last_failure)"></b></div>
-            </div>
-          </div>
+          </span>
         </div>
       </template>
+      <div class="hier-card hier-more" x-show="!hierarchy().length" x-cloak>
+        <span class="hier-name">No strategies</span>
+      </div>
     </div>
+  </section>
 
-    <!-- Scanner-level unattributable rows (attribution rule R1) -->
-    <div x-show="data.scanner_level && data.scanner_level.length" x-cloak style="margin-top:14px">
-      <h2 class="panel-title">Unattributed scanners</h2>
-      <table class="cap-table">
-        <thead><tr><th>Scanner</th><th>Label</th><th>Received</th><th>Accepted</th><th>Rejected</th></tr></thead>
+  <!-- ═══ MAIN TABLE ═══ -->
+  <section class="panel mc-panel">
+    <div class="st-toolbar">
+      <label class="st-show">Show
+        <select class="flt-c flt-sm" x-model.number="tPageSize" @change="tPage = 1">
+          <option :value="50">50</option><option :value="60">60</option>
+        </select>
+        entries</label>
+      {{ export_button("Export XLSX") }}
+    </div>
+    <div class="tbl-scroll">
+      <table class="st-tbl">
+        <thead><tr>
+          <template x-for="c in cols" :key="c.key">
+            <th :class="c.num ? 'rt' : ''" role="button" tabindex="0"
+                @click="tSort(c.key)" @keyup.enter="tSort(c.key)">
+              <span x-text="c.label"></span><span class="st-arw" x-text="tArrow(c.key)"></span>
+            </th>
+          </template>
+        </tr></thead>
         <tbody>
-          <template x-for="s in data.scanner_level" :key="s.scanner">
+          <template x-for="(r, i) in tPaged(filtered())" :key="i">
             <tr>
-              <td x-text="s.scanner"></td>
-              <td><span class="cap-inert" x-text="s.label"></span></td>
-              <td class="cap-num" x-text="s.received"></td>
-              <td class="cap-num" x-text="s.accepted"></td>
-              <td class="cap-num" x-text="s.rejected"></td>
+              <td class="st-name">
+                <span class="st-glyph" :class="dirCls(r.direction)" x-html="dirGlyph(r.direction)"></span>
+                <span x-text="r.strategy"></span>
+              </td>
+              <td class="st-scan" :title="r.scanner_full">
+                <span x-text="r.scanner"></span><span class="st-scan-n" x-show="r.scanner_extra" x-cloak x-text="r.scanner_extra"></span>
+              </td>
+              <td class="rt num" x-text="fmtInt(r.signals)"></td>
+              <td class="rt num" x-text="fmtInt(r.orders)"></td>
+              <td class="rt num" x-text="fmtInt(r.trades)"></td>
+              <td class="rt num" x-text="pctFmt(r.success)"></td>
+              <td class="rt num" x-text="pctFmt(r.win_rate)"></td>
+              <td class="rt num" :class="r.pnl > 0 ? 'txt-green' : (r.pnl < 0 ? 'txt-red' : '')" x-text="money(r.pnl)"></td>
+              <td class="rt num" x-text="money(r.used)"></td>
+              <td class="rt num" x-text="clockOf(r.last_signal)"></td>
+              <td class="rt num" x-text="clockOf(r.last_trade)"></td>
+              <td><span class="st-status" :class="'sts-' + r.status" x-text="r.status"></span></td>
             </tr>
           </template>
+          <tr x-show="!filtered().length" x-cloak><td :colspan="cols.length" class="ev-empty">No strategies match the current filters.</td></tr>
         </tbody>
       </table>
     </div>
+    <div class="st-foot">
+      <span class="st-count" x-text="pageInfo()"></span>
+      <div class="st-pager">
+        <span class="st-rpp">Rows per page
+          <select class="flt-c flt-sm" x-model.number="tPageSize" @change="tPage = 1">
+            <option :value="50">50</option><option :value="60">60</option>
+          </select>
+        </span>
+        <button class="st-pg" type="button" @click="tPage = Math.max(1, tPage-1)" :disabled="tPage<=1">‹</button>
+        <span class="st-pgn" x-text="tPage + ' / ' + tPageCount(filtered())"></span>
+        <button class="st-pg" type="button" @click="tPage = Math.min(tPageCount(filtered()), tPage+1)" :disabled="tPage >= tPageCount(filtered())">›</button>
+      </div>
+    </div>
   </section>
+
+  <!-- ═══ QUICK ACTIONS & INSIGHTS ═══ -->
+  <section class="panel mc-panel">
+    <div class="mc-head"><h2 class="mc-title">Quick Actions &amp; Insights</h2></div>
+    <div class="qa-grid">
+      <template x-for="q in quickActions" :key="q.key">
+        <a class="qa-card" :href="q.href">
+          <span class="qa-ic" :class="'ic-' + q.tone" x-html="stratIcon(q.key)"></span>
+          <span class="qa-body">
+            <span class="qa-title" x-text="q.title"></span>
+            <span class="qa-desc" x-text="q.desc"></span>
+          </span>
+          <span class="qa-chev">›</span>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <!-- ═══ STATUS LOGIC ═══ -->
+  <div class="stlogic">
+    <span class="stlogic-ic">ⓘ</span>
+    <span class="stlogic-k">Status Logic:</span>
+    <span class="stlogic-item"><span class="sts-ACTIVE stlogic-pill">ACTIVE</span> Signal within 30 mins</span>
+    <span class="stlogic-sep">·</span>
+    <span class="stlogic-item"><span class="sts-QUIET stlogic-pill">QUIET</span> 30 mins – 1.5 hrs</span>
+    <span class="stlogic-sep">·</span>
+    <span class="stlogic-item"><span class="sts-SILENT stlogic-pill">SILENT</span> No signal entire day</span>
+  </div>
+
 </div>
 
 <script>
 function strategiesPage() {
-  return Object.assign(pageBase("/api/strategies"), tableMixin({ defaultSize: 60 }), {
-    viewMode: "table", rankBy: "net_pnl", worstFirst: false,
-    tableRows() {
-      return (this.data.rows || []).map(r => ({
-        strategy: r.basic.display_name, family: r.family,
-        signals: r.signals.received, orders: r.processing.created,
-        trades: r.trading.open + r.trading.closed, success: r.success_rate,
-        win_rate: r.trading.win_rate, pnl: r.performance.net_pnl,
-        profit_factor: r.performance.profit_factor,
-        sl_hits: r.sl_tgt_hits.sl_hits, tgt_hits: r.sl_tgt_hits.tgt_hits,
-        roi: r.performance.roi_pct, last_signal: r.health.last_signal,
-        status: r.basic.enabled === false ? "DISABLED"
-                : (r.silence && r.silence.color ? r.silence.color : "ACTIVE"),
-      }));
-    },
-    rankKeys: [
-      { key: "net_pnl", label: "Net P&L" },
-      { key: "win_rate", label: "Win Rate" },
-      { key: "expectancy", label: "Expectancy" },
-      { key: "success_rate", label: "Success Rate" },
+  return Object.assign(pageBase("/api/strategies"), tableMixin({ defaultSize: 50 }), {
+    alerts: [],
+    f:  { date: "", strategy: "", scanner: "", status: "", trade_type: "", direction: "" },
+    af: { strategy: "", scanner: "", status: "", trade_type: "", direction: "" },
+    cols: [
+      { key: "strategy", label: "Strategy" },
+      { key: "scanner", label: "Scanner" },
+      { key: "signals", label: "Signals", num: true },
+      { key: "orders", label: "Orders", num: true },
+      { key: "trades", label: "Trades", num: true },
+      { key: "success", label: "Success %", num: true },
+      { key: "win_rate", label: "Win %", num: true },
+      { key: "pnl", label: "P&L (₹)", num: true },
+      { key: "used", label: "Used (₹)", num: true },
+      { key: "last_signal", label: "Last Signal", num: true },
+      { key: "last_trade", label: "Last Trade", num: true },
+      { key: "status", label: "Status" },
     ],
-    orderedRows() {
-      const rows = this.data.rows || [];
-      const order = (this.data.rankings || {})[this.rankBy] || rows.map(r => r.basic.name);
-      const byName = {}; rows.forEach(r => byName[r.basic.name] = r);
-      let out = order.map(n => byName[n]).filter(Boolean);
-      if (this.worstFirst) out = out.slice().reverse();
-      return out;
+    quickActions: [
+      { key: "details", tone: "info", title: "Strategy Details", desc: "View detailed performance", href: "/strategy-health" },
+      { key: "signals", tone: "info", title: "Signals", desc: "View signals for selected strategy", href: "/signals" },
+      { key: "orders", tone: "info", title: "Orders", desc: "View orders for selected strategy", href: "/orders" },
+      { key: "trades", tone: "pos", title: "Trades", desc: "View trades for selected strategy", href: "/trades" },
+      { key: "performance", tone: "pos", title: "Performance", desc: "Deep performance analytics", href: "/pnl" },
+      { key: "capital", tone: "warn", title: "Capital & Risk", desc: "Capital, risk & allocation", href: "/capital-risk" },
+      { key: "logs", tone: "info", title: "Logs", desc: "View strategy logs & events", href: "/logs" },
+    ],
+
+    // ── mapping ────────────────────────────────────────────────────────────
+    scannerCell(scanners) {
+      const s = scanners || [];
+      if (!s.length) return { primary: "—", extra: "", full: "—" };
+      return { primary: s[0], extra: s.length > 1 ? "+" + (s.length - 1) : "", full: s.join(", ") };
     },
-    viewRank(name) {
-      const order = (this.data.rankings || {})[this.rankBy] || [];
-      const i = order.indexOf(name);
-      return i >= 0 ? i + 1 : "—";
+    statusOf(r) {
+      const c = r.silence && r.silence.color;
+      if (c === "RED") return "SILENT";
+      if (c === "YELLOW") return "QUIET";
+      return "ACTIVE";
     },
-    tstr(ts) { return ts ? String(ts).replace("T", " ").slice(5, 19) : "—"; },
+    rowsMapped() {
+      return (this.data.rows || []).map(r => {
+        const sc = this.scannerCell(r.basic.scanners);
+        return {
+          name: r.basic.name, strategy: r.basic.display_name,
+          direction: r.basic.direction, trade_type: r.basic.trade_type,
+          scanner: sc.primary, scanner_extra: sc.extra, scanner_full: sc.full,
+          scanners: r.basic.scanners || [],
+          signals: Number(r.signals.received || 0),
+          orders: Number(r.processing.created || 0),
+          trades: Number((r.trading.open || 0) + (r.trading.closed || 0)),
+          success: (r.success_rate === null || r.success_rate === undefined) ? null : r.success_rate,
+          win_rate: (r.trading.win_rate === null || r.trading.win_rate === undefined) ? null : r.trading.win_rate,
+          pnl: Number(r.performance.net_pnl || 0),
+          used: Number((r.capital_view && r.capital_view.capital_used) || 0),
+          last_signal: r.health.last_signal, last_trade: r.health.last_trade,
+          status: this.statusOf(r), family: r.family,
+        };
+      });
+    },
+    filtered() {
+      const a = this.af;
+      return this.rowsMapped().filter(r => {
+        if (a.strategy && r.strategy !== a.strategy) return false;
+        if (a.scanner && !r.scanners.includes(a.scanner)) return false;
+        if (a.status && r.status !== a.status) return false;
+        if (a.trade_type && r.trade_type !== a.trade_type) return false;
+        if (a.direction && String(r.direction || "").toUpperCase() !== a.direction) return false;
+        return true;
+      });
+    },
+    applyFilters() {
+      this.af = { strategy: this.f.strategy, scanner: this.f.scanner, status: this.f.status,
+                  trade_type: this.f.trade_type, direction: this.f.direction };
+      this.tPage = 1;
+    },
+    resetFilters() {
+      this.f = { date: this.data.today || "", strategy: "", scanner: "", status: "", trade_type: "", direction: "" };
+      this.af = { strategy: "", scanner: "", status: "", trade_type: "", direction: "" };
+      this.tPage = 1;
+    },
+    strategyOptions() { return [...new Set(this.rowsMapped().map(r => r.strategy))].sort(); },
+    scannerOptions() {
+      const s = new Set(); this.rowsMapped().forEach(r => (r.scanners || []).forEach(x => s.add(x)));
+      return [...s].sort();
+    },
+
+    // ── KPI deck (aggregate over the full day, all strategies) ──────────────
+    kpiAgg() {
+      const rows = this.rowsMapped();
+      const total = rows.length;
+      let active = 0, quiet = 0, silent = 0, sig = 0, trd = 0, pnl = 0, wins = 0, losses = 0;
+      rows.forEach(r => {
+        if (r.status === "ACTIVE") active++; else if (r.status === "QUIET") quiet++; else if (r.status === "SILENT") silent++;
+        sig += r.signals; trd += r.trades; pnl += r.pnl;
+      });
+      (this.data.rows || []).forEach(r => { wins += r.trading.wins || 0; losses += r.trading.losses || 0; });
+      const wr = (wins + losses) ? Math.round(1000 * wins / (wins + losses)) / 10 : null;
+      const pct = (n) => total ? (Math.round(1000 * n / total) / 10) : 0;
+      return { total, active, quiet, silent, activePct: pct(active), quietPct: pct(quiet), silentPct: pct(silent),
+               signals: sig, trades: trd, pnl, winRate: wr };
+    },
+    kpiCards() {
+      const k = this.kpiAgg();
+      return [
+        { key: "total",  tone: "info", label: "Total Strategies", val: this.fmtInt(k.total), sub: "All strategies" },
+        { key: "active", tone: "pos",  label: "Active",  val: this.fmtInt(k.active), sub: k.activePct + "%", subClass: "txt-green" },
+        { key: "quiet",  tone: "warn", label: "Quiet",   val: this.fmtInt(k.quiet),  sub: k.quietPct + "%",  subClass: "txt-orange" },
+        { key: "silent", tone: "neg",  label: "Silent",  val: this.fmtInt(k.silent), sub: k.silentPct + "%", subClass: "txt-red" },
+        { key: "signals", tone: "info", label: "Total Signals", val: this.fmtInt(k.signals), sub: "Today" },
+        { key: "trades",  tone: "info", label: "Total Trades",  val: this.fmtInt(k.trades),  sub: "Today" },
+        { key: "pnl", tone: (k.pnl < 0 ? "neg" : "pos"), label: "Total P&L", val: this.money(k.pnl), sub: "Today" },
+        { key: "winrate", tone: "info", label: "Win Rate", val: (k.winRate === null ? "—" : k.winRate + "%"), sub: "Today" },
+      ];
+    },
+
+    // ── hierarchy ───────────────────────────────────────────────────────────
+    hierarchy() {
+      const fam = {};
+      this.rowsMapped().forEach(r => {
+        const f = r.family || r.strategy;
+        fam[f] = fam[f] || { name: f, long: false, short: false };
+        const d = String(r.direction || "").toUpperCase();
+        if (d === "LONG") fam[f].long = true;
+        if (d === "SHORT") fam[f].short = true;
+      });
+      return Object.values(fam);
+    },
+
+    // ── formatters / glyphs ──────────────────────────────────────────────────
+    money(v) { const n = Number(v || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); },
+    fmtInt(v) { return Number(v || 0).toLocaleString("en-IN"); },
+    pctFmt(v) { return (v === null || v === undefined || v < 0) ? "—" : (v + "%"); },
+    clockOf(ts) { if (!ts) return "—"; const s = String(ts).replace("T", " "); return s.slice(11, 19) || "—"; },
+    dirCls(d) { return String(d || "").toUpperCase() === "SHORT" ? "glyph-short" : "glyph-long"; },
+    dirGlyph(d) { return String(d || "").toUpperCase() === "SHORT" ? STRAT_ICONS._down : STRAT_ICONS._up; },
+    stratIcon(k) { return STRAT_ICONS[k] || STRAT_ICONS._up; },
+    pageInfo() {
+      const n = this.filtered().length;
+      if (!n) return "Showing 0 of 0 entries";
+      const from = (this.tPage - 1) * this.tPageSize + 1;
+      const to = Math.min(n, this.tPage * this.tPageSize);
+      return "Showing " + from + " to " + to + " of " + n + " entries";
+    },
   });
 }
+
+const _S = 'stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"';
+const STRAT_ICONS = {
+  total:       `<svg viewBox="0 0 24 24" ${_S}><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6M15 20a6 6 0 0 1 6-6"/></svg>`,
+  active:      `<svg viewBox="0 0 24 24" ${_S}><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v5h-5"/></svg>`,
+  quiet:       `<svg viewBox="0 0 24 24" ${_S}><path d="M4 7h16M4 12h10M4 17h7"/></svg>`,
+  silent:      `<svg viewBox="0 0 24 24" ${_S}><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 15.5v.5"/></svg>`,
+  signals:     `<svg viewBox="0 0 24 24" ${_S}><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg>`,
+  trades:      `<svg viewBox="0 0 24 24" ${_S}><path d="M3 8h13l-3-3M21 16H8l3 3"/></svg>`,
+  pnl:         `<svg viewBox="0 0 24 24" ${_S}><path d="M8 6h8M8 10h8M14 6a4 4 0 0 1 0 8H9l6 5"/></svg>`,
+  winrate:     `<svg viewBox="0 0 24 24" ${_S}><path d="M19 5L5 19"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg>`,
+  details:     `<svg viewBox="0 0 24 24" ${_S}><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>`,
+  orders:      `<svg viewBox="0 0 24 24" ${_S}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>`,
+  performance: `<svg viewBox="0 0 24 24" ${_S}><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-6"/></svg>`,
+  capital:     `<svg viewBox="0 0 24 24" ${_S}><path d="M12 3l7 3v5c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></svg>`,
+  logs:        `<svg viewBox="0 0 24 24" ${_S}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg>`,
+  _up:         `<svg viewBox="0 0 24 24" ${_S}><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7v5h-5"/></svg>`,
+  _down:       `<svg viewBox="0 0 24 24" ${_S}><path d="M3 7l6 6 4-4 8 8"/><path d="M21 17v-5h-5"/></svg>`,
+};
 </script>
 {% endblock %}

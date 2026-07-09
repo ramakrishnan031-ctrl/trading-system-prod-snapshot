@@ -69,6 +69,7 @@ def get_strategies(cfg: dict) -> dict:
             "display_name": s.get("display_name", name),
             "enabled": bool(s.get("enabled", True)),
             "direction": s.get("direction"),
+            "intent": s.get("intent"),          # INTRADAY | POSITIONAL (→ Trade Type)
             "order_protocol": s.get("order_protocol"),
             "max_concurrent_positions": int(s.get("max_concurrent_positions", 2)),
             "entry_start_time": s.get("entry_start_time"),

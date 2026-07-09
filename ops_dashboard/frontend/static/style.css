@@ -702,3 +702,116 @@ main.content:has(> .dash-page) { width: 100%; max-width: 2100px; margin: 0; padd
 .summary-bar .sb-datetime.sb-right { margin-left: auto; }
 .summary-bar .sb-hl { color: var(--blue); font-weight: 700; }
 .sb-ver { padding: 14px 16px 4px; font-size: 11px; color: var(--dim); opacity: .75; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   == Screen 03 — Strategies (Strategy Control Tower) ==
+   Continues Screen-02's visual system: the page root carries `.dash-page` so the
+   full-bleed layout + `.kc` cards + `.mc-panel`/`.mc-head`/tint tokens all apply.
+   `.strat-page` rules below are the screen-specific additions. Capital cols
+   Allocated/Remaining/Usage% intentionally omitted (no per-strategy cap exists).
+   ══════════════════════════════════════════════════════════════════════════ */
+.txt-orange { color: var(--orange) !important; }
+
+/* Title block */
+.strat-page .pg-title { display: flex; align-items: baseline; gap: 12px; margin: 2px 2px 14px; }
+.strat-page .pg-title h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -.01em; color: var(--text); }
+.strat-page .pg-sub { font-size: 13px; color: var(--muted); }
+
+/* 8 summary KPI cards (reuses .kc) */
+.strat-page .sk-deck { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 1400px) { .strat-page .sk-deck { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px)  { .strat-page .sk-deck { grid-template-columns: repeat(2, 1fr); } }
+/* icon tint for cards where the tone class isn't the parent (quick actions) */
+.strat-page .ic-info { background: rgba(var(--t-blue), .15); color: var(--blue); }
+.strat-page .ic-pos  { background: rgba(var(--t-green), .16); color: var(--pos); }
+.strat-page .ic-neg  { background: rgba(var(--t-red), .16); color: var(--neg); }
+.strat-page .ic-warn { background: rgba(var(--t-orange), .16); color: var(--orange); }
+
+/* Filters */
+.strat-page .flt-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px; }
+.strat-page .flt-field { display: flex; flex-direction: column; gap: 5px; min-width: 150px; flex: 1 1 150px; }
+.strat-page .flt-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.strat-page .flt-c { height: 36px; padding: 0 10px; font-size: 13px; color: var(--text);
+  background: var(--card); border: 1px solid var(--card-bd); border-radius: 8px; font-family: inherit; }
+.strat-page .flt-c:focus { outline: none; border-color: var(--blue); }
+.strat-page .flt-sm { height: 30px; padding: 0 8px; width: auto; min-width: 58px; }
+.strat-page .flt-actions { display: flex; gap: 10px; align-items: flex-end; margin-left: auto; }
+.strat-page .btn-ghost, .strat-page .btn-primary { height: 36px; padding: 0 16px; font-size: 13px; font-weight: 600;
+  border-radius: 8px; cursor: pointer; font-family: inherit; }
+.strat-page .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-bd); }
+.strat-page .btn-ghost:hover { color: var(--text); border-color: var(--blue); }
+.strat-page .btn-primary { background: var(--blue); color: #fff; border: 1px solid var(--blue); }
+.strat-page .btn-primary:hover { filter: brightness(1.08); }
+
+/* Strategy hierarchy */
+.strat-page .hier-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.strat-page .hier-card { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 14px 16px; background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; min-height: 62px; }
+.strat-page .hier-name { font-size: 14px; font-weight: 700; color: var(--text); }
+.strat-page .hier-legs { display: flex; align-items: center; gap: 8px; }
+.strat-page .hier-connector { width: 22px; height: 1px; background: var(--card-bd); }
+.strat-page .hier-leg { display: flex; flex-direction: column; gap: 3px; text-align: right; }
+.strat-page .hier-dir { font-size: 12.5px; font-weight: 700; }
+.strat-page .hier-long { color: var(--pos); }
+.strat-page .hier-short { color: var(--neg); }
+.strat-page .hier-muted { color: var(--dim); opacity: .45; }
+
+/* Main table */
+.strat-page .st-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.strat-page .st-show { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+.strat-page .st-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.strat-page .st-tbl th { text-align: left; padding: 8px 10px; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em; color: var(--dim); border-bottom: 1px solid var(--border);
+  white-space: nowrap; cursor: pointer; user-select: none; }
+.strat-page .st-tbl th.rt { text-align: right; }
+.strat-page .st-tbl th:hover { color: var(--muted); }
+.strat-page .st-arw { margin-left: 4px; color: var(--blue); }
+.strat-page .st-tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border-soft); white-space: nowrap; }
+.strat-page .st-tbl tbody tr:hover { background: var(--card); }
+.strat-page .st-tbl .rt { text-align: right; font-variant-numeric: tabular-nums; }
+.strat-page .st-name { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.strat-page .st-glyph { flex: 0 0 auto; width: 18px; height: 18px; display: inline-flex; }
+.strat-page .st-glyph svg { width: 18px; height: 18px; }
+.strat-page .glyph-long { color: var(--pos); }
+.strat-page .glyph-short { color: var(--neg); }
+.strat-page .st-scan { color: var(--muted); }
+.strat-page .st-scan-n { margin-left: 5px; padding: 0 5px; font-size: 10px; font-weight: 700; color: var(--blue);
+  background: rgba(var(--t-blue), .14); border-radius: 4px; }
+.strat-page .st-status { padding: 3px 9px; font-size: 11px; font-weight: 700; letter-spacing: .03em; border-radius: 6px; }
+.strat-page .sts-ACTIVE { color: var(--pos); background: rgba(var(--t-green), .15); }
+.strat-page .sts-QUIET  { color: var(--orange); background: rgba(var(--t-orange), .15); }
+.strat-page .sts-SILENT { color: var(--neg); background: rgba(var(--t-red), .15); }
+.strat-page .st-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.strat-page .st-count { font-size: 12.5px; color: var(--muted); }
+.strat-page .st-pager { display: flex; align-items: center; gap: 12px; }
+.strat-page .st-rpp { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
+.strat-page .st-pg { width: 30px; height: 30px; border-radius: 7px; background: var(--card); color: var(--text);
+  border: 1px solid var(--card-bd); cursor: pointer; font-size: 15px; line-height: 1; }
+.strat-page .st-pg:disabled { opacity: .4; cursor: default; }
+.strat-page .st-pg:not(:disabled):hover { border-color: var(--blue); }
+.strat-page .st-pgn { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 54px; text-align: center; }
+
+/* Quick actions */
+.strat-page .qa-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; }
+@media (max-width: 1400px) { .strat-page .qa-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px)  { .strat-page .qa-grid { grid-template-columns: repeat(2, 1fr); } }
+.strat-page .qa-card { display: flex; align-items: flex-start; gap: 10px; padding: 14px; text-decoration: none;
+  background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; color: var(--text);
+  transition: border-color .12s, transform .12s; position: relative; min-height: 86px; }
+.strat-page .qa-card:hover { transform: translateY(-2px); border-color: var(--blue); }
+.strat-page .qa-ic { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 8px; display: inline-flex;
+  align-items: center; justify-content: center; }
+.strat-page .qa-ic svg { width: 17px; height: 17px; }
+.strat-page .qa-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.strat-page .qa-title { font-size: 13.5px; font-weight: 700; }
+.strat-page .qa-desc { font-size: 11.5px; color: var(--dim); line-height: 1.25; }
+.strat-page .qa-chev { position: absolute; top: 12px; right: 12px; color: var(--dim); font-size: 16px; }
+
+/* Status logic footer */
+.strat-page .stlogic { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 11px 16px;
+  background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; font-size: 12.5px; color: var(--muted); }
+.strat-page .stlogic-ic { color: var(--blue); }
+.strat-page .stlogic-k { font-weight: 700; color: var(--text); }
+.strat-page .stlogic-item { display: inline-flex; align-items: center; gap: 7px; }
+.strat-page .stlogic-pill { padding: 2px 8px; font-size: 10.5px; font-weight: 700; border-radius: 5px; }
+.strat-page .stlogic-sep { color: var(--dim); }

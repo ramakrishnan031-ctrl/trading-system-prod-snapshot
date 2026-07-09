@@ -38,6 +38,17 @@ def _family_of(name: str) -> str:
     return name
 
 
+def _trade_type(intent) -> Optional[str]:
+    """Map the strategy YAML `intent` to the Screen-03 Trade Type label
+    (read-only display field; INTRADAY→Intraday, POSITIONAL/DELIVERY→Delivery)."""
+    t = str(intent or "").strip().upper()
+    if t in ("POSITIONAL", "DELIVERY", "CNC"):
+        return "Delivery"
+    if t == "INTRADAY":
+        return "Intraday"
+    return None
+
+
 def _win_rate(wins: int, losses: int) -> Optional[float]:
     decided = wins + losses
     return round(100.0 * wins / decided, 1) if decided > 0 else None
@@ -210,6 +221,7 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
                 "display_name": conf.get("display_name", name),
                 "enabled": bool(conf.get("enabled", True)) if name in strategies else None,
                 "direction": conf.get("direction"),
+                "trade_type": _trade_type(conf.get("intent")),   # Intraday | Delivery (read-only)
                 "scanners": my_scanners,
                 "mode": mode,
                 "configured": name in strategies,

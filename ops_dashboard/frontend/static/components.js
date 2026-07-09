@@ -20,7 +20,7 @@
 
    The macros in templates/components.html render markup that binds to these
    mixin members (tSort/tArrow/tPaged/fVals/fReset/pPeriod ...). Nothing here
-   mutates a page's own fields — mixin members are prefixed (t*/f*/p*/dt*). */
+   mutates a page's own fields — mixin members are prefixed (t*, f*, p*, dt*). */
 
 /* ── DataTable: client-side sort + rows-per-page over a rows[] the page owns ── */
 function tableMixin(opts) {
