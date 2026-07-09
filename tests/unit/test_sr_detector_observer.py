@@ -172,7 +172,7 @@ def _seed_signal(store, signal_id, symbol="TESTSTK"):
 
 def test_real_store_has_sr_table_and_write_roundtrips(tmp_path):
     store = _make_store(tmp_path)
-    assert store.get_schema_version() == 41   # W0 bumped 40→41 (+config_snapshots); sr_detector_results still present
+    assert store.get_schema_version() == 42   # W0 bumped 40→41 (+config_snapshots); sr_detector_results still present
     tbl = store.fetch_one(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='sr_detector_results'")
     assert tbl is not None

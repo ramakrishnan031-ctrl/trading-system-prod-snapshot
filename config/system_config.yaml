@@ -275,6 +275,10 @@ order_reconciler:             # RC17 — reconciler tuning
   capital_drift_alert_interval_sec: 1800  # TASK-11: min seconds between repeat CAPITAL_DRIFT alerts (30 min)
   stuck_exiting_timeout_minutes: 30  # Task 4: resolve trades stuck in EXITING (HARD_KILL died mid-exit) older than this — flat->CLOSED_MANUAL, still-held->OPEN
 
+eod_reconcile:                 # P1 (02-Jul) — broker-authoritative EOD reconcile (scripts/eod_broker_reconcile.py @15:58)
+  authoritative: false        # SHADOW default: P1 runs alongside eod_verify, writes its verdict + shadow comparison, alerts INFO, gates nothing. Flip true (after shadow observation) to make P1 authoritative + retire eod_verify.
+  pnl_tolerance: 100.0        # Rs band on broker-day-realized vs local realized before the P&L dimension is ISSUES
+
 tgt_retry:                    # Task (2026-06-19): standalone TGT retry — re-place a TGT left unplaced by FIX-190 Bug C (SL still protects)
   enabled: true
   poll_interval_sec: 30       # retry loop cadence

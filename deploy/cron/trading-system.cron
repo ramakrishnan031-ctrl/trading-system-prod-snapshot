@@ -87,6 +87,9 @@ SHELL=/bin/bash
 # eod_verify  [15:55 Mon-Fri]
 55 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_verify.py >> logs/cron-eod-verify.log 2>&1
 
+# eod_broker_reconcile  [15:58 Mon-Fri]
+58 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/eod_broker_reconcile.py >> logs/cron-eod-broker-reconcile.log 2>&1
+
 # wal_checkpoint  [16:00 Mon-Fri]
 0 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/wal_checkpoint.py >> logs/wal_checkpoint.log 2>&1
 

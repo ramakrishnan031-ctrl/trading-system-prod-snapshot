@@ -374,6 +374,24 @@ jobs:
     command: scripts/eod_verify.py
     env_wrapper: python
     log_target: '>> logs/cron-eod-verify.log 2>&1'
+  # P1 (02-Jul): broker-authoritative EOD reconcile — runs @15:58 (after reconcile_positions
+  # @15:45 + settle) with its OWN creds so it verifies even if the process was down at 15:17.
+  # SHADOW alongside eod_verify (config eod_reconcile.authoritative=false); at cutover this
+  # becomes authoritative and eod_verify is retired.
+  eod_broker_reconcile:
+    script: scripts/eod_broker_reconcile.py
+    schedule: 15:58 Mon-Fri
+    type: python
+    critical: true
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 58 15 * * 1-5
+    command: scripts/eod_broker_reconcile.py
+    env_wrapper: python
+    log_target: '>> logs/cron-eod-broker-reconcile.log 2>&1'
   # daily_review — DELETED 01-Jul-2026 (Phase C cutover); superseded by daily_trade_review
   # (16:07). Entry removed entirely (not disabled) per Rama's directive; the module is
   # `git rm`-ed so git history is the rollback. Its output (reports/daily/) had NO consumer.

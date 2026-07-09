@@ -99,7 +99,7 @@ def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 41  # W0 (report-redesign foundation): +config_snapshots (resolved-config-per-date). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 42  # P1: +eod_broker_reconciliation (broker-authoritative EOD verdict). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -2852,6 +2852,42 @@ class StateStore:
             (date_iso,),
         )
         return dict(row) if row else None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # P1: broker-authoritative EOD reconcile verdict
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def upsert_eod_broker_reconciliation(self, row: dict) -> None:
+        """P1: upsert the broker-authoritative EOD verdict for `row['date']`.
+        INSERT OR REPLACE so a same-day re-run overwrites. Keys mirror the
+        eod_broker_reconciliation columns; missing keys default to None/0."""
+        cols = (
+            "date", "mode", "self_consistency", "authoritative", "broker_reachable",
+            "positions_status", "orders_status", "pnl_status", "ledger_status",
+            "margin_status", "overall_status", "eod_verify_status", "mismatch",
+            "detail", "verified_at",
+        )
+        with self.transaction() as cur:
+            cur.execute(
+                f"INSERT OR REPLACE INTO eod_broker_reconciliation ({','.join(cols)}) "
+                f"VALUES ({','.join('?' for _ in cols)})",
+                tuple(row.get(c) for c in cols),
+            )
+
+    def get_eod_broker_reconciliation(self, date_iso: str) -> Optional[dict]:
+        """Return the P1 EOD verdict row for date_iso, or None."""
+        r = self.fetch_one(
+            "SELECT * FROM eod_broker_reconciliation WHERE date = ?", (date_iso,)
+        )
+        return dict(r) if r else None
+
+    def get_eod_verification_status(self, date_iso: str) -> Optional[str]:
+        """Return eod_verify's status for date_iso (VERIFIED | ISSUES_FOUND) or None —
+        for P1's shadow comparison against the local-only verdict."""
+        r = self.fetch_one(
+            "SELECT status FROM eod_verification WHERE date = ?", (date_iso,)
+        )
+        return r["status"] if r else None
 
     # ─────────────────────────────────────────────────────────────────────────
     # FIX-145: Cron heartbeat helpers
