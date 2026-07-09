@@ -1107,6 +1107,7 @@ class OrderReconciler:
                     entry_price=float(entry_price),
                     direction=direction,
                     costs=0.0,
+                    trade_id=trade_id,   # M-C7: reverse the persisted committed margin
                 )
                 steps.append(f"capital_released(pnl={release_result.pnl_delta:.2f})")
             except Exception as exc:
@@ -1792,33 +1793,135 @@ class OrderReconciler:
         """
         Local qty_filled > broker qty — partial position closure at broker (RC5d).
 
-        FIX-148 (A3): Enhanced to handle partial RMS exits:
-        1. Update qty_filled in DB
-        2. Cancel old SL/TGT orders at broker (wrong qty)
-        3. Telegram alert for partial close
-        G5b on the next cycle will detect missing SL and place a fresh one
-        at the correct (reduced) qty.
+        FIX-148 (A3): position/order side — update qty_filled, cancel stale SL/TGT
+        (G5b re-places at the reduced qty on the next cycle), Telegram alert.
+
+        M-O2 (Wave-6, audit 04-Jul): ALSO reconcile the capital/PnL side for the
+        externally-closed portion. CHECK1 (full close) releases capital + books PnL
+        via fm.release_used; CHECK4 historically skipped it, so the margin for the
+        closed (phantom) qty stayed locked in ``used`` all session and its realized
+        PnL never entered daily_realized — the FM7 daily-loss gate could not see a
+        partial stop-out. Fix: mirror CHECK1 proportionally with
+        release_used(exit_qty=closed_qty), freeing the closed portion's margin and
+        booking its PnL into fm_ledger/daily_realized.
+
+        Exactly-once via a qty_filled CAS (``WHERE qty_filled=local_qty``): only the
+        cycle that actually observes the local->broker transition performs the
+        release, so a re-detected same-delta cycle (or a crash between the release
+        and the qty write) cannot double-release; sequential DIFFERENT partials each
+        match their own current qty and release their own delta. Ordering is CAS
+        (claim) THEN release: a release failure after the claim leaves the margin
+        un-freed (conservative under-release, logged loud) rather than risking a
+        double-release — the safe failure direction for a capital guard.
+
+        The trade STAYS OPEN/PARTIAL — no mark_trade_manually_closed, no close_trade
+        CAS -> no terminal write -> the terminal-state guard stays silent. No
+        terminal net_pnl is written on a partial (trades.net_pnl finalizes at full
+        close; fm_ledger.pnl_delta is the source of truth for daily-loss +
+        reservable). PositionClosed is deliberately NOT published on a partial: its
+        subscribers treat it as a FULL close (paper adapter pops the WHOLE position;
+        slippage_recorder writes a completed-trade roll-up; shadow_tracker opens an
+        inning) — all wrong for a still-open position.
         """
         trade_id = trade["trade_id"]
         symbol = trade["symbol"]
         log = bind_trade(self._log, trade_id=trade_id)
         local_qty = trade["qty_filled"] or 0
+
+        # M-O2 edge: a present-but-zero broker position is a FULL external close,
+        # not a partial (CHECK1's ``bp is None`` misses a zero-qty-but-present row).
+        # Route to CHECK1 so it finalizes + releases the remaining qty rather than
+        # leaving the trade OPEN at qty 0.
+        if broker_qty <= 0:
+            return self._check1_manual_close(trade)
+
         success = True
         steps: List[str] = []
 
+        # ── qty_filled CAS: the exactly-once latch for the M-O2 capital release ──
+        # Conditional on the CURRENT recorded qty so only the observing cycle both
+        # reduces qty AND releases the closed portion. rowcount==1 -> this cycle
+        # owns the release; ==0 -> another path already moved qty_filled (skip the
+        # release; no double-count).
+        qty_transition_owned = False
         try:
             with self._store.transaction() as cur:
                 cur.execute(
-                    "UPDATE trades SET qty_filled = ?, updated_at = ? WHERE trade_id = ?",
-                    (broker_qty, self._now_ist(), trade_id),
+                    "UPDATE trades SET qty_filled = ?, updated_at = ? "
+                    "WHERE trade_id = ? AND qty_filled = ?",
+                    (broker_qty, self._now_ist(), trade_id, local_qty),
                 )
-            steps.append(f"qty_filled={local_qty}->{broker_qty}")
+                qty_transition_owned = (cur.rowcount == 1)
+            steps.append(
+                f"qty_filled={local_qty}->{broker_qty}" if qty_transition_owned
+                else f"qty_cas_noop(recorded!={local_qty})"
+            )
         except Exception as exc:
             log.error(
                 "check4: update qty_filled failed for %s: %s", trade_id, exc
             )
             success = False
             steps.append(f"qty_update_FAILED: {exc}")
+
+        # ── M-O2: release capital + book PnL for the closed portion, ONLY on the
+        #    cycle that owns the qty transition (exactly-once). Mirrors CHECK1's
+        #    accounting at exit_qty=closed_qty; trade stays OPEN. ────────────────
+        if qty_transition_owned:
+            closed_qty = local_qty - broker_qty
+            entry_price = trade["entry_actual_price"]
+            product = trade["product"]
+            intent = _PRODUCT_TO_INTENT.get(product or "", "")
+            try:
+                direction = trade["direction"] or "LONG"
+            except (KeyError, IndexError):
+                direction = "LONG"
+            if direction not in ("LONG", "SHORT"):
+                log.warning(
+                    "check4: trade %s unexpected direction %r; defaulting to LONG",
+                    trade_id, direction,
+                )
+                direction = "LONG"
+
+            if entry_price and float(entry_price) > 0 and closed_qty > 0 and intent:
+                exit_price = self._resolve_exit_price(
+                    symbol, direction, entry_price, log
+                )
+                exit_source = (
+                    "broker_trades" if exit_price != float(entry_price)
+                    else "entry_proxy"
+                )
+                try:
+                    release_result = self._fm.release_used(
+                        symbol=symbol,
+                        exit_price=float(exit_price),
+                        exit_qty=int(closed_qty),
+                        intent=intent,
+                        entry_price=float(entry_price),
+                        direction=direction,
+                        costs=0.0,
+                        trade_id=trade_id,   # M-C7: reverse the persisted committed margin
+                    )
+                    steps.append(
+                        f"partial_capital_released(qty={closed_qty} "
+                        f"pnl={release_result.pnl_delta:.2f} {exit_source})"
+                    )
+                except Exception as exc:
+                    # Conservative under-release (margin stays in ``used``); loud so
+                    # it is never silent. No retry: the CAS already reduced qty, so
+                    # the next cycle sees HEALTHY. Rare (release_used raises only on
+                    # a bad direction [guarded] or an invariant violation [hard_kill]).
+                    log.error(
+                        "check4: release_used FAILED for %s (margin NOT freed): %s",
+                        trade_id, exc,
+                    )
+                    success = False
+                    steps.append(f"partial_capital_release FAILED: {exc}")
+            elif not intent:
+                log.warning(
+                    "check4: unknown product %r for %s; skipping capital release",
+                    product, trade_id,
+                )
+                steps.append("skip_release(unknown_product)")
 
         # FIX-148: Cancel stale SL/TGT orders (they're sized for old qty).
         # G5b will detect no active SL on next cycle and place a fresh one

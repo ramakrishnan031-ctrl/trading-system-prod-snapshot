@@ -198,11 +198,11 @@ class _MockFundManager:
         self.released.append(reservation_id)
 
     def release_used(self, *, symbol, exit_price, exit_qty, intent,
-                     entry_price, direction, costs=0.0):
+                     entry_price, direction, costs=0.0, trade_id=None):
         self.released_used.append({
             "symbol": symbol, "exit_price": exit_price, "exit_qty": exit_qty,
             "intent": intent, "entry_price": entry_price,
-            "direction": direction, "costs": costs,
+            "direction": direction, "costs": costs, "trade_id": trade_id,
         })
 
     def required_margin(self, qty: int, price: float, intent: str) -> float:

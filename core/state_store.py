@@ -51,6 +51,7 @@ What This Module Does NOT Do:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -2385,6 +2386,48 @@ class StateStore:
             (date_iso,),
         )
         return row["net_pnl"] if row else 0.0
+
+    def get_entry_commit_margin(self, trade_id: str) -> Optional[tuple[float, int]]:
+        """M-C7: the PERSISTED committed entry margin + committed qty for a trade,
+        summed over its COMMIT fm_ledger row(s).
+
+        FundManager.release_used uses this to REVERSE the committed margin
+        (proportionally by qty) instead of recomputing it from the current
+        leverage_map — so a leverage-config edit across a restart cannot leave a
+        permanent residual in `used` (M-C7). The committed margin is the COMMIT
+        row's `amount` (what commit_to_used persisted, and what rehydrate replays);
+        the committed qty is parsed from that row's `reason` (`"fill: qty=<n> …"`,
+        written by fund_manager.commit_to_used — keep that token parse-stable).
+
+        trade_id -> trades.reservation_id -> fm_ledger COMMIT rows. Returns
+        (committed_margin, committed_qty), or None if unresolvable (no
+        reservation_id / no COMMIT row / unparseable qty) so the caller can fall
+        back to the recompute without breaking a close.
+        """
+        trow = self.fetch_one(
+            "SELECT reservation_id FROM trades WHERE trade_id = ?", (trade_id,)
+        )
+        if not trow or not trow["reservation_id"]:
+            return None
+        rid = trow["reservation_id"]
+        commit_rows = self.fetch_all(
+            "SELECT amount, reason FROM fm_ledger "
+            "WHERE reservation_id = ? AND entry_type = 'COMMIT'",
+            (rid,),
+        )
+        if not commit_rows:
+            return None
+        total_margin = 0.0
+        total_qty = 0
+        for r in commit_rows:
+            total_margin += float(r["amount"] or 0.0)
+            m = re.search(r"qty=(\d+)", r["reason"] or "")
+            if m is None:
+                return None   # unparseable -> caller recomputes (never silent)
+            total_qty += int(m.group(1))
+        if total_qty <= 0:
+            return None
+        return (total_margin, total_qty)
 
     def get_day_opening_capital(self, date_iso: str) -> Optional[float]:
         """

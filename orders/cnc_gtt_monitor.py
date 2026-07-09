@@ -447,7 +447,8 @@ class CncGttMonitor:
                 rr = self._fm.release_used(
                     symbol=symbol, exit_price=float(exit_price), exit_qty=qty,
                     intent=PRODUCT_TO_INTENT.get("CNC", "DELIVERY"),
-                    entry_price=float(entry_price), direction=direction, costs=0.0)
+                    entry_price=float(entry_price), direction=direction, costs=0.0,
+                    trade_id=trade_id)   # M-C7: reverse the persisted committed margin
                 pnl = float(rr.pnl_delta)
                 self._store.record_gtt_close_financials(
                     trade_id=trade_id, exit_price=float(exit_price), net_pnl=pnl)

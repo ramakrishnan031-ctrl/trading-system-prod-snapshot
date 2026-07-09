@@ -1121,6 +1121,7 @@ class FundManager:
         entry_price: float,
         direction: str,
         costs: float = 0.0,
+        trade_id: Optional[str] = None,   # M-C7: reverse the persisted committed margin
     ) -> ReleaseResult:
         """
         Release used margin on position close (FM5). Updates daily_realized_pnl (FM7).
@@ -1157,9 +1158,20 @@ class FundManager:
         with self._lock:
             self._assert_initialized()
             bucket = self._bucket_for_intent(intent)
-            # Use entry_price to compute the margin that was locked in used (FM4).
-            # Exit price may differ; always release the entry margin from used.
-            margin = required_margin(exit_qty, entry_price, intent, self._leverage_map)
+            # M-C7: reverse the PERSISTED committed margin (proportional to
+            # exit_qty), NOT a recompute from the CURRENT leverage_map.
+            # commit_to_used persisted the commit-time margin (M1) in the COMMIT
+            # fm_ledger row and rehydrate replays that same M1; recomputing here
+            # with required_margin(...current leverage...) drifted `used`
+            # permanently whenever the leverage_map changed across a restart
+            # (M1 seeded, M2 released -> M1-M2 residual, silent because the
+            # mis-released amount lands in avail and the global invariant still
+            # balances). committed_M1 * exit_qty/committed_qty is
+            # leverage-change-invariant: a full close (sum of exit_qty ==
+            # committed_qty) frees exactly M1; partials (M-O2) free their slice.
+            margin = self._committed_release_margin(
+                trade_id, exit_qty, entry_price, intent
+            )
 
             # EF-3: direction-aware gross PnL. LONG: (exit-entry)*qty.
             # SHORT: (entry-exit)*qty. Subtract costs for net PnL.
@@ -1243,6 +1255,41 @@ class FundManager:
             self._handle_invariant_violation(_violation)
             raise _violation
         return _result
+
+    def _committed_release_margin(
+        self,
+        trade_id: Optional[str],
+        exit_qty: int,
+        entry_price: float,
+        intent: str,
+    ) -> float:
+        """M-C7: the margin to free on release = the PERSISTED committed margin,
+        proportional to exit_qty (committed_M1 * exit_qty / committed_qty). This
+        is leverage-change-invariant — a full close frees exactly the committed
+        M1 regardless of any leverage_map edit since commit; sequential partials
+        each free their slice and sum to M1 (denominator is always the ORIGINAL
+        committed_qty).
+
+        Falls back to the legacy leverage recompute ONLY when the committed row
+        is unresolvable (no trade_id / missing COMMIT row / unparseable qty) — no
+        worse than the pre-M-C7 behaviour, and LOGGED so it is never silent. A
+        release must never raise here (the position is already realised at the
+        broker; capital cleanup proceeds).
+        """
+        if trade_id is not None:
+            committed = self._store.get_entry_commit_margin(trade_id)
+            if committed is not None:
+                committed_margin, committed_qty = committed
+                if committed_qty > 0:
+                    return committed_margin * exit_qty / committed_qty
+            self._log.warning(
+                "fund_manager.release_used_commit_unresolved",
+                extra={
+                    "trade_id": trade_id,
+                    "reason": "no COMMIT row / unparseable qty; M-C7 recompute fallback",
+                },
+            )
+        return required_margin(exit_qty, entry_price, intent, self._leverage_map)
 
     def sync_from_broker(self, broker_balance: float) -> None:
         """
@@ -2131,13 +2178,22 @@ class FundManager:
         total_reserved = self._intraday_reserved + self._positional_reserved
         total_used = self._intraday_used + self._positional_used
         try:
-            # H-1: per-bucket INV6 guard. Global sum check alone can hide
-            # bucket overflow (one bucket negative, other positive enough to
-            # offset, sum passes). Checking each bucket against its cap
-            # surfaces NEGATIVE_MARGIN_AVAILABLE when reserved+used exceeds
-            # the bucket's share of _total (e.g. after sync_from_broker
-            # shrinks the broker balance).
-            if self._intraday_avail < -_INVARIANT_TOLERANCE:
+            # H-1 + M-C3: per-bucket INV6 non-negativity guard. The global sum
+            # check alone hides per-bucket corruption — one partition negative,
+            # another positive enough to offset, so the global sum passes (e.g. a
+            # wrong-bucket release drives positional_used < 0 while its avail stays
+            # >= 0; or sync_from_broker shrinks the balance). H-1 caught only a
+            # NEGATIVE avail; M-C3 extends the trigger to a negative per-bucket USED
+            # or RESERVED too (neither can EVER legitimately be < 0), surfacing the
+            # "borrow" case as NEGATIVE_MARGIN_* instead of silence. Non-negativity
+            # ONLY: assert_capital_invariant runs here solely when a partition is
+            # already negative, so its INV6 field-guard raises BEFORE the equality
+            # check — a legitimate PnL-shifted per-bucket split (avail+reserved+used
+            # != total*pct) is never reached, so this cannot false-fire (a false
+            # CapitalInvariantViolation -> hard_kill).
+            if (self._intraday_avail < -_INVARIANT_TOLERANCE
+                    or self._intraday_used < -_INVARIANT_TOLERANCE
+                    or self._intraday_reserved < -_INVARIANT_TOLERANCE):
                 assert_capital_invariant(
                     margin_available=self._intraday_avail,
                     margin_reserved=self._intraday_reserved,
@@ -2149,7 +2205,9 @@ class FundManager:
                     reservation_id=context_id,
                     tolerance=_INVARIANT_TOLERANCE,
                 )
-            if self._positional_avail < -_INVARIANT_TOLERANCE:
+            if (self._positional_avail < -_INVARIANT_TOLERANCE
+                    or self._positional_used < -_INVARIANT_TOLERANCE
+                    or self._positional_reserved < -_INVARIANT_TOLERANCE):
                 assert_capital_invariant(
                     margin_available=self._positional_avail,
                     margin_reserved=self._positional_reserved,
