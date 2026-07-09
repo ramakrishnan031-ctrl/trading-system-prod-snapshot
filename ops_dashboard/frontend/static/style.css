@@ -484,51 +484,213 @@ a.kpi-card:hover { border-color: var(--accent); }
 .rank-1 { color: var(--gold); } .rank-2 { color: var(--silver); } .rank-3 { color: var(--bronze); }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   == Screen 02 — Dashboard redesign ==
-   Scoped to .dash-page (dashboard.html's content root) wherever the touched
-   class is shared with other, not-yet-redesigned screens, so nothing here
-   bleeds into them. Rules for classes exclusive to dashboard.html (pcard*,
-   svc-strip, hero-*, bw-card, the new strat-summary-grid) are unscoped.
+   == Screen 02 — Dashboard "Mission Control Center" (approved gui/02.Dashboard.png)
+   A full visual rebuild of dashboard.html, NOT a polish of the old widgets.
+   Everything here is scoped under `.dash-page` or uses classes that exist ONLY in
+   dashboard.html (mc-*, kc-*, pl-*, cap-tbl, svc-tbl, ev-*, ss-*) — no other
+   (not-yet-redesigned) screen is touched. Colors reuse the theme tokens; tint
+   rgbas are declared once on .dash-page so cards read as one system.
    ══════════════════════════════════════════════════════════════════════════ */
 
-/* Fill the available column width. The shared `.content` uses `margin:0 auto`
-   inside the flex-column `.main-col`; on the cross axis that auto-margin overrides
-   `align-items:stretch`, so the block shrink-wraps to its content and floats in a
-   narrow centered band with large blank gutters — the Screen-01 spacing issue the
-   spec calls out ("expand naturally", "avoid large unused blank regions"). Giving it
-   a definite `width:100%` makes it fill the column up to `max-width:1600px`, and the
-   existing `margin:0 auto` then only centers it once the viewport exceeds 1600px.
-   Scoped via :has() so no other (not-yet-redesigned) screen is affected. */
+/* Fill the column width. Shared `.content` uses `margin:0 auto` inside the
+   flex-column shell; on the cross axis that auto-margin overrides stretch, so the
+   block shrink-wraps + centers into a narrow band (the Screen-01 gutter issue).
+   `width:100%` makes it fill up to max-width:1600 and only center beyond it.
+   Scoped via :has() so no other screen changes. */
 main.content:has(> .dash-page) { width: 100%; }
 
-/* Section/card spacing (spec: sections 20-24px, cards/grid gap 16px) */
-.dash-page .panel { margin-bottom: 22px; }
-.dash-page .kpi-row, .dash-page .hero-grid, .dash-page .pipeline-grid, .dash-page .two-col {
-  gap: 16px;
+.dash-page {
+  --t-blue: 56,139,253;  --t-green: 46,160,67;   --t-red: 218,54,51;
+  --t-orange: 219,109,40; --t-purple: 163,113,247; --t-yellow: 210,153,34;
+  --t-gray: 139,148,158;
+  --card: #0f141b;          /* inner card bg — a step below --panel */
+  --card-bd: #232b35;       /* inner card border */
+  --ink: #cdd6e0;           /* section-title ink */
 }
-.dash-page .kpi-card { min-height: 92px; }   /* equal-height safety net across wrapped rows */
+.txt-green { color: var(--pos) !important; }
+.txt-red   { color: var(--neg) !important; }
 
-/* 13px readability floor for dashboard content text (long monitoring
-   sessions) — scoped here rather than sitewide since these classes are
-   shared with screens not yet redesigned. */
-.dash-page .pcard-name, .dash-page .svc-state, .dash-page .ev-ts, .dash-page .ev-type,
-.dash-page .bn-label, .dash-page .bn-note, .dash-page .cap-status, .dash-page .panel-sub {
-  font-size: 13px;
-}
+/* ── Panel shell + section head (spec: header 14-16px, strong weight) ── */
+.dash-page .panel.mc-panel { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 15px 18px 16px; margin-bottom: 16px; }
+.dash-page .mc-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.dash-page .mc-title { margin: 0; font-size: 14px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink); }
+.dash-page .mc-arw { color: var(--blue); font-weight: 700; }
+.dash-page .mc-flow { font-size: 12px; font-weight: 600; color: var(--blue); }
+.dash-page .mc-today { font-size: 12px; font-weight: 500; color: var(--dim);
+  text-transform: none; letter-spacing: 0; }
+.dash-page .mc-link { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--blue);
+  text-decoration: none; white-space: nowrap; }
+.dash-page .mc-link:hover { text-decoration: underline; }
+.dash-page .mc-link-foot { display: inline-block; margin: 12px 0 0; }
+.dash-page .mc-hint { margin-top: 12px; font-size: 12px; color: var(--dim); }
+.dash-page .mc-hint-ic { margin-right: 5px; }
 
-/* Strategy Summary (compact) — replaces the old Best/Worst block + chip strip */
-.strat-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 16px; align-items: stretch; }
-.strat-summary-grid .bignum, .strat-summary-grid .bw-card { min-height: 84px; }
+/* ── TODAY'S TRADING SUMMARY — 12 KPI cards ── */
+.dash-page .kpi-deck { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; }
+@media (max-width: 1400px) { .dash-page .kpi-deck { grid-template-columns: repeat(6, 1fr); } }
+@media (max-width: 1000px) { .dash-page .kpi-deck { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px)  { .dash-page .kpi-deck { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 520px)  { .dash-page .kpi-deck { grid-template-columns: repeat(2, 1fr); } }
 
-/* The 16px gap above widens each minmax()-based grid track's effective
-   minimum just enough to overflow at narrow widths (measured: 19px at
-   390px). kpi-row/hero-grid/pipeline-grid/two-col are shared with 16 other
-   templates already tuned at the original 12px gap sitewide -- revert to it
-   below the existing mobile breakpoint instead of changing their shared base. */
-@media (max-width: 640px) {
-  .dash-page .kpi-row, .dash-page .hero-grid, .dash-page .pipeline-grid,
-  .dash-page .two-col, .strat-summary-grid {
-    gap: 10px;
-  }
-}
+.dash-page .kc { display: flex; flex-direction: column; gap: 9px; min-height: 108px;
+  padding: 12px 12px 11px; background: var(--card); border: 1px solid var(--card-bd);
+  border-top: 3px solid var(--gray); border-radius: 10px; color: var(--text);
+  text-decoration: none; transition: transform .12s ease, border-color .12s ease; }
+.dash-page .kc:hover { transform: translateY(-2px); }
+.dash-page .kc-top { display: flex; align-items: center; gap: 7px; }
+.dash-page .kc-ic { flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.dash-page .kc-ic svg { width: 15px; height: 15px; }
+.dash-page .kc-label { font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1.15; }
+.dash-page .kc-val { font-size: 26px; font-weight: 800; line-height: 1.02;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.dash-page .kc-foot { display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 6px; margin-top: auto; }
+.dash-page .kc-sub { font-size: 11px; color: var(--dim); }
+.dash-page .kc-spark { width: 56px; height: 20px; }
+.dash-page .kc-spark .spark-line { stroke: var(--pos); stroke-width: 1.5; }
+/* tone families: top rail + icon chip + value color */
+.dash-page .kc-info { border-top-color: var(--blue); }
+.dash-page .kc-info .kc-ic { background: rgba(var(--t-blue), .15); color: var(--blue); }
+.dash-page .kc-info .kc-val { color: #7cb2ff; }
+.dash-page .kc-pos { border-top-color: var(--green); }
+.dash-page .kc-pos .kc-ic { background: rgba(var(--t-green), .16); color: var(--pos); }
+.dash-page .kc-pos .kc-val { color: var(--pos); }
+.dash-page .kc-neg { border-top-color: var(--red); }
+.dash-page .kc-neg .kc-ic { background: rgba(var(--t-red), .16); color: var(--neg); }
+.dash-page .kc-neg .kc-val { color: var(--neg); }
+.dash-page .kc-warn { border-top-color: var(--orange); }
+.dash-page .kc-warn .kc-ic { background: rgba(var(--t-orange), .16); color: var(--orange); }
+.dash-page .kc-warn .kc-val { color: var(--orange); }
+
+/* ── SIGNAL → TRADE PIPELINE — 13 stage cards, colored top-rail, arrows ── */
+.dash-page .pl-rail { display: flex; gap: 14px; overflow-x: auto; padding: 2px 2px 8px; }
+.dash-page .pl-card { position: relative; flex: 1 1 0; min-width: 90px; padding: 10px 9px;
+  background: var(--card); border: 1px solid var(--card-bd); border-top: 3px solid var(--gray);
+  border-radius: 9px; display: flex; flex-direction: column; gap: 6px; }
+.dash-page .pl-card:not(:last-child)::after { content: "→"; position: absolute; right: -11px;
+  top: 50%; transform: translateY(-50%); color: var(--dim); font-size: 13px; line-height: 1; z-index: 1; }
+.dash-page .pl-name { font-size: 10.5px; font-weight: 600; color: var(--muted);
+  line-height: 1.18; min-height: 2.36em; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; }
+.dash-page .pl-count { font-size: 22px; font-weight: 800; line-height: 1;
+  font-variant-numeric: tabular-nums; }
+.dash-page .pl-last { font-size: 10px; color: var(--dim); white-space: nowrap; }
+.dash-page .pl-active { box-shadow: 0 0 0 1px rgba(var(--t-yellow), .45); }
+.dash-page .pl-GRAY   { border-top-color: #3a4048; }        .dash-page .pl-GRAY .pl-count   { color: var(--dim); }
+.dash-page .pl-BLUE   { border-top-color: var(--blue); }    .dash-page .pl-BLUE .pl-count   { color: #7cb2ff; }
+.dash-page .pl-YELLOW { border-top-color: var(--yellow); }  .dash-page .pl-YELLOW .pl-count { color: var(--yellow); }
+.dash-page .pl-ORANGE { border-top-color: var(--orange); }  .dash-page .pl-ORANGE .pl-count { color: var(--orange); }
+.dash-page .pl-GREEN  { border-top-color: var(--green); }   .dash-page .pl-GREEN .pl-count  { color: var(--pos); }
+.dash-page .pl-RED    { border-top-color: var(--red); }     .dash-page .pl-RED .pl-count    { color: var(--neg); }
+.dash-page .pl-PURPLE { border-top-color: var(--purple); }  .dash-page .pl-PURPLE .pl-count { color: var(--purple); }
+
+/* ── 3-COLUMN OPS ROW ── */
+.dash-page .mc-3col { display: grid; grid-template-columns: 1.55fr 1fr 1.2fr; gap: 16px; align-items: start; }
+@media (max-width: 1400px) { .dash-page .mc-3col { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px)  { .dash-page .mc-3col { grid-template-columns: 1fr; } }
+.dash-page .mc-3col .mc-panel { margin-bottom: 0; }
+
+/* Capacity table */
+.dash-page .cap-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dash-page .cap-tbl th { text-align: left; padding: 0 8px 8px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--dim); border-bottom: 1px solid var(--border); }
+.dash-page .cap-tbl td { padding: 9px 8px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+.dash-page .cap-tbl tr:last-child td { border-bottom: none; }
+.dash-page .cap-tbl .rt { text-align: right; }
+.dash-page .cap-lim { font-weight: 600; }
+.dash-page .cap-new { margin-left: 6px; padding: 1px 5px; font-size: 9px; font-weight: 700;
+  color: var(--blue); background: rgba(var(--t-blue), .14); border-radius: 4px; vertical-align: middle; }
+.dash-page .usage { display: flex; align-items: center; gap: 9px; min-width: 128px; }
+.dash-page .usage-pct { flex: 0 0 auto; width: 42px; text-align: right; font-size: 12px;
+  font-variant-numeric: tabular-nums; color: var(--muted); }
+.dash-page .usage-bar { flex: 1; height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.dash-page .usage-fill { display: block; height: 100%; border-radius: 4px; }
+.dash-page .uf-ok { background: var(--green); }
+.dash-page .uf-warn { background: var(--yellow); }
+.dash-page .uf-crit { background: var(--red); }
+.dash-page .cap-badge { font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+.dash-page .cb-OK { color: var(--pos); }
+.dash-page .cb-WARNING { color: var(--orange); }
+.dash-page .cb-BREACH { color: var(--neg); }
+.dash-page .cb-UNAVAILABLE, .dash-page .cb-AWAITING, .dash-page .cb-INERT { color: var(--dim); }
+.dash-page .cap-legend { display: flex; gap: 16px; margin-top: 12px; font-size: 11px; color: var(--muted); }
+.dash-page .cap-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+.dash-page .lg-dot { width: 9px; height: 9px; border-radius: 50%; }
+
+/* Service Health table */
+.dash-page .svc-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dash-page .svc-tbl th { text-align: left; padding: 0 6px 8px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--dim); border-bottom: 1px solid var(--border); }
+.dash-page .svc-tbl th.rt, .dash-page .svc-tbl td.rt { text-align: right; }
+.dash-page .svc-tbl td { padding: 9px 6px; border-bottom: 1px solid var(--border-soft); }
+.dash-page .svc-tbl tr:last-child td { border-bottom: none; }
+.dash-page .svc-name { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+.dash-page .svc-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; }
+.dash-page .dot-ok { background: var(--green); box-shadow: 0 0 0 3px rgba(var(--t-green), .18); }
+.dash-page .dot-down { background: var(--red); box-shadow: 0 0 0 3px rgba(var(--t-red), .18); }
+.dash-page .dot-idle { background: var(--dim); }
+.dash-page .svc-badge { padding: 2px 7px; font-size: 10px; font-weight: 700; letter-spacing: .04em; border-radius: 5px; }
+.dash-page .svb-active { color: var(--pos); background: rgba(var(--t-green), .14); }
+.dash-page .svb-inactive { color: var(--neg); background: rgba(var(--t-red), .14); }
+.dash-page .svb-idle { color: var(--dim); background: rgba(var(--t-gray), .14); }
+.dash-page .svc-upd { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Recent Events */
+.dash-page .ev-list { list-style: none; margin: 0; padding: 0; }
+.dash-page .ev-row { display: flex; align-items: center; gap: 9px; padding: 7px 2px;
+  border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+.dash-page .ev-row:last-child { border-bottom: none; }
+.dash-page .ev-time { flex: 0 0 auto; width: 58px; font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+.dash-page .ev-ic { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.dash-page .ev-ic svg { width: 13px; height: 13px; }
+.dash-page .ev-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-weight: 500; }
+.dash-page .ev-det { margin-left: 4px; color: var(--dim); font-weight: 400; }
+.dash-page .ev-tag { flex: 0 0 auto; padding: 2px 7px; font-size: 10px; font-weight: 700;
+  letter-spacing: .04em; border-radius: 5px; }
+.dash-page .evc-signal, .dash-page .evt-signal { color: var(--blue); background: rgba(var(--t-blue), .14); }
+.dash-page .evc-order,  .dash-page .evt-order  { color: #7cb2ff; background: rgba(var(--t-blue), .12); }
+.dash-page .evc-risk,   .dash-page .evt-risk   { color: var(--neg); background: rgba(var(--t-red), .14); }
+.dash-page .evc-exit,   .dash-page .evt-exit   { color: var(--pos); background: rgba(var(--t-green), .14); }
+.dash-page .evc-sys,    .dash-page .evt-sys    { color: var(--dim); background: rgba(var(--t-gray), .14); }
+
+/* ── STRATEGY SUMMARY (compact) ── */
+.dash-page .ss-grid { display: grid; gap: 14px; align-items: stretch;
+  grid-template-columns: repeat(4, minmax(84px, 1fr)) minmax(170px, 1.5fr) minmax(170px, 1.5fr) auto; }
+@media (max-width: 1200px) { .dash-page .ss-grid { grid-template-columns: repeat(4, 1fr); }
+  .dash-page .ss-bw { grid-column: span 2; } .dash-page .ss-all { grid-column: span 4; } }
+@media (max-width: 560px) { .dash-page .ss-grid { grid-template-columns: repeat(2, 1fr); }
+  .dash-page .ss-bw, .dash-page .ss-all { grid-column: span 2; } }
+.dash-page .ss-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px;
+  background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; }
+.dash-page .ss-k { font-size: 12px; font-weight: 600; color: var(--muted); }
+.dash-page .ss-v { font-size: 30px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.dash-page .ss-n { font-size: 11px; color: var(--dim); }
+.dash-page .ss-green .ss-v { color: var(--pos); }
+.dash-page .ss-orange .ss-v { color: var(--orange); }
+.dash-page .ss-red .ss-v { color: var(--neg); }
+.dash-page .ss-bw { display: flex; flex-direction: column; gap: 3px; padding: 14px;
+  background: var(--card); border: 1px solid var(--card-bd); border-radius: 10px; }
+.dash-page .ss-best { border-left: 3px solid var(--green); }
+.dash-page .ss-worst { border-left: 3px solid var(--red); }
+.dash-page .ss-bw-k { font-size: 12px; font-weight: 700; }
+.dash-page .ss-best .ss-bw-k { color: var(--pos); }
+.dash-page .ss-worst .ss-bw-k { color: var(--neg); }
+.dash-page .ss-bw-name { font-size: 15px; font-weight: 700; line-height: 1.2; }
+.dash-page .ss-bw-pnl { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.dash-page .ss-all { align-self: stretch; display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 0 20px; min-height: 72px; font-size: 14px; font-weight: 700; text-align: center;
+  color: #7cb2ff; text-decoration: none; background: rgba(var(--t-blue), .08);
+  border: 1px solid var(--blue); border-radius: 10px; }
+.dash-page .ss-all:hover { background: rgba(var(--t-blue), .18); }
+
+/* ── Slimmed header (identity kept; date/time emphasized) + sidebar version ── */
+.summary-bar .sb-gap { margin-left: 22px; }
+.summary-bar .sb-datetime.sb-right { margin-left: auto; }
+.summary-bar .sb-hl { color: var(--blue); font-weight: 700; }
+.sb-ver { padding: 14px 16px 4px; font-size: 11px; color: var(--dim); opacity: .75; }

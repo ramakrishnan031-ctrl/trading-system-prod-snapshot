@@ -74,6 +74,7 @@
     <a class="nv-item {% block nav_audit %}{% endblock %}" href="/audit">{{ icon('audit') }}<span class="nv-label">Audit</span></a>
     <a class="nv-item {% block nav_trade_logs %}{% endblock %}" href="/trade-logs">{{ icon('logs') }}<span class="nv-label">Trade Logs</span></a>
     <a class="nv-item {% block nav_logs %}{% endblock %}" href="/logs">{{ icon('logs') }}<span class="nv-label">System Logs</span></a>
+    <div class="sb-ver"><span class="nv-label">version 2.0.0</span></div>
   </aside>
 
   <div class="main-col">
@@ -115,32 +116,26 @@
         <span class="sb-label">Phase</span>
         <span class="sb-pill pill-phase" x-text="summary.phase || '—'"></span>
       </div>
-      <div class="sb-item"><span class="sb-label">Received</span><span class="sb-num num" x-text="c('received')"></span></div>
-      <div class="sb-item"><span class="sb-label">Trades</span><span class="sb-num num" x-text="c('trades_today')"></span></div>
-      <div class="sb-item"><span class="sb-label">Open</span><span class="sb-num num" x-text="c('open_positions')"></span></div>
-      <div class="sb-item">
-        <span class="sb-label">Net P&L</span>
-        <span class="sb-num num" :class="netClass()" x-text="money(c('net_pnl_today'))"></span>
-      </div>
-      <div class="sb-item">
+      <!-- Identity (kept per spec); day counters moved into the KPI deck to declutter the header. -->
+      <div class="sb-item sb-idty sb-gap">
         <span class="sb-label">Broker ID</span>
         <span class="sb-num num" x-text="summary.account_id || '--'"></span>
       </div>
-      <div class="sb-item">
+      <div class="sb-item sb-idty">
         <span class="sb-label">Client Name</span>
-        <span class="sb-num num">--</span>
+        <span class="sb-num num" x-text="summary.client_name || '--'"></span>
       </div>
-      <div class="sb-item">
+      <div class="sb-item sb-datetime sb-right">
         <span class="sb-label">Trading Date</span>
-        <span class="sb-num num" x-text="tradingDate()"></span>
+        <span class="sb-num num sb-hl" x-text="tradingDate()"></span>
       </div>
-      <div class="sb-item">
+      <div class="sb-item sb-datetime">
         <span class="sb-label">Current Time</span>
-        <span class="sb-num num" x-text="currentTime()"></span>
+        <span class="sb-num num sb-hl" x-text="currentTime()"></span>
         <span class="sb-poll" x-text="'poll ' + Math.round(pollMs/1000) + 's'"></span>
       </div>
-      <div class="sb-item sb-right">
-        <form method="post" action="/logout"><button class="btn-logout" type="submit">Log out</button></form>
+      <div class="sb-item">
+        <form method="post" action="/logout"><button class="btn-logout" type="submit">⎋ Log out</button></form>
       </div>
       <span class="nav-status" x-show="lastError" x-cloak x-text="lastError"></span>
     </header>
