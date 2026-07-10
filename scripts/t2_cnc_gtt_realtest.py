@@ -31,6 +31,15 @@ unprotected CNC position. Specifically —
     a held position is squared best-effort via `ensure_flat` (sells the actual broker
     net qty, so it can never accidentally go short), loudly logged.
 
+MARKETABLE-LIMIT ORDERS (10-Jul): all 4 real placements (buy, square, ensure-flat,
+close-overnight) are marketable LIMIT — fresh LTP ± EMERGENCY_EXIT_BUFFER_PCT (1%),
+tick-snapped — NOT raw order_type="MARKET". Zerodha's API refuses MARKET without
+market-protection (the 10-Jul canary block); a marketable LIMIT crosses the spread
+(fills like a market) while capping worst-case slippage, mirroring the live system's
+emergency exits (orders.price_math.marketable_limit_price). A missing fresh LTP aborts
+that placement — never a MARKET fallback. The OCO-GTT legs are already trigger+LIMIT
+(not MARKET), so they are unchanged.
+
 USAGE (on the VM, market hours):
     cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a
     PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/t2_cnc_gtt_realtest.py \
@@ -210,6 +219,34 @@ def _ltp(kite, symbol: str) -> float:
     return float(q[f"NSE:{symbol}"]["last_price"])
 
 
+def _marketable_limit(adapter, kite, symbol: str, side: str, log) -> float:
+    """Fresh-LTP MARKETABLE LIMIT price — the live system's convention
+    (``orders.price_math.marketable_limit_price`` + ``EMERGENCY_EXIT_BUFFER_PCT``, FIX-181):
+
+        BUY  -> LTP + buffer (round UP)   -> crosses the spread, fills like a market buy
+        SELL -> LTP - buffer (round DOWN) -> crosses the spread, fills like a market sell
+
+    tick-snapped (Zerodha rejects off-tick). Zerodha's API REFUSES raw ``order_type=
+    "MARKET"`` without market-protection (the 10-Jul canary block), so T2 places a
+    marketable LIMIT instead — identical to the live emergency-exit path — which fills
+    immediately while capping worst-case slippage at the buffer. A missing/invalid fresh
+    LTP ABORTS this placement (raises) — it NEVER falls back to MARKET."""
+    from orders.price_math import marketable_limit_price, EMERGENCY_EXIT_BUFFER_PCT
+    try:
+        ltp = _ltp(kite, symbol)
+    except Exception as exc:  # noqa: BLE001 — a missing quote must abort, not MARKET
+        raise RuntimeError(f"no fresh LTP for {symbol} ({exc}) -> refusing to place "
+                           f"without a marketable limit (NO MARKET fallback)") from exc
+    if not ltp or ltp <= 0:
+        raise RuntimeError(f"non-positive LTP {ltp!r} for {symbol} -> refusing to place "
+                           f"without a marketable limit (NO MARKET fallback)")
+    tick = adapter._resolve_tick(symbol)   # fail-safe: DEFAULT_TICK when no cache wired
+    px = marketable_limit_price(side, ltp, EMERGENCY_EXIT_BUFFER_PCT, tick)
+    log.info("marketable LIMIT: %s %s ltp=%.2f -> limit=%.2f (buffer=%.2f%%, tick=%.2f)",
+             side, symbol, ltp, px, EMERGENCY_EXIT_BUFFER_PCT * 100, tick)
+    return px
+
+
 def _poll_terminal(kite, order_id, polls: int = 12, gap: float = 2.0) -> str:
     """Poll order_history until the status is terminal (COMPLETE/REJECTED/CANCELLED)
     or the budget is exhausted. Returns the last-seen status (UPPER), 'UNKNOWN' if
@@ -249,8 +286,9 @@ def ensure_flat(adapter, kite, symbol: str, log) -> tuple[bool, str]:
     if held <= 0:
         return True, f"already flat (broker net qty={held})"
     try:
-        s = adapter.place_order(symbol=symbol, side="SELL", qty=held, price=0.0,
-                                order_type="MARKET", intent="DELIVERY", tag="t2_ensure_flat")
+        px = _marketable_limit(adapter, kite, symbol, "SELL", log)
+        s = adapter.place_order(symbol=symbol, side="SELL", qty=held, price=px,
+                                order_type="LIMIT", intent="DELIVERY", tag="t2_ensure_flat")
         st = _poll_terminal(kite, s.broker_order_id)
         if st == "COMPLETE":
             return True, f"ensure-flat SELL {s.broker_order_id} COMPLETE (squared qty={held})"
@@ -287,9 +325,10 @@ def run_single_session(adapter, kite, gtt_placer, store, symbol: str, qty: int, 
     gtt_id = None
     ok = False
     try:
-        # 1) REAL CNC BUY + confirm the fill ────────────────────────────────────────
-        entry = adapter.place_order(symbol=symbol, side="BUY", qty=qty, price=0.0,
-                                    order_type="MARKET", intent="DELIVERY", tag="t2_entry")
+        # 1) REAL CNC BUY (marketable LIMIT — Zerodha refuses raw MARKET via API) + confirm fill ─
+        buy_px = _marketable_limit(adapter, kite, symbol, "BUY", log)
+        entry = adapter.place_order(symbol=symbol, side="BUY", qty=qty, price=buy_px,
+                                    order_type="LIMIT", intent="DELIVERY", tag="t2_entry")
         log.info("1) CNC BUY placed: %s — confirming fill", entry.broker_order_id)
         buy_st = _poll_terminal(kite, entry.broker_order_id)
         if buy_st in ("REJECTED", "CANCELLED"):
@@ -332,9 +371,10 @@ def run_single_session(adapter, kite, gtt_placer, store, symbol: str, qty: int, 
                      "--close-overnight %s (or let the GTT trigger). Not squaring now.", gtt_id, gtt_id)
             return 0 if ok else 1
 
-        # 4) square via a CNC SELL — the no-TPIN proof — and CONFIRM COMPLETE ─────────
-        sell = adapter.place_order(symbol=symbol, side="SELL", qty=qty, price=0.0,
-                                   order_type="MARKET", intent="DELIVERY", tag="t2_square")
+        # 4) square via a CNC SELL (marketable LIMIT) — the no-TPIN proof — and CONFIRM COMPLETE ─
+        sell_px = _marketable_limit(adapter, kite, symbol, "SELL", log)
+        sell = adapter.place_order(symbol=symbol, side="SELL", qty=qty, price=sell_px,
+                                   order_type="LIMIT", intent="DELIVERY", tag="t2_square")
         sell_st = _poll_terminal(kite, sell.broker_order_id)
         log.info("4) CNC SELL placed: %s status=%s", sell.broker_order_id, sell_st)
         if sell_st == "COMPLETE":
@@ -369,8 +409,9 @@ def run_close_overnight(adapter, kite, symbol: str, qty: int, gtt_id_str: str, l
     log.info("close-overnight: selling %s %s (CNC), then conditionally deleting GTT %s",
              qty, symbol, gtt_id_str)
     try:
-        sell = adapter.place_order(symbol=symbol, side="SELL", qty=qty, price=0.0,
-                                   order_type="MARKET", intent="DELIVERY", tag="t2_close")
+        px = _marketable_limit(adapter, kite, symbol, "SELL", log)
+        sell = adapter.place_order(symbol=symbol, side="SELL", qty=qty, price=px,
+                                   order_type="LIMIT", intent="DELIVERY", tag="t2_close")
         st = _poll_terminal(kite, sell.broker_order_id)
     except Exception as exc:  # noqa: BLE001
         log.critical("close-overnight SELL FAILED (%s) — GTT %s KEPT (protection); MANUAL handling.",
