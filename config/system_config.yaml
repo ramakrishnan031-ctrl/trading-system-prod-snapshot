@@ -171,7 +171,7 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_open_delivery_positions: 3  # SLICE2.5-PHASE-3 (A): separate cap on concurrent open DELIVERY (CNC) positions; inert while force_intraday_only=true
   max_daily_delivery_trades: 5    # SLICE2.5-PHASE-3 (A): separate cap on DELIVERY (CNC) entries per day; inert while force_intraday_only=true
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
-  max_consecutive_losses: 5      # halt after N consecutive losses (both modes)
+  max_consecutive_losses: 4      # halt after N consecutive losses (both modes)
   daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT
   daily_loss_include_unrealized: false  # B-1 (02-Jul): SHADOW default — reconciler populates unrealized MTM + gate LOGS would_reject, but ENFORCES realized-only. Flip true to enforce realized+unrealized (validate first).
   price_drift_threshold: 0.005  # FIX-075: 0.5% - trigger margin top-up if price drifts beyond this before placement

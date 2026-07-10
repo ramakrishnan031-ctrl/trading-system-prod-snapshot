@@ -44,7 +44,7 @@ This is Rama's reference for changing config settings.
 | Entry throttle (min gap) | **20 s** | `system_config.yaml → signal_processor.min_gap_between_entries_sec` |
 | Entry burst cap | **3 / 60 s** | `system_config.yaml → signal_processor.entry_burst_max` |
 | Per-symbol cooldown | **5 min** | `system_config.yaml → signal_processor.per_symbol_cooldown_sec` |
-| Consecutive-loss halt | **2 losses** | `system_config.yaml → risk.max_consecutive_losses` |
+| Consecutive-loss halt | **4 losses** | `system_config.yaml → risk.max_consecutive_losses` |
 | Reconciler cadence | **15 s** | `system_config.yaml → order_reconciler.poll_interval_sec` |
 | Capital-drift alert interval | **30 min** | `system_config.yaml → order_reconciler.capital_drift_alert_interval_sec` |
 | Kill-switch API-fail threshold | **3** | `system_config.yaml → kill_switch.api_failure_threshold` |
@@ -140,7 +140,7 @@ did nothing). Edit these directly to change the caps.
 
 ### max_consecutive_losses
 **File:** `system_config.yaml → risk.max_consecutive_losses`
-**Current:** `5` · **Type:** integer
+**Current:** `4` · **Type:** integer
 
 **What it does:** After this many losing trades **in a row (today only)**, new signals
 are halted for the day. Day-scoped since FIX-183 (yesterday's losses no longer block
@@ -716,7 +716,7 @@ Computed size = min of:
 > **Effective: ON** (master true; primary channel enabled).
 
 ### Max consecutive losses (day scope)
-`risk.max_consecutive_losses` (5) — counts **today's** losses only (FIX-183); a prior
+`risk.max_consecutive_losses` (4) — counts **today's** losses only (FIX-183); a prior
 day's losses never carry over.
 
 ---

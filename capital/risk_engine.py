@@ -118,7 +118,7 @@ class RiskEngine:
             max_open_positions=5,
             max_daily_trades=10,
             max_sector_exposure_pct=0.40,
-            max_consecutive_losses=5,
+            max_consecutive_losses=4,
             daily_loss_limit_pct=0.03,
             sector_lookup_fn=lambda s: instrument_cache.sector_for(s),
             logger=get_logger(__name__),
