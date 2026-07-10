@@ -1696,6 +1696,10 @@ def _main_locked(args, config_dir: Path) -> int:
         rate_limit_backoff=app_config.broker_limits.rate_limit_backoff,
         # SLICE2.5-P1: master delivery lock — refuses real CNC orders/GTTs when false.
         delivery_enabled=app_config.system.delivery_enabled,
+        # Option A (10-Jul-2026): product-coercion guard — coerces any non-INTRADAY
+        # intent to MIS at the broker chokepoint while the breaker is on (the P0 MIS-only
+        # guarantee now that the load-time intent rewrite is removed).
+        force_intraday_only=app_config.system.force_intraday_only,
     )
 
     try:

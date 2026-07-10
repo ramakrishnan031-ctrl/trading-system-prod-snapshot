@@ -192,6 +192,8 @@ def _make_adapter(
     # SLICE2.5-P1: adapter-mechanics tests grant the delivery capability by default
     # (CNC orders work); the master-lock behaviour is tested explicitly elsewhere.
     delivery_enabled: bool = True,
+    # Option A (10-Jul): product-coercion guard (default OFF = existing tests unchanged).
+    force_intraday_only: bool = False,
 ) -> tuple[ZerodhaAdapter, MockKite, RateLimiter, OrderStateMachine, Any]:
     """Return (adapter, kite, rl, osm, logger)."""
     from broker.cost_calculator import CostCalculator
@@ -217,6 +219,7 @@ def _make_adapter(
         paper_ltp_gating_max_wait_sec=paper_ltp_gating_max_wait_sec,
         paper_ltp_gating_poll_sec=paper_ltp_gating_poll_sec,
         delivery_enabled=delivery_enabled,
+        force_intraday_only=force_intraday_only,
     )
     return adapter, kite, rl, osm, logger
 
@@ -2194,6 +2197,76 @@ def test_fix157_paper_capital_loss_on_external_close() -> None:
     print("  OK FIX-157: paper_capital decreases on external close loss")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Option A (10-Jul-2026): force_intraday_only product-coercion + delivery_lock =
+# the P0 MIS-only DOUBLE LOCK. The load-time intent rewrite was removed, so these
+# two INDEPENDENT locks at the broker chokepoint guarantee no CNC/NRML is placed
+# while the breaker is on / delivery is disabled. T4 proves each lock separately.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _record_place_order(kite: MockKite) -> list:
+    """Capture the kwargs the adapter passes to kite.place_order (live path)."""
+    seen: list = []
+
+    def _rec(**kwargs: Any) -> str:
+        seen.append(kwargs)
+        return kite.place_order_return
+
+    kite.place_order = _rec  # type: ignore[assignment]
+    return seen
+
+
+def test_optA_force_coerces_delivery_intent_to_mis() -> None:
+    # LOCK 1 (product-coercion), proven INDEPENDENTLY of the delivery_lock: grant
+    # delivery_enabled=True (so the lock would NOT block a CNC), then submit a DELIVERY
+    # intent under force_intraday_only=true. It must be coerced -> MIS at the chokepoint;
+    # the broker receives product=MIS, never CNC.
+    kite = MockKite()
+    seen = _record_place_order(kite)
+    adapter, _, _, _, _ = _make_adapter(
+        kite=kite, force_intraday_only=True, delivery_enabled=True,
+    )
+    result = adapter.place_order(symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+                                 order_type="LIMIT", intent="DELIVERY")
+    assert result.product == "MIS", f"expected MIS (coerced), got {result.product}"
+    assert seen and seen[-1]["product"] == "MIS", (
+        f"broker must receive MIS, got {seen[-1].get('product') if seen else None}"
+    )
+    print("  OK Option A LOCK1: force_intraday_only coerces DELIVERY->MIS (delivery_lock off)")
+
+
+def test_optA_delivery_lock_blocks_cnc_independently_of_force() -> None:
+    # LOCK 2 (delivery_lock), proven INDEPENDENTLY of the coercion: force OFF (no
+    # coercion) + delivery_enabled=false. A DELIVERY intent resolves to CNC and the
+    # delivery_lock refuses it — no order reaches the broker.
+    adapter, _, _, _, _ = _make_adapter(
+        force_intraday_only=False, delivery_enabled=False,
+    )
+    raised = None
+    try:
+        adapter.place_order(symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+                            order_type="LIMIT", intent="DELIVERY")
+    except OrderRejectedError as exc:
+        raised = exc
+    assert raised is not None, "Expected OrderRejectedError from the delivery_lock"
+    assert "delivery_enabled=false" in str(raised), str(raised)
+    print("  OK Option A LOCK2: delivery_lock refuses CNC (force off) — independent lock")
+
+
+def test_optA_intraday_intent_unaffected_by_coercion() -> None:
+    # Sanity: the common live path (an INTRADAY strategy under the breaker) resolves to
+    # MIS with no coercion warning path needed. This is the 12-active-strategy case.
+    kite = MockKite()
+    seen = _record_place_order(kite)
+    adapter, _, _, _, _ = _make_adapter(
+        kite=kite, force_intraday_only=True, delivery_enabled=False,
+    )
+    result = adapter.place_order(symbol="RELIANCE", side="BUY", qty=1, price=2500.0,
+                                 order_type="LIMIT", intent="INTRADAY")
+    assert result.product == "MIS" and seen[-1]["product"] == "MIS"
+    print("  OK Option A: INTRADAY intent -> MIS (no coercion needed)")
+
+
 def run_all_tests() -> int:
     tests = [
         test_place_order_success_returns_placed_order,
@@ -2261,6 +2334,10 @@ def run_all_tests() -> int:
         # FIX-157: paper capital updates on external PositionClosed
         test_fix157_paper_capital_updates_on_external_position_closed,
         test_fix157_paper_capital_loss_on_external_close,
+        # Option A (10-Jul): force_intraday_only product-coercion + delivery_lock double lock
+        test_optA_force_coerces_delivery_intent_to_mis,
+        test_optA_delivery_lock_blocks_cnc_independently_of_force,
+        test_optA_intraday_intent_unaffected_by_coercion,
     ]
 
     print("=" * 70)

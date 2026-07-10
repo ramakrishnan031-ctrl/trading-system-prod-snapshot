@@ -44,13 +44,17 @@ class StrategyLoader:
         ANY invalid file raises ConfigSchemaError immediately — no partial loads.
         Optionally cross-validates scan_webhook_map_path (S10).
 
-        Bug D (P0 2026-06-15): when ``force_intraday_only`` is True, every loaded
-        strategy's intent is overridden to "INTRADAY". This is the single
-        chokepoint that guarantees the system can never place CNC/DELIVERY
-        orders — strategy_obj.intent flows into sizing, risk approval, product
-        resolution and order placement, so overriding it here makes the whole
-        pipeline MIS-only. DELIVERY strategies keep their LIMIT_TRIPLE protocol
-        (valid for INTRADAY) and will simply trade/square-off as intraday.
+        Option A (10-Jul-2026): the declared intent is PRESERVED for every strategy
+        (the old Bug-D destructive rewrite DELIVERY->INTRADAY at load was REMOVED).
+        ``force_intraday_only`` no longer mutates intent here; its safety role moves
+        to the proper layers: strategies.control.strategy_will_trade DORMANTS a raw
+        DELIVERY strategy while the breaker is on (LAYER 0) or trade_type=INTRADAY
+        (LAYER 1x2), so it never reaches sizing/placement; and the broker chokepoint
+        (zerodha_adapter.place_order) coerces the product to MIS under the breaker,
+        with the delivery_lock (delivery_enabled=false) as an independent CNC backstop.
+        Preserving the intent gives the resolver + status table a single source of
+        truth for each strategy's true product type. The param is retained (callers +
+        a per-strategy dormancy log); it just no longer rewrites.
         """
         strategies: Dict[str, StrategyConfig] = {}
 
@@ -63,13 +67,18 @@ class StrategyLoader:
         for yaml_path in yaml_files:
             # validate_strategy raises ConfigSchemaError on any failure
             cfg = validate_strategy(yaml_path)
+            # Option A (10-Jul-2026): NO load-time intent rewrite — the declared intent
+            # is preserved. Under the breaker a DELIVERY strategy is DORMANTED at the
+            # entry-gate resolver (it never places), and MIS-only is guaranteed at the
+            # broker product chokepoint — so there is nothing to rewrite here. Log the
+            # dormancy for visibility (was a WARNING overwrite; now an INFO notice).
             if force_intraday_only and cfg.intent != "INTRADAY":
-                _log.warning(
-                    "force_intraday_only: overriding strategy %r intent %s -> INTRADAY "
-                    "(MIS-only safety; CNC/DELIVERY orders blocked)",
+                _log.info(
+                    "force_intraday_only=true: %r keeps declared intent %s but is DORMANT "
+                    "at the entry gate (no load-time rewrite; MIS-only enforced at the "
+                    "broker product chokepoint)",
                     cfg.name, cfg.intent,
                 )
-                cfg = cfg.model_copy(update={"intent": "INTRADAY"})
             strategies[cfg.name] = cfg
 
         # S10: cross-validate against scan_webhook_map

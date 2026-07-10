@@ -373,6 +373,12 @@ class ZerodhaAdapter:
         # False (default), the adapter refuses any CNC order or OCO-GTT — the breaker
         # for the overnight-protection capability. MIS/CO are unaffected.
         delivery_enabled: bool = False,
+        # Option A (10-Jul-2026): PRODUCT-COERCION guard (mirrors system.force_intraday_only).
+        # When True, place_order coerces any non-INTRADAY intent to INTRADAY (product MIS)
+        # — the P0 MIS-only guarantee now that the load-time intent rewrite is gone.
+        # Independent of, and composes with, delivery_enabled. Default False (existing
+        # tests behave as before).
+        force_intraday_only: bool = False,
     ) -> None:
         self._kite = kite_client
         self._rl = rate_limiter
@@ -396,6 +402,8 @@ class ZerodhaAdapter:
         self._instrument_cache: Optional[Any] = instrument_cache
         # SLICE2.5-P1: master delivery lock (see __init__ param).
         self._delivery_enabled: bool = delivery_enabled
+        # Option A (10-Jul-2026): product-coercion guard (see __init__ param).
+        self._force_intraday_only: bool = force_intraday_only
         # 23-Jun tick fail-safe: warn-once-per-symbol throttle for a missing
         # tick_size (the fallback to DEFAULT_TICK is silent otherwise; FIX-170).
         self._missing_tick_warned: set[str] = set()
@@ -525,8 +533,23 @@ class ZerodhaAdapter:
             symbol, order_type, side, price, trigger_price
         )
 
+        # Option A (10-Jul-2026): PRODUCT-COERCION CHOKEPOINT — the P0 MIS-only guard.
+        # The load-time intent rewrite was removed (strategies keep declared intent; the
+        # entry-gate resolver dormants DELIVERY under the breaker). This is the SECOND,
+        # independent MIS guarantee at the single broker-submission chokepoint: while
+        # force_intraday_only is on, coerce ANY non-INTRADAY intent to INTRADAY so the
+        # product resolves to MIS — no strategy can place CNC/NRML under the breaker even
+        # if it somehow reached here. Composes with (never replaces) the delivery_lock below.
+        resolve_intent = intent
+        if self._force_intraday_only and intent != "INTRADAY":
+            self._log.warning(
+                "place_order: force_intraday_only=true — coercing intent %r -> INTRADAY "
+                "(MIS-only product guard) for %s", intent, symbol,
+            )
+            resolve_intent = "INTRADAY"
+
         # ZA4: resolve product intent -> broker code (may raise ProductNotSupportedError)
-        broker_code = self._pr.resolve(intent, "zerodha")
+        broker_code = self._pr.resolve(resolve_intent, "zerodha")
 
         # SLICE2.5-P1: master delivery lock — refuse a REAL CNC order while delivery is
         # disabled (belt-and-suspenders behind force_intraday_only). MIS/CO unaffected.

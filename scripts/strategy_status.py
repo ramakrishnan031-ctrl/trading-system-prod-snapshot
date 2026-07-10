@@ -9,12 +9,12 @@ NEVER disagree with live behaviour. Renders three views:
   * render_telegram   -> compact phone view (counts + names)
   * render_plaintext  -> plain mirror (HTML fallback)
 
-The "Type" column shows each strategy's TRUE declared intent (from the raw YAML,
-BEFORE the force_intraday_only load-time rewrite), so a DELIVERY strategy reads
-DELIVERY even while the breaker is forcing it to trade intraday. The VERDICT,
-however, is computed on the EFFECTIVE (post-rewrite) intent — exactly what the
-gate sees — so verdict == gate. A footnote flags any delivery strategy currently
-running as intraday under the breaker.
+The "Type" column shows each strategy's declared intent. Option A (10-Jul-2026):
+the loader no longer rewrites intent, so the resolver gates on the DECLARED intent
+directly — a DELIVERY strategy is DORMANT (WON'T TRADE) under trade_type=INTRADAY or
+the force_intraday_only breaker. The VERDICT is computed from the SAME raw config the
+resolver/gate sees, so verdict == gate (no effective-intent simulation needed). A
+footnote flags any DELIVERY strategy currently dormant under the master/breaker.
 
 Malformed YAML -> a CONFIG ERROR row (never crash the report).
 """
@@ -51,15 +51,6 @@ class StatusRow:
         return self.verdict == _WILL
 
 
-def _effective_intent(true_intent: str, force_intraday_only: bool) -> str:
-    """Mirror the loader's force_intraday_only rewrite: DELIVERY -> INTRADAY when
-    the breaker is on. The resolver must see this (post-rewrite) intent so the
-    table verdict matches the gate."""
-    if force_intraday_only and true_intent != "INTRADAY":
-        return "INTRADAY"
-    return true_intent
-
-
 def build_status_rows(
     config_dir: Path, *, trade_type: str, force_intraday_only: bool
 ) -> List[StatusRow]:
@@ -79,16 +70,15 @@ def build_status_rows(
                 start="—", end="—", sl_pct="—", rr="—", direction="—",
             ))
             continue
-        true_intent = cfg.intent
-        eff_cfg = cfg.model_copy(
-            update={"intent": _effective_intent(true_intent, force_intraday_only)}
-        )
+        # Option A (10-Jul): the resolver gates on the DECLARED intent (the loader no
+        # longer rewrites), so pass the raw validated config straight through — no
+        # effective-intent simulation. Type column = that same declared intent.
         v = strategy_will_trade(
-            eff_cfg, trade_type=trade_type, force_intraday_only=force_intraday_only
+            cfg, trade_type=trade_type, force_intraday_only=force_intraday_only
         )
         rows.append(StatusRow(
             strategy=cfg.name,
-            type=true_intent,
+            type=cfg.intent,
             master=trade_type,
             switch="ENABLED" if cfg.enabled else "DISABLED",
             verdict=_WILL if v.will_trade else _WONT,
@@ -117,15 +107,17 @@ def summary_line(rows: List[StatusRow], trade_type: str) -> str:
 
 
 def footnote(rows: List[StatusRow], force_intraday_only: bool) -> Optional[str]:
-    """Flag delivery strategies currently trading as intraday (breaker ON)."""
-    if not force_intraday_only:
+    """Flag DELIVERY-type strategies that are DORMANT (WON'T TRADE) under the current
+    master trade_type / breaker. Option A (10-Jul): the loader no longer rewrites
+    intent, so a DELIVERY strategy is segregated OFF (dormant) rather than repurposed as
+    intraday — it trades only once delivery is enabled (trade_type DELIVERY/BOTH + force
+    off). ``force_intraday_only`` retained for signature compatibility."""
+    deliv_dormant = sorted(r.strategy for r in rows
+                           if r.type == "DELIVERY" and not r.will_trade)
+    if not deliv_dormant:
         return None
-    deliv_live = sorted(r.strategy for r in rows
-                        if r.type == "DELIVERY" and r.will_trade)
-    if not deliv_live:
-        return None
-    return ("Note: %s — DELIVERY-type, trading as INTRADAY because "
-            "force_intraday_only is ON (no CNC placed)." % ", ".join(deliv_live))
+    return ("Note: %s — DELIVERY-type, DORMANT under the current master/breaker "
+            "(no CNC/delivery placed until delivery is enabled)." % ", ".join(deliv_dormant))
 
 
 # ── rendering ────────────────────────────────────────────────────────────────

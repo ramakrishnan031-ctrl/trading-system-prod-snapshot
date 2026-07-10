@@ -8,13 +8,13 @@ pre-flight), so the gate and the displayed table can NEVER disagree.
 
 The 3 control layers (+ the pre-existing emergency breaker, LAYER 0):
 
-  LAYER 0  ``force_intraday_only``  — emergency breaker. Rewrites every strategy's
-           intent to INTRADAY at LOAD (``strategies/loader``). By the time this
-           resolver runs, a force-on DELIVERY strategy already carries
-           intent=INTRADAY and trades as intraday. The defensive ``force +
-           DELIVERY`` branch below therefore never fires in production (the loader
-           pre-rewrites) — it exists to LOCK the breaker's "block live delivery"
-           semantics under unit test.
+  LAYER 0  ``force_intraday_only``  — emergency breaker. Option A (10-Jul-2026): the
+           loader NO LONGER rewrites intent at load (declared intent is preserved), so
+           the ``force + DELIVERY`` branch below is now the LIVE mechanism that dormants
+           a DELIVERY strategy while the breaker is on — it returns WON'T TRADE so the
+           strategy never reaches sizing/placement. MIS-only for anything that DOES
+           trade is guaranteed separately at the broker product chokepoint
+           (``zerodha_adapter.place_order`` coerces to MIS under the breaker).
   LAYER 1  ``system_config.trade_type``  INTRADAY | DELIVERY | BOTH — master
            product gate (which product type may trade today).
   LAYER 2  ``strategy.intent``  INTRADAY | DELIVERY — the strategy's product type.
@@ -82,10 +82,11 @@ def strategy_will_trade(
         return Verdict(False, "WON'T TRADE — switch disabled", intent,
                        cause=CAUSE_DISABLED)
 
-    # LAYER 0 — emergency breaker (defensive). In production the loader has already
-    # rewritten a DELIVERY strategy's intent to INTRADAY when the breaker is on, so
-    # this only fires if a RAW DELIVERY intent reaches the resolver — it locks the
-    # "breaker blocks live delivery" guarantee for tests.
+    # LAYER 0 — emergency breaker. Option A (10-Jul): the loader preserves declared
+    # intent, so this branch is the LIVE dormancy for a DELIVERY strategy while the
+    # breaker is on (it no longer only fires under test). Returns WON'T TRADE so the
+    # strategy never reaches placement; MIS-only for survivors is enforced at the
+    # broker product chokepoint.
     if force_intraday_only and intent == "DELIVERY":
         return Verdict(
             False,

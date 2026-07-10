@@ -8,8 +8,11 @@ label "TRADE_TYPE" via a machine-readable Verdict.cause (no string-matching);
 (Step 3) lock the gate behaviour for EVERY go-live config + the dormant no-op +
 the label-bleed regression + the contradictory-combo Auditor BLOCK.
 
-Option B (declared/pre-coercion-intent gating) is PARKED — it would stop the 3
-live positional_* strategies; a separate strategy decision, not a durability task.
+Option A (10-Jul-2026, BUILT): declared-intent gating is now LIVE — the loader's
+load-time intent rewrite was removed, so the resolver segregates on the DECLARED intent.
+Under the default (trade_type=INTRADAY + force on) the 3 positional_* DELIVERY strategies
+are DORMANT (12 WILL / 3 WON'T). This was the deliberately-approved behavior change;
+MIS-only is guaranteed at the broker product chokepoint (test_zerodha_adapter Option A).
 """
 from __future__ import annotations
 
@@ -83,13 +86,15 @@ def test_scenario_both_force_false():
     assert strategy_will_trade(_s("DELIVERY"), trade_type="BOTH", force_intraday_only=False).will_trade
 
 
-def test_dormancy_current_config_is_noop():
-    """★ CURRENT live config (trade_type=INTRADAY + force_intraday_only=true): every
-    strategy is coerced to INTRADAY at LOAD, so the gate sees intent=INTRADAY ->
-    WILL TRADE (cause OK), 0 rejects. (The full loader+gate proof across all 15
-    real strategies is in test_slice2_strategy_control.)"""
+def test_current_config_intraday_trades_delivery_dormant():
+    """★ CURRENT live config (trade_type=INTRADAY + force_intraday_only=true). Option A:
+    an INTRADAY strategy WILL TRADE (cause OK); a DELIVERY strategy is DORMANT (cause
+    FORCE_BREAKER) — the loader no longer rewrites intent. (The full loader+gate proof
+    across all 15 real strategies is in test_slice2_strategy_control.)"""
     v = strategy_will_trade(_s("INTRADAY"), trade_type="INTRADAY", force_intraday_only=True)
     assert v.will_trade and v.cause == CAUSE_OK
+    d = strategy_will_trade(_s("DELIVERY"), trade_type="INTRADAY", force_intraday_only=True)
+    assert not d.will_trade and d.cause == CAUSE_FORCE_BREAKER
 
 
 # ════════════════════════════════════════════════════════════════════════════════

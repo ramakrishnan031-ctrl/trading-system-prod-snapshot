@@ -315,19 +315,33 @@ class TestExitingStatus:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Bug D — force_intraday_only overrides every strategy to INTRADAY
+# Bug D — force_intraday_only (Option A, 10-Jul-2026: NO load-time intent rewrite)
+# The old destructive rewrite (DELIVERY->INTRADAY at load) was REMOVED. The declared
+# intent is preserved; force_intraday_only dormants DELIVERY at the entry-gate resolver
+# and MIS-only is enforced at the broker product chokepoint (see test_zerodha_adapter
+# Option A double-lock + test_slice2_strategy_control resolver counts).
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestBugD_ForceIntradayOnly:
 
     _STRAT_DIR = Path(__file__).parent.parent.parent / "config" / "strategies"
 
-    def test_force_overrides_delivery_to_intraday(self) -> None:
+    def test_force_preserves_declared_intent_and_dormants_delivery(self) -> None:
+        # Option A: the loader NO LONGER rewrites intent. DELIVERY strategies keep
+        # intent=DELIVERY (T5 preserved-intent) and are DORMANTED by the resolver under
+        # the breaker (they never place); MIS-only is enforced at the product chokepoint.
+        from strategies.control import strategy_will_trade
         loader = StrategyLoader()
         strategies = loader.load_all_strategies(self._STRAT_DIR, force_intraday_only=True)
         assert strategies
+        deliv = [n for n, c in strategies.items() if c.intent == "DELIVERY"]
+        assert deliv, "declared DELIVERY intent must be PRESERVED (not rewritten) under force"
         for name, cfg in strategies.items():
-            assert cfg.intent == "INTRADAY", f"{name} not forced to INTRADAY"
+            v = strategy_will_trade(cfg, trade_type="INTRADAY", force_intraday_only=True)
+            if cfg.intent == "DELIVERY":
+                assert not v.will_trade, f"{name}: DELIVERY must be dormant under the breaker"
+            else:
+                assert v.will_trade, f"{name}: INTRADAY must still trade"
 
     def test_without_force_delivery_preserved(self) -> None:
         loader = StrategyLoader()

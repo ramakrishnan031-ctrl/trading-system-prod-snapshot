@@ -1,14 +1,15 @@
-"""Slice 2 (24-Jun): 3-layer strategy control + status table.
+"""Slice 2 (24-Jun) + Option A (10-Jul-2026): 3-layer strategy control + status table.
 
-LAYER 0 force_intraday_only (load-time intent rewrite, unchanged) · LAYER 1
-system_config.trade_type · LAYER 2 strategy.intent · LAYER 3 strategy.enabled.
-ONE resolver (strategies.control.strategy_will_trade) drives BOTH the entry gate
-(signals.signal_processor, two sites) AND the status table (scripts.strategy_status),
+LAYER 0 force_intraday_only · LAYER 1 system_config.trade_type · LAYER 2
+strategy.intent (DECLARED — Option A removed the load-time rewrite) · LAYER 3
+strategy.enabled. ONE resolver (strategies.control.strategy_will_trade) drives BOTH the
+entry gate (signals.signal_processor) AND the status table (scripts.strategy_status),
 so the table can never disagree with live behaviour.
 
-Default (shipped) state = trade_type INTRADAY, force_intraday_only true, ALL 15
-enabled → 15 WILL TRADE / 0 WON'T TRADE (TRUE zero behaviour change; the 3
-delivery strategies keep trading as intraday as they do today).
+Default (shipped) state = trade_type INTRADAY, force_intraday_only true, ALL 15 enabled
+→ 12 WILL TRADE / 3 WON'T TRADE: the 3 DELIVERY strategies (positional_*) are DORMANT
+(segregated off), no longer repurposed as intraday. MIS-only for the 12 that trade is
+guaranteed at the broker product chokepoint (test_zerodha_adapter Option A double-lock).
 """
 from __future__ import annotations
 
@@ -54,8 +55,8 @@ class TestResolverTruthTable:
             assert not v.will_trade and "switch disabled" in v.reason
 
     def test_force_intraday_only_plus_raw_delivery_wont_trade(self):
-        # Defensive breaker branch (a raw DELIVERY intent reaching the resolver
-        # under the breaker). In production the loader pre-rewrites to INTRADAY.
+        # LAYER 0 breaker. Option A: the loader no longer pre-rewrites, so this is the
+        # LIVE dormancy path for a DELIVERY strategy under the breaker (WON'T TRADE).
         v = strategy_will_trade(_S("DELIVERY"), trade_type="BOTH", force_intraday_only=True)
         assert not v.will_trade and "breaker" in v.reason.lower()
 
@@ -140,8 +141,10 @@ class TestProductWiring:
         assert pr.resolve("INTRADAY", "zerodha") == "MIS"
 
     def test_invariant_default_state_never_places_cnc(self):
-        # Default: trade_type INTRADAY + force_intraday_only true. Every WILL-TRADE
-        # strategy's effective product is INTRADAY (MIS) — never DELIVERY/CNC.
+        # Default: trade_type INTRADAY + force_intraday_only true. Option A: the 3
+        # DELIVERY strategies are now DORMANT (skipped by `if v.will_trade`), and every
+        # WILL-TRADE strategy has product INTRADAY — the invariant holds even more
+        # strongly (no delivery strategy reaches placement at all).
         from strategies.loader import StrategyLoader
         loaded = StrategyLoader().load_all_strategies(_CFG / "strategies", force_intraday_only=True)
         for name, s in loaded.items():
@@ -153,13 +156,33 @@ class TestProductWiring:
 # ── Phase 8.6 — regression: default state = unchanged (15 trade) ──────────────
 
 class TestDefaultStateRegression:
-    def test_default_real_config_15_will_trade_0_wont(self):
+    _DELIVERY = {"positional_momentum_long", "positional_sector_rotation",
+                 "positional_swing_long"}
+
+    def _counts(self, trade_type, force):
         from strategies.loader import StrategyLoader
-        loaded = StrategyLoader().load_all_strategies(_CFG / "strategies", force_intraday_only=True)
-        verdicts = {n: strategy_will_trade(s, trade_type="INTRADAY", force_intraday_only=True)
+        loaded = StrategyLoader().load_all_strategies(_CFG / "strategies", force_intraday_only=force)
+        verdicts = {n: strategy_will_trade(s, trade_type=trade_type, force_intraday_only=force)
                     for n, s in loaded.items()}
-        will = [n for n, v in verdicts.items() if v.will_trade]
-        wont = [n for n, v in verdicts.items() if not v.will_trade]
+        will = {n for n, v in verdicts.items() if v.will_trade}
+        wont = {n for n, v in verdicts.items() if not v.will_trade}
+        return will, wont
+
+    def test_default_intraday_12_will_3_wont(self):
+        # ★ T1 RED→GREEN core: the shipped default (trade_type=INTRADAY + force on) now
+        # trades the 12 INTRADAY strategies and DORMANTS the 3 DELIVERY ones (was 15/0).
+        will, wont = self._counts("INTRADAY", True)
+        assert len(will) == 12 and len(wont) == 3
+        assert wont == self._DELIVERY, f"the 3 dormant must be the positional_* set, got {wont}"
+
+    def test_delivery_mode_3_will_12_wont(self):
+        # T1: trade_type=DELIVERY + force OFF → only the 3 DELIVERY strategies trade.
+        will, wont = self._counts("DELIVERY", False)
+        assert will == self._DELIVERY and len(wont) == 12
+
+    def test_both_mode_15_will_0_wont(self):
+        # T1: trade_type=BOTH + force OFF → all 15 trade.
+        will, wont = self._counts("BOTH", False)
         assert len(will) == 15 and len(wont) == 0
 
 
@@ -173,8 +196,9 @@ class TestStatusTable:
         return build_status_rows(_CFG, **kw)
 
     def test_table_verdicts_equal_gate(self):
-        # The table verdict for each strategy == the gate resolver on the loaded
-        # (post-rewrite) config — same function, same inputs, can't disagree.
+        # The table verdict for each strategy == the gate resolver on the loaded config
+        # (Option A: declared intent, no rewrite) — same function, same inputs, can't
+        # disagree. Now 12 WILL / 3 WON'T on both sides.
         from strategies.loader import StrategyLoader
         rows = self._rows()
         loaded = StrategyLoader().load_all_strategies(_CFG / "strategies", force_intraday_only=True)
@@ -183,24 +207,29 @@ class TestStatusTable:
             assert r.will_trade == gate.will_trade
 
     def test_type_column_shows_true_intent(self):
-        # Delivery strategies show Type=DELIVERY (true intent) even though they
-        # trade as intraday under the breaker (verdict WILL TRADE).
+        # Option A: delivery strategies show Type=DELIVERY (declared intent preserved)
+        # and are now DORMANT (WON'T TRADE) under the breaker — no longer repurposed as
+        # intraday. INTRADAY strategies still WILL TRADE.
         rows = {r.strategy: r for r in self._rows()}
         assert rows["positional_sector_rotation"].type == "DELIVERY"
-        assert rows["positional_sector_rotation"].will_trade is True
+        assert rows["positional_sector_rotation"].will_trade is False
         assert rows["gap_go_long"].type == "INTRADAY"
+        assert rows["gap_go_long"].will_trade is True
 
     def test_will_trade_sorted_first(self):
         from scripts.strategy_status import build_status_rows
-        # one delivery enabled (BOTH so it WILL), the rest as default
+        # Option A: 12 WILL then 3 WON'T — the WILL-first ordering still holds.
         rows = build_status_rows(_CFG, trade_type="INTRADAY", force_intraday_only=True)
         verdicts = [r.will_trade for r in rows]
-        assert verdicts == sorted(verdicts, reverse=True)  # all True here, but order holds
+        assert verdicts == sorted(verdicts, reverse=True)  # True (12) before False (3)
 
-    def test_footnote_flags_delivery_as_intraday(self):
+    def test_footnote_flags_delivery_dormant(self):
         from scripts.strategy_status import footnote
+        # Option A: the footnote now flags DELIVERY strategies as DORMANT (not "trading
+        # as intraday"). All 3 positional_* are dormant under the default config.
         note = footnote(self._rows(), force_intraday_only=True)
-        assert note and "DELIVERY" in note and "force_intraday_only" in note
+        assert note and "DELIVERY" in note and "DORMANT" in note
+        assert "positional_momentum_long" in note
 
     def test_malformed_yaml_becomes_config_error_row(self, tmp_path):
         from scripts.strategy_status import build_status_rows
@@ -212,8 +241,9 @@ class TestStatusTable:
 
     def test_compact_lists_split_correctly(self):
         from scripts.strategy_status import compact_lists
+        # Option A: default config → 12 WILL, 3 WON'T (the dormant positional_* set).
         will, wont, err = compact_lists(self._rows())
-        assert len(will) == 15 and wont == [] and err == []
+        assert len(will) == 12 and len(wont) == 3 and err == []
 
     def test_disabled_strategy_shows_wont_trade(self, tmp_path):
         # Copy a real YAML, set enabled:false -> table shows WON'T TRADE (switch).
