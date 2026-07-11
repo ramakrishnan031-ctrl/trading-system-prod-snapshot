@@ -354,7 +354,7 @@ regime:                       # V3 03.02 — index-level Market Regime engine (S
   compute_interval_sec: 60.0  # shadow-runner cadence
 
 portfolio_allocator:         # V3 03.05 — ranked batch admission (default-OFF; FCFS byte-identical while off)
-  allocator_mode: "off"      # ★ master gate (paper+live): off | shadow | enforce. off = allocator not constructed → signal_processor gets None → current FCFS admission BYTE-IDENTICAL. Flip to shadow (regret soak) only after off-market push + review; enforce is gated on N shadow sessions + regret review + Rama + an off-market cutover
+  allocator_mode: "shadow"   # ★ master gate (paper+live): off | shadow | enforce. SHADOW 12-Jul: non-blocking regret observer alongside live FCFS (NEVER reserves/places → LIVE admission BYTE-IDENTICAL). enforce is gated on ≥5 shadow sessions + regret review + Rama + an off-market cutover
   enforce_scope: "v3_only"   # v3_only | all — v3_only governs ONLY V3-playbook strategies (none exist yet → enforce governs nothing even if flipped); all = every scanner
   candle_interval_seconds: 60.0  # wall-clock window alignment (NOT candle_store); short vs the 60s signal expiry
   drain_tail_seconds: 2.0    # collect this long after each boundary before ranking

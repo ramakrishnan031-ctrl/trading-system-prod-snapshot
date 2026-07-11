@@ -36,7 +36,7 @@ medium_score_threshold: 65
 #   recompute (scripts/v3_hardgate_parity_recompute.py) is signed off. Thresholds are
 #   the analytic fresh-reference start (min 60→50 / med 65→56 / high 80→75) and MUST be
 #   data-fit before enforce.
-v3_hardgate_mode: "off"            # off | shadow | enforce  (quoted — YAML reads bare off as false)
+v3_hardgate_mode: "shadow"         # off | shadow | enforce  (quoted — YAML reads bare off as false). SHADOW 12-Jul: compute+log OLD-vs-NEW; LIVE follows OLD (byte-identical). soak ≥5 sessions before any enforce discussion
 v3_gate_steps: [circuit_check, signal_age]   # steps the Hard-Gate owns (excluded from v3 scoring)
 v3_freshness_max_sec: 60.0         # freshness gate cutoff (matches OLD signal_age>60s reject)
 v3_min_pass_score: 50
