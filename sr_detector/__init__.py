@@ -31,12 +31,20 @@ def build_sr_detector(
     logger,
     mode: str,
     now_fn=None,
+    session_open=None,
+    session_close=None,
 ):
     """
     Construct a wired SRDetector. `fetch_fn(token, from_date, to_date, interval)`
     is the rate-limited broker call (built in main.py as a closure over the
     market-data kite handle + rate_limiter — see main.py wiring). `now_fn`
     defaults to core.time_authority.now_ist.
+
+    `session_open`/`session_close` (datetime.time) are the NSE session bounds
+    used by the V3 03.01 Layer-A anchors (VWAP/ORB); pass them from the system's
+    MarketWindows (main.py) so nothing hardcodes 09:15. They are optional — when
+    absent (or `intraday_anchors_enabled` is False, the default) the detector
+    skips the intraday-anchor fetch and behaves exactly as before.
     """
     if now_fn is None:
         from core.time_authority import now_ist
@@ -57,4 +65,6 @@ def build_sr_detector(
         logger=logger,
         mode=mode,
         now_fn=now_fn,
+        session_open=session_open,
+        session_close=session_close,
     )

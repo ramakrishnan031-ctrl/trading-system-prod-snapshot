@@ -21,6 +21,16 @@ from core.time_authority import now_ist
 # post-fill placeability gate (orders.price_math.clamp_exit_into_band) uses, so
 # the pre-fill ceiling and the clamp ceiling never drift (NOCIL fix).
 from orders.price_math import DEFAULT_CIRCUIT_MARGIN_PCT
+# V3 03.03/03.04: the pre-fill circuit-proximity rule is RELOCATED into
+# screening.hard_gate (single source; the OFF path delegates to it, byte-identical)
+# + the shared 8-step re-scale helpers used by both the live v3 path and the
+# offline parity recompute tool.
+from screening.hard_gate import (
+    circuit_proximity_reason as _hg_circuit_proximity_reason,
+    rescale_min_score,
+    rescaled_total,
+    tier_for,
+)
 
 if TYPE_CHECKING:
     from screening.step_executor import StepExecutor
@@ -64,12 +74,30 @@ class SecondaryScreener:
         mis_filter_enabled: bool = False,         # master switch (default OFF -> dormant)
         mis_filter_shadow: bool = True,           # when enabled: True = log-only, False = actually reject
         resolve_product: Optional[Callable] = None,  # intent -> product code ("MIS"/...); broker-free closure
+        hard_gate=None,                           # V3 03.03: screening.hard_gate.HardGate | None
+        scoring_config=None,                      # V3 03.04: core.config_loader.ScoringConfig | None
     ) -> None:
         self._executor = step_executor
         self._scorer = quality_scorer
         self._state_store = state_store
         self._quote_fn = quote_fn
         self._logger = logger
+
+        # V3 03.03/03.04 — Hard-Gate + scorer re-scale. DEFAULT-OFF: when the mode
+        # is "off" (or no scoring_config is injected, as in most tests) NONE of the
+        # v3 code runs and screen() is byte-identical to the pre-V3 path.
+        self._hard_gate = hard_gate
+        self._v3_mode = str(getattr(scoring_config, "v3_hardgate_mode", "off") or "off")
+        self._v3_gate_steps = set(
+            getattr(scoring_config, "v3_gate_steps", ["circuit_check", "signal_age"]) or []
+        )
+        self._v3_min_pass = int(getattr(scoring_config, "v3_min_pass_score", 50))
+        self._v3_high = int(getattr(scoring_config, "v3_high_score_threshold", 75))
+        self._v3_medium = int(getattr(scoring_config, "v3_medium_score_threshold", 56))
+        self._step_weights = (
+            dict(scoring_config.steps.model_dump())
+            if scoring_config is not None and hasattr(scoring_config, "steps") else {}
+        )
         # NOCIL fix: pre-fill circuit-proximity reject (framing-b, both legs).
         # YAML fast-disable lever (default ON, parity-safe). The post-fill
         # placeability gate is the core safety net and is NOT flag-gated.
@@ -150,6 +178,14 @@ class SecondaryScreener:
                 return result
 
         market_data_snapshot = dict(market_data)
+
+        # ── V3 03.03/03.04 ENFORCE: gate-first + 8-step + re-scaled thresholds ──
+        # Only taken when the flag is explicitly "enforce" (default off never here).
+        if self._v3_mode == "enforce" and self._hard_gate is not None:
+            return self._screen_v3_enforce(
+                signal_id, symbol, scanner_name, trigger_price, triggered_at,
+                direction, intent, strategy, market_data, market_data_snapshot,
+            )
 
         # ── 1b. Pre-fill circuit-proximity rejection (NOCIL fix) ──────────────
         # Reject doomed-at-fill entries that sit at/beyond the exit-clamp ceiling
@@ -247,6 +283,17 @@ class SecondaryScreener:
 
         total_score = score_result.total_score
         tier = score_result.tier
+
+        # ── V3 03.03/03.04 SHADOW: compute the NEW (gate + 8-step + v3 tier) and
+        # log it alongside the OLD. The LIVE decision below is UNCHANGED (follows
+        # OLD); this is a pure side-effect for the old-vs-new soak compare. Never
+        # runs when mode is off. Belt-and-suspenders — the binding parity proof is
+        # the offline recompute (scripts/v3_hardgate_parity_recompute.py). ──
+        if self._v3_mode == "shadow" and self._hard_gate is not None:
+            self._log_v3_shadow_compare(
+                signal_id, symbol, trigger_price, triggered_at, direction,
+                market_data, exec_result.step_results, score_result,
+            )
 
         # ── 6. Apply per-strategy min_score override (SS4 step 6) ────────────
         effective_min = (
@@ -355,64 +402,136 @@ class SecondaryScreener:
     def _circuit_proximity_reason(
         self, trigger_price, direction, market_data: dict
     ) -> Optional[str]:
-        """Pre-fill circuit-proximity reject (NOCIL fix, framing-b, BOTH legs).
-
-        Reject the entry when it sits at/beyond the exit-clamp ceiling — i.e.
-        when NO profitable TGT *or* no valid SL could be placed inside the day's
-        circuit band — so the trade is doomed before it fills. Uses the SAME
-        DEFAULT_CIRCUIT_MARGIN_PCT as the post-fill placeability gate, so the
-        pre-fill ceiling and the clamp ceiling are one source of truth.
-
-            TGT-ceiling: LONG reject if entry >= upper*(1-m); SHORT if entry <= lower*(1+m)
-            SL-ceiling:  LONG reject if entry <= lower*(1+m); SHORT if entry >= upper*(1-m)
-
-        Fail-open: flag OFF, or missing/non-numeric/non-positive band or entry
-        -> None (admit). Degraded-but-profitable R:R remains the R:R gate's job
-        (FIX-136 Item 54), not this rule's. Returns the reason string or None.
+        """Pre-fill circuit-proximity reject (NOCIL fix). RELOCATED to
+        screening.hard_gate.circuit_proximity_reason (single source); this
+        delegates so the OFF path is byte-identical AND the same implementation
+        backs the V3 Hard-Gate. Fail-open behaviour unchanged.
         """
-        if not self._circuit_proximity_reject_enabled:
-            return None
+        return _hg_circuit_proximity_reason(
+            trigger_price, direction, market_data,
+            enabled=self._circuit_proximity_reject_enabled,
+        )
 
-        def _pos_num(x):
-            return (
-                x if isinstance(x, (int, float)) and not isinstance(x, bool) and x > 0
-                else None
+    # ── V3 03.03/03.04: enforce path (gate-first + 8-step + re-scaled thresholds) ──
+
+    def _screen_v3_enforce(
+        self, signal_id, symbol, scanner_name, trigger_price, triggered_at,
+        direction, intent, strategy, market_data, market_data_snapshot,
+    ) -> ScreeningResult:
+        """ENFORCE: the Hard-Gate runs BEFORE scoring; survivors are scored on the
+        8 kept steps and judged against the re-scaled v3 thresholds; there is NO
+        signal_age defense-in-depth (the gate owns freshness). Same
+        ScreeningResult shape/status vocabulary as the OFF path."""
+        # 1. Hard-Gate first (at-circuit + circuit-proximity + freshness; liquidity no-op).
+        gate = self._hard_gate.evaluate(
+            trigger_price=trigger_price, triggered_at=triggered_at,
+            direction=direction, market_data=market_data,
+        )
+        if not gate.passed:
+            self._logger.warning(
+                "secondary_screener [%s/%s]: HARD_GATE reject — %s %s",
+                signal_id, symbol, gate.reason, gate.evidence,
             )
+            result = ScreeningResult(
+                passed=False, status=f"REJECTED_{gate.reason}", score=0, tier="LOW",
+                rejected_step=str(gate.reason).lower(), step_results={}, step_statuses={},
+                error_steps=[], latencies_ms={}, market_data_snapshot=market_data_snapshot,
+            )
+            self._persist(signal_id, result)
+            return result
 
-        upper = _pos_num(market_data.get("upper_circuit"))
-        lower = _pos_num(market_data.get("lower_circuit"))
-        entry = _pos_num(trigger_price)
-        if entry is None or (upper is None and lower is None):
-            return None
+        thresholds = {
+            "min_volume_surge": strategy.min_volume_surge,
+            "min_adr_pct": strategy.min_adr_pct,
+            "max_spread_pct": strategy.max_spread_pct,
+        }
+        signal_dict = {
+            "symbol": symbol, "scanner_name": scanner_name,
+            "trigger_price": trigger_price, "triggered_at": triggered_at,
+            "direction": direction, "intent": intent,
+        }
 
-        margin = DEFAULT_CIRCUIT_MARGIN_PCT
-        upper_ceiling = upper * (1.0 - margin) if upper is not None else None
-        lower_floor = lower * (1.0 + margin) if lower is not None else None
-        is_long = str(direction).upper() in ("LONG", "BUY")
+        # 2. Run the 8 scored steps (exclude the gate-owned steps).
+        try:
+            exec_result = self._executor.run_all(
+                signal_dict, market_data, thresholds, exclude_steps=self._v3_gate_steps
+            )
+        except Exception:
+            self._logger.error(
+                "secondary_screener [%s/%s]: step_executor raised:\n%s",
+                signal_id, symbol, traceback.format_exc(),
+            )
+            result = self._make_skipped("SKIPPED_EXECUTOR_ERROR", market_data_snapshot, signal_id)
+            self._persist(signal_id, result)
+            return result
+        if exec_result.error_steps:
+            bad = ", ".join(str(s) for s in exec_result.error_steps)
+            result = ScreeningResult(
+                passed=False, status="REJECTED_STEP_ERROR", score=0, tier="LOW",
+                rejected_step=bad, step_results=exec_result.step_results,
+                step_statuses=exec_result.step_statuses, error_steps=exec_result.error_steps,
+                latencies_ms=exec_result.latencies_ms, market_data_snapshot=market_data_snapshot,
+            )
+            self._persist(signal_id, result)
+            return result
 
-        if is_long:
-            if upper_ceiling is not None and entry >= upper_ceiling:
-                return (
-                    f"LONG entry {entry} >= upper-ceiling {upper_ceiling:.2f} "
-                    f"(upper_circuit {upper}); no profitable TGT fits the band"
-                )
-            if lower_floor is not None and entry <= lower_floor:
-                return (
-                    f"LONG entry {entry} <= lower-floor {lower_floor:.2f} "
-                    f"(lower_circuit {lower}); no valid SL fits the band"
-                )
-        else:
-            if lower_floor is not None and entry <= lower_floor:
-                return (
-                    f"SHORT entry {entry} <= lower-floor {lower_floor:.2f} "
-                    f"(lower_circuit {lower}); no profitable TGT fits the band"
-                )
-            if upper_ceiling is not None and entry >= upper_ceiling:
-                return (
-                    f"SHORT entry {entry} >= upper-ceiling {upper_ceiling:.2f} "
-                    f"(upper_circuit {upper}); no valid SL fits the band"
-                )
-        return None
+        # 3. Re-scaled 8-step total + v3 tier (shared helpers; scorer untouched).
+        total = rescaled_total(exec_result.step_results, self._step_weights, self._v3_gate_steps)
+        new_tier = tier_for(total, self._v3_high, self._v3_medium)
+
+        # 4. Per-strategy min_score override (re-scaled, A7) else the v3 min_pass.
+        eff_min = (
+            rescale_min_score(strategy.min_score)
+            if getattr(strategy, "min_score", 0) and strategy.min_score > 0
+            else self._v3_min_pass
+        )
+        if total < eff_min:
+            result = ScreeningResult(
+                passed=False, status=f"REJECTED_SCORE_{total}", score=total, tier=new_tier,
+                rejected_step=None, step_results=exec_result.step_results,
+                step_statuses=exec_result.step_statuses, error_steps=exec_result.error_steps,
+                latencies_ms=exec_result.latencies_ms, market_data_snapshot=market_data_snapshot,
+            )
+            self._persist(signal_id, result, eligible_score=eff_min)
+            return result
+
+        # 5. Passed — NO signal_age defense-in-depth (freshness is now the gate).
+        result = ScreeningResult(
+            passed=True, status="PASSED", score=total, tier=new_tier, rejected_step=None,
+            step_results=exec_result.step_results, step_statuses=exec_result.step_statuses,
+            error_steps=exec_result.error_steps, latencies_ms=exec_result.latencies_ms,
+            market_data_snapshot=market_data_snapshot,
+        )
+        self._persist(signal_id, result, eligible_score=eff_min)
+        self._logger.info(
+            "secondary_screener [%s/%s]: %s score=%d tier=%s (v3-enforce)",
+            signal_id, symbol, result.status, result.score, result.tier,
+        )
+        return result
+
+    def _log_v3_shadow_compare(
+        self, signal_id, symbol, trigger_price, triggered_at, direction,
+        market_data, step_results, score_result,
+    ) -> None:
+        """SHADOW: log OLD (10-step) vs NEW (gate + 8-step + v3 tier) for the
+        old-vs-new soak compare. Pure side-effect; never changes the live result,
+        never raises."""
+        try:
+            gate = self._hard_gate.evaluate(
+                trigger_price=trigger_price, triggered_at=triggered_at,
+                direction=direction, market_data=market_data,
+            )
+            new_total = rescaled_total(step_results, self._step_weights, self._v3_gate_steps)
+            new_tier = tier_for(new_total, self._v3_high, self._v3_medium)
+            self._logger.info(
+                "v3_shadow [%s/%s]: OLD score=%d tier=%s | NEW score=%d tier=%s gate=%s",
+                signal_id, symbol, score_result.total_score, score_result.tier,
+                new_total, new_tier, (gate.reason or "PASS"),
+            )
+        except Exception:
+            self._logger.error(
+                "v3_shadow [%s/%s]: compare failed:\n%s", signal_id, symbol, traceback.format_exc(),
+            )
 
     def _is_mis_blocked_decision(
         self, symbol: str, intent: str, direction: str, signal_id: str

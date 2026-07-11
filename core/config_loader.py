@@ -265,6 +265,20 @@ class PositionSizingConfig(BaseModel):
     max_multiplier: float = 2.0                # FIX-133 Item 21: cap for perf weight
     enabled: bool = True                       # Diary #4: ON = score-tier × perf sizing (default)
     flat_value_rs: Optional[float] = None      # Diary #4: flat Rs/order; required (>0) when enabled=False
+    # V3 03.06 — DELIVERY-scoped sizing scaffold (INERT: delivery is double-locked OFF
+    # + force_intraday_only coerces every strategy to INTRADAY → the positional bucket
+    # is never taken live → these are never read). Default None → the sizer uses the
+    # global risk_per_trade_pct / max_position_value_pct (byte-identical). The V3
+    # delivery path will set these when delivery is activated (a much later step).
+    delivery_risk_per_trade_pct: Optional[float] = None
+    delivery_max_position_value_pct: Optional[float] = None
+
+    @field_validator("delivery_risk_per_trade_pct", "delivery_max_position_value_pct")
+    @classmethod
+    def _validate_delivery_pct(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and not (0 < v <= 1):
+            raise ValueError("delivery sizing pct, when set, must be in (0, 1]")
+        return v
 
     @field_validator("risk_per_trade_pct")
     @classmethod
@@ -792,6 +806,29 @@ class SRDetectorConfig(BaseModel):
     retest_poll_interval_sec: float = 20.0   # RetestMonitor poll cadence
     sl_buffer_pct: float = 0.2               # structure SL = band_low − this%
 
+    # ── V3 03.01: Layer-A intraday anchors (VWAP + ORB) — default-OFF ──
+    # Master gate for the extra TODAY-only fine fetch used to compute VWAP + ORB.
+    # OFF (default) → detector behaviour byte-identical (no extra broker call,
+    # no anchor/swing evidence enrichment); the level-export tool turns it on.
+    # Prior-day (PDH/PDL/PDC) + round anchors are always available (existing
+    # fetches). Swings + confidence_class emission are gated by this same flag so
+    # the live default row stays unchanged until validation.
+    intraday_anchors_enabled: bool = False
+    anchor_intraday_interval: str = "5minute"   # fine TF for VWAP/ORB (intraday only)
+    anchor_lookback_days: int = 1               # today-only window for the fine fetch
+    orb_window_minutes: int = 15                # opening-range window (scanner convention)
+
+    @field_validator("anchor_intraday_interval")
+    @classmethod
+    def _validate_anchor_interval(cls, v: str) -> str:
+        allowed = {"5minute", "15minute", "30minute"}
+        if v not in allowed:
+            raise ValueError(
+                "sr_detector.anchor_intraday_interval must be intraday %s; got %r"
+                % (sorted(allowed), v)
+            )
+        return v
+
     @field_validator("require_confidence")
     @classmethod
     def _validate_require_confidence(cls, v: str) -> str:
@@ -812,6 +849,132 @@ class SRDetectorConfig(BaseModel):
                 % (bad, sorted(allowed))
             )
         return v
+
+
+class RegimeConfig(BaseModel):
+    """
+    V3 03.02 — index-level Market Regime engine config.
+
+    ONE default-off flag (`enabled`) gates the whole shadow module in BOTH
+    paper + live. Every other field is a tuning knob. The market index (NIFTY 50)
+    is NOT in the instrument cache, so its token is supplied here and fetched
+    through the existing rate-limited OHLC closure (reuse, not a new data path).
+    Regime is a PREFERENCE — nothing here gates trading in this step.
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    index_symbol: str = "NIFTY 50"
+    index_token: int = 256265              # NIFTY 50 spot index (Kite instrument_token)
+    daily_lookback_days: int = 400         # enough for EMA200 + swing structure
+    intraday_interval: str = "5minute"
+    intraday_lookback_days: int = 1
+    ema_fast: int = 50
+    ema_slow: int = 200
+    slope_lookback: int = 5
+    adx_period: int = 14
+    adx_trend_threshold: float = 25.0
+    atr_period: int = 14
+    vol_high_ratio: float = 1.3            # cur ATR / baseline TR ≥ this → HIGH vol
+    vol_low_ratio: float = 0.7            # ≤ this → LOW vol
+    trend_day_range_atr_mult: float = 1.5  # intraday range ≥ this × ATR → trend-day candidate
+    swing_pivot_n: int = 3
+    compute_interval_sec: float = 60.0     # shadow-runner cadence
+
+    @field_validator("intraday_interval")
+    @classmethod
+    def _validate_regime_interval(cls, v: str) -> str:
+        allowed = {"5minute", "15minute", "30minute"}
+        if v not in allowed:
+            raise ValueError(
+                "regime.intraday_interval must be intraday %s; got %r" % (sorted(allowed), v)
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _validate_ema_order(self):
+        if self.ema_fast >= self.ema_slow:
+            raise ValueError("regime.ema_fast must be < regime.ema_slow")
+        return self
+
+
+class PortfolioAllocatorConfig(BaseModel):
+    """
+    V3 03.05 — Portfolio Allocator (ranked batch admission) config.
+
+    ONE default-off flag (`allocator_mode`) gates the whole thing in BOTH paper +
+    live. **off (default) = the current FCFS admission, BYTE-IDENTICAL** (the
+    allocator object is not even constructed in main.py, so signal_processor gets
+    allocator=None and the routing hook is never entered). shadow = a non-blocking
+    observer computes the would-be ranked-admission set alongside live FCFS and logs
+    the regret metrics (it NEVER reserves or places). enforce = a single admission
+    worker ranks a candle-window batch and governs admission via the EXISTING
+    reservation/gate primitives (the fused FCFS admit is bypassed only for in-scope
+    candidates). Sits ON fund_manager.reserve / portfolio_lock /
+    count_live_reservations / risk_engine.approve — reimplements none of them.
+
+    Every knob below is INERT by default (deployment cap None → no-op; skew None →
+    no-op; scope v3_only + no V3-playbook strategies yet → enforce governs nothing),
+    so a flip to shadow/enforce changes as little as possible until each knob is
+    deliberately set. See docs/v3/V3_STEP6_PORTFOLIO_ALLOCATOR_PLAN.md.
+    """
+    model_config = ConfigDict(extra="forbid")
+    allocator_mode: str = "off"                 # off | shadow | enforce (★ master gate)
+    enforce_scope: str = "v3_only"              # v3_only | all — v3_only governs ONLY V3-playbook strategies (none exist yet → inert)
+    # A1: wall-clock-aligned window (NOT candle_store) — align to this interval, then
+    # collect a short drain tail before ranking. Both far below the 60s signal expiry.
+    candle_interval_seconds: float = 60.0       # window boundary alignment (wall-clock)
+    drain_tail_seconds: float = 2.0             # collect this long after each boundary before ranking
+    # A3: shared portfolio-wide concentration cap (deployed-margin %). None = INERT
+    # (no-op). When set: admit iff deployed + candidate.margin <= pct * total.
+    # COMPOSES with the per-sector 0.40 cap (does NOT touch risk_engine gate 8).
+    max_portfolio_deployment_pct: Optional[float] = None
+    # A6: long/short directional skew cap (max fraction of the batch admits in one
+    # direction). None = INERT.
+    long_short_skew_max: Optional[float] = None
+    # T6: where the shadow regret rows are appended (JSONL; created on first write).
+    regret_log_path: str = "data_store/allocator/regret.jsonl"
+
+    @field_validator("allocator_mode")
+    @classmethod
+    def _validate_mode(cls, v: str) -> str:
+        if v not in {"off", "shadow", "enforce"}:
+            raise ValueError("portfolio_allocator.allocator_mode must be off|shadow|enforce")
+        return v
+
+    @field_validator("enforce_scope")
+    @classmethod
+    def _validate_scope(cls, v: str) -> str:
+        if v not in {"v3_only", "all"}:
+            raise ValueError("portfolio_allocator.enforce_scope must be v3_only|all")
+        return v
+
+    @field_validator("max_portfolio_deployment_pct")
+    @classmethod
+    def _validate_deployment_pct(cls, v: Optional[float]) -> Optional[float]:
+        # Constrained (0, 1]; a value < the single-sector cap (0.40) would bind before
+        # the sector cap — still SAFE (more conservative), just document-worthy.
+        if v is not None and not (0 < v <= 1):
+            raise ValueError("portfolio_allocator.max_portfolio_deployment_pct, when set, must be in (0, 1]")
+        return v
+
+    @field_validator("long_short_skew_max")
+    @classmethod
+    def _validate_skew(cls, v: Optional[float]) -> Optional[float]:
+        # A skew cap below 0.5 is nonsensical (every batch is >=50% one side when odd);
+        # require (0.5, 1].
+        if v is not None and not (0.5 < v <= 1):
+            raise ValueError("portfolio_allocator.long_short_skew_max, when set, must be in (0.5, 1]")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_window(self):
+        if self.candle_interval_seconds <= 0:
+            raise ValueError("portfolio_allocator.candle_interval_seconds must be > 0")
+        if not (0 < self.drain_tail_seconds < self.candle_interval_seconds):
+            raise ValueError(
+                "portfolio_allocator.drain_tail_seconds must be in (0, candle_interval_seconds)"
+            )
+        return self
 
 
 class StructureExitConfig(BaseModel):
@@ -1238,6 +1401,8 @@ class SystemConfig(BaseModel):
     tgt_retry: TgtRetryConfig = Field(default_factory=TgtRetryConfig)  # Task: standalone TGT retry
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     sr_detector: SRDetectorConfig = Field(default_factory=SRDetectorConfig)  # SNR-DETECTOR-V1: shadow S&R detector (default-off)
+    regime: RegimeConfig = Field(default_factory=RegimeConfig)  # V3 03.02: index-level market regime (shadow, default-off)
+    portfolio_allocator: PortfolioAllocatorConfig = Field(default_factory=PortfolioAllocatorConfig)  # V3 03.05: ranked batch admission (default-off)
     structure_exit: StructureExitConfig = Field(default_factory=StructureExitConfig)  # SNR-V2 Phase B: structure-aware exit (default-off)
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
@@ -1527,6 +1692,40 @@ class ScoringConfig(BaseModel):
     # score thresholds below.
     high_score_threshold: int
     medium_score_threshold: int
+
+    # ── V3 03.03/03.04 — Hard-Gate extraction + scorer re-scale (default-OFF) ──
+    # OFF (default): the 10-step scorer + the thresholds above run unchanged
+    # (BYTE-IDENTICAL live path). shadow: compute both, live follows OLD, log NEW.
+    # enforce: the gate + 8-step + v3 thresholds decide. The v3_* keys are
+    # SEPARATE from the OLD thresholds so OFF/reports keep reading 60/80/65.
+    v3_hardgate_mode: str = "off"                       # off | shadow | enforce
+    v3_gate_steps: list[str] = Field(default_factory=lambda: ["circuit_check", "signal_age"])
+    v3_freshness_max_sec: float = 60.0                  # freshness gate cutoff (A4)
+    v3_min_pass_score: int = 50                         # re-scaled (analytic; data-fit before enforce)
+    v3_high_score_threshold: int = 75
+    v3_medium_score_threshold: int = 56
+
+    @field_validator("v3_hardgate_mode")
+    @classmethod
+    def _validate_v3_mode(cls, v: str) -> str:
+        if v not in {"off", "shadow", "enforce"}:
+            raise ValueError("scoring.v3_hardgate_mode must be off|shadow|enforce")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_threshold_ordering(self):
+        # A9: high > medium > min_pass, for BOTH the live and the v3 thresholds.
+        if not (self.high_score_threshold > self.medium_score_threshold > self.min_pass_score):
+            raise ValueError(
+                "scoring thresholds must satisfy high > medium > min_pass "
+                f"(got {self.high_score_threshold}/{self.medium_score_threshold}/{self.min_pass_score})"
+            )
+        if not (self.v3_high_score_threshold > self.v3_medium_score_threshold > self.v3_min_pass_score):
+            raise ValueError(
+                "scoring v3 thresholds must satisfy high > medium > min_pass "
+                f"(got {self.v3_high_score_threshold}/{self.v3_medium_score_threshold}/{self.v3_min_pass_score})"
+            )
+        return self
 
 
 # ─────────────────────────────────────────────────────────────────────────────

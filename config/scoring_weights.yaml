@@ -27,3 +27,18 @@ min_pass_score: 60
 # misleading dead config. The thresholds below still drive tier ASSIGNMENT.
 high_score_threshold: 80
 medium_score_threshold: 65
+
+# ── V3 03.03/03.04 — Hard-Gate extraction + scorer re-scale (DEFAULT-OFF) ──
+# off (default) = the 10-step scorer + the 60/80/65 thresholds above run UNCHANGED
+#   (byte-identical live path). The v3_* keys are separate so OFF/reports keep 60/80/65.
+# shadow = compute both, live follows OLD, log NEW old-vs-new. enforce = gate + 8-step
+#   + v3 thresholds decide. Flip off→shadow→enforce ONLY after the offline parity
+#   recompute (scripts/v3_hardgate_parity_recompute.py) is signed off. Thresholds are
+#   the analytic fresh-reference start (min 60→50 / med 65→56 / high 80→75) and MUST be
+#   data-fit before enforce.
+v3_hardgate_mode: "off"            # off | shadow | enforce  (quoted — YAML reads bare off as false)
+v3_gate_steps: [circuit_check, signal_age]   # steps the Hard-Gate owns (excluded from v3 scoring)
+v3_freshness_max_sec: 60.0         # freshness gate cutoff (matches OLD signal_age>60s reject)
+v3_min_pass_score: 50
+v3_high_score_threshold: 75
+v3_medium_score_threshold: 56

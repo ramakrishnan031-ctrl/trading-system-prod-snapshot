@@ -1113,6 +1113,8 @@ def _shutdown(
     zone_warmer=None,  # SNR-V2: ZoneWarmer daemon (None when disabled)
     retest_monitor=None,  # SNR-V2: RetestMonitor daemon (None when disabled)
     structure_exit_manager=None,  # SNR-V2 Phase B: StructureExitManager (None when disabled)
+    market_regime_runner=None,  # V3 03.02: Market Regime shadow runner (None when disabled)
+    portfolio_allocator=None,  # V3 03.05: ranked-admission worker (None when off)
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1143,6 +1145,18 @@ def _shutdown(
             sr_detector.stop()
         except Exception as exc:
             _log.error("sr_detector.stop error: %s", exc)
+    # V3 03.02: stop the Market Regime shadow runner (daemon; best-effort).
+    if market_regime_runner is not None:
+        try:
+            market_regime_runner.stop()
+        except Exception as exc:
+            _log.error("market_regime_runner.stop error: %s", exc)
+    # V3 03.05: stop the Portfolio Allocator window worker (daemon; best-effort).
+    if portfolio_allocator is not None:
+        try:
+            portfolio_allocator.stop()
+        except Exception as exc:
+            _log.error("portfolio_allocator.stop error: %s", exc)
     # SNR-V2: stop the retest monitor + zone warmer daemons (best-effort).
     if retest_monitor is not None:
         try:
@@ -2094,6 +2108,9 @@ def _main_locked(args, config_dir: Path) -> int:
         max_position_value_pct=ps_cfg.max_position_value_pct,  # FIX-144 / BUILD 1 (#2)
         enabled=ps_cfg.enabled,                # Diary #4: tier-multiplier ON/OFF switch
         flat_value_rs=ps_cfg.flat_value_rs,    # Diary #4: flat Rs/order when OFF
+        # V3 03.06 delivery scaffold (INERT; None → global values, byte-identical).
+        delivery_risk_per_trade_pct=ps_cfg.delivery_risk_per_trade_pct,
+        delivery_max_position_value_pct=ps_cfg.delivery_max_position_value_pct,
     )
     # Diary #4: surface the active sizing mode at startup (one info-level line).
     if ps_cfg.enabled:
@@ -2445,6 +2462,16 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("step_executor"),
         market_open=market_windows.market_open,  # Audit #18
     )
+    # V3 03.03: pre-scoring Hard-Gate (circuit + proximity + freshness). Consumed
+    # by the screener only when scoring.v3_hardgate_mode != off (default off →
+    # dormant); built always so shadow/enforce need no re-wiring.
+    from screening.hard_gate import HardGate
+    hard_gate = HardGate(
+        now_fn=time_authority.now_ist,
+        logger=get_logger("hard_gate"),
+        freshness_max_sec=app_config.scoring.v3_freshness_max_sec,
+        circuit_proximity_reject_enabled=app_config.system.entry_gate.circuit_proximity_reject_enabled,
+    )
     screener = SecondaryScreener(
         step_executor=step_executor,
         quality_scorer=scorer,
@@ -2458,6 +2485,9 @@ def _main_locked(args, config_dir: Path) -> int:
         mis_filter_enabled=app_config.system.mis_filter.enabled,
         mis_filter_shadow=app_config.system.mis_filter.shadow,
         resolve_product=lambda intent: product_resolver.resolve(intent, "zerodha"),
+        # V3 03.03/03.04 — Hard-Gate + scorer re-scale (default-OFF via config).
+        hard_gate=hard_gate,
+        scoring_config=app_config.scoring,
     )
 
     eod = EodSquareoff(
@@ -2529,8 +2559,12 @@ def _main_locked(args, config_dir: Path) -> int:
     # (so it builds when EITHER retest or structure-exit is on). Dormant by default.
     _struct_exit_cfg = app_config.system.structure_exit
     _struct_exit_on = getattr(_struct_exit_cfg, "structure_exit_enabled", False)
+    # V3 03.02: index-level Market Regime shadow engine (default-off). Shares the
+    # same rate-limited OHLC fetch closure (reused for the index by config token).
+    _regime_cfg = getattr(app_config.system, "regime", None)
+    _regime_on = bool(getattr(_regime_cfg, "enabled", False))
     _sr_fetch_fn = None
-    if _v1_on or _v2_on or _struct_exit_on:
+    if _v1_on or _v2_on or _struct_exit_on or _regime_on:
         _md_kite = _build_market_data_kite(is_paper, kite_client)
         if _md_kite is None:
             _log.warning(
@@ -2548,12 +2582,48 @@ def _main_locked(args, config_dir: Path) -> int:
                 config=_sr_cfg, fetch_fn=_sr_fetch_fn,
                 instrument_cache=instrument_cache, store=store,
                 logger=get_logger("sr_detector"), mode=mode_label,
+                # V3 03.01 Layer-A anchors: inject NSE session bounds from the
+                # system's MarketWindows (never hardcode 09:15). Used only when
+                # sr_detector.intraday_anchors_enabled is on (default OFF).
+                session_open=market_windows.market_open,
+                session_close=market_windows.market_close,
             )
             sr_detector.start()
             _log.info("sr_detector: ENABLED and started (mode=%s)", mode_label)
         except Exception as exc:  # never let the detector break startup
             _log.error("sr_detector wiring failed (continuing without it): %s", exc)
             sr_detector = None
+
+    # V3 03.02: Market Regime shadow runner (index-level; NON-GATING). Dormant by
+    # default; when regime.enabled it computes/logs/persists the regime once per
+    # cycle. It gates NOTHING (no order/score/size/kill-switch). Fail-safe by
+    # construction — a broken regime NEVER halts the book.
+    market_regime_runner = None
+    if _regime_on:
+        try:
+            from sr_detector.fetch import OhlcFetcher
+            from regime import MarketRegimeShadowRunner, build_market_regime
+            _regime_fetcher = OhlcFetcher(
+                _sr_fetch_fn, instrument_cache,
+                lookback_days=int(getattr(_regime_cfg, "daily_lookback_days", 400)),
+                logger=get_logger("market_regime"), now_fn=time_authority.now_ist,
+                cache_ttl_sec=float(getattr(_sr_cfg, "cache_ttl_sec", 1800.0)))
+            _regime_engine = build_market_regime(
+                config=_regime_cfg, fetcher=_regime_fetcher,
+                logger=get_logger("market_regime"), now_fn=time_authority.now_ist,
+                market_windows=market_windows,
+                exchange_status_fn=None,  # no positive halt feed yet → extreme_flag stays FALSE
+            )
+            market_regime_runner = MarketRegimeShadowRunner(
+                engine=_regime_engine, logger=get_logger("market_regime"),
+                now_fn=time_authority.now_ist, market_windows=market_windows,
+                interval_sec=float(getattr(_regime_cfg, "compute_interval_sec", 60.0)),
+                persist_path=str(Path("data_store/regime/regime_state.json")))
+            market_regime_runner.start()
+            _log.info("market_regime: ENABLED and started (shadow, mode=%s)", mode_label)
+        except Exception as exc:  # never let regime break startup
+            _log.error("market_regime wiring failed (continuing without it): %s", exc)
+            market_regime_runner = None
 
     # SNR-V2 Phase A: ZoneCache + ZoneWarmer (built BEFORE SignalProcessor so the
     # warmer can be injected). The RetestMonitor + Diverter are built AFTER sp
@@ -2635,6 +2705,45 @@ def _main_locked(args, config_dir: Path) -> int:
         trade_type=app_config.system.trade_type,
         force_intraday_only=app_config.system.force_intraday_only,
     )
+
+    # ── V3 03.05 Portfolio Allocator (ranked batch admission) — default-OFF ──
+    # off (default): NOT constructed → signal_processor keeps allocator=None → the FCFS
+    # admission path is BYTE-IDENTICAL. shadow: a non-blocking regret observer runs
+    # alongside live FCFS (never reserves/places). enforce: a single admission worker
+    # ranks each candle-window batch and governs admission via the SAME reserve+place
+    # primitives (built here, but gated on the flag + N shadow sessions + a cutover).
+    portfolio_allocator = None
+    _alloc_cfg = getattr(app_config.system, "portfolio_allocator", None)
+    if _alloc_cfg is not None and getattr(_alloc_cfg, "allocator_mode", "off") != "off":
+        try:
+            from allocation import PortfolioAllocator
+            portfolio_allocator = PortfolioAllocator(
+                config=_alloc_cfg,
+                fund_manager=fund_manager,
+                max_open=int(getattr(risk_engine, "_max_open", 5)),
+                active_count_fn=store.count_active_positions,
+                logger=get_logger("portfolio_allocator"),
+                now_fn=time_authority.now_ist,
+                portfolio_lock=fund_manager.portfolio_lock,
+                enforce_admit_fn=signal_processor.admit_prepared,
+                enforce_reject_fn=signal_processor.reject_prepared,
+                # A2/A4: v3_only scope → only V3-playbook strategies (none exist yet →
+                # enforce governs nothing even if flipped). Existing scanners keep FCFS.
+                v3_scope_fn=lambda s: bool(getattr(s, "v3_playbook", False)),
+            )
+            signal_processor.set_allocator(portfolio_allocator)
+            portfolio_allocator.start()
+            _log.info(
+                "portfolio_allocator: ENABLED (mode=%s scope=%s)",
+                _alloc_cfg.allocator_mode, _alloc_cfg.enforce_scope,
+            )
+        except Exception as exc:  # never let the allocator break startup — fall back to FCFS
+            _log.error("portfolio_allocator wiring failed (continuing FCFS): %s", exc)
+            portfolio_allocator = None
+            try:
+                signal_processor.set_allocator(None)
+            except Exception:
+                pass
 
     # SNR-V2 Phase A: RetestMonitor + Diverter (need signal_processor.continue_from_
     # retest, so built here). The diverter is late-bound into signal_processor; the
@@ -3041,6 +3150,8 @@ def _main_locked(args, config_dir: Path) -> int:
         zone_warmer=zone_warmer,  # SNR-V2
         retest_monitor=retest_monitor,  # SNR-V2
         structure_exit_manager=structure_exit_manager,  # SNR-V2 Phase B
+        market_regime_runner=market_regime_runner,  # V3 03.02
+        portfolio_allocator=portfolio_allocator,  # V3 03.05
         mode=mode_label,
     )
     return 0

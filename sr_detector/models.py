@@ -166,6 +166,25 @@ STRUCT_OK = "OK"
 STRUCT_NONE = "NO_CLEAR_STRUCTURE"
 STRUCT_FETCH_FAILED = "FETCH_FAILED"
 
+# V3 03.01 — confidence_class: which detection layer the analysis may be trusted
+# on. Defaults to ANCHOR_ONLY: anchors (PDH/PDL/PDC, round, VWAP, ORB) are
+# reference levels; structural SWINGS are computed + emitted but flagged
+# NOT-YET-VALIDATED until Rama's manual-marking validation passes (the later,
+# human-gated flip to ANCHOR_PLUS_VALIDATED_SWINGS). The 03.03 R:R gate will use
+# ANCHOR-only levels for live capital until then.
+CONF_ANCHOR_ONLY = "ANCHOR_ONLY"
+CONF_ANCHOR_PLUS_VALIDATED_SWINGS = "ANCHOR_PLUS_VALIDATED_SWINGS"
+
+# V3 03.01 — S&R Timeframe Policy (intraday): map a fetched interval to its
+# structural ROLE so swing levels are labelled primary/major for validation.
+TF_ROLE = {
+    "day": "DAILY",
+    "60minute": "MAJOR",     # 1-hour = MAJOR structural
+    "30minute": "PRIMARY",   # 30-minute = PRIMARY structural
+    "15minute": "MINOR",
+    "5minute": "MICRO",
+}
+
 
 @dataclass(frozen=True)
 class SRAnalysis:
@@ -180,3 +199,9 @@ class SRAnalysis:
     retest: RetestProposal = field(default_factory=RetestProposal)
     evidence: dict = field(default_factory=dict)   # full per-zone breakdown (JSON)
     note: Optional[str] = None                     # e.g. "fetch_failed: <reason>"
+    # V3 03.01 (additive; default-safe so every existing construction is unchanged):
+    anchors: dict = field(default_factory=dict)    # Layer-A reference levels: prior_day
+    #   (PDH/PDL/PDC), round_numbers, vwap, orb_high/orb_low/orb_window_minutes.
+    swings: dict = field(default_factory=dict)     # Layer-B structural swing levels by
+    #   role: {"PRIMARY":[...], "MAJOR":[...], ...} — computed but NOT-YET-VALIDATED.
+    confidence_class: str = CONF_ANCHOR_ONLY       # ANCHOR_ONLY (default) | ANCHOR_PLUS_VALIDATED_SWINGS

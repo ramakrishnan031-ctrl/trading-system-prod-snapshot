@@ -135,6 +135,12 @@ class PositionSizer:
         broker_adapter=None,  # FIX-072: optional adapter for live margin fetch
         enabled: bool = True,                   # Diary #4: ON = score-tier × perf sizing (default)
         flat_value_rs: Optional[float] = None,  # Diary #4: flat Rs/order; required when enabled=False
+        # V3 03.06 — DELIVERY-scoped sizing scaffold (INERT; default None → the global
+        # risk/max-position-value are used, byte-identical). Applied ONLY to a positional
+        # (delivery) bucket, which never occurs live while force_intraday_only coerces
+        # every entry to INTRADAY. Reuses this sizer (no parallel/delivery sizer).
+        delivery_risk_per_trade_pct: Optional[float] = None,
+        delivery_max_position_value_pct: Optional[float] = None,
     ) -> None:
         self._fm = fund_manager
         self._leverage_map = dict(leverage_map)
@@ -155,6 +161,9 @@ class PositionSizer:
         # enforces this, but guard here too (PositionSizer is built directly in tests).
         self._enabled = enabled
         self._flat_value_rs = flat_value_rs
+        # V3 03.06 delivery scaffold (INERT; see ctor note).
+        self._delivery_risk_per_trade_pct = delivery_risk_per_trade_pct
+        self._delivery_max_position_value_pct = delivery_max_position_value_pct
         if not enabled and (flat_value_rs is None or flat_value_rs <= 0):
             raise ValueError(
                 f"PositionSizer: enabled=False (flat sizing) requires flat_value_rs > 0, "
@@ -265,6 +274,21 @@ class PositionSizer:
         total_capital = snap.total
         avail = snap.intraday_avail if bucket == "intraday" else snap.positional_avail
 
+        # V3 03.06 delivery scaffold (INERT): a positional (delivery) entry MAY use
+        # delivery-specific risk / max-position-value; default None → the global values
+        # (byte-identical). bucket is never "positional" live while force_intraday_only
+        # coerces every entry to INTRADAY, so live sizing is unchanged.
+        eff_risk_pct = (
+            self._delivery_risk_per_trade_pct
+            if (bucket == "positional" and self._delivery_risk_per_trade_pct is not None)
+            else self._risk_per_trade_pct
+        )
+        eff_max_position_value_pct = (
+            self._delivery_max_position_value_pct
+            if (bucket == "positional" and self._delivery_max_position_value_pct is not None)
+            else self._max_position_value_pct
+        )
+
         # ── PS2: Three candidate quantities ───────────────────────────────────
         # FIX-072: Try live margin from broker API first, fallback to static on error
         leverage = self._leverage_map.get(intent, 1.0)  # static fallback
@@ -330,7 +354,7 @@ class PositionSizer:
                 breakdown={},
             )
 
-        risk_rs = total_capital * self._risk_per_trade_pct
+        risk_rs = total_capital * eff_risk_pct
         qty_by_risk = int(math.floor(risk_rs / sl_distance))
 
         # FIX-041: Guard 2 — Qty explosion sanity cap
@@ -474,7 +498,7 @@ class PositionSizer:
         # - Bugs in earlier constraints
         # - High-priced stocks where even small qty is large exposure
         position_value = final_qty * entry_price
-        max_position_value = self._max_position_value_pct * total_capital
+        max_position_value = eff_max_position_value_pct * total_capital
         if position_value > max_position_value:
             if self._log is not None:
                 self._log.critical(

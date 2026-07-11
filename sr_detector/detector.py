@@ -28,6 +28,7 @@ from typing import Dict, List, Optional
 
 from sr_detector.flags import BreakoutContext, compute_flags_and_retest
 from sr_detector.models import (
+    CONF_ANCHOR_ONLY,
     STRUCT_FETCH_FAILED,
     STRUCT_NONE,
     STRUCT_OK,
@@ -35,9 +36,12 @@ from sr_detector.models import (
     SRAnalysis,
 )
 from sr_detector.zone_builder import (
+    build_anchor_payload,
     build_flag_params,
     build_scoring_params,
+    build_swings_payload,
     build_zone_knobs,
+    intraday_anchors,
     scored_zones_from_candles,
 )
 
@@ -56,6 +60,8 @@ class SRDetector:
         mode: str,
         now_fn,
         detector_version: str = DETECTOR_VERSION,
+        session_open=None,
+        session_close=None,
     ) -> None:
         self._cfg = config
         self._fetcher = fetcher
@@ -65,6 +71,17 @@ class SRDetector:
         self._now_fn = now_fn
         self._version = detector_version
         self._enabled = bool(_attr(config, "enabled", False))
+
+        # V3 03.01 Layer-A intraday anchors (VWAP/ORB) — default-OFF gate. When
+        # off, analyze() adds no anchor/swing enrichment and does NO extra fetch,
+        # so the shadow row is byte-identical to before. Session bounds are
+        # injected (from MarketWindows in main.py) — never hardcoded here.
+        self._anchors_on = bool(_attr(config, "intraday_anchors_enabled", False))
+        self._anchor_interval = str(_attr(config, "anchor_intraday_interval", "5minute"))
+        self._anchor_lookback_days = int(_attr(config, "anchor_lookback_days", 1))
+        self._orb_window_minutes = int(_attr(config, "orb_window_minutes", 15))
+        self._session_open = session_open      # datetime.time | None
+        self._session_close = session_close    # datetime.time | None
 
         # SNR-V2: the zone-building params + the pivots→zones→confluence sequence
         # are shared with the ZoneWarmer via sr_detector.zone_builder (one path).
@@ -159,6 +176,16 @@ class SRDetector:
         status = STRUCT_OK if scored else STRUCT_NONE
         flags = fr.flags if fr.flags else (("NO_CLEAR_STRUCTURE",) if status == STRUCT_NONE else ())
 
+        # V3 03.01 (gated, default-OFF): Layer-A anchor levels + Layer-B swing
+        # labelling for the manual-marking validation. confidence_class stays
+        # ANCHOR_ONLY — swings are computed + emitted but NOT-YET-VALIDATED, so
+        # they never drive the later R:R gate until Rama's validation flips it.
+        anchors: dict = {}
+        swings: dict = {}
+        if self._anchors_on:
+            anchors = self._build_anchors(candidate, tf_candles)
+            swings = build_swings_payload(scored)
+
         return SRAnalysis(
             structure_status=status,
             nearest_resistance=fr.nearest_resistance,
@@ -169,7 +196,38 @@ class SRDetector:
             flags=flags,
             retest=fr.retest,
             evidence=self._evidence(scored),
+            anchors=anchors,
+            swings=swings,
+            confidence_class=CONF_ANCHOR_ONLY,
         )
+
+    def _build_anchors(self, candidate: Candidate, tf_candles: Dict[str, list]) -> dict:
+        """Layer-A anchors: prior-day (PDH/PDL/PDC) + round numbers (always) plus
+        the intraday VWAP/ORB block (a today-only fine fetch; only when session
+        bounds are injected). Fail-safe — a fine-fetch miss yields None fields,
+        never raises."""
+        daily = tf_candles.get("day") or []
+        reference = float(candidate.intended_entry) if candidate.intended_entry else None
+        intraday = None
+        if self._session_open is not None and self._session_close is not None:
+            on_date = candidate.ts.date() if candidate.ts is not None else None
+            if on_date is not None:
+                try:
+                    fine = self._fetcher.fetch_interval(
+                        candidate.symbol, self._anchor_interval, self._anchor_lookback_days
+                    ) or []
+                    intraday = intraday_anchors(
+                        fine,
+                        on_date=on_date,
+                        session_open=self._session_open,
+                        session_close=self._session_close,
+                        orb_window_minutes=self._orb_window_minutes,
+                    )
+                except Exception as exc:   # fail-safe: anchors are shadow-only
+                    self._safe_log("warning", "sr_detector: intraday anchors failed for %s: %s",
+                                   candidate.symbol, exc)
+                    intraday = None
+        return build_anchor_payload(daily, reference, intraday)
 
     def _breakout_context(self, tf_candles: Dict[str, list]) -> Optional[BreakoutContext]:
         intr = tf_candles.get("30minute") or tf_candles.get("60minute") or tf_candles.get("day")
@@ -195,6 +253,14 @@ class SRDetector:
 
     def _write(self, candidate: Candidate, a: SRAnalysis) -> None:
         try:
+            # V3 03.01: enrich the evidence JSON with anchors/swings/confidence_class
+            # ONLY when the anchor layer is on — default-OFF keeps the persisted
+            # row byte-identical to the pre-V3 shadow write.
+            evidence_payload = dict(a.evidence)
+            if self._anchors_on:
+                evidence_payload["anchors"] = a.anchors
+                evidence_payload["swings"] = a.swings
+                evidence_payload["confidence_class"] = a.confidence_class
             row = {
                 "signal_id": candidate.signal_id,
                 "symbol": candidate.symbol,
@@ -211,7 +277,7 @@ class SRDetector:
                 "dist_to_support_pct": a.dist_to_support_pct,
                 "resistance_confidence": a.nearest_resistance.confidence if a.nearest_resistance else "NONE",
                 "support_confidence": a.nearest_support.confidence if a.nearest_support else "NONE",
-                "confluence_evidence": _json(a.evidence),
+                "confluence_evidence": _json(evidence_payload),
                 "breakout_volume": a.breakout_volume,
                 "flags": _json(list(a.flags)),
                 "would_wait_for_retest": 1 if a.retest.would_wait else 0,

@@ -73,6 +73,21 @@ class _PipelineReject(Exception):
         self.reason = reason
 
 
+class _AdmitCtx:
+    """V3 03.05: mutable lifecycle holder threaded through the extracted ADMIT callable
+    (_admit_and_place). Carries the reservation/in-flight/requeue/placed state so the
+    caller's except+finally see it on EVERY exit path (normal, early-return, and raise) —
+    this is what preserves the pre-extraction behaviour byte-for-byte (esp. the queue.Full
+    reservation-leak guard, where reservation_id must remain visible to the outer handler)."""
+    __slots__ = ("reservation_id", "requeued", "in_flight_incremented", "placed")
+
+    def __init__(self) -> None:
+        self.reservation_id = None            # type: Optional[str]
+        self.requeued = False                 # FIX-069
+        self.in_flight_incremented = False    # FIX-165c
+        self.placed = False                   # True once order_placer.place() succeeded
+
+
 # ---------------------------------------------------------------------------
 # SignalProcessor
 # ---------------------------------------------------------------------------
@@ -145,6 +160,7 @@ class SignalProcessor:
         perf_weights: Optional[Dict[str, float]] = None,  # FIX-132 Item 9
         trade_type: str = "INTRADAY",       # Slice 2 LAYER 1: master product gate
         force_intraday_only: bool = False,  # Slice 2 LAYER 0: read for the control resolver
+        allocator=None,                     # V3 03.05: PortfolioAllocator (None = OFF → FCFS byte-identical)
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -181,6 +197,7 @@ class SignalProcessor:
         self._perf_weights: Dict[str, float] = dict(perf_weights or {})  # FIX-132 Item 9
         self._trade_type = trade_type                      # Slice 2 LAYER 1
         self._force_intraday_only = bool(force_intraday_only)  # Slice 2 LAYER 0
+        self._allocator = allocator                        # V3 03.05: None unless shadow/enforce (also settable via set_allocator)
 
         # Lifecycle
         self._running = False
@@ -649,6 +666,7 @@ class SignalProcessor:
         reservation_id: Optional[str] = None
         requeued = False  # FIX-069: track if signal was re-queued
         in_flight_incremented = False  # FIX-165c: track whether _in_flight_count was incremented
+        handed_off = False  # V3 03.05: True when this candidate was handed to the allocator (enforce); worker owns the claim
 
         try:
             # SP9: mark PROCESSING immediately
@@ -903,251 +921,52 @@ class SignalProcessor:
                 raise _PipelineReject(f"SIZING_{sizing.constraint}", sizing.reason)
             self._heartbeat(symbol)  # FIX-011: checkpoint 3 (sizing done)
 
-            # ----------------------------------------------------------
-            # Steps 6-7: Risk approval + Capital reservation
-            # Audit 1.2 / Portfolio Lock: approve + reserve must be a single
-            # critical section. Two concurrent signals on the same sector or
-            # bucket would otherwise both pass risk_engine.approve (which
-            # reads existing exposure) and then both fm.reserve, overshooting
-            # max_sector_exposure_pct / max_open_positions. RLock so reserve()
-            # re-entering self._fm._lock is safe.
-            #
-            # FIX-018: TOCTOU fix. Increment _in_flight_count BEFORE approve() so
-            # concurrent signals see each other even before they insert into the
-            # in_flight DB table. Decrement in finally block (every exit path).
-            # ----------------------------------------------------------
-            with self._in_flight_lock:
-                self._in_flight_count += 1
-                in_flight_incremented = True  # FIX-165c
-                processor_in_flight = self._in_flight_count
-
-            with self._fm.portfolio_lock:
-                # H-7 (Wave-5): the per-strategy cap is enforced ATOMICALLY inside
-                # portfolio_lock, immediately before reserve(), so a Chartink burst can't
-                # slip past a stale pre-lock count. One deduped check for all 3 paths.
-                self._enforce_strategy_position_cap(strategy_name, strategy_obj)
+            # ── V3 03.05 Portfolio Allocator routing (default-OFF: allocator is None
+            #    → this hook is skipped entirely → FCFS admission BYTE-IDENTICAL) ──
+            if self._allocator is not None:
                 try:
-                    approval = self._risk.approve(
-                        symbol, side, strategy_obj.intent, sizing, signal_id,
-                        processor_in_flight_count=processor_in_flight
-                    )
-                except BrokerError as be:
-                    if self._ks:
-                        self._ks.record_api_failure(be)
-                    raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
+                    _amode = self._allocator.mode
+                    if _amode == "enforce" and self._allocator.in_scope(strategy_obj):
+                        # ENFORCE + in-scope: hand off to the batch worker; the receiver's
+                        # symbol in-flight claim stays held until the worker admits/rejects
+                        # (A8). Do NOT self-admit; do NOT release the claim here.
+                        self._allocator.submit(self._build_candidate(
+                            signal_id, symbol, scanner_name, strategy_name, strategy_obj,
+                            side, entry_price, sl_price, sizing, screen_result,
+                            trigger_price, triggered_at, retry_count, now,
+                            with_payload=True))
+                        handed_off = True
+                        return
+                    if _amode == "shadow":
+                        # SHADOW: fire-and-forget copy for the regret observer, then fall
+                        # through to the UNCHANGED fused admit (live FCFS still governs).
+                        self._allocator.observe(self._build_candidate(
+                            signal_id, symbol, scanner_name, strategy_name, strategy_obj,
+                            side, entry_price, sl_price, sizing, screen_result,
+                            trigger_price, triggered_at, retry_count, now,
+                            with_payload=False))
+                except _PipelineReject:
+                    raise
+                except Exception as _alloc_exc:   # the allocator must NEVER break admission
+                    self._log.error("allocator routing error (ignored): %s", _alloc_exc)
 
-                if not approval.approved:
-                    raise _PipelineReject(approval.failed_check, approval.reason)
-
-                try:
-                    reservation = self._fm.reserve(
-                        symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id,
-                        strategy=strategy_name,   # H-7 (Wave-5): tag for the per-strategy cap
-                    )
-                except BrokerError as be:
-                    if self._ks:
-                        self._ks.record_api_failure(be)
-                    raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
-
-                if not reservation.success:
-                    raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
-
-                reservation_id = reservation.reservation_id
-
-                # SP9: signal reserved (kept inside the lock so the SQL row
-                # appears atomically with the reservation entry).
-                self._store.update_signal_status(signal_id, "RESERVED")
-
-            self._heartbeat(symbol)  # FIX-011: checkpoint 4 (reservation done)
-
-            # ----------------------------------------------------------
-            # Step 8: Order placement (SP16: optional)
-            # ----------------------------------------------------------
-            if self._placer is None:
-                self._log.info(
-                    f"order_placer=None; releasing reservation {reservation_id} for {signal_id}"
-                )
-                try:
-                    self._fm.release(reservation_id, "no_order_placer")
-                except Exception as rel_exc:
-                    self._log.error(f"Failed to release reservation {reservation_id}: {rel_exc}")
-                reservation_id = None
-                self._store.update_signal_status(signal_id, "PROCESSED_NO_PLACER")
-                with self._stats_lock:
-                    self._stats["processed_no_placer"] += 1
-                return
-
-            # Derive target price (SPW5, SPW6). Uses the (possibly fresh-re-anchored)
-            # entry_price/sl_price from the FIX-067/M-S1 momentum block above, so the
-            # target sits on the same fresh basis as entry/SL/qty/reservation.
-            tgt_price = self._derive_target(entry_price, sl_price, strategy_obj)
-
-            # Telegram alert: INTRADAY SIGNAL (fires before order placement)
-            self._emit_signal_alert(
-                symbol=symbol,
-                strategy_name=strategy_name,
-                score=screen_result.score,
-                entry_price=entry_price,
-                sl_price=sl_price,
-                tgt_price=tgt_price,
-                qty=sizing.qty,
-                direction=strategy_obj.direction,
-            )
-
-            self._heartbeat(symbol)  # FIX-011: checkpoint 5 (before placement)
-
-            # FIX-070: Second kill-switch check after pipeline processing.
-            # TOCTOU fix: HARD_KILL could fire during steps 2-7 (screening, sizing,
-            # reservation). Check again immediately before placement to prevent
-            # opening positions after kill-switch activated.
-            # Also check shutdown event - system shutdown could have been initiated.
-            if self._ks and self._ks.is_active("entry"):
-                self._log.warning(
-                    f"FIX-070: kill-switch active after pipeline - aborting placement for {signal_id} ({symbol})"
-                )
-                if reservation_id:
-                    self._fm.release(reservation_id, "kill_switch_after_pipeline")
-                    reservation_id = None
-                raise _PipelineReject("KILL_SWITCH_LATE", "Kill switch active before placement")
-
-            if self._stop_event.is_set():
-                self._log.warning(
-                    f"FIX-070: shutdown event set - aborting placement for {signal_id} ({symbol})"
-                )
-                if reservation_id:
-                    self._fm.release(reservation_id, "shutdown_before_placement")
-                    reservation_id = None
-                raise _PipelineReject("SHUTDOWN", "System shutdown before placement")
-
-            # FIX-190 (Bug G): entry throttle — space out placed entries to prevent
-            # a burst (the 5-entries-in-5s 19-Jun spike). Released reservation on
-            # reject so the slot frees for a later signal.
-            _tr = self._entry_throttle.admit(symbol)
-            if not _tr.allowed:
-                if reservation_id:
-                    self._fm.release(reservation_id, "entry_throttled")
-                    reservation_id = None
-                self._bump_metric("entries_throttled")
-                raise _PipelineReject(
-                    "ENTRY_THROTTLED", f"Entry throttled: {_tr.reason}"
-                )
-
+            # Fused admission (OFF / shadow / enforce-out-of-scope). _admit_and_place is
+            # the SAME callable the enforce worker uses (R2: no forked reservation path).
+            # The inner try/finally syncs ac's lifecycle flags back to the locals the
+            # outer except/finally read — preserving every existing behaviour (incl. the
+            # queue.Full reservation-leak guard and FIX-165c in_flight bookkeeping).
+            _ac = _AdmitCtx()
             try:
-                self._placer.place(
-                    symbol=symbol,
-                    side=side,
-                    qty=sizing.qty,
-                    entry_price=entry_price,  # FIX-067/M-S1: fresh-re-anchored (or stale fallback)
-                    sl_price=sl_price,
-                    intent=strategy_obj.intent,
-                    signal_id=signal_id,
-                    reservation_id=reservation_id,
-                    strategy=strategy_name,
-                    tgt_price=tgt_price,
-                    signal_trigger_price=trigger_price,  # FIX-128: for slippage guard
-                    sizing_breakdown=sizing.breakdown,   # Diary #4: sizing audit
-                    tgt_risk_reward=getattr(strategy_obj, "tgt_risk_reward", None),  # Slice 1: freeze strategy R:R for fill-time TGT recalc (None -> fill falls back to default + WARN)
-                )
-                reservation_id = None   # placer owns it now
-                self._bump_metric("entries_placed")  # FIX-190 (Bug B)
-            except BrokerTimeoutError as timeout_err:
-                # A-2 (02-Jul): a place() timeout is AMBIGUOUS — the order may already
-                # be live at the broker. Do NOT retry (a retry = a second, duplicate
-                # entry / 2x exposure — the entry throttle only masks it). order_placer
-                # has already set the trade UNKNOWN_IN_FLIGHT and KEPT its reservation
-                # (FIX-068); the 15s reconciler recovery (_recover_in_flight_entries) is
-                # the SOLE owner — it correlates the entry by tag and adopts+protects (or
-                # FAILs on confirmed broker-absence) and reconstructs capital. So: record
-                # the API failure, mark the SIGNAL TIMEOUT (the TRADE stays authoritative
-                # UNKNOWN_IN_FLIGHT — TIMEOUT is an already-allowed signal status, so no
-                # schema/report change), relinquish the reservation handle
-                # WITHOUT releasing it (recovery owns it — SINGULAR ownership), free the
-                # symbol lock (requeued stays False), and return. Parity: paper simulates
-                # the timeout through this same handler.
-                if self._ks:
-                    self._ks.record_api_failure(timeout_err)
-                self._store.update_signal_status(
-                    signal_id, "TIMEOUT", str(timeout_err)
-                )
-                reservation_id = None   # recovery owns the reservation — do NOT release
-                return
-
-            except BrokerRateLimitError as transient_err:
-                # FIX-069: a client-side rate-limit is raised PRE-submission (nothing was
-                # sent to the broker) -> re-queuing for retry is idempotent. Keep lock
-                # held to prevent duplicate admission. Max 3 retries (45s total, 15s each).
-                if self._ks:
-                    self._ks.record_api_failure(transient_err)
-
-                if retry_count >= 3:
-                    # Max retries exhausted - mark as failed and release lock
-                    self._log.warning(
-                        f"FIX-069: signal {signal_id} ({symbol}) abandoned after "
-                        f"{retry_count} retries on {type(transient_err).__name__}"
-                    )
-                    raise  # Let outer exception handler mark PLACEMENT_FAILED
-
-                # Re-queue with incremented retry count
-                retry_count += 1
-                requeued = True  # Signal finally block to NOT release lock
-                self._log.warning(
-                    f"FIX-069: re-queuing {signal_id} ({symbol}) due to "
-                    f"{type(transient_err).__name__}, retry {retry_count}/3"
-                )
-
-                # Build signal dict with retry metadata
-                signal_dict = {
-                    "signal_id": signal_id,
-                    "scanner_name": scanner_name,
-                    "symbol": symbol,
-                    "trigger_price": trigger_price,
-                    "triggered_at": triggered_at,
-                    "retry_count": retry_count,
-                }
-
-                try:
-                    self._queue.put(signal_dict, timeout=1.0)
-                    # Release reservation but keep lock - reconciler will retry
-                    if reservation_id:
-                        self._fm.release(reservation_id, "requeued_transient_error")
-                        reservation_id = None
-                    return  # Exit without releasing lock (requeued=True)
-                except queue.Full:
-                    # Queue full - can't retry, must fail and release lock
-                    self._log.error(
-                        f"FIX-069: queue full, cannot re-queue {signal_id} ({symbol})"
-                    )
-                    requeued = False  # Force lock release
-                    raise  # Let outer handler mark PLACEMENT_FAILED
-            except BrokerError as be:
-                if self._ks:
-                    self._ks.record_api_failure(be)
-                raise  # caught by outer except below
-            except Exception:
-                raise  # caught by outer except below
-
-            # ----------------------------------------------------------
-            # Step 9: Success (SPW7: only post-screen statuses here)
-            # ----------------------------------------------------------
-            self._store.update_signal_status(signal_id, "PROCESSED")
-            with self._stats_lock:
-                self._stats["processed"] += 1
-                self._stats["placed"] += 1
-
-            # SNR-DETECTOR-V1: non-gating observer — runs only now that the order
-            # reached placement. Enqueues + returns immediately (never blocks/raises).
-            self._sr_observe(
-                symbol=symbol,
-                strategy_name=strategy_name,
-                score=screen_result.score,
-                entry_price=entry_price,  # FIX-067/M-S1: the actual placed (fresh-re-anchored) entry
-                sl_price=sl_price,
-                tgt_price=tgt_price,
-                qty=sizing.qty,
-                direction=strategy_obj.direction,
-                signal_id=signal_id,
-                intent=strategy_obj.intent,
-            )
+                self._admit_and_place(
+                    _ac, signal_id=signal_id, symbol=symbol, scanner_name=scanner_name,
+                    strategy_name=strategy_name, strategy_obj=strategy_obj, side=side,
+                    entry_price=entry_price, sl_price=sl_price, sizing=sizing,
+                    screen_result=screen_result, trigger_price=trigger_price,
+                    triggered_at=triggered_at, retry_count=retry_count, now=now)
+            finally:
+                reservation_id = _ac.reservation_id
+                requeued = _ac.requeued
+                in_flight_incremented = _ac.in_flight_incremented
 
         except _PipelineReject as rej:
             self._log.info(
@@ -1209,8 +1028,11 @@ class SignalProcessor:
             # FIX-069: Only release in-flight lock if signal was NOT re-queued.
             # If requeued=True, lock must travel with signal to prevent duplicate
             # admission while signal is pending retry.
+            # V3 03.05: also skip when handed_off — the allocator worker owns the symbol
+            # claim until it admits/rejects (A8). In OFF, handed_off is always False, so
+            # this condition is byte-identical to the pre-allocator behaviour.
             # SP7: ALWAYS release in-flight (audit #21 fix; SPW8: covers screener paths)
-            if not requeued and self._in_flight_release is not None:
+            if not requeued and not handed_off and self._in_flight_release is not None:
                 try:
                     self._in_flight_release(symbol)
                 except Exception as rel_exc:
@@ -1220,6 +1042,385 @@ class SignalProcessor:
             with self._stats_lock:
                 self._stats["total_ms"] += elapsed_ms
                 self._stats["pipeline_total"] += 1
+    def _admit_and_place(
+        self, ac, *, signal_id, symbol, scanner_name, strategy_name, strategy_obj,
+        side, entry_price, sl_price, sizing, screen_result, trigger_price,
+        triggered_at, retry_count, now,
+    ) -> None:
+        """V3 03.05: the extracted ADMIT+place block (Steps 6-9). The SINGLE
+        admission callable used by BOTH the fused FCFS path (_process_one) and the
+        enforce worker (admit_prepared) — R2: no forked reservation path. Operates on
+        a mutable _AdmitCtx `ac` (reservation_id/requeued/in_flight_incremented/placed)
+        so the caller's except+finally observe the lifecycle on every exit path.
+        Byte-identical to the pre-extraction inline block (only the three locals became
+        ac.* fields, plus the ac.placed marker after a successful place())."""
+        # ----------------------------------------------------------
+        # Steps 6-7: Risk approval + Capital reservation
+        # Audit 1.2 / Portfolio Lock: approve + reserve must be a single
+        # critical section. Two concurrent signals on the same sector or
+        # bucket would otherwise both pass risk_engine.approve (which
+        # reads existing exposure) and then both fm.reserve, overshooting
+        # max_sector_exposure_pct / max_open_positions. RLock so reserve()
+        # re-entering self._fm._lock is safe.
+        #
+        # FIX-018: TOCTOU fix. Increment _in_flight_count BEFORE approve() so
+        # concurrent signals see each other even before they insert into the
+        # in_flight DB table. Decrement in finally block (every exit path).
+        # ----------------------------------------------------------
+        with self._in_flight_lock:
+            self._in_flight_count += 1
+            ac.in_flight_incremented = True  # FIX-165c
+            processor_in_flight = self._in_flight_count
+
+        with self._fm.portfolio_lock:
+            # H-7 (Wave-5): the per-strategy cap is enforced ATOMICALLY inside
+            # portfolio_lock, immediately before reserve(), so a Chartink burst can't
+            # slip past a stale pre-lock count. One deduped check for all 3 paths.
+            self._enforce_strategy_position_cap(strategy_name, strategy_obj)
+            try:
+                approval = self._risk.approve(
+                    symbol, side, strategy_obj.intent, sizing, signal_id,
+                    processor_in_flight_count=processor_in_flight
+                )
+            except BrokerError as be:
+                if self._ks:
+                    self._ks.record_api_failure(be)
+                raise _PipelineReject("RISK_BROKER_ERROR", str(be)) from be
+
+            if not approval.approved:
+                raise _PipelineReject(approval.failed_check, approval.reason)
+
+            try:
+                reservation = self._fm.reserve(
+                    symbol, sizing.qty, entry_price, strategy_obj.intent, signal_id,
+                    strategy=strategy_name,   # H-7 (Wave-5): tag for the per-strategy cap
+                )
+            except BrokerError as be:
+                if self._ks:
+                    self._ks.record_api_failure(be)
+                raise _PipelineReject("RESERVE_BROKER_ERROR", str(be)) from be
+
+            if not reservation.success:
+                raise _PipelineReject("RESERVE_FAILED", reservation.reason_if_failed)
+
+            ac.reservation_id = reservation.reservation_id
+
+            # SP9: signal reserved (kept inside the lock so the SQL row
+            # appears atomically with the reservation entry).
+            self._store.update_signal_status(signal_id, "RESERVED")
+
+        self._heartbeat(symbol)  # FIX-011: checkpoint 4 (reservation done)
+
+        # ----------------------------------------------------------
+        # Step 8: Order placement (SP16: optional)
+        # ----------------------------------------------------------
+        if self._placer is None:
+            self._log.info(
+                f"order_placer=None; releasing reservation {ac.reservation_id} for {signal_id}"
+            )
+            try:
+                self._fm.release(ac.reservation_id, "no_order_placer")
+            except Exception as rel_exc:
+                self._log.error(f"Failed to release reservation {ac.reservation_id}: {rel_exc}")
+            ac.reservation_id = None
+            self._store.update_signal_status(signal_id, "PROCESSED_NO_PLACER")
+            with self._stats_lock:
+                self._stats["processed_no_placer"] += 1
+            return
+
+        # Derive target price (SPW5, SPW6). Uses the (possibly fresh-re-anchored)
+        # entry_price/sl_price from the FIX-067/M-S1 momentum block above, so the
+        # target sits on the same fresh basis as entry/SL/qty/reservation.
+        tgt_price = self._derive_target(entry_price, sl_price, strategy_obj)
+
+        # Telegram alert: INTRADAY SIGNAL (fires before order placement)
+        self._emit_signal_alert(
+            symbol=symbol,
+            strategy_name=strategy_name,
+            score=screen_result.score,
+            entry_price=entry_price,
+            sl_price=sl_price,
+            tgt_price=tgt_price,
+            qty=sizing.qty,
+            direction=strategy_obj.direction,
+        )
+
+        self._heartbeat(symbol)  # FIX-011: checkpoint 5 (before placement)
+
+        # FIX-070: Second kill-switch check after pipeline processing.
+        # TOCTOU fix: HARD_KILL could fire during steps 2-7 (screening, sizing,
+        # reservation). Check again immediately before placement to prevent
+        # opening positions after kill-switch activated.
+        # Also check shutdown event - system shutdown could have been initiated.
+        if self._ks and self._ks.is_active("entry"):
+            self._log.warning(
+                f"FIX-070: kill-switch active after pipeline - aborting placement for {signal_id} ({symbol})"
+            )
+            if ac.reservation_id:
+                self._fm.release(ac.reservation_id, "kill_switch_after_pipeline")
+                ac.reservation_id = None
+            raise _PipelineReject("KILL_SWITCH_LATE", "Kill switch active before placement")
+
+        if self._stop_event.is_set():
+            self._log.warning(
+                f"FIX-070: shutdown event set - aborting placement for {signal_id} ({symbol})"
+            )
+            if ac.reservation_id:
+                self._fm.release(ac.reservation_id, "shutdown_before_placement")
+                ac.reservation_id = None
+            raise _PipelineReject("SHUTDOWN", "System shutdown before placement")
+
+        # FIX-190 (Bug G): entry throttle — space out placed entries to prevent
+        # a burst (the 5-entries-in-5s 19-Jun spike). Released reservation on
+        # reject so the slot frees for a later signal.
+        _tr = self._entry_throttle.admit(symbol)
+        if not _tr.allowed:
+            if ac.reservation_id:
+                self._fm.release(ac.reservation_id, "entry_throttled")
+                ac.reservation_id = None
+            self._bump_metric("entries_throttled")
+            raise _PipelineReject(
+                "ENTRY_THROTTLED", f"Entry throttled: {_tr.reason}"
+            )
+
+        try:
+            self._placer.place(
+                symbol=symbol,
+                side=side,
+                qty=sizing.qty,
+                entry_price=entry_price,  # FIX-067/M-S1: fresh-re-anchored (or stale fallback)
+                sl_price=sl_price,
+                intent=strategy_obj.intent,
+                signal_id=signal_id,
+                reservation_id=ac.reservation_id,
+                strategy=strategy_name,
+                tgt_price=tgt_price,
+                signal_trigger_price=trigger_price,  # FIX-128: for slippage guard
+                sizing_breakdown=sizing.breakdown,   # Diary #4: sizing audit
+                tgt_risk_reward=getattr(strategy_obj, "tgt_risk_reward", None),  # Slice 1: freeze strategy R:R for fill-time TGT recalc (None -> fill falls back to default + WARN)
+            )
+            ac.reservation_id = None   # placer owns it now
+            ac.placed = True   # V3 03.05: mark placement for the enforce tally
+            self._bump_metric("entries_placed")  # FIX-190 (Bug B)
+        except BrokerTimeoutError as timeout_err:
+            # A-2 (02-Jul): a place() timeout is AMBIGUOUS — the order may already
+            # be live at the broker. Do NOT retry (a retry = a second, duplicate
+            # entry / 2x exposure — the entry throttle only masks it). order_placer
+            # has already set the trade UNKNOWN_IN_FLIGHT and KEPT its reservation
+            # (FIX-068); the 15s reconciler recovery (_recover_in_flight_entries) is
+            # the SOLE owner — it correlates the entry by tag and adopts+protects (or
+            # FAILs on confirmed broker-absence) and reconstructs capital. So: record
+            # the API failure, mark the SIGNAL TIMEOUT (the TRADE stays authoritative
+            # UNKNOWN_IN_FLIGHT — TIMEOUT is an already-allowed signal status, so no
+            # schema/report change), relinquish the reservation handle
+            # WITHOUT releasing it (recovery owns it — SINGULAR ownership), free the
+            # symbol lock (ac.requeued stays False), and return. Parity: paper simulates
+            # the timeout through this same handler.
+            if self._ks:
+                self._ks.record_api_failure(timeout_err)
+            self._store.update_signal_status(
+                signal_id, "TIMEOUT", str(timeout_err)
+            )
+            ac.reservation_id = None   # recovery owns the reservation — do NOT release
+            return
+
+        except BrokerRateLimitError as transient_err:
+            # FIX-069: a client-side rate-limit is raised PRE-submission (nothing was
+            # sent to the broker) -> re-queuing for retry is idempotent. Keep lock
+            # held to prevent duplicate admission. Max 3 retries (45s total, 15s each).
+            if self._ks:
+                self._ks.record_api_failure(transient_err)
+
+            if retry_count >= 3:
+                # Max retries exhausted - mark as failed and release lock
+                self._log.warning(
+                    f"FIX-069: signal {signal_id} ({symbol}) abandoned after "
+                    f"{retry_count} retries on {type(transient_err).__name__}"
+                )
+                raise  # Let outer exception handler mark PLACEMENT_FAILED
+
+            # Re-queue with incremented retry count
+            retry_count += 1
+            ac.requeued = True  # Signal finally block to NOT release lock
+            self._log.warning(
+                f"FIX-069: re-queuing {signal_id} ({symbol}) due to "
+                f"{type(transient_err).__name__}, retry {retry_count}/3"
+            )
+
+            # Build signal dict with retry metadata
+            signal_dict = {
+                "signal_id": signal_id,
+                "scanner_name": scanner_name,
+                "symbol": symbol,
+                "trigger_price": trigger_price,
+                "triggered_at": triggered_at,
+                "retry_count": retry_count,
+            }
+
+            try:
+                self._queue.put(signal_dict, timeout=1.0)
+                # Release reservation but keep lock - reconciler will retry
+                if ac.reservation_id:
+                    self._fm.release(ac.reservation_id, "requeued_transient_error")
+                    ac.reservation_id = None
+                return  # Exit without releasing lock (requeued=True)
+            except queue.Full:
+                # Queue full - can't retry, must fail and release lock
+                self._log.error(
+                    f"FIX-069: queue full, cannot re-queue {signal_id} ({symbol})"
+                )
+                ac.requeued = False  # Force lock release
+                raise  # Let outer handler mark PLACEMENT_FAILED
+        except BrokerError as be:
+            if self._ks:
+                self._ks.record_api_failure(be)
+            raise  # caught by outer except below
+        except Exception:
+            raise  # caught by outer except below
+
+        # ----------------------------------------------------------
+        # Step 9: Success (SPW7: only post-screen statuses here)
+        # ----------------------------------------------------------
+        self._store.update_signal_status(signal_id, "PROCESSED")
+        with self._stats_lock:
+            self._stats["processed"] += 1
+            self._stats["placed"] += 1
+
+        # SNR-DETECTOR-V1: non-gating observer — runs only now that the order
+        # reached placement. Enqueues + returns immediately (never blocks/raises).
+        self._sr_observe(
+            symbol=symbol,
+            strategy_name=strategy_name,
+            score=screen_result.score,
+            entry_price=entry_price,  # FIX-067/M-S1: the actual placed (fresh-re-anchored) entry
+            sl_price=sl_price,
+            tgt_price=tgt_price,
+            qty=sizing.qty,
+            direction=strategy_obj.direction,
+            signal_id=signal_id,
+            intent=strategy_obj.intent,
+        )
+
+    # ------------------------------------------------------------------
+    # V3 03.05 Portfolio Allocator integration (default-OFF; see
+    # docs/v3/V3_STEP6_PORTFOLIO_ALLOCATOR_PLAN.md)
+    # ------------------------------------------------------------------
+
+    def set_allocator(self, allocator) -> None:
+        """Late-bind the PortfolioAllocator (built after this processor in main.py so it
+        can reference admit_prepared/reject_prepared). None keeps FCFS byte-identical."""
+        self._allocator = allocator
+
+    def _sector_for(self, symbol: str) -> str:
+        ic = self._instrument_cache
+        if ic is None:
+            return "UNKNOWN"
+        for _m in ("sector_for", "get_sector"):
+            _fn = getattr(ic, _m, None)
+            if callable(_fn):
+                try:
+                    _s = _fn(symbol)
+                    return str(_s) if _s else "UNKNOWN"
+                except Exception:
+                    return "UNKNOWN"
+        return "UNKNOWN"
+
+    def _build_candidate(self, signal_id, symbol, scanner_name, strategy_name,
+                         strategy_obj, side, entry_price, sl_price, sizing,
+                         screen_result, trigger_price, triggered_at, retry_count, now,
+                         *, with_payload):
+        """Build the allocator's ScoredCandidate from a screened+sized signal. The heavy
+        AdmitPayload is attached ONLY for enforce (with_payload); shadow needs only the
+        light ranking/regret fields. Imports allocation lazily (no import-time coupling
+        when the allocator is off)."""
+        from allocation.models import AdmitPayload, ScoredCandidate
+        try:
+            _epoch = triggered_at.replace(tzinfo=ist_timezone()).timestamp()
+        except Exception:
+            _epoch = 0.0
+        _payload = None
+        if with_payload:
+            _payload = AdmitPayload(
+                scanner_name=scanner_name, strategy_obj=strategy_obj, sizing=sizing,
+                screen_result=screen_result, entry_price=entry_price, sl_price=sl_price,
+                trigger_price=trigger_price, triggered_at=triggered_at,
+                retry_count=retry_count, now=now)
+        return ScoredCandidate(
+            signal_id=signal_id, symbol=symbol, strategy_name=strategy_name, side=side,
+            intent=strategy_obj.intent, score=float(getattr(screen_result, "score", 0.0)),
+            tier=str(getattr(screen_result, "tier", "")),
+            margin_required=float(getattr(sizing, "margin_required", 0.0)),
+            sector=self._sector_for(symbol), triggered_epoch=float(_epoch), payload=_payload)
+
+    def admit_prepared(self, candidate) -> bool:
+        """ENFORCE-worker entry: admit ONE ranked, prepared candidate. Reuses the SHARED
+        _admit_and_place (same reserve+place as the fused path) and mirrors _process_one's
+        reject/exception handlers + finally cleanup (R5 migration scaffolding — consolidate
+        with _process_one when enforce is activated). Returns True iff the entry placed."""
+        ac = _AdmitCtx()
+        p = candidate.payload
+        try:
+            self._admit_and_place(
+                ac, signal_id=candidate.signal_id, symbol=candidate.symbol,
+                scanner_name=p.scanner_name, strategy_name=candidate.strategy_name,
+                strategy_obj=p.strategy_obj, side=candidate.side, entry_price=p.entry_price,
+                sl_price=p.sl_price, sizing=p.sizing, screen_result=p.screen_result,
+                trigger_price=p.trigger_price, triggered_at=p.triggered_at,
+                retry_count=p.retry_count, now=p.now)
+        except _PipelineReject as rej:
+            self._store.update_signal_status(candidate.signal_id, f"REJECTED_{rej.check}", rej.reason)
+            if ac.reservation_id:
+                try:
+                    self._fm.release(ac.reservation_id, f"rejected_{rej.check.lower()}")
+                except Exception as rel_exc:
+                    self._log.error(f"Failed to release reservation {ac.reservation_id}: {rel_exc}")
+            with self._stats_lock:
+                bucket = self._stats["rejected"]
+                bucket[rej.check] = bucket.get(rej.check, 0) + 1
+        except Exception as exc:
+            self._log.error(f"allocator admit exception for {candidate.signal_id} ({candidate.symbol}): {exc}")
+            self._store.update_signal_status(candidate.signal_id, "PLACEMENT_FAILED", str(exc))
+            if ac.reservation_id:
+                try:
+                    self._fm.release(ac.reservation_id, "placement_failed")
+                except Exception as rel_exc:
+                    self._log.error(f"Failed to release reservation {ac.reservation_id}: {rel_exc}")
+            with self._stats_lock:
+                bucket = self._stats["rejected"]
+                bucket["PLACEMENT_FAILED"] = bucket.get("PLACEMENT_FAILED", 0) + 1
+        finally:
+            if ac.in_flight_incremented:
+                try:
+                    with self._in_flight_lock:
+                        self._in_flight_count -= 1
+                except Exception as lock_exc:
+                    self._log.error(f"_in_flight_count decrement failed: {lock_exc}")
+            if not ac.requeued and self._in_flight_release is not None:
+                try:
+                    self._in_flight_release(candidate.symbol)
+                except Exception as rel_exc:
+                    self._log.error(f"in_flight_release failed for {candidate.symbol}: {rel_exc}")
+        return ac.placed
+
+    def reject_prepared(self, candidate, reason: str) -> None:
+        """ENFORCE: a candidate the allocator's portfolio pre-checks dropped BEFORE admit
+        (no reservation / no in_flight increment happened — those live in _admit_and_place).
+        Set the signal status + release the receiver's symbol in-flight claim so it is
+        treated exactly like an FCFS reject (A8)."""
+        try:
+            self._store.update_signal_status(candidate.signal_id, f"REJECTED_{reason}",
+                                             f"allocator pre-check: {reason}")
+        except Exception as exc:
+            self._log.error(f"reject_prepared status write failed for {candidate.signal_id}: {exc}")
+        with self._stats_lock:
+            bucket = self._stats["rejected"]
+            bucket[reason] = bucket.get(reason, 0) + 1
+        if self._in_flight_release is not None:
+            try:
+                self._in_flight_release(candidate.symbol)
+            except Exception as rel_exc:
+                self._log.error(f"in_flight_release failed for {candidate.symbol}: {rel_exc}")
+
 
     # ------------------------------------------------------------------
     # Price derivation (SPW4)

@@ -155,6 +155,13 @@ position_sizing:              # PS9
   dynamic_by_winrate: true    # FIX-133 Item 21: PerformanceAllocator weights applied to sizing
   min_multiplier: 0.5         # floor: worst-performing strategy gets at least 50% qty
   max_multiplier: 2.0         # cap: best-performing strategy gets at most 200% qty
+  # V3 03.06 — DELIVERY-scoped sizing scaffold (INERT). null → the global
+  # risk_per_trade_pct / max_position_value_pct above are used (byte-identical).
+  # Delivery is double-locked OFF + force_intraday_only coerces every entry to
+  # INTRADAY, so the positional (delivery) bucket is never sized live. The V3
+  # delivery path sets these when delivery is activated (a later step).
+  delivery_risk_per_trade_pct: null      # e.g. 0.005 for a tighter delivery risk when activated
+  delivery_max_position_value_pct: null  # e.g. 0.20 for a tighter delivery position cap when activated
 
 risk:                         # RE13 — portfolio-level pre-trade gate limits
   # BUILD 1 (#3, 24-Jun): these base caps are now the SOLE authority in BOTH
@@ -323,6 +330,37 @@ sr_detector:                  # SNR-DETECTOR-V1 — shadow support/resistance de
   zone_rewarm_margin_sec: 300      # re-warm a cached symbol this long before its TTL expiry
   retest_poll_interval_sec: 20     # RetestMonitor 1m poll cadence
   sl_buffer_pct: 0.2               # structure SL beyond the broken level by this % (LONG below band_low / SHORT above band_high)
+  # ── V3 03.01 Layer-A intraday anchors (VWAP + ORB) — DEFAULT-OFF (validate first) ──
+  intraday_anchors_enabled: false  # ★ master gate. false = no extra fine fetch, shadow row byte-identical. Flip true AFTER the sr_level_export manual-marking validation passes
+  anchor_intraday_interval: 5minute  # fine TF for VWAP/ORB (5minute/15minute/30minute)
+  anchor_lookback_days: 1          # today-only window for the fine fetch
+  orb_window_minutes: 15           # opening-range window (original scanner convention)
+
+regime:                       # V3 03.02 — index-level Market Regime engine (SHADOW, gates nothing)
+  enabled: false              # ★ master gate (paper+live). false = not constructed/run; zero pipeline change. Regime is a PREFERENCE; extreme_flag NOT wired to stop trading yet
+  index_symbol: "NIFTY 50"    # spot index (NOT in the instrument cache → fetched by index_token via the existing OHLC closure)
+  index_token: 256265         # NIFTY 50 Kite instrument_token (VERIFY live historical access on the VM before flipping enabled)
+  daily_lookback_days: 400    # enough for EMA200 + swing structure
+  intraday_interval: 5minute  # for day-type (5minute/15minute/30minute)
+  intraday_lookback_days: 1
+  ema_fast: 50
+  ema_slow: 200
+  adx_period: 14
+  adx_trend_threshold: 25.0
+  atr_period: 14
+  vol_high_ratio: 1.3         # cur ATR / baseline TR ≥ this → HIGH vol; ≤ vol_low_ratio → LOW
+  vol_low_ratio: 0.7
+  trend_day_range_atr_mult: 1.5
+  compute_interval_sec: 60.0  # shadow-runner cadence
+
+portfolio_allocator:         # V3 03.05 — ranked batch admission (default-OFF; FCFS byte-identical while off)
+  allocator_mode: "off"      # ★ master gate (paper+live): off | shadow | enforce. off = allocator not constructed → signal_processor gets None → current FCFS admission BYTE-IDENTICAL. Flip to shadow (regret soak) only after off-market push + review; enforce is gated on N shadow sessions + regret review + Rama + an off-market cutover
+  enforce_scope: "v3_only"   # v3_only | all — v3_only governs ONLY V3-playbook strategies (none exist yet → enforce governs nothing even if flipped); all = every scanner
+  candle_interval_seconds: 60.0  # wall-clock window alignment (NOT candle_store); short vs the 60s signal expiry
+  drain_tail_seconds: 2.0    # collect this long after each boundary before ranking
+  max_portfolio_deployment_pct: null  # A3 shared concentration cap (deployed-margin %). null = INERT (no-op). Composes with the per-sector 0.40 cap; does NOT touch risk_engine gate 8
+  long_short_skew_max: null  # A6 directional-skew cap (max fraction one side). null = INERT
+  regret_log_path: "data_store/allocator/regret.jsonl"  # shadow regret rows (JSONL, created on first write)
 
 structure_exit:               # SNR-V2 Phase B — structure-aware exit (trail SL to structure + confirmed-break exit), MIS LIMIT_TRIPLE only
   structure_exit_enabled: false    # ★ MASTER flag (paper+live). false = StructureExitManager not constructed; zero pipeline change. Single SL owner — do NOT co-enable strategy.trailing_sl_enabled

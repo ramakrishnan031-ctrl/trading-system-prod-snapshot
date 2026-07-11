@@ -281,6 +281,22 @@ def _group_b_single_source(raw_system: Optional[dict],
             "system_config.position_sizing. Remove the scoring duplicate.",
         ))
 
+    # A9 (V3 03.04): tier thresholds must satisfy high > medium > min_pass, for BOTH
+    # the live thresholds and the v3 re-scale set. (config_loader also fail-fasts on
+    # this; the auditor surfaces it on the raw YAML in pre-flight.)
+    if raw_scoring is not None:
+        for lo_key, mid_key, hi_key, label in (
+            ("min_pass_score", "medium_score_threshold", "high_score_threshold", "live"),
+            ("v3_min_pass_score", "v3_medium_score_threshold", "v3_high_score_threshold", "v3"),
+        ):
+            lo, mid, hi = raw_scoring.get(lo_key), raw_scoring.get(mid_key), raw_scoring.get(hi_key)
+            if None not in (lo, mid, hi) and not (hi > mid > lo):
+                out.append(AuditFinding(
+                    "B", f"B5_scoring_threshold_ordering_{label}", Severity.BLOCK,
+                    f"scoring {label} thresholds must satisfy high > medium > min_pass "
+                    f"(got {hi}/{mid}/{lo}).",
+                ))
+
     if not out:
         out.append(AuditFinding(
             "B", "B_ok", Severity.PASS,

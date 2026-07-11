@@ -78,9 +78,17 @@ class StepExecutor:
         signal: dict,
         market_data: dict,
         thresholds: dict,
+        exclude_steps: "set[str] | None" = None,
     ) -> StepExecutorResult:
-        """Run all 10 steps; capture exceptions; return full result."""
+        """Run the screening steps; capture exceptions; return full result.
+
+        V3 03.03/03.04: `exclude_steps` names steps NOT to run (the Hard-Gate now
+        owns them). Default None → all 10 steps run (the OFF path is byte-identical
+        to before). In v3 mode the screener passes {circuit_check, signal_age} so
+        only the 8 scored steps run.
+        """
         direction = signal.get("direction", "LONG").upper()
+        _exclude = exclude_steps or set()
 
         step_results: dict[str, float] = {}
         step_statuses: dict[str, str] = {}
@@ -89,16 +97,18 @@ class StepExecutor:
         rejected_at: str | None = None
 
         steps = [
-            ("volume_surge",    self._step_1_volume_surge),
-            ("vwap_position",   self._step_2_vwap_position),
-            ("atr_filter",      self._step_3_atr_filter),
-            ("rsi_range",       self._step_4_rsi_range),
-            ("price_action",    self._step_5_price_action),
-            ("sector_strength", self._step_6_sector_strength),
-            ("time_of_day",     self._step_7_time_of_day),
-            ("spread_check",    self._step_8_spread_check),
-            ("circuit_check",   self._step_9_circuit_check),
-            ("signal_age",      self._step_10_signal_age),
+            (name, fn) for name, fn in (
+                ("volume_surge",    self._step_1_volume_surge),
+                ("vwap_position",   self._step_2_vwap_position),
+                ("atr_filter",      self._step_3_atr_filter),
+                ("rsi_range",       self._step_4_rsi_range),
+                ("price_action",    self._step_5_price_action),
+                ("sector_strength", self._step_6_sector_strength),
+                ("time_of_day",     self._step_7_time_of_day),
+                ("spread_check",    self._step_8_spread_check),
+                ("circuit_check",   self._step_9_circuit_check),
+                ("signal_age",      self._step_10_signal_age),
+            ) if name not in _exclude
         ]
 
         # FIX-100: Reuse instance-level executor (was: create new executor per call)

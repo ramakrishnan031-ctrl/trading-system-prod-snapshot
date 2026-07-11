@@ -67,6 +67,39 @@ class OhlcFetcher:
                 out[interval] = candles
         return out
 
+    def fetch_interval(
+        self, symbol: str, interval: str, lookback_days: Optional[int] = None
+    ) -> Optional[List[Candle]]:
+        """Fetch ONE interval with an explicit (usually short) lookback window.
+
+        V3 03.01: the Layer-A intraday anchors (VWAP/ORB) need TODAY's fine bars
+        (e.g. 5-minute, lookback 1) — a different window than the multi-day
+        structural fetch. Reuses the same token/cache/fetch_fn machinery; returns
+        None on any failure (fail-safe, SR-F4). fetch_timeframes() is unchanged.
+        """
+        token = self._resolve_token(symbol)
+        if token is None:
+            return None
+        return self._fetch_one(symbol, token, interval, lookback_days=lookback_days)
+
+    def fetch_by_token(
+        self, token: int, interval: str, lookback_days: Optional[int] = None,
+        *, cache_key: Optional[str] = None,
+    ) -> Optional[List[Candle]]:
+        """Fetch ONE interval for an EXPLICIT instrument_token (skips the
+        symbol→token cache resolution).
+
+        V3 03.02: the market-index (e.g. NIFTY 50) is NOT in the instrument
+        cache, so its token is supplied from config and fetched directly through
+        the SAME rate-limited fetch_fn (reuse, not a new data path). Returns None
+        on any failure (fail-safe). `cache_key` scopes the intra-session cache
+        (defaults to the token).
+        """
+        if not token:
+            return None
+        key = cache_key or f"__token_{int(token)}"
+        return self._fetch_one(key, int(token), interval, lookback_days=lookback_days)
+
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _resolve_token(self, symbol: str) -> Optional[int]:
@@ -78,13 +111,17 @@ class OhlcFetcher:
             self._safe_log("warning", "sr_detector fetch: token lookup failed for %s: %s", symbol, exc)
             return None
 
-    def _fetch_one(self, symbol: str, token: int, interval: str) -> Optional[List[Candle]]:
+    def _fetch_one(
+        self, symbol: str, token: int, interval: str,
+        lookback_days: Optional[int] = None,
+    ) -> Optional[List[Candle]]:
         cached = self._cache_get(symbol, interval)
         if cached is not None:
             return cached
         try:
             now = self._now_fn()
-            from_dt = now - timedelta(days=self._lookback_days)
+            lb = self._lookback_days if lookback_days is None else int(lookback_days)
+            from_dt = now - timedelta(days=lb)
             rows = self._fetch_fn(token, from_dt, now, interval)
             candles = [Candle.from_kite(r) for r in (rows or [])]
             if candles:
