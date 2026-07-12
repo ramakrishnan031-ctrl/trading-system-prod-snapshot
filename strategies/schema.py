@@ -109,6 +109,13 @@ class StrategyConfig(BaseModel):
     lot_size: int = 1
     max_concurrent_positions: int = 2  # FIX-135 Item 42: per-strategy position cap
 
+    # --- V3 playbook membership (default-OFF; V3 Step 10) ---
+    # Marks a strategy as governed by the V3 decision chain (playbook-scope gates +
+    # 3-layer score + allocator v3_only scope). DEFAULT False → the 15 existing
+    # strategies are byte-identical; only a V3 playbook (PB-01, built in 10b) sets it
+    # true. Consumed by allocator.in_scope (v3_scope_fn) and the V3 chain enrichment.
+    v3_playbook: bool = False
+
     # --- Time ---
     entry_start_time: str = "10:00"  # Matches trading_hours.entry_start = 10:00 (T5 29-Jun)
     entry_end_time: str = "15:00"    # Matches trading_hours.entry_end = 15:00 (T5 29-Jun)

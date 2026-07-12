@@ -1115,6 +1115,7 @@ def _shutdown(
     structure_exit_manager=None,  # SNR-V2 Phase B: StructureExitManager (None when disabled)
     market_regime_runner=None,  # V3 03.02: Market Regime shadow runner (None when disabled)
     portfolio_allocator=None,  # V3 03.05: ranked-admission worker (None when off)
+    v3_chain=None,  # V3 Step 10: decision-chain shadow enrichment worker (None when off)
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1157,6 +1158,12 @@ def _shutdown(
             portfolio_allocator.stop()
         except Exception as exc:
             _log.error("portfolio_allocator.stop error: %s", exc)
+    # V3 Step 10: stop the decision-chain shadow enrichment worker (daemon; best-effort).
+    if v3_chain is not None:
+        try:
+            v3_chain.stop()
+        except Exception as exc:
+            _log.error("v3_chain.stop error: %s", exc)
     # SNR-V2: stop the retest monitor + zone warmer daemons (best-effort).
     if retest_monitor is not None:
         try:
@@ -2563,8 +2570,12 @@ def _main_locked(args, config_dir: Path) -> int:
     # same rate-limited OHLC fetch closure (reused for the index by config token).
     _regime_cfg = getattr(app_config.system, "regime", None)
     _regime_on = bool(getattr(_regime_cfg, "enabled", False))
+    # V3 Step 10: decision-chain shadow enrichment (default-off). Also needs the
+    # shared rate-limited OHLC fetch closure (for its own truncating fetcher).
+    _v3_cfg = getattr(app_config.system, "v3_chain", None)
+    _v3_chain_on = bool(_v3_cfg is not None and getattr(_v3_cfg, "v3_chain_mode", "off") != "off")
     _sr_fetch_fn = None
-    if _v1_on or _v2_on or _struct_exit_on or _regime_on:
+    if _v1_on or _v2_on or _struct_exit_on or _regime_on or _v3_chain_on:
         _md_kite = _build_market_data_kite(is_paper, kite_client)
         if _md_kite is None:
             _log.warning(
@@ -2742,6 +2753,45 @@ def _main_locked(args, config_dir: Path) -> int:
             portfolio_allocator = None
             try:
                 signal_processor.set_allocator(None)
+            except Exception:
+                pass
+
+    # ── V3 Step 10 decision chain (SHADOW enrichment) — default-OFF ──
+    # off (default): NOT constructed → signal_processor keeps v3_chain=None → the hot-
+    # path hook is a single skipped flag check (BYTE-IDENTICAL). shadow: a guarded fire-
+    # and-forget observer feeds a BACKGROUND worker that computes the V3 verdict (generic
+    # gates + Context/Execution score, LOG-ONLY — never rejects/delays/alters a live
+    # order) and appends a would-be record. Its own truncating OhlcFetcher REUSES the
+    # SAME rate-limited closure (no new data path); the regime .latest snapshot is read
+    # on the hot path AS OF signal time (NO-LOOKAHEAD).
+    v3_chain_runner = None
+    if _v3_chain_on:
+        try:
+            from sr_detector.fetch import OhlcFetcher
+            from sr_detector.zone_builder import build_scoring_params, build_zone_knobs
+            from v3_chain import V3ChainRunner
+            _v3_fetcher = OhlcFetcher(
+                _sr_fetch_fn, instrument_cache,
+                lookback_days=int(getattr(_v3_cfg, "fetch_lookback_days", 180)),
+                logger=get_logger("v3_chain"), now_fn=time_authority.now_ist,
+                cache_ttl_sec=float(getattr(_v3_cfg, "fetch_cache_ttl_sec", 1800.0)))
+            v3_chain_runner = V3ChainRunner(
+                config=_v3_cfg,
+                zone_knobs=build_zone_knobs(_sr_cfg),      # REUSE the sr_detector zone knobs (no duplicate tuning)
+                zone_scoring=build_scoring_params(_sr_cfg),
+                fetcher=_v3_fetcher,
+                logger=get_logger("v3_chain"),
+                now_fn=time_authority.now_ist,
+                regime_runner=market_regime_runner,        # as-of regime snapshot (None when regime OFF)
+            )
+            signal_processor.set_v3_chain(v3_chain_runner)
+            v3_chain_runner.start()
+            _log.info("v3_chain: ENABLED (mode=%s, shadow LOG-ONLY)", _v3_cfg.v3_chain_mode)
+        except Exception as exc:   # never let the chain break startup
+            _log.error("v3_chain wiring failed (continuing without it): %s", exc)
+            v3_chain_runner = None
+            try:
+                signal_processor.set_v3_chain(None)
             except Exception:
                 pass
 
@@ -3152,6 +3202,7 @@ def _main_locked(args, config_dir: Path) -> int:
         structure_exit_manager=structure_exit_manager,  # SNR-V2 Phase B
         market_regime_runner=market_regime_runner,  # V3 03.02
         portfolio_allocator=portfolio_allocator,  # V3 03.05
+        v3_chain=v3_chain_runner,  # V3 Step 10
         mode=mode_label,
     )
     return 0

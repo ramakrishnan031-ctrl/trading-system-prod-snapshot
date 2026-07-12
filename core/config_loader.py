@@ -977,6 +977,126 @@ class PortfolioAllocatorConfig(BaseModel):
         return self
 
 
+class V3ChainConfig(BaseModel):
+    """
+    V3 Step 10 — the V3 DECISION CHAIN (enrichment + generic gates + 3-layer score
+    + would-be record) config. Governs the SHADOW enrichment that runs the V3 chain
+    over live signals to measure it against real outcomes (the "Kalyan" question).
+
+    ONE default-off flag (`v3_chain_mode`) gates the whole thing in BOTH paper +
+    live. **off (default) = BYTE-IDENTICAL** — the V3ChainRunner is not even
+    constructed in main.py, so signal_processor gets v3_chain=None and the hot-path
+    hook is a single skipped flag check. shadow = a guarded fire-and-forget observer
+    emits a copy of each screened+sized signal to a BACKGROUND worker which computes
+    the V3 verdict (gates + score, LOG-ONLY, never rejects/delays/alters a live
+    order) and appends a would-be record. BINARY for now (no `enforce` — that is a
+    far-later step; keeping the flag binary avoids a dead enforce branch on the hot
+    path). All gate thresholds + score weights are SEED numbers to be calibrated
+    from the shadow data (spec §1 governing principle) — starting points, not truth.
+
+    See docs/v3/V3_STEP10_PIPELINE_PLUMBING_PLAN.md + the V3 DECISION CONTENT
+    SPECIFICATION v1.0.
+    """
+    model_config = ConfigDict(extra="forbid")
+    v3_chain_mode: str = "off"                  # off | shadow (★ master gate; BINARY, no enforce yet)
+
+    # ── gate knobs (spec §3) ──────────────────────────────────────────────────
+    atr30_period: int = 14                      # ATR(30m) period for the G-RR SL buffer (distinct from regime.atr_period)
+    rr_floor: float = 2.0                       # G-RR: R:R must be >= this (seed)
+    sl_buffer_atr_mult: float = 0.20            # G-RR SL buffer = this × ATR30 (seed)
+    htf_ema_period: int = 20                    # G-HTF + htf_alignment: 1h EMA period
+    htf_swing_pivot_n: int = 3                  # G-HTF + htf_alignment: 1h swing-pivot N (each side)
+
+    # ── 3-layer score weights (spec §4; every step used exactly once, no double-count) ──
+    # PLAYBOOK (40) — forward-compat, UNUSED in 10a (no playbook exists yet; recorded null).
+    w_retest_quality: float = 15.0
+    w_confirmation_strength: float = 15.0
+    w_level_significance: float = 10.0
+    # CONTEXT (40).
+    w_regime_preference: float = 8.0
+    w_sr_target_quality: float = 8.0
+    w_htf_alignment: float = 8.0                # CONFLUENCE GROUP {ema-position, swing-structure}
+    w_sector_strength: float = 8.0
+    w_momentum_position: float = 8.0            # CONFLUENCE GROUP {rsi_range, vwap_position}
+    # EXECUTION (20) — the raw step weights + the layer budget; the composer rescales
+    # each by (exec_budget / Σ raw) so the four execution-ish steps sum to 20 (spec §4).
+    exec_budget: float = 20.0
+    w_exec_volume_surge: float = 15.0
+    w_exec_atr: float = 10.0
+    w_exec_time_of_day: float = 5.0
+    w_exec_spread: float = 5.0
+
+    # ── confluence combination (the anti-inflation rule, spec §4) ─────────────
+    # Members of a group are combined into ONE bounded value BEFORE weighting so
+    # correlated factors cannot each take a full weight. "mean" = mean of the
+    # members' normalized fractions (default); "max" = the strongest member.
+    confluence_combine: str = "mean"
+
+    # ── sr_target_quality mapping (zone confidence → fraction, spec §4) ────────
+    sr_target_quality_high: float = 1.0
+    sr_target_quality_medium: float = 0.6
+    sr_target_quality_low: float = 0.3
+
+    # ── regime base-preference maps (spec §4 regime_preference) ───────────────
+    # Each axis' base preference for PB-01 (intraday LONG breakout-retest); each is
+    # multiplied by that axis' OWN confidence multiplier (from 03.02). regime OFF /
+    # UNKNOWN → contributes 0 (never dominant; 8 of 40).
+    regime_pref_direction: dict[str, float] = Field(
+        default_factory=lambda: {"BULL": 1.0, "SIDEWAYS": 0.5, "BEAR": 0.0})
+    regime_pref_day_type: dict[str, float] = Field(
+        default_factory=lambda: {"TREND_DAY": 1.0, "UNDETERMINED": 0.5, "RANGE_DAY": 0.4})
+    regime_pref_volatility: dict[str, float] = Field(
+        default_factory=lambda: {"HIGH": 0.85, "NORMAL": 1.0, "LOW": 1.0})
+
+    # ── 3-layer thresholds (forward-compat; 10a records the score, does not gate on it) ──
+    # The distribution differs from the 8-step re-scale, so Step-4b's 50/56/75 do NOT
+    # transfer — start at the classic shape and CALIBRATE from the would-be data.
+    min_pass_score: int = 60
+    medium_score_threshold: int = 65
+    high_score_threshold: int = 80
+
+    # ── worker / fetch knobs (the async enrichment worker) ────────────────────
+    # The structural TFs the worker fetches (via the SAME rate-limited closure the
+    # sr_detector uses) and truncates to signal time (NO-LOOKAHEAD addendum).
+    structure_intervals: list[str] = Field(
+        default_factory=lambda: ["day", "60minute", "30minute"])
+    fetch_lookback_days: int = 180
+    fetch_cache_ttl_sec: float = 1800.0         # own OhlcFetcher cache TTL (distinct from sr_detector.cache_ttl_sec)
+    max_queue: int = 512
+    would_be_log_path: str = "data_store/v3/would_be.jsonl"
+
+    @field_validator("v3_chain_mode")
+    @classmethod
+    def _validate_v3_chain_mode(cls, v: str) -> str:
+        # BINARY on purpose (no enforce in 10a) — a dead enforce branch on the hot
+        # path is a foot-gun; enforce arrives in a later, deliberate step.
+        if v not in {"off", "shadow"}:
+            raise ValueError("v3_chain.v3_chain_mode must be off|shadow")
+        return v
+
+    @field_validator("confluence_combine")
+    @classmethod
+    def _validate_confluence(cls, v: str) -> str:
+        if v not in {"mean", "max"}:
+            raise ValueError("v3_chain.confluence_combine must be mean|max")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_v3_chain(self):
+        if self.atr30_period <= 0:
+            raise ValueError("v3_chain.atr30_period must be > 0")
+        if self.rr_floor <= 0:
+            raise ValueError("v3_chain.rr_floor must be > 0")
+        if self.exec_budget <= 0:
+            raise ValueError("v3_chain.exec_budget must be > 0")
+        if not (self.high_score_threshold > self.medium_score_threshold > self.min_pass_score):
+            raise ValueError(
+                "v3_chain thresholds must satisfy high > medium > min_pass "
+                f"(got {self.high_score_threshold}/{self.medium_score_threshold}/{self.min_pass_score})"
+            )
+        return self
+
+
 class StructureExitConfig(BaseModel):
     """
     SNR-V2 Phase B — structure-aware exit (trail SL to structure + confirmed-break
@@ -1403,6 +1523,7 @@ class SystemConfig(BaseModel):
     sr_detector: SRDetectorConfig = Field(default_factory=SRDetectorConfig)  # SNR-DETECTOR-V1: shadow S&R detector (default-off)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)  # V3 03.02: index-level market regime (shadow, default-off)
     portfolio_allocator: PortfolioAllocatorConfig = Field(default_factory=PortfolioAllocatorConfig)  # V3 03.05: ranked batch admission (default-off)
+    v3_chain: V3ChainConfig = Field(default_factory=V3ChainConfig)  # V3 Step 10: decision-chain shadow enrichment (default-off)
     structure_exit: StructureExitConfig = Field(default_factory=StructureExitConfig)  # SNR-V2 Phase B: structure-aware exit (default-off)
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection

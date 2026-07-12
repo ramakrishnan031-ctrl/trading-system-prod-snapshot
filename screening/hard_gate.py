@@ -203,3 +203,143 @@ def rescale_min_score(old_min_score: int) -> int:
     if not old_min_score or old_min_score <= 0:
         return 0
     return max(0, int(round(1.25 * old_min_score - 25.0)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V3 Step 10 — GENERIC playbook-scope gates (G-RR / G-HTF / G-EXTREME).
+#
+# These are the gates computable for ANY signal (no playbook context) — the ones
+# Step 10a runs in SHADOW over live signals to measure the S&R R:R gate against
+# real trade outcomes (G-KALYAN). They are PURE FUNCTIONS (float/duck-typed
+# inputs) and, on the V3 path, LOG-ONLY: the caller records the verdict and NEVER
+# rejects/delays/alters a live order. The playbook-scope must-haves G-CONFIRM /
+# G-PULLBACK (and the Playbook score layer) are Step 10b (they need a playbook).
+#
+# Missing-data rules per the V3 DECISION CONTENT SPECIFICATION v1.0 §3:
+#   G-RR      must-have  → missing S&R FAILS (never guess a target).
+#   G-HTF     must-NOT   → missing data PASSES (fail-OPEN; only a STRONG contra fails).
+#   G-EXTREME must-NOT   → missing/OFF regime PASSES (03.02 fail-safe).
+# ─────────────────────────────────────────────────────────────────────────────
+
+GATE_RR = "RR"
+GATE_HTF = "HTF"
+GATE_EXTREME = "EXTREME"
+
+
+def _is_long(side: str) -> bool:
+    return str(side).strip().upper() in ("BUY", "LONG")
+
+
+def gate_rr(
+    side: str,
+    entry: float,
+    *,
+    sl_zone_edge: Optional[float],
+    tgt_zone_edge: Optional[float],
+    atr30: Optional[float],
+    rr_floor: float,
+    sl_buffer_atr_mult: float,
+) -> GateVerdict:
+    """G-RR (must-have; missing S&R → FAIL). Generic side-aware S&R R:R (spec §3;
+    the 10a version uses the nearest structural zones, without the playbook
+    level/retest-low which arrive in 10b).
+
+      LONG  : SL = support_edge − buffer (below support); TGT = resistance_edge above.
+      SHORT : SL = resistance_edge + buffer (above resistance); TGT = support_edge below.
+      buffer = sl_buffer_atr_mult × ATR30  (0 when ATR30 is unavailable).
+      R:R = reward / risk;  PASS iff R:R >= rr_floor.
+
+    `sl_zone_edge` / `tgt_zone_edge` are the relevant band edges the caller selected
+    (None when no such zone exists → FAIL). The computed SL/TGT/RR are returned in
+    `evidence` so the would-be record can log them EVEN on a fail (the comparison to
+    the live FIXED_PCT SL is itself a finding). Never raises."""
+    try:
+        if entry is None or entry <= 0:
+            return GateVerdict(False, GATE_RR, {"detail": "no entry price"})
+        if sl_zone_edge is None or tgt_zone_edge is None:
+            return GateVerdict(False, GATE_RR, {
+                "detail": "missing S&R zone (no safe SL or TGT)",
+                "sl_zone_edge": sl_zone_edge, "tgt_zone_edge": tgt_zone_edge,
+            })
+        buffer = (float(sl_buffer_atr_mult) * float(atr30)) if atr30 else 0.0
+        if _is_long(side):
+            sl = float(sl_zone_edge) - buffer
+            tgt = float(tgt_zone_edge)
+            risk = entry - sl
+            reward = tgt - entry
+        else:
+            sl = float(sl_zone_edge) + buffer
+            tgt = float(tgt_zone_edge)
+            risk = sl - entry
+            reward = entry - tgt
+        ev = {"v3_sl": round(sl, 4), "v3_tgt": round(tgt, 4)}
+        if risk <= 0 or reward <= 0:
+            ev["detail"] = f"invalid geometry (risk={risk:.4f}, reward={reward:.4f})"
+            ev["v3_rr"] = None
+            return GateVerdict(False, GATE_RR, ev)
+        rr = reward / risk
+        ev["v3_rr"] = round(rr, 4)
+        if rr >= float(rr_floor):
+            return GateVerdict(True, None, ev)
+        ev["detail"] = f"R:R {rr:.2f} < floor {rr_floor}"
+        return GateVerdict(False, GATE_RR, ev)
+    except Exception as exc:   # a gate must never raise into the shadow worker
+        return GateVerdict(False, GATE_RR, {"detail": f"error: {exc}"})
+
+
+def gate_htf(
+    side: str,
+    *,
+    htf_close: Optional[float],
+    htf_ema: Optional[float],
+    htf_swing_highs: Optional[list] = None,
+    htf_swing_lows: Optional[list] = None,
+) -> GateVerdict:
+    """G-HTF (must-NOT-have / blocker; missing → PASS, fail-OPEN). FAILS only on a
+    STRONG 1-hour contradiction (spec §3):
+
+      LONG  fails iff (1h close < 1h EMA) AND (last two 1h swing HIGHS descending).
+      SHORT fails iff (1h close > 1h EMA) AND (last two 1h swing LOWS ascending).
+
+    A mild pullback against the 1h is ALLOWED — that IS the entry. `htf_swing_*` are
+    chronological price lists (e.g. from find_swing_pivots); need >= 2 to judge the
+    structure, else the structural leg is not met → PASS. Never raises."""
+    try:
+        if htf_close is None or htf_ema is None:
+            return GateVerdict(True, None, {"detail": "no HTF data → pass (fail-open)"})
+        highs = list(htf_swing_highs or [])
+        lows = list(htf_swing_lows or [])
+        if _is_long(side):
+            below_ema = htf_close < htf_ema
+            descending = len(highs) >= 2 and highs[-1] < highs[-2]
+            if below_ema and descending:
+                return GateVerdict(False, GATE_HTF, {
+                    "detail": "strong 1h contradiction (close<EMA & swing highs descending)",
+                    "close": htf_close, "ema": htf_ema, "last_highs": highs[-2:],
+                })
+        else:
+            above_ema = htf_close > htf_ema
+            ascending = len(lows) >= 2 and lows[-1] > lows[-2]
+            if above_ema and ascending:
+                return GateVerdict(False, GATE_HTF, {
+                    "detail": "strong 1h contradiction (close>EMA & swing lows ascending)",
+                    "close": htf_close, "ema": htf_ema, "last_lows": lows[-2:],
+                })
+        return GateVerdict(True, None, {"close": htf_close, "ema": htf_ema})
+    except Exception as exc:
+        return GateVerdict(True, None, {"detail": f"error → pass (fail-open): {exc}"})
+
+
+def gate_extreme(regime_state) -> GateVerdict:
+    """G-EXTREME (must-NOT-have / blocker; missing/OFF → PASS, fail-OPEN). FAILS iff a
+    regime snapshot exists AND its extreme_flag is True (a confirmed halt/index
+    circuit, 03.02 positive-confirmation-only). regime None / status UNKNOWN → PASS —
+    a broken or disabled regime NEVER halts the book. Never raises."""
+    try:
+        if regime_state is None:
+            return GateVerdict(True, None, {"detail": "regime OFF/unavailable → pass"})
+        if bool(getattr(regime_state, "extreme_flag", False)):
+            return GateVerdict(False, GATE_EXTREME, {"detail": "regime extreme_flag TRUE"})
+        return GateVerdict(True, None, {})
+    except Exception as exc:
+        return GateVerdict(True, None, {"detail": f"error → pass (fail-open): {exc}"})

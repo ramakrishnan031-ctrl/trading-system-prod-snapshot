@@ -161,6 +161,7 @@ class SignalProcessor:
         trade_type: str = "INTRADAY",       # Slice 2 LAYER 1: master product gate
         force_intraday_only: bool = False,  # Slice 2 LAYER 0: read for the control resolver
         allocator=None,                     # V3 03.05: PortfolioAllocator (None = OFF → FCFS byte-identical)
+        v3_chain=None,                      # V3 Step 10: V3ChainRunner (None = OFF → byte-identical; also set via set_v3_chain)
     ) -> None:
         self._queue = signal_queue
         self._store = state_store
@@ -198,6 +199,7 @@ class SignalProcessor:
         self._trade_type = trade_type                      # Slice 2 LAYER 1
         self._force_intraday_only = bool(force_intraday_only)  # Slice 2 LAYER 0
         self._allocator = allocator                        # V3 03.05: None unless shadow/enforce (also settable via set_allocator)
+        self._v3_chain = v3_chain                          # V3 Step 10: None unless shadow (also settable via set_v3_chain)
 
         # Lifecycle
         self._running = False
@@ -921,6 +923,20 @@ class SignalProcessor:
                 raise _PipelineReject(f"SIZING_{sizing.constraint}", sizing.reason)
             self._heartbeat(symbol)  # FIX-011: checkpoint 3 (sizing done)
 
+            # ── V3 Step 10 decision chain (SHADOW, LOG-ONLY) — default-OFF: v3_chain is
+            #    None → this hook is a single skipped flag check → BYTE-IDENTICAL. Fire-
+            #    and-forget: it MUST NEVER reject, delay, alter, or block a live signal or
+            #    order (G-NO-INTERFERENCE). Placed BEFORE the allocator hook so it observes
+            #    every sized signal even if the allocator (enforce) hands one off. ──
+            if self._v3_chain is not None:
+                try:
+                    self._v3_chain.observe(self._build_v3_signal(
+                        signal_id, symbol, scanner_name, strategy_name, strategy_obj,
+                        side, entry_price, sl_price, screen_result,
+                        trigger_price, triggered_at, now))
+                except Exception as _v3_exc:   # the chain must NEVER break admission
+                    self._log.error("v3_chain observe error (ignored): %s", _v3_exc)
+
             # ── V3 03.05 Portfolio Allocator routing (default-OFF: allocator is None
             #    → this hook is skipped entirely → FCFS admission BYTE-IDENTICAL) ──
             if self._allocator is not None:
@@ -1310,6 +1326,38 @@ class SignalProcessor:
         """Late-bind the PortfolioAllocator (built after this processor in main.py so it
         can reference admit_prepared/reject_prepared). None keeps FCFS byte-identical."""
         self._allocator = allocator
+
+    def set_v3_chain(self, v3_chain) -> None:
+        """Late-bind the V3ChainRunner (V3 Step 10 shadow enrichment). None keeps the
+        hot path byte-identical (the observe hook is a single skipped flag check)."""
+        self._v3_chain = v3_chain
+
+    def _build_v3_signal(self, signal_id, symbol, scanner_name, strategy_name,
+                         strategy_obj, side, entry_price, sl_price, screen_result,
+                         trigger_price, triggered_at, now):
+        """Build the LIGHT V3Signal snapshot for the shadow chain (fire-and-forget).
+        Captures the LIVE placement basis + the screener outputs AT signal time so the
+        async worker re-reads NOTHING live (NO-LOOKAHEAD). Imports v3_chain lazily so
+        there is no import-time coupling when the chain is off. Computes the LIVE target
+        with the SAME derivation the admit path uses (a pure O(1) call — no divergence)."""
+        from v3_chain.models import V3Signal
+        try:
+            live_tgt = self._derive_target(entry_price, sl_price, strategy_obj)
+        except Exception:
+            live_tgt = None
+        return V3Signal(
+            signal_id=signal_id, symbol=symbol, scanner_name=scanner_name,
+            strategy_name=strategy_name, side=side, intent=strategy_obj.intent,
+            entry_price=float(entry_price), live_sl_price=float(sl_price),
+            live_tgt_price=(float(live_tgt) if live_tgt is not None else None),
+            trigger_price=float(trigger_price),
+            score=float(getattr(screen_result, "score", 0.0)),
+            tier=str(getattr(screen_result, "tier", "")),
+            step_results=dict(getattr(screen_result, "step_results", {}) or {}),
+            market_data=dict(getattr(screen_result, "market_data_snapshot", {}) or {}),
+            sector=self._sector_for(symbol),
+            as_of=now, triggered_at=triggered_at,
+            v3_playbook=bool(getattr(strategy_obj, "v3_playbook", False)))
 
     def _sector_for(self, symbol: str) -> str:
         ic = self._instrument_cache

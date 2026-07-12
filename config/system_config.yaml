@@ -362,6 +362,43 @@ portfolio_allocator:         # V3 03.05 — ranked batch admission (default-OFF;
   long_short_skew_max: null  # A6 directional-skew cap (max fraction one side). null = INERT
   regret_log_path: "data_store/allocator/regret.jsonl"  # shadow regret rows (JSONL, created on first write)
 
+v3_chain:                     # V3 Step 10 — decision-chain SHADOW enrichment (default-OFF; byte-identical while off)
+  v3_chain_mode: "off"        # ★ master gate (paper+live): off | shadow. off = V3ChainRunner NOT constructed → v3_chain=None → hot-path hook is a skipped flag check (BYTE-IDENTICAL). shadow = fire-and-forget background enrichment; the V3 verdict is LOG-ONLY (never rejects/delays/alters a live order). BINARY — no enforce in 10a
+  # gate knobs (spec §3) — ALL SEEDS to be calibrated from shadow data
+  atr30_period: 14            # ATR(30m) period for the G-RR SL buffer (distinct from regime.atr_period)
+  rr_floor: 2.0               # G-RR: R:R must be >= this
+  sl_buffer_atr_mult: 0.20    # G-RR SL buffer = this × ATR30
+  htf_ema_period: 20          # G-HTF + htf_alignment: 1h EMA period
+  htf_swing_pivot_n: 3        # G-HTF + htf_alignment: 1h swing-pivot N each side
+  # 3-layer score weights (spec §4) — Playbook (unused in 10a), Context 40, Execution 20
+  w_retest_quality: 15.0
+  w_confirmation_strength: 15.0
+  w_level_significance: 10.0
+  w_regime_preference: 8.0
+  w_sr_target_quality: 8.0
+  w_htf_alignment: 8.0        # CONFLUENCE GROUP {1h-EMA-position, 1h-swing-structure}
+  w_sector_strength: 8.0
+  w_momentum_position: 8.0    # CONFLUENCE GROUP {rsi_range, vwap_position}
+  exec_budget: 20.0           # Execution layer budget; the 4 exec steps rescale by (20/35)
+  w_exec_volume_surge: 15.0
+  w_exec_atr: 10.0
+  w_exec_time_of_day: 5.0
+  w_exec_spread: 5.0
+  confluence_combine: "mean"  # mean | max — grouped correlated factors combine to ONE bounded value (anti-inflation)
+  sr_target_quality_high: 1.0
+  sr_target_quality_medium: 0.6
+  sr_target_quality_low: 0.3
+  # 3-layer thresholds (forward-compat; 10a records the score, does NOT gate on it) — SEEDS
+  min_pass_score: 60
+  medium_score_threshold: 65
+  high_score_threshold: 80
+  # async worker / fetch (reuses the sr_detector rate-limited closure; truncates to signal time)
+  structure_intervals: ["day", "60minute", "30minute"]
+  fetch_lookback_days: 180
+  fetch_cache_ttl_sec: 1800.0   # own OhlcFetcher cache TTL (distinct from sr_detector.cache_ttl_sec)
+  max_queue: 512
+  would_be_log_path: "data_store/v3/would_be.jsonl"
+
 structure_exit:               # SNR-V2 Phase B — structure-aware exit (trail SL to structure + confirmed-break exit), MIS LIMIT_TRIPLE only
   structure_exit_enabled: false    # ★ MASTER flag (paper+live). false = StructureExitManager not constructed; zero pipeline change. Single SL owner — do NOT co-enable strategy.trailing_sl_enabled
   sl_buffer_pct: 0.2               # SL-to-structure buffer (LONG below support.band_low / SHORT above resistance.band_high) — match Phase A
