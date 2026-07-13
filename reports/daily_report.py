@@ -50,6 +50,7 @@ from reports.style_constants import (
     COLOR_WHITE,
 )
 from core.time_authority import now_ist
+from utils.holiday_guard import is_trading_day
 
 log = logging.getLogger("daily_report")
 
@@ -89,21 +90,23 @@ class ReportData:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def is_holiday_or_weekend(date_iso: str, config_dir: Path) -> bool:
-    """Check if date is a weekend or NSE holiday."""
+    """Check if date is a weekend or NSE holiday.
+
+    M-R1 (audit 04-Jul): the old inline check did `date_iso in holidays.get("holidays")`,
+    but the production nse_holidays_<year>.yaml lists holidays as DICTS ({date:, name:}),
+    so a plain-string membership test NEVER matched — the report generated and Telegrammed
+    on NSE holidays (violating the 'no real alerts on non-trading days' rule). Delegate the
+    holiday half to utils.holiday_guard (the single source; it parses BOTH the string and
+    dict entry formats). Weekend stays a local check so a missing YAML still blocks weekends.
+    """
     dt = date.fromisoformat(date_iso)
     if dt.weekday() >= 5:
         return True
-
-    year = dt.year
-    holiday_file = config_dir / f"nse_holidays_{year}.yaml"
-    if holiday_file.exists():
-        import yaml
-        with open(holiday_file, "r") as f:
-            holidays = yaml.safe_load(f) or {}
-        holiday_dates = holidays.get("holidays", [])
-        if date_iso in holiday_dates:
-            return True
-    return False
+    try:
+        return not is_trading_day(dt, config_dir)
+    except FileNotFoundError:
+        # No holiday file for the year -> can't be a listed holiday; same as the old behaviour.
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────

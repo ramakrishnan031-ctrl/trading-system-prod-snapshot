@@ -234,6 +234,16 @@ class TestHolidayCheck:
 
         assert is_holiday_or_weekend("2026-05-15", tmp_path) is True
 
+    def test_weekday_with_holiday_dict_format(self, tmp_path):
+        """M-R1: production lists holidays as DICTS ({date:, name:}); the old inline
+        `date_iso in holidays` missed these entirely, so the report ran on real NSE
+        holidays. Fails against the pre-fix code, passes against the holiday_guard delegation."""
+        import yaml
+        holiday_file = tmp_path / "nse_holidays_2026.yaml"
+        holiday_file.write_text(yaml.dump(
+            {"holidays": [{"date": "2026-05-15", "name": "Test Holiday"}]}))
+        assert is_holiday_or_weekend("2026-05-15", tmp_path) is True
+
     def test_weekday_not_in_holiday_list(self, tmp_path):
         import yaml
         holiday_file = tmp_path / "nse_holidays_2026.yaml"
