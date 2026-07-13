@@ -729,21 +729,28 @@ class StateStore:
         )
         return int(row["n"]) if row else 0
 
-    def sector_exposure(self, sector: str) -> float:
+    _SECTOR_EXPOSURE_STATUSES: tuple = ("PENDING_FILL", "OPEN", "PARTIAL")
+
+    def sector_exposure(
+        self, sector: str, *, statuses: tuple = _SECTOR_EXPOSURE_STATUSES,
+    ) -> float:
         """
-        Total margin_reserved for all active trades (PENDING_FILL/OPEN/PARTIAL)
-        in the given sector. Counts BOTH open positions AND in-flight reservations
-        to catch concentration races (RE6 audit fix).
-        Used by risk_engine SECTOR_EXPOSURE check (RE5, RE6).
+        Total margin_reserved for TRADE ROWS in `sector` whose status is in `statuses`
+        (default PENDING_FILL/OPEN/PARTIAL — BYTE-IDENTICAL to the prior no-arg signature).
+
+        NOTE (FIX-185-class TOCTOU): this counts TRADE ROWS only. A RESERVED-NOT-PLACED
+        reservation — reserve() succeeded but no PENDING_FILL trade row exists yet (the
+        order is placed LATER, outside portfolio_lock) — is NOT here, which is exactly the
+        window two concurrent same-sector signals can both slip through. risk_engine closes
+        it by adding fund_manager.get_live_reservations() and partitioning with
+        `statuses=("OPEN","PARTIAL")` (the reservation-free set, so PENDING_FILL is counted
+        once via the reservation, not twice). Used by the SECTOR_EXPOSURE check (RE5, RE6).
         """
+        placeholders = ",".join("?" for _ in statuses)
         row = self.fetch_one(
-            """
-            SELECT COALESCE(SUM(margin_reserved), 0.0) AS total
-            FROM trades
-            WHERE status IN ('PENDING_FILL', 'OPEN', 'PARTIAL')
-              AND sector = ?
-            """,
-            (sector,),
+            f"SELECT COALESCE(SUM(margin_reserved), 0.0) AS total FROM trades "
+            f"WHERE status IN ({placeholders}) AND sector = ?",
+            (*statuses, sector),
         )
         return float(row["total"]) if row else 0.0
 
