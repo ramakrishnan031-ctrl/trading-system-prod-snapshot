@@ -33,7 +33,11 @@ if str(ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
-OUT_PATH = ROOT / "data_store" / "v3" / "forward_shadow.jsonl"
+# VERSIONED, APPEND-ONLY, IMMUTABLE audit artifact. If the METHOD changes (recompute,
+# walker, cost model, fields), BUMP _METHOD_VERSION and the file auto-rolls to a new name —
+# never mutate a written record or an existing file, or the out-of-sample evidence is void.
+_METHOD_VERSION = "fs-v1"
+OUT_PATH = ROOT / "data_store" / "v3" / f"forward_shadow_{_METHOD_VERSION}.jsonl"
 JOB_NAME = "forward_shadow_record"
 
 
@@ -42,6 +46,37 @@ def _weights() -> dict:
     import yaml
     data = yaml.safe_load((ROOT / "config" / "scoring_weights.yaml").read_text())
     return {k: float(v) for k, v in (data.get("steps") or {}).items()}
+
+
+def _provenance() -> dict:
+    """Immutability/reproducibility stamp on every record (ChatGPT A1). git commit is
+    best-effort (the VM working tree is not a git repo — falls back to the bare repo, then
+    None); file hashes are always available and pin the exact scorer/config used."""
+    import hashlib
+    import subprocess
+
+    def _sha(p: Path) -> str | None:
+        try:
+            return hashlib.sha256(p.read_bytes()).hexdigest()[:12]
+        except Exception:
+            return None
+
+    commit = None
+    for cmd in (["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+                ["git", "--git-dir", str(Path.home() / "trading-system.git"), "rev-parse", "HEAD"]):
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if out.returncode == 0 and out.stdout.strip():
+                commit = out.stdout.strip()[:12]
+                break
+        except Exception:
+            continue
+    return {
+        "method_version": _METHOD_VERSION,
+        "git_commit": commit,
+        "scoring_weights_sha": _sha(ROOT / "config" / "scoring_weights.yaml"),
+        "system_config_sha": _sha(ROOT / "config" / "system_config.yaml"),
+    }
 
 
 def _direction(strategy: str) -> str:
@@ -84,12 +119,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="forward_shadow_record")
     ap.add_argument("--date", help="YYYY-MM-DD (default: today IST)")
     ap.add_argument("--dry-run", action="store_true", help="compute + print, append nothing, no fetch")
+    ap.add_argument("--db", help="DB path override (default: live DB; use a COPY for verification runs)")
     args = ap.parse_args(argv)
 
     log = get_logger(JOB_NAME)
     date_iso = args.date or now_ist().date().isoformat()
     weights = _weights()
-    store = StateStore(ROOT / "data_store" / "trading_system.db")
+    prov = _provenance()
+    db_path = Path(args.db) if args.db else (ROOT / "data_store" / "trading_system.db")
+    store = StateStore(db_path)
     try:
         rows = store.fetch_all(
             """SELECT s.signal_id, s.score AS old_score, s.step_results, s.market_data_snapshot,
@@ -172,7 +210,8 @@ def main(argv=None) -> int:
                          "ms4_score": new_score, "ms4_band": score_band(new_score),
                          "ms4_stats_ok": st["atr14"] is not None,
                          "decision": r["decision"], "reject_reason": r["rejection_reason"],
-                         "sim_R": sim_R, "realized_pnl": realized, "computed_at": now_ist().isoformat()})
+                         "sim_R": sim_R, "realized_pnl": realized, "computed_at": now_ist().isoformat(),
+                         **prov})
             written += 1
 
         if args.dry_run:
