@@ -1692,10 +1692,15 @@ class SignalProcessor:
         continue_from_retest — enforce it identically; the pullback/retest resumptions
         used to skip it. is_tracking() is in-memory + cheap; an exception FAILS CLOSED
         (skip the entry — a missing check must never silently approve an overlap)."""
-        if self._shadow_tracker is None:
+        # getattr: the resume paths (continue_from_gate/retest) may run on a partially
+        # constructed processor in unit tests (SignalProcessor.__new__); a missing
+        # _shadow_tracker means none is wired -> no shadow inning to overlap -> proceed.
+        # A real regression that dropped it from __init__ is still caught by the b5 tests.
+        tracker = getattr(self, "_shadow_tracker", None)
+        if tracker is None:
             return
         try:
-            if self._shadow_tracker.is_tracking(symbol):
+            if tracker.is_tracking(symbol):
                 raise _PipelineReject(
                     "SHADOW_INNING_ACTIVE",
                     f"Symbol {symbol} has an active shadow inning; skip new entry to "
