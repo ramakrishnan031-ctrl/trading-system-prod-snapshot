@@ -2828,6 +2828,53 @@ class StateStore:
             )
 
     # ─────────────────────────────────────────────────────────────────────────
+    # M-S4: daily_symbol_stats — pre-market scorer-input cache (schema v44)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def upsert_daily_symbol_stats(
+        self,
+        symbol: str,
+        trading_date: str,
+        *,
+        prev_close: Optional[float] = None,
+        avg_volume_20d: Optional[float] = None,
+        atr14: Optional[float] = None,
+        rsi14: Optional[float] = None,
+    ) -> None:
+        """Write (or replace) the pre-market daily stats for (symbol, trading_date).
+        Upsert on the PRIMARY KEY so a re-run of the pre-market cache job is idempotent.
+        Populated ONLY by the ~08:30 pre-market cron from candles that CLOSED BEFORE
+        trading_date; READ O(1) by the screener. Any field may be None (a stat that could
+        not be computed from the available history) — the reader fails safe on it."""
+        from core.time_authority import now_ist
+        with self.transaction() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO daily_symbol_stats
+                    (symbol, trading_date, prev_close, avg_volume_20d, atr14, rsi14, computed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (symbol, trading_date, prev_close, avg_volume_20d, atr14, rsi14,
+                 now_ist().isoformat()),
+            )
+
+    def get_daily_symbol_stats(
+        self, symbol: str, trading_date: str,
+    ) -> Optional[dict]:
+        """O(1) point read of the pre-market daily stats for (symbol, trading_date), or
+        None on a cache MISS (no row). The screener's _build_market_data uses this and
+        DEGRADES GRACEFULLY to today's behaviour (0.0 / 0.5) on a miss — it never blocks,
+        never fetches on the hot path, and never fabricates a value."""
+        with self.transaction() as cur:
+            cur.execute(
+                "SELECT symbol, trading_date, prev_close, avg_volume_20d, atr14, rsi14, "
+                "computed_at FROM daily_symbol_stats WHERE symbol = ? AND trading_date = ?",
+                (symbol, trading_date),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Order reconciliation status helpers (FIX-129 Item 26)
     # ─────────────────────────────────────────────────────────────────────────
 
