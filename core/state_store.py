@@ -2985,6 +2985,11 @@ class StateStore:
             UTC, shifting every 00:00-05:30 IST exit back one calendar day — a
             silent off-by-one for early-morning / re-touched rows. substr avoids
             that entirely.
+
+        DO NOT "optimise" this back to DATE(): the bug re-exposes itself the moment
+        ANY future job updates a trade row (or an exit lands) between 00:00-05:30 IST.
+        The substr(COALESCE(exit_time, updated_at), 1, 10) form removes that landmine
+        PERMANENTLY — it is deliberate, not incidental.
         """
         row = self.fetch_one(
             """SELECT COALESCE(SUM(net_pnl), 0.0) AS total
