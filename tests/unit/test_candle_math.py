@@ -23,6 +23,7 @@ from core.candle_math import (
     ema,
     ema_series,
     resample,
+    rsi,
     session_vwap,
     true_range_series,
 )
@@ -36,6 +37,45 @@ from sr_detector.models import Candle
 
 def _c(ts, o, h, l, c, v=10) -> Candle:
     return Candle(ts=ts, open=float(o), high=float(h), low=float(l), close=float(c), volume=int(v))
+
+
+def _closes(seq) -> list:
+    """Candles from a close series (o=h=l=c; RSI reads closes only)."""
+    base = datetime(2026, 7, 6, 9, 15)
+    return [_c(base + timedelta(minutes=i), v, v, v, v) for i, v in enumerate(seq)]
+
+
+# ── (1d) Wilder's RSI ────────────────────────────────────────────────────────
+
+def test_rsi_insufficient_data_returns_none():
+    assert rsi(_closes([10, 11]), period=2) is None   # len 2 < period+1
+    assert rsi([], period=14) is None
+
+
+def test_rsi_invalid_period_raises():
+    cs = _closes([1, 2, 3, 4])
+    for bad in (0, -1, 2.0, True):
+        with pytest.raises(ValueError):
+            rsi(cs, period=bad)
+
+
+def test_rsi_all_gains_is_100():
+    assert rsi(_closes([1, 2, 3, 4, 5]), period=2) == 100.0
+
+
+def test_rsi_all_losses_is_0():
+    assert rsi(_closes([5, 4, 3, 2, 1]), period=2) == 0.0
+
+
+def test_rsi_flat_series_is_neutral_50():
+    assert rsi(_closes([5, 5, 5, 5]), period=2) == 50.0
+
+
+def test_rsi_known_value_wilder():
+    # closes [10,11,10,11,12], period=2 -> deltas +1,-1,+1,+1
+    # seed avg_gain=0.5 avg_loss=0.5; Wilder smooth -> avg_gain=0.875 avg_loss=0.125
+    # RS=7 -> RSI = 100 - 100/8 = 87.5
+    assert rsi(_closes([10, 11, 10, 11, 12]), period=2) == pytest.approx(87.5)
 
 
 # A small fixed OHLC series with hand-computed True Ranges.

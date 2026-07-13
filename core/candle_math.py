@@ -244,6 +244,53 @@ def adx(candles: Sequence["Candle"], period: int = 14) -> Optional[float]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# (1d) Momentum — Wilder's RSI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def rsi(candles: Sequence["Candle"], period: int = 14) -> Optional[float]:
+    """Wilder's Relative Strength Index over the candles' CLOSES, or None when
+    data is INSUFFICIENT. Requires at least ``period + 1`` candles so that
+    ``period`` close-to-close deltas exist to seed the average gain / loss;
+    fewer candles -> None (never fabricate a value).
+
+    Wilder's smoothing (the standard RSI): the seed avg_gain / avg_loss is the
+    simple mean of the first ``period`` deltas' gains / losses; then
+    ``avg_t = (avg_{t-1} * (period - 1) + value_t) / period``. RSI = 100 - 100 /
+    (1 + RS) with RS = avg_gain / avg_loss. When the window has NO losses, RSI is
+    100.0 (maximally overbought); a perfectly flat series (no gains, no losses)
+    returns the neutral 50.0.
+
+    Pure and deterministic: same candles + period -> same output. Reuses the
+    shared Candle type (closes only). Raises ValueError on an invalid ``period``.
+    """
+    if not isinstance(period, int) or isinstance(period, bool) or period <= 0:
+        raise ValueError(f"rsi period must be a positive int, got {period!r}")
+    if len(candles) < period + 1:
+        return None
+
+    closes = [float(cd.close) for cd in candles]
+    gains: List[float] = []
+    losses: List[float] = []
+    for i in range(1, len(closes)):
+        delta = closes[i] - closes[i - 1]
+        gains.append(delta if delta > 0.0 else 0.0)
+        losses.append(-delta if delta < 0.0 else 0.0)
+
+    # Wilder seed = SMA of the first `period` gains / losses.
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    # Wilder smoothing over the remaining deltas.
+    for g, l in zip(gains[period:], losses[period:]):
+        avg_gain = (avg_gain * (period - 1) + g) / period
+        avg_loss = (avg_loss * (period - 1) + l) / period
+
+    if avg_loss == 0.0:
+        return 100.0 if avg_gain > 0.0 else 50.0
+    rs = avg_gain / avg_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # (2) Timeframe resample
 # ─────────────────────────────────────────────────────────────────────────────
 
