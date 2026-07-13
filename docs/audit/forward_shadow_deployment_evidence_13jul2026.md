@@ -48,6 +48,25 @@ scorer weights, M-S4 OFF, shadow×2 all confirmed unchanged post-deploy). 166 br
 - **Schema v43 → v44 migration at the 08:15 boot:** drill-proven on a live-DB clone + inert empty table, BUT a
   failed migration blocks startup and loses a trading day — **must be checked at tomorrow's boot and reported.**
 
+## 14-Jul UPDATE (post-power-outage resume, ~04:40 IST) — migration RESOLVED early; 18:15 still pending
+
+**Schema v43 → v44 migration — RESOLVED (no 08:15 risk).** Read-only VM check (`sqlite3 data_store/trading_system.db`):
+`schema_version = 44`, `daily_symbol_stats` table present, `PRAGMA quick_check = ok`. The migration already ran
+CLEANLY at 13-Jul 23:41 when the forward-shadow recorder first opened the **live** `trading_system.db` (live-DB
+mtime == `forward_shadow_fs-v1.jsonl` mtime == 23:41). **Therefore the 14-Jul 08:15 boot SKIPS migration → clean
+start guaranteed; the "must be checked at boot" item is retired.**
+
+> ⚠️ Correction to the "No production impact" line above: the SCHEDULED recorder DID open the **live** DB once
+> (the additive v43→v44 migration + its own append-only `forward_shadow_fs-v1.jsonl`; NO orders, NO trading-table
+> writes, NO config change — safety-neutral). The earlier "live DB untouched" statement referred to the
+> `--db <copy>` *verification* runs, not the first scheduled recorder run.
+
+**V5 — first SCHEDULED forward-shadow run (14-Jul 18:15) — STILL PENDING** (checked ~04:40 IST): crontab has
+`15 18 * * 1-5 … forward_shadow_record.py … ; echo "$rc …" > … forward_shadow_record.done` (rc-marker + fail-LOUD
+sentinel). No `data_store/cron_marks/forward_shadow_record.done` and no `logs/cron-forward-shadow.log` yet — correct,
+the cron has not fired (first fire is 18:15). **Owed: after 18:15, confirm the marker shows rc 0, the log is clean,
+and the jsonl idempotently skips 13-Jul's 3467 and appends 14-Jul's records.**
+
 ## Baseline established
 The forward shadow is live and verified. From 14-Jul it records every scored signal's old + M-S4 score/band,
 live decision, true-path sim outcome, and realised P&L — the **out-of-sample evidence** required (with Rama's
