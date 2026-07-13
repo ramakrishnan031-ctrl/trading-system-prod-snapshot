@@ -343,3 +343,117 @@ def gate_extreme(regime_state) -> GateVerdict:
         return GateVerdict(True, None, {})
     except Exception as exc:
         return GateVerdict(True, None, {"detail": f"error → pass (fail-open): {exc}"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V3 Step 10b — PLAYBOOK-scope must-have gates (G-CONFIRM / G-PULLBACK).
+#
+# These are the PB-01-specific must-haves (spec §3). They evaluate ONLY for a
+# v3_playbook candidate (the next-morning 5-min retest). Like the generic gates
+# they are PURE FUNCTIONS and, on the V3 path, LOG-ONLY (the shadow chain records
+# the verdict; no live order exists — PB-01 is enabled:false / would-be only).
+# BOTH are must-have: any missing input → FAIL (never guess a confirmation).
+# ─────────────────────────────────────────────────────────────────────────────
+
+GATE_CONFIRM = "CONFIRM"
+GATE_PULLBACK = "PULLBACK"
+
+
+def gate_confirm(
+    *,
+    candle_open: Optional[float],
+    candle_high: Optional[float],
+    candle_low: Optional[float],
+    candle_close: Optional[float],
+    candle_volume: Optional[float],
+    level: Optional[float],
+    baseline_5m_volume: Optional[float],
+    min_body_frac: float,
+    volume_mult: float,
+) -> GateVerdict:
+    """G-CONFIRM (playbook must-have; missing data → FAIL). A 5-minute candle CLOSES
+    above LEVEL (a close, never a wick) with a decisive body and volume (spec §3):
+
+        close > LEVEL
+        body_frac = |close-open| / (high-low)  >=  min_body_frac   (rejects dojis)
+        volume >= volume_mult × baseline_5m_volume
+
+    `baseline_5m_volume` = SMA20(daily volume) / candles_per_session (computed by the
+    caller — deliberately independent of the session's own first candles). Any
+    missing/degenerate input → FAIL. Never raises."""
+    try:
+        vals = (candle_open, candle_high, candle_low, candle_close, candle_volume,
+                level, baseline_5m_volume)
+        if any(v is None for v in vals):
+            return GateVerdict(False, GATE_CONFIRM, {"detail": "missing data → fail (must-have)"})
+        o, h, l = float(candle_open), float(candle_high), float(candle_low)
+        c, vol = float(candle_close), float(candle_volume)
+        lvl, base = float(level), float(baseline_5m_volume)
+        rng = h - l
+        if rng <= 0:
+            return GateVerdict(False, GATE_CONFIRM, {"detail": "degenerate candle (high<=low)"})
+        if base <= 0:
+            return GateVerdict(False, GATE_CONFIRM, {"detail": "no baseline volume → fail (must-have)"})
+        ev = {"close": round(c, 4), "level": round(lvl, 4),
+              "body_frac": None, "volume": vol, "baseline_5m_volume": round(base, 4)}
+        if c <= lvl:
+            ev["detail"] = f"close {c} not above LEVEL {lvl} (wick, not a close)"
+            return GateVerdict(False, GATE_CONFIRM, ev)
+        body_frac = abs(c - o) / rng
+        ev["body_frac"] = round(body_frac, 4)
+        if body_frac < float(min_body_frac):
+            ev["detail"] = f"body_frac {body_frac:.2f} < min {min_body_frac} (doji/indecision)"
+            return GateVerdict(False, GATE_CONFIRM, ev)
+        if vol < float(volume_mult) * base:
+            ev["detail"] = f"volume {vol:.0f} < {volume_mult}×baseline {base:.1f}"
+            return GateVerdict(False, GATE_CONFIRM, ev)
+        return GateVerdict(True, None, ev)
+    except Exception as exc:
+        return GateVerdict(False, GATE_CONFIRM, {"detail": f"error: {exc}"})
+
+
+def gate_pullback(
+    *,
+    level: Optional[float],
+    session_low: Optional[float],
+    lowest_5m_close: Optional[float],
+    atr30: Optional[float],
+    proximity_pct: float,
+    proximity_atr_mult: float,
+    hold_buffer_atr_mult: float,
+) -> GateVerdict:
+    """G-PULLBACK (playbook must-have; missing data → FAIL). The valid pullback /
+    higher-low (spec §3) — BOTH must hold:
+
+      (a) TOUCHED: the session low since the open came within pullback_proximity of
+          LEVEL, where pullback_proximity = max(proximity_pct×LEVEL,
+          proximity_atr_mult×ATR30). (price genuinely came back — not a straight run.)
+      (b) HELD:    NO 5-min candle CLOSED below (LEVEL - hold_buffer_atr_mult×ATR30)
+          (a close below = the support/resistance flip failed = invalidated).
+
+    `lowest_5m_close` = the lowest 5-min CLOSE seen since the open (the caller tracks
+    it). Any missing input (incl. ATR30) → FAIL (must-have). Never raises."""
+    try:
+        if level is None or session_low is None or lowest_5m_close is None or atr30 is None:
+            return GateVerdict(False, GATE_PULLBACK, {
+                "detail": "missing data (level/session_low/lowest_close/ATR30) → fail (must-have)"})
+        lvl, slow = float(level), float(session_low)
+        lclose, a = float(lowest_5m_close), float(atr30)
+        proximity = max(float(proximity_pct) * lvl, float(proximity_atr_mult) * a)
+        hold_floor = lvl - float(hold_buffer_atr_mult) * a
+        touched = slow <= lvl + proximity
+        held = lclose >= hold_floor
+        ev = {"level": round(lvl, 4), "session_low": round(slow, 4),
+              "lowest_5m_close": round(lclose, 4), "proximity": round(proximity, 4),
+              "hold_floor": round(hold_floor, 4), "touched": touched, "held": held}
+        if not touched:
+            ev["detail"] = (f"no touch: session_low {slow} > LEVEL+proximity "
+                            f"{lvl + proximity:.2f} (straight-line run, never came back)")
+            return GateVerdict(False, GATE_PULLBACK, ev)
+        if not held:
+            ev["detail"] = (f"not held: a 5m close {lclose} < hold_floor "
+                            f"{hold_floor:.2f} (the S-R flip failed)")
+            return GateVerdict(False, GATE_PULLBACK, ev)
+        return GateVerdict(True, None, ev)
+    except Exception as exc:
+        return GateVerdict(False, GATE_PULLBACK, {"detail": f"error: {exc}"})

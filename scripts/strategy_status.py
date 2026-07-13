@@ -26,6 +26,7 @@ from typing import List, Optional
 
 from strategies.control import strategy_will_trade
 from strategies.schema import validate_strategy
+from strategies.taxonomy import taxonomy_label   # V3 side-task A — declared pipeline·horizon
 
 _WILL = "WILL TRADE"
 _WONT = "WON'T TRADE"
@@ -45,6 +46,7 @@ class StatusRow:
     sl_pct: str
     rr: str
     direction: str
+    category: str = "—"     # V3 side-task A — declared taxonomy "pipeline·horizon" (display only)
 
     @property
     def will_trade(self) -> bool:
@@ -67,8 +69,16 @@ def build_status_rows(
             rows.append(StatusRow(
                 strategy=name, type="?", master=trade_type, switch="?",
                 verdict=_ERR, reason=f"config error: {str(exc)[:80]}",
-                start="—", end="—", sl_pct="—", rr="—", direction="—",
+                start="—", end="—", sl_pct="—", rr="—", direction="—", category="—",
             ))
+            continue
+        # V3 Step 10b: a v3_playbook strategy (PB-01) is a SHADOW playbook governed by
+        # the V3 decision chain, not a live tradable strategy. It is structurally
+        # enabled:false and would only muddy this "will it trade today?" operator view
+        # (conflating a shadow playbook with the delivery-dormant set). Its status is
+        # surfaced by the dedicated PB-01 soak report instead. Keep this table = the
+        # 15 live strategies.
+        if getattr(cfg, "v3_playbook", False):
             continue
         # Option A (10-Jul): the resolver gates on the DECLARED intent (the loader no
         # longer rewrites), so pass the raw validated config straight through — no
@@ -88,6 +98,7 @@ def build_status_rows(
             sl_pct=(f"{cfg.sl_pct * 100:.2f}%" if cfg.sl_pct else "—"),
             rr=f"{cfg.tgt_risk_reward:g}",
             direction=cfg.direction,
+            category=taxonomy_label(getattr(cfg, "pipeline", None), getattr(cfg, "horizon", None)),
         ))
 
     # WILL TRADE first, then CONFIG ERROR last; within a group by Type then name.
@@ -130,7 +141,7 @@ def render_html(rows: List[StatusRow], trade_type: str,
                 force_intraday_only: bool) -> str:
     """Gmail-safe inline-CSS table — all rows, no truncation (no-skip policy)."""
     head_cells = ["S.No", "Strategy", "Type", "Master", "Switch", "Verdict",
-                  "Start", "End", "SL%", "Target(R:R)", "Direction"]
+                  "Start", "End", "SL%", "Target(R:R)", "Direction", "Category"]
     ths = "".join(
         f'<th style="padding:6px 8px;text-align:left;border-bottom:2px solid '
         f'#bbb;font-size:12px;color:#333;">{_esc(h)}</th>' for h in head_cells
@@ -150,7 +161,7 @@ def render_html(rows: List[StatusRow], trade_type: str,
         switch_col = (r.switch if r.switch == "ENABLED"
                       else f'<span style="color:#9aa0a6;">{_esc(r.switch)}</span>')
         cells = [str(i), r.strategy, r.type, r.master, switch_col, pill,
-                 r.start, r.end, r.sl_pct, r.rr, r.direction]
+                 r.start, r.end, r.sl_pct, r.rr, r.direction, r.category]
         tds = "".join(
             f'<td style="padding:6px 8px;font-size:12px;color:#202124;">{c}</td>'
             if j in (4, 5) else  # switch/verdict already contain HTML
@@ -192,6 +203,12 @@ def render_telegram(rows: List[StatusRow], trade_type: str) -> str:
     lines.append(f"⛔ WON'T TRADE ({len(wont)}): " + (", ".join(wont) if wont else "—"))
     if err:
         lines.append(f"⚠️ CONFIG ERROR ({len(err)}): " + ", ".join(err))
+    # V3 side-task A — surface the declared taxonomy compactly (counts per category).
+    cats: dict = {}
+    for r in rows:
+        cats[r.category] = cats.get(r.category, 0) + 1
+    if cats:
+        lines.append("🏷 " + " · ".join(f"{n} {c}" for c, n in sorted(cats.items())))
     lines.append("_Full table → email_")
     return "\n".join(lines)
 
@@ -199,6 +216,6 @@ def render_telegram(rows: List[StatusRow], trade_type: str) -> str:
 def render_plaintext(rows: List[StatusRow], trade_type: str) -> str:
     out = [summary_line(rows, trade_type)]
     for i, r in enumerate(rows, 1):
-        out.append(f"{i:2d}. {r.strategy:30s} {r.type:8s} {r.switch:8s} "
+        out.append(f"{i:2d}. {r.strategy:30s} {r.type:8s} {r.category:18s} {r.switch:8s} "
                    f"{r.verdict:11s} ({r.reason})")
     return "\n".join(out)

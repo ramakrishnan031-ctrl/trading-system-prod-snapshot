@@ -99,7 +99,7 @@ def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 42  # P1: +eod_broker_reconciliation (broker-authoritative EOD verdict). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 43  # 10b: +pb01_watchlist (PB-01 overnight watchlist). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -2778,6 +2778,54 @@ class StateStore:
             cur.execute("SELECT * FROM retest_state ORDER BY added_at ASC")
             rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PB-01 overnight watchlist helpers (V3 Step 10b)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def insert_pb01_watchlist(self, row: dict) -> bool:
+        """Capture an EOD PB-01 breakout candidate. INSERT OR IGNORE so the
+        UNIQUE(symbol, trading_date) constraint SILENTLY dedupes premature/repeated
+        Chartink firings. Returns True if a NEW row was inserted, False if one already
+        exists for this (symbol, trading_date) (a duplicate/earlier firing)."""
+        cols = ("symbol", "trading_date", "level", "breakout_date", "source",
+                "sr_zone_json", "status", "outcome_json", "captured_at", "created_at")
+        placeholders = ", ".join("?" for _ in cols)
+        with self.transaction() as cur:
+            cur.execute(
+                f"INSERT OR IGNORE INTO pb01_watchlist ({', '.join(cols)}) "
+                f"VALUES ({placeholders})",
+                tuple(row.get(c) for c in cols),
+            )
+            return cur.rowcount > 0
+
+    def get_pb01_watchlist_for_date(
+        self, trading_date: str, *, pending_only: bool = False,
+    ) -> list[dict]:
+        """Load the PB-01 watchlist rows for exactly ONE trading_date. This IS the
+        anti-rehydration discipline (FIX-046 class): the entry stage passes TODAY, so a
+        row stamped for any other date is NEVER returned and can never fire on a later
+        day. `pending_only` → only rows still awaiting a next-morning decision."""
+        q = "SELECT * FROM pb01_watchlist WHERE trading_date = ?"
+        if pending_only:
+            q += " AND status = 'PENDING'"
+        q += " ORDER BY id ASC"
+        with self.transaction() as cur:
+            cur.execute(q, (trading_date,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def update_pb01_watchlist_status(
+        self, row_id: int, status: str, *,
+        outcome_json: Optional[str] = None, consumed_at: Optional[str] = None,
+    ) -> None:
+        """Record a watchlist row's terminal outcome — CONSUMED / EXPIRED_WINDOW /
+        INVALIDATED / SKIPPED_GAP — with optional detail + the consumption timestamp."""
+        with self.transaction() as cur:
+            cur.execute(
+                "UPDATE pb01_watchlist SET status = ?, outcome_json = ?, consumed_at = ? "
+                "WHERE id = ?",
+                (status, outcome_json, consumed_at, row_id),
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Order reconciliation status helpers (FIX-129 Item 26)

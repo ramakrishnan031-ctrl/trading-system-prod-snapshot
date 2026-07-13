@@ -370,7 +370,16 @@ v3_chain:                     # V3 Step 10 — decision-chain SHADOW enrichment 
   sl_buffer_atr_mult: 0.20    # G-RR SL buffer = this × ATR30
   htf_ema_period: 20          # G-HTF + htf_alignment: 1h EMA period
   htf_swing_pivot_n: 3        # G-HTF + htf_alignment: 1h swing-pivot N each side
-  # 3-layer score weights (spec §4) — Playbook (unused in 10a), Context 40, Execution 20
+  # 10b PLAYBOOK gate knobs (spec §3; PB-01 G-CONFIRM/G-PULLBACK) — ALL SEEDS
+  confirm_min_body_frac: 0.50       # G-CONFIRM: |close-open|/(high-low) >= this (rejects dojis)
+  confirm_volume_mult: 1.20         # G-CONFIRM: 5m volume >= this × baseline_5m_volume
+  baseline_candles_per_session: 75  # baseline_5m_volume = SMA20(daily volume) / this
+  pullback_proximity_pct: 0.005     # G-PULLBACK TOUCHED: within max(this×LEVEL, atr_mult×ATR30)
+  pullback_proximity_atr_mult: 0.50
+  hold_buffer_atr_mult: 0.20        # G-PULLBACK HELD: 5m CLOSE below (LEVEL - this×ATR30) → INVALIDATED
+  retest_quality_atr_span: 0.75     # retest_quality = max(0, 1 - |dist|/this)
+  level_touches_cap: 5              # level_significance = min(touches, this) / this
+  # 3-layer score weights (spec §4) — Playbook 40, Context 40, Execution 20
   w_retest_quality: 15.0
   w_confirmation_strength: 15.0
   w_level_significance: 10.0
@@ -398,6 +407,20 @@ v3_chain:                     # V3 Step 10 — decision-chain SHADOW enrichment 
   fetch_cache_ttl_sec: 1800.0   # own OhlcFetcher cache TTL (distinct from sr_detector.cache_ttl_sec)
   max_queue: 512
   would_be_log_path: "data_store/v3/would_be.jsonl"
+
+watchlist:                    # V3 Step 10b — PB-01 overnight watchlist + next-morning entry stage (default-OFF; byte-identical while off)
+  enabled: false              # ★ master gate (paper+live): false = capture worker + entry-stage monitor NOT constructed → an EOD webhook is captured to nothing (BYTE-IDENTICAL). ANALYSIS ONLY — no position/capital/CNC/GTT; PB-01 stays enabled:false (fail-closed) regardless
+  playbook_scanner: "pb01_breakout_retest"   # the eod scanner this watchlist owns (→ the pb01_breakout_retest strategy)
+  # capture (EOD, day D) — ALL SEEDS
+  level_lookback_sessions: 20       # LEVEL = highest daily HIGH of the N sessions BEFORE the breakout day
+  capture_fetch_lookback_days: 60   # how far back to fetch daily candles to compute LEVEL (calendar days)
+  # next-morning entry stage (day D+1) — ALL SEEDS (calibrate: when do retests confirm?)
+  entry_start: "09:20"        # first 5-min candle must CLOSE before any confirmation (spec §7)
+  entry_end: "11:00"          # next-morning retest thesis expired by mid-morning
+  entry_tf: "5minute"         # retest timeframe (built via candle_math.resample)
+  gap_guard_pct: 0.03         # SKIPPED_GAP if open > LEVEL × (1 + this)
+  poll_interval_sec: 20.0     # entry-stage candle poll cadence (off the hot path)
+  would_be_log_path: "data_store/v3/pb01_would_be.jsonl"   # PB-01 SHADOW would-be records (LOG-ONLY, NO order; SEPARATE from the 10a would_be.jsonl)
 
 structure_exit:               # SNR-V2 Phase B — structure-aware exit (trail SL to structure + confirmed-break exit), MIS LIMIT_TRIPLE only
   structure_exit_enabled: false    # ★ MASTER flag (paper+live). false = StructureExitManager not constructed; zero pipeline change. Single SL owner — do NOT co-enable strategy.trailing_sl_enabled

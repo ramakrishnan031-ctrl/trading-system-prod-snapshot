@@ -418,15 +418,15 @@ def test_g3_smtp_resolved_password_prefers_env_var() -> None:
     smtp = SmtpConfig(
         host="smtp.example.com", port=587, use_tls=True,
         username="u", password="ignored-plaintext",
-        password_env="G3_TEST_SMTP_PASSWORD",
+        password_env="TEST_SMTP_PASSWORD_ENV",
         from_address="from@example.com",
         to_addresses=["to@example.com"], timeout_sec=10,
     )
-    os.environ["G3_TEST_SMTP_PASSWORD"] = "from-env-var"
+    os.environ["TEST_SMTP_PASSWORD_ENV"] = "from-env-var"
     try:
         assert smtp.resolved_password() == "from-env-var"
     finally:
-        del os.environ["G3_TEST_SMTP_PASSWORD"]
+        del os.environ["TEST_SMTP_PASSWORD_ENV"]
     print("  OK G.3: resolved_password() reads password_env first")
 
 
@@ -451,19 +451,19 @@ def test_g3_smtp_password_env_set_but_var_missing_raises() -> None:
     smtp = SmtpConfig(
         host="smtp.example.com", port=587, use_tls=True,
         username="u", password="",
-        password_env="G3_TEST_NOT_EXPORTED",
+        password_env="TEST_SMTP_PASSWORD_NOT_EXPORTED",
         from_address="from@example.com",
         to_addresses=["to@example.com"], timeout_sec=10,
     )
     # Make sure it really isn't set.
-    os.environ.pop("G3_TEST_NOT_EXPORTED", None)
+    os.environ.pop("TEST_SMTP_PASSWORD_NOT_EXPORTED", None)
 
     raised = False
     try:
         smtp.resolved_password()
     except ValueError as exc:
         raised = True
-        assert "G3_TEST_NOT_EXPORTED" in str(exc)
+        assert "TEST_SMTP_PASSWORD_NOT_EXPORTED" in str(exc)
     assert raised, "Expected ValueError for missing env var"
     print("  OK G.3: missing env var raises at resolved_password()")
 
@@ -1008,14 +1008,16 @@ def test_real_scan_webhook_map_yaml_loads() -> None:
     project_root = Path(__file__).parent.parent.parent
     raw = yaml.safe_load((project_root / "config" / "scan_webhook_map.yaml").read_text())
     cfg = ScanWebhookMapConfig.model_validate(raw)
-    assert len(cfg.scanners) == 15, f"Expected 15 scanners, got {len(cfg.scanners)}"
+    # 15 live scanners + the PB-01 shadow playbook scanner (V3 Step 10b) = 16.
+    assert len(cfg.scanners) == 16, f"Expected 16 scanners (15 live + PB-01), got {len(cfg.scanners)}"
+    assert "pb01_breakout_retest" in cfg.scanners, "PB-01 scanner missing from map"
     for name, entry in cfg.scanners.items():
         assert isinstance(entry, ScannerEntry), f"Scanner {name!r} entry not ScannerEntry"
         assert entry.strategy, f"Scanner {name!r} has empty strategy"
         assert entry.chartink_url.startswith("https://"), (
             f"Scanner {name!r} chartink_url not https: {entry.chartink_url!r}"
         )
-    print(f"  OK Real scan_webhook_map.yaml: 15 scanners, all valid")
+    print(f"  OK Real scan_webhook_map.yaml: {len(cfg.scanners)} scanners, all valid")
 
 
 def test_real_nse_holidays_yaml_loads() -> None:

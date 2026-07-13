@@ -1453,13 +1453,20 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
     _disable_gridlines(ws)
 
     ws.cell(row=1, column=1, value="STRATEGY-WISE PERFORMANCE").font = FONT_TITLE
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=17)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=19)
+
+    # V3 side-task A — declared taxonomy (pipeline·horizon), APPENDED as the last two
+    # columns so the absolute currency-format indices below (11-16) do not shift.
+    # Fail-safe: a name missing from the map (or a bad YAML) simply shows "—".
+    from strategies.taxonomy import build_taxonomy_map
+    _tax_map = build_taxonomy_map()
 
     perf_headers = [
         "Trading Date", "Strategy", "Signals Rcvd", "Processed", "Rejected", "Traded",
         "Wins", "Losses", "Breakeven", "Win Rate %",
         "Gross P&L ₹", "Net P&L ₹", "Avg Net/Trade ₹",
-        "Max Win ₹", "Max Loss ₹", "Capital Used ₹", "Drawdown %"
+        "Max Win ₹", "Max Loss ₹", "Capital Used ₹", "Drawdown %",
+        "Pipeline", "Horizon"
     ]
 
     for col, header in enumerate(perf_headers, start=1):
@@ -1537,6 +1544,8 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
             round(max_loss, 2),
             round(capital_used, 2),
             drawdown_pct,
+            (_tax_map.get(strat, ("—", "—"))[0]),   # Pipeline (declared; "—" if unknown)
+            (_tax_map.get(strat, ("—", "—"))[1]),   # Horizon
         ]
 
         for col, value in enumerate(row_data, start=1):

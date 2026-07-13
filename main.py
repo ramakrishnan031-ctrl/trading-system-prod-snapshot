@@ -1116,6 +1116,8 @@ def _shutdown(
     market_regime_runner=None,  # V3 03.02: Market Regime shadow runner (None when disabled)
     portfolio_allocator=None,  # V3 03.05: ranked-admission worker (None when off)
     v3_chain=None,  # V3 Step 10: decision-chain shadow enrichment worker (None when off)
+    pb01_entry_stage=None,  # V3 Step 10b: PB-01 next-morning entry-stage daemon (None when off)
+    pb01_capture_worker=None,  # V3 Step 10b: PB-01 EOD watchlist-capture worker (None when off)
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
@@ -1164,6 +1166,18 @@ def _shutdown(
             v3_chain.stop()
         except Exception as exc:
             _log.error("v3_chain.stop error: %s", exc)
+    # V3 Step 10b: stop the PB-01 entry stage + EOD capture worker (daemons; best-effort).
+    # After webhook_receiver.stop() above, so no new EOD alert can be captured.
+    if pb01_entry_stage is not None:
+        try:
+            pb01_entry_stage.stop()
+        except Exception as exc:
+            _log.error("pb01_entry_stage.stop error: %s", exc)
+    if pb01_capture_worker is not None:
+        try:
+            pb01_capture_worker.stop()
+        except Exception as exc:
+            _log.error("pb01_capture_worker.stop error: %s", exc)
     # SNR-V2: stop the retest monitor + zone warmer daemons (best-effort).
     if retest_monitor is not None:
         try:
@@ -2574,8 +2588,13 @@ def _main_locked(args, config_dir: Path) -> int:
     # shared rate-limited OHLC fetch closure (for its own truncating fetcher).
     _v3_cfg = getattr(app_config.system, "v3_chain", None)
     _v3_chain_on = bool(_v3_cfg is not None and getattr(_v3_cfg, "v3_chain_mode", "off") != "off")
+    # V3 Step 10b: PB-01 overnight watchlist + next-morning entry stage (default-off).
+    # Also rides the shared rate-limited OHLC fetch closure (EOD LEVEL compute + the
+    # 09:20-11:00 5-min retest poll). enabled=false → nothing constructed → byte-identical.
+    _watchlist_cfg = getattr(app_config.system, "watchlist", None)
+    _watchlist_on = bool(_watchlist_cfg is not None and getattr(_watchlist_cfg, "enabled", False))
     _sr_fetch_fn = None
-    if _v1_on or _v2_on or _struct_exit_on or _regime_on or _v3_chain_on:
+    if _v1_on or _v2_on or _struct_exit_on or _regime_on or _v3_chain_on or _watchlist_on:
         _md_kite = _build_market_data_kite(is_paper, kite_client)
         if _md_kite is None:
             _log.warning(
@@ -2794,6 +2813,58 @@ def _main_locked(args, config_dir: Path) -> int:
                 signal_processor.set_v3_chain(None)
             except Exception:
                 pass
+
+    # V3 Step 10b — PB-01 OVERNIGHT WATCHLIST + next-morning ENTRY STAGE (default-off).
+    # watchlist.enabled=false (default): NOTHING constructed → the EOD route keeps
+    # eod_capture=None (a fail-safe miss) + no entry-stage daemon → BYTE-IDENTICAL. When
+    # enabled it is SHADOW / ANALYSIS-ONLY: the EOD capture persists ONE pb01_watchlist
+    # row (LEVEL computed from OUR daily candles); the next-morning 09:20-11:00 entry stage
+    # detects the FIRST 5-min retest-confirmation and hands it to the PLACE-FREE would-be
+    # runner (a JSONL record — NO order, NO reservation, G-NO-ORDER by construction).
+    # Reuses the SAME rate-limited fetch closure; entirely off the hot path.
+    pb01_capture_worker = None
+    pb01_entry_stage = None
+    if _watchlist_on:
+        try:
+            from core.config_loader import V3ChainConfig
+            from sr_detector.fetch import OhlcFetcher
+            from sr_detector.zone_builder import build_scoring_params, build_zone_knobs
+            from v3_chain.pb01_entry import Pb01EntryStage
+            from v3_chain.pb01_runner import Pb01WouldBeRunner
+            from v3_chain.watchlist_capture import WatchlistCaptureWorker
+            _wl_v3_cfg = _v3_cfg if _v3_cfg is not None else V3ChainConfig()
+            _wl_knobs = build_zone_knobs(_sr_cfg)
+            _wl_scoring = build_scoring_params(_sr_cfg)
+            # ONE fetcher over the shared closure: lookback covers the structural fetch;
+            # cache_ttl=0 keeps the entry stage's 5-min poll FRESH (the daily/30-min inputs
+            # are memoized at the VALUE level in the entry stage → fetched once per symbol).
+            _wl_fetcher = OhlcFetcher(
+                _sr_fetch_fn, instrument_cache,
+                lookback_days=int(getattr(_wl_v3_cfg, "fetch_lookback_days", 180)),
+                logger=get_logger("pb01_watchlist"), now_fn=time_authority.now_ist,
+                cache_ttl_sec=0.0)
+            pb01_capture_worker = WatchlistCaptureWorker(
+                config=_watchlist_cfg, store=store, fetcher=_wl_fetcher,
+                market_windows=market_windows, logger=get_logger("pb01_watchlist"),
+                now_fn=time_authority.now_ist, zone_knobs=_wl_knobs, zone_scoring=_wl_scoring)
+            _pb01_would_be = Pb01WouldBeRunner(
+                config=_watchlist_cfg, v3_cfg=_wl_v3_cfg, fetcher=_wl_fetcher,
+                zone_knobs=_wl_knobs, zone_scoring=_wl_scoring,
+                logger=get_logger("pb01_watchlist"), now_fn=time_authority.now_ist,
+                regime_runner=market_regime_runner)   # as-of regime snapshot (None when OFF)
+            pb01_entry_stage = Pb01EntryStage(
+                config=_watchlist_cfg, v3_cfg=_wl_v3_cfg, store=store, fetcher=_wl_fetcher,
+                market_windows=market_windows, on_confirm=_pb01_would_be.record,
+                logger=get_logger("pb01_watchlist"), now_fn=time_authority.now_ist)
+            webhook_receiver.set_eod_capture(pb01_capture_worker)   # EOD alerts now captured
+            pb01_capture_worker.start()
+            pb01_entry_stage.start()      # the row status IS the durable state (restart-safe)
+            _log.info("V3 Step 10b PB-01 watchlist: ENABLED — capture + entry stage started "
+                      "(SHADOW / ANALYSIS-ONLY, NO order path)")
+        except Exception as exc:   # never let the watchlist break startup
+            _log.error("pb01 watchlist wiring failed (continuing without it): %s", exc)
+            pb01_capture_worker = None
+            pb01_entry_stage = None
 
     # SNR-V2 Phase A: RetestMonitor + Diverter (need signal_processor.continue_from_
     # retest, so built here). The diverter is late-bound into signal_processor; the
@@ -3203,6 +3274,8 @@ def _main_locked(args, config_dir: Path) -> int:
         market_regime_runner=market_regime_runner,  # V3 03.02
         portfolio_allocator=portfolio_allocator,  # V3 03.05
         v3_chain=v3_chain_runner,  # V3 Step 10
+        pb01_entry_stage=pb01_entry_stage,  # V3 Step 10b
+        pb01_capture_worker=pb01_capture_worker,  # V3 Step 10b
         mode=mode_label,
     )
     return 0

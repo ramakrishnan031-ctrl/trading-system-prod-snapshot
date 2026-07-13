@@ -28,3 +28,5 @@ scanners:
   positional_momentum_long: "https://chartink.com/screener/positional-momentum-long"
   positional_sector_rotation: "https://chartink.com/screener/positional-sector-rotation"
   positional_swing_long: "https://chartink.com/screener/positional-swing-long"
+  # V3 PLAYBOOK PB-01 (Step 10b) — DAILY/EOD scanner (connectivity check is WARN-only).
+  pb01_breakout_retest: "https://chartink.com/screener/pb01-breakout-retest"

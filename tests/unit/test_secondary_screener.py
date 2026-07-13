@@ -529,10 +529,13 @@ def test_same_inputs_twice_same_result():
 # ---------------------------------------------------------------------------
 
 def test_all_15_strategies_screen_without_error():
-    """Load all 15 real strategies, screen with mock market data — no crash."""
+    """Load all 15 live strategies, screen with mock market data — no crash."""
     from pathlib import Path
     loader = StrategyLoader()
-    strategies = loader.load_all_strategies(Path("config/strategies"))
+    all_strategies = loader.load_all_strategies(Path("config/strategies"))
+    # Scope to the 15 LIVE strategies; the PB-01 shadow playbook (V3 Step 10b) is
+    # exercised by its own tests, not this live-strategy screening regression.
+    strategies = {n: s for n, s in all_strategies.items() if not s.v3_playbook}
     assert len(strategies) == 15
 
     md = _passing_market_data()

@@ -1504,9 +1504,51 @@ CREATE TABLE IF NOT EXISTS eod_broker_reconciliation (
 CREATE INDEX IF NOT EXISTS idx_eod_broker_reconciliation_date
     ON eod_broker_reconciliation(date);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 49: pb01_watchlist   (V3 Step 10b — PB-01 overnight watchlist, schema v43)
+-- The STATEFUL OVERNIGHT WATCHLIST for the PB-01 "Breakout + Retest" playbook. An
+-- EOD Chartink breakout is captured (day D) with the LEVEL it cleared and a single
+-- valid trading_date = D+1; the next-morning entry stage (09:20-11:00) loads today's
+-- rows and evaluates the 5-min retest. ANALYSIS ONLY — never a position, never
+-- capital; PB-01 is SHADOW (would-be records only), enabled:false (fail-closed).
+--
+-- Two load-bearing invariants (approved by Rama + Web Claude + ChatGPT):
+--   * UNIQUE (symbol, trading_date) — DB-level dedupe: premature/repeated Chartink
+--     firings CANNOT create duplicate or early rows (belt-and-suspenders with the
+--     receiver dedup).
+--   * trading_date — the ANTI-REHYDRATION key (FIX-046 class): on load, DISCARD any
+--     row whose trading_date != today, so a stale candidate can NEVER fire on a
+--     later day. Enforced in code + a test (G-NO-REHYDRATION).
+--
+-- PURE ADDITION (same pattern as v37 sr_detector_results / v38 retest_state / v39
+-- excursion_reconstruction_runs); no MIGRATION_TABLES entry, nothing rebuilt. The
+-- trailing INSERT bumps to v43.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS pb01_watchlist (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol        TEXT NOT NULL,
+    trading_date  TEXT NOT NULL,           -- YYYY-MM-DD IST; the SINGLE valid session (D+1).
+                                           -- ANTI-REHYDRATION key: load discards trading_date != today.
+    level         REAL NOT NULL,           -- retest LEVEL = highest daily HIGH of the 20 sessions
+                                           -- BEFORE the breakout day (WE compute it; never the payload).
+    breakout_date TEXT NOT NULL,           -- YYYY-MM-DD IST; the session whose daily close cleared LEVEL.
+    source        TEXT NOT NULL,           -- scanner name (pb01_breakout_retest).
+    sr_zone_json  TEXT,                    -- nearest 30m/1h sr_detector zone to LEVEL (S&R validation programme).
+    status        TEXT NOT NULL DEFAULT 'PENDING'
+                  CHECK (status IN ('PENDING','CONSUMED','EXPIRED_WINDOW','INVALIDATED','SKIPPED_GAP')),
+    outcome_json  TEXT,                    -- entry-stage outcome detail (confirmation candle / gap / expiry ts).
+    captured_at   TEXT NOT NULL,           -- ISO-8601 IST at capture (EOD).
+    created_at    TEXT NOT NULL,           -- ISO-8601 IST row-insert.
+    consumed_at   TEXT,                    -- ISO-8601 IST when CONSUMED/EXPIRED/INVALIDATED/SKIPPED.
+    UNIQUE (symbol, trading_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pb01_watchlist_trading_date
+    ON pb01_watchlist(trading_date);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '42');  -- P1: +eod_broker_reconciliation (broker-authoritative EOD verdict). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '43');  -- 10b: +pb01_watchlist (PB-01 overnight watchlist). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

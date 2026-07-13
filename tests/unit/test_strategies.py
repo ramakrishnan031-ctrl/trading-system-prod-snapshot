@@ -48,6 +48,8 @@ def _valid_data() -> dict:
         "direction": "LONG",
         "intent": "INTRADAY",
         "order_protocol": "CO_PLUS_TGT",
+        "pipeline": "INTRADAY",
+        "horizon": "SAME_DAY",
         "entry_method": "LIMIT",
         "entry_offset_pct": 0.001,
         "sl_method": "FIXED_PCT",
@@ -265,10 +267,15 @@ def test_load_all_strategies_loads_15() -> None:
     from strategies.loader import StrategyLoader
     loader = StrategyLoader()
     strategies = loader.load_all_strategies(_STRATEGIES_DIR)
-    assert len(strategies) == 15, "Expected 15 strategies, got %d" % len(strategies)
+    # The invariant is 15 LIVE (non-playbook) strategies. V3 Step 10b added the PB-01
+    # shadow playbook (v3_playbook:true), which is registered but never trades.
+    live = {n: s for n, s in strategies.items() if not s.v3_playbook}
+    assert len(live) == 15, "Expected 15 live strategies, got %d" % len(live)
     for name in _ALL_15_NAMES:
         assert name in strategies, "Missing strategy: %s" % name
-    print("  OK load_all_strategies_loads_15: loaded %d" % len(strategies))
+        assert not strategies[name].v3_playbook, "%s must NOT be a v3_playbook" % name
+    print("  OK load_all_strategies_loads_15: %d live + %d playbook"
+          % (len(live), len(strategies) - len(live)))
 
 
 def test_load_all_strategies_corrupt_file_raises_error() -> None:
@@ -354,7 +361,8 @@ def test_scan_webhook_map_all_15_strategies_exist() -> None:
         _STRATEGIES_DIR,
         scan_webhook_map_path=_SCAN_WEBHOOK_MAP,
     )
-    assert len(strategies) == 15
+    live = {n: s for n, s in strategies.items() if not s.v3_playbook}
+    assert len(live) == 15
     print("  OK scan_webhook_map_all_15_strategies_exist")
 
 
@@ -443,16 +451,20 @@ def test_all_15_yaml_files_validate() -> None:
     """Regression: every file in config/strategies/ validates cleanly."""
     from strategies.schema import validate_strategy
     yaml_files = sorted(_STRATEGIES_DIR.glob("*.yaml"))
-    assert len(yaml_files) == 15, "Expected 15 YAML files, got %d" % len(yaml_files)
+    live_count = 0
     for yaml_path in yaml_files:
         try:
             cfg = validate_strategy(yaml_path)
             assert cfg.name, "name field empty in %s" % yaml_path.name
+            if not cfg.v3_playbook:
+                live_count += 1
         except ConfigSchemaError as exc:
             raise AssertionError(
                 "Strategy YAML %s failed validation: %s" % (yaml_path.name, exc)
             ) from exc
-    print("  OK all_15_yaml_files_validate")
+    # 15 LIVE (non-playbook) strategies; V3 Step 10b added the PB-01 shadow playbook.
+    assert live_count == 15, "Expected 15 live YAML files, got %d" % live_count
+    print("  OK all_15_yaml_files_validate (%d files, %d live)" % (len(yaml_files), live_count))
 
 
 def test_defaults_populated_correctly() -> None:

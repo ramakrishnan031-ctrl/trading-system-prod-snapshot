@@ -24,6 +24,8 @@ description: A test strategy
 direction: LONG
 intent: INTRADAY
 order_protocol: LIMIT_TRIPLE
+pipeline: INTRADAY
+horizon: SAME_DAY
 entry_method: LIMIT
 sl_method: FIXED_PCT
 sl_pct: 0.01

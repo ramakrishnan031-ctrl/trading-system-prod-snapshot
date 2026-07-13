@@ -255,43 +255,13 @@ class V3ChainRunner:
         )
         return rec
 
-    # ── score-factor helpers ──────────────────────────────────────────────────
+    # ── score-factor helpers (delegate to the shared pure functions below so the
+    #    PB-01 would-be runner reuses ONE implementation — no duplication) ─────────
     def _regime_fraction(self, regime_state, as_of):
-        """(fraction in [0,1] or None, regime_asof_unavailable). None/UNKNOWN → 0
-        contribution + unavailable flag. The snapshot was captured on the hot path AT
-        as_of (observe time), so it is as-of-signal-time by construction; if a `ts` is
-        present and is somehow AFTER as_of, we refuse it (no lookahead)."""
-        if regime_state is None:
-            return None, True
-        try:
-            ts = getattr(regime_state, "ts", None)
-            if ts and _parse_iso(ts) is not None and as_of is not None:
-                if _naive(_parse_iso(ts)) > _naive(as_of):
-                    return None, True   # post-signal snapshot → refuse (no lookahead)
-        except Exception:
-            pass
-        try:
-            d = regime_state.direction
-            dt = regime_state.day_type
-            vol = regime_state.volatility
-            dir_c = float(self._cfg.regime_pref_direction.get(d.value, 0.5)) * float(d.multiplier)
-            day_c = float(self._cfg.regime_pref_day_type.get(dt.value, 0.5)) * float(dt.multiplier)
-            vol_c = float(self._cfg.regime_pref_volatility.get(vol.value, 1.0)) * float(vol.multiplier)
-            frac = (dir_c + day_c + vol_c) / 3.0
-            return max(0.0, min(1.0, frac)), False
-        except Exception:
-            return None, True
+        return regime_fraction(self._cfg, regime_state, as_of)
 
     def _sr_target_fraction(self, tgt_zone):
-        """Target-zone confidence → fraction (a fuzzy target = an unreliable TGT)."""
-        if tgt_zone is None:
-            return 0.0
-        conf = str(getattr(tgt_zone, "confidence", "LOW")).upper()
-        if conf == "HIGH":
-            return float(self._cfg.sr_target_quality_high)
-        if conf == "MEDIUM":
-            return float(self._cfg.sr_target_quality_medium)
-        return float(self._cfg.sr_target_quality_low)
+        return sr_target_fraction(self._cfg, tgt_zone)
 
     # ── persistence (best-effort; never blocks/raises) ────────────────────────
     def _persist(self, rec: WouldBeRecord) -> None:
@@ -320,6 +290,51 @@ class V3ChainRunner:
             getattr(self._log, level)(msg, *args)
         except Exception:
             pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# shared score-factor functions (cfg-parametrized; reused by the PB-01 would-be
+# runner so the Context factors have ONE implementation — no duplicate scorer).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def regime_fraction(cfg, regime_state, as_of):
+    """(fraction in [0,1] or None, regime_asof_unavailable). None/UNKNOWN → 0
+    contribution + unavailable flag. The snapshot was captured AS OF the decision
+    instant, so it is as-of by construction; a `ts` present and AFTER as_of is refused
+    (no lookahead). Pure — parametrized by cfg so both runners share it."""
+    if regime_state is None:
+        return None, True
+    try:
+        ts = getattr(regime_state, "ts", None)
+        if ts and _parse_iso(ts) is not None and as_of is not None:
+            if _naive(_parse_iso(ts)) > _naive(as_of):
+                return None, True   # post-signal snapshot → refuse (no lookahead)
+    except Exception:
+        pass
+    try:
+        d = regime_state.direction
+        dt = regime_state.day_type
+        vol = regime_state.volatility
+        dir_c = float(cfg.regime_pref_direction.get(d.value, 0.5)) * float(d.multiplier)
+        day_c = float(cfg.regime_pref_day_type.get(dt.value, 0.5)) * float(dt.multiplier)
+        vol_c = float(cfg.regime_pref_volatility.get(vol.value, 1.0)) * float(vol.multiplier)
+        frac = (dir_c + day_c + vol_c) / 3.0
+        return max(0.0, min(1.0, frac)), False
+    except Exception:
+        return None, True
+
+
+def sr_target_fraction(cfg, tgt_zone):
+    """Target-zone confidence → fraction (a fuzzy target = an unreliable TGT). Pure —
+    shared by V3ChainRunner and the PB-01 would-be runner."""
+    if tgt_zone is None:
+        return 0.0
+    conf = str(getattr(tgt_zone, "confidence", "LOW")).upper()
+    if conf == "HIGH":
+        return float(cfg.sr_target_quality_high)
+    if conf == "MEDIUM":
+        return float(cfg.sr_target_quality_medium)
+    return float(cfg.sr_target_quality_low)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

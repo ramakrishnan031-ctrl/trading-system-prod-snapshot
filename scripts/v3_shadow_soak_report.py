@@ -276,14 +276,140 @@ def v3_report(since: str | None) -> int:
     return 0
 
 
+# ── PB-01 watchlist soak report (the retest CONFIRMATION RATE + would-be verdicts) ──
+def _pb01_watchlist_rows(since: str | None) -> list:
+    """Read-only load of pb01_watchlist rows (the capture/entry OUTCOME distribution).
+    Empty [] if the DB/table is absent (dev tree)."""
+    if not _DB.exists():
+        return []
+    where, params = "", ()
+    if since:
+        where, params = "WHERE trading_date >= ?", (since,)
+    conn = sqlite3.connect(f"file:{_DB.as_posix()}?mode=ro", uri=True, timeout=30.0)
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            f"SELECT symbol, trading_date, status FROM pb01_watchlist {where} "
+            f"ORDER BY trading_date, id", params)
+        return [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        print(f"  (pb01_watchlist read unavailable: {exc})")
+        return []
+    finally:
+        conn.close()
+
+
+_PB01_TERMINAL = ("CONSUMED", "INVALIDATED", "EXPIRED_WINDOW", "SKIPPED_GAP")
+
+
+def pb01_report(since: str | None) -> int:
+    """PB-01 SHADOW soak. TWO halves:
+      1. The capture/entry OUTCOME distribution from pb01_watchlist — the KEY UNKNOWN is
+         the retest CONFIRMATION RATE: of the captured breakouts, how many actually
+         retested + confirmed the next morning (CONSUMED) vs gapped away (SKIPPED_GAP),
+         broke down (INVALIDATED), or never confirmed (EXPIRED_WINDOW). The skip
+         distribution IS the evidence about whether these breakouts retest at all.
+      2. The would-be verdict/gate/R:R/score distribution from pb01_would_be.jsonl — for
+         the CONSUMED candidates, what the V3 chain decided (gates + 3-layer score).
+    Read-only; never places or simulates an order."""
+    from core.config_loader import load_all
+    cfg = load_all(_REPO / "config")
+    print(f"\n=== PB-01 WATCHLIST SOAK  (since={since or 'ALL'}) ===")
+
+    # 1. capture/entry outcome distribution ------------------------------------
+    rows = _pb01_watchlist_rows(since)
+    if not rows:
+        print("  (no pb01_watchlist rows — enable watchlist.enabled + capture a PB-01 EOD alert)")
+    else:
+        per_day: dict = defaultdict(lambda: defaultdict(int))
+        totals: dict = defaultdict(int)
+        for r in rows:
+            per_day[r["trading_date"]][r["status"]] += 1
+            totals[r["status"]] += 1
+        hdr = ("session", "captured", *[s[:7] for s in _PB01_TERMINAL], "PENDING")
+        print("  {:<12}{:>9}{:>9}{:>9}{:>9}{:>9}{:>9}".format(*hdr))
+        for day in sorted(per_day):
+            d = per_day[day]
+            cap = sum(d.values())
+            print("  {:<12}{:>9}{:>9}{:>9}{:>9}{:>9}{:>9}".format(
+                day, cap, d.get("CONSUMED", 0), d.get("INVALIDATED", 0),
+                d.get("EXPIRED_WINDOW", 0), d.get("SKIPPED_GAP", 0), d.get("PENDING", 0)))
+        n_all = sum(totals.values())
+        terminal = sum(totals.get(s, 0) for s in _PB01_TERMINAL)
+        consumed = totals.get("CONSUMED", 0)
+        reached = terminal - totals.get("SKIPPED_GAP", 0)   # candidates that reached the window
+        print(f"  TOTALS: captured={n_all}  terminal={terminal}  "
+              f"CONSUMED={consumed}  SKIPPED_GAP={totals.get('SKIPPED_GAP',0)}  "
+              f"INVALIDATED={totals.get('INVALIDATED',0)}  EXPIRED={totals.get('EXPIRED_WINDOW',0)}")
+        if terminal:
+            print(f"  CONFIRMATION RATE (CONSUMED / terminal): {100.0*consumed/terminal:.1f}%")
+        if reached > 0:
+            print(f"  CONFIRMATION RATE excl. gaps (CONSUMED / reached-window): "
+                  f"{100.0*consumed/reached:.1f}%")
+        print("  <- THE KEY UNKNOWN: if this is tiny, PB-01 generates few trades (acceptable, "
+              "but we should know). Needs several sessions before it means anything.")
+
+    # 2. would-be verdicts from the shadow JSONL -------------------------------
+    path = _REPO / getattr(cfg.system.watchlist, "would_be_log_path",
+                           "data_store/v3/pb01_would_be.jsonl")
+    print(f"\n  would-be log: {path}")
+    wb = []
+    if path.exists():
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                day = str(rec.get("signal_ts", ""))[:10]
+                if since and day and day < since:
+                    continue
+                wb.append(rec)
+    if not wb:
+        print("  (no pb01_would_be rows yet — written per CONFIRMED candidate in shadow)")
+    else:
+        verdict_ct: dict = defaultdict(int)
+        gate_fail: dict = defaultdict(int)
+        for r in wb:
+            verdict_ct[r.get("v3_verdict", "?")] += 1
+            for g, gd in (r.get("gates") or {}).items():
+                if isinstance(gd, dict) and gd.get("passed") is False:
+                    gate_fail[g] += 1
+        v3_rrs = [float(r["v3_rr"]) for r in wb if r.get("v3_rr") is not None]
+        scores = [float((r.get("score") or {}).get("total", 0.0)) for r in wb
+                  if (r.get("score") or {}).get("total") is not None]
+        print(f"  would-be records: {len(wb)}")
+        print("  verdicts:   " + "  ".join(f"{v}={c}" for v, c in sorted(verdict_ct.items())))
+        print("  gate-fails: " + ("  ".join(f"{g}={c}" for g, c in sorted(gate_fail.items())) or "none"))
+        if v3_rrs:
+            print(f"  would-be R:R  n={len(v3_rrs)} mean={sum(v3_rrs)/len(v3_rrs):.2f} "
+                  f"median={_median(v3_rrs):.2f} (R:R FAIL => the Kalyan skip -- no safe target)")
+        if scores:
+            print(f"  3-layer score n={len(scores)} mean={sum(scores)/len(scores):.1f} "
+                  f"median={_median(scores):.1f} (SEED thresholds — calibrate from THIS book)")
+        print("  would-be EXPECTANCY: PENDING an outcome replay — a PB-01 shadow candidate has "
+              "no real trade, so its P&L must be SIMULATED from POST-confirmation candles (SL vs "
+              "TGT hit). That replay needs candle access (not a read-only join) and is the NEXT "
+              "soak step; it is deliberately NOT faked here (an honest gap beats a fabricated number).")
+    print("\n  PROMOTION GATE (spec §13): positive expectancy over >=N signals + S&R validation "
+          "(ANCHOR_ONLY today => unvalidated swings must NEVER gate real capital) before PB-01 "
+          "places a rupee. This report is evidence-gathering ONLY.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="V3 shadow soak report (read-only)")
     ap.add_argument("--scorer", action="store_true", help="scorer OLD-vs-NEW flip-set")
     ap.add_argument("--allocator", action="store_true", help="allocator regret summary")
     ap.add_argument("--v3", action="store_true", help="V3 chain would-be report (G-KALYAN join)")
+    ap.add_argument("--pb01", action="store_true", help="PB-01 watchlist soak (confirmation rate + would-be verdicts)")
     ap.add_argument("--since", default=None, help="YYYY-MM-DD lower bound (a session date)")
     args = ap.parse_args()
-    run_both = not (args.scorer or args.allocator or args.v3)
+    run_both = not (args.scorer or args.allocator or args.v3 or args.pb01)
     rc = 0
     if args.scorer or run_both:
         rc = max(rc, scorer_report(args.since))
@@ -291,6 +417,8 @@ def main() -> int:
         rc = max(rc, allocator_report(args.since))
     if args.v3 or run_both:
         rc = max(rc, v3_report(args.since))
+    if args.pb01 or run_both:
+        rc = max(rc, pb01_report(args.since))
     return rc
 
 

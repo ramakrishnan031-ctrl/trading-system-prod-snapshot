@@ -35,6 +35,7 @@ def _make_strategy(direction="LONG", sl_pct=0.01, sl_gap_buffer_pct=0.3):
         direction=direction,
         intent="INTRADAY",
         order_protocol="LIMIT_TRIPLE",
+        pipeline="INTRADAY", horizon="SAME_DAY",
         entry_method="LIMIT",
         entry_offset_pct=0.0,
         sl_method="FIXED_PCT",

@@ -1,0 +1,79 @@
+# config/strategies/pb01_breakout_retest.yaml
+# V3 PLAYBOOK PB-01 — "Breakout + Retest" (V3 Step 10b).
+#
+# *** REGISTRATION STUB — SHADOW / NON-TRADING ***
+# This strategy is registered so a Chartink EOD scanner can be RECEIVED, AUTHENTICATED
+# and ROUTED, and so the V3 decision chain can produce WOULD-BE records for it. It does
+# NOT trade real capital.
+#
+# FAIL-CLOSED (the non-negotiable safety requirement, V3 Step 10b):
+#   enabled: false  -> strategies.control.strategy_will_trade() returns WON'T TRADE
+#                      (LAYER 3 / CAUSE_DISABLED) -> signal_processor._process_one raises
+#                      _PipelineReject("STRATEGY_CONTROL") BEFORE any sizing / reservation
+#                      / order placement. A raw intraday firing of this scanner can never
+#                      place, modify or cancel an order. Proven by test (G-NO-ORDER).
+#   v3_playbook: true -> marks this strategy as governed by the V3 decision chain
+#                      (playbook-scope gates + 3-layer score + allocator v3_only scope).
+#                      The 15 live strategies keep v3_playbook:false (byte-identical).
+#
+# The AUTHORITY for PB-01's real gate thresholds, score weights, entry window (09:20-11:00),
+# retest level definition, gap guard and expiry rules is the "V3 DECISION CONTENT
+# SPECIFICATION v1.0". Those land as CONFIG (not here) in the Step 10b watchlist/entry
+# build. Every number below is a schema-valid SEED for the registration stub only.
+
+name: "pb01_breakout_retest"
+display_name: "PB-01 Breakout + Retest (shadow)"
+description: "V3 playbook: daily breakout above 20-session high, then next-morning retest-and-confirm. WATCHLIST-bound, SHADOW / non-trading (enabled:false); would-be records only."
+
+direction: "LONG"
+intent: "INTRADAY"          # same-day entry+square-off when promoted; delivery stays OFF
+enabled: false              # FAIL-CLOSED: never trades until the spec-13 promotion gate
+order_protocol: "CO_PLUS_TGT"
+
+# Taxonomy (metadata + display only; V3 side-task A). SWING = multi-day hold.
+pipeline: "INTRADAY"
+horizon: "NEXT_DAY"
+
+entry_method: "LIMIT"
+entry_offset_pct: 0.001
+
+sl_method: "FIXED_PCT"
+sl_pct: 0.01
+sl_atr_multiplier: 1.5
+sl_min_pct: 0.003
+sl_max_pct: 0.05
+
+tgt_method: "RISK_REWARD"
+tgt_pct: 0.0
+tgt_risk_reward: 1.5
+tgt_atr_multiplier: 2.5
+
+smart_tgt_enabled: true
+smart_tgt_trail_trigger_pct: 0.005
+smart_tgt_trail_step_pct: 0.003
+
+pullback_wait_enabled: false
+pullback_wait_tolerance_pct: 0.005
+pullback_wait_timeout_sec: 180
+
+min_score: 0
+min_volume_surge: 1.3
+min_adr_pct: 0.005
+max_spread_pct: 0.005
+
+lot_size: 1
+max_concurrent_positions: 2
+
+v3_playbook: true           # governed by the V3 decision chain (Step 10b)
+
+# NOTE: the AUTHORITATIVE PB-01 entry window is 09:20-11:00 IST, enforced by the
+# watchlist entry stage (Step 10b) per the SPEC — NOT by this per-strategy field, which
+# only feeds the intraday webhook path this strategy never uses (enabled:false).
+entry_start_time: "09:25"
+entry_end_time: "11:00"
+active_days:
+  - MON
+  - TUE
+  - WED
+  - THU
+  - FRI

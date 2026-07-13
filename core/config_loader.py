@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import date as _date
+from datetime import time as _dt_time
 from pathlib import Path
 
 import yaml
@@ -1007,6 +1008,18 @@ class V3ChainConfig(BaseModel):
     htf_ema_period: int = 20                    # G-HTF + htf_alignment: 1h EMA period
     htf_swing_pivot_n: int = 3                  # G-HTF + htf_alignment: 1h swing-pivot N (each side)
 
+    # ── 10b PLAYBOOK gate knobs (spec §3; PB-01 must-haves G-CONFIRM / G-PULLBACK). ──
+    # All SEEDS — calibrate from the PB-01 would-be soak, never treat as tuned truth.
+    confirm_min_body_frac: float = 0.50         # G-CONFIRM: body_frac=|close-open|/(high-low) >= this (rejects dojis)
+    confirm_volume_mult: float = 1.20           # G-CONFIRM: 5m volume >= this × baseline_5m_volume
+    baseline_candles_per_session: int = 75      # baseline_5m_volume = SMA20(daily volume) / this (75 five-min bars/session)
+    pullback_proximity_pct: float = 0.005       # G-PULLBACK TOUCHED: within max(this×LEVEL, atr_mult×ATR30) of LEVEL
+    pullback_proximity_atr_mult: float = 0.50
+    hold_buffer_atr_mult: float = 0.20          # G-PULLBACK HELD: a 5m CLOSE below (LEVEL - this×ATR30) → INVALIDATED
+    # ── 10b PLAYBOOK score-factor knobs (spec §4). ──
+    retest_quality_atr_span: float = 0.75       # retest_quality = max(0, 1 - |dist|/this), dist=(pullback_low-LEVEL)/ATR30
+    level_touches_cap: int = 5                  # level_significance = min(touches, this) / this
+
     # ── 3-layer score weights (spec §4; every step used exactly once, no double-count) ──
     # PLAYBOOK (40) — forward-compat, UNUSED in 10a (no playbook exists yet; recorded null).
     w_retest_quality: float = 15.0
@@ -1094,6 +1107,67 @@ class V3ChainConfig(BaseModel):
                 "v3_chain thresholds must satisfy high > medium > min_pass "
                 f"(got {self.high_score_threshold}/{self.medium_score_threshold}/{self.min_pass_score})"
             )
+        return self
+
+
+class WatchlistConfig(BaseModel):
+    """
+    V3 Step 10b — the PB-01 OVERNIGHT WATCHLIST + next-morning entry stage config.
+
+    ONE default-off master flag (`enabled`) gates BOTH the EOD capture and the
+    next-morning entry stage in BOTH paper + live. **enabled=false (default) =
+    BYTE-IDENTICAL** — the capture worker + entry-stage monitor are not constructed
+    in main.py, and an EOD webhook (if one arrived) is captured to nothing. The
+    watchlist is ANALYSIS ONLY — no position, no capital, no CNC/GTT overnight; PB-01
+    is SHADOW (would-be records) and enabled:false (fail-closed) regardless.
+
+    All windows/thresholds are SEEDS to calibrate from the PB-01 would-be soak (spec
+    §7 open items O1/O3) — starting points, not truth.
+    """
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False                        # ★ master gate — OFF = byte-identical
+
+    # which EOD scanner is PB-01 (binds the eod route → the playbook). The strategy is
+    # resolved via scan_webhook_map; this is the scanner-name the capture worker owns.
+    playbook_scanner: str = "pb01_breakout_retest"
+
+    # ── capture (EOD, day D) ──────────────────────────────────────────────────
+    level_lookback_sessions: int = 20            # LEVEL = highest daily HIGH of the N sessions BEFORE the breakout day
+    capture_fetch_lookback_days: int = 60        # how far back to fetch daily candles to compute LEVEL (calendar days)
+
+    # ── next-morning entry stage (day D+1) ────────────────────────────────────
+    entry_start: str = "09:20"                   # first 5-min candle must CLOSE before any confirmation (spec §7)
+    entry_end: str = "11:00"                     # the next-morning retest thesis has expired by mid-morning (seed)
+    entry_tf: str = "5minute"                    # the retest timeframe (built via candle_math.resample)
+    gap_guard_pct: float = 0.03                  # SKIPPED_GAP if open > LEVEL × (1 + this) (seed 3%)
+    poll_interval_sec: float = 20.0              # entry-stage candle poll cadence (off the hot path)
+
+    # ── would-be record (T6 shadow; SEPARATE from the 10a would_be.jsonl) ─────
+    would_be_log_path: str = "data_store/v3/pb01_would_be.jsonl"  # PB-01 shadow records (LOG-ONLY, NO order)
+
+    @field_validator("entry_start", "entry_end")
+    @classmethod
+    def _validate_hhmm(cls, v: str) -> str:
+        try:
+            hh, mm = v.split(":")
+            _t = _dt_time(int(hh), int(mm))
+        except (ValueError, AttributeError) as exc:
+            raise ValueError(f"watchlist entry time must be HH:MM, got {v!r}") from exc
+        return v
+
+    @model_validator(mode="after")
+    def _validate_watchlist(self):
+        sh, sm = map(int, self.entry_start.split(":"))
+        eh, em = map(int, self.entry_end.split(":"))
+        if _dt_time(sh, sm) >= _dt_time(eh, em):
+            raise ValueError(
+                f"watchlist.entry_start ({self.entry_start}) must be < entry_end ({self.entry_end})")
+        if self.level_lookback_sessions <= 0:
+            raise ValueError("watchlist.level_lookback_sessions must be > 0")
+        if not (0.0 < self.gap_guard_pct < 1.0):
+            raise ValueError("watchlist.gap_guard_pct must be in (0, 1)")
+        if self.poll_interval_sec <= 0:
+            raise ValueError("watchlist.poll_interval_sec must be > 0")
         return self
 
 
@@ -1524,6 +1598,7 @@ class SystemConfig(BaseModel):
     regime: RegimeConfig = Field(default_factory=RegimeConfig)  # V3 03.02: index-level market regime (shadow, default-off)
     portfolio_allocator: PortfolioAllocatorConfig = Field(default_factory=PortfolioAllocatorConfig)  # V3 03.05: ranked batch admission (default-off)
     v3_chain: V3ChainConfig = Field(default_factory=V3ChainConfig)  # V3 Step 10: decision-chain shadow enrichment (default-off)
+    watchlist: WatchlistConfig = Field(default_factory=WatchlistConfig)  # V3 Step 10b: PB-01 overnight watchlist + entry stage (default-off)
     structure_exit: StructureExitConfig = Field(default_factory=StructureExitConfig)  # SNR-V2 Phase B: structure-aware exit (default-off)
     smart_tgt: SmartTgtConfig                 # BL-7b: SmartTgtManager defaults
     entry_gate: EntryGateConfig               # FIX-025: gate release slippage protection
@@ -1859,12 +1934,25 @@ class ScannerEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     strategy: str
     chartink_url: str
+    # V3 Step 10b: the scanner's TYPE — a STRUCTURAL routing property (not a name-string
+    # compare). DEFAULT "intraday" → the 15 live scanners are byte-identical. An "eod"
+    # scanner (PB-01) is a DAILY/EOD alert: the receiver skips the intraday entry-window
+    # gate and routes it ONLY to the EOD-capture queue (the watchlist) — it can NEVER
+    # enter the intraday signal_queue / order path (constraint #1, fail-closed).
+    scanner_type: str = "intraday"
 
     @field_validator("chartink_url")
     @classmethod
     def url_must_be_http(cls, v: str) -> str:
         if not v.startswith(("http://", "https://")):
             raise ValueError(f"chartink_url must be http(s): {v}")
+        return v
+
+    @field_validator("scanner_type")
+    @classmethod
+    def _validate_scanner_type(cls, v: str) -> str:
+        if v not in {"intraday", "eod"}:
+            raise ValueError(f"scanner_type must be intraday|eod, got {v!r}")
         return v
 
 

@@ -11,6 +11,10 @@ intent: "DELIVERY"
 enabled: true
 order_protocol: "LIMIT_TRIPLE"
 
+# Taxonomy (metadata + display only; V3 side-task A). SWING = multi-day hold.
+pipeline: "DELIVERY"
+horizon: "SWING"
+
 entry_method: "LIMIT"
 entry_offset_pct: 0.002
 

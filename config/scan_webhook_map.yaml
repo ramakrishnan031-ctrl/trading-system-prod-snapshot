@@ -73,3 +73,12 @@ scanners:
   positional_swing_long:
     strategy: positional_swing_long
     chartink_url: "https://chartink.com/screener/positional-swing-long"
+
+  # V3 PLAYBOOK PB-01 (Step 10b) — DAILY/EOD scanner, WATCHLIST-bound, SHADOW/non-trading.
+  # Routing key MUST equal the /webhook/<scanner_name> URL path Rama pastes into Chartink.
+  # The strategy pb01_breakout_retest is enabled:false + v3_playbook:true -> FAIL-CLOSED
+  # (a raw firing is rejected at the strategy-control gate, never placed).
+  pb01_breakout_retest:
+    strategy: pb01_breakout_retest
+    chartink_url: "https://chartink.com/screener/pb01-breakout-retest"
+    scanner_type: eod   # DAILY/EOD alert → routed to the watchlist ONLY, never the intraday order path

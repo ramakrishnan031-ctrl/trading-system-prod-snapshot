@@ -58,6 +58,7 @@ class TestSchemaField:
         cfg = StrategyConfig(
             name="test", display_name="Test", description="test",
             direction="LONG", intent="INTRADAY", order_protocol="CO_PLUS_TGT",
+            pipeline="INTRADAY", horizon="SAME_DAY",
             entry_method="LIMIT", sl_method="FIXED_PCT", sl_pct=0.01,
             tgt_method="RISK_REWARD", tgt_risk_reward=2.0,
             smart_tgt_enabled=False, pullback_wait_enabled=False,
@@ -69,6 +70,7 @@ class TestSchemaField:
         cfg = StrategyConfig(
             name="test", display_name="Test", description="test",
             direction="LONG", intent="INTRADAY", order_protocol="CO_PLUS_TGT",
+            pipeline="INTRADAY", horizon="SAME_DAY",
             entry_method="LIMIT", sl_method="FIXED_PCT", sl_pct=0.01,
             tgt_method="RISK_REWARD", tgt_risk_reward=2.0,
             smart_tgt_enabled=False, pullback_wait_enabled=False,
@@ -138,6 +140,7 @@ class TestParity:
         cfg = StrategyConfig(
             name="test", display_name="Test", description="test",
             direction="LONG", intent="INTRADAY", order_protocol="CO_PLUS_TGT",
+            pipeline="INTRADAY", horizon="SAME_DAY",
             entry_method="LIMIT", sl_method="FIXED_PCT", sl_pct=0.01,
             tgt_method="RISK_REWARD", tgt_risk_reward=2.0,
             smart_tgt_enabled=False, pullback_wait_enabled=False,

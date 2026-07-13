@@ -791,6 +791,7 @@ def _make_config_dir(tmp_path: Path, exclude: list = None) -> Path:
     (strat_dir / "test_strat.yaml").write_text(
         "name: test_strat\ndisplay_name: Test\ndescription: test\n"
         "direction: LONG\nintent: INTRADAY\norder_protocol: LIMIT_TRIPLE\n"
+        "pipeline: INTRADAY\nhorizon: SAME_DAY\n"
         "entry_method: LIMIT\nsl_method: FIXED_PCT\nsl_pct: 0.01\n"
         "tgt_method: RISK_REWARD\ntgt_risk_reward: 2.0\n"
         "smart_tgt_enabled: false\npullback_wait_enabled: false\n"

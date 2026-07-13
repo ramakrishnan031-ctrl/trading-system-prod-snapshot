@@ -86,7 +86,10 @@ class TestSchemaConfig:
     def test_all_15_yamls_load_with_enabled(self):
         from strategies.schema import validate_strategy
         files = sorted((_CFG / "strategies").glob("*.yaml"))
-        assert len(files) == 15
+        # V3 Step 10b added the PB-01 shadow playbook YAML; the invariant is 15 LIVE
+        # (non-playbook) strategies, so count those.
+        live = [p for p in files if not validate_strategy(p).v3_playbook]
+        assert len(live) == 15
         for p in files:
             cfg = validate_strategy(p)
             assert isinstance(cfg.enabled, bool)
@@ -162,6 +165,10 @@ class TestDefaultStateRegression:
     def _counts(self, trade_type, force):
         from strategies.loader import StrategyLoader
         loaded = StrategyLoader().load_all_strategies(_CFG / "strategies", force_intraday_only=force)
+        # V3 Step 10b: v3_playbook strategies (PB-01) are governed by the V3 decision
+        # chain, not the intraday trade_type gate — exclude them so these regression
+        # counts describe the 15 live strategies (the invariant this test protects).
+        loaded = {n: s for n, s in loaded.items() if not s.v3_playbook}
         verdicts = {n: strategy_will_trade(s, trade_type=trade_type, force_intraday_only=force)
                     for n, s in loaded.items()}
         will = {n for n, v in verdicts.items() if v.will_trade}

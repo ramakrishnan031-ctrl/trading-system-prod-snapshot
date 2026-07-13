@@ -337,6 +337,11 @@ class TestBugD_ForceIntradayOnly:
         deliv = [n for n, c in strategies.items() if c.intent == "DELIVERY"]
         assert deliv, "declared DELIVERY intent must be PRESERVED (not rewritten) under force"
         for name, cfg in strategies.items():
+            # V3 Step 10b: the PB-01 shadow playbook is v3_playbook + enabled:false, so it
+            # never trades by construction — Option A's "INTRADAY still trades" invariant is
+            # about the 15 live strategies, not the shadow playbook.
+            if cfg.v3_playbook:
+                continue
             v = strategy_will_trade(cfg, trade_type="INTRADAY", force_intraday_only=True)
             if cfg.intent == "DELIVERY":
                 assert not v.will_trade, f"{name}: DELIVERY must be dormant under the breaker"

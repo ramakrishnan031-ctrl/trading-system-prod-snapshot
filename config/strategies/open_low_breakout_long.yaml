@@ -10,6 +10,10 @@ intent: "INTRADAY"
 enabled: true
 order_protocol: "CO_PLUS_TGT"
 
+# Taxonomy (metadata + display only; V3 side-task A). SWING = multi-day hold.
+pipeline: "INTRADAY"
+horizon: "SAME_DAY"
+
 entry_method: "LIMIT"
 entry_offset_pct: 0.001
 

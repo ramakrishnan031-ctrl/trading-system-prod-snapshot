@@ -24,6 +24,13 @@ from core.exceptions import ConfigSchemaError
 _VALID_DIRECTIONS = {"LONG", "SHORT"}
 _VALID_INTENTS = {"INTRADAY", "DELIVERY"}
 _VALID_PROTOCOLS = {"CO_PLUS_TGT", "LIMIT_TRIPLE"}
+# V3 side-task A — STRATEGY TAXONOMY (metadata + display only; NO routing/execution).
+# pipeline = which book the strategy belongs to; horizon = how long the trade is held.
+# SWING (not BTST) = a genuine MULTI-DAY hold (the 3 positional_* strategies' declared
+# semantics); BTST = buy-today-sell-tomorrow; NEXT_DAY = analysis carried overnight but
+# the POSITION is intraday (PB-01). Both are DECLARED enums (no free-text → no typos).
+_VALID_PIPELINES = {"INTRADAY", "DELIVERY"}
+_VALID_HORIZONS = {"SAME_DAY", "NEXT_DAY", "BTST", "SWING"}
 _VALID_ENTRY_METHODS = {"MARKET", "LIMIT"}
 _VALID_SL_METHODS = {"FIXED_PCT", "ATR"}
 _VALID_TGT_METHODS = {"FIXED_PCT", "RISK_REWARD", "ATR"}
@@ -51,6 +58,16 @@ class StrategyConfig(BaseModel):
     direction: str
     intent: str
     order_protocol: str
+
+    # --- Taxonomy (required; metadata + display only — V3 side-task A) ---
+    # Declared, NOT derived: pipeline/horizon tell Rama what KIND of trade fired
+    # (Telegram + EOD reports). REQUIRED (no silent default that could mislabel a
+    # strategy). Deliberately INERT — no routing, execution, capital-split, or config
+    # change; live behaviour is byte-identical. This is ALSO the prerequisite for the
+    # future two-pipeline split (you cannot route by pipeline until strategies declare
+    # one). pipeline is INDEPENDENT of intent (intent gates the product; pipeline labels).
+    pipeline: str        # INTRADAY | DELIVERY
+    horizon: str         # SAME_DAY | NEXT_DAY | BTST | SWING
 
     # --- Strategy ON/OFF switch (Slice 2, LAYER 3) ---
     # Per-strategy master switch read by the strategy-control resolver
@@ -147,6 +164,24 @@ class StrategyConfig(BaseModel):
         if v not in _VALID_PROTOCOLS:
             raise ValueError(
                 "order_protocol must be CO_PLUS_TGT or LIMIT_TRIPLE, got %r" % v
+            )
+        return v
+
+    @field_validator("pipeline")
+    @classmethod
+    def _val_pipeline(cls, v: str) -> str:
+        if v not in _VALID_PIPELINES:
+            raise ValueError(
+                "pipeline must be INTRADAY or DELIVERY, got %r" % v
+            )
+        return v
+
+    @field_validator("horizon")
+    @classmethod
+    def _val_horizon(cls, v: str) -> str:
+        if v not in _VALID_HORIZONS:
+            raise ValueError(
+                "horizon must be one of SAME_DAY|NEXT_DAY|BTST|SWING, got %r" % v
             )
         return v
 

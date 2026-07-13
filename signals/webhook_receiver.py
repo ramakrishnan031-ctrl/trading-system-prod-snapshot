@@ -118,6 +118,7 @@ class WebhookReceiver:
         kill_switch: Any,     # KillSwitch (may be None in tests)
         logger: Any,
         secret_token: Optional[str] = None,
+        eod_capture: Any = None,   # V3 Step 10b: WatchlistCaptureWorker (None → EOD alerts are a fail-safe miss)
     ) -> None:
         # BL-18: if the deployed config declares require_hmac=True, refuse to
         # construct without a secret. Prevents silent downgrade where config
@@ -147,6 +148,11 @@ class WebhookReceiver:
         self._ks = kill_switch
         self._log = logger
         self._secret = secret_token
+        # V3 Step 10b: the EOD-capture worker. An "eod" scanner routes here ONLY (never
+        # the intraday signal_queue). None (default / watchlist disabled) → an EOD alert
+        # is a fail-SAFE miss (logged, never silent). Purely additive: intraday scanners
+        # never touch this, so the live path is byte-identical.
+        self._eod_capture = eod_capture
         # G.1 (2026-04-25): persist for request-time enforcement. When True
         # the token-param fallback is disabled -- HMAC is the sole accepted
         # auth surface (token in URL is logged by nginx and weaker than
@@ -437,6 +443,16 @@ class WebhookReceiver:
         if scanner_name not in known_scanners:
             return jsonify({"error": f"Unknown scanner: {scanner_name!r}"}), 404
 
+        # V3 Step 10b — STRUCTURAL EOD ROUTING. An "eod" scanner (a DAILY/EOD alert) is
+        # captured to the WATCHLIST only: it SKIPS the intraday entry-window gate (a
+        # post-close alert is legitimate) and is NEVER enqueued to the intraday
+        # signal_queue — so it is structurally INCAPABLE of the intraday order path
+        # (constraint #1). Default "intraday" → this is a single skipped attribute read
+        # → the live path is BYTE-IDENTICAL.
+        _entry = known_scanners.get(scanner_name)
+        if getattr(_entry, "scanner_type", "intraday") == "eod":
+            return self._handle_eod(scanner_name, raw_body)
+
         # WR5: kill_switch active -> 403
         if self._ks and self._ks.is_active():
             return jsonify({"error": "Kill switch active; signals rejected"}), 403
@@ -610,6 +626,73 @@ class WebhookReceiver:
         if current_depth >= warn_threshold:
             resp.headers["X-Queue-Warning"] = "high"
         return resp, http_status
+
+    # ------------------------------------------------------------------
+    # V3 Step 10b — EOD route (watchlist capture; NEVER the intraday order path)
+    # ------------------------------------------------------------------
+
+    def _handle_eod(self, scanner_name: str, raw_body: bytes):
+        """Route a DAILY/EOD scanner alert to the watchlist capture worker. Self-contained
+        (does NOT touch the intraday parse, so that path stays byte-identical). Parses the
+        Chartink payload, then hands each symbol to `eod_capture.submit()` — which does the
+        heavy LEVEL fetch/compute OFF the request thread (WR1). NEVER enqueues to the
+        intraday signal_queue. Auth already ran in _process_request before this."""
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, ValueError) as exc:
+            return jsonify({"error": f"Malformed JSON: {exc}"}), 400
+        if not isinstance(body, dict):
+            return jsonify({"error": "Request body must be a JSON object"}), 400
+        for field in ("stocks", "trigger_prices", "triggered_at"):
+            if field not in body:
+                return jsonify({"error": f"Missing required field: {field!r}"}), 400
+
+        triggered_at = self._parse_eod_triggered_at(str(body["triggered_at"]).strip())
+        if triggered_at is None:
+            return jsonify({"error": "Invalid triggered_at"}), 400
+
+        stocks_raw = body["stocks"]
+        if not isinstance(stocks_raw, str):
+            return jsonify({"error": "stocks must be a comma-separated string"}), 400
+        symbols = [s.strip() for s in stocks_raw.split(",") if s.strip()]
+
+        # watchlist disabled (no capture worker) → a fail-SAFE miss (logged, never silent):
+        # an empty watchlist = no PB-01 next day, never a bad trade.
+        if self._eod_capture is None:
+            self._log.warning(
+                "EOD alert %s: watchlist disabled (no capture worker) → fail-safe miss "
+                "for %d symbol(s)", scanner_name, len(symbols))
+            return jsonify({"accepted": 0, "captured": 0, "detail": "watchlist disabled"}), 200
+
+        captured = 0
+        for raw_symbol in symbols:
+            symbol = self._alias_map.get(raw_symbol.upper(), raw_symbol)
+            try:
+                if self._eod_capture.submit(
+                        scanner_name=scanner_name, symbol=symbol, triggered_at=triggered_at):
+                    captured += 1
+            except Exception as exc:   # a capture-submit error must never break the response
+                self._log.error("EOD capture submit failed for %s: %s", symbol, exc)
+        self._log.info("EOD alert %s: %d symbol(s) → %d queued for capture",
+                       scanner_name, len(symbols), captured)
+        return jsonify({"accepted": len(symbols), "captured": captured}), 200
+
+    def _parse_eod_triggered_at(self, raw: str):
+        """Parse the EOD alert's triggered_at → IST-aware datetime. Accepts the same
+        formats the intraday path does; for an EOD daily scan the DATE is what matters
+        (breakout_date). None on an unparseable value."""
+        now = now_ist()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%I:%M %p", "%H:%M"):
+            try:
+                parsed = datetime.strptime(raw, fmt)
+                if fmt in ("%I:%M %p", "%H:%M"):
+                    parsed = datetime(now.year, now.month, now.day, parsed.hour, parsed.minute, 0)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=ist_timezone())
+                return parsed
+            except ValueError:
+                continue
+        return None
 
     # ------------------------------------------------------------------
     # Persisted-payload sanitizer (S-1B.1)
@@ -846,6 +929,12 @@ class WebhookReceiver:
                 )
         except Exception as exc:
             self._log.error(f"Failed to write webhook_audit row: {exc}")
+
+    def set_eod_capture(self, eod_capture) -> None:
+        """V3 Step 10b: late-bind the WatchlistCaptureWorker (built after the receiver,
+        once the shared fetch closure exists — same late-binding pattern as
+        signal_processor.set_v3_chain). None keeps EOD alerts a fail-safe miss."""
+        self._eod_capture = eod_capture
 
     # ------------------------------------------------------------------
     # Shutdown (WR12)

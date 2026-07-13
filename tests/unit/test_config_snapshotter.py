@@ -40,8 +40,8 @@ def _count(store: StateStore) -> int:
 def test_schema_is_v41_with_config_snapshots_table(tmp_path):
     store = _fresh_store(tmp_path)
     try:
-        assert EXPECTED_SCHEMA_VERSION == 42   # P1: +eod_broker_reconciliation (was 41: config_snapshots)
-        assert store.get_schema_version() == 42
+        assert EXPECTED_SCHEMA_VERSION == 43   # 10b: +pb01_watchlist (was 42: eod_broker_reconciliation)
+        assert store.get_schema_version() == 43
         tbl = store.fetch_one(
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name='config_snapshots'")
