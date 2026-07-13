@@ -84,6 +84,53 @@ class TestGroupAContradictions:
     def test_real_config_no_contradiction(self, base_system):
         assert audit(base_system, groups="A").verdict == "PASS"
 
+    # ── A4 (Q4(c)): structure_exit single-SL-owner vs strategy trailing_sl ──────
+    @staticmethod
+    def _trail(trailing: bool, enabled: bool = True):
+        class _S:
+            def __init__(self):
+                self.trailing_sl_enabled, self.enabled = trailing, enabled
+        return _S()
+
+    def test_structure_exit_plus_trailing_sl_blocks(self, base_system):
+        strategies = {"gap_go_long": self._trail(True),
+                      "vwap_bounce_long": self._trail(False)}
+        s = _mut(base_system, structure_exit__structure_exit_enabled=True)
+        r = audit(s, groups="A", strategies=strategies)
+        assert r.verdict == "BLOCK"
+        a4 = [f for f in r.blocks if f.code == "A4_structure_exit_trailing_sl"]
+        assert a4 and "CONTRADICTORY CONFIG" in a4[0].message
+        # names the offender, not the innocent
+        assert "gap_go_long" in a4[0].message and "vwap_bounce_long" not in a4[0].message
+        assert a4[0].metrics["trailing_strategies"] == ["gap_go_long"]
+
+    def test_structure_exit_off_trailing_sl_ok(self, base_system):
+        # trailing strategy is harmless when structure-exit is OFF (only one SL owner)
+        strategies = {"gap_go_long": self._trail(True)}
+        s = _mut(base_system, structure_exit__structure_exit_enabled=False)
+        r = audit(s, groups="A", strategies=strategies)
+        assert not any(f.code == "A4_structure_exit_trailing_sl" for f in r.blocks)
+
+    def test_structure_exit_on_no_trailing_ok(self, base_system):
+        strategies = {"gap_go_long": self._trail(False),
+                      "vwap_bounce_long": self._trail(False)}
+        s = _mut(base_system, structure_exit__structure_exit_enabled=True)
+        r = audit(s, groups="A", strategies=strategies)
+        assert not any(f.code == "A4_structure_exit_trailing_sl" for f in r.blocks)
+
+    def test_structure_exit_disabled_strategy_trailing_not_blocked(self, base_system):
+        # a DISABLED strategy that trails won't trade -> no SL to race -> no block
+        strategies = {"gap_go_long": self._trail(True, enabled=False)}
+        s = _mut(base_system, structure_exit__structure_exit_enabled=True)
+        r = audit(s, groups="A", strategies=strategies)
+        assert not any(f.code == "A4_structure_exit_trailing_sl" for f in r.blocks)
+
+    def test_structure_exit_no_strategies_context_skips_a4(self, base_system):
+        # config-only startup subset (strategies=None) cannot evaluate A4 -> no false block
+        s = _mut(base_system, structure_exit__structure_exit_enabled=True)
+        r = audit(s, groups="A")   # no strategies
+        assert not any(f.code == "A4_structure_exit_trailing_sl" for f in r.blocks)
+
 
 # ── Group B — single-source regression guards ─────────────────────────────────
 

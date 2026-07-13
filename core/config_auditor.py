@@ -212,6 +212,32 @@ def _group_a_contradictions(sc: Any, strategies: Optional[dict]) -> List[AuditFi
             "INTRADAY/DELIVERY/BOTH.",
         ))
 
+    # A4 — SNR-V2 SINGLE SL OWNER (Q4(c)): structure_exit_enabled (system flag) makes the
+    # StructureExitManager the sole owner of the SL leg; a strategy with
+    # trailing_sl_enabled=true would ALSO advance that leg for its own trades → two SL
+    # owners racing on one order. Only a LIVE contradiction when structure-exit is on AND
+    # ≥1 ENABLED strategy trails → BLOCK. Needs strategies (skipped when absent, e.g. the
+    # config-only startup subset — main.py re-runs group A WITH strategies as a construction
+    # guard). NB: message contains "CONTRADICTORY CONFIG" (consistent with A1/A2).
+    if strategies:
+        _se = getattr(sc, "structure_exit", None)
+        _se_on = getattr(_se, "structure_exit_enabled", False) is True if _se is not None else False
+        if _se_on:
+            _trailers = sorted(
+                n for n, s in strategies.items()
+                if getattr(s, "enabled", True) and getattr(s, "trailing_sl_enabled", False) is True
+            )
+            if _trailers:
+                out.append(AuditFinding(
+                    "A", "A4_structure_exit_trailing_sl", Severity.BLOCK,
+                    "CONTRADICTORY CONFIG: structure_exit_enabled=true makes the "
+                    "StructureExitManager the single SL owner, but these ENABLED strategies "
+                    f"also trail their SL (trailing_sl_enabled=true): {', '.join(_trailers)}. "
+                    "Two SL owners would race on one leg. Disable structure_exit, or set "
+                    "trailing_sl_enabled=false on those strategies.",
+                    metrics={"trailing_strategies": _trailers},
+                ))
+
     # A3 — strategy-dependent: would ANY strategy trade today? trade_type +
     # force_intraday_only + per-strategy enabled/intent can combine to silence the
     # whole book (e.g. trade_type=DELIVERY with every delivery strategy disabled).

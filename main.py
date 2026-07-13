@@ -54,6 +54,7 @@ from capital.position_sizer import PositionSizer
 from capital.risk_engine import RiskEngine
 from core.account_registry import AccountRegistry
 from core.config_loader import load_all
+from core.config_auditor import audit as audit_config
 from core.config_snapshotter import snapshot_config
 from core.config_validator import config_validator
 from core.events import EventBus, CapitalDriftDetected, KillSwitchActivated
@@ -2591,6 +2592,22 @@ def _main_locked(args, config_dir: Path) -> int:
     # (so it builds when EITHER retest or structure-exit is on). Dormant by default.
     _struct_exit_cfg = app_config.system.structure_exit
     _struct_exit_on = getattr(_struct_exit_cfg, "structure_exit_enabled", False)
+    # Q4(c) capital-safety construction guard: structure_exit makes StructureExitManager
+    # the SINGLE SL owner; a strategy that also trails its SL (trailing_sl_enabled) would
+    # race it on one leg. The rule lives in the config auditor (single source, group A);
+    # config_loader ran group A WITHOUT strategies, so re-run it here WITH the loaded
+    # strategies and fail-fast BEFORE any structure-exit / zone infra is built. `is True`
+    # (not truthy): a genuine bool only — a MagicMock/proxy config in unit tests must not
+    # trip the guard; byte-identical when structure-exit is off. We act ONLY on the A4
+    # finding (not raise_if_blocked) so an unrelated group-A block can never mis-fire here.
+    if _struct_exit_on is True:
+        _a4 = [f for f in audit_config(
+                   app_config.system, strategies=strategies, groups="A").blocks
+               if f.code == "A4_structure_exit_trailing_sl"]
+        if _a4:
+            _log.critical("q4c_structure_exit_trailing_sl_contradiction: %s", _a4[0].message)
+            store.close()
+            return 3
     # V3 03.02: index-level Market Regime shadow engine (default-off). Shares the
     # same rate-limited OHLC fetch closure (reused for the index by config token).
     _regime_cfg = getattr(app_config.system, "regime", None)
