@@ -91,6 +91,7 @@ from utils.startup_checks import (
     StartupCheckFailed,
     StartupScenario,
     check_config_hash,
+    check_kill_switch_present,
     check_paper_capital_consistency,
     check_webhook_endpoint,
     detect_startup_scenario,
@@ -2149,6 +2150,16 @@ def _main_locked(args, config_dir: Path) -> int:
             extra={"mode": "OFF_FLAT", "flat_value_rs": ps_cfg.flat_value_rs},
         )
         print(f"Tier multiplier: OFF (flat Rs {ps_cfg.flat_value_rs:.0f}/order, safety ceilings active)")
+
+    # Q4(b) capital-safety: LIVE requires a real kill_switch wired into the RiskEngine
+    # we are about to build. Boot-time fail-fast (a day not started beats a day run
+    # without the emergency brake). RiskEngine's runtime warn+skip is left UNCHANGED.
+    try:
+        check_kill_switch_present(kill_switch=kill_switch, is_paper=is_paper, logger=_log)
+    except StartupCheckFailed as exc:
+        _log.critical("q4b_kill_switch_missing_live: %s", exc)
+        store.close()
+        return 3
 
     risk_cfg = app_config.system.risk
     # BUILD 1 (#3, 24-Jun): the FIX-190 live_test_mode swap was REMOVED. The

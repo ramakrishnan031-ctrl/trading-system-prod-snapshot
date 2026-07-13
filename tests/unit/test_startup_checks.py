@@ -44,6 +44,7 @@ from utils.startup_checks import (
     detect_startup_scenario,
     check_clock_skew,
     check_config_hash,
+    check_kill_switch_present,
     check_paper_capital_consistency,
     check_scanner_connectivity,
     reset_scanner_warnings,  # FIX-D
@@ -1354,6 +1355,53 @@ def test_f1_ef7_startup_check_noop_in_live_mode(tmp_path: Path) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Q4(b) -- check_kill_switch_present (LIVE requires a real kill_switch)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_q4b_kill_switch_missing_live_raises(tmp_path: Path) -> None:
+    """LIVE + kill_switch=None -> StartupCheckFailed + CRITICAL grep-tagged log."""
+    logger = MagicMock()
+    try:
+        check_kill_switch_present(kill_switch=None, is_paper=False, logger=logger)
+    except StartupCheckFailed as exc:
+        assert "LIVE" in str(exc) and "kill_switch" in str(exc)
+        critical = [c for c in logger.critical.call_args_list
+                    if "KILL_SWITCH_MISSING_LIVE" in str(c)]
+        assert len(critical) == 1
+        print("  OK Q4(b) live + kill_switch=None aborts startup")
+        return
+    raise AssertionError("check_kill_switch_present did not raise in live mode with None")
+
+
+def test_q4b_kill_switch_present_live_ok(tmp_path: Path) -> None:
+    """LIVE + a real kill_switch -> no raise, info OK log."""
+    logger = MagicMock()
+    check_kill_switch_present(kill_switch=MagicMock(), is_paper=False, logger=logger)
+    logger.critical.assert_not_called()
+    assert any("check_kill_switch_present: OK" in str(c) for c in logger.info.call_args_list)
+    print("  OK Q4(b) live + kill_switch present passes")
+
+
+def test_q4b_kill_switch_missing_paper_warns_not_raises(tmp_path: Path) -> None:
+    """PAPER + kill_switch=None -> WARNING (wiring bug), but NOT a startup abort."""
+    logger = MagicMock()
+    check_kill_switch_present(kill_switch=None, is_paper=True, logger=logger)  # must not raise
+    logger.critical.assert_not_called()
+    assert any("kill_switch is None in PAPER mode" in str(c) for c in logger.warning.call_args_list)
+    print("  OK Q4(b) paper + kill_switch=None warns, does not abort")
+
+
+def test_q4b_kill_switch_present_paper_ok(tmp_path: Path) -> None:
+    """PAPER + a real kill_switch -> no raise, no warning, info OK log."""
+    logger = MagicMock()
+    check_kill_switch_present(kill_switch=MagicMock(), is_paper=True, logger=logger)
+    logger.critical.assert_not_called()
+    logger.warning.assert_not_called()
+    assert any("check_kill_switch_present: OK" in str(c) for c in logger.info.call_args_list)
+    print("  OK Q4(b) paper + kill_switch present passes")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner (no pytest dependency)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1483,6 +1531,11 @@ def run_all_tests() -> int:
         test_f1_ef7_startup_check_fires_on_divergence,
         test_f1_ef7_startup_check_passes_on_match,
         test_f1_ef7_startup_check_noop_in_live_mode,
+        # check_kill_switch_present (Q4(b))
+        test_q4b_kill_switch_missing_live_raises,
+        test_q4b_kill_switch_present_live_ok,
+        test_q4b_kill_switch_missing_paper_warns_not_raises,
+        test_q4b_kill_switch_present_paper_ok,
     ]
 
     print("=" * 70)

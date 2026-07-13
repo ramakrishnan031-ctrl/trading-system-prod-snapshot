@@ -1002,6 +1002,56 @@ def check_paper_capital_consistency(
     )
 
 
+def check_kill_switch_present(
+    kill_switch,
+    is_paper: bool,
+    logger,
+) -> None:
+    """
+    Q4(b) boot-time capital-safety guard: LIVE trading REQUIRES a real kill_switch.
+
+    RiskEngine accepts kill_switch=None and, at RUNTIME, merely logs a WARNING and SKIPS
+    the KILL_SWITCH gate for every trade (defense-in-depth: the hot path must never crash
+    on a missing brake). That runtime degrade is correct and is left UNCHANGED here -- we
+    do NOT flip the runtime gate. But it means a wiring regression that dropped the
+    kill_switch would run LIVE fully unprotected while only whispering a warning. This
+    check promotes that silent runtime degrade to a LOUD boot-time stop: in live mode a
+    missing kill_switch aborts startup. A trading day not started beats a trading day run
+    without the emergency brake.
+
+    Paper mode: a missing kill_switch is a wiring bug worth a WARNING, not a startup abort
+    (paper places no real orders). Parity is preserved -- the SAME wiring is asserted in
+    both modes; only the severity (abort vs warn) differs with real-money exposure.
+
+    Raises StartupCheckFailed when live and kill_switch is None.
+    """
+    if kill_switch is not None:
+        logger.info(
+            "check_kill_switch_present: OK (kill_switch wired; mode=%s)",
+            "paper" if is_paper else "live",
+        )
+        return
+
+    if is_paper:
+        logger.warning(
+            "check_kill_switch_present: kill_switch is None in PAPER mode -- a wiring bug "
+            "(RiskEngine will skip the KILL_SWITCH gate). Non-fatal in paper; MUST be fixed "
+            "before live."
+        )
+        return
+
+    logger.critical(
+        "KILL_SWITCH_MISSING_LIVE kill_switch=None in LIVE mode -- RiskEngine would skip "
+        "the KILL_SWITCH gate for every trade. Aborting startup."
+    )
+    raise StartupCheckFailed(
+        "kill_switch is None in LIVE mode: RiskEngine would silently skip the KILL_SWITCH "
+        "gate for every trade (unprotected live trading). Wire a real KillSwitch into the "
+        "RiskEngine before starting live. Boot-time guard only -- the RiskEngine runtime "
+        "degrade (warn+skip) is intentionally left unchanged."
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SC11 -- Secret env var presence check
 # ─────────────────────────────────────────────────────────────────────────────
