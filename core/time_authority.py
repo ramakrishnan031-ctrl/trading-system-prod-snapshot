@@ -23,7 +23,7 @@ How It Works:
 
 Inputs:
     - Broker timestamps via record_broker_skew() (called by Layer 3)
-    - Callback via set_critical_skew_callback() (wired by main.py)
+    - Callbacks via configure(on_critical_skew=..., ...) (wired by main.py)
     - Thresholds via configure() or defaults
 
 Outputs:
@@ -118,14 +118,18 @@ def now_ist_iso() -> str:
 # Public API — Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
+# M-K4: sentinel distinguishing "argument not provided" from an explicit None.
+_UNSET = object()
+
+
 def configure(
     thresholds: Optional[dict] = None,
-    on_critical_skew: Optional[Callable[[float, str], None]] = None,
-    on_alert_skew: Optional[Callable[[float, str], None]] = None,
-    on_warn_skew: Optional[Callable[[float, str], None]] = None,
+    on_critical_skew: Optional[Callable[[float, str], None]] = _UNSET,
+    on_alert_skew: Optional[Callable[[float, str], None]] = _UNSET,
+    on_warn_skew: Optional[Callable[[float, str], None]] = _UNSET,
 ) -> None:
     """
-    Configure thresholds and callbacks. Called once at startup by main.py.
+    Configure thresholds and callbacks. Called at startup by main.py.
 
     Args:
         thresholds: dict with keys warn_sec, alert_sec, halt_sec,
@@ -134,6 +138,13 @@ def configure(
         on_critical_skew: callback(skew_sec, reason) fired when avg skew > halt_sec
         on_alert_skew:    callback(skew_sec, reason) fired when avg skew > alert_sec
         on_warn_skew:     callback(skew_sec, reason) fired when avg skew > warn_sec
+
+    M-K4: each callback is (re)assigned ONLY when its argument is explicitly passed.
+    A configure(thresholds=...) call that omits the callbacks now PRESERVES the wired
+    callbacks instead of silently wiping them to None — which would disarm the HALT-tier
+    critical-skew soft-kill. Pass an explicit None to clear one; call reset() to clear all
+    (tests). Before this fix the callbacks defaulted to None, so any thresholds-only
+    reconfigure dropped the critical brake.
     """
     global _on_critical_skew, _on_alert_skew, _on_warn_skew, _skew_window
 
@@ -145,9 +156,12 @@ def configure(
             if new_size != _skew_window.maxlen:
                 _skew_window = deque(maxlen=new_size)
 
-        _on_critical_skew = on_critical_skew
-        _on_alert_skew = on_alert_skew
-        _on_warn_skew = on_warn_skew
+        if on_critical_skew is not _UNSET:
+            _on_critical_skew = on_critical_skew
+        if on_alert_skew is not _UNSET:
+            _on_alert_skew = on_alert_skew
+        if on_warn_skew is not _UNSET:
+            _on_warn_skew = on_warn_skew
 
 
 # ─────────────────────────────────────────────────────────────────────────────

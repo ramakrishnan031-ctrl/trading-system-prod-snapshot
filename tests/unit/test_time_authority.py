@@ -28,6 +28,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.time_authority import (
@@ -59,6 +61,17 @@ def broker_ts_offset(offset_sec: float) -> datetime:
 
 def setup() -> None:
     """Reset time_authority state before each test."""
+    reset()
+
+
+@pytest.fixture(autouse=True)
+def _reset_time_authority():
+    """M-K4: guarantee per-test isolation. The module-level setup() above is nose-style
+    and is NOT auto-invoked by pytest, so isolation used to rely on configure() clobbering
+    all three callbacks on every call. Now that configure() preserves un-passed callbacks
+    (M-K4 fix), reset() MUST run before each test — this autouse fixture makes it so."""
+    reset()
+    yield
     reset()
 
 
@@ -328,6 +341,22 @@ def test_configure_updates_thresholds() -> None:
     assert status["thresholds"]["alert_sec"] == 20.0
     assert status["thresholds"]["halt_sec"] == 30.0  # unchanged default
     print(f"  OK configure() updated thresholds: warn=10, alert=20, halt=30")
+
+
+def test_mk4_thresholds_only_configure_preserves_callbacks() -> None:
+    """M-K4: a configure(thresholds=...) that omits the callbacks must PRESERVE the wired
+    callbacks. Wiping the critical-skew callback to None silently disarms the HALT-tier
+    soft-kill. RED on pre-fix code (the callback -> None, so it never fires)."""
+    fired = []
+    configure(on_critical_skew=lambda s, r: fired.append(("halt", s, r)))
+    # a later runtime re-tune of thresholds ONLY must not drop the wired critical callback
+    configure(thresholds={"warn_sec": 5.0})
+    # drive a HALT-tier skew (5 samples at 35s > halt_sec 30, count >= min_samples 3)
+    result = None
+    for _ in range(5):
+        result = record_broker_skew(broker_ts_offset(35.0))
+    assert result.tier == "HALT", f"expected HALT, got {result.tier}"
+    assert fired, "critical-skew callback was wiped by a thresholds-only configure() (M-K4)"
 
 
 def test_configure_with_custom_window_size() -> None:
