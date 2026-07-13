@@ -1546,9 +1546,36 @@ CREATE TABLE IF NOT EXISTS pb01_watchlist (
 CREATE INDEX IF NOT EXISTS idx_pb01_watchlist_trading_date
     ON pb01_watchlist(trading_date);
 
+-- ═════════════════════════════════════════════════════════════════════════════
+-- TABLE 50: daily_symbol_stats   (M-S4 — pre-market daily-stats cache, schema v44)
+-- Per-(symbol, trading_date) daily statistics computed PRE-MARKET (~08:30 cron, AFTER
+-- the token refresh) from daily candles that CLOSED BEFORE trading_date, via the shared
+-- rate-limited OhlcFetcher. The screener's _build_market_data does an O(1) READ of this
+-- table to wire the previously-dead scorer inputs (volume_surge / atr_filter / rsi_range)
+-- WITHOUT any hot-path broker fetch. A cache MISS -> the screener keeps today's fail-safe
+-- (0.0 / 0.5); this table NEVER blocks, fetches on the hot path, or fabricates a value.
+-- All behind a default-OFF wiring flag until the M-S4 threshold re-fit ships (GATE 1).
+-- PURE ADDITION (same pattern as v43 pb01_watchlist / v38 retest_state); no
+-- MIGRATION_TABLES entry, nothing rebuilt. The trailing INSERT bumps to v44.
+-- ═════════════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS daily_symbol_stats (
+    symbol          TEXT NOT NULL,
+    trading_date    TEXT NOT NULL,          -- YYYY-MM-DD IST; the session these stats are FOR
+                                            -- (computed ONLY from candles closed BEFORE it — NO lookahead).
+    prev_close      REAL,                   -- previous session's daily close.
+    avg_volume_20d  REAL,                   -- SMA of daily volume over the 20 sessions before trading_date.
+    atr14           REAL,                   -- Wilder ATR(14) on daily candles (the atr_filter ADR% input).
+    rsi14           REAL,                   -- Wilder RSI(14) on daily closes (the rsi_range input).
+    computed_at     TEXT NOT NULL,          -- ISO-8601 IST when the row was computed (staleness / audit).
+    PRIMARY KEY (symbol, trading_date)      -- natural dedupe + O(1) point lookup by the screener.
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_symbol_stats_date
+    ON daily_symbol_stats(trading_date);
+
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '43');  -- 10b: +pb01_watchlist (PB-01 overnight watchlist). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '44');  -- M-S4: +daily_symbol_stats (pre-market scorer-input cache). Pure addition — no rebuild.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

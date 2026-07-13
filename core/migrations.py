@@ -84,6 +84,10 @@ Version map
                  v39 excursion_reconstruction_runs, v40 control_tower_* (5 tables),
                  v41 config_snapshots (W0 report-redesign foundation: the FULL
                  resolved config per date, written by core/config_snapshotter.py).
+    v41 -> v44 : all pure additions (NO MIGRATION_TABLES entry, nothing rebuilt) —
+                 v42 eod_broker_reconciliation (P1 SHADOW broker reconciliation),
+                 v43 pb01_watchlist (Step 10b PB-01 overnight watchlist),
+                 v44 daily_symbol_stats (M-S4 pre-market scorer-input cache).
 """
 from __future__ import annotations
 

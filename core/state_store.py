@@ -99,7 +99,7 @@ def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 43  # 10b: +pb01_watchlist (PB-01 overnight watchlist). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 44  # M-S4: +daily_symbol_stats (pre-market scorer-input cache). Pure addition — no rebuild.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
