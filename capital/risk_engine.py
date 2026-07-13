@@ -247,7 +247,11 @@ class RiskEngine:
 
         # Sector lookup — RE9: exception → "UNKNOWN", log WARNING, do not reject
         sector = self._resolve_sector(symbol)
-        existing_sector_margin = self._store.sector_exposure(sector)
+        existing_sector_margin = self._store.sector_exposure(sector)   # DB truth (trade rows only)
+        # FIX-185-class TOCTOU close: harden the SECTOR_EXPOSURE gate with reserved-not-placed
+        # reservations. The snapshot's sector_pct below intentionally keeps DB truth (reporting
+        # unchanged); ONLY the gate consumes the effective (hardened) value.
+        effective_sector_margin = self._effective_sector_margin(sector, existing_sector_margin)
 
         # Duplicate symbol check data
         has_dup = self._store.has_active_position(symbol)
@@ -285,7 +289,7 @@ class RiskEngine:
             checks_run, snapshot, snap, sizing_result,
             active_count, open_count, in_flight_count, daily_count,
             settled_today,
-            consec, existing_sector_margin, has_dup, kill_active,
+            consec, effective_sector_margin, has_dup, kill_active,
             processor_in_flight_count,
             symbol, side, active_direction,
             open_delivery_count, daily_delivery_count,   # PHASE-3 (A)
@@ -306,6 +310,54 @@ class RiskEngine:
     # Internal helpers
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _effective_sector_margin(
+        self, sector: str, existing_sector_margin: float,
+    ) -> float:
+        """
+        FIX-185-class TOCTOU close for the SECTOR_EXPOSURE gate.
+
+        `existing_sector_margin` (StateStore.sector_exposure) sums TRADE ROWS only, so a
+        RESERVED-NOT-PLACED reservation — fund_manager.reserve() succeeded but its PENDING_FILL
+        trade row is written later, OUTSIDE portfolio_lock — is invisible here, and two concurrent
+        same-sector signals can each read stale exposure and together breach _max_sector_pct.
+        approve() runs inside portfolio_lock (same seam the FIX-185 count gate already reads
+        reservations from), so the live reservation set is a consistent read.
+
+        Partition so every unit is counted EXACTLY ONCE (mirrors the FIX-185 count partition):
+          • open_partial = sector_exposure(sector, statuses=("OPEN","PARTIAL")) — trade rows whose
+            reservation was already popped at fill, hence NOT in get_live_reservations().
+          • reserved     = Σ margin of live reservations in this sector = reserved-not-placed
+            PLUS any PENDING_FILL still holding its reservation.
+        open_partial + reserved therefore never double-counts a PENDING_FILL.
+
+        Returns max(existing, open_partial + reserved): floored by DB truth (covers a restart that
+        lost in-memory reservations but kept PENDING_FILL rows) and can ONLY harden, never loosen.
+        Degrades to DB truth — but LOUDLY (never silently) — if the fund_manager predates
+        get_live_reservations() or the read raises.
+        """
+        get_res = getattr(self._fm, "get_live_reservations", None)
+        if not callable(get_res):
+            self._log.warning(
+                "risk_engine.sector_toctou_degraded sector=%s reason=no_get_live_reservations "
+                "-- SECTOR_EXPOSURE using DB truth only; reserved-not-placed window NOT closed",
+                sector,
+            )
+            return existing_sector_margin
+        try:
+            reserved = sum(
+                r.margin for r in get_res().values()
+                if self._resolve_sector(r.symbol) == sector
+            )
+            open_partial = self._store.sector_exposure(sector, statuses=("OPEN", "PARTIAL"))
+            return max(existing_sector_margin, open_partial + reserved)
+        except Exception as exc:   # hardening must never break approve(); degrade loudly
+            self._log.warning(
+                "risk_engine.sector_toctou_degraded sector=%s reason=%r "
+                "-- SECTOR_EXPOSURE using DB truth only; reserved-not-placed window NOT closed",
+                sector, exc,
+            )
+            return existing_sector_margin
+
     def _run_checks(
         self,
         checks_run: List[str],
@@ -318,7 +370,7 @@ class RiskEngine:
         daily_count: int,
         settled_today: int,
         consec: int,
-        existing_sector_margin: float,
+        effective_sector_margin: float,
         has_dup: bool,
         kill_active: bool,
         processor_in_flight_count: int,
@@ -544,10 +596,11 @@ class RiskEngine:
                 f"(realized={daily_pnl:.2f}{u_note}), limit={limit:.2f}",
             )
 
-        # 8. SECTOR_EXPOSURE — existing + this trade <= max_pct * total (RE6)
+        # 8. SECTOR_EXPOSURE — effective + this trade <= max_pct * total (RE6 +
+        #    FIX-185-class TOCTOU: effective_sector_margin already folds in reserved-not-placed)
         checks_run.append("SECTOR_EXPOSURE")
         if snap.total > 0:
-            projected = existing_sector_margin + sizing_result.margin_required
+            projected = effective_sector_margin + sizing_result.margin_required
             if projected > self._max_sector_pct * snap.total:
                 return reject(
                     "SECTOR_EXPOSURE",
