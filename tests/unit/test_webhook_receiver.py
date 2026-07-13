@@ -430,6 +430,43 @@ def test_queue_full_on_individual_signal_returns_503():
     print("  OK queue full -> QUEUE_FULL status + 503")
 
 
+def test_ms2_queue_full_then_retry_is_accepted_not_duplicate():
+    """M-S2: QUEUE_FULL is backpressure (503 'retry later'), NOT a duplicate. After the
+    queue drains, the sender's retry of the SAME signal must be ACCEPTED — pre-fix the
+    dedup cache AND the DB fingerprint row both bounced it as DUPLICATE for the whole 300s
+    window, so backpressure recovery was impossible. RED on pre-fix code."""
+    sq = queue.Queue(maxsize=1)
+    receiver, _, store = _make_receiver(sq=sq, capacity=50, bp_pct=0.9, expiry=3600)
+    tcs_ts = _now_str()
+
+    with receiver.app.test_client() as client:
+        # RELIANCE fills the queue (maxsize=1)
+        r1 = client.post("/webhook/gap_go_long",
+                         json=_valid_payload(stocks="RELIANCE", prices="2500.0"))
+        assert r1.get_json()["results"][0]["status"] == "ACCEPTED"
+
+        # TCS -> queue physically full -> QUEUE_FULL + 503
+        r2 = client.post("/webhook/gap_go_long",
+                         json=_valid_payload(stocks="TCS", prices="3650.0", triggered_at=tcs_ts))
+        assert r2.status_code == 503
+        assert r2.get_json()["results"][0]["status"] == "QUEUE_FULL"
+
+        # Backpressure clears (queue drained); the sender retries the SAME signal.
+        sq.get_nowait()
+        receiver.release_in_flight("TCS")   # defensive — QUEUE_FULL path already released it
+
+        r3 = client.post("/webhook/gap_go_long",
+                         json=_valid_payload(stocks="TCS", prices="3650.0", triggered_at=tcs_ts))
+        assert r3.status_code == 200, r3.get_json()
+        assert r3.get_json()["results"][0]["status"] == "ACCEPTED", r3.get_json()
+
+    # the re-accept REUSED the QUEUE_FULL row (no orphan) and flipped it back to QUEUED
+    rows = store.fetch_all("SELECT status FROM signals WHERE symbol = 'TCS'")
+    assert len(rows) == 1, f"expected 1 TCS row (reused), got {len(rows)}"
+    assert rows[0]["status"] == "QUEUED", rows[0]["status"]
+    print("  OK M-S2 QUEUE_FULL -> drain -> retry ACCEPTED (backpressure recovery)")
+
+
 def test_duplicate_same_fingerprint_same_minute():
     """Same scanner+symbol+minute returns per-stock DUPLICATE on second call."""
     receiver, sq, _ = _make_receiver()

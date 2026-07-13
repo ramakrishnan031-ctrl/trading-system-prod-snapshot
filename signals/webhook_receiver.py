@@ -823,7 +823,38 @@ class WebhookReceiver:
                     ),
                 )
         except sqlite3.IntegrityError:
-            # Race: another concurrent request inserted same fingerprint first
+            # A row with this (fingerprint, fingerprint_date) already exists.
+            # M-S2: if it is a QUEUE_FULL backpressure row (inserted, but never queued
+            # because the queue was full), THIS request is a legitimate 503 retry — flip that
+            # row back to QUEUED and re-queue it, reusing its signal_id (audit row preserved).
+            # Otherwise it is a genuine concurrent duplicate.
+            existing = self._store.fetch_one(
+                "SELECT signal_id, status FROM signals "
+                "WHERE fingerprint = ? AND fingerprint_date = ?",
+                (fingerprint, today_iso),
+            )
+            if existing is not None and existing["status"] == "QUEUE_FULL":
+                requeue = (existing["signal_id"], scanner_name, symbol, price, triggered_at)
+                try:
+                    self._queue.put_nowait(requeue)
+                except queue.Full:
+                    # still backpressured — roll the cache claim back so the NEXT retry works
+                    with self._dedup_lock:
+                        self._dedup_cache.pop(dedup_key, None)
+                    self._release_in_flight(symbol)
+                    return {"symbol": symbol, "status": "QUEUE_FULL"}
+                try:
+                    with self._store.transaction() as cur:
+                        cur.execute(
+                            "UPDATE signals SET status = 'QUEUED' WHERE signal_id = ?",
+                            (existing["signal_id"],),
+                        )
+                except Exception as upd_exc:
+                    self._log.error(
+                        f"Failed to flip re-queued signal {existing['signal_id']} "
+                        f"to QUEUED: {upd_exc}")
+                return {"symbol": symbol, "status": "ACCEPTED",
+                        "signal_id": existing["signal_id"]}
             self._release_in_flight(symbol)
             return {"symbol": symbol, "status": "DUPLICATE"}
 
@@ -832,7 +863,7 @@ class WebhookReceiver:
         try:
             self._queue.put_nowait(entry)
         except queue.Full:
-            # Mark QUEUE_FULL in DB so signal is not silently lost
+            # Mark QUEUE_FULL in DB so the signal is not silently lost (audit row kept).
             try:
                 with self._store.transaction() as cur:
                     cur.execute(
@@ -841,6 +872,13 @@ class WebhookReceiver:
                     )
             except Exception as upd_exc:
                 self._log.error(f"Failed to mark QUEUE_FULL for {signal_id}: {upd_exc}")
+            # M-S2: QUEUE_FULL is backpressure, NOT a duplicate. Roll back the fast-path
+            # dedup CACHE claim written above so the sender's 503 retry passes the cache
+            # check and reaches the re-accept path (the DB QUEUE_FULL row is recognised
+            # there and re-queued). Without this the retry is bounced as DUPLICATE for the
+            # whole dedup window and backpressure recovery is impossible.
+            with self._dedup_lock:
+                self._dedup_cache.pop(dedup_key, None)
             self._release_in_flight(symbol)
             return {"symbol": symbol, "status": "QUEUE_FULL"}
 
