@@ -52,6 +52,10 @@ from reports.style_constants import (
 from core.time_authority import now_ist
 from utils.holiday_guard import is_trading_day
 
+# M-R2 (audit 04-Jul): CLOSED_MANUAL trades ARE closed with realized P&L; the report
+# filtered status=='CLOSED' only, understating P&L on any EOD-close day. Single source:
+_CLOSED_STATUSES = ("CLOSED", "CLOSED_MANUAL")
+
 log = logging.getLogger("daily_report")
 
 
@@ -469,7 +473,7 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
     row += 1
 
     row = section_header("Section C — P&L Summary", row)
-    closed_trades = [t for t in data.trades if t.get("status") == "CLOSED"]
+    closed_trades = [t for t in data.trades if t.get("status") in _CLOSED_STATUSES]
     gross_pnl = sum(t.get("gross_pnl") or 0.0 for t in closed_trades)
     total_costs = sum(t.get("charges") or 0.0 for t in closed_trades)
     net_pnl = sum(t.get("net_pnl") or 0.0 for t in closed_trades)
@@ -570,7 +574,7 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
 def _generate_tune_suggestions(data: ReportData) -> List[str]:
     """Generate auto-tuning suggestions based on trade outcomes."""
     suggestions = []
-    closed_trades = [t for t in data.trades if t.get("status") == "CLOSED"]
+    closed_trades = [t for t in data.trades if t.get("status") in _CLOSED_STATUSES]
 
     for t in closed_trades:
         symbol = t.get("symbol", "?")
@@ -901,7 +905,7 @@ def build_sheet_2_orders(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
         qty_filled = trade.get("qty_filled", 0)
         roi_pct = (net_pnl / (fill_entry * qty_filled) * 100) if fill_entry and qty_filled else 0
 
-        is_closed = trade.get("status") == "CLOSED"
+        is_closed = trade.get("status") in _CLOSED_STATUSES
         cost_brokerage_db = trade.get("cost_brokerage")
         charges_total = trade.get("charges")
         if not is_closed or charges_total is None:
@@ -1240,7 +1244,7 @@ def build_sheet_4_candles(
     signal_map = {s.get("signal_id"): s for s in data.signals}
 
     # Filter to only CLOSED trades - exclude CANCELLED to avoid NaN values
-    closed_trades = [t for t in data.trades if t.get("status") == "CLOSED"]
+    closed_trades = [t for t in data.trades if t.get("status") in _CLOSED_STATUSES]
 
     for trade in closed_trades:
         trade_id = trade.get("trade_id", "")
@@ -1501,13 +1505,13 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
         else:
             strategies[strat] = {"trades": [], "signals": 1}
 
-    _PROCESSED_STATUSES = {"PROCESSED", "TRADED", "FILLED", "CLOSED", "PLACED", "SIZED", "APPROVED", "RESERVED"}
+    _PROCESSED_STATUSES = {"PROCESSED", "TRADED", "FILLED", "CLOSED", "CLOSED_MANUAL", "PLACED", "SIZED", "APPROVED", "RESERVED"}
 
     row = 3
     for strat, info in strategies.items():
         trades = info["trades"]
         signals = info["signals"]
-        closed = [t for t in trades if t.get("status") == "CLOSED"]
+        closed = [t for t in trades if t.get("status") in _CLOSED_STATUSES]
 
         wins = [t for t in closed if (t.get("net_pnl") or 0) > 0]
         losses = [t for t in closed if (t.get("net_pnl") or 0) < 0]
@@ -1604,7 +1608,7 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
             if recv_time and start_time <= recv_time < end_time:
                 bucket_signals += 1
 
-        closed = [t for t in bucket_trades if t.get("status") == "CLOSED"]
+        closed = [t for t in bucket_trades if t.get("status") in _CLOSED_STATUSES]
         wins = [t for t in closed if (t.get("net_pnl") or 0) > 0]
         losses = [t for t in closed if (t.get("net_pnl") or 0) < 0]
         be = [t for t in closed if (t.get("net_pnl") or 0) == 0]

@@ -352,6 +352,28 @@ class TestSheetBuilders:
         assert ws.title == "0_EOD_Dashboard"
         assert "EOD Dashboard" in str(ws.cell(row=1, column=1).value)
 
+    def test_dashboard_net_pnl_includes_closed_manual(self, sample_report_data, sample_trade):
+        """M-R2: a CLOSED_MANUAL trade (EOD / manual close) is counted in Net P&L, not dropped.
+        Pre-fix the dashboard filtered status=='CLOSED' only, understating P&L on close days."""
+        import openpyxl
+        import dataclasses
+
+        def _net_pnl(trades):
+            data = dataclasses.replace(sample_report_data, trades=trades)
+            ws = build_sheet_0_dashboard(openpyxl.Workbook(), data)
+            for row in ws.iter_rows():
+                for c in row:
+                    if c.value == "Net P&L":
+                        raw = ws.cell(row=c.row, column=c.column + 1).value
+                        return float(str(raw).replace("₹", "").replace(",", ""))
+            raise AssertionError("Net P&L row not found on the dashboard")
+
+        manual = dict(sample_trade, trade_id="trade-manual",
+                      status="CLOSED_MANUAL", net_pnl=200.0)
+        base = _net_pnl([sample_trade])                 # 930.0 (CLOSED only)
+        with_manual = _net_pnl([sample_trade, manual])  # 930.0 + 200.0
+        assert with_manual == base + 200.0, (base, with_manual)
+
     def test_build_sheet_0_includes_all_sections(self, sample_report_data):
         import openpyxl
         wb = openpyxl.Workbook()
