@@ -85,15 +85,19 @@ def _direction(strategy: str) -> str:
 
 
 def _build_kite(log):
-    """(kite, inst_map, sector_map) or (None, {}, {}) — read-only broker handle for the
-    daily (M-S4) fetch + the 1-min ensure. Same token path as reconstruct_excursions;
-    returns None on any failure (the recorder then records score/decision only)."""
+    """(kite, inst_map, sector_map, hist_fetch) or (None,{},{},None). hist_fetch is a
+    RATE-LIMITED historical closure (P1): it reuses the SAME broker RateLimiter the live
+    OhlcFetcher uses (rate_limiter.acquire("historical"), ≤3 req/sec) so this research job
+    can NEVER trip the broker rate limit and degrade the trading system's own API access.
+    Returns None on any failure (the recorder then records score/decision only)."""
     tok_path = ROOT / "data_store" / "session" / "zerodha_token.json"
     if not tok_path.exists():
         log.warning("forward_shadow.no_token — recording score/decision only")
-        return None, {}, {}
+        return None, {}, {}, None
     try:
         from kiteconnect import KiteConnect
+        from broker.rate_limiter import RateLimiter
+        from core.config_loader import load_all
         api_key = os.environ.get("ZERODHA_API_KEY_LFL836", "")
         access = json.loads(tok_path.read_text()).get("access_token")
         kite = KiteConnect(api_key=api_key); kite.set_access_token(access)
@@ -101,10 +105,16 @@ def _build_kite(log):
         inst = kite.instruments("NSE")
         inst_map = {i["tradingsymbol"]: i["instrument_token"] for i in inst}
         sector_map = {i["tradingsymbol"]: (i.get("segment") or "NSE") for i in inst}  # segment as coarse present-flag
-        return kite, inst_map, sector_map
+        rl = RateLimiter(load_all(ROOT / "config").broker_limits)
+
+        def hist_fetch(token, frm, to, interval):
+            rl.acquire("historical")   # P1: the SAME pacing as _make_sr_fetch_fn (main.py:352)
+            return kite.historical_data(instrument_token=token, from_date=frm, to_date=to, interval=interval)
+
+        return kite, inst_map, sector_map, hist_fetch
     except Exception as exc:  # noqa: BLE001
         log.warning("forward_shadow.broker_connect_failed err=%s — recording score/decision only", exc)
-        return None, {}, {}
+        return None, {}, {}, None
 
 
 def main(argv=None) -> int:
@@ -127,8 +137,9 @@ def main(argv=None) -> int:
     weights = _weights()
     prov = _provenance()
     db_path = Path(args.db) if args.db else (ROOT / "data_store" / "trading_system.db")
-    store = StateStore(db_path)
+    store = None
     try:
+        store = StateStore(db_path)
         rows = store.fetch_all(
             """SELECT s.signal_id, s.score AS old_score, s.step_results, s.market_data_snapshot,
                       sig.symbol, sig.strategy, sig.status AS decision, sig.rejection_reason,
@@ -151,17 +162,16 @@ def main(argv=None) -> int:
         if not rows:
             print(f"forward_shadow: date={date_iso} nothing new ({len(seen)} present)"); return 0
 
-        kite, inst_map, sector_map = (None, {}, {}) if args.dry_run else _build_kite(log)
+        kite, inst_map, sector_map, hist = (None, {}, {}, None) if args.dry_run else _build_kite(log)
         now = now_ist().replace(tzinfo=None)
-        # a 1-min fetcher for ensure_candles (same shape reconstruct_excursions expects)
+        # a 1-min fetcher for ensure_candles (RATE-LIMITED via `hist`; P1)
         def onemin_fetcher(symbol, d):
             t = inst_map.get(symbol)
-            if not t or kite is None:
+            if not t or hist is None:
                 return None
-            frm = now.replace(hour=9, minute=0); to = now.replace(hour=15, minute=31)
-            frm = frm.replace(year=int(d[:4]), month=int(d[5:7]), day=int(d[8:10]))
-            to = to.replace(year=int(d[:4]), month=int(d[5:7]), day=int(d[8:10]))
-            rr = kite.historical_data(t, frm, to, "minute")
+            frm = now.replace(hour=9, minute=0, year=int(d[:4]), month=int(d[5:7]), day=int(d[8:10]))
+            to = now.replace(hour=15, minute=31, year=int(d[:4]), month=int(d[5:7]), day=int(d[8:10]))
+            rr = hist(t, frm, to, "minute")
             return (t, rr) if rr else None
 
         daily_cache: dict = {}
@@ -170,9 +180,9 @@ def main(argv=None) -> int:
                 return daily_cache[symbol]
             st = {"avg_volume_20d": None, "atr14": None, "rsi14": None}
             t = inst_map.get(symbol)
-            if t and kite is not None:
+            if t and hist is not None:
                 try:
-                    dc = [Candle.from_kite(x) for x in kite.historical_data(t, now - timedelta(days=90), now, "day")]
+                    dc = [Candle.from_kite(x) for x in hist(t, now - timedelta(days=90), now, "day")]
                     st = compute_daily_stats(dc, date_iso)
                 except Exception:
                     pass
@@ -230,8 +240,22 @@ def main(argv=None) -> int:
             except Exception:
                 pass
         return 0
+    except Exception as exc:  # noqa: BLE001 — P2: fail-safe + fail-LOUD. A research crash MUST
+        # alert (Telegram sentinel) so a silently-dead recorder is caught, and NEVER affect trading.
+        log.error("forward_shadow.crash err=%s", exc, exc_info=True)
+        try:
+            from alerts.critical import write_critical_sentinel
+            write_critical_sentinel(
+                title="FORWARD SHADOW recorder FAILED (research job; no trading impact)",
+                body=f"forward_shadow_record crashed: {type(exc).__name__}: {exc}",
+                source_module="scripts.forward_shadow_record",
+            )
+        except Exception:  # noqa: BLE001 — alerting must never change the exit path
+            pass
+        return 1
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 if __name__ == "__main__":

@@ -301,6 +301,25 @@ jobs:
     env_wrapper: python_nopath
     log_target: '>> logs/cron-excursions.log 2>&1'
     marker_name: reconstruct_excursions
+  forward_shadow_record:
+    # RESEARCH recorder (records only; no orders, no config change, off the hot path).
+    # 18:15 = well after the 15:30-17:05 EOD window + the 15:40/15:50 candle backfills.
+    # Rate-limited (reuses the broker RateLimiter, <=3 req/sec) + fail-safe & fail-LOUD
+    # (a crash raises a Telegram sentinel; it can never affect trading). Idempotent.
+    script: scripts/forward_shadow_record.py
+    schedule: 18:15 Mon-Fri
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 15 18 * * 1-5
+    command: scripts/forward_shadow_record.py
+    env_wrapper: python_nopath
+    log_target: '>> logs/cron-forward-shadow.log 2>&1'
+    marker_name: forward_shadow_record
   sr_detector_backfill:
     script: scripts/sr_detector_backfill.py
     schedule: 15:58 Mon-Fri
