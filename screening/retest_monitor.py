@@ -322,6 +322,14 @@ class RetestDiverter:
         is_short = side == "SELL"
         if not (is_long or is_short):              # unknown side → normal placement
             return False
+        # M-S6: `divert_committed` flips True the moment the caller MUST NOT place —
+        # either the symbol is already parked (dedup) or we have registered the candidate.
+        # register() adds to the monitor BEFORE it persists and never raises, so once it
+        # runs the candidate WILL fire on retest; a later bookkeeping exception must NOT
+        # fall through to placement (that is the double-order path). Concurrent same-symbol
+        # signals are already serialized upstream by the receiver's atomic _claim_in_flight
+        # (M-1/FIX-011), so this method never runs twice for one symbol in parallel.
+        divert_committed = False
         try:
             zs = self._cache.get(symbol)            # synchronous; miss → None
             if zs is None:
@@ -337,6 +345,7 @@ class RetestDiverter:
             # (overlap invariant). Drop the duplicate signal rather than placing
             # it into the zone.
             if self._monitor.has_symbol(symbol):
+                divert_committed = True          # already parked → caller must NOT place
                 self._store.update_signal_status(
                     signal_id, "REJECTED_RETEST_DUP",
                     "symbol already parked in WAIT_FOR_RETEST")
@@ -360,12 +369,14 @@ class RetestDiverter:
                 state="WAIT_BREAKOUT",
             )
             self._monitor.register(parked)
+            divert_committed = True              # M-S6: register() is authoritative from here
             self._store.update_signal_status(signal_id, "RETEST_WAITING")
             self._log_divert_audit(parked, zone, structure_sl, score)
             return True
         except Exception as exc:
             self._safe_log("error", "retest_diverter: maybe_divert failed for %s: %s", symbol, exc)
-            return False
+            # M-S6: a post-commit bookkeeping failure must NOT fall through to placement.
+            return divert_committed
 
     def _matching_zone(self, zones, entry: float):
         """Nearest required-confidence zone (resistance for LONG / support for

@@ -182,3 +182,75 @@ def test_short_duplicate_symbol_is_dropped_not_double_parked():
     assert _call(d, side="SELL", direction="SHORT") is True         # handled (dropped)
     assert mon.registered == []                                     # NOT parked again
     assert ("SIG1", "REJECTED_RETEST_DUP", "symbol already parked in WAIT_FOR_RETEST") in store.status
+
+
+# ── M-S6: register() success is authoritative (no double-order on post-register failure) ──
+
+class _RaisingStore(_FakeStore):
+    """Raises on the post-register RETEST_WAITING status write, simulating a transient
+    DB failure AFTER the candidate is already registered (the exact M-S6 window)."""
+
+    def update_signal_status(self, sid, status, reason=None):
+        if status == "RETEST_WAITING":
+            raise RuntimeError("simulated DB failure after register()")
+        super().update_signal_status(sid, status, reason)
+
+
+def test_ms6_post_register_exception_does_not_fall_through():
+    """M-S6: register() adds the candidate to the monitor (it WILL fire on retest) BEFORE
+    the RETEST_WAITING status write. If that write raises, maybe_divert must still return
+    True — a False return makes _process_one ALSO place the original order → a real double
+    entry. RED on pre-fix code (the bare `except: return False` returns False here)."""
+    mon, store = _FakeMonitor(), _RaisingStore()
+    d, cache = _diverter(monitor=mon, store=store)
+    cache.put("X", [_high_res()], [])
+    result = _call(d)
+    assert len(mon.registered) == 1, "candidate was registered → it will fire on retest"
+    assert result is True, "post-register failure must NOT fall through to placement (double-order)"
+
+
+def test_ms6_dedup_status_failure_does_not_fall_through():
+    """M-S6 (dedup branch): the symbol is already parked; if the REJECTED_RETEST_DUP status
+    write raises, maybe_divert must still return True (the prior candidate is parked and will
+    fire; placing this one double-orders). RED on pre-fix code."""
+    class _DupRaisingStore(_FakeStore):
+        def update_signal_status(self, sid, status, reason=None):
+            raise RuntimeError("simulated DB failure on dedup status write")
+    mon, store = _FakeMonitor(has=True), _DupRaisingStore()
+    d, cache = _diverter(monitor=mon, store=store)
+    cache.put("X", [_high_res()], [])
+    assert _call(d) is True, "dedup bookkeeping failure must NOT fall through to placement"
+    assert mon.registered == []                                     # not double-parked
+
+
+def test_ms6_concurrent_diverts_never_fall_through():
+    """M-S6 under concurrency (one shared monitor, as in production): N distinct symbols
+    diverted in parallel, each hitting a post-register bookkeeping failure, must ALL return
+    True and register exactly once — never fall through. On pre-fix code every call returns
+    False (every one a double-order path)."""
+    import threading
+
+    N = 24
+    mon = _FakeMonitor()
+    results: dict[int, object] = {}
+    barrier = threading.Barrier(N)
+
+    def run(i):
+        sym = f"S{i}"
+        d, cache = _diverter(monitor=mon, store=_RaisingStore())
+        cache.put(sym, [_high_res()], [])
+        barrier.wait()   # release all threads together to maximise overlap
+        results[i] = d.maybe_divert(
+            signal_id=f"SIG{i}", symbol=sym, side="BUY", direction="LONG",
+            entry_price=100.5, sl_price=98.0, strategy_name="strat",
+            intent="INTRADAY", tier="A", trigger_price=100.4, score=62)
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(N)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    fell_through = [i for i in range(N) if results.get(i) is not True]
+    assert not fell_through, f"diverts fell through to placement (double-order): {fell_through}"
+    assert len(mon.registered) == N, f"expected {N} parked exactly once, got {len(mon.registered)}"
