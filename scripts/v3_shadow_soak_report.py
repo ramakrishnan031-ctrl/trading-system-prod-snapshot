@@ -91,8 +91,8 @@ def scorer_report(since: str | None) -> int:
     print(f"  UNCHANGED %: {100.0 * unchanged / n:.2f}" if n else "  n/a")
     print(f"  UNEXPLAINED: {len(res['unexplained'])}   PARITY_OK: {res['parity_ok']}")
     for v in res["flips"][:40]:
-        print(f"    {v.classification:<10} {v.signal_id}  old={v.old_total} new={v.new_score} "
-              f"tier={v.new_tier} gate={v.gate} :: {v.reason}")
+        print(f"    {v.classification:<10} {v.signal_id}  old={v.old_score} new={v.new_score} "
+              f"tier={v.new_tier} gate={v.gate_reason} :: {v.reason}")
     if res["unexplained"]:
         print("\n  🛑 STOP CONDITION: UNEXPLAINED scorer flip(s) present — "
               "NOT predicted by the offline parity artifact. REVERT v3_hardgate_mode -> off "
