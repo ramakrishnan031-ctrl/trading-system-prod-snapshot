@@ -68,13 +68,13 @@ def _trigger_exists(db: Path, name: str) -> bool:
 def test_newer_db_fails_fast_without_downgrade(tmp_path):
     db = tmp_path / "newer.db"
     # Build a real current-schema DB, then stamp it one version NEWER than code.
-    StateStore(db).close()
+    StateStore(db, allow_migrate=True, market_open=False).close()
     newer = EXPECTED_SCHEMA_VERSION + 1
     _stamp_version(db, newer)
 
     # Re-open with the current code: must REFUSE (fail-fast), not downgrade.
     with pytest.raises(SchemaVersionMismatch):
-        StateStore(db)
+        StateStore(db, allow_migrate=True, market_open=False)
 
     # The stored version must be UNTOUCHED — executescript never ran to stamp
     # it back down (that WAS the silent downgrade the guard now prevents).
@@ -87,10 +87,10 @@ def test_older_db_still_migrates_up(tmp_path):
     # Build a current-schema DB, then stamp it one version OLDER so the
     # `old_version < EXPECTED` migrate-up gate runs. Proves the new
     # `old_version > EXPECTED` guard does not interfere with migrate-up.
-    StateStore(db).close()
+    StateStore(db, allow_migrate=True, market_open=False).close()
     _stamp_version(db, EXPECTED_SCHEMA_VERSION - 1)
 
-    store = StateStore(db)
+    store = StateStore(db, allow_migrate=True, market_open=False)
     try:
         assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
     finally:
@@ -100,7 +100,7 @@ def test_older_db_still_migrates_up(tmp_path):
 # ── T3 — equal/fresh DB → boots + terminal-guard trigger present ─────────────
 def test_equal_version_boots_and_creates_trigger(tmp_path):
     db = tmp_path / "fresh.db"
-    store = StateStore(db)
+    store = StateStore(db, allow_migrate=True, market_open=False)
     try:
         # Equal-version boot (the path every production start takes) is unaffected.
         assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION

@@ -60,24 +60,19 @@ The live process + 23 scripts construct `StateStore`:
 
 ---
 
-## 3 · PROPOSAL (do NOT implement — review required, touches every DB-opening process)
+## 3 · GUARD — RATIFIED DESIGN (Rama + Web Claude + ChatGPT, 14-Jul) — ACCEPTANCE CRITERIA
 
-**Goal:** make "never migrate the live DB mid-session" an *enforced* invariant, not a convention.
+**Decision:** *only the main trading process's boot path may EVER migrate; every other process refuses and fails loudly.* This makes reality match the mental model everyone already holds. (My earlier "refuse 09:00–15:30 for everyone" was the right instinct, wrong boundary — a blanket time-refusal would stop `main.py` from starting after a mid-session crash if a migration were pending, turning a recoverable crash into a **lost session**.)
 
-### Option 1 (recommended) — market-hours refusal in `_initialize_schema`
-Before running `run_migrations`, if a migration is needed **and** `now_ist()` is within the trading window (e.g. 09:00–15:30 on a market day) **and** this is the live DB (not a `--db` copy): **refuse and fail LOUDLY** (raise + CRITICAL sentinel → the alert chain), rather than migrate.
-- **Pro:** a single choke-point (every StateStore goes through `_initialize_schema`); protects even if the off-market-push rule is violated.
-- **Con / trade-off to decide:** a mid-session `main.py` crash-restart with a pending migration would be **blocked** → trading stays down until an off-market migration. That is arguably *correct* (a silent mid-session rebuild of the live trades table is worse), but it is a policy call. Mitigation: the 08:15 boot is before 09:00, so a normal day is unaffected; only a *pending schema change* + a *mid-session restart* hits this.
+- **AC1 — WHO MAY MIGRATE:** EXACTLY ONE — `main.py`'s boot path, via a single explicit auditable entry point: `StateStore(..., allow_migrate=True)` passed **only** at `main.py:1566`. All 23 other StateStore openers get `allow_migrate=False` **by default** → they refuse.
+- **AC2 — SAFE WINDOW:** the boot path ADDITIONALLY refuses while the **market is open**. `main.py` passes `market_open=<computed>`; the guard migrates only when `allow_migrate AND NOT market_open`. A mid-session crash-restart with a pending migration therefore refuses — which is correct: it means a schema change was pushed *during market hours* (already a rule violation), and failing loudly beats silently migrating a live DB under a running market.
+- **AC3 — WHEN BLOCKED: FAIL LOUDLY.** Drop a CRITICAL sentinel naming the exact pending migration (`"schema vN→vN+1 pending; this process may not migrate; it applies at the next off-market boot"`) **and** raise `MigrationNotPermitted`. **Never a silent skip. Never a degraded "run anyway" path.** (A research job silently running against an un-migrated schema is the "reports success while doing nothing" failure found three times already.) The sentinel write is best-effort (a sentinel-dir failure must never mask the raise); the raise is the primary loud signal.
+- **AC4 — RECOVERY:** restart the app off-market (or wait for the 08:15 boot); the migration applies through the ONE sanctioned path. **No manual DB surgery, ever.**
+- **AC5 — PRESERVE** the existing fail-fast on a NEWER-than-code DB exactly as it is (line 349; a different guard, correct as-is; it runs BEFORE this gate).
 
-### Option 2 — explicit opt-in for non-boot processes
-Require `--allow-migrate` (or an env flag) for any process other than `main.py` to run a migration; without it, a non-boot process that finds `old_version < EXPECTED` **refuses + alerts** instead of migrating. Boot migrates; crons/reports/research never silently do.
-- **Pro:** the trigger becomes explicit and auditable.
-- **Con:** touches ~24 call sites; a forgotten flag on a legitimately-first off-market cron blocks a valid migration.
+**Accepted consequence:** if a schema change is deployed and a cron (e.g. the forward-shadow recorder) opens the DB before the next boot, that job **fails loudly and skips a day**. Right trade — one loudly-missed research day beats a silent mid-session migration on the live DB.
 
-### Option 3 (belt) — a deploy-time preflight
-`deploy_preflight` already refuses a mid-session *deploy*. Extend it to detect a **schema bump** in the push and refuse unless the window is off-market AND to name which process will open first. Does not protect against a push that bypasses preflight, so pairs with Option 1/2, not a replacement.
-
-**Recommendation:** Option 1 as the enforced backstop (single choke-point, fail-loud) + Option 3 as the deploy-time nudge. Option 2 is the most invasive and most easily mis-configured. **All three are PROPOSALS — PAUSED pending review.**
+**Implementation:** `core/state_store.py` — `StateStore.__init__(..., *, allow_migrate=False, market_open=False)`; the refuse path drops the sentinel via a **function-local** `alerts.critical` import (no import-time `core→alerts` inversion) and raises `MigrationNotPermitted`. `main.py:1566` passes `allow_migrate=True, market_open=<weekday ∧ 09:15–15:30 IST>`. **Proven:** all 24 openers refuse a pending migration; `main.py`'s boot path migrates off-market; a FORCED blocked migration drops the CRITICAL sentinel (the same discipline as the V2 forced-failure test — an untested alert path is not an alert path).
 
 ---
 

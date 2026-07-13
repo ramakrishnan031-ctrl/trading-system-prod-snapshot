@@ -106,7 +106,7 @@ def test_migration_preserves_data_and_adds_check(tmp_path):
     db = tmp_path / "legacy.db"
     _build_v24(db, signal_status="REJECTED_SCORE_42")
 
-    store = StateStore(db)  # triggers migration
+    store = StateStore(db, allow_migrate=True, market_open=False)  # triggers migration
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
 
     rows = store.fetch_all("SELECT signal_id, status FROM signals")
@@ -121,9 +121,9 @@ def test_migration_preserves_data_and_adds_check(tmp_path):
 def test_migration_idempotent(tmp_path):
     db = tmp_path / "legacy.db"
     _build_v24(db)
-    StateStore(db).close()
+    StateStore(db, allow_migrate=True, market_open=False).close()
     # Re-open: already migrated, must be a no-op and stay at latest version.
-    store = StateStore(db)
+    store = StateStore(db, allow_migrate=True, market_open=False)
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
     assert store.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     store.close()
@@ -135,7 +135,7 @@ def test_migration_failsafe_on_violating_legacy_data(tmp_path):
     _build_v24(db, signal_status="weird_legacy")
 
     with pytest.raises(migrations.MigrationError):
-        StateStore(db)
+        StateStore(db, allow_migrate=True, market_open=False)
 
     # Rolled back: version stays at 24, original row intact, no CHECK applied.
     conn = sqlite3.connect(str(db))
@@ -181,7 +181,7 @@ def test_o1_fk_added_to_existing_table(tmp_path):
     conn.commit()
     conn.close()
 
-    store = StateStore(db)  # migrate v25 -> latest
+    store = StateStore(db, allow_migrate=True, market_open=False)  # migrate v25 -> latest
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
     # data preserved
     assert store.fetch_one("SELECT COUNT(*) AS n FROM screener_results")["n"] == 1
@@ -226,7 +226,7 @@ def test_o4_date_column_added_and_indexed(tmp_path):
     conn.commit()
     conn.close()
 
-    store = StateStore(db)  # migrate v26 -> latest
+    store = StateStore(db, allow_migrate=True, market_open=False)  # migrate v26 -> latest
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
     # generated column computed from existing data
     assert store.fetch_one("SELECT date FROM fm_ledger")["date"] == "2026-06-13"
@@ -281,7 +281,7 @@ def test_o6_analytics_tables_relocated(tmp_path):
     conn.commit()
     conn.close()
 
-    store = StateStore(db)  # migrate v27 -> v28 (relocation)
+    store = StateStore(db, allow_migrate=True, market_open=False)  # migrate v27 -> v28 (relocation)
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
 
     # The analytics file now exists and the main DB no longer holds these tables.
@@ -301,7 +301,7 @@ def test_o6_analytics_tables_relocated(tmp_path):
 
     # Idempotent: re-open does not error and stays at v28 with rows intact.
     store.close()
-    store2 = StateStore(db)
+    store2 = StateStore(db, allow_migrate=True, market_open=False)
     assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION
     assert store2.fetch_one("SELECT COUNT(*) AS n FROM candles")["n"] == 1
     store2.close()
@@ -312,7 +312,7 @@ def test_o6_fresh_build_has_analytics_in_separate_file(tmp_path):
     from core import db_connect
 
     db = tmp_path / "fresh.db"
-    store = StateStore(db)
+    store = StateStore(db, allow_migrate=True, market_open=False)
     main_tables = {r["name"] for r in store.fetch_all(
         "SELECT name FROM sqlite_master WHERE type='table'")}
     assert "candles" not in main_tables
@@ -341,7 +341,7 @@ def test_fresh_and_migrated_table_ddl_converge(tmp_path):
 
     db = tmp_path / "legacy.db"
     _build_v24(db)
-    migrated = StateStore(db)
+    migrated = StateStore(db, allow_migrate=True, market_open=False)
     for t, fsql in fresh_sql.items():
         msql = migrated.fetch_one(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (t,)
@@ -420,7 +420,7 @@ def test_v31_to_v32_tolerance_columns_added(tmp_path):
     db = tmp_path / "mig3132.db"
 
     # 1. Build at the current schema (v32) and seed one trade + one execution row.
-    store = StateStore(db)
+    store = StateStore(db, allow_migrate=True, market_open=False)
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
     with store.transaction() as cur:
         cur.execute(
@@ -452,7 +452,7 @@ def test_v31_to_v32_tolerance_columns_added(tmp_path):
     conn.close()
 
     # 3. Reopen -> run_migrations rebuilds both tables to v32.
-    store2 = StateStore(db)
+    store2 = StateStore(db, allow_migrate=True, market_open=False)
     assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION  # 32
     for tbl in ("trades", "order_execution_log"):
         cols = {r["name"] for r in store2.fetch_all(f"PRAGMA table_info({tbl})")}
@@ -490,7 +490,7 @@ def test_v33_to_v34_sizing_audit_columns_added(tmp_path):
     db = tmp_path / "mig3334.db"
 
     # 1. Build at the current schema (v34) and seed one trade with the new fields.
-    store = StateStore(db)
+    store = StateStore(db, allow_migrate=True, market_open=False)
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION  # 34
     with store.transaction() as cur:
         cur.execute(
@@ -518,7 +518,7 @@ def test_v33_to_v34_sizing_audit_columns_added(tmp_path):
     conn.close()
 
     # 3. Reopen -> run_migrations rebuilds trades to v34.
-    store2 = StateStore(db)
+    store2 = StateStore(db, allow_migrate=True, market_open=False)
     assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION  # 34
     cols = {r["name"] for r in store2.fetch_all("PRAGMA table_info(trades)")}
     assert set(_V34_COLS) <= cols

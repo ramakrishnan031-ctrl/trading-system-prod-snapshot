@@ -131,6 +131,14 @@ class SchemaVersionMismatch(StateStoreError):
     """DB schema version differs from code's expected version."""
 
 
+class MigrationNotPermitted(StateStoreError):
+    """P11 (14-Jul): a schema migration is pending but THIS process may not run it.
+    Only main.py's boot path (allow_migrate=True) may migrate, and only off-market
+    (AC1/AC2). Every other opener — cron, monitor, report, research — refuses and
+    fails LOUDLY here (a CRITICAL sentinel is also dropped) rather than silently
+    migrating the live DB, or worse, running against an un-migrated schema."""
+
+
 class TransactionError(StateStoreError):
     """A transaction failed; the caller should treat its work as not committed."""
 
@@ -165,10 +173,20 @@ class StateStore:
         self,
         db_path: Path,
         schema_path: Path = DEFAULT_SCHEMA_PATH,
+        *,
+        allow_migrate: bool = False,
+        market_open: bool = False,
     ) -> None:
+        # P11 (14-Jul): schema migrations run ON OPEN, so ANY process that opens the
+        # live DB with newer code would silently migrate it. AC1: only main.py's boot
+        # path passes allow_migrate=True; every other opener refuses (default False).
+        # AC2: even the boot path refuses while the market is open (market_open=True).
+        # See MigrationNotPermitted + docs/audit/migration_on_open_rule_14jul2026.md.
+        self._allow_migrate = bool(allow_migrate)
+        self._market_open = bool(market_open)
         self._db_path = Path(db_path)
         self._schema_path = Path(schema_path)
-        
+
         # Per-thread connection storage. Each thread that calls a method
         # on this StateStore gets its own sqlite3.Connection.
         self._tls = threading.local()
@@ -305,6 +323,37 @@ class StateStore:
     # Schema initialization & version check
     # ─────────────────────────────────────────────────────────────────────────
     
+    def _refuse_migration(self, old_version: int, expected: int) -> None:
+        """P11 AC3: a pending migration this process may not run. Drop a CRITICAL sentinel
+        (best-effort — a sentinel-write failure must NEVER mask the raise) and raise
+        MigrationNotPermitted. Never a silent skip, never a 'run anyway' path. Touches
+        nothing in the DB (called BEFORE run_migrations / executescript)."""
+        msg = (
+            f"schema v{old_version} -> v{expected} pending; this process may not migrate the "
+            f"live DB (allow_migrate={self._allow_migrate}, market_open={self._market_open}). It "
+            f"applies at the next OFF-MARKET boot of the trading app. If this IS main.py "
+            f"restarting mid-session, a schema change was pushed during market hours — restart "
+            f"off-market. No manual DB surgery."
+        )
+        _mlog = logging.getLogger("state_store.migrations")
+        _mlog.critical("MIGRATION_REFUSED %s", msg)
+        # Best-effort CRITICAL sentinel via the alert chain. Function-local import so
+        # core.state_store keeps NO import-time dependency on alerts (layer-clean); sentinel
+        # dir = the DB's parent (data_store), matching where alert_watcher looks.
+        try:
+            from alerts.critical import write_critical_sentinel
+            write_critical_sentinel(
+                title="Schema migration refused (non-boot process)",
+                body=msg,
+                source_module="state_store",
+                context={"old_version": old_version, "expected": expected,
+                         "allow_migrate": self._allow_migrate, "market_open": self._market_open},
+                sentinel_dir=self._db_path.parent,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort; the raise below is the primary signal
+            _mlog.error("MIGRATION_REFUSED: sentinel write failed (%s); the raise still stands", exc)
+        raise MigrationNotPermitted(msg)
+
     def _initialize_schema(self) -> None:
         """
         Run schema.sql against the database. Idempotent because schema.sql
@@ -369,6 +418,13 @@ class StateStore:
         # the version untouched so the migration is retried on next startup —
         # never a version that claims success over an un-rebuilt table.
         if old_version is not None and old_version < EXPECTED_SCHEMA_VERSION:
+            # P11 AC1/AC2: a migration is pending. Only main.py's boot path may run it
+            # (allow_migrate=True) AND only off-market (not market_open). Every other
+            # opener — and even the boot path mid-session — REFUSES + fails LOUDLY here,
+            # touching nothing, so the live DB is never migrated by a cron/monitor/report/
+            # research process or under a running market.
+            if not (self._allow_migrate and not self._market_open):
+                self._refuse_migration(old_version, EXPECTED_SCHEMA_VERSION)
             mig_log = logging.getLogger("state_store.migrations")
             migrations.run_migrations(
                 conn,

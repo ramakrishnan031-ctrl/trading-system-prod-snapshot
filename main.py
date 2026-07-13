@@ -1563,7 +1563,25 @@ def _main_locked(args, config_dir: Path) -> int:
     config_validator.register_all_from_app_config(app_config)
 
     # ── Phase 0c: StateStore + EventBus + KillSwitch + TimeAuthority (MAIN6) ─
-    store = StateStore(Path("data_store/trading_system.db"))
+    # P11 (14-Jul): schema migrations run ON OPEN (StateStore.__init__ → _initialize_schema),
+    # so ANY process that opens the live DB with newer code would silently migrate it. AC1:
+    # THIS boot path is the ONLY sanctioned migrator (allow_migrate=True); every other
+    # StateStore opener uses the default False and refuses + fails loud. AC2: even here, refuse
+    # while the market is open — a mid-session crash-restart with a pending migration means a
+    # schema change was pushed during market hours (a rule violation); fail loud, don't rebuild
+    # the live trades table under a running market. See docs/audit/migration_on_open_rule_14jul2026.md.
+    from core.time_authority import now_ist as _now_ist_boot
+    from datetime import time as _dtime_boot
+    _th_boot = app_config.system.trading_hours
+    _now_boot = _now_ist_boot()
+    _mo_boot = _dtime_boot(*map(int, _th_boot.market_open.split(":")))
+    _mc_boot = _dtime_boot(*map(int, _th_boot.market_close.split(":")))
+    _market_open_now = (_now_boot.weekday() < 5) and (_mo_boot <= _now_boot.time() <= _mc_boot)
+    store = StateStore(
+        Path("data_store/trading_system.db"),
+        allow_migrate=True,          # AC1: the single sanctioned migration entry point
+        market_open=_market_open_now,  # AC2: even the boot path refuses while market is open
+    )
     event_bus = EventBus()
 
     # Session mode label used for all Telegram alert titles: "[PAPER]"/"[LIVE]"
