@@ -60,7 +60,32 @@ measure trades M-S4 would have admitted but we never took (no outcome exists). I
 estimate, not a backtest. Small sample (~134, ~2 months, one regime) — **small samples must not drive the
 deployment decision;** n beside every number.
 
-## §4 — The three predefined outcomes (fixed in advance, to defeat confirmation bias)
+## §3 — RESULTS (backfill complete; seed=20260713; 90-day daily fetch; 122/122 symbols; 134/134 trades with full daily stats)
+
+M-S4 shifts scores from **[55,64] → [69,99]** (as predicted). Then, on the REALISED outcomes:
+
+**PRIMARY (all 134, restricted-range: every taken trade passed the old bar):**
+- **T1 rank-correlation (Spearman rho vs realised R):** NEW = **−0.077** · OLD (null) = +0.024. (vs win 0/1: NEW −0.067 / OLD +0.058.) Neither ranks; the fixed score is marginally *negative*.
+- **T2 quintile gradient (the headline) — NO monotonic gradient:** NEW win rates by ascending score = 42/44/41/**26**/41% (top quintile 41% = bottom 42%); OLD = 31/41/44/37/41%. Neither score separates winners from losers.
+- **T3 permutation null (2000 shuffles):** rho_new **INSIDE** the null band [−0.163,+0.172], two-sided p ≈ 0.36 → **no detectable signal.**
+- **T4 (demoted):** top-half by NEW score won **34.3%** vs bottom-half **43.3%** (±~11pp) — the *wrong* direction, within noise.
+
+**EXPLORATORY (T5 near-miss — the funnel-opening question, seed=20260713, 400 of 4,298 sampled, 1% SL/+1.5R TGT approx, no cost):**
+- The 55–59 rejects M-S4 would newly admit: would-be win **38.5%** (±4.8pp), gross exp **−0.104R**, target-hit 28.5% — **SIMILAR to (slightly worse than) the trades we took** (38.8% / −0.007R / 36%).
+
+**Reading:** M-S4 does **not** rank the taken trades better (primary evidence converges on *no signal*), and the trades it would newly admit are **no better**. The deeper finding: **these 10 screening factors — even fully wired — have no detectable predictive power over this trade population** (old *and* fixed scores both fail to separate ~38%-win trades). Consistent with Q2.5–2.8 (no gross edge; the edge, if any, does not live in these factors).
+
+**Caveats (honoured, not buried):** n=134 taken (restricted range attenuates correlation) + 400 near-miss; one regime, ~2 months; T1–T4 measure ranking on trades we ALREADY took (cannot see admitted-but-never-taken — T5 approximates that, exploratorily); the −0.077 rho is *within* noise → the claim is "**no detectable improvement**," NOT "M-S4 is harmful." Partial, directional estimate — not a backtest.
+
+## §4 — VERDICT: **OUTCOME C** (does not improve; do NOT flip)
+
+Per the pre-registered framework, this is **Outcome C: M-S4 does NOT improve ranking/selection on this data** (and marginally inverts, within noise). **DO NOT FLIP M-S4 as a scoring/enforce/selection change** on this evidence — there is no measured benefit to gate on, and the near-misses it would admit are no better.
+
+- The **engineering fix is still worth completing** (a scorer with 4 dead inputs is objectively broken; wire them + re-fit so the *code* is correct and future data can be measured). But that is an engineering correctness fix, **not** a justification to change live selection.
+- **Re-measure on FRESH forward shadow data** before ever reconsidering an enforce — this backfill is an estimate; a live re-measure on the fixed scorer is the proof, and it may differ (different regime, unrestricted range).
+- **The bigger, harder finding to surface to Rama:** the screening-score approach (these 10 factors) shows no predictive power here. If the system is to develop an edge, it likely needs a *different* signal source (the V3 S&R/regime/playbook chain, or better entry logic) — not a re-weighting of these factors. This is exactly the kind of thing far cheaper to learn from a backfill than from live capital.
+
+### The three predefined outcomes (for the record)
 
 - **A. Admitted set CLEARS the 43.5% bar** → M-S4 plausibly flips the book → proceed to flip (off-market,
   supervised session).
