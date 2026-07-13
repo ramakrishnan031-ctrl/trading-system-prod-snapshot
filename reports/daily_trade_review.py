@@ -1048,9 +1048,14 @@ def build_reconciliation(store: StateStore, date_iso: str,
     lr = store.fetch_one("SELECT COALESCE(SUM(pnl_delta),0.0) r FROM fm_ledger "
                          "WHERE date=? AND entry_type='RELEASE_USED'", (date_iso,))
     ledger_realized = round(_f(lr["r"]) or 0.0, 2)
-    tr = store.fetch_one("SELECT COALESCE(SUM(net_pnl),0.0) r FROM trades WHERE substr(created_at,1,10)=? "
-                         "AND status IN ('CLOSED','CLOSED_MANUAL')", (date_iso,))
-    trades_realized = round(_f(tr["r"]) or 0.0, 2)
+    # M-R3: key trades_realized by the CLOSE date, not created_at, so it lines up with the
+    # ledger's close-date RELEASE_USED sum above. An overnight/CNC trade created on day D but
+    # closed on D+1 realises its P&L on D+1 in the ledger; keying trades by created_at put it
+    # on D -> a false "capital corruption" FAIL on the date seam. Reuse get_today_closed_pnl
+    # (the M-K1-corrected close-date sum via substr(COALESCE(exit_time,updated_at))) rather
+    # than duplicate the query. Byte-identical for the intraday-only book (created == closed
+    # same day); correct once delivery/overnight trading is enabled.
+    trades_realized = round(store.get_today_closed_pnl(date_iso), 2)
     drift = round(abs(ledger_realized - trades_realized), 2)
     if opening is None:
         cap_status, cap_detail = "PENDING_CAPTURE", "no fm_ledger INIT row (non-trading day / fresh DB)"

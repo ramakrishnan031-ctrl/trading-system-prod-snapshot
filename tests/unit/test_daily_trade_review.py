@@ -354,6 +354,40 @@ def test_reconciliation_pass_then_fail_injection(tmp_path):
         store.close()
 
 
+def test_mr3_capital_block_keys_trades_by_close_date_not_created(tmp_path):
+    """M-R3: Block-4 CAPITAL must key trades_realized by the CLOSE date (to line up with the
+    ledger's close-date RELEASE_USED), not created_at. An overnight trade created on D but
+    closed on D+1 realises its P&L on D+1; keying by created_at summed 0 on D+1 -> a false
+    'capital corruption' FAIL on the date seam. RED on pre-fix code (drift 11 -> FAIL)."""
+    store = StateStore(tmp_path / "mr3.db")
+    try:
+        prev, day = "2026-06-29", "2026-06-30"
+        prev_ts, day_ts = f"{prev}T14:00:00+05:30", f"{day}T09:45:00+05:30"
+        with store.transaction() as cur:
+            cur.execute(
+                "INSERT INTO signals (signal_id,symbol,scanner,strategy,triggered_at,"
+                "received_at,expires_at,status,fingerprint,fingerprint_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                ("s_on", "ACME", "scan1", "strat1", prev_ts, prev_ts, prev_ts, "TRADED", "s_on", prev))
+            cur.execute(
+                "INSERT INTO trades (trade_id,signal_id,symbol,direction,strategy,qty_planned,"
+                "qty_filled,entry_target_price,sl_initial,tgt_initial,margin_reserved,risk_amount,"
+                "created_at,status,order_protocol,updated_at,net_pnl,exit_time) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("t_on", "s_on", "ACME", "LONG", "strat1", 10, 10, 100.0, 98.0, 104.0, 200.0, 20.0,
+                 prev_ts, "CLOSED", "LIMIT_TRIPLE", day_ts, -11.0, day_ts))  # created D, closed D+1
+        # ledger INIT + RELEASE_USED both on the CLOSE day (_seed_ledger stamps ts=_TS=2026-06-30)
+        _seed_ledger(store, [("INIT", 0.0, 1000.0), ("RELEASE_USED", -11.0, 989.0)])
+        recs, _ = build_records(store, day)
+        _sr, sm = build_signal_records(store, day)
+        blocks, _meta = build_reconciliation(store, day, recs, sm)
+        cap = next(b for b in blocks if b["name"].endswith("CAPITAL"))
+        assert cap["status"] == "PASS", cap          # RED pre-fix: trades_realized=0 -> drift 11 -> FAIL
+        assert cap["lhs"] == -11.0 and cap["rhs"] == -11.0
+    finally:
+        store.close()
+
+
 def test_reconciliation_capital_pending_when_no_init(tmp_path):
     store = StateStore(tmp_path / "rec2.db")
     try:
