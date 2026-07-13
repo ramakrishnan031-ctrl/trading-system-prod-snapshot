@@ -243,7 +243,11 @@ def main() -> int:
 
     # Paths
     project_root = Path(__file__).parent.parent
-    db_path = project_root / "data" / "state.db"
+    # M-SC2 (audit 04-Jul): was `data/state.db` — a path that has never existed since the
+    # FIX-039 rewrite, so this crond job (16:01 Mon-Fri) hit the not-found branch every trading
+    # day and wrote an empty headers-only CSV while returning 0 (SUCCESS). The canonical main DB
+    # is data_store/trading_system.db (see capture_metrics_baseline / check_cron_drift).
+    db_path = project_root / "data_store" / "trading_system.db"
     output_dir = project_root / "reports" / "daily_review"
 
     print(f"Generating screened stocks CSV for {date_str}...")
@@ -253,11 +257,13 @@ def main() -> int:
     if not db_path.exists():
         print(f"ERROR: Database not found at {db_path}", file=sys.stderr)
         print("  Creating empty CSV with headers only...")
-        # Create empty CSV with headers (FIX-039: no crash on empty DB)
+        # Create empty CSV with headers (FIX-039: no crash on empty DB) so downstream report
+        # consumers still find the file, BUT return non-zero — a genuinely missing production DB
+        # is a real failure the Cron Officer must SEE, not a silent SUCCESS (M-SC2).
         csv_path = generate_csv(date_str, [], [], output_dir)
         print(f"  CSV written to: {csv_path}")
         print("  WARNING: No data (database not found)")
-        return 0
+        return 1
 
     # Query database
     try:
@@ -271,11 +277,11 @@ def main() -> int:
     except Exception as exc:
         print(f"ERROR: Database query failed: {exc}", file=sys.stderr)
         print("  Creating empty CSV with headers only...")
-        # FIX-039: no crash on DB error
+        # FIX-039: no crash on DB error (still write the file), but surface the failure (M-SC2).
         csv_path = generate_csv(date_str, [], [], output_dir)
         print(f"  CSV written to: {csv_path}")
         print("  WARNING: No data (database error)")
-        return 0
+        return 1
 
     # Generate CSV
     csv_path = generate_csv(date_str, traded, non_traded_with_reasons, output_dir)
