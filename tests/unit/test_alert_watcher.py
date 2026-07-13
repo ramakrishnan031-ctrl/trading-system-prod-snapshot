@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -30,6 +31,8 @@ from scripts.alert_watcher import (
     _release_lock,
     _save_attempts,
     _setup_watcher_log,
+    _write_heartbeat,
+    run_loop,
     run_once,
 )
 
@@ -82,6 +85,66 @@ def _null_log() -> logging.Logger:
     log = logging.getLogger("test_watcher")
     log.addHandler(logging.NullHandler())
     return log
+
+
+# ==============================================================================
+# TestRunLoop (P5: --loop mode + heartbeat)
+# ==============================================================================
+
+class TestRunLoop(unittest.TestCase):
+    """P5: --loop runs run_once() repeatedly with a liveness heartbeat and an
+    interruptible sleep; a persistent auth error stops it; a set stop_event ends it."""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmpdir = Path(self._tmpdir.name)
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    @patch("scripts.alert_watcher.run_once")
+    def test_loop_runs_max_iters(self, mock_run_once):
+        mock_run_once.return_value = 0
+        rc = run_loop(_make_cfg(self.tmpdir), interval_sec=0.0, heartbeat_path=None,
+                      dry_run=False, log=_null_log(), stop_event=threading.Event(), max_iters=3)
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_run_once.call_count, 3)
+
+    @patch("scripts.alert_watcher.run_once")
+    def test_loop_writes_heartbeat(self, mock_run_once):
+        mock_run_once.return_value = 0
+        hb = self.tmpdir / "hb" / "alert_watcher.heartbeat"
+        rc = run_loop(_make_cfg(self.tmpdir), interval_sec=0.0, heartbeat_path=hb,
+                      dry_run=False, log=_null_log(), stop_event=threading.Event(), max_iters=1)
+        self.assertEqual(rc, 0)
+        self.assertTrue(hb.exists(), "heartbeat file not written")
+        self.assertIn("T", hb.read_text())   # a plausible ISO timestamp
+
+    @patch("scripts.alert_watcher.run_once")
+    def test_loop_stops_on_auth_error_no_spin(self, mock_run_once):
+        mock_run_once.return_value = 2   # SmtpAuthError -> run_once returns 2
+        rc = run_loop(_make_cfg(self.tmpdir), interval_sec=0.0, heartbeat_path=None,
+                      dry_run=False, log=_null_log(), stop_event=threading.Event(), max_iters=10)
+        self.assertEqual(rc, 2)
+        self.assertEqual(mock_run_once.call_count, 1)   # stops immediately, never spins
+
+    @patch("scripts.alert_watcher.run_once")
+    def test_loop_stops_when_event_preset(self, mock_run_once):
+        mock_run_once.return_value = 0
+        ev = threading.Event(); ev.set()
+        rc = run_loop(_make_cfg(self.tmpdir), interval_sec=0.0, heartbeat_path=None,
+                      dry_run=False, log=_null_log(), stop_event=ev, max_iters=10)
+        self.assertEqual(rc, 0)
+        self.assertEqual(mock_run_once.call_count, 0)   # never entered the loop body
+
+    def test_write_heartbeat_none_is_noop(self):
+        _write_heartbeat(None, _null_log())   # must not raise
+
+    def test_write_heartbeat_unwritable_is_non_fatal(self):
+        a_file = self.tmpdir / "afile"
+        a_file.write_text("x")
+        # parent path is a FILE -> mkdir fails -> logged, never raised (alert path mustn't die)
+        _write_heartbeat(a_file / "sub" / "hb", _null_log())
 
 
 # ==============================================================================

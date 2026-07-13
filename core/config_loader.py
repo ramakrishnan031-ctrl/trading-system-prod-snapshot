@@ -708,6 +708,8 @@ class AlertsConfig(BaseModel):
     alert_digest_threshold: int = 3  # FIX-095: send digest email when pending flags > this count
     watcher_lock_path: str        # AW11: lock file path for alert_watcher
     watcher_log_path: str         # AW11: alert_watcher own log file path
+    watcher_interval_sec: int = 60         # P5: --loop sleep between passes (default-off; --once stays default)
+    watcher_heartbeat_path: Optional[str] = None  # P5: liveness heartbeat file written each --loop pass
     email_fallback: EmailFallbackConfig = EmailFallbackConfig()  # FIX-132 Item 10
     telegram: TelegramConfig      # TG12: Telegram Bot API config
     smtp: SmtpConfig              # AW7: SMTP config for alert_watcher

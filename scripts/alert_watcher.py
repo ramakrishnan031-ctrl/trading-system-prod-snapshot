@@ -36,7 +36,9 @@ import logging
 import os
 import smtplib
 import socket
+import signal
 import sys
+import threading
 import concurrent.futures as _futures  # A.2: TimeoutError exception class
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -63,6 +65,7 @@ from alerts.critical import (
     read_sentinel,
 )
 from core.config_loader import load_all
+from core.time_authority import now_ist
 
 # Broker account tag for alert subjects (the locked primary account in
 # config/accounts.csv, is_primary=TRUE). Surfaced in every alert subject so the
@@ -532,12 +535,62 @@ def run_once(
 # CLI entrypoint (AW2)
 # ------------------------------------------------------------------------------
 
+def _write_heartbeat(heartbeat_path: Optional[Path], log: logging.Logger) -> None:
+    """P5: stamp a liveness heartbeat (IST ISO timestamp) after each --loop pass so a
+    watchdog can detect a hung/dead loop. Best-effort: a write failure is logged, never
+    fatal — the alert path must not die because the heartbeat file is unwritable."""
+    if heartbeat_path is None:
+        return
+    try:
+        heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = heartbeat_path.with_suffix(heartbeat_path.suffix + ".tmp")
+        tmp.write_text(now_ist().isoformat(), encoding="utf-8")
+        os.replace(tmp, heartbeat_path)   # atomic swap
+    except Exception as exc:  # noqa: BLE001
+        log.warning("alert_watcher heartbeat write failed (%s): %s", heartbeat_path, exc)
+
+
+def run_loop(
+    cfg,
+    *,
+    interval_sec: float,
+    heartbeat_path: Optional[Path],
+    dry_run: bool,
+    log: logging.Logger,
+    stop_event: threading.Event,
+    max_iters: Optional[int] = None,   # test hook; None = run until stop_event
+) -> int:
+    """P5: run run_once() repeatedly with a heartbeat between an interruptible sleep,
+    until `stop_event` is set (SIGTERM/SIGINT). Replaces the --once + systemd-Restart churn
+    with one long-lived process. A SmtpAuthError (run_once -> 2) is a persistent config
+    fault: stop the loop and return 2 so systemd/the operator sees it (never spin silently
+    on a broken alert path). Returns 0 on clean stop."""
+    iters = 0
+    while not stop_event.is_set():
+        rc = run_once(cfg, dry_run=dry_run, log=log)
+        if rc == 2:
+            log.error("alert_watcher loop: SmtpAuthError (persistent) — stopping loop, exit 2")
+            return 2
+        _write_heartbeat(heartbeat_path, log)
+        iters += 1
+        if max_iters is not None and iters >= max_iters:
+            break
+        stop_event.wait(interval_sec)   # interruptible sleep (wakes immediately on stop)
+    log.info("alert_watcher loop: stop requested after %d pass(es) — exiting cleanly", iters)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Alert watcher: process critical sentinel files and send email."
     )
     parser.add_argument("--config", default=None, help="Path to config directory")
     parser.add_argument("--once", action="store_true", help="Run one pass and exit (default)")
+    parser.add_argument("--loop", action="store_true",
+                        help="P5: run continuously (run_once every --interval sec) with a "
+                             "liveness heartbeat, instead of --once + systemd Restart")
+    parser.add_argument("--interval", type=float, default=None,
+                        help="P5: --loop pass interval seconds (default: alerts.watcher_interval_sec)")
     parser.add_argument("--dry-run", action="store_true", dest="dry_run",
                         help="Log actions without sending email or renaming files")
     args = parser.parse_args()
@@ -564,6 +617,26 @@ def main() -> int:
         return 0
 
     try:
+        if args.loop:
+            interval = (args.interval if args.interval is not None
+                        else getattr(alerts_cfg, "watcher_interval_sec", 60))
+            hb = getattr(alerts_cfg, "watcher_heartbeat_path", None)
+            heartbeat_path = Path(hb) if hb else None
+            stop_event = threading.Event()
+
+            def _on_signal(signum, _frame):
+                log.info("alert_watcher: received signal %s — stopping loop", signum)
+                stop_event.set()
+
+            for _sig in (signal.SIGTERM, signal.SIGINT):
+                try:
+                    signal.signal(_sig, _on_signal)
+                except (ValueError, OSError):
+                    pass  # not main thread / unsupported platform — stop_event still ends it
+            log.info("alert_watcher: --loop mode (interval=%.0fs, heartbeat=%s)",
+                     interval, heartbeat_path or "off")
+            return run_loop(cfg, interval_sec=interval, heartbeat_path=heartbeat_path,
+                            dry_run=args.dry_run, log=log, stop_event=stop_event)
         return run_once(cfg, dry_run=args.dry_run, log=log)
     finally:
         _release_lock(lock_path)
