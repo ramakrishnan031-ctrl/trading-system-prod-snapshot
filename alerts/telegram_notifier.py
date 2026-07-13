@@ -52,6 +52,32 @@ _MSG_MAX = 4096
 _TRUNCATION_MARKER = "\n...[truncated]"
 
 
+def _safe_html_truncate(s: str, limit: int) -> str:
+    """Truncate HTML `s` to at most `limit` chars WITHOUT ending inside an HTML entity
+    (&...;) or a tag (<...>).
+
+    M-A1: Telegram parses parse_mode=HTML strictly and rejects the whole message with a
+    400 if a naive slice left an entity or tag half-open (e.g. "&am" or "<b"). That 400 is
+    treated as a permanent failure, so a long CRITICAL alert (kill-switch / naked position /
+    SYSTEM_OVERSELL) would be silently lost. Back off the cut to the last safe boundary.
+    """
+    if limit <= 0:
+        return ""
+    if len(s) <= limit:
+        return s
+    cut = s[:limit]
+    # Inside an unterminated tag "<..." (last '<' after last '>') → drop from the '<'.
+    lt, gt = cut.rfind("<"), cut.rfind(">")
+    if lt > gt:
+        cut = cut[:lt]
+    # Inside an unterminated entity "&..." → drop from the '&'. HTML entities are short
+    # (&amp; &lt; &#1234; …); only treat a nearby, unclosed '&' as a split entity.
+    amp, semi = cut.rfind("&"), cut.rfind(";")
+    if amp > semi and (len(cut) - amp) <= 12:
+        cut = cut[:amp]
+    return cut
+
+
 def _read_telegram_enabled(config_dir: str | Path = "config") -> bool:
     """
     Read alerts.telegram.enabled from system_config.yaml (TASK-10 Item A).
@@ -588,7 +614,19 @@ class TelegramNotifier:
                 time.sleep(self._retry_backoff)
                 continue
 
-            # 4xx (other than 429): permanent failure (TG6)
+            # 4xx (other than 429): permanent failure (TG6). M-A1: LOG the response body —
+            # Telegram's JSON `description` is the ONLY signal for a markup-truncation
+            # reject ("Bad Request: can't parse entities ...") that would otherwise drop a
+            # CRITICAL alert with no trace. Bounded so a huge body can't bloat the log line.
+            try:
+                err_body = str(resp.text)[:500]
+            except Exception:
+                err_body = "<unreadable>"
+            self._log.error(
+                "telegram.4xx_permanent_failure",
+                extra={"status_code": resp.status_code, "chat_id": chat_id,
+                       "response_body": err_body},
+            )
             return False
 
     # --------------------------------------------------------------------------
@@ -729,7 +767,7 @@ def _format_message(
         allowed_body = _MSG_MAX - overhead - len(_TRUNCATION_MARKER)
         if allowed_body < 0:
             allowed_body = 0
-        truncated_body = safe_body[:allowed_body] + _TRUNCATION_MARKER
+        truncated_body = _safe_html_truncate(safe_body, allowed_body) + _TRUNCATION_MARKER
         lines_t = [
             f"<b>[{severity}] {safe_title}</b>",
             f"<b>Module:</b> {safe_module}",
@@ -742,6 +780,7 @@ def _format_message(
         message = "\n".join(lines_t)
         # Hard cap if still over (context very large)
         if len(message) > _MSG_MAX:
-            message = message[:_MSG_MAX - len(_TRUNCATION_MARKER)] + _TRUNCATION_MARKER
+            message = _safe_html_truncate(
+                message, _MSG_MAX - len(_TRUNCATION_MARKER)) + _TRUNCATION_MARKER
 
     return message

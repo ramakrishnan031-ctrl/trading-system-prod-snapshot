@@ -19,7 +19,10 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from alerts.telegram_notifier import ChannelConfig, TelegramNotifier, SendResult, _format_message
+from alerts.telegram_notifier import (
+    ChannelConfig, TelegramNotifier, SendResult, _format_message,
+    _safe_html_truncate, _TRUNCATION_MARKER,
+)
 from alerts.critical import list_pending_sentinels
 
 
@@ -132,6 +135,27 @@ class TestInfoWarnTier(unittest.TestCase):
         result = n.send("WARN", "test", "body", "mod")
         self.assertFalse(result.success)
         self.assertFalse(result.failed_log_written)
+
+    @patch("alerts.telegram_notifier.requests.post")
+    def test_ma1_4xx_response_body_is_logged(self, mock_post):
+        """M-A1: a 4xx (e.g. 400 'can't parse entities') must log Telegram's response
+        body — otherwise a markup-truncation reject drops a CRITICAL alert with no trace."""
+        resp = MagicMock()
+        resp.status_code = 400
+        resp.headers = {}
+        resp.text = ('{"ok":false,"error_code":400,'
+                     '"description":"Bad Request: can\'t parse entities"}')
+        mock_post.return_value = resp
+        n = _make_notifier(self.tmpdir, max_retries=0)
+        n._log = MagicMock()
+        n.send("INFO", "test", "body", "mod")
+        logged = [
+            c for c in n._log.error.call_args_list
+            if c.kwargs.get("extra", {}).get("response_body")
+            and "can't parse entities" in c.kwargs["extra"]["response_body"]
+        ]
+        self.assertTrue(logged, "4xx response body was not logged")
+        self.assertEqual(logged[0].kwargs["extra"]["status_code"], 400)
 
 
 # ==============================================================================
@@ -427,6 +451,35 @@ class TestMessageFormatting(unittest.TestCase):
         msg = _format_message("WARN", "t", "b", "mod", {"key": "value"})
         self.assertIn("key", msg)
         self.assertIn("value", msg)
+
+    # ── M-A1: HTML-safe truncation (a split entity/tag → Telegram 400 → lost alert) ──
+
+    def test_ma1_safe_html_truncate_backs_off_partial_entity_and_tag(self):
+        # complete entity kept
+        self.assertEqual(_safe_html_truncate("a&amp;b", 6), "a&amp;")
+        # cut inside "&amp;" -> drop the partial entity
+        self.assertEqual(_safe_html_truncate("ab&amp;cd", 5), "ab")
+        # cut inside "<b>" -> drop the partial tag
+        self.assertEqual(_safe_html_truncate("ab<b>cd", 4), "ab")
+        # plain text unaffected
+        self.assertEqual(_safe_html_truncate("abcde", 3), "abc")
+        # under the limit -> returned as-is
+        self.assertEqual(_safe_html_truncate("abc", 10), "abc")
+
+    def test_ma1_format_message_truncation_does_not_split_entity(self):
+        # A body of '&' escapes to '&amp;'*5000 (25 000 chars) and forces truncation.
+        # OLD code sliced mid-'&amp;' (e.g. '...&am[truncated]') -> Telegram 400 -> alert
+        # lost. The safe truncation must land on a complete-entity boundary.
+        import re
+        msg = _format_message("CRITICAL", "t", "&" * 5000, "mod", {})
+        self.assertLessEqual(len(msg), 4096)
+        self.assertIn("[truncated]", msg)
+        body_region = msg[: msg.rindex(_TRUNCATION_MARKER)]
+        # a trailing '&' followed only by (optional) entity chars = a split entity
+        self.assertIsNone(
+            re.search(r"&[a-zA-Z#0-9]*$", body_region),
+            f"message body ends mid-entity: ...{body_region[-12:]!r}",
+        )
 
 
 # ==============================================================================
