@@ -698,34 +698,12 @@ class SignalProcessor:
                     f"Signal age {age_sec:.1f}s > expiry {self._signal_expiry_sec}s",
                 )
 
-            # B.5 / Audit 5.1: shadow-tracker re-entry guard.
-            # symbol_lock blocks re-entry while a real trade is OPEN, but
-            # shadow tracking is a second inning on a CLOSED trade -- the
-            # symbol_lock has already been released. Without this gate, a
-            # new real signal on the same symbol would create overlapping
-            # real + simulated positions. is_tracking() is in-memory and
-            # cheap (no I/O); fail-open if shadow_tracker is not wired.
-            if self._shadow_tracker is not None:
-                try:
-                    if self._shadow_tracker.is_tracking(symbol):
-                        raise _PipelineReject(
-                            "SHADOW_INNING_ACTIVE",
-                            f"Symbol {symbol} has an active shadow inning; "
-                            f"skip new entry to avoid overlapping real+simulated trades",
-                        )
-                except _PipelineReject:
-                    raise
-                except Exception as exc:
-                    # Defensive: an exception inside is_tracking must NOT
-                    # silently approve. Log and fail-closed (skip signal).
-                    self._log.error(
-                        f"shadow_tracker.is_tracking raised for {symbol}: {exc}; "
-                        f"failing closed (skipping signal)"
-                    )
-                    raise _PipelineReject(
-                        "SHADOW_TRACKER_ERROR",
-                        f"shadow_tracker.is_tracking raised: {exc}",
-                    )
+            # B.5 / Audit 5.1 / M-S5: shadow-tracker re-entry guard. symbol_lock blocks
+            # re-entry while a real trade is OPEN, but a shadow inning is a 2nd inning on
+            # a CLOSED trade whose symbol_lock is already released — a new real signal on
+            # that symbol would create overlapping real+simulated positions. Hoisted into
+            # a shared helper so the gate/retest resume paths enforce it too (M-S5).
+            self._reject_if_shadow_inning_active(symbol)
 
             # ----------------------------------------------------------
             # Step 2: Strategy lookup (SPW3)
@@ -1706,6 +1684,35 @@ class SignalProcessor:
     # Gate-release pipeline entry point (MAIN18)
     # ------------------------------------------------------------------
 
+    def _reject_if_shadow_inning_active(self, symbol: str) -> None:
+        """B.5 / Audit 5.1 / M-S5: reject a fresh entry when `symbol` has an active
+        shadow inning — a simulated 2nd inning on a CLOSED trade whose symbol_lock was
+        already released. Without this a new real entry overlaps the simulated position.
+        HOISTED (M-S5) so ALL THREE entry paths — _process_one, continue_from_gate,
+        continue_from_retest — enforce it identically; the pullback/retest resumptions
+        used to skip it. is_tracking() is in-memory + cheap; an exception FAILS CLOSED
+        (skip the entry — a missing check must never silently approve an overlap)."""
+        if self._shadow_tracker is None:
+            return
+        try:
+            if self._shadow_tracker.is_tracking(symbol):
+                raise _PipelineReject(
+                    "SHADOW_INNING_ACTIVE",
+                    f"Symbol {symbol} has an active shadow inning; skip new entry to "
+                    f"avoid overlapping real+simulated trades",
+                )
+        except _PipelineReject:
+            raise
+        except Exception as exc:
+            self._log.error(
+                f"shadow_tracker.is_tracking raised for {symbol}: {exc}; "
+                f"failing closed (skipping signal)"
+            )
+            raise _PipelineReject(
+                "SHADOW_TRACKER_ERROR",
+                f"shadow_tracker.is_tracking raised: {exc}",
+            )
+
     def continue_from_gate(self, entry: object, release_ltp: Optional[float] = None) -> None:
         """
         Resume post-screening pipeline for a WatchEntry released by EntryGate
@@ -1741,6 +1748,10 @@ class SignalProcessor:
             now = now_ist()
             if not self._mw.is_entry_allowed(now):
                 raise _PipelineReject("OUTSIDE_ENTRY_WINDOW", "Outside entry window")
+
+            # M-S5: shared shadow-inning re-entry guard — a gate-released entry must not
+            # overlap an active shadow inning on the same symbol (see _process_one).
+            self._reject_if_shadow_inning_active(symbol)
 
             # Strategy lookup (for intent, lot_size)
             strategy_name = entry.strategy_name  # type: ignore[attr-defined]
@@ -2067,6 +2078,10 @@ class SignalProcessor:
             now = now_ist()
             if not self._mw.is_entry_allowed(now):
                 raise _PipelineReject("OUTSIDE_ENTRY_WINDOW", "Outside entry window")
+
+            # M-S5: shared shadow-inning re-entry guard — a retest resumption must not
+            # overlap an active shadow inning on the same symbol (see _process_one).
+            self._reject_if_shadow_inning_active(symbol)
 
             strategy_obj = self._strategies.get(strategy_name)
             if strategy_obj is None:

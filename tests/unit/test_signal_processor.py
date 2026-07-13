@@ -2057,6 +2057,76 @@ def test_b5_is_tracking_raises_fails_closed() -> None:
     print("  OK B.5 is_tracking exception -> REJECTED_SHADOW_TRACKER_ERROR")
 
 
+def _insert_processing_signal(store, sig_id, symbol):
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR IGNORE INTO signals (signal_id, symbol, scanner, strategy, "
+            "triggered_at, received_at, expires_at, status, fingerprint, fingerprint_date) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (sig_id, symbol, "gap_go_long", "gap_go_long_v1",
+             "2026-04-15 10:00:00", "2026-04-15 10:00:00", "2026-04-15 10:01:00",
+             "PROCESSING", f"fp_{sig_id}", "2026-04-15"),
+        )
+
+
+class _CapturePlacer:
+    def __init__(self):
+        self.calls = []
+
+    def place(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+def test_ms5_continue_from_gate_rejects_shadow_inning() -> None:
+    """M-S5: the gate-resume path must enforce the shadow-inning guard too. A pullback
+    entry released by EntryGate on a symbol with an active shadow inning would overlap the
+    simulated position. RED on pre-fix code — the guard lived ONLY in _process_one, so the
+    gate path placed the order. Proves the hoisted _reject_if_shadow_inning_active fires here."""
+    from screening.entry_gate import WatchEntry
+    from datetime import datetime
+
+    placer = _CapturePlacer()
+    sh = _StubShadowTracker(tracking={"RELIANCE"})
+    proc, _, store = _make_proc(shadow_tracker=sh, placer=placer)
+    _insert_processing_signal(store, "sig_ms5_gate", "RELIANCE")
+
+    entry = WatchEntry(
+        signal_id="sig_ms5_gate", symbol="RELIANCE", direction="LONG",
+        trigger_price=2500.0, entry_price=2495.0, sl_price=2445.0, tgt_price=2595.0,
+        tolerance_pct=0.005, timeout_sec=300, strategy_name="gap_go_long_v1",
+        tier="HIGH", scanner_name="gap_go_long", intent="INTRADAY", added_at=datetime.now(),
+    )
+    proc.continue_from_gate(entry)
+
+    assert not placer.calls, "gate resume PLACED an order despite an active shadow inning (overlap)"
+    _assert_rejected(store, "sig_ms5_gate", "REJECTED_SHADOW_INNING_ACTIVE")
+    print("  OK M-S5 continue_from_gate rejects active shadow inning")
+
+
+def test_ms5_continue_from_retest_rejects_shadow_inning() -> None:
+    """M-S5: the retest-resume path must enforce the shadow-inning guard too. RED on pre-fix
+    code — the guard lived ONLY in _process_one, so a confirmed retest placed the order."""
+    from screening.retest_monitor import ParkedCandidate
+    from datetime import datetime
+
+    placer = _CapturePlacer()
+    sh = _StubShadowTracker(tracking={"RELIANCE"})
+    proc, _, store = _make_proc(shadow_tracker=sh, placer=placer)
+    _insert_processing_signal(store, "sig_ms5_retest", "RELIANCE")
+
+    parked = ParkedCandidate(
+        signal_id="sig_ms5_retest", symbol="RELIANCE", direction="LONG",
+        zone_band_low=2480.0, zone_band_high=2500.0, entry_price=2495.0, sl_price=2445.0,
+        strategy="gap_go_long_v1", intent="INTRADAY", tier="HIGH", trigger_price=2500.0,
+        sizing_inputs={}, added_at=datetime.now(), state="WAIT_BREAKOUT",
+    )
+    proc.continue_from_retest(parked)
+
+    assert not placer.calls, "retest resume PLACED an order despite an active shadow inning (overlap)"
+    _assert_rejected(store, "sig_ms5_retest", "REJECTED_SHADOW_INNING_ACTIVE")
+    print("  OK M-S5 continue_from_retest rejects active shadow inning")
+
+
 # ---------------------------------------------------------------------------
 # FIX-007: rate_limiter pre-check
 # ---------------------------------------------------------------------------
