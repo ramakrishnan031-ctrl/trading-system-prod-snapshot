@@ -328,15 +328,32 @@ def test_signal_age_over_90s_rejected_signal_age():
 # quote_fn failure
 # ---------------------------------------------------------------------------
 
-def test_quote_fn_raises_returns_skipped_quote_unavailable():
+def test_quote_fn_raises_returns_skipped_quote_unavailable(caplog):
     def bad_quote_fn(symbols):
         raise ConnectionError("network down")
     screener, store = _make_screener(quote_fn=bad_quote_fn)
     _insert_signal_row(store)
-    result = screener.screen(**_base_signal_kwargs())
-    # No market_data passed -> quote_fn called -> raises -> SKIPPED
+    with caplog.at_level(logging.ERROR, logger="test_secondary_screener"):
+        result = screener.screen(**_base_signal_kwargs())
+    # No market_data passed -> quote_fn called -> RAISES -> SKIPPED, and a REAL failure keeps
+    # its ERROR + traceback (only the benign no-quote case was downgraded).
     assert result.passed is False
     assert result.status == "SKIPPED_QUOTE_UNAVAILABLE"
+    assert any(r.levelno >= logging.ERROR and "quote_fn failed" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_no_quote_available_is_info_skip_not_error(caplog):
+    """Audit noise fix: an empty quotes dict (no quote for the symbol — illiquid/not currently
+    trading) is a BENIGN INFO skip, not a raised KeyError logged at ERROR-with-traceback. Guards
+    the ~249/day error-log flood (that masked real ERRORs) from regressing."""
+    screener, store = _make_screener(quote_fn=MagicMock(return_value={}))  # symbol absent -> None
+    _insert_signal_row(store)
+    with caplog.at_level(logging.DEBUG, logger="test_secondary_screener"):
+        result = screener.screen(**_base_signal_kwargs())
+    assert result.status == "SKIPPED_QUOTE_UNAVAILABLE"
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []   # no error noise
+    assert any("no quote available" in r.getMessage() for r in caplog.records)  # surfaced at INFO
 
 
 def test_market_data_provided_quote_fn_not_called():

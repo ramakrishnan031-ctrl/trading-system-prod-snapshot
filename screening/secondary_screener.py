@@ -164,9 +164,21 @@ class SecondaryScreener:
                 quotes = self._quote_fn([symbol])
                 quote = quotes.get(symbol)
                 if quote is None:
-                    raise KeyError(f"No quote returned for {symbol}")
+                    # No quote for this symbol right now (illiquid / not currently trading) is an
+                    # EXPECTED, benign skip that fires ~hundreds of times a session. Log a single
+                    # INFO line WITHOUT a traceback and WITHOUT raising — the old `raise KeyError`
+                    # +ERROR+traceback produced ~249 error tracebacks/day that masked real ERRORs.
+                    self._logger.info(
+                        "secondary_screener [%s/%s]: no quote available -> "
+                        "SKIPPED_QUOTE_UNAVAILABLE", signal_id, symbol,
+                    )
+                    result = self._make_skipped("SKIPPED_QUOTE_UNAVAILABLE", {}, signal_id)
+                    self._persist(signal_id, result)
+                    return result
                 market_data = self._build_market_data(quote)
             except Exception:
+                # quote_fn or _build_market_data genuinely FAILED (broker/network/parse) — this
+                # IS unexpected, so keep the full ERROR + traceback.
                 self._logger.error(
                     "secondary_screener [%s/%s]: quote_fn failed:\n%s",
                     signal_id, symbol, traceback.format_exc(),
