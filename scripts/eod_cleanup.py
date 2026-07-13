@@ -3,7 +3,7 @@ scripts/eod_cleanup.py -- Trading System v2  FIX-135 Item 48
 
 Purpose:
     End-of-day cleanup of session artifacts:
-      1. Mark stale IN_PROCESS signals as EXPIRED
+      1. Mark stale PROCESSING signals as EXPIRED
       2. Mark stale OPEN/SUBMITTED/PENDING/TRIGGER_PENDING orders as CANCELLED
       3. Delete orphaned smart_tgt_state rows
       4. Prune old signal fingerprints (>7 days)
@@ -84,7 +84,10 @@ def _cleanup_stale_signals(
 ) -> int:
     if dry_run:
         row = store.fetch_one(
-            "SELECT COUNT(*) AS n FROM signals WHERE status = 'IN_PROCESS' AND SUBSTR(triggered_at, 1, 10) < ?",
+            # M-SC3 (audit 04-Jul): reaper filtered 'IN_PROCESS', a status the pipeline NEVER
+            # persists (signal_processor sets 'PROCESSING' at signals.status) → dead code, stuck
+            # signals never cleaned. Filter the real in-flight status.
+            "SELECT COUNT(*) AS n FROM signals WHERE status = 'PROCESSING' AND SUBSTR(triggered_at, 1, 10) < ?",
             (date_iso,),
         )
         count = int(row["n"]) if row else 0
@@ -93,7 +96,7 @@ def _cleanup_stale_signals(
 
     with store.transaction() as cur:
         cur.execute(
-            "UPDATE signals SET status = 'EXPIRED' WHERE status = 'IN_PROCESS' AND SUBSTR(triggered_at, 1, 10) < ?",
+            "UPDATE signals SET status = 'EXPIRED' WHERE status = 'PROCESSING' AND SUBSTR(triggered_at, 1, 10) < ?",
             (date_iso,),
         )
         count = cur.rowcount

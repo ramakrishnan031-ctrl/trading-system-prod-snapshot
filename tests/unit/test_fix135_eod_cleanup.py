@@ -17,7 +17,7 @@ def store(tmp_path: Path) -> StateStore:
     return StateStore(db_path=tmp_path / "test.db")
 
 
-def _insert_signal(store, status="IN_PROCESS", date_str=None):
+def _insert_signal(store, status="PROCESSING", date_str=None):
     date_str = date_str or today_ist()
     ts = f"{date_str}T10:00:00+05:30"
     signal_id = str(uuid.uuid4())
@@ -84,7 +84,7 @@ def _insert_smart_tgt_state(store, trade_id):
 
 class TestStaleSignals:
     def test_in_process_from_yesterday_expired(self, store):
-        _insert_signal(store, "IN_PROCESS", "2026-05-30")
+        _insert_signal(store, "PROCESSING", "2026-05-30")
         results = run_eod_cleanup(
             store=store, date_iso="2026-05-31",
             log=logging.getLogger("test"),
@@ -94,7 +94,7 @@ class TestStaleSignals:
         assert row["status"] == "EXPIRED"
 
     def test_today_in_process_not_expired(self, store):
-        _insert_signal(store, "IN_PROCESS", "2026-05-31")
+        _insert_signal(store, "PROCESSING", "2026-05-31")
         results = run_eod_cleanup(
             store=store, date_iso="2026-05-31",
             log=logging.getLogger("test"),
@@ -187,7 +187,7 @@ class TestOrphanedSmartTgt:
 
 class TestDryRun:
     def test_dry_run_does_not_modify(self, store):
-        _insert_signal(store, "IN_PROCESS", "2026-05-30")
+        _insert_signal(store, "PROCESSING", "2026-05-30")
         _insert_trade_and_order(store, "PENDING", "2026-05-30")
         results = run_eod_cleanup(
             store=store, date_iso="2026-05-31",
@@ -197,4 +197,4 @@ class TestDryRun:
         assert results["stale_signals_expired"] == 1
         assert results["stale_orders_cancelled"] == 1
         row = store.fetch_one("SELECT status FROM signals")
-        assert row["status"] == "IN_PROCESS"
+        assert row["status"] == "PROCESSING"
