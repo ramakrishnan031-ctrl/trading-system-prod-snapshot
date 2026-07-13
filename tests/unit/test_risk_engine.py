@@ -33,6 +33,7 @@ import logging
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -68,6 +69,7 @@ class _MockFundManager:
         self._unrealized_mtm = 0.0
         self._mtm_fresh = True   # B-1: freshness flag the gate reads
         self._live_reservations = 0  # FIX-185: authoritative in-flight count
+        self._reservations: dict = {}  # sector-TOCTOU: {id: obj(symbol, margin)} — mirrors real fm
 
     def get_snapshot(self) -> CapitalSnapshot:
         return self._snap
@@ -83,6 +85,16 @@ class _MockFundManager:
     def count_live_reservations(self) -> int:
         """FIX-185: authoritative count of uncommitted entry reservations."""
         return self._live_reservations
+
+    def get_live_reservations(self) -> dict:
+        """Sector-TOCTOU close reads this (mirrors the REAL FundManager.get_live_reservations):
+        the reserved-not-placed margin that StateStore.sector_exposure cannot see yet."""
+        return dict(self._reservations)
+
+    def add_reservation(self, symbol: str, margin: float, resv_id: str | None = None) -> None:
+        """Test helper: inject a reserved-not-placed reservation (reserve() done, no trade row)."""
+        rid = resv_id or f"r{len(self._reservations)}"
+        self._reservations[rid] = SimpleNamespace(symbol=symbol, margin=margin)
 
 
 class _CapturingHandler(logging.Handler):
@@ -881,6 +893,96 @@ def test_sector_exposure_counts_in_flight_and_open(tmp_path: Path) -> None:
     store.close()
 
 
+# ── Q4(a) gate-8 sector TOCTOU (FIX-185-class) ───────────────────────────────────
+
+def test_sector_exposure_statuses_default_is_byte_identical(tmp_path: Path) -> None:
+    """CHECKLIST-3: the new statuses= kwarg defaults to (PENDING_FILL,OPEN,PARTIAL), so
+    every existing caller is byte-identical; the OPEN/PARTIAL partition drops PENDING_FILL."""
+    store = StateStore(tmp_path / "test.db")
+    _insert_trade(store, "t1", symbol="RELIANCE", sector="ENERGY", status="OPEN",         margin=100_000.0)
+    _insert_trade(store, "t2", symbol="ONGC",     sector="ENERGY", status="PENDING_FILL", margin=50_000.0)
+    _insert_trade(store, "t3", symbol="IOC",      sector="ENERGY", status="PARTIAL",      margin=25_000.0)
+    # default (no kwarg) == the explicit prior tuple, to the rupee
+    assert store.sector_exposure("ENERGY") == 175_000.0
+    assert store.sector_exposure("ENERGY") == store.sector_exposure(
+        "ENERGY", statuses=("PENDING_FILL", "OPEN", "PARTIAL"))
+    # the reservation-free partition excludes the PENDING_FILL row
+    assert store.sector_exposure("ENERGY", statuses=("OPEN", "PARTIAL")) == 125_000.0
+    store.close()
+
+
+def test_effective_sector_margin_folds_reserved_not_placed(tmp_path: Path) -> None:
+    """CHECKLIST-1 (mock level): a reserved-not-placed reservation (reserve() done, NO trade
+    row) is invisible to StateStore.sector_exposure but MUST count toward the sector cap.
+    OLD gate (DB truth only) approves; NEW gate (effective) rejects. Run against pre-fix code
+    this test FAILS at `assert not approved` (old code approves)."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0))
+    engine = _make_engine(store, fm, handler, kill_switch=_MockKillSwitch(False),
+                          max_sector_pct=0.40, sector_fn=lambda s: "ENERGY")   # limit = 400_000
+
+    _insert_trade(store, "t1", symbol="RELIANCE", sector="ENERGY", status="OPEN", margin=350_000.0)
+    fm.add_reservation("ONGC", 40_000.0)   # reserve() succeeded, order not placed yet (no trade row)
+
+    # OLD gate sees only DB truth: 350_000 + 20_000 = 370_000 <= 400_000 -> would APPROVE (the bug).
+    assert store.sector_exposure("ENERGY") == 350_000.0
+    # NEW gate sees effective: max(350_000, 350_000_open + 40_000_reserved) = 390_000;
+    # projected 390_000 + 20_000 = 410_000 > 400_000 -> REJECT.
+    result = engine.approve("IOC", "BUY", "INTRADAY", _make_sizing(margin=20_000.0), "sig-1")
+    assert not result.approved
+    assert result.failed_check == "SECTOR_EXPOSURE", result.failed_check
+    store.close()
+
+
+def test_effective_sector_margin_no_double_count_pending_and_reservation(tmp_path: Path) -> None:
+    """CHECKLIST-2: a PENDING_FILL trade row that STILL holds its live reservation (the
+    row-written-but-reservation-not-yet-released window) is counted EXACTLY ONCE. A naive
+    existing+reserved would double it to 200_000."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0))
+    engine = _make_engine(store, fm, handler, kill_switch=_MockKillSwitch(False),
+                          max_sector_pct=0.40, sector_fn=lambda s: "ENERGY")
+
+    _insert_trade(store, "t1", symbol="RELIANCE", sector="ENERGY", status="PENDING_FILL", margin=100_000.0)
+    fm.add_reservation("RELIANCE", 100_000.0)   # same position: BOTH a PENDING_FILL row AND a reservation
+
+    existing = store.sector_exposure("ENERGY")   # DB truth = 100_000
+    assert existing == 100_000.0
+    effective = engine._effective_sector_margin("ENERGY", existing)
+    # open_partial(0 — PENDING_FILL excluded) + reserved(100_000) = 100_000; max(100_000,100_000)=100_000.
+    assert effective == 100_000.0, f"double-counted: expected 100000, got {effective}"
+    store.close()
+
+
+def test_effective_sector_margin_degrades_loudly(tmp_path: Path) -> None:
+    """The getattr-guard: a fund_manager that predates get_live_reservations() (or whose read
+    raises) degrades to DB truth — but LOGS a WARNING; the hardening is never silently dropped."""
+    store = StateStore(tmp_path / "test.db")
+    handler = _CapturingHandler()
+    fm = _MockFundManager(_make_snap(total=1_000_000.0))
+    engine = _make_engine(store, fm, handler, kill_switch=_MockKillSwitch(False))
+
+    # (a) fund_manager WITHOUT get_live_reservations -> DB truth + a loud warning
+    engine._fm = SimpleNamespace()   # no get_live_reservations attribute
+    assert engine._effective_sector_margin("ENERGY", 123_000.0) == 123_000.0
+    assert any("sector_toctou_degraded" in w and "no_get_live_reservations" in w
+               for w in handler.warnings()), handler.warnings()
+
+    # (b) get_live_reservations present but RAISES -> DB truth + a loud warning (never propagates)
+    handler.records.clear()
+
+    class _BoomFM:
+        def get_live_reservations(self):
+            raise RuntimeError("fm down")
+
+    engine._fm = _BoomFM()
+    assert engine._effective_sector_margin("ENERGY", 123_000.0) == 123_000.0
+    assert any("sector_toctou_degraded" in w for w in handler.warnings()), handler.warnings()
+    store.close()
+
+
 def test_duplicate_symbol_open(tmp_path: Path) -> None:
     """DUPLICATE_SYMBOL: existing OPEN trade for same symbol -> rejected."""
     store = StateStore(tmp_path / "test.db")
@@ -1297,6 +1399,10 @@ def run_all_tests() -> int:
         test_daily_loss_positive_pnl_not_rejected,
         test_sector_exposure_at_limit,
         test_sector_exposure_counts_in_flight_and_open,
+        test_sector_exposure_statuses_default_is_byte_identical,
+        test_effective_sector_margin_folds_reserved_not_placed,
+        test_effective_sector_margin_no_double_count_pending_and_reservation,
+        test_effective_sector_margin_degrades_loudly,
         test_duplicate_symbol_open,
         test_duplicate_symbol_in_flight,
         test_check_order_first_failing_wins,
