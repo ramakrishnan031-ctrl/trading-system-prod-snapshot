@@ -174,9 +174,23 @@ def _cleanup_old_fingerprints(
         datetime.strptime(date_iso, "%Y-%m-%d") - timedelta(days=retention_days)
     ).strftime("%Y-%m-%d")
 
+    # Prune old terminal NOISE fingerprints (expired / duplicate / any reject) so the
+    # signals table + its fingerprint index do not grow unbounded. The trade audit trail
+    # (QUEUED->...->TRADED / PLACEMENT_FAILED / PROCESSED) is KEPT.
+    #
+    # Q5 fix: the pipeline persists REJECTED_<check> (e.g. REJECTED_DUPLICATE_SYMBOL,
+    # REJECTED_SHADOW_INNING_ACTIVE) and NEVER a bare 'REJECTED', so the old
+    # `status IN (...,'REJECTED')` filter matched zero rows -> every reject fingerprint
+    # leaked forever (unbounded growth in a table the dedup path reads). GLOB 'REJECTED*'
+    # catches the whole family. The dry-run now counts with the SAME predicate as the
+    # DELETE, so the preview equals the action (it previously counted ALL old rows,
+    # including kept TRADED/PROCESSED — over-reporting).
+    where = ("(status IN ('EXPIRED', 'DUPLICATE') OR status GLOB 'REJECTED*') "
+             "AND fingerprint_date < ?")
+
     if dry_run:
         row = store.fetch_one(
-            "SELECT COUNT(*) AS n FROM signals WHERE fingerprint_date < ?",
+            f"SELECT COUNT(*) AS n FROM signals WHERE {where}",
             (cutoff,),
         )
         count = int(row["n"]) if row else 0
@@ -184,10 +198,7 @@ def _cleanup_old_fingerprints(
         return count
 
     with store.transaction() as cur:
-        cur.execute(
-            "DELETE FROM signals WHERE status IN ('EXPIRED', 'DUPLICATE', 'REJECTED') AND fingerprint_date < ?",
-            (cutoff,),
-        )
+        cur.execute(f"DELETE FROM signals WHERE {where}", (cutoff,))
         count = cur.rowcount
     log.info("eod_cleanup.fingerprints_pruned: %d (cutoff=%s)", count, cutoff)
     return count

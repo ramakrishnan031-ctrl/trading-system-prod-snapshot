@@ -110,6 +110,52 @@ class TestStaleSignals:
         assert results["stale_signals_expired"] == 0
 
 
+# ── Q5/P10: old fingerprint prune must catch REJECTED_* + dry-run == actual ──
+
+
+class TestFingerprintPrune:
+    """The pipeline persists REJECTED_<check> (never a bare 'REJECTED'), so the old
+    `status IN (...,'REJECTED')` filter pruned no rejects at all -> unbounded growth in a
+    table the dedup path reads. And the dry-run counted ALL old rows, not just the prunable
+    ones. Both fixed: GLOB 'REJECTED*' + shared predicate for preview == action."""
+
+    _OLD = "2026-05-01"          # well before the date_iso - 7d cutoff
+
+    def _seed(self, store):
+        _insert_signal(store, "REJECTED_DUPLICATE_SYMBOL", self._OLD)
+        _insert_signal(store, "REJECTED_SHADOW_INNING_ACTIVE", self._OLD)
+        _insert_signal(store, "EXPIRED", self._OLD)
+        _insert_signal(store, "DUPLICATE", self._OLD)
+        _insert_signal(store, "TRADED", self._OLD)     # KEEP — trade audit trail
+        _insert_signal(store, "PROCESSED", self._OLD)  # KEEP
+
+    def test_rejected_prefix_pruned_trade_trail_kept(self, store):
+        self._seed(store)
+        results = run_eod_cleanup(
+            store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+        )
+        # 2 REJECTED_* + EXPIRED + DUPLICATE pruned; TRADED + PROCESSED kept
+        assert results["fingerprints_pruned"] == 4
+        remaining = {r["status"] for r in store.fetch_all("SELECT status FROM signals")}
+        assert remaining == {"TRADED", "PROCESSED"}
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM signals WHERE status GLOB 'REJECTED*'")["n"] == 0
+
+    def test_dry_run_count_equals_actual_delete(self, store):
+        self._seed(store)
+        dry = run_eod_cleanup(
+            store=store, date_iso="2026-05-31", log=logging.getLogger("test"), dry_run=True,
+        )
+        # dry-run deletes nothing
+        assert store.fetch_one("SELECT COUNT(*) AS n FROM signals")["n"] == 6
+        actual = run_eod_cleanup(
+            store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+        )
+        # preview == action == the 4 prunable rows (old code over-counted the preview at 6)
+        assert dry["fingerprints_pruned"] == 4
+        assert actual["fingerprints_pruned"] == 4
+
+
 # ── Stale orders ─────────────────────────────────────────────────────────
 
 
