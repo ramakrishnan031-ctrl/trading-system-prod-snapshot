@@ -2908,16 +2908,33 @@ class StateStore:
 
     def get_today_closed_pnl(self, date_iso: str) -> float:
         """
-        Return sum of net_pnl for trades CLOSED today (FIX-128 Fix B).
+        Return Σ net_pnl for trades that reached a terminal status on the IST
+        date `date_iso` (FIX-128 Fix B; M-K1 date-key fix 14-Jul).
 
-        Only terminal statuses (CLOSED) are included. Open trades have
-        unrealized P&L not yet counted. Returns 0.0 if no closed trades today.
+        Terminal statuses CLOSED and CLOSED_MANUAL are both counted (a manual /
+        RMS close realises P&L exactly like a normal close). Open trades hold
+        only unrealised P&L and are excluded. Returns 0.0 if none.
+
+        DATE KEY (M-K1) — the IST calendar date of the EXIT, read as the first
+        10 chars of COALESCE(exit_time, updated_at):
+          * exit_time is the immutable moment of exit; updated_at is mutable, so
+            a later touch of a closed row (e.g. a reconciler action days later)
+            must NOT re-attribute its P&L to another day -> prefer exit_time.
+          * exit_time can be NULL on a CLOSED_MANUAL row that
+            mark_trade_manually_closed() set but record_manual_close_financials()
+            has not yet filled -> fall back to updated_at so a realised trade is
+            never dropped (no under-count).
+          * substr(...,1,10) reads the date straight off the IST ISO-8601 string.
+            SQLite DATE() would FIRST normalise a "+05:30"-offset timestamp to
+            UTC, shifting every 00:00-05:30 IST exit back one calendar day — a
+            silent off-by-one for early-morning / re-touched rows. substr avoids
+            that entirely.
         """
         row = self.fetch_one(
             """SELECT COALESCE(SUM(net_pnl), 0.0) AS total
                FROM trades
                WHERE status IN ('CLOSED', 'CLOSED_MANUAL')
-                 AND DATE(updated_at) = ?""",
+                 AND substr(COALESCE(exit_time, updated_at), 1, 10) = ?""",
             (date_iso,),
         )
         return float(row["total"]) if row else 0.0

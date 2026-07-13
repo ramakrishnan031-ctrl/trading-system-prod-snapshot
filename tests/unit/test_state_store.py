@@ -804,6 +804,59 @@ def test_fix156_get_today_closed_pnl_includes_closed_manual(tmp_path: Path) -> N
     store.close()
 
 
+def _force_ts(store: StateStore, trade_id: str, *, updated_at: str,
+              exit_time: str | None = "__keep__") -> None:
+    """Test helper: stamp an explicit updated_at (and optionally exit_time) on a
+    trade row so date-keying can be exercised deterministically, independent of
+    wall-clock. exit_time='__keep__' leaves the column untouched."""
+    with store.transaction() as cur:
+        if exit_time == "__keep__":
+            cur.execute("UPDATE trades SET updated_at=? WHERE trade_id=?",
+                        (updated_at, trade_id))
+        else:
+            cur.execute("UPDATE trades SET updated_at=?, exit_time=? WHERE trade_id=?",
+                        (updated_at, exit_time, trade_id))
+
+
+def test_mk1_get_today_closed_pnl_keys_on_ist_exit_date(tmp_path: Path) -> None:
+    """M-K1 / FIX-156 (deterministic, wall-clock-INDEPENDENT): get_today_closed_pnl
+    keys on the IST exit date via substr(COALESCE(exit_time, updated_at), 1, 10),
+    NOT SQLite DATE(updated_at).
+
+    Two defects this pins, both RED on pre-fix code at ANY time of day:
+      (1) DATE() normalises a "+05:30" timestamp to UTC, so an exit at 00:00-05:30
+          IST is shifted back one calendar day and dropped from its own day.
+      (2) updated_at is mutable; a later touch of a closed row must not move its
+          realised P&L to the touch day (key on the immutable exit_time instead).
+    """
+    store = StateStore(tmp_path / "test.db")
+    DAY = "2026-07-14"
+
+    # (1) early-morning CLOSED, exit_time 02:00 IST -> DATE() would shift to 07-13
+    insert_test_trade(store, "early_closed", status="CLOSED", net_pnl=1000.0,
+                      created_date=DAY, exit_time=f"{DAY}T02:00:00+05:30")
+    _force_ts(store, "early_closed", updated_at=f"{DAY}T02:00:00+05:30")
+
+    # (2) CLOSED_MANUAL, exit_time still NULL, updated_at 03:00 IST -> must fall back
+    insert_test_trade(store, "early_manual", status="OPEN", net_pnl=226.50, created_date=DAY)
+    store.mark_trade_manually_closed("early_manual")               # leaves exit_time NULL
+    _force_ts(store, "early_manual", updated_at=f"{DAY}T03:00:00+05:30")
+
+    # (3) M-K1 mutable-key: exit today 10:00, row re-touched two days later
+    insert_test_trade(store, "retouched", status="CLOSED", net_pnl=500.0,
+                      created_date=DAY, exit_time=f"{DAY}T10:00:00+05:30")
+    _force_ts(store, "retouched", updated_at="2026-07-16T09:00:00+05:30")
+
+    # NEW code: all three belong to DAY by their exit; OLD code drops all three.
+    assert abs(store.get_today_closed_pnl(DAY) - 1726.50) < 0.01, \
+        f"expected 1726.50 on {DAY}, got {store.get_today_closed_pnl(DAY)}"
+    # The re-touch must NOT leak realised P&L into the touch day.
+    assert store.get_today_closed_pnl("2026-07-16") == 0.0, \
+        "retouched trade's P&L leaked into its updated_at day (mutable-key bug)"
+    print("  OK M-K1 get_today_closed_pnl keys on IST exit date (no UTC shift, no re-touch leak)")
+    store.close()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EOD square-off query helper tests (EOD8, EOD9)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2114,6 +2167,8 @@ def run_all_tests() -> int:
         # FIX-156: CLOSED_MANUAL PnL inclusion
         test_fix156_recent_trade_pnls_includes_closed_manual,
         test_fix156_get_today_closed_pnl_includes_closed_manual,
+        # M-K1: IST exit-date keying (no UTC shift, no mutable-key re-touch leak)
+        test_mk1_get_today_closed_pnl_keys_on_ist_exit_date,
         # KS9 kill_switch_state table tests
         test_kill_switch_state_table_exists,
         test_kill_switch_state_single_row_constraint,
