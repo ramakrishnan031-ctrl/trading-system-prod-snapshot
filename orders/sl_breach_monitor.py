@@ -193,8 +193,14 @@ class SlBreachMonitor:
                     ),
                     source_module="sl_breach_monitor",
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # M-X2: the emergency close already fired; a notifier failure must NOT block it,
+                # but it must NOT be invisible either — a revoked token would otherwise hide an
+                # emergency SL-breach close from the operator. Log LOUD, still swallow.
+                self._log.error(
+                    "sl_breach_monitor: emergency-breach notifier send FAILED "
+                    "(close proceeds): %s", exc,
+                )
 
         if self._mode == "LIVE" and self._adapter is not None:
             try:

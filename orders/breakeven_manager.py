@@ -376,8 +376,13 @@ class BreakevenManager:
                     ),
                     source_module="breakeven_manager",
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # M-X2: don't let a notifier failure swallow the fact that breakeven SL-modify
+                # exhausted its retries (original SL still active at broker) — log it LOUD even
+                # when the alert itself could not be delivered.
+                self._log.error(
+                    "breakeven_manager: SL-modify-exhausted notifier send FAILED: %s", exc,
+                )
 
     def _get_sl_broker_order_id(self, trade_id: str) -> Optional[str]:
         """BM9: Look up active SL order's broker_order_id from state_store."""
