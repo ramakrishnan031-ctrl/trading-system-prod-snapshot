@@ -116,21 +116,37 @@ the rest confirmed green + RED/GREEN-built.
   not reached), NOT this branch: `SignalProcessor` defaults `shadow_tracker=None`, so M-S5's hoisted
   guard is a no-op in these tests (the one line my change adds to `continue_from_gate` returns
   immediately). These 4 are the documented PC-env failures (green on the VM).
-- **Full unit-suite HEAD run:** _pending — will append the number; expected == the documented PC-env
-  baseline (all pre-existing, none in touched areas)._
+- **Full unit-suite HEAD-vs-main diff (definitive):** pre-fix HEAD = **11 failed / 4614 passed / 15
+  skipped**. Of the 11: **10 are PRE-EXISTING** (4 `test_main` + 4 `test_order_placer_fix061` + 1
+  `test_phase17_batch2::test_fix077_flask` + 1 `test_fix181::...inflight_orphan`), each confirmed to
+  fail IDENTICALLY on a clean `git checkout main` (same environment, runtime files present) — the
+  documented Windows PC-env baseline, green on the VM. **1 was NEW** (`test_v34_to_v35_columns_added`)
+  and is now FIXED (see Concerns). **Post-fix: 10 failed / 0 new.**
 
 ---
 
 ## CONCERNS FOUND
 
-**One item investigated and CLEARED (documented so the audit trail shows it was chased, not assumed):**
-the 3 `TestContinueFromGate` failures sit on the exact M-S5 hot path and initially read as a possible
-regression from hoisting the shadow-inning guard. Chased to ground: `shadow_tracker` defaults to None
-in the test → the guard is a no-op → the failures reproduce identically on pre-fix `main`. **Not a
-regression.** No code change warranted.
+**CONCERN #1 — FOUND + FIXED (the review's real catch):** the migration guard (P11) broke
+`test_slice1_rr_aftercheck::test_v34_to_v35_columns_added`, which reopens a version-rewound DB with a
+plain `StateStore(db)` expecting the migration to run. The guard now (correctly) refuses a non-boot
+migration → `MigrationNotPermitted`. The guard commit updated `test_migrations` +
+`test_schema_version_failfast` but **missed this migration-exercising test** — it passed on `main`,
+failed on the branch = a genuine new failure. **This is a test-maintenance gap, NOT a production bug**
+(prod is v44==v44, so the guard never refuses; a precise grep confirms this was the only stamp-old-
+then-reopen-plain test not already updated). **FIX (`ee70f40`):** the test declares migration intent
+(`allow_migrate=True, market_open=False`) exactly like `main.py`'s boot and the other migration tests;
+now 24/24 green. Post-fix full-suite: 0 new failures.
 
-**No blocking concerns.** No loosening, no uncovered order/reservation/kill change, no cannot-fail test,
-no leftover debug/scratch/hardcoded/TODO.
+**CONCERN #2 — INVESTIGATED + CLEARED (chased, not assumed):** the 3 `TestContinueFromGate` failures
+sit on the exact M-S5 hot path and initially read as a possible regression from hoisting the
+shadow-inning guard. Chased to ground: `shadow_tracker` defaults to None in the test → the guard is a
+no-op → the failures reproduce identically on `main`. **Not a regression.** No code change warranted.
+
+**No remaining blocking concerns.** No loosening, no uncovered order/reservation/kill change, no
+cannot-fail test, no leftover debug/scratch/hardcoded/TODO. The one real defect the review found (the
+migration-guard test gap) is fixed. This is exactly what a pre-deploy review is for — done NOW, not at
+18:30.
 
 ---
 
