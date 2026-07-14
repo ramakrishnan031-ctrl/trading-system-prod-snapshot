@@ -31,6 +31,16 @@ coverage):
     e2e would first have to ENABLE a path prod does not run. Its deterministic coverage
     is test_sr_v2_divert.py, including a 24-thread concurrency proof — stronger than any
     single-threaded wired copy. See docs/audit/deploy_behaviour_delta_prediction_14jul2026.md.
+  * Migration guard (non-boot opener + pending migration -> REFUSES + CRITICAL sentinel):
+    does not fire on THIS deploy at all (live DB v44 == EXPECTED 44, no pending migration), and
+    the wired fixture builds a fresh v44 DB (nothing to refuse). Its deterministic scenario is
+    test_migration_guard.py::test_blocked_migration_fires_critical_sentinel — a REAL StateStore
+    that stamps an older version, opens non-boot, asserts MigrationNotPermitted AND verifies the
+    CRITICAL sentinel file. That IS "a non-boot opener with a pending migration refuses + alerts".
+
+W3 coverage: gate-8 / M-S5 / M-S2 are wired here (the LIVE hardenings); M-S6 and the migration
+guard — neither fires under this deploy's config — are covered by the deterministic targeted unit
+tests named above (per the work order's "targeted test instead / never ship flaky").
 """
 from __future__ import annotations
 

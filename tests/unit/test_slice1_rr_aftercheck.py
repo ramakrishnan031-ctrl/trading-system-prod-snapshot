@@ -627,9 +627,12 @@ def test_v34_to_v35_columns_added(tmp_path):
     assert "exits_verified" not in {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
     conn.close()
 
-    # Reopen -> run_migrations rebuilds trades to v35.
-    store2 = StateStore(db)
-    assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION  # 35
+    # Reopen -> run_migrations rebuilds trades to current. P11 migration guard (14-Jul):
+    # this test DELIBERATELY exercises a migration, so it must declare migration intent the
+    # same way main.py's boot path does (allow_migrate=True, off-market) — a plain reopen now
+    # refuses + raises MigrationNotPermitted (only the boot path may migrate the live DB).
+    store2 = StateStore(db, allow_migrate=True, market_open=False)
+    assert store2.get_schema_version() == EXPECTED_SCHEMA_VERSION
     cols = {r["name"] for r in store2.fetch_all("PRAGMA table_info(trades)")}
     assert set(_V35_COLS) <= cols
     assert store2.fetch_one("SELECT COUNT(*) AS n FROM trades")["n"] == 1
