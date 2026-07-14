@@ -335,11 +335,15 @@ def test_reconciliation_pass_then_fail_injection(tmp_path):
         blocks, meta = build_reconciliation(store, "2026-06-30", recs, sm)
         bd = {b["name"]: b for b in blocks}
         assert bd["1 · SIGNAL-STORAGE"]["status"] == "PASS"
-        assert bd["2 · ORDER"]["status"] == "PASS" and bd["2 · ORDER"]["lhs"] == 2
-        assert bd["3 · TRADE"]["status"] == "PASS"
-        assert bd["4 · CAPITAL"]["status"] == "PASS"
-        assert bd["4 · CAPITAL"]["lhs"] == -11.0 and bd["4 · CAPITAL"]["rhs"] == -11.0
-        assert bd["5 · BROKER"]["status"] == "PENDING_CAPTURE"
+        # M-R4: the tautological "2 · ORDER" block (RHS ≡ LHS → could never FAIL) was deleted
+        # and the rest renumbered. Guard against re-introduction by IDENTITY (survives a
+        # renumber), not just by name.
+        assert not any("placement_failed" in b["identity"] for b in blocks), \
+            "M-R4: the order-placement tautology block must not be re-introduced"
+        assert bd["2 · TRADE"]["status"] == "PASS"
+        assert bd["3 · CAPITAL"]["status"] == "PASS"
+        assert bd["3 · CAPITAL"]["lhs"] == -11.0 and bd["3 · CAPITAL"]["rhs"] == -11.0
+        assert bd["4 · BROKER"]["status"] == "PENDING_CAPTURE"
         assert meta["overall"] == "PASS — 1 pending capture"
 
         # FAIL injection: force capital drift beyond tolerance
@@ -355,7 +359,7 @@ def test_reconciliation_pass_then_fail_injection(tmp_path):
 
 
 def test_mr3_capital_block_keys_trades_by_close_date_not_created(tmp_path):
-    """M-R3: Block-4 CAPITAL must key trades_realized by the CLOSE date (to line up with the
+    """M-R3: Block-3 CAPITAL must key trades_realized by the CLOSE date (to line up with the
     ledger's close-date RELEASE_USED), not created_at. An overnight trade created on D but
     closed on D+1 realises its P&L on D+1; keying by created_at summed 0 on D+1 -> a false
     'capital corruption' FAIL on the date seam. RED on pre-fix code (drift 11 -> FAIL)."""
@@ -870,10 +874,10 @@ def test_fix3_filled_label_disambiguated_entered_vs_qty(tmp_path):
         meta = {"mode": "LIVE", "n": 2}
         smeta = _full_smeta(2, 2, 2)
         rb, rmeta = build_reconciliation(store, "2026-06-30", records, smeta)
-        b3 = next(b for b in rb if b["name"] == "3 · TRADE")
-        assert "entered(open/partial/exiting/closed)=2" in b3["detail"]
-        assert "filled=" not in b3["detail"]              # the ambiguous label is gone from recon
-        assert b3["identity"] == "placed = entered + cancelled + rejected/failed + pending"
+        b_trade = next(b for b in rb if b["name"] == "2 · TRADE")
+        assert "entered(open/partial/exiting/closed)=2" in b_trade["detail"]
+        assert "filled=" not in b_trade["detail"]         # the ambiguous label is gone from recon
+        assert b_trade["identity"] == "placed = entered + cancelled + rejected/failed + pending"
         sdata = build_strategy_data(store, "2026-06-30", records, srecords, meta)
         slipdata = build_slippage_data(store, "2026-06-30", records, meta)
         dash = build_dashboard_data(store, "2026-06-30", records, srecords, meta, smeta,

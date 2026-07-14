@@ -962,17 +962,26 @@ def render_signals_sheet(wb: openpyxl.Workbook, records: List[Dict[str, Any]], m
 # SHEET 3 — RECONCILIATION  (the integrity backbone: per-identity PASS/FAIL/PENDING)
 #
 # Never fake PASS, never fake FAIL, never compute outside the DB. Each block states
-# an identity, its two sides from the DB, and a status. Partition blocks (1,3) FAIL
+# an identity, its two sides from the DB, and a status. Partition blocks (1,2) FAIL
 # on an UNMAPPED status (schema drift). The CAPITAL block is a real cross-source
 # check (fm_ledger RELEASE_USED.pnl_delta vs Σ trades.net_pnl). The BROKER block is
 # PENDING_CAPTURE (broker P&L/positions/margin are not persisted → W2/W3) — never FAIL.
+#
+# M-R4 (14-Jul-2026): the old "2 · ORDER" block (qualified = order_placed_ok +
+# placement_failed) was DELETED and the remaining blocks renumbered. Its RHS was derived
+# from its LHS (placement_failed ≡ qualified − placed_ok), so RHS == LHS identically and it
+# could NEVER FAIL — it compared the trade list to itself and printed "PASS/verified" while
+# verifying nothing. A block that manufactures false confidence is worse than no block.
+# Genuine signal→order reconciliation needs an INDEPENDENT external source (the broker's
+# full-day order count); that folds into 4 · BROKER once the P1 feeder is authoritative.
+# Until then this is an honest gap, not a fake check.
 # ═════════════════════════════════════════════════════════════════════════════════
 
 _CAPITAL_DRIFT_TOLERANCE = 1.0   # ₹ — ledger-vs-trades realized P&L must match within this
 
 
 def _trade_bucket(status: str) -> str:
-    # Reconciliation Block-3 is a STATUS partition of every trade record. Its "entered"
+    # Reconciliation Block-2 is a STATUS partition of every trade record. Its "entered"
     # class = the order reached a live-or-closed position status (open/partial/exiting/
     # closed/closed_manual). FIX 3 (Phase-B.1): renamed from "filled" so the word
     # "filled" has ONE meaning report-wide — the Dashboard's qty-based execution metric
@@ -1015,18 +1024,10 @@ def build_reconciliation(store: StateStore, date_iso: str,
                    f"(full received=Qual+Rej+Dup identity awaits W9)."),
     })
 
-    # 2 · ORDER  (funnel: qualified = order_placed_ok + placement_failed)
-    qualified = len(trade_records)   # each trade row == one qualified signal
-    placed_ok = sum(1 for t in trade_records if t.get("broker_order_id"))
-    placement_failed = qualified - placed_ok
-    blocks.append({
-        "name": "2 · ORDER", "identity": "qualified = order_placed_ok + placement_failed",
-        "lhs": qualified, "rhs": placed_ok + placement_failed,
-        "status": "PASS" if qualified == placed_ok + placement_failed else "FAIL", "verified_at": trd_at,
-        "detail": f"order_placed_ok (entry order present)={placed_ok}; placement_failed (no entry order)={placement_failed}.",
-    })
-
-    # 3 · TRADE  (partition; FAIL on unmapped status)
+    # 2 · TRADE  (partition; FAIL on unmapped status)
+    # NB: the former "2 · ORDER" block was DELETED (M-R4 — see the sheet header): its identity
+    # was a tautology (RHS derived from LHS) so it could never FAIL. Order reconciliation needs
+    # an external source; it folds into 4 · BROKER once the P1 feeder is authoritative.
     tb: Dict[str, int] = defaultdict(int)
     for t in trade_records:
         tb[_trade_bucket(t.get("trade_status"))] += 1
@@ -1034,14 +1035,14 @@ def build_reconciliation(store: StateStore, date_iso: str,
     rhs3 = tb["entered"] + tb["cancelled"] + tb["rejected_failed"] + tb["pending"]
     d3 = placed - rhs3   # == #unmapped
     blocks.append({
-        "name": "3 · TRADE", "identity": "placed = entered + cancelled + rejected/failed + pending",
+        "name": "2 · TRADE", "identity": "placed = entered + cancelled + rejected/failed + pending",
         "lhs": placed, "rhs": rhs3, "status": "PASS" if d3 == 0 else "FAIL", "verified_at": trd_at,
         "detail": (f"entered(open/partial/exiting/closed)={tb['entered']} cancelled={tb['cancelled']} "
                    f"rejected/failed={tb['rejected_failed']} pending={tb['pending']}; Δ={d3} (unmapped → 0). "
                    "NB: 'entered' = STATUS reached a position; distinct from the Dashboard's qty-based 'filled'."),
     })
 
-    # 4 · CAPITAL  (opening + realized = closing; ledger realized == trades realized)
+    # 3 · CAPITAL  (opening + realized = closing; ledger realized == trades realized)
     o = store.fetch_one("SELECT balance_after FROM fm_ledger WHERE date=? AND entry_type='INIT' "
                         "ORDER BY ts LIMIT 1", (date_iso,))
     opening = _f(o["balance_after"]) if o else None
@@ -1069,14 +1070,14 @@ def build_reconciliation(store: StateStore, date_iso: str,
                       "RELEASE_USED.pnl_delta is the clean trade-close realized. (The RESET_PNL ledger row is a "
                       "by-design daily EOD reset, NOT pollution; RMS closes pass costs=0.0 can drift — flagged, not hidden.)")
     blocks.append({
-        "name": "4 · CAPITAL", "identity": "opening + realized_pnl = closing  (ledger == trades)",
+        "name": "3 · CAPITAL", "identity": "opening + realized_pnl = closing  (ledger == trades)",
         "lhs": ledger_realized, "rhs": trades_realized, "status": cap_status, "verified_at": led_at,
         "detail": cap_detail,
     })
 
-    # 5 · BROKER  (pending capture — never FAIL)
+    # 4 · BROKER  (pending capture — never FAIL; future home of external order reconciliation, M-R4)
     blocks.append({
-        "name": "5 · BROKER", "identity": "system P&L = broker P&L · positions · margin",
+        "name": "4 · BROKER", "identity": "system P&L = broker P&L · positions · margin",
         "lhs": "—", "rhs": "pending W2/W3", "status": "PENDING_CAPTURE", "verified_at": "—",
         "detail": "broker P&L / positions / margin are NOT persisted (in-memory only) — W2 (broker margin blocked) / W3 (pnl+position reconciliation wiring).",
     })
