@@ -483,6 +483,32 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > `bash deploy/security/install_copy_protection.sh --uninstall` (removes the symlinks; real `/usr/bin`
 > binaries untouched).
 
+> 🛡️🔎 **Q8 VM-SECURITY FORENSICS (14-Jul-2026, read-only) — NO BREACH.** Report
+> `docs/audit/q8_vm_security_breach_forensics_14jul2026.md`; memory `q8_vm_security_forensics_14jul`.
+> Durable facts: **(1) the "18:00–08:00 time-lock" is `copy_gate.py` (VM→PC file copies) — NOT an SSH
+> gate. SSH has NO time/network restriction** (24/7 `0.0.0.0:22`, key-only: `PasswordAuthentication no`
+> + `PermitRootLogin no` + fail2ban). ⚠️ **Never add an 18:00–08:00 SSH lock — that IS Rama's off-market
+> deploy window** (a time-locked SSH would lock the operator out). (2) 2,246 SSH logins are 100%
+> publickey/`ubuntu`/Airtel-India; the only foreign IP (`45.198.224.120`, Stockholm bot) failed 327×,
+> **0 success**. (3) The Jul-13 09:16 `authorized_keys` change to `BRi6…` (vs baseline `uDRN8…`) was
+> **Rama's own un-baselined rotation** (bash_history nano-edits + bracketing session) that
+> `security-watcher` correctly alerted on → **run `scripts/approve_ssh_keys.py --apply` to re-baseline
+> and reset the tripwire.** (4) **`ubuntu ≡ root`** here (sole login user + `NOPASSWD:ALL`) → leverage is
+> keeping intruders off `ubuntu` (SSH→Tailscale-only + key passphrase), NOT `.env` file-mode. Controls
+> PROPOSE-not-apply; recovery path for any SSH change = **OCI serial/VNC console**.
+
+> 🧾🔍 **PENDING SOURCE-OF-TRUTH (14-Jul-2026):** the 10-Jul master pending list was reconciled
+> against HEAD → **`docs/audit/pending_reconciliation_14jul2026.md` is now the authoritative pending
+> register** (supersedes `MASTER_PENDING_TRUE_FINAL_10JUL.txt`, a Downloads file not in-repo).
+> Durable facts it establishes: **Audit-B Phases 9 (Operations) + 10 (Security) were NEVER completed**
+> (`docs/audit/audit_05jul2026.md` ends mid-Phase-9, "Batch 5 running") → pending, not clean.
+> **M-S4 is PARTIAL** — substrate (schema-v44 `daily_symbol_stats`, `candle_math.rsi`, forward-shadow
+> recorder) shipped default-OFF, but the live bug persists (`screening/secondary_screener.py:407
+> "atr": None` → screening steps 1&3 still 0.0). **The stale duplicate `deploy/post-receive` still
+> carries the wrong `/home/ubuntu/trading-system` path** — the canonical `deploy/hooks/post-receive`
+> AND the LIVE VM hook are correct (`/home/ubuntu/systems/trading-system`), so deploys land; the dup
+> is a record-don't-fix footgun. memory `pending_reconciliation_14jul`.
+
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
 ---
