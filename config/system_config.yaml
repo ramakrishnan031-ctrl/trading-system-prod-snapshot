@@ -363,7 +363,7 @@ portfolio_allocator:         # V3 03.05 — ranked batch admission (default-OFF;
   regret_log_path: "data_store/allocator/regret.jsonl"  # shadow regret rows (JSONL, created on first write)
 
 v3_chain:                     # V3 Step 10 — decision-chain SHADOW enrichment (default-OFF; byte-identical while off)
-  v3_chain_mode: "off"        # ★ master gate (paper+live): off | shadow. off = V3ChainRunner NOT constructed → v3_chain=None → hot-path hook is a skipped flag check (BYTE-IDENTICAL). shadow = fire-and-forget background enrichment; the V3 verdict is LOG-ONLY (never rejects/delays/alters a live order). BINARY — no enforce in 10a
+  v3_chain_mode: "shadow"        # ★ master gate (paper+live): off | shadow. off = V3ChainRunner NOT constructed → v3_chain=None → hot-path hook is a skipped flag check (BYTE-IDENTICAL). shadow = fire-and-forget background enrichment; the V3 verdict is LOG-ONLY (never rejects/delays/alters a live order). BINARY — no enforce in 10a
   # gate knobs (spec §3) — ALL SEEDS to be calibrated from shadow data
   atr30_period: 14            # ATR(30m) period for the G-RR SL buffer (distinct from regime.atr_period)
   rr_floor: 2.0               # G-RR: R:R must be >= this
@@ -409,7 +409,7 @@ v3_chain:                     # V3 Step 10 — decision-chain SHADOW enrichment 
   would_be_log_path: "data_store/v3/would_be.jsonl"
 
 watchlist:                    # V3 Step 10b — PB-01 overnight watchlist + next-morning entry stage (default-OFF; byte-identical while off)
-  enabled: false              # ★ master gate (paper+live): false = capture worker + entry-stage monitor NOT constructed → an EOD webhook is captured to nothing (BYTE-IDENTICAL). ANALYSIS ONLY — no position/capital/CNC/GTT; PB-01 stays enabled:false (fail-closed) regardless
+  enabled: true              # ★ master gate (paper+live): false = capture worker + entry-stage monitor NOT constructed → an EOD webhook is captured to nothing (BYTE-IDENTICAL). ANALYSIS ONLY — no position/capital/CNC/GTT; PB-01 stays enabled:false (fail-closed) regardless
   playbook_scanner: "pb01_breakout_retest"   # the eod scanner this watchlist owns (→ the pb01_breakout_retest strategy)
   # capture (EOD, day D) — ALL SEEDS
   level_lookback_sessions: 20       # LEVEL = highest daily HIGH of the N sessions BEFORE the breakout day
