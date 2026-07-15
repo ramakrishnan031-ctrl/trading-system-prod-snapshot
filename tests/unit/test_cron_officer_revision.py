@@ -60,7 +60,10 @@ def test_officer_config_eod_time_and_ban():
     reg = CronRegistry.load(_REAL)
     assert reg.officer.morning_briefing_time == "09:20"
     assert reg.eod_report_time(MON, Path("config")) == time(18, 50)
-    assert reg.officer.ban_active(MON) is True
+    # F4 (15-Jul): the stale telegram_ban_until ('2026-06-23') was PURGED (null) — no ban
+    # is active for any date now. (This previously asserted ban_active(MON) is True.)
+    assert reg.officer.telegram_ban_until is None
+    assert reg.officer.ban_active(MON) is False
     assert reg.officer.ban_active(date(2026, 6, 24)) is False
 
 
