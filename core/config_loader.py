@@ -1572,6 +1572,17 @@ class EodReconcileConfig(BaseModel):
     pnl_tolerance: float = 100.0
 
 
+class EodCleanupConfig(BaseModel):
+    """EOD hygiene prune (scripts/eod_cleanup.py step 4). `signal_retention_days` = keep-window
+    (days) for terminal NOISE signal fingerprints (EXPIRED / DUPLICATE / REJECTED_*); older ones
+    are DROPPED — children-first (FK-safe), batched — so the signals table + its dedup index do
+    not grow unbounded (a live DB holds operational data, not a research archive). Trade-linked
+    signals are NEVER pruned (capital-safety guard lives in the script). Tunable; lower it for a
+    one-time backlog clear, then raise back. Default 90 (Rama, 15-Jul-2026)."""
+    model_config = ConfigDict(extra="forbid")
+    signal_retention_days: int = Field(default=90, ge=1)
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     broker: BrokerConfig = BrokerConfig()  # FIX-133 Item 28
@@ -1594,6 +1605,7 @@ class SystemConfig(BaseModel):
     logging: LoggingConfig                    # FIX-099: logging subsystem config
     order_reconciler: OrderReconcilerConfig   # RC17: reconciler tuning
     eod_reconcile: EodReconcileConfig = Field(default_factory=EodReconcileConfig)  # P1: broker-authoritative EOD reconcile (shadow default)
+    eod_cleanup: EodCleanupConfig = Field(default_factory=EodCleanupConfig)  # 15-Jul: signal-fingerprint retention prune (children-first, FK-safe)
     tgt_retry: TgtRetryConfig = Field(default_factory=TgtRetryConfig)  # Task: standalone TGT retry
     shadow_tracker: ShadowTrackerConfig       # SH11: multi-inning tracking config
     sr_detector: SRDetectorConfig = Field(default_factory=SRDetectorConfig)  # SNR-DETECTOR-V1: shadow S&R detector (default-off)

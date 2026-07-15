@@ -7,6 +7,7 @@ gated (NOT_CHECKED at 15:58, never blocks VERIFIED).
 """
 from __future__ import annotations
 
+import logging
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 from core.state_store import StateStore
 from scripts.eod_broker_reconcile import (
     BrokerState, LocalState, compute_verdict, persist, margin_reliable_now,
+    _local_capital_snapshot,
     VERIFIED, ISSUES, UNVERIFIED, NOT_CHECKED,
 )
 
@@ -143,3 +145,37 @@ def test_persist_writes_verdict_and_pnl_reconciliation_correct_columns():
         assert abs(pr["broker_pnl"] - (-500.0)) < 1e-6 and abs(pr["system_pnl"] - (-100.0)) < 1e-6
         assert abs(pr["variance"] - 400.0) < 1e-6       # fail-on-old: eod_verify's query = dead 0.0
         store.close()
+
+
+class TestLocalCapitalSnapshot:
+    """Fix 3 (15-Jul): _local_capital_snapshot queried `ORDER BY id`, but fm_ledger's PK is
+    `ledger_id` -> "no such column: id" -> caught -> a SILENT 0.0 total (wrong capital
+    snapshot). Harmless in shadow (margin NOT_CHECKED) but wrong once margin-checking is
+    authoritative. Fails on old code (returns 0.0), passes on the fix (real latest balance)."""
+
+    def test_returns_latest_ledger_balance(self, tmp_path):
+        store = StateStore(db_path=tmp_path / "t.db")
+        try:
+            with store.transaction() as cur:
+                cur.execute(
+                    "INSERT INTO fm_ledger (ts, entry_type, amount, bucket, balance_before, "
+                    "balance_after) VALUES (?, 'INIT', 0.0, 'intraday', 0.0, 10000.0)",
+                    ("2026-05-31T10:00:00+05:30",))
+                cur.execute(
+                    "INSERT INTO fm_ledger (ts, entry_type, amount, bucket, balance_before, "
+                    "balance_after) VALUES (?, 'RELEASE_USED', -100.0, 'intraday', 10000.0, 9876.5)",
+                    ("2026-05-31T15:00:00+05:30",))
+            ok, total = _local_capital_snapshot(store, logging.getLogger("test"))
+        finally:
+            store.close()
+        assert ok is True
+        # latest row (ledger_id DESC) balance_after — NOT the silent 0.0 the old `id` query gave
+        assert abs(total - 9876.5) < 1e-6
+
+    def test_empty_ledger_returns_zero(self, tmp_path):
+        store = StateStore(db_path=tmp_path / "t.db")
+        try:
+            ok, total = _local_capital_snapshot(store, logging.getLogger("test"))
+        finally:
+            store.close()
+        assert ok is True and total == 0.0

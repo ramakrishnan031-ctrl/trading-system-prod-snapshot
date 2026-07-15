@@ -61,7 +61,7 @@
 | M-R2 | legacy P&L excludes CLOSED_MANUAL | CLOSED | `9a303ee` | |
 | M-R3 | Block-4 false FAIL overnight CNC | CLOSED | `342b871` | keys by close date |
 | M-R4 | Block-2 identity tautology | CLOSED | `23ddd29` + `mr4_block2_order_reconciliation_14jul2026.md` | block deleted |
-| M-SC2 | screened_stocks_csv → non-existent DB | CLOSED | `522da32` | |
+| M-SC2 | screened_stocks_csv → non-existent DB | **PARTIAL** (re-graded 15-Jul) | `522da32` | DB-path defect genuinely fixed by 522da32, but runtime evidence (15-Jul) shows the report still produced no data — a SEPARATE older `store.transaction(readonly=True)` TypeError (FIX-039, 14-May). Residual **M-SC2b FIXED `d3499b9`** (read-only connection). See `docs/audit/fixes_15jul2026.md`. |
 | M-SC3 | eod_cleanup reaper filters dead status | CLOSED | `501d14f` | IN_PROCESS→PROCESSING |
 | P3-r8 | charges computed, never validated vs contract note (Ph8) | OPEN | 0 fix commits | manual parity task |
 | P3-r9 | raw exec-log unlinkable, trade_id NULL | OPEN | 0 fix commits | set OrderFilled.trade_id |

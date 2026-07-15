@@ -117,9 +117,11 @@ class TestFingerprintPrune:
     """The pipeline persists REJECTED_<check> (never a bare 'REJECTED'), so the old
     `status IN (...,'REJECTED')` filter pruned no rejects at all -> unbounded growth in a
     table the dedup path reads. And the dry-run counted ALL old rows, not just the prunable
-    ones. Both fixed: GLOB 'REJECTED*' + shared predicate for preview == action."""
+    ones. Both fixed: GLOB 'REJECTED*' + shared predicate for preview == action.
+    (15-Jul: the default retention is now 90d from config, so these tests pass an explicit
+    signal_retention_days=7 to keep exercising the prune with the seeded 30-day-old dates.)"""
 
-    _OLD = "2026-05-01"          # well before the date_iso - 7d cutoff
+    _OLD = "2026-05-01"          # well before a date_iso - 7d cutoff
 
     def _seed(self, store):
         _insert_signal(store, "REJECTED_DUPLICATE_SYMBOL", self._OLD)
@@ -133,6 +135,7 @@ class TestFingerprintPrune:
         self._seed(store)
         results = run_eod_cleanup(
             store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+            signal_retention_days=7,
         )
         # 2 REJECTED_* + EXPIRED + DUPLICATE pruned; TRADED + PROCESSED kept
         assert results["fingerprints_pruned"] == 4
@@ -145,15 +148,112 @@ class TestFingerprintPrune:
         self._seed(store)
         dry = run_eod_cleanup(
             store=store, date_iso="2026-05-31", log=logging.getLogger("test"), dry_run=True,
+            signal_retention_days=7,
         )
         # dry-run deletes nothing
         assert store.fetch_one("SELECT COUNT(*) AS n FROM signals")["n"] == 6
         actual = run_eod_cleanup(
             store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+            signal_retention_days=7,
         )
         # preview == action == the 4 prunable rows (old code over-counted the preview at 6)
         assert dry["fingerprints_pruned"] == 4
         assert actual["fingerprints_pruned"] == 4
+
+
+class TestFingerprintPruneFkSafe:
+    """15-Jul-2026 fix: P10 broadened the prune to GLOB 'REJECTED*', but those signals are
+    FK-referenced by screener_results (foreign_keys=ON) -> the whole `DELETE FROM signals`
+    rolled back every 15:50 run (~108k stuck, +4.3k/session). The prune is now children-first
+    + batched + capital-guarded (NOT EXISTS trades). These tests ERROR on the pre-fix code
+    (FK IntegrityError in test (a)) and pass on the fix."""
+
+    _OLD = "2026-05-01"
+
+    @staticmethod
+    def _add_screener_child(store, signal_id, date_str="2026-05-01"):
+        ts = f"{date_str}T10:00:00+05:30"
+        with store.transaction() as cur:
+            cur.execute(
+                """INSERT INTO screener_results
+                   (signal_id, score, tier, status, step_results, latencies,
+                    market_data_snapshot, ts)
+                   VALUES (?, 57, 'LOW', 'REJECTED_SCORE_57', '{}', '{}', '{}', ?)""",
+                (signal_id, ts),
+            )
+
+    def test_rejected_with_screener_child_pruned_fk_clean(self, store):
+        # (a) old REJECTED_* WITH a screener_results child = the live FK-rollback trigger.
+        sid_a = _insert_signal(store, "REJECTED_SCORE_57", self._OLD)
+        self._add_screener_child(store, sid_a)
+        # (c) old EXPIRED, no children.
+        _insert_signal(store, "EXPIRED", self._OLD)
+
+        results = run_eod_cleanup(
+            store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+            signal_retention_days=7,
+        )
+        # both pruned; the screener child dropped children-first with its parent
+        assert results["fingerprints_pruned"] == 2
+        assert store.fetch_one("SELECT COUNT(*) AS n FROM signals")["n"] == 0
+        assert store.fetch_one("SELECT COUNT(*) AS n FROM screener_results")["n"] == 0
+        # FK integrity clean afterward (no dangling child)
+        assert store.fetch_all("PRAGMA foreign_key_check") == []
+
+    def test_trade_linked_signal_never_pruned(self, store):
+        # (b) CAPITAL-SAFETY: a signal WITH a `trades` child is NEVER deleted, even when its
+        # status matches the prune filter (adversarial — proves the NOT EXISTS trades guard).
+        ts = f"{self._OLD}T10:00:00+05:30"
+        sid_b = str(uuid.uuid4())
+        tid = str(uuid.uuid4())
+        with store.transaction() as cur:
+            cur.execute(
+                """INSERT INTO signals
+                   (signal_id, symbol, scanner, strategy, triggered_at, received_at,
+                    expires_at, status, fingerprint, fingerprint_date, trigger_price)
+                   VALUES (?, 'TEST', 'test', 'test', ?, ?, ?, 'REJECTED_SCORE_57', ?, ?, 100.0)""",
+                (sid_b, ts, ts, ts, f"fp-{sid_b}", self._OLD),
+            )
+            cur.execute(
+                """INSERT INTO trades
+                   (trade_id, signal_id, symbol, direction, strategy, qty_planned,
+                    qty_filled, entry_target_price, sl_initial, tgt_initial,
+                    margin_reserved, risk_amount, created_at, status,
+                    order_protocol, updated_at)
+                   VALUES (?, ?, 'TEST', 'LONG', 'test', 10, 10, 100.0, 95.0, 110.0,
+                           2000.0, 500.0, ?, 'CLOSED', 'LIMIT_TRIPLE', ?)""",
+                (tid, sid_b, ts, ts),
+            )
+
+        results = run_eod_cleanup(
+            store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+            signal_retention_days=7,
+        )
+        # the trade-linked signal survives; nothing pruned
+        assert results["fingerprints_pruned"] == 0
+        assert store.fetch_one(
+            "SELECT COUNT(*) AS n FROM signals WHERE signal_id = ?", (sid_b,))["n"] == 1
+        assert store.fetch_all("PRAGMA foreign_key_check") == []
+
+    def test_batched_prune_clears_backlog_over_one_batch(self, store):
+        # a backlog larger than one batch (_PRUNE_BATCH) clears fully across COMMITted chunks.
+        from scripts.eod_cleanup import _PRUNE_BATCH
+        n = _PRUNE_BATCH + 50
+        ts = f"{self._OLD}T10:00:00+05:30"
+        with store.transaction() as cur:
+            cur.executemany(
+                """INSERT INTO signals
+                   (signal_id, symbol, scanner, strategy, triggered_at, received_at,
+                    expires_at, status, fingerprint, fingerprint_date, trigger_price)
+                   VALUES (?, 'TEST', 'test', 'test', ?, ?, ?, 'REJECTED_SCORE_57', ?, ?, 100.0)""",
+                [(str(uuid.uuid4()), ts, ts, ts, f"fp-{i}", self._OLD) for i in range(n)],
+            )
+        results = run_eod_cleanup(
+            store=store, date_iso="2026-05-31", log=logging.getLogger("test"),
+            signal_retention_days=7,
+        )
+        assert results["fingerprints_pruned"] == n
+        assert store.fetch_one("SELECT COUNT(*) AS n FROM signals")["n"] == 0
 
 
 # ── Stale orders ─────────────────────────────────────────────────────────
