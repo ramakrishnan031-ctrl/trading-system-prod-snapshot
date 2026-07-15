@@ -708,4 +708,4 @@ officer:
   # may have just fired and not yet committed its heartbeat -> PENDING not MISSED
   # (stops the 09:20 cron-cluster false-CRITICAL). Real misses (> N min) still flag.
   miss_grace_minutes: 2
-  telegram_ban_until: '2026-06-23'
+  telegram_ban_until: null    # F4 (15-Jul-2026): stale past ban ('2026-06-23') PURGED — it was inert (a past date) but confusing. null = no ban.

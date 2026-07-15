@@ -439,12 +439,21 @@ def _clear_degraded_marker(sentinel_dir: Path) -> None:
 # ------------------------------------------------------------------------------
 
 def _setup_watcher_log(log_path: Path) -> logging.Logger:
-    """Configure the watcher's own plain-text log file (AW8)."""
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    """Configure the watcher's own plain-text log file (AW8).
+
+    F4 (15-Jul-2026): DATE-EMBED the filename (logs/alert_watcher_<YYYY-MM-DD>.log) — one
+    file per day, cleaned by the log_cleanup cron (`find logs -name '*.log' -mtime +30`),
+    matching the system-wide convention (Foundation Rule 1.7: date-embedded names, NOT a
+    RotatingFileHandler mid-day split). This bounds the previously-unbounded single
+    alert_watcher.log (14 MB during the SMTP loop); F1 removes the growth SOURCE, this
+    caps accumulation. (--once model recomputes the date each invocation → correct daily
+    files; a long-lived --loop would roll on restart.)"""
+    dated = log_path.parent / f"{log_path.stem}_{now_ist().strftime('%Y-%m-%d')}{log_path.suffix}"
+    dated.parent.mkdir(parents=True, exist_ok=True)
     log = logging.getLogger("alert_watcher")
     log.setLevel(logging.DEBUG)
     if not log.handlers:
-        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh = logging.FileHandler(dated, encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         log.addHandler(fh)
     return log

@@ -608,15 +608,17 @@ class TestWatcherLog(unittest.TestCase):
         self._tmpdir.cleanup()
 
     def test_log_file_created(self):
+        # F4 (15-Jul): the watcher log is now DATE-EMBEDDED (alert_watcher_<date>.log) —
+        # one file per day (Foundation Rule 1.7; cleaned by log_cleanup) — NOT a single
+        # unbounded alert_watcher.log. (This test previously asserted the fixed name.)
         log_path = self.tmpdir / "logs" / "alert_watcher.log"
-        self.assertFalse(log_path.exists())
         log = _setup_watcher_log(log_path)
         log.info("test message")
-        # Flush handler
         for h in log.handlers:
             h.flush()
-        self.assertTrue(log_path.exists())
-        # Cleanup handlers
+        dated = list((self.tmpdir / "logs").glob("alert_watcher_*.log"))
+        self.assertEqual(len(dated), 1, "exactly one date-embedded log created")
+        self.assertFalse(log_path.exists(), "the old fixed name is no longer used")
         for h in log.handlers[:]:
             log.removeHandler(h)
             h.close()
