@@ -7,6 +7,7 @@ tests/unit/test_gemini_log_review_hardening.py — 23-Jun gemini review hardenin
 from __future__ import annotations
 
 import logging
+from unittest.mock import create_autospec
 
 import scripts.gemini_log_review as glr
 
@@ -97,7 +98,9 @@ def test_degraded_but_completed_no_sentinel(tmp_path, monkeypatch):
     monkeypatch.setattr(ac, "write_critical_sentinel", lambda **kw: calls.append(kw))
     monkeypatch.setattr(glr, "_call_gemini_cli", lambda *a, **k: "real review text")
     monkeypatch.setattr(glr, "_send_telegram_summary", lambda *a, **k: None)
-    monkeypatch.setattr(ch, "record_heartbeat", lambda *a, **k: None)
+    # AUTOSPEC (15-Jul-2026): enforce the real record_heartbeat signature at the mock boundary
+    # (was a permissive `lambda *a, **k`). See test_cron_heartbeat_contract.py.
+    monkeypatch.setattr(ch, "record_heartbeat", create_autospec(ch.record_heartbeat, return_value=None))
     out_dir = tmp_path / "out"
     rc = glr.run_review("2026-06-23", _logdir_with_error(tmp_path), out_dir,
                         tmp_path / "wm", logging.getLogger("t"), dry_run=False)

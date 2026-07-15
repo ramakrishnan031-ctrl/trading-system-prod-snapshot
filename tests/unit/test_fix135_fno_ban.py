@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
@@ -340,15 +340,17 @@ class TestMainBehaviour:
 class TestCronMainHeartbeat:
     @pytest.fixture()
     def heartbeats(self, monkeypatch):
-        recorded: list[dict] = []
-
-        def _capture(job_name, status="SUCCESS", duration_sec=None, message=None, db_path=None):
-            recorded.append({"job": job_name, "status": status, "message": message})
-            return True
-
-        monkeypatch.setattr("utils.cron_heartbeat.record_heartbeat", _capture)
+        # AUTOSPEC (15-Jul-2026): build the record_heartbeat stand-in from the REAL function
+        # via create_autospec so it ENFORCES the live signature. The previous hand-written stub
+        # hard-coded a param list and broke the moment Branch-B/F2 inserted `functional_status`
+        # into record_heartbeat (TypeError at the HeartbeatTimer.__exit__ boundary); an autospec
+        # mock tracks the signature automatically. See test_cron_heartbeat_contract.py.
+        import utils.cron_heartbeat as _ch
+        hb = create_autospec(_ch.record_heartbeat)
+        hb.return_value = True
+        monkeypatch.setattr("utils.cron_heartbeat.record_heartbeat", hb)
         monkeypatch.setattr("utils.cron_heartbeat.skip_if_non_trading_day", lambda *a, **k: False)
-        return recorded
+        return hb
 
     def test_success_records_heartbeat_exit_0(self, tmp_path, monkeypatch, heartbeats):
         db = tmp_path / "t.db"
@@ -359,7 +361,8 @@ class TestCronMainHeartbeat:
         )
         rc = _cron_main(["--db", str(db)])
         assert rc == 0
-        assert heartbeats and heartbeats[-1]["status"] == "SUCCESS"
+        assert heartbeats.called
+        assert heartbeats.call_args.kwargs["status"] == "SUCCESS"
         store2 = StateStore(db_path=db)
         assert is_symbol_fno_banned(store2, "KAYNES") is True
 
@@ -374,7 +377,8 @@ class TestCronMainHeartbeat:
         rc = _cron_main(["--db", str(db)])
         assert rc == 0  # soft failure → exit 0
         # Heartbeat recorded as SUCCESS, NOT FAILED — Cron Officer sees "done".
-        assert heartbeats and heartbeats[-1]["status"] == "SUCCESS"
+        assert heartbeats.called
+        assert heartbeats.call_args.kwargs["status"] == "SUCCESS"
 
 
 # ── Config ────────────────────────────────────────────────────────────────
