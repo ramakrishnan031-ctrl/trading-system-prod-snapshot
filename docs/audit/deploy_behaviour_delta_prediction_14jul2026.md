@@ -205,19 +205,26 @@ far below 40% of total. Any deviation is itself a finding to write up before the
 
 ---
 
-## §7. OBSERVED (fill AFTER the first deployed session — reusable template)
+## §7. OBSERVED (filled after session-1 — 15-Jul-2026)
+
+> Filled by the read-only 15-Jul day-reconstruction diagnostic. Full evidence +
+> per-item pointers: `docs/audit/day_reconstruction_15jul2026.md`. Session ran unattended
+> through Rama's local power outage (VM is PC-independent; token auto-refreshes VM-side).
 
 | Field | Value |
 |---|---|
-| Session date | _pending_ |
-| Boot | _clean? migration? guards?_ |
-| PREDICTED vs OBSERVED trade count | _pending_ |
-| Signals rejected (by reason) | _pending_ |
-| Trades prevented (gate-8 / M-S5) | _pending_ |
-| Duplicates prevented (M-S6) | _pending — expect 0, dormant_ |
-| Sector rejections | _pending — expect 0_ |
-| Signals recovered (M-S2 re-queue) | _pending_ |
-| **UNEXPECTED REJECTS** | _any reject not mapped to §A/§B → STOP_ |
-| Rollback decision + reasoning | _pending_ |
+| Session date | **2026-07-15** (first supervised session) |
+| Boot | **CLEAN** — 08:15:04, `run_all_startup_checks OK warnings=[]`; **NO migration** (`schema_meta.schema_version=44` == `EXPECTED_SCHEMA_VERSION 44`); `check_kill_switch_present: OK`; no config-auditor abort. Deploy intact (bare `2dc69d5`, config mtime 14-Jul 18:52 unchanged). |
+| PREDICTED vs OBSERVED trade count | **HELD.** 12 trade rows (7 fills all closed flat, 4 FAILED, 1 REJECTED) vs pre-deploy 14-Jul **11** / 13-Jul **14** → in-baseline. |
+| Signals rejected (by reason) | 4,317 signals — ALL mapped: STRATEGY_CONTROL 1459 · SCORE_* ~2300 · SHADOW_INNING_ACTIVE 323 · QUOTE_UNAVAILABLE 130 · CIRCUIT_PROXIMITY 21 · SIZING_CONCENTRATION 21 · OPEN_POSITIONS 20 · ENTRY_THROTTLED 11 · DUPLICATE_SYMBOL 7 · STRATEGY_POSITION_LIMIT 4 · PLACEMENT_FAILED 1. |
+| Trades prevented (gate-8 / M-S5) | **gate-8 SECTOR_EXPOSURE = 0** (as predicted; Finding-1 resting-book term structurally 0). **M-S5 SHADOW_INNING_ACTIVE = 323** on 3 symbols (NUVOCO 247 / LANDMARK 74 / WANBURY 2), **each with a genuine active inning** (real trade closed → sim inning). **IN-BASELINE** (prior sessions 122–840; today low end) — pre-existing `shadow_tracker` mechanism, **not** deploy-new, **no mis-fire**. |
+| Duplicates prevented (M-S6) | **0** — duplicate-real-trade-per-signal query EMPTY; path dormant (`wait_for_retest_enabled: false`). |
+| Sector rejections | **0** (as predicted). |
+| Signals recovered (M-S2 re-queue) | **0** — `signals WHERE status='QUEUE_FULL'` = 0; queue never filled. |
+| **UNEXPECTED REJECTS** | **NONE** — every reject reason maps to §A/§B or a normal pipeline gate. |
+| Rollback decision + reasoning | **Deferred to Web Claude + Rama** (the 15-Jul diagnostic was read-only and does not decide reverts). **No STOP trigger substantively met**: book flat & reconciled, count in-baseline, all rejects mapped, SECTOR/QUEUE_FULL/dups=0. The **literal** "SHADOW_INNING > a couple → STOP" threshold tripped (323), but investigation shows it is **baseline / genuine innings / no mis-fire** → the threshold was mis-calibrated vs the pre-existing `shadow_tracker`; **recommend RECALIBRATE**, not revert. |
 
-**Any UNEXPECTED REJECT → STOP, REPORT, BE READY TO REVERT.**
+**Outcome: session-1 matched the prediction. No UNEXPECTED reject; no revert indicated.** The one
+pre-registered watch (M-S5 volume) tripped numerically but is confirmed expected-behaviour — recalibrate
+the threshold. Separately flagged (non-safety, non-trading): `eod_cleanup` + `generate_screened_csv`
+cron failures; PB-01 capture wrote no row (alert not wired); 18:15 forward-shadow cron PENDING.
