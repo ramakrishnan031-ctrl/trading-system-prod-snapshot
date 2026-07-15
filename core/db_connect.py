@@ -109,3 +109,29 @@ def connect(
     if attach:
         attach_analytics(conn, main_db_path)
     return conn
+
+
+def connect_readonly(
+    main_db_path: str | Path,
+    *,
+    timeout: float = 30.0,
+) -> sqlite3.Connection:
+    """
+    Open a READ-ONLY sqlite3 connection to the trading DB.
+
+    Opened with a URI ``mode=ro`` filename + ``PRAGMA query_only=ON`` so the
+    connection is STRUCTURALLY unable to write or migrate the schema — a
+    reporting / analysis job can never mutate production data through it, and it
+    does NOT go through the migrating ``StateStore`` init (the wrong tool for a
+    read). ``mode=ro`` requires the file to already exist (it will not create it).
+
+    Main-DB reads only (``trades`` / ``signals`` / …); analytics.db is NOT
+    attached (a read-only attach would need the WAL/synchronous pragmas, which
+    require write access). The row factory is left at the sqlite3 default
+    (tuples); the caller may set ``conn.row_factory`` afterwards.
+    """
+    uri = Path(main_db_path).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=timeout)
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA query_only = ON")
+    return conn

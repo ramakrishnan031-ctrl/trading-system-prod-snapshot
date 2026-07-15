@@ -28,6 +28,7 @@ FIX-039: Rewritten to use StateStore DB queries instead of log parsing.
 from __future__ import annotations
 
 import csv
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,7 +37,7 @@ from typing import List, Tuple
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.state_store import StateStore
+from core import db_connect
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +109,12 @@ def expand_rejection_reason(rejection_reason: str | None, status: str) -> str:
 # DB queries
 # ---------------------------------------------------------------------------
 
-def get_traded_symbols(store: StateStore, date_str: str) -> List[str]:
+def get_traded_symbols(conn: sqlite3.Connection, date_str: str) -> List[str]:
     """
     Query trades table for symbols that were actually traded on the given date.
 
     Args:
-        store: StateStore instance
+        conn: a READ-ONLY sqlite3 connection (db_connect.connect_readonly)
         date_str: Date in YYYY-MM-DD format
 
     Returns:
@@ -127,19 +128,16 @@ def get_traded_symbols(store: StateStore, date_str: str) -> List[str]:
         ORDER BY symbol
     """
 
-    with store.transaction(readonly=True) as cur:
-        cur.execute(query, (date_str,))
-        rows = cur.fetchall()
-
+    rows = conn.execute(query, (date_str,)).fetchall()
     return [row[0] for row in rows]
 
 
-def get_non_traded_symbols(store: StateStore, date_str: str) -> List[Tuple[str, str]]:
+def get_non_traded_symbols(conn: sqlite3.Connection, date_str: str) -> List[Tuple[str, str]]:
     """
     Query signals table for symbols that were rejected/dropped on the given date.
 
     Args:
-        store: StateStore instance
+        conn: a READ-ONLY sqlite3 connection (db_connect.connect_readonly)
         date_str: Date in YYYY-MM-DD format
 
     Returns:
@@ -153,9 +151,7 @@ def get_non_traded_symbols(store: StateStore, date_str: str) -> List[Tuple[str, 
         ORDER BY received_at
     """
 
-    with store.transaction(readonly=True) as cur:
-        cur.execute(query, (date_str,))
-        rows = cur.fetchall()
+    rows = conn.execute(query, (date_str,)).fetchall()
 
     # Deduplicate symbols (keep first occurrence with its reason)
     seen = set()
@@ -265,14 +261,18 @@ def main() -> int:
         print("  WARNING: No data (database not found)")
         return 1
 
-    # Query database
+    # Query database — READ-ONLY. A reporting job must be structurally unable to
+    # write/migrate the production DB. M-SC2b root cause: the old
+    # store.transaction(readonly=True) raised TypeError every run (transaction()
+    # has no readonly param), and a migrating StateStore open is the wrong tool
+    # for a read. connect_readonly opens mode=ro + query_only=ON (no migration).
     try:
-        store = StateStore(db_path=db_path)
-
-        traded = get_traded_symbols(store, date_str)
-        non_traded_with_reasons = get_non_traded_symbols(store, date_str)
-
-        store.close()
+        conn = db_connect.connect_readonly(db_path)
+        try:
+            traded = get_traded_symbols(conn, date_str)
+            non_traded_with_reasons = get_non_traded_symbols(conn, date_str)
+        finally:
+            conn.close()
 
     except Exception as exc:
         print(f"ERROR: Database query failed: {exc}", file=sys.stderr)
