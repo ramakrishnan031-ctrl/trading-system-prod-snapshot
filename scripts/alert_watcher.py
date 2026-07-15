@@ -305,6 +305,136 @@ def _send_email(smtp_cfg, data: dict, log: logging.Logger) -> None:
 
 
 # ------------------------------------------------------------------------------
+# F1 (15-Jul-2026): SMTP-failure robustness — Telegram fallback + backoff +
+# degraded telemetry.
+#
+# Root cause: on an SMTP auth failure run_once returned 2 → systemd (Restart=always,
+# 10s) crash-looped, the log grew every pass, and — being email-ONLY — the sentinels
+# were unrecoverable. Now a DELIVERY failure keeps the watcher alive (it never exits
+# non-zero for a delivery fault), routes each stuck sentinel to the proven direct-
+# Telegram channel (CLASS 2 closed), backs off the dead SMTP (no per-pass spam), and
+# publishes a machine-visible "delivery degraded" marker the canary/Officer can see.
+# ------------------------------------------------------------------------------
+
+# Skip re-hitting a dead SMTP for a growing window (base × 2^(n-1), capped) after
+# consecutive auth failures, so a broken credential cannot spam the log/CPU on every
+# ~10s pass; new sentinels route straight to Telegram during the window.
+_SMTP_BACKOFF_BASE_SEC = 60.0
+_SMTP_BACKOFF_MAX_SEC = 1800.0
+_SMTP_STATE_FILE = "alert_watcher_smtp_state.json"
+_DEGRADED_MARKER_FILE = "alert_watcher_degraded.json"
+
+
+def _load_smtp_state(sentinel_dir: Path) -> dict:
+    p = sentinel_dir / _SMTP_STATE_FILE
+    if not p.exists():
+        return {"consecutive_auth_fails": 0, "last_fail_iso": None}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"consecutive_auth_fails": 0, "last_fail_iso": None}
+
+
+def _save_smtp_state(sentinel_dir: Path, state: dict) -> None:
+    p = sentinel_dir / _SMTP_STATE_FILE
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _smtp_in_backoff(state: dict) -> bool:
+    """True if an auth failure occurred within the current backoff window — skip the
+    dead SMTP this pass and go straight to Telegram."""
+    n = int(state.get("consecutive_auth_fails", 0) or 0)
+    last = state.get("last_fail_iso")
+    if n <= 0 or not last:
+        return False
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except (ValueError, TypeError):
+        return False
+    window = min(_SMTP_BACKOFF_BASE_SEC * (2 ** (n - 1)), _SMTP_BACKOFF_MAX_SEC)
+    return (now_ist() - last_dt).total_seconds() < window
+
+
+def _record_smtp_failure(sentinel_dir: Path, state: dict) -> None:
+    state["consecutive_auth_fails"] = int(state.get("consecutive_auth_fails", 0) or 0) + 1
+    state["last_fail_iso"] = now_ist().isoformat()
+    _save_smtp_state(sentinel_dir, state)
+
+
+def _reset_smtp_state(sentinel_dir: Path) -> None:
+    _save_smtp_state(sentinel_dir, {"consecutive_auth_fails": 0, "last_fail_iso": None})
+
+
+def _telegram_notifier(log: logging.Logger):
+    """Build the proven direct-Telegram notifier (reuses TelegramNotifier.from_env —
+    the same path the emitters use). None if telegram is unconfigured/disabled → the
+    caller leaves the sentinel .flag for the next pass (never silently drops it)."""
+    try:
+        from alerts.telegram_notifier import TelegramNotifier
+        return TelegramNotifier.from_env(logger=log)
+    except Exception as exc:  # noqa: BLE001 — telegram-build failure must not crash the watcher
+        log.error("telegram fallback unavailable: %s", exc)
+        return None
+
+
+def _telegram_fallback_batch(pending, notifier, log: logging.Logger) -> tuple[int, int]:
+    """Deliver each still-pending sentinel via Telegram (write_sentinel=False — the
+    sentinel already exists on disk). mark_delivered on success. Returns (delivered, stuck)."""
+    if notifier is None:
+        return 0, len(pending)
+    delivered = stuck = 0
+    for sp in pending:
+        try:
+            data = read_sentinel(sp)
+        except (OSError, ValueError):
+            stuck += 1
+            continue
+        sev = data.get("context", {}).get("severity", "CRITICAL")
+        res = notifier.send(
+            severity=sev if sev in ("CRITICAL", "ERROR", "WARNING", "INFO") else "CRITICAL",
+            title=data.get("title", "(no title)"),
+            body=(data.get("body", "") or "")[:3500],
+            source_module=data.get("source_module", "alert_watcher"),
+            write_sentinel=False,   # the sentinel already exists — do not rewrite it
+        )
+        if getattr(res, "success", False):
+            try:
+                mark_delivered(sp)
+                delivered += 1
+                log.info("Delivered %s via TELEGRAM fallback -> .delivered", sp.name)
+            except OSError:
+                stuck += 1
+        else:
+            stuck += 1
+    return delivered, stuck
+
+
+def _write_degraded_marker(sentinel_dir: Path, reason: str, via_tg: int, stuck: int,
+                           log: logging.Logger) -> None:
+    """Publish a machine-visible 'email delivery degraded' marker (read by the monitoring
+    canary + the Cron Officer). Presence = email delivery is down; content = reason + counts."""
+    p = sentinel_dir / _DEGRADED_MARKER_FILE
+    payload = {"degraded": True, "reason": reason, "since": now_ist().isoformat(),
+               "last_via_telegram": via_tg, "last_stuck": stuck}
+    try:
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError as exc:
+        log.error("degraded-marker write failed: %s", exc)
+
+
+def _clear_degraded_marker(sentinel_dir: Path) -> None:
+    (sentinel_dir / _DEGRADED_MARKER_FILE).unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------------------
 # Logger setup (AW8)
 # ------------------------------------------------------------------------------
 
@@ -353,7 +483,16 @@ def run_once(
         return 0
 
     log.info("Found %d pending sentinel(s).", len(pending))
-    auth_error_exit = False
+    auth_error_exit = False   # retained name; run_once no longer exits non-zero on a delivery fault
+    smtp_auth_failed = False
+    state = _load_smtp_state(sentinel_dir)
+    # F1: after consecutive SMTP auth failures, skip the dead SMTP this pass (time-based
+    # backoff) and route sentinels straight to the Telegram fallback — no per-pass 535 spam.
+    skip_smtp = _smtp_in_backoff(state)
+    if skip_smtp:
+        log.info("SMTP in backoff (%s consecutive auth fail[s]) — routing to Telegram fallback",
+                 state.get("consecutive_auth_fails", 0))
+        smtp_auth_failed = True
 
     # Audit #15: parse + dry-run handling serially; fan out SMTP network I/O
     # (the slow part) via ThreadPoolExecutor. File renames and counter updates
@@ -381,7 +520,7 @@ def run_once(
         to_send.append((sentinel_path, data))
 
     # FIX-095: Check if we should send digest or individual emails
-    if to_send:
+    if to_send and not skip_smtp:
         send_digest = len(to_send) > digest_threshold
 
         if send_digest:
@@ -425,8 +564,10 @@ def run_once(
                 log.info("Digest delivered: %d alerts → .delivered", len(to_send))
 
             except smtplib.SMTPAuthenticationError as exc:
+                # F1: do NOT return 2 (that crash-looped systemd). Flag for the Telegram
+                # fallback + degraded telemetry below; the watcher stays alive.
                 log.error("SMTP auth failure (digest): %s", exc)
-                return 2
+                smtp_auth_failed = True
 
             except (smtplib.SMTPException, OSError) as exc:
                 log.error("SMTP error (digest): %s", exc)
@@ -473,10 +614,10 @@ def run_once(
                         log.info("Delivered %s -> .delivered", fname)
 
                     except SmtpAuthError as exc:
+                        # F1: do NOT exit 2. Flag for the Telegram fallback + degraded
+                        # telemetry below; cancel remaining sends (SMTP is down).
                         log.error("SMTP auth failure: %s", exc)
-                        auth_error_exit = True
-                        # Let remaining futures finish (cancellation is best-effort
-                        # and SMTP sockets are already in flight); we'll exit 2.
+                        smtp_auth_failed = True
                         for pending_future in future_to_path:
                             pending_future.cancel()
 
@@ -524,11 +665,33 @@ def run_once(
                         except OSError:
                             pass
 
+    # F1: Telegram fallback — a dead SMTP must never blind the operator (CLASS 2).
+    # Deliver anything email could not send this pass via the proven direct-Telegram
+    # channel; publish a machine-visible "degraded" marker; back off the dead SMTP.
+    if smtp_auth_failed:
+        if not skip_smtp:            # a FRESH auth failure (not merely a backoff-skip pass)
+            _record_smtp_failure(sentinel_dir, state)
+        notifier = _telegram_notifier(log)
+        still_pending = list_pending_sentinels(sentinel_dir)
+        via_tg, stuck = _telegram_fallback_batch(still_pending, notifier, log)
+        _write_degraded_marker(sentinel_dir,
+                               "SMTP auth failure — email delivery down", via_tg, stuck, log)
+        log.error("EMAIL DELIVERY DEGRADED: SMTP auth failed; %d sentinel(s) delivered via "
+                  "Telegram fallback, %d still pending (retry next pass)", via_tg, stuck)
+    else:
+        # Email healthy this pass (or nothing to send) — clear any degraded state.
+        if int(state.get("consecutive_auth_fails", 0) or 0):
+            _reset_smtp_state(sentinel_dir)
+        _clear_degraded_marker(sentinel_dir)
+
     # Prune entries for files no longer pending
     counters = _prune_attempts(counters, sentinel_dir)
     _save_attempts(counter_path, counters)
 
-    return 2 if auth_error_exit else 0
+    # F1: a DELIVERY failure is NOT a crash — never return non-zero for a delivery/auth
+    # fault (the cause of the 10s systemd crash-loop). main() still returns 1 on config error.
+    _ = auth_error_exit  # retained for API stability; delivery faults no longer exit 2
+    return 0
 
 
 # ------------------------------------------------------------------------------

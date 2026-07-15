@@ -88,6 +88,89 @@ def _null_log() -> logging.Logger:
 
 
 # ==============================================================================
+# TestF1SmtpRobustness (15-Jul: no crash-loop + Telegram fallback + degraded marker)
+# ==============================================================================
+
+class TestF1SmtpRobustness(unittest.TestCase):
+    """F1: on SMTP auth failure the watcher must NOT return non-zero (the exit-2 →
+    systemd 10s crash-loop), must deliver each stuck sentinel via the direct-Telegram
+    fallback (CLASS 2), back off the dead SMTP, and publish a machine-visible degraded
+    marker. Every assertion FAILS on the pre-fix code (which returned 2, email-only)."""
+
+    _DEGRADED = "alert_watcher_degraded.json"
+    _STATE = "alert_watcher_smtp_state.json"
+
+    @staticmethod
+    def _ok_notifier():
+        n = MagicMock()
+        n.send.return_value = MagicMock(success=True)
+        return n
+
+    @patch("scripts.alert_watcher.smtplib.SMTP")
+    @patch("scripts.alert_watcher._telegram_notifier")
+    def test_digest_auth_fail_falls_back_to_telegram_no_crash(self, mock_tg, mock_smtp):
+        import smtplib as _s
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = _make_cfg(Path(tmp), digest_threshold=3)
+            sd = Path(cfg.system.alerts.sentinel_dir)
+            sd.mkdir(parents=True, exist_ok=True)
+            [_write_sentinel(sd, title=f"A{i}") for i in range(4)]   # >3 → digest (the incident)
+
+            server = MagicMock()
+            server.login.side_effect = _s.SMTPAuthenticationError(535, b"BadCredentials")
+            mock_smtp.return_value = server
+            mock_tg.return_value = self._ok_notifier()
+
+            rc = run_once(cfg, log=_null_log())
+
+            self.assertEqual(rc, 0, "delivery fault must NOT crash the watcher (was exit 2)")
+            self.assertEqual(len(list_pending_sentinels(sd)), 0, "all delivered via telegram")
+            self.assertEqual(len(list(sd.glob("*.delivered"))), 4)
+            self.assertTrue((sd / self._DEGRADED).exists(), "degraded marker published")
+            state = json.loads((sd / self._STATE).read_text())
+            self.assertEqual(state["consecutive_auth_fails"], 1)
+
+    @patch("scripts.alert_watcher.smtplib.SMTP")
+    @patch("scripts.alert_watcher._telegram_notifier")
+    def test_backoff_skips_dead_smtp_and_still_delivers(self, mock_tg, mock_smtp):
+        from core.time_authority import now_ist
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = _make_cfg(Path(tmp), digest_threshold=3)
+            sd = Path(cfg.system.alerts.sentinel_dir)
+            sd.mkdir(parents=True, exist_ok=True)
+            # a recent auth failure → within the backoff window
+            (sd / self._STATE).write_text(json.dumps(
+                {"consecutive_auth_fails": 1, "last_fail_iso": now_ist().isoformat()}))
+            _write_sentinel(sd, title="new-during-outage")
+            mock_tg.return_value = self._ok_notifier()
+
+            rc = run_once(cfg, log=_null_log())
+
+            self.assertEqual(rc, 0)
+            mock_smtp.assert_not_called()          # dead SMTP skipped during backoff (no spam)
+            self.assertEqual(len(list(sd.glob("*.delivered"))), 1)   # delivered via telegram
+
+    @patch("scripts.alert_watcher._send_email")
+    def test_healthy_send_resets_backoff_and_clears_marker(self, mock_send):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = _make_cfg(Path(tmp))
+            sd = Path(cfg.system.alerts.sentinel_dir)
+            sd.mkdir(parents=True, exist_ok=True)
+            # stale degraded state from a prior outage (last_fail_iso null → not in backoff)
+            (sd / self._DEGRADED).write_text('{"degraded": true}')
+            (sd / self._STATE).write_text('{"consecutive_auth_fails": 2, "last_fail_iso": null}')
+            _write_sentinel(sd, title="recovered")   # 1 ≤ threshold → individual path
+            mock_send.return_value = None            # SMTP send succeeds
+
+            rc = run_once(cfg, log=_null_log())
+
+            self.assertEqual(rc, 0)
+            self.assertFalse((sd / self._DEGRADED).exists(), "healthy send clears degraded marker")
+            state = json.loads((sd / self._STATE).read_text())
+            self.assertEqual(state["consecutive_auth_fails"], 0, "backoff reset on recovery")
+
+
+# ==============================================================================
 # TestRunLoop (P5: --loop mode + heartbeat)
 # ==============================================================================
 
@@ -307,14 +390,22 @@ class TestSmtpFailureHandling(unittest.TestCase):
         counters = _load_attempts(counter_path)
         self.assertNotIn(p.name, counters)
 
+    @patch("scripts.alert_watcher._telegram_notifier")
     @patch("scripts.alert_watcher._send_email")
-    def test_smtp_auth_error_exits_2(self, mock_send):
+    def test_smtp_auth_error_no_longer_crashes(self, mock_send, mock_tg):
+        # F1 (15-Jul): an auth failure USED to `return 2` → systemd 10s crash-loop.
+        # It now stays alive (rc=0) and publishes a degraded marker. With no Telegram
+        # configured (both channels down) the sentinel is LEFT pending for retry —
+        # never abandoned. (This test previously asserted `result == 2`.)
         mock_send.side_effect = SmtpAuthError("auth failed")
+        mock_tg.return_value = None            # telegram also unavailable
         cfg = _make_cfg(self.tmpdir)
         sentinel_dir = Path(cfg.system.alerts.sentinel_dir)
         _write_sentinel(sentinel_dir)
         result = run_once(cfg, log=_null_log())
-        self.assertEqual(result, 2)
+        self.assertEqual(result, 0)            # was 2 — F1 removes the crash-loop
+        self.assertTrue((sentinel_dir / "alert_watcher_degraded.json").exists())
+        self.assertEqual(len(list_pending_sentinels(sentinel_dir)), 1)  # left for retry
 
     @patch("scripts.alert_watcher._SMTP_TASK_TIMEOUT_SEC", 0.3)
     @patch("scripts.alert_watcher._send_email")
