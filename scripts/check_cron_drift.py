@@ -45,18 +45,38 @@ from core.time_authority import now_ist
 from scripts.generate_crontab import (
     _command_lines, compose, load_jobs, parse, resolve_job_name,
 )
+# F3: reuse the Cron Officer's marker reader (single source of truth for exit_code_file
+# detection) so the drift-check mirrors the Officer's detection map instead of duplicating it.
+from scripts.cron_officer import NO_SIGNAL, _read_marker
 
 _log = get_logger("check_cron_drift")
 
 
-# ── PASS 1: heartbeat-miss (unchanged) ───────────────────────────────────────
-def check_cron_drift(store: StateStore, registry: CronRegistry, config_dir: Path) -> list[str]:
-    """Names of monitored, due-today jobs missing a heartbeat (24h)."""
+# ── PASS 1: signal-miss (F3: detection-method-aware) ─────────────────────────
+def check_cron_drift(store: StateStore, registry: CronRegistry, config_dir: Path,
+                     marks_dir: Path = Path("data_store/cron_marks")) -> list[str]:
+    """Names of monitored, due-today jobs missing their EXPECTED signal in 24h.
+
+    F3 (15-Jul-2026): dispatch by the job's detection method, MIRRORING the Cron Officer
+    (_classify_job) — a heartbeat_db job needs a heartbeat row; an exit_code_file job needs
+    a fresh cron_marks/<name>.done marker. Pre-fix this pass checked heartbeats for EVERY
+    monitored job, so the four MARKER-detected jobs (preflight_phase_a/b/c, sr_detector_
+    backfill — which write markers, never heartbeats) always looked "missing" → a standing
+    daily FALSE 'no heartbeat in 24h' warning even though they ran fine."""
     now = now_ist()
     cutoff_iso = (now - timedelta(hours=24)).isoformat()
-    seen = {h["job_name"] for h in store.get_cron_heartbeats_since(cutoff_iso)}
-    expected = registry.expected_heartbeat_jobs(now.date(), config_dir=config_dir, before_time=now.time())
-    return [j.name for j in expected if j.name not in seen]
+    seen_hb = {h["job_name"] for h in store.get_cron_heartbeats_since(cutoff_iso)}
+    expected = registry.expected_heartbeat_jobs(now.date(), config_dir=config_dir,
+                                                before_time=now.time())
+    missing: list[str] = []
+    for j in expected:
+        if j.effective_detection_method == "exit_code_file":
+            st, _rt, _note = _read_marker(j.marker_name or j.name, now.date(), marks_dir)
+            if st == NO_SIGNAL:              # no fresh marker today → genuinely missing
+                missing.append(j.name)
+        elif j.name not in seen_hb:          # heartbeat_db → needs a heartbeat row
+            missing.append(j.name)
+    return missing
 
 
 # ── PASS 2: content drift (Phase 3) ──────────────────────────────────────────
