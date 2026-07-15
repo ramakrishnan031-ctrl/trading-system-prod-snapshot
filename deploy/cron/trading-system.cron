@@ -45,6 +45,9 @@ SHELL=/bin/bash
 # auto_refresh_token  [08:15 Mon-Fri]
 15 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/auto_refresh_token.py >> logs/cron-auto-token.log 2>&1
 
+# monitoring_canary  [08:20 daily]
+20 8 * * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/monitoring_canary.py >> logs/cron-monitoring-canary.log 2>&1
+
 # preflight_phase_a  [08:30 Mon-Fri]
 30 8 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python -m scripts.preflight.orchestrator --phase A >> logs/preflight.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/preflight_phase_a.done
 

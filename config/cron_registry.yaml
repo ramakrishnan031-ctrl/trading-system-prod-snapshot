@@ -166,6 +166,24 @@ jobs:
     command: scripts/auto_refresh_token.py
     env_wrapper: python
     log_target: '>> logs/cron-auto-token.log 2>&1'
+  monitoring_canary:
+    # 15-Jul-2026 monitoring hardening: DAILY self-test of the alert plumbing (email /
+    # telegram / sentinel ingestion / dashboard). QUIET when healthy; a Telegram WARNING on
+    # any failure (falls back to a CRITICAL sentinel if Telegram is down too). The email
+    # check FAILS until ALERT_SMTP_PASSWORD is restored — that is the canary working, not a bug.
+    script: scripts/monitoring_canary.py
+    schedule: 08:20 daily
+    type: python
+    critical: false
+    market_day_only: false
+    cadence: daily
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 20 8 * * *
+    command: scripts/monitoring_canary.py
+    env_wrapper: python
+    log_target: '>> logs/cron-monitoring-canary.log 2>&1'
   preflight_phase_a:
     script: python -m scripts.preflight.orchestrator --phase A
     schedule: 08:30 Mon-Fri
