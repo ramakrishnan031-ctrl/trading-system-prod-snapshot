@@ -443,7 +443,11 @@ def _local_capital_snapshot(store: StateStore, log: logging.Logger):
     A standalone job has no live FM; rebuild a read-only snapshot from fm_ledger."""
     try:
         row = store.fetch_one(
-            "SELECT balance_after FROM fm_ledger ORDER BY id DESC LIMIT 1"
+            # fm_ledger's PK is `ledger_id` (autoincrement) — the old `ORDER BY id`
+            # referenced a non-existent column, so this query ALWAYS raised
+            # "no such column: id", was caught below, and returned a silent 0.0
+            # snapshot (wrong capital total). ledger_id DESC = the latest ledger row.
+            "SELECT balance_after FROM fm_ledger ORDER BY ledger_id DESC LIMIT 1"
         )
         total = float(row["balance_after"]) if row and row["balance_after"] is not None else 0.0
         # Post-EOD the invariant is a local self-check; we treat a readable ledger as OK
