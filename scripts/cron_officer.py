@@ -40,7 +40,7 @@ from scripts.cron_report_render import (
     render_briefing_telegram, render_eod_html, render_eod_plaintext,
     render_eod_telegram,
 )
-from utils.cron_heartbeat import record_heartbeat
+from utils.cron_heartbeat import record_heartbeat, parse_functional_status
 
 _log = get_logger("cron_officer")
 _BAR = "━" * 24
@@ -139,6 +139,25 @@ def _today_heartbeats(store: StateStore, today: date) -> dict[str, dict]:
     return latest
 
 
+def _email_delivery_health_line(sentinel_dir: Path = Path("data_store")) -> Optional[str]:
+    """F2/F1 (15-Jul): read the alert_watcher 'delivery degraded' marker so a dead email
+    channel (SMTP 535) is VISIBLE in the Officer even when every job's execution heartbeat
+    is green. None (no line) when healthy. This closes the CLASS-1 gap where the 15-Jul EOD
+    emails were undelivered while the monitor reported clean."""
+    try:
+        import json as _json
+        marker = sentinel_dir / "alert_watcher_degraded.json"
+        if not marker.exists():
+            return None
+        d = _json.loads(marker.read_text(encoding="utf-8"))
+        since = d.get("since", "?")
+        stuck = d.get("last_stuck", "?")
+        return (f"📧 EMAIL DELIVERY: 🔴 DEGRADED since {since} — {d.get('reason', 'SMTP down')}; "
+                f"{stuck} alert(s) via Telegram/retry. Restore ALERT_SMTP_PASSWORD.")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
                       config_dir: Path, now_time: time) -> tuple[str, bool]:
     """
@@ -149,6 +168,7 @@ def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
     expected = registry.expected_heartbeat_jobs(today, config_dir, before_time=now_time)
 
     completed, failed, skipped, missed = [], [], [], []
+    functional_issues: list[tuple[str, str]] = []   # F2: EXECUTION ok but FUNCTIONAL degraded
     total_runtime = 0.0
     for job in expected:
         row = hb.get(job.name)
@@ -163,6 +183,11 @@ def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
             skipped.append(job)
         else:  # SUCCESS / PARTIAL
             completed.append(job)
+            # F2 (15-Jul): a job that EXECUTED ok but FUNCTIONALLY failed (empty artifact,
+            # undelivered output) must NOT read as clean. Surface the functional gap.
+            func = parse_functional_status(row.get("message"))
+            if func and func.upper() not in ("OK", "SUCCESS", "DELIVERED"):
+                functional_issues.append((job.name, func))
 
     critical_miss = any(j.critical for j in missed)
     mins, secs = divmod(int(total_runtime), 60)
@@ -179,8 +204,17 @@ def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
         f"⏭ Skipped: {len(skipped)} ({_names(skipped)})",
         f"⏱ Total runtime: {mins}m {secs}s",
         f"🔴 Missed: {len(missed)} ({_names(missed)})",
-        _BAR,
     ]
+    # F2: FUNCTIONAL status — a delivery/artifact failure behind a green execution heartbeat.
+    if functional_issues:
+        lines.append("⚠️ Functional (execution ok, FUNCTION degraded): "
+                     + ", ".join(f"{n}[{f}]" for n, f in functional_issues))
+    # F2/F1: email-delivery health — a dead SMTP is now VISIBLE even when every job is green
+    # (the 15-Jul CLASS-1 gap: EOD emails undelivered while heartbeats read SUCCESS).
+    email_line = _email_delivery_health_line()
+    if email_line:
+        lines.append(email_line)
+    lines.append(_BAR)
     return "\n".join(lines), critical_miss
 
 

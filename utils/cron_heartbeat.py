@@ -21,11 +21,43 @@ from core.state_store import StateStore
 from core.time_authority import now_ist
 
 
+# F2 (15-Jul-2026): FUNCTIONAL status, recorded INDEPENDENTLY of the EXECUTION `status`.
+#   EXECUTION  status ("the script ran / exited")   -> the `status` column (unchanged).
+#   FUNCTIONAL status ("the artifact was generated / delivered / validated") -> encoded
+#   in the existing free-form `message` column as `[func=<STATUS>] <message>` (NO schema
+#   change). A job whose script exits 0 but whose real function failed (empty CSV,
+#   undelivered email) records status=SUCCESS + functional_status=<the real outcome>, so
+#   a delivery/artifact failure can no longer read as SUCCESS. The Cron Officer surfaces
+#   the two states separately via parse_functional_status().
+_FUNC_PREFIX = "[func="
+
+
+def _encode_functional(functional_status: Optional[str], message: Optional[str]) -> Optional[str]:
+    """Prefix `message` with a structured [func=...] marker; execution status stays in the
+    `status` column. Returns the combined message (or the original when no functional status)."""
+    if not functional_status:
+        return message
+    tail = (message or "").strip()
+    return f"{_FUNC_PREFIX}{functional_status}]" + (f" {tail}" if tail else "")
+
+
+def parse_functional_status(message: Optional[str]) -> Optional[str]:
+    """Extract the FUNCTIONAL status from a heartbeat `message`, or None. Inverse of
+    `_encode_functional` — used by the Cron Officer to show functional vs execution."""
+    if not message or not message.startswith(_FUNC_PREFIX):
+        return None
+    end = message.find("]")
+    if end < 0:
+        return None
+    return message[len(_FUNC_PREFIX):end].strip() or None
+
+
 def record_heartbeat(
     job_name: str,
     status: str = "SUCCESS",
     duration_sec: Optional[float] = None,
     message: Optional[str] = None,
+    functional_status: Optional[str] = None,
     db_path: Path = Path("data_store/trading_system.db"),
 ) -> bool:
     """
@@ -35,9 +67,12 @@ def record_heartbeat(
 
     Args:
         job_name: Short name for the cron job (e.g., "daily_report")
-        status: SUCCESS (default) | PARTIAL | FAILED
+        status: EXECUTION status — SUCCESS (default) | PARTIAL | FAILED | SKIPPED
         duration_sec: Optional job duration
         message: Optional diagnostic message
+        functional_status: F2 — the FUNCTIONAL outcome (did the artifact/delivery
+            actually succeed), recorded independently of `status`. Encoded into
+            `message` as `[func=<functional_status>] ...` (no schema change).
 
     Returns:
         True if heartbeat was recorded, False on error (never raises)
@@ -52,7 +87,7 @@ def record_heartbeat(
             executed_at=now_ist().isoformat(),
             status=status,
             duration_sec=duration_sec,
-            message=message,
+            message=_encode_functional(functional_status, message),
         )
         store.close()
         return True
@@ -88,7 +123,8 @@ class HeartbeatTimer:
     ):
         self.job_name = job_name
         self.db_path = db_path
-        self.status = "SUCCESS"
+        self.status = "SUCCESS"                       # EXECUTION status
+        self.functional_status: Optional[str] = None  # F2: FUNCTIONAL status (set by the job)
         self.message: Optional[str] = None
         self._start: float = 0.0
         self._started_iso: Optional[str] = None
@@ -113,6 +149,7 @@ class HeartbeatTimer:
             status=self.status,
             duration_sec=duration,
             message=self.message,
+            functional_status=self.functional_status,
             db_path=self.db_path,
         )
 

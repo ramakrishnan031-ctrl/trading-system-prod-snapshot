@@ -309,6 +309,29 @@ def main() -> int:
     return 0
 
 
+def _csv_functional_status() -> str:
+    """F2 (15-Jul): FUNCTIONAL criterion for the screened CSV = a NON-EMPTY artifact.
+    OK if today's CSV has >=1 data row, EMPTY_NO_DATA if only the header (legitimate on a
+    no-trade day, but recorded so the operator sees data-present vs empty), MISSING/UNKNOWN
+    otherwise. Independent of the EXECUTION status — this is what caught the 14-Jul
+    'green heartbeat, empty CSV' silent failure."""
+    try:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        csv_path = (Path(__file__).parent.parent / "reports" / "daily_review"
+                    / f"screened_stocks_{date_str}.csv")
+        if not csv_path.exists():
+            return "MISSING"
+        with open(csv_path, newline='', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            next(reader, None)   # skip header
+            for row in reader:
+                if any((c or "").strip() for c in row):
+                    return "OK"
+        return "EMPTY_NO_DATA"
+    except Exception:
+        return "UNKNOWN"
+
+
 def _cron_main() -> int:
     """Cron entry: holiday-skip + heartbeat + per-job alert (TASK #3)."""
     from utils.cron_heartbeat import HeartbeatTimer, skip_if_non_trading_day
@@ -320,8 +343,13 @@ def _cron_main() -> int:
         rc = main()
         rc = 0 if rc is None else rc
         if rc != 0:
-            timer.status = "FAILED"
+            timer.status = "FAILED"                 # EXECUTION failed
             timer.message = f"exit code {rc}"
+            timer.functional_status = "FAILED"      # F2: no valid artifact
+        else:
+            # F2: EXECUTION ok — now record the FUNCTIONAL outcome (did we actually
+            # produce a non-empty CSV) so an empty artifact can never read as SUCCESS.
+            timer.functional_status = _csv_functional_status()
     return rc
 
 
