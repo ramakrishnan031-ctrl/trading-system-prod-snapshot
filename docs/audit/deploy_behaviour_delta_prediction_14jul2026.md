@@ -80,6 +80,17 @@ the log, or `MigrationNotPermitted` sentinel.
 - **FALSIFY → STOP:** more than a couple of `SHADOW_INNING_ACTIVE` rejects on the gate path in one
   session, or any such reject on a symbol with **no** active inning (would mean the guard mis-fires).
 
+> **⚠️ [RECALIBRATED 15-Jul-2026 — this threshold was MIS-CALIBRATED; do NOT treat "> a couple" as a STOP.]**
+> Session-1 logged **323** `SHADOW_INNING_ACTIVE` rejects — but the guard is functioning CORRECTLY and this
+> is baseline behaviour, not a deploy delta. All 323 were on **3 symbols with a genuine active inning**
+> (NUVOCO 247 / LANDMARK 74 / WANBURY 2 — each had a real trade CLOSE today → sim inning), **zero mis-fires**.
+> The count is driven by Chartink re-firing scanners 300–374×/session against the pre-existing (pre-deploy)
+> `shadow_tracker` mechanism. Per-session baseline: **15-Jul 323 · 14-Jul 303 · 13-Jul 823 · 10-Jul 840 ·
+> 09-Jul 505 · 08-Jul 480 · 07-Jul 828 · 06-Jul 122** — today is on the LOW end of a long-standing 122–840
+> range. **The only genuine STOP sub-condition remains "a reject on a symbol with NO active inning"** (guard
+> mis-fire) — that did NOT occur. Recalibration recorded in `docs/audit/followup_investigation_15jul2026.md` §5.
+> M-S5 code is correct and unchanged; keep observing via forward-shadow.
+
 ### A3 — M-S6 RetestDiverter double-order (`b3a5c94`)  ·  **DORMANT → delta = 0 (certain)**
 
 - **Old → new:** `maybe_divert()`'s bare `except: return False` after a successful `register()` let a
