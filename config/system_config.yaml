@@ -286,6 +286,11 @@ eod_reconcile:                 # P1 (02-Jul) — broker-authoritative EOD reconc
   authoritative: false        # SHADOW default: P1 runs alongside eod_verify, writes its verdict + shadow comparison, alerts INFO, gates nothing. Flip true (after shadow observation) to make P1 authoritative + retire eod_verify.
   pnl_tolerance: 100.0        # Rs band on broker-day-realized vs local realized before the P&L dimension is ISSUES
 
+eod_cleanup:                  # 15-Jul-2026 — EOD hygiene prune (scripts/eod_cleanup.py step 4 @15:50)
+  signal_retention_days: 90   # keep-window (days) for terminal NOISE fingerprints (EXPIRED/DUPLICATE/REJECTED_*);
+                              # older ones are DROPPED children-first (FK-safe, batched). Trade-linked signals are
+                              # NEVER pruned (capital-safety guard). Tunable — lower for a one-time backlog clear.
+
 tgt_retry:                    # Task (2026-06-19): standalone TGT retry — re-place a TGT left unplaced by FIX-190 Bug C (SL still protects)
   enabled: true
   poll_interval_sec: 30       # retry loop cadence

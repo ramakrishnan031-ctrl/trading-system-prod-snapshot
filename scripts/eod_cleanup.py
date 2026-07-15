@@ -40,8 +40,31 @@ def _parse_args(argv=None):
     parser.add_argument("--db", metavar="PATH", default=None)
     parser.add_argument("--date", metavar="YYYY-MM-DD", default=None)
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--fingerprint-days", type=int, default=7)
+    # Window for the step-4 signal-fingerprint prune. Default None => read from config
+    # (system.eod_cleanup.signal_retention_days, default 90). An explicit value OVERRIDES
+    # config — used for a one-time lower-window backlog clear (Phase B) and by tests.
+    # `--fingerprint-days` kept as a backward-compat alias (same dest).
+    parser.add_argument("--signal-retention-days", "--fingerprint-days",
+                        dest="signal_retention_days", type=int, default=None)
     return parser.parse_args(argv)
+
+
+def _resolve_signal_retention_days(cli_override, log: logging.Logger) -> int:
+    """Resolve the prune window: an explicit CLI value wins (one-time backlog clear / tests);
+    else read `system.eod_cleanup.signal_retention_days` (default 90). A config-load failure
+    falls back to the SAME model default — never a bare literal — so a hygiene cron can't crash
+    on a config error and the window is always config-sourced."""
+    if cli_override is not None:
+        return int(cli_override)
+    try:
+        from core.config_loader import load_all
+        return load_all().system.eod_cleanup.signal_retention_days
+    except Exception as exc:  # noqa: BLE001 — config must never crash a hygiene cron
+        from core.config_loader import EodCleanupConfig
+        fallback = EodCleanupConfig().signal_retention_days
+        log.warning("eod_cleanup: config load failed (%s); using default retention=%dd",
+                    exc, fallback)
+        return fallback
 
 
 def run_eod_cleanup(
@@ -50,7 +73,7 @@ def run_eod_cleanup(
     date_iso: str,
     log: logging.Logger,
     dry_run: bool = False,
-    fingerprint_retention_days: int = 7,
+    signal_retention_days: int = 90,
 ) -> dict[str, int]:
     """
     Run all EOD cleanup actions. Returns counts of each action.
@@ -69,9 +92,9 @@ def run_eod_cleanup(
     orphaned_tgt = _cleanup_orphaned_smart_tgt(store, log, dry_run)
     results["orphaned_smart_tgt_deleted"] = orphaned_tgt
 
-    # 4. Prune old fingerprints
+    # 4. Prune old fingerprints (children-first, FK-safe, batched; capital-guarded)
     pruned_fp = _cleanup_old_fingerprints(
-        store, date_iso, fingerprint_retention_days, log, dry_run
+        store, date_iso, signal_retention_days, log, dry_run
     )
     results["fingerprints_pruned"] = pruned_fp
 
@@ -166,27 +189,51 @@ def _cleanup_orphaned_smart_tgt(
     return count
 
 
+# Analytics/shadow children of signals(signal_id) that the prune DROPS alongside the
+# parent noise signal. `trades` is DELIBERATELY ABSENT — a trade-linked signal is never
+# in the prune set (the NOT EXISTS guard below), so capital/P&L history is never touched.
+# Full FK graph (core/schema.sql): signals(signal_id) parents seven children — these five
+# plus `trades` (protected) and ... verified: trades, screener_results, gate_state,
+# shadow_trades, sr_detector_results, retest_state.
+_SIGNAL_ANALYTICS_CHILDREN = (
+    "screener_results",
+    "gate_state",
+    "shadow_trades",
+    "sr_detector_results",
+    "retest_state",
+)
+
+# signal_ids deleted per transaction. Bounds transaction size + rollback blast radius so a
+# large backlog (~108k) clears in COMMITted chunks instead of one giant all-or-nothing tx.
+_PRUNE_BATCH = 2000
+
+
 def _cleanup_old_fingerprints(
-    store: StateStore, date_iso: str, retention_days: int,
+    store: StateStore, date_iso: str, signal_retention_days: int,
     log: logging.Logger, dry_run: bool,
 ) -> int:
     cutoff = (
-        datetime.strptime(date_iso, "%Y-%m-%d") - timedelta(days=retention_days)
+        datetime.strptime(date_iso, "%Y-%m-%d") - timedelta(days=signal_retention_days)
     ).strftime("%Y-%m-%d")
 
     # Prune old terminal NOISE fingerprints (expired / duplicate / any reject) so the
-    # signals table + its fingerprint index do not grow unbounded. The trade audit trail
-    # (QUEUED->...->TRADED / PLACEMENT_FAILED / PROCESSED) is KEPT.
+    # signals table + its dedup index do not grow unbounded. The trade audit trail
+    # (QUEUED->...->TRADED / PLACEMENT_FAILED / PROCESSED) is KEPT by the status filter.
     #
-    # Q5 fix: the pipeline persists REJECTED_<check> (e.g. REJECTED_DUPLICATE_SYMBOL,
-    # REJECTED_SHADOW_INNING_ACTIVE) and NEVER a bare 'REJECTED', so the old
-    # `status IN (...,'REJECTED')` filter matched zero rows -> every reject fingerprint
-    # leaked forever (unbounded growth in a table the dedup path reads). GLOB 'REJECTED*'
-    # catches the whole family. The dry-run now counts with the SAME predicate as the
-    # DELETE, so the preview equals the action (it previously counted ALL old rows,
-    # including kept TRADED/PROCESSED — over-reporting).
+    # CAPITAL-SAFETY INVARIANT (primary guard): a hygiene job must NEVER delete a signal
+    # linked to capital/P&L history. `NOT EXISTS (trades)` excludes any signal with a
+    # `trades` child regardless of status — belt-and-suspenders beyond the status filter.
+    #
+    # FK-SAFETY (root cause of the 15:50 rollback): P10 (2e61fad) broadened the filter to
+    # GLOB 'REJECTED*'. Those signals are FK-referenced by analytics children
+    # (screener_results et al.) and foreign_keys=ON, so a bare `DELETE FROM signals` rolls
+    # back the whole statement. We DROP the analytics children first, THEN the parent, in
+    # COMMITted batches (children-first cascade; beyond-window = DROP, no archive).
+    #
+    # The dry-run counts with the SAME predicate as the DELETE (preview == action).
     where = ("(status IN ('EXPIRED', 'DUPLICATE') OR status GLOB 'REJECTED*') "
-             "AND fingerprint_date < ?")
+             "AND fingerprint_date < ? "
+             "AND NOT EXISTS (SELECT 1 FROM trades t WHERE t.signal_id = signals.signal_id)")
 
     if dry_run:
         row = store.fetch_one(
@@ -194,14 +241,34 @@ def _cleanup_old_fingerprints(
             (cutoff,),
         )
         count = int(row["n"]) if row else 0
-        log.info("eod_cleanup.old_fingerprints: %d (dry-run, cutoff=%s)", count, cutoff)
+        log.info("eod_cleanup.old_fingerprints: %d (dry-run, cutoff=%s, retention=%dd)",
+                 count, cutoff, signal_retention_days)
         return count
 
-    with store.transaction() as cur:
-        cur.execute(f"DELETE FROM signals WHERE {where}", (cutoff,))
-        count = cur.rowcount
-    log.info("eod_cleanup.fingerprints_pruned: %d (cutoff=%s)", count, cutoff)
-    return count
+    total = 0
+    while True:
+        with store.transaction() as cur:
+            rows = cur.execute(
+                f"SELECT signal_id FROM signals WHERE {where} LIMIT ?",
+                (cutoff, _PRUNE_BATCH),
+            ).fetchall()
+            ids = [r[0] for r in rows]
+            if not ids:
+                break
+            placeholders = ",".join("?" * len(ids))
+            # children-first (FK-safe), then the parent signals — one COMMIT per batch
+            for child in _SIGNAL_ANALYTICS_CHILDREN:
+                cur.execute(
+                    f"DELETE FROM {child} WHERE signal_id IN ({placeholders})", ids
+                )
+            cur.execute(
+                f"DELETE FROM signals WHERE signal_id IN ({placeholders})", ids
+            )
+            total += len(ids)
+        # transaction COMMITs on context exit; loop re-selects the next batch until empty
+    log.info("eod_cleanup.fingerprints_pruned: %d (cutoff=%s, retention=%dd)",
+             total, cutoff, signal_retention_days)
+    return total
 
 
 def main(argv=None) -> int:
@@ -216,7 +283,9 @@ def main(argv=None) -> int:
         return 1
 
     date_iso = args.date or today_ist()
-    log.info("eod_cleanup.start", extra={"date": date_iso, "dry_run": args.dry_run})
+    retention_days = _resolve_signal_retention_days(args.signal_retention_days, log)
+    log.info("eod_cleanup.start", extra={"date": date_iso, "dry_run": args.dry_run,
+                                         "signal_retention_days": retention_days})
 
     try:
         run_eod_cleanup(
@@ -224,7 +293,7 @@ def main(argv=None) -> int:
             date_iso=date_iso,
             log=log,
             dry_run=args.dry_run,
-            fingerprint_retention_days=args.fingerprint_days,
+            signal_retention_days=retention_days,
         )
     except Exception as exc:
         log.error("eod_cleanup.unexpected_error: %s", exc, exc_info=True)
