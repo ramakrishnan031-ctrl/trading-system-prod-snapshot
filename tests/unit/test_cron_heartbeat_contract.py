@@ -17,6 +17,12 @@ Two guards close that class of failure permanently:
      or an explicitly permissive `lambda *a, **k`. A narrow hand-written stub is
      rejected before it can silently drift.
 
+SCOPE LOCK (INTENTIONAL — do not widen this cycle): the discovery guard is deliberately
+limited to `record_heartbeat` patch sites and uses a simple line-pattern scan of the test
+tree — NOT an AST parse, NOT a generic repository-wide signature scanner. Generalizing it
+into a broad "every mock must be autospec" tool is a separate, deliberate decision for a
+future cycle, not scope creep here. Keep it focused and cheap.
+
 Test-only; no production code depends on this file.
 """
 from __future__ import annotations

@@ -38,3 +38,30 @@ must be impossible to survive unseen:
   never block.
 
 **Owner of the monitoring subsystem: Rama.** Referenced from `docs/SYSTEM_MAP.md`.
+
+## Interface Change Checklist — for ANY function-signature change (engineering pattern)
+
+**Adopted 15-Jul-2026.** Motivating incident: Branch-B/F2 inserted a new `functional_status`
+parameter into `record_heartbeat` (before `db_path`). Production was updated correctly, but a
+pre-existing hand-written test mock froze the OLD parameter list, so a `TypeError` stayed
+hidden until the full combined regression three merges later. Signature changes are cheap to
+make and easy to under-propagate; this checklist makes the propagation explicit.
+
+When you change ANY function's signature, do ALL of the following in the SAME change:
+
+- [ ] **Production callers** — update every call site to the new signature.
+- [ ] **Wrappers** — update anything that forwards args (e.g. `HeartbeatTimer.__exit__`).
+- [ ] **Mocks** — update every hand-written stub / monkeypatch of the function.
+- [ ] **Autospec** — prefer `create_autospec(fn)` / `patch(..., autospec=True)` for those mocks
+      so they track the real signature automatically and cannot silently drift again.
+- [ ] **Contract test** — update the signature-lock (e.g. `tests/unit/test_cron_heartbeat_contract.py`)
+      so the pinned parameter set matches the new signature.
+- [ ] **Discovery guard** — run it; it fails on any narrow stub that was missed.
+
+`record_heartbeat` is the reference implementation of this pattern: the signature-lock +
+discovery-guard tests live in `tests/unit/test_cron_heartbeat_contract.py`.
+
+**Scope lock (intentional):** that discovery guard is deliberately limited to `record_heartbeat`
+patch sites and is a simple line-pattern scan of the test tree — NOT an AST parse, NOT a generic
+repository-wide "every mock must be autospec" scanner. Generalizing it is a separate, deliberate
+decision for a future cycle, not scope creep in this one.
