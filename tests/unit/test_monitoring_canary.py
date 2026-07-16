@@ -3,16 +3,19 @@ fails loudly via the surviving channel. The whole module is new, so every import
 fails on the pre-fix tree (fail-on-old); the probes are pure + dependency-injected."""
 from __future__ import annotations
 
+import json
 import smtplib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from scripts.monitoring_canary import (
+    _classify_respawn,
     _format_report,
     check_dashboard,
     check_email_path,
     check_sentinel_ingestion,
+    check_service_respawn,
     check_telegram_path,
 )
 
@@ -77,3 +80,68 @@ def test_canary_is_registered_and_monitored():
     job = reg.get("monitoring_canary")
     assert job is not None
     assert job.enabled and job.monitored
+
+
+# ── Respawn-loop detection (16-Jul-2026) ─────────────────────────────────────
+# Regression guard: alert-watcher can NEVER read HEALTHY while it is silently respawning.
+# fail-on-old = _classify_respawn/check_service_respawn don't exist pre-fix (ImportError);
+# pass-on-new = the assertions below. The classifier is pure; the wrapper injects runner+state.
+
+def test_classify_respawn_flags_fast_restart():
+    # the 16-Jul incident shape: ~8640 restarts accumulated over 24h (~360/hr) → NOT healthy.
+    ok, detail = _classify_respawn(8640, "running", prev_nrestarts=0, elapsed_sec=86400.0)
+    assert ok is False and "RESPAWN" in detail.upper()
+
+
+def test_classify_respawn_auto_restart_substate_flags():
+    # a stable daemon is never mid-restart at sample time → auto-restart alone is a red flag.
+    ok, _ = _classify_respawn(5, "auto-restart", prev_nrestarts=5, elapsed_sec=3600.0)
+    assert ok is False
+
+
+def test_classify_respawn_stable_daemon_ok():
+    # long-lived --loop daemon: NRestarts unchanged over 24h → healthy.
+    assert _classify_respawn(3, "running", prev_nrestarts=3, elapsed_sec=86400.0)[0] is True
+
+
+def test_classify_respawn_single_restart_not_flagged():
+    # one legit restart in a short 5-min inter-run gap: delta=1 < min_delta → no false alarm.
+    assert _classify_respawn(4, "running", prev_nrestarts=3, elapsed_sec=300.0)[0] is True
+
+
+def test_classify_respawn_baseline_and_reset_are_benign():
+    assert _classify_respawn(101570, "running", prev_nrestarts=None, elapsed_sec=0.0)[0] is True  # 1st run
+    assert _classify_respawn(0, "running", prev_nrestarts=9000, elapsed_sec=86400.0)[0] is True    # redeploy
+
+
+def test_check_service_respawn_detects_loop(tmp_path):
+    state = tmp_path / "svc.json"
+    state.write_text(json.dumps({"nrestarts": 0, "iso": "2026-07-15T08:20:00"}))
+    runner = lambda: "NRestarts=8640\nSubState=running\n"  # noqa: E731
+    ok, detail = check_service_respawn("alert-watcher.service", runner=runner,
+                                       state_path=state, now_iso="2026-07-16T08:20:00")
+    assert ok is False and "RESPAWN" in detail.upper()
+    assert json.loads(state.read_text())["nrestarts"] == 8640  # baseline advanced for next run
+
+
+def test_check_service_respawn_stable_daemon_ok(tmp_path):
+    state = tmp_path / "svc.json"
+    state.write_text(json.dumps({"nrestarts": 2, "iso": "2026-07-15T08:20:00"}))
+    runner = lambda: "NRestarts=2\nSubState=running\n"  # noqa: E731
+    ok, _ = check_service_respawn(runner=runner, state_path=state, now_iso="2026-07-16T08:20:00")
+    assert ok is True
+
+
+def test_check_service_respawn_first_run_records_baseline(tmp_path):
+    state = tmp_path / "svc.json"
+    runner = lambda: "NRestarts=100\nSubState=running\n"  # noqa: E731
+    ok, _ = check_service_respawn(runner=runner, state_path=state, now_iso="2026-07-16T08:20:00")
+    assert ok is True                                  # no prior sample → benign baseline
+    assert json.loads(state.read_text())["nrestarts"] == 100
+
+
+def test_check_service_respawn_unavailable_degrades_not_alarms(tmp_path):
+    def _boom():
+        raise FileNotFoundError("systemctl not found")
+    ok, detail = check_service_respawn(runner=_boom, state_path=tmp_path / "svc.json")
+    assert ok is True and "unavailable" in detail       # no spurious canary WARNING

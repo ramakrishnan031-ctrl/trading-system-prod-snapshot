@@ -7,7 +7,7 @@ works and FAILS LOUDLY — via the surviving channel — when it does not. It ex
 the 15-Jul audit found the monitor reporting green while every email + sentinel alert was
 silently undelivered (a dead SMTP credential). A monitor that can lie needs a monitor.
 
-Four independent paths are probed, each PASS/FAIL with detail:
+Five independent paths are probed, each PASS/FAIL with detail:
     1. EMAIL      — SMTP login (no send) using the alert_watcher SMTP config. The check
                     that would have caught the 15-Jul 535 BadCredentials the morning it broke.
     2. TELEGRAM   — the bot token validates via getMe (no channel spam); the canary's own
@@ -15,6 +15,9 @@ Four independent paths are probed, each PASS/FAIL with detail:
     3. SENTINEL   — alert_watcher ingestion is healthy (no F1 'degraded' marker; no large
                     backlog of undelivered .flag sentinels).
     4. DASHBOARD  — the read-only ops GUI service is active (systemctl is-active).
+    5. RESPAWN    — alert-watcher is a stable --loop daemon, NOT a systemd respawn loop
+                    (NRestarts rate + SubState). Closes the 16-Jul blind spot where a service
+                    churning ~every 10s still read healthy on every other path.
 
 Noise profile: QUIET when healthy (heartbeat + functional_status only), LOUD when broken
 (a Telegram WARNING naming the down path; if Telegram is ALSO down, a CRITICAL sentinel is
@@ -35,9 +38,12 @@ Exit codes: 0 = ran (healthy OR degraded-but-reported); 1 = the canary itself co
 """
 from __future__ import annotations
 
+import json
+import os
 import smtplib
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -129,18 +135,125 @@ def check_dashboard(unit: str = "gui-dashboard",
         return False, f"dashboard check error: {exc}"
 
 
+# ── Respawn-loop detection (16-Jul-2026) ─────────────────────────────────────
+#
+# The 16-Jul morning verify found alert-watcher silently RESPAWNING (--once + Restart=always
+# → ~101,570 restarts) while every alert path read healthy: sentinels still delivered each
+# pass, so check_sentinel_ingestion was green and NOTHING here watched the service's restart
+# rate. A monitor that calls a churning service "healthy" is exactly the blind spot the canary
+# exists to close. This probe treats a rapid-respawn pattern (SubState=auto-restart, or
+# NRestarts climbing fast between daily canary runs) as NOT-healthy, so the fixed --loop daemon
+# can be proven stable and a regression back into a respawn loop can never read green.
+_RESPAWN_MAX_PER_HOUR = 6.0     # a long-lived daemon restarts a handful of times/day at most
+_RESPAWN_MIN_DELTA = 3          # ignore 1-2 legit restarts in a short inter-run gap (no false alarm)
+_SERVICE_STATE_FILE = "canary_service_state.json"
+
+
+def _parse_systemctl_show(text: str) -> dict:
+    """Parse `systemctl show` KEY=VALUE lines into a dict (order-independent)."""
+    props: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        if "=" in line:
+            k, _, v = line.partition("=")
+            props[k.strip()] = v.strip()
+    return props
+
+
+def _load_service_state(state_path: Optional[Path]) -> dict:
+    if not state_path:
+        return {}
+    try:
+        return json.loads(Path(state_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_service_state(state_path: Optional[Path], state: dict) -> None:
+    if not state_path:
+        return
+    try:
+        p = Path(state_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def _elapsed_seconds(prev_iso: Optional[str], now_iso: str) -> float:
+    """Seconds between two ISO timestamps; 0.0 if prev is missing/unparseable (→ baseline)."""
+    if not prev_iso:
+        return 0.0
+    try:
+        return (datetime.fromisoformat(now_iso) - datetime.fromisoformat(prev_iso)).total_seconds()
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _classify_respawn(nrestarts: int, substate: str, prev_nrestarts: Optional[int],
+                      elapsed_sec: float, *, max_restarts_per_hour: float = _RESPAWN_MAX_PER_HOUR,
+                      min_delta: int = _RESPAWN_MIN_DELTA) -> tuple[bool, str]:
+    """Pure verdict: is the service respawning? (unit-testable, no I/O)
+
+    NOT-healthy when SubState=auto-restart (a stable daemon is never mid-restart at sample
+    time) OR NRestarts jumped by >= min_delta at a rate above max_restarts_per_hour since the
+    previous canary run. First run (no prev) or a counter reset (redeploy) is a benign baseline.
+    """
+    if substate == "auto-restart":
+        return False, f"mid-restart (SubState=auto-restart) — verify not a respawn loop; NRestarts={nrestarts}"
+    if prev_nrestarts is None or elapsed_sec <= 0:
+        return True, f"NRestarts={nrestarts} (baseline)"
+    delta = nrestarts - prev_nrestarts
+    if delta < 0:
+        return True, f"NRestarts reset to {nrestarts} (service redeployed)"
+    rate = delta / (elapsed_sec / 3600.0)
+    if delta >= min_delta and rate > max_restarts_per_hour:
+        return False, (f"RESPAWN LOOP: +{delta} restarts in {elapsed_sec:.0f}s "
+                       f"(~{rate:.0f}/hr > {max_restarts_per_hour:.0f}/hr)")
+    return True, f"NRestarts={nrestarts} stable (+{delta} in {elapsed_sec:.0f}s)"
+
+
+def check_service_respawn(unit: str = "alert-watcher.service", *,
+                          runner: Optional[Callable] = None,
+                          state_path: Optional[Path] = None,
+                          now_iso: Optional[str] = None) -> tuple[bool, str]:
+    """Healthy iff `unit` is NOT respawning (see _classify_respawn). Reads NRestarts + SubState
+    via `systemctl show` (runner injectable for tests) and compares NRestarts to the persisted
+    previous sample. A systemctl/parse failure DEGRADES to healthy-with-note (a respawn-check
+    outage is not itself an alert-path failure) rather than firing a spurious canary WARNING."""
+    try:
+        if runner is None:
+            runner = lambda: subprocess.run(  # noqa: E731
+                ["systemctl", "show", unit, "--property=NRestarts", "--property=SubState"],
+                capture_output=True, text=True, timeout=10).stdout
+        props = _parse_systemctl_show(runner())
+        nrestarts = int(props.get("NRestarts", "0") or 0)
+        substate = props.get("SubState", "") or ""
+    except Exception as exc:  # noqa: BLE001
+        return True, f"{unit}: respawn-check unavailable ({exc})"
+
+    now_iso = now_iso or now_ist().isoformat()
+    prev = _load_service_state(state_path)
+    prev_n = prev.get("nrestarts")
+    elapsed = _elapsed_seconds(prev.get("iso"), now_iso)
+    ok, detail = _classify_respawn(nrestarts, substate, prev_n, elapsed)
+    _save_service_state(state_path, {"nrestarts": nrestarts, "iso": now_iso})
+    return ok, f"{unit}: {detail}"
+
+
 # ── Orchestration ────────────────────────────────────────────────────────────
 
 def run_canary(cfg, *, sentinel_dir: Optional[Path] = None) -> dict:
-    """Run all four probes. Returns {path: {"ok": bool, "detail": str}, "overall_ok": bool}."""
+    """Run all five probes. Returns {path: {"ok": bool, "detail": str}, "overall_ok": bool}."""
     alerts_cfg = cfg.system.alerts
     sd = Path(sentinel_dir if sentinel_dir is not None else alerts_cfg.sentinel_dir)
-    import os
     results = {
         "email": check_email_path(alerts_cfg.smtp),
         "telegram": check_telegram_path(os.environ.get("TELEGRAM_BOT_TOKEN", "")),
         "sentinel": check_sentinel_ingestion(sd),
         "dashboard": check_dashboard(),
+        "respawn": check_service_respawn(state_path=sd / _SERVICE_STATE_FILE),
     }
     out = {k: {"ok": ok, "detail": detail} for k, (ok, detail) in results.items()}
     out["overall_ok"] = all(v["ok"] for v in out.values() if isinstance(v, dict))
@@ -150,7 +263,7 @@ def run_canary(cfg, *, sentinel_dir: Optional[Path] = None) -> dict:
 def _format_report(results: dict) -> str:
     icon = {True: "✅", False: "🔴"}
     lines = ["🐤 [LFL836] Monitoring Canary — " + now_ist().strftime("%d-%b %H:%M")]
-    for path in ("email", "telegram", "sentinel", "dashboard"):
+    for path in ("email", "telegram", "sentinel", "dashboard", "respawn"):
         r = results.get(path, {})
         lines.append(f"{icon.get(r.get('ok'), '❔')} {path}: {r.get('detail', '?')}")
     return "\n".join(lines)
@@ -211,7 +324,7 @@ def _cron_main(argv=None) -> int:
             results = run_canary(load_all())
             timer.functional_status = "OK" if results["overall_ok"] else "DEGRADED"
             if not results["overall_ok"]:
-                down = [p for p in ("email", "telegram", "sentinel", "dashboard")
+                down = [p for p in ("email", "telegram", "sentinel", "dashboard", "respawn")
                         if not results[p]["ok"]]
                 timer.message = "paths down: " + ", ".join(down)
         except Exception:  # noqa: BLE001
