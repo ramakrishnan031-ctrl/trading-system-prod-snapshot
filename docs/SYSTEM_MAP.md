@@ -596,11 +596,23 @@ inactive alert-watcher).
   (never executable) → fixed to `.sector`; BUG B (`signal_processor._sector_for` always UNKNOWN)
   DEFERRED-inert (its `V3Signal`/`ScoredCandidate` sector fields are set-but-never-read); Q6 repo-wide
   stale-resolver sweep CLEAN (only BUG A+B). Canonical resolver everywhere = `InstrumentCache.sector`.
-- 🔀🚀 **16-Jul COMBINED DEPLOY (alert-watcher + F1) — MERGED to `main`@`85b8887`, tag
-  `deploy-16jul-alertwatcher-f1`→`1d5337d`, UNPUSHED.** Config overlap auto-merged (AlertsConfig
-  respawn_* + RiskConfig sector fields); combined regression 4700 pass / 10 known-PC-env (zero-new);
-  deploy_assert rc=0 · integrity/FK clean · schema v44. One off-market push; behaviour-neutral.
-  Runbook `docs/audit/consolidation_16jul2026.md`; memory `consolidation_16jul`.
+- ✅🔀🚀 **16-Jul COMBINED DEPLOY (alert-watcher + F1) — DEPLOYED 16-Jul ~18:5x IST off-market.
+  VM==bare==`11abebb`** (= tag `deploy-16jul-alertwatcher-f1`→`1d5337d` + 5 docs-only files;
+  `git diff --name-only 1d5337d..11abebb` = markdown ONLY ⇒ deployed CODE == the regression-green tag.
+  Rama approved the deviation from the instruction's expected `f68d15d`, stale by 2 docs commits).
+  Config overlap auto-merged (AlertsConfig respawn_* + RiskConfig sector fields); combined regression
+  4700 pass / 10 known-PC-env (zero-new); deploy_assert rc=0 · integrity/FK clean · **schema v44,
+  no migration**. Behaviour-neutral: gate-8 `sector_cap_mode=observe` (log-only) · alert-watcher is
+  monitoring-only. **alert-watcher: `activating`/auto-restart NRestarts=104,567 → `active`/`running`
+  NRestarts=0**; single instance PROVEN via the unit cgroup (`TasksCurrent=1`) — note a raw
+  `pgrep -fc alert_watcher.py` returns 2 because the ssh shell self-matches its own command line;
+  use `ps -eo args | grep -c '[a]lert_watcher.py'`. Canary ALL GREEN incl. the new `respawn` probe
+  (quiet when healthy — `_deliver_report` returns early on `overall_ok`). **OWED: 24h resource soak
+  (baseline 16-Jul 18:47:50 PID 1318632 — RSS 37,548kb · VSZ 50,264kb · 1 thread · 4 fd · 0 db-fd;
+  ANY sustained growth → rollback) · F1 observe soak ≥1 session (starts Fri 17-Jul) → evidence →
+  Rama-gated enforce flip.** M-C4 (`6c77525`) deliberately NOT in this deploy. Report
+  `docs/audit/deploy_done_16jul2026.md`; runbook `docs/audit/consolidation_16jul2026.md`;
+  memory `consolidation_16jul`.
 - 🩺🔒 **Capital-safety cluster M-C4/C5/C6/C8 — read-only investigation (16-Jul).** M-C4 (auto-trip holds the
   kill-switch RLock through soft_kill's publish+Telegram send, `kill_switch.py:649-663`) + M-C8 (hard_kill's
   2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
