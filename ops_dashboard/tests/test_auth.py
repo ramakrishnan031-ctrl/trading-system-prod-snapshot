@@ -20,7 +20,39 @@ def test_totp():
     code = pyotp.TOTP(secret).now()
     assert auth.verify_totp(secret, code) is True
     assert auth.verify_totp(secret, "000000") is False
-    assert auth.verify_totp("", "anything") is True   # empty secret disables TOTP
+
+
+def test_totp_empty_secret_fails_closed():
+    """AB-910 §1.3: a missing secret must REFUSE, not wave the user through.
+
+    This assertion is the exact inverse of what it was before 17-Jul, deliberately:
+    the old contract ("empty secret disables TOTP") meant losing the secret silently
+    downgraded the dashboard to a single factor, with the weaker state as the default.
+    """
+    assert auth.verify_totp("", "anything") is False
+    assert auth.verify_totp("", "") is False
+
+
+def test_totp_disabled_flag_is_the_only_escape_hatch():
+    """Skipping TOTP must be asked for explicitly — and must still work, so a dev
+    (or a locked-out operator) has a documented way through."""
+    assert auth.verify_totp("", "anything", totp_disabled=True) is True
+    # An explicit disable does NOT override a real secret: a wrong code still fails.
+    secret = pyotp.random_base32()
+    assert auth.verify_totp(secret, "000000", totp_disabled=True) is False
+    assert auth.verify_totp(secret, pyotp.TOTP(secret).now(), totp_disabled=True) is True
+
+
+def test_authenticate_empty_secret_refuses_but_flag_allows():
+    """End-to-end through authenticate(), which is what the login route calls."""
+    cfg = {"username": "tester", "password_hash": auth.hash_password("pw"),
+           "totp_secret": ""}
+    ok, err = auth.authenticate(cfg, auth.LoginAttemptTracker(), "tester", "pw", "")
+    assert ok is False, "empty totp_secret must not authenticate by default"
+
+    ok, err = auth.authenticate({**cfg, "totp_disabled": True},
+                                auth.LoginAttemptTracker(), "tester", "pw", "")
+    assert ok is True and err is None
 
 
 def test_lockout():

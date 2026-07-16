@@ -59,9 +59,19 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(dk.hex(), hash_hex)
 
 
-def verify_totp(secret: str, code: str) -> bool:
+def verify_totp(secret: str, code: str, *, totp_disabled: bool = False) -> bool:
+    """Verify a TOTP code. FAILS CLOSED on a missing secret (AB-910 §1.3).
+
+    An absent/empty `totp_secret` used to return True — i.e. losing the secret silently
+    downgraded the dashboard from two factors to one, and the weaker state was the
+    *default*. A security control must never be disabled by the absence of its own config.
+
+    Skipping TOTP is now something you can only ask for OUT LOUD, via an explicit
+    `auth.totp_disabled: true` in the GUI config. That is the dev escape hatch and the
+    only way to log in without a second factor.
+    """
     if not secret:
-        return True  # TOTP disabled (dev only; empty secret)
+        return bool(totp_disabled)  # fail CLOSED unless explicitly, deliberately disabled
     if not code:
         return False
     try:
@@ -117,7 +127,11 @@ def authenticate(auth_cfg: dict, tracker: LoginAttemptTracker,
         return False, f"Locked out. Try again in {tracker.seconds_remaining(username, now=now)}s."
     ok_user = hmac.compare_digest(username or "", expected_user)
     ok_pw = verify_password(password or "", auth_cfg.get("password_hash", ""))
-    ok_totp = verify_totp(auth_cfg.get("totp_secret", ""), totp_code)
+    # AB-910 §1.3: an empty totp_secret refuses unless `totp_disabled: true` is explicit.
+    ok_totp = verify_totp(
+        auth_cfg.get("totp_secret", ""), totp_code,
+        totp_disabled=bool(auth_cfg.get("totp_disabled", False)),
+    )
     if ok_user and ok_pw and ok_totp:
         tracker.record_success(username)
         return True, None
