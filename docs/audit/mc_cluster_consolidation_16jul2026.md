@@ -1,9 +1,18 @@
 # M-C CAPITAL-SAFETY CLUSTER — consolidation, combined regression, sandbox hard_kill drill
 
-**Date:** 16-Jul-2026, ~21:36–22:0x IST (off-market) · **Merged main:** `341cc57`
-**Tag:** `deploy-16jul-mc-cluster` → `341cc57` (the rollback point)
+**Date:** 16-Jul-2026, ~21:36–22:0x IST (off-market)
+**Tag (the CODE point + rollback anchor):** `deploy-16jul-mc-cluster` → **`341cc57`**
+**local `main`:** `2c7e05d` = `341cc57` + this docs commit (inert)
 **Status:** VALIDATED + DRILLED. **UNPUSHED. Awaiting Rama's off-market deploy authorization.**
 **Deployed VM/bare: `11abebb` — untouched.** No schema change.
+
+> **⚠️ At deploy time, re-derive the SHA — do not trust the one written here.** Docs
+> commits ride on top of the tag, so `main`'s HEAD will very likely have moved on again
+> by the time the deploy runs. **The TAG is the code identity, not the branch SHA.**
+> This exact trap already fired once today: the 16-Jul alert-watcher/F1 deploy
+> instruction pinned `f68d15d` and `main` had advanced two docs commits past it. The
+> right check is `git diff --name-only deploy-16jul-mc-cluster..HEAD` → **markdown
+> ONLY** ⇒ the code being deployed IS the drilled, regression-green tag.
 
 ---
 
@@ -196,7 +205,7 @@ Off-market = past 17:05, before 08:15; never 09:00–15:30 or 15:30–17:05.
 
 1. **Fresh VM backup** — `sqlite3 data_store/trading_system.db ".backup data_store/backups/pre_deploy_mc_cluster.db"`; confirm non-empty + `integrity_check` ok.
 2. **Push** — `git push origin main` and `git push origin deploy-16jul-mc-cluster`.
-3. **Verify deploy** — bare HEAD == `341cc57` (or the then-current merged SHA — **confirm at run time; do not trust a SHA written hours earlier**, that trap already bit once today); post-receive checkout landed in `/home/ubuntu/systems/trading-system/`; **schema v44 unchanged (no migration)**; `integrity_check` ok + `foreign_key_check` clean; services healthy.
+3. **Verify deploy** — bare HEAD == **the local `main` HEAD confirmed at run time** (NOT a SHA copied from this report). The gate that actually matters: `git diff --name-only deploy-16jul-mc-cluster..HEAD` returns **markdown only** ⇒ the deployed code IS the drilled tag `341cc57`. Then: post-receive checkout landed in `/home/ubuntu/systems/trading-system/`; **schema v44 unchanged (no migration)**; `integrity_check` ok + `foreign_key_check` clean; services healthy.
 4. **Completion checklist** — all four fixes present in the checked-out tree; working tree clean; **no code modified during deploy**.
 5. **Memory/ledger only AFTER verified.**
 6. **Note:** `trading-system.service` is currently HALTED on a planned operator SOFT_KILL and **auto-clears at the next 08:15 boot** (`main.py:1607` `clear_stale_state` wipes any prior-day kill) — the cluster goes live at that boot. No restart is owed by this deploy.
