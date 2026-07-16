@@ -605,7 +605,12 @@ inactive alert-watcher).
   kill-switch RLock through soft_kill's publish+Telegram send, `kill_switch.py:649-663`) + M-C8 (hard_kill's
   2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
   M-C5 mitigated (atomic reconciler caller gate), M-C6 latent (allocator min_weight 0.5). Report
-  `docs/audit/mc_cluster_investigation_16jul2026.md`; memory `mc_cluster_investigation_16jul`. Fixed nothing.
+  `docs/audit/mc_cluster_investigation_16jul2026.md`; memory `mc_cluster_investigation_16jul`.
+  **M-C4 is now FIXED (16-Jul, LOCK SCOPE ONLY): `record_api_failure` counts+decides under the lock and
+  calls `soft_kill` OUTSIDE it, so the lock is never held across the publish/Telegram send** (RED-on-old:
+  concurrent `is_active` blocked 20.02s). Branch `mc4-killswitch-lock-16jul` (`6c77525`), UNPUSHED —
+  report `docs/audit/mc4_killswitch_lock_16jul2026.md`, memory `mc4_killswitch_lock_16jul`. **M-C8 is
+  NEXT**; M-C5/M-C6 remain (mitigated / latent).
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
