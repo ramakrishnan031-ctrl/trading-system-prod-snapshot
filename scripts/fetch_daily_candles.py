@@ -16,6 +16,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -41,7 +42,6 @@ API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
 
 def _get_traded_symbols(date_iso: str) -> list[str]:
     """Return distinct symbols from PROCESSED signals on date_iso."""
-    import sqlite3
     if not DB_PATH.exists():
         return []
     conn = sqlite3.connect(str(DB_PATH))
