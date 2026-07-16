@@ -26,6 +26,17 @@ broker:                       # FIX-133 Item 28: multi-broker support
 
 trading_hours:
   entry_start: "10:00"        # [LAUNCH-PHASE] Live Week 1: conservative start; avoid opening-hour volatility. Relax toward 09:20 as the account scales.
+  # This value is a FLOOR OVER the per-strategy windows, not a duplicate of them.
+  # market_windows.is_entry_allowed_for_strategy() requires BOTH: the global window
+  # here AND the strategy's own entry_start_time/entry_end_time (CFG-5). So while this
+  # says 10:00, the 16 strategies declaring entry_start_time "09:25" cannot trade at
+  # 09:25 — the floor binds and their value is inert TODAY.
+  # >>> They are NOT stale, and must NOT be "aligned" to 10:00. "09:25" is each
+  # strategy's INTENDED window; 10:00 is this temporary launch-phase floor. Rewriting
+  # the strategies to 10:00 would look tidy and then silently keep them out of the
+  # 09:20-10:00 window on the day this floor is relaxed — a behaviour change disguised
+  # as cleanup. Relaxing THIS line is the switch; the strategies already say what they
+  # want. (04-Jul audit "entry_start_time 09:25 vs entry_start 10:00 (cosmetic)".)
   # #8 (BUILD 1) / T5 (29-Jun): entry_end and eod_entry_cutoff are read by
   # DIFFERENT paths — entry_end gates the strategy entry window (signal eligibility),
   # eod_entry_cutoff is FIX-073's absolute order-placement deadline (rate-limiter
