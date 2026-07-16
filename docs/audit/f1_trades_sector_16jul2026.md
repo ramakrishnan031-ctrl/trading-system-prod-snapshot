@@ -20,14 +20,15 @@ writes `sector`); the caller hardcoded `sector=None`.
 over `config/reference_data/index_members/*.csv`). Never raises; returns `"UNKNOWN"` for a miss or a
 blank. **This is exactly the source gate-8 uses live:** `main.py:2199`
 `sector_lookup_fn=lambda sym: instrument_cache.sector(sym)` → `RiskEngine._resolve_sector`.
-⚠️ **Two non-live discrepancies recorded (NOT fixed — out of scope, not the live path):**
-- `capital/risk_engine.py:123` — an alternate factory wires `instrument_cache.sector_for(s)`, a method
-  that does **not** exist on InstrumentCache (would raise → `_resolve_sector` catches → `"UNKNOWN"`).
-  The LIVE engine is built directly at `main.py:2188` with the correct `sector()`, so this is a latent
-  bug in an unused builder. **Recorded for a future cleanup.**
-- `signals/signal_processor._sector_for` (`:1340`) looks for `sector_for`/`get_sector` (neither exists)
-  → always returns `"UNKNOWN"`. It sets the *signal's* sector (dead → always UNKNOWN); not the trade
-  insert. **Recorded.** The fix does NOT use it.
+⚠️ **Two non-live discrepancies — both resolved/classified in the 16-Jul follow-up (§ below):**
+- **BUG A** `capital/risk_engine.py:123` — the class **docstring's `Usage::` example** (NOT executable
+  code) showed `instrument_cache.sector_for(s)`, a nonexistent method — a dev copying it would wire an
+  always-UNKNOWN lookup. The live engine (`main.py:2199`) already uses the correct `sector()`.
+  **FIXED 16-Jul** (docstring → `.sector`) + doc-lint test. *(Earlier draft called this "an alternate
+  factory" — corrected: it is a docstring example, never executed, so it was never a runtime risk.)*
+- **BUG B** `signals/signal_processor._sector_for` (`:1340`) looks for `sector_for`/`get_sector`
+  (neither exists) → always `"UNKNOWN"`; sets `V3Signal.sector` / `ScoredCandidate.sector`.
+  **DEFERRED with evidence** — both fields are set-but-never-read (inert). The fix does NOT use it.
 
 ⇒ No ambiguity / no conflicting source **for the live path**. STOP-gate PASSES.
 
@@ -100,6 +101,42 @@ test_order_placer` = **226 passed**; `test_hardening_scenarios` = **4 passed**; 
 **4 pre-existing PC-env failures (identical on base — ZERO new)**; all 4 modules compile.
 
 ---
+
+## F1 follow-up — BUG A fix + BUG B search + Q6 sweep (16-Jul, read-only except BUG A)
+
+### BUG A — FIXED (stale docstring, never executed)
+`capital/risk_engine.py:123` lives inside the **RiskEngine class docstring's `Usage::` example**
+(`"""` opens L104, closes L130; `__init__` at L132) — it is documentation, not code, so it never ran
+and was never a runtime risk. It showed `instrument_cache.sector_for(s)` (a nonexistent method); a
+developer copying the example would have wired an always-UNKNOWN lookup. **Fixed:** docstring →
+`instrument_cache.sector(s)` (matches the live wiring `main.py:2199`). Test:
+`test_risk_engine_docstring_references_the_real_sector_method` (fail-on-old: the old docstring
+contained `sector_for`; a doc-lint guard, since there is no executable factory to exercise).
+
+### BUG B — DEFERRED with evidence (inert; no runtime dependency)
+`signals/signal_processor._sector_for` (`:1340`) probes `sector_for`/`get_sector` (neither exists on
+InstrumentCache) → **always `"UNKNOWN"`**. It populates two fields:
+- `V3Signal.sector` (`:1336`, the V3 shadow chain) and `ScoredCandidate.sector` (`:1379`, the
+  PortfolioAllocator). **Repo-wide `.sector` grep: NEITHER field is READ anywhere** — the only
+  `.sector` reads are `instrument_cache.sector(...)` (canonical source) and `row.sector` (CSV). Both
+  are **carried-but-dead**.
+- The allocator does not use it: `allocation/portfolio_allocator.py:173` comments the per-sector 0.40
+  cap is enforced in **gate-8 independently** (gate-8 uses `trades.sector` [F1] + `_resolve_sector`,
+  not the signal's sector). The V3 scorer uses `step_results["sector_strength"]` (a screener STEP
+  score), **not** the signal's `.sector` name.
+- `v3_chain/forward_shadow.py` (a RECORDS-ONLY research recorder, "never places/delays/alters an
+  order") takes its `sector` from `scripts/forward_shadow_record.py:211 sector=sector_map.get(...)` —
+  **not** `_sector_for` — and is computed-only (never gates).
+
+⇒ **No live/runtime decision depends on the always-UNKNOWN signal sector** → per the instruction,
+DEFERRED (not fixed). It stays inert even at a future allocator/v3-chain enforce flip (the fields are
+structurally unread). A trivial one-line future fix (same pattern as BUG A); deliberately deferred to
+avoid perturbing the forward-shadow M-S4 baseline. **STOP-gate NOT triggered.**
+
+### Q6 — repo-wide stale-resolver sweep: CLEAN
+`grep 'sector_for(' + 'get_sector('` repo-wide → the ONLY code sites are **BUG A** (risk_engine
+docstring, fixed) and **BUG B** (`signal_processor._sector_for` def + its 2 callers). **No other stale
+resolver anywhere.** The canonical resolver is `InstrumentCache.sector` (used by gate-8 + F1's insert).
 
 ## 4. OFF-MARKET DEPLOY + OBSERVE SOAK + ENFORCE (runbook — NOT executed now)
 1. **Off-market: push + deploy.** Behaviour-neutral (sector fills; gate-8 observe = log-only). No
