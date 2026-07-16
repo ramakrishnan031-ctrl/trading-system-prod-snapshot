@@ -733,6 +733,10 @@ class AlertsConfig(BaseModel):
     watcher_log_path: str         # AW11: alert_watcher own log file path
     watcher_interval_sec: int = 60         # P5: --loop sleep between passes (default-off; --once stays default)
     watcher_heartbeat_path: Optional[str] = None  # P5: liveness heartbeat file written each --loop pass
+    # 16-Jul: monitoring-canary respawn-guard thresholds. Defaults == the canary's historical
+    # literals, so behaviour is unchanged unless overridden. See scripts/monitoring_canary.py.
+    respawn_restart_delta_threshold: int = 3        # min NRestarts jump between canary samples to flag
+    respawn_rate_per_hour_threshold: float = 6.0    # restarts/hr above which that jump is a respawn loop
     email_fallback: EmailFallbackConfig = EmailFallbackConfig()  # FIX-132 Item 10
     telegram: TelegramConfig      # TG12: Telegram Bot API config
     smtp: SmtpConfig              # AW7: SMTP config for alert_watcher

@@ -231,6 +231,55 @@ class TestRunLoop(unittest.TestCase):
 
 
 # ==============================================================================
+# TestRunLoopFunctional (16-Jul: --loop as a production daemon, in isolation)
+# ==============================================================================
+
+class TestRunLoopFunctional(unittest.TestCase):
+    """The alert-watcher unit switches from `--once`+Restart=always (a ~10s systemd respawn
+    loop) to the `--loop` daemon. These exercise run_loop with a REAL run_once (not mocked)
+    against a temp sentinel dir: it stays up across clean passes, and a transient SMTP auth
+    failure does NOT kill the loop — F1's Telegram fallback + degraded marker operate in loop
+    mode. (Single-instance is the pidfile lock in main(), covered by TestLockFile.)"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmpdir = Path(self._tmpdir.name)
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    @patch("scripts.alert_watcher._send_email")
+    def test_loop_stays_up_across_real_clean_passes(self, mock_send):
+        cfg = _make_cfg(self.tmpdir)
+        sd = Path(cfg.system.alerts.sentinel_dir)
+        sd.mkdir(parents=True, exist_ok=True)
+        _write_sentinel(sd, title="one")
+        _write_sentinel(sd, title="two")
+        rc = run_loop(cfg, interval_sec=0.0, heartbeat_path=None, dry_run=False,
+                      log=_null_log(), stop_event=threading.Event(), max_iters=3)
+        self.assertEqual(rc, 0, "clean loop must exit 0, never crash out")
+        self.assertEqual(len(list_pending_sentinels(sd)), 0, "both delivered")
+        self.assertEqual(len(list(sd.glob("*.delivered"))), 2)
+
+    @patch("scripts.alert_watcher._telegram_notifier")
+    @patch("scripts.alert_watcher._send_email")
+    def test_loop_survives_smtp_auth_via_telegram_fallback(self, mock_send, mock_tg):
+        mock_send.side_effect = SmtpAuthError("535 BadCredentials")
+        notifier = MagicMock()
+        notifier.send.return_value = MagicMock(success=True)
+        mock_tg.return_value = notifier
+        cfg = _make_cfg(self.tmpdir)
+        sd = Path(cfg.system.alerts.sentinel_dir)
+        sd.mkdir(parents=True, exist_ok=True)
+        _write_sentinel(sd, title="during-outage")
+        rc = run_loop(cfg, interval_sec=0.0, heartbeat_path=None, dry_run=False,
+                      log=_null_log(), stop_event=threading.Event(), max_iters=1)
+        self.assertEqual(rc, 0, "auth failure must NOT stop the loop (F1 fallback keeps it alive)")
+        self.assertTrue((sd / "alert_watcher_degraded.json").exists(), "degraded marker published")
+        self.assertEqual(len(list(sd.glob("*.delivered"))), 1, "delivered via Telegram fallback")
+
+
+# ==============================================================================
 # TestRunOnceBasic
 # ==============================================================================
 

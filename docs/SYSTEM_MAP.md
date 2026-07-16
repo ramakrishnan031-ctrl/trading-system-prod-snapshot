@@ -445,7 +445,7 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 |---|---|---|---|
 | `trading-system.service` | `venv/bin/python main.py --mode live` | Main app (live mode) | `Restart=on-failure`, `RestartSec=10`, **`RestartPreventExitStatus=3 4`** (4=HALT/SOFT_KILL no-restart, added 18-Jun); `EnvironmentFile=.env` + drop-in (Telegram secrets). **FIX-189 (19-Jun): main() exits 0 outside the broad service window [08:00–16:00 IST]** (startup guard; bypass: `--status`/`--dry-run`/`--interactive`/`--resume` or `TS_IGNORE_MARKET_WINDOW=1`) **and an `eod-self-exit` thread exits 0 once past 16:00 IST AND flat** (`count_active_positions()==0`) so it never idles overnight; never exits while a position is open. |
 | `token-watcher.service` | `bash deploy/token_watcher.sh` | Auto-start app on fresh token | active |
-| `alert-watcher.service` | `python scripts/alert_watcher.py` | Consume CRITICAL sentinel flags (email digest) | **enabled, delivering (18-Jun)**. NB: `Restart=always`+`RestartSec=10` and the script runs one pass then exits 0 → **periodic-oneshot**: `auto-restart`/rising `NRestarts` is NORMAL (a check every ~10s), NOT a crash-loop. |
+| `alert-watcher.service` | `python scripts/alert_watcher.py --loop` | Consume CRITICAL sentinel flags (email digest / Telegram fallback) | **enabled, delivering.** **16-Jul-2026: switched `--once`+`Restart=always` → long-lived `--loop` daemon + `Restart=on-failure` + `StartLimitBurst=5`/`StartLimitIntervalSec=300` + `TimeoutStopSec=35` (PREPARED in repo — deploy OFF-MARKET, unpushed at time of writing).** Was a periodic-oneshot respawning ~every 10s (101,570+ restarts); now ONE process polling `alerts.watcher_interval_sec` (default 60s), SIGINT-clean shutdown, single-instance pidfile lock held for its lifetime. **Rising `NRestarts` / `SubState=auto-restart` is now a RESPAWN SYMPTOM, no longer normal** — the monitoring canary's `respawn` probe (`check_service_respawn`) flags it NOT-healthy. F1 (Telegram fallback + `alert_watcher_degraded.json` marker) means a dead SMTP never exits non-zero, so `on-failure` fires only on a real crash (e.g. config error). Report `docs/audit/alertwatcher_loop_fix_16jul2026.md`. |
 | `trading-watchman.service` | (gemini watchman) | AI log monitor during market hours | `Wants=` by trading-system |
 | `security-watcher.service` | `python scripts/security_monitor.py --watch` | **VM Security Manager Phase 1+2** — auth.log + file-integrity monitor (9 checks incl. Phase-2 copy-switch + copy-bypass), [LFL836] alerts | **enabled+active (19-Jun)**. `Type=simple`+`Restart=always`+`RestartSec=60` → periodic (~60s); model = alert-watcher. Reads `/var/log/auth.log` (ubuntu ∈ `adm`). Config `config/security.yaml` (standalone — NOT system_config.yaml, which is `extra="forbid"`). State `data_store/security_state.json`. Alert-ONLY (never blocks). **SSH baseline:** the allowed key fingerprint(s) = `expected_key_fingerprint` in `config/security.yaml` (committed default) OR the durable operator override `data_store/security/ssh_key_baseline.json` (overlaid by `apply_operator_ssh_baseline`, wins when present, NOT git-tracked so it survives a deploy's `checkout -f`). **After ANY legitimate SSH key rotation, run `python scripts/approve_ssh_keys.py --apply`** — it shows the live keys + diff, writes the override, re-seeds state, and ALWAYS Telegrams (a re-baseline can never be silent). 28-Jun-2026: baseline DrHT9…→uDRN8… for Rama's LEGITIMATE rotation (ED25519 `oracle-vm-2026`, Airtel/Tamil-Nadu IP 223.237.190.224) — NOT a compromise. |
 | `cron-watchdog.timer`→`.service` | `venv/bin/python scripts/cron_watchdog.py` (oneshot) | **Tier-2 watch-the-watcher (ARMED 23-Jun)** — asserts `cron_officer_eod` + `check_cron_drift` both heartbeated today, else a CRITICAL sentinel via the **cron-INDEPENDENT** path (alert-watcher emails) | systemd (NOT cron) so it can't fail the way a dead crond / broken shared-env cron would. Fires **19:30 IST daily** (`Persistent=true`); first run **Wed 24-Jun 19:30**. `enabled`+`active`. From `deploy/systemd/cron-watchdog.{service,timer}`. |
@@ -512,6 +512,39 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > is a record-don't-fix footgun. memory `pending_reconciliation_14jul`.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
+
+---
+
+## ⚠️ MANDATORY — Broker-Truth Verification BEFORE Every Manual Position Intervention (16-Jul-2026)
+
+**NEVER flatten / square-off / hedge from DB state alone. The DB status LAGS broker truth.**
+On 16-Jul the DB read a position (ACI) as OPEN for minutes *after* its stop-loss had already
+filled at the broker; a DB-driven "flatten the open position" would have SOLD a share we no
+longer held → **a naked short**. Zerodha *regular* orders also have **no broker-side OCO** (the
+engine enforces software-OCO for `LIMIT_TRIPLE`), so any manual action **races the exit-manager**
+unless the engine is stopped first. Every manual intervention on positions MUST follow, in order:
+
+1. **STOP the trading engine** (`sudo systemctl stop trading-system.service`, or a SOFT_KILL then
+   restart — see below). Do not skip: a running engine will race your manual order.
+2. **VERIFY the engine is fully stopped** (`systemctl is-active trading-system` → `inactive`; no
+   `main.py` in `ps`). A half-stopped engine still manages exits.
+3. **READ BROKER positions** — `kite.positions()` / the Kite web terminal is the **source of
+   truth**, NOT `trades`/`positions` in the DB.
+4. **COMPARE broker vs DB** and resolve every mismatch. If they disagree, **the broker wins.**
+   (Per symbol: buys == sells ⇒ flat, regardless of what the DB row says.)
+5. **FLATTEN ONLY broker-open positions** (net qty ≠ 0 at the broker). Never place an order for a
+   position that is flat at the broker even if the DB shows it open.
+6. **VERIFY zero positions** at the broker after flattening (`kite.positions()` net == 0).
+7. **VERIFY zero pending orders** at the broker (`kite.orders()` — cancel any resting SL/TGT legs;
+   regular orders have no OCO, so an orphan leg can fill later).
+8. **RESTART only when intended** (engine boot re-reads the kill switch; an active SOFT_KILL boots
+   to `startup_scenario=HALT` → exit-4, designed no-restart — see the kill-switch note below).
+
+**Corollary — no live halt/flatten API:** the KillSwitch is loaded **at boot only** (in-memory), so
+an intra-session stop needs **stop → set-kill → start → HALT (exit-4)**; there is no running-process
+"flatten now" endpoint (recorded as a future architecture decision, not built). See `deploy/resume.sh`
+/ `scripts/clear_kill_switch.py` to resume. This checklist is the **"broker-truth before every manual
+intervention"** rule — memory `alertwatcher_loop_fix_16jul`.
 
 ---
 
