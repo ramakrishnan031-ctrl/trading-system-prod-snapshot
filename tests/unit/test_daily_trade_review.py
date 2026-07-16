@@ -17,7 +17,8 @@ import pytest
 
 from core.state_store import StateStore
 from reports.daily_trade_review import (
-    _COLSPECS, _SIGNAL_COLSPECS, _bucket_for, _build_t5_ranking, _fmt_time, _fmt_zone,
+    _COLSPECS, _SIGNAL_COLSPECS, _bucket_for, _build_t5_ranking, _day_summary, _fmt_time,
+    _fmt_zone,
     _grade, _latency_ms, _minmax_norm, _minutes_between, _parse_dt, _signal_bucket,
     _signal_stage, _trade_bucket, _win_loss_pct, build_config_data, build_dashboard_data,
     build_reconciliation, build_records, build_signal_records, build_slippage_data,
@@ -912,3 +913,41 @@ def test_main_defaults_date_to_today_and_records_heartbeat(tmp_path, monkeypatch
         assert row is not None and (row["status"] or "").upper() == "SUCCESS"
     finally:
         s.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The headline win% must use the SAME denominator as the per-strategy figures
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_day_summary_win_pct_matches_the_per_strategy_denominator():
+    """RED ON OLD. _day_summary divided by len(realized) -- which counts BREAKEVENS
+    (net exactly 0) -- while _win_loss_pct divides by decided (wins+losses), and
+    _win_loss_pct's docstring claimed the two matched. They did not.
+
+    Shaped like the real book at the time of the fix: 61 wins / 91 losses / 1 breakeven.
+    Old headline: 61/153 = 39.87. Per-strategy: 61/152 = 40.13. Same report, two win
+    rates, and the headline diluted by a single breakeven -- exactly the dilution FIX 1
+    (Phase-B.1) removed everywhere else."""
+    records = ([{"_net_raw": 1.0} for _ in range(61)]
+               + [{"_net_raw": -1.0} for _ in range(91)]
+               + [{"_net_raw": 0.0}])
+
+    headline = _day_summary(records, [])["win_pct"]
+
+    assert headline == _win_loss_pct(61, 91)[0], "headline win% contradicts per-strategy"
+    assert headline == 40.13
+    assert headline != 39.87, "still using the breakeven-diluted denominator"
+
+
+def test_day_summary_win_pct_is_none_when_nothing_is_decided():
+    """No decided trade -> N/A, never a misleading 0.0% (the _win_loss_pct contract,
+    now inherited by the headline for free)."""
+    assert _day_summary([], [])["win_pct"] is None
+    assert _day_summary([{"_net_raw": None}], [])["win_pct"] is None
+
+
+def test_day_summary_win_pct_unaffected_when_there_are_no_breakevens():
+    """The common case is untouched: with no net==0 trade the two denominators are
+    identical, so this fix moves no number on a normal day."""
+    records = [{"_net_raw": 1.0}, {"_net_raw": 1.0}, {"_net_raw": -1.0}]
+    assert _day_summary(records, [])["win_pct"] == 66.67

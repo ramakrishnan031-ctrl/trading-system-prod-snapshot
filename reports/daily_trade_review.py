@@ -2018,9 +2018,17 @@ def _prior_trading_day(store: StateStore, date_iso: str) -> Optional[str]:
 
 def _day_summary(records: List[Dict[str, Any]], srecords: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Headline metrics for one day, derived from the Orders/Signals records (same
-    truth layer the detail sheets use)."""
+    truth layer the detail sheets use).
+
+    win_pct uses _win_loss_pct — the ONE definition — so the headline and the
+    per-strategy/per-direction figures cannot disagree. It previously divided by
+    len(realized), which counts BREAKEVENS (net exactly 0) in the denominator, while
+    _win_loss_pct divides by decided (wins + losses). Its docstring claimed the two
+    matched; with one breakeven in the book they did not. Deriving beats restating.
+    """
     realized = [r for r in records if r.get("_net_raw") is not None]
     wins = sum(1 for r in realized if r["_net_raw"] > 0)
+    losses = sum(1 for r in realized if r["_net_raw"] < 0)
     capital = sum(_f(r.get("capital_consumed")) or 0.0 for r in records)
     slips = [_f(r.get("slip_pct")) * 100 for r in records if _f(r.get("slip_pct")) is not None]
     by: Dict[str, float] = defaultdict(float)
@@ -2028,7 +2036,7 @@ def _day_summary(records: List[Dict[str, Any]], srecords: List[Dict[str, Any]]) 
         by[r.get("strategy") or "?"] += r["_net_raw"]
     leader = max(by.items(), key=lambda kv: kv[1])[0] if by else None
     return {"net": round(sum(r["_net_raw"] for r in realized), 2),
-            "win_pct": round(wins / len(realized) * 100, 2) if realized else None,
+            "win_pct": _win_loss_pct(wins, losses)[0],
             "trades": len(records), "signals": len(srecords),
             "capital": round(capital, 2),
             "avg_slip_bps": round(sum(slips) / len(slips), 2) if slips else None,
