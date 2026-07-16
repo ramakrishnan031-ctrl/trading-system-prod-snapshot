@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from core import db_connect
 from core.state_store import EXPECTED_SCHEMA_VERSION, StateStore
@@ -150,9 +149,20 @@ def test_last_run_writer_is_additive_and_never_raises(tmp_path):
     before = list(findings)
     sm._write_last_run_status(tmp_path / "x.json", findings, 9, datetime.now(_IST))
     assert findings == before                   # never mutates findings
-    # unwritable path -> logged + swallowed, never raises into the security pass
+
+    # unwritable path -> logged + swallowed, never raises into the security pass.
+    #
+    # The target's PARENT is a FILE, so creating anything beneath it raises on BOTH
+    # platforms and stays inside tmp_path. The old literal "/nonexistent_xyz/sub/
+    # last.json" was POSIX-only: on Windows it is not even absolute (no drive letter),
+    # it resolves to D:\nonexistent_xyz\..., and the write SUCCEEDS -- so this test
+    # passed while never exercising the swallow branch it exists to prove, and it
+    # littered a stray D:\nonexistent_xyz\ on the dev box every run (the register's
+    # NR-4 "stray D:\ folders").
+    blocker = tmp_path / "iam_a_file"
+    blocker.write_text("not a directory", encoding="utf-8")
     sm._write_last_run_status(
-        Path("/nonexistent_xyz/sub/last.json"), findings, 9, datetime.now(_IST))
+        blocker / "sub" / "last.json", findings, 9, datetime.now(_IST))
 
 
 def test_run_pass_records_check_count_unchanged(tmp_path):
