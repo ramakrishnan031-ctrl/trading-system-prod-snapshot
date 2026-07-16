@@ -24,6 +24,27 @@ reject() {  # honour dry-run: log what WOULD be rejected, but allow the push
 
 while read -r oldrev newrev ref; do
   [ "$ref" = "$BRANCH" ] || continue
+
+  # ── FIX-065: market-hours deploy guard (17-Jul-2026) ──────────────────────
+  # Rejects a push during 09:15-15:30 IST so a deploy cannot swap code under a live
+  # session. Bypass: [force-deploy] in the HEAD commit message.
+  # This is a HARD reject and deliberately does NOT honour CRON_GUARD_DRYRUN: the
+  # dry-run switch belongs to the cron-integrity guard below, whose rollout is staged.
+  # The decision lives in market_hours_guard.sh (a pure function of its args, so it is
+  # honestly testable); this hook only supplies the clock.
+  #
+  # BEFORE 17-Jul this guard existed ONLY in the dead deploy/post-receive duplicate --
+  # i.e. it had NEVER been live, and 12 tests "covering" it asserted against an inline
+  # mock, so they passed regardless. See docs/audit/sweep_done_17jul2026.md.
+  _MHG="$(dirname "$0")/market_hours_guard.sh"
+  [ -x "$_MHG" ] || _MHG="/home/ubuntu/systems/trading-system/deploy/hooks/market_hours_guard.sh"
+  if [ -r "$_MHG" ]; then
+    _MSG="$(git log -1 --format=%B "$newrev" 2>/dev/null || true)"
+    bash "$_MHG" "$(TZ=Asia/Kolkata date +%H%M)" "$(TZ=Asia/Kolkata date +%u)" "$_MSG" || exit 1
+  fi
+  # A missing guard file FAILS OPEN (push allowed) — same reasoning as the script's own
+  # unparseable-clock path: never wedge deploys on the guard's own absence.
+
   TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
   git archive "$newrev" config/cron_registry.yaml deploy/cron/trading-system.cron \
       scripts/generate_crontab.py 2>/dev/null | tar -x -C "$TMP" 2>/dev/null || true
