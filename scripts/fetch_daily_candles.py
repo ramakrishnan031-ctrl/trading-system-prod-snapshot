@@ -186,7 +186,10 @@ def main(argv=None) -> None:
 
     with open(TOKEN_PATH) as f:
         access_token = json.load(f).get("access_token")
-    print(f"Token loaded: {access_token[:8]}...")
+    # Never print any part of the live access token: this runs under cron and the line
+    # lands in a log file that is not credential-grade storage. The only thing the
+    # operator needs from here is whether a token was found at all.
+    print(f"Token loaded: {'yes' if access_token else 'MISSING'}")
 
     try:
         from kiteconnect import KiteConnect
