@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from core.state_store import StateStore
-from signals.webhook_receiver import WebhookReceiver
+from signals.webhook_receiver import WebhookReceiver, _PerIpRateLimiter
 
 
 class _MockMarketWindows:
@@ -138,3 +138,77 @@ class TestGraduatedBackpressure:
         sq_cfg = cfg.system.signal_queue
         assert sq_cfg.warning_pct == 0.60
         assert sq_cfg.backpressure_pct == 0.80
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AB-910 §1.7 — /health must not hand system state to anonymous callers
+# ─────────────────────────────────────────────────────────────────────────────
+# Obviously fake: the pre-commit secret scanner (deploy/hooks/secret_scan.py)
+# correctly blocks credential-shaped test values, so use a placeholder it accepts.
+_FAKE_TOKEN = "dummy-webhook-token-for-tests"
+
+
+def _make_receiver_with_secret(capacity=100):
+    """Same harness as _make_receiver, but WITH a webhook secret configured —
+    which is the production shape (.env carries WEBHOOK_SECRET)."""
+    sq = queue.Queue(maxsize=capacity)
+    td = tempfile.mkdtemp()
+    store = StateStore(Path(td) / "test.db")
+    config = _make_config(capacity=capacity)
+    receiver = WebhookReceiver(
+        sq, store, config,
+        _MockMarketWindows(), _MockKillSwitch(), _NullLogger(),
+        secret_token=_FAKE_TOKEN,
+    )
+    return receiver, sq, store
+
+
+class TestHealthAuth:
+    """RED before the fix: /health returned kill_switch_active + queue depth to any
+    anonymous caller on 0.0.0.0:5000, and bypassed the per-IP limiter /webhook is behind."""
+
+    def test_unauthenticated_health_is_denied_when_a_secret_is_configured(self):
+        receiver, _, _ = _make_receiver_with_secret()
+        with receiver.app.test_client() as client:
+            resp = client.get("/health")
+        assert resp.status_code == 401
+
+    def test_unauthenticated_health_leaks_no_system_state(self):
+        """The failure path is where oracles usually leak — assert it says nothing."""
+        receiver, _, _ = _make_receiver_with_secret()
+        with receiver.app.test_client() as client:
+            data = client.get("/health").get_json() or {}
+        for leaky in ("kill_switch_active", "queue_size", "queue_capacity", "queue_depth"):
+            assert leaky not in data, f"/health leaked {leaky} to an anonymous caller"
+
+    def test_health_with_correct_token_returns_full_detail(self):
+        receiver, _, _ = _make_receiver_with_secret()
+        with receiver.app.test_client() as client:
+            resp = client.get(f"/health?token={_FAKE_TOKEN}")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok" and data["queue_depth"] == "0/100"
+
+    def test_health_with_wrong_token_is_denied(self):
+        receiver, _, _ = _make_receiver_with_secret()
+        with receiver.app.test_client() as client:
+            resp = client.get("/health?token=wrong")
+        assert resp.status_code == 401
+
+    def test_health_without_a_secret_configured_stays_open(self):
+        """Symmetry with /webhook: no secret configured -> no auth surface. Guards
+        against hard-failing a deployment that never had a secret."""
+        receiver, _, _ = _make_receiver(capacity=100)
+        with receiver.app.test_client() as client:
+            resp = client.get("/health")
+        assert resp.status_code == 200
+
+    def test_health_is_now_behind_the_per_ip_rate_limiter(self):
+        """AB-910: /health bypassed the limiter entirely. Exhaust the bucket and the
+        NEXT /health must be 429 — proving it is metered like /webhook."""
+        receiver, _, _ = _make_receiver_with_secret()
+        receiver._ip_limiter = _PerIpRateLimiter(burst=2, refill_per_sec=0.0)
+        with receiver.app.test_client() as client:
+            codes = [client.get(f"/health?token={_FAKE_TOKEN}").status_code for _ in range(3)]
+        assert codes[:2] == [200, 200]
+        assert codes[2] == 429, f"3rd call must be rate-limited, got {codes}"

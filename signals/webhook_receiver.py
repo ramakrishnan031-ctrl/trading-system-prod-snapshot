@@ -261,6 +261,39 @@ class WebhookReceiver:
 
         @app.route("/health", methods=["GET"])
         def health():
+            # AB-910 §1.7: this endpoint sits on 0.0.0.0:5000 (open for Chartink), and it
+            # used to hand ANY anonymous caller kill_switch_active + queue depth — i.e. a
+            # free oracle for "is the trading system halted right now, and how loaded is
+            # it". That is reconnaissance and timing intel, unauthenticated, from the
+            # internet. It also bypassed the per-IP limiter that /webhook is behind.
+            #
+            # Now: same rate limiter, same secret as /webhook. Scope is deliberately this
+            # ONE route — /webhook's handler is not touched, because this is the signal
+            # entry path and a health endpoint is not worth risking it.
+            source_ip: str = request.remote_addr or "unknown"
+
+            # Limit BEFORE auth, exactly as /webhook does, so a flood is cheap to reject.
+            if receiver._ip_limiter is not None and not receiver._ip_limiter.allow(source_ip):
+                return jsonify({"error": "rate limit exceeded"}), 429
+
+            # No secret configured -> no auth surface to enforce; preserve old behaviour
+            # rather than hard-fail a deployment that never had a secret.
+            if receiver._secret:
+                sig_header: str = request.headers.get("X-Webhook-Signature", "")
+                token_param: str = request.args.get("token", "")
+                ok = False
+                if sig_header.startswith("sha256="):
+                    expected_hex = _hmac.new(
+                        receiver._secret.encode(), b"", hashlib.sha256
+                    ).hexdigest()
+                    ok = _hmac.compare_digest(sig_header[7:], expected_hex)
+                elif token_param:
+                    ok = _hmac.compare_digest(token_param, receiver._secret)
+                if not ok:
+                    # Deliberately says nothing about system state — including in the
+                    # failure path, which is where oracles usually leak.
+                    return jsonify({"error": "authentication required"}), 401
+
             ks_active = bool(receiver._ks.is_active()) if receiver._ks else False
             q_size = receiver._queue.qsize()
             q_cap = receiver._config.system.signal_queue.capacity
