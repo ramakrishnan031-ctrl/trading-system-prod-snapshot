@@ -18,6 +18,7 @@ from core.config_loader import load_all
 from core.config_snapshotter import (
     config_to_canonical_json,
     hash_config_json,
+    redact_secrets,
     snapshot_config,
 )
 from core.state_store import EXPECTED_SCHEMA_VERSION, StateStore
@@ -193,3 +194,61 @@ def test_real_load_all_snapshots_one_row(tmp_path):
         assert _count(store) == 1
     finally:
         store.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M-K5 — a populated secret must never reach config_snapshots.config_json
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_mk5_populated_password_is_redacted_before_persistence():
+    """RED ON OLD: the resolved config was serialized unredacted, so if the sanctioned
+    DEV SMTP-password fallback is ever used the plaintext lands in
+    config_snapshots.config_json — a durable table that rides into every DB backup."""
+    cfg = {"system": {"alerts": {"smtp": {"password": "hunter2-real-password"}}}}
+
+    out = config_to_canonical_json(cfg)
+
+    assert "hunter2-real-password" not in out, "plaintext secret persisted to the snapshot"
+    assert "***REDACTED***" in out
+
+
+def test_mk5_is_a_no_op_on_the_real_resolved_config():
+    """The safety property that makes this deployable: on the REAL config nothing
+    changes. By CL5 the resolved config carries env-var NAMES, not values, and the one
+    plaintext-fallback field is empty — so the JSON is byte-identical, the hash is
+    identical, and the snapshot dedupe still skips (no spurious extra row)."""
+    import json
+
+    cfg = load_all().model_dump(mode="json")
+    raw = json.dumps(cfg, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    redacted = config_to_canonical_json(cfg)
+
+    assert redacted == raw, "redaction changed the LIVE config JSON — it must not"
+    assert hash_config_json(redacted) == hash_config_json(raw)
+
+
+def test_mk5_env_var_names_are_not_redacted():
+    """`*_env` keys hold env-var NAMES, not values — the name-indirection this system
+    relies on. Redacting them would blank the report's Config sheet and hide which
+    variable an operator must set."""
+    assert redact_secrets({"password_env": "ALERT_SMTP_PASSWORD"}) == {
+        "password_env": "ALERT_SMTP_PASSWORD"
+    }
+    assert redact_secrets({"bot_token_env": "TELEGRAM_BOT_TOKEN"}) == {
+        "bot_token_env": "TELEGRAM_BOT_TOKEN"
+    }
+
+
+def test_mk5_empty_secret_stays_empty_and_nesting_is_walked():
+    """Only POPULATED values are touched (that is what keeps the live hash stable), and
+    the walk reaches secrets nested in dicts and lists."""
+    assert redact_secrets({"password": ""}) == {"password": ""}
+    assert redact_secrets({"api_key": "live-key"}) == {"api_key": "***REDACTED***"}
+    assert redact_secrets({"a": [{"secret": "s"}]}) == {"a": [{"secret": "***REDACTED***"}]}
+    assert redact_secrets({"n": {"deep": {"token": "t"}}}) == {
+        "n": {"deep": {"token": "***REDACTED***"}}
+    }
+    assert redact_secrets({"port": 587, "host": "smtp.gmail.com"}) == {
+        "port": 587, "host": "smtp.gmail.com"
+    }

@@ -42,6 +42,47 @@ from typing import Optional
 # Serialization + hashing (pure, independently testable)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# M-K5: keys whose VALUE is a secret if it is ever populated. Matched on the key name,
+# case-insensitively, as a substring. `*_env` keys are deliberately NOT redacted — those
+# hold env-var NAMES (bot_token_env, password_env), which are the name-indirection this
+# system relies on and are meant to be visible in the report's Config sheet.
+_SECRET_KEY_MARKERS = ("password", "secret", "token", "api_key", "apikey")
+_REDACTED = "***REDACTED***"
+
+
+def _is_secret_key(key: str) -> bool:
+    k = key.lower()
+    if k.endswith("_env"):
+        return False  # an env-var NAME, not a value
+    return any(m in k for m in _SECRET_KEY_MARKERS)
+
+
+def redact_secrets(config):
+    """M-K5: replace any POPULATED secret-valued field with a redaction marker.
+
+    Only NON-EMPTY string values are touched. That is the whole design:
+
+    * In production nothing changes — by CL5 the resolved config carries env-var NAMES,
+      not values, and the one plaintext-fallback field (``alerts.smtp.password``) is
+      empty. Empty stays empty, so ``config_json`` is byte-identical, so ``config_hash``
+      is identical, so the dedupe still skips and no extra snapshot row appears. This
+      fix is provably a no-op on the live path.
+    * If the sanctioned DEV SMTP-password fallback is ever used, the plaintext no longer
+      lands in ``config_snapshots.config_json`` — a durable table that rides into every
+      DB backup. Redacting at the point of persistence is the only place that helps: by
+      then the value has already been resolved, and a snapshot is forever.
+    """
+    if isinstance(config, dict):
+        return {
+            k: (_REDACTED if _is_secret_key(k) and isinstance(v, str) and v
+                else redact_secrets(v))
+            for k, v in config.items()
+        }
+    if isinstance(config, list):
+        return [redact_secrets(v) for v in config]
+    return config
+
+
 def config_to_canonical_json(config: dict) -> str:
     """
     Serialize ``config`` to a STABLE JSON string: sorted keys + compact separators.
@@ -50,8 +91,12 @@ def config_to_canonical_json(config: dict) -> str:
     order produce byte-identical JSON (and therefore the same hash). This is the
     string stored in ``config_json`` AND the string that is hashed — the report
     reads it back with a plain ``json.loads``.
+
+    M-K5: secrets are redacted here, so the redaction applies to BOTH the stored
+    string and the hash (one path — they cannot diverge).
     """
-    return json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(redact_secrets(config), sort_keys=True,
+                      separators=(",", ":"), ensure_ascii=False)
 
 
 def hash_config_json(config_json: str) -> str:
