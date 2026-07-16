@@ -566,7 +566,14 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > hook they define inline, so they pass regardless and are vacuous. Decide: implement in
 > `deploy/hooks/post-receive` (deploy-path behaviour change) or retire FIX-065 + its tests.
 >
-> **🔄 SUPERSEDED 17-Jul (sweep S7): the post-receive md5 is now `e493dc5…`, NOT `bd950b7…`.**
+> **🔄 SUPERSEDED 17-Jul (sweep S7): the post-receive md5 is now `b716673…`, NOT `bd950b7…`.**
+> *(Corrected same-session: an earlier line here — and S7's commit message `5f89ec5`, which is
+> immutable — recorded `e493dc5…`. That was measured after the first of TWO edits to the file;
+> the second edit moved the md5 again and the record was not re-measured. `b716673…` is the real
+> value, verified identical across the PC working copy, the git blob, and the armed VM hook — the
+> file is `eol: lf` normalised, so the checksum is platform-stable. Recording a stale checksum for
+> the live hook is precisely the trap S7 exists to close, which is why it is corrected rather than
+> quietly left: **always re-measure AFTER the last edit.**)*
 > The header was corrected (it falsely claimed "NOT the currently-installed hook"; a real push
 > that same day printed `crontab AUTO-INSTALLED from canonical`, which only the armed Option-A
 > version does — runtime proof it IS live). Comment-only: executable lines are byte-identical to

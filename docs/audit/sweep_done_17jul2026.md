@@ -80,8 +80,14 @@ the moment you'd least want a silent downgrade. Old contract
 It claimed "*NOT the currently-installed hook*". False, proven twice: md5 identity, **and**
 the live push printing `crontab AUTO-INSTALLED from canonical`. Comment-only (non-comment
 lines byte-identical). The catch, handled rather than left behind: byte-identity **was** the
-proof of which hook is real, so the edit moves md5 `bd950b7…` → `e493dc5…`; the VM hook is
-re-armed to match and SYSTEM_MAP's checksum updated in the same commit. Audit reports citing
+proof of which hook is real, so the edit moves md5 `bd950b7…` → **`b716673…`**; the VM hook is
+re-armed to match (verified: repo tree == armed hook) and SYSTEM_MAP's checksum updated.
+*Self-correction worth recording: I first wrote `e493dc5…` into SYSTEM_MAP and the commit
+message — that md5 was measured after the FIRST of two edits to the file, and the second
+edit moved it again. Caught at re-arm time by comparing against the VM. Recording a stale
+checksum for the live hook is exactly the trap S7 closes; the lesson is **re-measure after
+the last edit**. SYSTEM_MAP is corrected; commit `5f89ec5`'s message is immutable and
+carries the stale value.* Audit reports citing
 the old md5 were deliberately left alone — rewriting a point-in-time record is how records
 stop being evidence.
 
