@@ -547,6 +547,12 @@ inactive alert-watcher).
 ---
 
 ## Related Docs (do not duplicate these — cross-reference)
+- 🚫📋 **Operator PLANNING docs are NOT repo artifacts.** The master pending register
+  (`MASTER_PENDING_REGISTER_*.txt`) + decision sheets (`*_DECISION_SHEET_*.txt`) are **Rama's own
+  external working files** — git-excluded via `.git/info/exclude` (local, never pushed), NEVER
+  `git add`-ed. The tracked ANALYSIS lineage (the census/audit reports) DOES live here, under
+  `docs/audit/` (e.g. `pending_reconciliation_14jul2026.md`) — those stay tracked. Convention memory
+  `feedback_operator_planning_docs_external`.
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
