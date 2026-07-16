@@ -65,6 +65,17 @@ from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
 _HARD_KILL_MAX_RETRY_HOURS = 2.0
 # Per-trade Telegram dedup window for the "exit failed" escalation alert.
 _EXIT_ALERT_DEDUP_SEC = 300.0
+
+# M-C8: trade statuses the flatten treats as live. SINGLE source for both the
+# flatten's SELECT and its EXITING write-condition — they MUST agree. If they
+# drift (a status added to one but not the other) the write silently no-ops and
+# the trade stays re-selectable, i.e. a double-sell risk. Derive, don't duplicate.
+_FLATTEN_LIVE_TRADE_STATUSES = ("OPEN", "PARTIAL", "PENDING_FILL")
+# M-C8: terminal order statuses. An order that reached one of these must NEVER be
+# overwritten with CANCELLED — above all COMPLETE, which means the resting SL/TGT
+# actually FILLED. Clobbering that would record a filled exit as cancelled and
+# leave the reconciler believing a closed position is still open.
+_FLATTEN_TERMINAL_ORDER_STATUSES = ("CANCELLED", "FAILED", "EXPIRED", "COMPLETE")
 # Throttle for the actionable Kite IP-allowlist (403) alert: one per hour, so a
 # burst of failed entries does not spam the channel (the system self-recovers on
 # the next signal once the IP is allowlisted).
@@ -108,6 +119,25 @@ class KillState(Enum):
     HARD_KILL = "HARD_KILL"
 
 
+class FlattenState(Enum):
+    """M-C8: lifecycle of the async HARD_KILL flatten worker.
+
+    IDLE     -- no flatten has been dispatched (or none ever ran)
+    RUNNING  -- the worker thread is executing the indestructible exit loop
+    DRAINING -- shutdown asked the worker to finish; we are awaiting it
+    COMPLETE -- the worker finished (successfully, by deadline, or by crashing)
+
+    "In progress" == RUNNING or DRAINING. This is the SINGLE source of truth for
+    "a flatten is in flight" — deliberately NOT StateStore.count_active_positions(),
+    which counts only OPEN/PARTIAL/PENDING_FILL and is therefore blind to the
+    EXITING rows the flatten creates (see M-C8 report / main._eod_self_exit_due).
+    """
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    DRAINING = "DRAINING"
+    COMPLETE = "COMPLETE"
+
+
 @dataclass(frozen=True)
 class CancellationReport:
     """
@@ -117,10 +147,19 @@ class CancellationReport:
         attempted: number of orders the callback tried to cancel
         succeeded: number successfully cancelled
         failed:    list of order IDs that could not be cancelled
+        dispatched: M-C8 — True when hard_kill handed the flatten to the async
+            worker and returned immediately. The other three fields are then
+            NOT a result (nothing has been attempted yet at return time); they
+            are zero/empty purely to satisfy the type. A False value means the
+            report IS a completed result (the legacy cancel_fn path, or a direct
+            call to _exit_all_trades_indestructible). No production caller reads
+            this — all six call hard_kill for effect — but it keeps the async
+            return honest instead of masquerading as "nothing to do".
     """
     attempted: int
     succeeded: int
     failed: List[str] = field(default_factory=list)
+    dispatched: bool = False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -195,6 +234,17 @@ class KillSwitch:
         # Monotonic ts of the last Kite IP-403 actionable alert (1/hr throttle);
         # None = never alerted (so the first IP-403 always alerts).
         self._ip403_last_alert_ts: Optional[float] = None
+
+        # M-C8: async flatten worker state. A DEDICATED lock, deliberately NOT the
+        # KS4 RLock above: this lock is taken around the thread handle and a state
+        # read/write only, never across a publish/send/join. Reusing self._lock
+        # would re-create the M-C4 defect in a worse place — a 2h join under the
+        # lock that gates is_active() would block the last-mile order check for
+        # the entire flatten. Lock ORDER (never violated here): a holder of
+        # _flatten_lock must not acquire self._lock.
+        self._flatten_lock = threading.Lock()
+        self._flatten_state = FlattenState.IDLE
+        self._flatten_thread: Optional[threading.Thread] = None
 
         # KS3: recover persisted state on startup (Audit Issue #18 fix)
         self._load_state_from_store()
@@ -513,9 +563,29 @@ class KillSwitch:
         """
         Activate HARD_KILL: block ALL orders, attempt to cancel open broker orders.
 
-        Returns CancellationReport from on_hard_kill_cancel_fn (empty if not set).
-        Idempotent: if already HARD_KILL, re-runs cancellation attempt in case
-        orders reappeared (no state change, no event re-published).
+        The kill STATE is tripped synchronously before this returns, so is_active()
+        blocks new orders the instant the caller regains control — that has not
+        changed and must not.
+
+        M-C8 (16-Jul-2026) — WHAT CHANGED: the FLATTEN is now asynchronous on the
+        adapter path (production). This call dispatches the exit loop to a worker
+        and RETURNS IMMEDIATELY; the returned report carries dispatched=True and is
+        NOT a result. Previously the caller's thread ran the whole retry loop, up to
+        _HARD_KILL_MAX_RETRY_HOURS — and the callers are on the fill/commit path,
+        so an emergency froze the fill pipeline it needed.
+
+        Returns:
+            CancellationReport. On the ADAPTER path: dispatched=True, counters
+            zero/empty (nothing has happened yet — do not read them). On the LEGACY
+            cancel_fn path: a real, completed report (dispatched=False), exactly as
+            before. Empty report if no callback is set.
+
+        Idempotent. If already HARD_KILL: no state change, no event re-published.
+        The LEGACY path re-runs cancellation in case orders reappeared (KS6,
+        unchanged). The ADAPTER path is SINGLE-FLIGHT — a repeat call will not
+        start a second flatten worker; the running loop already re-derives from
+        broker truth on every retry, so it covers late-appearing positions.
+
         Persist-first atomicity same as soft_kill().
         """
         with self._lock:
@@ -832,10 +902,38 @@ class KillSwitch:
         intentional - during HARD_KILL the system MUST NOT give up on flattening.
 
         If adapter is not set, falls back to legacy callback (on_hard_kill_cancel_fn).
+
+        M-C8 (16-Jul-2026): the ADAPTER path now DISPATCHES the exit loop to a
+        worker thread and returns immediately (fire-and-return). It used to run on
+        the caller's thread, and several callers are on the fill/commit path
+        (order_placer:1499/:3750, fund_manager:974/:2259, drift_handler:231,
+        main:647) — so a HARD_KILL could starve the fill/event pipeline for up to
+        _HARD_KILL_MAX_RETRY_HOURS while the flatten retried. The flatten itself
+        was never the problem; blocking the caller was.
+
+        The LEGACY cancel_fn path below stays SYNCHRONOUS, and
+        _exit_all_trades_indestructible stays a synchronous internal method. That
+        split is load-bearing, not incidental: production always calls set_adapter
+        (main.py:1983) so production always takes the adapter path, while the tests
+        that assert on a real CancellationReport reach the loop through the legacy
+        cancel_fn or by calling the internal method directly. Keeping both sync is
+        what lets the async change land without disturbing them. Do not "tidy" the
+        two paths into one.
+
+        Caveat, learned the hard way (M-C8): the claim "no existing test calls
+        hard_kill() with an adapter set" was WRONG when this was written —
+        test_p0_live_day1_fixes.py::TestBugC_KillSwitchExit did exactly that and
+        broke. Those tests now call the internal method directly like their
+        siblings. If you add a test that drives hard_kill() with an adapter, it
+        gets a DISPATCH, not a result: drain_flatten() first, then assert.
         """
         # FIX-087: New indestructible exit logic if adapter is available
         if self._adapter is not None:
-            return self._exit_all_trades_indestructible()
+            # M-C8: fire-and-return. Single-flight lives in the dispatcher.
+            self._dispatch_flatten_worker()
+            return CancellationReport(
+                attempted=0, succeeded=0, failed=[], dispatched=True
+            )
 
         # Legacy callback path (backward compat)
         if self._cancel_fn is None:
@@ -861,6 +959,172 @@ class KillSwitch:
                 "on_hard_kill_cancel_fn raised %s: %s", type(exc).__name__, exc
             )
             return CancellationReport(attempted=0, succeeded=0, failed=[str(exc)])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # M-C8: async flatten worker (dispatch / lifecycle / drain)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    @property
+    def flatten_state(self) -> FlattenState:
+        """Current FlattenState (thread-safe snapshot)."""
+        with self._flatten_lock:
+            return self._flatten_state
+
+    def is_flatten_in_progress(self) -> bool:
+        """True while a HARD_KILL flatten worker is running or being drained.
+
+        This is the gate main.py's eod-self-exit MUST consult before deciding the
+        process may exit. count_active_positions() cannot answer this question: it
+        counts OPEN/PARTIAL/PENDING_FILL only, and the flatten marks trades EXITING
+        *early* (before the retry confirms the fill), so a flatten in progress can
+        read as "0 active positions" — i.e. as flat. That blindness is the
+        today-latent race M-C8 closes.
+        """
+        with self._flatten_lock:
+            return self._flatten_state in (FlattenState.RUNNING, FlattenState.DRAINING)
+
+    def _dispatch_flatten_worker(self) -> bool:
+        """Start the flatten worker unless one is already in flight (single-flight).
+
+        Returns True iff THIS call started the worker.
+
+        SINGLE-FLIGHT (adapter path only): a repeat hard_kill — including the
+        re-entrant already-HARD_KILL path and calls from other threads — must not
+        start a second flatten. Two concurrent flatten loops would race each other
+        placing exit orders for the same positions. It is also unnecessary: the
+        running loop re-derives every decision from CURRENT broker truth on every
+        retry (H-4), so it already picks up anything that appeared after it
+        started. The legacy cancel_fn path keeps its KS6 "re-runs cancellation"
+        behaviour unchanged.
+        """
+        with self._flatten_lock:
+            if self._flatten_state in (FlattenState.RUNNING, FlattenState.DRAINING):
+                self._log.warning(
+                    "kill_switch: flatten already in progress (%s) — single-flight "
+                    "no-op, NOT starting a second worker (the running loop re-derives "
+                    "from broker truth every retry, so it covers new positions too)",
+                    self._flatten_state.value,
+                )
+                return False
+            self._flatten_state = FlattenState.RUNNING
+            # NON-daemon: a daemon thread would be killed the instant the process
+            # decides to exit — mid-flatten, with positions still open. Non-daemon
+            # means the interpreter itself will not tear down under a running
+            # flatten. main._shutdown drains it explicitly; this is the backstop.
+            t = threading.Thread(
+                target=self._flatten_worker_main,
+                name="ks-hard-kill-flatten",
+                daemon=False,
+            )
+            self._flatten_thread = t
+        # start() OUTSIDE the lock (M-C4 lesson: never hold a lock across work).
+        try:
+            t.start()
+        except Exception as exc:  # noqa: BLE001 — e.g. RuntimeError: can't start new thread
+            # Thread exhaustion is most likely EXACTLY here: the process is in
+            # distress, which is why a HARD_KILL is firing. Two things must not
+            # happen. (1) Leaving the state at RUNNING with a thread that never
+            # ran would make is_flatten_in_progress() answer True forever — the
+            # eod-self-exit gate would hold the process open all night, and
+            # drain_flatten would join() a never-started thread and raise. (2) Not
+            # flattening at all. An unflattened book is far worse than a blocked
+            # caller, so fall back to running the flatten INLINE (the pre-M-C8
+            # behaviour) rather than dropping it. _flatten_worker_main sets
+            # COMPLETE in its finally either way.
+            with self._flatten_lock:
+                self._flatten_thread = None
+            self._log.critical(
+                "kill_switch: could NOT start the flatten worker (%s: %s) — running "
+                "the flatten INLINE on the caller's thread instead. The caller is "
+                "blocked for the duration, but the positions WILL be flattened.",
+                type(exc).__name__, exc,
+            )
+            self._flatten_worker_main()
+            return True
+        self._log.critical(
+            "kill_switch: HARD_KILL flatten dispatched to worker thread "
+            "(hard_kill returns immediately; the fill/commit path is not blocked)"
+        )
+        return True
+
+    def _flatten_worker_main(self) -> None:
+        """Worker body: run the SAME synchronous flatten, then always mark COMPLETE.
+
+        The `finally` is safety-critical, not tidiness. If this worker died leaving
+        the state at RUNNING, is_flatten_in_progress() would answer True forever and
+        the eod-self-exit gate would hold the process up all night waiting on a
+        flatten that is not running. COMPLETE-on-crash keeps the gate honest.
+        """
+        try:
+            report = self._exit_all_trades_indestructible()
+            if report.failed:
+                self._log.critical(
+                    "kill_switch: flatten worker finished with %d UNEXITED trade(s) "
+                    "%s — MANUAL INTERVENTION REQUIRED",
+                    len(report.failed), report.failed,
+                )
+            else:
+                self._log.critical(
+                    "kill_switch: flatten worker finished — all %d attempted "
+                    "position(s) flat", report.attempted,
+                )
+        except Exception as exc:  # noqa: BLE001 — the worker must never die silently
+            self._log.critical(
+                "kill_switch: flatten worker CRASHED (%s: %s) — positions may remain "
+                "OPEN, MANUAL INTERVENTION REQUIRED",
+                type(exc).__name__, exc, exc_info=True,
+            )
+        finally:
+            with self._flatten_lock:
+                self._flatten_state = FlattenState.COMPLETE
+
+    def drain_flatten(self, timeout: Optional[float] = None) -> bool:
+        """Wait for an in-flight flatten to finish. Returns True iff nothing is left running.
+
+        Called by main._shutdown before tearing anything down. Returns True
+        immediately when no flatten is in flight (the overwhelmingly common case).
+
+        timeout=None waits indefinitely (bounded in practice by the loop's own
+        _HARD_KILL_MAX_RETRY_HOURS deadline) — that is the INTERNAL eod-self-exit
+        case, which can afford to wait. An EXTERNAL SIGTERM passes a bounded grace
+        instead: systemd will SIGKILL at TimeoutStopSec regardless, so holding on
+        is not an option there.
+
+        The join happens OUTSIDE _flatten_lock — holding it across a potentially
+        2h join would block every is_flatten_in_progress()/flatten_state reader.
+        """
+        with self._flatten_lock:
+            # The STATE is authoritative, not the handle. In the thread-start
+            # fallback the flatten runs INLINE on some other caller's thread and
+            # _flatten_thread is None — a handle-first check would read that as
+            # "nothing in flight" and cheerfully let _shutdown close the store out
+            # from under a live flatten. There is nothing to join in that case, so
+            # say so honestly rather than claim a drain we did not perform.
+            if self._flatten_state not in (
+                FlattenState.RUNNING, FlattenState.DRAINING
+            ):
+                return True  # nothing in flight
+            t = self._flatten_thread
+            if t is None:
+                self._log.critical(
+                    "kill_switch: a flatten is in progress INLINE (no worker thread "
+                    "to join) — cannot drain it from here; it holds its own caller's "
+                    "thread until it finishes"
+                )
+                return False
+            self._flatten_state = FlattenState.DRAINING
+        self._log.critical(
+            "kill_switch: draining HARD_KILL flatten worker before shutdown "
+            "(timeout=%s)", "none" if timeout is None else f"{timeout:.1f}s",
+        )
+        t.join(timeout)
+        if t.is_alive():
+            # State stays DRAINING: the worker really is still running. Do NOT
+            # force it to COMPLETE — that would be a lie to every other reader.
+            return False
+        with self._flatten_lock:
+            self._flatten_state = FlattenState.COMPLETE
+        return True
 
     def _is_position_flat(self, symbol: str) -> bool:
         """
@@ -972,13 +1236,35 @@ class KillSwitch:
     def _mark_trade_exiting(self, trade_id: str) -> None:
         """FIX-190: mark a trade EXITING (best-effort; broker truth > DB). Marking
         BEFORE/right-after placing the flatten keeps a concurrent flatten path
-        (the OPEN/PARTIAL/PENDING_FILL query) from re-selecting and double-selling."""
+        (the OPEN/PARTIAL/PENDING_FILL query) from re-selecting and double-selling.
+
+        M-C8: the write is CONDITIONAL on the trade still being live. The flatten
+        now runs on its own thread, so this UPDATE races the fill thread. An
+        unconditional write would clobber whatever the fill thread had already
+        advanced the trade to (e.g. CLOSED) and resurrect a finished trade as
+        EXITING. Conditioning on the live set makes the losing side of the race a
+        clean no-op instead. No lock is needed: broker truth stays authoritative
+        (every decision is re-derived from get_positions()), so a no-op here costs
+        nothing — the next retry re-reads the world anyway.
+        """
+        placeholders = ",".join("?" * len(_FLATTEN_LIVE_TRADE_STATUSES))
         try:
             with self._store.transaction() as cur:
                 cur.execute(
-                    "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
-                    ("EXITING", now_ist().isoformat(), trade_id),
+                    f"UPDATE trades SET status = ?, updated_at = ? "
+                    f"WHERE trade_id = ? AND status IN ({placeholders})",
+                    ("EXITING", now_ist().isoformat(), trade_id,
+                     *_FLATTEN_LIVE_TRADE_STATUSES),
                 )
+                if cur.rowcount == 0:
+                    # Not an error: the trade left the live set under us (fill
+                    # thread got there first, or it is already EXITING). Log it —
+                    # a silent no-op here would hide a real concurrency story.
+                    self._log.info(
+                        "kill_switch: EXITING write for trade %s was a no-op — no "
+                        "longer in %s (concurrent fill-path update; broker truth "
+                        "still governs)", trade_id, list(_FLATTEN_LIVE_TRADE_STATUSES),
+                    )
         except Exception as exc:
             self._log.critical(
                 "kill_switch: DB write (EXITING) failed for trade %s: %s",
@@ -989,12 +1275,15 @@ class KillSwitch:
         """FIX-190 (Bug E): cancel a trade's resting SL/TGT orders at the broker
         BEFORE flattening, so they don't survive as orphans that later re-fire
         into a naked position. Best-effort; broker truth > DB."""
+        # M-C8: same constant as the CANCELLED write-condition below — the SELECT's
+        # exclusion set and the write's guard must stay identical.
+        _term_placeholders = ",".join("?" * len(_FLATTEN_TERMINAL_ORDER_STATUSES))
         try:
             rows = self._store.fetch_all(
                 "SELECT order_id, leg FROM orders "
                 "WHERE trade_id = ? AND leg IN ('SL','TGT') "
-                "AND status NOT IN ('CANCELLED','FAILED','EXPIRED','COMPLETE')",
-                (trade_id,),
+                f"AND status NOT IN ({_term_placeholders})",
+                (trade_id, *_FLATTEN_TERMINAL_ORDER_STATUSES),
             )
         except Exception as exc:
             self._log.warning(
@@ -1026,12 +1315,25 @@ class KillSwitch:
                 )
                 continue
             try:
+                # M-C8: CONDITIONAL — never overwrite a TERMINAL order status. The
+                # flatten is now off-thread, so between the SELECT above and this
+                # write the fill thread can mark this very order COMPLETE (the SL
+                # filled in the gap after the broker accepted our cancel). Writing
+                # CANCELLED over that would record a FILLED exit as cancelled and
+                # leave the reconciler thinking a closed position is still open.
+                # The condition mirrors the SELECT's exclusion set exactly.
                 with self._store.transaction() as cur:
                     cur.execute(
-                        "UPDATE orders SET status = 'CANCELLED', updated_at = ? "
-                        "WHERE order_id = ?",
-                        (now_ist().isoformat(), oid),
+                        f"UPDATE orders SET status = 'CANCELLED', updated_at = ? "
+                        f"WHERE order_id = ? AND status NOT IN ({_term_placeholders})",
+                        (now_ist().isoformat(), oid, *_FLATTEN_TERMINAL_ORDER_STATUSES),
                     )
+                    if cur.rowcount == 0:
+                        self._log.info(
+                            "kill_switch: CANCELLED write for order %s was a no-op — "
+                            "already terminal (concurrent fill-path update won the "
+                            "race; broker truth governs)", oid,
+                        )
             except Exception:
                 pass  # broker cancel is what matters; reconciler finalizes DB
             cancelled += 1
@@ -1064,6 +1366,9 @@ class KillSwitch:
         # under the SAME product the position was opened with — MIS vs CNC
         # matters). `product` lives on the orders table (ENTRY/CO leg), not on
         # trades, so pull it via a correlated subquery.
+        # M-C8: the live-status set comes from _FLATTEN_LIVE_TRADE_STATUSES, the
+        # same constant the EXITING write-condition uses — they must never drift.
+        _live_placeholders = ",".join("?" * len(_FLATTEN_LIVE_TRADE_STATUSES))
         try:
             open_trades = self._store.fetch_all(
                 "SELECT t.trade_id, t.symbol, t.qty_filled, t.direction, "
@@ -1071,7 +1376,8 @@ class KillSwitch:
                 "        WHERE o.trade_id = t.trade_id AND o.leg IN ('ENTRY','CO') "
                 "        LIMIT 1) AS product "
                 "FROM trades t "
-                "WHERE t.status IN ('OPEN', 'PARTIAL', 'PENDING_FILL')"
+                f"WHERE t.status IN ({_live_placeholders})",
+                tuple(_FLATTEN_LIVE_TRADE_STATUSES),
             )
         except Exception as exc:
             self._log.critical(
@@ -1285,15 +1591,13 @@ class KillSwitch:
                     if not order_result.broker_order_id:
                         raise RuntimeError("Broker returned empty order id for exit")
 
-                    # Best-effort DB update
-                    try:
-                        with self._store.transaction() as cur:
-                            cur.execute(
-                                "UPDATE trades SET status = ?, updated_at = ? WHERE trade_id = ?",
-                                ("EXITING", now_ist().isoformat(), trade_id),
-                            )
-                    except Exception:
-                        pass  # Broker truth > DB truth
+                    # Best-effort DB update. M-C8: route through the one
+                    # conditional helper instead of repeating the raw UPDATE —
+                    # this site and _mark_trade_exiting were the same write in two
+                    # places, and only one of them would have gotten the race
+                    # condition. Same semantics, swallow-and-continue preserved
+                    # (the helper never raises: broker truth > DB truth).
+                    self._mark_trade_exiting(trade_id)
 
                     self._log.info(
                         "kill_switch: trade %s exited successfully (retry)", trade_id
