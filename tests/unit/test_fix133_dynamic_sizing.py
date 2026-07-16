@@ -3,8 +3,10 @@ tests/unit/test_fix133_dynamic_sizing.py
 
 FIX-133 Item 21: Dynamic position sizing by strategy win rate.
   - High perf_weight -> larger qty (up to 2x cap)
-  - Low perf_weight -> smaller qty (floor at 1)
-  - perf_weight=0 -> floor at 1
+  - Low (but positive) perf_weight -> smaller qty, floored at 1 lot
+  - perf_weight=0 -> SKIP the trade  (M-C6, 16-Jul-2026 — was "floor at 1", which
+    put capital on a signal the sizing model had sized to nothing; the floor is for
+    small-but-POSITIVE multipliers, not for an explicit zero)
   - perf_weight=3.0 -> capped at 2x raw_qty
 """
 from __future__ import annotations
@@ -61,14 +63,30 @@ class TestDynamicSizingCap:
         )
         print(f"  OK: perf_weight=0.5 -> qty={reduced.qty} <= base={base.qty}")
 
-    def test_perf_weight_zero_floor_at_one(self) -> None:
-        """perf_weight=0 should floor qty at 1 (not zero)."""
+    def test_perf_weight_zero_skips_the_trade(self) -> None:
+        """perf_weight=0 -> SKIP, NOT one lot.
+
+        SUPERSEDED BY M-C6 (16-Jul-2026). This test previously asserted
+        `tiered_qty >= 1` for perf_weight=0 and was named ..._floor_at_one — it
+        locked in the defect: a ZERO multiplier means the sizing model said to trade
+        NOTHING, and flooring it to 1 lot put real capital and real risk on exactly
+        the signal it had just declined. The floor's real job (kept below, and in
+        test_low_perf_weight_smaller_qty) is to stop a small-but-POSITIVE multiplier
+        rounding to zero and silently killing a wanted trade.
+
+        Behaviour-neutral in production: performance_allocator clamps min_weight=0.5
+        (PA3/PA8) and signal_processor defaults an unknown strategy to 1.0, so
+        perf_weight is never 0 today. This is the hard PREREQUISITE for ever lowering
+        min_weight.
+        """
         sizer = _make_sizer()
         result = sizer.calculate("TEST", "BUY", 1000.0, 985.0, "INTRADAY", perf_weight=0.0)
 
-        # tiered_qty is floored at 1, but may still be filtered by lot_size or min_qty
-        assert result.breakdown.get("tiered_qty", 0) >= 1, "tiered_qty must be >= 1"
-        print(f"  OK: perf_weight=0.0 -> tiered_qty={result.breakdown['tiered_qty']} (>= 1)")
+        assert result.success is False
+        assert result.qty == 0, "a zero multiplier must not manufacture a position"
+        assert result.constraint == "ZERO_MULTIPLIER"
+        assert result.breakdown.get("tiered_qty") == 0
+        print(f"  OK: perf_weight=0.0 -> SKIP (constraint={result.constraint})")
 
     def test_perf_weight_large_capped_at_2x(self) -> None:
         """perf_weight=3.0 should cap tiered_qty at 2x raw_qty."""

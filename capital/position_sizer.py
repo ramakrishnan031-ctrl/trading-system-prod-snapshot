@@ -80,6 +80,9 @@ class SizingResult:
                            "CAPITAL"       -- available bucket capital was tightest
                            "CONCENTRATION" -- max_concentration_pct was tightest
                            "BELOW_MIN"     -- tier/lot_size rounding made qty < minimum
+                           "ZERO_MULTIPLIER" -- M-C6: tier_mult × perf_weight <= 0, i.e.
+                                              sizing said "trade nothing" -> skip (NOT
+                                              floored to 1 lot)
         reason:          Human-readable explanation (non-empty always).
         breakdown:       Dict with all candidate qtys + tier multiplier for audit.
     """
@@ -441,8 +444,65 @@ class PositionSizer:
         if self._enabled:
             # ON: PS5 tier multiplier × PA4 performance weight (FIX-132 Item 9) — unchanged.
             effective_mult = tier_mult * max(0.0, perf_weight)  # perf_weight >= 0 guard
+            # M-C6 (16-Jul-2026): a ZERO (or negative) multiplier means "size this to
+            # nothing" — SKIP the trade. FIX-133's floor below turned it into 1 lot,
+            # i.e. real capital and real risk on a signal the sizing model had just
+            # said to stay out of. The floor exists so a small-but-POSITIVE multiplier
+            # still trades (0.3 × 2 lots rounding to 0 should not silently kill a
+            # wanted trade); it was never meant to manufacture a position out of an
+            # explicit zero. Split the two cases and the floor keeps its real job.
+            #
+            # `<= 0` needs no tolerance: perf_weight is already clamped >= 0 one line
+            # up, so the product cannot be a tiny FP negative — a negative here means
+            # a genuinely negative tier_mult (PositionSizingTierConfig types HIGH/
+            # MEDIUM/LOW as bare floats with no ge=0 bound, so a config typo reaches
+            # this), and -1.0 * 0.0 == -0.0 which `<= 0` also catches. Negative is
+            # treated exactly as zero: there is no meaning to a negative size.
+            #
+            # NOT reachable today: performance_allocator clamps min_weight=0.5 (PA3/
+            # PA8) and signal_processor defaults an unknown strategy to 1.0, so
+            # effective_mult >= 0.25 in production and this branch never fires. It is
+            # a hard PREREQUISITE for ever lowering min_weight.
+            if effective_mult <= 0:
+                breakdown["tier_multiplier_mode"] = "ON"
+                breakdown["tier_weight_applied"] = tier_mult
+                breakdown["perf_weight_applied"] = round(perf_weight, 4)
+                breakdown["flat_value_rs_used"] = None
+                breakdown["qty_by_flat"] = None
+                breakdown["tiered_qty"] = 0
+                breakdown["tier_mult"] = tier_mult
+                breakdown["perf_weight"] = round(perf_weight, 4)
+                breakdown["effective_mult"] = effective_mult
+                reason = (
+                    f"qty=0: ZERO_MULTIPLIER for {symbol} — effective_mult="
+                    f"{effective_mult} (tier_mult={tier_mult} × perf_weight="
+                    f"{perf_weight}) sizes this trade to nothing; skipping rather "
+                    f"than flooring to 1 lot"
+                )
+                if self._log is not None:
+                    self._log.warning(
+                        "position_sizer.zero_multiplier_skip",
+                        extra={
+                            "symbol": symbol,
+                            "tier_mult": tier_mult,
+                            "perf_weight": perf_weight,
+                            "effective_mult": effective_mult,
+                            "raw_qty": raw_qty,
+                        },
+                    )
+                return SizingResult(
+                    success=False,
+                    qty=0,
+                    margin_required=0.0,
+                    risk_amount=0.0,
+                    bucket=bucket,
+                    constraint="ZERO_MULTIPLIER",
+                    reason=reason,
+                    breakdown=breakdown,
+                )
             tiered_qty = int(math.floor(raw_qty * effective_mult))
-            # FIX-133 Item 21: cap at 2x base_qty, floor at 1
+            # FIX-133 Item 21: cap at 2x base_qty, floor at 1 — for a POSITIVE
+            # multiplier only (see the M-C6 note above).
             tiered_qty = max(1, min(tiered_qty, raw_qty * 2))
             breakdown["tier_multiplier_mode"] = "ON"
             breakdown["tier_weight_applied"] = tier_mult
