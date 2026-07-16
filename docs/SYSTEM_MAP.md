@@ -559,6 +559,10 @@ inactive alert-watcher).
   `observe`** = log `WOULD_REJECT`, does NOT reject → behaviour-neutral deploy). The observe→enforce
   flip that ACTIVATES the live 40% sector concentration cap is OFF-MARKET + Rama-gated (observe soak
   ≥1 session first). Report `docs/audit/f1_trades_sector_16jul2026.md`; memory `f1_trades_sector_16jul`.
+  16-Jul follow-up: BUG A (`risk_engine.py:123` `sector_for`) was a stale class-DOCSTRING example
+  (never executable) → fixed to `.sector`; BUG B (`signal_processor._sector_for` always UNKNOWN)
+  DEFERRED-inert (its `V3Signal`/`ScoredCandidate` sector fields are set-but-never-read); Q6 repo-wide
+  stale-resolver sweep CLEAN (only BUG A+B). Canonical resolver everywhere = `InstrumentCache.sector`.
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
