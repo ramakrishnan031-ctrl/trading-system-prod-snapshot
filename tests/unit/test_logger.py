@@ -781,6 +781,110 @@ def test_fix058_safe_json_encoder_complex_nested() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tests — L11: third-party HTTP loggers must not leak URL credentials
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Shaped like a real Telegram bot token (digits ":" base64ish, 46 chars) so the
+# assertion exercises the real leak path. Obviously fake; never a live credential.
+_FAKE_BOT_TOKEN = "123456789:AAFfakeFAKEfakeFAKEfakeFAKEfakeFAKEfa"
+
+
+def _serve_once() -> tuple[str, object]:
+    """Start a throwaway localhost HTTP server on an ephemeral port.
+
+    Returns (base_url, httpd). Caller must call httpd.shutdown().
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 — stdlib callback name
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_args) -> None:
+            pass  # silence BaseHTTPRequestHandler's stderr access log
+
+    httpd = HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{httpd.server_port}", httpd
+
+
+def test_l11_http_client_debug_does_not_leak_url_credentials() -> None:
+    """L11: a real HTTP request whose PATH carries a credential (the Telegram shape)
+    must not write that credential to the debug log.
+
+    RED before the fix: urllib3.connectionpool logs the request line at DEBUG
+    ('%s://%s:%s "%s %s %s" %s %s' — `url` is the path), root is DEBUG, and the debug
+    sink takes DEBUG+ from all loggers, so the token lands in logs/debug_*.log.
+    """
+    import requests
+
+    base_url, httpd = _serve_once()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            setup_logging(log_dir)
+
+            # Mirrors alerts/telegram_notifier.py's _TELEGRAM_API: token in the URL PATH.
+            requests.post(f"{base_url}/bot{_FAKE_BOT_TOKEN}/sendMessage", timeout=5)
+
+            debug_text = "\n".join(_read_lines(_log_file(log_dir, "debug")))
+            _teardown()
+
+        assert _FAKE_BOT_TOKEN not in debug_text, (
+            "L11 VIOLATED: a credential in a request URL reached the debug log"
+        )
+        # The credential must be absent because the emitter is capped — not because
+        # the request never happened. Prove urllib3 still ran at INFO+ capability.
+        assert logging.getLogger("urllib3").level == logging.INFO, (
+            "urllib3 must be capped at INFO, not silenced entirely"
+        )
+        print("  OK L11 third-party HTTP DEBUG does not leak URL credentials")
+    finally:
+        httpd.shutdown()
+
+
+def test_l11_cap_does_not_suppress_application_debug() -> None:
+    """L11 must cap ONLY third-party HTTP loggers — our own DEBUG still reaches the sink.
+
+    Guards the obvious wrong fix (raising root above DEBUG / muting broadly), which
+    would also make this module's debug log useless.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        log_dir = Path(tmp)
+        setup_logging(log_dir)
+
+        get_logger("core.some_module").debug("application debug line kept")
+
+        debug_text = "\n".join(_read_lines(_log_file(log_dir, "debug")))
+        _teardown()
+
+    assert "application debug line kept" in debug_text, (
+        "L11 over-reached: application DEBUG output was suppressed"
+    )
+    print("  OK L11 cap leaves application DEBUG output intact")
+
+
+def test_l11_cap_is_idempotent_and_survives_relogging() -> None:
+    """setup_logging() is called again by tests/entry points; the cap must re-apply.
+
+    A caller that resets urllib3 to DEBUG (as a debugging session might) must not
+    leave the leak armed for the next setup_logging().
+    """
+    logging.getLogger("urllib3").setLevel(logging.DEBUG)  # simulate the leak being re-armed
+    with tempfile.TemporaryDirectory() as tmp:
+        setup_logging(Path(tmp))
+        _teardown()
+    assert logging.getLogger("urllib3").level == logging.INFO, (
+        "setup_logging() must re-apply the L11 cap"
+    )
+    print("  OK L11 cap re-applies on every setup_logging()")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Standalone runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -822,6 +926,9 @@ def run_all_tests() -> int:
         test_fix058_safe_json_encoder_handles_exception,
         test_fix058_safe_json_encoder_handles_unserializable,
         test_fix058_safe_json_encoder_complex_nested,
+        test_l11_http_client_debug_does_not_leak_url_credentials,
+        test_l11_cap_does_not_suppress_application_debug,
+        test_l11_cap_is_idempotent_and_survives_relogging,
     ]
 
     print("=" * 70)

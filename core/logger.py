@@ -25,6 +25,9 @@ Locked Design Decisions:
            order_id?, symbol?, <extra alphabetical>, exc_type?, exc_traceback?.
     L10 — get_logger caches by name (module-level dict). setup_logging() removes
            previous handlers before attaching new ones. Prevents duplicate-handler bug.
+    L11 — Third-party HTTP client loggers are capped at INFO by setup_logging().
+           Their DEBUG output contains full request URLs, which carry credentials in
+           the path (see _THIRD_PARTY_HTTP_LOGGERS). Our own loggers are unaffected.
 
 What This Module Does NOT Do:
     - Does not send alerts (handled by alerts/telegram_notifier.py)
@@ -74,6 +77,31 @@ _SEVERITY_TO_LEVEL: dict[str, int] = {
 }
 
 _PLAIN_FMT = "%(asctime)s %(levelname)-8s %(name)s — %(message)s"
+
+# Third-party HTTP client loggers, capped at INFO by setup_logging() (L11).
+#
+# WHY: the debug sink is DEBUG+/all-loggers (L3) and setup_logging() sets root to DEBUG,
+# which opts us into the wire-level DEBUG output of every third-party library — output we
+# never asked for. urllib3 (the transport under `requests`) logs the request line of every
+# call it makes, path included:
+#     urllib3.connectionpool DEBUG https://api.telegram.org:443 "POST /bot<TOKEN>/... " 200
+# Telegram embeds the bot token in the URL PATH, so ANY HTTP debug logging writes a live
+# credential to disk in cleartext by construction. urllib3 leaks the same URL from three
+# call sites (request line, redirect, retry), so capping the emitter beats chasing formats.
+#
+# INFO (not WARNING) keeps their genuinely useful INFO+ records (retries, connection
+# warnings). Our own loggers are module-named ("core.*", "alerts.*", …) and never match
+# these names, so no application DEBUG output is suppressed.
+#
+# Libraries not currently installed are listed anyway: getLogger() on an absent module is
+# harmless and pre-arms the cap if the dependency is ever added.
+_THIRD_PARTY_HTTP_LOGGERS: tuple[str, ...] = (
+    "urllib3",                      # transport under `requests` — the observed leaker
+    "requests",
+    "requests.packages.urllib3",    # legacy vendored alias
+    "httpx",
+    "httpcore",
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -310,6 +338,19 @@ def log_exception(log: logging.Logger, exc: BaseException) -> None:
     )
 
 
+def cap_third_party_http_loggers() -> None:
+    """
+    Cap third-party HTTP client loggers at INFO so their DEBUG request lines — which
+    carry credentials in the URL path — never reach the debug sink (L11).
+
+    Called by setup_logging(). Exposed for entry points that configure logging
+    themselves (e.g. logging.basicConfig) instead of going through setup_logging().
+    Idempotent.
+    """
+    for name in _THIRD_PARTY_HTTP_LOGGERS:
+        logging.getLogger(name).setLevel(logging.INFO)
+
+
 def setup_logging(log_dir: Path = Path("logs")) -> None:
     """
     Configure the root logger with four file handlers and one stdout handler (L1–L10).
@@ -409,6 +450,10 @@ def setup_logging(log_dir: Path = Path("logs")) -> None:
     root.setLevel(logging.DEBUG)
     for h in new_handlers:
         root.addHandler(h)
+
+    # L11: root is now DEBUG, which would otherwise pull third-party HTTP wire logs
+    # (and the credentials in their URLs) into the debug sink. Cap them at INFO.
+    cap_third_party_http_loggers()
 
     _active_handlers = new_handlers
 
