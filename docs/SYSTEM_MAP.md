@@ -596,6 +596,11 @@ inactive alert-watcher).
   (never executable) → fixed to `.sector`; BUG B (`signal_processor._sector_for` always UNKNOWN)
   DEFERRED-inert (its `V3Signal`/`ScoredCandidate` sector fields are set-but-never-read); Q6 repo-wide
   stale-resolver sweep CLEAN (only BUG A+B). Canonical resolver everywhere = `InstrumentCache.sector`.
+- 🔀🚀 **16-Jul COMBINED DEPLOY (alert-watcher + F1) — MERGED to `main`@`85b8887`, tag
+  `deploy-16jul-alertwatcher-f1`→`1d5337d`, UNPUSHED.** Config overlap auto-merged (AlertsConfig
+  respawn_* + RiskConfig sector fields); combined regression 4700 pass / 10 known-PC-env (zero-new);
+  deploy_assert rc=0 · integrity/FK clean · schema v44. One off-market push; behaviour-neutral.
+  Runbook `docs/audit/consolidation_16jul2026.md`; memory `consolidation_16jul`.
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,

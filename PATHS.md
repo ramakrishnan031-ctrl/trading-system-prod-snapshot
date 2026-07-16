@@ -3,6 +3,8 @@
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
+> 🔀🚀 **16-Jul COMBINED DEPLOY STAGED (UNPUSHED): alert-watcher `--loop` + F1 trades.sector/gate-8-observe MERGED to `main`@`85b8887`; tag `deploy-16jul-alertwatcher-f1`→`1d5337d`.** ONE off-market push. Combined regression 4700 pass / 10 known-PC-env (zero-new); deploy_assert rc=0, integrity/FK clean, schema v44. Behaviour-neutral (gate-8 `sector_cap_mode=observe`; alert-watcher monitoring-only). Runbook `docs/audit/consolidation_16jul2026.md`. **⏰ Rama: push off-market → alert-watcher unit+24h soak → F1 observe soak ≥1 session → evidence → Rama-gated enforce flip.**
+
 > 🚫📋 **Operator planning docs are NOT repo artifacts** — `MASTER_PENDING_REGISTER_*.txt` + `*_DECISION_SHEET_*.txt` are Rama's external working files, git-excluded (`.git/info/exclude`, local/not-pushed), never `git add`-ed. Tracked analysis reports live under `docs/audit/`. memory `feedback_operator_planning_docs_external`.
 
 > 🏦 **F1 sector cap (16-Jul, UNPUSHED branch `f1-trades-sector-observe-16jul`):** `trades.sector` now populated at INSERT; gate-8 `risk.sector_cap_mode` default **`observe`** (logs `WOULD_REJECT`, behaviour-neutral). observe→enforce (activates the live 40% sector cap) = OFF-MARKET + Rama-gated after an observe soak. memory `f1_trades_sector_16jul`.
