@@ -43,6 +43,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -468,6 +469,73 @@ def test_record_api_failure_auto_trips(tmp_path: Path) -> None:
     assert len(events) == 1
     assert events[0].triggered_by == "auto_trip"
     print("  OK record_api_failure x3 -> auto soft_kill (default threshold=3)")
+    store.close()
+
+
+def test_mc4_autotrip_does_not_hold_the_lock_across_publish_and_send(tmp_path: Path) -> None:
+    """M-C4 (16-Jul-2026): record_api_failure must NOT hold self._lock across soft_kill's
+    bus.publish + notifier.send.
+
+    Pre-fix, the auto-trip called soft_kill() from INSIDE `with self._lock`, so the outer
+    RLock acquisition stayed held through the publish (a slow subscriber) AND the Telegram
+    send (network I/O) — blocking is_active()/current_state(), the last-mile order gate, on
+    every thread. Here BOTH the subscriber and the notifier block on events; at each of the
+    two blocked points the concurrent gate calls must return PROMPTLY with correct state.
+
+    fail-on-old: every concurrent call blocks until the I/O is released (~10s each phase).
+    """
+    store = _make_store(tmp_path)
+    ks, bus, _ = _make_ks(store, threshold=3, auto_trip=True)
+
+    at_publish, release_publish = threading.Event(), threading.Event()
+    at_send, release_send = threading.Event(), threading.Event()
+
+    def _blocking_subscriber(_evt) -> None:
+        at_publish.set()
+        release_publish.wait(timeout=10)
+
+    class _BlockingNotifier:
+        def send(self, **_kw):
+            at_send.set()
+            release_send.wait(timeout=10)
+
+    bus.subscribe(KillSwitchActivated, _blocking_subscriber)
+    ks.set_notifier(_BlockingNotifier())
+
+    def _trip() -> None:
+        for _ in range(3):        # the 3rd crosses the threshold -> auto-trip
+            ks.record_api_failure()
+
+    tripper = threading.Thread(target=_trip, daemon=True)
+    tripper.start()
+
+    def _assert_gate_responsive(phase: str) -> None:
+        t0 = time.monotonic()
+        # State is mutated BEFORE any publish/send, so the kill is already visible.
+        assert ks.is_active("entry") is True, f"{phase}: kill must already be active"
+        assert ks.current_state() is KillState.SOFT_KILL, f"{phase}: wrong state"
+        ks.record_api_failure()          # a concurrent SECOND call must not block either
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, (
+            f"{phase}: kill-switch lock held across the blocked I/O — concurrent "
+            f"is_active/current_state/record_api_failure blocked {elapsed:.2f}s (M-C4)"
+        )
+
+    # Phase 1 — the trip thread is blocked inside bus.publish
+    assert at_publish.wait(timeout=5), "auto-trip never reached the publish"
+    assert not release_publish.is_set()
+    _assert_gate_responsive("publish")
+
+    # Phase 2 — release the publish; the trip thread now blocks inside notifier.send
+    release_publish.set()
+    assert at_send.wait(timeout=5), "auto-trip never reached the notifier send"
+    assert not release_send.is_set()
+    _assert_gate_responsive("send")
+
+    release_send.set()
+    tripper.join(timeout=10)
+    assert not tripper.is_alive(), "trip thread did not finish"
+    assert ks.current_state() is KillState.SOFT_KILL
     store.close()
 
 
