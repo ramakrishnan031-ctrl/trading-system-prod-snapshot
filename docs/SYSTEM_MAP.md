@@ -613,6 +613,42 @@ inactive alert-watcher).
   Rama-gated enforce flip.** M-C4 (`6c77525`) deliberately NOT in this deploy. Report
   `docs/audit/deploy_done_16jul2026.md`; runbook `docs/audit/consolidation_16jul2026.md`;
   memory `consolidation_16jul`.
+- 🏁✅ **M-C CAPITAL-SAFETY CLUSTER COMPLETE (16-Jul) — all 4 fixed, all 4 UNPUSHED, pending ONE consolidated
+  off-market deploy.** M-C4 `6c77525` (`mc4-killswitch-lock-16jul`) · M-C8 `8f9ce0d`
+  (`mc8-async-hardkill-16jul`) · **M-C5 + M-C6 + the test_main logger-leak fix `mc5-mc6-testmain-16jul`
+  (3 independent commits: `f87e587`/`0847134`/`6ca1bbe`; report `docs/audit/mc5_mc6_testmain_16jul2026.md`,
+  memory `mc5_mc6_testmain_16jul`).**
+  **M-C5** — `FundManager.commit_adopted_entry` evaluates its `_commit_exists` guard INSIDE `self._lock` but
+  commits OUTSIDE it (it must: `commit_to_used` takes the lock itself + defers BL-4 hard_kill to after
+  release). Two NON-GATING callers both pass the guard ⇒ both commit; **the harm is NOT capital —
+  `_apply_commit:1999` pops the reservation, so the loser raises ValueError and BL-4 fires a SPURIOUS
+  hard_kill.** Not reachable today (both prod callers gate atomically: `order_reconciler:3603`
+  `adopt_recovery_trade_to_open`, `:3660` `mark_recovery_trade_exiting`). **Fix = 3 gates:** caller's atomic
+  transition (primary) + `fm_ledger` COMMIT row (DURABLE, covers a later cycle post-restart) + **NEW in-memory
+  CAS claim `_commit_claims` (CONCURRENT, covers the window the durable guard structurally cannot see)** —
+  test-and-set under the lock ALREADY held, released in a `finally`, **NO lock across the commit I/O** (the
+  M-4/M-C4 anti-pattern). NOT part of the 3-balance invariant.
+  **M-C6** — `position_sizer.py` `max(1, floor(raw_qty × effective_mult))` turned a ZERO multiplier into
+  **1 lot** (capital on a signal the model sized to nothing). Now `effective_mult <= 0` →
+  `constraint="ZERO_MULTIPLIER"` skip; **FIX-133's floor is PRESERVED for positive multipliers** (its real job).
+  `<=0` needs no tolerance (`perf_weight` clamped ≥0 ⇒ no tiny FP negatives; `-1.0*0.0 == -0.0` caught).
+  **⚠️ `PositionSizingTierConfig` types HIGH/MEDIUM/LOW as BARE FLOATS with NO `ge=0` bound ⇒ a negative tier
+  multiplier loads cleanly from config.** BEHAVIOUR-NEUTRAL today (`performance_allocator` clamps
+  `min_weight=0.5` PA3/PA8 + `signal_processor:893/1827` defaults unknown strategies to 1.0 ⇒
+  `effective_mult >= 0.25`) — **it is the hard PREREQUISITE for ever lowering `min_weight`.**
+  **⚠️ M-C6 INVERTS a documented FIX-133 decision** (`test_perf_weight_zero_floor_at_one` + the module
+  docstring recorded "perf_weight=0 -> floor at 1" as INTENDED — that test encoded the defect; renamed +
+  corrected, siblings untouched). **⏰ NEXT: consolidate the 3 branches → fresh combined regression → SANDBOX
+  hard_kill DRILL → off-market deploy. Do NOT disturb the deployed `11abebb`.**
+- 🧪⚠️ **`tests/unit/test_main.py` leaked a MagicMock into `main._log` — FIXED 16-Jul (`f87e587`, test-only).**
+  `main._main_locked` declares `global _log` (`main.py:1538`) and rebinds it (`_log = get_logger("main")`,
+  `:1626`); test_main patches `main.get_logger`→MagicMock and the patch restores `get_logger` but **NOT
+  `_log`** ⇒ after test_main ran, `main._log` stayed a MagicMock for the whole session and **ANY later test
+  asserting on main's logging was SILENTLY VACUOUS** (passing while testing nothing — that is how M-C8's
+  test_d3 was caught). Fix = an **autouse module fixture** saving/restoring `main._log` (autouse because there
+  are **4** separate `patch.multiple("main", ...)` sites); guard `test_zz_main_log_is_not_left_as_a_mock` is
+  deliberately **LAST in the file** — pytest runs tests in definition order, and last is the only position
+  where an entry-invariant assertion means anything.
 - 🩺🔒 **Capital-safety cluster M-C4/C5/C6/C8 — read-only investigation (16-Jul).** M-C4 (auto-trip holds the
   kill-switch RLock through soft_kill's publish+Telegram send, `kill_switch.py:649-663`) + M-C8 (hard_kill's
   2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
