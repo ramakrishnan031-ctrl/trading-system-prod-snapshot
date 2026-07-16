@@ -104,3 +104,55 @@ class TestSkipHoliday:
     def test_runs_on_trading_day(self):
         with patch("utils.holiday_guard.is_trading_day", return_value=True):
             assert skip_if_non_trading_day("eod_verify", db_path=_NO_DB) is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A registry we cannot read must not silently DOWNGRADE a critical job's alert
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _severity_for(status, critical_value):
+    """Drive alert_job_result with a forced criticality and capture the severity sent."""
+    sent = {}
+    notifier = MagicMock()
+    notifier.send.side_effect = lambda **kw: sent.update(kw)
+    with patch("alerts.cron_alerts._resolve_critical", return_value=critical_value), \
+         patch("alerts.telegram_notifier.TelegramNotifier.from_env", return_value=notifier):
+        cron_alerts.alert_job_result("some_job", status, config_dir=Path("config"))
+    return sent.get("severity")
+
+
+def test_failed_with_unreadable_registry_escalates_as_critical():
+    """RED ON OLD: _resolve_critical swallowed every error and returned False, so an
+    unreadable registry turned a critical job's FAILED alert into an ERROR — and only
+    CRITICAL carries the email fallback. The alert that most needed to escalate lost its
+    escalation, silently, exactly when the config was broken. Unknown != not-critical."""
+    assert _severity_for("FAILED", None) == "CRITICAL"
+
+
+def test_success_with_unreadable_registry_stays_silent():
+    """The other half of the tri-state, and why a blanket "assume critical" is wrong: it
+    would ping on EVERY successful job while the registry is broken. Spam trains the
+    operator to ignore the channel, which is how the next real alert gets missed."""
+    assert _severity_for("SUCCESS", None) is None
+
+
+def test_known_criticality_is_unchanged():
+    """The resolved cases must behave exactly as before."""
+    assert _severity_for("FAILED", True) == "CRITICAL"
+    assert _severity_for("FAILED", False) == "ERROR"
+    assert _severity_for("SUCCESS", True) == "INFO"
+    assert _severity_for("SUCCESS", False) is None
+
+
+def test_resolve_critical_returns_none_and_warns_when_the_registry_is_unreadable(tmp_path):
+    """The 'silently' half of the finding: an unreadable registry now says so."""
+    with patch.object(cron_alerts._log, "warning") as warn:
+        result = cron_alerts._resolve_critical("any_job", tmp_path)  # no registry here
+    assert result is None, "unknown must be None, not False"
+    assert warn.called, "an unreadable registry must not be swallowed silently"
+
+
+def test_resolve_critical_reads_the_real_registry():
+    """Positive control: with the real registry it still answers True/False, not None."""
+    result = cron_alerts._resolve_critical("daily_trade_review", Path("config"))
+    assert result is False   # cron_registry.yaml: daily_trade_review critical: false
