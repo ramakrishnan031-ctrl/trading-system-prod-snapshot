@@ -18,10 +18,13 @@ Or:  python tests/unit/test_main.py
 """
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import date, datetime, timezone, timedelta, time as _time_cls
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -40,6 +43,39 @@ from main import (
 )
 
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module hygiene
+# ─────────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _restore_main_log():
+    """Put main._log back after every test in this module.
+
+    This module patches main.get_logger to return a MagicMock. main._main_locked
+    declares `global _log` (main.py:1538) and rebinds it (`_log = get_logger("main")`,
+    main.py:1626) — so any test that runs main() replaces the module-level logger with
+    that MagicMock. `patch.multiple`/`patch` restore get_logger on exit, but NOTHING
+    restores _log: it is a module global that main itself reassigned, not something the
+    patch ever owned.
+
+    The leak is session-wide and SILENT. Once any test here has run main(), main._log
+    stays a MagicMock for every later test in the session: addHandler() becomes a no-op
+    mock call, _log.critical() records nowhere, and caplog stays empty. A later test
+    asserting on main's logging does not fail — it stops testing anything and passes.
+    (Found 16-Jul-2026 when an M-C8 shutdown test passed alone and failed after this
+    module ran; it was asserting against a mock that swallowed everything.)
+
+    Autouse + module-wide on purpose: there are four separate `patch.multiple("main", ...)`
+    application sites here (_run_main, _run, and two inline), and fixing them one by one
+    would leave the next one to reintroduce this. Test-only; no production change.
+    """
+    saved = _main_module._log
+    try:
+        yield
+    finally:
+        _main_module._log = saved
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1112,3 +1148,28 @@ class TestFix189EodSelfExit:
         )
         assert ev.wait(timeout=2) is False, "must NOT exit while a position is open"
         ev.set()  # stop the daemon thread cleanly
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module-hygiene guard — MUST BE LAST
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_zz_main_log_is_not_left_as_a_mock():
+    """main._log must be a REAL logger on entry to a test that runs after this
+    module's main() tests. Deliberately last in the file (pytest runs tests in
+    definition order), because that is the only position where it has meaning: it
+    asserts the ENTRY invariant _restore_main_log provides, after many tests have
+    each rebound main._log to a MagicMock via the patched get_logger.
+
+    Delete the fixture and this goes red. Without both, the leak escapes this module
+    and every later test in the SESSION that asserts on main's logging passes while
+    testing nothing (that is how it was found — an M-C8 shutdown test asserting a
+    CRITICAL passed alone and failed after test_main, because it was asserting against
+    a mock that swallowed the log).
+    """
+    assert isinstance(_main_module._log, logging.Logger), (
+        f"main._log leaked out of an earlier test as "
+        f"{type(_main_module._log).__name__} — any later test asserting on main's "
+        f"logging is now silently vacuous"
+    )
+    assert not isinstance(_main_module._log, MagicMock)
