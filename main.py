@@ -35,7 +35,7 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, time as _time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import core.time_authority as time_authority
 from alerts.telegram_notifier import TelegramNotifier
@@ -959,18 +959,61 @@ def _start_market_open_margin_sync_thread(
 # PENDING_FILL) — it stays up to keep managing residual positions and exits only
 # once flat. Parity: StateStore.count_active_positions() is mode-agnostic, so
 # paper and live behave identically.
+#
+# M-C8: it also never exits while a HARD_KILL flatten is in progress — see
+# _eod_self_exit_due. count_active_positions() is EXITING-blind and cannot see one.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _eod_self_exit_due(store, now: datetime, window_end: _time) -> "tuple[bool, int]":
+# M-C8: sentinel for the `active` slot when a flatten is in progress. Distinct from
+# -1 ("not due / unknown") so the caller can log the two apart: -1 is silence, this
+# is "we are deliberately holding the process open for the flatten".
+_ACTIVE_FLATTEN_IN_PROGRESS = -2
+
+# M-C8: bounded grace for draining the flatten worker on an EXTERNAL stop
+# (systemd/operator SIGTERM|SIGINT). deploy/systemd/trading-system.service sets
+# TimeoutStopSec=30, after which systemd SIGKILLs us no matter what we want — so a
+# flatten that needs its full 2h CANNOT be honoured here, and pretending otherwise
+# would just get us killed mid-write. 15s leaves the other half of the budget for
+# the rest of _shutdown (WAL checkpoint + close). A flatten that outlives the grace
+# gets a CRITICAL: positions may remain open, and that is the operator's call.
+# The INTERNAL eod-self-exit path never hits this: it waits (unbounded) via the
+# flatten gate above and only shuts down once the flatten is COMPLETE.
+_FLATTEN_DRAIN_GRACE_SEC = 15.0
+
+def _eod_self_exit_due(
+    store,
+    now: datetime,
+    window_end: _time,
+    flatten_in_progress_fn: "Optional[Callable[[], bool]]" = None,
+) -> "tuple[bool, int]":
     """Decide whether the service should self-exit for the day.
 
     Returns (due, active_positions). `due` is True iff `now` is at/after
-    `window_end` AND there are zero active positions (OPEN/PARTIAL/PENDING_FILL).
-    Before `window_end` → (False, -1) without querying. On a count error →
-    (False, -1) so the service stays up (fail-safe).
+    `window_end` AND no HARD_KILL flatten is in progress AND there are zero active
+    positions (OPEN/PARTIAL/PENDING_FILL). Before `window_end` → (False, -1)
+    without querying. On a count error → (False, -1) so the service stays up
+    (fail-safe). While a flatten is in progress → (False, _ACTIVE_FLATTEN_IN_PROGRESS).
+
+    M-C8 — WHY THE FLATTEN GATE EXISTS (this closes a race that is latent TODAY,
+    not one the async worker introduced): count_active_positions() counts only
+    OPEN/PARTIAL/PENDING_FILL. The HARD_KILL flatten marks trades EXITING *early* —
+    before the retry loop has confirmed the exit filled. EXITING is in none of those
+    three, so a flatten that is still retrying reads here as "0 active positions",
+    i.e. as FLAT, and this function would say "due" and exit the process out from
+    under trades that are still being flattened. Asking the kill switch directly is
+    the only honest answer; the position count structurally cannot give one.
+
+    fail-safe: if flatten_in_progress_fn raises we assume a flatten IS in progress
+    and stay up. Never exit on an unknown.
     """
     if now.time() < window_end:
         return (False, -1)
+    if flatten_in_progress_fn is not None:
+        try:
+            if flatten_in_progress_fn():
+                return (False, _ACTIVE_FLATTEN_IN_PROGRESS)
+        except Exception:
+            return (False, _ACTIVE_FLATTEN_IN_PROGRESS)  # cannot confirm → stay up
     try:
         active = int(store.count_active_positions())
     except Exception:
@@ -987,8 +1030,14 @@ def _start_eod_self_exit_thread(
     shutdown_event: "threading.Event",
     window_end: "_time | None" = None,
     poll_interval_sec: int = 60,
+    flatten_in_progress_fn: "Optional[Callable[[], bool]]" = None,
 ) -> None:
-    """Daemon thread: after the service-window end, exit cleanly once flat."""
+    """Daemon thread: after the service-window end, exit cleanly once flat.
+
+    M-C8: `flatten_in_progress_fn` (KillSwitch.is_flatten_in_progress) blocks the
+    self-exit while a HARD_KILL flatten is still running — the position count alone
+    cannot detect one (it is EXITING-blind).
+    """
     import time as _time_mod
     from core.time_authority import now_ist as _now_ist
 
@@ -1009,8 +1058,20 @@ def _start_eod_self_exit_thread(
             return
 
         warned_not_flat = False
+        warned_flatten = False
         while not shutdown_event.is_set():
-            due, active = _eod_self_exit_due(store, _now_ist(), window_end)
+            due, active = _eod_self_exit_due(
+                store, _now_ist(), window_end, flatten_in_progress_fn
+            )
+            if active == _ACTIVE_FLATTEN_IN_PROGRESS and not warned_flatten:
+                warned_flatten = True
+                log.critical(
+                    "eod_self_exit: past %s IST but a HARD_KILL flatten is IN "
+                    "PROGRESS — holding the process open until it finishes (the "
+                    "position count cannot see an in-flight flatten; exiting now "
+                    "would abandon trades mid-exit).",
+                    window_end.strftime("%H:%M"),
+                )
             if due:
                 log.info(
                     "eod_self_exit: past %s IST and flat (0 active positions) — "
@@ -1120,12 +1181,40 @@ def _shutdown(
     v3_chain=None,  # V3 Step 10: decision-chain shadow enrichment worker (None when off)
     pb01_entry_stage=None,  # V3 Step 10b: PB-01 next-morning entry-stage daemon (None when off)
     pb01_capture_worker=None,  # V3 Step 10b: PB-01 EOD watchlist-capture worker (None when off)
+    kill_switch=None,  # M-C8: drain the async HARD_KILL flatten worker (None when absent)
+    flatten_drain_timeout_sec: float = _FLATTEN_DRAIN_GRACE_SEC,
     mode: str = "LIVE",
 ) -> None:
     """Reverse-order shutdown (MAIN15)."""
     # FIX-060: Set shutdown event FIRST so rate limiter aborts immediately
     _shutdown_event.set()
     _log.info("Shutdown initiated")
+
+    # M-C8: drain the HARD_KILL flatten worker FIRST, before tearing anything down.
+    # Ordering is the whole point: the worker places exit orders through the adapter
+    # and writes through `store`, and store.close() is at the bottom of this
+    # function. Draining last would pull the DB out from under a live flatten.
+    # Nothing below is needed BY the flatten, so nothing is lost by waiting here.
+    #
+    # This is the EXTERNAL-stop path (systemd/operator signal). The internal
+    # eod-self-exit never arrives here mid-flatten — its gate already waited. So a
+    # flatten still running at this point means someone asked us to stop NOW, and
+    # systemd will SIGKILL at TimeoutStopSec regardless: bounded grace, then a
+    # CRITICAL saying plainly that positions may be left open.
+    if kill_switch is not None:
+        try:
+            if not kill_switch.drain_flatten(timeout=flatten_drain_timeout_sec):
+                _log.critical(
+                    "SHUTDOWN WITH FLATTEN STILL RUNNING: the HARD_KILL flatten did "
+                    "not finish within the %.0fs stop grace. POSITIONS MAY REMAIN "
+                    "OPEN AT THE BROKER — verify at the broker and flatten manually "
+                    "(8-step broker-truth runbook; never flatten from DB state).",
+                    flatten_drain_timeout_sec,
+                )
+            else:
+                _log.info("flatten worker drained (or none was running)")
+        except Exception as exc:
+            _log.critical("flatten drain failed: %s — continuing shutdown", exc)
 
     # FIX-062: Invalidate token if auth error occurred
     if _broker_auth_failed:
@@ -3238,6 +3327,8 @@ def _main_locked(args, config_dir: Path) -> int:
             market_windows=market_windows,
             shutdown_event=_shutdown_event,
             window_end=SERVICE_WINDOW_END,
+            # M-C8: never self-exit while a HARD_KILL flatten is still running.
+            flatten_in_progress_fn=kill_switch.is_flatten_in_progress,
         )
     else:
         _log.info(
@@ -3326,6 +3417,7 @@ def _main_locked(args, config_dir: Path) -> int:
         v3_chain=v3_chain_runner,  # V3 Step 10
         pb01_entry_stage=pb01_entry_stage,  # V3 Step 10b
         pb01_capture_worker=pb01_capture_worker,  # V3 Step 10b
+        kill_switch=kill_switch,  # M-C8: drain the flatten worker before teardown
         mode=mode_label,
     )
     return 0
