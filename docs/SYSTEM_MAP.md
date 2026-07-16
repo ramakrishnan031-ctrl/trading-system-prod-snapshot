@@ -613,8 +613,27 @@ inactive alert-watcher).
   Rama-gated enforce flip.** M-C4 (`6c77525`) deliberately NOT in this deploy. Report
   `docs/audit/deploy_done_16jul2026.md`; runbook `docs/audit/consolidation_16jul2026.md`;
   memory `consolidation_16jul`.
-- 🏁✅ **M-C CAPITAL-SAFETY CLUSTER COMPLETE (16-Jul) — all 4 fixed, all 4 UNPUSHED, pending ONE consolidated
-  off-market deploy.** M-C4 `6c77525` (`mc4-killswitch-lock-16jul`) · M-C8 `8f9ce0d`
+- ✅🏁🚀 **M-C CAPITAL-SAFETY CLUSTER — DEPLOYED 16-Jul-2026 ~22:1x IST (off-market). VM==bare==`06a61cb`;
+  the deployed CODE == the drilled tag `deploy-16jul-mc-cluster`→`341cc57`** (`git diff --name-only
+  deploy-16jul-mc-cluster..HEAD` = markdown ONLY. Local main at run time was `06a61cb`, NOT the SHA written
+  in the consolidation report — **the TAG is the code identity; re-derive the SHA at deploy time**, the same
+  trap that fired on the F1 deploy this morning). **Schema v44 unchanged, NO migration** (deployed
+  `EXPECTED_SCHEMA_VERSION=44` == live v44 ⇒ the 08:15 boot skips migration); integrity/FK clean; services
+  healthy; **all 4 fixes verified in the CHECKED-OUT tree — M-C4 by AST** (`record_api_failure`'s
+  `with self._lock` block contains ZERO `soft_kill` calls; the call is at line 750, outside). Backup
+  `data_store/backups/pre_deploy_mc_cluster.db`. Combined regression 4763 pass / 11 known-PC-env (zero-new,
+  no divergence); sandbox hard_kill drill 35/35, no invariant violation.
+  **⏰ GOES LIVE AT THE 17-Jul 08:15 BOOT** — `trading-system.service` is halted on the planned operator
+  SOFT_KILL (dated 16-Jul ⇒ a PRIOR-DAY kill ⇒ `main.py:1607 clear_stale_state` auto-clears it);
+  **NO restart owed, no operator action.**
+  **⚠️ M-C8 rewrote the EMERGENCY-EXIT path and the drill was MOCK-broker only ⇒ THE FIRST LIVE HARD_KILL IS
+  THE REAL TEST.** Watch: `HARD_KILL flatten dispatched to worker thread` + `flatten worker finished — all N
+  attempted position(s) flat` = good; `finished with N UNEXITED trade(s)` / `flatten worker CRASHED` /
+  `SHUTDOWN WITH FLATTEN STILL RUNNING` / `could NOT start the flatten worker` = each means MANUAL
+  broker-truth verification (never flatten from DB state). Report `docs/audit/deploy_done_mc_cluster_16jul2026.md`;
+  memory `mc_cluster_consolidation_16jul`. Rollback: L1 revert a fix · L2 revert a merge (`c0c9376`/`8bc685a`/
+  `341cc57`) · L3 reset main to `16437ae`; all schema-free.
+  — **HISTORICAL (pre-deploy detail):** M-C4 `6c77525` (`mc4-killswitch-lock-16jul`) · M-C8 `8f9ce0d`
   (`mc8-async-hardkill-16jul`) · **M-C5 + M-C6 + the test_main logger-leak fix `mc5-mc6-testmain-16jul`
   (3 independent commits: `f87e587`/`0847134`/`6ca1bbe`; report `docs/audit/mc5_mc6_testmain_16jul2026.md`,
   memory `mc5_mc6_testmain_16jul`).**
