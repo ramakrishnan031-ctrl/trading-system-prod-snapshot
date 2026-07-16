@@ -110,7 +110,7 @@ EOF
 ### 3.2b .env (secrets) — required before first run
 
 I.5 (2026-04-25): the systemd units assume a `.env` file at
-`/home/ubuntu/trading-system/.env` containing the secrets
+`/home/ubuntu/systems/trading-system/.env` containing the secrets
 (`ZERODHA_API_KEY_*`, `ZERODHA_API_SECRET_*`, `TELEGRAM_BOT_TOKEN`,
 `WEBHOOK_SECRET`, `ALERT_SMTP_PASSWORD`, etc). Without it the service
 will start but every broker/notify call fails with a cryptic
@@ -123,9 +123,9 @@ will start but every broker/notify call fails with a cryptic
 # in repo: .env.example -- copy and fill in real values, then ship).
 scp -i ~/.ssh/trading_vm_secure \
     .env \
-    ubuntu@161.118.187.249:/home/ubuntu/trading-system/.env
+    ubuntu@161.118.187.249:/home/ubuntu/systems/trading-system/.env
 
-ssh trading-vm 'chmod 600 /home/ubuntu/trading-system/.env'
+ssh trading-vm 'chmod 600 /home/ubuntu/systems/trading-system/.env'
 ```
 
 Verify systemd can read it (the unit file must reference it via
@@ -133,7 +133,7 @@ Verify systemd can read it (the unit file must reference it via
 
 ```bash
 ssh trading-vm 'sudo systemctl cat trading-system.service | grep -i environment'
-# Expect: EnvironmentFile=/home/ubuntu/trading-system/.env
+# Expect: EnvironmentFile=/home/ubuntu/systems/trading-system/.env
 ```
 
 If the systemd unit lacks the `EnvironmentFile=` line, edit
@@ -160,7 +160,7 @@ crontab -l
 systemctl status cron --no-pager | head -5
 
 # Ensure backup directory exists:
-mkdir -p /home/ubuntu/trading-system/data_store/backups
+mkdir -p /home/ubuntu/systems/trading-system/data_store/backups
 EOF
 ```
 
