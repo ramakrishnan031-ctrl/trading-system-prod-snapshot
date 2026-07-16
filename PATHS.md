@@ -1,5 +1,13 @@
 # PATHS — Quick Reference (Trading System v2)
-# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-07-03
+# Full map + audit: docs/SYSTEM_MAP.md  ·  Last updated: 2026-07-16
+#
+# ⚠️ HONEST LABEL: this is no longer a "quick reference". It is ~120KB and grows with
+# every deploy (75KB at the 04-Jul audit → ~120KB now). It works as a WHAT-CHANGED-
+# RECENTLY log, read top-down — the newest banners are at the top and that is the point.
+# It is NOT an orientation document; a new reader should not start here.
+# (P4-7. The restructure — and P4-6's SYSTEM_MAP split — are open items: they need an
+# agreed shape before content moves, since every report and memory entry points into
+# these two files by section. Do not split either one silently.)
 
 > ⚠️ Read `docs/SYSTEM_MAP.md` before any VM/system work. **Deploy ≠ restart.**
 
