@@ -1,9 +1,24 @@
 #!/bin/bash
 # deploy/hooks/post-receive — Phase 3 Option A (AUTO-INSTALL the crontab).
-# *** NOT the currently-installed hook *** (the live one is checkout-only).
-# Arm by: cp deploy/hooks/post-receive ~/trading-system.git/hooks/post-receive
-# Precondition for arming: live == generate(registry) already reconciled (incl.
-# sentinel_retention installed to live), so the first auto-install is a no-op.
+#
+# *** THIS IS THE LIVE HOOK. *** It is armed at ~/trading-system.git/hooks/post-receive
+# on the VM and runs on every push to main: checkout, then crontab auto-install.
+# (Corrected 17-Jul-2026, AB-910 follow-up: this header used to claim "NOT the
+# currently-installed hook (the live one is checkout-only)". That was FALSE and had been
+# for some time — md5 proves this file is byte-identical to the armed hook, and a real
+# push on 17-Jul printed "post-receive: crontab AUTO-INSTALLED from canonical", which
+# only this Option-A version does. A header that misdescribes the live deploy path is the
+# same class of trap as the stale deploy/post-receive duplicate deleted in batch-2.)
+#
+# KEEP IN SYNC: this file and the armed hook must stay byte-identical — that identity is
+# how we prove which hook is real. Nothing auto-installs this file, so after ANY edit
+# (comments included — they change the md5) push first, then re-arm FROM THE DEPLOYED TREE:
+#     cd /home/ubuntu/systems/trading-system
+#     cp deploy/hooks/post-receive ~/trading-system.git/hooks/post-receive
+#     chmod +x ~/trading-system.git/hooks/post-receive
+#     md5sum deploy/hooks/post-receive ~/trading-system.git/hooks/post-receive   # must match
+# Editing without re-arming silently recreates the very drift this header documents.
+#
 # A crontab swap does NOT disrupt in-flight jobs (only future triggers).
 TARGET=/home/ubuntu/systems/trading-system
 GIT_DIR=/home/ubuntu/trading-system.git

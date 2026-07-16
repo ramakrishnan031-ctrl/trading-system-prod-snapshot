@@ -565,6 +565,17 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > discipline only. `tests/unit/test_fix065_market_hours_guard.py`'s 12 tests assert against a mock
 > hook they define inline, so they pass regardless and are vacuous. Decide: implement in
 > `deploy/hooks/post-receive` (deploy-path behaviour change) or retire FIX-065 + its tests.
+>
+> **🔄 SUPERSEDED 17-Jul (sweep S7): the post-receive md5 is now `e493dc5…`, NOT `bd950b7…`.**
+> The header was corrected (it falsely claimed "NOT the currently-installed hook"; a real push
+> that same day printed `crontab AUTO-INSTALLED from canonical`, which only the armed Option-A
+> version does — runtime proof it IS live). Comment-only: executable lines are byte-identical to
+> `bd950b7…`. **The armed VM hook was re-armed to match in the same change** — repo == live is the
+> identity proof and must be re-established after ANY edit (`cp deploy/hooks/post-receive
+> ~/trading-system.git/hooks/post-receive`), since nothing auto-installs the hook.
+> **FIX-065 update (sweep S6): the guard belongs in `deploy/hooks/pre-receive`, NOT post-receive** —
+> git ignores post-receive's exit code (refs are already updated), so a guard there would skip the
+> checkout while the bare ref moved, leaving bare≠tree (a half-deploy) instead of a clean rejection.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
