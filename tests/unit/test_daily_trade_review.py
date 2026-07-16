@@ -18,7 +18,7 @@ import pytest
 from core.state_store import StateStore
 from reports.daily_trade_review import (
     _COLSPECS, _SIGNAL_COLSPECS, _bucket_for, _build_t5_ranking, _day_summary, _fmt_time,
-    _fmt_zone,
+    _fmt_zone, is_holiday_or_weekend,
     _grade, _latency_ms, _minmax_norm, _minutes_between, _parse_dt, _signal_bucket,
     _signal_stage, _trade_bucket, _win_loss_pct, build_config_data, build_dashboard_data,
     build_reconciliation, build_records, build_signal_records, build_slippage_data,
@@ -951,3 +951,38 @@ def test_day_summary_win_pct_unaffected_when_there_are_no_breakevens():
     identical, so this fix moves no number on a normal day."""
     records = [{"_net_raw": 1.0}, {"_net_raw": 1.0}, {"_net_raw": -1.0}]
     assert _day_summary(records, [])["win_pct"] == 66.67
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Non-trading-day guard — "no real alerts on non-trading days"
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_weekends_are_non_trading_days():
+    """The weekend half is LOCAL on purpose: a missing/unreadable holiday YAML must
+    still block weekends rather than fail open."""
+    from pathlib import Path
+    cfg = Path("config")
+    assert is_holiday_or_weekend("2026-07-18", cfg) is True   # Saturday
+    assert is_holiday_or_weekend("2026-07-19", cfg) is True   # Sunday
+
+
+def test_a_listed_nse_holiday_is_a_non_trading_day():
+    """RED ON OLD: this script had NO guard at all. cron_registry declares
+    market_day_only: true, but that field is METADATA -- nothing enforces it -- and the
+    crontab (7 16 * * 1-5) only excludes weekends. A mid-week NSE holiday fired the job
+    and it built + emitted a review for a day with no trading."""
+    from pathlib import Path
+    assert is_holiday_or_weekend("2026-01-26", Path("config")) is True  # Republic Day
+
+
+def test_a_normal_trading_day_is_not_blocked():
+    """The guard must not block the 249 days that matter."""
+    from pathlib import Path
+    assert is_holiday_or_weekend("2026-07-16", Path("config")) is False  # a Thursday
+
+
+def test_missing_holiday_file_does_not_fail_open_on_weekends(tmp_path):
+    """No holiday YAML for the year -> cannot be a listed holiday (same as the old
+    behaviour), but weekends are still blocked by the local check."""
+    assert is_holiday_or_weekend("2026-07-18", tmp_path) is True    # Saturday, still blocked
+    assert is_holiday_or_weekend("2026-07-16", tmp_path) is False   # weekday, no file -> allowed

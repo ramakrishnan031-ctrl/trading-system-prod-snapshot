@@ -57,7 +57,7 @@ import json
 import logging
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2407,6 +2407,25 @@ def generate(store: StateStore, date_iso: str, output_dir: Path) -> Path:
     return out
 
 
+def is_holiday_or_weekend(date_iso: str, config_dir: Path) -> bool:
+    """True if date_iso is a weekend or a listed NSE holiday.
+
+    Mirrors reports/daily_report.is_holiday_or_weekend deliberately — one behaviour,
+    one shape. The holiday half delegates to utils.holiday_guard (the single source that
+    parses BOTH the string and {date:, name:} dict entry formats); the weekend half stays
+    local so a missing/unreadable YAML still blocks weekends rather than failing open.
+    """
+    dt = date.fromisoformat(date_iso)
+    if dt.weekday() >= 5:
+        return True
+    try:
+        from utils.holiday_guard import is_trading_day
+        return not is_trading_day(dt, config_dir)
+    except FileNotFoundError:
+        # No holiday file for the year -> cannot be a listed holiday; same as before.
+        return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="DB-pure daily trade review (Orders sheet).")
     ap.add_argument("--db", default="data_store/trading_system.db")
@@ -2414,6 +2433,10 @@ def main() -> int:
                     help="YYYY-MM-DD (IST trading date); default = today IST (like the "
                          "retired daily_review/daily_report — lets cron invoke with no args)")
     ap.add_argument("--output-dir", default="reports/output")
+    ap.add_argument("--config-dir", default="config",
+                    help="config dir holding nse_holidays_<year>.yaml (holiday guard)")
+    ap.add_argument("--force", action="store_true",
+                    help="generate even on a weekend/NSE holiday")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     # Local imports (match daily_review): keep the module import-time surface light.
@@ -2421,6 +2444,25 @@ def main() -> int:
     from utils.cron_heartbeat import record_heartbeat
     date_iso = args.date or now_ist().strftime("%Y-%m-%d")
     db_path = Path(args.db)
+
+    # cron_registry declares this job market_day_only + cadence: market_day, but that
+    # field is METADATA ONLY — nothing enforces it, and the crontab (7 16 * * 1-5) only
+    # excludes weekends. A mid-week NSE holiday fired this job, which then built and
+    # emitted a report for a day with no trading ("no real alerts on non-trading days").
+    # The sibling daily_report.py already self-guards; this one never did.
+    if not args.force and is_holiday_or_weekend(date_iso, Path(args.config_dir)):
+        _log.info("Skipping review — %s is a non-trading day", date_iso)
+        print(f"Skipping: {date_iso} is a holiday or weekend (use --force to override)")
+        # STILL heartbeat: monitored:true means the Cron Officer expects one, and going
+        # silent would raise a false "no heartbeat" alarm on every holiday — trading a
+        # spurious report for a spurious alert. F2's split says it exactly: the job
+        # EXECUTED fine (SUCCESS) and produced nothing ON PURPOSE (functional SKIPPED).
+        if db_path.exists():
+            record_heartbeat("daily_trade_review", status="SUCCESS",
+                             duration_sec=0.0, message=f"skipped: {date_iso} non-trading day",
+                             functional_status="SKIPPED", db_path=db_path)
+        return 0
+
     if not db_path.exists():
         print(f"[FATAL] DB not found: {db_path}")
         return 2
