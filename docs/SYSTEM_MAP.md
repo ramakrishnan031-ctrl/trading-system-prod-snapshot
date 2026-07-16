@@ -553,6 +553,12 @@ inactive alert-watcher).
   `git add`-ed. The tracked ANALYSIS lineage (the census/audit reports) DOES live here, under
   `docs/audit/` (e.g. `pending_reconciliation_14jul2026.md`) — those stay tracked. Convention memory
   `feedback_operator_planning_docs_external`.
+- 🏦 **F1 sector cap (16-Jul, branch `f1-trades-sector-observe-16jul`, UNPUSHED):** `trades.sector` is
+  now populated at INSERT (`order_placer._resolve_trade_sector` ← `InstrumentCache.sector`, the same
+  source gate-8 uses; `"UNKNOWN"`-bucketed, frozen). Gate-8 gains `risk.sector_cap_mode` (**default
+  `observe`** = log `WOULD_REJECT`, does NOT reject → behaviour-neutral deploy). The observe→enforce
+  flip that ACTIVATES the live 40% sector concentration cap is OFF-MARKET + Rama-gated (observe soak
+  ≥1 session first). Report `docs/audit/f1_trades_sector_16jul2026.md`; memory `f1_trades_sector_16jul`.
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
