@@ -23,6 +23,12 @@ logs/
 # Generated reports
 reports/daily/
 reports/output/*.xlsx
+# A base64-of-XLSX .txt walked straight past the *.xlsx rule above and committed a
+# 1.44 MB report — with real trade data in it — into the repo. Ignore the ENCODED forms
+# too, not just the extension: the rule protects the DATA, not the suffix.
+reports/output/*_b64.txt
+reports/output/*.b64
+reports/output/*.xlsx.txt
 reports/system_manager/
 reports/cron_officer/
 
