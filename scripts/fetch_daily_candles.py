@@ -31,6 +31,8 @@ if str(ROOT) not in sys.path:  # TASK #3: cron heartbeat import works without PY
 from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
+from core.time_authority import today_ist  # noqa: E402 — needs the sys.path bootstrap above
+
 TOKEN_PATH  = ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR  = ROOT / "data_store" / "candles"
 DB_PATH     = ROOT / "data_store" / "trading_system.db"
@@ -170,7 +172,11 @@ def main(argv=None) -> None:
         dates = _trading_days_in_range(args.from_date, args.to_date)
         print(f"\nCandle Backfill — {len(dates)} trading days ({args.from_date} to {args.to_date})")
     else:
-        trade_date = args.date or datetime.now().strftime("%Y-%m-%d")
+        # today_ist(), not datetime.now(): this derives the TRADE DATE, and a naive
+        # now() takes the HOST's timezone. The VM is IST so it agrees today, but the
+        # same line run from a non-IST host silently fetches the wrong day's candles.
+        # time_authority is the single clock for exactly this reason.
+        trade_date = args.date or today_ist()
         dates = [trade_date]
         print(f"\nCandle Fetcher (VM) — Date: {trade_date}")
 
