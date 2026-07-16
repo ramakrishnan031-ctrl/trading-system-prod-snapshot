@@ -894,13 +894,21 @@ class KillSwitch:
         _HARD_KILL_MAX_RETRY_HOURS while the flatten retried. The flatten itself
         was never the problem; blocking the caller was.
 
-        The LEGACY cancel_fn path below stays SYNCHRONOUS. That split is load-
-        bearing, not incidental: production always calls set_adapter (main.py:1983)
-        so production always takes the adapter path, while every test that reads
-        the returned CancellationReport reaches the loop either through the legacy
-        cancel_fn or by calling _exit_all_trades_indestructible() directly. Keeping
-        the legacy path sync and the internal method sync is what lets the async
-        change land with no test rewritten and no caller contract broken.
+        The LEGACY cancel_fn path below stays SYNCHRONOUS, and
+        _exit_all_trades_indestructible stays a synchronous internal method. That
+        split is load-bearing, not incidental: production always calls set_adapter
+        (main.py:1983) so production always takes the adapter path, while the tests
+        that assert on a real CancellationReport reach the loop through the legacy
+        cancel_fn or by calling the internal method directly. Keeping both sync is
+        what lets the async change land without disturbing them. Do not "tidy" the
+        two paths into one.
+
+        Caveat, learned the hard way (M-C8): the claim "no existing test calls
+        hard_kill() with an adapter set" was WRONG when this was written —
+        test_p0_live_day1_fixes.py::TestBugC_KillSwitchExit did exactly that and
+        broke. Those tests now call the internal method directly like their
+        siblings. If you add a test that drives hard_kill() with an adapter, it
+        gets a DISPATCH, not a result: drain_flatten() first, then assert.
         """
         # FIX-087: New indestructible exit logic if adapter is available
         if self._adapter is not None:
