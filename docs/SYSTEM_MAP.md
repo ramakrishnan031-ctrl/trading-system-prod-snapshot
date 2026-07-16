@@ -601,6 +601,11 @@ inactive alert-watcher).
   respawn_* + RiskConfig sector fields); combined regression 4700 pass / 10 known-PC-env (zero-new);
   deploy_assert rc=0 · integrity/FK clean · schema v44. One off-market push; behaviour-neutral.
   Runbook `docs/audit/consolidation_16jul2026.md`; memory `consolidation_16jul`.
+- 🩺🔒 **Capital-safety cluster M-C4/C5/C6/C8 — read-only investigation (16-Jul).** M-C4 (auto-trip holds the
+  kill-switch RLock through soft_kill's publish+Telegram send, `kill_switch.py:649-663`) + M-C8 (hard_kill's
+  2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
+  M-C5 mitigated (atomic reconciler caller gate), M-C6 latent (allocator min_weight 0.5). Report
+  `docs/audit/mc_cluster_investigation_16jul2026.md`; memory `mc_cluster_investigation_16jul`. Fixed nothing.
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
