@@ -132,8 +132,11 @@ class KillSwitch:
     System-wide trading halt mechanism (KS1-KS13).
 
     Thread-safe: all public methods acquire self._lock (RLock) before reading
-    or mutating state. RLock (not Lock) prevents the record_api_failure ->
-    soft_kill reentrant deadlock identified in Audit Issue #4 (KS4).
+    or mutating state. RLock (not Lock) was Audit Issue #4's fix for the
+    record_api_failure -> soft_kill reentrant deadlock (KS4). M-C4 (16-Jul-2026)
+    since moved that auto-trip call OUTSIDE the lock — so the lock is never held
+    across soft_kill's publish/send — and that path no longer re-enters; RLock is
+    retained (other internal calls may still re-acquire; reentrancy-safe).
 
     Usage::
         ks = KillSwitch(
@@ -646,21 +649,35 @@ class KillSwitch:
             )
             return
 
+        # M-C4 (16-Jul-2026): COUNT + DECIDE inside the lock; TRIP outside it.
+        # Calling soft_kill() from INSIDE this `with` held self._lock across
+        # soft_kill's bus.publish (a slow subscriber) AND its Telegram send
+        # (network I/O) — soft_kill releases only its own reentrant acquisition,
+        # never this outer one. That blocked is_active()/current_state() — the
+        # last-mile order gate checked on every entry/exit — on every thread for
+        # the duration of that I/O, exactly during a broker wobble. So: capture
+        # the decision + reason under the lock, release, then trip.
         with self._lock:
             self._api_failure_count += 1
-            if (
+            should_trip = (
                 self._auto_trip
                 and self._api_failure_count >= self._threshold
                 and self._state == KillState.INACTIVE
-            ):
-                # KS4: same thread re-acquires RLock inside soft_kill() — safe
-                self.soft_kill(
-                    reason=(
-                        f"Auto-trip: {self._api_failure_count} consecutive "
-                        f"API failures (threshold={self._threshold})"
-                    ),
-                    triggered_by="auto_trip",
-                )
+            )
+            # Built under the lock so it reports the count at the moment of the
+            # decision (byte-identical to the pre-fix message).
+            trip_reason = (
+                f"Auto-trip: {self._api_failure_count} consecutive "
+                f"API failures (threshold={self._threshold})"
+            ) if should_trip else ""
+
+        # Lock RELEASED. soft_kill re-acquires it briefly for the persist + state
+        # mutation, then publishes/sends with NO lock held. A concurrent
+        # double-trip is collapsed by soft_kill's own in-lock idempotency check
+        # (already-SOFT_KILL -> return, no republish/renotify), so releasing here
+        # cannot produce a second publish or send.
+        if should_trip:
+            self.soft_kill(reason=trip_reason, triggered_by="auto_trip")
 
     def record_success(self) -> None:
         """Reset the consecutive API failure counter on any successful API call."""

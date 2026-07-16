@@ -618,6 +618,10 @@ inactive alert-watcher).
   2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
   M-C5 mitigated (atomic reconciler caller gate), M-C6 latent (allocator min_weight 0.5). Report
   `docs/audit/mc_cluster_investigation_16jul2026.md`; memory `mc_cluster_investigation_16jul`. Fixed nothing.
+  **M-C4 FIXED (16-Jul, LOCK SCOPE ONLY): `record_api_failure` counts+decides under the lock and calls
+  `soft_kill` OUTSIDE it, so the lock is never held across the publish/Telegram send** (RED-on-old:
+  concurrent `is_active` blocked 20.02s). `6c77525` — report `docs/audit/mc4_killswitch_lock_16jul2026.md`,
+  memory `mc4_killswitch_lock_16jul`.
   **M-C8 deeper investigation (16-Jul, `63dbb38`, read-only — `docs/audit/mc8_investigation_16jul2026.md`,
   memory `mc8_investigation_16jul`):** no prod caller uses hard_kill's `CancellationReport` ⇒ the async
   redesign can fire-and-return; prod always takes the adapter path (`main.py:1983 set_adapter`) while the
@@ -627,7 +631,8 @@ inactive alert-watcher).
   daemon (`main.py:964-978` / `:1012-1035`, due iff active==0 past the window end) can set the shutdown
   event while trades are still inside the 2h exit-retry loop.** Any async flatten MUST use a non-daemon
   worker + join/drain in `_shutdown` + a flatten-in-progress gate — never `count_active_positions()`.
-  (M-C4 itself is FIXED on branch `mc4-killswitch-lock-16jul`, UNPUSHED.)
+  (Note: the investigation's seam claim "all existing tests pass unchanged" was later DISPROVEN — see the
+  M-C8 fix entry. All four M-C fixes are now done; the cluster entry above is authoritative.)
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
