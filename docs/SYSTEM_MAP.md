@@ -668,6 +668,20 @@ inactive alert-watcher).
   are **4** separate `patch.multiple("main", ...)` sites); guard `test_zz_main_log_is_not_left_as_a_mock` is
   deliberately **LAST in the file** — pytest runs tests in definition order, and last is the only position
   where an entry-invariant assertion means anything.
+- 🗂️⭐ **BATCH-vs-LOOP CLASSIFICATION of every open register item (16/17-Jul, read-only PROPOSAL —
+  awaiting Web Claude's approval; NOTHING executed).** `docs/audit/batch_classification_16jul2026.md`;
+  memory `batch_classification_16jul`. **27 BATCH-SAFE** (docs 6 · repo-hygiene 1 · logging 5 · tests 3 ·
+  verify-only 6 · trivial-code 6) · **+3 batch-safe-by-risk but TOO LARGE ⇒ own run** (AB-910 Audit-B
+  Ph9/10 · Q9 integration coverage · BK-1 LONG-strategy review) · **~70+ LOOP-REQUIRED** · **8 AMBIGUOUS
+  defaulted to LOOP** (X1 `ops_dashboard/backend/auth.py:62-64` **`verify_topt` fail-open 2FA** = the most
+  security-severe item on the list; X2 `eod_verify.py:60-68` wrong columns ⇒ a fix makes a dormant P&L
+  check LIVE; X6 `cron_heartbeat.py:157-162` holiday degrade changes whether jobs RUN on a holiday).
+  **📌 THE 16-Jul REGISTER IS STALE — verified at the deployed head: B1 (trades.sector), B4
+  (alert-watcher `--loop`) and M-C4/C5/C6/C8 are ALL CLOSED by the two 16-Jul deploys ⇒ B2/M-S4 is now the
+  TOP open engineering item** (`screening/secondary_screener.py:407/408/410` still `"atr"/"rsi"/
+  "prev_close": None` ⇒ 25/100 selection points are a constant 0.0 in LIVE). Rule: LOOP if it touches
+  capital/kill/order/schema/sizing/regime/**any live trading decision**; **unsure → LOOP**. Group-E
+  boundary: verification-only items produce a FINDING and STOP — **any implied fix EXITS the batch to LOOP**.
 - 🩺🔒 **Capital-safety cluster M-C4/C5/C6/C8 — read-only investigation (16-Jul).** M-C4 (auto-trip holds the
   kill-switch RLock through soft_kill's publish+Telegram send, `kill_switch.py:649-663`) + M-C8 (hard_kill's
   2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
