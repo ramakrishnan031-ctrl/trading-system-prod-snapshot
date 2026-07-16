@@ -628,6 +628,38 @@ inactive alert-watcher).
   event while trades are still inside the 2h exit-retry loop.** Any async flatten MUST use a non-daemon
   worker + join/drain in `_shutdown` + a flatten-in-progress gate — never `count_active_positions()`.
   (M-C4 itself is FIXED on branch `mc4-killswitch-lock-16jul`, UNPUSHED.)
+- 🧨✅ **M-C8 FIXED — the hard_kill flatten now runs on a WORKER, not the caller's thread (16-Jul, branch
+  `mc8-async-hardkill-16jul`, UNPUSHED; `capital/kill_switch.py` + `main.py`; report
+  `docs/audit/mc8_async_hardkill_16jul2026.md`, memory `mc8_async_hardkill_16jul`).**
+  **`hard_kill` FIRES-AND-RETURNS on the adapter path** (production — `main.py:1983` always `set_adapter`);
+  the kill STATE is still tripped synchronously first (`is_active` blocks orders immediately — that did NOT
+  go async). The **LEGACY `cancel_fn` path stays SYNCHRONOUS** and `_exit_all_trades_indestructible` stays a
+  sync internal method — **that split is LOAD-BEARING** (every report-reading test uses the legacy path or
+  calls the internal method directly ⇒ the async change landed with **no test rewritten**). Do not "tidy" it.
+  **Flatten state machine `IDLE→RUNNING→DRAINING→COMPLETE`** under a **DEDICATED lock, never the KS4 RLock**
+  (reusing it would re-create M-C4 in a worse place: a 2h join under the lock that gates `is_active`);
+  `COMPLETE` is set in a `finally` — a worker dying at RUNNING would make `is_flatten_in_progress()` answer
+  True forever and hang the eod-self-exit gate all night. **SINGLE-FLIGHT on the adapter path** (a repeat/
+  cross-thread `hard_kill` no-ops; the running loop already re-derives from broker truth every retry) —
+  **KS6's "re-runs cancellation" is now PATH-SPECIFIC: preserved for legacy, single-flight for the adapter.**
+  **⚠️ THE EXITING-BLIND RACE IS NOW CLOSED:** `main._eod_self_exit_due` gates on
+  `KillSwitch.is_flatten_in_progress` (NOT `count_active_positions`), fail-safe (gate raises → stay up), and
+  `_shutdown` drains the non-daemon worker **BEFORE any teardown** (the worker writes through `store`, and
+  `store.close()` is at the bottom). **Shutdown split:** internal eod-exit waits (bounded by the flatten's own
+  2h deadline); **external SIGTERM gets a bounded 15s grace** (`_FLATTEN_DRAIN_GRACE_SEC`) because
+  `trading-system.service` sets `TimeoutStopSec=30` and systemd SIGKILLs regardless → CRITICAL "positions may
+  remain open" on overrun. **DB writes are CONDITIONAL** (no global lock; broker truth stays authoritative):
+  `trades→EXITING` conditioned on the live set, `orders→CANCELLED` on NOT-terminal, both sharing one module
+  constant with the SELECTs that feed them. **📌 Two schema facts found while proving the tests RED-on-old:
+  (1) `schema.sql:278 trg_trades_terminal_status_guard` ALREADY ABORTs transitions out of CLOSED/
+  CLOSED_MANUAL/FAILED/CANCELLED/REJECTED* — so the terminal trades case was never exposed; the conditional's
+  real gain there is `UNKNOWN_IN_FLIGHT` (the A-2 "don't know if it filled" state, NOT terminal, NOT guarded)
+  plus turning a trigger-ABORT-logged-as-CRITICAL into a quiet no-op. (2) There is NO trigger on `orders` at
+  all ⇒ the `CANCELLED`-over-`COMPLETE` clobber (a FILLED SL recorded as cancelled) was ENTIRELY unguarded —
+  the conditional is the only thing preventing it.** FIX-180/181/190/H-4/H-5 preserved by construction (the
+  worker runs the same method); 25 new tests (8 proven RED-on-old by reverting each behaviour), 86 pre-existing
+  kill-switch tests unchanged, 111 combined, `test_main` zero-new. **Deploys OFF-MARKET with the M-C cluster —
+  emergency path ⇒ fresh combined regression + ideally a sandbox hard_kill drill first.**
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
