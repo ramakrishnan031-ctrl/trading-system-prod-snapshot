@@ -1262,11 +1262,10 @@ class KillSwitch:
                 # CANCELLED over that would record a FILLED exit as cancelled and
                 # leave the reconciler thinking a closed position is still open.
                 # The condition mirrors the SELECT's exclusion set exactly.
-                placeholders = ",".join("?" * len(_FLATTEN_TERMINAL_ORDER_STATUSES))
                 with self._store.transaction() as cur:
                     cur.execute(
                         f"UPDATE orders SET status = 'CANCELLED', updated_at = ? "
-                        f"WHERE order_id = ? AND status NOT IN ({placeholders})",
+                        f"WHERE order_id = ? AND status NOT IN ({_term_placeholders})",
                         (now_ist().isoformat(), oid, *_FLATTEN_TERMINAL_ORDER_STATUSES),
                     )
                     if cur.rowcount == 0:

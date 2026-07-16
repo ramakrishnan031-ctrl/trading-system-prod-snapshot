@@ -217,6 +217,17 @@ class _KsAdapterNoId:
 
 
 class TestBugC_KillSwitchExit:
+    """M-C8 (16-Jul-2026): these drive the flatten via _exit_all_trades_indestructible()
+    directly, as their siblings already do (test_h4:109, test_h5:67,
+    test_hard_kill_flatten_chain:132). They used to enter through hard_kill(), which
+    since M-C8 DISPATCHES the flatten to a worker and returns immediately on the
+    adapter path — so an assertion made straight after it raced the worker, and the
+    returned report is a dispatch marker, not a result. What these tests are ABOUT is
+    unchanged and every assertion below is verbatim: Bug C is about the flatten's
+    intent derivation and success detection, not about hard_kill's synchrony.
+    hard_kill's dispatch-to-flatten path is covered by
+    test_mc8_async_hardkill.py::test_f4.
+    """
 
     def test_exit_passes_intent_derived_from_product(self, tmp_path: Path) -> None:
         """Emergency exit passes intent derived from the position's product (CNC->DELIVERY)."""
@@ -227,7 +238,7 @@ class TestBugC_KillSwitchExit:
         ks = KillSwitch(state_store=store, bus=EventBus(), logger=_log(),
                         adapter=adapter, enable_auto_trip=False)
 
-        report = ks.hard_kill(reason="test", triggered_by="test")
+        report = ks._exit_all_trades_indestructible()  # M-C8: hard_kill dispatches this
 
         assert len(adapter.calls) == 1
         call = adapter.calls[0]
@@ -245,7 +256,7 @@ class TestBugC_KillSwitchExit:
         ks = KillSwitch(state_store=store, bus=EventBus(), logger=_log(),
                         adapter=adapter, enable_auto_trip=False)
 
-        ks.hard_kill(reason="test", triggered_by="test")
+        ks._exit_all_trades_indestructible()  # M-C8: hard_kill dispatches this
 
         call = adapter.calls[0]
         assert call["intent"] == "INTRADAY"
@@ -264,7 +275,7 @@ class TestBugC_KillSwitchExit:
         ks = KillSwitch(state_store=store, bus=EventBus(), logger=_log(),
                         adapter=adapter, enable_auto_trip=False)
 
-        report = ks.hard_kill(reason="test", triggered_by="test")
+        report = ks._exit_all_trades_indestructible()  # M-C8: hard_kill dispatches this
         # The contract that matters for Bug C: the broker exit is treated as a
         # success (no AttributeError, no infinite retry loop) and reported.
         assert report.succeeded == 1

@@ -430,9 +430,23 @@ def test_d2_drain_returns_false_when_the_flatten_overruns_the_grace(store):
         assert ks.flatten_state is FlattenState.COMPLETE
 
 
-def test_d3_shutdown_drains_the_worker_and_criticals_when_it_overruns(caplog):
+def test_d3_shutdown_drains_the_worker_and_criticals_when_it_overruns():
     """main._shutdown must ASK the kill switch to drain, before it tears anything
-    down, and must escalate loudly if the flatten outlives the stop grace."""
+    down, and must escalate loudly if the flatten outlives the stop grace.
+
+    This test INSTALLS ITS OWN LOGGER into main for the duration, rather than
+    trusting main._log or caplog. Both are unreliable here, for a reason worth
+    knowing: main._main_locked declares `global _log` (main.py:1538) and rebinds it
+    (`_log = get_logger("main")`, main.py:1626). tests/unit/test_main.py patches
+    main.get_logger to return a MagicMock — and when the patch context exits it
+    restores get_logger, NOT _log. So once test_main has run, main._log is a
+    MagicMock for the rest of the session: addHandler() is a no-op mock call and
+    _log.critical() records nothing anywhere. caplog fails for the same reason.
+    A later test asserting on main's logging is then silently VACUOUS.
+
+    (Pre-existing pollution in test_main, surfaced by the full-suite run: this test
+    passed in isolation and failed after test_main. Flagged in the M-C8 report.)
+    """
     import main as main_mod
 
     ks = MagicMock()
@@ -440,19 +454,31 @@ def test_d3_shutdown_drains_the_worker_and_criticals_when_it_overruns(caplog):
     st = MagicMock()
     st.checkpoint_wal.return_value = {"busy": 0, "log": 0, "checkpointed": 0}
 
-    prev = main_mod._shutdown_event.is_set()
+    handler = _CapturingCritical()
+    probe = logging.getLogger("mc8_shutdown_probe")
+    probe.handlers.clear()
+    probe.addHandler(handler)
+    probe.setLevel(logging.CRITICAL)
+
+    prev_log = main_mod._log
+    prev_event = main_mod._shutdown_event.is_set()
+    main_mod._log = probe
     try:
-        with caplog.at_level(logging.CRITICAL):
-            main_mod._shutdown(
-                signal_proc=MagicMock(), entry_gate=MagicMock(), smart_tgt=MagicMock(),
-                order_reconciler=MagicMock(), order_monitor=MagicMock(),
-                live_feed=MagicMock(), candle_store=MagicMock(), notifier=MagicMock(),
-                store=st, kill_switch=ks, flatten_drain_timeout_sec=0.1, mode="PAPER",
-            )
+        main_mod._shutdown(
+            signal_proc=MagicMock(), entry_gate=MagicMock(), smart_tgt=MagicMock(),
+            order_reconciler=MagicMock(), order_monitor=MagicMock(),
+            live_feed=MagicMock(), candle_store=MagicMock(), notifier=MagicMock(),
+            store=st, kill_switch=ks, flatten_drain_timeout_sec=0.1, mode="PAPER",
+        )
         ks.drain_flatten.assert_called_once_with(timeout=0.1)
-        assert "POSITIONS MAY REMAIN OPEN" in caplog.text.upper()
+        blob = " ".join(handler.messages).upper()
+        assert "POSITIONS MAY REMAIN OPEN" in blob, (
+            f"the overrun was not escalated; CRITICALs seen: {handler.messages}"
+        )
     finally:
-        if not prev:
+        main_mod._log = prev_log
+        probe.removeHandler(handler)
+        if not prev_event:
             main_mod._shutdown_event.clear()
 
 
