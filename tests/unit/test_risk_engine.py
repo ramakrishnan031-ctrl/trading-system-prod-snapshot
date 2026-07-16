@@ -941,6 +941,16 @@ def test_sector_exposure_sums_multi_position_resting_book_by_sector(tmp_path: Pa
     store.close()
 
 
+def test_risk_engine_docstring_references_the_real_sector_method() -> None:
+    """BUG A (16-Jul): the RiskEngine class Usage:: docstring must reference the REAL resolver
+    `instrument_cache.sector(...)`, NOT the nonexistent `sector_for`/`get_sector` — a dev copying
+    the stale example would wire an always-UNKNOWN lookup. (It is a docstring, not executable — so
+    a doc-lint guard, not a runtime test; fail-on-old: the old docstring contained `sector_for`.)"""
+    doc = RiskEngine.__doc__ or ""
+    assert "sector_for" not in doc and "get_sector" not in doc, "stale resolver name in the docstring"
+    assert "instrument_cache.sector(" in doc, "docstring should show the real .sector method"
+
+
 # ── Q4(a) gate-8 sector TOCTOU (FIX-185-class) ───────────────────────────────────
 
 def test_sector_exposure_statuses_default_is_byte_identical(tmp_path: Path) -> None:

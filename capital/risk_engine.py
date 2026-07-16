@@ -120,7 +120,7 @@ class RiskEngine:
             max_sector_exposure_pct=0.40,
             max_consecutive_losses=4,
             daily_loss_limit_pct=0.03,
-            sector_lookup_fn=lambda s: instrument_cache.sector_for(s),
+            sector_lookup_fn=lambda s: instrument_cache.sector(s),   # BUG A (16-Jul): the real InstrumentCache method is .sector
             logger=get_logger(__name__),
             kill_switch=ks,          # optional; None disables KILL_SWITCH check
         )
