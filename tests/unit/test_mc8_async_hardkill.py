@@ -742,6 +742,43 @@ def test_g4_if_the_worker_cannot_start_the_flatten_runs_inline_and_still_complet
     assert ks.drain_flatten(timeout=1) is True  # must not raise on a dead handle
 
 
+def test_g5_drain_is_honest_while_the_flatten_runs_inline(store, monkeypatch):
+    """If the worker could not start, the flatten runs INLINE on its caller's thread
+    and there is no handle to join. drain_flatten must then report False ("still
+    running") rather than read the absent handle as "nothing in flight" — the latter
+    would let _shutdown close the store out from under a live flatten, silently."""
+    _seed_open_trade(store)
+    adapter = _BlockingFlattenAdapter()  # gate NOT set → the inline flatten blocks
+
+    real_start = threading.Thread.start
+
+    def _selective_start(self):
+        # Fail ONLY the kill-switch worker, so this test can still use threads.
+        if self.name == "ks-hard-kill-flatten":
+            raise RuntimeError("can't start new thread")
+        return real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", _selective_start)
+    ks = _make_ks(store, adapter=adapter)
+
+    # hard_kill will block (inline fallback) → drive it from a side thread.
+    caller = threading.Thread(target=lambda: ks.hard_kill("emergency", "test"),
+                              name="inline-caller")
+    caller.start()
+    try:
+        assert adapter.entered.wait(3.0), "the inline flatten never reached the broker"
+        assert ks.is_flatten_in_progress() is True
+        assert ks.drain_flatten(timeout=0.2) is False, (
+            "drain claimed success while a flatten was running inline"
+        )
+    finally:
+        adapter.gate.set()
+        caller.join(10)
+
+    assert ks.flatten_state is FlattenState.COMPLETE
+    assert ks.drain_flatten(timeout=1) is True
+
+
 def test_g3_the_worker_is_not_a_daemon(store):
     """A daemon thread would be killed the instant the process decides to exit —
     mid-flatten, positions open. Non-daemon is the backstop behind the gate."""

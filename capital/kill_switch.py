@@ -1069,11 +1069,24 @@ class KillSwitch:
         2h join would block every is_flatten_in_progress()/flatten_state reader.
         """
         with self._flatten_lock:
-            t = self._flatten_thread
-            if t is None or self._flatten_state not in (
+            # The STATE is authoritative, not the handle. In the thread-start
+            # fallback the flatten runs INLINE on some other caller's thread and
+            # _flatten_thread is None — a handle-first check would read that as
+            # "nothing in flight" and cheerfully let _shutdown close the store out
+            # from under a live flatten. There is nothing to join in that case, so
+            # say so honestly rather than claim a drain we did not perform.
+            if self._flatten_state not in (
                 FlattenState.RUNNING, FlattenState.DRAINING
             ):
                 return True  # nothing in flight
+            t = self._flatten_thread
+            if t is None:
+                self._log.critical(
+                    "kill_switch: a flatten is in progress INLINE (no worker thread "
+                    "to join) — cannot drain it from here; it holds its own caller's "
+                    "thread until it finishes"
+                )
+                return False
             self._flatten_state = FlattenState.DRAINING
         self._log.critical(
             "kill_switch: draining HARD_KILL flatten worker before shutdown "
