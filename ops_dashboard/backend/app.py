@@ -42,6 +42,49 @@ _DEFAULT_CONFIG = os.path.join(_HERE, "config", "gui_config.yaml")
 
 _LOGIN_EXEMPT = {"auth.login_get", "auth.login_post"}
 
+# The Flask session key is persisted here when `auth.secret_key` is not configured.
+# data_store/ is gitignored and survives the post-receive `checkout -f`, so the key
+# outlives both restarts and deploys.
+_SECRET_KEY_FILE = os.path.abspath(
+    os.path.join(_HERE, "..", "..", "data_store", "session", "gui_secret_key")
+)
+
+
+def _resolve_secret_key(configured: Optional[str], log=None) -> str:
+    """Return a STABLE Flask session key.
+
+    `auth.secret_key` wins if configured. Otherwise the key is generated once and
+    persisted (0600), because the old fallback minted a fresh key on every start: each
+    restart of gui-dashboard silently invalidated every session and bounced the operator
+    back to the login + TOTP screen. A session key is meant to be durable; an ephemeral
+    one is a logout on a timer.
+
+    FAIL-SAFE: any problem reading or writing the file degrades to the previous
+    behaviour (a fresh ephemeral key) rather than refusing to start. A read-only ops
+    dashboard that boots and logs you out beats one that will not boot.
+    """
+    if configured:
+        return configured
+    try:
+        if os.path.exists(_SECRET_KEY_FILE):
+            key = open(_SECRET_KEY_FILE, encoding="utf-8").read().strip()
+            if key:
+                return key
+        key = secrets.token_hex(32)
+        os.makedirs(os.path.dirname(_SECRET_KEY_FILE), exist_ok=True)
+        # 0600 before content: never widen, even briefly.
+        fd = os.open(_SECRET_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(key)
+        return key
+    except OSError as exc:  # noqa: BLE001 — never block startup on this
+        if log is not None:
+            log.warning(
+                "gui: could not persist the session key (%s); falling back to an "
+                "ephemeral key — sessions will not survive a restart", exc,
+            )
+        return secrets.token_hex(32)
+
 
 def _deep_merge(base: dict, overlay: dict) -> dict:
     """Recursive dict merge — overlay wins on scalar/list conflicts."""
@@ -85,7 +128,7 @@ def create_app(config_path: Optional[str] = None, gui_config: Optional[dict] = N
 
     auth_cfg = cfg.get("auth", {}) or {}
     server_cfg = cfg.get("server", {}) or {}
-    app.secret_key = auth_cfg.get("secret_key") or secrets.token_hex(32)
+    app.secret_key = _resolve_secret_key(auth_cfg.get("secret_key"), log=app.logger)
     app.permanent_session_lifetime = timedelta(
         minutes=int(auth_cfg.get("session_lifetime_minutes", 60))
     )
