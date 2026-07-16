@@ -555,6 +555,16 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > carries the wrong `/home/ubuntu/trading-system` path** — the canonical `deploy/hooks/post-receive`
 > AND the LIVE VM hook are correct (`/home/ubuntu/systems/trading-system`), so deploys land; the dup
 > is a record-don't-fix footgun. memory `pending_reconciliation_14jul`.
+> **✅ RESOLVED 17-Jul (batch-2, AB-910 §2.4): `deploy/post-receive` is DELETED** — no longer
+> record-don't-fix. Dead-proof: md5 `bd950b7…` live VM hook == `deploy/hooks/post-receive` (1336 B),
+> while the dup was `604d2b3…` (3629 B); no caller anywhere (`install_vm_services.sh` never
+> referenced it, despite the dup's own header claiming it did). Recover from git if ever needed:
+> `git show 57f28a1:deploy/post-receive`. **⚠️ NEW finding it exposed → LOOP:** the dup was the ONLY
+> copy of FIX-065's market-hours push guard. The canonical hook and the LIVE VM hook have NO such
+> guard (grep=0) — **the guard has never been live**, so "no push during market hours" is manual
+> discipline only. `tests/unit/test_fix065_market_hours_guard.py`'s 12 tests assert against a mock
+> hook they define inline, so they pass regardless and are vacuous. Decide: implement in
+> `deploy/hooks/post-receive` (deploy-path behaviour change) or retire FIX-065 + its tests.
 
 Drop-in dir: `trading-system.service.d/` (holds Telegram env vars — secrets).
 
