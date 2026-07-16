@@ -993,7 +993,29 @@ class KillSwitch:
             )
             self._flatten_thread = t
         # start() OUTSIDE the lock (M-C4 lesson: never hold a lock across work).
-        t.start()
+        try:
+            t.start()
+        except Exception as exc:  # noqa: BLE001 — e.g. RuntimeError: can't start new thread
+            # Thread exhaustion is most likely EXACTLY here: the process is in
+            # distress, which is why a HARD_KILL is firing. Two things must not
+            # happen. (1) Leaving the state at RUNNING with a thread that never
+            # ran would make is_flatten_in_progress() answer True forever — the
+            # eod-self-exit gate would hold the process open all night, and
+            # drain_flatten would join() a never-started thread and raise. (2) Not
+            # flattening at all. An unflattened book is far worse than a blocked
+            # caller, so fall back to running the flatten INLINE (the pre-M-C8
+            # behaviour) rather than dropping it. _flatten_worker_main sets
+            # COMPLETE in its finally either way.
+            with self._flatten_lock:
+                self._flatten_thread = None
+            self._log.critical(
+                "kill_switch: could NOT start the flatten worker (%s: %s) — running "
+                "the flatten INLINE on the caller's thread instead. The caller is "
+                "blocked for the duration, but the positions WILL be flattened.",
+                type(exc).__name__, exc,
+            )
+            self._flatten_worker_main()
+            return True
         self._log.critical(
             "kill_switch: HARD_KILL flatten dispatched to worker thread "
             "(hard_kill returns immediately; the fill/commit path is not blocked)"

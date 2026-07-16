@@ -712,6 +712,36 @@ def test_g2_a_crashing_worker_still_reaches_complete(store, monkeypatch):
     assert ks.is_flatten_in_progress() is False
 
 
+def test_g4_if_the_worker_cannot_start_the_flatten_runs_inline_and_still_completes(
+    store, monkeypatch
+):
+    """Thread exhaustion is most likely EXACTLY when a HARD_KILL fires — the process
+    is already in distress. Two failure modes must not happen: the state wedged at
+    RUNNING (is_flatten_in_progress() True forever → the eod gate holds the process
+    open all night, and drain_flatten join()s a never-started thread and raises), and
+    the positions simply never flattened. An unflattened book beats a blocked caller,
+    so the flatten falls back to INLINE."""
+    _seed_open_trade(store)
+    adapter = _BlockingFlattenAdapter()
+    adapter.gate.set()  # let the inline flatten run straight through
+
+    def _no_threads(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", _no_threads)
+    ks = _make_ks(store, adapter=adapter)
+
+    ks.hard_kill("emergency", "test")
+
+    # It flattened anyway...
+    assert adapter.placed == [{"side": "SELL", "qty": 100}]
+    assert _trade_status(store) == "EXITING"
+    # ...and the state is honest, so the eod gate is not wedged.
+    assert ks.flatten_state is FlattenState.COMPLETE
+    assert ks.is_flatten_in_progress() is False
+    assert ks.drain_flatten(timeout=1) is True  # must not raise on a dead handle
+
+
 def test_g3_the_worker_is_not_a_daemon(store):
     """A daemon thread would be killed the instant the process decides to exit —
     mid-flatten, positions open. Non-daemon is the backstop behind the gate."""
