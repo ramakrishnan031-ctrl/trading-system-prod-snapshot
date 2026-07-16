@@ -149,6 +149,10 @@ class RiskEngine:
         # B-1 (02-Jul): enforce the unrealized-MTM term in the DAILY_LOSS gate.
         # Default False = SHADOW (log would_reject, enforce realized-only).
         daily_loss_include_unrealized: bool = False,
+        # F1 (16-Jul): SECTOR_EXPOSURE gate mode. "observe" (DEFAULT) LOGS a would-reject but
+        # does NOT reject; "enforce" rejects as designed. Default observe so populating
+        # trades.sector activates the cap in log-only mode until a soak + Rama's approval.
+        sector_cap_mode: str = "observe",
     ) -> None:
         self._fm = fund_manager
         self._store = state_store
@@ -158,6 +162,7 @@ class RiskEngine:
         self._max_consec = max_consecutive_losses
         self._daily_loss_pct = daily_loss_limit_pct
         self._daily_loss_include_unrealized = daily_loss_include_unrealized
+        self._sector_cap_mode = sector_cap_mode if sector_cap_mode in ("observe", "enforce") else "observe"
         self._max_open_delivery = max_open_delivery_positions   # PHASE-3 (A)
         self._max_daily_delivery = max_daily_delivery_trades     # PHASE-3 (A)
         self._sector_fn = sector_lookup_fn
@@ -293,6 +298,7 @@ class RiskEngine:
             processor_in_flight_count,
             symbol, side, active_direction,
             open_delivery_count, daily_delivery_count,   # PHASE-3 (A)
+            sector=sector,                               # F1 (16-Jul): observe-mode log
         )
 
         # ── Log every call at INFO (RE12) ─────────────────────────────────────
@@ -379,6 +385,7 @@ class RiskEngine:
         active_direction: Optional[str],
         open_delivery_count: int = 0,      # PHASE-3 (A): delivery-scoped open count
         daily_delivery_count: int = 0,     # PHASE-3 (A): delivery-scoped today count
+        sector: str = "UNKNOWN",           # F1 (16-Jul): resolved sector, for the observe-mode log
     ) -> ApprovalResult:
         """Execute checks in RE5 + FIX-018 + FIX-019 order; return the first failure or approval."""
 
@@ -602,12 +609,26 @@ class RiskEngine:
         if snap.total > 0:
             projected = effective_sector_margin + sizing_result.margin_required
             if projected > self._max_sector_pct * snap.total:
-                return reject(
-                    "SECTOR_EXPOSURE",
-                    f"Sector exposure would exceed limit: "
-                    f"projected={projected:.2f} "
-                    f"({projected / snap.total * 100:.1f}%), "
-                    f"max={self._max_sector_pct * 100:.1f}%",
+                # F1 (16-Jul): in "observe" (default) LOG a would-reject record and CONTINUE
+                # (do not reject) — behaviour-neutral while trades.sector fills and the cap is
+                # soaked. In "enforce" reject as designed (the live sector cap).
+                if self._sector_cap_mode == "enforce":
+                    return reject(
+                        "SECTOR_EXPOSURE",
+                        f"Sector exposure would exceed limit: "
+                        f"projected={projected:.2f} "
+                        f"({projected / snap.total * 100:.1f}%), "
+                        f"max={self._max_sector_pct * 100:.1f}%",
+                    )
+                self._log.warning(
+                    "risk_engine.sector_cap_would_reject mode=observe verdict=WOULD_REJECT "
+                    "symbol=%s sector=%s current_pct=%.1f%% projected_pct=%.1f%% "
+                    "threshold_pct=%.1f%% projected=%.2f total=%.2f",
+                    symbol, sector,
+                    snapshot.get("sector_exposure_pct", 0.0) * 100.0,
+                    projected / snap.total * 100.0,
+                    self._max_sector_pct * 100.0,
+                    projected, snap.total,
                 )
 
         # 9. CONTRARY_POSITION — FIX-019 wash trade prevention

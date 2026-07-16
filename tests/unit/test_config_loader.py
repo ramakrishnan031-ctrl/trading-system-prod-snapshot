@@ -406,6 +406,17 @@ def test_alerts_config_values_match_stubs() -> None:
     print("  OK AlertsConfig values match stub YAML (TG12, AW11)")
 
 
+def test_risk_config_sector_cap_defaults_observe() -> None:
+    """F1 (16-Jul): sector_cap_mode defaults to 'observe' (behaviour-neutral) and
+    sector_unknown_alert_pct to 0.20 when the YAML omits them (declared safe defaults)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        _write_stubs(d)
+        cfg = load_all(d)
+    assert cfg.system.risk.sector_cap_mode == "observe"
+    assert cfg.system.risk.sector_unknown_alert_pct == 0.20
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # G.3 / 2026-04-25 audit — SMTP password from env var
 # ─────────────────────────────────────────────────────────────────────────────

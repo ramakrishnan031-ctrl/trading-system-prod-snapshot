@@ -42,14 +42,17 @@ def _make_fm(store: StateStore) -> FundManager:
     return fm
 
 
-def _make_engine(store: StateStore, fm: FundManager, *, max_sector_pct: float) -> RiskEngine:
+def _make_engine(store: StateStore, fm: FundManager, *, max_sector_pct: float,
+                 sector_cap_mode: str = "enforce") -> RiskEngine:
     # Every non-sector threshold is set generous so approve() reaches gate 8 (SECTOR_EXPOSURE)
     # and the sector gate is the ONLY binding constraint under test.
+    # F1: these TOCTOU tests exercise the ENFORCE gate (the prod default is observe/log-only).
     return RiskEngine(
         fund_manager=fm, state_store=store,
         max_open_positions=50, max_daily_trades=50, max_sector_exposure_pct=max_sector_pct,
         max_consecutive_losses=99, daily_loss_limit_pct=0.99,
         sector_lookup_fn=lambda s: "ENERGY", logger=_LOG, kill_switch=None,
+        sector_cap_mode=sector_cap_mode,
     )
 
 

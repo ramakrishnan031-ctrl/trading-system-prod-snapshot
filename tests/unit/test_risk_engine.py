@@ -172,6 +172,7 @@ def _make_engine(
     sector_fn: Any = _sector_fn,
     kill_switch: Any = None,
     daily_loss_include_unrealized: bool = False,
+    sector_cap_mode: str = "enforce",   # F1: sector tests here exercise the ENFORCE gate (prod default is observe)
 ) -> RiskEngine:
     log = logging.getLogger("test_risk_engine")
     log.handlers.clear()
@@ -189,6 +190,7 @@ def _make_engine(
         logger=log,
         kill_switch=kill_switch,
         daily_loss_include_unrealized=daily_loss_include_unrealized,
+        sector_cap_mode=sector_cap_mode,
     )
 
 
@@ -890,6 +892,52 @@ def test_sector_exposure_counts_in_flight_and_open(tmp_path: Path) -> None:
     existing = store.sector_exposure("ENERGY")
     assert existing == 400_000.0, f"Expected 400000 (200k OPEN + 200k PENDING_FILL); got {existing}"
     print(f"  OK SECTOR_EXPOSURE counts in-flight+open: {existing}")
+    store.close()
+
+
+# ── F1 (16-Jul): sector-cap observe/enforce mode + multi-position resting-book sum ──
+
+def test_sector_cap_observe_mode_logs_would_reject_not_rejects(tmp_path: Path) -> None:
+    """F1: observe mode (prod default) LOGS a WOULD_REJECT on a sector-cap breach but APPROVES
+    (behaviour-neutral). The SAME breach rejects in enforce mode. (ChatGPT 3.2/3.3)"""
+    store = StateStore(tmp_path / "obs.db")
+    fm = _MockFundManager(_make_snap(total=1_000_000.0))
+    ks = _MockKillSwitch(active=False)
+    energy_fn = lambda s: "ENERGY"  # noqa: E731
+    # 390k ENERGY resting + 20k new -> 410k > 400k (40% of 1M) = a breach
+    _insert_trade(store, "t1", symbol="RELIANCE", sector="ENERGY", status="OPEN", margin=390_000.0)
+    sizing = _make_sizing(margin=20_000.0)
+
+    obs_handler = _CapturingHandler()
+    obs = _make_engine(store, fm, obs_handler, kill_switch=ks, max_sector_pct=0.40,
+                       sector_fn=energy_fn, sector_cap_mode="observe")
+    r_obs = obs.approve("ONGC", "BUY", "INTRADAY", sizing, "sig-obs")
+    assert r_obs.approved, "observe mode must NOT reject a sector-cap breach"
+    assert any("WOULD_REJECT" in m for m in obs_handler.warnings()), \
+        "observe mode must LOG a WOULD_REJECT record"
+
+    enf_handler = _CapturingHandler()
+    enf = _make_engine(store, fm, enf_handler, kill_switch=ks, max_sector_pct=0.40,
+                       sector_fn=energy_fn, sector_cap_mode="enforce")
+    r_enf = enf.approve("ONGC", "BUY", "INTRADAY", sizing, "sig-enf")
+    assert not r_enf.approved and r_enf.failed_check == "SECTOR_EXPOSURE", \
+        "enforce mode must reject the same breach"
+    store.close()
+
+
+def test_sector_exposure_sums_multi_position_resting_book_by_sector(tmp_path: Path) -> None:
+    """F1, ChatGPT Q5: with trades.sector POPULATED, sector_exposure sums the resting book PER
+    SECTOR. A NULL-sector row (the OLD bug — every trade had sector NULL) contributes to NO
+    bucket, so the cap saw 0 for every sector. Locks the sum-by-sector semantics the
+    populate-at-insert fix depends on."""
+    store = StateStore(tmp_path / "multi.db")
+    _insert_trade(store, "e1", symbol="RELIANCE", sector="ENERGY", status="OPEN",         margin=100_000.0)
+    _insert_trade(store, "e2", symbol="ONGC",     sector="ENERGY", status="PENDING_FILL", margin=50_000.0)
+    _insert_trade(store, "i1", symbol="TCS",      sector="IT",     status="OPEN",         margin=30_000.0)
+    _insert_trade(store, "n1", symbol="XYZ",      sector=None,     status="OPEN",         margin=99_000.0)  # OLD bug: NULL
+    assert store.sector_exposure("ENERGY") == 150_000.0     # both ENERGY rows summed
+    assert store.sector_exposure("IT") == 30_000.0
+    assert store.sector_exposure("UNKNOWN") == 0.0          # a NULL row is in NO bucket (the old no-op)
     store.close()
 
 
