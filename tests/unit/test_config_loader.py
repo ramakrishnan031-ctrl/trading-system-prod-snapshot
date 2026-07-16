@@ -381,6 +381,10 @@ def test_alerts_config_values_match_stubs() -> None:
     assert cfg.system.alerts.watcher_max_attempts == 5
     assert cfg.system.alerts.watcher_lock_path == "data_store/alert_watcher.lock"
     assert cfg.system.alerts.watcher_log_path == "logs/alert_watcher.log"
+    # respawn-guard thresholds (16-Jul): stub YAML doesn't set them → proves the byte-identical
+    # defaults (== the monitoring-canary historical literals: delta 3, rate 6.0/hr).
+    assert cfg.system.alerts.respawn_restart_delta_threshold == 3
+    assert cfg.system.alerts.respawn_rate_per_hour_threshold == 6.0
 
     tg = cfg.system.alerts.telegram
     assert isinstance(tg, TelegramConfig)

@@ -144,6 +144,9 @@ def check_dashboard(unit: str = "gui-dashboard",
 # exists to close. This probe treats a rapid-respawn pattern (SubState=auto-restart, or
 # NRestarts climbing fast between daily canary runs) as NOT-healthy, so the fixed --loop daemon
 # can be proven stable and a regression back into a respawn loop can never read green.
+# DEFAULT thresholds — overridable via alerts.respawn_rate_per_hour_threshold /
+# alerts.respawn_restart_delta_threshold (run_canary reads the config and passes them in;
+# direct/test callers with no override get exactly these values → behaviour unchanged).
 _RESPAWN_MAX_PER_HOUR = 6.0     # a long-lived daemon restarts a handful of times/day at most
 _RESPAWN_MIN_DELTA = 3          # ignore 1-2 legit restarts in a short inter-run gap (no false alarm)
 _SERVICE_STATE_FILE = "canary_service_state.json"
@@ -217,11 +220,15 @@ def _classify_respawn(nrestarts: int, substate: str, prev_nrestarts: Optional[in
 def check_service_respawn(unit: str = "alert-watcher.service", *,
                           runner: Optional[Callable] = None,
                           state_path: Optional[Path] = None,
-                          now_iso: Optional[str] = None) -> tuple[bool, str]:
+                          now_iso: Optional[str] = None,
+                          max_restarts_per_hour: Optional[float] = None,
+                          min_delta: Optional[int] = None) -> tuple[bool, str]:
     """Healthy iff `unit` is NOT respawning (see _classify_respawn). Reads NRestarts + SubState
     via `systemctl show` (runner injectable for tests) and compares NRestarts to the persisted
-    previous sample. A systemctl/parse failure DEGRADES to healthy-with-note (a respawn-check
-    outage is not itself an alert-path failure) rather than firing a spurious canary WARNING."""
+    previous sample. Thresholds fall back to the module defaults when not supplied (run_canary
+    passes the config-driven `alerts.respawn_*` values). A systemctl/parse failure DEGRADES to
+    healthy-with-note (a respawn-check outage is not itself an alert-path failure) rather than
+    firing a spurious canary WARNING."""
     try:
         if runner is None:
             runner = lambda: subprocess.run(  # noqa: E731
@@ -237,7 +244,11 @@ def check_service_respawn(unit: str = "alert-watcher.service", *,
     prev = _load_service_state(state_path)
     prev_n = prev.get("nrestarts")
     elapsed = _elapsed_seconds(prev.get("iso"), now_iso)
-    ok, detail = _classify_respawn(nrestarts, substate, prev_n, elapsed)
+    ok, detail = _classify_respawn(
+        nrestarts, substate, prev_n, elapsed,
+        max_restarts_per_hour=(_RESPAWN_MAX_PER_HOUR if max_restarts_per_hour is None else max_restarts_per_hour),
+        min_delta=(_RESPAWN_MIN_DELTA if min_delta is None else min_delta),
+    )
     _save_service_state(state_path, {"nrestarts": nrestarts, "iso": now_iso})
     return ok, f"{unit}: {detail}"
 
@@ -253,7 +264,11 @@ def run_canary(cfg, *, sentinel_dir: Optional[Path] = None) -> dict:
         "telegram": check_telegram_path(os.environ.get("TELEGRAM_BOT_TOKEN", "")),
         "sentinel": check_sentinel_ingestion(sd),
         "dashboard": check_dashboard(),
-        "respawn": check_service_respawn(state_path=sd / _SERVICE_STATE_FILE),
+        "respawn": check_service_respawn(
+            state_path=sd / _SERVICE_STATE_FILE,
+            max_restarts_per_hour=getattr(alerts_cfg, "respawn_rate_per_hour_threshold", _RESPAWN_MAX_PER_HOUR),
+            min_delta=getattr(alerts_cfg, "respawn_restart_delta_threshold", _RESPAWN_MIN_DELTA),
+        ),
     }
     out = {k: {"ok": ok, "detail": detail} for k, (ok, detail) in results.items()}
     out["overall_ok"] = all(v["ok"] for v in out.values() if isinstance(v, dict))

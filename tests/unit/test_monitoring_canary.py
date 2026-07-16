@@ -145,3 +145,27 @@ def test_check_service_respawn_unavailable_degrades_not_alarms(tmp_path):
         raise FileNotFoundError("systemctl not found")
     ok, detail = check_service_respawn(runner=_boom, state_path=tmp_path / "svc.json")
     assert ok is True and "unavailable" in detail       # no spurious canary WARNING
+
+
+def test_classify_respawn_threshold_override_changes_verdict():
+    # a +2 restart bump over 10 min: HEALTHY at the default min_delta (3), FLAGGED when the
+    # config lowers min_delta to 1 — the override reaches the verdict.
+    assert _classify_respawn(12, "running", prev_nrestarts=10, elapsed_sec=600.0)[0] is True
+    ok, detail = _classify_respawn(12, "running", prev_nrestarts=10, elapsed_sec=600.0,
+                                   min_delta=1, max_restarts_per_hour=6.0)
+    assert ok is False and "RESPAWN" in detail.upper()
+
+
+def test_check_service_respawn_config_override_changes_verdict(tmp_path):
+    # run_canary passes alerts.respawn_restart_delta_threshold as min_delta; prove it changes
+    # the verdict at the probe boundary. Same +2-in-10min sample, two thresholds.
+    seed = {"nrestarts": 10, "iso": "2026-07-16T08:00:00"}
+    runner = lambda: "NRestarts=12\nSubState=running\n"  # noqa: E731
+    state = tmp_path / "svc.json"
+    state.write_text(json.dumps(seed))                                  # default delta>=3
+    assert check_service_respawn(runner=runner, state_path=state,
+                                 now_iso="2026-07-16T08:10:00")[0] is True
+    state.write_text(json.dumps(seed))                                  # overridden delta>=1
+    ok, _ = check_service_respawn(runner=runner, state_path=state,
+                                  now_iso="2026-07-16T08:10:00", min_delta=1)
+    assert ok is False

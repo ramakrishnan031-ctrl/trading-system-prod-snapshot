@@ -77,6 +77,15 @@ healthy**), auto-restart → not healthy, stable daemon → healthy, single-rest
 baseline/reset benign, and the wrapper detects a seeded loop + advances the baseline + degrades
 on systemctl-missing. All pass.
 
+**Configurable thresholds (refinement #2, 16-Jul):** both thresholds are now config-driven —
+`alerts.respawn_restart_delta_threshold` (default **3**) + `alerts.respawn_rate_per_hour_threshold`
+(default **6.0**) as declared `AlertsConfig` fields (`extra="forbid"`-safe); `run_canary` reads them
+and passes them to `check_service_respawn` → `_classify_respawn` (the module constants remain the
+fallback for direct/test callers). **With no YAML override, behaviour is byte-identical to the former
+hard-coded literals.** Proof: classifier- + probe-level override tests show a lowered `min_delta`
+flags a smaller restart bump that is healthy at the default; `test_config_loader` asserts the defaults
+(3 / 6.0). Config-ize only — the guard was not re-designed.
+
 ### 3.3 `--loop` functional tests (`test_alert_watcher.py::TestRunLoopFunctional`)
 - `test_loop_stays_up_across_real_clean_passes` — real `run_once` over 3 passes, temp sentinel
   dir, 2 sentinels → both `.delivered`, loop exits 0 (no crash/respawn).
@@ -86,10 +95,10 @@ on systemctl-missing. All pass.
 
 ### Test results
 ```
-python -m pytest tests/unit/test_alert_watcher.py tests/unit/test_monitoring_canary.py -q
-  → 56 passed  (baseline 45 + 11 new)
-python -m pytest tests/unit/test_preflight_groups.py -q  → 11 passed
-py_compile: monitoring_canary.py, alert_watcher.py, preflight/checks/services.py → OK
+python -m pytest test_monitoring_canary.py test_alert_watcher.py \
+                 test_preflight_groups.py test_config_loader.py -q
+  → 111 passed  (incl. +11 respawn/loop from the fix, +2 threshold-override, +2 config-default asserts)
+py_compile: config_loader.py, monitoring_canary.py, alert_watcher.py, preflight/checks/services.py → OK
 ```
 
 ---
@@ -142,8 +151,9 @@ path) references a stale method name `test_smtp_auth_error_exits_2` (renamed to
 ---
 
 ## 4. OFF-MARKET DEPLOY RUNBOOK  (SEPARATE — run only after 17:05, before next 08:15)
-1. Merge branch `alertwatcher-loop-fix-16jul` → `main` (repo's branch-per-fix pattern; 3 commits:
-   unit fix · canary respawn probe · docs), then `git push origin main` off-market.
+1. Merge branch `alertwatcher-loop-fix-16jul` → `main` (repo's branch-per-fix pattern; 4 commits:
+   unit fix · canary respawn probe · docs · configurable thresholds), then `git push origin main`
+   off-market.
 2. On the VM: reinstall the unit → reload → restart **only** alert-watcher:
    ```bash
    sudo cp /home/ubuntu/systems/trading-system/deploy/systemd/alert-watcher.service /etc/systemd/system/
@@ -157,22 +167,47 @@ path) references a stale method name `test_smtp_auth_error_exits_2` (renamed to
    #   expect: ActiveState=active  SubState=running  NRestarts stops climbing
    systemctl status alert-watcher --no-pager     # one PID, uptime grows
    ```
-4. **POST-DEPLOY 24h VALIDATION:** watch RSS + fd/handle count over the first 24h
-   (`ps -o rss= -p <PID>`, `ls /proc/<PID>/fd | wc -l`). No growth expected. If it grows → ROLLBACK.
-5. Next daily canary (08:20) records the `respawn` baseline, then flags any future respawn.
-
-**ROLLBACK:** revert the unit change (`ExecStart` back to no-flag, `Restart=always`, `TimeoutStopSec=10`,
-drop StartLimit) → `daemon-reload` → `restart alert-watcher`, off-market. The crash is already fixed
-by F1, so rollback is loop-only (no functional loss). L2: `git revert` the fix commits.
+4. **SOAK (ChatGPT #1) — the several-hour / overnight validation before relying on `--loop`.**
+   Sample at intervals over the first hours and again at ~24h; **ALL must stay flat:**
+   ```bash
+   PID=$(systemctl show alert-watcher -p ExecMainPID --value)
+   ps -o rss=  -p $PID          # resident memory (KB)      — must NOT climb
+   ls /proc/$PID/fd | wc -l      # open file descriptors     — must NOT climb
+   ps -o nlwp= -p $PID          # thread count (or: ls /proc/$PID/task | wc -l)
+   lsof -p $PID | grep -E 'trading_system.db|analytics.db' | wc -l   # DB handles — no accumulation
+   ```
+   **SMTP/Telegram recovery:** after a forced/transient delivery failure, confirm the daemon stays
+   UP, uses the Telegram fallback + writes `data_store/alert_watcher_degraded.json`, and RECOVERS
+   (marker cleared) once delivery returns. **If RSS / fd / threads / DB-conns GROWS → ROLLBACK
+   (step 6).** Only after a clean soak is `--loop` the permanent state. *(Optional pre-switch scratch
+   soak: run `--loop` against a TEMP sentinel dir in a separate process for a few hours BEFORE step 2
+   — never against the LIVE sentinel dir while the real watcher is up; the single-instance lock
+   forbids it.)*
+5. **DEPLOYMENT.md path fix (F2 residual — VM-VERIFY FIRST, ChatGPT #5).** Off-market, confirm the
+   ACTUAL live paths before editing:
+   ```bash
+   ls -la /home/ubuntu/systems/trading-system/.env      # the real EnvironmentFile the units read
+   # + the real backups dir the crons actually write to
+   ```
+   ONLY if confirmed, correct DEPLOYMENT.md's `/home/ubuntu/trading-system/` refs (.env + backups,
+   ~lines 113/126/128/136/163) → `/home/ubuntu/systems/trading-system/`. Do NOT change any path that
+   cannot be VM-verified. (The stale duplicate `deploy/post-receive` stays record-only.)
+6. **ROLLBACK:** revert the unit (`ExecStart` back to no-flag, `Restart=always`, `TimeoutStopSec=10`,
+   drop StartLimit) → `daemon-reload` → `restart alert-watcher`, off-market. The crash is already
+   fixed by F1, so rollback is loop-only (no functional loss). L2: `git revert` the fix commits.
+7. Next daily canary (08:20) records the `respawn` baseline, then flags any future respawn.
 
 ---
 
-## Files changed (UNPUSHED)
+## Files changed (UNPUSHED, branch `alertwatcher-loop-fix-16jul`)
 - `deploy/systemd/alert-watcher.service` — `--loop` + `on-failure` + StartLimit + TimeoutStopSec.
-- `scripts/monitoring_canary.py` — `respawn` probe (`_classify_respawn` + `check_service_respawn`), 5th path.
+- `scripts/monitoring_canary.py` — `respawn` probe (`_classify_respawn` + `check_service_respawn`), 5th
+  path; thresholds config-driven.
+- `core/config_loader.py` — `alerts.respawn_restart_delta_threshold` (3) + `respawn_rate_per_hour_threshold` (6.0).
 - `scripts/preflight/checks/services.py` — rationale comment (behavior unchanged).
-- `tests/unit/test_monitoring_canary.py` (+9), `tests/unit/test_alert_watcher.py` (+2).
-- `docs/SYSTEM_MAP.md` — service row flipped + MANDATORY broker-truth section.
+- `tests/unit/test_monitoring_canary.py` (+11), `tests/unit/test_alert_watcher.py` (+2),
+  `tests/unit/test_config_loader.py` (default asserts).
+- `docs/SYSTEM_MAP.md` — service row flipped + MANDATORY broker-truth section; `PATHS.md` — banner.
 - `docs/audit/alertwatcher_loop_fix_16jul2026.md` (this report).
 
 **Done = investigate PASS · unit prepared · respawn-regression + `--loop` functional tests pass ·
