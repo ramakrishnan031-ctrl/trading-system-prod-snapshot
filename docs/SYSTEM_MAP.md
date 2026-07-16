@@ -606,6 +606,16 @@ inactive alert-watcher).
   2h retry loop runs sync on the fill/commit thread, `:550/1204-1290`) are OPEN+REACHABLE = the fix targets;
   M-C5 mitigated (atomic reconciler caller gate), M-C6 latent (allocator min_weight 0.5). Report
   `docs/audit/mc_cluster_investigation_16jul2026.md`; memory `mc_cluster_investigation_16jul`. Fixed nothing.
+  **M-C8 deeper investigation (16-Jul, `63dbb38`, read-only — `docs/audit/mc8_investigation_16jul2026.md`,
+  memory `mc8_investigation_16jul`):** no prod caller uses hard_kill's `CancellationReport` ⇒ the async
+  redesign can fire-and-return; prod always takes the adapter path (`main.py:1983 set_adapter`) while the
+  sync-contract tests use the legacy `cancel_fn` path ⇒ a clean seam. **⚠️ OPERATIONAL FACT (latent today):
+  `StateStore.count_active_positions()` counts ONLY `OPEN`/`PARTIAL`/`PENDING_FILL` — `EXITING` is BLIND
+  (`state_store.py:639-651`) — and the HARD_KILL flatten marks trades `EXITING` EARLY, so the eod-self-exit
+  daemon (`main.py:964-978` / `:1012-1035`, due iff active==0 past the window end) can set the shutdown
+  event while trades are still inside the 2h exit-retry loop.** Any async flatten MUST use a non-daemon
+  worker + join/drain in `_shutdown` + a flatten-in-progress gate — never `count_active_positions()`.
+  (M-C4 itself is FIXED on branch `mc4-killswitch-lock-16jul`, UNPUSHED.)
 - `docs/CONFIG_GUIDE.md` — **Rama-facing config reference (TASK #8)**: every setting in plain
   language, effective-values table, override precedence, common scenarios, safety warnings
 - `docs/system_manuals/*.docx` — **Word-format manuals for Rama** (`trading_System_v2_runbook.docx`,
