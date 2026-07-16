@@ -20,9 +20,11 @@ import subprocess
 from scripts.preflight.base import Check, CheckContext, CheckResult, Criticality, FixResult
 
 
-# Periodic-oneshot services (alert-watcher, security-watcher; Restart=always +
-# short RestartSec) spend most of their time in "activating" between cycles --
-# treat that as healthy, else they false-FAIL every few seconds.
+# security-watcher is a periodic-oneshot (Restart=always + RestartSec=60) that spends most of
+# its time in "activating" between cycles -- treat that as healthy, else it false-FAILs every
+# few seconds. (alert-watcher was in this class until 16-Jul-2026; it is now a long-lived
+# `--loop` daemon in state "active", already covered below -- the monitoring canary's respawn
+# probe, not this pre-market gate, is what now catches an alert-watcher respawn regression.)
 HEALTHY_STATES = ("active", "activating", "reloading")
 
 

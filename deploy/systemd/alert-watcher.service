@@ -1,7 +1,13 @@
 [Unit]
-Description=Trading System - Alert Watcher (sentinel monitor)
+Description=Trading System - Alert Watcher (sentinel monitor, --loop daemon)
 After=network-online.target
 Wants=network-online.target
+# 16-Jul-2026: long-lived --loop daemon (was --once + Restart=always, which exited every
+# pass and let systemd respawn it ~every 10s -> 101,570+ restarts). With Restart=on-failure,
+# StartLimit caps restart hammering: >5 failed starts in 300s trips the limiter and the unit
+# enters `failed` (LOUD, surfaced by the monitoring canary) instead of looping silently.
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,13 +16,20 @@ Group=ubuntu
 WorkingDirectory=/home/ubuntu/systems/trading-system
 Environment="PATH=/home/ubuntu/systems/venv/bin:/usr/bin:/bin"
 EnvironmentFile=/home/ubuntu/systems/trading-system/.env
+# --loop: ONE long-lived process polling every alerts.watcher_interval_sec (default 60s),
+# with an interruptible SIGINT/SIGTERM shutdown and a single-instance pidfile lock held for
+# the whole lifetime. Delivery/auth faults never exit non-zero (F1: Telegram fallback +
+# degraded marker), so Restart=on-failure fires only on a real crash (e.g. config error at
+# startup), NOT on a dead SMTP credential.
 ExecStart=/home/ubuntu/systems/venv/bin/python \
-    /home/ubuntu/systems/trading-system/scripts/alert_watcher.py
+    /home/ubuntu/systems/trading-system/scripts/alert_watcher.py --loop
 
 KillSignal=SIGINT
-TimeoutStopSec=10
+# > _SMTP_TASK_TIMEOUT_SEC (30s in alert_watcher.py): let a worst-case in-flight SMTP batch
+# drain on stop before systemd SIGKILLs, so `systemctl stop/restart` is clean even mid-send.
+TimeoutStopSec=35
 
-Restart=always
+Restart=on-failure
 RestartSec=10
 
 StandardOutput=journal
