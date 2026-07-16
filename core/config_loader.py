@@ -496,6 +496,15 @@ class RiskConfig(BaseModel):
     # it changes a capital gate. Reversible by flipping this flag.
     daily_loss_include_unrealized: bool = False
     price_drift_threshold: float = 0.005  # FIX-075: 0.5% default drift threshold for margin top-up
+    # F1 (16-Jul): sector concentration cap (gate-8) mode + data-quality threshold.
+    # sector_cap_mode gates the SECTOR_EXPOSURE check: "observe" (DEFAULT) LOGS a would-reject
+    # record but does NOT reject (behaviour-neutral — trades.sector now fills, the 40% cap only
+    # logs); "enforce" rejects as designed. Flip observe->enforce ONLY after an observe soak
+    # (>=1 session) + Rama's explicit approval (activating a live capital gate). Reversible.
+    # sector_unknown_alert_pct fires a one-shot data-quality alert if the UNKNOWN-sector fraction
+    # of inserted trades exceeds it (the cap is only as good as trades.sector).
+    sector_cap_mode: str = "observe"
+    sector_unknown_alert_pct: float = 0.20
 
     # BUILD 1 (#3, 24-Jun-2026): the FIX-190 live_test_* override fields were
     # DELETED. The live_test caps had been set EQUAL to the base caps
@@ -516,6 +525,20 @@ class RiskConfig(BaseModel):
     def _validate_pct(cls, v: float) -> float:
         if not (0 < v <= 1):
             raise ValueError("must be > 0 and <= 1")
+        return v
+
+    @field_validator("sector_cap_mode")
+    @classmethod
+    def _validate_sector_cap_mode(cls, v: str) -> str:
+        if v not in ("observe", "enforce"):
+            raise ValueError("sector_cap_mode must be 'observe' or 'enforce'")
+        return v
+
+    @field_validator("sector_unknown_alert_pct")
+    @classmethod
+    def _validate_unknown_pct(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError("sector_unknown_alert_pct must be between 0 and 1")
         return v
 
 

@@ -555,6 +555,7 @@ class OrderPlacer:
         min_effective_rr: float = 0.0,  # FIX-136 Item 54: abort if R:R below this after slippage
         emergency_exit_buffer_pct: float = EMERGENCY_EXIT_BUFFER_PCT,  # FIX-181
         mis_blocklist: Optional[Any] = None,  # MIS learned blocklist (record-only here; None = inert)
+        sector_unknown_alert_pct: float = 0.20,  # F1 (16-Jul): DQ alert if > this fraction of trades resolve UNKNOWN sector
     ) -> None:
         # BL-7b: CO_PLUS_TGT needs trigger/step fractions at fill time.
         if smart_tgt_manager is not None and smart_tgt_config is None:
@@ -590,6 +591,14 @@ class OrderPlacer:
         # Telegram alerts (optional): wiring for ORDER PLACED / TGT HIT / SL HIT
         self._notifier = notifier
         self._mode = mode
+        # F1 (16-Jul): sector data-quality — populate trades.sector at insert from the SAME
+        # source gate-8 uses (instrument_cache.sector). Session counters drive a one-shot
+        # WARNING when the UNKNOWN fraction exceeds the threshold (the cap is only as good as
+        # this data). In-memory only (parity: identical paper/live), reset on restart.
+        self._sector_unknown_alert_pct = sector_unknown_alert_pct
+        self._sector_dq_total = 0
+        self._sector_dq_unknown = 0
+        self._sector_dq_alerted = False
 
         # OP5: internal_order_id → _FillEntry
         self._fill_map: Dict[str, _FillEntry] = {}
@@ -651,6 +660,57 @@ class OrderPlacer:
     def set_instrument_cache(self, cache) -> None:
         """Wire InstrumentCache for IC8 tick-size rounding (called from main.py)."""
         self._instrument_cache = cache
+
+    # F1 (16-Jul): minimum inserts before the UNKNOWN-fraction data-quality alert can fire
+    # (avoids a false alarm off the first UNKNOWN symbol of the session).
+    _SECTOR_DQ_MIN_SAMPLE = 10
+
+    def _resolve_trade_sector(self, symbol: str) -> str:
+        """Resolve a symbol's sector at INSERT from the SAME canonical source gate-8 uses
+        (InstrumentCache.sector — 'UNKNOWN' on miss/blank/no-cache). The value is FROZEN on the
+        trade row for its life (StateStore.sector_exposure sums the stored value; nothing
+        re-looks-up an open position). Never raises — a lookup failure degrades to 'UNKNOWN'
+        (a distinct bucket, never NULL, never pooled into a real sector) so placement is never
+        broken by sector data. Also tracks the UNKNOWN proportion for the data-quality alert."""
+        sector = "UNKNOWN"
+        ic = self._instrument_cache
+        if ic is not None:
+            try:
+                resolved = ic.sector(symbol)
+                if isinstance(resolved, str) and resolved:
+                    sector = resolved
+            except Exception as exc:  # never break placement on a sector lookup
+                self._log.warning(
+                    "order_placer.sector_lookup_failed symbol=%s err=%r -> UNKNOWN", symbol, exc)
+        self._track_sector_dq(sector == "UNKNOWN")
+        return sector
+
+    def _track_sector_dq(self, is_unknown: bool) -> None:
+        """One-shot data-quality WARNING when the UNKNOWN-sector fraction of this session's
+        inserts exceeds sector_unknown_alert_pct (the sector cap is only as good as trades.sector).
+        In-memory counters (parity: identical paper/live); the alert never breaks placement."""
+        self._sector_dq_total += 1
+        if is_unknown:
+            self._sector_dq_unknown += 1
+        if self._sector_dq_alerted or self._sector_dq_total < self._SECTOR_DQ_MIN_SAMPLE:
+            return
+        frac = self._sector_dq_unknown / self._sector_dq_total
+        if frac <= self._sector_unknown_alert_pct:
+            return
+        self._sector_dq_alerted = True
+        msg = (f"{self._sector_dq_unknown}/{self._sector_dq_total} ({frac * 100:.0f}%) trades this "
+               f"session resolved to UNKNOWN sector (> {self._sector_unknown_alert_pct * 100:.0f}% "
+               f"threshold) — the sector concentration cap is operating on incomplete data; "
+               f"check instruments.csv / the NSE index-member reference data.")
+        self._log.warning("order_placer.sector_data_quality %s", msg)
+        try:
+            if self._notifier is not None:
+                self._notifier.send(
+                    severity="WARNING",
+                    title=f"[{self._mode}] Sector data-quality: high UNKNOWN rate",
+                    body=msg, source_module="order_placer")
+        except Exception:  # noqa: BLE001 — the alert path must never break order placement
+            pass
 
     def get_timeout_recovery_trades(self) -> List[str]:
         """
@@ -892,7 +952,7 @@ class OrderPlacer:
             symbol=symbol,
             direction=direction,
             strategy=strategy,
-            sector=None,        # OP10: symbol_validator not yet built
+            sector=self._resolve_trade_sector(symbol),  # F1 (16-Jul): populate at insert from instrument_cache (frozen; UNKNOWN-bucketed + DQ-alerted)
             qty=qty,
             entry_target_price=entry_price,
             sl_initial=sl_price,

@@ -2197,6 +2197,9 @@ def _main_locked(args, config_dir: Path) -> int:
         daily_loss_include_unrealized=risk_cfg.daily_loss_include_unrealized,
         # HIGH #2: sector from instrument_cache (was lambda: "UNKNOWN")
         sector_lookup_fn=lambda sym: instrument_cache.sector(sym),
+        # F1 (16-Jul): SECTOR_EXPOSURE gate mode (observe default = log-only; flip to enforce
+        # only after an observe soak + Rama's approval). Same lookup source as create_trade.
+        sector_cap_mode=risk_cfg.sector_cap_mode,
         logger=get_logger("risk_engine"),
         kill_switch=kill_switch,
         # SLICE2.5-PHASE-3 (A): separate delivery (CNC) count caps (inert while
@@ -2364,6 +2367,7 @@ def _main_locked(args, config_dir: Path) -> int:
         min_effective_rr=app_config.system.entry_gate.min_effective_rr,  # FIX-136 Item 54
         emergency_exit_buffer_pct=app_config.system.capital.emergency_exit_buffer_pct,  # FIX-181
         mis_blocklist=mis_blocklist,  # MIS learned blocklist: record broker MIS-blocks
+        sector_unknown_alert_pct=risk_cfg.sector_unknown_alert_pct,  # F1 (16-Jul): data-quality alert threshold
     )
     order_placer.set_instrument_cache(instrument_cache)  # IC8: tick rounding
 

@@ -107,6 +107,9 @@ class TestGate8SectorToctouWired:
         one test isolates the reserved-not-placed fold-in as the sole cause of the reject
         (this is the deploy behaviour-delta the prediction doc predicts is ~0 in prod)."""
         ctx = wired_system
+        # F1 (16-Jul): exercise the ENFORCE gate (prod default is observe/log-only). This test
+        # asserts the SECTOR_EXPOSURE gate REJECTS on the reserved-not-placed fold-in.
+        ctx.risk_engine._sector_cap_mode = "enforce"
         total = ctx.fund_manager.get_snapshot().total
         price = 100.0
 
