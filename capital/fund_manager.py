@@ -366,6 +366,14 @@ class FundManager:
         # FM6: active reservations
         self._reservations: dict[str, _Reservation] = {}
 
+        # M-C5: reservation_ids with a commit_adopted_entry commit IN FLIGHT.
+        # Guarded by self._lock; a test-and-set on entry, discarded in a finally.
+        # NOT part of the 3-balance invariant — it is pure concurrency control, so
+        # a stale entry could only cause a no-op, never a capital error. See
+        # commit_adopted_entry for why the durable fm_ledger COMMIT-row guard alone
+        # cannot cover the window between the guard and the commit.
+        self._commit_claims: set[str] = set()
+
         # FIX-035 / B-1: unrealized MTM tracking per trade_id. ADVISORY ONLY — this
         # dict is NOT part of the 3-balance invariant (available+reserved+used==total)
         # and never touches _total / reservations / buckets. It is read by the
@@ -1016,15 +1024,34 @@ class FundManager:
               -> restore the RESERVE in-memory from the durable fm_ledger RESERVE
                  row, THEN commit_to_used -> reserved becomes used.
 
-        Exactly ONE COMMIT per trade: if a COMMIT ledger row already exists for
-        the reservation this is a no-op (returns None). The caller's atomic
-        trade-state guard (state_store.adopt_recovery_trade_to_open) is the
-        primary exactly-once gate; this ledger check is defence in depth so a
-        second cycle can never restore-and-double-commit.
+        Exactly ONE COMMIT per trade, on THREE independent gates:
+          1. The caller's atomic trade-state transition
+             (state_store.adopt_recovery_trade_to_open / mark_recovery_trade_exiting)
+             — the primary exactly-once gate, and the only reason M-C5 was never
+             reachable in production.
+          2. The fm_ledger COMMIT-row check below — DURABLE, and the one that
+             survives a restart: it stops a LATER cycle re-committing a trade
+             committed in an earlier one.
+          3. M-C5: an in-memory CAS claim — CONCURRENT, and the one that makes this
+             method safe ON ITS OWN, without leaning on (1).
+
+        M-C5 (16-Jul-2026) — why (3) exists: gate (2) is evaluated INSIDE self._lock
+        while the commit itself runs OUTSIDE it (it must — see the lock-release note
+        below). Two callers that did NOT gate on (1) would therefore BOTH pass (2)
+        (no COMMIT row exists yet — neither has written one) and BOTH proceed to
+        commit_to_used. The loser does not corrupt capital: _apply_commit pops the
+        reservation, so the second commit_to_used finds no reservation, raises
+        ValueError, and BL-4 fires hard_kill — a SPURIOUS emergency halt caused by
+        nothing but a race. Claiming the reservation_id atomically under the lock we
+        already hold makes the loser a clean no-op instead. The claim is a
+        test-and-set on a set — it costs one dict lookup and is released in a
+        finally; NO lock is held across the commit I/O (that is the M-C4 anti-pattern
+        M-C8 exists to avoid).
 
         Returns the CommitResult, or None if there is nothing to commit (no
-        reservation resolvable, or already committed). On a genuine commit
-        failure, commit_to_used's BL-4 handler fires hard_kill and re-raises.
+        reservation resolvable, already committed, or a concurrent commit for the
+        same reservation is already in flight). On a genuine commit failure,
+        commit_to_used's BL-4 handler fires hard_kill and re-raises.
         """
         with self._lock:
             self._assert_initialized()
@@ -1046,11 +1073,30 @@ class FundManager:
                     extra={"trade_id": _row_get(trade_row, "trade_id")},
                 )
                 return None
+            # M-C5 CAS: claim this reservation, or concede to whoever holds it.
+            # Same lock as the guard above, so guard-and-claim are one atomic step
+            # and the window that gate (2) cannot cover is closed.
+            if rid in self._commit_claims:
+                self._log.info(
+                    "fund_manager.commit_adopted_entry_commit_in_flight",
+                    extra={"reservation_id": rid},
+                )
+                return None
+            self._commit_claims.add(rid)
         # Lock released: commit_to_used manages its own lock and defers its BL-4
         # hard_kill to AFTER lock release (C.1), so we must NOT call it while
         # holding self._lock. RLock reentrancy would keep the lock held across
         # hard_kill's downstream (rate_limiter / broker cancel) and risk deadlock.
-        return self.commit_to_used(rid, actual_fill_price, actual_qty)
+        try:
+            return self.commit_to_used(rid, actual_fill_price, actual_qty)
+        finally:
+            # Always release the claim — including when commit_to_used raised.
+            # On success the durable ledger guard (2) takes over from here, so
+            # holding the claim would only leak memory. On failure, releasing is
+            # what lets a legitimate retry happen; if the ledger row was already
+            # written before the failure, guard (2) no-ops that retry anyway.
+            with self._lock:
+                self._commit_claims.discard(rid)
 
     def restore_adopted_reservation(self, trade_row: Any) -> bool:
         """For an ADOPTED entry still RESTING at the broker (OPEN / TRIGGER
