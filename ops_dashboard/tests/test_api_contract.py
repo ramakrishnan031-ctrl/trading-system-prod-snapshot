@@ -115,3 +115,55 @@ def test_login_page_is_reachable_without_auth(app):
     r = anon.get("/login")
     assert r.status_code == 200
     assert b"AlgoCore Systems" in r.data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# P3 (17-Jul-2026) — route-map-driven guard invariant.
+# ─────────────────────────────────────────────────────────────────────────────
+# The two tests above enumerate the endpoints to check BY HAND. That is exactly the
+# gap the fixture-blindness investigation flagged: a NEW blueprint is protected by the
+# before_request guard, but nothing PROVES it — a forgotten endpoint just never gets an
+# anon test. This walks app.url_map instead, so coverage cannot be skipped by omission:
+# every endpoint not in _LOGIN_EXEMPT must deny an anonymous caller.
+import re as _re
+
+
+def _concrete_path(rule) -> str:
+    """A requestable path for a rule: replace every <...> placeholder (incl.
+    <path:filename> for the static route) with a dummy segment so the URL matches
+    this rule and the before_request guard runs (the anon request is intercepted
+    before the view, so the dummy value is never dereferenced)."""
+    return _re.sub(r"<[^>]+>", "x", rule.rule)
+
+
+def test_every_non_exempt_route_denies_anonymous(app):
+    """P3: iterate app.url_map and assert EVERY endpoint not in _LOGIN_EXEMPT denies an
+    anonymous client — /api/* -> 401, everything else -> 302 to /login (matching the
+    before_request logic in backend/app.py). This is the automatic invariant behind the
+    hand-written test_auth_required_* lists: a new route cannot skip coverage by being
+    forgotten. Includes the Flask `static` endpoint, which app.py deliberately guards too."""
+    from backend.app import _LOGIN_EXEMPT
+
+    anon = app.test_client()
+    checked = 0
+    for rule in app.url_map.iter_rules():
+        if rule.endpoint in _LOGIN_EXEMPT:
+            continue
+        methods = (rule.methods or set()) - {"HEAD", "OPTIONS"}
+        method = "GET" if "GET" in methods else (next(iter(methods)) if methods else "GET")
+        path = _concrete_path(rule)
+        resp = anon.open(path, method=method)
+        if path.startswith("/api/"):
+            assert resp.status_code == 401, (
+                f"{method} {path} (endpoint {rule.endpoint!r}) must 401 an anonymous "
+                f"caller, got {resp.status_code}"
+            )
+        else:
+            loc = resp.headers.get("Location", "")
+            assert resp.status_code == 302 and "/login" in loc, (
+                f"{method} {path} (endpoint {rule.endpoint!r}) must 302 -> /login for an "
+                f"anonymous caller, got {resp.status_code} Location={loc!r}"
+            )
+        checked += 1
+    # Guard the guard: if this collapses to near-zero the loop proved nothing.
+    assert checked >= 15, f"expected the invariant to cover many routes, only saw {checked}"
