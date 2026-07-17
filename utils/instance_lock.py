@@ -1,13 +1,42 @@
 """
 utils/instance_lock.py -- Trading System v2
 
-Single-instance enforcement via PID lock file + persistent socket lock.
+Single-instance enforcement via an OS-owned file lock + a persistent socket lock.
 
-FIX-081: Replaces TOCTOU-prone check_port_available() with a persistent socket
-bound to a dedicated lock port (default 5001). The socket is held open for the
-entire process lifetime. If binding fails (OSError: Address already in use),
-another instance is running. This eliminates the race where something binds
-the port between check and Flask startup.
+Two instances trading the same book would double every order, so this guard must
+hold. It must equally never REFUSE a legitimate restart: main() exits 1 when the
+lock is refused, and the unit's RestartPreventExitStatus is "3 4" — so exit 1 is
+restarted, and a lock that wrongly reports "already running" becomes a restart
+loop, i.e. a full outage. Both properties are load-bearing; X5 tests both.
+
+FIX-081 bound a persistent socket to a lock port (default 5001), held open for
+the process lifetime, replacing a TOCTOU-prone check_port_available() call.
+
+X5 (17-Jul-2026) — what that left, and what changed:
+
+  * The PID-liveness check was the ENFORCEMENT layer, and PIDs are recycled. A
+    crash leaves the file behind (release never runs); if the OS has since reused
+    that PID for ANY unrelated process, _pid_is_alive() says True and the restart
+    is refused forever. Enforcement now comes from a lock the KERNEL owns and
+    drops when the process dies — including on SIGKILL, OOM-kill or power loss.
+    A stale lock is therefore not possible, rather than merely unlikely. The PID
+    in the file is now informational only: it names the holder in the operator
+    message, and nothing branches on whether it is alive.
+
+  * SO_REUSEADDR was removed. Measured, both platforms, second bind of a
+    LISTENING 127.0.0.1 port:
+        Linux   (prod VM) : REFUSED, EADDRINUSE(98) — with or without it
+        Windows (dev PC)  : SUCCEEDS with it, REFUSED without it
+    So SO_REUSEADDR bought nothing on Linux (it only permits rebinding a
+    TIME_WAIT port, and a lock socket that never accept()s never has a
+    connection to leave one) while on Windows it actively let a second instance
+    bind. SO_EXCLUSIVEADDRUSE is the Windows spelling of the Linux default.
+
+  * The lock file is never unlinked. The lock lives on the INODE via an open fd,
+    so unlinking the path while another process holds it would let the next start
+    create a fresh inode, lock that, and run alongside. Leaving a 64-byte file in
+    the lock dir is the cost of closing that race; correctness depends on the
+    lock, never on the file's existence.
 """
 from __future__ import annotations
 
@@ -24,6 +53,16 @@ _LOCK_FILE = _LOCK_DIR / "trading-system.lock"
 # FIX-081: Persistent socket lock (held for entire process lifetime)
 _lock_socket: Optional[socket.socket] = None
 _LOCK_PORT = 5001  # Configurable via acquire_instance_lock(lock_port=...)
+
+# X5: the fd carrying the OS lock. Held open for the whole process lifetime —
+# closing it releases the lock, which is exactly what must not happen early.
+_lock_fd: Optional[int] = None
+
+# Windows byte-range locks are MANDATORY: a locked region cannot be read by the
+# other process. Lock a byte far past the PID text so a refused instance can
+# still read the PID to name the holder. Windows permits locking beyond EOF.
+_LOCK_BYTE_OFFSET = 1024
+_PID_FIELD_WIDTH = 64   # fixed-width so the PID can be rewritten without truncating
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -46,13 +85,57 @@ def _pid_is_alive(pid: int) -> bool:
             return True
 
 
+def _lock_fd_exclusive(fd: int) -> bool:
+    """Take the OS-owned exclusive, non-blocking lock on `fd`. True if acquired.
+
+    The kernel owns this lock and drops it when the fd closes — on clean exit,
+    SIGKILL, OOM-kill or power loss alike. That is the entire point: a lock that
+    cannot survive its holder cannot go stale, so it cannot block a restart."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False   # held by a live process
+
+
+def _unlock_fd(fd: int) -> None:
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+            os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except OSError:
+        pass   # closing the fd releases it regardless
+
+
+def _read_holder_pid(fd: int) -> str:
+    """The PID recorded in the lock file — for the operator message only."""
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        return os.read(fd, _PID_FIELD_WIDTH).decode("ascii", "replace").strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 def acquire_instance_lock(lock_port: int = _LOCK_PORT) -> tuple[bool, str]:
     """
     Attempt to acquire the single-instance lock.
 
-    FIX-081: Binds a persistent socket to `lock_port` (default 5001) and holds
-    it open for the entire process lifetime. If binding fails, another instance
-    is running. Eliminates TOCTOU race between check and Flask startup.
+    Layer 1 (X5, authoritative): an OS-owned exclusive lock on _LOCK_FILE, held
+    for the process lifetime. A second concurrent start cannot take it; a dead
+    instance cannot keep it.
+
+    Layer 2 (FIX-081): a persistent socket bound to `lock_port`, also held for
+    the process lifetime, which additionally reserves the port itself.
 
     Args:
         lock_port: TCP port to bind as the lock socket (default 5001, configurable
@@ -62,32 +145,43 @@ def acquire_instance_lock(lock_port: int = _LOCK_PORT) -> tuple[bool, str]:
         (True, "") on success — lock acquired, caller proceeds.
         (False, reason) if another instance is running or lock failed.
     """
-    global _lock_socket
+    global _lock_socket, _lock_fd
 
-    # Step 1: Check PID lock file
-    if _LOCK_FILE.exists():
-        try:
-            existing_pid = int(_LOCK_FILE.read_text().strip())
-        except (ValueError, OSError):
-            _LOCK_FILE.unlink(missing_ok=True)
-        else:
-            if _pid_is_alive(existing_pid):
-                return False, (
-                    f"Another instance running (PID {existing_pid}, lock={_LOCK_FILE}). "
-                    f"Kill it first: kill {existing_pid}"
-                )
-            _LOCK_FILE.unlink(missing_ok=True)
-
-    # Step 2: Write PID lock file
+    # Step 1: OS-owned file lock (authoritative single-instance guard).
     try:
-        _LOCK_FILE.write_text(str(os.getpid()))
+        fd = os.open(str(_LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o644)
     except OSError as exc:
-        return False, f"Cannot write lock file {_LOCK_FILE}: {exc}"
+        # Fail CLOSED, as before: if the guard cannot run, do not trade.
+        return False, f"Cannot open lock file {_LOCK_FILE}: {exc}"
 
-    # Step 3: FIX-081 — Bind persistent socket lock
+    if not _lock_fd_exclusive(fd):
+        holder = _read_holder_pid(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        return False, (
+            f"Another instance is running (PID {holder}, lock={_LOCK_FILE}). "
+            f"Kill it first: kill {holder}"
+        )
+
+    # Record our PID for the operator message. Fixed-width and never truncated:
+    # truncation would drop the locked byte at _LOCK_BYTE_OFFSET on Windows.
+    try:
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, str(os.getpid()).ljust(_PID_FIELD_WIDTH).encode("ascii"))
+    except OSError:
+        pass   # informational only — never fail an acquired lock over this
+
+    _lock_fd = fd   # keep open: closing it would release the lock
+
+    # Step 2: FIX-081 — bind persistent socket lock.
     try:
         _lock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _lock_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            # Windows SO_REUSEADDR lets a second socket bind a LISTENING port;
+            # SO_EXCLUSIVEADDRUSE restores the semantics Linux gives by default.
+            _lock_socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         _lock_socket.bind(("127.0.0.1", lock_port))
         # listen(1) minimal backlog; we never accept() on this socket
         _lock_socket.listen(1)
@@ -99,7 +193,7 @@ def acquire_instance_lock(lock_port: int = _LOCK_PORT) -> tuple[bool, str]:
             except Exception:  # FIX-106: Don't suppress KeyboardInterrupt/SystemExit
                 pass
             _lock_socket = None
-        _LOCK_FILE.unlink(missing_ok=True)  # Clean up PID file
+        _release_file_lock()   # do not hold layer 1 after refusing the start
         return False, (
             f"Port {lock_port} already in use (another instance running). "
             f"Original error: {exc}"
@@ -108,11 +202,28 @@ def acquire_instance_lock(lock_port: int = _LOCK_PORT) -> tuple[bool, str]:
     return True, ""
 
 
+def _release_file_lock() -> None:
+    """Drop the OS lock. The file itself is deliberately left in place: the lock
+    is on the inode, and unlinking a path another instance already holds would
+    let the next start lock a fresh inode and run alongside it."""
+    global _lock_fd
+    if _lock_fd is None:
+        return
+    _unlock_fd(_lock_fd)
+    try:
+        os.close(_lock_fd)
+    except OSError:
+        pass
+    _lock_fd = None
+
+
 def release_instance_lock() -> None:
     """
-    Remove the lock file and close the lock socket on clean shutdown.
+    Release both lock layers on clean shutdown.
 
-    FIX-081: Closes the persistent socket lock so the port is released.
+    Correctness does not depend on this running: the kernel drops the file lock
+    and the OS reclaims the socket when the process dies by any means. This
+    releases them promptly so an immediate restart need not wait.
     """
     global _lock_socket
 
@@ -124,14 +235,7 @@ def release_instance_lock() -> None:
             pass
         _lock_socket = None
 
-    # Remove PID lock file
-    try:
-        if _LOCK_FILE.exists():
-            pid_in_file = int(_LOCK_FILE.read_text().strip())
-            if pid_in_file == os.getpid():
-                _LOCK_FILE.unlink(missing_ok=True)
-    except (ValueError, OSError):
-        pass
+    _release_file_lock()
 
 
 def check_port_available(port: int, host: str = "127.0.0.1") -> tuple[bool, str]:
