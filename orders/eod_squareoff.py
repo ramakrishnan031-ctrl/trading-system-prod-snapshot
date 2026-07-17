@@ -650,7 +650,19 @@ class EodSquareoff:
             )
             return
 
-        body = self._format_summary_body(closed, human_symbols, log=self._log)
+        # Route the per-strategy 🟢/🔴 grouping to the CANONICAL direction
+        # (StrategyConfig.direction) instead of a majority-vote over realized sides.
+        # Built HERE (the caller does I/O) so _format_summary_body stays PURE; fail-safe
+        # → an empty map falls the body back to the vote (byte-identical behaviour).
+        try:
+            from core.strategy_direction import build_direction_map
+            direction_map = build_direction_map("config")
+        except Exception as exc:  # noqa: BLE001
+            self._log.debug("EOD summary: direction map unavailable (%s); using vote", exc)
+            direction_map = {}
+
+        body = self._format_summary_body(closed, human_symbols, log=self._log,
+                                         direction_map=direction_map)
         self._notifier.send(
             severity="INFO",
             title=f"[{self._mode}] 📊 DAILY SUMMARY — {date_str}",
@@ -663,12 +675,16 @@ class EodSquareoff:
         closed: list[dict],
         human_symbols: list[str],
         log: "logging.Logger | None" = None,
+        direction_map: "dict | None" = None,
     ) -> str:
         """Build the redesigned EOD DAILY SUMMARY body from closed trades.
 
         PURE (no I/O) so it is unit-testable and render-able offline against
         real trade rows. `closed` is the list of trades in
         _SUMMARY_CLOSED_STATUSES; `human_symbols` are today's untracked symbols.
+        `direction_map` (optional {strategy: LONG|SHORT}, canonical StrategyConfig
+        .direction) drives the per-strategy 🟢/🔴 grouping; None/empty → the legacy
+        majority-vote over realized sides (byte-identical), keeping this function pure.
 
         Layout (29-Jun redesign):
             P&L | Win rate
@@ -743,7 +759,12 @@ class EodSquareoff:
                 e["wins"] += 1
             e["pnl"] += npnl(t)
 
-        def _strat_dir(e: dict) -> str:
+        def _strat_dir(name: str, e: dict) -> str:
+            # Canonical StrategyConfig.direction when known; else the legacy majority
+            # vote over realized trade sides (byte-identical to pre-registry behaviour).
+            d = (direction_map or {}).get(name)
+            if d in ("LONG", "SHORT"):
+                return d
             n_long = sum(1 for t in e["trades"] if disp(t) == "LONG")
             return "LONG" if n_long * 2 >= len(e["trades"]) else "SHORT"
 
@@ -776,12 +797,12 @@ class EodSquareoff:
         # 🟢 long strategies first, then 🔴 short; each ordered by P&L desc.
         ordered = sorted(
             strat_stats.items(),
-            key=lambda kv: (0 if _strat_dir(kv[1]) == "LONG" else 1, -kv[1]["pnl"]),
+            key=lambda kv: (0 if _strat_dir(kv[0], kv[1]) == "LONG" else 1, -kv[1]["pnl"]),
         )
         for name, e in ordered:
             n = len(e["trades"])
             s_wr = (e["wins"] / n * 100.0) if n else 0.0
-            emoji = "🟢" if _strat_dir(e) == "LONG" else "🔴"
+            emoji = "🟢" if _strat_dir(name, e) == "LONG" else "🔴"
             lines.append(f"{emoji} {name}  {n}T {s_wr:.0f}%WR  {_money(e['pnl'])}")
             for t in e["trades"]:
                 ep = EodSquareoff._summary_entry_px(t)

@@ -29,10 +29,16 @@ _STALE_WARN_SEC = 30 * 60
 _STALE_RED_SEC = 2 * 60 * 60
 
 
-def _family_of(name: str) -> str:
-    """UI grouping key (G5b): base strategy name without the direction suffix
-    (gap_fade_long → gap_fade). Pure; no config dependency."""
-    for suf in ("_long", "_short"):
+def _family_of(name: str, direction: str | None = None) -> str:
+    """UI grouping key (G5b): base strategy name without its direction token
+    (gap_fade_long → gap_fade). Uses the STRUCTURED direction (StrategyConfig.direction,
+    surfaced as basic.direction) to decide the token to strip — NOT a blind `_long`/
+    `_short` suffix parse (retired 17-Jul-2026). Behaviour-identical for the current
+    naming (LONG↔`_long`, SHORT↔`_short`); a strategy whose direction is unknown simply
+    groups under its own full name. Pure; no config dependency beyond the passed value."""
+    d = str(direction or "").strip().upper()
+    if d in ("LONG", "SHORT"):
+        suf = "_" + d.lower()
         if name.endswith(suf):
             return name[: -len(suf)]
     return name
@@ -282,7 +288,7 @@ def build_strategy_tower(cfg: dict, today: Optional[str] = None, now=None) -> di
                 "success_rate": success_rate if success_rate is not None else -1.0,
             },
             "success_rate": success_rate,
-            "family": _family_of(name),                          # G5b: UI grouping
+            "family": _family_of(name, conf.get("direction")),  # G5b: UI grouping (canonical direction, not name-parse)
             "sl_tgt_hits": sltgt.get(name, {"sl_hits": 0, "tgt_hits": 0}),  # G5b (additive)
         })
 
