@@ -36,10 +36,78 @@ from core.time_authority import today_ist  # noqa: E402 — needs the sys.path b
 TOKEN_PATH  = ROOT / "data_store" / "session" / "zerodha_token.json"
 OUTPUT_DIR  = ROOT / "data_store" / "candles"
 DB_PATH     = ROOT / "data_store" / "trading_system.db"
+INDEX_UNIVERSE_PATH = ROOT / "config" / "index_universe.yaml"
 
 # C-1 (02-Jul): api_key read from env (.env), NEVER hardcoded — survives a future
 # api_key rotation (Rama updates .env; no code change) and never re-exposes a secret.
 API_KEY = os.environ.get("ZERODHA_API_KEY_LFL836", "")
+
+
+def _load_index_universe() -> list[str]:
+    """Regime Phase 0: the index tradingsymbols to ingest (config/index_universe.yaml).
+
+    Data-driven — adding a sector index is a config edit, no code change. Missing or
+    unreadable config returns [] (fail-safe: no indices fetched, stock path untouched).
+    """
+    if not INDEX_UNIVERSE_PATH.exists():
+        return []
+    try:
+        import yaml
+        with open(INDEX_UNIVERSE_PATH, encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        names = data.get("indices", []) or []
+        return [str(n).strip() for n in names if str(n).strip()]
+    except Exception as e:
+        print(f"  [index] WARNING: could not read {INDEX_UNIVERSE_PATH.name}: {e}")
+        return []
+
+
+def _fetch_indices(trade_date: str, kite, inst_map: dict) -> None:
+    """Regime Phase 0: fetch 1-min candles for the configured index universe and store
+    them in the candles DB table (reusing _insert_into_candles_db).
+
+    DATA ONLY — no regime is computed here. Indices are NOT written to the traded-stock
+    CSV (they are not traded symbols; the daily report keys candles by trade symbol, so
+    index rows would be dead keys there). FAIL-SAFE by construction: a missing token or a
+    failed fetch logs and continues; this function never raises, so it can never break the
+    stock-candle ingestion below or the caller. Index instruments carry no volume
+    (historical_data returns volume=0); the candles.volume column DEFAULT 0 handles it.
+    """
+    indices = _load_index_universe()
+    if not indices:
+        return
+    from_dt = datetime.strptime(trade_date, "%Y-%m-%d").replace(hour=9, minute=15)
+    to_dt   = datetime.strptime(trade_date, "%Y-%m-%d").replace(hour=15, minute=31)
+    rows: list[dict] = []
+    ok = 0
+    for name in indices:
+        token = inst_map.get(name)
+        if not token:
+            print(f"    [index] {name:<20} — NOT FOUND in NSE instruments (skipped)")
+            continue
+        try:
+            candles = kite.historical_data(
+                instrument_token=token, from_date=from_dt, to_date=to_dt,
+                interval="minute",
+            )
+            for c in (candles or []):
+                rows.append({
+                    "symbol":   name,
+                    "datetime": c["date"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "open":     c["open"], "high": c["high"],
+                    "low":      c["low"],  "close": c["close"],
+                    "volume":   c.get("volume", 0) or 0,
+                })
+            print(f"    [index] {name:<20} — {len(candles or [])} candles")
+            ok += 1
+        except Exception as e:  # fail-safe: never let an index fetch break stock ingestion
+            print(f"    [index] {name:<20} — ERROR: {e}")
+        time.sleep(0.35)
+    if rows:
+        _insert_into_candles_db(rows, inst_map)
+        print(f"  {trade_date}: {len(rows)} INDEX candle rows stored ({ok}/{len(indices)} indices)")
+    else:
+        print(f"  {trade_date}: no index candle rows fetched ({ok}/{len(indices)} indices)")
 
 
 def _get_traded_symbols(date_iso: str) -> list[str]:
@@ -84,9 +152,14 @@ def _trading_days_in_range(start: str, end: str) -> list[str]:
 
 def _fetch_single_day(trade_date: str, kite, inst_map: dict) -> None:
     """Fetch candles for a single trading day and store to CSV + DB."""
+    # Regime Phase 0: ingest the index universe FIRST and independently of traded stocks —
+    # the regime needs NIFTY every session, including days with no trades. Fail-safe (never
+    # raises), so the traded-stock path below is reached and behaves exactly as before.
+    _fetch_indices(trade_date, kite, inst_map)
+
     symbols = _get_traded_symbols(trade_date)
     if not symbols:
-        print(f"  {trade_date}: No PROCESSED signals — skipping.")
+        print(f"  {trade_date}: No PROCESSED signals — skipping stock candles.")
         return
     print(f"  {trade_date}: {len(symbols)} symbols")
 

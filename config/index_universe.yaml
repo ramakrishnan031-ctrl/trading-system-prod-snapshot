@@ -1,0 +1,28 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# index_universe.yaml — index instruments ingested for the regime-ranking feature
+# (Phase 0, 17-Jul-2026). DATA ONLY — no regime is computed from these yet.
+#
+# Each entry is a Kite tradingsymbol; scripts/fetch_daily_candles.py resolves it to
+# an instrument_token at fetch time from kite.instruments("NSE") (segment INDICES).
+# Adding or removing a sector index here needs NO code change.
+#
+# Tokens (confirmed live 17-Jul-2026, for reference only — resolution is by name):
+#   NIFTY 50=256265 · NIFTY BANK=260105 · NIFTY IT=259849 · NIFTY AUTO=263433
+#   NIFTY PHARMA=262409 · NIFTY FMCG=261897 · NIFTY METAL=263689
+#   NIFTY ENERGY=261641 · NIFTY FIN SERVICE=257801 · INDIA VIX=264969
+#
+# Indices carry NO volume on the index itself (historical_data returns volume=0);
+# the candles table stores them fine (volume column DEFAULT 0). The regime only
+# needs OHLC (the 09:15-10:00 window).
+# ═════════════════════════════════════════════════════════════════════════════
+indices:
+  - "NIFTY 50"           # the primary regime driver (Phase 1 uses its 09:15-10:00 move)
+  - "NIFTY BANK"
+  - "NIFTY IT"
+  - "NIFTY AUTO"
+  - "NIFTY PHARMA"
+  - "NIFTY FMCG"
+  - "NIFTY METAL"
+  - "NIFTY ENERGY"
+  - "NIFTY FIN SERVICE"
+  - "INDIA VIX"          # volatility gauge (Phase 4 secondary factor)
