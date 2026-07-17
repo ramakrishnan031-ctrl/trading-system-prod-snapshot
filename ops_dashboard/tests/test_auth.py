@@ -55,18 +55,42 @@ def test_authenticate_empty_secret_refuses_but_flag_allows():
     assert ok is True and err is None
 
 
-def test_lockout():
+def test_throttle_replaces_the_lockout():
+    """S3 (2026-07-17) — DELIBERATE CONTRACT INVERSION.
+
+    This test previously asserted the lockout: 5 failures -> is_locked() True for
+    900s. That behaviour WAS the bug (AB-910 §1.2): keyed on the submitted
+    username, anyone who knew Rama's username could lock him out of his own
+    dashboard for 15 minutes, repeatably. The control handed an attacker a
+    denial-of-service against the only operator.
+
+    The contract is now: NOTHING ever locks. Failures earn an exponential, capped
+    DELAY on the failed response (slowing brute force), and correct credentials
+    always authenticate. The old assertions are inverted deliberately rather than
+    deleted, so the change of contract is explicit in the history.
+
+    Full coverage of the new behaviour: tests/test_s3_login_throttle.py.
+    """
     tr = auth.LoginAttemptTracker(max_failures=5, lockout_seconds=900)
     t0 = 1000.0
     for _ in range(5):
-        assert tr.is_locked("u", now=t0) is False
         tr.record_failure("u", now=t0)
-    assert tr.is_locked("u", now=t0) is True
-    assert tr.seconds_remaining("u", now=t0) == 900
-    # cooldown elapsed → unlocked and reset
-    assert tr.is_locked("u", now=t0 + 901) is False
-    tr.record_success("u")
+
+    # No lockout exists any more — not after 5, not after 100.
     assert tr.is_locked("u", now=t0) is False
+    assert tr.seconds_remaining("u", now=t0) == 0
+    for _ in range(95):
+        tr.record_failure("u", now=t0)
+    assert tr.is_locked("u", now=t0) is False
+
+    # Brute force is slowed instead: a capped, growing delay on FAILURES.
+    assert tr.throttle_delay("u", now=t0) == tr.throttle_max_seconds
+
+    # A quiet period decays the streak; success clears it outright.
+    assert tr.throttle_delay("u", now=t0 + 901) == 0.0
+    tr.record_success("u")
+    assert tr.failure_count("u", now=t0) == 0
+    assert tr.throttle_delay("u", now=t0) == 0.0
 
 
 def test_authenticate_flow():
