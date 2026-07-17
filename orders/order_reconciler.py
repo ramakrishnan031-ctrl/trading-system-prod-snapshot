@@ -1112,12 +1112,17 @@ class OrderReconciler:
             # Was hardcoded 0.0 (no CostCalculator was ever wired here), which
             # made these rows the only GROSS ones in fm_ledger. Fails open to
             # 0.0 (loudly) — never block a capital release.
+            # `product` is non-empty here by construction: intent is derived
+            # from it above and an unmapped product yields a falsy intent, which
+            # this branch already excludes. Passed through as-is — NOT defaulted
+            # to MIS: an unexpected product must fail OPEN and loudly, never be
+            # silently costed at the wrong product's rates.
             charges = round_trip_costs_or_zero(
                 self._cost_calculator,
                 qty=qty,
                 entry_price=float(entry_price),
                 exit_price=float(exit_price),
-                product=product or "MIS",
+                product=product,
                 logger=log,
                 context=f"check1 trade_id={trade_id}",
             )
@@ -1835,6 +1840,11 @@ class OrderReconciler:
         release_used(exit_qty=closed_qty), freeing the closed portion's margin and
         booking its PnL into fm_ledger/daily_realized.
 
+        E4 (2026-07-17): that PnL is now NET — the closed slice is costed with the
+        shared CostCalculator (was costs=0.0, which made these rows gross while
+        every other row was net). The costs are for the CLOSED SLICE only; the
+        remainder is costed when it closes.
+
         Exactly-once via a qty_filled CAS (``WHERE qty_filled=local_qty``): only the
         cycle that actually observes the local->broker transition performs the
         release, so a re-detected same-delta cycle (or a crash between the release
@@ -1928,7 +1938,7 @@ class OrderReconciler:
                     qty=int(closed_qty),
                     entry_price=float(entry_price),
                     exit_price=float(exit_price),
-                    product=product or "MIS",
+                    product=product,   # as-is; never defaulted (see CHECK1)
                     logger=log,
                     context=f"check4_partial trade_id={trade_id}",
                 )

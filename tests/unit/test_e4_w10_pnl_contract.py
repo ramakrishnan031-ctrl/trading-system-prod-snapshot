@@ -567,6 +567,24 @@ def test_cost_calc_failure_fails_open_and_does_not_block_the_release(caplog):
     assert "cost_calc_failed" in caplog.text
 
 
+def test_unsupported_product_fails_open_rather_than_mis_costing(caplog):
+    """An unexpected product must fail OPEN + loudly, never be silently costed
+    at another product's rates.
+
+    CostCalculator accepts MIS/CO/CNC and raises on anything else. product_map
+    only ever emits MIS/CNC/CO, so NRML (present in PRODUCT_TO_INTENT purely as
+    a defensive reverse-mapping) is unreachable on these paths today — pinned
+    here so that if it ever becomes reachable it is loud, not silently wrong.
+    """
+    with caplog.at_level(logging.ERROR):
+        got = round_trip_costs_or_zero(
+            _cost_calculator(), qty=_QTY, entry_price=_PRICE, exit_price=2450.0,
+            product="NRML", logger=logging.getLogger("t_cc"), context="unit",
+        )
+    assert got == 0.0
+    assert "cost_calc_failed" in caplog.text
+
+
 def test_unwired_calculator_degrades_loudly(caplog):
     """A None calculator (an un-updated construction site) must not crash — it
     degrades to the pre-E4 behaviour and is loudly attributable, so a missing
