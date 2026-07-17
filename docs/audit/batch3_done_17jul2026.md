@@ -278,6 +278,51 @@ Per-item RED-on-old evidence is in each section above; both were proven on the *
 pre-change tree (`git checkout HEAD -- <file>` + grep-confirm absent + check rc — never
 `git stash`, which misses committed work).
 
-## Deploy
+## Deploy — verified, `PC == VM == bare == 1d3b540`
 
-_(filled in below after deploy)_
+Tag **`deploy-17jul-batch3` → `65cd7df`** = the code identity and the rollback anchor.
+Code-identity gate `git diff --name-only deploy-17jul-batch3..HEAD` = **markdown only**.
+
+Fresh pre-deploy backup: `data_store/backups/pre_deploy_batch3_20260717_140208.db`
+(357 MB, `integrity_check=ok`, schema v44, 361 trades).
+
+| Gate | Result |
+|---|---|
+| bare HEAD == local HEAD | `1d3b540` == `1d3b540` ✅ |
+| schema | live **v44** == `EXPECTED_SCHEMA_VERSION = 44` → **no migration** ✅ |
+| `integrity_check` | `ok` ✅ |
+| `foreign_key_check` | empty ✅ |
+| services | `trading-system=inactive` (down by design today) · `token-watcher=active` · `alert-watcher=active` ✅ |
+| crontab | unchanged — **no cron/config/schema file in the whole diff** ✅ |
+| X7 present in deployed tree | `broker_order_id` ×6 in `slippage_recorder.py` ✅ |
+| X5 present in deployed tree | OS-lock ×3 in `instance_lock.py` ✅ |
+
+Everything batch-3 touched, in full: `orders/slippage_recorder.py`, `utils/instance_lock.py`,
+their two test files, and two markdown files. No trading-path file, no config, no schema.
+
+### The SO_REUSEADDR grep is a trap — verified by behaviour instead
+
+`grep -c SO_REUSEADDR utils/instance_lock.py` on the deployed tree returns **3**, not 0. All
+three are *comments* (lines 26, 30, 182 — the docstring recording the measurement, and the
+line explaining why Windows needs `SO_EXCLUSIVEADDRUSE`). `grep -E "setsockopt\(.*SO_REUSEADDR"`
+returns nothing: the call is gone. This is the same failure mode as the old test that greps
+`inspect.getsource()` for `"bind("`, and it is why the test asserts the **live socket** instead.
+Runtime proof on the deployed tree:
+
+```
+acquired=True   SO_REUSEADDR on live socket=0   OS lock fd held=True
+released cleanly; re-acquire works=True
+```
+
+### Takes effect
+
+X7 records on the next fill; X5 applies at the **next boot**. The system is down today and was
+**not** started to apply either. The 08:15 boot picks both up.
+
+**Post-deploy watch (X7):** the first fill after the next session should write an
+`order_execution_log` row with a **non-NULL `parent_trade_id`**, a **real `leg`** (SL/TGT rows
+should now appear, not 100% ENTRY), and a non-NULL `order_timestamp`; the GUI per-trade
+execution drill-down should stop being empty.
+
+**Rollback:** revert the two code commits (`fd77f80`, `65cd7df`) or reset to `9be3902`.
+Schema-free either way; nothing to undo in the DB.
