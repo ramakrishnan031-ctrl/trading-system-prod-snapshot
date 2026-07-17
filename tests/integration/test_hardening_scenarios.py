@@ -18,6 +18,13 @@ Why these three here (and not the other two):
     in prod (shadow_tracker.enabled=true; EntryGate pullback path active).
   * M-S2 (QUEUE_FULL no longer poisons dedup): driven through the real WebhookReceiver
     Flask endpoint + real StateStore with a controlled small queue. LIVE in prod.
+  * S4 boot fix (an authenticated /health must still let the system boot): added
+    17-Jul-2026 after S4 halted production. Both sides' unit tests were green and
+    correct — /health 401s anonymous callers, and 2xx means reachable — yet the system
+    could not boot, because nothing owned the SEAM between them. Only a wired test can
+    own it, and only if the receiver is built the way prod is CONFIGURED: with a secret.
+    Every other wired case here passes secret_token=None, which is precisely why the
+    401 that took prod down cannot occur anywhere else in this suite.
 
 Deliberately NOT duplicated here (their deterministic coverage already lives at
 real-component level, and a wired copy would add maintenance surface without new
@@ -55,6 +62,7 @@ from core.market_windows import MarketWindows
 from orders.shadow_tracker import Inning, ShadowTracker
 from screening.entry_gate import WatchEntry
 from signals.webhook_receiver import WebhookReceiver
+from utils.startup_checks import check_webhook_endpoint
 
 from tests.integration.conftest import (
     MOCK_TRIGGERED_AT,
@@ -272,3 +280,52 @@ class TestMs2QueueFullRecoveryWired:
         assert rows[0]["signal_id"] == row["signal_id"], "retry must reuse the QUEUE_FULL row's signal_id"
         # The recovered signal is now actually in the queue.
         assert tiny_q.qsize() == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S4 boot fix — the REAL authenticated /health wired to the REAL boot self-check.
+#   This is the seam that halted the system on 17-Jul-2026: S4's own unit tests
+#   (/health 401s anonymous callers) and the boot check's unit tests (2xx ->
+#   reachable) were BOTH green and BOTH correct, and the system still could not
+#   boot. Nothing owned the join between them, so nothing tested it.
+#
+#   It stayed invisible because every wired fixture builds the receiver with
+#   secret_token=None -- so S4's `if receiver._secret:` branch never runs in the
+#   suite, and the 401 that broke production literally cannot occur. This test is
+#   the one place that constructs the receiver the way PROD is configured.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestS4AuthenticatedHealthStillBootsWired:
+
+    def test_boot_self_check_passes_against_authenticated_health(self, wired_system):
+        """A secret IS configured (as in prod), so the unauthenticated boot self-check
+        gets 401 -- and that must still count as "Flask is listening", because that is the
+        only thing the check exists to prove. RED before the fix: reachable=False ->
+        main.py:3242 fires _shutdown_event -> the system halts at boot and trades nothing
+        (17-Jul-2026: 0 trades on a live trading day, first boot after S4 shipped)."""
+        ctx = wired_system
+
+        receiver = WebhookReceiver(
+            queue.Queue(maxsize=10), ctx.store, _make_webhook_config([SCANNER_NAME]),
+            MarketWindows(holidays=set()), ctx.kill_switch, _logger("wh_s4"),
+            secret_token="a-prod-like-secret",   # <-- the whole point; prod has one
+        )
+
+        # Drive the REAL /health exactly as main.py:3238 does: no token, no signature.
+        with receiver.app.test_client() as client:
+            resp = client.get("/health")
+
+        # S4 itself is working as designed -- an anonymous caller is still denied.
+        assert resp.status_code == 401, "S4 must keep denying anonymous /health callers"
+
+        # ...and the REAL boot self-check must nonetheless call that reachable.
+        result = check_webhook_endpoint(
+            "http://127.0.0.1:5000/health",
+            lambda url, timeout: (resp.status_code, resp.get_data(as_text=True)),
+            _logger("s4_boot"),
+        )
+        assert result.reachable is True, (
+            "main.py:3240-3242 fires _shutdown_event when this is False -- the system "
+            "halts at boot and trades nothing"
+        )
+        assert result.status_code == 401

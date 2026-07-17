@@ -765,6 +765,41 @@ def test_webhook_returns_body(tmp_path: Path) -> None:
     print("  OK webhook_endpoint: response_body populated")
 
 
+def test_webhook_401_is_reachable(tmp_path: Path) -> None:
+    """S4 boot fix: 401 -> reachable=True (SC8).
+
+    AB-910 §1.7 put /health behind the webhook secret, but main.py's post-start
+    self-check calls it unauthenticated by design, so 401 is the EXPECTED answer and it
+    proves Flask is listening -- the only thing this check exists to prove. RED before
+    the fix: 401 was treated as unreachable, main.py fired _shutdown_event, and the
+    system halted at boot (17-Jul-2026: 0 trades on a live trading day).
+    """
+    log = _CapturingLogger()
+    result = check_webhook_endpoint(
+        "http://localhost:5000/health",
+        lambda url, timeout: (401, '{"error": "authentication required"}'),
+        log,
+    )
+    assert result.reachable is True, \
+        "401 means /health answered AND its auth works -- Flask is demonstrably listening"
+    assert result.status_code == 401
+    print("  OK webhook_endpoint: 401 -> reachable (authenticated /health)")
+
+
+def test_webhook_still_unreachable_on_server_error(tmp_path: Path) -> None:
+    """The 401 allowance must NOT weaken the check: a genuinely broken or absent
+    endpoint still halts the boot (SC8)."""
+    log = _CapturingLogger()
+    for code in (500, 502, 404, 429):
+        result = check_webhook_endpoint(
+            "http://localhost:5000/health",
+            lambda url, timeout, c=code: (c, "boom"),
+            log,
+        )
+        assert result.reachable is False, f"status {code} must NOT count as reachable"
+    print("  OK webhook_endpoint: 5xx/404/429 still unreachable")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # check_config_files_present tests (SC9)
 # ─────────────────────────────────────────────────────────────────────────────

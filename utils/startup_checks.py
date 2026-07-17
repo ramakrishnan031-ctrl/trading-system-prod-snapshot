@@ -791,10 +791,22 @@ def check_webhook_endpoint(
 
     Called by main.py AFTER starting the Flask webhook receiver, to confirm
     Flask is listening. Equivalent to `curl http://localhost:5000/health`.
+
+    "Reachable" means the server ANSWERED — 401 counts (see below).
     """
     try:
         status_code, body = http_fetcher_fn(webhook_url, timeout_sec)
-        reachable = status_code is not None and 200 <= status_code < 300
+        # AB-910 §1.7 (S4, 84cee3e) put /health behind the webhook secret, and this
+        # in-process self-check calls it UNAUTHENTICATED by design (main.py:3238) --
+        # passing the token would put the secret into a URL that main.py:3241 logs on
+        # failure, which is exactly the token-at-rest leak the 17-Jul sweep just closed.
+        # So a 401 is an EXPECTED answer here, and it proves the one thing this check
+        # exists to prove: Flask is listening. Treating it as unreachable made main.py
+        # fire _shutdown_event and halt the whole system at boot (17-Jul: 0 trades on a
+        # live trading day). Anything else -- 5xx, 404, no answer -- is still a failure.
+        reachable = status_code is not None and (
+            200 <= status_code < 300 or status_code == 401
+        )
         if not reachable:
             logger.warning(
                 "check_webhook: endpoint %s returned status %s",
