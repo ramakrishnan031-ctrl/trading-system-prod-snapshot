@@ -289,27 +289,24 @@ class TestMs2QueueFullRecoveryWired:
 #   reachable) were BOTH green and BOTH correct, and the system still could not
 #   boot. Nothing owned the join between them, so nothing tested it.
 #
-#   It stayed invisible because every wired fixture builds the receiver with
-#   secret_token=None -- so S4's `if receiver._secret:` branch never runs in the
-#   suite, and the 401 that broke production literally cannot occur. This test is
-#   the one place that constructs the receiver the way PROD is configured.
+#   It stayed invisible because the DEFAULT wired fixture (wired_system) builds the
+#   receiver with secret_token=None -- so S4's `if receiver._secret:` branch never runs
+#   on that path, and the 401 that broke production cannot occur there. P2 (17-Jul) added
+#   `wired_system_authenticated` (conftest.py) — the receiver built the way PROD is
+#   configured — so this test drives the real wired receiver instead of hand-building one.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestS4AuthenticatedHealthStillBootsWired:
 
-    def test_boot_self_check_passes_against_authenticated_health(self, wired_system):
+    def test_boot_self_check_passes_against_authenticated_health(self, wired_system_authenticated):
         """A secret IS configured (as in prod), so the unauthenticated boot self-check
         gets 401 -- and that must still count as "Flask is listening", because that is the
         only thing the check exists to prove. RED before the fix: reachable=False ->
         main.py:3242 fires _shutdown_event -> the system halts at boot and trades nothing
         (17-Jul-2026: 0 trades on a live trading day, first boot after S4 shipped)."""
-        ctx = wired_system
-
-        receiver = WebhookReceiver(
-            queue.Queue(maxsize=10), ctx.store, _make_webhook_config([SCANNER_NAME]),
-            MarketWindows(holidays=set()), ctx.kill_switch, _logger("wh_s4"),
-            secret_token="a-prod-like-secret",   # <-- the whole point; prod has one
-        )
+        ctx = wired_system_authenticated
+        receiver = ctx.receiver   # P2: built WITH a prod-like secret by the fixture
+        assert ctx.webhook_secret, "fixture must configure a secret (auth ON)"
 
         # Drive the REAL /health exactly as main.py:3238 does: no token, no signature.
         with receiver.app.test_client() as client:

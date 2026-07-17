@@ -141,27 +141,28 @@ class SystemContext:
     order_placer: OrderPlacer
     order_manager: OrderManager
     state_machine: OrderStateMachine
+    # P2 (17-Jul-2026): the secret the receiver was built with (None = open, the
+    # default wired_system posture). wired_system_authenticated sets this so a test
+    # can drive the receiver configured the way prod is, and can sign requests with it.
+    webhook_secret: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
 # wired_system fixture
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def wired_system(request, tmp_path):
-    """
-    Full paper-mode system wired in a temp SQLite DB.
+# P2: the prod-like secret the authenticated wired system is built with. A test that
+# wants an auth-ON receiver uses `wired_system_authenticated` and reads ctx.webhook_secret.
+_PROD_LIKE_WEBHOOK_SECRET = "a-prod-like-secret"
 
-    Lifecycle: patches applied → signal_processor.start() → yield ctx →
-               signal_processor.stop() → patches removed → store closed.
+def _build_wired_system(request, tmp_path, webhook_secret):
+    """Shared builder for wired_system and wired_system_authenticated.
 
-    Indirect parametrization (A.3.g): tests can override adapter behavior via
-    ``@pytest.mark.parametrize("wired_system", [{...}], indirect=True)``.
-    Supported keys:
-        paper_auto_fill_delay_sec (float, default 0.05): ZerodhaAdapter's
-            ZA16a synth delay. The Phase A exit-gate test uses 60.0 to
-            suppress the synth thread so it can publish OrderFilled
-            deterministically itself (avoids thread-scheduling races).
+    A generator (not a fixture) so both fixtures can delegate to it with
+    ``yield from`` and share one body. ``webhook_secret`` is the only difference:
+    None → the open receiver (legacy default); a string → an auth-ON receiver built
+    the way prod is configured. Teardown is in a finally so it runs on the yield-from
+    path (GeneratorExit at close) exactly as it did for the plain fixture.
     """
     _param = getattr(request, "param", None) or {}
     _paper_auto_fill_delay_sec = float(
@@ -329,7 +330,7 @@ def wired_system(request, tmp_path):
         market_windows=market_windows,
         kill_switch=kill_switch,
         logger=_logger("wh"),
-        secret_token=None,
+        secret_token=webhook_secret,
     )
 
     # ── Time patching ─────────────────────────────────────────────────────────
@@ -362,12 +363,51 @@ def wired_system(request, tmp_path):
         order_placer=order_placer,
         order_manager=order_manager,
         state_machine=state_machine,
+        webhook_secret=webhook_secret,
     )
 
-    yield ctx
+    try:
+        yield ctx
+    finally:
+        # ── Teardown ─────────────────────────────────────────────────────────
+        signal_processor.stop()
+        for p in _patches:
+            p.stop()
+        store.close()
 
-    # ── Teardown ─────────────────────────────────────────────────────────────
-    signal_processor.stop()
-    for p in _patches:
-        p.stop()
-    store.close()
+
+@pytest.fixture
+def wired_system(request, tmp_path):
+    """
+    Full paper-mode system wired in a temp SQLite DB, open receiver (secret=None).
+
+    Lifecycle: patches applied → signal_processor.start() → yield ctx →
+               signal_processor.stop() → patches removed → store closed.
+
+    Indirect parametrization (A.3.g): tests can override adapter behavior via
+    ``@pytest.mark.parametrize("wired_system", [{...}], indirect=True)``.
+    Supported keys:
+        paper_auto_fill_delay_sec (float, default 0.05): ZerodhaAdapter's
+            ZA16a synth delay. The Phase A exit-gate test uses 60.0 to
+            suppress the synth thread so it can publish OrderFilled
+            deterministically itself (avoids thread-scheduling races).
+    """
+    yield from _build_wired_system(request, tmp_path, webhook_secret=None)
+
+
+@pytest.fixture
+def wired_system_authenticated(request, tmp_path):
+    """P2 (17-Jul-2026): wired_system, but the receiver is built WITH a prod-like
+    webhook secret (auth ON) — the shape prod is configured in (.env carries
+    WEBHOOK_SECRET). The S4 boot-seam test uses this instead of hand-building its own
+    receiver, so the one place that proves 'an authenticated /health still lets the
+    system boot' runs against the real wired stack. Read ctx.webhook_secret to sign.
+
+    Every other wired test uses `wired_system` (secret=None) — see the note in
+    test_hardening_scenarios.py: that open default is exactly why the 401 that took
+    prod down on 17-Jul cannot occur in those cases, which is what makes this
+    dedicated auth-ON sibling necessary.
+    """
+    yield from _build_wired_system(
+        request, tmp_path, webhook_secret=_PROD_LIKE_WEBHOOK_SECRET
+    )
