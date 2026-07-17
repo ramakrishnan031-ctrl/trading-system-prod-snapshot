@@ -11,6 +11,7 @@ Or:  python tests/unit/test_webhook_receiver.py  (standalone mode)
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac as _hmac
 import json
@@ -465,6 +466,160 @@ def test_ms2_queue_full_then_retry_is_accepted_not_duplicate():
     assert len(rows) == 1, f"expected 1 TCS row (reused), got {len(rows)}"
     assert rows[0]["status"] == "QUEUED", rows[0]["status"]
     print("  OK M-S2 QUEUE_FULL -> drain -> retry ACCEPTED (backpressure recovery)")
+
+
+# ---------------------------------------------------------------------------
+# P3-s14: a store failure is NOT a duplicate.
+#
+# _process_signal claims the symbol in-flight and writes the fast-path dedup cache
+# BEFORE the INSERT, and pre-fix the INSERT's only handler was
+# `except sqlite3.IntegrityError`. Any other exception (sqlite3.OperationalError on a
+# full disk being the likeliest) escaped holding BOTH claims: the transaction rolled
+# itself back, but a rollback cannot touch an in-memory cache. The leaked claim then
+# bounced the sender's retry as DUPLICATE for the whole dedup window -> the signal was
+# silently dropped, and the escape also abandoned the rest of the payload batch.
+#
+# No test injected a non-IntegrityError INSERT failure, which is why a wholly
+# unprotected path sat under a green suite.
+# ---------------------------------------------------------------------------
+
+class _InsertFailingCursor:
+    """Wraps a real cursor and raises OperationalError on the signals INSERT for one
+    target symbol -- a faithful stand-in for a disk-full / disk-I/O error at the INSERT.
+    The raise happens INSIDE the real transaction, so the real ROLLBACK still runs."""
+
+    def __init__(self, real_cur, fail_symbol: str) -> None:
+        self._real = real_cur
+        self._fail_symbol = fail_symbol
+
+    def execute(self, sql, params=()):
+        # params[1] is `symbol` in the signals INSERT.
+        if ("INSERT INTO signals" in sql
+                and len(params) > 1 and params[1] == self._fail_symbol):
+            raise sqlite3.OperationalError("disk I/O error")
+        return self._real.execute(sql, params)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+@contextlib.contextmanager
+def _insert_fails_for(store, fail_symbol: str):
+    """Make the signals INSERT raise sqlite3.OperationalError for `fail_symbol` only.
+    Every other statement (incl. BEGIN IMMEDIATE / COMMIT / ROLLBACK) runs for real."""
+    real_transaction = store.transaction
+
+    @contextlib.contextmanager
+    def _patched():
+        with real_transaction() as cur:
+            yield _InsertFailingCursor(cur, fail_symbol)
+
+    store.transaction = _patched
+    try:
+        yield
+    finally:
+        store.transaction = real_transaction
+
+
+def test_p3s14_store_failure_releases_both_claims():
+    """P3-s14 (1)+(2): a non-IntegrityError INSERT failure must release the fast-path
+    dedup claim AND the in-flight claim. RED on pre-fix code: the OperationalError
+    escaped _process_signal with both still held."""
+    receiver, sq, store = _make_receiver(capacity=50, expiry=3600)
+
+    with receiver.app.test_client() as client:
+        with _insert_fails_for(store, "TCS"):
+            client.post("/webhook/gap_go_long",
+                        json=_valid_payload(stocks="TCS", prices="3650.0"))
+
+    # Both claims leak on pre-fix code, and they bounce the retry at DIFFERENT times:
+    # in-flight is checked first (:811) so an IMMEDIATE retry gets IN_PROCESS; once the
+    # sweeper evicts that (<=120s) the dedup cache takes over and gives DUPLICATE until
+    # its TTL expires (<=300s). The dedup cache is the binding constraint, hence ~300s.
+
+    # (1) the fast-path dedup claim -- leaked, it bounces the retry as DUPLICATE
+    with receiver._dedup_lock:
+        assert ("TCS", "gap_go_long") not in receiver._dedup_cache, \
+            "dedup claim leaked: the retry is bounced as DUPLICATE for the rest of the window"
+
+    # (2) the in-flight claim -- leaked, it bounces the IMMEDIATE retry as IN_PROCESS
+    with receiver._in_flight_lock:
+        assert "TCS" not in receiver._in_flight, \
+            "in-flight claim leaked: the immediate retry is bounced as IN_PROCESS"
+
+    # the transaction rolled back, so no orphan row and nothing queued
+    assert len(store.fetch_all("SELECT signal_id FROM signals WHERE symbol='TCS'")) == 0
+    assert sq.qsize() == 0
+    print("  OK P3-s14 store failure -> both claims released")
+
+
+def test_p3s14_store_failure_retry_is_accepted_not_duplicate():
+    """P3-s14 (3)+(4): after a store failure the sender's IMMEDIATE retry of the SAME
+    signal must be ACCEPTED, and the failed attempt must have answered with a RETRYABLE
+    5xx -- releasing the claims only helps if a retry is actually sent. RED on pre-fix
+    code: the retry came back IN_PROCESS (the leaked in-flight claim is checked before
+    the leaked dedup claim, which would answer DUPLICATE from ~120s to 300s), and the
+    batch answered 500 because the exception escaped to _handle_webhook."""
+    receiver, sq, store = _make_receiver(capacity=50, expiry=3600)
+    ts = _now_str()
+
+    with receiver.app.test_client() as client:
+        with _insert_fails_for(store, "TCS"):
+            r1 = client.post("/webhook/gap_go_long",
+                             json=_valid_payload(stocks="TCS", prices="3650.0",
+                                                 triggered_at=ts))
+
+        # The store is healthy again and the sender retries the SAME signal. Same
+        # (scanner, symbol, epoch bucket) -> the SAME fingerprint, so this also proves
+        # the rolled-back INSERT left no row to collide with.
+        r2 = client.post("/webhook/gap_go_long",
+                         json=_valid_payload(stocks="TCS", prices="3650.0",
+                                             triggered_at=ts))
+
+    # (3) THE HARM first: pre-fix the leaked dedup claim bounced this as DUPLICATE and
+    #     the signal was dropped for the whole window.
+    assert r2.get_json()["results"][0]["status"] == "ACCEPTED", \
+        f"the retry must re-enter cleanly, got {r2.get_json()}"
+    assert r2.status_code == 200, r2.get_json()
+
+    # (4) THE MECHANISM: a retry only arrives if the failed attempt was retryable. An
+    #     ordinary status here would make the batch answer 200 -> Chartink never retries
+    #     -> the bounded loss becomes permanent.
+    assert r1.status_code == 503, \
+        f"a store failure must answer retryably (503), got {r1.status_code}: {r1.get_json()}"
+    assert r1.get_json()["results"][0]["status"] == "STORE_ERROR", r1.get_json()
+
+    # the retry stored exactly one row -- no orphan from the failed attempt
+    rows = store.fetch_all("SELECT status FROM signals WHERE symbol='TCS'")
+    assert len(rows) == 1 and rows[0]["status"] == "QUEUED", rows
+    print("  OK P3-s14 store failure -> 503 -> retry ACCEPTED (not DUPLICATE)")
+
+
+def test_p3s14_store_failure_does_not_abandon_rest_of_batch():
+    """P3-s14 (5): _process_request calls _process_signal inside the per-symbol loop with
+    no try/except, so a raising store failure abandoned every symbol AFTER it in the same
+    Chartink payload. Catching it keeps the loop alive. RED on pre-fix code: the escape
+    returned a bare 500 with no per-symbol results at all."""
+    receiver, sq, store = _make_receiver(capacity=50, expiry=3600)
+
+    with receiver.app.test_client() as client:
+        with _insert_fails_for(store, "TCS"):
+            # TCS sits in the MIDDLE: RELIANCE precedes it, INFY follows it.
+            resp = client.post("/webhook/gap_go_long",
+                               json=_valid_payload(stocks="RELIANCE,TCS,INFY",
+                                                   prices="2500.0,3650.0,1500.0"))
+
+    assert resp.status_code == 503, f"expected 503, got {resp.status_code}"
+    data = resp.get_json()
+    assert "results" in data, f"batch abandoned -- no per-symbol results: {data}"
+    by_symbol = {r["symbol"]: r["status"] for r in data["results"]}
+    assert by_symbol == {"RELIANCE": "ACCEPTED", "TCS": "STORE_ERROR",
+                         "INFY": "ACCEPTED"}, by_symbol
+
+    # INFY comes AFTER the failing symbol: it must be really stored, not just reported.
+    stored = {r["symbol"] for r in store.fetch_all("SELECT symbol FROM signals")}
+    assert stored == {"RELIANCE", "INFY"}, stored
+    print("  OK P3-s14 store failure -> loop continues (INFY after TCS still processed)")
 
 
 def test_duplicate_same_fingerprint_same_minute():

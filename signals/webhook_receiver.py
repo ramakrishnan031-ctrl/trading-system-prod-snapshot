@@ -19,7 +19,7 @@ Locked Design Decisions:
     WR8  -- Optional HMAC validation via X-Webhook-Signature header
     WR9  -- Insert into signals table then push to queue
     WR10 -- Per-signal status: ACCEPTED/DUPLICATE/EXPIRED/INVALID_SYMBOL/
-             INVALID_PRICE/QUEUE_FULL/OUTSIDE_HOURS/IN_PROCESS
+             INVALID_PRICE/QUEUE_FULL/STORE_ERROR/OUTSIDE_HOURS/IN_PROCESS
     WR11 -- Thread-safe; each Flask request in its own thread
     WR12 -- stop() for graceful shutdown
     WR13 -- webhook_audit row per POST regardless of outcome
@@ -54,6 +54,15 @@ from flask import Flask, request, jsonify
 
 from core.ids import new_signal_id
 from core.time_authority import ist_timezone, now_ist
+
+# P3-s14 (2026-07-17): per-signal statuses meaning "the system did not take this signal,
+# and it is NOT a duplicate — send it again". The batch answers 503 if any symbol returns
+# one of these, so the sender (Chartink) retries. Every status listed here MUST have
+# released both the in-flight claim and the fast-path dedup claim before returning:
+# a retry is only useful if it can get past the claims the failed attempt took out.
+# Response-only — these never reach signals.status (QUEUE_FULL's DB row is written by a
+# separate UPDATE; a STORE_ERROR has no row at all, because its INSERT is what failed).
+_RETRYABLE_STATUSES = frozenset({"QUEUE_FULL", "STORE_ERROR"})
 
 
 class _PerIpRateLimiter:
@@ -645,9 +654,11 @@ class WebhookReceiver:
             else:
                 rejected_count += 1
 
-        # HIGH #6: return 503 when queue is full so client knows to retry
-        any_queue_full = any(r["status"] == "QUEUE_FULL" for r in results)
-        http_status = 503 if any_queue_full else 200
+        # HIGH #6: return 503 when queue is full so client knows to retry.
+        # P3-s14: STORE_ERROR joins it -- same contract (the signal was not taken, it is
+        # not a duplicate, retry it), so the same retryable 5xx. See _RETRYABLE_STATUSES.
+        any_retryable = any(r["status"] in _RETRYABLE_STATUSES for r in results)
+        http_status = 503 if any_retryable else 200
         resp = jsonify({
             "accepted": accepted_count,
             "rejected": rejected_count,
@@ -890,6 +901,35 @@ class WebhookReceiver:
                         "signal_id": existing["signal_id"]}
             self._release_in_flight(symbol)
             return {"symbol": symbol, "status": "DUPLICATE"}
+        except Exception as exc:
+            # P3-s14: the INSERT failed for a reason that is NOT a constraint violation
+            # (sqlite3.OperationalError on a full disk is the likeliest). transaction()
+            # rolls back on any exception, so the DB-side dedup layer releases itself --
+            # but the two claims taken above are IN-MEMORY and a rollback cannot touch
+            # them. Left held, they bounce this (symbol, scanner) as DUPLICATE for the
+            # whole dedup window, so the sender's retry is silently dropped.
+            #
+            # Same reasoning as the M-S2 QUEUE_FULL path below: a store failure is not a
+            # duplicate, so roll BOTH claims back. Double-entry stays impossible without
+            # the cache -- _claim_in_flight serialises same-symbol concurrency, and
+            # UNIQUE(fingerprint, fingerprint_date) is the authoritative within-window
+            # dedup (a retry inside the same bucket recomputes the same fingerprint).
+            with self._dedup_lock:
+                self._dedup_cache.pop(dedup_key, None)
+            self._release_in_flight(symbol)
+            # CRITICAL, not ERROR: this used to escape to _handle_webhook, which logged
+            # CRITICAL and returned 500. Catching it here must not make a store failure
+            # quieter than it was -- and the 503 below no longer distinguishes it from
+            # QUEUE_FULL backpressure, so THIS line is now the fingerprint to alert on.
+            self._log.critical(
+                "webhook_receiver: signal store FAILED for %s/%s: %s -- claims released, "
+                "returning STORE_ERROR so the sender retries", scanner_name, symbol, exc,
+            )
+            # Returning instead of raising also keeps the rest of the batch alive: the
+            # caller's per-symbol loop has no try/except, so a raise here abandoned every
+            # symbol after this one. STORE_ERROR makes the batch answer 503 -- releasing
+            # the claims is only meaningful if a retry actually arrives.
+            return {"symbol": symbol, "status": "STORE_ERROR"}
 
         # Push to signal_queue
         entry = (signal_id, scanner_name, symbol, price, triggered_at)
