@@ -1105,6 +1105,13 @@ def test_performance_100_posts_under_5_seconds():
 
 # ---------------------------------------------------------------------------
 # BL-18: construction guard for config.webhook.require_hmac
+#
+# SCOPE: these tests are CONSTRUCTOR-ONLY — they prove __init__ raises (or does not)
+# for a given require_hmac/secret combination. They do NOT exercise request-time
+# enforcement: delete the request-time `elif self._require_hmac` branches and every
+# BL-18 test below still passes. Request-time enforcement is owned by the G.1 tests
+# further down (/webhook) and by TestHealthRequireHmac in test_fix134_backpressure.py
+# (/health, added 17-Jul). Don't read a green BL-18 as proof the routes enforce it.
 # ---------------------------------------------------------------------------
 
 def _make_config_with_require_hmac(require_hmac: bool):

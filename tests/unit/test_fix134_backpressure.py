@@ -165,7 +165,14 @@ def _make_receiver_with_secret(capacity=100):
 
 class TestHealthAuth:
     """RED before the fix: /health returned kill_switch_active + queue depth to any
-    anonymous caller on 0.0.0.0:5000, and bypassed the per-IP limiter /webhook is behind."""
+    anonymous caller on 0.0.0.0:5000, and bypassed the per-IP limiter /webhook is behind.
+
+    SCOPE: every test here runs require_hmac=False (the _make_config used by
+    _make_receiver_with_secret omits the `webhook` block, so require_hmac resolves
+    False). They cover the secret-vs-no-secret and token/HMAC/anon paths, NOT the
+    require_hmac=True posture — that is owned by TestHealthRequireHmac below (P1,
+    17-Jul). A green TestHealthAuth says nothing about whether /health honours
+    require_hmac; don't mistake it for full /health auth coverage."""
 
     def test_unauthenticated_health_is_denied_when_a_secret_is_configured(self):
         receiver, _, _ = _make_receiver_with_secret()
