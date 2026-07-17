@@ -289,6 +289,30 @@ jobs:
     env_wrapper: python
     log_target: '>> logs/cron-metrics.log 2>&1'
     marker_name: capture_metrics
+  liveness_probe:
+    # 17-Jul-2026: trading-system.service died at 08:16:09 with a CLEAN exit 0 and took 0
+    # trades on a live day; nothing noticed for the whole session, because NOTHING watched
+    # this unit's liveness (monitoring_canary's respawn probe watches alert-watcher, its
+    # dashboard probe watches gui-dashboard). One CRITICAL per incident, deduped on the
+    # unit's InactiveEnterTimestamp. SILENT on holidays, on an operator SOFT_KILL/HARD_KILL
+    # park, and outside [09:00,16:00). The window is the schedule: the first run at 09:00 is
+    # after the 08:15 token -> ~08:30 premarket boot chain (so a slow start is never a false
+    # alarm) and 15 min before the 09:15 open; the last run at 15:55 is before 16:00, where
+    # the EOD self-exit becomes legitimate. monitored:false matches capture_metrics — a
+    # 5-minute job cannot be heartbeat-expected. See docs/audit/liveness_alarm_17jul2026.md.
+    script: scripts/liveness_probe.py
+    schedule: '*/5 09-15 Mon-Fri'
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: intraday
+    monitored: false
+    enabled: true
+    personal_tooling: false
+    cron_expression: '*/5 9-15 * * 1-5'
+    command: scripts/liveness_probe.py
+    env_wrapper: python
+    log_target: '>> logs/cron-liveness.log 2>&1'
   fetch_daily_candles:
     script: scripts/fetch_daily_candles.py
     schedule: 15:40 Mon-Fri

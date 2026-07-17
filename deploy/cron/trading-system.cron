@@ -69,6 +69,9 @@ SHELL=/bin/bash
 # capture_metrics  [*/5 09-15 Mon-Fri]
 */5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py >> logs/cron-metrics.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/capture_metrics.done
 
+# liveness_probe  [*/5 09-15 Mon-Fri]
+*/5 9-15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/liveness_probe.py >> logs/cron-liveness.log 2>&1
+
 # fetch_daily_candles  [15:40 Mon-Fri]
 40 15 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && /home/ubuntu/systems/venv/bin/python scripts/fetch_daily_candles.py >> logs/cron-candle-fetch.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/fetch_daily_candles.done
 
