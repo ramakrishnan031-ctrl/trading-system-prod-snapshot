@@ -2490,6 +2490,7 @@ def _main_locked(args, config_dir: Path) -> int:
         logger=get_logger("cnc_gtt_monitor"),
         mode=mode_label,
         market_hours_fn=_market_hours_fn,
+        cost_calculator=cost_calculator,   # E4: real costs on GTT closes
     )
 
     rc_cfg = app_config.system.order_reconciler
@@ -2507,6 +2508,7 @@ def _main_locked(args, config_dir: Path) -> int:
         mode=mode_label,
         cnc_gtt_monitor=cnc_gtt_monitor,        # SLICE2.5-P2 (4a/4b)
         market_hours_fn=_market_hours_fn,
+        cost_calculator=cost_calculator,        # E4: real costs on CHECK1/CHECK4
     )
 
     # Task (2026-06-19): standalone TGT retry — re-place a TGT left unplaced by

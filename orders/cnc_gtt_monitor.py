@@ -30,6 +30,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
+from broker.cost_calculator import round_trip_costs_or_zero
 from core.constants import PRODUCT_TO_INTENT
 from core.events import PositionClosed
 from core.time_authority import now_ist
@@ -56,6 +57,7 @@ class CncGttMonitor:
         logger: Any,
         mode: str = "LIVE",
         market_hours_fn: Optional[Callable[[], bool]] = None,
+        cost_calculator: Optional[Any] = None,  # E4: real costs on GTT closes
     ) -> None:
         self._store = store
         self._adapter = adapter
@@ -66,6 +68,10 @@ class CncGttMonitor:
         self._bus = bus
         self._log = logger
         self._mode = mode
+        # E4 (2026-07-17): the SAME mode-agnostic CostCalculator instance the
+        # normal exit path uses, so a GTT close writes a NET pnl_delta too.
+        # None (unwired) degrades to costs=0.0 loudly — the pre-E4 behaviour.
+        self._cost_calculator = cost_calculator
         # in-hours predicate (Y1 pre-open vs in-hours recreate). Default: always
         # in-hours (so a missing-market-window in tests doesn't block recreate).
         self._in_hours = market_hours_fn or (lambda: True)
@@ -443,15 +449,32 @@ class CncGttMonitor:
 
         pnl = 0.0
         if entry_price > 0 and qty > 0:
+            # E4 (2026-07-17): real CNC round-trip costs (was hardcoded 0.0 —
+            # no CostCalculator was wired here) so this close's pnl_delta is
+            # NET like every other row. product is CNC by construction: this
+            # path only ever handles delivery GTT exits.
+            charges = round_trip_costs_or_zero(
+                self._cost_calculator,
+                qty=qty,
+                entry_price=float(entry_price),
+                exit_price=float(exit_price),
+                product="CNC",
+                logger=self._log,
+                context=f"gtt_exit trade_id={trade_id}",
+            )
             try:
                 rr = self._fm.release_used(
                     symbol=symbol, exit_price=float(exit_price), exit_qty=qty,
                     intent=PRODUCT_TO_INTENT.get("CNC", "DELIVERY"),
-                    entry_price=float(entry_price), direction=direction, costs=0.0,
+                    entry_price=float(entry_price), direction=direction,
+                    costs=charges,
                     trade_id=trade_id)   # M-C7: reverse the persisted committed margin
                 pnl = float(rr.pnl_delta)
+                # E4: pnl is NET now, so gross/charges must be passed explicitly
+                # or the row would claim gross==net and charges==0 falsely.
                 self._store.record_gtt_close_financials(
-                    trade_id=trade_id, exit_price=float(exit_price), net_pnl=pnl)
+                    trade_id=trade_id, exit_price=float(exit_price), net_pnl=pnl,
+                    gross_pnl=pnl + charges, charges=charges)
             except Exception as exc:  # noqa: BLE001
                 self._log.error("cnc_gtt_monitor: capital release failed for %s: %s",
                                 trade_id, exc)

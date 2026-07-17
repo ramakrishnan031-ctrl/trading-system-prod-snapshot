@@ -230,8 +230,14 @@ def test_o4_date_column_added_and_indexed(tmp_path):
     assert store.get_schema_version() == EXPECTED_SCHEMA_VERSION
     # generated column computed from existing data
     assert store.fetch_one("SELECT date FROM fm_ledger")["date"] == "2026-06-13"
-    # the daily-loss query returns the preserved value
-    assert abs(store.get_daily_realized_net_pnl("2026-06-13") - 450.0) < 0.001
+    # the daily-loss query returns the preserved value.
+    # E4/W10 (2026-07-17) — DELIBERATE CONTRACT INVERSION (cf. M-C6/FIX-133):
+    # was 450.0 back when the reader computed SUM(pnl_delta) - SUM(costs) on the
+    # false premise that pnl_delta was gross. pnl_delta is NET by contract, so
+    # the seeded 500.0 IS the net and `costs` is observability only, never
+    # re-subtracted. This assertion is about migration preserving the row; the
+    # value tracks the contract.
+    assert abs(store.get_daily_realized_net_pnl("2026-06-13") - 500.0) < 0.001
     # the new query uses the date index
     plan = store.fetch_all(
         "EXPLAIN QUERY PLAN SELECT * FROM fm_ledger WHERE date = '2026-06-13'"
