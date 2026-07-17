@@ -1,0 +1,154 @@
+# ═════════════════════════════════════════════════════════════════════════════
+# strategy_direction_registry.yaml — auto-maintained by
+# scripts/strategy_registry_officer.py (mirrors config/cron_registry.yaml + the
+# cron officer's auto-detect/notify pattern). Regime-ranking prerequisite (17-Jul-2026).
+#
+# ⚠️ StrategyConfig.direction (config/strategies/<name>.yaml) REMAINS the single
+# source of truth for direction. This file is a REGISTRATION + HEALTH tracker that
+# MIRRORS that field; it NEVER overrides it, and nothing reads direction FROM here
+# to place a trade. Consumers read direction from the canonical accessor
+# (core/strategy_direction.py → StrategyConfig.direction).
+#
+# THREE SEPARATE concepts per strategy (ChatGPT mandate — do not conflate):
+#   direction            : LONG | SHORT            (authoritative; copied from StrategyConfig.direction)
+#   registration_status  : PENDING | CONFIRMED     (PENDING on first detection; CONFIRMED on first filled trade)
+#   health               : OK | DIRECTION_CONFLICT (a realized trade side ≠ declared direction)
+#
+# The daily officer OWNS writes (never a silent runtime mutation). A NEW strategy or
+# a DIRECTION_CONFLICT is notified (Telegram + email); a no-change run is silent.
+# The key is StrategyConfig.name (stable machine identity — display_name / entry
+# conditions may change freely without changing direction; direction comes from the
+# `direction` field, never the _long/_short suffix).
+#
+# Seeded 2026-07-17 with the current strategy set (status PENDING; the officer's first
+# VM run confirms the ones that have already traded and stays otherwise silent).
+# ═════════════════════════════════════════════════════════════════════════════
+strategies:
+  first_pullback_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/first_pullback_long.yaml
+      scanner: first_pullback_long
+  first_pullback_short:
+    direction: SHORT
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/first_pullback_short.yaml
+      scanner: first_pullback_short
+  gap_fade_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/gap_fade_long.yaml
+      scanner: gap_fade_long
+  gap_fade_short:
+    direction: SHORT
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/gap_fade_short.yaml
+      scanner: gap_fade_short
+  gap_go_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/gap_go_long.yaml
+      scanner: gap_go_long
+  gap_go_short:
+    direction: SHORT
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/gap_go_short.yaml
+      scanner: gap_go_short
+  open_high_breakdown_short:
+    direction: SHORT
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/open_high_breakdown_short.yaml
+      scanner: open_high_breakdown_short
+  open_low_breakout_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/open_low_breakout_long.yaml
+      scanner: open_low_breakout_long
+  pb01_breakout_retest:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/pb01_breakout_retest.yaml
+      scanner: pb01_breakout_retest
+  positional_momentum_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/positional_momentum_long.yaml
+      scanner: positional_momentum_long
+  positional_sector_rotation:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/positional_sector_rotation.yaml
+      scanner: positional_sector_rotation
+  positional_swing_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/positional_swing_long.yaml
+      scanner: positional_swing_long
+  range_breakout_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/range_breakout_long.yaml
+      scanner: range_breakout_long
+  range_breakout_short:
+    direction: SHORT
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/range_breakout_short.yaml
+      scanner: range_breakout_short
+  vwap_bounce_long:
+    direction: LONG
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/vwap_bounce_long.yaml
+      scanner: vwap_bounce_long
+  vwap_rejection_short:
+    direction: SHORT
+    registration_status: PENDING
+    health: OK
+    first_seen: "2026-07-17"
+    evidence:
+      source_yaml: config/strategies/vwap_rejection_short.yaml
+      scanner: vwap_rejection_short

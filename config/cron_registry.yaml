@@ -560,6 +560,29 @@ jobs:
     env_wrapper: python
     log_target: '>> logs/cron-metrics.log 2>&1'
     marker_name: metrics_summary
+  # Regime-ranking prerequisite (17-Jul-2026): the daily strategy-direction registry
+  # maintainer. Detects a newly-added strategy (loaded YAMLs ∪ distinct signals scanner/
+  # strategy), registers it PENDING with direction = StrategyConfig.direction, notifies
+  # Telegram+email, confirms PENDING->CONFIRMED on the first filled trade, and flags
+  # health=DIRECTION_CONFLICT where a realized trade side differs from the declared
+  # direction (never overwriting it). Runs 16:22 = after compute_strategy_metrics (16:15);
+  # writes config/strategy_direction_registry.yaml (a DB-derived cache — re-derives after
+  # a deploy checkout). DATA/REGISTRY only; no trading-decision change.
+  strategy_registry_officer:
+    script: scripts/strategy_registry_officer.py
+    schedule: 16:22 Mon-Fri
+    type: python
+    critical: false
+    market_day_only: true
+    cadence: market_day
+    monitored: true
+    enabled: true
+    personal_tooling: false
+    cron_expression: 22 16 * * 1-5
+    command: scripts/strategy_registry_officer.py
+    env_wrapper: python
+    log_target: '>> logs/cron-strategy-registry.log 2>&1'
+    marker_name: strategy_registry_officer
   gemini_log_review:
     script: scripts/gemini_log_review.py
     schedule: 16:20 Mon-Fri

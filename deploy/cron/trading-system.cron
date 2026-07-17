@@ -120,6 +120,9 @@ SHELL=/bin/bash
 # metrics_summary  [16:16 Mon-Fri]
 16 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/capture_metrics_baseline.py --summarize >> logs/cron-metrics.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/metrics_summary.done
 
+# strategy_registry_officer  [16:22 Mon-Fri]
+22 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/strategy_registry_officer.py >> logs/cron-strategy-registry.log 2>&1; rc=$?; mkdir -p /home/ubuntu/systems/trading-system/data_store/cron_marks; echo "$rc $(date -Iseconds)" > /home/ubuntu/systems/trading-system/data_store/cron_marks/strategy_registry_officer.done
+
 # gemini_log_review  [16:20 Mon-Fri]
 20 16 * * 1-5 cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/gemini_log_review.py >> logs/cron-gemini-review.log 2>&1
 
