@@ -211,9 +211,49 @@ liveness tests = 4875**, and the failure count is unchanged at 11.
 Cron framework intact: `generate_crontab.py --selftest` → **48/48 lines round-trip
 byte-for-byte**, rc=0; `test_cron_registry.py` + `test_cron_alerts.py` → **42 passed**, rc=0.
 
-## 5. Deploy
+## 5. Deploy — verified
 
-**{{DEPLOY}}**
+Tag **`deploy-17jul-liveness`** → **`6a4c092`** (the code identity; delta tag..HEAD = **0
+non-markdown files**). Backup `pre_deploy_liveness_20260717_170239.db`, verified **sound**
+(`quick_check=ok`, v44) rather than merely present. Schema **v44, no migration**.
+
+| Check | Result |
+|---|---|
+| PC HEAD == VM bare HEAD | ✅ `164b72c` |
+| **cron entry registered** | ✅ `*/5 9-15 * * 1-5 … scripts/liveness_probe.py` present in the live crontab |
+| non-comment cron lines | ✅ **48 → 49** (exactly one job added) |
+| live crontab == deployed canonical | ✅ identical |
+| `generate(registry)` == canonical **on the VM** | ✅ registry / canonical / live **all three agree** |
+| schema / integrity / FK | ✅ v44 · `quick_check=ok` · FK clean |
+| `e4-w10-pnl-contract` still unpushed | ✅ (sign-off gated) |
+
+**Unlike the previous two deploys, this one DOES change the crontab** — so the hook's install
+condition was verified up-front (`generate(registry)` byte-identical to the canonical via the
+LF writer) and confirmed after (`post-receive: crontab AUTO-INSTALLED from canonical`). The
+generator's `--selftest` passes 48/48 round-trip.
+
+### ⭐ End-to-end proof on the REAL box — it would have caught today's outage
+
+The system is **still down**, so the deployed probe was pointed at it with **real systemctl,
+real NSE calendar, real `kill_switch_state`** — only `now` moved to an in-window time, and the
+*decision* function called rather than `main()`, so no alarm was actually sent:
+
+```
+REAL inputs:  kill_switch_state = INACTIVE   trading day today = True
+
+AT 09:00 (in-window), REAL dead service:
+  -> DOWN | alarm = True
+  detail: trading-system.service=inactive since Fri 2026-07-17 08:16:09 IST
+  state:  ActiveState=inactive SubState=dead Result=success ExecMainStatus=0
+
+AT 09:05 (same incident) -> ALREADY_ALARMED | alarm = False
+AT the real time now     -> OUTSIDE_WINDOW  | alarm = False
+
+VERDICT: WOULD HAVE CAUGHT TODAY'S OUTAGE, once, and is silent out-of-window   (rc=0)
+```
+
+It fires on the **real** 08:16:09 death timestamp, dedups against the **real** incident id, and
+stays silent outside the window — on production state, not a fixture.
 
 ## 6. Parity
 
