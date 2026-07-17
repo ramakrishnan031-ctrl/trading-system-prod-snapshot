@@ -147,21 +147,33 @@ rc=1); both rc values checked. Never `git stash`.
    non-2xx from one local endpoint silently halts a whole trading day, with a clean exit 0
    that looks like a normal stop. Worth asking whether this check should be *blocking* at
    all, or should fail loud-but-degraded. — **decision item, Rama.**
-3. **⭐ Nothing alarmed — and the canary actually reported HEALTHY.** This is the most
+3. **⭐ Nothing alarmed — nothing was ever watching this unit.** This is the most
    actionable follow-up, and it now has evidence rather than a suspicion:
-   - `data_store/canary_service_state.json` @ **08:20:05** (4 minutes after the system
-     died) reads **`{"nrestarts": 0, "iso": "2026-07-17T08:20:05..."}`**. The canary
-     watches for a **restart loop**, not for **liveness** — so a cleanly-dead service
-     scores `nrestarts: 0`, which is the *good* value. **A clean exit 0 with zero restarts
-     is indistinguishable from a healthy system.**
+   - **CORRECTION (17-Jul, later — this report's own first claim was imprecise).** The
+     original wording here said the canary "watches for a restart loop, not liveness, so a
+     cleanly-dead service scores the good value" — implying the canary *looked at*
+     trading-system and misjudged it. **It never looked at all.** Verified in code:
+     `check_service_respawn`'s unit defaults to **`alert-watcher.service`**
+     (`monitoring_canary.py:220`) and `check_dashboard`'s to **`gui-dashboard`**
+     (`:124`); `run_canary` mentions `trading-system` **nowhere**. The
+     `{"nrestarts": 0}` in `canary_service_state.json` @ 08:20:05 is **alert-watcher's**
+     restart count. The truth is simpler and worse: **no monitor has ever watched
+     trading-system's liveness.** (Pinned now by
+     `test_liveness_probe.py::test_old_canary_would_not_have_caught_it`.)
+   - Even had it been pointed at this unit, restart-counting could not have caught it:
+     `Restart=on-failure` + a clean **exit 0** means systemd never restarts and never
+     complains, so `NRestarts` stays **0** — the *healthy* value. **A clean exit 0 with
+     zero restarts is indistinguishable from a healthy system.**
    - 5 CRITICAL alerts were delivered today and **none** of them mentions the boot or the
      webhook (`grep "not reachable" data_store/critical_alert_20260717*` → no match). The
      boot CRITICAL went to the log; nothing escalated it.
    - Net: the system announced its own death in the journal at 08:16:04 and **every
      monitor read green for the rest of the day.**
-   ⇒ Worth a dedicated "service should be up during the service window but is not" check —
-   the one signal that would have caught this in minutes instead of a session. **Loop
-   item / Rama.**
+   ⇒ **✅ CLOSED 17-Jul — `scripts/liveness_probe.py`** now alarms exactly once when this
+   unit is unexpectedly down during [09:00, 16:00) on a trading day, and stays silent on
+   holidays / an operator park / outside the window. Today's death would have been caught
+   at **09:00**, an hour before the 10:00 entry window. See
+   `docs/audit/liveness_alarm_17jul2026.md`. [[liveness-alarm-17jul]]
 
 ## 8. Parity
 
