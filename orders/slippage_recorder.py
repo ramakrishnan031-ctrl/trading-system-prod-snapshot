@@ -27,6 +27,11 @@ from core.time_authority import now_ist
 # Statuses that mean "won" / "lost" for trade_result.
 _WIN, _LOSS, _BE = "WIN", "LOSS", "BREAKEVEN"
 
+# order_execution_log.leg is NOT NULL, so an unresolved leg still has to write
+# something. It must not be "ENTRY": that silently relabels SL/TGT/EOD fills as
+# entries, which is a wrong answer rather than a missing one.
+_LEG_UNKNOWN = "UNKNOWN"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure helpers (unit-tested) — slippage sign convention: ADVERSE = positive.
@@ -112,19 +117,20 @@ class SlippageRecorder:
     def _on_order_filled(self, ev: OrderFilled) -> None:
         try:
             order_id = ev.internal_order_id or ev.order_id or None
-            (leg, order_type, qty_req, strategy,
-             tol_frac, tol_source) = self._enrich_order(order_id, ev.trade_id)
+            (leg, order_type, qty_req, placed_at, trade_id, signal_id,
+             strategy, tol_frac, tol_source) = self._enrich_order(
+                ev.broker_order_id or ev.order_id, ev.trade_id)
             intended = ev.expected_price or None
             actual = ev.avg_fill_price or None
             slip_rs = (adverse_entry_slip(ev.side, intended, actual)
                        if (intended and actual) else None)
             row = {
                 "order_id": order_id,
-                "parent_trade_id": ev.trade_id or None,
-                "signal_id": ev.signal_id or None,
+                "parent_trade_id": trade_id,
+                "signal_id": ev.signal_id or signal_id,
                 "symbol": ev.symbol,
                 "strategy_name": strategy,
-                "leg": leg or "ENTRY",
+                "leg": leg or _LEG_UNKNOWN,
                 "order_type": order_type,
                 "side": ev.side or None,
                 "intended_price": intended,
@@ -135,12 +141,13 @@ class SlippageRecorder:
                 "filled_qty": ev.filled_qty or None,
                 "is_partial": 1 if (qty_req and ev.filled_qty and ev.filled_qty < qty_req) else 0,
                 "status": "COMPLETE",
+                "order_timestamp": placed_at,
                 "fill_timestamp": ev.filled_at or None,
                 "tolerance_fraction_used": tol_frac,   # Phase 3a (from parent trade)
                 "tolerance_source": tol_source,        # Phase 3a (from parent trade)
             }
             self._store.insert_order_execution_log(row)
-            self._record_context(ev.trade_id, order_id, ev.symbol, leg, actual)
+            self._record_context(trade_id, order_id, ev.symbol, leg, actual)
         except Exception as exc:  # noqa: BLE001 — recording must never raise
             self._log.warning("slippage_recorder: order-filled record failed: %s", exc)
 
@@ -237,30 +244,46 @@ class SlippageRecorder:
         }
 
     # -- enrichment (best-effort DB reads) ------------------------------------
-    def _enrich_order(self, order_id, trade_id):
-        """(leg, order_type, qty_requested, strategy, tolerance_fraction_used,
-        tolerance_source) from orders + trades; all None on any miss — never
-        raises. The two tolerance fields (Phase 3a) record WHICH entry-slippage
-        override rule applied to the parent trade, copied onto the execution row."""
-        leg = order_type = qty_req = strategy = tol_frac = tol_source = None
+    def _enrich_order(self, broker_order_id, trade_id):
+        """(leg, order_type, qty_requested, placed_at, trade_id, signal_id,
+        strategy, tolerance_fraction_used, tolerance_source) from orders +
+        trades; all None on any miss — never raises.
+
+        The `orders` PK is the BROKER order id (order_manager.insert_order:
+        "broker_order_id is the PK ... internal_order_id is NOT stored"), so the
+        lookup MUST key on ev.broker_order_id. Keying on the internal ord_<hex>
+        id matches nothing, which is how every enriched column silently came back
+        NULL. orders.trade_id is NOT NULL, so a hit always yields the parent
+        trade, which is what lets the exec log join to trades.
+
+        The two tolerance fields (Phase 3a) record WHICH entry-slippage override
+        rule applied to the parent trade, copied onto the execution row."""
+        leg = order_type = qty_req = placed_at = None
+        signal_id = strategy = tol_frac = tol_source = None
+        trade_id = trade_id or None
         try:
-            if order_id:
+            if broker_order_id:
                 r = self._store.fetch_one(
-                    "SELECT leg, order_type, qty_requested FROM orders WHERE order_id=?",
-                    (order_id,))
+                    "SELECT leg, order_type, qty_requested, placed_at, trade_id "
+                    "FROM orders WHERE order_id=?", (str(broker_order_id),))
                 if r:
-                    leg, order_type, qty_req = r["leg"], r["order_type"], r["qty_requested"]
+                    leg, order_type = r["leg"], r["order_type"]
+                    qty_req, placed_at = r["qty_requested"], r["placed_at"]
+                    # Event-supplied trade_id wins; the orders row is the fallback.
+                    trade_id = trade_id or r["trade_id"]
             if trade_id:
                 r = self._store.fetch_one(
-                    "SELECT strategy, tolerance_fraction_used, tolerance_source "
-                    "FROM trades WHERE trade_id=?", (trade_id,))
+                    "SELECT signal_id, strategy, tolerance_fraction_used, "
+                    "tolerance_source FROM trades WHERE trade_id=?", (trade_id,))
                 if r:
+                    signal_id = r["signal_id"]
                     strategy = r["strategy"]
                     tol_frac = r["tolerance_fraction_used"]
                     tol_source = r["tolerance_source"]
         except Exception:
             pass
-        return leg, order_type, qty_req, strategy, tol_frac, tol_source
+        return (leg, order_type, qty_req, placed_at, trade_id, signal_id,
+                strategy, tol_frac, tol_source)
 
     def _fetch_trade(self, trade_id) -> Optional[dict]:
         if not trade_id:
