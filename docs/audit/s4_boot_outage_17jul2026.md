@@ -147,9 +147,21 @@ rc=1); both rc values checked. Never `git stash`.
    non-2xx from one local endpoint silently halts a whole trading day, with a clean exit 0
    that looks like a normal stop. Worth asking whether this check should be *blocking* at
    all, or should fail loud-but-degraded. — **decision item, Rama.**
-3. **The alert chain did not surface it as an outage.** A CRITICAL was logged and alerts
-   were delivered today, yet the system sat down all session. Whether "booted and
-   immediately shut down" raises a distinct alarm is worth checking. — **loop item.**
+3. **⭐ Nothing alarmed — and the canary actually reported HEALTHY.** This is the most
+   actionable follow-up, and it now has evidence rather than a suspicion:
+   - `data_store/canary_service_state.json` @ **08:20:05** (4 minutes after the system
+     died) reads **`{"nrestarts": 0, "iso": "2026-07-17T08:20:05..."}`**. The canary
+     watches for a **restart loop**, not for **liveness** — so a cleanly-dead service
+     scores `nrestarts: 0`, which is the *good* value. **A clean exit 0 with zero restarts
+     is indistinguishable from a healthy system.**
+   - 5 CRITICAL alerts were delivered today and **none** of them mentions the boot or the
+     webhook (`grep "not reachable" data_store/critical_alert_20260717*` → no match). The
+     boot CRITICAL went to the log; nothing escalated it.
+   - Net: the system announced its own death in the journal at 08:16:04 and **every
+     monitor read green for the rest of the day.**
+   ⇒ Worth a dedicated "service should be up during the service window but is not" check —
+   the one signal that would have caught this in minutes instead of a session. **Loop
+   item / Rama.**
 
 ## 8. Parity
 
