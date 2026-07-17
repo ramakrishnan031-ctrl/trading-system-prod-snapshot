@@ -158,6 +158,41 @@ def _email_delivery_health_line(sentinel_dir: Path = Path("data_store")) -> Opti
         return None
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# S5 (17-Jul-2026): the BENIGN functional-status set
+# ─────────────────────────────────────────────────────────────────────────────
+# F2 splits EXECUTION from FUNCTION: a job can exit 0 yet have done nothing
+# useful (the 14-Jul "green heartbeat, empty CSV" silent failure). The Officer
+# flags any functional_status outside this set.
+#
+# S5: the set was ("OK","SUCCESS","DELIVERED") — too narrow, so it flagged
+# outcomes that are CORRECT BY DESIGN and raised a false alarm on quiet days:
+#
+#   EMPTY_NO_DATA — generate_screened_csv's own criterion, whose docstring says
+#                   it is "legitimate on a no-trade day, but recorded so the
+#                   operator sees data-present vs empty". A quiet trading day
+#                   that screens nothing is not a failure; it is the honest
+#                   answer. Flagging it trains the operator to ignore the
+#                   functional line — which is how the 14-Jul silent failure got
+#                   through in the first place.
+#   SKIPPED       — a deliberate, recorded no-op (e.g. a non-trading day). The
+#                   job did exactly what it should. Note the SEPARATE path: a
+#                   heartbeat whose STATUS is "SKIPPED" never reaches here at all
+#                   (build_eod_summary's `elif status == "SKIPPED"` catches it
+#                   first and counts it under "Skipped"); this entry is for a job
+#                   that ran, exited SUCCESS, and reported SKIPPED functionally.
+#
+# NOT benign, and deliberately still flagged — each means a real gap:
+#   FAILED (no valid artifact) · MISSING (artifact absent) · DEGRADED ·
+#   UNKNOWN (the criterion itself could not be evaluated — silence about silence).
+#
+# The rule: benign == "the job did its job, and the empty/absent result is the
+# CORRECT answer for today". Anything that might be a real gap stays loud.
+_BENIGN_FUNCTIONAL = frozenset({
+    "OK", "SUCCESS", "DELIVERED", "SKIPPED", "EMPTY_NO_DATA",
+})
+
+
 def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
                       config_dir: Path, now_time: time) -> tuple[str, bool]:
     """
@@ -185,8 +220,9 @@ def build_eod_summary(registry: CronRegistry, store: StateStore, today: date,
             completed.append(job)
             # F2 (15-Jul): a job that EXECUTED ok but FUNCTIONALLY failed (empty artifact,
             # undelivered output) must NOT read as clean. Surface the functional gap.
+            # S5 (17-Jul): ...but only a REAL gap. See _BENIGN_FUNCTIONAL.
             func = parse_functional_status(row.get("message"))
-            if func and func.upper() not in ("OK", "SUCCESS", "DELIVERED"):
+            if func and func.upper() not in _BENIGN_FUNCTIONAL:
                 functional_issues.append((job.name, func))
 
     critical_miss = any(j.critical for j in missed)
