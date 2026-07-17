@@ -333,5 +333,27 @@ def main(argv=None) -> int:
         return 1
 
 
+def _cron_main(argv=None) -> int:
+    """Cron entry: S1 holiday-skip, then the real capture/summarize.
+
+    S1 (2026-07-17): market_day_only was decorative — nothing enforced it at the
+    cron entry, so this ran on every NSE holiday. skip_if_non_trading_day FAILS
+    OPEN (weekday fallback on any calendar error) so a trading day is never
+    skipped. Guard here, not in main(), so a manual capture still works.
+
+    NOTE: this ONE script backs TWO registry jobs — `capture_metrics` (bare) and
+    `metrics_summary` (--summarize). The skip must be attributed to the job that
+    actually ran, or the heartbeat would land under the wrong name and the Cron
+    Officer would report a phantom miss for the other one.
+    """
+    from utils.cron_heartbeat import skip_if_non_trading_day
+
+    args = sys.argv[1:] if argv is None else argv
+    job = "metrics_summary" if "--summarize" in args else "capture_metrics"
+    if skip_if_non_trading_day(job):
+        return 0
+    return main(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cron_main())

@@ -387,5 +387,34 @@ def main(argv=None) -> int:
     return 0
 
 
+def _cron_main(argv=None) -> int:
+    """Cron entry: S1 holiday-skip, then the real refresh.
+
+    S1 (2026-07-17): cron_registry declares this job `market_day_only: true` +
+    `cadence: market_day`, but NOTHING enforced it at the cron entry — the
+    registry's `cadence` only tells the Cron Officer not to EXPECT a heartbeat
+    on a holiday; cron still fired the job. So the token was refreshed on every
+    NSE holiday: pointless (there is no trading) though harmless.
+
+    *** THE SAFETY PROPERTY: a TRADING day must NEVER be skipped. *** This job
+    gates the whole boot chain (05:00 delete -> 08:15 TOTP refresh ->
+    token-watcher starts the app), so a trading day misread as a holiday would
+    starve the token and the system could not trade at all. That is why the
+    guard is skip_if_non_trading_day, which FAILS OPEN: on ANY calendar error
+    (missing/corrupt nse_holidays_<year>.yaml) it degrades to a plain weekday
+    check and the job RUNS. Skipping a real holiday saves a pointless refresh;
+    wrongly skipping a trading day costs the trading session — the asymmetry
+    decides the direction.
+
+    The guard lives here, NOT in main(), so a manual/ad-hoc `main()` run (e.g.
+    recovering a token on a weekend) is never blocked. Mirrors eod_cleanup.
+    """
+    from utils.cron_heartbeat import skip_if_non_trading_day
+
+    if skip_if_non_trading_day("auto_refresh_token"):
+        return 0
+    return main(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cron_main())

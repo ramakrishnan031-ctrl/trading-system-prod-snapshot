@@ -222,5 +222,22 @@ def main() -> int:
     return 0 if severity == "OK" else 1
 
 
+def _cron_main() -> int:
+    """Cron entry: S1 holiday-skip, then the real drift check.
+
+    S1 (2026-07-17): market_day_only was decorative — nothing enforced it at the
+    cron entry, so this ran on every NSE holiday and compared today's heartbeats
+    against a set of jobs that were (correctly) never due. skip_if_non_trading_day
+    FAILS OPEN (weekday fallback on any calendar error) so a trading day is never
+    skipped — drift is still checked every trading day. Guard here, not in main(),
+    so a manual drift check on any day still works.
+    """
+    from utils.cron_heartbeat import skip_if_non_trading_day
+
+    if skip_if_non_trading_day("check_cron_drift"):
+        return 0
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cron_main())

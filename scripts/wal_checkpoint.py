@@ -47,5 +47,24 @@ def main() -> None:
         sys.exit(1)
 
 
-if __name__ == "__main__":
+def _cron_main() -> int:
+    """Cron entry: S1 holiday-skip, then the real checkpoint.
+
+    S1 (2026-07-17): market_day_only was decorative — nothing enforced it at the
+    cron entry, so this ran on every NSE holiday. skip_if_non_trading_day FAILS
+    OPEN (weekday fallback on any calendar error) so a trading day is never
+    skipped. Guard here, not in main(), so a manual checkpoint still works.
+
+    main() returns None (it signals failure by raising), so the exit code is 0
+    unless it raises — preserved exactly as before.
+    """
+    from utils.cron_heartbeat import skip_if_non_trading_day
+
+    if skip_if_non_trading_day("wal_checkpoint"):
+        return 0
     main()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_cron_main())

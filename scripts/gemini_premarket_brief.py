@@ -288,5 +288,22 @@ def main(argv=None) -> int:
         return 1
 
 
+def _cron_main(argv=None) -> int:
+    """Cron entry: S1 holiday-skip, then the real job.
+
+    S1 (2026-07-17): the registry declares this job market_day_only + cadence
+    market_day, but NOTHING enforced it at the cron entry — `cadence` only tells
+    the Cron Officer not to EXPECT a heartbeat on a holiday; cron still fired the
+    job. skip_if_non_trading_day FAILS OPEN (weekday fallback on any calendar
+    error) so a trading day is never skipped. The guard is here and not in main()
+    so a manual/ad-hoc run on a non-trading day is never blocked.
+    """
+    from utils.cron_heartbeat import skip_if_non_trading_day
+
+    if skip_if_non_trading_day("gemini_premarket_brief"):
+        return 0
+    return main(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cron_main())

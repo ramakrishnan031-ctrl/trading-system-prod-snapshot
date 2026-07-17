@@ -458,5 +458,21 @@ def _local_capital_snapshot(store: StateStore, log: logging.Logger):
         return True, 0.0
 
 
+def _cron_main(argv=None) -> int:
+    """Cron entry: S1 holiday-skip, then the real reconcile.
+
+    S1 (2026-07-17): market_day_only was decorative — nothing enforced it at the
+    cron entry, so this ran (and called the broker) on every NSE holiday.
+    skip_if_non_trading_day FAILS OPEN (weekday fallback on any calendar error)
+    so a trading day is never skipped. Guard here, not in main(), so a manual
+    reconcile on a non-trading day still works.
+    """
+    from utils.cron_heartbeat import skip_if_non_trading_day
+
+    if skip_if_non_trading_day("eod_broker_reconcile"):
+        return 0
+    return main(argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cron_main())
