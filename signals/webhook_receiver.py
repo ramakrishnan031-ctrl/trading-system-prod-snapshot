@@ -276,9 +276,10 @@ class WebhookReceiver:
             # it". That is reconnaissance and timing intel, unauthenticated, from the
             # internet. It also bypassed the per-IP limiter that /webhook is behind.
             #
-            # Now: same rate limiter, same secret as /webhook. Scope is deliberately this
-            # ONE route — /webhook's handler is not touched, because this is the signal
-            # entry path and a health endpoint is not worth risking it.
+            # Now: same rate limiter, same secret, and same require_hmac posture as
+            # /webhook. Scope is deliberately this ONE route — /webhook's handler is not
+            # touched, because this is the signal entry path and a health endpoint is not
+            # worth risking it.
             source_ip: str = request.remote_addr or "unknown"
 
             # Limit BEFORE auth, exactly as /webhook does, so a flood is cheap to reject.
@@ -296,6 +297,18 @@ class WebhookReceiver:
                         receiver._secret.encode(), b"", hashlib.sha256
                     ).hexdigest()
                     ok = _hmac.compare_digest(sig_header[7:], expected_hex)
+                elif receiver._require_hmac:
+                    # G.1 parity with /webhook (see _handle_webhook): when
+                    # require_hmac=True the token-param fallback is disabled, so a
+                    # token-only request must NOT authenticate here either. Without
+                    # this, a deploy that flipped require_hmac kept the URL-token
+                    # surface open on /health — the more exposed of the two routes,
+                    # and the one that hands back kill_switch_active + queue depth.
+                    # Falls through to the shared 401 below (ok stays False); the
+                    # message stays uniform on purpose — /webhook names the reason,
+                    # but here that would tell an anonymous caller require_hmac is
+                    # on, which is exactly the kind of leak this route must not have.
+                    ok = False
                 elif token_param:
                     ok = _hmac.compare_digest(token_param, receiver._secret)
                 if not ok:
