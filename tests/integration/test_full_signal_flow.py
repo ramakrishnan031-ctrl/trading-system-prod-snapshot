@@ -6,9 +6,16 @@ with mocked broker — from webhook POST through close_trade and report.
 
 4 scenarios:
   1. Happy path: webhook → screen → size → reserve → place → fill → TGT hit → close → report
-  2. Sad path 1: Signal rejected by risk (daily_loss_limit reached)
+  2. Sad path 1: Signal rejected by risk (max_open_positions cap saturated)
   3. Sad path 2: Entry rejected by broker (OrderRejectedError)
   4. Sad path 3: SL hit producing a loss
+
+NOTE (Q9 batch 1, 18-Jul-2026): scenario 2 previously advertised itself as
+"daily_loss_limit reached", but the implemented test saturates the OPEN_POSITIONS cap —
+the suite documented a daily-loss scenario it never ran, which is how that gap survived
+review. The docstring now matches the code. The real daily-loss coverage (both halves,
+positive and negative, driven to the threshold) lives in
+tests/integration/test_q9_daily_loss_limit_wired.py.
 
 All tests use the wired_system fixture from conftest.py (paper mode,
 real subsystems, SQLite in tmp_path, now_ist patched to 10:30 IST).
@@ -105,7 +112,8 @@ _ALL_TERMINAL = {
 }
 
 
-def _seed_signal_row(ctx: SystemContext, signal_id: str, symbol: str) -> None:
+def _seed_signal_row(ctx: SystemContext, signal_id: str, symbol: str,
+                     strategy: str = "vwap_bounce_long") -> None:
     with ctx.store.transaction() as cur:
         cur.execute(
             """INSERT OR IGNORE INTO signals
@@ -113,7 +121,7 @@ def _seed_signal_row(ctx: SystemContext, signal_id: str, symbol: str) -> None:
                 triggered_at, received_at, expires_at,
                 status, fingerprint, fingerprint_date)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (signal_id, symbol, "vwap_bounce_long", "vwap_bounce_long",
+            (signal_id, symbol, strategy, strategy,
              "2026-04-15 09:45:00", "2026-04-15 09:45:00", "2026-04-15 09:46:00",
              "PROCESSED", f"fp_{signal_id}", "2026-04-15"),
         )
@@ -342,7 +350,8 @@ class TestSadPathRiskRejection:
     No trade created, capital unchanged.
     """
 
-    def _seed_open_trades(self, ctx: SystemContext, count: int) -> None:
+    def _seed_open_trades(self, ctx: SystemContext, count: int,
+                          strategy: str = "vwap_bounce_long") -> None:
         for i in range(count):
             signal_id = f"sig_risk_seed_{i:04d}"
             trade_id = f"trd_risk_seed_{i:04d}"
@@ -353,7 +362,7 @@ class TestSadPathRiskRejection:
                         triggered_at, received_at, expires_at,
                         status, fingerprint, fingerprint_date)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (signal_id, f"RISKSEED{i}", "vwap_bounce_long", "vwap_bounce_long",
+                    (signal_id, f"RISKSEED{i}", strategy, strategy,
                      "2026-04-15 09:45:00", "2026-04-15 09:45:00", "2026-04-15 09:46:00",
                      "PROCESSED", f"fp_risk_seed_{i:04d}", "2026-04-15"),
                 )
@@ -367,7 +376,7 @@ class TestSadPathRiskRejection:
                         status, order_protocol,
                         created_at, updated_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (trade_id, signal_id, f"RISKSEED{i}", "LONG", "vwap_bounce_long",
+                    (trade_id, signal_id, f"RISKSEED{i}", "LONG", strategy,
                      10, 10, 100.0, 100.0, 98.0, 104.0,
                      1000.0, 200.0, "OPEN", "CO_PLUS_TGT",
                      "2026-04-15 09:45:00", "2026-04-15 09:45:00"),
@@ -378,7 +387,16 @@ class TestSadPathRiskRejection:
         symbol = "HDFCBANK"
 
         # Saturate the open-position cap (max_open_positions=2 in conftest)
-        self._seed_open_trades(ctx, 2)
+        # Seed the two OPEN positions on a DIFFERENT strategy than the incoming
+        # signal (SCANNER_NAME → vwap_bounce_long). Q9 batch 1 found that seeding them
+        # on the SAME strategy trips the per-strategy cap in
+        # signal_processor.py:624-640 (STRATEGY_POSITION_LIMIT) BEFORE the risk engine
+        # is ever reached — so this test, despite its name, never exercised the global
+        # max_open_positions gate. The nine-way accepted-status set hid that for as long
+        # as it existed. Seeding elsewhere leaves vwap_bounce_long at 0/2 of its own cap
+        # while the GLOBAL cap (max_open_positions=2) is saturated, so OPEN_POSITIONS is
+        # the gate that fires — which is what this test claims to prove.
+        self._seed_open_trades(ctx, 2, strategy="gap_go_long")
 
         initial_snap = ctx.fund_manager.get_snapshot()
 
@@ -395,21 +413,19 @@ class TestSadPathRiskRejection:
             signal_id = _wait_for_signal(ctx, symbol, timeout=3.0)
             assert signal_id is not None
 
-            _risk_reject = {
-                "REJECTED_OPEN_POSITIONS",
-                "REJECTED_DAILY_TRADES",
-                "REJECTED_DAILY_LOSS",
-                "REJECTED_KILL_SWITCH",
-                "REJECTED_DUPLICATE_SYMBOL",
-                "REJECTED_CONSECUTIVE_LOSSES",
-                "REJECTED_SIZING_VALID",
-                "REJECTED_CAPITAL",
-                "REJECTED_STRATEGY_POSITION_LIMIT",
-            }
-            terminal = _wait_for_signal_status(ctx, signal_id, _risk_reject, timeout=5.0)
+            # Q9 batch 1 (18-Jul-2026): this used to accept ANY of nine rejection
+            # statuses, so it proved "some gate rejected" and never WHICH — it would
+            # still have passed if the OPEN_POSITIONS gate silently broke and a
+            # different gate happened to fire. The scenario is deterministic (the
+            # open-position cap is saturated above and every earlier check passes), so
+            # it now asserts the SPECIFIC gate.
+            terminal = _wait_for_signal_status(
+                ctx, signal_id, {"REJECTED_OPEN_POSITIONS"}, timeout=5.0
+            )
 
-        assert terminal is not None
-        assert terminal in _risk_reject, f"Expected risk rejection, got {terminal!r}"
+        assert terminal == "REJECTED_OPEN_POSITIONS", (
+            f"expected the OPEN_POSITIONS gate specifically, got {terminal!r}"
+        )
 
         # No trade created for this symbol
         trades = ctx.store.fetch_all(
