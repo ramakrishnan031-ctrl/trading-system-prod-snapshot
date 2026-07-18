@@ -65,6 +65,7 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 
 from core.state_store import StateStore
+from reports import signal_status as sig_status
 from reports.style_constants import (
     FILL_GREEN, FILL_RED, FILL_AMBER, FILL_GREY, FILL_HEADER,
     FONT_BODY, FONT_HEADER, FONT_WHITE_BOLD, FONT_TITLE,
@@ -709,29 +710,13 @@ def _paint(ws, row: int, key: str, fill, *, font=None, when: bool = True) -> Non
 # fabricated per-signal duplicate rows, no fake Received=Q+R+Dup identity.
 # ═════════════════════════════════════════════════════════════════════════════════
 
-_QUALIFIED_STATUSES = {"PROCESSED", "TRADED", "PLACEMENT_FAILED", "RESERVED",
-                       "PROCESSED_NO_PLACER", "PASSED"}
-# Known non-terminal / other statuses. A status outside ALL of {qualified, rejected,
-# skipped, dropped, known-other} is 'unmapped' → it makes the SIGNAL-STORAGE
-# reconciliation Δ ≠ 0 (a real schema-drift alarm, not a silent catch-all).
-_KNOWN_OTHER_STATUSES = {"EXPIRED", "QUEUE_FULL", "QUEUED", "PENDING", "CANCELLED",
-                         "TIMEOUT", "IN_PROCESS", "FAILED", "ACCEPTED", "PROCESSING",
-                         "DUPLICATE", "INVALID_SYMBOL", "INVALID_PRICE", "OUTSIDE_HOURS"}
-
-
-def _signal_bucket(status: str) -> str:
-    s = (status or "").upper()
-    if s.startswith("REJECTED"):
-        return "rejected"
-    if s.startswith("SKIPPED_"):
-        return "skipped"
-    if s.startswith("DROPPED_"):
-        return "dropped"
-    if s in _QUALIFIED_STATUSES:
-        return "qualified"
-    if s in _KNOWN_OTHER_STATUSES or s.startswith("GATE_") or s.startswith("RETEST_"):
-        return "other"
-    return "unmapped"
+# Vocabulary + bucketing moved to reports/signal_status.py so daily_report.py and this file
+# share ONE implementation (they previously classified signal statuses independently, and
+# daily_report's copy did it by substring-matching the free-text rejection_reason). Aliased
+# here to keep this module's call sites unchanged.
+_QUALIFIED_STATUSES = sig_status.QUALIFIED_STATUSES
+_KNOWN_OTHER_STATUSES = sig_status.KNOWN_OTHER_STATUSES
+_signal_bucket = sig_status.bucket
 
 
 def _signal_stage(status: str, has_screener: bool, has_trade: bool) -> str:

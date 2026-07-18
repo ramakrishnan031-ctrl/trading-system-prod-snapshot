@@ -50,6 +50,7 @@ from reports.style_constants import (
     COLOR_WHITE,
 )
 from core.time_authority import now_ist
+from reports import signal_status as sig_status
 from utils.holiday_guard import is_trading_day
 
 # M-R2 (audit 04-Jul): CLOSED_MANUAL trades ARE closed with realized P&L; the report
@@ -456,19 +457,38 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
 
     row = section_header("Section B — Signal Funnel", row)
     total_signals = len(data.signals)
-    dedup_signals = [s for s in data.signals if "DUPLICATE" not in (s.get("status") or "")]
+    # Classification is driven by the STRUCTURED status, never by the free-text
+    # rejection_reason (see reports/signal_status.py for why, and what it cost).
+    dedup_signals = [s for s in data.signals if not sig_status.is_dedup_duplicate(s.get("status"))]
     excluded_count = sum(1 for s in data.signals if s.get("symbol") in data.excluded_symbols)
     after_dedup = len(dedup_signals) - excluded_count
     passed_screen = sum(1 for s in data.signals if s.get("trade_id") is not None or s.get("status") in ("TRADED", "PLACED", "FILLED"))
     converted = sum(1 for s in data.signals if s.get("trade_id") is not None)
-    rejected_capital = sum(1 for s in data.signals if "CAPITAL" in (s.get("rejection_reason") or "").upper())
-    silent_dead = total_signals - converted - sum(1 for s in data.signals if "REJECTED" in (s.get("status") or ""))
+    # Sizing/capital rejections, by status. The old test was
+    # `"CAPITAL" in rejection_reason.upper()`, which matched every CONCENTRATION rejection
+    # because its reason string embeds `capital_qty=` -- reporting 1,189 capital rejections
+    # on 2026-07-10 when the true count was 0.
+    sizing_rejected = [s for s in data.signals if sig_status.is_sizing_rejection(s.get("status"))]
+    constraint_counts: dict = {}
+    for s in sizing_rejected:
+        c = sig_status.sizing_constraint(s.get("status")) or "UNKNOWN"
+        constraint_counts[c] = constraint_counts.get(c, 0) + 1
+    top_constraint = max(constraint_counts.items(), key=lambda kv: kv[1]) if constraint_counts else None
+    # 'Silent' means NO recorded outcome. REJECTED_* is not the only terminal family --
+    # DROPPED_*/SKIPPED_*/QUEUE_FULL/PLACEMENT_FAILED/TIMEOUT are terminal too, and counting
+    # only REJECTED_* mislabelled 2,688 explicitly-dispositioned signals as silently dead.
+    silent_dead = total_signals - sum(
+        1 for s in data.signals
+        if s.get("trade_id") is not None or sig_status.has_explicit_disposition(s.get("status"))
+    )
 
     row = add_row("Total Received", f"{total_signals}", row)
     row = add_row("After Dedup/Excluded", f"{after_dedup} ({after_dedup/max(total_signals,1)*100:.1f}%)", row)
     row = add_row("Passed Screening", f"{passed_screen} ({passed_screen/max(total_signals,1)*100:.1f}%)", row)
     row = add_row("Converted to Orders", f"{converted} ({converted/max(total_signals,1)*100:.1f}%)", row)
-    row = add_row("Rejected (Capital)", f"{rejected_capital}", row)
+    row = add_row("Rejected (Sizing/Capital)", f"{len(sizing_rejected)}", row)
+    if top_constraint:
+        row = add_row("  Binding Constraint", f"{top_constraint[0]} ({top_constraint[1]})", row)
     row = add_row("Silent Dead", f"{max(0, silent_dead)}", row)
     row += 1
 
@@ -545,11 +565,15 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
     row = add_row("Orphan Orders", orphan_count, row)
     row = add_row("Reconcile Status", "OK" if orphan_count == 0 else "REVIEW", row)
 
-    rejected_signals = [s for s in data.signals if "REJECTED" in (s.get("status") or "").upper()]
+    # Group by the STRUCTURED status family, not by the free-text reason. The reason embeds the
+    # symbol and three sizing arm values, so grouping by it produced 190 near-unique lines for
+    # 7,655 rejections on 2026-07-10 -- every one too small to notice. By family: 9 lines.
+    # The per-signal reason text is NOT lost: sheet 1_Signals renders it for every signal.
+    rejected_signals = [s for s in data.signals if sig_status.is_rejected(s.get("status"))]
     rejection_reasons: dict = {}
     for s in rejected_signals:
-        reason = s.get("rejection_reason") or s.get("status") or "UNKNOWN"
-        rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+        fam = sig_status.family(s.get("status"))
+        rejection_reasons[fam] = rejection_reasons.get(fam, 0) + 1
     if rejection_reasons:
         row = add_row("Rejection Breakdown", "", row)
         for reason, cnt in sorted(rejection_reasons.items(), key=lambda x: -x[1]):
@@ -1538,7 +1562,7 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
             strat,
             signals,
             processed_count,
-            sum(1 for s in data.signals if s.get("strategy") == strat and "REJECTED" in (s.get("status") or "")),
+            sum(1 for s in data.signals if s.get("strategy") == strat and sig_status.is_rejected(s.get("status"))),
             len(trades),
             len(wins),
             len(losses),
