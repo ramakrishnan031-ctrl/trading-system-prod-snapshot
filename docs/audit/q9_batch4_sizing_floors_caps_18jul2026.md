@@ -460,7 +460,7 @@ Test-only: **no runtime behaviour change**.
 
 | Item | Owner | Note |
 |---|---|---|
-| **D1 sizing decision** now has its full evidence package | Rama | §C reachability table + §5 exclusion + the 7.34× LONG skew |
+| **D1 sizing decision** now has its full evidence package | Rama | §C reachability table + §5 exclusion + the **9.54×** LONG skew (authoritative, via `StrategyConfig.direction`; an earlier name-inferred 7.34× is superseded) |
 | `daily_report.py:464` mis-attributes 3,098 CONCENTRATION rejections as CAPITAL | careful loop | 100% false positive; one-line substring test, but it is a report the operator reads daily |
 | `daily_report.py:549` fragments one rejection class into 246 lines | careful loop | group by `status` before `rejection_reason` |
 | `position_sizer.py:506` 2× ceiling can exceed every clamp arm | careful loop / D1 | latent; pinned by a failing-on-change test |
