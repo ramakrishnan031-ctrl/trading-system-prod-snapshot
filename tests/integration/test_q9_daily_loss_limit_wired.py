@@ -97,13 +97,24 @@ def _capital_picture(ctx: SystemContext) -> dict:
     }
 
 
-def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
-    """Drive ONE real losing round-trip through the WIRED path: reserve → place → ENTRY
-    fill → SL fill → close. Asserts the capital picture before and after (Q9 rule A).
+def _drive_close(ctx: SystemContext, symbol: str, seq: int,
+                 exit_price: float = LOSS_SL, sl_price: float = LOSS_SL,
+                 tag: str = "loss") -> dict:
+    """Drive ONE real round-trip through the WIRED path: reserve → place → ENTRY
+    fill → exit fill → close. Asserts the capital picture before and after (Q9 rule A).
+
+    `exit_price` is the price the exit leg FILLS at, and it is what decides the sign:
+    below LOSS_ENTRY is a loss, above it is a win. `sl_price` stays the price the SL
+    order is PLACED at, so a winning exit is still placed with a realistic stop.
+
+    Defaults reproduce the original losing round-trip exactly, so batches 1 and 5 are
+    untouched. The win form exists for Q9's consecutive-losses RESET path, which has to
+    prove a winner actually breaks the streak.
 
     Returns the closed trade row.
     """
-    signal_id = f"q9_loss_{seq}"
+    signal_id = f"q9_{tag}_{seq}"
+    expect_loss = exit_price < LOSS_ENTRY
     _seed_signal_row(ctx, signal_id, symbol)
 
     before = _capital_picture(ctx)
@@ -126,7 +137,7 @@ def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
 
     ctx.order_placer.place(
         symbol=symbol, side="BUY", qty=LOSS_QTY,
-        entry_price=LOSS_ENTRY, sl_price=LOSS_SL,
+        entry_price=LOSS_ENTRY, sl_price=sl_price,
         intent="INTRADAY", signal_id=signal_id,
         reservation_id=res.reservation_id,
     )
@@ -162,7 +173,7 @@ def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
     ctx.bus.publish(OrderFilled(
         source_module="q9_test", internal_order_id=sl_iid,
         broker_order_id=f"PAPER_SL_{symbol}_{seq}", symbol=symbol, side="SELL",
-        filled_qty=LOSS_QTY, avg_fill_price=LOSS_SL, expected_price=LOSS_SL,
+        filled_qty=LOSS_QTY, avg_fill_price=exit_price, expected_price=exit_price,
         slippage_pct=0.0, filled_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
     ))
 
@@ -171,10 +182,18 @@ def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
 
     after_close = _capital_picture(ctx)
     # gross/net relationship — NOT a hard-coded figure (see the module docstring).
-    assert closed["gross_pnl"] < 0, f"loss #{seq}: expected a LOSS"
+    # Costs always push net BELOW gross, whichever side the trade landed on.
     assert closed["net_pnl"] <= closed["gross_pnl"], (
-        f"loss #{seq}: net must be at least as negative as gross once costs are deducted"
+        f"{tag} #{seq}: net must sit below gross once costs are deducted"
     )
+    if expect_loss:
+        assert closed["gross_pnl"] < 0, f"{tag} #{seq}: expected a LOSS"
+    else:
+        assert closed["gross_pnl"] > 0, f"{tag} #{seq}: expected a WIN"
+        assert closed["net_pnl"] > 0, (
+            f"{tag} #{seq}: costs turned the win into a net loss ({closed['net_pnl']:.2f}); "
+            f"it would NOT break a consecutive-loss streak — widen exit_price"
+        )
     # The close must release the capital it committed and move realized P&L down.
     assert after_close["intraday_used"] == pytest.approx(before["intraday_used"]), (
         f"loss #{seq}: used capital not released on close"
@@ -182,10 +201,16 @@ def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
     assert after_close["intraday_reserved"] == pytest.approx(before["intraday_reserved"]), (
         f"loss #{seq}: reserved capital not released on close"
     )
-    assert after_close["reader"] < before["reader"], (
-        f"loss #{seq}: a losing close did not move realized P&L downward "
-        f"({before['reader']} → {after_close['reader']})"
-    )
+    if expect_loss:
+        assert after_close["reader"] < before["reader"], (
+            f"{tag} #{seq}: a losing close did not move realized P&L downward "
+            f"({before['reader']} → {after_close['reader']})"
+        )
+    else:
+        assert after_close["reader"] > before["reader"], (
+            f"{tag} #{seq}: a winning close did not move realized P&L upward "
+            f"({before['reader']} → {after_close['reader']})"
+        )
     # The snapshot the PRE-TRADE gate reads must agree with the reader.
     assert after_close["daily_realized_pnl"] == pytest.approx(after_close["reader"]), (
         "snapshot.daily_realized_pnl and get_daily_realized_net_pnl disagree — the "
@@ -194,8 +219,30 @@ def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
     return closed
 
 
-def _probe_signal_status(ctx: SystemContext, symbol: str, price: float) -> str | None:
-    """Push ONE signal through the wired webhook→screen→risk path; return its terminal status."""
+def _drive_losing_close(ctx: SystemContext, symbol: str, seq: int) -> dict:
+    """The original losing round-trip, unchanged. Batches 1 and 5 call this."""
+    return _drive_close(ctx, symbol, seq)
+
+
+_TERMINAL_STATUSES = {
+    "REJECTED_DAILY_LOSS", "REJECTED_OPEN_POSITIONS", "REJECTED_DAILY_TRADES",
+    "REJECTED_KILL_SWITCH", "REJECTED_DUPLICATE_SYMBOL",
+    "REJECTED_CONSECUTIVE_LOSSES", "REJECTED_SIZING_VALID", "REJECTED_CAPITAL",
+    "REJECTED_STRATEGY_POSITION_LIMIT", "PASSED", "PLACED", "PROCESSED",
+}
+
+
+def _probe_signal_status(ctx: SystemContext, symbol: str, price: float,
+                         ignore: set[str] | None = None) -> str | None:
+    """Push ONE signal through the wired webhook→screen→risk path; return its terminal status.
+
+    ``ignore`` drops statuses from the wait set. It exists because "PASSED" is the
+    SCREENING verdict (screening/secondary_screener.py:353,512), reached BEFORE the
+    risk engine rules — so waiting on it can return while the risk verdict is still
+    in flight, and any positive assertion on a specific REJECTED_* becomes a race.
+    Callers asserting a specific risk rejection should pass ignore={"PASSED"}.
+    Default behaviour is unchanged.
+    """
     ctx.sim_kite.set_rich_quote(symbol, ltp=price)
     rich_md = ctx.sim_kite.get_market_data(symbol)
     with patch.object(ctx.screener, "_build_market_data", return_value=rich_md):
@@ -207,10 +254,7 @@ def _probe_signal_status(ctx: SystemContext, symbol: str, price: float) -> str |
         assert signal_id is not None
         terminal = _wait_for_signal_status(
             ctx, signal_id,
-            {"REJECTED_DAILY_LOSS", "REJECTED_OPEN_POSITIONS", "REJECTED_DAILY_TRADES",
-             "REJECTED_KILL_SWITCH", "REJECTED_DUPLICATE_SYMBOL",
-             "REJECTED_CONSECUTIVE_LOSSES", "REJECTED_SIZING_VALID", "REJECTED_CAPITAL",
-             "REJECTED_STRATEGY_POSITION_LIMIT", "PASSED", "PLACED", "PROCESSED"},
+            _TERMINAL_STATUSES - (ignore or set()),
             timeout=6.0,
         )
     return terminal
