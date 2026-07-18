@@ -3,10 +3,10 @@ from __future__ import annotations
 import json, os, sqlite3, subprocess, sys, time, urllib.request
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+from tests.crash_test.ct_utils import get_db_connection
 from dotenv import load_dotenv
 load_dotenv()
 
-DB = os.path.expanduser("~/systems/trading-system/data_store/trading_system.db")
 PYTHON = sys.executable
 
 def health():
@@ -16,13 +16,13 @@ def health():
         return {"status": "dead"}
 
 def open_trade_count():
-    conn = sqlite3.connect(DB)
+    conn = get_db_connection(readonly=True)
     count = conn.execute("SELECT COUNT(*) FROM trades WHERE status IN ('OPEN','PARTIAL')").fetchone()[0]
     conn.close()
     return count
 
 def get_open_trades():
-    conn = sqlite3.connect(DB)
+    conn = get_db_connection(readonly=True)
     conn.row_factory = sqlite3.Row
     trades = conn.execute("SELECT trade_id, symbol, status FROM trades WHERE status IN ('OPEN','PARTIAL')").fetchall()
     conn.close()

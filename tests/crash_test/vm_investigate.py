@@ -1,9 +1,10 @@
 """One-shot VM investigation: LIQUIDPLUS, EOD coverage, PnL trust."""
-import sqlite3, os
+import os, sys
 
-DB = os.path.expanduser("~/systems/trading-system/data_store/trading_system.db")
-conn = sqlite3.connect(DB)
-conn.row_factory = sqlite3.Row
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+from tests.crash_test.ct_utils import get_db_connection
+
+conn = get_db_connection(readonly=True)   # live DB, READ-ONLY via the one guard
 
 print("=" * 70)
 print("1. LIQUIDPLUS POSITIONS")

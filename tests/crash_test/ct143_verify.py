@@ -8,22 +8,22 @@ import json, os, sqlite3, subprocess, sys, urllib.request
 from datetime import datetime
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+from tests.crash_test.ct_utils import get_db_connection
 from dotenv import load_dotenv
 load_dotenv()
 
-DB = os.path.expanduser("~/systems/trading-system/data_store/trading_system.db")
 LOG_DIR = os.path.expanduser("~/systems/trading-system/logs")
 REPORT_DIR = os.path.expanduser("~/systems/trading-system/reports/output")
 
 def q(sql):
-    conn = sqlite3.connect(DB)
+    conn = get_db_connection(readonly=True)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(sql).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 def q1(sql):
-    conn = sqlite3.connect(DB)
+    conn = get_db_connection(readonly=True)
     val = conn.execute(sql).fetchone()
     conn.close()
     return val[0] if val else None

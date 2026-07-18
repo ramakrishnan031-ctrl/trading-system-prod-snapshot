@@ -3,10 +3,10 @@ from __future__ import annotations
 import json, os, subprocess, sys, time, urllib.request, sqlite3
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
+from tests.crash_test.ct_utils import get_db_connection
 from dotenv import load_dotenv
 load_dotenv()
 
-DB = os.path.expanduser("~/systems/trading-system/data_store/trading_system.db")
 PYTHON = sys.executable
 SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
@@ -50,7 +50,7 @@ def start_system(wait=20):
     time.sleep(wait)
 
 def db_query(sql):
-    conn = sqlite3.connect(DB)
+    conn = get_db_connection(readonly=True)
     result = conn.execute(sql).fetchone()[0]
     conn.close()
     return result
