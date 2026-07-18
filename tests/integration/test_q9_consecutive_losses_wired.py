@@ -44,6 +44,16 @@ REACHABILITY (B9) -- measured against PRODUCTION, not the fixture. See the repor
     streak completes the day's entries have already stopped for other reasons.
     REACHABLE, correctly configured, never yet binding.
 
+⚠️ EVERY CLASS HERE MUST KEEP paper_auto_fill_delay_sec=60.0. DO NOT REMOVE IT.
+    The fixture default is 0.05, i.e. the paper adapter auto-fills an order 50 ms after
+    it is placed, ASYNCHRONOUSLY. These tests publish their own ENTRY/exit fills to
+    control the exit price and therefore the sign of each close, so the adapter's
+    auto-fill RACES them: win the race and the close lands at the intended price, lose
+    it and the trade closes at the adapter's, corrupting the P&L and hence the streak.
+    It cost one full-suite failure that passed in isolation and in tests/integration --
+    the signature of a race, since only the slower full run lost it. Every other Q9
+    batch sets 60.0 for the same reason.
+
 TEST-ONLY. No production file is modified by this module.
 """
 from __future__ import annotations
@@ -134,6 +144,7 @@ def _drive_losses(ctx: SystemContext, n: int, start: int = 1) -> None:
 # 1. THE STREAK ITSELF — what increments it, and what resets it (B1a)
 # ═════════════════════════════════════════════════════════════════════════════
 
+@pytest.mark.parametrize("wired_system", [{"paper_auto_fill_delay_sec": 60.0}], indirect=True)
 class TestTheStreakMechanics:
 
     def test_each_losing_close_advances_the_streak_by_exactly_one(self, wired_system):
@@ -232,6 +243,7 @@ class TestTheStreakMechanics:
 # 2. THE GATE — positive and negative through the WIRED path (B3, B4)
 # ═════════════════════════════════════════════════════════════════════════════
 
+@pytest.mark.parametrize("wired_system", [{"paper_auto_fill_delay_sec": 60.0}], indirect=True)
 class TestTheGateItself:
 
     def test_at_the_threshold_the_next_signal_is_rejected_consecutive_losses(self, wired_system):
@@ -292,6 +304,7 @@ class TestTheGateItself:
 # 3. RESTART (B1c) — is the restart a bypass?
 # ═════════════════════════════════════════════════════════════════════════════
 
+@pytest.mark.parametrize("wired_system", [{"paper_auto_fill_delay_sec": 60.0}], indirect=True)
 class TestSurvivesRestart:
     """The same question batch 5 asked of the daily loss and the kill state. If the
     streak resets on restart, a restart hands the system a fresh run of losses."""
@@ -332,6 +345,7 @@ class TestSurvivesRestart:
 # 4. PARITY (B7) + REACHABILITY (B9) — structural
 # ═════════════════════════════════════════════════════════════════════════════
 
+@pytest.mark.parametrize("wired_system", [{"paper_auto_fill_delay_sec": 60.0}], indirect=True)
 class TestParityAndReachability:
 
     def test_the_gate_has_no_paper_or_live_branch(self, wired_system):
