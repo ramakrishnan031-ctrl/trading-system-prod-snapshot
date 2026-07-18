@@ -28,7 +28,7 @@ verified · **REACH** reachable under *current production config* (batch 4's add
 | 11 | Tier multiplier | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ REACHABLE — 0.5 on 298/298 | **batch 4** |
 | 12 | FIX-133 min-lot floor | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ REACHABLE — produced the qty on **65/298 (21.8%)** | **batch 4** |
 | 13 | M-C6 zero-multiplier SKIP | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ **UNREACHABLE** — `perf_weight` ≡ 1.0 | **batch 4** |
-| 14 | **Consecutive-losses gate (RE10)** | ❌ | — | — | — | — | ✅ | — | ✅ REACHABLE | 🔴 **STILL UNIT-ONLY — see §3** |
+| 14 | **Consecutive-losses gate (RE10)** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ REACHABLE — precondition met on **3 of 21** production days, but **0 rejections in 32,928 signals** (see §3) | **19-Jul batch** |
 
 **Layers added by the programme** (not in the original 14):
 
@@ -60,31 +60,49 @@ honest boundary.
 
 ---
 
-## 3. 🔴 THE ONE LAYER Q9 DID NOT CLOSE
+## 3. ✅ LAYER 14 — CLOSED 19-Jul (it was the last one)
 
-**Layer 14 — the consecutive-losses gate (RE10) is still UNIT-ONLY.**
+**The consecutive-losses gate (RE10) is now WIRED** — 13 tests,
+`tests/integration/test_q9_consecutive_losses_wired.py`, report
+`consecutive_losses_gate_wired_19jul2026.md`. It got its own batch rather than being smuggled
+into M-C1, because the scenario had to thread between the daily-trades cap above it and the
+post-close soft-kill below it.
 
-Verified, not assumed: in `tests/integration/` it appears only as (a) a fixture config value
-(`conftest.py:256 max_consecutive_losses=4`), (b) a member of a *terminal-status waiter set*,
-and (c) gate-order commentary explaining why batch 1's and batch 3's scenarios deliberately stay
-**under** it. **No integration test drives it to fire.**
+**The finding that shaped it: there is no counter.** The streak is RECOMPUTED on every
+`approve()` from `recent_trade_pnls(max_consec+1, today)` — never incremented, never in memory
+(`core/schema.sql:459-460` says the stored column "was never written"). So:
 
-Its **gate order** IS proven (batch 1 established RE5 checks `CONSECUTIVE_LOSSES` *before*
-`DAILY_LOSS`, which is why the daily-loss scenarios cap at 3 closes) — but its own enforcing
-branch has no wired positive. It is REACHABLE in production (`max_consecutive_losses: 4`).
+- **it resets on any non-loss close** (a breakeven too — RE10 defines a loss as `net_pnl < -1e-6`)
+  **and at the day boundary** (FIX-183, added because a cross-day streak was a **deadlock**:
+  breaking it needs a win, and the block prevents one). ⇒ **The halt is not for the rest of the
+  day; one winning close lifts it.** Proven, not described.
+- **it survives a restart by construction** — same shape as batch 5's daily P&L. **A restart is
+  NOT a bypass.**
 
-*Not smuggled into this batch: it is a scenario needing ≥4 consecutive losing closes, which
-collides with the daily-loss limit and needs its own design.*
+**⭐ REACHABILITY — a category of its own.** Not UNREACHABLE like the batch-4 guards (dead by
+algebra), and not routinely binding either. Measured against production: the precondition has
+been met on **3 of 21 trading days** (streaks of 5, 5, 6) — yet **`REJECTED_CONSECUTIVE_LOSSES`
+= 0 across all 32,928 signals**. Two checks explain it without any defect:
+
+1. **No bypass.** On 2026-07-08 the streak reached 4 at exit **10:22:23**, but all six trades had
+   been **entered by 10:14:19** — the gate reads at *entry* while the streak changes at *exit*, so
+   in-flight positions cannot be retro-blocked.
+2. **Why it never fired.** All **63** signals arriving after 10:22:23 that day were
+   `SKIPPED_QUOTE_UNAVAILABLE` — they died upstream of the risk engine.
+
+⇒ **REACHABLE: live, correctly configured, precondition demonstrably met, never yet binding.**
 
 ---
 
 ## 4. FINAL TALLY
 
+> **UPDATED 19-Jul — Q9 IS NOW COMPLETE AT 22/22.** Layer 14 closed; see §3.
+
 | | Count |
 |---|---|
-| Original 14 layers **WIRED** | **13 / 14** (layer 14 outstanding) |
-| Total layers now wired (incl. the 8 added) | **21 / 22** |
-| **REACHABLE** under current production config | **15** |
+| Original 14 layers **WIRED** | **14 / 14** ✅ |
+| Total layers now wired (incl. the 8 added) | **22 / 22** ✅ |
+| **REACHABLE** under current production config | **16** |
 | **UNREACHABLE** (dead by algebra or config) | **3** — the value cap, M-C6, and the sizing group in row 18 |
 | **CONDITIONAL** | **3** — gate-8 (observe mode), post-restart replay (mid-day restart), prior-day kill clear |
 | Sign-off-gated | **1** — E4/W10 |
