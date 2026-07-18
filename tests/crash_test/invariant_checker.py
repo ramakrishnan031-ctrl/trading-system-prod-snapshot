@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
 from tests.crash_test.ct_utils import (
-    get_db_connection, ist_now_iso, today_str, http_get, DB_PATH, RESULTS_DIR,
+    get_db_connection, ist_now_iso, today_str, http_get, LIVE_DB_PATH, RESULTS_DIR,
 )
 
 HEALTH_URL = "http://localhost:5000/health"

@@ -9,7 +9,7 @@ import sqlite3
 import sys
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
-from tests.crash_test.ct_utils import get_db_connection, ist_now_iso, DB_PATH
+from tests.crash_test.ct_utils import get_db_connection, ist_now_iso, BASE_DIR
 
 import logging
 
@@ -51,7 +51,7 @@ def main():
     import subprocess
     result = subprocess.run(
         [sys.executable, "tests/crash_test/invariant_checker.py", "--invariant", "A"],
-        capture_output=True, text=True, cwd=str(DB_PATH.parent.parent)
+        capture_output=True, text=True, cwd=str(BASE_DIR)
     )
     print(f"Invariant A check result (corrupted state):")
     print(result.stdout[:500])

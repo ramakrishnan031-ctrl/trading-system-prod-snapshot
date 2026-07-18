@@ -1,5 +1,20 @@
 """
 tests/crash_test/cleanup.py — Tool 7: Reset system state between scenarios.
+
+⚠️ SCOPE CHANGE (18-Jul-2026): this tool now resets the SCRATCH database only.
+
+It previously issued its destructive statements (delete signals, clear the kill
+switch, release reservations, ``UPDATE trades SET status='CANCELLED'``, reset
+capital) against the LIVE trading database — reports/crash_test/cleanup_log.jsonl
+records real live writes on 05-Jun and 07-Jun 2026. The harness is now scratch-safe
+by construction (ct_utils.assert_not_live_db), so those statements can no longer
+reach production data.
+
+The tool deliberately REFUSES rather than silently cleaning scratch when the caller
+clearly means the live system (``--live``): a cleanup that reports success while the
+live system is untouched is worse than one that stops. Resetting the real system
+after a scenario is an OPERATOR action and belongs in scripts/ with its own
+safeguards — not in a destructive test harness.
 """
 
 from __future__ import annotations
@@ -239,7 +254,24 @@ def main():
     group.add_argument("--status", action="store_true", help="Show current state")
     parser.add_argument("--force", action="store_true",
                         help="Required for --hard and --nuclear if positions open")
+    parser.add_argument("--live", action="store_true",
+                        help="(REFUSED) live-system cleanup was removed from this harness")
     args = parser.parse_args()
+
+    # Fail CLOSED and LOUDLY: never let an operator believe the live system was
+    # cleaned when this tool only ever touches scratch now.
+    if args.live:
+        print(
+            "REFUSED: cleanup.py no longer operates on the LIVE database.\n"
+            "  This is a destructive crash-test tool; it now resets the SCRATCH DB only\n"
+            "  (see tests/crash_test/ct_utils.py::assert_not_live_db).\n"
+            "  Resetting the real system is an OPERATOR action — do it deliberately,\n"
+            "  off-market, with a backup taken first.",
+            file=sys.stderr,
+        )
+        return 2
+
+    print("cleanup.py: operating on the SCRATCH database (live DB is protected).")
 
     if args.status:
         do_status()

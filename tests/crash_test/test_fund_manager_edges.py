@@ -51,9 +51,9 @@ def get_fresh_fm():
     from core.state_store import StateStore
     from core.events import EventBus
     from capital.fund_manager import FundManager
-    from tests.crash_test.ct_utils import DB_PATH
+    from tests.crash_test.ct_utils import make_scratch_db
 
-    store = StateStore(db_path=DB_PATH)
+    store = StateStore(db_path=str(make_scratch_db()))
     bus = EventBus()
     fm = FundManager(
         state_store=store,

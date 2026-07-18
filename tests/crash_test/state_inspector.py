@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent))
 from tests.crash_test.ct_utils import (
-    get_db_connection, ist_now_iso, http_get, DB_PATH, SNAPSHOTS_DIR,
+    get_db_connection, ist_now_iso, http_get, LIVE_DB_PATH, SNAPSHOTS_DIR,
 )
 
 HEALTH_URL = "http://localhost:5000/health"
@@ -117,15 +117,15 @@ def _capture_thread_status() -> dict:
 
 def _capture_db_info() -> dict:
     info = {}
-    if DB_PATH.exists():
-        stat = DB_PATH.stat()
+    if LIVE_DB_PATH.exists():
+        stat = LIVE_DB_PATH.stat()
         info["size_bytes"] = stat.st_size
         info["size_mb"] = round(stat.st_size / (1024 * 1024), 2)
         info["last_modified"] = str(stat.st_mtime)
     else:
         info["error"] = "DB file not found"
 
-    wal_path = DB_PATH.parent / (DB_PATH.name + "-wal")
+    wal_path = LIVE_DB_PATH.parent / (LIVE_DB_PATH.name + "-wal")
     if wal_path.exists():
         info["wal_size_bytes"] = wal_path.stat().st_size
     else:
