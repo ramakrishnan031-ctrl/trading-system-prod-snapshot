@@ -305,6 +305,14 @@ Key pkgs: kiteconnect 5.1.0, pydantic 2.13.0, Flask 3.1.3, openpyxl 3.1.5, reque
 - **COROLLARY:** a "read-only verification" against the LIVE DB with newer code is **NOT read-only** — opening the StateStore migrates it. Always verify with `--db <copy>`.
 - **Full inventory + a PROPOSED (not implemented) migration guard** (market-hours refusal / `--allow-migrate` / deploy preflight): `docs/audit/migration_on_open_rule_14jul2026.md`. Every future schema deploy MUST identify which process realistically opens the DB first and reason about WHEN. **Guard = PROPOSAL, PAUSED for review.**
 
+### ⚠️ ENGINEERING RULE — A TEST HARNESS MUST NEVER HOLD A WRITABLE HANDLE ON A LIVE DB (18-Jul-2026)
+**A destructive / crash-test harness must NEVER hold a writable handle on a live database. ALL writable DB access goes through ONE guard that fails CLOSED — no override flag, no environment escape hatch. Resetting a live system is an OPERATOR tool in `scripts/` with a backup + confirmation gate, NEVER part of a test harness.**
+- **Why it exists:** `tests/crash_test/ct_utils.py` hardcoded the live DB and `get_db_connection()` defaulted to **writable**; `reports/crash_test/cleanup_log.jsonl` records real live writes on **05-Jun and 07-Jun 2026** ("Kill switch cleared (1 rows updated)", "Released 37 orphan reservations", a `hard_cleanup` that cancelled trades/orders and reset capital). Five further modules bypassed the guard entirely with raw `sqlite3.connect()` on a hardcoded live path.
+- **The guard:** `ct_utils.assert_not_live_db()` → raises `LiveDatabaseRefused`. Compares canonical `realpath` **plus `os.path.samefile()`** (the only thing that catches a **hardlink**, which `realpath` cannot resolve) and refuses the `-wal`/`-shm` sidecars. Proven against absolute/relative/`..`/symlink/hardlink/env-override routes. **Read-only live access stays allowed** (`get_db_connection(readonly=True)`, `mode=ro`) — that is the harness's legitimate diagnostic use.
+- **Enforced automatically, not by memory** — `tests/crash_test/test_ct_guard_invariant.py` (AST scan of every harness module): **(A)** no raw `sqlite3.connect()` outside `ct_utils.py`; **(B)** no live-DB path literal outside `ct_utils.py` (*you cannot open what you may not name*); **(C)** `StateStore(db_path=…)` never receives `LIVE_DB_PATH`. **Proven to bite:** a planted bypass makes A+B fail; removing it restores green. Allow-list is 3 files, each justified in-line.
+- **Corollary (composes with the migration-on-open rule above):** a harness passing the live path to `StateStore` is doubly dangerous — it opens **writable** *and* can migrate the schema on open.
+- Detail: `docs/audit/ct_harness_safety_18jul2026.md` · `docs/audit/ct_guard_invariant_and_secwatcher_18jul2026.md`. **⚠️ OPEN (Rama):** `cleanup.py --live` now REFUSES — does live-reset return as a `scripts/` operator tool with backup + confirmation?
+
 ### Config Files  (`config/`)
 | File | Purpose | Read by |
 |---|---|---|
