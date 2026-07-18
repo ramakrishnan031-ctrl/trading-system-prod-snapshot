@@ -85,7 +85,7 @@ from screening.step_executor import StepExecutor
 from signals.signal_processor import SignalProcessor
 from scripts.healthcheck_server import start_healthcheck_server
 from signals.webhook_receiver import WebhookReceiver
-from strategies.loader import StrategyLoader
+from strategies.loader import StrategyLoader, scan_strategy_errors
 from utils.holiday_guard import is_trading_day, next_trading_day, get_holiday_name
 from utils.instance_lock import acquire_instance_lock, check_port_available, release_instance_lock
 from utils.startup_checks import (
@@ -278,6 +278,78 @@ def _send_holiday_notification(message: str) -> None:
             pass
     except Exception:
         pass
+
+
+def _alert_invalid_strategy_configs(
+    bad_files: list[tuple[str, str]],
+    config_dir: Path,
+) -> None:
+    """Fire ONE loud Telegram + email alert naming every strategy YAML that failed to
+    load/validate — a missing/invalid ``direction`` or ANY other schema failure — so a
+    forgotten ``direction:`` can never silently fail to trade (18-Jul-2026).
+
+    Called from the startup-checks abort path (``invalid_strategy_configs`` blocking
+    failure) BEFORE the boot returns. The boot STILL fails — a broken strategy set must
+    not run — but this tells Rama LOUDLY and specifically WHY the system won't start,
+    naming each file + reason instead of burying it in one log line.
+
+    Reuses the SAME Telegram + critical-email path as the strategy-registry / cron
+    officers (``TelegramNotifier.from_env`` + ``write_critical_sentinel``) — no parallel
+    notifier. The Telegram send uses ``write_sentinel=False`` so this method owns the
+    single email sentinel itself (no duplicate email), and the email still fires even if
+    the Telegram token is unset. FAIL-SAFE: every send is wrapped — an import or delivery
+    failure is logged and swallowed, so the alert can never crash or mask the abort it is
+    describing. Mode-agnostic (paper == live): a boot-blocking config error alerts either
+    way, exactly like the cron officers.
+    """
+    if not bad_files:
+        return
+
+    lines = [
+        "STRATEGY CONFIG INVALID — the system will NOT start until this is fixed.",
+        "",
+        "%d strategy YAML file(s) failed to load/validate:" % len(bad_files),
+    ]
+    for fname, reason in bad_files:
+        lines.append("  • %s — %s" % (fname, reason))
+    lines.append("")
+    lines.append(
+        "Fix the file(s) above and restart. A missing or invalid `direction:` is the "
+        "usual cause — every strategy must declare direction: LONG or SHORT."
+    )
+    body = "\n".join(lines)
+    title = "[BOOT ABORT] %d invalid strategy YAML(s)" % len(bad_files)
+
+    # Telegram (best-effort). CRITICAL tier; write_sentinel=False because we write the
+    # one email sentinel ourselves below (avoids a duplicate email).
+    try:
+        notifier = TelegramNotifier.from_env(logger=_log, config_dir=config_dir)
+        if notifier is not None:
+            notifier.send(
+                severity="CRITICAL",
+                title=title,
+                body=body,
+                source_module="main.strategy_config",
+                write_sentinel=False,
+            )
+    except Exception as exc:  # noqa: BLE001 — a Telegram failure must never crash the boot
+        _log.error("strategy_config_alert.telegram_failed: %s", exc)
+
+    # Email via the critical sentinel (the alert-watcher delivers it), mirroring the
+    # registry / cron officers. Guarantees an inbox record even if Telegram is unset.
+    try:
+        from alerts.critical import write_critical_sentinel
+        write_critical_sentinel(
+            title=title,
+            body=body,
+            source_module="main.strategy_config",
+            subject="[CRITICAL] %s" % title,
+            content_type="text/plain",
+            plain_fallback=body,
+            sentinel_dir=Path("data_store"),
+        )
+    except Exception as exc:  # noqa: BLE001 — email is best-effort; the boot abort continues
+        _log.error("strategy_config_alert.email_failed: %s", exc)
 
 
 def _init_time_authority(app_config, kill_switch) -> None:
@@ -1921,6 +1993,19 @@ def _main_locked(args, config_dir: Path) -> int:
         _log.critical(
             "Startup checks failed: %s", report.blocking_failures
         )
+        # MISSING-DIRECTION ALERT (18-Jul-2026): if the boot is aborting because a
+        # strategy YAML is missing/has an invalid `direction` (or otherwise fails to
+        # validate), fire ONE loud Telegram+email alert naming the file(s) + reason
+        # BEFORE we abort — so a forgotten `direction:` can't silently fail to trade.
+        # We KEEP failing the boot (a broken strategy set must not run); the alert is
+        # purely additive and fail-safe (scan + send never raise).
+        if "invalid_strategy_configs" in report.blocking_failures:
+            try:
+                _bad_strats = scan_strategy_errors(config_dir / "strategies")
+                if _bad_strats:
+                    _alert_invalid_strategy_configs(_bad_strats, config_dir)
+            except Exception as _sca_exc:  # noqa: BLE001 — alert must never mask the abort
+                _log.error("strategy_config_alert failed (non-fatal): %s", _sca_exc)
         store.close()  # FIX-169 F32
         return 3
 

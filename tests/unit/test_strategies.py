@@ -10,6 +10,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from core.exceptions import ConfigMissingError, ConfigSchemaError
@@ -526,6 +528,99 @@ def test_loader_empty_dir_raises_error() -> None:
     print("  OK loader_empty_dir_raises_error")
 
 
+# ── scan_strategy_errors (missing-direction alert, 18-Jul-2026) ─────────────────
+#
+# scan_strategy_errors() is the describe-only pass that feeds the boot-abort alert: it
+# names EVERY strategy YAML that fails to load/validate (missing/invalid `direction`, or
+# any other schema failure) WITHOUT raising, so one consolidated Telegram+email alert can
+# be sent before the boot (still) fails. It changes nothing about how strategies load.
+
+def _write_valid(tmpdir: str, filename: str, **overrides) -> Path:
+    """Write a valid strategy YAML to tmpdir, applying `overrides` (e.g. direction=...)."""
+    data = _valid_data()
+    data.update(overrides)
+    return _write_yaml(tmpdir, filename, yaml.safe_dump(data))
+
+
+def test_scan_strategy_errors_all_valid_is_silent() -> None:
+    """All-valid strategy dir -> [] (no alert)."""
+    from strategies.loader import scan_strategy_errors
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_valid(tmpdir, "a.yaml", name="a", direction="LONG")
+        _write_valid(tmpdir, "b.yaml", name="b", direction="SHORT")
+        assert scan_strategy_errors(Path(tmpdir)) == []
+    print("  OK scan_strategy_errors_all_valid_is_silent")
+
+
+def test_scan_strategy_errors_missing_direction_named() -> None:
+    """A strategy YAML MISSING `direction` -> that file named, with a direction reason."""
+    from strategies.loader import scan_strategy_errors
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_valid(tmpdir, "good.yaml", name="good")
+        data = _valid_data()
+        data["name"] = "nodir"
+        del data["direction"]
+        _write_yaml(tmpdir, "no_direction.yaml", yaml.safe_dump(data))
+        out = dict(scan_strategy_errors(Path(tmpdir)))
+        assert "no_direction.yaml" in out, out
+        assert "missing required field 'direction'" in out["no_direction.yaml"], out
+        assert "good.yaml" not in out  # a VALID file is never flagged
+    print("  OK scan_strategy_errors_missing_direction_named")
+
+
+def test_scan_strategy_errors_invalid_direction_named() -> None:
+    """A strategy YAML with an INVALID `direction` -> named with value + valid set."""
+    from strategies.loader import scan_strategy_errors
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_valid(tmpdir, "bad.yaml", name="bad", direction="FOO")
+        out = dict(scan_strategy_errors(Path(tmpdir)))
+        assert "bad.yaml" in out, out
+        reason = out["bad.yaml"]
+        assert "direction" in reason and "FOO" in reason, reason
+        assert "LONG" in reason and "SHORT" in reason, reason
+    print("  OK scan_strategy_errors_invalid_direction_named")
+
+
+def test_scan_strategy_errors_multiple_bad_all_listed() -> None:
+    """Multiple bad files -> ALL listed in one pass (feeds ONE consolidated alert)."""
+    from strategies.loader import scan_strategy_errors
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_valid(tmpdir, "ok.yaml", name="ok")
+        miss = _valid_data()
+        miss["name"] = "m"
+        del miss["direction"]
+        _write_yaml(tmpdir, "miss.yaml", yaml.safe_dump(miss))
+        _write_valid(tmpdir, "inv.yaml", name="i", direction="SIDEWAYS")
+        _write_yaml(tmpdir, "unk.yaml",
+                    yaml.safe_dump({**_valid_data(), "name": "u", "zzz": 1}))
+        names = {fn for fn, _ in scan_strategy_errors(Path(tmpdir))}
+        assert names == {"miss.yaml", "inv.yaml", "unk.yaml"}, names
+        assert "ok.yaml" not in names
+    print("  OK scan_strategy_errors_multiple_bad_all_listed")
+
+
+def test_scan_strategy_errors_non_direction_failure_covered() -> None:
+    """§2: ANY validation failure (not just direction) is covered by the same scan."""
+    from strategies.loader import scan_strategy_errors
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_valid(tmpdir, "badintent.yaml", name="bi", intent="SWING")
+        out = dict(scan_strategy_errors(Path(tmpdir)))
+        assert "badintent.yaml" in out, out
+        assert "intent" in out["badintent.yaml"], out
+    print("  OK scan_strategy_errors_non_direction_failure_covered")
+
+
+def test_scan_strategy_errors_never_raises_on_garbage() -> None:
+    """A non-mapping / bad-syntax YAML is reported as a reason — the scan never raises."""
+    from strategies.loader import scan_strategy_errors
+    with tempfile.TemporaryDirectory() as tmpdir:
+        _write_yaml(tmpdir, "notmap.yaml", "- just\n- a\n- list\n")     # valid YAML, not a dict
+        _write_yaml(tmpdir, "badsyntax.yaml", "name: [unterminated\n")  # broken YAML syntax
+        out = dict(scan_strategy_errors(Path(tmpdir)))
+        assert "notmap.yaml" in out and "badsyntax.yaml" in out, out
+    print("  OK scan_strategy_errors_never_raises_on_garbage")
+
+
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 def run_all_tests() -> int:
@@ -561,6 +656,12 @@ def run_all_tests() -> int:
         test_gap_go_pullback_disabled,
         test_atr_sl_strategy_accepts_zero_sl_pct,
         test_loader_empty_dir_raises_error,
+        test_scan_strategy_errors_all_valid_is_silent,
+        test_scan_strategy_errors_missing_direction_named,
+        test_scan_strategy_errors_invalid_direction_named,
+        test_scan_strategy_errors_multiple_bad_all_listed,
+        test_scan_strategy_errors_non_direction_failure_covered,
+        test_scan_strategy_errors_never_raises_on_garbage,
     ]
 
     passed = 0

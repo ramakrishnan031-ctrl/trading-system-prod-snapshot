@@ -40,6 +40,7 @@ from main import (
     _make_gate_release_cb,
     _log_kill_switch_event,
     _send_holiday_notification,
+    _alert_invalid_strategy_configs,
 )
 
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -438,6 +439,73 @@ class TestHelpers:
                 req = call_args[0][0]
                 assert "sendMessage" in req.full_url
                 assert req.method == "POST"
+
+    # ── Missing-direction boot-abort alert (18-Jul-2026) ──────────────────────
+    # _alert_invalid_strategy_configs fires ONE loud Telegram+email alert naming
+    # every strategy YAML that failed to validate, on the boot-abort path, BEFORE
+    # the boot (still) returns 3. It must be fail-safe: a send/import failure can
+    # never crash the boot.
+
+    def test_alert_invalid_strategy_configs_one_telegram_one_email(self):
+        """Happy path: ONE CRITICAL Telegram (write_sentinel=False, so no duplicate
+        email) + ONE email sentinel, both naming every bad file."""
+        bad = [
+            ("gap.yaml", "missing required field 'direction'"),
+            ("foo.yaml", "direction: direction must be LONG or SHORT, got 'X'"),
+        ]
+        fake_notifier = MagicMock()
+        with patch.object(_main_module.TelegramNotifier, "from_env",
+                          return_value=fake_notifier), \
+             patch("alerts.critical.write_critical_sentinel") as wcs:
+            _alert_invalid_strategy_configs(bad, Path("config"))
+        assert fake_notifier.send.call_count == 1
+        kw = fake_notifier.send.call_args.kwargs
+        assert kw["severity"] == "CRITICAL"
+        assert kw["write_sentinel"] is False       # we own the single email sentinel
+        assert "gap.yaml" in kw["body"] and "foo.yaml" in kw["body"]
+        assert wcs.call_count == 1                  # exactly one email, no duplicate
+        ekw = wcs.call_args.kwargs
+        assert ekw["content_type"] == "text/plain" and ekw["plain_fallback"]
+        assert "gap.yaml" in ekw["body"]
+
+    def test_alert_invalid_strategy_configs_failsafe_both_channels_raise(self):
+        """FAIL-SAFE: from_env AND write_critical_sentinel raising must NOT propagate
+        — a boot-time alert can never crash the boot it is describing."""
+        with patch.object(_main_module.TelegramNotifier, "from_env",
+                          side_effect=RuntimeError("tg down")), \
+             patch("alerts.critical.write_critical_sentinel",
+                   side_effect=OSError("disk full")):
+            _alert_invalid_strategy_configs(
+                [("x.yaml", "missing required field 'direction'")], Path("config")
+            )  # must not raise
+
+    def test_alert_invalid_strategy_configs_failsafe_send_raises(self):
+        """FAIL-SAFE: notifier.send() raising is swallowed, and the email is still
+        attempted afterwards."""
+        boom = MagicMock()
+        boom.send.side_effect = RuntimeError("send boom")
+        with patch.object(_main_module.TelegramNotifier, "from_env",
+                          return_value=boom), \
+             patch("alerts.critical.write_critical_sentinel") as wcs:
+            _alert_invalid_strategy_configs([("x.yaml", "bad")], Path("config"))
+        assert wcs.call_count == 1                  # email attempted despite telegram raise
+
+    def test_alert_invalid_strategy_configs_none_notifier_still_emails(self):
+        """from_env -> None (Telegram token unset) still writes the email sentinel."""
+        with patch.object(_main_module.TelegramNotifier, "from_env",
+                          return_value=None), \
+             patch("alerts.critical.write_critical_sentinel") as wcs:
+            _alert_invalid_strategy_configs(
+                [("x.yaml", "missing required field 'direction'")], Path("config")
+            )
+        assert wcs.call_count == 1                  # email guaranteed with no Telegram
+
+    def test_alert_invalid_strategy_configs_empty_is_silent(self):
+        """No bad files -> no notifier built, no email (defensive no-op)."""
+        with patch.object(_main_module.TelegramNotifier, "from_env") as fe, \
+             patch("alerts.critical.write_critical_sentinel") as wcs:
+            _alert_invalid_strategy_configs([], Path("config"))
+        assert fe.call_count == 0 and wcs.call_count == 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

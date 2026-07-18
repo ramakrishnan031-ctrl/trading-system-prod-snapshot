@@ -11,14 +11,81 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
+from pydantic import ValidationError
 
 from core.exceptions import ConfigMissingError, ConfigSchemaError
 from strategies.schema import StrategyConfig, validate_strategy
 
 _log = logging.getLogger("strategies.loader")
+
+
+# ── Config-error description scan (missing-direction alert, 18-Jul-2026) ─────────
+#
+# load_all_strategies() (S9) is fail-fast by design: the FIRST invalid YAML raises
+# ConfigSchemaError and no strategy loads ("no partial loads"). That is the correct
+# capital-safety behaviour — the system must NOT boot with a broken strategy set — but
+# on its own it fails QUIETLY: today a strategy YAML that is missing `direction` (or has
+# an invalid one, or fails any other schema rule) only aborts the boot with a single log
+# line naming the first bad file, and Rama is never told LOUDLY. A forgotten
+# `direction:` would then silently not-trade the strategy.
+#
+# scan_strategy_errors() is the additive, describe-only pass that feeds that alert. It
+# does NOT change how strategies load or trade — it just names EVERY bad file so the
+# boot-abort path can send one consolidated Telegram+email alert before it (still) fails.
+
+def _describe_config_error(exc: Exception) -> str:
+    """Render a concise, path-free reason for ONE failed strategy YAML.
+
+    Prefers pydantic's structured errors (reached via ``ConfigSchemaError.__cause__``,
+    which ``validate_strategy`` sets with ``raise ... from exc``) so the message names
+    the offending field(s) — e.g. ``missing required field 'direction'`` or
+    ``direction: direction must be LONG or SHORT, got 'FOO'``. Falls back to the raw
+    exception text for non-schema failures (missing file, bad YAML syntax, non-mapping).
+    """
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, ValidationError):
+        parts: List[str] = []
+        for err in cause.errors():
+            loc = ".".join(str(x) for x in err.get("loc", ())) or "<root>"
+            etype = err.get("type", "")
+            msg = str(err.get("msg", "invalid"))
+            if etype == "missing":
+                parts.append("missing required field %r" % loc)
+            elif etype == "extra_forbidden":
+                parts.append("unknown field %r not permitted" % loc)
+            else:
+                # Custom-validator ValueErrors surface as "Value error, <detail>";
+                # drop the boilerplate prefix so the detail reads cleanly.
+                if msg.startswith("Value error, "):
+                    msg = msg[len("Value error, "):]
+                parts.append("%s: %s" % (loc, msg))
+        if parts:
+            return "; ".join(parts)
+    return str(exc)
+
+
+def scan_strategy_errors(strategies_dir: Path) -> List[Tuple[str, str]]:
+    """Validate EVERY ``*.yaml`` in ``strategies_dir`` and return, for each file that
+    fails, a ``(filename, reason)`` pair. An all-valid directory returns ``[]``.
+
+    Unlike :meth:`StrategyLoader.load_all_strategies` (which raises on the FIRST invalid
+    file — S9, "no partial loads"), this collects ALL bad files in one pass so a single
+    consolidated alert can name every one. It NEVER raises: a per-file failure becomes a
+    reason string, so it is safe to call on the boot's abort path purely to describe
+    *why* the boot is failing. It changes NOTHING about how strategies load or trade —
+    the actual fail-fast abort is still owned by ``load_all_strategies`` /
+    ``check_strategy_configs``.
+    """
+    bad: List[Tuple[str, str]] = []
+    for yaml_path in sorted(strategies_dir.glob("*.yaml")):
+        try:
+            validate_strategy(yaml_path)
+        except Exception as exc:  # noqa: BLE001 — a describe pass must never itself raise
+            bad.append((yaml_path.name, _describe_config_error(exc)))
+    return bad
 
 
 class StrategyLoader:
