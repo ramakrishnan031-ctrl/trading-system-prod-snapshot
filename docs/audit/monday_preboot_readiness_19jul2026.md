@@ -111,4 +111,25 @@ Nothing was changed, started, restarted or fixed. The code that boots Monday is 
 - **Live DB:** `6df0c09a…`, mtime `2026-07-19 11:14:29`, size `89,968,640`. **Forward-shadow JSONL:** 7,827 lines, mtime `2026-07-16 18:15`, size `4,526,565`. **analytics.db:** `bb229f44…`, size `24,133,632`, mtime `2026-07-19 02:30:04`.
 - **Re-fingerprinted on the VM over SSH after the PC restart (§C1/§C2) — all three byte-identical to the values recorded pre-restart** (DB size + mtime-to-the-second + sha; analytics sha; JSONL line-count + mtime). The JSONL mtime is *still* 16-Jul: the 18:15 forward-shadow crons on 17/18/19-Jul **did not touch it** (non-trading days append nothing; VM clock was 16:05 at re-take, before today's 18:15), and no manual recorder run occurred. Nothing differed, so §C2's "investigate before committing" did not trigger. *(The post-push crontab re-check and a final re-fingerprint are recorded in the **Deploy proof** addendum, added by the follow-up commit after this one's push.)*
 
+---
+
+## Deploy proof (post-push, §C3/§D2/§D3)
+
+This report was committed as **`bfcd964`** and pushed to `origin` (= the VM bare repo). The remote hook printed **`post-receive: crontab AUTO-INSTALLED from canonical`** — i.e. `generate_crontab.py --generate == deploy/cron/trading-system.cron`, and the crontab was reinstalled from that canonical file (**reinstall #9**).
+
+- **§D2 — identity:** PC `bfcd964` == origin `bfcd964` == VM bare `bfcd964`. The code-identity delta against `d271525` remains **markdown-only** (only `docs/` commits since the tag).
+- **§D3 — crontab after reinstall #9:** the installed crontab is **byte-identical to `deploy/cron/trading-system.cron`**; `crontab -l | grep -v '^#|^$' | sort | uniq -d` is **empty (0 duplicates)**; the five boot-critical jobs are each present **exactly once**, correct schedule:
+
+  | job | schedule | line |
+  |---|---|---|
+  | 08:15 TOTP refresh | `15 8 * * 1-5` | `auto_refresh_token.py` |
+  | 05:00 token cleanup | `0 5 * * *` | `rm -f …/zerodha_token.json` (+ cron_mark) |
+  | 15:50 EOD cleanup | `50 15 * * 1-5` | `eod_cleanup.py` |
+  | 16:22 registry officer | `22 16 * * 1-5` | `strategy_registry_officer.py` |
+  | 18:15 forward-shadow | `15 18 * * 1-5` | `forward_shadow_record.py` |
+
+  **Reinstall #9 changed nothing** — it installed the unchanged canonical file verbatim. (The `crontab swap does not disrupt in-flight jobs`, per the hook header; irrelevant here — nothing is running.)
+- **§C3 — re-fingerprint after push:** all three artifacts **byte-identical to the pre-push values** — live DB `6df0c09a…`/`89,968,640`/`11:14:29`, analytics `bb229f44…`, JSONL `7,827` lines @ `16-Jul 18:15`. The push touched only the `docs/` checkout and the (identical) crontab; no data artifact moved.
+- **On this addendum's own push:** because the hook installs the *unchanged* canonical crontab **verbatim**, the follow-up commit that carries this section reinstalls the **byte-identical** crontab (**reinstall #10**) — the post-push state is invariant under a docs-only change. That terminal `AUTO-INSTALLED` + clean re-check is recorded in the session log and memory; a third commit would regress the bookkeeping without changing state, so the chain stops here.
+
 *Docs-only. Nothing was changed, started, restarted, or fixed. The token is Rama's to watch at 08:15; everything else has a loud backstop.*
