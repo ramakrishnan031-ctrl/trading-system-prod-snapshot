@@ -10,6 +10,12 @@
 - **Not re-verifiable on its own data:** the 13-Jul exit study's per-trade sims were never persisted, and there are no 1-min candles before 13-Jul — the same standing constraint that made D3's discovery study irreproducible.
 - **The Option-B/C backtest numbers below are inherited from the 13-Jul study** and cannot be re-checked at adequate power from what exists; read them as *what was found in one window*, unconfirmed out-of-sample.
 
+## ⚠️ UPDATE 19-Jul-2026 (later) — the candle-retention question is settled: **SURVIVES** (`docs/audit/candle_retention_and_perfallocator_feasibility_19jul2026.md`)
+- **D4's data path is NOT at risk from retention.** The candles table is pruned at **90 days** by `scripts/db_retention.py:63-70` (`DELETE FROM candles WHERE date < run_date−90d`), running **every calendar day** (`cron_registry.yaml:82-111`, `market_day_only:false`), genuinely reaching `analytics.candles` (attached via `state_store.py:247`). Verified **not vacuous**: the Sunday `--vacuum` completed today (`analytics.db` mtime 02:30 + `db_retention.done` 02:30:05), which only happens with `failures==0`, so the candle DELETE executed; it deleted 0 because the earliest candle (2026-06-19, 30 days old) is not yet ≥90d.
+- **Dates:** the OOS seed candles (13–16 Jul) expire **~12–15 Oct**; the D4 sample matures at ~17 trading days (~50 winners, ~mid-Aug) to ~34 (~100 winners, ~mid-Sep) — **5–9 weeks of margin.** The rolling 90-day window (~62 trading days) permanently exceeds D4's 17–34-day need; the only constraint is to run the analysis within ~90 days of the earliest trade it examines (~40-day slack).
+- **Preservation gap immaterial:** the census snapshot is `trading_system.db` only, but `analytics.db` (candles) is backed up nightly by the `analytics_backup` cron (01:05).
+- **Net:** the binding constraint for D4 stays **power** (19 entered / 9 winners today), not data loss. Needs the system running to accumulate the sample — retention will not delete it first.
+
 ## The choice
 - **Option A — keep the current static exits:** entry → fixed −1R SL → +1.5R TGT → 15:17 squareoff.
 - **Option B — enable the as-built breakeven rule via config** (`trailing_sl_enabled` → BreakevenMgr 60/80).
