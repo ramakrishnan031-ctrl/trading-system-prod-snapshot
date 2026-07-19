@@ -52,6 +52,8 @@ AND NOT EXISTS (SELECT 1 FROM trades t WHERE t.signal_id = signals.signal_id)
 This is **status-selective**: it destroys `REJECTED_*` and keeps `SKIPPED_*` and the qualified
 family. The observed cutoff is **2026-07-09**.
 
+> **⚠️ NOTE 19-Jul-2026 (§A4 correction, throttle/record-correction batch).** The 09-Jul cutoff is a **fixed one-off** — the 16-Jul manual Phase-B prune (which cleared 113,377 old signals) — **not** a sliding window. Steady-state `signal_retention_days` is **90** and the earliest row is **12-Jun**, so the *daily* prune's `fingerprint_date < ?` matches **0 rows** every day until **~2026-09-10**. The data is not eroding day-to-day. See the corrected item under "What cannot be measured" below, and `docs/audit/throttle_selection_and_record_correction_19jul2026.md`.
+
 | date | POSTs | accepted | webhook-rejected | 403 | signal rows | rows/accepted |
 |---|---:|---:|---:|---:|---:|---:|
 | 2026-06-12 | 3675 | 7667 | 33712 | 162 | 96 | 1.3% |
@@ -516,10 +518,10 @@ without answering it:
 2. **⭐ The signal count inside 403-blocked POSTs.** ~338,000 estimated, never counted. Note this
    is **cheaply fixable in principle** — the payload size is already stored, and the parse
    happens after the auth check.
-3. **All `REJECTED_*` history before 2026-07-09.** Destroyed by retention. The census can never
-   be extended backwards; only 6 complete days exist, and the window will keep sliding. **Any
+3. **All `REJECTED_*` history before 2026-07-09.** Destroyed. Only 6 complete days exist. **Any
    future analysis of rejection composition must be run against a window that has not yet been
    pruned, or against a preserved snapshot.**
+   > **⚠️ CORRECTED 19-Jul-2026 (throttle/record-correction batch, §A4).** "The window will keep sliding" was **WRONG** — I inferred an ongoing rolling erosion from a single event. Steady-state `signal_retention_days` is **90** (`system_config.yaml`), the earliest row is **12-Jun**, so the daily prune predicate matches **0 rows** every day until **~2026-09-10** (verified at run-date 20-Jul: 90d→0, 30d→0, 14d→0; only ≤10-day windows delete anything). The 09-Jul boundary was carved by the **one-off manual Phase-B prune of 16-Jul**, not the daily job. The data is **not eroding day-to-day**; the real risk is **another manual short-window prune**, not the clock. Everything else in item 3 stands. A preserved snapshot now exists at `/home/ubuntu/preserved/signal_census_19jul2026/`.
 4. **Per-check attribution inside the risk engine.** `approve()` records the *first* failing
    check. A signal rejected at `DAILY_TRADES` (check 5) tells us nothing about whether it would
    also have failed `DAILY_LOSS` (check 7). Q9's reachability work already relies on this and it

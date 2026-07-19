@@ -33,6 +33,8 @@ win/target-reach rate*, because today there is no gross edge to protect.**
 - **SHORT is positive** but n=10 (noise): win 60%, expectancy +0.165R. The negative expectancy lives in
   the long book — consistent with Q3's >Rs990 long-book distortion.
 
+> **⚠️ NOTE 19-Jul-2026 (record-correction batch).** "Q3's >Rs990 long-book distortion" is a **selection/count** effect of the 91%-long book, **not** the concentration cap treating longs more harshly — by rejection *rate* the cap hits SHORTs marginally harder (LONG 10.00% vs SHORT 10.72%; census `signal_mortality_census_19jul2026.md` claim 3). The empirical observation here (LONG n=124 carries the net loss) is unaffected; only the *attribution* to a long-specific cap bias is corrected.
+
 **15:17 squareoff:** 29 MANUAL exits net **−Rs22.60** (18 of 29 in loss); the 15:15–15:20 cohort (17) is
 −Rs24.29. Modest, skews negative (closing trades that never resolved), but not the primary driver.
 

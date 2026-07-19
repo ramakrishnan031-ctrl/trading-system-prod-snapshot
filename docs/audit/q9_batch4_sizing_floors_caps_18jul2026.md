@@ -104,6 +104,10 @@ current corpus **298 sized trades, 2026-06-22 → 2026-07-16**. Live capital **R
 direction. Finding 6's "silent" characterisation is the one that needed correcting, and the
 correction is more actionable than the original claim (§5).
 
+> **⚠️ CORRECTED / QUALIFIED 19-Jul-2026 (throttle/record-correction batch; census `docs/audit/signal_mortality_census_19jul2026.md`).**
+> - **Row 7 direction IS inverted by rate.** "Nothing inverted" referred to the *count* skew holding (LONG 2,804 vs SHORT 294 = 9.54×). But that count skew is the **10.2× long-volume skew**, not differential treatment: by **rate**, LONG **10.00%** vs SHORT **10.72%** are concentration-rejected — SHORTs marginally *harder*. Threshold (~Rs 990) and share (~23%) stand. ⚠️ **This row sits in D1's evidence package; D1 is undecided — the corrected direction must travel with it.**
+> - **POPULATION-BIAS QUALIFICATION (census §B1).** Every verdict in this report ("only 4 of 15 sizing guards can bind", the reachability table) is correct **as a statement about the population that reaches the sizer** — the arithmetic was never in question. That population is **enriched 1.45× in >Rs 990 names** (34.73% at the sizer vs 24.02% at admission; mean price Rs 875 vs Rs 732); the concentration cap then deletes that band **before the risk engine sees it** (0.14% >Rs 990 at the risk engine). A guard needing high notional is unreachable **because of an upstream cap**, not its own threshold. This **bounds the domain of the conclusions; it does not invalidate them.**
+
 ### §A4 — runtime probe (rule F: verify a seam before depending on it)
 
 | Probe | Result |

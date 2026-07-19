@@ -274,6 +274,8 @@ have already stopped for other reasons. On 2026-07-08 **all 63 signals arriving 
 `SKIPPED_QUOTE_UNAVAILABLE`** — they died upstream of the risk engine, so the gate was never
 consulted.
 
+> **⚠️ CORRECTED 19-Jul-2026 (census `docs/audit/signal_mortality_census_19jul2026.md` claim 1).** The *reason* in (2) is **survivorship bias, not fact.** 2026-07-08 is in the **pre-09-Jul pruned era**, where `eod_cleanup.py:234` deletes `REJECTED_*` but keeps `SKIPPED_*`, so the surviving rows only *look* like "everything after 10:22 was skipped". On the unpruned accepted counts, acceptance **accelerated** after 10:22 (hourly 464→676→1,179→1,431→**1,462**, the day's busiest hour); the 63 skips are **1.21% of that day's 5,212 accepted — the 6th-lowest rate of 21 days.** Entries did **not** stop. **The VERDICT below (RE10 REACHABLE, never-binding) and point (1) (no bypass: entry-at-10:14 vs streak-at-exit-10:22 recomputation semantics) are UNAFFECTED and stand** — they rest on the gate's evaluation timing, verified independently, not on this day's quote history. The census in fact *strengthens* "reachable": the gate is consulted **~975×/day** (5,845 signals reach the risk engine in the complete era).
+
 > **VERDICT: REACHABLE — live, correctly configured, precondition demonstrably met, but never yet
 > the binding rejection.** This is a distinct category from batch 4's UNREACHABLE guards (dead by
 > algebra or config). Nothing to fix; recorded so it is not mistaken for either a dead gate or a

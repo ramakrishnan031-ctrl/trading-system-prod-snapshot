@@ -77,6 +77,11 @@ is safe. Deployment on this axis is not the risk; the negative edge is.
 
 ## 4. The >Rs990 exclusion (Q3c) — a real, large, silent selection distortion
 
+> **⚠️ CORRECTED 19-Jul-2026 (throttle/record-correction batch; census `docs/audit/signal_mortality_census_19jul2026.md` claim 3).** Two parts of this section were remeasured and changed:
+> - **"silent" is wrong.** These are `REJECTED_SIZING_CONCENTRATION` rows — *logged decisions*, not a silent drop (3,098 in the complete era; batch 4 §5 first flagged the mislabel).
+> - **"hits the long book ~4.5× harder" (Cause (a), §5) — DIRECTION INVERTED.** As a *rate*, LONG **10.00%** vs SHORT **10.72%** of each direction's signals are concentration-rejected — SHORTs are marginally *harder* hit, within 0.7pp. The "~4.5×" (and batch 4's later "9.54×") are *count* ratios that reflect the **10.2× long-volume skew** (28,027 LONG vs 2,742 SHORT signals), **not** the cap treating longs more harshly.
+> The threshold (**~Rs 990**, exact) and the **~23–24% universe share** both remain VERIFIED. The exclusion is a real, price-structured selection distortion — it is just **not direction-structured**.
+
 - **7,707 signals** rejected `REJECTED_SIZING_CONCENTRATION` (178 distinct symbols) — `floor(990/price)=0`
   for any price > ~Rs991.
 - Price bands: **45% Rs990–1,500 · 37.8% Rs1,500–2,477 · 16.8% Rs2,477–4,954**.

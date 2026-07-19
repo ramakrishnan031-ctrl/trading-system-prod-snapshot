@@ -90,6 +90,8 @@ been met on **3 of 21 trading days** (streaks of 5, 5, 6) — yet **`REJECTED_CO
 2. **Why it never fired.** All **63** signals arriving after 10:22:23 that day were
    `SKIPPED_QUOTE_UNAVAILABLE` — they died upstream of the risk engine.
 
+> **⚠️ CORRECTED 19-Jul-2026 (census `docs/audit/signal_mortality_census_19jul2026.md` claim 1).** Point 2's reason is **survivorship bias**: 2026-07-08 is in the pre-09-Jul pruned era (`REJECTED_*` deleted, `SKIPPED_*` kept), so "63 all skipped" is a prune artefact, not a pricing stop — acceptance actually *accelerated* after 10:22 (peak **1,462/hr**; 63 = **1.21%**, 6th-lowest of 21 days). **The verdict (REACHABLE, never-binding) and point 1 stand** — they rest on entry-vs-exit recomputation, verified separately.
+
 ⇒ **REACHABLE: live, correctly configured, precondition demonstrably met, never yet binding.**
 
 ---
@@ -109,6 +111,8 @@ been met on **3 of 21 trading days** (streaks of 5, 5, 6) — yet **`REJECTED_CO
 
 **The programme's headline:** of the 15 sizing guards batch 4 enumerated, only **4** can bind in
 production. Coverage and reachability are different questions, and the matrix now records both.
+
+> **⚠️ POPULATION-BIAS QUALIFICATION added 19-Jul-2026 (census §B1; `docs/audit/throttle_selection_and_record_correction_19jul2026.md`).** "Only 4 of 15 sizing guards can bind" is correct **for the population that reaches the sizer**, which is **enriched 1.45× in >Rs 990 names** (34.73% at the sizer vs 24.02% at admission); the concentration cap deletes that band before the risk engine sees it (0.14% >Rs 990 there). Several guards that "cannot bind" are unreachable partly **because of that upstream cap**, not solely their own thresholds. This bounds the domain of the claim; the arithmetic (4 of 15) is unchanged.
 
 ---
 
