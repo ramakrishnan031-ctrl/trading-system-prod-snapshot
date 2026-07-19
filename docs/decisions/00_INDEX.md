@@ -8,7 +8,7 @@ Deploy state at assembly: PC == origin == VM bare == `3dda9f7`; code tag `deploy
 
 | # | Decision | Type | Status | What blocks / gates it |
 |---|---|---|---|---|
-| [01](01_e4_w10_pnl_contract.md) | **E4/W10** — the `pnl_delta` contract (daily-loss input) | capital-posture | OPEN — built, tested, **unpushed** (`e4-w10-pnl-contract`@`ad34ee4`) | a posture sign-off; deploy also needs a manual flatten first |
+| [01](01_e4_w10_pnl_contract.md) | **E4/W10** — the `pnl_delta` contract (daily-loss input) | capital-posture | OPEN — **exposure now COMPUTED (19-Jul): N=0**; residual is a posture sign-off | threshold was wrong in the file (fixture) — corrected to 3%×~Rs10k ≈ **Rs300**; N=0, closest approach Rs 243; deploy needs a manual flatten first · `e4_w10_outcome_impact_19jul2026.md` |
 | [02](02_d1_concentration_sizing.md) | **D1** — the concentration cap (sizing) | capital-posture | OPEN | coupled to D3 — the cap is a lever on a book whose sign is unknown |
 | [03](03_d2_strategic_direction.md) | **D2** — strategic direction / strategy mix | strategic | OPEN | a positive-control baseline + regime attribution (Q10, token-blocked) |
 | [04](04_d3_min_pass_threshold.md) | **D3** — the `min_pass_score` threshold (band inversion) | strategic (edge) | OPEN | tension with FREEZE (#08); backtest vs real-book point opposite ways |
