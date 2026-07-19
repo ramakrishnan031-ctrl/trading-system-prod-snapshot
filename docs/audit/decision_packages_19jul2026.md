@@ -60,7 +60,7 @@ Every open board item is present in the current MEMORY.md, with its line:
 | 03 | D2 strategy mix | keep / retire negative-edge strategies / rebalance | positive-control baseline + Q10 (token) |
 | 04 | D3 `min_pass_score` | leave 60 vs lower it — **backtest and real-book point opposite ways, equal weight** | tension with FREEZE |
 | 05 | D4 exits | keep naked static / enable config BE / build BE-after-0.5R | out-of-sample test; routes to M-S4 |
-| 06 | PerformanceAllocator | wire it vs leave `perf_weight ≡ 1.0` | likely masked by the concentration cap |
+| 06 | PerformanceAllocator | wire it vs leave `perf_weight ≡ 1.0` | ~~likely masked by the concentration cap~~ **REFUTED 19-Jul** — post-cap multiplier, changes qty **233/298**; gate = merit (D2/D3) + leverage (`masking_premise_sweep_19jul2026.md`) |
 | 07 | Regime | leave off / enable / build Phase 1 first | Q10 (~2.2 months + token); do-not-flip-mid-soak |
 | 08 | Freeze `min_pass_score` | freeze during measurement vs allow changes | downstream of Regime + D3 |
 | 09 | Prune retention | leave 90d status-selective / retain rejections / change window | Rama's intent on rejection-analysis need |

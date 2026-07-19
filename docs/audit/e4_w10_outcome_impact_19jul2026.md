@@ -92,7 +92,7 @@ Classification of each decision's *cheapest* settlement path. Couplings noted; n
 | 01 | E4/W10 | the per-day computation above | **COMPUTED this batch (N=0)** → residual is **NEEDS RAMA** (posture + manual-flatten precondition) |
 | 04 | D3 min_pass | out-of-sample 1-min backtest (is the band inversion stable beyond 06-19…07-13?) | **COMPUTABLE NOW** — the harness (`ms4_fullrange_study`) and 1-min data exist; live transfer then NEEDS RUNNING (and collides with FREEZE) |
 | 05 | D4 exits | out-of-sample exit backtest (is the BE-after-0.5R spike stable?) | **COMPUTABLE NOW** — same harness + data |
-| 06 | PerformanceAllocator | reachability algebra: can `perf_weight ≠ 1` ever change qty while concentration binds 100%? | **COMPUTABLE NOW** — existing data, same method as the sizing-guard reachability |
+| 06 | PerformanceAllocator | reachability algebra: can `perf_weight ≠ 1` ever change qty while concentration binds 100%? | **COMPUTED 19-Jul: YES, 233/298 (78%)** — the label held (`candle_retention_and_perfallocator_feasibility_19jul2026.md`) |
 | 02 | D1 concentration | a positive-expectancy baseline at larger size | **NEEDS SYSTEM RUNNING** (re-soak after D3); partial COMPUTABLE (the >Rs990 names' 1-min backtest) |
 | 03 | D2 strategy mix | per-strategy edge on a corrected scorer + regime attribution | **BLOCKED** (Q10 token) + NEEDS RUNNING; today's per-strategy P&L exists but is confounded |
 | 07 | Regime | Q10 to statistical power | **BLOCKED** (Kite token for the backfill) + **NEEDS RUNNING** (~2.2 months) |

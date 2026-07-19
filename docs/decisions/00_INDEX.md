@@ -24,7 +24,7 @@ Deploy state at assembly: PC == origin == VM bare == `3dda9f7`; code tag `deploy
 - **D3 ↔ #08 (Freeze):** changing `min_pass_score` (D3) resets the regime measurement's clock; freezing (#08) forbids the D3 change. They cannot both be exercised in the same window.
 - **D3 ↔ #10 (Throttle):** ranked admission (#10 Option C) is only worth building if the score ranks — the same open question as D3.
 - **D2 ↔ #07 (Regime) ↔ Q10:** per-strategy edge and regime attribution both depend on Q10, which is NOT DETERMINABLE at n=23 and whose backfill is token-blocked.
-- **#06 (PerformanceAllocator) ↔ D1:** a size multiplier is masked by the concentration cap that binds 100% of trades.
+- **#06 (PerformanceAllocator) ↔ D1:** ~~a size multiplier is masked by the concentration cap that binds 100% of trades~~ **← REFUTED 19-Jul** (`../audit/candle_retention_and_perfallocator_feasibility_19jul2026.md`; sweep `../audit/masking_premise_sweep_19jul2026.md`). `perf_weight` is a **post-cap multiplier** (applied after `raw_qty`, up to a 2× ceiling), so it is **not** masked — it changes final qty on **233/298 (78%)** over [0.5, 2.0]. #06's real gate is the multiplier's **merit (D2/D3)** + the **sizing/leverage** picture (where it genuinely touches D1), *not* the concentration cap. Conditional on today's unlevered sizing.
 
 ## Operator actions (not decisions)
 These are things to *do*, not choices to make — see [ACTIONS_not_decisions.md](ACTIONS_not_decisions.md): the Q10 Part B backfill (token-blocked) and the standing security actions.
