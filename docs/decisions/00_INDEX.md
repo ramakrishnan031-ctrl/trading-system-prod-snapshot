@@ -28,3 +28,8 @@ Deploy state at assembly: PC == origin == VM bare == `3dda9f7`; code tag `deploy
 
 ## Operator actions (not decisions)
 These are things to *do*, not choices to make — see [ACTIONS_not_decisions.md](ACTIONS_not_decisions.md): the Q10 Part B backfill (token-blocked) and the standing security actions.
+
+## Decidable-now briefs + the E4/W10 runbook (added 19-Jul)
+**Triage of all ten** (which are answerable now vs gated, with each gate named): [`../audit/decision_readiness_triage_19jul2026.md`](../audit/decision_readiness_triage_19jul2026.md). Three turn only on Rama's judgement today — one-screen briefs (they do **not** supersede the full files):
+- [`BRIEF_01_e4_w10_pnl_contract.md`](BRIEF_01_e4_w10_pnl_contract.md) · [`BRIEF_08_freeze_min_pass.md`](BRIEF_08_freeze_min_pass.md) · [`BRIEF_09_prune_retention.md`](BRIEF_09_prune_retention.md)
+- [`RUNBOOK_e4_w10_deploy.md`](RUNBOOK_e4_w10_deploy.md) — the E4/W10 deploy, **prepared but NOT executed**; gated on decision 01 + observing Monday.
