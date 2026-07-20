@@ -1648,6 +1648,7 @@ class StateStore:
         net_pnl: float,
         exit_time: Optional[str] = None,
         charges: float = 0.0,
+        gross_pnl: Optional[float] = None,
     ) -> bool:
         """
         Bug 4 (FIX-180): populate the trade row's exit financials after a
@@ -1660,12 +1661,20 @@ class StateStore:
         trades.net_pnl disagree with fm_ledger.pnl_delta and broke per-trade
         reporting. This writes those fields.
 
-        RMS/manual closes pass costs=0.0 (see capital release call), so
-        gross_pnl == net_pnl and charges == 0.0. Guarded to CLOSED_MANUAL rows
-        only (idempotent; never clobbers a normal CLOSED row). exit_time is
-        preserved if already set. Returns True if the row was updated.
+        E4 (2026-07-17): CHECK 1 now costs the close with the real
+        CostCalculator, so `gross_pnl` and `charges` are passed explicitly and
+        the row satisfies gross_pnl - charges == net_pnl. `gross_pnl=None`
+        keeps the pre-E4 behaviour (gross_pnl := net_pnl, i.e. a zero-cost
+        close) for callers that genuinely have no cost basis — do NOT rely on
+        that default when costs were actually deducted, or the row will claim
+        charges==0 while the ledger says otherwise.
+
+        Guarded to CLOSED_MANUAL rows only (idempotent; never clobbers a normal
+        CLOSED row). exit_time is preserved if already set. Returns True if the
+        row was updated.
         """
         ts = exit_time or _now_ist_iso()
+        _gross = net_pnl if gross_pnl is None else gross_pnl
         with self.transaction() as cur:
             cur.execute(
                 """
@@ -1679,7 +1688,7 @@ class StateStore:
                 WHERE trade_id = ?
                   AND status = 'CLOSED_MANUAL'
                 """,
-                (exit_price, ts, net_pnl, charges, net_pnl, ts, trade_id),
+                (exit_price, ts, _gross, charges, net_pnl, ts, trade_id),
             )
             return cur.rowcount > 0
 
@@ -2254,12 +2263,18 @@ class StateStore:
         net_pnl: float,
         charges: float = 0.0,
         exit_time: Optional[str] = None,
+        gross_pnl: Optional[float] = None,
     ) -> bool:
         """Write exit financials onto a GTT-closed trade (status='CLOSED' with a GTT
         exit_reason). Guarded by `exit_reason LIKE 'GTT%'` so it can never clobber a
-        normally-closed row. GTT exits pass costs=0.0 (gross==net). Returns True if
-        the row was updated."""
+        normally-closed row. Returns True if the row was updated.
+
+        E4 (2026-07-17): GTT exits are now costed with the real CostCalculator,
+        so `gross_pnl`/`charges` are passed explicitly and the row satisfies
+        gross_pnl - charges == net_pnl. `gross_pnl=None` keeps the pre-E4
+        behaviour (gross_pnl := net_pnl, a zero-cost close)."""
         ts = exit_time or _now_ist_iso()
+        _gross = net_pnl if gross_pnl is None else gross_pnl
         with self.transaction() as cur:
             cur.execute(
                 """
@@ -2268,7 +2283,7 @@ class StateStore:
                     gross_pnl = ?, charges = ?, net_pnl = ?, updated_at = ?
                 WHERE trade_id = ? AND status = 'CLOSED' AND exit_reason LIKE 'GTT%'
                 """,
-                (exit_price, ts, net_pnl, charges, net_pnl, ts, trade_id),
+                (exit_price, ts, _gross, charges, net_pnl, ts, trade_id),
             )
             return cur.rowcount > 0
 
@@ -2431,20 +2446,34 @@ class StateStore:
 
     def get_daily_realized_net_pnl(self, date_iso: str) -> float:
         """
-        FIX-056: Return NET realized PnL for date_iso (gross PnL minus costs).
+        FIX-056: Return NET realized PnL for date_iso.
 
-        Sums fm_ledger.pnl_delta (gross PnL from trade closes) and subtracts
-        fm_ledger.costs (brokerage, STT, taxes). Returns 0.0 if no rows.
+        CONTRACT (E4/W10, 2026-07-17): ``fm_ledger.pnl_delta`` is ALREADY NET.
+        FundManager.release_used computes ``pnl = gross_pnl - costs`` and stores
+        that in ``pnl_delta``; ``costs`` is persisted ALONGSIDE for observability
+        only and MUST NEVER be subtracted again. This function therefore sums
+        ``pnl_delta`` and nothing else. Returns 0.0 if no rows.
+
+        Prior to 2026-07-17 this computed ``SUM(pnl_delta) - SUM(costs)`` on the
+        false premise (stated in this docstring) that ``pnl_delta`` was gross —
+        so costs were subtracted TWICE and the daily-loss controls saw a loss
+        larger than reality (W10). The writer, rehydrate, the GUI/capacity
+        readers and reports already assumed the NET contract; this aligns the
+        controls with them. See docs/audit/e4_investigation_17jul2026.md.
+
+        Only RELEASE_USED (trade closes) and RESET_PNL (the EOD zeroing
+        counter-entry) ever carry a non-zero ``pnl_delta``; every other
+        entry_type writes 0.0, so no entry_type filter is needed here.
 
         Args:
             date_iso: Date string in YYYY-MM-DD format (YYYY-MM-DD)
 
         Returns:
-            Net PnL = sum(pnl_delta) - sum(costs) for the given date.
+            Net PnL = sum(pnl_delta) for the given date.
         """
         row = self.fetch_one(
             # O4 (v27): use the indexed stored `date` column (== DATE(ts)).
-            """SELECT COALESCE(SUM(pnl_delta) - SUM(COALESCE(costs, 0.0)), 0.0) as net_pnl
+            """SELECT COALESCE(SUM(pnl_delta), 0.0) as net_pnl
                FROM fm_ledger WHERE date = ?""",
             (date_iso,),
         )

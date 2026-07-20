@@ -63,6 +63,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta
 from typing import Callable, Dict, List, Optional
 
+from broker.cost_calculator import round_trip_costs_or_zero
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from alerts.telegram_notifier import TelegramNotifier
@@ -247,6 +248,7 @@ class OrderReconciler:
             cfg=cfg.order_reconciler,
             quote_fn=adapter.get_quote,
             broker_orders_fn=None,   # or adapter.get_open_orders if available
+            cost_calculator=cost_calculator,   # E4: real costs on backstop closes
         )
         reconciler.start()           # runs startup reconcile + launches thread
         ...
@@ -269,6 +271,7 @@ class OrderReconciler:
         order_placer: Optional[Any] = None,  # FIX-068: OrderPlacer for timeout recovery
         cnc_gtt_monitor: Optional[Any] = None,  # SLICE2.5-P2: overnight-GTT reconcile
         market_hours_fn: Optional[Callable[[], bool]] = None,  # SLICE2.5-P2: cadence gate
+        cost_calculator: Optional[Any] = None,  # E4: real costs on backstop closes
     ) -> None:
         self._store = state_store
         self._adapter = adapter
@@ -283,6 +286,12 @@ class OrderReconciler:
         self._mode = mode
         self._order_mgr = OrderManager(state_store, logger)
         self._order_placer = order_placer  # FIX-068
+        # E4 (2026-07-17): the SAME mode-agnostic CostCalculator instance
+        # main.py builds before the paper/live branch and hands to order_placer
+        # — so a backstop close is costed identically to a normal exit, in both
+        # modes. None (unwired, e.g. an older test harness) degrades to
+        # costs=0.0 with a loud log, i.e. the pre-E4 behaviour.
+        self._cost_calculator = cost_calculator
         # SLICE2.5-P2: overnight CNC-GTT reconcile (startup [4a] + 15-min in-hours
         # cadence [4b]). When wired, delivery (CNC) trades with an ACTIVE gtt_state
         # row are EXCLUDED from the position/SL/exit checks below and managed here.
@@ -1098,6 +1107,25 @@ class OrderReconciler:
         steps.append(f"exit_price={exit_price:.2f}({exit_source})")
 
         if entry_price and float(entry_price) > 0 and qty > 0 and intent:
+            # E4 (2026-07-17): real round-trip costs, so this backstop close
+            # writes a NET pnl_delta like the normal exit path already does.
+            # Was hardcoded 0.0 (no CostCalculator was ever wired here), which
+            # made these rows the only GROSS ones in fm_ledger. Fails open to
+            # 0.0 (loudly) — never block a capital release.
+            # `product` is non-empty here by construction: intent is derived
+            # from it above and an unmapped product yields a falsy intent, which
+            # this branch already excludes. Passed through as-is — NOT defaulted
+            # to MIS: an unexpected product must fail OPEN and loudly, never be
+            # silently costed at the wrong product's rates.
+            charges = round_trip_costs_or_zero(
+                self._cost_calculator,
+                qty=qty,
+                entry_price=float(entry_price),
+                exit_price=float(exit_price),
+                product=product,
+                logger=log,
+                context=f"check1 trade_id={trade_id}",
+            )
             try:
                 release_result = self._fm.release_used(
                     symbol=symbol,
@@ -1106,10 +1134,13 @@ class OrderReconciler:
                     intent=intent,
                     entry_price=float(entry_price),
                     direction=direction,
-                    costs=0.0,
+                    costs=charges,
                     trade_id=trade_id,   # M-C7: reverse the persisted committed margin
                 )
-                steps.append(f"capital_released(pnl={release_result.pnl_delta:.2f})")
+                steps.append(
+                    f"capital_released(pnl={release_result.pnl_delta:.2f} "
+                    f"costs={charges:.2f})"
+                )
             except Exception as exc:
                 log.warning(
                     "check1: release_used failed for %s: %s", trade_id, exc
@@ -1117,13 +1148,17 @@ class OrderReconciler:
                 steps.append(f"capital_release FAILED: {exc}")
             else:
                 # Bug 4 (FIX-180): persist exit financials onto the trade row so
-                # trades.net_pnl matches fm_ledger.pnl_delta. RMS/manual closes
-                # pass costs=0.0 above, so gross==net and charges=0.0.
+                # trades.net_pnl matches fm_ledger.pnl_delta.
+                # E4: pnl_delta is NET now, so gross and charges must be passed
+                # explicitly — otherwise the row would claim gross==net and
+                # charges==0 while real costs had been deducted.
                 try:
                     self._store.record_manual_close_financials(
                         trade_id=trade_id,
                         exit_price=float(exit_price),
                         net_pnl=float(release_result.pnl_delta),
+                        gross_pnl=float(release_result.pnl_delta) + charges,
+                        charges=charges,
                     )
                     steps.append("trade_financials_recorded")
                 except Exception as exc:
@@ -1805,6 +1840,11 @@ class OrderReconciler:
         release_used(exit_qty=closed_qty), freeing the closed portion's margin and
         booking its PnL into fm_ledger/daily_realized.
 
+        E4 (2026-07-17): that PnL is now NET — the closed slice is costed with the
+        shared CostCalculator (was costs=0.0, which made these rows gross while
+        every other row was net). The costs are for the CLOSED SLICE only; the
+        remainder is costed when it closes.
+
         Exactly-once via a qty_filled CAS (``WHERE qty_filled=local_qty``): only the
         cycle that actually observes the local->broker transition performs the
         release, so a re-detected same-delta cycle (or a crash between the release
@@ -1890,6 +1930,18 @@ class OrderReconciler:
                     "broker_trades" if exit_price != float(entry_price)
                     else "entry_proxy"
                 )
+                # E4: real round-trip costs for the CLOSED SLICE only (the
+                # remainder is still open and will be costed when it closes),
+                # so this partial's pnl_delta is NET like every other row.
+                charges = round_trip_costs_or_zero(
+                    self._cost_calculator,
+                    qty=int(closed_qty),
+                    entry_price=float(entry_price),
+                    exit_price=float(exit_price),
+                    product=product,   # as-is; never defaulted (see CHECK1)
+                    logger=log,
+                    context=f"check4_partial trade_id={trade_id}",
+                )
                 try:
                     release_result = self._fm.release_used(
                         symbol=symbol,
@@ -1898,12 +1950,13 @@ class OrderReconciler:
                         intent=intent,
                         entry_price=float(entry_price),
                         direction=direction,
-                        costs=0.0,
+                        costs=charges,
                         trade_id=trade_id,   # M-C7: reverse the persisted committed margin
                     )
                     steps.append(
                         f"partial_capital_released(qty={closed_qty} "
-                        f"pnl={release_result.pnl_delta:.2f} {exit_source})"
+                        f"pnl={release_result.pnl_delta:.2f} "
+                        f"costs={charges:.2f} {exit_source})"
                     )
                 except Exception as exc:
                     # Conservative under-release (margin stays in ``used``); loud so

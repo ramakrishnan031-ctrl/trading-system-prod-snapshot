@@ -343,31 +343,36 @@ class TestCapitalInvariantWired:
 class TestContractInvariant:
     """I5: the reader's realized P&L must equal the independent ground truth.
 
-    ⚠️ DESIGN — READ BEFORE CHANGING EITHER TEST BELOW.
+    ✅ MIGRATED 20-Jul-2026 — E4/W10 landed, and I5 is now simply TRUE.
 
-    I5 is FALSE TODAY by the known E4/W10 bug, so it cannot be a plain green assertion, and
-    it must not be "fixed" into passing. The pair below satisfies four requirements at once:
+    The design below worked exactly as intended and is kept as the record of why:
 
-      1. green today — the suite does not go red on a known, accepted bug (strict xfail);
-      2. it cannot silently start passing when E4/W10 lands — strict xfail reports an XPASS
-         as a FAILURE, forcing a deliberate flip as part of that migration instead of a stale
-         test quietly rotting in the suite;
-      3. no rewrite needed then, and no hard-coded rupee figure anywhere (rule D);
-      4. a NEW discrepancy cannot hide behind the old one — the second test asserts, plain
-         green, that the delta is EXACTLY the double-counted costs and nothing else.
+      I5 was FALSE by the known E4/W10 bug, so it could not be a plain green assertion and must
+      not be "fixed" into passing. The pair satisfied four requirements at once:
+        1. green then — the suite did not go red on a known, accepted bug (strict xfail);
+        2. it could not silently start passing when E4/W10 landed — strict xfail reports an
+           XPASS as a FAILURE, forcing a deliberate flip as part of that migration instead of a
+           stale test quietly rotting in the suite;
+        3. no rewrite needed then, and no hard-coded rupee figure anywhere (rule D);
+        4. a NEW discrepancy could not hide behind the old one — the second test asserted,
+           plain green, that the delta was EXACTLY the double-counted costs and nothing else.
+      Strict xfail was chosen over alternatives (a skip hides it; a plain assertion of current
+      buggy behaviour bakes the bug in and would need rewriting; a warning is ignorable).
 
-    Strict xfail was chosen over alternatives (a skip hides it; a plain assertion of current
-    buggy behaviour bakes the bug in and would need rewriting; a warning is ignorable).
+    ⭐ REQUIREMENT (2) IS THE ONE THAT PAID OFF. On the 20-Jul merge the strict xfail XPASSed
+    and was reported as a FAILURE, which stopped that deploy at the regression gate and forced
+    this flip to be deliberate. It did its job precisely as designed.
+
+    Requirement (4) survives the migration rather than being dropped: the second test now guards
+    the failure mode E4/W10 CREATES — a silent FAIL-OPEN degradation of
+    `round_trip_costs_or_zero` to 0.0 would make `reader == truth` hold trivially. See its
+    docstring. Full context: docs/audit/e4_w10_deploy_20jul2026.md.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="E4/W10: get_daily_realized_net_pnl double-subtracts costs "
-               "(pnl_delta is already NET). Fixed on branch e4-w10-pnl-contract@ad34ee4, "
-               "UNPUSHED pending Rama's risk-posture sign-off. When that lands this XPASSes, "
-               "and strict=True turns the XPASS into a FAILURE so the migration is deliberate.",
-    )
     def test_reader_equals_independent_ground_truth(self, wired_system):
+        """I5, now a PLAIN GREEN assertion. The strict xfail below was removed 20-Jul-2026 as
+        the deliberate migration step it was designed to force — E4/W10 landed in the same
+        commit, so the reader no longer double-subtracts costs and I5 is simply TRUE."""
         ctx = wired_system
         _round_trip(ctx, "RELIANCE", "vwap_bounce_long", 20, exit_leg="SL")
         p = _picture(ctx)
@@ -376,21 +381,39 @@ class TestContractInvariant:
             f"CONTRACT INVARIANT: reader={p['reader']:.4f} vs ground truth={p['truth']:.4f}"
         )
 
-    def test_the_discrepancy_is_exactly_the_double_counted_costs(self, wired_system):
-        """Requirement (4): pins the delta to E4/W10 EXACTLY, so a NEW value bug breaks the
-        suite immediately even while the old one is still xfailed.
+    def test_the_double_counted_costs_discrepancy_is_gone_and_stays_gone(self, wired_system):
+        """Requirement (4), INVERTED 20-Jul-2026 — and it keeps a job the test above does not.
 
-        reader = SUM(pnl_delta) - SUM(costs), and pnl_delta is already (gross - costs),
-        so reader = truth - SUM(costs)  =>  reader - truth == -SUM(costs), exactly.
+        Was: `reader - truth == -SUM(costs)` exactly, pinning the E4/W10 delta so a NEW value
+        bug could not hide behind the known one while I5 was xfailed. Post-fix the delta is 0.
+
+        A bare `reader == truth` here would merely duplicate test_reader_equals_… above. The
+        distinct job is guarding the failure mode E4/W10 CREATES:
+        `broker.cost_calculator.round_trip_costs_or_zero` is **FAIL-OPEN** — a cost-calculation
+        failure degrades to 0.0 rather than raising. If that degradation ever became silent and
+        systematic, `costs` would be 0, `reader == truth` would hold TRIVIALLY, and the suite
+        would be green while cost accounting was dead. So this test asserts costs are genuinely
+        being recorded FIRST, and only then that the discrepancy is gone — and, explicitly, that
+        it is no longer the old `-SUM(costs)` shape, which is what a regression would look like.
         """
         ctx = wired_system
         _round_trip(ctx, "RELIANCE", "vwap_bounce_long", 21, exit_leg="SL")
         p = _picture(ctx)
-        assert p["costs"] > 0, "no costs were incurred — the delta would be trivially 0"
-        assert (p["reader"] - p["truth"]) == pytest.approx(-p["costs"], abs=TOL), (
-            f"THE READER/GROUND-TRUTH DISCREPANCY IS NO LONGER EXACTLY THE DOUBLE-COUNTED "
-            f"COSTS: reader({p['reader']:.4f}) - truth({p['truth']:.4f}) = "
-            f"{p['reader'] - p['truth']:.4f}, but -costs = {-p['costs']:.4f}. Either E4/W10 "
-            f"changed shape or there is a NEW value-level bug — investigate before touching "
-            f"this test."
+        delta = p["reader"] - p["truth"]
+
+        # ANTI-VACUITY, and the fail-open guard: without real costs everything below is trivial.
+        assert p["costs"] > 0, (
+            "no costs were recorded — either the scenario incurred none, or the FAIL-OPEN "
+            "round_trip_costs_or_zero degraded to 0.0. Both make 'reader == truth' trivially "
+            "true and this test worthless. Investigate before touching it."
+        )
+        assert delta == pytest.approx(0.0, abs=TOL), (
+            f"THE READER NO LONGER MATCHES GROUND TRUTH: reader({p['reader']:.4f}) - "
+            f"truth({p['truth']:.4f}) = {delta:.4f}, expected 0. Under the E4/W10 contract "
+            f"pnl_delta is NET and costs are observability-only, so these must agree exactly."
+        )
+        assert delta != pytest.approx(-p["costs"], abs=TOL), (
+            f"THE DOUBLE-SUBTRACT IS BACK: reader - truth = {delta:.4f}, which is exactly "
+            f"-SUM(costs) ({-p['costs']:.4f}) — the pre-E4/W10 signature. Something is "
+            f"subtracting costs from pnl_delta a second time again."
         )

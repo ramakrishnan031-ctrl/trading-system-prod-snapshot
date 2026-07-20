@@ -1179,7 +1179,21 @@ class FundManager:
             intent:      original intent (determines bucket and leverage)
             entry_price: original entry price (for PnL calculation)
             direction:   "LONG" | "SHORT" — required for direction-correct PnL.
-            costs:       total transaction costs (passed by caller)
+            costs:       total round-trip transaction costs (passed by caller).
+                         E4 (2026-07-17): EVERY production caller must pass the
+                         REAL costs from the shared CostCalculator. Passing 0.0
+                         writes a GROSS pnl_delta, which silently breaks the
+                         "pnl_delta is NET" contract that the daily-loss limit,
+                         available capital, rehydrate and the reports all rely
+                         on. The 0.0 default is retained only for tests that
+                         model a zero-cost close.
+
+        CONTRACT — pnl_delta is NET (E4/W10, 2026-07-17):
+            pnl_delta := gross_pnl - costs, and that same NET number is what is
+            credited to bucket avail and to _total. `costs` is written to the
+            ledger ALONGSIDE, for observability only; readers must NEVER
+            subtract it again. get_daily_realized_net_pnl therefore sums
+            pnl_delta alone. See docs/audit/e4_investigation_17jul2026.md.
 
         PnL sign convention (EF-3):
             LONG  profit = exit > entry  (close above cost)
@@ -1231,9 +1245,14 @@ class FundManager:
             projected_after = avail_before + margin + pnl
 
             # BL-5: write-ahead. Record the intended mutation first; replay
-            # via rehydrate uses direction + pnl_delta + costs to rebuild
-            # the same end state (EF-3 direction correctness carries into
-            # the ledger).
+            # via rehydrate uses direction + pnl_delta to rebuild the same end
+            # state (EF-3 direction correctness carries into the ledger).
+            #
+            # E4/W10 CONTRACT (2026-07-17): pnl_delta is NET (gross - costs) —
+            # exactly the number credited to avail/_total below, which is what
+            # makes rehydrate's replay of pnl_delta reproduce a continuous run.
+            # `costs` is persisted for OBSERVABILITY ONLY and must never be
+            # subtracted from pnl_delta by any reader.
             ts = now_ist().isoformat()
             self._write_ledger(
                 ts=ts,
@@ -1247,6 +1266,11 @@ class FundManager:
                     f"pnl={pnl:.2f} costs={costs:.2f}"
                 ),
                 direction=direction,
+                # E4 side finding: trade_id was accepted but never persisted, so
+                # every RELEASE_USED row had trade_id NULL and the ledger could
+                # not be joined to `trades` — which is what blocked per-trade
+                # reconciliation of this very bug. Column already exists (no DDL).
+                trade_id=trade_id,
                 margin_delta=-margin,
                 pnl_delta=pnl,
                 costs=costs,

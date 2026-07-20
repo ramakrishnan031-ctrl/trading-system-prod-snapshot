@@ -38,6 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Optional
 
 from core.config_loader import BrokerCostsConfig
 
@@ -297,3 +298,56 @@ class CostCalculator:
             total=round(buy.total + sell.total, 2),
             turnover=round(buy.turnover + sell.turnover, 2),
         )
+
+
+def round_trip_costs_or_zero(
+    calculator: Optional[CostCalculator],
+    *,
+    qty: int,
+    entry_price: float,
+    exit_price: float,
+    product: str,
+    logger,
+    context: str,
+) -> float:
+    """E4 (2026-07-17): round-trip costs for a backstop close path, fail-OPEN.
+
+    The backstop close paths (order_reconciler CHECK1/CHECK4, cnc_gtt_monitor)
+    hardcoded ``costs=0.0`` because they were never wired a CostCalculator — so
+    their fm_ledger.pnl_delta was written GROSS while every other row was NET.
+    This is the single wiring point that closes that gap.
+
+    FAIL-OPEN BY DESIGN: a cost-calculation failure must NEVER block a capital
+    release. On the backstop paths a raised exception would leave the closed
+    position's margin locked in ``used`` for the rest of the session (starving
+    sizing) — strictly worse than booking a slightly-wrong cost. So a failure
+    (or a missing calculator) degrades to 0.0, which reverts that ONE row to
+    the pre-fix gross behaviour, and is logged LOUDLY so it is attributable
+    rather than silent. Mirrors order_placer.py's existing policy on the normal
+    exit path deliberately — one policy, not two.
+
+    Returns the round-trip total (CC12), or 0.0 if it could not be computed.
+    """
+    if calculator is None:
+        logger.error(
+            "cost_calc_unavailable: no CostCalculator wired; costs=0.0 "
+            "(pnl_delta for this close is GROSS) context=%s",
+            context,
+        )
+        return 0.0
+    try:
+        return float(
+            calculator.total_round_trip_cost(
+                qty=int(qty),
+                entry_price=float(entry_price),
+                exit_price=float(exit_price),
+                product=product,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — fail-open, see docstring
+        logger.error(
+            "cost_calc_failed: costs=0.0 (pnl_delta for this close is GROSS) "
+            "context=%s product=%s: %s",
+            context, product, exc,
+        )
+        return 0.0

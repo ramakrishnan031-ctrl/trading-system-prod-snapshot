@@ -673,6 +673,19 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > hook they define inline, so they pass regardless and are vacuous. Decide: implement in
 > `deploy/hooks/post-receive` (deploy-path behaviour change) or retire FIX-065 + its tests.
 >
+> **✅ E4 + W10 FIXED 17-Jul (branch `e4-w10-pnl-contract`, LOCAL/UNPUSHED — DEPLOY AWAITS RAMA'S
+> EXPLICIT RISK-POSTURE SIGN-OFF).** Report → `docs/audit/e4_w10_done_17jul2026.md`. THE CONTRACT
+> IS NOW: **`fm_ledger.pnl_delta` is NET; `costs` is observability-only and is NEVER re-subtracted.**
+> Reader `state_store.py` → `SUM(pnl_delta)`; the 3 backstop paths take the shared mode-agnostic
+> `CostCalculator` (via `broker/cost_calculator.round_trip_costs_or_zero`, fail-OPEN so a cost-calc
+> failure can never block a capital release) and book real costs; `record_manual_close_financials`
+> / `record_gtt_close_financials` gained `gross_pnl` so those trade rows keep
+> `gross_pnl − charges == net_pnl`; `release_used` now persists `trade_id`. `reset_daily_pnl` and
+> rehydrate/M-C1 were deliberately NOT changed — both are in lockstep by construction and are
+> pinned by test. **⚠️ The daily-loss limit now fires on the TRUE net ⇒ it trips LATER than the
+> old double-counted figure on normal exits.** The historical gap is NOT backfillable (the 36 rows'
+> real costs were never computed). The read-only investigation that established all this ↓
+>
 > **🔴 E4 INVESTIGATED read-only 17-Jul → `docs/audit/e4_investigation_17jul2026.md`. E4 IS W10 —
 > ONE bug (a `pnl_delta` contract mismatch), and fixing either half ALONE is a regression.**
 > WRITER `fund_manager.py:1228/1251` stores `pnl_delta = gross − costs` (**NET**); READER
@@ -692,7 +705,7 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > paper/live branch. ⚠️ A fix removes today's accidental conservatism ⇒ **the loss limit will trip
 > LATER than it does now on normal exits** — a live risk-posture change, state it to Rama.
 > Prior art: `audit_05jul2026.md:572` (W10 "confirmed unfixed"), `pending_reconciliation_14jul2026.md:73`
-> (W10 OPEN, 0 fix commits). **Nothing fixed — design step next.**
+> (W10 OPEN, 0 fix commits). **Investigation only — the FIX is the ✅ block above.**
 >
 > **🔄 SUPERSEDED 17-Jul (sweep S7): the post-receive md5 is now `b716673…`, NOT `bd950b7…`.**
 > *(Corrected same-session: an earlier line here — and S7's commit message `5f89ec5`, which is
