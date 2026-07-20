@@ -101,21 +101,28 @@ grep -iE 'invariant|hard_kill|CAPITAL.*mismatch' logs/system-manager.log logs/*.
 > nothing to do with the contract. Both queries above are fixed: compare **`pnl_delta`**, and **exclude
 > the `RESET_PNL` row** from the sums. See `docs/audit/e4_w10_deploy_stopped_20jul2026.md` §D.
 
+> ### ✅ ARMED 20-Jul-2026 22:20 IST — **E4/W10 SHIPPED. THE EXPECTATION HAS FLIPPED.**
+> Deployed at `a266432`, tag `deploy-20jul-e4-w10-pnl-contract`. From the **first EOD reset on the new
+> code** the reader is `SUM(pnl_delta)` and costs are never re-subtracted. **The Option-B signature is
+> now the DEFECT and the new one is the pass.** The two differ by exactly `Σcosts`.
+
 - **GOOD:** `ledger_pnl == trades_net` (the ledger reconciles to the trades). Exactly **one `RESET_PNL`**
-  row, and its **`pnl_delta` == `expected_reset_OPTION_B`** = **−(Σpnl_delta − Σcosts)** over the
-  non-RESET rows. This gross-based reset is the **EXPECTED Option-B signature** — E4/W10 has **NOT**
-  shipped (deploy attempted and **stopped** 20-Jul at the regression gate), so `−(Σpnl_delta − Σcosts)`
-  is correct, *not* a defect. Worked example, live 20-Jul: Σδ = −18.29, Σcosts = 1.32 ⇒
-  `expected_reset_OPTION_B` = **19.61**, actual `RESET_PNL.pnl_delta` = **19.61** ✓.
+  row, and its **`pnl_delta` == `expected_reset_IF_E4_SHIPPED`** = **−Σpnl_delta** over the non-RESET
+  rows — *costs are NOT subtracted*. On 20-Jul's numbers that would be **18.29** (Σδ = −18.29), where
+  the old contract gave **19.61**; the gap is exactly `Σcosts` = 1.32.
   No capital-invariant error in the logs (production asserts `available+reserved+used==total` itself at
   `fund_manager.py:2268`; a break would have hard-killed).
 - **BAD:** `ledger_pnl ≠ trades_net`; RESET_PNL missing, duplicated, or `pnl_delta ≠
-  expected_reset_OPTION_B`; OR any `available+reserved+used` invariant / spurious `hard_kill` in the logs.
-- **🔮 PRE-ARMED — the day E4/W10 ships, this expectation FLIPS.** From the first EOD reset on the new
-  code the correct value becomes **`expected_reset_IF_E4_SHIPPED` = −Σpnl_delta** (= **18.29** on 20-Jul
-  data; the two differ by exactly `Σcosts`). On that day `RESET_PNL.pnl_delta == 19.61` would be the
-  defect and `== 18.29` the pass. **Swap which column is GOOD — do not report the new signature as a
-  break.** Until then, Option-B is the correct expectation.
+  expected_reset_IF_E4_SHIPPED`; OR any `available+reserved+used` invariant / spurious `hard_kill`.
+- **🔴 THE SPECIFIC REGRESSION TO WATCH FOR:** if `pnl_delta == expected_reset_OPTION_B`
+  (= `−(Σpnl_delta − Σcosts)`, the **19.61** shape) then **E4/W10 has silently reverted** — the reader
+  is double-subtracting costs again. Report it; the rollback is
+  `git revert -m 1 a266432 && git push origin main` (schema-free, v44 both ways, no ledger unwind).
+- ⚠️ **A same-day caveat, expected and harmless.** 20-Jul's own `RESET_PNL` row was written by the OLD
+  code *before* this deploy, so it is **19.61** and will stay 19.61 — do **not** flag it. The new
+  signature applies from the **next** EOD reset onward. Reading 20-Jul under the new reader also returns
+  `Σcosts` = **+1.32** rather than 0 — a small *positive*, so it cannot cause a spurious daily-loss
+  breach (runbook §7).
 
 ### A4 — THE DAILY-LOSS CONTROL (report the number regardless — it feeds decision 01)
 ```
