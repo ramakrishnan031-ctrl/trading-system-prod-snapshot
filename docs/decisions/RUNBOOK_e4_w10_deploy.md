@@ -20,11 +20,11 @@ Two commits off base `4c148fb`: `1f4509e` (the contract migration) + `ad34ee4` (
 **The contract it installs:** `fm_ledger.pnl_delta` **is NET**; `costs` becomes **observability-only and is never re-subtracted**. Reader `state_store.get_daily_realized_net_pnl` → `SUM(pnl_delta)`. The three backstop close paths (reconciler CHECK1 + CHECK4-partial, `cnc_gtt_monitor`) take the shared, mode-agnostic `broker/cost_calculator.round_trip_costs_or_zero` (**fail-OPEN** — a cost-calc failure degrades to 0.0 *loudly*, never blocks a capital release). CHECK1 + GTT financial writers gained a real `gross_pnl` (they had hardcoded `gross_pnl=net_pnl, charges=0.0`), preserving `Σ pnl_delta == Σ trades.net_pnl` (`PATHS.md:447`).
 
 **Files (base..branch), 11 total:**
-- Capital-path code (6): `broker/cost_calculator.py` (new, +54) · `capital/fund_manager.py` · `core/state_store.py` · `main.py` (+2, CostCalculator wiring ~`:1786`) · `orders/order_reconciler.py` · `orders/cnc_gtt_monitor.py`
-- Tests (2): `tests/unit/test_e4_w10_pnl_contract.py` (new, 19 tests) · `tests/unit/test_migrations.py` (+10 — the **deliberate** contract inversion `450.0→500.0`)
+- Capital-path code (6): `broker/cost_calculator.py` (**+54; ⚠️ CORRECTED 20-Jul: NOT a new file** — it pre-exists at 299 lines and the branch takes it to 353; the new *function* is `round_trip_costs_or_zero`) · `capital/fund_manager.py` · `core/state_store.py` · `main.py` (+2, CostCalculator wiring ~`:1786`) · `orders/order_reconciler.py` · `orders/cnc_gtt_monitor.py`
+- Tests (2): `tests/unit/test_e4_w10_pnl_contract.py` (new, **20** tests — ⚠️ CORRECTED 20-Jul from "19"; confirmed by the collected delta 5001 → 5021) · `tests/unit/test_migrations.py` (+10 — the **deliberate** contract inversion `450.0→500.0`)
 - Docs (3): `PATHS.md` · `docs/SYSTEM_MAP.md` · `docs/audit/e4_w10_done_17jul2026.md`
 
-## 2. Integrate onto current main — the branch is **81 commits behind** its base
+## 2. Integrate onto current main — the branch is **81 commits behind** its base *(⚠️ 20-Jul: now **94** — ordinary drift, not an error. The merge was executed 20-Jul and produced **ZERO conflicts**, including all three files predicted below.)*
 The branch was cut 17-Jul off `4c148fb`; main is now `1462984` (code identity `d271525` + docs). **This is not a fast-forward.** Verified overlap (read-only, `4c148fb..main`):
 
 | what the branch touches | changed on main since base? | merge risk |
@@ -40,7 +40,21 @@ The branch was cut 17-Jul off `4c148fb`; main is now `1462984` (code identity `d
 3. **Commit the integration BEFORE any attribution/checkout step** — a `git checkout HEAD -- <file>` during attribution silently wiped an uncommitted edit on 17-Jul; commit first, then verify with `git status`.
 
 ## 3. Pre-deploy checks (on the **integrated** tree, not the branch in isolation)
-1. **Full regression on the merge result.** Current baseline: **14 failed · 5025 passed · 5 skipped · 1 xfailed = 5045 collected** — all 14 are the known env/time-gated set (`test_fix129_ntp_check` ×2 float64 half-ULP, fails on VM too; `test_instance_lock` ×2 PC-only; plus the in-window time-gated set). After the merge, **collected rises** (+the 19 E4/W10 tests) and the **failure set must stay at those 14** — investigate any *new* failure with `comm -23` against the baseline. Two branch-edited files (`state_store.py`, `fund_manager.py`) are contract-central, so do **not** take a green run on trust: any delta gets attributed.
+1. **Full regression on the merge result.** ~~Current baseline: **14 failed · 5025 passed · 5 skipped · 1 xfailed = 5045 collected** … the **failure set must stay at those 14**.~~
+   **⚠️ REPLACED 20-Jul-2026 — THERE IS NO FIXED-NUMBER BASELINE.** "14" was a property of one
+   environment at one moment, not of the code: the known-failure set is **time-of-day and calendar
+   dependent** (10 in-window / 11 outside / +1 on weekends), and on the PC `bash` resolves to the **WSL
+   stub** (`WindowsApps\bash.exe`), so `shutil.which("bash")` succeeds and ~20 bash-subprocess tests
+   (`test_fix065_market_hours_guard` ×17, `test_t4_deploy_preflight` ×3) **run and fail instead of
+   skipping**. Measured 20-Jul: BASE `80fbe86` = 33 failed / 5001 collected; MERGE = 36 failed / 5021.
+   **METHOD: take a fresh BASE run in the SAME session and window as the candidate run, and `comm -23`
+   the two failure sets. Neither absolute number is meaningful; the differential is exactly meaningful.
+   Merge-only must be EMPTY.** Two branch-edited files (`state_store.py`, `fund_manager.py`) are
+   contract-central, so do **not** take a green run on trust: any delta gets attributed.
+   **⚠️ Expect 3 merge-only failures until the Q9 detectors are migrated** — see
+   `docs/audit/e4_w10_deploy_stopped_20jul2026.md` and the re-derivation in
+   `docs/audit/mc1_live_seed_rederivation_20jul2026.md`. They are **not** covered by this runbook
+   because both test files were written 18-Jul, *after* the branch was cut on 17-Jul.
 2. ⚠️ **The regression MUST NOT cross midnight** (standing rule): `_TODAY` is captured at collection but the engine dates at execution — a run started after ~23:15 IST corrupts attribution silently. Run it in one pre-23:00 window.
 3. **Identity + artifacts:** confirm `PC == origin == VM bare` before the push; fingerprint the three artifacts (live DB, forward-shadow JSONL, `analytics.db`) so "before" is on record.
 

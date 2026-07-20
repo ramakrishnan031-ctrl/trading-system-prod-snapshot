@@ -64,6 +64,24 @@ E4/W10.
 
 ## 2. §A2 — CONTRACT-INDEPENDENCE (verdict: YES, it survives E4/W10)
 
+> **⚠️ SUPERSEDED IN PART, 20-Jul-2026 — the conclusion holds, the stated reason does not.**
+> The verdict below (**the cancellation survives E4/W10**) is **correct**, but two of its claims are
+> wrong and must not be reused:
+> 1. *"the seed and Phase 2 never consult it"* / *"the reader is not involved at all"* is **FALSE** —
+>    `rehydrate_from_open_trades` calls `get_daily_realized_net_pnl` at `fund_manager.py:1736`. The
+>    true, narrower statement is that the value is used **only as a log field**, after Phase 2 and
+>    after the invariant check.
+> 2. The **numerical** difference (`reader != carryover`, the `Σcosts` gap measured below) was a
+>    *consequence* of the old contract, never the *reason* for independence. E4/W10 makes the two
+>    equal during the session, which is why
+>    `TestSharedHelper::test_the_reader_is_a_different_quantity_and_is_not_involved` fired on the
+>    20-Jul merge — a proxy failing, not the property breaking.
+>
+> **The re-derivation, with the structural reason and a falsification condition, is in
+> `docs/audit/mc1_live_seed_rederivation_20jul2026.md`** (verdict: STILL SOUND, NEW REASON). The sound
+> half of the original — *both sides share `_today_release_used_pnl_rows`, so `(net−Σ)+Σ = net` for any
+> meaning of `pnl_delta`* — is retained and is still the load-bearing argument. Left legible below.
+
 Because both sides sum the **same field from the same rows**, the cancellation is algebraic and
 independent of what `pnl_delta` means. Measured:
 
