@@ -9,7 +9,9 @@ baseline *because it traded* — a hash check would fire on a perfectly healthy 
 **row-level / behavioural**, against the 19-Jul baseline.
 
 ### How to run
-SSH to the VM; the service will still be **active** (it does not stop after squareoff), so query with
+SSH to the VM; **⚠️ CORRECTED 20-Jul (observed):** the service runs an **`eod_self_exit` at 16:00 IST when flat** and
+auto-restarts tomorrow after the 08:15 token refresh — so after 18:15 it is **`inactive (dead)`, which is
+EXPECTED, not S4** (see A1; the WAL is checkpointed at that clean shutdown). Query with
 `mode=ro` (never `immutable` — that would miss the live WAL):
 ```
 ssh trading-vm
@@ -51,6 +53,14 @@ Keep this output — it is the reference for any later diagnosis.
 ## A. The session
 
 ### A1 — DID IT BOOT, AND DID IT STAY UP? (the S4 clean-death is the specific thing to rule out)
+
+> ⚠️ **CORRECTED 20-Jul (observed at 16:07):** the system runs an **`eod_self_exit` — at 16:00 IST, when flat,
+> it cleanly shuts down for the day** (log: *"past 16:00 IST and flat … clean shutdown for the day; auto-restarts
+> tomorrow after the morning token refresh"*), `Result=success`, `code=exited status=0/SUCCESS`, `NRestarts=0`.
+> So **after 18:15 this checklist WILL see `inactive (dead)` — that is EXPECTED, NOT S4.** Distinguisher:
+> **a clean exit at 16:00 after a full trading day = designed `eod_self_exit` (GOOD); a clean exit at ~09:00 with
+> 0 trades + a `LIVENESS … is DOWN` alert = S4 (BAD).** Read the GOOD/BAD below through this lens — confirm the
+> exit was the 16:00 self-exit (`grep 'eod_self_exit' logs/system_*.log`), not a morning death.
 ```
 systemctl is-active trading-system.service; systemctl show trading-system.service -p ExecMainStartTimestamp -p ActiveState -p SubState -p NRestarts
 grep -iE 'LIVENESS|is DOWN' logs/cron-liveness.log 2>/dev/null | tail
