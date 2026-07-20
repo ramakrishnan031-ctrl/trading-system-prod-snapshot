@@ -89,18 +89,33 @@ Q "SELECT substr(created_at,12,2) hr, COUNT(*) FROM trades WHERE date(created_at
 ### A3 — CAPITAL INTEGRITY
 ```
 Q "SELECT ROUND((SELECT COALESCE(SUM(pnl_delta),0) FROM fm_ledger WHERE date='2026-07-20'),2) AS ledger_pnl, ROUND((SELECT COALESCE(SUM(net_pnl),0) FROM trades WHERE date(exit_time)='2026-07-20' AND status IN ('CLOSED','CLOSED_MANUAL')),2) AS trades_net;"
-Q "SELECT entry_type, ROUND(amount,2) amount, ts FROM fm_ledger WHERE date='2026-07-20' AND entry_type='RESET_PNL';"
-Q "SELECT ROUND(SUM(pnl_delta),2) sum_pnl, ROUND(SUM(costs),2) sum_costs, ROUND(-(SUM(pnl_delta)-SUM(costs)),2) AS expected_reset FROM fm_ledger WHERE date='2026-07-20';"
+Q "SELECT entry_type, ROUND(pnl_delta,2) reset_pnl_delta, ROUND(amount,2) amount, ts FROM fm_ledger WHERE date='2026-07-20' AND entry_type='RESET_PNL';"
+Q "SELECT ROUND(SUM(pnl_delta),2) sum_delta, ROUND(SUM(costs),2) sum_costs, ROUND(-(SUM(pnl_delta)-SUM(costs)),2) AS expected_reset_OPTION_B, ROUND(-SUM(pnl_delta),2) AS expected_reset_IF_E4_SHIPPED FROM fm_ledger WHERE date='2026-07-20' AND entry_type!='RESET_PNL';"
 grep -iE 'invariant|hard_kill|CAPITAL.*mismatch' logs/system-manager.log logs/*.log 2>/dev/null | grep -i 2026-07-20 | tail
 ```
+> **⚠️ CORRECTED 20-Jul-2026 — the previous form of this check was VACUOUS and could not fail.** It
+> compared `RESET_PNL.amount` against an `expected_reset` computed over **all** rows for the date,
+> including the `RESET_PNL` row itself. Measured on live 20-Jul data: `amount` = **0.0** (that column is
+> always 0 for this entry_type — the signature lives in **`pnl_delta`**), and the self-referential sum
+> gives `expected_reset` = **0.0**. So the assertion was `0.0 == 0.0` — green for reasons that have
+> nothing to do with the contract. Both queries above are fixed: compare **`pnl_delta`**, and **exclude
+> the `RESET_PNL` row** from the sums. See `docs/audit/e4_w10_deploy_stopped_20jul2026.md` §D.
+
 - **GOOD:** `ledger_pnl == trades_net` (the ledger reconciles to the trades). Exactly **one `RESET_PNL`**
-  row, and its `amount == expected_reset` = **−(Σpnl_delta − Σcosts)**. This gross-based reset is the
-  **EXPECTED Option-B signature** — E4/W10 has NOT shipped, so `−(Σpnl_delta − Σcosts)` is correct, *not*
-  a defect. No capital-invariant error in the logs (production asserts `available+reserved+used==total`
-  itself at `fund_manager.py:2268`; a break would have hard-killed).
-- **BAD:** `ledger_pnl ≠ trades_net`; RESET_PNL missing, duplicated, or ≠ `expected_reset`; OR any
-  `available+reserved+used` invariant / spurious `hard_kill` in the logs. (If `RESET_PNL == −Σpnl_delta`
-  *instead* — E4/W10 would have shipped, which it hasn't — that too is unexpected: report it.)
+  row, and its **`pnl_delta` == `expected_reset_OPTION_B`** = **−(Σpnl_delta − Σcosts)** over the
+  non-RESET rows. This gross-based reset is the **EXPECTED Option-B signature** — E4/W10 has **NOT**
+  shipped (deploy attempted and **stopped** 20-Jul at the regression gate), so `−(Σpnl_delta − Σcosts)`
+  is correct, *not* a defect. Worked example, live 20-Jul: Σδ = −18.29, Σcosts = 1.32 ⇒
+  `expected_reset_OPTION_B` = **19.61**, actual `RESET_PNL.pnl_delta` = **19.61** ✓.
+  No capital-invariant error in the logs (production asserts `available+reserved+used==total` itself at
+  `fund_manager.py:2268`; a break would have hard-killed).
+- **BAD:** `ledger_pnl ≠ trades_net`; RESET_PNL missing, duplicated, or `pnl_delta ≠
+  expected_reset_OPTION_B`; OR any `available+reserved+used` invariant / spurious `hard_kill` in the logs.
+- **🔮 PRE-ARMED — the day E4/W10 ships, this expectation FLIPS.** From the first EOD reset on the new
+  code the correct value becomes **`expected_reset_IF_E4_SHIPPED` = −Σpnl_delta** (= **18.29** on 20-Jul
+  data; the two differ by exactly `Σcosts`). On that day `RESET_PNL.pnl_delta == 19.61` would be the
+  defect and `== 18.29` the pass. **Swap which column is GOOD — do not report the new signature as a
+  break.** Until then, Option-B is the correct expectation.
 
 ### A4 — THE DAILY-LOSS CONTROL (report the number regardless — it feeds decision 01)
 ```
