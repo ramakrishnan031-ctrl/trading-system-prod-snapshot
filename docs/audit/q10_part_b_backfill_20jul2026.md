@@ -55,4 +55,43 @@ Proved from the code, not the doc (per the 0.1 discipline):
   **~2.2 months of forward within-cell** data. The backfill produces the tercile bands and *starts the clock* —
   it is not an answer. D2/D3/#07 remain Rama's.
 
-*Read-only. Baseline: 20-Jul, `4763041`, schema v44. No `analytics.db` write occurred.*
+---
+
+## §A/§B RESULTS (20-Jul, after (a) was chosen) — ⭐ THE BACKFILL IS MOOT; (a) WAS NOT RUN
+
+**§A5 VERDICT: NOT COMPUTABLE via this backfill — and it never could be, at any range.** The whole
+premise was wrong on the data path, proved from code (`regime/engine.py`, `sr_detector/fetch.py`):
+
+- The regime engine's direction axis needs ~**201 DAILY** NIFTY candles (`engine.py:80,92,108` →
+  `daily_lookback_days=400`, `min_daily_candles=max(ema_slow+1, 2·adx+1)=201`, `interval="day"`).
+- It fetches them via `OhlcFetcher.fetch_by_token(256265,"day",400)` → a **Kite `historical_data`
+  closure** (`fetch.py:12-13,125,133`) — **live from Kite, NOT the `candles` DB table.**
+- The Q10 backfill (`fetch_daily_candles.py`) writes **1-minute** candles (`interval="minute"`) to
+  the `candles` table. **Triple mismatch:** wrong granularity (1-min vs daily), wrong quantity
+  (23 days vs 201+), **wrong source entirely** (a table regime never reads).
+- Confirmed by the live state: `data_store/regime/regime_state.json` last computed **2026-04-16**,
+  `status=UNKNOWN`, note **`insufficient_index_daily_candles`** — never a real classification.
+
+⇒ **(a) was NOT run.** Adding 1-minute index candles to a table the regime engine never reads would
+have reported "success" and left D2/D3 exactly as blocked — the paper-closure §A5 warned about.
+
+**§A2 stock invariant:** N/A — no write occurred. (And per the earlier finding it was moot anyway:
+`INSERT OR IGNORE` makes existing-row corruption structurally impossible.)
+
+**§B — (a) vs (b) cost, answered for ChatGPT:**
+- Trades in 06-15→06-18 (the days (a) excludes): **9 + 3 + 20 + 26 = 58 trades = 15.7%** of the
+  369-trade book (16% of the 361 baseline). Not marginal *as trades*.
+- **But the cost for the regime confound is ZERO** — neither range feeds regime (it reads Kite daily
+  bars, not the candles table), so 19-20 vs 23-24 backfilled days changes **nothing** for Q10/#07.
+- **D3** (band inversion) is **forward-shadow-gated, not candle-gated** — untouched by any of this.
+- **D2** — the regime-confound split needs a *daily-regime-per-trade-date* computation, which this
+  backfill does not provide at any range.
+- ⇒ **(b) and (c) are not worth doing** for regime: the extra days/flag change no verdict, because the
+  candles table is the wrong artifact. That **closes** ChatGPT's question rather than leaving it open.
+
+**What would actually make the regime confound measurable:** run the *built* regime engine
+**retrospectively per past trade-date** off the ~400-day **daily** NIFTY history (Kite-available;
+`historical_data` works) + verify the index token is wired to the engine's fetcher + enable/persist.
+That is a small **harness**, not a candle backfill. (No recommendation — a separate careful-loop item.)
+
+*Read-only. Baseline: 20-Jul, `8345cc0`, schema v44. **No `analytics.db` write occurred** — (a) was proven moot and not run.*
