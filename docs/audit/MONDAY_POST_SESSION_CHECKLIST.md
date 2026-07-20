@@ -26,6 +26,18 @@ Q() { sqlite3 "file:$PWD/data_store/trading_system.db?mode=ro" "$1"; }   # helpe
 - analytics `bb229f4474bb37c0` · 24,133,632 · 02:30:04
 - daily-loss threshold ≈ **Rs 296** (3% × Rs 9,875.60 actual capital); worst-ever intraday cum was **−56.47**.
 
+### ✅ SCHEMA-VALIDATED 20-Jul-2026 ~14:30 IST (read-only, `mode=ro`) — before use
+Every SQL query and shell command below was executed read-only against the **live schema**. **16 SQL queries
+checked; 1 corrected** — A5's `kill_switch_state.is_active` does not exist → now `state`. **Verified-correct,
+do NOT "fix":**
+- **`fm_ledger.date` and `webhook_audit.date` are VIRTUAL GENERATED columns** (`= date(ts)`; `pragma_table_xinfo`
+  `hidden=3`). `pragma_table_info` **hides** them so they *look* absent — but they are real, per-row, and
+  correct (confirmed against 07-16 rows). The A3/A4/A7 `WHERE date='…'` filters are fine as written.
+- **`kill_switch_state` is a single-row current-state table** (`state ∈ INACTIVE / SOFT_KILL / HARD_KILL`);
+  **"was the kill switch active" = `state != 'INACTIVE'`.**
+- The forward-shadow JSONL fields (`sim_R`, `old_score`, `ms4_score`, `decision`, `realized_pnl`,
+  `reject_reason`, `git_commit`, `scoring_weights_sha`) are all present in real records (B1–B3 execute).
+
 ### STEP 0 — capture first (forensic; the system is LIVE so this RECORDS state, it does not prove "untouched")
 ```
 hostname; date +%Y-%m-%dT%H:%M:%S%z
@@ -93,12 +105,12 @@ Q "SELECT COUNT(*) FROM kill_switch_state WHERE date(triggered_at)='2026-07-20' 
 
 ### A5 — KILL SWITCH & SQUAREOFF
 ```
-Q "SELECT is_active, reason, triggered_at FROM kill_switch_state ORDER BY rowid DESC LIMIT 3;"
+Q "SELECT state, reason, triggered_at, triggered_by FROM kill_switch_state ORDER BY id DESC LIMIT 3;"   # 20-Jul schema-fix: column is 'state' (INACTIVE/SOFT_KILL/HARD_KILL), NOT 'is_active'; single-row state table
 Q "SELECT status, COUNT(*) FROM trades WHERE date(created_at)='2026-07-20' GROUP BY status;"
 Q "SELECT trade_id, symbol, status, exit_reason, exit_time FROM trades WHERE date(created_at)='2026-07-20' AND status NOT IN ('CLOSED','CLOSED_MANUAL','CANCELLED','REJECTED','FAILED');"
 grep -iE 'squareoff|cutoff|reconcil' logs/*.log 2>/dev/null | grep 2026-07-20 | tail
 ```
-- **GOOD:** kill switch **INACTIVE** at close; every Monday trade is terminal (`CLOSED`/`CLOSED_MANUAL`/
+- **GOOD:** kill switch `state`=**INACTIVE** at close (single-row state table; "was active" = `state != 'INACTIVE'`); every Monday trade is terminal (`CLOSED`/`CLOSED_MANUAL`/
   `CANCELLED`) — the third query returns **0 rows** (nothing `OPEN`/`EXITING` survived past 15:17); the
   15:15 cutoff and 15:17 squareoff logged normally; reconciler flagged nothing.
 - **BAD:** an `OPEN`/`PARTIAL`/`EXITING` trade after 15:17 (a position survived squareoff); a kill active
