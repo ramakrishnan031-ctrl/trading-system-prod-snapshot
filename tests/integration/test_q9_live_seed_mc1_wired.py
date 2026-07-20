@@ -48,12 +48,23 @@ fired three times running — batch 4 twice, batch 5's reused KillSwitch).
 
 ⚠️ §A2 — THE CANCELLATION IS CONTRACT-INDEPENDENT, SO IT SURVIVES E4/W10.
 Both sides sum `pnl_delta` from the SAME helper, so `net - Σ + Σ == net` holds whatever
-`pnl_delta` means. Note the daily-loss READER is a DIFFERENT quantity —
-`SUM(pnl_delta) - SUM(costs)`; observed here reader=-18,189.08 vs carryover=-18,094.54, a
-difference of exactly the costs. The reader is not involved in the cancellation at all, which is
-why E4/W10 (which changes the reader's contract) cannot disturb it. If either side ever computes
-its rows independently the cancellation breaks SILENTLY, with neither number looking wrong on its
-own — the same shape as E4/W10 itself. TestSharedHelper pins it.
+`pnl_delta` means. If either side ever computes its rows independently the cancellation breaks
+SILENTLY, with neither number looking wrong on its own — the same shape as E4/W10 itself.
+TestSharedHelper pins it.
+
+  ⚠️ CORRECTED 20-Jul-2026 — §A2 as originally written contained a FALSE claim, and it is
+  removed here rather than left to be re-read as fact. It said the daily-loss reader "is not
+  involved in the cancellation at all" / "the seed and Phase 2 never consult it".
+  **That is false:** `rehydrate_from_open_trades` calls `get_daily_realized_net_pnl` at
+  fund_manager.py:1736. The true claim is narrower — the value is read AFTER Phase 2 and AFTER
+  the invariant check, and is used ONLY as a log field. Shared code path; no causal dependency.
+  §A2 also leaned on the reader being a *numerically different* quantity (the observed
+  reader=-18,189.08 vs carryover=-18,094.54, differing by exactly Σcosts). That difference was a
+  CONSEQUENCE of the old contract, never the REASON for independence — post-E4/W10 the two are
+  equal during the session and differ only after the EOD reset.
+  The conclusion (the cancellation survives E4/W10) STANDS, on three structural reasons set out
+  in TestSharedHelper's docstring and in
+  docs/audit/mc1_live_seed_rederivation_20jul2026.md (verdict: STILL SOUND, NEW REASON).
 """
 from __future__ import annotations
 
@@ -392,7 +403,42 @@ class TestParityStructural:
 class TestSharedHelper:
     """If the two sides ever compute their rows independently the cancellation breaks SILENTLY —
     neither number looks wrong on its own. That is the E4/W10 shape, and it is the reason this
-    is pinned rather than assumed."""
+    is pinned rather than assumed.
+
+    ⭐ WHY THESE PIN A STRUCTURE AND NOT A NUMBER (re-derivation, 20-Jul-2026).
+    An earlier test here asserted `reader != carryover` — a NUMERICAL proxy for the structural
+    claim "the reader is not involved". The two were never equivalent: the gap was merely a
+    CONSEQUENCE of the old contract (it equalled Σcosts). E4/W10 makes the two equal during the
+    session, so the proxy fired on a merge that changed nothing about the mechanism — and it
+    would have stayed silent had the mechanism broken while the numbers happened to differ.
+    **A test that pins a symptom rather than the property fails on changes that do not threaten
+    it and stays silent on changes that do. Both halves are bad.**
+
+    (A naive inversion to `reader == carryover` would have been wrong too: post-E4/W10 the two
+    are equal DURING the session but differ AFTER the EOD reset, because the reader has no
+    entry_type filter and therefore sees RESET_PNL. It was a transient coincidence either way.)
+
+    The three tests below pin the three STRUCTURAL reasons the cancellation is contract-
+    independent, and all three pass identically before and after E4/W10:
+      1. both sides draw the same rows/field from ONE shared helper ⇒ (net-Σ)+Σ = net for any
+         meaning of `pnl_delta`            → test_both_sides_still_call_the_shared_helper
+                                             + test_the_carryover_equals_exactly_what_phase_2…
+      2. the ONLY reader-derived ledger row (RESET_PNL) is excluded by the helper's
+         entry_type filter                 → test_the_reset_pnl_row_cannot_reach_the_cancellation
+      3. the one reader call on the path is a log field
+                                           → test_the_rehydrate_reader_call_is_observational_only
+
+    FALSIFICATION CONDITIONS (the original argument had none — which is why it survived until a
+    merge broke it):
+      #1 the two sides cease to share `_today_release_used_pnl_rows`  (pinned: tests 1)
+      #2 ⭐ that helper's `entry_type='RELEASE_USED'` filter is dropped or widened to admit
+         RESET_PNL — THE LOAD-BEARING ONE                              (pinned: test 2)
+      #3 rehydrate_from_open_trades:1736 ceases to be log-only         (pinned: test 3)
+      #4 the seed and rehydrate derive their own day-floors and can straddle midnight —
+         pre-existing, contract-independent, NOT pinned here. See
+         docs/audit/mc1_live_seed_rederivation_20jul2026.md §C2(e).
+
+    Full argument: docs/audit/mc1_live_seed_rederivation_20jul2026.md."""
 
     def test_the_carryover_equals_exactly_what_phase_2_re_applies(self, wired_system):
         ctx = wired_system
@@ -411,27 +457,134 @@ class TestSharedHelper:
             f"({row_sum}) — the cancellation is no longer exact"
         )
 
-    def test_the_reader_is_a_different_quantity_and_is_not_involved(self, wired_system):
-        """⚠️ The daily-loss reader is SUM(pnl_delta) - SUM(costs); the cancellation uses raw
-        pnl_delta on both sides. Conflating them is the batch-3 trap. Because the reader is not
-        involved, E4/W10 (which changes the reader's contract) cannot disturb the cancellation."""
+    def test_the_reset_pnl_row_cannot_reach_the_cancellation(self, wired_system):
+        """⭐ THE LOAD-BEARING STRUCTURAL FACT (re-derivation 20-Jul-2026, reason 2).
+
+        `reset_daily_pnl` (fund_manager.py:1603/:1610) writes
+        `RESET_PNL.pnl_delta = -get_daily_realized_net_pnl(today)` — the SOLE causal edge from
+        the daily-loss reader into the ledger. `_today_release_used_pnl_rows` (:1757) filters
+        `entry_type='RELEASE_USED'`, so that row is invisible to BOTH sides of the cancellation.
+        The reader's value therefore cannot reach the seed or Phase 2 under ANY contract.
+
+        CONTRACT-AGNOSTIC: the RESET_PNL row's VALUE differs between contracts
+        (-(Σpnl_delta - Σcosts) pre-E4/W10 vs -Σpnl_delta post-); its EXCLUSION does not. This
+        test passes identically on both sides of that migration.
+
+        ⚠️ FALSIFIER #2 — if that `entry_type='RELEASE_USED'` filter is ever dropped or widened
+        to admit RESET_PNL, the reader's value enters the cancellation and the independence
+        genuinely breaks. This test is the one that fails.
+        """
         ctx = wired_system
         _drive_losing_close(ctx, "RELIANCE", 1)
+        _drive_losing_close(ctx, "TCS", 2)
 
-        fm = _fresh_fm(ctx)
-        carry = fm.today_realized_pnl_carryover()
-        reader = ctx.store.get_daily_realized_net_pnl(now_ist().date().isoformat())
-        costs = float(ctx.store.fetch_one(
-            "SELECT COALESCE(SUM(costs),0.0) AS v FROM fm_ledger")["v"])
+        carry_before = _fresh_fm(ctx).today_realized_pnl_carryover()
+        # ANTI-VACUITY (1): with a zero carryover the exclusion would be untestable.
+        assert carry_before != 0.0, (
+            "the carryover is ZERO — the scenario realized no P&L, so excluding RESET_PNL "
+            "would be trivially true and this test would prove nothing"
+        )
 
-        assert costs > 0, "no costs were incurred — the distinction would be invisible here"
-        assert reader != pytest.approx(carry, abs=TOL), (
-            "the reader and the carryover have become the same quantity — re-derive §A2; the "
-            "cancellation's independence from the E4/W10 contract rested on them differing"
+        ctx.fund_manager.reset_daily_pnl()          # writes the ONE reader-derived ledger row
+
+        reset_rows = ctx.store.fetch_all(
+            "SELECT pnl_delta FROM fm_ledger WHERE entry_type = 'RESET_PNL'"
         )
-        assert (reader - carry) == pytest.approx(-costs, abs=TOL), (
-            f"reader({reader:.4f}) - carryover({carry:.4f}) should be -costs({-costs:.4f})"
+        # ANTI-VACUITY (2): if the reset wrote nothing, or wrote a zero, there is no row whose
+        # exclusion could matter — the assertion below would pass for the wrong reason.
+        assert len(reset_rows) == 1, (
+            f"expected exactly one RESET_PNL row, got {len(reset_rows)} — the reset did not run "
+            f"as expected and the exclusion is untested"
         )
+        reset_delta = float(reset_rows[0]["pnl_delta"])
+        assert abs(reset_delta) > TOL, (
+            f"the RESET_PNL row carries pnl_delta={reset_delta} — a zero row would be excluded "
+            f"or included with identical effect, so this test would prove nothing"
+        )
+
+        carry_after = _fresh_fm(ctx).today_realized_pnl_carryover()
+        assert carry_after == pytest.approx(carry_before, abs=TOL), (
+            f"THE RESET_PNL ROW REACHED THE CANCELLATION: carryover moved {carry_before:.4f} -> "
+            f"{carry_after:.4f} after an EOD reset wrote pnl_delta={reset_delta:.4f}. The "
+            f"_today_release_used_pnl_rows entry_type='RELEASE_USED' filter no longer excludes "
+            f"it, so the daily-loss reader's value now feeds the live seed — falsifier #2 of the "
+            f"20-Jul re-derivation. The seed is NOT contract-independent any more."
+        )
+
+        # …and the cancellation still lands, with a RESET_PNL row on the books.
+        broker = _StubBroker()
+        fm, _ = _boot(ctx, broker.get_margins().net - carry_after)
+        assert fm.get_snapshot().total == pytest.approx(BROKER_NET, abs=TOL), (
+            f"live seed failed to cancel with a RESET_PNL row present: _total="
+            f"{fm.get_snapshot().total:.4f} vs broker.net={BROKER_NET:.4f}"
+        )
+        _assert_identity(fm, "live-seeded-after-reset")
+
+    def test_the_rehydrate_reader_call_is_observational_only(self, wired_system, monkeypatch):
+        """⭐ CORRECTS §A2 (re-derivation 20-Jul-2026, reason 3).
+
+        §A2 claimed *"the seed and Phase 2 never consult it"*. That is FALSE:
+        `rehydrate_from_open_trades` calls `get_daily_realized_net_pnl` at fund_manager.py:1736.
+        The defensible claim is narrower — the value is read AFTER Phase 2 (:1703-1711) and
+        AFTER the invariant check, and feeds ONLY a log field, never `_total`, a bucket, or the
+        returned dict. Shared code path; no causal dependency.
+
+        Proven by making the reader return an absurd value across the whole seed+rehydrate
+        sequence and asserting `_total` still lands exactly on broker.net.
+
+        ⭐ ANTI-VACUITY, and it is the whole point: the patched reader must actually be CALLED.
+        Were it never called, this test would pass trivially and prove nothing — which is
+        precisely how the assertion it replaces went wrong (that one pinned a numerical
+        coincidence, `reader != carryover`, as a proxy for a structural property). The
+        call-count assertion documents BOTH that §A2's claim was false AND that the value is
+        irrelevant.
+
+        CONTRACT-AGNOSTIC: the reader returns garbage either side of E4/W10.
+        ⚠️ FALSIFIER #3 — fails the moment :1736's value feeds `_total`, a bucket, or the return
+        dict.
+        """
+        ctx = wired_system
+        _drive_losing_close(ctx, "RELIANCE", 1)
+        _drive_losing_close(ctx, "TCS", 2)
+
+        ABSURD = -1.0e9
+        calls = {"n": 0}
+        real_reader = ctx.store.get_daily_realized_net_pnl
+
+        def _absurd_reader(date_iso):
+            calls["n"] += 1
+            real_reader(date_iso)          # keep the real (side-effect-free) SELECT happening
+            return ABSURD
+
+        # Patch only around the seed + rehydrate sequence — i.e. exactly main.py:2255-2286.
+        monkeypatch.setattr(ctx.store, "get_daily_realized_net_pnl", _absurd_reader)
+        seed, carry = _live_seed(ctx, _StubBroker())
+        fm, counts = _boot(ctx, seed)
+        total_under_absurd_reader = fm.get_snapshot().total
+        monkeypatch.undo()
+
+        assert carry != 0.0, (
+            "the carryover is ZERO — nothing was cancelled, so a corrupted reader could not "
+            "have shown up either way"
+        )
+        # ANTI-VACUITY: patching a function nobody calls proves nothing.
+        assert calls["n"] >= 1, (
+            "the patched reader was NEVER CALLED during seed+rehydrate, so this test proves "
+            "nothing about its influence. NOTE: §A2 asserted exactly this ('the seed and Phase "
+            "2 never consult it') and it was false — rehydrate_from_open_trades:1736 calls it. "
+            "If that call has since been removed, delete this test rather than trusting it."
+        )
+        assert counts["summary"]["replayed_pnl_rows"] >= 2, (
+            "Phase 2 replayed nothing — there was no cancellation to corrupt"
+        )
+        assert total_under_absurd_reader == pytest.approx(BROKER_NET, abs=TOL), (
+            f"THE READER'S VALUE REACHED THE CANCELLATION: with the daily-loss reader forced to "
+            f"{ABSURD:.1f}, _total came out {total_under_absurd_reader:.4f} instead of "
+            f"broker.net={BROKER_NET:.4f}. rehydrate_from_open_trades:1736 is no longer "
+            f"log-only — falsifier #3 of the 20-Jul re-derivation. E4/W10's change to the "
+            f"reader's contract can now disturb live seeding."
+        )
+        _assert_identity(fm, "live-seeded-under-absurd-reader")
 
     def test_both_sides_still_call_the_shared_helper(self, wired_system):
         """The structural guarantee, measured: one call from the carryover, one from Phase 2."""
