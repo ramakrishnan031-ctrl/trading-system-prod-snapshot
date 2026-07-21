@@ -1602,6 +1602,32 @@ def _within_service_window(now: datetime) -> bool:
     return SERVICE_WINDOW_START <= now.time() < SERVICE_WINDOW_END
 
 
+# M-C1 (2026-07-07): the broker's net margin on a mid-day warm restart ALREADY
+# includes today's realized PnL, but rehydrate Phase 2 re-applies that same PnL
+# (fm_ledger RELEASE_USED carryover) -> the live seed would double-count it
+# (inflated reservable capital + a phantom -today_pnl drift on the next
+# sync_from_broker). Subtract today's realized-PnL carryover from the seed so
+# seed + Phase 2 == broker.net BY CONSTRUCTION. The Sigma is over the EXACT same
+# fm_ledger rows Phase 2 walks (shared helper), so the cancellation is exact incl.
+# sign (loss day -> Sigma<0 -> seed rises). Cold boot: 0 closed trades -> Sigma=0
+# -> seed = broker.net (unchanged). PAPER is UNTOUCHED: its static paper_capital
+# seed correctly excludes PnL.
+#
+# Extracted from main() 21-Jul-2026 (B1) to make the live-seed arithmetic invocable
+# by a test, and parameterised with the day-floor (B5, midnight day-floor fix):
+# main() derives start_of_today_iso ONCE and passes the SAME value here and to
+# rehydrate_from_open_trades, so the seed's Sigma and Phase-2's re-addition can
+# never span different days. start_of_today_iso=None forwards to
+# today_realized_pnl_carryover's own None-fallback (standalone/test callers). The
+# expression is otherwise identical to the former inline seed (one extra stack
+# frame, no new state, no exception handling added or removed).
+def compute_live_seed(broker_adapter, fund_manager, start_of_today_iso=None) -> float:
+    return (
+        broker_adapter.get_margins().net
+        - fund_manager.today_realized_pnl_carryover(start_of_today_iso)
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # main() (MAIN1-MAIN15)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2238,23 +2264,29 @@ def _main_locked(args, config_dir: Path) -> int:
         ),
         kill_switch=kill_switch,  # FM19 / BL-9: invariant violations -> hard_kill
     )
+    # M-C1 / midnight day-floor (21-Jul-2026): derive the day-floor ONCE here and
+    # pass the SAME value to BOTH the live-seed carryover Sigma (compute_live_seed,
+    # live only) and rehydrate Phase 2 (both modes). An off-schedule boot straddling
+    # midnight would otherwise let the seed and rehydrate each derive their own
+    # now_ist() floor a few ms apart on OPPOSITE sides of 00:00 -> the two Sigma's
+    # would span different day-row-sets and the seed<->rehydrate cancellation would
+    # leave a residue of -Sigma(D). Both callees keep their own None-fallback for
+    # standalone/test callers; the single-floor guarantee at BOOT is by convention
+    # at these two call sites, pinned structurally in
+    # tests/unit/test_mc1_live_seed_rehydrate.py
+    # (test_boot_derives_the_day_floor_once_and_passes_it_to_both).
+    # See docs/decisions/DESIGN_midnight_day_floor.md.
+    from core.time_authority import now_ist
+    _start_of_today_iso = now_ist().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ).isoformat()
+
     # SU19: paper mode uses configured paper_capital; live uses broker margins
     if args.mode == "paper":
         _startup_capital = selected_account.paper_capital
     else:
-        # M-C1 (2026-07-07): the broker's net margin on a mid-day warm restart
-        # ALREADY includes today's realized PnL, but rehydrate Phase 2 re-applies
-        # that same PnL (fm_ledger RELEASE_USED carryover) -> the live seed would
-        # double-count it (inflated reservable capital + a phantom -today_pnl drift
-        # on the next sync_from_broker). Subtract today's realized-PnL carryover
-        # from the seed so seed + Phase 2 == broker.net BY CONSTRUCTION. The Sigma
-        # is over the EXACT same fm_ledger rows Phase 2 walks (shared helper), so
-        # the cancellation is exact incl. sign (loss day -> Sigma<0 -> seed rises).
-        # Cold boot: 0 closed trades -> Sigma=0 -> seed = broker.net (unchanged).
-        # PAPER is UNTOUCHED: its static paper_capital seed correctly excludes PnL.
-        _startup_capital = (
-            broker_adapter.get_margins().net
-            - fund_manager.today_realized_pnl_carryover()
+        _startup_capital = compute_live_seed(
+            broker_adapter, fund_manager, _start_of_today_iso
         )
     fund_manager.initialize(_startup_capital)
 
@@ -2283,7 +2315,9 @@ def _main_locked(args, config_dir: Path) -> int:
     # failure) so ops can distinguish this from the generic unexpected-
     # exception path (code 2).
     try:
-        _rehydrate_summary = fund_manager.rehydrate_from_open_trades()
+        _rehydrate_summary = fund_manager.rehydrate_from_open_trades(
+            _start_of_today_iso
+        )
         _log.info(
             "fund_manager.rehydrated",
             extra=_rehydrate_summary,

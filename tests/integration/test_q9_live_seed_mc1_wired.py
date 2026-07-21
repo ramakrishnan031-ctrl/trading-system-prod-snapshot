@@ -33,13 +33,13 @@ fired three times running — batch 4 twice, batch 5's reused KillSwitch).
       fund_manager.initialize(seed)                      :408    main.py:2259
       fund_manager.rehydrate_from_open_trades()          :1626   main.py:2286, Phase 2
 
-  REPLICATED, because it is not callable:
-      the two-line expression `broker.get_margins().net - ...carryover()` is INLINE inside
-      main()'s body (main.py:2255-2258) with no function boundary, so no test can invoke it
-      without running main() itself — which in live mode is precisely what must never happen.
-      It is instead PINNED STRUCTURALLY by
-      test_q9_post_restart_capital_wired.TestParity::test_the_live_seed_still_subtracts_the_carryover,
-      which fails if the subtraction is removed or the two sides stop sharing the row helper.
+  NOW CALLED DIRECTLY (B1 extraction, 21-Jul-2026): the seed arithmetic was moved from an
+      inline expression in main()'s body into a module-level function `main.compute_live_seed`,
+      so `_live_seed()` below invokes the REAL production expression instead of replicating it.
+      The whole-file regex pin
+      (test_q9_post_restart_capital_wired.TestParity::test_the_live_seed_still_subtracts_the_carryover)
+      is kept as a cheap structural backstop — it still fails if the subtraction is removed or the
+      two sides stop sharing the row helper — but the behaviour is now covered directly.
 
   ⇒ These tests prove the MECHANISM — that the subtrahend is exactly what Phase 2 re-adds, so the
     seed cancels to broker.net. That is the part that can silently break. The arithmetic that
@@ -131,10 +131,13 @@ def _boot(ctx: SystemContext, seed: float) -> tuple:
 
 
 def _live_seed(ctx: SystemContext, broker: _StubBroker) -> tuple:
-    """The live seed exactly as main.py:2255-2258 composes it, using the REAL carryover."""
+    """The live seed AS PRODUCTION COMPOSES IT -- this calls the REAL extracted
+    main.compute_live_seed (B1, 21-Jul-2026), not a copy of the expression. carry is read
+    separately (same rows, same today-floor) for the anti-vacuity assertions below."""
+    from main import compute_live_seed
     fm_probe = _fresh_fm(ctx)
     carry = fm_probe.today_realized_pnl_carryover()      # REAL production function
-    return broker.get_margins().net - carry, carry
+    return compute_live_seed(broker, fm_probe), carry
 
 
 def _pic(fm) -> dict:

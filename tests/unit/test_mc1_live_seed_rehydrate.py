@@ -1,14 +1,15 @@
 """Wave-5 · M-C1 — LIVE warm-restart capital double-count fix (fund_manager seed).
 
 Root cause (audit M-C1, full_system_audit_04july2026.md:113): on a LIVE mid-day
-warm restart the broker's net margin (`main.py:2007` seed) ALREADY reflects today's
+warm restart the broker's net margin (the live seed, now `compute_live_seed()` in
+main.py) ALREADY reflects today's
 realized PnL, but rehydrate Phase 2 re-applies that same PnL (fm_ledger RELEASE_USED
 carryover) -> the live capital seed double-counts it (inflated reservable capital +
 a phantom -today_pnl drift on the next sync_from_broker). PAPER was already correct:
 its static paper_capital seed excludes today's PnL, so Phase 2 adds it exactly once.
 
 Fix: the LIVE seed subtracts today's realized-PnL carryover -
-  main.py:2007  _startup_capital = broker.net - fund_manager.today_realized_pnl_carryover()
+  compute_live_seed():  _startup_capital = broker.net - today_realized_pnl_carryover(floor)
 so seed + Phase 2 == broker.net BY CONSTRUCTION. The carryover Sigma is summed over
 the EXACT fm_ledger rows Phase 2 walks (shared helper _today_release_used_pnl_rows),
 so the subtraction and the re-addition cancel exactly, incl. sign. PAPER is UNTOUCHED
@@ -31,6 +32,8 @@ Run: python -m pytest tests/unit/test_mc1_live_seed_rehydrate.py -v
 from __future__ import annotations
 
 import logging
+import re
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -318,6 +321,131 @@ def test_T4_sync_drift_red_green(tmp_path: Path) -> None:
     assert abs(green_before - broker_net) < 0.01             # already == broker.net
     assert abs(green_correction - 0.0) < 0.01                # ZERO drift, no alert
     store.close()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# T5 — MIDNIGHT DAY-FLOOR HAZARD (DESIGN_midnight_day_floor.md) + the single-floor fix
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _StubBroker:
+    """Inert broker: get_margins().net returns a chosen number. No client, no
+    credentials — 'live' here is the live SEEDING arithmetic, never a connection."""
+
+    def __init__(self, net: float) -> None:
+        self._net = net
+
+    def get_margins(self):
+        return type("_Margins", (), {"net": self._net})()
+
+
+def _day_floors() -> tuple[str, str]:
+    """(floor_D, floor_Dp1) = midnight-of-today and midnight-of-tomorrow, ISO. The
+    seeded RELEASE_USED rows are stamped at now_ist() (day D), so floor_D captures
+    them (Sigma = Sigma(D)) and floor_Dp1 captures none (Sigma = 0). These are the
+    exact values two independent now_ist() calls would derive across a midnight boot."""
+    now = now_ist()
+    floor_D = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    floor_Dp1 = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return floor_D, floor_Dp1
+
+
+def test_T5a_divergent_midnight_floors_break_the_cancellation(tmp_path: Path) -> None:
+    """THE HAZARD, shown able to fail (DESIGN_midnight_day_floor B3). On the pre-fix path the
+    seed and rehydrate each derive their OWN now_ist() day-floor. A boot straddling midnight
+    gives the seed floor D (captures today's Sigma) and rehydrate floor D+1 (captures none), so
+    the subtraction and the re-addition span different row-sets and DO NOT cancel -- residue
+    -Sigma(D). The divergence is planted by passing the two floors explicitly."""
+    store = _store(tmp_path / "t5a.db")
+    pnl = _seed_session(
+        store, closed=[(-1234.0, "INTRADAY"), (321.0, "INTRADAY")], with_open=True)
+    sigma_D = pnl
+    assert abs(sigma_D) > 0.01, (
+        "ANTI-VACUITY: Sigma(D) must be non-zero, or a zero-P&L day collapses both floor-forms "
+        "and the test proves nothing (the E4/W10 no-cost-day trap)."
+    )
+    broker_net = BASE + pnl
+    floor_D, floor_Dp1 = _day_floors()
+
+    fm = _fm(store)
+    # seed derives floor D (pre-midnight); rehydrate derives floor D+1 (post-midnight).
+    seed = broker_net - fm.today_realized_pnl_carryover(floor_D)
+    fm.initialize(seed)
+    fm.rehydrate_from_open_trades(floor_Dp1)
+
+    total = _total(fm)
+    assert abs(total - (broker_net - sigma_D)) < 0.01, (
+        f"expected the BROKEN residue -Sigma(D): _total={total:.2f}, "
+        f"broker_net-Sigma(D)={broker_net - sigma_D:.2f}"
+    )
+    assert abs(total - broker_net) > 0.01, "divergent floors must NOT cancel to broker.net"
+    store.close()
+
+
+def test_T5b_single_shared_floor_survives_midnight(tmp_path: Path) -> None:
+    """THE FIX. main() derives ONE day-floor and passes it to BOTH compute_live_seed and
+    rehydrate_from_open_trades, so even a boot straddling midnight uses a single floor and the
+    cancellation is exact. Drives the REAL extracted compute_live_seed with one floor -- so this
+    cannot pass on the pre-extraction HEAD (compute_live_seed does not exist there)."""
+    from main import compute_live_seed
+
+    store = _store(tmp_path / "t5b.db")
+    pnl = _seed_session(
+        store, closed=[(-1234.0, "INTRADAY"), (321.0, "INTRADAY")], with_open=True)
+    assert abs(pnl) > 0.01, "ANTI-VACUITY: Sigma(D) must be non-zero"
+    broker_net = BASE + pnl
+    floor_D, _ = _day_floors()
+
+    fm = _fm(store)
+    seed = compute_live_seed(_StubBroker(broker_net), fm, floor_D)   # ONE floor ...
+    fm.initialize(seed)
+    fm.rehydrate_from_open_trades(floor_D)                           # ... to BOTH sides
+    assert abs(_total(fm) - broker_net) < 0.01, (
+        f"single shared floor must cancel to broker.net: _total={_total(fm):.2f}, "
+        f"broker_net={broker_net:.2f}"
+    )
+    store.close()
+
+
+def test_T5c_no_arg_carryover_still_matches_today_floor(tmp_path: Path) -> None:
+    """The None-fallback is UNCHANGED and correct: a standalone/test caller that passes no floor
+    still derives today's floor and gets the same Sigma as an explicit today-floor. Guards that
+    the fix did not alter the fallback that non-boot callers rely on."""
+    store = _store(tmp_path / "t5c.db")
+    pnl = _seed_session(store, closed=[(-777.0, "INTRADAY")], with_open=False)
+    assert abs(pnl) > 0.01
+    floor_D, _ = _day_floors()
+    fm = _fm(store)
+    assert abs(fm.today_realized_pnl_carryover() - fm.today_realized_pnl_carryover(floor_D)) < 0.01
+    store.close()
+
+
+def test_boot_derives_the_day_floor_once_and_passes_it_to_both() -> None:
+    """STRUCTURAL PIN -- the single-floor guarantee at boot is BY CONVENTION at main()'s two
+    capital-restore call sites (the fund_manager helpers keep a None-fallback for standalone
+    callers, so nothing structurally forbids a second derivation). This pins the convention:
+    main() must derive ONE now_ist() day-floor and pass the SAME variable to both
+    compute_live_seed and rehydrate_from_open_trades. It is RED on any tree where the seed and
+    rehydrate call sites derive their own floor (e.g. the pre-fix HEAD), which is how a future
+    edit that reintroduces a second derivation gets caught."""
+    main_src = (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
+    seed = re.search(
+        r"_startup_capital\s*=\s*compute_live_seed\(\s*broker_adapter,\s*fund_manager,"
+        r"\s*([A-Za-z_]\w*)\s*\)",
+        main_src,
+    )
+    assert seed, (
+        "the LIVE seed is not `compute_live_seed(broker_adapter, fund_manager, <day-floor>)` -- "
+        "the extracted helper and the explicit day-floor argument are the fix"
+    )
+    floor = seed.group(1)
+    assert re.search(rf"\.rehydrate_from_open_trades\(\s*{re.escape(floor)}\s*\)", main_src), (
+        f"rehydrate_from_open_trades is not passed the SAME day-floor variable ({floor!r}) as "
+        f"the seed -- the two boot call sites could derive divergent floors at a midnight boot"
+    )
+    assert len(re.findall(rf"{re.escape(floor)}\s*=\s*now_ist\(\)", main_src)) == 1, (
+        f"the boot day-floor {floor!r} must be derived from now_ist() exactly ONCE"
+    )
 
 
 if __name__ == "__main__":
