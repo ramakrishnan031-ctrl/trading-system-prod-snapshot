@@ -258,6 +258,27 @@ def _calc_slip_pct(sys_price: float, fill_price: float) -> float:
     return abs(fill_price - sys_price) / sys_price * 100
 
 
+# Routine, non-incident system events — must NOT inflate the CRITICAL tally.
+# KILL_AUTO_CLEARED is the daily prior-day kill auto-clear at boot
+# (kill_switch._record_cleared_kill); it fires every trading day and is INFO-grade,
+# not an incident. It is still surfaced below as a "Kill Switch Events" tally —
+# reclassified, not hidden.
+_ROUTINE_SYSTEM_EVENT_TYPES = frozenset({"KILL_AUTO_CLEARED"})
+
+
+def _is_critical_event(event_type: Optional[str]) -> bool:
+    """True iff a system_event is incident-grade (event_type contains CRITICAL or KILL)
+    AND is not a routine auto-clear. Keyed on the STRUCTURED event_type, never a free-text
+    severity: the only KILL/CRITICAL event_type ever written is the routine
+    KILL_AUTO_CLEARED, so the previous bare substring match reported a false
+    'CRITICAL Count >= 1' every single trading day. A genuine future KILL/CRITICAL
+    event_type still counts (anti-vacuity)."""
+    et = (event_type or "").upper()
+    if et in _ROUTINE_SYSTEM_EVENT_TYPES:
+        return False
+    return "CRITICAL" in et or "KILL" in et
+
+
 def _apply_cell_style(cell, font=None, fill=None, border=None, alignment=None, number_format=None):
     """Apply styles to a cell."""
     if font:
@@ -554,7 +575,7 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
 
     row = section_header("Section D — System Health", row)
     error_count = sum(1 for e in data.system_events if "ERROR" in (e.get("event_type") or "").upper())
-    critical_count = sum(1 for e in data.system_events if "CRITICAL" in (e.get("event_type") or "").upper() or "KILL" in (e.get("event_type") or "").upper())
+    critical_count = sum(1 for e in data.system_events if _is_critical_event(e.get("event_type")))
     orphan_count = sum(1 for r in data.recon_log if "ORPHAN" in (r.get("check_name") or "").upper())
 
     kill_count = sum(1 for e in data.system_events if "KILL" in (e.get("event_type") or "").upper())

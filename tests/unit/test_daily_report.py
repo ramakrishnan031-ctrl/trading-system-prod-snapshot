@@ -21,6 +21,7 @@ from reports.daily_report import (
     _fmt_time,
     _fmt_datetime,
     _calc_slip_pct,
+    _is_critical_event,
     _generate_tune_suggestions,
     _get_order_for_trade_leg,
     is_holiday_or_weekend,
@@ -156,6 +157,27 @@ def sample_report_data(sample_trade, sample_signal, sample_order):
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper function tests
 # ─────────────────────────────────────────────────────────────────────────────
+
+class TestCriticalEventClassification:
+    """C1: routine auto-cleared events must not be counted as CRITICAL, without silencing
+    a genuine incident (anti-vacuity). Keyed on the structured event_type, not free text."""
+
+    def test_routine_auto_clear_is_not_critical(self):
+        # KILL_AUTO_CLEARED fires every trading day (the prior-day kill auto-clear at boot).
+        # Pre-fix it was the ONLY event ever matched, so "CRITICAL Count" read >= 1 daily.
+        assert _is_critical_event("KILL_AUTO_CLEARED") is False
+
+    def test_genuine_critical_and_kill_still_count(self):
+        # ANTI-VACUITY: the routine exclusion must NOT swallow a real incident. A genuine
+        # KILL/CRITICAL event_type (should one ever be written) must still be counted.
+        assert _is_critical_event("HARD_KILL_TRIGGERED") is True
+        assert _is_critical_event("SOFT_KILL_ACTIVATED") is True
+        assert _is_critical_event("CRITICAL_FAILURE") is True
+
+    def test_non_incident_events_ignored(self):
+        for et in ("STARTUP", "SHUTDOWN", "CONFIG_DIFF", "", None):
+            assert _is_critical_event(et) is False
+
 
 class TestFormatHelpers:
     """Tests for formatting helper functions."""
