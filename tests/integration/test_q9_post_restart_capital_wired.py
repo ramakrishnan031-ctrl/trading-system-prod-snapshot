@@ -651,26 +651,29 @@ class TestParity:
         """⚠️ COVERAGE BOUNDARY, pinned structurally.
 
         Production runs `main.py --mode live`, but the wired fixture is paper_mode=True, so
-        every test above exercises the PAPER seed (static paper_capital, main.py:2243). The
-        LIVE seed — broker.get_margins().net - today_realized_pnl_carryover() (main.py:2255,
-        M-C1) — is NOT exercised by any integration test; its coverage is unit-level
-        (tests/unit/test_mc1_live_seed_rehydrate.py).
+        every test above exercises the PAPER seed (static paper_capital). The LIVE seed is
+        `main.compute_live_seed(broker_adapter, fund_manager, floor)` (= broker.get_margins().net
+        - today_realized_pnl_carryover(floor), M-C1). Since B1 (21-Jul-2026) extracted it into a
+        callable function it IS now exercised directly — by test_q9_live_seed_mc1_wired.py and by
+        tests/unit/test_mc1_live_seed_rehydrate.py. This regex is kept as a cheap structural
+        backstop: the subtraction has not been rewritten away in place.
 
         The subtraction is what stops a LIVE mid-day warm restart double-counting today's
         realized P&L (the broker's net already includes it, and rehydrate Phase 2 re-adds it).
-        Removing it would silently inflate live reservable capital. Since no wired test would
-        notice, this pins it structurally instead of leaving it unguarded.
+        Removing it would silently inflate live reservable capital.
         """
         from pathlib import Path
         import re
         main = (Path(__file__).resolve().parents[2] / "main.py").read_text(encoding="utf-8")
         assert re.search(
-            r"broker_adapter\.get_margins\(\)\.net\s*\n\s*-\s*fund_manager\.today_realized_pnl_carryover\(\)",
+            # `\(` not `\(\)`: B5 (21-Jul-2026) passes the shared day-floor as an argument, so the
+            # call is today_realized_pnl_carryover(_start_of_today_iso), not empty-parens.
+            r"broker_adapter\.get_margins\(\)\.net\s*\n\s*-\s*fund_manager\.today_realized_pnl_carryover\(",
             main,
         ), (
-            "the LIVE capital seed no longer subtracts today_realized_pnl_carryover() — a live "
-            "mid-day warm restart would double-count today's realized P&L (M-C1). No "
-            "integration test covers the live seed; see tests/unit/test_mc1_live_seed_rehydrate.py"
+            "the LIVE capital seed no longer subtracts today_realized_pnl_carryover(...) — a live "
+            "mid-day warm restart would double-count today's realized P&L (M-C1). The seed is now "
+            "compute_live_seed(); see tests/unit/test_mc1_live_seed_rehydrate.py"
         )
         # And the two must keep sharing one row-selection, or the cancellation stops being exact.
         fm = (Path(__file__).resolve().parents[2] / "capital" / "fund_manager.py").read_text(
