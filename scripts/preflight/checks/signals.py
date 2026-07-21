@@ -25,8 +25,17 @@ class WebhookResponsiveCheck(Check):
 
     def run(self, ctx: CheckContext) -> CheckResult:
         status, body = engine._http_get_json(WEBHOOK_HEALTH_URL)
-        if status == 200:
-            return self._passed("webhook /health 200 (signals can arrive)")
+        # AB-910 §1.7 (84cee3e) put the webhook /health behind the secret; this check
+        # calls it UNAUTHENTICATED by design (a token in the URL would leak the secret
+        # into logs — the 17-Jul token-at-rest sweep). So a 401 is the endpoint
+        # ANSWERING and proves the one thing this check exists to prove: Flask is
+        # listening and Chartink signals can physically arrive. Mirrors the S4 boot
+        # self-check (utils/startup_checks.py:807, which treats 2xx-or-401 as reachable).
+        # SCOPE: this tolerance is for the LOCAL /health only. Do NOT copy it to
+        # check_scanner (external Chartink), where a 401 IS a real anomaly. Anything
+        # else — unreachable (0), 5xx, 404 — is still a genuine failure.
+        if status == 200 or status == 401:
+            return self._passed(f"webhook /health {status} — Flask up (signals can arrive)")
         if status == 0:
             return self._failed(f"webhook unreachable — Chartink signals cannot arrive "
                                 f"({body.get('error', '')})")

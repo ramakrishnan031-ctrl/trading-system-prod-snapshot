@@ -20,9 +20,23 @@ def _ctx(tmp_path):
 
 
 def test_webhook_responsive(tmp_path, monkeypatch):
+    # 200 (no webhook secret configured) -> the endpoint answered -> reachable.
     monkeypatch.setattr(engine, "_http_get_json", lambda u, timeout=5.0: (200, {}))
     assert signals.WebhookResponsiveCheck().run(_ctx(tmp_path)).status is Status.PASS
+    # 401: AB-910 §1.7 put /health behind the webhook secret and this check calls it
+    # UNAUTHENTICATED by design, so a 401 is the endpoint ANSWERING -> Flask is up and
+    # Chartink signals can arrive -> PASS. Pre-fix this returned FAIL and fired a false
+    # CRITICAL every trading day (the S4 /health-401 family, 3rd site; mirrors the boot
+    # self-check utils/startup_checks.py:807, which already tolerates 401).
+    monkeypatch.setattr(engine, "_http_get_json", lambda u, timeout=5.0: (401, {}))
+    assert signals.WebhookResponsiveCheck().run(_ctx(tmp_path)).status is Status.PASS
+    # ANTI-VACUITY: the 401 tolerance must NOT swallow a genuine outage. A real 'down'
+    # (connection refused -> status 0) and a real 5xx must STILL fail CRITICAL -- else
+    # the check could never go red and would be worthless (the trap check_scanner:703
+    # would fall into if this tolerance were copied to the external Chartink path).
     monkeypatch.setattr(engine, "_http_get_json", lambda u, timeout=5.0: (0, {"error": "refused"}))
+    assert signals.WebhookResponsiveCheck().run(_ctx(tmp_path)).status is Status.FAIL
+    monkeypatch.setattr(engine, "_http_get_json", lambda u, timeout=5.0: (503, {}))
     assert signals.WebhookResponsiveCheck().run(_ctx(tmp_path)).status is Status.FAIL
 
 
