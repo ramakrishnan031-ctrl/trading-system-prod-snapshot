@@ -119,6 +119,20 @@ and `MEM/` (recalled every session) travel furthest; a gloss there is inherited 
 session before any primary evidence is consulted. They are the first place to correct and the
 first place to audit — not the last.
 
+**5.6 — Stale-read-after-correction: a correction must reach every READER who already copied from
+the source, not only every carrier.** §5.4's "reach every carrier" has a second clause. On 21-Jul
+the register's CT line was corrected at 14:40; a follow-on instruction was then written at 15:14
+**from a 14:18 read of the *pre*-correction register** — the fix reached the document, but not the
+reader who had already extracted from it. The result was a stale-premise instruction (the 16-Jul
+CT-harness finding restated as current) *plus* an invented causal claim ("the hazard is why the six
+tests are parked" — two unrelated facts joined by an unchecked "that is why"), one afternoon after
+this sweep named the class. Prevention: a correction to a high-traffic source (register /
+`SYSTEM_MAP.md`) should be **announced to anyone with work in flight against it**, not merely
+written; and a reader should **re-read the source at the moment of extraction**, not trust a read
+minutes old — §5.1's "re-verify the citation at use", applied to whole documents rather than single
+claims. (Contributed by the author of the CT-harness instruction, owning the error — the honest
+half of a correction.)
+
 **The one-line version:** *the gloss is the dropped qualifier; the harm is the summary cited as
 authority. Carry the hedge, cite the source, and sweep every carrier — break any one link and the
 class stops.*
