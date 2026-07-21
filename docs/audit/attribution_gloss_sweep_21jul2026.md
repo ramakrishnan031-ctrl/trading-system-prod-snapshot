@@ -133,6 +133,21 @@ minutes old — §5.1's "re-verify the citation at use", applied to whole docume
 claims. (Contributed by the author of the CT-harness instruction, owning the error — the honest
 half of a correction.)
 
+**5.7 — The stale-read sub-pattern generalises from citations to INSTRUCTION CONSTRAINTS.** §5.1/§5.6
+treat stale *citations*; the same failure shows up in *constraints an instruction carries forward*.
+Three shipped this week, all the same shape — a constraint true in an earlier context, carried without
+re-checking whether the context still held: **(a)** the CT-harness hazard (§5.6, stale by three days +
+an invented causal join); **(b)** the **boot-path deferral** whose stated reason ("tomorrow's boot would
+test two things at once") had already expired — E4/W10's boot behaviour had been observed three times
+(Monday, this morning, the 11:57 restart); only the EOD *signature* was pending, which is not a boot
+observable; **(c)** **"keep the regex pin green with zero test edits"** (B1 instruction), true for the
+earlier *no-floor* B1 design but not once B5's floor-passing was folded in — the pin matched empty parens
+`\(\)` and passing the day-floor makes the call `today_realized_pnl_carryover(_start_of_today_iso)`, so
+"zero edits" and "pass the floor to both" were mutually exclusive against the actual pin. **Prevention: an
+instruction constraint earns the same "re-verify at use" as a citation** — a carried-forward constraint is
+a claim about the current code/state and must be checked against it, not against the context it was
+written in. (Contributed by the author of all three, owning them.)
+
 **The one-line version:** *the gloss is the dropped qualifier; the harm is the summary cited as
 authority. Carry the hedge, cite the source, and sweep every carrier — break any one link and the
 class stops.*
