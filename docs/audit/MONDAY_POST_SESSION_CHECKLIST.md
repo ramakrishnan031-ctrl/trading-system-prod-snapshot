@@ -142,7 +142,7 @@ Q "SELECT status, COUNT(*) FROM trades WHERE date(created_at)='2026-07-20' GROUP
 Q "SELECT trade_id, symbol, status, exit_reason, exit_time FROM trades WHERE date(created_at)='2026-07-20' AND status NOT IN ('CLOSED','CLOSED_MANUAL','CANCELLED','REJECTED','FAILED');"
 grep -iE 'squareoff|cutoff|reconcil' logs/*.log 2>/dev/null | grep 2026-07-20 | tail
 ```
-- **GOOD:** kill switch `state`=**INACTIVE** at close (single-row state table; "was active" = `state != 'INACTIVE'`); every Monday trade is terminal (`CLOSED`/`CLOSED_MANUAL`/
+- **GOOD:** kill switch `state`=~~**INACTIVE**~~ **SOFT_KILL** at close **[⚠️ CORRECTED 20/21-Jul: the designed 15:15 circuit-breaker leaves SOFT_KILL set overnight (auto-clears at the next 08:15 boot); expecting INACTIVE makes every normal trading day read BAD. See `monday_post_session_results_20jul2026.md` §CHECKLIST-DEFECTS-2.]** (single-row state table; "was active" = `state != 'INACTIVE'`); every Monday trade is terminal (`CLOSED`/`CLOSED_MANUAL`/
   `CANCELLED`) — the third query returns **0 rows** (nothing `OPEN`/`EXITING` survived past 15:17); the
   15:15 cutoff and 15:17 squareoff logged normally; reconciler flagged nothing.
 - **BAD:** an `OPEN`/`PARTIAL`/`EXITING` trade after 15:17 (a position survived squareoff); a kill active
@@ -167,7 +167,7 @@ Q "SELECT substr(ts,12,2) hr, response_code, COUNT(*) n, SUM(payload_size_bytes)
 - **GOOD:** POSTs **before 10:00** return **403** (the `entry_start:10:00` gate rejects every pre-10:00
   POST — ~25,960 of them across the window), then **200** from 10:00 on. This is CORRECT behaviour, not an
   outage. (The pre-10:00 403 payloads carry ~338k uncounted signals — a known, tracked gap, not a fault.)
-- **BAD:** 403s **after 10:00** (the entry gate stuck closed), or **0 rows at all** (the webhook receiver
+- **BAD:** 403s **during [10:00, 15:00)** (the entry gate stuck closed) **[⚠️ CORRECTED 20/21-Jul: the entry window is [10:00, 15:00); the CLOSING gate at 15:00 emits ~373 legit 403s daily, so "403s after 10:00" makes every normal day read BAD. See `monday_post_session_results_20jul2026.md` §CHECKLIST-DEFECTS-3.]**, or **0 rows at all** (the webhook receiver
   never came up → cross-check A1).
 
 ---

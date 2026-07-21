@@ -363,8 +363,7 @@ file moved aside, a stale `.pyc` found and removed, `git stash` unused (stash li
 
 **⚠️ The first MINE run was NOT clean, and that is the point.** It carried **one attributable
 failure** — `test_the_streak_is_identical_after_a_restart`. Rather than re-run, it was traced to
-the paper auto-fill race (§9.3), fixed, and the full suite re-run. **The baseline is now 14**, down
-from 16.
+the paper auto-fill race (§9.3), fixed, and the full suite re-run. **~~The baseline is now 14~~**, down from 16. **[⚠️ CORRECTED 21-Jul (attribution-gloss sweep): there is NO fixed-number baseline — it is a property of one environment at one moment; judge a regression by same-window `comm -23`, not a count. See `docs/decisions/RUNBOOK_e4_w10_deploy.md:44` + memory `feedback_no_fixed_test_baseline`.]**
 
 ### 10.2 Deploy verification
 

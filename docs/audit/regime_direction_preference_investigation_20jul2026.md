@@ -23,7 +23,7 @@
   EMA-50/EMA-200 cross + slope + swing structure + ADX on **DAILY** closes (`engine.py:142-188`).
 - **Was the index fetch ever VM-verified? NO.** The persisted `data_store/regime/regime_state.json` is from
   **2026-04-16**, `status=UNKNOWN`, note **`insufficient_index_daily_candles`** — the last time the engine
-  ran it could not get enough daily index history. It has **never** produced a real classification.
+  ran it ~~could not get enough daily index history~~ **[⚠️ CORRECTED 20/21-Jul: this missing-handle reading is retired — a no-handle control run reproduced `insufficient_index_daily_candles`, and on 20-Jul live Kite served 271 daily bars (needs 201), status OK. The block was unverified API access, NOT a data shortage. See `regime_computability_verification_20jul2026.md`.]** raised that note. It has **never** produced a real classification (true — but not for want of data).
 - Source: the engine fetches via `sr_detector` `OhlcFetcher.fetch_by_token(256265,"day",400)` →
   a **Kite `historical_data` closure** (`fetch.py:12-13,125`), i.e. **live from Kite, not any DB table.**
 

@@ -40,8 +40,7 @@ the masking inference; correcting them would itself be over-propagation):
 - memory `capital_sizing_audit_18jun.md:39,51` — "the Rs-cap never binds; concentration binds lower
   first" (the row-10-style algebra, true).
 - `docs/SYSTEM_MAP.md:1165` — false positive ("swallowed by the surrounding try/except", unrelated).
-- The Q9 batch-4 report/memory — **contain no masking assertion** (see §B). Memory palace and `PATHS.md`
-  carried no assertion.
+- The Q9 batch-4 report/memory — **contain no masking assertion** (see §B). ~~Memory palace and `PATHS.md` carried no assertion.~~ **[⚠️ CORRECTED 21-Jul: FALSE for the memory palace — `decision_packages_19jul.md:26` and `decision_readiness_triage_19jul.md:16` carried the masking assertion UNCORRECTED until the 21-Jul sweep (`PATHS.md` was indeed clean). This summary was itself an attribution gloss — a correction doc claiming a completeness it did not have.]**
 
 ### #06's gate, restated (carried into every corrected location)
 #06 is **not** gated on the concentration cap. It is gated on the multiplier's **merit — D2/D3** (is there
