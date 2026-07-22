@@ -118,11 +118,33 @@ Naked-Short Fix (locked 2026-04-24, Phase A/2.1 + 3.4):
     OP-NS4 -- DELIVERY intent uses SL order_type (price = trigger_price);
               INTRADAY uses SL-M. Zerodha rejects SL-M on CNC. Branch lives
               inside LimitTripleProtocol.place_exits (OPL7).
+              [SUPERSEDED 2026-07-22, doc-only — original left legible.] Since
+              P0 2026-06-15 (FIX-179) EVERY SL leg — INTRADAY and DELIVERY — is
+              order_type "SL" (stop-limit): Zerodha rejects SL-M via the API
+              entirely, not just on CNC ("Market orders without market protection
+              are not allowed"; the 15-Jun rejection). The "INTRADAY uses SL-M"
+              clause above is historical. See LimitTripleProtocol.place_exits
+              Step 1 and price_math.calc_sl_limit_price.
     OP-NS5 -- On exit placement failure AFTER ENTRY fill: position is live
               with no SL. This is a capital-safety breach. Fire
               kill_switch.hard_kill with grep tag
               LIMIT_TRIPLE_EXITS_FAILED_POSITION_UNPROTECTED. Do NOT re-raise
               inside the event handler; reconciler is the backstop.
+              [RATIONALE UPDATED 2026-07-22 — behaviour UNCHANGED; original above
+              left legible.] The "position is live with no SL" reason is
+              SUPERSEDED by FIX-148 (2026-06-03): _place_limit_triple_exits now
+              runs _emergency_market_exit (a reverse-aware marketable-LIMIT
+              flatten) BEFORE _fire_hard_kill_for_unprotected_position, so at kill
+              time the position is normally already flat, not naked. The hard_kill
+              is RETAINED (Rama, Decision 7, 22-Jul) on a DIFFERENT, still-valid
+              rationale: an exit-placement rejection is a canary for a systemic
+              bad condition — every live firing (15/16/19-Jun) was a
+              multi-position storm — so the kill now stands as an ANOMALY
+              CIRCUIT-BREAKER that halts the trading day, NOT as protection for a
+              naked position (which FIX-148 + the reverse-aware kill-flatten sweep
+              already handle). SLUnplaceableError (SL cannot be placed on the
+              protective side) is the residual truly-unprotectable case. Full
+              record: docs/audit/exit_rejection_hard_kill_forensics_22jul2026.md.
 
 Atomic Registration Fix (locked 2026-04-24, Phase A/1.1):
     OP-AR1 -- Per leg, _fill_map insert MUST happen BEFORE order_monitor.track().
@@ -3738,6 +3760,13 @@ class OrderPlacer:
         Escalate: a position is live with broken exit protection.
         This is exactly the capital-safety condition kill_switch.hard_kill exists
         for. Best-effort — any failure fires a CRITICAL log and returns.
+
+        RATIONALE (updated 2026-07-22, behaviour unchanged): callers now run
+        _emergency_market_exit BEFORE this, so at kill time the position is
+        normally already flat — the kill is retained (Decision 7) as an anomaly
+        circuit-breaker (halt the day on an exit-placement rejection), NOT as
+        naked-position protection. Full reasoning: OP-NS5 in the module header +
+        docs/audit/exit_rejection_hard_kill_forensics_22jul2026.md.
         """
         if self._kill_switch is None:
             self._log.critical(

@@ -1020,6 +1020,14 @@ instantly-marketable order. (NOCIL 22-Jun: a LONG TGT recalc'd to 197.12 was cla
   position cannot be stopped → `raise SLUnplaceableError` (`core/exceptions.py`) → order_placer's
   existing unprotected-position escalation (`_emergency_market_exit` + `_fire_hard_kill_for_unprotected_position`).
   `entry_fill` (= settled `avg_fill_price`) is threaded fill→`place_deferred_exits`→`place_exits`.
+- **HARD_KILL rationale (updated 2026-07-22, behaviour unchanged):** the
+  `_fire_hard_kill_for_unprotected_position` escalation above no longer protects a *naked* position —
+  since **FIX-148 (03-Jun)** the emergency flatten runs FIRST, so at kill time the position is normally
+  already flat. The kill is **retained (Decision 7, Rama, 22-Jul)** on a different rationale — an
+  **anomaly circuit-breaker**: an exit-placement rejection ⇒ halt the trading day (every live firing
+  15/16/19-Jun was a multi-position storm), NOT naked-position protection (FIX-148 + the reverse-aware
+  kill-flatten sweep already handle that). Contract: **OP-NS5** (`orders/order_placer.py` header).
+  Forensics: `docs/audit/exit_rejection_hard_kill_forensics_22jul2026.md`.
 - **Pre-fill reject (framing-b, both legs):** `screening/secondary_screener.py` rejects an entry that
   sits at/beyond the exit-clamp ceiling (`entry ≥ upper×(1−m)` LONG / `≤ lower×(1+m)` SHORT, and the
   symmetric SL-side) → `REJECTED_CIRCUIT_PROXIMITY`. Fast-disable lever:
