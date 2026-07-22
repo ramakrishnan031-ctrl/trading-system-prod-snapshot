@@ -723,6 +723,133 @@ def test_fire_now_still_sets_soft_kill() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# M-O5: fire_now must not leave the "already fired" flag stuck on failure, so the
+# 15:17 scheduled check_and_fire can still run the backstop squareoff. Mirrors
+# check_and_fire's reset-on-exception (:223-229) and adds the partial-failure
+# sibling (Rider 1). The realistic _fire raise is LIVE-only (paper get_positions()
+# -> [] places zero exits), so these inject a raising/failing mock (Rule #5).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_fire_now_raise_resets_flag_allows_scheduled_retry() -> None:
+    """M-O5: if _fire raises out of fire_now, the flag must NOT stay stuck — the
+    scheduled 15:17 check_and_fire must still fire the backstop. RED before the
+    fix: fire_now left _fired_for_date set, so check_and_fire returned False."""
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = []
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+    ks.is_active.return_value = False
+    # soft_kill (:349) is unwrapped in _fire -> a realistic infra raise out of _fire.
+    ks.soft_kill.side_effect = RuntimeError("infra: soft_kill failed")
+
+    with patch("orders.eod_squareoff.now_ist", return_value=_ist(12, 0)):
+        with pytest.raises(RuntimeError):
+            eod.fire_now(reason="daily_loss_limit_breached", triggered_by="fund_manager")
+
+    # The concurrency slot was claimed then reset by the fix (was set -> now False).
+    assert eod._fired_for_date.get(_FIXED_TEST_DATE, False) is False
+
+    # Infra recovers; the scheduled backstop squareoff must now actually fire.
+    ks.soft_kill.side_effect = None
+    assert eod.check_and_fire(_ist(15, 17)) is True
+
+
+def test_fire_now_partial_failure_resets_flag_allows_scheduled_retry() -> None:
+    """M-O5 Rider 1: a fire_now that RETURNS with positions_failed>0 (un-squared
+    positions, no exception) must also not block the 15:17 retry. 'Fired' is not
+    'squared everything'. RED before the fix: flag stayed set, retry skipped."""
+    from core.exceptions import BrokerError
+
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row("trd_x", "sig_x", "FAILSTOCK", "LONG", 5),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+    adapter.place_order.side_effect = BrokerError("place failed")  # -> positions_failed=1
+
+    with patch("orders.eod_squareoff.now_ist", return_value=_ist(12, 0)):
+        r1 = eod.fire_now(reason="daily_loss_limit_breached", triggered_by="fund_manager")
+
+    assert r1.positions_failed > 0                                    # partial failure
+    assert eod._fired_for_date.get(_FIXED_TEST_DATE, False) is False  # flag reset (Rider 1)
+
+    # The scheduled fire must retry the un-squared leg.
+    adapter.place_order.side_effect = None
+    adapter.place_order.return_value = _placed_order("ok", "K", "FAILSTOCK", "SELL", 5)
+    assert eod.check_and_fire(_ist(15, 17)) is True
+
+
+def test_fire_now_retry_resets_daily_pnl_twice_nonzero() -> None:
+    """M-O5 / deploy-note B1: after a Rider-1 retry, reset_daily_pnl runs on BOTH
+    fires, so the RESET_PNL ledger gets TWO rows in one day and the second is
+    NON-ZERO (it carries -current_net). Pins that production must verify RESET_PNL
+    by SUM(pnl_delta), never a single-row read. Zero pnl would be vacuous, so a
+    non-zero net is planted between the two resets."""
+    from core.exceptions import BrokerError
+
+    store = MagicMock(spec=StateStore)
+    store.get_pending_intraday_orders.return_value = []
+    store.get_open_intraday_positions.return_value = [
+        _open_position_row("trd_x", "sig_x", "FAILSTOCK", "LONG", 5),
+    ]
+    store.get_eod_squareoff_log_for_date.return_value = None
+
+    eod, adapter, fm, ks, bus, om = _make_eod(store=store)
+
+    # Emulate reset_daily_pnl: append a RESET row = -(current net), then zero it.
+    state = {"net": -250.0}   # non-zero loss BEFORE the first reset
+    reset_rows: list[float] = []
+
+    def _reset() -> None:
+        reset_rows.append(-state["net"])
+        state["net"] = 0.0
+
+    fm.reset_daily_pnl.side_effect = _reset
+
+    # Fire 1: partial failure -> flag reset (Rider 1); reset_daily_pnl row #1.
+    adapter.place_order.side_effect = BrokerError("place failed")
+    with patch("orders.eod_squareoff.now_ist", return_value=_ist(12, 0)):
+        r1 = eod.fire_now(reason="daily_loss_limit_breached", triggered_by="fund_manager")
+    assert r1.positions_failed > 0
+    assert eod._fired_for_date.get(_FIXED_TEST_DATE, False) is False
+
+    # Non-zero P&L accrues before the scheduled retry (anti-vacuity: NOT zero).
+    state["net"] = -30.0
+    adapter.place_order.side_effect = None
+    adapter.place_order.return_value = _placed_order("ok", "K", "FAILSTOCK", "SELL", 5)
+    assert eod.check_and_fire(_ist(15, 17)) is True
+
+    # Both fires reset -> two non-zero RESET rows; the SUM is the true total.
+    assert fm.reset_daily_pnl.call_count == 2
+    assert reset_rows == [250.0, 30.0]
+    assert reset_rows[1] != 0.0                 # zero would prove nothing
+    assert sum(reset_rows) == 280.0             # SUM(RESET_PNL) == -(net1 + net2)
+
+
+def test_check_and_fire_raise_resets_flag_allows_retry() -> None:
+    """Pins check_and_fire's OWN reset-on-exception (:223-229): if _fire raises,
+    the flag resets so the next poll retries. Coverage-gap fill flagged by the
+    M-O5 investigation (previously unasserted). GREEN before and after the fix —
+    guards the pattern fire_now is being made to mirror from regressing."""
+    eod, adapter, fm, ks, bus, om = _make_eod()
+    ks.is_active.return_value = False
+    ks.soft_kill.side_effect = RuntimeError("infra: soft_kill failed")
+
+    with pytest.raises(RuntimeError):
+        eod.check_and_fire(_ist(15, 17))
+
+    assert eod._fired_for_date.get(_FIXED_TEST_DATE, False) is False
+
+    ks.soft_kill.side_effect = None
+    assert eod.check_and_fire(_ist(15, 17)) is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Restart recovery (EOD9)
 # ─────────────────────────────────────────────────────────────────────────────
 

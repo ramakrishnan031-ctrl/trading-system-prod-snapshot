@@ -236,6 +236,19 @@ class EodSquareoff:
         Logs CRITICAL with reason. Marks _fired_for_date[today] to prevent
         check_and_fire() from firing again the same day.
 
+        M-O5: the flag is a concurrency CLAIM, not a "done" marker. If _fire()
+        raises, or returns having left positions/cancels un-squared, the flag is
+        reset so the scheduled 15:17 check_and_fire() can still run the backstop
+        squareoff — mirroring check_and_fire()'s own reset-on-exception (:223-229).
+        On FULL success the flag stays set so the scheduled fire does not
+        re-square what fire_now already squared. The retry is safe: the E.5
+        broker-position filter (_exit_open_positions) re-queries broker truth and
+        skips already-flat rows, so a retry cannot double-square. A partial-failure
+        retry re-runs reset_daily_pnl(), producing a SECOND RESET_PNL ledger row
+        for the day (its pnl_delta is -current_net, NOT zero) — so any RESET_PNL
+        verification must SUM pnl_delta, never read a single row. See
+        docs/audit/mo5_investigation_22jul2026.md.
+
         Args:
             reason:       Human-readable reason for the manual fire.
             triggered_by: Module or operator that triggered this.
@@ -251,7 +264,22 @@ class EodSquareoff:
         with self._lock:
             self._fired_for_date[today] = True
 
-        return self._fire(now, recovery_fire=False)
+        try:
+            result = self._fire(now, recovery_fire=False)
+        except Exception:
+            # M-O5: _fire() raised -> release the claim so check_and_fire() can
+            # retry the backstop squareoff (mirrors check_and_fire :223-229).
+            with self._lock:
+                self._fired_for_date[today] = False
+            raise
+        # M-O5 (Rider 1): a partial failure that did NOT raise (positions or
+        # cancels left un-squared) must also not block the scheduled 15:17 retry
+        # of the un-squared legs -- "fired" is not "successfully squared
+        # everything". Same predicate the restart-recovery path uses (:1717).
+        if result.positions_failed > 0 or result.cancels_failed > 0:
+            with self._lock:
+                self._fired_for_date[today] = False
+        return result
 
     def start_polling(self, poll_interval_sec: int = 5) -> None:
         """
