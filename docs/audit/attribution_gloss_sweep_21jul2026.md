@@ -148,6 +148,20 @@ instruction constraint earns the same "re-verify at use" as a citation** — a c
 a claim about the current code/state and must be checked against it, not against the context it was
 written in. (Contributed by the author of all three, owning them.)
 
+**5.8 — Output-match is not mechanism: a coincidental output collision read as a shared cause.**
+§5.1–5.7 treat claims that *drifted* from their source; this is a claim that never had a source — an
+inference from two artifacts sharing an **output**. The gemini_watchman's 21-Jul alert paraphrased a
+"₹0 closing capital", which matches the real `daily_report.py:195` `balance_after=0.0` defect
+(`broker_closing_capital_zero_21jul2026.md` §A), and *"sounds like the same bug"* was taken as *"reads
+the same field."* It does not: the watchman never touches `balance_after` — an LLM observer can **emit**
+a number that happens to match a real defect's output without ever reading the defect's mechanism. The
+§A3 verdict (*"nothing consumes it"*) stood unchanged; **the request to amend a correct verdict was
+itself the error.** This is §5.3's measured-vs-assumed tell applied to *causation*: "these two produce
+the same value" is measured; "therefore the same code path" is assumed — a mechanism claim with no
+trace behind it. **Prevention: matching outputs are not evidence of a shared cause; the trace is —
+name the field, the reader, and the write before fusing two artifacts into one bug.** (Contributed by
+the author, owning the fifth error of the week — the honest half.)
+
 **The one-line version:** *the gloss is the dropped qualifier; the harm is the summary cited as
 authority. Carry the hedge, cite the source, and sweep every carrier — break any one link and the
 class stops.*
