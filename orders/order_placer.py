@@ -45,6 +45,11 @@ Last-Mile Gaps (locked 2026-04-16):
     OP-LM3 -- Empty broker_order_id treated as failure. Validated in protocol
               files (order_protocol_limit.py, order_protocol_co.py) immediately
               after each adapter.place_order() call. Raises OrderRejectedError.
+              [REFINED 2026-07-22, doc-only.] "Raises" is the ENTRY/SL rule; an
+              empty broker_order_id on the LIMIT_TRIPLE TGT leg now returns a
+              partial SL-only result (FIX-190 Bug C), NOT a raise — the SL still
+              protects. See locked_decisions.yaml OP-LM3 (per-leg scope) and
+              order_protocol_limit.py:485-495.
 
 BL-8 (locked 2026-04-19, Phase C.2):
     OP-BL8a -- _persist_entry_orders is ATOMIC. Uses
@@ -98,6 +103,14 @@ BL-19 (locked 2026-04-19, Phase D.1):
                 any in-flight legs it placed (LimitTriple cancels ENTRY on
                 SL fail; CoPlusTgt has no inter-leg state on raise), so
                 re-executing the protocol does not produce duplicates.
+                [EXAMPLE SUPERSEDED 2026-07-22, doc-only — original above left
+                legible.] The "LimitTriple cancels ENTRY on SL fail" example
+                predates OP-NS1 (two-phase, 2026-04-24): engine.execute now
+                places the ENTRY LIMIT only (SL/TGT are deferred to place_exits
+                at fill time — see order_protocol_limit.py:148,167), so no SL is
+                placed during execute() to fail. The duplicate-safety CLAIM still
+                holds — a 429 raises pre-placement, so a re-executed ENTRY-only
+                protocol places nothing twice.
 
 Naked-Short Fix (locked 2026-04-24, Phase A/2.1 + 3.4):
     OP-NS1 -- LIMIT_TRIPLE is two-phase. engine.execute places ENTRY only;

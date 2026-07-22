@@ -666,6 +666,13 @@ orders_module:
     affects:
       - "orders/order_placer.py (_handle_placement_failure)"
 
+  # [SUPERSEDED 2026-07-22, doc-only] The LIMIT_TRIPLE SL/TGT scope in the
+  # decision below predates OP-NS1 (two-phase deferred exits, 2026-04-24): SL/TGT
+  # are no longer placed at ENTRY time but in place_exits at fill. A TGT empty-id
+  # or BrokerError now returns a partial SL-only result (FIX-190 Bug C,
+  # order_protocol_limit.py:421-495) — it does NOT "raise"; an SL failure escalates
+  # via order_placer (_emergency_market_exit + hard_kill), not "cancel ENTRY". The
+  # LIMIT_TRIPLE ENTRY and CO_PLUS_TGT scope lines still hold. Original left legible.
   OP-LM3:
     title: "Empty broker_order_id from adapter treated as placement failure"
     decision: |

@@ -41,9 +41,23 @@ Locked Design Decisions:
     KS13 -- NOT in scope: deciding when to auto-trip, performing broker
             cancellations, restart after halt.
 
+    [SUPERSEDED 2026-07-22, doc-only — KS5/KS11/KS13 originals above left
+    legible.] These predate the adapter-driven HARD_KILL flatten. The
+    constructor now ALSO takes adapter (FIX-087), notifier, mode and
+    emergency_exit_buffer_pct (see __init__), and the kill_switch PERFORMS the
+    flatten + broker cancellations DIRECTLY via that injected adapter — the
+    M-C8 async flatten worker + FIX-181 marketable-LIMIT exits/orphan sweep +
+    FIX-190 Bug A/E reverse-aware cancel-then-flatten. The on_hard_kill_cancel_fn
+    callback is retained only as a LEGACY FALLBACK when no adapter is injected
+    (_run_cancel_fn, ~:904/939). So "no cancel logic inside / does not perform
+    broker cancellations (injected callback)" describes the pre-adapter design,
+    not the current one.
+
 What This Module Does NOT Do:
     - Does not decide WHEN to call record_api_failure (callers decide)
     - Does not perform broker order cancellations (injected callback)
+      [SUPERSEDED 2026-07-22: NOW performs them DIRECTLY via the injected adapter;
+      the callback is a legacy fallback — see the KS5/KS11/KS13 note above]
     - Does not restart trading after halt (manual resume() only)
     - Does not send Telegram alerts (logger CRITICAL is the signal)
     - Does not import from any layer above capital/
