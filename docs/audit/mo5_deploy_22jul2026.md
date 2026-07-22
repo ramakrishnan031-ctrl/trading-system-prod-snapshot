@@ -106,15 +106,32 @@ are the entire evidence base.
 exercised by a morning boot; only a daily-loss breach (or the test suite) exercises
 `fire_now`.
 
-## Backup / deploy / rollback
+## Backup / deploy / rollback — CONFIRMED (filled 22-Jul from real post-deploy output)
 
-- Backup: `<FILL: pre_deploy backup name>` (integrity ok, v44).
-- Deploy: `git push origin main` → post-receive checkout to
-  `/home/ubuntu/systems/trading-system`; crontab `AUTO-INSTALLED`; **service NOT
-  started** (loads at next boot). Schema **v44 unchanged, no migration**.
-- Verify: PC `main` == origin (VM bare) == VM checkout. Tag `<FILL>`.
-- **Rollback:** `git revert <commit>` (schema-free; the change is one method) and
-  re-push off-market; or reset origin to `13518d6`. No state/schema to unwind.
+- **Backup:** `data_store/backups/pre_deploy_mo5_20260722.db` on the VM (111 MB,
+  taken 16:46 IST before the push). Integrity **verified read-only**: `PRAGMA
+  quick_check` = `ok`; `schema_meta.schema_version` = `44` (the app's source of
+  truth — SQLite `PRAGMA user_version` is `0` by design, so v44 is read from the
+  table, not the pragma). Schema-free change ⇒ the backup is an anchor, not a
+  required unwind path.
+- **Deploy — DONE.** `git push origin main` landed on the VM bare
+  (`~/trading-system.git`, `main` = `4585bd2`); post-receive checked out to
+  `/home/ubuntu/systems/trading-system` — **verified**: the deployed
+  `orders/eod_squareoff.py` sha256 (prefix `908669a0`) is byte-identical to the
+  `4585bd2` blob (`git show 4585bd2:orders/eod_squareoff.py | sha256sum`). Crontab
+  present (47 trading jobs; AUTO-INSTALL re-run is idempotent). **Service left
+  inactive** (self-exited 16:00, book flat) — NOT restarted, so the EOD-path change
+  loads at the next 08:15 boot. Schema **v44 unchanged, no migration**.
+- **Verify — HOLDS NOW:** the M-O5 deploy point is `4585bd2`, tag
+  **`deploy-22jul-mo5`** (annotated `ae53dfd` → `4585bd2`, pushed to origin). PC
+  `main` == origin (VM bare) == VM checkout — confirmed identical
+  (`git ls-remote origin refs/heads/main` == local HEAD; the VM working tree by the
+  hash match above). *This deploy-record completion is a docs-only follow-up commit
+  riding on top of `4585bd2`; it changes no code, schema, or cron and does not move
+  the deployed behaviour.*
+- **Rollback:** `git revert 4585bd2` (schema-free; the change is one method) and
+  re-push off-market; or reset origin to `13518d6` (its parent). No state/schema to
+  unwind.
 
 *Off-market; no order placed; the service was not restarted; the EOD path was not
 triggered. paper==live (the fix is mode-agnostic; the flag logic is identical).*
