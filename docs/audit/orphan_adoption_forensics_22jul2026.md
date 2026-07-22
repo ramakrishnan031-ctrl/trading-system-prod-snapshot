@@ -19,8 +19,10 @@ human trade.
 
 ## TL;DR — the headline is bigger than THELEELA
 
-**The June "orphan adoption" events were the debris of a recurring exit-placement
-bug, not human orders and not (at root) an in-flight fill race.** Three times in
+**The June 15-25 `ORPHAN_ADOPTION` events that `reconciliation_log` persisted were
+the debris of a recurring exit-placement bug, not human orders and not (at root) an
+in-flight fill race** (a larger, earlier orphan population predates the table —
+see §B3). Three times in
 June the system entered a position and then `order_placer._place_limit_triple_exits`
 had its SL/TGT **rejected by Zerodha**, leaving the position unprotected →
 **HARD_KILL** → the kill-flatten (plus the entry) left broker positions the local
@@ -158,11 +160,27 @@ timestamp), right inside the 15-Jun restart storm. A reconciler that had been
 running-and-persisting earlier would have left earlier `CAPITAL_DRIFT` rows; their
 absence indicates the table's **persistence began (or the DB was re-seeded) on
 15-Jun**. `schema_meta` shows only the current version (v44) and no migration
-history, so it cannot date the table. **Conclusion:** the 15-Jun start is
-substantially a **persistence-start artifact for this table** — it does not prove
-the exit-placement root cause began on 15-Jun. Whether it occurred before 15-Jun
-could only be answered from pre-15-Jun journald (a scan that did not complete in
-the read-only window); stated here as not-established rather than assumed.
+history, so it cannot date the table. **Conclusion — definitively a
+persistence-start artifact.** A completed journald scan of **10-14 Jun** (before
+the table starts) found **46,078** `CHECK2 ORPHAN_ADOPTION … no local trade found`
+lines, with **`CAPITAL_DRIFT` persist = 0** in that window — i.e. the reconciler
+was *logging* orphans at scale but not yet *persisting* to `reconciliation_log`.
+The earliest is **2026-06-10T13:11:57** (journald's horizon), already mid-event. So
+the 15-Jun table-start is **entirely a persistence-feature artifact** (RC10
+persistence began ~15-Jun); the orphan phenomenon is older than the table, and
+older than journald's reach.
+
+⚠️ **New, un-investigated thread (flagged, not answered).** The pre-15-Jun orphans
+include *much larger* positions than the qty 1-2 of 15-25 Jun — e.g. on 10-Jun
+**HGS qty 107 @455.95 (~Rs 48.8k)** and **AFCONS qty 150 @334.45 (~Rs 50.2k)**,
+each re-flagged per-cycle. On this ~Rs 9.9k-capital account a 100+ share position is
+anomalous. Whether these were real unprotected system positions, a stale
+broker-position read, or a pre-production/config-era artifact was **not** determined
+here — it is beyond this batch's scope (THELEELA + the 15-Jun cluster). It should be
+its own investigation: a ~Rs 50k un-matched position is a different order of concern
+from the qty-1 debris analysed above, and it means the exit-failure root cause
+below is established for the **15/16/19-Jun persisted clusters**, not proven to be
+the sole source of *every* orphan in June.
 
 ### B4 — priority
 
@@ -230,11 +248,15 @@ They have never fired in production; treat them as *unproven*, not *known-good*.
 ## Not in scope / not changed
 
 M-O5 (owns 15:30, untouched); M-O4 (inert, prior batch). No fix, design, deploy, or
-order. Verifying that **each** of the three exit-rejection variants
-(market-protection, tick-size, circuit-limit) is independently closed — and whether
-"unprotected position → HARD_KILL" is the intended terminal response vs a
-retry/repair — is a **separate thread**, not opened here. This document is
-findings-only.
+order. Two **separate threads** are flagged but not opened here:
+1. Verifying that **each** of the three exit-rejection variants (market-protection,
+   tick-size, circuit-limit) is independently closed — and whether "unprotected
+   position → HARD_KILL" is the intended terminal response vs a retry/repair.
+2. **The pre-15-Jun large orphans** (§B3): 46,078 orphan log-lines in 10-14 Jun,
+   including ~Rs 48-50k positions (HGS 107, AFCONS 150) on a ~Rs 9.9k-capital
+   account. Root not determined; a different order of concern from the qty-1 debris.
+
+This document is findings-only.
 
 ---
 
