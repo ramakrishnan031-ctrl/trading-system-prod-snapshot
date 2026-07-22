@@ -162,6 +162,22 @@ trace behind it. **Prevention: matching outputs are not evidence of a shared cau
 name the field, the reader, and the write before fusing two artifacts into one bug.** (Contributed by
 the author, owning the fifth error of the week — the honest half.)
 
+**5.9 — A tool's help text is not its contract; the implementation is.** §5.1 says re-verify a
+citation at use; the same applies to a *tool's own description of itself*. `backup_retention.py`'s
+abort message — *"re-run with --max-delete N if legitimate"* — reads like "N is how many to delete."
+The implementation says otherwise: `--max-delete` is a **sanity-cap abort threshold**
+(`abort = total_delete > max_delete`, `:110-111`), never a delete count, and it never selects *which*
+files — candidates are always `members[keep_n:]`, the oldest beyond keep-N. Reading the help text as
+the contract produced a false claim ("a `--max-delete 47` would take the three anchors") that a
+two-line read of `build_plan` refutes. **The damage is specific: the CONCLUSION (don't re-run
+casually) was right, but the REASON was false — and a false reason is worse than none, because
+refuting it discards the correct caution along with it.** This joins §5.8 and the *"two names → two
+destinations"* slip (`AlgoCore_Engine` the **bot** vs `-1003977291784` the **channel**, read as two
+channels) as one family: **surface-reading — a message, an output, a name — in place of tracing the
+mechanism.** Prevention: a tool's behaviour is read from its code, not its prose; a name is resolved
+to its referent before it is counted. (Contributed by the author, owning the sixth and seventh errors
+of the week.)
+
 **The one-line version:** *the gloss is the dropped qualifier; the harm is the summary cited as
 authority. Carry the hedge, cite the source, and sweep every carrier — break any one link and the
 class stops.*
