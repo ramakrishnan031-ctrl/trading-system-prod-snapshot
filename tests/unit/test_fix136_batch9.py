@@ -171,7 +171,6 @@ class TestDashboardCompletion:
             mode="PAPER",
             account="TEST",
             opening_capital=50000.0,
-            closing_capital_broker=51000.0,
             signals=[
                 {"signal_id": "s1", "status": "PROCESSED", "symbol": "RELIANCE", "scanner": "sc1", "strategy": "fp_long", "trigger_price": 2500, "received_at": "2026-05-31T10:00:00", "triggered_at": "2026-05-31T09:55:00"},
                 {"signal_id": "s2", "status": "REJECTED_EXPIRED", "symbol": "TCS", "scanner": "sc1", "strategy": "fp_long", "rejection_reason": "EXPIRED", "trigger_price": 3500, "received_at": "2026-05-31T10:05:00", "triggered_at": "2026-05-31T09:50:00"},

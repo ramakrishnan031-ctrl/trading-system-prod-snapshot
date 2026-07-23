@@ -114,7 +114,6 @@ def sample_report_data(sample_trade, sample_signal, sample_order):
         mode="PAPER",
         account="TEST001",
         opening_capital=100000.0,
-        closing_capital_broker=100930.0,
         signals=[sample_signal],
         trades=[sample_trade],
         orders=[sample_order],
@@ -291,7 +290,6 @@ class TestTuneSuggestions:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=99000.0,
             signals=[],
             trades=[{
                 "trade_id": "t1",
@@ -325,7 +323,6 @@ class TestTuneSuggestions:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=99000.0,
             signals=[],
             trades=[{
                 "trade_id": "t1",
@@ -442,7 +439,11 @@ class TestSheetBuilders:
         assert ws.title == "3_Capital"
         assert ws.cell(row=2, column=3).value == "Opening"
 
-    def test_build_sheet_3_capital_has_reconciliation(self, sample_report_data):
+    def test_build_sheet_3_capital_shows_honest_capital_summary(self, sample_report_data):
+        """The old '[3_Capital]' reconciliation reported 'Closing Capital - Broker' from the last
+        fm_ledger balance_after (the RESET_PNL 0.0 on a normal day), so the Reconcile Status read
+        REVIEW on ~14 of 15 days against a broker figure that was never captured. It is now an
+        honest system-side capital summary: no broker fiction, no permanently-REVIEW status."""
         import openpyxl
         wb = openpyxl.Workbook()
         ws = build_sheet_3_capital(wb, sample_report_data)
@@ -452,7 +453,14 @@ class TestSheetBuilders:
             all_values.extend([str(v) for v in row if v])
 
         text = " ".join(all_values)
-        assert "RECONCILIATION" in text
+        assert "CAPITAL SUMMARY" in text
+        assert "Opening Capital" in text
+        assert "Closing Capital" in text
+        assert "Net P&L (Realized)" in text
+        # the broker misnomer and its uninformative daily-REVIEW status are gone
+        assert "Broker" not in text
+        assert "Reconcile Status" not in text
+        assert "Reconcile Variance" not in text
 
     def test_build_sheet_3_capital_strategy_fallback(self, sample_report_data):
         """Strategy column should fallback to signal.strategy if trade.strategy is empty."""
@@ -488,7 +496,6 @@ class TestSheetBuilders:
             mode=sample_report_data.mode,
             account=sample_report_data.account,
             opening_capital=sample_report_data.opening_capital,
-            closing_capital_broker=sample_report_data.closing_capital_broker,
             signals=sample_report_data.signals,  # Contains sig-001 with strategy="MOMENTUM"
             trades=[trade_no_strategy],
             orders=sample_report_data.orders,
@@ -542,7 +549,6 @@ class TestSheetBuilders:
             mode=sample_report_data.mode,
             account=sample_report_data.account,
             opening_capital=sample_report_data.opening_capital,
-            closing_capital_broker=sample_report_data.closing_capital_broker,
             signals=sample_report_data.signals,
             trades=[trade_no_strategy],
             orders=sample_report_data.orders,
@@ -595,7 +601,6 @@ class TestSheetBuilders:
             mode=sample_report_data.mode,
             account=sample_report_data.account,
             opening_capital=sample_report_data.opening_capital,
-            closing_capital_broker=sample_report_data.closing_capital_broker,
             signals=sample_report_data.signals,
             trades=[trade_no_strategy],
             orders=sample_report_data.orders,
@@ -645,7 +650,6 @@ class TestSheetBuilders:
             mode=sample_report_data.mode,
             account=sample_report_data.account,
             opening_capital=sample_report_data.opening_capital,
-            closing_capital_broker=sample_report_data.closing_capital_broker,
             signals=sample_report_data.signals,
             trades=[sample_report_data.trades[0], cancelled_trade],  # 1 CLOSED + 1 CANCELLED
             orders=sample_report_data.orders,
@@ -732,7 +736,6 @@ class TestSheetBuilders:
             mode=sample_report_data.mode,
             account=sample_report_data.account,
             opening_capital=sample_report_data.opening_capital,
-            closing_capital_broker=sample_report_data.closing_capital_broker,
             signals=sample_report_data.signals,  # Contains sig-001 with strategy="MOMENTUM"
             trades=[trade_no_strategy],
             orders=sample_report_data.orders,
@@ -806,7 +809,6 @@ class TestSheetBuilders:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=99000.0,
             signals=[],
             trades=[{
                 "trade_id": "t1",
@@ -840,7 +842,6 @@ class TestSheetBuilders:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=99000.0,
             signals=[],
             trades=[{
                 "trade_id": "t1",
@@ -956,7 +957,6 @@ class TestEdgeCases:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[],
             trades=[],
             orders=[],
@@ -996,7 +996,6 @@ class TestEdgeCases:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1060,7 +1059,6 @@ class TestPerStrategyEligibleScore:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100480.0,
             signals=[signal],
             trades=[trade],
             orders=[],
@@ -1146,7 +1144,6 @@ class TestCostColumnsFromDB:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100145.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1198,7 +1195,6 @@ class TestCostColumnsFromDB:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1245,7 +1241,6 @@ class TestCostColumnsFromDB:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1291,7 +1286,6 @@ class TestFix125EligibleScoreFallback:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[signal],
             trades=[],
             orders=[],
@@ -1339,7 +1333,6 @@ class TestFix125EligibleScoreFallback:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1391,7 +1384,6 @@ class TestFix125CostFallback:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100145.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1436,7 +1428,6 @@ class TestFix125TimeOfDayRejected:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=signals,
             trades=[],
             orders=[],
@@ -1499,7 +1490,6 @@ class TestFix125NumericZeroFill:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=[],
             trades=[trade],
             orders=[],
@@ -1529,7 +1519,6 @@ class TestFix126DisplayRules:
             mode="PAPER",
             account="TEST",
             opening_capital=100000.0,
-            closing_capital_broker=100000.0,
             signals=signals or [],
             trades=trades,
             orders=[],

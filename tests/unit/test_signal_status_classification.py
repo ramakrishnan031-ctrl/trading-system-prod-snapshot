@@ -64,6 +64,42 @@ class TestTheOriginalDefect:
         assert new_says_capital is False, "the new logic reproduces the defect"
 
 
+class TestRiskEngineSizingValidNotASizerConstraint:
+    """REJECTED_SIZING_VALID is the risk engine's check-2 name (risk_engine.py:407 --
+    sizing_result.success), NOT a position_sizer constraint. It shares the REJECTED_SIZING_
+    prefix, so the prefix classifier would bucket it as a sizing rejection and name a bogus
+    constraint 'VALID'. Latent today (0 such rows) but the prefixes truly collide."""
+
+    RISK_ENGINE_STATUS = "REJECTED_SIZING_VALID"
+
+    def test_the_prefix_genuinely_collides(self):
+        """Anti-vacuity: if REJECTED_SIZING_VALID ever stops sharing the sizer prefix, the
+        special-case in signal_status is dead and this whole class proves nothing."""
+        assert self.RISK_ENGINE_STATUS.startswith(sig_status.SIZING_PREFIX), (
+            "REJECTED_SIZING_VALID no longer shares the REJECTED_SIZING_ prefix -- the guard "
+            "is now unnecessary; re-verify the risk-engine check name (risk_engine.py:407)"
+        )
+
+    def test_risk_engine_sizing_valid_is_not_a_sizer_rejection(self):
+        """POSITIVE half: the collision itself."""
+        assert sig_status.is_sizing_rejection(self.RISK_ENGINE_STATUS) is False
+        assert sig_status.sizing_constraint(self.RISK_ENGINE_STATUS) is None
+
+    def test_real_sizer_rejections_are_still_classified(self):
+        """NEGATIVE half (rule B): the exclusion must be surgical -- a classifier that simply
+        stopped recognising sizing rejections would pass the test above trivially."""
+        assert sig_status.is_sizing_rejection("REJECTED_SIZING_CONCENTRATION") is True
+        assert sig_status.sizing_constraint("REJECTED_SIZING_CONCENTRATION") == "CONCENTRATION"
+        assert sig_status.is_sizing_rejection("REJECTED_SIZING_CAPITAL") is True
+        assert sig_status.sizing_constraint("REJECTED_SIZING_CAPITAL") == "CAPITAL"
+
+    def test_it_is_still_a_rejection_just_not_a_sizer_one(self):
+        """It IS a terminal rejection and groups under its own family -- excluding it from the
+        sizer family must not make it vanish from the rejected breakdown."""
+        assert sig_status.is_rejected(self.RISK_ENGINE_STATUS) is True
+        assert sig_status.family(self.RISK_ENGINE_STATUS) == "REJECTED_SIZING_VALID"
+
+
 class TestFamilyGrouping:
     """The second half of the same defect: grouping by free text fragmented one rejection
     class into 190 lines because the reason embeds the symbol and three arm values."""

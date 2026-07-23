@@ -12,8 +12,9 @@ Row types:
                 fabricate a live value)
   window      — time-window status (inside/outside now, via freshness)
 
-Daily-loss "used" reads fm_ledger.RELEASE_USED.pnl_delta — deliberately NOT
-get_daily_realized_net_pnl, which double-subtracts costs (W10). Decision D2,
+Daily-loss "used" reads fm_ledger.RELEASE_USED.pnl_delta directly — NOT
+get_daily_realized_net_pnl. (W10 — that reader's cost double-subtract — was
+fixed 2026-07-17; it now returns a clean SUM(pnl_delta).) Decision D2,
 approved permanent by the G2a review.
 """
 from __future__ import annotations

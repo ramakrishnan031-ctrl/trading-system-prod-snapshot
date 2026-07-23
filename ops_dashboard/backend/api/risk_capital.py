@@ -34,8 +34,10 @@ def get_risk():
     ks = db_reader.get_kill_switch(cfg)
     return jsonify({
         "today": today,
-        # D2 (approved permanent): fm_ledger.RELEASE_USED.pnl_delta losses —
-        # NOT get_daily_realized_net_pnl (W10 double-subtracts costs).
+        # D2 (approved permanent): reads fm_ledger.RELEASE_USED.pnl_delta losses
+        # directly, NOT get_daily_realized_net_pnl. (W10 — that reader's cost
+        # double-subtract — was fixed 2026-07-17; it now returns a clean
+        # SUM(pnl_delta). RELEASE_USED.pnl_delta stays the direct realized-loss source.)
         "daily_loss": {
             "used": db_reader.realized_loss_today(cfg, today),
             "limit": loss_limit, "limit_pct": loss_pct,

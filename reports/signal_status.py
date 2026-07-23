@@ -56,6 +56,14 @@ _SCORE_STATUS_RE = re.compile(r"^REJECTED_SCORE_\d+$")
 # constraint bound -- the question the old free-text count got exactly backwards.
 SIZING_PREFIX = "REJECTED_SIZING_"
 
+# The risk engine's check 2 is NAMED "SIZING_VALID" (risk_engine.py:407-411 -- sizing_result.success
+# must be True); a failure there is emitted as REJECTED_SIZING_VALID. That shares the position_sizer's
+# REJECTED_SIZING_ prefix but is NOT a sizer constraint -- it is the risk engine re-validating the
+# sizer's success flag one layer later. Excluded from the sizing family below so the sizing-rejection
+# count and the named binding constraint stay a position_sizer property, rather than a risk-engine
+# outcome mislabelled as constraint "VALID". Latent today (0 such rows) but the prefixes truly collide.
+_RISK_ENGINE_SIZING_STATUS = "REJECTED_SIZING_VALID"
+
 
 def bucket(status: Optional[str]) -> str:
     """Coarse disposition of a signal: qualified / rejected / skipped / dropped / other /
@@ -115,15 +123,23 @@ def is_dedup_duplicate(status: Optional[str]) -> bool:
 
 
 def is_sizing_rejection(status: Optional[str]) -> bool:
-    """True for REJECTED_SIZING_* -- the family that means 'capital/sizing refused it'."""
-    return (status or "").upper().startswith(SIZING_PREFIX)
+    """True for the position_sizer's REJECTED_SIZING_* family -- 'capital/sizing refused it'.
+
+    Excludes REJECTED_SIZING_VALID, which is the risk engine's check-2 name, not a
+    position_sizer constraint (see _RISK_ENGINE_SIZING_STATUS)."""
+    s = (status or "").upper()
+    if s == _RISK_ENGINE_SIZING_STATUS:
+        return False
+    return s.startswith(SIZING_PREFIX)
 
 
 def sizing_constraint(status: Optional[str]) -> Optional[str]:
     """Which sizing guard bound, e.g. 'CONCENTRATION' / 'CAPITAL' / 'ZERO_MULTIPLIER'.
-    None when the status is not a sizing rejection."""
+    None when the status is not a position_sizer sizing rejection -- including the risk
+    engine's REJECTED_SIZING_VALID, which is not a sizer constraint (it would otherwise
+    report a bogus constraint 'VALID')."""
     s = (status or "").upper()
-    if not s.startswith(SIZING_PREFIX):
+    if s == _RISK_ENGINE_SIZING_STATUS or not s.startswith(SIZING_PREFIX):
         return None
     return s[len(SIZING_PREFIX):] or None
 

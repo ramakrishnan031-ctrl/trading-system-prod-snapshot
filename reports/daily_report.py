@@ -71,7 +71,6 @@ class ReportData:
     mode: str
     account: str
     opening_capital: float
-    closing_capital_broker: float
 
     signals: List[dict]
     trades: List[dict]
@@ -184,22 +183,16 @@ def load_report_data(store, date_iso: str, config_dir: Path) -> ReportData:
     excursion_map: Dict[str, dict] = {r["trade_id"]: r for r in excursion_rows}
 
     opening_capital = 0.0
-    closing_capital_broker = 0.0
 
     init_rows = [r for r in fm_ledger if r.get("entry_type") == "INIT"]
     if init_rows:
         opening_capital = init_rows[0].get("balance_after", 0.0)
-
-    if fm_ledger:
-        sorted_ledger = sorted(fm_ledger, key=lambda r: r.get("ts", ""))
-        closing_capital_broker = sorted_ledger[-1].get("balance_after", opening_capital)
 
     return ReportData(
         date_iso=date_iso,
         mode=mode,
         account=account,
         opening_capital=opening_capital,
-        closing_capital_broker=closing_capital_broker,
         signals=signals,
         trades=trades,
         orders=orders,
@@ -454,9 +447,13 @@ def build_sheet_0_dashboard(wb: openpyxl.Workbook, data: ReportData) -> Workshee
     row = add_row("Mode", data.mode, row)
     row = add_row("Account", data.account, row)
     row = add_row("Opening Capital", f"₹{data.opening_capital:,.2f}", row)
-    row = add_row("Closing Capital (Broker)", f"₹{data.closing_capital_broker:,.2f}", row)
-    broker_net = data.closing_capital_broker - data.opening_capital
-    row = add_row("Broker Net Gain", f"₹{broker_net:,.2f}", row)
+    # Closing = opening + realized net P&L (closed trades). There is NO per-day broker-funds
+    # figure persisted (the boot get_margins().net is never snapshotted), so the old "Closing
+    # Capital (Broker)" row was the last fm_ledger balance_after — the RESET_PNL 0.0 on a normal
+    # day, a value it never actually had. Report the honest system-side closing instead.
+    realized_pnl = sum((t.get("net_pnl") or 0.0) for t in data.trades if t.get("status") in _CLOSED_STATUSES)
+    row = add_row("Closing Capital", f"₹{data.opening_capital + realized_pnl:,.2f}", row)
+    row = add_row("Net P&L (Realized)", f"₹{realized_pnl:,.2f}", row)
 
     start_event = next((e for e in data.system_events if e.get("event_type") == "STARTUP"), None)
     end_event = next((e for e in reversed(data.system_events) if e.get("event_type") == "SHUTDOWN"), None)
@@ -1199,17 +1196,17 @@ def build_sheet_3_capital(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
 
         row += 4
 
-    ws.cell(row=row, column=1, value="RECONCILIATION").font = FONT_HEADER
+    ws.cell(row=row, column=1, value="CAPITAL SUMMARY").font = FONT_HEADER
     row += 1
 
+    # System-side capital only. The old "Broker" rows + Reconcile Status derived from the last
+    # fm_ledger balance_after (the RESET_PNL 0.0 on a normal day), so the reconcile read REVIEW
+    # on ~14 of 15 days against a broker figure that was never captured. The genuine ledger-vs-
+    # trades capital reconciliation lives in daily_trade_review's "3 · CAPITAL" block.
     recon_rows = [
         ("Opening Capital ₹", data.opening_capital),
-        ("Closing Capital — Sys ₹", running_balance),
-        ("Closing Capital — Broker ₹", data.closing_capital_broker),
-        ("Sys Calculated Net P&L ₹", running_balance - data.opening_capital),
-        ("Broker Net Gain ₹", data.closing_capital_broker - data.opening_capital),
-        ("Reconcile Variance ₹", data.closing_capital_broker - running_balance),
-        ("Reconcile Status", "MATCH" if abs(data.closing_capital_broker - running_balance) < 1 else "REVIEW"),
+        ("Closing Capital ₹", running_balance),
+        ("Net P&L (Realized) ₹", running_balance - data.opening_capital),
     ]
 
     for label, value in recon_rows:
