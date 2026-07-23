@@ -230,13 +230,14 @@ An **OVERALL VERDICT** (the Dashboard banner reads this): FAIL if any block FAIL
 | 5 · BROKER | `system P&L = broker P&L · positions · margin` | — (broker P&L/positions/margin **not persisted**) | always **PENDING_CAPTURE** (never FAIL) — **W2** (broker margin) / **W3** (pnl+position reconciliation wiring) |
 
 ### Notes / guardrails (Reconciliation)
-- **CAPITAL realized source (important):** `get_daily_realized_net_pnl` is **NOT** used — it **double-subtracts
-  costs** (**W10**: it returns `SUM(pnl_delta) − SUM(costs)`, but `RELEASE_USED.pnl_delta` already = gross − costs,
-  so costs are removed twice). The clean trade-close realized is `Σ fm_ledger.RELEASE_USED.pnl_delta`
-  (== `Σ trades.net_pnl`, verified 30-Jun = ₹3.24 both). *(The `RESET_PNL` ledger row is a **by-design daily EOD
-  reset**, NOT "pollution" — it zeroes the running-P&L accumulator at EOD; it is not the reason
-  `get_daily_realized_net_pnl` is avoided.)* A genuine divergence (e.g. the known RMS-close `costs=0.0` quirk)
-  **FAILs the block honestly** — it is flagged, not hidden.
+- **CAPITAL realized source (important):** this block sums `Σ fm_ledger.RELEASE_USED.pnl_delta` directly
+  (the clean trade-close realized, == `Σ trades.net_pnl`, verified 30-Jun = ₹3.24 both) — **NOT**
+  `get_daily_realized_net_pnl`, which sums **ALL** `pnl_delta` rows including the EOD `RESET_PNL`
+  counter-entry, so post-15:17 it would zero the day's realized. *(**W10** — that reader's earlier cost
+  double-subtract (it returned `SUM(pnl_delta) − SUM(costs)` while `RELEASE_USED.pnl_delta` already = gross − costs,
+  removing costs twice) — was **fixed 2026-07-17**; it now returns a clean `SUM(pnl_delta)`. The `RESET_PNL`
+  ledger row is a **by-design daily EOD reset**, NOT "pollution".)* A genuine divergence (e.g. the known
+  RMS-close `costs=0.0` quirk) **FAILs the block honestly** — it is flagged, not hidden.
 - **Partition blocks (1, 3) are FAIL-able:** the buckets are explicit status sets, not a silent catch-all —
   an unmapped/new status makes Δ≠0 → FAIL (a schema-drift alarm).
 - **FAIL path proven** (build-gate): injecting +₹100 into a closed trade's `net_pnl` on a copy DB flipped
