@@ -546,6 +546,26 @@ def _group_g_cross_field(sc: Any, strategies: Optional[dict]) -> List[AuditFindi
     # posture (16 strategies declare 09:25 while the global gates to 10:00; the 04-Jul
     # audit classed it "cosmetic"). Warning on it would re-create a daily false WARN in
     # the 09:20 email's G row — the exact class this auditor exists to avoid.
+    #
+    # ORIGINAL condition (verbatim — it NEVER executed, so this comment is the only
+    # record of its intended behaviour): it read getattr(s, "entry_start")/"entry_end"
+    # (always None) and would have warned on CONTAINMENT violations:
+    #     if entry_start < global entry_start:  WARN "strategy start before global start"
+    #     if entry_end   > global entry_end:    WARN "strategy end after global end"
+    # i.e. it flagged ANY strategy window extending BEYOND the global envelope.
+    #
+    # NARROWING — M-K2 is STRICTLY NARROWER than that original. It warns only on a
+    # window with NO overlap (can-never-trade). NEWLY SILENT (cases the old intent would
+    # have flagged and this deliberately does not): (a) a strategy STARTING earlier than
+    # the global start (e.g. 09:25 vs 10:00); (b) a strategy ENDING later than the global
+    # end (e.g. 15:30 vs 15:00). Both are harmlessly clamped by the global envelope, so
+    # they are NOT config errors — suppressing them is the point.
+    #
+    # KNOWN LIMITATION (do NOT "fix" with a threshold): "usable overlap" is BINARY. A
+    # window overlapping the global by only a few minutes (e.g. 14:55-15:30 vs 10:00-15:00
+    # → 5 min) is effectively crippled but technically overlaps, so G5 stays quiet. A
+    # minimum-overlap-minutes rule is a tunable nobody has a principled value for = a
+    # future false signal; this edge is NAMED here rather than guarded.
     if strategies:
         g_start = _hhmm(th.entry_start)
         g_end = _hhmm(th.entry_end)
