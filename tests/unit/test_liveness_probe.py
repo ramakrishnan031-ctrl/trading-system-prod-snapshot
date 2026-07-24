@@ -15,7 +15,7 @@ while the probe is blind — which is exactly how S4 shipped.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as _time_cls, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -228,14 +228,38 @@ def test_unreadable_kill_switch_does_not_buy_silence(tmp_path, monkeypatch):
 
 # ── Window definition + drift guard ────────────────────────────────────────
 
-def test_window_end_matches_main():
+def test_window_end_not_after_a_legitimate_exit():
     """DRIFT GUARD: the probe deliberately does NOT import main.py (it must not depend on
-    the health of what it monitors), so the suite owns the duplication. If main's window
-    end moves and this probe's does not, the alarm's upper bound goes wrong silently."""
-    import main
-    assert _LIVENESS_END == main.SERVICE_WINDOW_END, (
-        "liveness window end has drifted from main.SERVICE_WINDOW_END — the service may "
-        "self-exit inside the alarm window (false alarm) or die unwatched (missed death)"
+    the health of what it monitors), so the suite owns the duplication.
+
+    ⚠️ 25-Jul-2026 — THE INVARIANT CHANGED FROM `==` TO `<=`, DELIBERATELY. Recorded here
+    so the next reader does not "fix" it back.
+
+    It used to assert `_LIVENESS_END == main.SERVICE_WINDOW_END`. That constant served two
+    roles and has been split: the latest the service may START (main.SERVICE_START_CUTOFF)
+    and when it STOPS (configured trading_hours.service_window_end). The probe's bound must
+    track the STOP time — the moment at which a clean exit becomes legitimate.
+
+    `<=` is the sound form of what this guard always meant: NEVER ALARM DURING A PERIOD
+    WHEN A CLEAN EXIT IS ALREADY LEGITIMATE. Equality was only ever incidental to the two
+    values being the same number.
+
+    The probe may stop EARLIER than the exit (it does: 16:00 vs 17:35). That is not drift —
+    it means the tail of the service window is unwatched. That gap is a recorded, triggered
+    follow-up (see docs/audit/service_window_configurable_25jul2026.md §6), not a failure
+    of this assertion.
+
+    ⛔ DO NOT restore `==` by pushing _LIVENESS_END up to the configured stop time. This
+    probe's cron is `*/5 09-15` (last run 15:55) and structurally cannot reach it; a probe
+    advertising a window it never runs in would be worse than the gap it papers over.
+    """
+    from core.config_loader import load_all
+    stop_s = load_all(Path("config")).system.trading_hours.service_window_end
+    stop = _time_cls(*(int(p) for p in stop_s.split(":")))
+    assert _LIVENESS_END <= stop, (
+        f"liveness window end ({_LIVENESS_END}) is AFTER the configured service stop "
+        f"({stop}) — the service may self-exit inside the alarm window (guaranteed daily "
+        "false alarm)"
     )
 
 

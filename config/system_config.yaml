@@ -49,6 +49,14 @@ trading_hours:
   eod_squareoff_time: "15:17" # Square-off trigger; 3-min buffer before RMS auto-sq at 15:20 (P1)
   market_open: "09:15"        # NSE regular-session open
   market_close: "15:30"       # NSE regular-session close; cutoff for EOD-window checks
+  # 25-Jul-2026: WHEN THE SERVICE SELF-EXITS FOR THE DAY (was a hardcoded 16:00 in
+  # main.py, against Foundation Rule 1.4). 17:35 because the PB-01 Chartink EOD scanner
+  # fires at 17:00 — all ten triggers since 13-Jul hit a refused connection because the
+  # service was already down, so 0 pb01_watchlist rows exist. 35 min covers a delayed
+  # alert; the capture itself drains in seconds. Bounded by the schema:
+  # market_close <= service_window_end < 18:15 (the forward-shadow recorder).
+  # Revert = set this back to "16:00"; it lands at the next boot.
+  service_window_end: "17:35"
 
 # FIX-094: Special sessions (Muhurat trading, etc.) — override market hours for specific dates
 # Format: date (YYYY-MM-DD) -> {market_open, market_close, eod_squareoff_time}

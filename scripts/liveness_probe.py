@@ -24,9 +24,10 @@ INDEPENDENCE (deliberate)
     This probe must not depend on the health of the thing it monitors. It does NOT import
     main.py: if main.py could not be imported, the probe would die exactly when the system
     is broken -- which is the silent failure it exists to prevent. The window constants are
-    therefore duplicated here, and test_liveness_probe.py::test_window_end_matches_main
-    asserts they have not drifted from main.SERVICE_WINDOW_END. Drift is caught by the
-    suite, not paid for at runtime.
+    therefore duplicated here, and test_liveness_probe.py::
+    test_window_end_not_after_a_legitimate_exit asserts this probe's upper bound never
+    passes the configured service stop time. Drift is caught by the suite, not paid for at
+    runtime.
 
 THE FALSE-ALARM MATRIX (this is the whole design -- see the report for the derivation)
     SILENT  non-trading day (weekend / NSE holiday)   -- authoritative calendar (S1)
@@ -81,10 +82,21 @@ _UNIT = "trading-system.service"
 _STATE_FILE = "liveness_alarm_state.json"
 
 # ── The liveness window ──────────────────────────────────────────────────────
-# UPPER BOUND == main.SERVICE_WINDOW_END (16:00). Exact, not approximate:
-# main._eod_self_exit_due() returns (False, -1) *without querying* before window_end, so
-# the service NEVER self-exits before 16:00 -- at 15:59 it must still be up. After 16:00
-# a clean exit is legitimate (and it stays up past 16:00 if positions are still open).
+# UPPER BOUND 16:00. main._eod_self_exit_due() returns (False, -1) *without querying*
+# before its window_end, so the service NEVER self-exits before the configured stop time
+# -- at 15:59 it must still be up.
+#
+# ⚠️ 25-Jul-2026: the service stop time became CONFIGURABLE and is now 17:35, so this
+# bound is CONSERVATIVE rather than exact -- it no longer equals the stop time, it is
+# merely never after it (which is the property that matters: never alarm during a period
+# when a clean exit is already legitimate).
+#
+# ⛔ Do NOT "resync" this to 17:35. This probe's cron is `*/5 09-15 Mon-Fri` (last run
+# 15:55) and structurally cannot run past 16:00; raising the constant alone would
+# advertise a window the probe never visits AND would alarm every day after the 17:35
+# exit. The 16:00-17:35 tail is genuinely UNWATCHED -- a recorded, triggered follow-up
+# (docs/audit/service_window_configurable_25jul2026.md §6), and extending it needs the
+# cron AND this bound moved together, which is its own small design.
 #
 # LOWER BOUND is deliberately NOT main.SERVICE_WINDOW_START (08:00). 08:00 is when the
 # service MAY start, not when it MUST be up: the 08:15 token cron -> token-watcher ->
@@ -93,7 +105,7 @@ _STATE_FILE = "liveness_alarm_state.json"
 # path and still 15 minutes before the 09:15 market open -- today's 08:16:09 death would
 # have been caught at 09:00, a full hour before the 10:00 entry window.
 _LIVENESS_START = _time(9, 0)
-_LIVENESS_END = _time(16, 0)   # == main.SERVICE_WINDOW_END (drift-guarded by the tests)
+_LIVENESS_END = _time(16, 0)   # <= the configured service stop (drift-guarded by the tests)
 
 
 def within_liveness_window(now: datetime) -> bool:

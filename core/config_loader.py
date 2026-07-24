@@ -59,6 +59,30 @@ from core.exceptions import ConfigMissingError, ConfigSchemaError
 # Locked: P1, P2, P4, P11b, P14, P15, Q1, G4
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── The exclusive upper bound for trading_hours.service_window_end ───────────
+# WHY 18:15 AND NOT A ROUND NUMBER: it is the forward-shadow recorder's cron time
+# (cron_registry.yaml -> forward_shadow_record, "18:15 Mon-Fri"). That job is the only
+# out-of-sample evidence producer in the system and what it writes cannot be
+# regenerated. A configured shutdown at/after it would leave the service alive while
+# it runs.
+#
+# This is POSTURE, not a concurrency finding. WAL would in fact tolerate the overlap —
+# the 16:05 daily report already reads against the live writer every trading day. The
+# rule is that nothing in the evening pipeline should ever have to reason about whether
+# a live writer is present. Said plainly on purpose: the weaker "they would contend"
+# argument is wrong, and a future reader would be right to relax a bound resting on it.
+#
+# DRIFT-GUARDED, not merely commented — tests/unit/test_service_window_config.py::
+# test_max_is_before_the_forward_shadow_job reads the schedule from the registry and
+# fails if this bound ever reaches it. Move that cron and the bound must move with it.
+#
+# SECOND ROLE: main.SERVICE_START_CUTOFF binds to this value, so the LATEST the service
+# may START is >= every legal stop time. That makes the crash-restart trap
+# unrepresentable rather than untested.
+# See docs/audit/service_window_configurable_25jul2026.md §3.
+SERVICE_WINDOW_END_MAX = _dt_time(18, 15)
+
+
 class TradingHoursConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entry_start: str           # "HH:MM" IST — entry window opens (P1)
@@ -67,6 +91,11 @@ class TradingHoursConfig(BaseModel):
     eod_squareoff_time: str    # "HH:MM" IST — square-off trigger (P1)
     market_open: str = "09:15"   # "HH:MM" IST — NSE regular-session open
     market_close: str = "15:30"  # "HH:MM" IST — NSE regular-session close
+    # "HH:MM" IST — when the service self-exits for the day
+    # (main._start_eod_self_exit_thread). DEFAULTED so that under extra="forbid" each
+    # half of a deploy is independently safe (schema-without-key and key-without-schema
+    # would both otherwise fail the boot), and so a revert is a one-line config edit.
+    service_window_end: str = "16:00"
 
     @model_validator(mode="after")
     def _validate_window_ordering(self) -> "TradingHoursConfig":
@@ -75,6 +104,15 @@ class TradingHoursConfig(BaseModel):
         silently shrink (or invert) the entry window. P1 mandates
         entry_start < entry_end and market_open <= entry_start
         and entry_end <= eod_entry_cutoff <= eod_squareoff_time <= market_close.
+
+        2026-07-25: the chain is extended one link to service_window_end, so the
+        shutdown time is bounded by the SAME mechanism as the rest of the family:
+        market_close <= service_window_end < SERVICE_WINDOW_END_MAX.
+        Below market_close would cut the session short; at/after the max would leave
+        the service alive for the forward-shadow recorder (see the constant).
+        This fires at CONFIG LOAD — before StateStore (main.py:1767) or any broker
+        handle exists — so a bad value is a loud, early boot failure, never a
+        silently-wrong shutdown time.
         """
         from datetime import time as _time
 
@@ -97,6 +135,17 @@ class TradingHoursConfig(BaseModel):
                 f"entry_end={self.entry_end}, eod_entry_cutoff={self.eod_entry_cutoff}, "
                 f"eod_squareoff_time={self.eod_squareoff_time}, "
                 f"market_close={self.market_close}"
+            )
+
+        swe = _hhmm(self.service_window_end)
+        if not (mc <= swe < SERVICE_WINDOW_END_MAX):
+            raise ValueError(
+                "trading_hours.service_window_end out of range; require "
+                f"market_close <= service_window_end < "
+                f"{SERVICE_WINDOW_END_MAX:%H:%M} (the forward-shadow recorder's cron "
+                "time; see SERVICE_WINDOW_END_MAX), got "
+                f"market_close={self.market_close}, "
+                f"service_window_end={self.service_window_end}"
             )
         return self
 

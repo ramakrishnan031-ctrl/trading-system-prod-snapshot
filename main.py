@@ -53,7 +53,7 @@ from capital.kill_switch import KillSwitch
 from capital.position_sizer import PositionSizer
 from capital.risk_engine import RiskEngine
 from core.account_registry import AccountRegistry
-from core.config_loader import load_all
+from core.config_loader import SERVICE_WINDOW_END_MAX, load_all
 from core.config_auditor import audit as audit_config
 from core.config_snapshotter import snapshot_config
 from core.config_validator import config_validator
@@ -1024,7 +1024,8 @@ def _start_market_open_margin_sync_thread(
 # all night (no EOD self-exit existed — the runtime loop just waits on the
 # shutdown event, and EOD squareoff only trips a scheduled SOFT_KILL). This
 # watchdog sets the shutdown event once we are past the service-window end
-# (SERVICE_WINDOW_END, 16:00 IST) AND positions are flat, so main() exits 0 →
+# (the CONFIGURED trading_hours.service_window_end — 17:35 IST as deployed;
+# 25-Jul-2026, was a hardcoded 16:00) AND positions are flat, so main() exits 0 →
 # systemd does not restart (Restart=on-failure) and token-watcher's
 # "exit-0-today" path skips a restart → clean overnight + clean morning start.
 # Safety: it NEVER exits while any position has live exposure (OPEN/PARTIAL/
@@ -1100,7 +1101,7 @@ def _start_eod_self_exit_thread(
     log,
     market_windows,
     shutdown_event: "threading.Event",
-    window_end: "_time | None" = None,
+    window_end: "_time",
     poll_interval_sec: int = 60,
     flatten_in_progress_fn: "Optional[Callable[[], bool]]" = None,
 ) -> None:
@@ -1109,12 +1110,15 @@ def _start_eod_self_exit_thread(
     M-C8: `flatten_in_progress_fn` (KillSwitch.is_flatten_in_progress) blocks the
     self-exit while a HARD_KILL flatten is still running — the position count alone
     cannot detect one (it is EXITING-blind).
+
+    25-Jul-2026: `window_end` is REQUIRED — it used to default to None and resolve to
+    the module constant SERVICE_WINDOW_END. That constant has since been split into a
+    START cutoff (SERVICE_START_CUTOFF) and a CONFIGURED stop time, so the old default
+    would now silently resolve to the wrong role. No caller relied on it (main.py
+    passes it; every test passes it explicitly), so it is gone rather than repointed.
     """
     import time as _time_mod
     from core.time_authority import now_ist as _now_ist
-
-    if window_end is None:  # default resolved at call time (constant defined below)
-        window_end = SERVICE_WINDOW_END
 
     def _run() -> None:
         # Wait until window_end on the start date (the trading day we came up).
@@ -1589,17 +1593,81 @@ def _print_welcome_banner(account, mode, capital, today):
 # not keep a long-lived process alive off-hours. The normal path stays inside the
 # window: 08:15 token-refresh cron -> 08:30 premarket start; intraday crash
 # recovery is also in-window. EOD self-exit (post square-off) is unchanged.
+#
+# ⭐ 25-Jul-2026 — THIS CONSTANT USED TO HAVE TWO ROLES. `SERVICE_WINDOW_END` was both
+# the latest the service may START (here) and the moment it STOPS (the eod-self-exit
+# thread). Making only the stop time configurable opens a silent trap: a crash-restart
+# between the two values hits this guard, returns exit 0 — which `Restart=on-failure`
+# does not retry — so the process stays dead for the evening, and the liveness probe
+# (cron `*/5 09-15`, last run 15:55) is not running to notice.
+#
+# The two roles are now separate names, and locked together so the gap cannot exist:
+#   * SERVICE_START_CUTOFF        — latest the service may START (this guard)
+#   * trading_hours.service_window_end (CONFIG) — when it STOPS
+# The cutoff binds to the schema's exclusive upper bound for the configured stop, so
+# EVERY legal stop time is strictly inside the start window — including after a revert
+# to 16:00. The trap is unrepresentable, not merely untested.
+#
+# This guard runs at main() BEFORE load_all(), so it cannot read config; binding to the
+# bound rather than the value is what makes that safe. Accepted cost: the anti-overnight
+# start window widens 16:00 -> 18:15. A stray start inside it arms the self-exit thread
+# whose target time is already past, so it goes flat-check-then-exit within one poll
+# (<=60 s). The FIX-189 incidents (23:22 start, 04:24 alerts) are still refused.
+# See docs/audit/service_window_configurable_25jul2026.md §3.
 # ─────────────────────────────────────────────────────────────────────────────
 SERVICE_WINDOW_START = _time(8, 0)   # IST — before the 08:30 premarket start
-SERVICE_WINDOW_END = _time(16, 0)    # IST — after 15:30 close + EOD square-off
+SERVICE_START_CUTOFF = SERVICE_WINDOW_END_MAX  # IST — latest the service may START
 
 
 def _within_service_window(now: datetime) -> bool:
-    """True if `now` (IST, tz-aware) is within the broad service window
-    [08:00, 16:00). Pure time-of-day check (holiday/weekend is handled by the
-    separate holiday guard), so it is host-timezone independent.
+    """True if `now` (IST, tz-aware) is inside the broad START window
+    [SERVICE_WINDOW_START, SERVICE_START_CUTOFF) = [08:00, 18:15).
+
+    This is the START guard only — it answers "may the service come up now?", NOT
+    "should it still be running?". The stop time is the configured
+    trading_hours.service_window_end, enforced by the eod-self-exit thread.
+
+    Pure time-of-day check (holiday/weekend is handled by the separate holiday
+    guard), so it is host-timezone independent.
     """
-    return SERVICE_WINDOW_START <= now.time() < SERVICE_WINDOW_END
+    return SERVICE_WINDOW_START <= now.time() < SERVICE_START_CUTOFF
+
+
+def _config_error_detail(exc: BaseException) -> str:
+    """Render the REASON a config load failed, for the boot log.
+
+    25-Jul-2026: `ConfigSchemaError`'s message only names the FILE ("Schema validation
+    failed for system_config.yaml"); the reason lives in the structured context kwargs,
+    which TradingSystemError documents as "intended for structured logging". main() was
+    logging only `%s`, so a rejected config VALUE would die at the 08:15 boot without
+    saying which key was wrong — the operator would pay for that diagnosis on a trading
+    morning. Found while proving the new service_window_end range validator actually
+    rejects (a validator whose reason nobody can read is half a validator).
+
+    Never raises: diagnostics must not mask the failure they are describing.
+    """
+    try:
+        out = ""
+        for err in (getattr(exc, "context", {}) or {}).get("errors") or []:
+            loc = ".".join(str(p) for p in err.get("loc", ()))
+            out += f" | {loc or '<root>'}: {err.get('msg')}"
+        return out
+    except Exception:  # noqa: BLE001 — a broken diagnostic must never break the boot log
+        return ""
+
+
+def _service_window_banner(start: _time, cutoff: _time, stop: _time) -> str:
+    """The boot-log line naming BOTH windows (§3.6 of the build instruction).
+
+    After a week of finding things that look alive and produce nothing, "what window
+    is this process actually running?" must be answerable from the log rather than by
+    reading the deployed source.
+    """
+    return (
+        f"service window: may START in [{start:%H:%M}, {cutoff:%H:%M}) IST; "
+        f"EOD self-exit at {stop:%H:%M} IST (configured: "
+        f"trading_hours.service_window_end)"
+    )
 
 
 # M-C1 (2026-07-07): the broker's net margin on a mid-day warm restart ALREADY
@@ -1710,11 +1778,16 @@ def main(argv: Optional[list] = None) -> int:  # noqa: C901
     )
     _svc_now = time_authority.now_ist()
     if not _window_bypass and not _within_service_window(_svc_now):
+        # Prints the START window, which is what this guard actually enforces — it runs
+        # before load_all() and so cannot know the configured stop time. Naming the
+        # wrong window here would mislead whoever reads it during an incident.
         print(
-            f"Outside service window "
+            f"Outside service START window "
             f"[{SERVICE_WINDOW_START.strftime('%H:%M')}-"
-            f"{SERVICE_WINDOW_END.strftime('%H:%M')} IST]; current IST "
+            f"{SERVICE_START_CUTOFF.strftime('%H:%M')} IST]; current IST "
             f"{_svc_now.strftime('%H:%M')}. Not starting (clean exit 0). "
+            "(The daily stop time is separate and configured: "
+            "trading_hours.service_window_end.) "
             "Token-watcher starts the service in-window after the morning "
             "token refresh. Override with TS_IGNORE_MARKET_WINDOW=1 or --resume."
         )
@@ -1742,12 +1815,23 @@ def _main_locked(args, config_dir: Path) -> int:
     try:
         app_config = load_all(config_dir)
     except Exception as exc:
-        _log.critical("Config load failed: %s", exc)
+        _log.critical("Config load failed: %s%s", exc, _config_error_detail(exc))
         return 5
     _log.info("Config loaded from %s (%d files)", config_dir, len(app_config.file_hashes))
 
     # CV1: Register all config values for usage tracking (post-paper audit)
     config_validator.register_all_from_app_config(app_config)
+
+    # Service window (25-Jul-2026). The STOP time is configured; the START cutoff is a
+    # module constant bound to the same schema bound (see SERVICE_START_CUTOFF). Derived
+    # ONCE here and passed to the eod-self-exit thread — one parse, one source of truth.
+    # Logged immediately so the running window is answerable from the boot log.
+    _service_window_end = _parse_hhmm(app_config.system.trading_hours.service_window_end)
+    _log.info(
+        _service_window_banner(
+            SERVICE_WINDOW_START, SERVICE_START_CUTOFF, _service_window_end
+        )
+    )
 
     # ── Phase 0c: StateStore + EventBus + KillSwitch + TimeAuthority (MAIN6) ─
     # P11 (14-Jul): schema migrations run ON OPEN (StateStore.__init__ → _initialize_schema),
@@ -3429,8 +3513,9 @@ def _main_locked(args, config_dir: Path) -> int:
         market_windows=market_windows,
     )
 
-    # FIX-189 (P1-A completion): EOD window-end self-exit — exit 0 once flat after
-    # SERVICE_WINDOW_END (16:00 IST) so the service never idles overnight. Armed
+    # FIX-189 (P1-A completion): EOD window-end self-exit — exit 0 once flat after the
+    # CONFIGURED trading_hours.service_window_end (17:35 IST as deployed; a hardcoded
+    # 16:00 until 25-Jul-2026) so the service never idles overnight. Armed
     # only for normal service starts; skipped for operator/diagnostic starts that
     # deliberately bypassed the window guard (--interactive/--resume/
     # TS_IGNORE_MARKET_WINDOW=1), so an operator override is never auto-stopped.
@@ -3447,7 +3532,7 @@ def _main_locked(args, config_dir: Path) -> int:
             log=_log,
             market_windows=market_windows,
             shutdown_event=_shutdown_event,
-            window_end=SERVICE_WINDOW_END,
+            window_end=_service_window_end,
             # M-C8: never self-exit while a HARD_KILL flatten is still running.
             flatten_in_progress_fn=kill_switch.is_flatten_in_progress,
         )

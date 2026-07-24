@@ -95,6 +95,10 @@ def _make_mock_app_config():
     sys_cfg.trading_hours.eod_squareoff_time = "15:17"
     sys_cfg.trading_hours.market_open = "09:15"
     sys_cfg.trading_hours.market_close = "15:30"
+    # 25-Jul-2026: the EOD self-exit reads this from config. It is a real "HH:MM" string
+    # here (not a MagicMock attribute) because main() parses it at boot — a bare mock
+    # would make every boot-sequencing test fail inside _parse_hhmm.
+    sys_cfg.trading_hours.service_window_end = "17:35"
     sys_cfg.kill_switch.api_failure_threshold = 3
     sys_cfg.kill_switch.enable_auto_trip = True
     sys_cfg.clock.warn_skew_sec = 2.0
@@ -1125,10 +1129,14 @@ if __name__ == "__main__":
 
 
 # ----------------------------------------------------------------------
-# FIX-189 (P1-A): broad service-window guard [08:00, 16:00) IST
+# FIX-189 (P1-A): broad service-START guard [08:00, SERVICE_START_CUTOFF) IST
 # ----------------------------------------------------------------------
 class TestFix189ServiceWindow:
-    """The trading service must not run overnight."""
+    """The trading service must not START overnight.
+
+    25-Jul-2026: this covers the START guard only. When the service STOPS is the
+    configured trading_hours.service_window_end — see test_service_window_config.py.
+    """
 
     def test_within_window_midday(self):
         from main import _within_service_window
@@ -1143,11 +1151,22 @@ class TestFix189ServiceWindow:
         assert _within_service_window(datetime(2026, 6, 19, 4, 24, tzinfo=ist)) is False
 
     def test_window_boundaries(self):
-        from main import _within_service_window
+        # 25-Jul-2026: 16:00 is now INSIDE the start window. The constant was split into
+        # a START cutoff and a CONFIGURED stop time, and the cutoff moved out to
+        # SERVICE_START_CUTOFF so that a crash-restart between 16:00 and the stop time is
+        # not refused (an exit-0 refusal is not retried by Restart=on-failure, which would
+        # kill the evening silently). Asserted against the constant rather than a fresh
+        # frozen number, so this keeps testing the BOUNDARY and not a literal.
+        from main import SERVICE_START_CUTOFF, _within_service_window
         ist = timezone(timedelta(hours=5, minutes=30))
         assert _within_service_window(datetime(2026, 6, 19, 8, 0, tzinfo=ist)) is True   # start inclusive
         assert _within_service_window(datetime(2026, 6, 19, 15, 59, tzinfo=ist)) is True
-        assert _within_service_window(datetime(2026, 6, 19, 16, 0, tzinfo=ist)) is False  # end exclusive
+        assert _within_service_window(datetime(2026, 6, 19, 16, 0, tzinfo=ist)) is True
+        cutoff = datetime(
+            2026, 6, 19, SERVICE_START_CUTOFF.hour, SERVICE_START_CUTOFF.minute, tzinfo=ist
+        )
+        assert _within_service_window(cutoff - timedelta(minutes=1)) is True
+        assert _within_service_window(cutoff) is False  # end exclusive
 
 
 # ----------------------------------------------------------------------
