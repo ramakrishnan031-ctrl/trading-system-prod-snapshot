@@ -313,3 +313,31 @@ the 17:35 exit. Both must move together:
 That is its own small design. The `<=` drift guard will keep passing meanwhile — it permits
 the probe stopping early; it only forbids it stopping late.
 
+---
+
+## §7 — DEPLOY RECORD (25-Jul-2026 ~01:5x IST, off-market, book flat, service down)
+
+**PUSHED & CHECKED OUT: PC == origin == VM bare == VM tree == `c8b81bd`**
+(`bc75406..c8b81bd`, fast-forward, 2 commits off `main`).
+
+- `f59bb9e` — code (main.py · config_loader.py · system_config.yaml · liveness_probe.py
+  · 3 test files)
+- `c8b81bd` — docs (SYSTEM_MAP + this report)
+
+**Verification (all four legs, not just the SHA):**
+- PC `HEAD` = `git ls-remote origin refs/heads/main` = VM bare `HEAD` = `c8b81bd`.
+- post-receive printed *"Deploying main… crontab AUTO-INSTALLED from canonical.
+  Deployment complete."*
+- **bare@main vs deployed tree: all 8 changed files sha256-IDENTICAL.** Compared the bare
+  repo's blob against the deployed file rather than against the PC working copy — the PC
+  tree is CRLF and would differ spuriously.
+- Deployed `config/system_config.yaml:59` reads `service_window_end: "17:35"`.
+- **crontab: `liveness_probe.py` ×1, `forward_shadow_record.py` ×1 — no duplicates.**
+- ⛔ **NO SERVICE RESTART**: `ActiveState=inactive`, `SubState=dead`, `NRestarts=0`,
+  `ExecMainStartTimestamp=Fri 2026-07-24 08:15:27 IST` — i.e. still the *previous* day's
+  boot, untouched by this deploy. **The change loads at Monday 08:15.**
+
+⚠️ Saturday is a non-trading day, so the holiday guard exits before the service window is
+ever evaluated. **The first exercise of this code is Monday 27-Jul 08:15** — the boot
+banner in `logs/` is the first confirmation to read, before anything at 17:10.
+
