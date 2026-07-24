@@ -281,6 +281,44 @@ class TestGroupGCrossField:
 
 # ── Report model + startup gate ───────────────────────────────────────────────
 
+class TestGroupG5StrategyWindow:
+    """M-K2 (24-Jul): G5 read `entry_start`/`entry_end`, but a StrategyConfig exposes
+    `entry_start_time`/`entry_end_time` (strategies/schema.py), so getattr always
+    returned None and the per-strategy window check NEVER fired. The fix renames the
+    fields AND calibrates: warn only when a strategy window has NO usable overlap with
+    the global envelope (can never enter) — a merely-wider window is harmlessly gated
+    and must stay quiet (the 09:25-vs-10:00 launch-phase posture; 04-Jul 'cosmetic')."""
+
+    def test_g5_fires_on_no_overlap_window(self, base_system):
+        # RED before the fix: getattr(s, "entry_start", None) is None, so G5 is silent
+        # even for a window that can never enter (opens 15:30; global closes 15:00).
+        from types import SimpleNamespace
+        strategies = {"late_only": SimpleNamespace(
+            entry_start_time="15:30", entry_end_time="15:45")}
+        r = audit(base_system, groups="G", strategies=strategies)
+        assert any(f.code == "G5_window_late_only" for f in r.warns)
+
+    def test_g5_quiet_on_gated_wider_window(self, base_system):
+        # A 09:25 declaration (before global 10:00) overlaps 10:00-15:00 -> gated,
+        # must NOT warn (guards against re-creating a daily false WARN in the G row).
+        from types import SimpleNamespace
+        strategies = {"early_decl": SimpleNamespace(
+            entry_start_time="09:25", entry_end_time="15:00")}
+        r = audit(base_system, groups="G", strategies=strategies)
+        assert not any(f.code == "G5_window_early_decl" for f in r.warns)
+
+    def test_g5_quiet_on_real_shipped_strategies(self, app_config):
+        # End-to-end anti-noise guard: the shipped 09:25 strategies must produce ZERO
+        # G5 window WARNs against the shipped global 10:00-15:00 envelope.
+        from strategies.loader import StrategyLoader
+        strategies = StrategyLoader().load_all_strategies(
+            _CFG / "strategies",
+            force_intraday_only=app_config.system.force_intraday_only,
+        )
+        r = audit(app_config.system, groups="G", strategies=strategies)
+        assert not any(f.code.startswith("G5_window_") for f in r.warns)
+
+
 class TestReportAndStartup:
     def test_one_line_pass(self, base_system):
         # Build an all-clean report by avoiding the pre-existing G entry-window WARN.

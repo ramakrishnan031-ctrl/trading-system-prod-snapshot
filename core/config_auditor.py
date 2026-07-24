@@ -533,25 +533,34 @@ def _group_g_cross_field(sc: Any, strategies: Optional[dict]) -> List[AuditFindi
             f"min_tick_size ({mts}) < 0.01 - may allow micro-fraction SL distances",
             metrics={"min_tick_size": mts}))
 
-    # G5 — per-strategy entry window within the global envelope (when strategies are
-    # available and expose a window). Defensive getattr — strategies may not declare one.
+    # G5 — per-strategy entry window must have a USABLE OVERLAP with the global entry
+    # envelope. FIX M-K2 (24-Jul): the fields are entry_start_time / entry_end_time
+    # (strategies/schema.py) — the old entry_start / entry_end never existed on a
+    # StrategyConfig, so getattr returned None and this check NEVER fired once.
+    #
+    # Calibration (24-Jul, per the "stays quiet when it should" requirement): warn ONLY
+    # when the strategy window has no overlap with the global window — i.e. the strategy
+    # can NEVER enter a trade (starts at/after the global close, or ends at/before the
+    # global open). A window that merely extends BEYOND the global (starts earlier and/or
+    # ends later) is harmlessly GATED by the global envelope — the intended launch-phase
+    # posture (16 strategies declare 09:25 while the global gates to 10:00; the 04-Jul
+    # audit classed it "cosmetic"). Warning on it would re-create a daily false WARN in
+    # the 09:20 email's G row — the exact class this auditor exists to avoid.
     if strategies:
         g_start = _hhmm(th.entry_start)
         g_end = _hhmm(th.entry_end)
         for name, s in strategies.items():
-            ss = getattr(s, "entry_start", None)
-            se = getattr(s, "entry_end", None)
+            ss = getattr(s, "entry_start_time", None)
+            se = getattr(s, "entry_end_time", None)
             try:
-                if ss is not None and _hhmm(ss) < g_start:
+                if ss is None or se is None:
+                    continue
+                if _hhmm(ss) >= g_end or _hhmm(se) <= g_start:
                     out.append(AuditFinding(
                         "G", f"G5_window_{name}", Severity.WARN,
-                        f"strategy {name} entry_start ({ss}) is before the global "
-                        f"entry_start ({th.entry_start})"))
-                if se is not None and _hhmm(se) > g_end:
-                    out.append(AuditFinding(
-                        "G", f"G5_window_{name}", Severity.WARN,
-                        f"strategy {name} entry_end ({se}) is after the global "
-                        f"entry_end ({th.entry_end})"))
+                        f"strategy {name} entry window ({ss}-{se}) has NO overlap with "
+                        f"the global entry window ({th.entry_start}-{th.entry_end}) - it "
+                        f"can never enter a trade"))
             except Exception:  # noqa: BLE001
                 continue
 
