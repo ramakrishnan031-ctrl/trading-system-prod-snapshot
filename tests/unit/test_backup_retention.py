@@ -32,7 +32,7 @@ def test_pre_keep20_delete5_newest_preserved(tmp_path):
     for i in range(25):                       # i=24 is newest (largest mtime)
         _mk(tmp_path, f"pre_deploy_{i:02d}.db", 1000 + i)
     plan = build_plan(tmp_path, max_delete=10)
-    pre = _cat(plan, "pre_*")
+    pre = _cat(plan, "pre_*.db")
     assert pre.present == 25 and len(pre.keep) == 20 and len(pre.delete) == 5
     assert not plan.abort                      # 5 <= 10
     # newest preserved; the 5 OLDEST are the delete candidates
@@ -75,7 +75,7 @@ def test_categories_are_disjoint(tmp_path):
     _mk(tmp_path, "trading_system-2026-06-01.db", 12)
     _mk(tmp_path, "analytics-2026-06-01.db", 13)
     plan = build_plan(tmp_path, max_delete=10)
-    assert _cat(plan, "pre_*").present == 2
+    assert _cat(plan, "pre_*.db").present == 2
     assert _cat(plan, "trading_system-*.db").present == 1
     assert _cat(plan, "analytics-*.db").present == 1
     assert plan.total_delete == 0  # all under keep-N
@@ -141,7 +141,7 @@ def test_missing_file_race_skipped_gracefully(tmp_path):
     for i in range(25):
         _mk(tmp_path, f"pre_deploy_{i:02d}.db", 1000 + i)
     plan = build_plan(tmp_path, max_delete=10)
-    victim = _cat(plan, "pre_*").delete[0]
+    victim = _cat(plan, "pre_*.db").delete[0]
     victim.unlink()                            # vanish between plan and execute
     res = execute(plan, apply=True)            # must not raise
     assert any(p == victim and "already-gone" in reason for p, reason in res.skipped)
@@ -152,7 +152,7 @@ def test_locked_file_skipped_not_force_deleted(tmp_path, monkeypatch):
     for i in range(25):
         _mk(tmp_path, f"pre_deploy_{i:02d}.db", 1000 + i)
     plan = build_plan(tmp_path, max_delete=10)
-    locked = _cat(plan, "pre_*").delete[0]
+    locked = _cat(plan, "pre_*.db").delete[0]
     orig = Path.unlink
 
     def fake_unlink(self, *a, **k):
@@ -178,3 +178,68 @@ def test_format_report_smoke(tmp_path):
     _mk(tmp_path, "pre_deploy_a.db", 10)
     r = format_report(build_plan(tmp_path), apply=False)
     assert "BACKUP RETENTION" in r and "dry-run" in r
+
+
+# ── §E (24-Jul): sidecar resolution — keep-N counts LOGICAL backups; reap a -wal/
+#    -shm only WITH its base .db (or when orphaned); a non-zero -wal is refused. ──
+
+def test_nonzero_wal_refused_red_first(tmp_path):
+    """C3: a non-zero -wal holds unflushed data and must be REFUSED (never deleted),
+    even when its base .db is a delete candidate. RED before §E: the old `pre_*` glob
+    matched the -wal as a category member (so it could be deleted) and there was no
+    refusal path / sidecar_refused field at all."""
+    for i in range(21):                                    # 21 logical -> oldest beyond keep-20
+        _mk(tmp_path, f"pre_deploy_{i:02d}.db", 1000 + i)
+    _mk(tmp_path, "pre_deploy_00.db-wal", 1000, size=64)   # NON-ZERO -wal (unflushed)
+    _mk(tmp_path, "pre_deploy_00.db-shm", 1000, size=32)
+    plan = build_plan(tmp_path, max_delete=100)
+    delete_names = {p.name for c in plan.categories for p in c.delete} | {p.name for p in plan.sidecar_delete}
+    refused_names = {p.name for p, _ in plan.sidecar_refused}
+    assert "pre_deploy_00.db" in delete_names              # base .db is reaped
+    assert "pre_deploy_00.db-wal" in refused_names         # non-zero -wal REFUSED
+    assert "pre_deploy_00.db-wal" not in delete_names      # ... and never a delete candidate
+    assert "pre_deploy_00.db-shm" in delete_names          # 0/shm sidecar reaped WITH its base
+    execute(plan, apply=True)
+    assert (tmp_path / "pre_deploy_00.db-wal").exists()    # refused survives on disk
+    assert not (tmp_path / "pre_deploy_00.db").exists()    # base gone
+    assert not (tmp_path / "pre_deploy_00.db-shm").exists()  # shm gone with base
+
+
+def test_keep_n_counts_logical_db_not_sidecar_slots(tmp_path):
+    """C1: keep-N counts base .db files; sidecars do not consume keep slots."""
+    for i in range(3):
+        _mk(tmp_path, f"pre_deploy_{i:02d}.db", 1000 + i)
+        _mk(tmp_path, f"pre_deploy_{i:02d}.db-wal", 1000 + i, size=0)   # 0-byte
+        _mk(tmp_path, f"pre_deploy_{i:02d}.db-shm", 1000 + i)
+    plan = build_plan(tmp_path, max_delete=100, categories=[("pre_*.db", 2)])
+    pre = _cat(plan, "pre_*.db")
+    assert pre.present == 3 and len(pre.keep) == 2 and len(pre.delete) == 1  # 3 LOGICAL, not 9
+    assert pre.delete[0].name == "pre_deploy_00.db"        # oldest logical
+
+
+def test_sidecar_of_surviving_base_never_deleted(tmp_path):
+    """C2: a sidecar whose base .db SURVIVES is never a delete/refuse candidate —
+    the split-survivor case must be impossible, not merely unlikely."""
+    _mk(tmp_path, "pre_deploy_keep.db", 5000)              # sole backup -> survives
+    _mk(tmp_path, "pre_deploy_keep.db-wal", 5000, size=999)  # non-zero, but base survives
+    _mk(tmp_path, "pre_deploy_keep.db-shm", 5000)
+    plan = build_plan(tmp_path, max_delete=100)
+    assert plan.total_delete == 0
+    assert plan.sidecar_delete == [] and plan.sidecar_refused == []
+    execute(plan, apply=True)
+    assert (tmp_path / "pre_deploy_keep.db-wal").exists()  # untouched (base survives)
+    assert (tmp_path / "pre_deploy_keep.db-shm").exists()
+
+
+def test_orphan_sidecar_reaped_but_nonzero_wal_refused(tmp_path):
+    """C6: a sidecar whose base .db is ABSENT (orphan) is reapable (drains the
+    standing orphans) — except a non-zero -wal, which is still refused."""
+    _mk(tmp_path, "analytics-2026-06-01.db-shm", 100)           # orphan shm, base absent
+    _mk(tmp_path, "analytics-2026-06-01.db-wal", 100, size=0)   # orphan 0-byte wal
+    _mk(tmp_path, "analytics-2026-06-02.db-wal", 100, size=7)   # orphan NON-ZERO wal
+    plan = build_plan(tmp_path, max_delete=100)
+    reap = {p.name for p in plan.sidecar_delete}
+    refused = {p.name for p, _ in plan.sidecar_refused}
+    assert "analytics-2026-06-01.db-shm" in reap
+    assert "analytics-2026-06-01.db-wal" in reap
+    assert "analytics-2026-06-02.db-wal" in refused        # non-zero -> refused even as orphan
