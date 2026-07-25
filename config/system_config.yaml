@@ -294,6 +294,22 @@ alerts:                       # TG12/AW11 — alert subsystem settings
     personal_chat_id_env: "TELEGRAM_PERSONAL_CHAT_ID"
     whitelist_only: true
   email_fallback:               # FIX-132 Item 10: email when Telegram fails for CRITICAL
+    # *** 25-Jul-2026 -- READ THIS BEFORE TRUSTING `enabled: true`. THIS PATH IS
+    # INERT IN PRODUCTION. *** The three env vars named below are ABSENT from the
+    # VM .env (absent, not empty), so _send_email_fallback() logs
+    # `email_fallback.missing_credentials` and returns False before any socket op.
+    # MEASURED: that WARNING has fired 7 times in production.
+    # *** THE OUT-OF-BAND PATH THAT ACTUALLY DELIVERS IS alert_watcher *** -- a
+    # separate mechanism, `alerts.smtp` below, using a DIFFERENT credential
+    # (ALERT_SMTP_PASSWORD, which IS set). It is a live systemd service and has
+    # delivered 82 CRITICALs; verified end-to-end 25-Jul.
+    # *** DELIBERATELY LEFT `true` rather than flipped to `false`: *** `true` is
+    # the honest statement of INTENT (this fallback is wanted), and flipping it
+    # would make _send_email_fallback return at the first check -- silencing the
+    # missing_credentials WARNING, i.e. removing the only runtime evidence that
+    # the path is dead. Silently-disabled is worse than loudly-inert.
+    # TO ACTIVATE: set ALERT_EMAIL_USER / _PASSWORD / _TO in the VM .env. No code
+    # change needed. See docs/audit/out_of_band_alert_path_verified_25jul2026.md.
     enabled: true
     smtp_host: "smtp.gmail.com"
     smtp_port: 587
