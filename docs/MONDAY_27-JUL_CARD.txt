@@ -67,15 +67,27 @@ IF YOU EVER NEED TO HALT — READ THIS BEFORE THE MOMENT, NOT DURING IT
 
 EMAILS YOU WILL GET THAT MEAN NOTHING (so a real one still stands out)
 ------------------------------------------------------------------------------
-· "UNEXPECTED SSH KEY present" — EVERY 6 HOURS, ~03:46 / 09:46 / 15:46 / 21:46.
-  A STALE BASELINE, not an intrusion: the key it flags is the only key in
-  authorized_keys and is the one every session (incl. mine) logs in with. It has
-  fired 37 times since 17-Jul across two key rotations. Fix is one command and
-  it is YOURS to approve — see the critical_alert_stream audit.
-· "Cron EOD" / "Cron Briefing" / "Pre-flight Phase B|C" / "System Manager EOD —
-  clean" — these are DAILY REPORTS sent at CRITICAL severity, not incidents.
-⚠️ 80% of your CRITICAL emails are one of the above. If one arrives that is NOT
-   on this list, it is worth stopping for.
+✅ "UNEXPECTED SSH KEY present" — GONE. It fired 37 times since 17-Jul across two
+   key rotations; the last was Sat 21:46:45. You re-baselined at 00:24 Sunday and
+   the third (committed) baseline was fixed after that, so the check now produces
+   NO finding at all. ⭐ If a 38th ever arrives, that is NEW — do not assume it is
+   the old loop.
+✅ AND IT CANNOT COME BACK AS A FLOOD. The 6-hourly re-alert was the real defect
+   and it is fixed: a condition that is merely STILL PRESENT now backs off
+   6h -> 24h -> 7d and is never CRITICAL twice. A condition that CLEARED and CAME
+   BACK is now alerted immediately at full severity — it used to be swallowed.
+⭐ "System Manager EOD — clean" IS NOT A CRITICAL. Yesterday's card said it was;
+   that was wrong. Measured by re-rendering all 85 sentinels through the function
+   that builds the subject: it arrives as "[LFL836] INFO — …". So do the Pre-flight
+   READY and Cron Daily Report ones. They are correctly labelled already.
+· STILL ROUTINE, still worth ignoring: the 15:15 "SOFT KILL ACTIVATED —
+  circuit_breaker_force_close_15:15", same second every trading day, by design.
+🔴 "RMS/MANUAL CLOSE — <symbol>" — ⚠️ DO NOT TRUST THE WORDING. All four sent so
+   far (HUHTAMAKI, WAAREERTL, GODIGIT, BLSE) were the system's OWN SL/TGT/EOD
+   order filling, not an external close — the reconciler polled between the
+   broker fill and its own bookkeeping. The MONEY was right every time. Reported,
+   not fixed; the fix is yours to call. See alert_stream_fixes_26jul2026.
+⚠️ If an email arrives that is NOT on this list, it is worth stopping for.
 
 TUESDAY 08:15 — THREE NON-EVENTS
 ------------------------------------------------------------------------------
