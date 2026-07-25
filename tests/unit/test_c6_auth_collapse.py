@@ -44,6 +44,7 @@ import tempfile
 import types
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import create_autospec
 
 from core.state_store import StateStore
 from signals.webhook_receiver import WebhookReceiver
@@ -435,3 +436,177 @@ class TestC6Structure:
                 assert token not in src, (
                     f"{fn.__name__} branches on {token!r} -- auth is not mode-independent"
                 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# C3 (25-Jul-2026) — the PB-01 capture heartbeat.
+#
+# Before this, the 17:00 EOD capture emitted nothing but INFO log lines. An
+# empty pb01_watchlist next morning was identical under all of: no breakouts /
+# Chartink never fired / boot wiring failed (_eod_capture is None) / every
+# symbol skipped / the service died at 16:20. Only the third was detectable,
+# and only by grepping the MORNING's boot log.
+#
+# One cron_heartbeat row per alert collapses that. It records QUEUED, not
+# captured -- the worker is asynchronous -- which is why the message says
+# `queued=`; the watchlist row count stays the proof the worker finished.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class _HeartbeatSpy:
+    """Captures record_heartbeat calls without touching a DB.
+
+    Installed BEHIND create_autospec (see _patch_heartbeat) — never as the stub
+    itself. A hand-written stub freezes today's parameter list and drifts silently
+    the next time record_heartbeat gains a parameter; that is the exact 15-Jul-2026
+    F2 break, and tests/unit/test_cron_heartbeat_contract.py's discovery guard
+    rejects any file that patches record_heartbeat without a signature-safe
+    stand-in.
+    """
+
+    def __init__(self, explode=False):
+        self.calls = []
+        self._explode = explode
+
+    def __call__(self, job_name, status="SUCCESS", duration_sec=None,
+                 message=None, functional_status=None, db_path=None):
+        if self._explode:
+            raise RuntimeError("heartbeat DB unavailable")
+        self.calls.append({"job_name": job_name, "status": status,
+                           "message": message, "functional_status": functional_status})
+        return True
+
+
+def _patch_heartbeat(monkeypatch, spy):
+    """Swap in a stand-in that ENFORCES record_heartbeat's real signature.
+
+    create_autospec tracks the live signature, so a future parameter change fails
+    here loudly instead of a narrow stub swallowing it. The spy rides as
+    side_effect: autospec binds the call (raising TypeError on a bad signature),
+    then the spy records it. Patching the MODULE attribute is what makes this
+    work — production imports record_heartbeat inside the function, so the name
+    is resolved at call time.
+    """
+    import utils.cron_heartbeat as hb
+    monkeypatch.setattr(hb, "record_heartbeat",
+                        create_autospec(hb.record_heartbeat, side_effect=spy))
+
+
+def _post_eod(receiver, body=None):
+    body = body if body is not None else _eod_body()
+    with receiver.app.test_client() as c:
+        return _post(c, body, scanner="pb01_breakout_retest",
+                     headers={"X-Webhook-Signature": _sig(body)})
+
+
+class TestC3CaptureHeartbeat:
+
+    def test_success_records_counts_and_no_functional_status(self, monkeypatch):
+        spy = _HeartbeatSpy()
+        _patch_heartbeat(monkeypatch, spy)
+        receiver, _, _ = _make_receiver(with_eod_scanner=True)
+        receiver.set_eod_capture(_CapturingEodWorker())
+
+        resp = _post_eod(receiver)
+        assert resp.status_code == 200 and resp.get_json()["captured"] == 2
+        assert len(spy.calls) == 1
+        call = spy.calls[0]
+        assert call["job_name"] == "pb01_capture"
+        assert call["status"] == "SUCCESS"
+        assert call["functional_status"] is None
+        assert "symbols=2" in call["message"] and "queued=2" in call["message"]
+        assert "pb01_breakout_retest" in call["message"]
+
+    def test_message_says_QUEUED_not_captured(self, monkeypatch):
+        """A3: the worker is async, so this proves arrival/acceptance, NOT that a
+        pb01_watchlist row exists. The wording must not overstate it."""
+        spy = _HeartbeatSpy()
+        _patch_heartbeat(monkeypatch, spy)
+        receiver, _, _ = _make_receiver(with_eod_scanner=True)
+        receiver.set_eod_capture(_CapturingEodWorker())
+
+        _post_eod(receiver)
+        msg = spy.calls[0]["message"]
+        assert "queued=" in msg
+        assert "captured=" not in msg, f"heartbeat overstates the worker's outcome: {msg}"
+
+    def test_zero_queued_is_flagged_EMPTY_NO_DATA(self, monkeypatch):
+        spy = _HeartbeatSpy()
+        _patch_heartbeat(monkeypatch, spy)
+
+        class _RefusingWorker:
+            def submit(self, **kw):
+                return False
+
+        receiver, _, _ = _make_receiver(with_eod_scanner=True)
+        receiver.set_eod_capture(_RefusingWorker())
+
+        _post_eod(receiver)
+        assert spy.calls[0]["status"] == "SUCCESS"
+        assert spy.calls[0]["functional_status"] == "EMPTY_NO_DATA"
+        assert "queued=0" in spy.calls[0]["message"]
+
+    def test_no_capture_worker_records_FAILED_and_DISABLED(self, monkeypatch):
+        """*** THE ONE THAT MATTERS. *** A boot-wiring failure leaves _eod_capture
+        None; the alert still answers 200, so without this row it is invisible until
+        someone notices an empty watchlist and cannot tell why."""
+        spy = _HeartbeatSpy()
+        _patch_heartbeat(monkeypatch, spy)
+        receiver, _, _ = _make_receiver(with_eod_scanner=True)   # set_eod_capture NOT called
+
+        resp = _post_eod(receiver)
+        assert resp.status_code == 200                      # unchanged, fail-safe
+        assert resp.get_json()["detail"] == "watchlist disabled"
+        assert spy.calls[0]["status"] == "FAILED"
+        assert spy.calls[0]["functional_status"] == "DISABLED"
+        assert "symbols=2" in spy.calls[0]["message"] and "queued=0" in spy.calls[0]["message"]
+
+    # ── A4: the ingress must be unbreakable ──────────────────────────────
+    def test_a_heartbeat_failure_cannot_change_the_response(self, monkeypatch):
+        """⛔ SIGNAL INGRESS. If the heartbeat raises, the alert must still be
+        accepted with the same 200 and the same body. Observability may never
+        break the thing it observes."""
+        _patch_heartbeat(monkeypatch, _HeartbeatSpy(explode=True))
+        worker = _CapturingEodWorker()
+        receiver, sq, _ = _make_receiver(with_eod_scanner=True)
+        receiver.set_eod_capture(worker)
+
+        resp = _post_eod(receiver)
+        assert resp.status_code == 200, f"a heartbeat failure changed the response: {resp.data!r}"
+        assert resp.get_json() == {"accepted": 2, "captured": 2}
+        assert [s for _, s in worker.submitted] == ["RELIANCE", "TCS"]
+        assert sq.qsize() == 0
+
+    def test_a_heartbeat_failure_cannot_break_the_disabled_branch_either(self, monkeypatch):
+        _patch_heartbeat(monkeypatch, _HeartbeatSpy(explode=True))
+        receiver, _, _ = _make_receiver(with_eod_scanner=True)
+        resp = _post_eod(receiver)
+        assert resp.status_code == 200
+        assert resp.get_json()["detail"] == "watchlist disabled"
+
+    # ── A5: the protected divergence is untouched ────────────────────────
+    def test_the_eod_early_return_still_precedes_the_kill_and_window_gates(self, monkeypatch):
+        """A5: adding the heartbeat must not disturb the early return that makes a
+        17:00 capture possible. Both gates set to REFUSE; capture must still work."""
+        spy = _HeartbeatSpy()
+        _patch_heartbeat(monkeypatch, spy)
+        worker = _CapturingEodWorker()
+        receiver, sq, _ = _make_receiver(with_eod_scanner=True,
+                                         kill_active=True, entry_allowed=False)
+        receiver.set_eod_capture(worker)
+
+        resp = _post_eod(receiver)
+        assert resp.status_code == 200 and resp.get_json()["captured"] == 2
+        assert spy.calls[0]["status"] == "SUCCESS"
+        assert sq.qsize() == 0
+
+    def test_an_unauthenticated_alert_records_no_heartbeat(self, monkeypatch):
+        """Auth still runs first, so a rejected caller cannot write rows."""
+        spy = _HeartbeatSpy()
+        _patch_heartbeat(monkeypatch, spy)
+        receiver, _, _ = _make_receiver(with_eod_scanner=True)
+        receiver.set_eod_capture(_CapturingEodWorker())
+
+        with receiver.app.test_client() as c:
+            resp = _post(c, _eod_body(), scanner="pb01_breakout_retest")   # no credential
+        assert resp.status_code == 401
+        assert spy.calls == []

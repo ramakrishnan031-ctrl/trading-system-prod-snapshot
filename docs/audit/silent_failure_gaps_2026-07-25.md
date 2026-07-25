@@ -188,3 +188,26 @@ and `status="FAILED"` + `functional_status="DISABLED"` on the `_eod_capture is N
 **Common shape:** all three are the same defect class — *an exit path that produces nothing and says nothing*. In each case the mechanism to fix it already exists in the codebase (`record_heartbeat` + the `functional_status` vocabulary); none needs a new subsystem, a schema change, or a new alert channel.
 
 ⛔ **Nothing was built. No file changed by this investigation.**
+
+---
+
+# ✅ SHIPPED — 25-Jul-2026 (appended after the fact; everything above is the investigation as written)
+
+## C3 — PB-01 capture heartbeat. **SHIPPED.**
+
+`signals/webhook_receiver.py` — a new `_record_eod_heartbeat` called from both exits of `_handle_eod`, plus the missing `DISABLED` boot line on the `else` of `main.py:3171`.
+
+| alert outcome | `status` | `functional_status` |
+|---|---|---|
+| symbols queued | `SUCCESS` | *(none)* |
+| alert arrived, **0 queued** | `SUCCESS` | `EMPTY_NO_DATA` |
+| `_eod_capture is None` (boot wiring never happened) | **`FAILED`** | **`DISABLED`** |
+
+⚠️ **IT RECORDS `queued=`, NOT `captured=`, AND THE DISTINCTION IS LOAD-BEARING.** `submit()` hands the symbol to the capture worker, which does the LEVEL fetch/compute **off the request thread** (WR1). So the row proves the alert **arrived, authenticated, parsed and was accepted** — it does **not** prove any row reached `pb01_watchlist`. **The watchlist row count remains the only proof the worker finished.** The message deliberately says `queued=` so no future reader can take it for capture confirmation; a test asserts `"captured=" not in message`.
+
+⛔ **This is the signal ingress**, so the heartbeat is swallowed twice over — `record_heartbeat` already returns `False` rather than raising, and the call site adds its own `except`. Two tests assert that a heartbeat which *raises* still leaves the response a byte-identical `200`. Do not "clean that up".
+
+**Boot ambiguity closed too:** config-off previously logged **nothing**, so the absence of the `ENABLED` line could mean either "disabled by config" or "boot never got here". Every boot now states which of three it was: `ENABLED` / `DISABLED` / the wiring-failed `ERROR`.
+
+**Not instrumented (deliberate, unchanged scope):** the malformed-payload 400s earlier in `_handle_eod`. Those answer non-200 to the sender; they are not the silent case.
+

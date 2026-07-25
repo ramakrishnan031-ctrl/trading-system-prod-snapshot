@@ -3209,6 +3209,14 @@ def _main_locked(args, config_dir: Path) -> int:
             _log.error("pb01 watchlist wiring failed (continuing without it): %s", exc)
             pb01_capture_worker = None
             pb01_entry_stage = None
+    else:
+        # C3 (25-Jul-2026): say so. Before this, config-off logged NOTHING, so the
+        # ABSENCE of the ENABLED line was ambiguous between "disabled by config" and
+        # "boot never reached this point" — and an empty pb01_watchlist next morning
+        # is the same either way. Now every boot states which of the three it was:
+        # ENABLED / DISABLED / the wiring-failed ERROR above.
+        _log.info("V3 Step 10b PB-01 watchlist: DISABLED (watchlist.enabled=false) — "
+                  "no EOD capture will be wired; an empty pb01_watchlist is EXPECTED")
 
     # SNR-V2 Phase A: RetestMonitor + Diverter (need signal_processor.continue_from_
     # retest, so built here). The diverter is late-bound into signal_processor; the

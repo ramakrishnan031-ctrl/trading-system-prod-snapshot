@@ -743,6 +743,12 @@ class WebhookReceiver:
             self._log.warning(
                 "EOD alert %s: watchlist disabled (no capture worker) → fail-safe miss "
                 "for %d symbol(s)", scanner_name, len(symbols))
+            # C3 (25-Jul-2026): THIS is the branch that used to be invisible. A boot-wiring
+            # failure leaves _eod_capture None, the 17:00 alert still answers 200, and next
+            # morning an empty pb01_watchlist looks exactly like "no breakouts". FAILED +
+            # func=DISABLED makes the two distinguishable in one query.
+            self._record_eod_heartbeat(scanner_name, len(symbols), 0,
+                                       status="FAILED", functional_status="DISABLED")
             return jsonify({"accepted": 0, "captured": 0, "detail": "watchlist disabled"}), 200
 
         captured = 0
@@ -756,7 +762,40 @@ class WebhookReceiver:
                 self._log.error("EOD capture submit failed for %s: %s", symbol, exc)
         self._log.info("EOD alert %s: %d symbol(s) → %d queued for capture",
                        scanner_name, len(symbols), captured)
+        self._record_eod_heartbeat(
+            scanner_name, len(symbols), captured,
+            functional_status=("EMPTY_NO_DATA" if captured == 0 else None))
         return jsonify({"accepted": len(symbols), "captured": captured}), 200
+
+    def _record_eod_heartbeat(self, scanner_name: str, symbols: int, queued: int,
+                              status: str = "SUCCESS",
+                              functional_status: Optional[str] = None) -> None:
+        """C3 (25-Jul-2026): one cron_heartbeat row per EOD alert, so the 17:00 capture
+        stops being invisible.
+
+        ⚠️ RECORDS *QUEUED*, NOT CAPTURED. `submit()` hands the symbol to the capture
+        worker, which does the LEVEL fetch/compute OFF the request thread (WR1). So
+        `queued=N` proves the alert ARRIVED, authenticated, parsed, and was accepted —
+        it does NOT prove any row reached `pb01_watchlist`. The watchlist row count
+        remains the only proof the worker finished. The message says `queued=` and not
+        `captured=` precisely so nobody later reads this as capture confirmation.
+
+        ⛔ THIS IS THE SIGNAL INGRESS. Every failure mode is swallowed: `record_heartbeat`
+        already returns False rather than raising, and this adds a belt-and-braces except
+        so that no DB hiccup, no import error and no bad argument can turn a 200 into a
+        500. Observability must never be able to break the thing it observes.
+        """
+        try:
+            from utils.cron_heartbeat import record_heartbeat
+            record_heartbeat(
+                "pb01_capture", status=status, functional_status=functional_status,
+                message=f"scanner={scanner_name} symbols={symbols} queued={queued}",
+            )
+        except Exception as exc:   # never let observability break the request path
+            try:
+                self._log.warning("pb01_capture heartbeat failed (ignored): %s", exc)
+            except Exception:
+                pass
 
     def _parse_eod_triggered_at(self, raw: str):
         """Parse the EOD alert's triggered_at → IST-aware datetime. Accepts the same
