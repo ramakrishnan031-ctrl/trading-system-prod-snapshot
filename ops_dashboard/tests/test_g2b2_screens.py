@@ -27,8 +27,10 @@ def test_capital_api(client):
     d = client.get("/api/capital").get_json()
     assert d["opening_capital"] == 100000.0
     assert d["buckets"]["intraday_allocated"] == 70000.0
-    assert d["used"] == 42000.0 and d["pending"] == 3000.0
-    assert d["remaining"] == 28000.0 and d["deployed_pct"] == 42.0
+    # 25-Jul-2026: derived from trades (4 OPEN x 5000), not the capital_snapshot
+    # row that claimed 42000/3000 with no trade behind it.
+    assert d["used"] == 20000.0 and d["pending"] == 0.0
+    assert d["remaining"] == 50000.0 and d["deployed_pct"] == 20.0
     ledger = d["ledger"]
     assert len(ledger) == 6                        # 1 INIT + 5 RELEASE_USED
     # 25-Jul-2026: was 7 ("2 INIT") -- the fixture seeded a bucket-split pair that
@@ -44,7 +46,7 @@ def test_exposure_api(client):
     assert d["per_symbol"][0] == {"symbol": "AAA", "value": 40000.0, "positions": 4}
     strat = {r["strategy"]: r for r in d["per_strategy"]}
     assert strat["gap_fade_long"]["positions"] == 2
-    assert d["margin_used"] == 42000.0
+    assert d["margin_used"] == 20000.0      # 4 open x 5000 (was a 42000 fiction)
 
 
 # ── M10 P&L (equity curve from the ledger sequence) ──

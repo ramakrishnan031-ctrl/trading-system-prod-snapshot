@@ -140,7 +140,13 @@ def _create_app(state_store: Any, logger: Any, metrics_provider=None,
             "signals_traded": 0,
             "open_positions": 0,
             "daily_pnl": 0.0,
-            "capital_deployed_pct": 0.0,
+            # 25-Jul-2026: None, not 0.0. This default was reached on EVERY request
+            # (the old capital_snapshot read found no row and set nothing), so
+            # /metrics reported "0% of capital deployed" as though it were measured.
+            # None means "not determined"; the block below replaces it with a real
+            # number, or with None plus a stated reason.
+            "capital_deployed_pct": None,
+            "margin_used": 0.0,
             "kill_switch_state": "INACTIVE",
             "uptime_seconds": uptime,
             "last_signal_at": "",
@@ -183,14 +189,42 @@ def _create_app(state_store: Any, logger: Any, metrics_provider=None,
             if row:
                 m["daily_pnl"] = round(float(row["pnl"] or 0.0), 2)
 
+            # 25-Jul-2026: was `SELECT margin_used, cash_floor FROM capital_snapshot`.
+            # That table has 0 rows in production (nothing has written it since the
+            # 3-balance model was retired), so `row` was always None and
+            # capital_deployed_pct was NEVER emitted at all.
+            #
+            # ⭐ DEFINITION CHANGE, dated and deliberate: the metric is now
+            # margin_used / TOTAL capital, not margin_used / cash_floor. A ratio
+            # against remaining cash grows without bound as the book fills and is
+            # not a "deployment %". Safe to redefine precisely because the old one
+            # never emitted a value -- there is no series and no consumer holding
+            # the old meaning.
+            #
+            # total_capital reuses the canonical accessor rather than re-summing:
+            # get_day_opening_capital() takes the day's FIRST INIT row, which is
+            # restart-safe (INIT is one row per PROCESS START).
             row = state_store.fetch_one(
-                "SELECT margin_used, cash_floor FROM capital_snapshot WHERE id = 1",
+                "SELECT COALESCE(SUM(margin_reserved), 0.0) AS m FROM trades "
+                "WHERE status IN ('OPEN', 'PARTIAL', 'EXITING')",
                 (),
             )
-            if row:
-                cash_floor = float(row["cash_floor"] or 1)
-                margin_used = float(row["margin_used"] or 0)
-                m["capital_deployed_pct"] = round(margin_used / max(cash_floor, 1) * 100, 2)
+            margin_used = float(row["m"] or 0.0) if row else 0.0
+            m["margin_used"] = round(margin_used, 2)
+            try:
+                total_capital = state_store.get_day_opening_capital(today_iso)
+            except Exception as exc:      # never let one metric cost the others
+                total_capital = None
+                logger.error("metrics.opening_capital_failed", extra={"error": str(exc)})
+            if total_capital and float(total_capital) > 0:
+                m["capital_deployed_pct"] = round(margin_used / float(total_capital) * 100, 2)
+                m["total_capital"] = round(float(total_capital), 2)
+            else:
+                # Div-0 guard states WHY. A silent 0.0 would read as "nothing
+                # deployed" when the truth is "we could not tell".
+                m["capital_deployed_pct"] = None
+                m["capital_deployed_pct_unavailable"] = (
+                    f"no INIT ledger row for {today_iso} (capital not seeded yet)")
 
             row = state_store.fetch_one(
                 "SELECT state FROM kill_switch_state WHERE id = 1",

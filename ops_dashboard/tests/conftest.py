@@ -383,6 +383,11 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
               (_ts("14:50:00"), "RELEASE_USED", 0.0, "intraday", 0.0, 0.0, 200.0, 2.0))
 
     # ── capital_snapshot: used 42000 / pending 3000 ──
+    # ⚠️ 25-Jul-2026: NO READER USES THIS ROW ANY MORE. db_reader.capital_usage()
+    # now derives the balances from trades + fm_ledger, because capital_snapshot
+    # has 0 rows in production and these numbers were fiction -- the fixture's own
+    # trades carry 4 OPEN x 5000 = 20000 of margin and no PENDING_FILL at all.
+    # Kept only so the table stays exercised; do not add expectations against it.
     c.execute("INSERT INTO capital_snapshot(id,cash_floor,realized_pnl_today,margin_used,"
               "margin_reserved,charges_today,updated_at) VALUES(1,?,?,?,?,?,?)",
               (55000.0, -25.0, 42000.0, 3000.0, 10.0, _ts("15:15:00")))

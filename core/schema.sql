@@ -374,6 +374,25 @@ CREATE INDEX IF NOT EXISTS idx_orders_superseded_by
 -- This is the "fast read" of capital. The capital_ledger is the audit trail.
 --
 -- Decision refs: P7a (3-balance model), G3 (invariant)
+--
+-- ⚠️ UNUSED SINCE 2026-07-25 — READS REDIRECTED, TABLE DELIBERATELY KEPT.
+-- Nothing writes this table and it holds 0 rows in production. Its three readers
+-- (scripts/preflight/checks/engine.py, scripts/healthcheck_server.py,
+-- ops_dashboard/backend/readers/db_reader.py) were therefore reading nothing:
+-- preflight emitted a permanent "no capital_snapshot row yet" WARN on every run,
+-- /metrics never emitted capital_deployed_pct at all, and the GUI rendered a
+-- hard-coded all-zero capital block as if it had been measured.
+--
+-- Each value is now sourced where it actually lives:
+--   cash_floor          = opening capital − margin on open positions
+--   realized_pnl_today  = Σ fm_ledger.pnl_delta over RELEASE_USED (already NET)
+--   margin_used         = Σ trades.margin_reserved, status OPEN/PARTIAL/EXITING
+--   margin_reserved     = Σ trades.margin_reserved, status PENDING_FILL
+--
+-- NOT DROPPED: a schema change was not authorised, dropping it would need a
+-- migration, and the definition documents what the 3-balance model meant. If a
+-- writer is ever added, delete this note with it.
+-- See docs/audit/capital_snapshot_redirect_25jul2026.md
 -- ═════════════════════════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS capital_snapshot (
     id                  INTEGER PRIMARY KEY CHECK (id = 1),

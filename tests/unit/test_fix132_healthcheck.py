@@ -146,3 +146,72 @@ if __name__ == "__main__":
         except Exception as exc:
             print(f"  FAIL {t.__name__}: {exc}")
     print(f"\n{passed}/{len(tests)} passed")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 25-Jul-2026 — /metrics capital block reads live sources, not capital_snapshot.
+#
+# Before: `SELECT margin_used, cash_floor FROM capital_snapshot WHERE id = 1`.
+# That table has 0 rows in production, so fetch_one returned None and
+# capital_deployed_pct was NEVER emitted at all -- the metric looked implemented
+# and shipped nothing for months.
+#
+# The definition changed with the source, deliberately and dated:
+#   was  margin_used / cash_floor    (a ratio against REMAINING cash, unbounded)
+#   now  margin_used / total_capital (an actual deployment percentage)
+# Safe precisely because the old one never emitted -- no series, no consumer.
+# ═════════════════════════════════════════════════════════════════════════════
+
+class _CapitalStore:
+    """Store double that answers the two queries the capital block makes."""
+
+    def __init__(self, margin_used=0.0, opening=None, raise_on_opening=False):
+        self._margin = margin_used
+        self._opening = opening
+        self._raise = raise_on_opening
+
+    def fetch_one(self, sql, params=()):
+        class _Row:
+            def __init__(self, m):
+                self._m = m
+            def __getitem__(self, key):
+                return self._m if key == "m" else (0 if key == "cnt" else None)
+        return _Row(self._margin)
+
+    def get_day_opening_capital(self, date_iso):
+        if self._raise:
+            raise RuntimeError("ledger unreadable")
+        return self._opening
+
+
+def _metrics(store):
+    app = _create_app(store, _log())
+    return json.loads(app.test_client().get("/metrics").data)
+
+
+class TestMetricsCapitalRedirect:
+
+    def test_deployed_pct_is_real_and_nonzero_against_open_positions(self):
+        """B8: a flat book proves nothing. 2,500 margin against a 10,000 opening
+        is 25% -- and it is margin/TOTAL, not margin/remaining (which would be
+        33.33% here)."""
+        d = _metrics(_CapitalStore(margin_used=2500.0, opening=10000.0))
+        assert d["capital_deployed_pct"] == 25.0
+        assert d["margin_used"] == 2500.0
+        assert d["total_capital"] == 10000.0
+        assert "capital_deployed_pct_unavailable" not in d
+
+    def test_no_init_row_states_a_reason_instead_of_a_silent_zero(self):
+        """A silent 0.0 would read as 'nothing deployed' when the truth is
+        'we could not tell'."""
+        d = _metrics(_CapitalStore(margin_used=2500.0, opening=None))
+        assert d["capital_deployed_pct"] is None
+        assert "no INIT ledger row" in d["capital_deployed_pct_unavailable"]
+        assert d["margin_used"] == 2500.0          # still reported
+
+    def test_a_failing_opening_capital_read_does_not_cost_the_other_metrics(self):
+        """The capital block sits mid-way through /metrics. If it raised, every
+        metric after it would be lost to the outer handler."""
+        d = _metrics(_CapitalStore(margin_used=2500.0, raise_on_opening=True))
+        assert d["capital_deployed_pct"] is None
+        assert "kill_switch_state" in d            # a metric that comes AFTER it

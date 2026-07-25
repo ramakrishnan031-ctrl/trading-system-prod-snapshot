@@ -23,6 +23,10 @@ OPEN_STATES = ("OPEN", "PARTIAL", "PENDING_FILL", "EXITING")
 _OPEN_STATES = OPEN_STATES  # internal alias used by the query helpers
 # trades that represent a completed position lifecycle
 _CLOSED_STATES = ("CLOSED", "CLOSED_MANUAL")
+# 25-Jul-2026: the 3-balance split, per core/schema.sql's own column comments —
+# margin_used is "over open positions", margin_reserved is "not yet filled".
+_OPEN_POSITION_STATES = ("OPEN", "PARTIAL", "EXITING")
+_PENDING_STATES = ("PENDING_FILL",)
 
 # Reject-status families (signals.status == f"REJECTED_{check}"), from
 # capital/risk_engine.py check codes + signals/signal_processor reject codes.
@@ -324,8 +328,12 @@ def opening_capital(cfg: dict, today: str) -> Optional[float]:
     day's opening capital rather than two that disagree on restart days.
 
     Percentage limits (daily-loss, intraday-bucket) resolve against total capital.
-    Fallback: capital_snapshot (cash_floor + margin_used + margin_reserved).
-    Returns None if neither source is available (pre-open) → callers render '—'.
+    Returns None if there is no INIT row yet (pre-open) → callers render '—'.
+
+    25-Jul-2026: the `capital_snapshot` fallback was removed. That table has 0 rows
+    in production — nothing has written it since the 3-balance model was retired —
+    so the fallback could only ever return None. It was dead code that made the
+    reader look like it had two sources when it had one.
     """
     with _ro(cfg) as conn:
         val = _scalar(
@@ -334,29 +342,56 @@ def opening_capital(cfg: dict, today: str) -> Optional[float]:
             "WHERE date=? AND entry_type='INIT' ORDER BY ts ASC LIMIT 1",
             (today,),
         )
-        if val is not None and float(val) > 0:
-            return float(val)
-        row = conn.execute(
-            "SELECT cash_floor, margin_used, margin_reserved "
-            "FROM capital_snapshot WHERE id=1"
-        ).fetchone()
-    if row is None:
-        return None
-    total = float(row["cash_floor"]) + float(row["margin_used"]) + float(row["margin_reserved"])
-    return total if total > 0 else None
+    if val is not None and float(val) > 0:
+        return float(val)
+    return None
 
 
-def capital_usage(cfg: dict) -> dict:
+def capital_usage(cfg: dict, today: str) -> dict:
+    """The four capital balances, sourced where each one actually lives.
+
+    25-Jul-2026: was a single read of `capital_snapshot`, a table with 0 rows in
+    production — so this returned all-zeros on every call and every consumer
+    rendered 0 as if it were measured. Each value now comes from its real source,
+    keeping schema.sql's own definitions of the 3-balance model:
+
+      margin_used       margin on OPEN positions      ("over open positions")
+      margin_reserved   margin on PENDING orders      ("not yet filled")
+      realized_pnl_today  Σ fm_ledger.pnl_delta on RELEASE_USED — the E4/W10
+                        contract: pnl_delta is ALREADY NET, costs are persisted
+                        alongside for observability and must NEVER be subtracted
+                        again (mirrors state_store.get_daily_realized_net_pnl,
+                        which this process cannot call — opening a StateStore
+                        would trigger migration-on-open, reserved for main.py).
+      cash_floor        total capital − margin deployed (the free-cash residual)
+
+    `today` is now required: three of the four values are date-scoped, which the
+    snapshot row hid by carrying no date at all.
+    """
+    total = opening_capital(cfg, today)          # first INIT row — restart-safe
     with _ro(cfg) as conn:
-        row = conn.execute(
-            "SELECT margin_used, margin_reserved, realized_pnl_today, cash_floor "
-            "FROM capital_snapshot WHERE id=1"
-        ).fetchone()
-    if row is None:
-        return {"margin_used": 0.0, "margin_reserved": 0.0,
-                "realized_pnl_today": 0.0, "cash_floor": 0.0}
-    return {k: float(row[k]) for k in
-            ("margin_used", "margin_reserved", "realized_pnl_today", "cash_floor")}
+        used = float(_scalar(
+            conn,
+            "SELECT COALESCE(SUM(margin_reserved),0.0) FROM trades "
+            "WHERE status IN (" + _in_clause(_OPEN_POSITION_STATES) + ")",
+            _OPEN_POSITION_STATES) or 0.0)
+        pending = float(_scalar(
+            conn,
+            "SELECT COALESCE(SUM(margin_reserved),0.0) FROM trades "
+            "WHERE status IN (" + _in_clause(_PENDING_STATES) + ")",
+            _PENDING_STATES) or 0.0)
+        realized = float(_scalar(
+            conn,
+            "SELECT COALESCE(SUM(pnl_delta),0.0) FROM fm_ledger "
+            "WHERE date=? AND entry_type='RELEASE_USED'",
+            (today,)) or 0.0)
+    return {
+        "margin_used": used,
+        "margin_reserved": pending,
+        "realized_pnl_today": realized,
+        # None total → 0.0 rather than a negative floor invented from no capital.
+        "cash_floor": (float(total) - used) if total is not None else 0.0,
+    }
 
 
 def consecutive_loss_streak(cfg: dict) -> int:

@@ -46,7 +46,8 @@ def phase_b_checks() -> List[Check]:
     return [
         # app process up -- ALERT-ONLY (token-watcher owns lifecycle; never auto-start)
         services.ServiceActiveCheck("trading-system.service", auto_fixable=False),
-        *engine.CHECKS,                 # app_health, app_metrics, fund_manager_balance, vm_ntp_strict
+        *engine.CHECKS,                 # app_health, app_metrics, fund_manager_balance,
+                                        # capital_deployment (WARN-only), vm_ntp_strict
         # fast re-gate: token still fresh, public IP unchanged, no new resting orders
         broker.TokenFreshCheck(),
         broker.VmIpUnchangedCheck(),

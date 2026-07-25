@@ -19,12 +19,36 @@ def _ctx(tmp_path, db=None):
                         mode="live", as_of_date=date(2026, 6, 22), phase="B")
 
 
-def _db_capital(tmp_path, cash_floor):
+# 25-Jul-2026: capital now comes from fm_ledger + trades, not capital_snapshot.
+# The old _db_capital() seeded a capital_snapshot row -- a table with 0 rows in
+# production, so these checks were only ever exercised against a fixture-only
+# shape. These builders model what the app actually writes.
+_AS_OF = date(2026, 6, 22)
+
+
+def _db_live_capital(tmp_path, opening=None, open_margin=(), pending_margin=(),
+                     with_tables=True):
+    """A DB shaped like production: one INIT ledger row per process start
+    (bucket='both', full balance) plus trades carrying margin_reserved."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     db = tmp_path / "trading_system.db"
     conn = sqlite3.connect(str(db))
-    conn.execute("CREATE TABLE capital_snapshot (id INTEGER PRIMARY KEY, cash_floor REAL, margin_used REAL)")
-    conn.execute("INSERT INTO capital_snapshot VALUES (1, ?, 0)", (cash_floor,))  # None -> NULL row
+    if with_tables:
+        conn.execute("CREATE TABLE fm_ledger (ledger_id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                     "ts TEXT NOT NULL, entry_type TEXT, amount REAL, bucket TEXT, "
+                     "balance_before REAL, balance_after REAL, "
+                     "date TEXT GENERATED ALWAYS AS (substr(ts,1,10)) STORED)")
+        conn.execute("CREATE TABLE trades (trade_id TEXT PRIMARY KEY, status TEXT, "
+                     "margin_reserved REAL)")
+        if opening is not None:
+            conn.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,"
+                         "balance_after) VALUES(?,?,?,?,?,?)",
+                         (_AS_OF.isoformat() + "T08:15:26.589351+05:30", "INIT",
+                          opening, "both", 0.0, opening))
+        for i, m in enumerate(open_margin):
+            conn.execute("INSERT INTO trades VALUES(?,?,?)", ("o%d" % i, "OPEN", m))
+        for i, m in enumerate(pending_margin):
+            conn.execute("INSERT INTO trades VALUES(?,?,?)", ("p%d" % i, "PENDING_FILL", m))
     conn.commit()
     conn.close()
     return db
@@ -50,22 +74,117 @@ def test_app_metrics(tmp_path, monkeypatch):
 
 
 # ── fund_manager_balance ────────────────────────────────────────────────────────────
+# MEANING UNCHANGED (25-Jul-2026): still "is the fund manager's free cash sane?",
+# still CRITICAL, still FAIL on NaN / <= 0. Only the SOURCE moved, off the
+# permanently-empty capital_snapshot onto opening capital minus deployed margin.
 def test_fund_manager_balance(tmp_path):
-    ok = _db_capital(tmp_path, 10247.0)
-    assert engine.FundManagerBalanceCheck().run(_ctx(tmp_path, ok)).status is Status.PASS
-    zero = _db_capital(tmp_path / "z", 0.0)
+    ok = _db_live_capital(tmp_path, opening=10247.0, open_margin=(1000.0,))
+    res = engine.FundManagerBalanceCheck().run(_ctx(tmp_path, ok))
+    assert res.status is Status.PASS
+    assert res.metrics["cash_floor"] == 9247.0     # 10247 - 1000 = the free-cash residual
+
+    # fully deployed -> free cash <= 0 -> the SAME failure this check always made
+    zero = _db_live_capital(tmp_path / "z", opening=10247.0, open_margin=(10247.0,))
     assert engine.FundManagerBalanceCheck().run(_ctx(tmp_path / "z", zero)).status is Status.FAIL
-    none = _db_capital(tmp_path / "n", None)
-    assert engine.FundManagerBalanceCheck().run(_ctx(tmp_path / "n", none)).status is Status.FAIL
+
+    # SQLite has no NaN: a NaN balance_after comes back as NULL, so this also
+    # covers the NULL case. Both mean "the row exists but the balance is broken",
+    # which is the crash-test NaN guard and must FAIL -- never be softened into
+    # the "no INIT row yet" WARN.
+    nan = _db_live_capital(tmp_path / "n", opening=float("nan"))
+    res = engine.FundManagerBalanceCheck().run(_ctx(tmp_path / "n", nan))
+    assert res.status is Status.FAIL
+    assert "NaN/None" in res.detail
 
 
-def test_fund_manager_no_snapshot(tmp_path):
+def test_fund_manager_no_init_row_warns_rather_than_failing(tmp_path):
+    """No INIT row for the day => WARN, not CRITICAL. Genuinely transient now:
+    preflight B runs 09:14 and the seed lands ~08:15, so this can only mean the
+    app has not seeded today at all."""
+    db = _db_live_capital(tmp_path, opening=None)
+    res = engine.FundManagerBalanceCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.WARN
+    assert "no INIT ledger row" in res.detail
+
+
+def test_fund_manager_degrades_to_warn_when_the_db_is_unreadable(tmp_path):
+    """B5: preflight is a boot gate. An unexpected condition must WARN with a real
+    reason and NEVER let an exception escape -- a crash here costs a trading day."""
+    db = _db_live_capital(tmp_path, with_tables=False)      # tables absent
+    res = engine.FundManagerBalanceCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.WARN
+    assert "unreadable" in res.detail and res.detail.strip()
+
+
+# ── B7 anti-vacuity: the old PERMANENT warn is gone ───────────────────────────
+_OLD_WARN = "no capital_snapshot row yet (app may still be initialising)"
+
+
+def test_the_old_permanent_capital_snapshot_warn_is_gone(tmp_path):
+    """capital_snapshot has 0 rows in production, so this check emitted the SAME
+    warning on EVERY run, forever -- a permanent WARN wearing a transient's
+    wording. Two assertions: the check no longer reads that table at all, and the
+    exact DB shape that used to produce the string no longer produces it.
+
+    Not vacuous: on the pre-fix code this same DB returns _OLD_WARN verbatim.
+    Demonstrated by planting -- see docs/audit/capital_snapshot_redirect_25jul2026.md.
+    """
+    import inspect
+    assert "FROM capital_snapshot" not in inspect.getsource(engine)
+
     db = tmp_path / "trading_system.db"
     conn = sqlite3.connect(str(db))
-    conn.execute("CREATE TABLE capital_snapshot (id INTEGER PRIMARY KEY, cash_floor REAL, margin_used REAL)")
+    conn.execute("CREATE TABLE capital_snapshot (id INTEGER PRIMARY KEY, cash_floor REAL, "
+                 "margin_used REAL)")
     conn.commit()
     conn.close()
-    assert engine.FundManagerBalanceCheck().run(_ctx(tmp_path, db)).status is Status.WARN
+    res = engine.FundManagerBalanceCheck().run(_ctx(tmp_path, db))
+    assert res.detail != _OLD_WARN
+
+
+# ── capital_deployment (NEW, alert-only) ────────────────────────────────
+def test_capital_deployment_is_alert_only_never_critical():
+    """Ruling 3: the deployment % is its OWN check and can never escalate a run to
+    CRITICAL. FundManagerBalanceCheck keeps exactly one meaning."""
+    assert engine.CapitalDeploymentCheck.criticality is Criticality.WARN
+    assert engine.FundManagerBalanceCheck.criticality is Criticality.CRITICAL
+    names = [c.name for c in engine.CHECKS]
+    assert "capital_deployment" in names and "fund_manager_balance" in names
+
+
+def test_capital_deployment_emits_a_real_nonzero_pct(tmp_path):
+    """B8: a flat book proves nothing -- assert against KNOWN open positions.
+    2 open x 1500 margin against a 10000 opening = 30%."""
+    db = _db_live_capital(tmp_path, opening=10000.0,
+                          open_margin=(1500.0, 1500.0), pending_margin=(500.0,))
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.PASS
+    assert res.metrics["capital_deployed_pct"] == 30.0
+    assert res.metrics["margin_used"] == 3000.0
+    assert res.metrics["margin_reserved"] == 500.0    # PENDING_FILL stays separate
+    assert res.metrics["total_capital"] == 10000.0
+
+
+def test_capital_deployment_div0_states_a_reason_never_a_silent_zero(tmp_path):
+    """B3: the div-0 guard must say WHY. A silent 0.0 reads as "nothing deployed"
+    when the truth is "we could not tell"."""
+    db = _db_live_capital(tmp_path, opening=None, open_margin=(1500.0,))
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.WARN
+    assert "unavailable" in res.detail and "no INIT ledger row" in res.detail
+    assert "capital_deployed_pct" not in res.metrics     # absent, not a fake 0.0
+
+    zero = _db_live_capital(tmp_path / "z", opening=0.0, open_margin=(1500.0,))
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path / "z", zero))
+    assert res.status is Status.WARN and "non-positive" in res.detail
+    assert "capital_deployed_pct" not in res.metrics
+
+
+def test_capital_deployment_degrades_and_never_raises(tmp_path):
+    """B5 for the new check too."""
+    db = _db_live_capital(tmp_path, with_tables=False)
+    res = engine.CapitalDeploymentCheck().run(_ctx(tmp_path, db))
+    assert res.status is Status.WARN and "unreadable" in res.detail
 
 
 # ── ntp strict (Phase B escalation) ──────────────────────────────────────────────

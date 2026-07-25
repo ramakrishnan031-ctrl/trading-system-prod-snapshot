@@ -23,9 +23,21 @@ def _log():
 
 
 class _MockStore:
-    """Mock that returns sensible values for all metrics queries."""
+    """Mock that returns sensible values for all metrics queries.
+
+    25-Jul-2026: the capital block no longer reads capital_snapshot. That table
+    has 0 rows in production, so this double's `capital_snapshot` branch was the
+    ONLY reason capital_deployed_pct ever had a value anywhere -- the metric was
+    asserted here at 25% while production emitted nothing at all. The double now
+    answers the two live queries instead, with the same underlying numbers
+    (25,000 deployed against 100,000 of capital) so the 25% expectation still
+    means what it always meant.
+    """
     def __init__(self, raise_on_query=False):
         self._raise = raise_on_query
+
+    def get_day_opening_capital(self, date_iso):
+        return 100000.0
 
     def fetch_one(self, sql, params=()):
         if self._raise:
@@ -47,8 +59,9 @@ class _MockStore:
             return _Row({"cnt": 10})
         if "SUM(net_pnl)" in sql:
             return _Row({"pnl": 1500.0})
-        if "capital_snapshot" in sql:
-            return _Row({"margin_used": 25000.0, "cash_floor": 100000.0})
+        # margin deployed on open positions (replaces the capital_snapshot read)
+        if "SUM(margin_reserved)" in sql:
+            return _Row({"m": 25000.0})
         if "kill_switch_state" in sql:
             return _Row({"value": "INACTIVE"})
         if "received_at FROM signals" in sql:

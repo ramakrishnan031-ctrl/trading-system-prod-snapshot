@@ -51,7 +51,7 @@ def test_capacity_counters(gui_config, today):
     assert db_reader.consecutive_loss_streak(gui_config) == 3
     assert db_reader.opening_capital(gui_config, today) == 100000.0
     assert db_reader.realized_loss_today(gui_config, today) == 450.0
-    assert db_reader.capital_usage(gui_config)["margin_used"] == 42000.0
+    assert db_reader.capital_usage(gui_config, today)["margin_used"] == 20000.0
 
 
 def test_strategy_stats(gui_config, today):

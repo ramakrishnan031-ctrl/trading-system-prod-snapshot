@@ -26,7 +26,7 @@ def build_summary(cfg: dict, today: Optional[str] = None, now=None,
     ks = db_reader.get_kill_switch(cfg)
     th = trader_health if trader_health is not None else metrics_client.get_trader_health(cfg)
     funnel = db_reader.webhook_funnel(cfg, today)
-    cap = db_reader.capital_usage(cfg)
+    cap = db_reader.capital_usage(cfg, today)
 
     opening = db_reader.opening_capital(cfg, today)
 

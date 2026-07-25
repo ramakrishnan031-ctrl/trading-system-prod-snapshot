@@ -126,7 +126,7 @@ def build_capacity(cfg: dict, today: Optional[str] = None, now=None,
     force_intraday = bool(sc.get("force_intraday_only", True))
 
     opening = db_reader.opening_capital(cfg, today)
-    cap_usage = db_reader.capital_usage(cfg)
+    cap_usage = db_reader.capital_usage(cfg, today)
     exposure = db_reader.exposure_extremes(cfg)
 
     # ── G2a primary rows #1-#8 (Dashboard widget contract preserved) ──

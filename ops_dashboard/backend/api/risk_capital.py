@@ -68,7 +68,7 @@ def get_capital():
     sc = config_reader.get_system_config(cfg, today)
     cap_cfg = (sc.get("capital") or {}) if isinstance(sc, dict) else {}
     opening = db_reader.opening_capital(cfg, today)
-    usage = db_reader.capital_usage(cfg)
+    usage = db_reader.capital_usage(cfg, today)
     intraday_pct = cap_cfg.get("intraday_bucket_pct")
     positional_pct = cap_cfg.get("positional_bucket_pct")
     allocated = round(float(intraday_pct) * opening, 2) if (intraday_pct and opening) else None
@@ -94,7 +94,7 @@ def get_capital():
 def get_exposure():
     cfg, today = _ctx()
     opening = db_reader.opening_capital(cfg, today)
-    usage = db_reader.capital_usage(cfg)
+    usage = db_reader.capital_usage(cfg, today)
     data = db_reader.exposure_breakdown(cfg, top_n=10)
     data.update({
         "today": today,

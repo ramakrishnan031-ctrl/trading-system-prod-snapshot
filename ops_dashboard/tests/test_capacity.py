@@ -35,9 +35,12 @@ def test_daily_loss(gui_config, today):
 
 def test_intraday_capital(gui_config, today):
     r = _rows(gui_config, today)[0]["intraday_capital"]
-    assert r["used"] == 42000.0 and r["limit"] == 70000.0   # 0.70 * 100000
-    assert r["pct"] == 60.0 and r["status"] == "OK"
-    assert r["pending"] == 3000.0
+    # 25-Jul-2026: used/pending now derive from the fixture's own trades
+    # (4 OPEN x 5000 margin_reserved = 20000; no PENDING_FILL rows), not from
+    # the capital_snapshot row, which claimed 42000/3000 that no trade supported.
+    assert r["used"] == 20000.0 and r["limit"] == 70000.0   # 0.70 * 100000
+    assert r["pct"] == 28.6 and r["status"] == "OK"
+    assert r["pending"] == 0.0
 
 
 def test_consecutive_losses(gui_config, today):
