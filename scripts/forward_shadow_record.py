@@ -160,7 +160,26 @@ def main(argv=None) -> int:
         rows = [r for r in rows if r["signal_id"] not in seen]
         log.info("forward_shadow.start date=%s new=%d already=%d dry_run=%s", date_iso, len(rows), len(seen), args.dry_run)
         if not rows:
-            print(f"forward_shadow: date={date_iso} nothing new ({len(seen)} present)"); return 0
+            print(f"forward_shadow: date={date_iso} nothing new ({len(seen)} present)")
+            # C2 (25-Jul-2026): this exit used to write NOTHING, so "no signals today"
+            # and "the recorder is dead" were indistinguishable to every monitor. The
+            # forward shadow is the OOS evidence path and it only grows forward — a
+            # silent stop cannot be backfilled, so the absence of a heartbeat had to
+            # stop being ambiguous.
+            #
+            # EXECUTION status stays SUCCESS (the job ran and did its job correctly);
+            # the FUNCTIONAL status says the day was legitimately empty. Same split
+            # generate_screened_stocks_csv already uses for its header-only days.
+            #
+            # ⇒ AFTER THIS, A MISSING forward_shadow_record HEARTBEAT MEANS DEAD.
+            try:
+                from utils.cron_heartbeat import record_heartbeat
+                record_heartbeat(JOB_NAME, status="SUCCESS",
+                                 functional_status="EMPTY_NO_DATA",
+                                 message=f"date={date_iso} nothing new ({len(seen)} present)")
+            except Exception:   # a clean empty day must never become a failure
+                pass
+            return 0
 
         kite, inst_map, sector_map, hist = (None, {}, {}, None) if args.dry_run else _build_kite(log)
         now = now_ist().replace(tzinfo=None)

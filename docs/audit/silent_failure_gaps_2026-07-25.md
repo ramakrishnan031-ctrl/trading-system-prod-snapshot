@@ -211,3 +211,11 @@ and `status="FAILED"` + `functional_status="DISABLED"` on the `_eod_capture is N
 
 **Not instrumented (deliberate, unchanged scope):** the malformed-payload 400s earlier in `_handle_eod`. Those answer non-200 to the sender; they are not the silent case.
 
+## C2 — forward-shadow empty-day heartbeat. **SHIPPED.**
+
+`scripts/forward_shadow_record.py` — the `if not rows:` exit now records `SUCCESS` + `functional_status="EMPTY_NO_DATA"` carrying the date and the already-present count, wrapped in `try/except` so a heartbeat failure can never turn a clean empty day into a failure.
+
+⭐ **THIS CHANGES HOW A FUTURE ABSENCE MUST BE READ.** All four exits of the recorder now emit a signal (normal write → `SUCCESS`; empty day → `SUCCESS`+`EMPTY_NO_DATA`; crash → CRITICAL sentinel; `--dry-run` → deliberately nothing, and it is never the cron path). **Therefore, from 25-Jul-2026, a MISSING `forward_shadow_record` heartbeat on a trading day means the recorder is DEAD — it no longer means "a quiet day".** That is the whole value of the fix: the forward shadow is the OOS evidence path, it only grows forward, and a silent stop cannot be backfilled.
+
+⛔ **The recorder was never run to test this.** `tests/unit/test_forward_shadow_empty_day.py` stubs `core.state_store.StateStore`, `OUT_PATH` and `record_heartbeat` before calling `main()` — the module imports `StateStore` *inside* `main()`, which is what makes the module-level stub intercept it. One test asserts the real JSONL's mtime is unchanged **and** that the only path the recorder could write to was inside the tmp sandbox; the mtime half degrades to `None == None` on a box where the real dataset does not exist, so it cannot carry that claim alone.
+
