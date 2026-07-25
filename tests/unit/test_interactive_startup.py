@@ -85,14 +85,75 @@ def test_weekend_exit_returns_0():
     assert result == 0
 
 
+def _at_ist(hour: int, minute: int = 0):
+    """Pin main()'s service-window clock to a chosen IST time-of-day.
+
+    25-Jul-2026: main() calls `time_authority.now_ist()` at :1779 and refuses to
+    start outside [08:00, 18:15) (SERVICE_START_CUTOFF, widened 25-Jul 570b3e8).
+    Any test that reaches PAST the holiday guard therefore depended on the WALL
+    CLOCK of the machine running it: `test_holiday_guard_missing_yaml_proceeds`
+    passed before 18:15 and failed after, on identical code (measured: 32F at
+    17:35, 34F at 18:20). That makes every BASE-vs-MERGE gate ambiguous in the
+    evening -- and that gate is the thing catching real defects.
+
+    We pin the CLOCK rather than stubbing `_within_service_window`, so the real
+    guard still executes and is still under test; only the hour is made
+    deterministic.
+    """
+    from core.time_authority import now_ist
+    fixed = now_ist().replace(hour=hour, minute=minute, second=0, microsecond=0)
+    return patch.object(_main_module.time_authority, "now_ist", return_value=fixed)
+
+
 def test_holiday_guard_missing_yaml_proceeds():
-    """FileNotFoundError from is_trading_day is swallowed; startup continues (SU6)."""
-    with patch.object(_main_module, "is_trading_day", side_effect=FileNotFoundError("missing")), \
+    """FileNotFoundError from is_trading_day is swallowed; startup continues (SU6).
+
+    Runs at a pinned 10:00 IST so it asserts what it means to assert, at any hour.
+    """
+    with _at_ist(10, 0), \
+         patch.object(_main_module, "is_trading_day", side_effect=FileNotFoundError("missing")), \
          patch.object(_main_module, "setup_logging"), \
          patch.object(_main_module, "load_all", side_effect=Exception("stop here")):
         result = _main_module.main(["--mode", "paper"])
     # Should have proceeded past holiday guard (hitting config load error = exit 5)
     assert result == 5
+
+
+def test_service_window_guard_refuses_to_start_after_the_cutoff():
+    """ANTI-VACUITY companion: identical setup, only the hour differs.
+
+    At 19:00 IST main() must stop at the service-window guard and return 0 WITHOUT
+    reaching load_all. This proves the clock pin in the test above is load-bearing
+    (not decoration), and pins the guard itself so a future widening cannot silently
+    disable the 18:15 START cutoff.
+    """
+    load_all_spy = MagicMock(side_effect=Exception("must not be reached"))
+    with _at_ist(19, 0), \
+         patch.object(_main_module, "is_trading_day", side_effect=FileNotFoundError("missing")), \
+         patch.object(_main_module, "setup_logging"), \
+         patch.object(_main_module, "load_all", load_all_spy):
+        result = _main_module.main(["--mode", "paper"])
+    assert result == 0, "post-cutoff start must be a clean exit 0"
+    load_all_spy.assert_not_called()
+
+
+def test_holiday_and_weekend_guards_run_before_the_window_guard():
+    """The other two SU6 tests are NOT hour-exposed, and this records WHY.
+
+    is_trading_day is evaluated at main.py:1720 and returns 0 there; the service
+    window guard is at :1780. So a holiday/weekend exit never reaches the window
+    check -- verified here at 19:00 IST, past the cutoff, where load_all must not
+    be reached and the result is still the holiday-path 0.
+    """
+    load_all_spy = MagicMock(side_effect=Exception("must not be reached"))
+    with _at_ist(19, 0), \
+         patch.object(_main_module, "is_trading_day", return_value=False), \
+         patch.object(_main_module, "next_trading_day", return_value=date(2026, 4, 20)), \
+         patch.object(_main_module, "setup_logging"), \
+         patch.object(_main_module, "load_all", load_all_spy):
+        result = _main_module.main(["--mode", "paper"])
+    assert result == 0
+    load_all_spy.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
