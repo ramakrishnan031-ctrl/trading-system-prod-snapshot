@@ -385,16 +385,32 @@ class BreakevenManager:
                 )
 
     def _get_sl_broker_order_id(self, trade_id: str) -> Optional[str]:
-        """BM9: Look up active SL order's broker_order_id from state_store."""
+        """BM9: Look up the active SL order's broker order id from state_store.
+
+        E2 (25-Jul-2026): this selected `broker_order_id`, which `orders` does not
+        have — the broker-assigned id IS the primary key `order_id`
+        (core/schema.sql:303). The bad SELECT raised OperationalError, the except
+        below swallowed it into a db_lookup_error log, and the method returned
+        None, so the breakeven SL advance could never fire. LATENT: main.py never
+        constructs a BreakevenManager, so order_placer's reference is always None
+        and register_trade() is never called — this changes nothing at runtime.
+
+        The status set is left EXACTLY as it was. structure_exit_manager.py:74
+        derives its `_SL_LIVE_EXCLUDE` from this call site by reference ("mirror
+        the existing call sites verbatim"), so widening it here would silently
+        desync that module; and `state_store.get_sl_order_for_trade` additionally
+        excludes EXPIRED and orders by placed_at. Those divergences are pinned by
+        test, not adopted. Column only.
+        """
         try:
             row = self._store.fetch_one(
-                """SELECT broker_order_id FROM orders
+                """SELECT order_id FROM orders
                    WHERE trade_id = ? AND leg = 'SL'
                      AND status NOT IN ('CANCELLED', 'COMPLETE', 'REJECTED', 'FAILED')
                    LIMIT 1""",
                 (trade_id,),
             )
-            return row["broker_order_id"] if row else None
+            return row["order_id"] if row else None
         except Exception as exc:
             self._log.error(
                 "breakeven_manager.db_lookup_error",

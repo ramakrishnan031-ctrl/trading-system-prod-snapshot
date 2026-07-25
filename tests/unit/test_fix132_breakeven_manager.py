@@ -64,10 +64,22 @@ class _MockStore:
         self._sl_id = sl_broker_order_id
 
     def fetch_one(self, sql, params):
+        # E2 (25-Jul-2026): this used to answer on the key "broker_order_id" —
+        # a column the real `orders` table does not have. The fixture therefore
+        # vouched for a SELECT that raises OperationalError in production, and
+        # kept this suite green across four fix cycles while the lookup could
+        # never work. Keyed on the real column now, and it raises on anything
+        # else so the next wrong column cannot hide here either.
+        # Real-schema coverage: tests/unit/test_e2_breakeven_sl_column.py.
         if "leg = 'SL'" in sql:
             class _Row:
                 def __getitem__(self, key):
-                    return "KITE_SL_001" if key == "broker_order_id" else None
+                    if key == "order_id":
+                        return "KITE_SL_001"
+                    raise KeyError(
+                        f"no such column in `orders`: {key!r} "
+                        "(see core/schema.sql; the broker id is order_id)"
+                    )
             return _Row()
         return None
 
