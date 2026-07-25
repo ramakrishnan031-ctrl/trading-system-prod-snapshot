@@ -75,7 +75,7 @@ def get_capital():
     used = round(usage["margin_used"], 2)
     return jsonify({
         "today": today,
-        "opening_capital": round(opening, 2) if opening else None,   # today's INIT rows
+        "opening_capital": round(opening, 2) if opening else None,   # today's FIRST INIT row
         "buckets": {
             "intraday_pct": intraday_pct, "positional_pct": positional_pct,
             "intraday_allocated": allocated,

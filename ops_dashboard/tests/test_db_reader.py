@@ -1,6 +1,8 @@
 """db_reader queries against the seeded v41/v42 fixtures (runs on both)."""
 from __future__ import annotations
 
+import sqlite3
+
 from backend.readers import db_reader
 
 
@@ -67,3 +69,64 @@ def test_events(gui_config):
     assert len(ev) == 3
     assert ev[0]["event_type"] == "CONFIG_DIFF"   # newest first
     assert {"timestamp", "event_type", "scenario", "details"} <= set(ev[0])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 25-Jul-2026 — opening_capital is the day's FIRST INIT row, never the SUM.
+#
+# RED BEFORE THE FIX: db_reader.opening_capital ran
+#     SELECT SUM(balance_after) FROM fm_ledger WHERE date=? AND entry_type='INIT'
+# INIT is NOT unique per day. FundManager.initialize() writes one INIT row per
+# PROCESS START -- its H-4 double-init guard is an in-memory per-process flag
+# (capital/fund_manager.py:408-448) -- so a mid-day restart adds a second INIT
+# row for the same date and the SUM doubled.
+#
+# MEASURED on production: 10 of 30 INIT dates carry more than one row; every one
+# of the 58 INIT rows has bucket='both' and the FULL balance, so a multi-INIT day
+# is always a restart duplicate and never a bucket split. On 2026-07-21 (the
+# forced 11:57 restart) this returned 19,716.03 against a true opening of
+# 9,857.30, so every percentage resolved against it read half its real value.
+#
+# The rule now matches state_store.get_day_opening_capital() -- ORDER BY ts ASC
+# LIMIT 1 -- so the system has one definition of "the day's opening capital".
+# ─────────────────────────────────────────────────────────────────────────────
+
+_INIT_SQL = ("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after) "
+             "VALUES(?,?,?,?,?,?)")
+
+
+def _add_init(gui_config, ts: str, balance: float) -> None:
+    """Append a production-shaped INIT row (bucket='both', full balance)."""
+    conn = sqlite3.connect(gui_config["paths"]["main_db"])
+    conn.execute(_INIT_SQL, (ts, "INIT", balance, "both", 0.0, balance))
+    conn.commit()
+    conn.close()
+
+
+def test_opening_capital_ignores_a_restart_reseed(gui_config, today):
+    """A mid-day restart adds a second INIT row. The opening capital is still the
+    08:15 seed -- the SUM would have returned 200500.0 here."""
+    _add_init(gui_config, f"{today}T11:57:41.742251+05:30", 100500.0)
+    assert db_reader.opening_capital(gui_config, today) == 100000.0
+
+
+def test_opening_capital_reproduces_the_measured_21jul_production_shape(gui_config):
+    """The real defect, with the real numbers, on a date nothing else queries."""
+    d = "2026-07-21"
+    _add_init(gui_config, f"{d}T08:15:26.589351+05:30", 9857.30)
+    _add_init(gui_config, f"{d}T11:57:41.742251+05:30", 9858.73)
+    assert db_reader.opening_capital(gui_config, d) == 9857.30      # NOT 19716.03
+
+
+def test_opening_capital_orders_by_timestamp_not_insertion_order(gui_config):
+    """Pins the ORDER BY. The later-timestamped row is inserted FIRST, so it wins
+    on rowid; only an ORDER BY ts can pick the 08:15 seed."""
+    d = "2026-07-20"
+    _add_init(gui_config, f"{d}T13:59:36.260932+05:30", 5555.55)   # inserted first
+    _add_init(gui_config, f"{d}T08:15:21.936187+05:30", 9826.50)   # earlier ts
+    assert db_reader.opening_capital(gui_config, d) == 9826.50
+
+
+def test_opening_capital_unchanged_on_a_normal_single_init_day(gui_config, today):
+    """Regression guard: the ordinary no-restart day must not move."""
+    assert db_reader.opening_capital(gui_config, today) == 100000.0

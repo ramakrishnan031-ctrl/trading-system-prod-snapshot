@@ -359,10 +359,21 @@ def _seed(conn: sqlite3.Connection, schema_version: int) -> None:
     _mkclosed("trd_m1", TENDAYS, "TGT_HIT", 50.0)
 
     # ── fm_ledger: INIT total=100000; realized losses 450 + one win 200 ──
+    # 25-Jul-2026: this used to seed TWO INIT rows split by bucket (intraday
+    # 70000 + positional 30000) so that SUM(balance_after) == 100000. Production
+    # has never looked like that: FundManager.initialize() writes exactly ONE
+    # INIT row per process start, with bucket='both' and balance_after = the FULL
+    # broker balance (capital/fund_manager.py:431-439). Verified against all 58
+    # production INIT rows -- bucket='both' on every one, and multi-INIT days are
+    # restart duplicates, never bucket splits.
+    #
+    # The bucket-split fixture is what let db_reader.opening_capital's
+    # SUM(balance_after) look correct while it silently doubled on any real
+    # restart day. Bucket allocations are derived as pct x opening_capital in
+    # risk_capital.get_capital(), never from this column, so modelling
+    # production here changes no other expectation.
     c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after) "
-              "VALUES(?,?,?,?,?,?)", (_ts("08:15:01"), "INIT", 70000.0, "intraday", 0.0, 70000.0))
-    c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after) "
-              "VALUES(?,?,?,?,?,?)", (_ts("08:15:02"), "INIT", 30000.0, "positional", 0.0, 30000.0))
+              "VALUES(?,?,?,?,?,?)", (_ts("08:15:01"), "INIT", 100000.0, "both", 0.0, 100000.0))
     for i, loss in enumerate((-100.0, -50.0, -75.0, -225.0)):  # sum = -450
         c.execute("INSERT INTO fm_ledger(ts,entry_type,amount,bucket,balance_before,balance_after,"
                   "pnl_delta,costs) VALUES(?,?,?,?,?,?,?,?)",

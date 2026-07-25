@@ -30,7 +30,9 @@ def test_capital_api(client):
     assert d["used"] == 42000.0 and d["pending"] == 3000.0
     assert d["remaining"] == 28000.0 and d["deployed_pct"] == 42.0
     ledger = d["ledger"]
-    assert len(ledger) == 7                        # 2 INIT + 5 RELEASE_USED
+    assert len(ledger) == 6                        # 1 INIT + 5 RELEASE_USED
+    # 25-Jul-2026: was 7 ("2 INIT") -- the fixture seeded a bucket-split pair that
+    # production has never written. One INIT row per process start, bucket='both'.
     assert ledger[0]["ledger_id"] > ledger[-1]["ledger_id"]   # newest first
     assert {"entry_type", "pnl_delta", "balance_after"} <= set(ledger[0])
 

@@ -305,7 +305,23 @@ def realized_loss_today(cfg: dict, today: str) -> float:
 
 
 def opening_capital(cfg: dict, today: str) -> Optional[float]:
-    """Day-opening TOTAL capital, summed across today's INIT ledger rows.
+    """Day-opening TOTAL capital: the day's FIRST INIT ledger row, by timestamp.
+
+    ⚠️ 25-Jul-2026: this was SUM(balance_after) over today's INIT rows, which
+    DOUBLED on any day the app restarted. INIT is not unique per day —
+    FundManager.initialize() writes one INIT row per PROCESS START (its H-4
+    double-init guard is an in-memory per-process flag, capital/fund_manager.py
+    :408-448), each with bucket='both' and the FULL broker balance. MEASURED: 10
+    of 30 production INIT dates carry more than one row; on 2026-07-21 (the
+    forced 11:57 restart) this returned 19,716.03 against a true opening of
+    9,857.30, so every percentage resolved against it read half its real value.
+
+    ORDER BY ts is safe: fm_ledger.ts is a uniform ISO-8601 IST string (single
+    +05:30 offset, fixed width), so the TEXT sort is chronological — verified
+    across all 58 production INIT rows, with zero days where the string sort
+    differed from a datetime sort. Same rule as
+    state_store.get_day_opening_capital(), so there is ONE definition of the
+    day's opening capital rather than two that disagree on restart days.
 
     Percentage limits (daily-loss, intraday-bucket) resolve against total capital.
     Fallback: capital_snapshot (cash_floor + margin_used + margin_reserved).
@@ -314,8 +330,8 @@ def opening_capital(cfg: dict, today: str) -> Optional[float]:
     with _ro(cfg) as conn:
         val = _scalar(
             conn,
-            "SELECT SUM(balance_after) FROM fm_ledger "
-            "WHERE date=? AND entry_type='INIT'",
+            "SELECT balance_after FROM fm_ledger "
+            "WHERE date=? AND entry_type='INIT' ORDER BY ts ASC LIMIT 1",
             (today,),
         )
         if val is not None and float(val) > 0:
