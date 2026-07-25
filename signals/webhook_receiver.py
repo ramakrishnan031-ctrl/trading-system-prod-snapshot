@@ -261,6 +261,68 @@ class WebhookReceiver:
             return {}
 
     # ------------------------------------------------------------------
+    # Auth (C6, 2026-07-25): ONE decision, one call site per route
+    # ------------------------------------------------------------------
+
+    def _authenticate(self, hmac_payload: bytes) -> tuple[bool, str]:
+        """The single auth decision every route makes.
+
+        Returns (True, "") when the request authenticates, else (False, reason).
+
+        WR8 accepted methods:
+          1. X-Webhook-Signature: sha256=<hex>  -- HMAC over `hmac_payload`
+          2. ?token=<secret>                    -- query-param bearer
+             (Chartink-compatible; ONLY accepted when require_hmac=False)
+        G.1 (2026-04-25): when require_hmac=True the token-param path is
+        disabled. Tokens in URL are logged by nginx and weaker than HMAC
+        over the body; allowing token fallback in a "strict HMAC" deploy
+        contradicts the config's stated security posture.
+
+        C6 collapsed two spellings of THIS decision into one place: /webhook
+        returned early from each branch, /health accumulated an `ok` boolean and
+        issued a single 401. Same three-way decision, written twice, patched
+        separately (G.1 on /webhook 2026-04-25, the /health parity fix later).
+        Two things stay per-route ON PURPOSE and must not be flattened:
+
+        * `hmac_payload` -- what the signature is computed over. The raw body on
+          POST /webhook; b"" on GET /health, because a GET carries no body. A
+          valid /health signature is therefore a CONSTANT for a given secret and
+          indefinitely replayable; /webhook's is body-bound and is not.
+        * `reason` -- /webhook's granular message. /health DISCARDS it and
+          answers with a uniform string: naming the reason there would tell an
+          anonymous caller whether require_hmac is on. See both callers.
+        """
+        # No secret configured -> no auth surface to enforce; preserve old behaviour
+        # rather than hard-fail a deployment that never had a secret. Unreachable in
+        # production (WEBHOOK_SECRET is a required startup secret -- main.py:226 /
+        # run_all_startup_checks), so this is a test-only path, not dead code.
+        if not self._secret:
+            return True, ""
+
+        sig_header: str = request.headers.get("X-Webhook-Signature", "")
+        token_param: str = request.args.get("token", "")
+
+        if sig_header.startswith("sha256="):
+            expected_hex = _hmac.new(
+                self._secret.encode(), hmac_payload, hashlib.sha256
+            ).hexdigest()
+            if not _hmac.compare_digest(sig_header[7:], expected_hex):
+                return False, "HMAC signature mismatch"
+            return True, ""
+        if self._require_hmac:
+            # G.1: HMAC required, no signature header -> reject. Do not consult
+            # token_param; deployments that flip require_hmac=True have
+            # explicitly opted out of the legacy token fallback. A bad signature
+            # is NOT rescued by a valid token either -- that is the branch above.
+            return False, ("HMAC signature required (require_hmac=True); "
+                           "token param is not accepted")
+        if token_param:
+            if not _hmac.compare_digest(token_param, self._secret):
+                return False, "Invalid token"
+            return True, ""
+        return False, "Missing auth: provide X-Webhook-Signature header or ?token= param"
+
+    # ------------------------------------------------------------------
     # Route registration
     # ------------------------------------------------------------------
 
@@ -286,35 +348,18 @@ class WebhookReceiver:
             if receiver._ip_limiter is not None and not receiver._ip_limiter.allow(source_ip):
                 return jsonify({"error": "rate limit exceeded"}), 429
 
-            # No secret configured -> no auth surface to enforce; preserve old behaviour
-            # rather than hard-fail a deployment that never had a secret.
-            if receiver._secret:
-                sig_header: str = request.headers.get("X-Webhook-Signature", "")
-                token_param: str = request.args.get("token", "")
-                ok = False
-                if sig_header.startswith("sha256="):
-                    expected_hex = _hmac.new(
-                        receiver._secret.encode(), b"", hashlib.sha256
-                    ).hexdigest()
-                    ok = _hmac.compare_digest(sig_header[7:], expected_hex)
-                elif receiver._require_hmac:
-                    # G.1 parity with /webhook (see _handle_webhook): when
-                    # require_hmac=True the token-param fallback is disabled, so a
-                    # token-only request must NOT authenticate here either. Without
-                    # this, a deploy that flipped require_hmac kept the URL-token
-                    # surface open on /health — the more exposed of the two routes,
-                    # and the one that hands back kill_switch_active + queue depth.
-                    # Falls through to the shared 401 below (ok stays False); the
-                    # message stays uniform on purpose — /webhook names the reason,
-                    # but here that would tell an anonymous caller require_hmac is
-                    # on, which is exactly the kind of leak this route must not have.
-                    ok = False
-                elif token_param:
-                    ok = _hmac.compare_digest(token_param, receiver._secret)
-                if not ok:
-                    # Deliberately says nothing about system state — including in the
-                    # failure path, which is where oracles usually leak.
-                    return jsonify({"error": "authentication required"}), 401
+            # C6 (2026-07-25): the SAME decision /webhook makes, one call site.
+            # /health signs an EMPTY body because a GET carries none. G.1 parity
+            # (require_hmac disables the token fallback here too) now comes for
+            # free from the shared helper instead of being re-spelled as an `ok`
+            # boolean — that re-spelling is what C6 removed.
+            authed, _reason = receiver._authenticate(b"")
+            if not authed:
+                # Deliberately says nothing about system state — including in the
+                # failure path, which is where oracles usually leak. `_reason` (the
+                # granular /webhook message) is DISCARDED on purpose: naming it here
+                # would tell an anonymous caller whether require_hmac is on.
+                return jsonify({"error": "authentication required"}), 401
 
             ks_active = bool(receiver._ks.is_active()) if receiver._ks else False
             q_size = receiver._queue.qsize()
@@ -460,38 +505,17 @@ class WebhookReceiver:
     def _process_request(self, scanner_name: str, raw_body: bytes):
         sq_cfg = self._config.system.signal_queue
 
-        # WR8: auth validation (when secret configured)
-        # Accepted methods:
-        #   1. X-Webhook-Signature: sha256=<hex>  — HMAC over raw body
-        #   2. ?token=<secret>                    — query-param bearer
-        #      (Chartink-compatible; ONLY accepted when require_hmac=False)
-        # G.1 (2026-04-25): when require_hmac=True the token-param path is
-        # disabled. Tokens in URL are logged by nginx and weaker than HMAC
-        # over the body; allowing token fallback in a "strict HMAC" deploy
-        # contradicts the config's stated security posture.
-        if self._secret:
-            sig_header: str = request.headers.get("X-Webhook-Signature", "")
-            token_param: str = request.args.get("token", "")
-            if sig_header.startswith("sha256="):
-                provided_hex = sig_header[7:]
-                expected_hex = _hmac.new(
-                    self._secret.encode(), raw_body, hashlib.sha256
-                ).hexdigest()
-                if not _hmac.compare_digest(provided_hex, expected_hex):
-                    return jsonify({"error": "HMAC signature mismatch"}), 401
-            elif self._require_hmac:
-                # G.1: HMAC required, no signature header -> reject. Do not
-                # consult token_param; deployments that flip require_hmac=True
-                # have explicitly opted out of the legacy token fallback.
-                return jsonify({
-                    "error": "HMAC signature required (require_hmac=True); "
-                             "token param is not accepted"
-                }), 401
-            elif token_param:
-                if not _hmac.compare_digest(token_param, self._secret):
-                    return jsonify({"error": "Invalid token"}), 401
-            else:
-                return jsonify({"error": "Missing auth: provide X-Webhook-Signature header or ?token= param"}), 401
+        # WR8: auth validation (when secret configured). C6 (2026-07-25): the
+        # three-way decision (HMAC → require_hmac → token) moved verbatim into
+        # _authenticate() and is now shared with /health. Unchanged here: the
+        # payload the signature covers (the raw body) and the granular failure
+        # message /webhook has always returned. Position in the gate order is
+        # unchanged too — shutting-down and the per-IP limiter still run first
+        # (in _handle_webhook), and the unknown-scanner 404 and the EOD route
+        # still run AFTER this, so neither can be reached unauthenticated.
+        authed, auth_error = self._authenticate(raw_body)
+        if not authed:
+            return jsonify({"error": auth_error}), 401
 
         # WR4: scanner_name must be in scan_webhook_map
         known_scanners: dict[str, Any] = self._config.scan_webhook_map.scanners
