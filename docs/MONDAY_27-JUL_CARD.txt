@@ -45,6 +45,26 @@ AFTER 17:00 — TWO CHECKS. DIFFERENT FACTS. BOTH NEEDED.
 [ ] 7 ~17:40  grep eod_self_exit $L
       EXPECT  past 17:35 IST and flat ... clean shutdown   (Friday said 16:00)
 
+IF YOU EVER NEED TO HALT — READ THIS BEFORE THE MOMENT, NOT DURING IT
+------------------------------------------------------------------------------
+⛔⛔ `halt.sh` DOES NOT EXIST. It was a hypothetical in an F2 report and was never
+   built. VERIFIED: not in the repo (nor in its history), not on the VM, not on
+   PATH. If you reach for it in an incident it will fail.
+   (`deploy/resume.sh` DOES exist, with no counterpart — that asymmetry is
+   exactly what makes the wrong assumption easy.)
+
+*** THE ONLY HALT THAT WORKS TODAY: ***
+      ssh trading-vm sudo systemctl stop trading-system
+
+⚠️ AND KNOW WHAT IT COSTS: it stops EVERYTHING — entries AND exit management.
+   There is NO way today to block new entries while still managing open
+   positions. If you stop the service holding an open position, that position is
+   left to its BROKER-SIDE SL/TGT with no system monitoring.
+   That is survivable — those are real resting orders at the broker, not
+   system-simulated ones — but it is a real reduction in cover, and you should
+   know it now rather than discover it then.
+   To resume: deploy/resume.sh (clears a kill), then start the service.
+
 TUESDAY 08:15 — THREE NON-EVENTS
 ------------------------------------------------------------------------------
 · CRITICAL sentinel  -> most likely the reconciler having run 95 min longer than
