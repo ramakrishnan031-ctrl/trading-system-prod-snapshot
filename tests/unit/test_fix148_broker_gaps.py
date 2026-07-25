@@ -637,7 +637,9 @@ class TestGap2BreakevenRetry:
             Mock(success=True),
         ])
         store = Mock()
-        store.fetch_one = Mock(return_value={"broker_order_id": "SL001"})
+        # E2 (25-Jul-2026): keyed on "broker_order_id" until now — a column the
+        # real `orders` table does not have. See test_e2_breakeven_sl_column.py.
+        store.fetch_one = Mock(return_value={"order_id": "SL001"})
 
         mgr = BreakevenManager(
             adapter=adapter, state_store=store, logger=MagicMock(),
@@ -662,7 +664,9 @@ class TestGap2BreakevenRetry:
         adapter = Mock()
         adapter.modify_order = Mock(return_value=Mock(success=False, reason="broker error"))
         store = Mock()
-        store.fetch_one = Mock(return_value={"broker_order_id": "SL001"})
+        # E2 (25-Jul-2026): keyed on "broker_order_id" until now — a column the
+        # real `orders` table does not have. See test_e2_breakeven_sl_column.py.
+        store.fetch_one = Mock(return_value={"order_id": "SL001"})
         notifier = _FakeNotifier()
 
         mgr = BreakevenManager(
@@ -693,7 +697,9 @@ class TestGap2BreakevenRetry:
         adapter = Mock()
         adapter.modify_order = Mock(return_value=Mock(success=True))
         store = Mock()
-        store.fetch_one = Mock(return_value={"broker_order_id": "SL001"})
+        # E2 (25-Jul-2026): keyed on "broker_order_id" until now — a column the
+        # real `orders` table does not have. See test_e2_breakeven_sl_column.py.
+        store.fetch_one = Mock(return_value={"order_id": "SL001"})
 
         mgr = BreakevenManager(
             adapter=adapter, state_store=store, logger=MagicMock(),
