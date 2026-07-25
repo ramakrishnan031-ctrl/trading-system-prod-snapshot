@@ -327,7 +327,18 @@ tgt_retry:                    # Task (2026-06-19): standalone TGT retry — re-p
   backoff_base_sec: 30        # nth retry waits base*2**(n-1): 30/60/120/240/480s
 
 shadow_tracker:               # SH11 — multi-inning tracking (Concern 4)
-  enabled: true               # SH13: false = all handlers no-ops; table stays empty
+  # ⛔ DISABLED 25-Jul-2026 — CONFIG ONLY, the component is deliberately LEFT INTACT.
+  # It becomes correct the day the live tick→candle path is wired; this is a switch,
+  # not a removal. WHY: innings 2-3 are watched via live ticks (SH5/SH6), and nothing
+  # has ever subscribed to the WebSocket (docs/audit/tick_candle_dormancy_25jul2026.md
+  # — 32 connects, 0 tokens, 0 ticks ever). So it did not fail quietly, it FABRICATED:
+  # 141 simulated innings, exit_reason SL=0 / TGT=0 / EOD=130 / NULL=11, and
+  # exit_price == entry_price on 130/130 with pnl_pct exactly 0.0 (real innings:
+  # 1/181 and 180 non-zero), because the EOD close falls back to entry_price when
+  # _last_price was never tick-populated. Zero inning-3 rows ever: the cascade needs
+  # SL/TGT, which only ticks can produce.
+  # RE-ENABLE ONLY once ticks actually flow; nothing else is required.
+  enabled: false              # SH13: false = all handlers no-ops; table stays empty
   max_innings: 3              # SH4: total innings (1 real + up to 2 simulated)
   alert_per_inning: true      # SH7: send Telegram INFO on each inning close
 
