@@ -849,7 +849,7 @@ def test_trading_hours_yaml_pins_operator_chosen_window() -> None:
     """
     project_root = Path(__file__).parent.parent.parent
     raw = yaml.safe_load(
-        (project_root / "config" / "system_config.yaml").read_text()
+        (project_root / "config" / "system_config.yaml").read_text(encoding="utf-8")
     )
     th = raw.get("trading_hours", {})
     assert th.get("entry_start") == "10:00", \
@@ -1021,7 +1021,7 @@ def test_shadow_tracker_max_innings_min_boundary() -> None:
 def test_real_scan_webhook_map_yaml_loads() -> None:
     """Load the real config/scan_webhook_map.yaml directly to catch schema drift."""
     project_root = Path(__file__).parent.parent.parent
-    raw = yaml.safe_load((project_root / "config" / "scan_webhook_map.yaml").read_text())
+    raw = yaml.safe_load((project_root / "config" / "scan_webhook_map.yaml").read_text(encoding="utf-8"))
     cfg = ScanWebhookMapConfig.model_validate(raw)
     # 15 live scanners + the PB-01 shadow playbook scanner (V3 Step 10b) = 16.
     assert len(cfg.scanners) == 16, f"Expected 16 scanners (15 live + PB-01), got {len(cfg.scanners)}"
@@ -1038,7 +1038,7 @@ def test_real_scan_webhook_map_yaml_loads() -> None:
 def test_real_nse_holidays_yaml_loads() -> None:
     """Load the real config/nse_holidays_2026.yaml directly to catch schema drift."""
     project_root = Path(__file__).parent.parent.parent
-    raw = yaml.safe_load((project_root / "config" / "nse_holidays_2026.yaml").read_text())
+    raw = yaml.safe_load((project_root / "config" / "nse_holidays_2026.yaml").read_text(encoding="utf-8"))
     cfg = NseHolidaysConfig.model_validate(raw)
     assert len(cfg.holidays) == 15, f"Expected 15 holidays, got {len(cfg.holidays)}"
     assert all(isinstance(h, HolidayEntry) for h in cfg.holidays)
@@ -1057,7 +1057,7 @@ def test_system_config_has_no_limits_block() -> None:
     the wrong block.
     """
     project_root = Path(__file__).parent.parent.parent
-    raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text())
+    raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text(encoding="utf-8"))
     assert isinstance(raw, dict), "system_config.yaml root must be a mapping"
     assert "limits" not in raw, (
         "system_config.yaml must not contain a top-level `limits:` block "
@@ -1078,7 +1078,7 @@ def test_no_duplicate_config_keys() -> None:
     differs across order_monitor/eod_squareoff/order_reconciler).
     """
     project_root = Path(__file__).parent.parent.parent
-    raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text())
+    raw = yaml.safe_load((project_root / "config" / "system_config.yaml").read_text(encoding="utf-8"))
     assert isinstance(raw, dict)
 
     # BL-7b: master-switch names are deliberately shared across module blocks
@@ -1131,6 +1131,48 @@ def test_no_duplicate_config_keys() -> None:
         f"  OK BL-17: no duplicate (key, value) pairs across "
         f"{len([k for k, v in raw.items() if isinstance(v, dict)])} top-level blocks"
     )
+
+
+def test_no_test_reads_repo_config_with_the_platform_encoding() -> None:
+    """D (25-Jul-2026): repo config files are UTF-8; tests must say so.
+
+    `config_loader` reads config with `path.read_bytes()` and hands the bytes to
+    `yaml.safe_load`, which is UTF-8 by spec -- so the APPLICATION is safe and
+    non-ASCII in a config file is never a boot hazard. Tests that use bare
+    `read_text()` instead get the PLATFORM default (cp1252 on this Windows host),
+    which HARD-ERRORS on any byte cp1252 does not map (0x81/0x8D/0x8F/0x90/0x9D).
+
+    That bit for real: a star (U+2B50 = E2 AD 90) added to a `system_config.yaml`
+    comment turned THREE unrelated config tests red, for a reason that had nothing
+    to do with what they assert. A suite that fails on the decoration in a comment
+    makes every BASE-vs-MERGE gate ambiguous -- the same failure mode as the
+    wall-clock time-bomb fixed in test_interactive_startup.py.
+
+    Scoped to CODE, not comments: documenting the retired pattern stays legal.
+    """
+    import re
+
+    tests_root = Path(__file__).parent.parent
+    offenders: list[str] = []
+    # bare .read_text() -- no args at all -- on a line that names a config path
+    bare = re.compile(r"\.read_text\(\s*\)")
+
+    for py in sorted(tests_root.rglob("*.py")):
+        for lineno, line in enumerate(
+            py.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            code = line.split("#", 1)[0]          # CODE only; comments are legal
+            if "config" not in code:
+                continue
+            if bare.search(code):
+                offenders.append(f"{py.relative_to(tests_root)}:{lineno}")
+
+    assert not offenders, (
+        "these tests read a repo config file with the platform default encoding; "
+        'use read_text(encoding="utf-8") so a non-ASCII byte in a config comment '
+        f"cannot fail them for an unrelated reason: {offenders}"
+    )
+    print("  OK no test reads repo config with the platform default encoding")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

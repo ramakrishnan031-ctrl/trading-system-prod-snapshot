@@ -100,7 +100,7 @@ class TestApplyReverts:
         applied = _mod.apply_reverts(config_dir_with_temp, results, log)
         assert applied > 0
 
-        content = (config_dir_with_temp / "system_config.yaml").read_text()
+        content = (config_dir_with_temp / "system_config.yaml").read_text(encoding="utf-8")
         assert "REVERTED" in content
 
 
