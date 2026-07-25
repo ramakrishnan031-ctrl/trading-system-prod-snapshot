@@ -2431,15 +2431,35 @@ class StateStore:
 
     def get_fm_ledger_for_date(self, date_iso: str) -> List[dict]:
         """
-        Return all fm_ledger rows for date_iso (DR8).
+        Return all fm_ledger rows for date_iso (DR8), in CHRONOLOGICAL order.
 
         BL-5: renamed from get_capital_ledger_for_date (the original name was
         a misnomer — the underlying query was always against fm_ledger, and
         the legacy capital_ledger table was never written).
+
+        ⚠️ 25-Jul-2026: this had NO ORDER BY, so SQLite was free to return rows
+        in any order. Its sole production caller — reports/daily_report.py:187 —
+        takes `init_rows[0]` as the day's opening capital, i.e. it depends on the
+        FIRST INIT row being the 08:15 seed. That held only because SQLite happens
+        to scan in rowid order, which is insertion order, which is usually
+        chronological: a query-plan accident, not a guarantee. An index scan on
+        the `date` column could legitimately return them otherwise.
+
+        It matters because INIT is not unique per day — FundManager.initialize()
+        writes one INIT row per PROCESS START (capital/fund_manager.py:408-448) —
+        so a mid-day restart adds a second INIT row for the same date, and an
+        arbitrary order would pick an arbitrary opening capital in the 16:05
+        report. Same root as the 25-Jul db_reader.opening_capital fix, and the
+        same resolution: the FIRST INIT by timestamp is the day's true open.
+
+        Ordered at the ACCESSOR rather than the call site because it has exactly
+        one production caller and no caller wants an unspecified order — so the
+        next caller inherits a deterministic order instead of the bug. `ledger_id`
+        is the tiebreaker, making the order total rather than merely ts-sorted.
         """
         rows = self.fetch_all(
             # O4 (v27): use the indexed stored `date` column (== DATE(ts)).
-            "SELECT * FROM fm_ledger WHERE date = ?",
+            "SELECT * FROM fm_ledger WHERE date = ? ORDER BY ts ASC, ledger_id ASC",
             (date_iso,),
         )
         return [dict(r) for r in rows]

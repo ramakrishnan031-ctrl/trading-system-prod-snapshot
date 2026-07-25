@@ -2275,3 +2275,92 @@ def run_all_tests() -> int:
 
 if __name__ == "__main__":
     sys.exit(run_all_tests())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 25-Jul-2026 — get_fm_ledger_for_date returns rows in CHRONOLOGICAL order.
+#
+# RED BEFORE THE FIX: the query was `SELECT * FROM fm_ledger WHERE date = ?`
+# with NO ORDER BY, so SQLite was free to return rows in any order. Its sole
+# production caller, reports/daily_report.py:187, does
+#
+#     init_rows = [r for r in fm_ledger if r.get("entry_type") == "INIT"]
+#     opening_capital = init_rows[0].get("balance_after", 0.0)
+#
+# i.e. it depends on the FIRST INIT row being the day's 08:15 seed. That held
+# only because SQLite happens to scan in rowid order, which is insertion order,
+# which is usually chronological -- a query-plan accident, not a guarantee.
+#
+# It is the same root as the db_reader double-INIT fix (25-Jul): INIT is one row
+# per PROCESS START, so a mid-day restart adds a second INIT row for the same
+# date. On such a day, an arbitrary order picks an arbitrary opening capital --
+# in the 16:05 report.
+#
+# These tests insert the LATER-timestamped row FIRST, so rowid order and ts order
+# DISAGREE. That is what makes them fail on the unordered query rather than pass
+# for the same accidental reason the bug survived on.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_FM_INSERT = """
+    INSERT INTO fm_ledger
+      (ts, entry_type, amount, bucket, balance_before, balance_after)
+    VALUES (?, ?, ?, ?, ?, ?)
+"""
+
+
+def _seed_out_of_order_inits(store: "StateStore", date_iso: str) -> None:
+    """Two INIT rows for one day, inserted NEWEST-FIRST so rowid order != ts order.
+    Mirrors production: one INIT per process start, bucket='both', full balance."""
+    with store.transaction() as cur:
+        # the 11:57 restart re-seed -- inserted first, so it wins on rowid
+        cur.execute(_FM_INSERT, (f"{date_iso}T11:57:41.742251+05:30", "INIT",
+                                 9858.73, "both", 0.0, 9858.73))
+        # the real 08:15 opening seed -- inserted second, earlier timestamp
+        cur.execute(_FM_INSERT, (f"{date_iso}T08:15:26.589351+05:30", "INIT",
+                                 9857.30, "both", 0.0, 9857.30))
+
+
+def test_get_fm_ledger_for_date_returns_rows_chronologically(tmp_path: Path) -> None:
+    """The accessor orders by ts, not by insertion/rowid."""
+    store = StateStore(tmp_path / "test.db")
+    date_iso = "2026-07-21"
+    _seed_out_of_order_inits(store, date_iso)
+
+    rows = store.get_fm_ledger_for_date(date_iso)
+    ts_list = [r["ts"] for r in rows]
+    assert ts_list == sorted(ts_list), f"rows are not chronological: {ts_list}"
+
+
+def test_first_init_row_is_the_opening_seed_not_the_restart_reseed(tmp_path: Path) -> None:
+    """*** THE 16:05 REPORT'S CONTRACT. *** daily_report.py:187 takes init_rows[0]
+    as the day's opening capital. It must be the 08:15 seed (9,857.30), never the
+    11:57 restart re-seed (9,858.73) that was inserted first.
+
+    Same 'first INIT is the true open' semantics as db_reader.opening_capital,
+    already proven correct against production: all 58 INIT timestamps share one
+    +05:30 offset and one width, and a string ORDER BY ts matched a datetime sort
+    on every date, so an 11:57 re-seed always sorts after an 08:15 seed."""
+    store = StateStore(tmp_path / "test.db")
+    date_iso = "2026-07-21"
+    _seed_out_of_order_inits(store, date_iso)
+
+    rows = store.get_fm_ledger_for_date(date_iso)
+    init_rows = [r for r in rows if r.get("entry_type") == "INIT"]   # daily_report.py:187
+    assert len(init_rows) == 2
+    assert init_rows[0]["balance_after"] == 9857.30, (
+        "the report would have taken the 11:57 restart re-seed as the day's opening capital"
+    )
+
+
+def test_fm_ledger_order_is_total_not_merely_by_timestamp(tmp_path: Path) -> None:
+    """Two rows can share a ts (same-second writes). ledger_id is the tiebreaker,
+    so the order is deterministic rather than merely 'sorted by ts'."""
+    store = StateStore(tmp_path / "test.db")
+    date_iso = "2026-07-22"
+    same_ts = f"{date_iso}T08:15:00.000000+05:30"
+    with store.transaction() as cur:
+        cur.execute(_FM_INSERT, (same_ts, "INIT", 100.0, "both", 0.0, 100.0))
+        cur.execute(_FM_INSERT, (same_ts, "RESERVE", 10.0, "intraday", 100.0, 90.0))
+
+    ids = [r["ledger_id"] for r in store.get_fm_ledger_for_date(date_iso)]
+    assert ids == sorted(ids), f"tie on ts must fall back to ledger_id: {ids}"
