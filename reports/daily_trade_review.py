@@ -1052,8 +1052,9 @@ def build_reconciliation(store: StateStore, date_iso: str,
                       f"Cross-source drift |ledger − Σtrades.net_pnl({trades_realized})| = {drift} (tolerance ₹{_CAPITAL_DRIFT_TOLERANCE:.2f}). "
                       "NB: this block sums RELEASE_USED.pnl_delta directly (the clean trade-close realized), NOT "
                       "get_daily_realized_net_pnl — the latter sums ALL pnl_delta rows including the EOD RESET_PNL "
-                      "counter-entry, which post-15:17 would zero the day's realized. (W10 — that reader's earlier "
-                      "cost double-subtract — was fixed 2026-07-17; it now returns a clean SUM(pnl_delta).) "
+                      "counter-entry, which post-15:17 would zero the day's realized. (W10, that reader's earlier "
+                      "cost double-subtract, was fixed 2026-07-17 and is NOT the reason it is avoided here — "
+                      "RESET_PNL is.) "
                       "(The RESET_PNL ledger row is a by-design daily EOD reset, NOT pollution; RMS closes pass "
                       "costs=0.0 can drift — flagged, not hidden.)")
     blocks.append({

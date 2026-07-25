@@ -35,13 +35,17 @@ def get_risk():
     return jsonify({
         "today": today,
         # D2 (approved permanent): reads fm_ledger.RELEASE_USED.pnl_delta losses
-        # directly, NOT get_daily_realized_net_pnl. (W10 — that reader's cost
-        # double-subtract — was fixed 2026-07-17; it now returns a clean
-        # SUM(pnl_delta). RELEASE_USED.pnl_delta stays the direct realized-loss source.)
+        # directly, NOT get_daily_realized_net_pnl.
+        # 25-Jul-2026 RE-LABEL: the reason changed and the label had not. W10 (that
+        # reader's cost double-subtract) was FIXED 2026-07-17, so it is no longer why
+        # the reader is avoided. The live reason is RESET_PNL: get_daily_realized_net_pnl
+        # sums ALL pnl_delta rows including the EOD RESET_PNL counter-entry, which
+        # post-15:17 would zero the day's realized loss. RELEASE_USED.pnl_delta stays
+        # the direct realized-loss source.
         "daily_loss": {
             "used": db_reader.realized_loss_today(cfg, today),
             "limit": loss_limit, "limit_pct": loss_pct,
-            "source_note": "fm_ledger RELEASE_USED losses (D2; W10 avoided)",
+            "source_note": "fm_ledger RELEASE_USED losses (D2; reader excluded — EOD RESET_PNL)",
         },
         "consecutive_losses": {
             "used": db_reader.consecutive_loss_streak(cfg),

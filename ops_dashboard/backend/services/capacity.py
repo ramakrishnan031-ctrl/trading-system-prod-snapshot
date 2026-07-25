@@ -13,9 +13,11 @@ Row types:
   window      — time-window status (inside/outside now, via freshness)
 
 Daily-loss "used" reads fm_ledger.RELEASE_USED.pnl_delta directly — NOT
-get_daily_realized_net_pnl. (W10 — that reader's cost double-subtract — was
-fixed 2026-07-17; it now returns a clean SUM(pnl_delta).) Decision D2,
-approved permanent by the G2a review.
+get_daily_realized_net_pnl. 25-Jul-2026 RE-LABEL: W10 (that reader's cost
+double-subtract) was FIXED 2026-07-17 and is no longer the reason. The live
+reason is RESET_PNL — that reader sums ALL pnl_delta rows including the EOD
+RESET_PNL counter-entry, which post-15:17 would zero the day's realized.
+Decision D2, approved permanent by the G2a review.
 """
 from __future__ import annotations
 

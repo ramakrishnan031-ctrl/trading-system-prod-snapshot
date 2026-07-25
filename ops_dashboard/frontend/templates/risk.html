@@ -33,7 +33,7 @@
         <span class="bn-sub" x-text="data.opening_capital ? ('opening ' + money(data.opening_capital)) : ''"></span>
       </div>
     </div>
-    <p class="panel-sub">Daily-loss source = fm_ledger RELEASE_USED (decision D2); get_daily_realized_net_pnl avoided. (W10 — that reader's cost double-subtract — was fixed 2026-07-17.)</p>
+    <p class="panel-sub">Daily-loss source = fm_ledger RELEASE_USED (decision D2); get_daily_realized_net_pnl excluded because it sums the EOD RESET_PNL counter-entry. (W10, that reader's cost double-subtract, was fixed 2026-07-17 and is no longer the reason.)</p>
   </section>
 </div>
 <script>

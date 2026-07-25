@@ -15,7 +15,14 @@ def test_risk_api(client):
     d = client.get("/api/risk").get_json()
     assert d["daily_loss"]["used"] == 450.0
     assert d["daily_loss"]["limit"] == 3000.0
-    assert "W10" in d["daily_loss"]["source_note"]
+    # 25-Jul-2026 RE-LABEL: was `"W10" in source_note`. W10 (the reader's cost
+    # double-subtract) was FIXED 2026-07-17, so it is no longer why the reader is
+    # avoided -- RESET_PNL is. A report string is behaviour, so assert the NEW one
+    # and assert the retired reason is gone, rather than loosening the check.
+    note = d["daily_loss"]["source_note"]
+    assert "RELEASE_USED" in note and "D2" in note
+    assert "RESET_PNL" in note, f"source_note must state the live reason: {note!r}"
+    assert "W10" not in note, f"source_note still cites the retired W10 reason: {note!r}"
     assert d["consecutive_losses"] == {"used": 3, "limit": 5}
     assert d["kill_switch"]["state"] == "INACTIVE" and d["kill_switch"]["halted"] is False
     assert d["open_positions"] == {"used": 4, "limit": 5}
