@@ -803,6 +803,7 @@ intervention"** rule — memory `alertwatcher_loop_fix_16jul`.
    `.flag`=0, `.failed`=0; digest emailed to `ramakrishnan031@gmail.com`, subject
    `[LFL836] CRITICAL — DIGEST: 16 alerts`). No auth errors after the valid password.
 4. ~~Two git remotes on PC~~ — **RESOLVED 2026-06-18** (`vm` remote removed; `origin` remains).
+5. 🧟 **MAINTAINED-BUT-NEVER-WIRED — `orders/breakeven_manager.py` (E3, 25-Jul-2026): the code looks alive and is not.** `BreakevenManager` was created 31-May (FIX-132a Item 8) and then edited by **five** later fix cycles (FIX-148 · FIX-179 · FIX-181 · the 23-Jun tick-snap · the 14-Jul M-X2 batch) — six commits of upkeep — while **`git log -S "BreakevenManager" -- main.py` returns NOTHING for the entire repo history**: main.py has never constructed one, so `order_placer`'s optional `breakeven_manager` is always `None` and `register_trade()` is never called. Consequence for the next reader: **its edit history is not evidence that it runs**, and a defect inside it cannot be triaged from commit activity — E2 (25-Jul) found its SL lookup selecting `broker_order_id`, a column `orders` does not have, which had been dead since day one behind a mock that answered on that key. **Before treating any module here as live, grep `main.py` for its constructor.** Sibling shape: `smart_tgt_manager`'s `volume_dependent_trails` block is an explicit `pass` placeholder behind a `false` config flag.
 
 ## PENDING CLEANUP
 ✅ **All previously-listed items were actioned on 2026-06-18** (see Changelog): root `trading.db`
