@@ -1,6 +1,6 @@
 ==============================================================================
 MONDAY 27-JUL-2026 — THE CARD.   Detail: MASTER_PENDING_..._EVENING.txt
-Deployed e754c7e+ · loads 08:15 · book flat.  Every command below was RUN against
+Deployed 9dd2488+ · loads 08:15 · book flat.  Every command below was RUN against
 production on 25-Jul. Two originally-drafted checks did not exist — see footnote.
     ssh trading-vm ; cd ~/systems/trading-system ; L=logs/system_$(date +%F).log
     DB="file:data_store/trading_system.db?mode=ro&immutable=1"
@@ -23,7 +23,7 @@ production on 25-Jul. Two originally-drafted checks did not exist — see footno
       EXPECT 322, and 322 forever. Growth => the disable did not take.
 
 ⛔ Do NOT look for the 17:35 window this morning — no such boot line exists
-   (the guard runs before config loads). It shows up at ~17:35, check 6.
+   (the guard runs before config loads). It shows up at ~17:35 - CHECK 7.
 
 ~17:10 — THE MOST IMPORTANT CHECK OF THE DAY
 ------------------------------------------------------------------------------
@@ -64,6 +64,18 @@ IF YOU EVER NEED TO HALT — READ THIS BEFORE THE MOMENT, NOT DURING IT
    system-simulated ones — but it is a real reduction in cover, and you should
    know it now rather than discover it then.
    To resume: deploy/resume.sh (clears a kill), then start the service.
+
+EMAILS YOU WILL GET THAT MEAN NOTHING (so a real one still stands out)
+------------------------------------------------------------------------------
+· "UNEXPECTED SSH KEY present" — EVERY 6 HOURS, ~03:46 / 09:46 / 15:46 / 21:46.
+  A STALE BASELINE, not an intrusion: the key it flags is the only key in
+  authorized_keys and is the one every session (incl. mine) logs in with. It has
+  fired 37 times since 17-Jul across two key rotations. Fix is one command and
+  it is YOURS to approve — see the critical_alert_stream audit.
+· "Cron EOD" / "Cron Briefing" / "Pre-flight Phase B|C" / "System Manager EOD —
+  clean" — these are DAILY REPORTS sent at CRITICAL severity, not incidents.
+⚠️ 80% of your CRITICAL emails are one of the above. If one arrives that is NOT
+   on this list, it is worth stopping for.
 
 TUESDAY 08:15 — THREE NON-EVENTS
 ------------------------------------------------------------------------------
