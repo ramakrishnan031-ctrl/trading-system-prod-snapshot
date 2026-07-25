@@ -16,7 +16,7 @@ Deploy state at assembly: PC == origin == VM bare == `3dda9f7`; code tag `deploy
 | [06](06_performance_allocator.md) | **PerformanceAllocator** — wire it or leave `perf_weight ≡ 1.0` | sizing mechanism | OPEN | **COMPUTABLE-NOW label HOLDS (19-Jul, computed on 298 trades)** — the *only* one of the three that did; **"masked by concentration" REFUTED**: perf_weight is a post-cap multiplier, would change final qty on **233/298 (78%)** over [0.5,2.0], **151/298** over [0.8,1.25]; conditional on unlevered sizing; `candle_retention_and_perfallocator_feasibility_19jul2026.md` |
 | [07](07_regime_enable.md) | **Regime** — enable / build Phase 1 / leave | strategic | OPEN | Q10 (~2.2 months of forward within-cell data); do-not-flip-mid-soak constraint. *(20-Jul: "+ token" struck — regime **computes today**, runtime-verified; the token/backfill was never on its path.)* |
 | [08](08_freeze_min_pass_during_measurement.md) | **Freeze `min_pass_score`** during the measurement? | measurement hygiene | OPEN | downstream of Regime (#07) and D3 (#04) |
-| [09](09_prune_retention.md) | **Prune retention** & status-selectivity | data-retention | OPEN — **new** (census §A4) | Rama's intent on whether rejection-composition is a recurring need |
+| [09](09_prune_retention.md) | **Prune retention** & status-selectivity | data-retention | ✅ **CLOSED 25-Jul — Option A, leave as-is, NO code change** | — (decided: 2,667 rows vs ~9.9 MB/day is noise, not value) |
 | [10](10_entry_throttle_admission.md) | **Entry-throttle admission** — arrival-order vs ranked | strategic / mechanism | OPEN — **new** (throttle analysis) | ranking value coupled to D3; **counter-case is strong** |
 
 ## How they are coupled (stated, not ranked)

@@ -1,6 +1,6 @@
 # Decision — Prune retention & status-selectivity
 
-**Status:** OPEN — Rama's call. **New (19-Jul, from the census §A4).** **Type:** data-retention (production change to alter). **Blocked by:** nothing.
+**Status:** ✅ **CLOSED 25-Jul-2026 — Option A (leave the prune as-is). NO CODE CHANGE.** **Type:** data-retention. **Decided by:** Rama.
 *Summary of the record, not a recommendation. Lettering is a label, not a ranking.*
 
 ## The choice
@@ -26,3 +26,22 @@
 
 ## What would settle it
 - A decision on whether rejection-composition is a recurring analytical need. If yes, the cheap settlement is a **scheduled snapshot** (cron) of the pre-prune state rather than changing the live prune — cost: a snapshot job, no change to the trading path. Changing the prune predicate or retention is a production change and is out of scope here.
+
+
+---
+
+## ✅ DECISION — 25-Jul-2026: **Option A. Leave the prune as-is. Nothing built.**
+
+**Rama's call, recorded verbatim in intent:** *2,667 rows against ~9.9 MB/day of growth is noise, not value.*
+
+**What that means concretely:**
+
+- The status-selective predicate at `scripts/eod_cleanup.py:234` **stays exactly as it is** — `REJECTED_*` / `EXPIRED` / `DUPLICATE` continue to be pruned at 90 days; `SKIPPED_*` and qualified families continue to be kept.
+- **Option B is declined.** Retaining rejections would trade ~9.9 MB/trading day of unbounded growth (×15 through the backup chain) for ~2,667 rows of rejection-composition history whose analytical need was the open question. The answer is that it is not a recurring need.
+- **Option C is declined.** The 90-day window is unchanged.
+
+**Therefore this decision ships NO code, NO config and NO cron change.** The design work in `DESIGN_09_prune_retention.md` and the brief in `BRIEF_09_prune_retention.md` are retained as the record of what was considered and why it was refused — not as pending work.
+
+⚠️ **The one thing that survives from the design:** the naive Option-B diff would have made the 15:50 job a **permanent no-op**, because `EXPIRED` and `DUPLICATE` are never actually persisted. That is a real trap and is why Option B was never a one-line change. Recorded here so nobody re-derives it if the question reopens.
+
+**Insurance already in place, unaffected:** the read-only snapshot at `/home/ubuntu/preserved/signal_census_19jul2026/` (89.97 MB DB + 2 CSVs, chmod 444) preserves 6 complete days of rejection composition regardless of the prune. If rejection-composition analysis ever does become recurring, the cheap settlement remains a **scheduled pre-prune snapshot**, not a change to the live prune.
