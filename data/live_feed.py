@@ -690,21 +690,38 @@ class LiveFeedManager:
         alert and force-close the ticker so kiteconnect's auto-reconnect
         machinery rebuilds the socket.
         """
-        # Wait for the first tick before arming. Otherwise startup before
-        # any subscription would immediately trip the watchdog.
-        while not self._stop_event.is_set():
-            with self._last_tick_lock:
-                if self._last_tick_at is not None:
-                    break
-            self._stop_event.wait(timeout=1.0)
+        # B1 (25-Jul-2026): ONE loop. The tick-age arming check used to be a
+        # SEPARATE pre-loop that spun until the first tick arrived, and
+        # _check_consumer_health() lived in the loop AFTER it. Because nothing
+        # subscribes to the WebSocket in ordinary operation (see
+        # docs/audit/tick_candle_dormancy_25jul2026.md -- 32 connects, 0 tokens
+        # subscribed, 0 ticks ever), that pre-loop never exited, so FIX-029's
+        # consumer-thread death detector NEVER RAN in production: a protection
+        # for a thread unrelated to ticks, disabled by an unrelated wiring gap.
+        # The health check now runs every interval unconditionally; the tick-age
+        # alarm keeps its original arm-on-first-tick semantics below.
+        armed = False
 
         while not self._stop_event.is_set():
             self._stop_event.wait(timeout=self._watchdog_check_interval_sec)
             if self._stop_event.is_set():
                 return
 
-            # FIX-029: Check consumer thread health
+            # FIX-029: Check consumer thread health. Deliberately BEFORE the
+            # tick-age arming gate -- a dead consumer thread is an incident
+            # whether or not any tick has ever arrived. No-ops when the thread
+            # is healthy or not yet started, so this adds no new alerts.
             self._check_consumer_health()
+
+            # B.6 tick-age arming: only meaningful once a tick has actually been
+            # seen. B2 (25-Jul-2026): deliberately NOT armed on subscription or
+            # on connect -- with nothing subscribed, "no tick for 30s" is not an
+            # anomaly, and arming it would alarm every interval of every day.
+            if not armed:
+                with self._last_tick_lock:
+                    armed = self._last_tick_at is not None
+                if not armed:
+                    continue
 
             # Skip when paper-mode somehow flipped or we never connected.
             if self._paper_mode or not self._connected:
