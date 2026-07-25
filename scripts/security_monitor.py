@@ -109,6 +109,12 @@ class SecConfig:
     new_ip_alert: bool = True
     sudo_alert: bool = True
     realert_cooldown_sec: int = 21600           # 6h: don't re-alert the same identity sooner
+    # SS-B: how the cooldown GROWS for a condition that is merely still present
+    # (x realert_cooldown_sec, per repeat, last value capped) and how long an
+    # absence must last before a return counts as a RECURRENCE rather than a
+    # flicker. Config, not code, so the ladder can be retuned without a deploy.
+    realert_backoff_multipliers: list = field(default_factory=lambda: [1, 4, 28])
+    realert_presence_gap_sec: int = 300
     expected_ssh_keys: int = 1
     expected_key_fingerprint: str = ""          # committed single-key baseline (legacy)
     expected_key_fingerprints: list = field(default_factory=list)  # operator-override list (set by apply_operator_ssh_baseline)
@@ -138,7 +144,9 @@ class SecConfig:
             for f in (
                 "enabled", "max_active_sessions", "failed_login_spike_threshold",
                 "root_probe_spike_threshold", "new_ip_alert", "sudo_alert",
-                "realert_cooldown_sec", "expected_ssh_keys", "expected_key_fingerprint",
+                "realert_cooldown_sec", "realert_backoff_multipliers",
+                "realert_presence_gap_sec",
+                "expected_ssh_keys", "expected_key_fingerprint",
                 "sudo_whitelist_prefixes", "watched_files", "authlog_path",
                 "authorized_keys_path", "sentinel_dir",
             ):
@@ -817,19 +825,177 @@ def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Findin
 # Dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _dedup(findings: list[Finding], state: dict, cooldown: int, now_ts: float) -> list[Finding]:
-    """Drop findings whose key alerted within the cooldown; record the rest."""
-    ledger = state.get("alerted", {})
-    fresh: list[Finding] = []
-    for f in findings:
-        last = ledger.get(f.key)
-        if last is not None and (now_ts - last) < cooldown:
+# ── Re-alert policy (SS-B, 26-Jul-2026) ──────────────────────────────────────
+# The old ledger stored ONE float per finding key -- the last time it alerted --
+# and compared it to a fixed cooldown. One number cannot express the difference
+# between a condition that NEVER WENT AWAY and one that WENT AWAY AND CAME BACK,
+# so it got both wrong, in opposite directions:
+#
+#   "still true"  -> a persistent BENIGN condition re-fired at full CRITICAL every
+#                    cooldown, forever, with no decay/escalation/expiry. One stale
+#                    SSH baseline produced 37 CRITICAL emails over 9 days and two
+#                    key generations -- 45% of the entire delivered stream.
+#   "true again"  -> a condition that CLEARED and RECURRED inside the cooldown was
+#                    SILENTLY DROPPED. The louder half hid the dangerous half.
+#
+# The ledger now tracks PRESENCE: {first_seen, last_seen, last_alerted, repeats}.
+#   * absent for > presence gap, then seen again  -> RECURRENCE: new episode,
+#     alerted IMMEDIATELY at FULL severity (closes the silent half);
+#   * seen continuously                           -> PERSISTENCE: the interval
+#     widens along the ladder (1x, 4x, 28x = 6h/24h/7d, capped) and every repeat
+#     after the first is DOWNGRADED out of CRITICAL and labelled as a repeat.
+#
+# WHY THE DOWNGRADE IS SAFE: every Finding.key encodes the IDENTITY of the
+# condition, not just its type -- authkeys:unexpected:<fingerprints>,
+# file:<label>:<sha12>, copybypass:<audit_event_id>, authkeys:hash:<sha12>. ANY
+# change to what is wrong produces a DIFFERENT key => a new condition => full
+# severity, immediately. Only a byte-identical condition is ever downgraded.
+# (test_every_live_finding_key_carries_its_identity pins that premise.)
+#
+# IT DOES NOT GO QUIET (the trap in the obvious fix): the repeat still fires on
+# the decaying ladder; data_store/security/last_run.json is written from the
+# PRE-dedup findings on EVERY ~60s pass and now NAMES the persistent keys; and
+# ops/control_tower/aggregator.read_security raises a finding whenever that file
+# says clean=false. `--report` also prints live findings with no dedup at all.
+_REALERT_BACKOFF_LADDER: tuple[float, ...] = (1.0, 4.0, 28.0)   # x realert_cooldown_sec
+_PRESENCE_GAP_SEC = 300.0          # absence shorter than this is a flicker, not a clear
+_LEDGER_RETENTION_SEC = 8 * 86400.0
+_LEDGER_MAX_ENTRIES = 500          # rootspike:/failspike: keys rotate hourly
+# A repeat is never CRITICAL. Kept inside the module's declared vocabulary
+# (CRITICAL | WARNING | INFO) so _F1_SEV_RANK and the tower severity map still
+# understand it.
+_REPEAT_SEVERITY = {"CRITICAL": "WARNING", "WARNING": "WARNING", "INFO": "INFO"}
+
+
+def _fmt_duration(seconds: float) -> str:
+    s = max(0, int(seconds))
+    d, rem = divmod(s, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+
+def _episode(entry) -> dict:
+    """Normalise a ledger entry to the episode shape.
+
+    Back-compat: the pre-SS-B ledger stored a bare float (the last alert time).
+    Read it as an episode with an UNKNOWN presence history, so the first pass
+    after this ships treats a still-present condition as a recurrence and alerts
+    once at full severity before settling onto the ladder. One extra alert is the
+    safe direction; one fewer is not.
+    """
+    if isinstance(entry, dict):
+        return dict(entry)
+    if isinstance(entry, (int, float)):
+        return {"first_seen": float(entry), "last_seen": None,
+                "last_alerted": float(entry), "repeats": 1}
+    return {}
+
+
+def _episode_age_ref(ep: dict) -> Optional[float]:
+    """The timestamp a ledger entry is aged against (last_seen; last_alerted for a
+    legacy entry that has never been seen under the new scheme)."""
+    for field_name in ("last_seen", "last_alerted", "first_seen"):
+        v = ep.get(field_name)
+        if v is not None:
+            return float(v)
+    return None
+
+
+def _as_repeat(f: Finding, ep: dict, now_ts: float, repeats: int) -> Finding:
+    """A repeat of an UNCHANGED condition: never CRITICAL, and says so."""
+    held = now_ts - float(ep.get("first_seen") or now_ts)
+    return Finding(
+        severity=_REPEAT_SEVERITY.get(f.severity, f.severity),
+        key=f.key,
+        title=f"{f.title} (STILL PRESENT)",
+        body=(
+            f"{f.body}\n\n"
+            f"[REPEAT #{repeats + 1}] UNCHANGED for {_fmt_duration(held)}. The first "
+            f"report went out at {f.severity}; repeats are downgraded so a persistent "
+            f"condition cannot flood the CRITICAL channel, and the interval widens each "
+            f"time. This is NOT a new event. If anything about the condition changes it "
+            f"gets a new alert identity and fires at full severity again. Continuous "
+            f"status, every pass, no dedup: data_store/security/last_run.json -> "
+            f"persistent[]."
+        ),
+    )
+
+
+def _prune_ledger(ledger: dict, now_ts: float) -> dict:
+    """Age out cleared conditions and bound the file. Legacy float entries are
+    CONVERTED here rather than dropped, so retention is uniform whether or not a
+    key happened to fire during the upgrade pass."""
+    keep: dict = {}
+    for k, v in ledger.items():
+        ep = _episode(v)
+        if not ep:
             continue
-        ledger[f.key] = now_ts
-        fresh.append(f)
-    # prune ledger entries older than 2x cooldown to bound growth
-    cutoff = now_ts - 2 * cooldown
-    state["alerted"] = {k: v for k, v in ledger.items() if v >= cutoff}
+        ref = _episode_age_ref(ep)
+        if ref is None or (now_ts - ref) <= _LEDGER_RETENTION_SEC:
+            keep[k] = ep
+    if len(keep) > _LEDGER_MAX_ENTRIES:
+        newest = sorted(keep.items(),
+                        key=lambda kv: _episode_age_ref(kv[1]) or 0.0,
+                        reverse=True)[:_LEDGER_MAX_ENTRIES]
+        keep = dict(newest)
+    return keep
+
+
+def _dedup(findings: list[Finding], state: dict, cooldown: int, now_ts: float,
+           *, backoff_ladder=None, presence_gap_sec=None) -> list[Finding]:
+    """Emit a finding once per EPISODE, then on a widening ladder and never again
+    as CRITICAL -- while treating a genuine RECURRENCE as the new event it is.
+
+    Also publishes state["persistent_conditions"]: the keys present on this pass
+    that are NOT first reports, so "what is still wrong" is written down even when
+    nothing is sent.
+    """
+    ladder = tuple(float(m) for m in (backoff_ladder or _REALERT_BACKOFF_LADDER))
+    if not ladder:
+        ladder = _REALERT_BACKOFF_LADDER
+    gap = float(_PRESENCE_GAP_SEC if presence_gap_sec is None else presence_gap_sec)
+    ledger = dict(state.get("alerted") or {})
+    fresh: list[Finding] = []
+    persistent: list[str] = []
+
+    for f in findings:
+        ep = _episode(ledger.get(f.key))
+        seen_before = ep.get("last_seen") if ep else None
+        # Absent for at least one presence gap and now back = "true again", a NEW
+        # episode -- not the same condition still running.
+        if not ep or seen_before is None or (now_ts - float(seen_before)) > gap:
+            ep = {"first_seen": now_ts, "last_alerted": None, "repeats": 0}
+        ep["last_seen"] = now_ts
+        repeats = int(ep.get("repeats") or 0)
+        last_alerted = ep.get("last_alerted")
+
+        if last_alerted is None:
+            due = True
+        else:
+            mult = ladder[min(max(repeats - 1, 0), len(ladder) - 1)]
+            due = (now_ts - float(last_alerted)) >= cooldown * mult
+
+        if not due:
+            persistent.append(f.key)
+            ledger[f.key] = ep
+            continue
+
+        if repeats == 0:
+            fresh.append(f)                      # first report of this episode: verbatim
+        else:
+            persistent.append(f.key)
+            fresh.append(_as_repeat(f, ep, now_ts, repeats))
+        ep["last_alerted"] = now_ts
+        ep["repeats"] = repeats + 1
+        ledger[f.key] = ep
+
+    state["alerted"] = _prune_ledger(ledger, now_ts)
+    state["persistent_conditions"] = sorted(set(persistent))
     return fresh
 
 
@@ -894,16 +1060,25 @@ _F1_SEV_RANK = {"CRITICAL": 3, "WARNING": 2, "INFO": 1}
 
 
 def _write_last_run_status(path: Path, findings: list, checks_run: int,
-                           now: datetime) -> None:
+                           now: datetime, persistent: Optional[list] = None) -> None:
     """F1 (Control Tower Phase 1a) — ADDITIVE side-artefact: write a small,
     queryable last-run status atomically (.tmp -> os.replace). It NEVER changes
     a finding, an alert, or the security state; best-effort (logs + swallows
-    OSError) so it can never break a monitoring pass."""
+    OSError) so it can never break a monitoring pass.
+
+    SS-B (26-Jul-2026): it is written from the PRE-dedup findings on EVERY pass, so
+    it reflects the CONDITION rather than the alert — which is what makes it safe
+    for _dedup to stop re-alerting a persistent condition. `persistent` names the
+    keys that are still present but no longer alerting each pass, so "what is
+    still wrong" is answerable without an email. The Control Tower's security
+    adapter (ops/control_tower/aggregator.read_security) raises a finding whenever
+    clean is false, so this is a channel that is read daily, not just written."""
     max_sev = "INFO"
     for f in findings:
         s = str(getattr(f, "severity", "")).upper()
         if _F1_SEV_RANK.get(s, 0) > _F1_SEV_RANK.get(max_sev, 0):
             max_sev = s
+    persistent_keys = sorted(str(k) for k in (persistent or []))
     payload = {
         "version": 1,
         "timestamp": now.isoformat(),
@@ -911,6 +1086,8 @@ def _write_last_run_status(path: Path, findings: list, checks_run: int,
         "findings_count": len(findings),
         "max_severity": max_sev,
         "clean": len(findings) == 0,
+        "persistent": persistent_keys,
+        "persistent_count": len(persistent_keys),
     }
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1006,7 +1183,9 @@ def main(argv=None) -> int:
                   len(state.get("file_hashes", {})))
         return 0
 
-    fresh = _dedup(findings, state, cfg.realert_cooldown_sec, now.timestamp())
+    fresh = _dedup(findings, state, cfg.realert_cooldown_sec, now.timestamp(),
+                   backoff_ladder=cfg.realert_backoff_multipliers,
+                   presence_gap_sec=cfg.realert_presence_gap_sec)
     for f in fresh:
         _send(f, cfg)
         _maybe_copy_audit(cfg, f, now)   # Phase 3: persist copy events for the EOD summary
@@ -1014,7 +1193,8 @@ def main(argv=None) -> int:
     save_state(args.state, state)
     # F1 (ADDITIVE): queryable last-run status for the Control Tower. Written
     # AFTER alerts/state so it can never influence a security decision.
-    _write_last_run_status(_DEFAULT_LAST_RUN, findings, _LAST_PASS_CHECK_COUNT, now)
+    _write_last_run_status(_DEFAULT_LAST_RUN, findings, _LAST_PASS_CHECK_COUNT, now,
+                           persistent=state.get("persistent_conditions"))
     _log.info("security_monitor: pass complete (%d finding(s), %d new alert(s))",
               len(findings), len(fresh))
     # exit 0 always (watcher must keep running); severity is in the alerts.

@@ -124,9 +124,15 @@ def test_last_run_status_clean(tmp_path):
     p = tmp_path / "security" / "last_run.json"
     now = datetime(2026, 6, 29, 13, 15, tzinfo=_IST)
     sm._write_last_run_status(p, [], 9, now)
+    # SS-B (26-Jul-2026) EXTENDED this schema additively: `persistent` /
+    # `persistent_count` name the conditions that are still present but no longer
+    # alerting each pass. That is what makes it safe for _dedup to stop re-alerting
+    # a persistent condition, so the field is asserted here rather than tolerated.
+    # The aggregator reads via .get(), so no consumer is affected.
     assert json.loads(p.read_text(encoding="utf-8")) == {
         "version": 1, "timestamp": now.isoformat(), "checks_run": 9,
         "findings_count": 0, "max_severity": "INFO", "clean": True,
+        "persistent": [], "persistent_count": 0,
     }
 
 

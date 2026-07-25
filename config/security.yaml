@@ -45,6 +45,23 @@ security:
   # many seconds. 6h = one nudge, not a 60s stream.
   realert_cooldown_sec: 21600
 
+  # 26-Jul-2026 (SS-B). The cooldown above is only the FIRST interval. A condition
+  # that is merely STILL PRESENT backs off along this ladder -- multiples of
+  # realert_cooldown_sec, per repeat, last value capped -- and every repeat after
+  # the first is downgraded out of CRITICAL. Left as config so the shape can be
+  # retuned without a deploy: [1, 4, 28] = 6h, then 24h, then 7d forever.
+  # Rationale: the pre-SS-B ledger re-fired at full CRITICAL every 6h forever, which
+  # is how ONE stale SSH baseline produced 37 CRITICAL emails -- 45% of the whole
+  # delivered stream -- over 9 days and two key rotations.
+  realert_backoff_multipliers: [1, 4, 28]
+
+  # How long a condition must be ABSENT before its return counts as a RECURRENCE
+  # ("true again", alerted immediately at full severity) rather than a flicker in a
+  # continuing episode. The watcher passes every ~60s, so 300s tolerates a few
+  # missed passes. Set too low and a flapping condition re-earns CRITICAL every few
+  # minutes; too high and a real recurrence is read as persistence.
+  realert_presence_gap_sec: 300
+
   # Known-good SSH baseline. check_authorized_keys alerts if the count grows or
   # a non-matching fingerprint appears. This committed value is the DEFAULT; an
   # operator override (data_store/security/ssh_key_baseline.json, written by
