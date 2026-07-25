@@ -116,6 +116,17 @@ SCHEDULED_KILL_REASONS = frozenset({
     "EOD_SQUAREOFF",
 })
 
+# 25-Jul-2026: WARN threshold for the _persist_state timing (measure-only).
+# WHY 1.0s: the write is a single-row `INSERT OR REPLACE` and every competing
+# writer is a single-row cron heartbeat INSERT, so the expected cost is
+# sub-millisecond to low-milliseconds. 1.0s is therefore ~1000x the expected
+# time — far too large to fire in normal operation — while still being 1/30th of
+# the `busy_timeout = 30000` ceiling, leaving ample headroom to notice
+# degradation long before a write could actually time out. A threshold that
+# fires routinely would be noise; one set near the ceiling would only tell us
+# what the absence of SQLITE_BUSY already tells us.
+_PERSIST_SLOW_WARN_SEC = 1.0
+
 
 def _is_scheduled_reason(reason: str) -> bool:
     """Return True if the kill reason matches a scheduled (non-emergency) pattern."""
@@ -825,16 +836,60 @@ class KillSwitch:
         """
         Write (or replace) the single kill_switch_state row (KS9).
         Raises on state_store failure — caller must treat this as abort.
+
+        25-Jul-2026 — MEASURE-ONLY instrumentation. This call runs INSIDE
+        `self._lock`, and `is_active()` (the last-mile order check before every
+        placement) takes that SAME lock, so a slow persist stalls order placement,
+        not just /health. It inherits `PRAGMA busy_timeout = 30000` and real
+        cross-process writers exist (33 cron heartbeat jobs, two on */5 during
+        market hours). Production shows the 30 s CEILING has never been hit — zero
+        SQLITE_BUSY / "database is locked" in any log against 25 real kills — but
+        nothing timed the call, so "never blocked for ≥30 s" was proven while
+        "never blocked" was not. This closes that gap by MEASURING.
+        ⛔ It deliberately does NOT redesign: `busy_timeout` is untouched and the
+        write stays inside the lock, because KS9's persist-first trades latency
+        for atomicity ON PURPOSE (a failed write must not leave a believed-active
+        kill unrecorded). See docs/audit/kill_persist_busy_timeout_25jul2026.md.
         """
-        with self._store.transaction() as cur:
-            cur.execute(
-                """
-                INSERT OR REPLACE INTO kill_switch_state
-                  (id, state, reason, triggered_at, triggered_by)
-                VALUES (1, ?, ?, ?, ?)
-                """,
-                (state.value, reason, ts.isoformat(), triggered_by),
-            )
+        import time  # function-local, matching this module's existing idiom
+
+        _t0 = time.monotonic()
+        try:
+            with self._store.transaction() as cur:
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO kill_switch_state
+                      (id, state, reason, triggered_at, triggered_by)
+                    VALUES (1, ?, ?, ?, ?)
+                    """,
+                    (state.value, reason, ts.isoformat(), triggered_by),
+                )
+        finally:
+            # `finally`, not the happy path: the case most worth seeing is a write
+            # that WAITS and then FAILS (the busy-timeout case). The original
+            # exception continues to propagate untouched — KS9's abort is intact.
+            try:
+                _elapsed = time.monotonic() - _t0
+                if _elapsed >= _PERSIST_SLOW_WARN_SEC:
+                    self._log.warning(
+                        "kill_switch: _persist_state took %.2fs (>= %.1fs) — "
+                        "self._lock was held throughout, so is_active() and the "
+                        "last-mile order check were blocked for that duration "
+                        "(busy_timeout ceiling is 30s)",
+                        _elapsed,
+                        _PERSIST_SLOW_WARN_SEC,
+                        extra={
+                            "elapsed_sec": round(_elapsed, 3),
+                            "state": state.value,
+                            "reason": reason,
+                        },
+                    )
+            except Exception:
+                # The kill path is the last thing that should die of an
+                # instrumentation error. Swallow deliberately — and note this
+                # cannot mask a real failure: any exception from the write above
+                # is already propagating through this `finally`.
+                pass
 
     def _load_state_from_store(self) -> None:
         """
