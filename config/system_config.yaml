@@ -262,10 +262,28 @@ alerts:                       # TG12/AW11 — alert subsystem settings
     max_retries: 3              # FIX-131 Item 18: retry attempts per channel
     retry_backoff_seconds: 2.0  # FIX-131 Item 18: seconds between retries
     rate_limit_per_minute: 20   # FIX-131 Item 18: max Telegram messages/minute
-    send_deadline_seconds: 30   # M-A2: hard wall-clock cap on ONE send(), shared across
+    send_deadline_seconds: 8    # M-A2: hard wall-clock cap on ONE send(), shared across
                                 # channels. Alert sends are synchronous on live threads
                                 # (signal_processor emits before order placement), so a
                                 # hung endpoint must not hold them. null = unbounded.
+                                # *** 30 -> 8 on 25-Jul-2026. *** 30 sat ABOVE the measured
+                                # ~26 s ladder ((3+1)x5 + 3x2, one channel enabled), so on
+                                # the very case this bound exists for it barely bound - it
+                                # clipped ~4 s off a stall the ORDER PATH cannot afford
+                                # (the alert fires BEFORE placement, capital already
+                                # reserved, the FIX-067/M-S1 re-anchored price going stale).
+                                # 8 = one full HTTP attempt (timeout_sec 5) + one backoff
+                                # (2) + ~1 s margin => TWO delivery attempts on a hung
+                                # endpoint (5 s, then 1 s clamped to the remainder).
+                                # SAFE because TG5 writes the CRITICAL sentinel BEFORE any
+                                # HTTP: the deadline discards a delivery ATTEMPT, never a
+                                # warning. A healthy send is untouched (answers in ms).
+                                # WARNING: if TELEGRAM_CHANNEL_SECONDARY is ever enabled
+                                # the ladder doubles to ~52 s and this budget is SHARED
+                                # across channels, so channel 2 would get little or none -
+                                # decide the two together. TUNE HERE, no code change.
+                                # (ASCII only in this file: several tests read it with the
+                                # platform default encoding - see the encoding fix.)
     channels:
       - chat_id_env: "TELEGRAM_CHANNEL_PRIMARY"
         label: "Primary Alert Channel"

@@ -700,7 +700,10 @@ class TelegramConfig(BaseModel):
     # and covering the rate-limit wait + HTTP timeouts + backoff sleeps. Sends are
     # synchronous on live threads, so this is what stops a hung Telegram endpoint
     # from holding an order/kill/signal path. null = unbounded (pre-M-A2).
-    send_deadline_seconds: Optional[float] = 30.0
+    # 25-Jul-2026: 30.0 -> 8.0. 30 sat above the measured ~26 s ladder, so it
+    # barely bound on the order path it exists to protect. 8 = one full HTTP
+    # attempt (5) + one backoff (2) + margin. Tunable from yaml; null = unbounded.
+    send_deadline_seconds: Optional[float] = 8.0
 
     @field_validator("channels")
     @classmethod

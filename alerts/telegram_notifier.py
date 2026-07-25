@@ -209,7 +209,7 @@ class TelegramNotifier:
         send_in_paper_mode: bool = False,
         email_fallback_config: Optional[Any] = None,  # FIX-132 Item 10
         enabled: bool = True,  # TASK-10: master ON/OFF switch (telegram.enabled)
-        send_deadline_seconds: float | None = 30.0,  # M-A2: whole-send wall clock
+        send_deadline_seconds: float | None = 8.0,  # M-A2: whole-send wall clock (30->8, 25-Jul)
     ) -> None:
         """
         Construct a TelegramNotifier (TG2).

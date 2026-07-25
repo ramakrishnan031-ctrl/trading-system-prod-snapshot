@@ -302,5 +302,125 @@ class TestDeadlineConfigWiring(unittest.TestCase):
         self.assertGreater(float(tg["send_deadline_seconds"]), 0.0)
 
 
+class TestDeadlineIsEightSeconds(unittest.TestCase):
+    """B (25-Jul-2026): 30 s -> 8 s.
+
+    30 s sat ABOVE the measured ~26 s ladder ((3+1)x5 + 3x2, one channel), so on
+    the exact case the fix was built for it barely bound at all -- it clipped ~4 s
+    off a stall the order path cannot afford. 8 s is chosen so the budget covers
+    one full HTTP attempt (5 s) plus one backoff (2 s) with ~1 s of margin.
+
+    WHAT MAKES 8 s SAFE RATHER THAN A TRADE-OFF: the CRITICAL path writes its
+    sentinel FIRST (TG5), before any HTTP, so the alert_watcher/email route is
+    already armed when the deadline bites. The deadline discards a delivery
+    ATTEMPT, never a warning.
+    """
+
+    def setUp(self) -> None:
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+
+    def tearDown(self) -> None:
+        self._td.cleanup()
+
+    def test_shipped_default_is_eight_seconds_everywhere(self) -> None:
+        """The number must be 8 in the yaml AND in both code defaults, so a
+        caller that omits it cannot silently get the old 30 s."""
+        import inspect
+        import yaml
+        from core.config_loader import TelegramConfig
+        from alerts.telegram_notifier import TelegramNotifier as _TN
+
+        raw = yaml.safe_load(
+            (Path(__file__).parent.parent.parent
+             / "config" / "system_config.yaml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            float(raw["alerts"]["telegram"]["send_deadline_seconds"]), 8.0,
+            "shipped yaml must carry 8 explicitly (B2: a default nobody can see "
+            "is a number nobody can change)")
+
+        self.assertEqual(
+            TelegramConfig(
+                channels=[{"chat_id_env": "X", "label": "x", "enabled": True}]
+            ).send_deadline_seconds, 8.0, "config_loader default")
+
+        self.assertEqual(
+            inspect.signature(_TN.__init__)
+            .parameters["send_deadline_seconds"].default, 8.0,
+            "notifier constructor default")
+
+    def test_still_configurable_not_hardcoded(self) -> None:
+        """B1: the number is TUNABLE without a code change. An explicit value
+        must still win over the 8 s default, and null must still opt out."""
+        n = _make_notifier(self.tmp, send_deadline_seconds=3.0)
+        self.assertEqual(n._send_deadline, 3.0)
+        self.assertIsNone(
+            _make_notifier(self.tmp, send_deadline_seconds=None)._send_deadline)
+
+    def test_hung_endpoint_returns_at_eight_seconds_not_twenty_six(self) -> None:
+        """B5, the boundary. With the SHIPPED ladder (timeout 5, backoff 2,
+        retries 3) an 8 s budget buys exactly TWO attempts:
+            post#1 -> t=5 | backoff 2 -> t=7 | post#2 clamped to 1 s -> t=8 | stop.
+        Pre-8s behaviour was 4 posts + 3 backoffs = 26 s.
+        """
+        clock = _FakeClock()
+        n = _make_notifier(self.tmp, send_deadline_seconds=8.0,
+                           timeout_sec=5.0, max_retries=3,
+                           retry_backoff_seconds=2.0)
+        post = _HangingEndpoint(clock)
+        t0 = clock.t
+        with _install(clock), patch("alerts.telegram_notifier.requests.post", new=post):
+            res = n.send("ERROR", "t", "b", "unit_test")
+
+        self.assertFalse(res.success)
+        self.assertLessEqual(clock.t - t0, 8.0 + 1e-6,
+                             "send() blocked past its 8 s deadline")
+        self.assertEqual(post.calls, [5.0, 1.0],
+                         "8 s buys one FULL attempt plus one clamped to the "
+                         "remaining budget -- not a third")
+        self.assertLess(clock.t - t0, 26.0,
+                        "anti-vacuity: this must beat the old 26 s ladder")
+
+    def test_eight_second_deadline_still_writes_the_critical_sentinel_first(self) -> None:
+        """B4 -- the property that makes 8 s safe. Tightening the budget must not
+        cost a CRITICAL: the sentinel is on disk BEFORE any HTTP is attempted, so
+        the watcher/email route is armed even when every attempt is discarded."""
+        clock = _FakeClock()
+        n = _make_notifier(self.tmp, send_deadline_seconds=8.0,
+                           timeout_sec=5.0, max_retries=3,
+                           retry_backoff_seconds=2.0)
+        post = _HangingEndpoint(clock)
+        with _install(clock), patch("alerts.telegram_notifier.requests.post", new=post):
+            res = n.send("CRITICAL", "kill", "body", "kill_switch")
+
+        self.assertFalse(res.success, "delivery genuinely failed")
+        self.assertIsNotNone(res.sentinel_path)
+        self.assertTrue(Path(res.sentinel_path).exists(),
+                        "the WARNING survived even though the ATTEMPT was discarded")
+
+    def test_healthy_send_is_unaffected_by_the_tighter_budget(self) -> None:
+        """Anti-vacuity: 8 s must not touch the normal path. A healthy endpoint
+        answers in milliseconds and still gets the full configured HTTP timeout."""
+        clock = _FakeClock()
+        n = _make_notifier(self.tmp, send_deadline_seconds=8.0, timeout_sec=5.0)
+        seen: list = []
+
+        def ok(url, json=None, timeout=None, **kw):  # noqa: A002
+            seen.append(timeout)
+
+            class _R:
+                status_code = 200
+                headers: dict = {}
+                text = "ok"
+            return _R()
+
+        with _install(clock), patch("alerts.telegram_notifier.requests.post", new=ok):
+            res = n.send("INFO", "t", "b", "unit_test")
+
+        self.assertTrue(res.success)
+        self.assertEqual(seen, [5.0],
+                         "a healthy send keeps the full 5 s timeout under an 8 s budget")
+
+
 if __name__ == "__main__":
     unittest.main()
