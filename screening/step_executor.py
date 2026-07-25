@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError  # FIX-091
@@ -63,11 +64,52 @@ class StepExecutor:
         # adding ~5-10ms overhead per signal under high throughput. The executor
         # is single-worker (steps run sequentially per signal) but persists
         # across calls to avoid create/destroy churn.
-        self._executor: ThreadPoolExecutor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="step-exec",
-        )
+        # M-S3: _executor_lock guards the swap in _rotate_executor() — run_all()
+        # may be entered by several signal workers at once.
+        self._executor_lock = threading.Lock()
+        self._executor: ThreadPoolExecutor = self._new_executor()
         self._executor_shutdown = False
+        self._executor_rotations = 0
+
+    @staticmethod
+    def _new_executor() -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=1, thread_name_prefix="step-exec")
+
+    def _rotate_executor(self, stale: ThreadPoolExecutor) -> None:
+        """M-S3: abandon the pool whose single worker is stuck on a timed-out step.
+
+        `future.result(timeout=...)` abandons the WAIT, not the WORK — Python
+        cannot interrupt a running function, and `future.cancel()` is a no-op once
+        a task has started. With FIX-100's shared single-worker pool that means the
+        hung task keeps the only worker: every remaining step of THIS signal, and
+        every step of every LATER signal, queues behind it and times out in turn.
+        One hung step thus costs 10x the timeout and never recovers.
+
+        So: swap in a fresh pool and let the stale one go. The hung thread is
+        abandoned, not leaked-and-waited-on — `shutdown(wait=False)` returns
+        immediately and the stale pool disappears when its task finally returns.
+        (A genuinely never-returning step would hold up interpreter exit either
+        way; that is unchanged, not made worse.)
+
+        Idempotent under concurrency: if another caller already rotated the same
+        stale pool, or shutdown() has been called, this is a no-op.
+        """
+        with self._executor_lock:
+            if self._executor_shutdown or self._executor is not stale:
+                return
+            self._executor = self._new_executor()
+            self._executor_rotations += 1
+            rotations = self._executor_rotations
+        self._logger.warning(
+            "step_executor: replaced the worker pool after a step timeout "
+            "(rotation #%d) — the hung step keeps the abandoned worker so it "
+            "cannot stall the remaining steps or the next signal",
+            rotations,
+        )
+        try:
+            stale.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001 — best-effort; never fail a screening run
+            pass
 
     # -------------------------------------------------------------------------
     # Public API
@@ -115,9 +157,13 @@ class StepExecutor:
         # FIX-091: Per-step timeout via future.result(timeout=...)
         for name, fn in steps:
             t0 = time.monotonic()
+            # M-S3: snapshot the pool we submit to, so that on a timeout we
+            # retire THAT pool and not whichever one a concurrent caller has
+            # since installed.
+            executor = self._executor
             try:
                 # Submit step to executor with timeout
-                future = self._executor.submit(fn, signal, market_data, thresholds, direction)
+                future = executor.submit(fn, signal, market_data, thresholds, direction)
                 score = future.result(timeout=self._step_timeout_sec)
             except FutureTimeoutError:
                 # FIX-091: Step timeout -> neutral score, WARNING log
@@ -130,6 +176,8 @@ class StepExecutor:
                 step_results[name] = 0.5  # neutral score
                 step_statuses[name] = "TIMEOUT"
                 latencies_ms[name] = elapsed
+                # M-S3: the hung task still owns this pool's only worker.
+                self._rotate_executor(executor)
                 continue
             except Exception:
                 elapsed = (time.monotonic() - t0) * 1000.0
@@ -176,12 +224,19 @@ class StepExecutor:
 
         Called by signal_processor.stop() or main.py shutdown sequence.
         Idempotent: safe to call multiple times.
+
+        M-S3: takes the same lock as _rotate_executor and shuts down whichever
+        pool is CURRENT, so a rotation can never leave shutdown() closing a pool
+        that is no longer in use. Setting the flag inside the lock also stops a
+        concurrent timeout from rotating a fresh pool in behind us.
         """
-        if self._executor_shutdown:
-            return
-        self._executor_shutdown = True
+        with self._executor_lock:
+            if self._executor_shutdown:
+                return
+            self._executor_shutdown = True
+            executor = self._executor
         try:
-            self._executor.shutdown(wait=True, cancel_futures=False)
+            executor.shutdown(wait=True, cancel_futures=False)
         except Exception:
             pass  # Best-effort; executor may already be dead
 
