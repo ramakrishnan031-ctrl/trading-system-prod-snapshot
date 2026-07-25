@@ -52,8 +52,24 @@ security:
   # deploys. After ANY legitimate SSH key rotation, run `approve_ssh_keys --apply`.
   # 28-Jun-2026: baseline updated DrHT9… -> uDRN8… for Rama's LEGITIMATE key
   # rotation (Airtel/Tamil-Nadu IP 223.237.190.224, ED25519 "oracle-vm-2026").
+  #
+  # 26-Jul-2026: deliberate SSH re-baseline after a legitimate key rotation.
+  # uDRN8BJT... -> 9WRshnFM... (ED25519, comment "trading-vm"). Rama confirmed he
+  # renamed the old keys, created new ones under the same filenames, registered
+  # and authorised them on the VM, and deleted the old files. Evidence matches:
+  # authorized_keys was rewritten 23-Jul 21:47:26 down to a SINGLE line, the old
+  # key BRi6UmV8... was last accepted 23-Jul 21:34 and the new one first accepted
+  # 21:45:57, and 9WRshnFM... is the key every current session authenticates with.
+  # NOTE this is the DEFAULT/fallback only: approve_ssh_keys.py --apply wrote the
+  # operator override at 2026-07-26T00:24:00+05:30, and the override REPLACES this
+  # value while it exists (apply_operator_ssh_baseline). It is updated here so the
+  # committed fallback is CORRECT if the override is ever lost (data_store is not
+  # git-tracked) -- a stale fallback would restart the 6-hourly CRITICAL loop.
+  # It is NOT blanked, because an empty allow-list makes check_authorized_keys
+  # skip the unexpected-key test entirely (`if allowed:`) -- silently disabling
+  # the check is worse than a wrong value.
   expected_ssh_keys: 1
-  expected_key_fingerprint: "SHA256:uDRN8BJTmfNGFfCLofbnXkIGtWF6qTtrREQrQJGKduk"
+  expected_key_fingerprint: "SHA256:9WRshnFMWRlLCWRPMp5VIdaTUlpIj5dILraFNvilGzg"
 
   # Auth source (ubuntu is in group adm → readable without sudo).
   authlog_path: /var/log/auth.log
