@@ -262,6 +262,10 @@ alerts:                       # TG12/AW11 — alert subsystem settings
     max_retries: 3              # FIX-131 Item 18: retry attempts per channel
     retry_backoff_seconds: 2.0  # FIX-131 Item 18: seconds between retries
     rate_limit_per_minute: 20   # FIX-131 Item 18: max Telegram messages/minute
+    send_deadline_seconds: 30   # M-A2: hard wall-clock cap on ONE send(), shared across
+                                # channels. Alert sends are synchronous on live threads
+                                # (signal_processor emits before order placement), so a
+                                # hung endpoint must not hold them. null = unbounded.
     channels:
       - chat_id_env: "TELEGRAM_CHANNEL_PRIMARY"
         label: "Primary Alert Channel"

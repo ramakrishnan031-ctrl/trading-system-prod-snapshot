@@ -157,9 +157,14 @@ class TestTelegramRateLimit:
             acquire_calls = [0]
             original_acquire = n._rate_limiter.acquire
 
-            def _counting_acquire():
+            # M-A2: forward *a/**kw and RETURN the result. The old hand-rolled
+            # spy took no arguments and dropped the return value, so it could
+            # only ever match one signature and reported None where the real
+            # acquire() reports success — a fixture that would have made a
+            # wrong caller look right. Signature-agnostic by construction now.
+            def _counting_acquire(*a, **kw):
                 acquire_calls[0] += 1
-                original_acquire()
+                return original_acquire(*a, **kw)
 
             n._rate_limiter.acquire = _counting_acquire
 

@@ -2252,6 +2252,7 @@ def _main_locked(args, config_dir: Path) -> int:
         max_retries=tg_cfg.max_retries,                        # FIX-131 Item 18
         retry_backoff_seconds=tg_cfg.retry_backoff_seconds,    # FIX-131 Item 18
         rate_limit_per_minute=tg_cfg.rate_limit_per_minute,    # FIX-131 Item 18
+        send_deadline_seconds=tg_cfg.send_deadline_seconds,    # M-A2: bound the caller
         email_fallback_config=alert_cfg.email_fallback,        # FIX-166 F13
     )
 

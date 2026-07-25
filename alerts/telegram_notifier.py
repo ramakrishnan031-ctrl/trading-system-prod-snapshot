@@ -109,13 +109,23 @@ def _read_telegram_enabled(config_dir: str | Path = "config") -> bool:
 class _SlidingWindowRateLimiter:
     """Thread-safe sliding-window rate limiter: max N calls per 60 seconds."""
 
+    _POLL_SEC = 0.5
+
     def __init__(self, max_per_minute: int) -> None:
         self._max = max(1, max_per_minute)
         self._window: collections.deque[float] = collections.deque()
         self._lock = threading.Lock()
 
-    def acquire(self) -> None:
-        """Block until sending is within the rate limit."""
+    def acquire(self, timeout: float | None = None) -> bool:
+        """Wait for a send slot. Returns True if one was taken, False on timeout.
+
+        M-A2: `timeout=None` keeps the original unbounded wait (the opt-out).
+        With a timeout the poll gives up instead of spinning — an alert storm
+        must not pin the CALLER's thread, and these callers are live paths
+        (signal_processor emits its INTRADAY SIGNAL alert *before* placing the
+        order, with capital already reserved).
+        """
+        deadline = None if timeout is None else time.monotonic() + float(timeout)
         while True:
             now = time.monotonic()
             with self._lock:
@@ -124,8 +134,15 @@ class _SlidingWindowRateLimiter:
                     self._window.popleft()
                 if len(self._window) < self._max:
                     self._window.append(now)
-                    return
-            time.sleep(0.5)
+                    return True
+            if deadline is None:
+                time.sleep(self._POLL_SEC)
+                continue
+            remaining = deadline - now
+            if remaining <= 0.0:
+                return False
+            # Never sleep past the deadline — a 0.2s budget must not cost 0.5s.
+            time.sleep(min(self._POLL_SEC, remaining))
 
     def count_recent(self) -> int:
         """Return number of messages sent in the last 60 seconds."""
@@ -192,6 +209,7 @@ class TelegramNotifier:
         send_in_paper_mode: bool = False,
         email_fallback_config: Optional[Any] = None,  # FIX-132 Item 10
         enabled: bool = True,  # TASK-10: master ON/OFF switch (telegram.enabled)
+        send_deadline_seconds: float | None = 30.0,  # M-A2: whole-send wall clock
     ) -> None:
         """
         Construct a TelegramNotifier (TG2).
@@ -228,6 +246,14 @@ class TelegramNotifier:
         # FIX-131 Item 18: sliding-window rate limiter (20 msgs/min default)
         self._rate_limiter = _SlidingWindowRateLimiter(rate_limit_per_minute)
         self._email_fallback = email_fallback_config  # FIX-132 Item 10
+        # M-A2: ONE wall-clock budget for a whole send() — shared across every
+        # enabled channel, and covering the rate-limit wait, the HTTP timeouts and
+        # the backoff sleeps. Without it a send costs (max_retries+1) x timeout_sec
+        # plus the backoffs PER CHAT (≈26 s on the shipped config) and the
+        # rate-limiter wait is unbounded. None = the pre-M-A2 unbounded behaviour.
+        self._send_deadline = (
+            None if send_deadline_seconds is None else float(send_deadline_seconds)
+        )
 
         if chat_ids and channels:
             self._log.warning(
@@ -529,6 +555,13 @@ class TelegramNotifier:
         delivered: list[str] = []
         failed: list[str] = []
 
+        # M-A2: the budget is per SEND, not per chat — three enabled channels
+        # against a hung endpoint must still return in one deadline, not three.
+        deadline = (
+            None if self._send_deadline is None
+            else time.monotonic() + self._send_deadline
+        )
+
         if self._channels is not None:
             # Env-var-based whitelist path
             for channel in self._channels:
@@ -541,7 +574,7 @@ class TelegramNotifier:
                         channel.label, channel.chat_id_env,
                     )
                     continue
-                ok = self._post_with_retry(chat_id, message)
+                ok = self._post_with_retry(chat_id, message, deadline=deadline)
                 if ok:
                     delivered.append(chat_id)
                 else:
@@ -549,7 +582,7 @@ class TelegramNotifier:
         else:
             # Legacy direct chat_ids path
             for chat_id in self._chat_ids:
-                ok = self._post_with_retry(chat_id, message)
+                ok = self._post_with_retry(chat_id, message, deadline=deadline)
                 if ok:
                     delivered.append(chat_id)
                 else:
@@ -557,12 +590,30 @@ class TelegramNotifier:
 
         return delivered, failed
 
-    def _post_with_retry(self, chat_id: str, text: str) -> bool:
+    @staticmethod
+    def _sleep_bounded(secs: float, deadline: float | None) -> None:
+        """M-A2: sleep `secs`, but never past `deadline`. A backoff must not be
+        the thing that overruns the budget the rest of the ladder respects."""
+        if deadline is None:
+            time.sleep(secs)
+            return
+        time.sleep(max(0.0, min(float(secs), deadline - time.monotonic())))
+
+    def _post_with_retry(
+        self, chat_id: str, text: str, deadline: float | None = None
+    ) -> bool:
         """
         POST a single message to one chat_id with retry logic (TG6).
 
         FIX-131 Item 18: rate limiter applied before each attempt; configurable
         backoff (retry_backoff_seconds) replaces hardcoded 0.5/1.0s ladder.
+
+        M-A2: `deadline` is a `time.monotonic()` instant after which this call
+        gives up. It bounds ALL THREE blocking parts — the rate-limit wait, the
+        HTTP timeout and the backoff sleeps — because the caller is a live
+        thread. Giving up costs no alert: CRITICAL has already written its
+        sentinel (TG5, `_handle_critical` step 1) and ERROR falls through to
+        `failed_alerts.log`. `deadline=None` = the pre-M-A2 unbounded ladder.
 
         Returns True on success, False on permanent failure.
         """
@@ -572,16 +623,41 @@ class TelegramNotifier:
         attempt = 0
 
         while True:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0.0:
+                self._log.warning(
+                    "telegram.send_deadline_exceeded",
+                    extra={"chat_id": chat_id, "attempts": attempt},
+                )
+                return False
+
             # FIX-131 Item 18: acquire rate-limit token before each HTTP attempt
-            self._rate_limiter.acquire()
+            if not self._rate_limiter.acquire(timeout=remaining):
+                self._log.warning(
+                    "telegram.rate_limit_wait_timed_out",
+                    extra={"chat_id": chat_id, "attempts": attempt},
+                )
+                return False
+
+            # Re-read: the rate-limit wait consumed part of the budget.
+            http_timeout = self._timeout
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    self._log.warning(
+                        "telegram.send_deadline_exceeded",
+                        extra={"chat_id": chat_id, "attempts": attempt},
+                    )
+                    return False
+                http_timeout = min(self._timeout, remaining)
 
             try:
-                resp = requests.post(url, json=payload, timeout=self._timeout)
+                resp = requests.post(url, json=payload, timeout=http_timeout)
             except requests.Timeout:
                 attempt += 1
                 if attempt > self._max_retries:
                     return False
-                time.sleep(self._retry_backoff)
+                self._sleep_bounded(self._retry_backoff, deadline)
                 continue
             except requests.RequestException:
                 return False
@@ -601,7 +677,7 @@ class TelegramNotifier:
                         extra={"retry_after_header": retry_after_raw,
                                "using_default_sec": retry_after},
                     )
-                time.sleep(min(retry_after, 5.0))
+                self._sleep_bounded(min(retry_after, 5.0), deadline)
                 attempt += 1
                 if attempt > self._max_retries:
                     return False
@@ -611,7 +687,7 @@ class TelegramNotifier:
                 attempt += 1
                 if attempt > self._max_retries:
                     return False
-                time.sleep(self._retry_backoff)
+                self._sleep_bounded(self._retry_backoff, deadline)
                 continue
 
             # 4xx (other than 429): permanent failure (TG6). M-A1: LOG the response body —

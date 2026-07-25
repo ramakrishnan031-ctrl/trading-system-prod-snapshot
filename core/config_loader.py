@@ -696,6 +696,11 @@ class TelegramConfig(BaseModel):
     max_retries: int = 3                         # FIX-131 Item 18: retry attempts for failed sends
     retry_backoff_seconds: float = 2.0           # FIX-131 Item 18: backoff delay between retries
     rate_limit_per_minute: int = 20              # FIX-131 Item 18: max messages per minute
+    # M-A2: whole-send wall-clock budget (seconds), shared across enabled channels
+    # and covering the rate-limit wait + HTTP timeouts + backoff sleeps. Sends are
+    # synchronous on live threads, so this is what stops a hung Telegram endpoint
+    # from holding an order/kill/signal path. null = unbounded (pre-M-A2).
+    send_deadline_seconds: Optional[float] = 30.0
 
     @field_validator("channels")
     @classmethod
