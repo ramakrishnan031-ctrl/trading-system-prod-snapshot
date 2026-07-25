@@ -1496,7 +1496,11 @@ def build_sheet_5_telegram(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
 # Sheet 6: Strategy Analysis
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet:
+def build_sheet_6_strategy(
+    wb: openpyxl.Workbook,
+    data: ReportData,
+    config_dir: Path | str = "config",
+) -> Worksheet:
     """Build Strategy Analysis sheet with two tables."""
     ws = wb.create_sheet(title="6_Strategy_Analysis")
     _disable_gridlines(ws)
@@ -1507,8 +1511,12 @@ def build_sheet_6_strategy(wb: openpyxl.Workbook, data: ReportData) -> Worksheet
     # V3 side-task A — declared taxonomy (pipeline·horizon), APPENDED as the last two
     # columns so the absolute currency-format indices below (11-16) do not shift.
     # Fail-safe: a name missing from the map (or a bad YAML) simply shows "—".
+    # E1 (25-Jul-2026): this called build_taxonomy_map() with NO argument, so the
+    # taxonomy columns were always read from ./config relative to CWD no matter
+    # what --config-dir said. taxonomy.py:23 was correct all along; the caller was
+    # not. Default stays "config" so the no-flag cron invocation is unchanged.
     from strategies.taxonomy import build_taxonomy_map
-    _tax_map = build_taxonomy_map()
+    _tax_map = build_taxonomy_map(config_dir)
 
     perf_headers = [
         "Trading Date", "Strategy", "Signals Rcvd", "Processed", "Rejected", "Traded",
@@ -1796,7 +1804,7 @@ def generate_daily_report(
     build_sheet_3_capital(wb, data)
     build_sheet_4_candles(wb, data)
     build_sheet_5_telegram(wb, data)
-    build_sheet_6_strategy(wb, data)
+    build_sheet_6_strategy(wb, data, config_dir)   # E1: honour --config-dir
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"daily_report_{date_iso}.xlsx"
