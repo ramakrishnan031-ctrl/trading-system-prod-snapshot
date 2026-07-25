@@ -1,0 +1,72 @@
+==============================================================================
+MONDAY 27-JUL-2026 — THE CARD.   Detail: MASTER_PENDING_..._EVENING.txt
+Deployed e754c7e+ · loads 08:15 · book flat.  Every command below was RUN against
+production on 25-Jul. Two originally-drafted checks did not exist — see footnote.
+    ssh trading-vm ; cd ~/systems/trading-system ; L=logs/system_$(date +%F).log
+    DB="file:data_store/trading_system.db?mode=ro&immutable=1"
+==============================================================================
+08:15  — THREE CHECKS, TWO MINUTES
+------------------------------------------------------------------------------
+[ ] 1 ⭐⭐ PB-01 IS WIRED — the highest-value 30 seconds of your week.
+      grep "PB-01 watchlist" $L
+      EXPECT ... PB-01 watchlist: ENABLED — capture + entry stage started
+      ⚠️ DISABLED or NOTHING => the 17:00 capture WILL FAIL, and you have ALL DAY
+         to react instead of discovering it Tuesday.
+
+[ ] 2 PRIOR-DAY KILL CLEARED.
+      journalctl -u trading-system --since today | grep auto-cleared
+      EXPECT  Kill switch auto-cleared: prior SOFT_KILL from 2026-07-24 ...
+      ⚠️ ABSENT + kill still set => entries blocked all day.
+
+[ ] 3 SHADOWTRACKER OFF — proved by silence; nothing logs the flag.
+      sqlite3 "$DB" "select count(*) from innings;"
+      EXPECT 322, and 322 forever. Growth => the disable did not take.
+
+⛔ Do NOT look for the 17:35 window this morning — no such boot line exists
+   (the guard runs before config loads). It shows up at ~17:35, check 6.
+
+~17:10 — THE MOST IMPORTANT CHECK OF THE DAY
+------------------------------------------------------------------------------
+[ ] 4 systemctl is-active trading-system            EXPECT active
+      ⭐ 16:00-17:35 is a MONITORING BLIND SPOT (liveness probe stops 15:55); this
+      is the compensating control. ⚠️ A silent death at 16:20 yields an empty
+      Tuesday watchlist that looks EXACTLY like "no breakouts" — after the fact
+      the two are indistinguishable.
+
+AFTER 17:00 — TWO CHECKS. DIFFERENT FACTS. BOTH NEEDED.
+------------------------------------------------------------------------------
+[ ] 5 DID THE ALERT ARRIVE?
+      sqlite3 "$DB" "select status,executed_at from cron_heartbeat
+                      where job_name='pb01_capture' order by id desc limit 3;"
+[ ] 6 DID THE WORKER FINISH?
+      sqlite3 "$DB" "select count(*) from pb01_watchlist;"     (0 as of 25-Jul)
+      ⚠️ The heartbeat records QUEUED, not captured — the worker is async.
+         HEARTBEAT-BUT-NO-ROWS IS A REAL STATE (alert landed, worker failed).
+[ ] 7 ~17:40  grep eod_self_exit $L
+      EXPECT  past 17:35 IST and flat ... clean shutdown   (Friday said 16:00)
+
+TUESDAY 08:15 — THREE NON-EVENTS
+------------------------------------------------------------------------------
+· CRITICAL sentinel  -> most likely the reconciler having run 95 min longer than
+  ever (~380 extra broker calls, a state that has never existed). EXPECTED shape,
+  self-clearing. Read it before reacting.
+· EMPTY watchlist    -> no breakouts OR silent capture failure. Checks 5+6 now
+  distinguish these; before this week they could not.
+· REGRESSION count moved -> the evening time-bomb was FIXED 25-Jul; the count no
+  longer depends on the hour. Residual wobble = the known machine-global
+  test_instance_lock flake (2/1/2 on an unchanged tree). Judge by the failure SET
+  against a same-shell baseline, NEVER by the count.
+
+⭐ WHAT MONDAY DOES *NOT* PROVE
+------------------------------------------------------------------------------
+A CAPTURE IS A PRECONDITION, NOT A WIN. PB-01 is enabled:false with NO live twin,
+so a captured row cannot yet be evaluated. It starts an out-of-sample clock that
+can only ever be STARTED, never backfilled — which is why a lost evening costs
+something permanent, and a captured one proves nothing yet.
+------------------------------------------------------------------------------
+FOOTNOTE (why two drafted checks are absent, verified 25-Jul): there is NO boot
+line naming the service window (guard main.py:1712 runs before load_all :1743)
+and NOTHING logs shadow_tracker's flag anywhere — replaced by checks 7 and 3.
+Also: the boot log is logs/system_<date>.log, NOT journald (~6 lines/boot); only
+check 2 lives in journald.
+==============================================================================
