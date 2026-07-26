@@ -568,11 +568,41 @@ class KillSwitch:
         # email-fallback path even when Telegram is down (a halt IS critical-grade;
         # WARN drops silently on a send failure with no fallback). Routing/severity
         # ONLY — the kill stays a SOFT_KILL. (Never crash on notifier failure.)
+        #
+        # SK-B (26-Jul-2026): a SCHEDULED kill — the 15:15 circuit breaker and the EOD
+        # squareoff — fires on a timer every trading day. It is a normal daily event,
+        # not a halt to page about, and it produced 5 of the CRITICALs in the 82-alert
+        # review. It routes at WARNING instead.
+        #
+        # ⭐ This REUSES the existing taxonomy rather than inventing one:
+        # `auto_clear_scheduled_kill()` already consults `_is_scheduled_reason` to
+        # decide whether a persisted kill SILENTLY CLEARS at the next 08:15 boot — i.e.
+        # whether the system resumes trading unattended. Choosing a severity is a
+        # strictly smaller trust than the one already placed in that predicate.
+        #
+        # ⚠️ EMERGENCY kills are untouched and stay CRITICAL. The test is exact
+        # equality against a 2-element frozenset, and every non-scheduled caller
+        # constructs a reason that cannot collide with either literal (auto-trip
+        # prefixes "Auto-trip:", system_manager "System Manager EOD <day>:",
+        # cnc_gtt_monitor "cnc_gtt_monitor: ", main.py "<source>: ", live_feed passes
+        # LIVEFEED_*). Pinned by test_scheduled_kill_severity.py, which plants one real
+        # reason from every emergency caller in the tree.
+        #
+        # ⭐ It does NOT go quiet: the alert still SENDS and still names the reason;
+        # the CRITICAL log line above (:562) and the persisted `kill_switch_state` row
+        # are unchanged; and the 15:15 event separately carries a dedicated, more
+        # informative WARNING from a DIFFERENT module (main.py:699). A scheduled kill
+        # that stopped happening therefore remains detectable.
         if self._notifier is not None:
+            scheduled = _is_scheduled_reason(reason)
             try:
                 self._notifier.send(
-                    severity="CRITICAL",
-                    title=f"[{self._mode}] ⚠️ SOFT KILL ACTIVATED",
+                    severity="WARNING" if scheduled else "CRITICAL",
+                    title=(
+                        f"[{self._mode}] SOFT KILL — scheduled ({reason})"
+                        if scheduled
+                        else f"[{self._mode}] ⚠️ SOFT KILL ACTIVATED"
+                    ),
                     body=(
                         f"Reason: {reason}\n"
                         "New signals: BLOCKED | Open positions: managed to SL/TGT/EOD"
