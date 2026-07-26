@@ -8,11 +8,14 @@ does not start (MEASURED 26-Jul-2026 by patching date.today before the import).
 Only NSE can supply the dates and only Rama can commit them, so the system cannot
 fix this itself — it can only ask, early enough, and to somebody who is listening.
 
-The suite already carries a dated tripwire for the same condition
-(tests/unit/test_config_loader.py, from 1-Dec). That one is kept — it is free and
-it catches the case where the alert path itself is broken. But a test only fires
-if somebody runs it, and in December that is a hope with a date on it. This file
-covers the production reminder that fires with NOBODY DOING ANYTHING:
+A dated tripwire for the same condition already exists and is KEPT — it is free
+and it catches the case where the alert path itself is broken. ⚠️ Note where it
+lives: `test_config_loader.py` on branch `hold-check1-w8-26jul` (`ffea817` +
+`b53b5ac`), NOT on main, so on main this file is currently the only cover. It
+fires from 1-Dec, deliberately earlier than the 15-Dec email — developer first,
+then the operator. But a test only fires if somebody runs it, and in December
+that is a hope with a date on it. This file covers the production reminder that
+fires with NOBODY DOING ANYTHING:
 `security_monitor.check_nse_holiday_calendar` -> CRITICAL sentinel ->
 alert-watcher.service -> email.
 

@@ -40,16 +40,17 @@ the first one is what a paper gate asserts.
 | 8 | 15:17 EOD squareoff EXEMPTS CNC (EOD6 / FIX-015) | ✅ | un-blinded by `f7eedd3` |
 | 9 | HARD_KILL sweep does not sweep CNC as MIS (H-5) | ✅ | un-blinded by `f7eedd3` |
 | 10 | **Position → holding transition (T+1 settlement)** | 🔴 **NO** | `_paper_holdings` has exactly one writer and it is the test helper |
-| 11 | Nightly restart: adapter state dies, DB row survives | 🔴 **NO** | happens — but see §"the mechanism" |
+| 11 | Nightly restart: the protection record survives it | 🔴 **NO** | the restart is real, but it destroys every broker-side fact the carry would be verified against |
 | 12 | **Tuesday 08:15 startup reconcile re-verifies the carry** | 🔴 **FALSE PASS** | the dangerous one |
 | 13 | GTT triggers at the broker | ⚠️ | rehearsable **only on branch `hold-check1-w8-26jul`** (`687b958`); on `main` a paper GTT still cannot fire |
 | 14 | Selling a demat holding with **no manual CDSL TPIN prompt** (DDPI) | 🔴 **NO** | live-only by construction |
 
-**The fraction, stated plainly:** of the 14 stages, **9 are genuinely paper-provable, 2 are
-provable only through a test seam or in a degraded form (4, 7), and 3 are not paper-provable
-at all (10, 12, 14).** The three that are not provable are consecutive, and together they are
-the definition of delivery. **Paper can prove that a CNC trade is opened and protected
-correctly. It cannot prove that it is still protected the next morning.**
+**The fraction, stated plainly:** of the 14 stages, **7 are genuinely paper-provable (1–3, 5, 6,
+8, 9); 3 only in a degraded form or through a test seam (4, 7, 13); and 4 not at all (10, 11,
+12, 14).** The four are consecutive but for DDPI, and together they are the definition of
+delivery. ⭐ **And one of them is worse than "not provable": stage 12 does not fail to prove —
+it prints a PASS.** Paper can prove that a CNC trade is opened and protected correctly. It
+cannot prove that it is still protected the next morning, and it will say that it is.
 
 ---
 
