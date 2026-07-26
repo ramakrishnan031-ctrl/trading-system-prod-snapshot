@@ -24,6 +24,13 @@ Parity: paper backs get_gtts/holdings/place_gtt/delete_gtt with an in-memory sto
 so the whole routine runs end-to-end in paper (Y7 injected-state tests). Y4: a broker
 gather failure DEFERS the cycle + alerts — it never crashes and never treats "no data"
 as "no positions". delivery_enabled stays false in Phase 2 (durability + safety only).
+
+⚠️ ONE THING PAPER CANNOT DO, AND IT SAYS SO (26-Jul-2026): the paper stores are
+in-memory and die with the nightly restart while `gtt_state` survives, so the morning
+after a paper carry this routine emits a clean GTT_EXIT for a position that was never
+held. `_announce_paper_carry_blind_spot` states that BEFORE the misleading exit rather
+than after it — paper-only, by a mode check. The carry is a live-only proof; see
+docs/audit/paper_overnight_carry_26jul2026.md.
 """
 from __future__ import annotations
 
@@ -84,6 +91,10 @@ class CncGttMonitor:
         # process so it never spams (esp. for benign human GTTs that match the
         # 0-trades case). Mirrors the reconciler's FIX-182 once-per-symbol discipline.
         self._adopt_warned: set = set()
+        # Paper blind-spot announcement (26-Jul-2026): dates already announced, so a
+        # row latched by needs_review cannot re-announce every 15-minute cycle. Same
+        # once-per-thing discipline as _adopt_warned above.
+        self._paper_carry_warned: set = set()
         self._lock = threading.Lock()
 
     # ── public ──────────────────────────────────────────────────────────────
@@ -108,6 +119,10 @@ class CncGttMonitor:
         broker_gtts, held_qty = gathered
 
         rows = self._store.get_active_gtt_states()
+
+        # Say what this pass CANNOT prove, BEFORE it produces artefacts that look
+        # exactly like proof (paper only; see the method).
+        actions.extend(self._announce_paper_carry_blind_spot(rows))
 
         # M2: >1 ACTIVE GTT for one trade -> ownership ambiguity -> SOFT-KILL.
         by_trade: Dict[str, list] = {}
@@ -331,6 +346,79 @@ class CncGttMonitor:
         return out
 
     # ── gather (Y4-safe) ──────────────────────────────────────────────────────
+    # ── the paper blind spot (26-Jul-2026) ────────────────────────────────────
+    def _announce_paper_carry_blind_spot(self, rows) -> List[str]:
+        """PAPER ONLY. Announce that this pass cannot prove the overnight carry —
+        because it is about to emit artefacts indistinguishable from proof that it did.
+
+        THE MECHANISM, measured. Paper's positions, holdings and GTTs are in-memory
+        dicts on the adapter (zerodha_adapter.py:424/429/432) and the nightly restart
+        erases all three; ``gtt_state`` is a real table and survives, by design. So on
+        the morning after a paper CNC carry ``_gather()`` returns empty/empty/empty
+        against a live ACTIVE row, ``_handle_row`` falls past rungs 1-3 to rung 4's
+        "GTT gone + flat -> the GTT did its job" branch, and ``_finalize_gtt_exit``
+        books a P&L at today's LTP (paper ``get_trades()`` is ``[]``, so the price
+        resolves off the quote), releases the delivery reservation, publishes
+        PositionClosed and marks the row CLEANED.
+
+        WHY IT IS WORTH SAYING OUT LOUD: every one of those artefacts is identical to
+        a real carried exit. That is not weak evidence, it is ACTIVE MISINFORMATION
+        about the one path that holds capital overnight — and silence is the dangerous
+        version, because "paper-proven" is the literal gate on delivery going live. So
+        the run states its own blind spot, and states it BEFORE the misleading
+        GTT_EXIT rather than after it.
+
+        LIVE IS UNREACHABLE BY CONSTRUCTION, and by a MODE check rather than a config
+        flag somebody could flip: this returns immediately unless the process is a
+        paper run. In live the premise is false anyway — the broker's holdings and
+        GTTs are real and survive the restart, which is precisely what the Mon->Tue
+        live pair exists to demonstrate.
+
+        ⛔ It does NOT change what the reconcile then does. Making paper behave
+        differently from live here would be its own parity lie; the fix for the gap is
+        a live pair, not a settlement model.
+        """
+        if self._mode != "PAPER":
+            return []
+        today = now_ist().date().isoformat()
+        carried = []
+        for r in rows:
+            stamp = str(r["created_at"] or "")[:10]
+            # Fail CLOSED on an unreadable stamp: only a well-formed date STRICTLY
+            # older than today counts, so a blank never reads as "carried".
+            if len(stamp) == 10 and stamp < today:
+                carried.append(r)
+        if not carried:
+            return []
+        if today in self._paper_carry_warned:
+            return [f"paper_carry_blind_spot_seen:{len(carried)}"]
+        self._paper_carry_warned.add(today)
+
+        symbols = ", ".join(sorted({str(r["symbol"]) for r in carried}))
+        oldest = min(str(r["created_at"])[:10] for r in carried)
+        body = (
+            f"{len(carried)} delivery GTT row(s) written on or before {oldest} "
+            f"({symbols}) survived this restart in the DATABASE — but the paper "
+            f"broker's holdings, positions and GTTs did not. They are in-memory and "
+            f"died with the process.\n\n"
+            f"⛔ WHATEVER THIS RECONCILE DOES WITH THEM NEXT IS NOT EVIDENCE ABOUT "
+            f"THE OVERNIGHT CARRY. Expect a clean-looking GTT_EXIT — trade closed, "
+            f"P&L booked at today's LTP, capital released — for a position that was "
+            f"never held and a GTT that was never there. It will be indistinguishable "
+            f"from a real carried exit.\n\n"
+            f"The overnight path is LIVE-ONLY. Paper can model a carry's end state "
+            f"(injected) but never the transition into it: nothing in production "
+            f"promotes a filled paper CNC position into a holding. Proving it needs a "
+            f"Monday->Tuesday live pair, whose PASS is the first Tuesday reconcile "
+            f"reporting healthy:<symbol> and finalising NOTHING. See "
+            f"docs/audit/paper_overnight_carry_26jul2026.md."
+        )
+        self._alert("CRITICAL", "PAPER CANNOT PROVE THE OVERNIGHT CARRY", body)
+        self._log.critical("cnc_gtt_monitor.paper_carry_blind_spot", extra={
+            "rows": len(carried), "symbols": symbols, "oldest_created_at": oldest,
+            "gtt_ids": [r["gtt_id"] for r in carried]})
+        return [f"paper_carry_blind_spot:{len(carried)}"]
+
     def _gather(self):
         """Return (broker_gtts_by_id, held_qty_by_symbol) or None on a broker failure
         (Y4: defer + alert, never treat no-data as no-positions)."""
