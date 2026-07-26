@@ -89,6 +89,24 @@ That is a design conversation, not a batch item.
 
 ---
 
+## Available, deliberately NOT taken — an end-of-runway escalation
+
+> 📋 **REGISTER LINE (Rama's call, ~4 lines if wanted):** *the December reminder sends exactly ONE
+> email — `security_monitor._send` writes a sentinel only for CRITICAL, so the four backoff
+> repeats are Telegram-only, and a WARNING Telegram dies silently on a delivery failure. A second
+> guaranteed email could be earned for free by folding a phase into the finding key (`…:early` →
+> `…:final` at ≤2 days of runway): a changed key is a NEW episode, so the existing ledger fires it
+> at full severity with no new mechanism. NOT BUILT — the batch's rule was "never CRITICAL twice",
+> and a deliberate second CRITICAL revises that rule rather than applying it.*
+
+Standing backstop meanwhile, so this is a nicety and not a hole: `last_run.json` reports
+`clean=false` on every ~60 s pass while the file is absent, and
+`ops/control_tower/aggregator.read_security` turns that into a finding that appears in **every
+daily pull report** until it lands (pushed to Telegram once, by `select_push`'s new/reopened
+rule, then silent).
+
+---
+
 ## Cross-reference
 
 The **WRONG**-class gap — the one that makes paper print a PASS rather than prove less — is the

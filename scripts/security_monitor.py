@@ -901,6 +901,11 @@ def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
         fname = f"nse_holidays_{year}.yaml"
         if (config_dir / fname).exists():
             continue
+        shape = (
+            f"in the same shape as the {today.year} file (a `holidays:` list of "
+            f"date/name entries)" if year != today.year else
+            "as a `holidays:` list of date/name entries"
+        )
         if year == today.year:
             headline = (
                 f"The 08:15 boot CANNOT START while this file is missing: load_all() "
@@ -921,8 +926,7 @@ def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
             f"config/{fname} does not exist on this machine.\n\n"
             f"{headline}\n\n"
             f"ACTION — commit NSE's PUBLISHED holiday list for {year} as "
-            f"config/{fname}, in the same shape as the {today.year} file "
-            f"(a `holidays:` list of date/name entries), and deploy.\n\n"
+            f"config/{fname}, {shape}, and deploy.\n\n"
             f"⛔ DO NOT invent, infer or extrapolate the dates, and do not copy the "
             f"previous year's file forward. A guessed calendar is far worse than a "
             f"missing one: the system would trade on a market holiday, or skip a real "
