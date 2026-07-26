@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta
 from typing import Callable, Dict, List, Optional
 
@@ -90,7 +90,9 @@ from orders.price_math import (
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
 
 # FIX-166 F17: canonical copy now in core.constants
+from core.closure_source import EXTERNAL_UNATTRIBUTED, OWN_CLOSURE_SOURCES
 from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
+from orders.closure_classifier import Evidence, OurLeg, classify
 
 # Terminal order statuses — never overwritten by a cancel/sweep (FIX-186).
 _TERMINAL_ORDER_STATUSES: frozenset[str] = frozenset(
@@ -120,6 +122,24 @@ _CANCEL_ALREADY_GONE_MARKERS: tuple[str, ...] = (
 _CANCEL_BEING_PROCESSED_MARKERS: tuple[str, ...] = (
     "being processed",
 )
+
+
+@dataclass
+class OrphanLegOutcome:
+    """D1: what the orphan-leg cancel pass actually learned.
+
+    The old `-> int` could not distinguish "no orphan legs" from "a leg is filling
+    right now" from "the read failed" -- and the mid-fill branch, which is POSITIVE
+    evidence the close is ours, never incremented the count. Those are three
+    different facts and CHECK1's verdict differs for each.
+    """
+    cancelled: int = 0
+    mid_fill: list = field(default_factory=list)    # [(broker_order_id, leg)] -- ours, filling
+    ambiguous: list = field(default_factory=list)   # unrecognised failure -> NOT evidence
+    read_failed: bool = False
+
+
+_BROKER_READ_FAILED = "__broker_read_failed__"  # sentinel: NOT an order_id
 
 
 def _cancel_reason_already_gone(reason: str) -> bool:
@@ -1081,9 +1101,16 @@ class OrderReconciler:
             )
 
         # FIX-148: Cancel orphaned SL/TGT orders at broker before capital release.
-        cancelled_count = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
-        if cancelled_count > 0:
-            steps.append(f"cancelled_{cancelled_count}_orphaned_orders")
+        # ── D2: GATHER, then CLASSIFY, then ACT ───────────────────────────────
+        # The claim above (mark_trade_manually_closed) is the IDEMPOTENT step and
+        # stays first (1.5) -- it is the double-release guard, and re-running it is
+        # free. The cancel is NOT idempotent and it destroys the mid-fill evidence,
+        # so it comes after. What moved is the DECISION: the cause used to be
+        # asserted 30 lines before any evidence existed.
+        orphan = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
+        if orphan.cancelled > 0:
+            steps.append(f"cancelled_{orphan.cancelled}_orphaned_orders")
+        cancelled_count = orphan.cancelled
 
         entry_price = trade["entry_actual_price"]
         qty = trade["qty_filled"] or 0
@@ -1102,9 +1129,52 @@ class OrderReconciler:
             direction = "LONG"
 
         # FIX-148: Fetch actual exit price from broker trades API.
-        exit_price = self._resolve_exit_price(symbol, direction, entry_price, log)
+        _broker_ids: list = []
+        exit_price = self._resolve_exit_price(
+            symbol, direction, entry_price, log, collect_order_ids=_broker_ids,
+        )
         exit_source = "broker_trades" if exit_price != entry_price else "entry_proxy"
         steps.append(f"exit_price={exit_price:.2f}({exit_source})")
+
+        # Our own exit legs, with their CURRENT local status. The orphan pass only
+        # sees NON-terminal legs, so a leg that already went COMPLETE -- the single
+        # most common case (35 of 41 measured) -- is invisible to it.
+        _legs_read_ok = True
+        _rows = []
+        try:
+            _rows = self._store.fetch_all(
+                """SELECT order_id, leg, status FROM orders
+                   WHERE trade_id = ? AND leg IN ('SL', 'TGT', 'EOD')""",
+                (trade_id,),
+            ) or []
+        except Exception as exc:  # noqa: BLE001
+            log.error("check1: exit-leg read failed: %s", exc)
+            _legs_read_ok = False
+
+        _mid = {b for b, _l in orphan.mid_fill}
+        _our_legs = tuple(
+            OurLeg(order_id=str(r["order_id"] or ""), leg=r["leg"],
+                   status=r["status"] or "", mid_fill=str(r["order_id"] or "") in _mid)
+            for r in _rows if r["order_id"]
+        )
+        _broker_ok = _BROKER_READ_FAILED not in _broker_ids
+        verdict = classify(Evidence(
+            our_legs=_our_legs,
+            broker_filled_order_ids=frozenset(
+                i for i in _broker_ids if i != _BROKER_READ_FAILED),
+            broker_trades_read_ok=_broker_ok,
+            orders_read_ok=(_legs_read_ok and not orphan.read_failed),
+            ambiguous_cancel=bool(orphan.ambiguous),
+        ))
+        steps.append(f"verdict={verdict.closure_source}({verdict.rung or 'none'})")
+
+        # W8: record the CAUSE now that it is known. COALESCE-guarded, so a value
+        # already written by the normal exit path is never clobbered.
+        try:
+            self._store.set_trade_closure_axes(trade_id, verdict.closure_source)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("check1: set_trade_closure_axes failed for %s: %s",
+                        trade_id, exc)
 
         if entry_price and float(entry_price) > 0 and qty > 0 and intent:
             # E4 (2026-07-17): real round-trip costs, so this backstop close
@@ -1184,22 +1254,51 @@ class OrderReconciler:
                         extra={"trade_id": trade_id, "symbol": symbol},
                     )
 
-                # FIX-148: CRITICAL Telegram alert with real PnL
+                # ⭐⭐ 1.4: CHECK1 EMITS THE ALERT THAT MATCHES THE EVIDENCE.
+                # This was CRITICAL "Position closed externally" unconditionally — a
+                # claim CHECK1 never verified. Measured 26-Jul: all four ever sent
+                # were our own orders filling. And because CHECK1 wins the race,
+                # order_placer's INFO exit alert is suppressed by its double-close
+                # early return (:2374) — so the false CRITICAL did not merely add
+                # noise, it REPLACED the good alert.
+                #
+                # Emitting the correct INFO here is what lets §C ship without §D:
+                # at bound 0 the reconciler finalizes AND alerts (exactly one alert,
+                # correct content, capital timing UNCHANGED); at bound > 0 it defers
+                # and order_placer alerts instead (again exactly one). Without this,
+                # §C alone would leave the good alert deleted.
                 if self._notifier is not None:
                     try:
                         pnl = release_result.pnl_delta
-                        self._notifier.send(
-                            severity="CRITICAL",
-                            title=f"[{self._mode}] RMS/MANUAL CLOSE -- {symbol}",
-                            body=(
-                                f"Position closed externally\n"
-                                f"Trade: {trade_id}\n"
-                                f"Entry: {float(entry_price):.2f} | Exit: {exit_price:.2f}\n"
-                                f"Qty: {qty} | PnL: {pnl:+.2f}\n"
-                                f"Source: {exit_source}"
-                            ),
-                            source_module="order_reconciler",
-                        )
+                        if verdict.is_ours:
+                            _leg = verdict.leg or "EXIT"
+                            self._notifier.send(
+                                severity="INFO",
+                                title=f"[{self._mode}] {_leg} EXIT -- {symbol}",
+                                body=(
+                                    f"Closed by OUR OWN {_leg} leg ({verdict.closure_source})\n"
+                                    f"Trade: {trade_id}\n"
+                                    f"Entry: {float(entry_price):.2f} | Exit: {exit_price:.2f}\n"
+                                    f"Qty: {qty} | PnL: {pnl:+.2f}\n"
+                                    f"Evidence: {verdict.rung} | Source: {exit_source}"
+                                ),
+                                source_module="order_reconciler",
+                            )
+                        else:
+                            self._notifier.send(
+                                severity="CRITICAL",
+                                title=f"[{self._mode}] RMS/MANUAL CLOSE -- {symbol}",
+                                body=(
+                                    f"Position closed externally — no own leg accounts for it\n"
+                                    f"Trade: {trade_id}\n"
+                                    f"Entry: {float(entry_price):.2f} | Exit: {exit_price:.2f}\n"
+                                    f"Qty: {qty} | PnL: {pnl:+.2f}\n"
+                                    f"Why: {', '.join(verdict.notes) or 'no evidence'}"
+                                    + (" | SOURCES DISAGREED" if verdict.contradiction else "")
+                                    + f" | Source: {exit_source}"
+                                ),
+                                source_module="order_reconciler",
+                            )
                     except Exception as exc:
                         log.error("check1: notifier.send failed: %s", exc)
         elif not intent:
@@ -1208,10 +1307,16 @@ class OrderReconciler:
                 product, trade_id,
             )
 
-        log.critical(
-            "CHECK1 MANUAL_CLOSE: trade_id=%s symbol=%s "
-            "local=OPEN/PARTIAL broker=no_position exit_price=%.2f exit_source=%s",
-            trade_id, symbol, exit_price if exit_price else 0.0, exit_source,
+        # The LOG follows the verdict for the same reason the alert does: a CRITICAL
+        # log line for a routine own-leg exit is the same false claim in another
+        # channel, and the daily report counts CRITICALs.
+        _lvl = log.info if verdict.is_ours else log.critical
+        _lvl(
+            "CHECK1 %s: trade_id=%s symbol=%s local=OPEN/PARTIAL broker=no_position "
+            "closure_source=%s rung=%s exit_price=%.2f exit_source=%s",
+            "OWN_LEG_CLOSE" if verdict.is_ours else "MANUAL_CLOSE",
+            trade_id, symbol, verdict.closure_source, verdict.rung or "none",
+            exit_price if exit_price else 0.0, exit_source,
         )
         return ReconciliationAction(
             check_name="MANUAL_CLOSE",
@@ -1337,7 +1442,8 @@ class OrderReconciler:
         )
 
     def _resolve_exit_price(
-        self, symbol: str, direction: str, entry_price, log
+        self, symbol: str, direction: str, entry_price, log,
+        collect_order_ids: Optional[list] = None,
     ) -> float:
         """
         FIX-148: Best-effort exit price resolution for externally closed positions.
@@ -1356,6 +1462,15 @@ class OrderReconciler:
                 and t["transaction_type"] == exit_side
                 and t["quantity"] > 0
             ]
+            if collect_order_ids is not None:
+                # ⭐ 1.3: THE THIRD DISCARDED SIGNAL. These rows already carry the
+                # order_id of the order that FILLED -- the most direct possible
+                # answer to "was this ours?" -- and this method kept only
+                # average_price. Plumbed out for the classifier; the price logic
+                # below is untouched, and the other caller passes nothing.
+                collect_order_ids.extend(
+                    str(x.get("order_id", "")) for x in matching if x.get("order_id")
+                )
             if matching:
                 latest = matching[-1]
                 price = latest["average_price"]
@@ -1366,6 +1481,11 @@ class OrderReconciler:
                     return price
         except Exception as exc:
             log.warning("check1: get_trades failed: %s — trying LTP fallback", exc)
+            if collect_order_ids is not None:
+                # Sentinel: the broker source FAILED (distinct from "returned
+                # nothing", which is paper's permanent state). A failure is not
+                # evidence and must not suppress the CRITICAL.
+                collect_order_ids.append(_BROKER_READ_FAILED)
 
         # Fallback: fetch current LTP
         try:
@@ -1384,11 +1504,14 @@ class OrderReconciler:
 
     def _cancel_orphaned_orders_for_trade(
         self, trade_id: str, symbol: str, log
-    ) -> int:
+    ) -> "OrphanLegOutcome":
         """
         FIX-148: Cancel any open SL/TGT orders at broker for a trade whose
-        position has been externally closed. Returns count of successfully
-        cancelled orders.
+        position has been externally closed.
+
+        D1 (26-Jul-2026): returns an OrphanLegOutcome, not an int. The caller
+        must be able to tell "no orphan legs" from "a leg is filling RIGHT
+        NOW" -- and from "the read failed". An int collapses all three.
 
         FIX-186 (FIX 1): finalize the LOCAL orders row immediately after the
         broker cancel, rather than relying on order_monitor to observe the
@@ -1402,7 +1525,7 @@ class OrderReconciler:
           - "being processed"       → leave alone (may fill); order_monitor owns it
           - any other error         → leave alone for retry; log ERROR
         """
-        cancelled = 0
+        out = OrphanLegOutcome()
         try:
             rows = self._store.fetch_all(
                 """SELECT order_id, leg FROM orders
@@ -1412,7 +1535,10 @@ class OrderReconciler:
             )
         except Exception as exc:
             log.error("check1: orphan order lookup failed: %s", exc)
-            return 0
+            # D1: a failed read is NOT "no orphan legs" -- it is an unknown, and an
+            # unknown must never suppress the CRITICAL (the first principle).
+            out.read_failed = True
+            return out
 
         for row in (rows or []):
             broker_id = row["order_id"]
@@ -1435,7 +1561,7 @@ class OrderReconciler:
                     "CANCELLED in local DB for trade %s",
                     broker_id, leg, trade_id,
                 )
-                cancelled += 1
+                out.cancelled += 1
             elif _cancel_reason_already_gone(result.reason):
                 # Order no longer exists at the broker — finalize locally so it
                 # cannot leak as an orphan row.
@@ -1445,7 +1571,7 @@ class OrderReconciler:
                     "CANCELLED in local DB for trade %s",
                     broker_id, leg, result.reason, trade_id,
                 )
-                cancelled += 1
+                out.cancelled += 1
             elif _cancel_reason_being_processed(result.reason):
                 # Mid-fill: may COMPLETE. Do NOT mark — let order_monitor
                 # observe the real terminal state on its next poll.
@@ -1454,13 +1580,21 @@ class OrderReconciler:
                     "(may fill); leaving local status for order_monitor: %s",
                     leg, broker_id, result.reason,
                 )
+                # ⭐ D1: THE SIGNAL THAT USED TO DIE HERE. The broker refused the
+                # cancel BECAUSE our own leg is filling -- positive evidence that
+                # this close is OURS. The check was always correct; only its answer
+                # was unreachable, because the return type was an int and this
+                # branch does not increment it.
+                out.mid_fill.append((broker_id, leg))
             else:
                 log.error(
                     "check1: cancel orphaned %s order %s failed (left for retry, "
                     "local status unchanged): %s",
                     leg, broker_id, result.reason,
                 )
-        return cancelled
+                # An unrecognised reason is explicitly NOT evidence either way.
+                out.ambiguous.append((broker_id, leg))
+        return out
 
     def _mark_order_cancelled_local(self, broker_order_id: str, log) -> None:
         """
@@ -1979,7 +2113,7 @@ class OrderReconciler:
         # FIX-148: Cancel stale SL/TGT orders (they're sized for old qty).
         # G5b will detect no active SL on next cycle and place a fresh one
         # at broker_qty.
-        cancelled = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
+        cancelled = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log).cancelled
         if cancelled > 0:
             steps.append(f"cancelled_{cancelled}_stale_orders")
 

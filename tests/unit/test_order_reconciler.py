@@ -372,9 +372,9 @@ def test_fix186_cancel_success_marks_local_cancelled(tmp_path: Path) -> None:
     adapter.cancel_order.return_value = _cancel_res(True)
     rec = _make_reconciler(store, adapter=adapter)
 
-    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+    out = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
 
-    assert n == 1
+    assert out.cancelled == 1
     assert _order_status(store, "sl1") == "CANCELLED"
     store.close()
     print("  OK FIX-186: broker cancel success → local SL CANCELLED")
@@ -392,9 +392,9 @@ def test_fix186_cancel_not_found_marks_local_cancelled(tmp_path: Path) -> None:
     )
     rec = _make_reconciler(store, adapter=adapter)
 
-    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+    out = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
 
-    assert n == 1
+    assert out.cancelled == 1
     assert _order_status(store, "sl1") == "CANCELLED"
     store.close()
     print("  OK FIX-186: broker 'not found' → local SL CANCELLED")
@@ -412,9 +412,13 @@ def test_fix186_cancel_being_processed_leaves_local(tmp_path: Path) -> None:
     )
     rec = _make_reconciler(store, adapter=adapter)
 
-    n = rec._cancel_orphaned_orders_for_trade("t1", "BEPL", logging.getLogger("t"))
+    out = rec._cancel_orphaned_orders_for_trade("t1", "BEPL", logging.getLogger("t"))
 
-    assert n == 0
+    assert out.cancelled == 0
+    # ⭐ D1: the signal that used to die here is now REACHABLE by the caller. Before,
+    # this case and "no orphan legs at all" both returned 0 and were indistinguishable.
+    assert out.mid_fill == [("sl1", "SL")], "mid-fill must be reported, not just logged"
+    assert out.ambiguous == [] and not out.read_failed
     assert _order_status(store, "sl1") == "OPEN", "being-processed must NOT be marked CANCELLED"
     store.close()
     print("  OK FIX-186: 'being processed' → local SL left for order_monitor")
@@ -430,9 +434,13 @@ def test_fix186_cancel_other_error_leaves_local(tmp_path: Path) -> None:
     adapter.cancel_order.return_value = _cancel_res(False, "Network unreachable")
     rec = _make_reconciler(store, adapter=adapter)
 
-    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+    out = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
 
-    assert n == 0
+    assert out.cancelled == 0
+    # ⭐ D1: an unrecognised reason is explicitly NOT evidence — it must be
+    # distinguishable from a mid-fill, because it forces CRITICAL and a mid-fill does not.
+    assert out.ambiguous == [("sl1", "SL")]
+    assert out.mid_fill == []
     assert _order_status(store, "sl1") == "OPEN"
     store.close()
     print("  OK FIX-186: unclassified error → local SL unchanged")
@@ -468,9 +476,9 @@ def test_fix186_paper_parity_marks_local_cancelled(tmp_path: Path) -> None:
     paper_adapter.cancel_order.return_value = _cancel_res(True)  # paper always succeeds
     rec = _make_reconciler(store, adapter=paper_adapter)
 
-    n = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
+    out = rec._cancel_orphaned_orders_for_trade("t1", "IRFC", logging.getLogger("t"))
 
-    assert n == 2
+    assert out.cancelled == 2
     assert _order_status(store, "sl1") == "CANCELLED"
     assert _order_status(store, "tgt1") == "CANCELLED"
     store.close()

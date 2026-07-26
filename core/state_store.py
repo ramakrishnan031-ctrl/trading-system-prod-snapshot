@@ -1611,6 +1611,28 @@ class StateStore:
             (trade_id,),
         )
 
+    def set_trade_closure_axes(
+        self, trade_id: str, closure_source: Optional[str],
+        exit_mechanism: Optional[str] = None,
+    ) -> None:
+        """W8: record WHO closed the trade (and HOW) on a row the reconciler
+        finalized. Separate from record_manual_close_financials because the
+        classification is decided by evidence, not by money.
+
+        Idempotent and NULL-safe: passing None leaves the column NULL, which is the
+        honest value for "we do not know" (docs/closure_source_contract.md). Never
+        clobbers a value already written by the normal exit path -- guarded to rows
+        whose closure_source IS NULL.
+        """
+        with self.transaction() as cur:
+            cur.execute(
+                """UPDATE trades
+                      SET closure_source = COALESCE(closure_source, ?),
+                          exit_mechanism = COALESCE(exit_mechanism, ?)
+                    WHERE trade_id = ?""",
+                (closure_source, exit_mechanism, trade_id),
+            )
+
     def mark_trade_manually_closed(self, trade_id: str) -> bool:
         """
         Mark a trade as CLOSED_MANUAL if it is still OPEN, PARTIAL or EXITING.
