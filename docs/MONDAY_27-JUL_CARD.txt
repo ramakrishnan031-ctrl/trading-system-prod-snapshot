@@ -150,10 +150,11 @@ You should not have to reconstruct this from six documents. It is three steps.
      M-A2 deadline 8s).  Monday's job is to OBSERVE, not to change.
 
   2. IF MONDAY IS OBSERVED CLEAN -> PUSH MONDAY EVENING.  "Clean" = checks 1-7 on
-     this card pass and no email arrives that is not on the list above. TWENTY
-     commits now go together as one push. Verify with:
-        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  20
-     ⭐ TWENTY, NOT FOURTEEN, AND THE REASON MATTERS. Late Sunday `main` gained 5
+     this card pass and no email arrives that is not on the list above. TWENTY-FOUR
+     commits now go together as one push — twenty-three below plus this card edit
+     itself as the twenty-fourth and the branch tip. Verify with:
+        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  24
+     ⭐ TWENTY-FOUR, NOT FOURTEEN, AND THE REASON MATTERS. Late Sunday `main` gained 5
      commits of its own (the December holiday-calendar reminder) while this branch
      sat waiting, so the two DIVERGED — a branch push to origin/main would have been
      REJECTED non-fast-forward, at exactly the moment you expect it to work. `main`
@@ -167,16 +168,21 @@ You should not have to reconstruct this from six documents. It is three steps.
         cc86839  SYSTEM_MAP "9 checks" -> 10; one fraction corrected (DOCS)
         359ccd8  alert body no longer says "copy the file that is missing"
         8316e0a  security-watcher is Type=simple, not a oneshot     (COMMENT)
+        6184e79  the merge commit itself
+     AND FOUR MORE FROM SUNDAY NIGHT, AFTER THE MERGE:
         e6ade32  a SECOND, final CRITICAL near the deadline  (security_monitor)
         ea65581  ⚠️ the paper run announces its own carry blind spot (PRODUCTION,
                  paper-only by a MODE check; proven silent in live on an identical row)
-        6184e79  the merge commit itself
+        9ac5023  this card + SYSTEM_MAP + the two audit docs        (DOCS)
+        <tip>    this card edit
      ⭐ NONE of these is loaded by the trading service's boot except ea65581, and
-        that one returns immediately unless mode == "PAPER". security_monitor is a
-        SEPARATE process (security-watcher.service, Type=simple + RestartSec=60), so
-        its changes go live ~60s after the push and cannot touch the 08:15 boot at
-        all. The reminder itself is December-gated: with nse_holidays_2026.yaml
-        present and today not in December it emits nothing.
+        that one returns immediately unless mode == "PAPER" — proven silent in LIVE
+        against an identical carried row, and silent anyway today because delivery is
+        off so the reconcile has no rows at all. security_monitor is a SEPARATE
+        process (security-watcher.service, Type=simple + RestartSec=60), so its
+        changes go live ~60s after the push and cannot touch the 08:15 boot at all.
+        The reminder itself is December-gated: with nse_holidays_2026.yaml present
+        and today not in December it emits nothing.
         SO v45 IS STILL TUESDAY'S SINGLE VARIABLE.
      THE ORIGINAL FOURTEEN, unchanged and in this order:
         77b8b04  §B  trades.closure_source + exit_mechanism  (SCHEMA v44 -> v45)
