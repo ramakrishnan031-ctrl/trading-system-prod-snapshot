@@ -86,6 +86,29 @@ def test_the_lead_days_config_moves_the_window_and_is_not_a_hidden_constant():
     assert sm._holiday_files_due(date(2026, 12, 2), 30) == [2026, 2027]   # 1-Dec window
 
 
+def test_the_committed_security_yaml_actually_reaches_the_behaviour(tmp_path):
+    """A knob is only config if the file is read. Same argument as the re-alert
+    ladder: prove the YAML -> SecConfig -> check path end to end, so the window can
+    be retuned on the VM without a deploy."""
+    import yaml
+    real = yaml.safe_load((_REAL_CONFIG_DIR / "security.yaml").read_text(encoding="utf-8"))
+    assert real["security"]["holiday_calendar_alert"] is True
+    assert sm.SecConfig.load(_REAL_CONFIG_DIR / "security.yaml").holiday_calendar_lead_days \
+        == real["security"]["holiday_calendar_lead_days"]
+
+    stub = tmp_path / "security.yaml"
+    stub.write_text("security:\n  holiday_calendar_lead_days: 45\n", encoding="utf-8")
+    cfg = sm.SecConfig.load(stub)
+    cfg.config_dir = str(tmp_path)
+    assert cfg.holiday_calendar_lead_days == 45
+    # 45 days out is 17-Nov: silent under the committed 16, loud under this one.
+    assert sm._holiday_files_due(date(2026, 11, 17), 16) == [2026]
+    assert [f.key for f in sm.check_nse_holiday_calendar(cfg, _at(2026, 11, 17))] == [
+        "holidaycal:missing:nse_holidays_2026.yaml",
+        "holidaycal:missing:nse_holidays_2027.yaml",
+    ]
+
+
 # ── fires / goes silent, against a real directory ────────────────────────────
 
 def test_it_is_silent_today_against_the_real_config_directory(tmp_path):
