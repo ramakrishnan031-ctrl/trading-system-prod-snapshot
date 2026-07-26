@@ -277,8 +277,11 @@ def test_reconstruct_unreadable_returns_none(tmp_path: Path):
 
 def test_unreadable_active_gtt_warns_once_no_insert(tmp_path: Path):
     env = _mon_env(tmp_path)
+    # Triggers bracket the fixture quote (337.0), matching _rowless_gtt's own
+    # 320/360 convention. [100,110] was an impossible state that only survived
+    # because a paper GTT could never fire; it can now.
     env.adapter._paper_gtts["888"] = env.adapter._paper_gtt_record(
-        "888", "INFY", [100.0, 110.0], 105.0, [], status="active")
+        "888", "INFY", [320.0, 360.0], 337.0, [], status="active")
     out = env.mon.adopt_orphan_gtts()
     assert out == ["adopt_unreadable:888"]
     assert env.store.get_gtt_state_by_id("888") is None

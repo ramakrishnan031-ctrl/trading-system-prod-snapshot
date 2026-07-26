@@ -250,8 +250,12 @@ def test_orphan_leaked_system_gtt_forensic_then_deleted(tmp_path: Path):
 def test_unknown_human_gtt_left_alone(tmp_path: Path):
     env = _setup(tmp_path)
     # a GTT with no gtt_state row at all -> human/external -> NEVER deleted
+    # Triggers must BRACKET the fixture's quote (337.0). [100,110] was an impossible
+    # state -- an untriggered GTT 3x below the traded price -- and only survived
+    # because a paper GTT could never fire. It can now, so the fixture has to be
+    # something production could produce.
     env.adapter._paper_gtts["88888"] = env.adapter._paper_gtt_record(
-        "88888", "INFY", [100.0, 110.0], 105.0, [], status="active")
+        "88888", "INFY", [320.0, 360.0], 337.0, [], status="active")
     out = env.mon.reconcile()
     assert "unknown_gtt:88888" in out
     assert "88888" in env.adapter._paper_gtts                          # NOT deleted
@@ -261,8 +265,10 @@ def test_50_cap_warning(tmp_path: Path):
     env = _setup(tmp_path)
     for i in range(45):
         gid = str(10_000 + i)
+        # bracket the fixture quote (337.0) so these stay ACTIVE and actually count
+        # toward the cap -- see the note in test_unknown_human_gtt_left_alone.
         env.adapter._paper_gtts[gid] = env.adapter._paper_gtt_record(
-            gid, "SYM", [1.0, 2.0], 1.5, [], status="active")
+            gid, "SYM", [320.0, 360.0], 337.0, [], status="active")
     out = env.mon.reconcile()
     assert any(a.startswith("gtt_cap:") for a in out)
     assert env.notifier.sev("WARNING")

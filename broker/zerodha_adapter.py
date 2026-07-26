@@ -781,10 +781,104 @@ class ZerodhaAdapter:
             "orders": list(legs),
         }
 
+    @staticmethod
+    def _gtt_triggered_leg(trigger_values, ltp: float) -> Optional[int]:
+        """Which OCO leg a Zerodha GTT would fire at this LTP: 0 = SL, 1 = TGT, None.
+
+        PURE, and separated from every I/O concern on purpose -- the trigger RULE is
+        the part that has to be right, and a pure predicate can be driven to any price
+        without a quote provider, a clock, or a thread.
+
+        trigger_values is [sl_trigger, tgt_trigger] ASCENDING (place_gtt's contract:
+        SL below, TGT above). Zerodha fires on LTP crossing either bound, inclusive.
+        SL is checked FIRST: if a single observation is outside both bounds -- which a
+        poll can see and a tick stream would not -- the protective leg must win.
+        """
+        try:
+            sl_trigger, tgt_trigger = float(trigger_values[0]), float(trigger_values[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        if ltp <= sl_trigger:
+            return 0
+        if ltp >= tgt_trigger:
+            return 1
+        return None
+
+    def _paper_settle_gtt_triggers(self) -> None:
+        """PAPER ONLY: flip any active GTT whose trigger the current LTP has crossed.
+
+        ⭐ WHY THIS EXISTS. Nothing ever wrote a paper GTT status other than "active",
+        so a GTT could NEVER FIRE in paper -- which made CncGttMonitor's primary path
+        (triggered + flat -> GTT_EXIT) and its F6 re-protect branch unreachable by a
+        running paper session. Every CNC exit runs through a GTT, so "paper-proven"
+        could not cover the CNC exit path at all. The 25 tests that appeared to cover
+        it reach past the public API and write `_paper_gtts[gid]["status"]` by hand --
+        a test that must cheat is the gap announcing itself.
+
+        ⚠️⚠️ WHAT THIS DOES **NOT** MODEL -- read before trusting a paper GTT result:
+          1. **OVERNIGHT / WHILE-DOWN TRIGGERING, WHICH IS THE WHOLE POINT OF A GTT.**
+             Zerodha evaluates server-side on every tick even when we are stopped.
+             This evaluates only when our own code asks, so a paper GTT cannot fire
+             while the paper service is down. The Mon->Tue carry stays irreducible.
+          2. **TICK-LEVEL PATH.** We poll a quote; price can cross and come back
+             between polls. Paper therefore UNDER-triggers relative to the broker --
+             the safe direction, but it means paper cannot prove a GTT *would* fire.
+          3. **TRIGGER != FILL.** Zerodha places a LIMIT leg on trigger, which may not
+             fill. This flips the status and places NOTHING, so the holding is left
+             intact -- which is exactly the F6 shape ("triggered but holding > 0").
+             It is not the fill path, and must not be read as one.
+
+        Status flip ONLY, deliberately: placing the leg from inside a read path would
+        take `_paper_fills_lock` while holding `_paper_gtts_lock` and spawn a thread
+        from a getter. Not worth the re-entrancy for a state the monitor derives from
+        holdings anyway.
+
+        LTP is fetched OUTSIDE the lock -- `_fetch_ltp` calls the injected
+        quote_provider, i.e. the network -- so the store is snapshotted, quoted, then
+        re-locked to write. `_fetch_ltp` returns None (never 0.0) on no-data, which is
+        what stops a missing quote from reading as a crashed price and firing every SL
+        (FIX-001).
+        """
+        if not self._paper:
+            return
+        with self._paper_gtts_lock:
+            pending = [
+                (gid, rec["condition"]["tradingsymbol"],
+                 list(rec["condition"].get("trigger_values") or []))
+                for gid, rec in self._paper_gtts.items()
+                if rec.get("status") == "active"
+            ]
+        if not pending:
+            return
+        ltps: dict[str, Optional[float]] = {}
+        for _gid, symbol, _tv in pending:
+            if symbol not in ltps:
+                ltps[symbol] = self._fetch_ltp(symbol)
+        for gid, symbol, trigger_values in pending:
+            ltp = ltps.get(symbol)
+            if ltp is None:
+                continue
+            leg = self._gtt_triggered_leg(trigger_values, ltp)
+            if leg is None:
+                continue
+            with self._paper_gtts_lock:
+                rec = self._paper_gtts.get(gid)
+                # re-check under the lock: a concurrent delete/modify may have
+                # landed while we were quoting.
+                if rec is None or rec.get("status") != "active":
+                    continue
+                rec["status"] = "triggered"
+                rec["condition"]["last_price"] = float(ltp)
+            self._log.info("paper_gtt_triggered", extra={
+                "gtt_id": gid, "symbol": symbol, "ltp": ltp,
+                "leg": "SL" if leg == 0 else "TGT",
+                "trigger_values": trigger_values})
+
     def get_gtt(self, gtt_id) -> Optional[dict]:
         """Fetch ONE GTT by trigger id. PAPER returns a copy of the stored record
         (None if absent). LIVE calls kite.get_gtt (broker errors translated)."""
         if self._paper:
+            self._paper_settle_gtt_triggers()
             with self._paper_gtts_lock:
                 rec = self._paper_gtts.get(str(gtt_id))
                 return dict(rec) if rec is not None else None
@@ -800,6 +894,7 @@ class ZerodhaAdapter:
         """All GTTs at the broker (active + triggered + …). PAPER returns the
         in-memory store. Used by the Phase-2 reconcile (missing/orphan/triggered)."""
         if self._paper:
+            self._paper_settle_gtt_triggers()
             with self._paper_gtts_lock:
                 return [dict(r) for r in self._paper_gtts.values()]
         self._rl.acquire(_CATEGORY_MAP["get_gtts"])
