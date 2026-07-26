@@ -150,10 +150,10 @@ You should not have to reconstruct this from six documents. It is three steps.
      M-A2 deadline 8s).  Monday's job is to OBSERVE, not to change.
 
   2. IF MONDAY IS OBSERVED CLEAN -> PUSH MONDAY EVENING.  "Clean" = checks 1-7 on
-     this card pass and no email arrives that is not on the list above. TEN commits
-     go together, in this order, as one push — the nine below, plus this card edit
-     itself as the tenth and the branch tip. Verify with:
-        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  10
+     this card pass and no email arrives that is not on the list above. FOURTEEN
+     commits go together, in this order, as one push — the thirteen below, plus this
+     card edit itself as the fourteenth and the branch tip. Verify with:
+        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  14
         77b8b04  §B  trades.closure_source + exit_mechanism  (SCHEMA v44 -> v45)
         10c02ae  §A  the pure closure classifier (component only)
         2f8fd87  §C  gather -> classify -> act; the alert the evidence supports
@@ -163,9 +163,17 @@ You should not have to reconstruct this from six documents. It is three steps.
         6f7d27e      the weekend-failing test: pin the clock  (TEST ONLY)
         ffea817      the YEAR tripwire + the clock-class report  (TEST + DOCS)
         5cccffb      §D report · paper-fidelity sweep · one standing rule  (DOCS)
+        6753854      card update: ten commits + a third failure count  (DOCS)
+        b53b5ac      the 2027 boot-blocker: warn in DECEMBER  (TEST ONLY)
+        687b958      ⚠️ a paper GTT can now FIRE  (PRODUCTION CODE, paper-only)
+        c43553d      the GTT report + gaps classified WEAKER vs WRONG  (DOCS)
      ⛔ Do NOT push a subset. §C without §D leaves the deleted INFO deleted.
-     ⭐ The last three touch NO production code -- two test files and docs only --
-        so they cannot affect Tuesday's boot. v45 remains the single variable.
+     ⚠️ ONE of these touches production code: 687b958 changes broker/zerodha_adapter
+        .py. It is DOUBLY paper-only — the new pass returns immediately unless
+        self._paper, and both call sites already sit inside `if self._paper:`, with
+        a test pinning the live no-op. It touches no schema and no capital path.
+        ⭐ SO v45 IS STILL TUESDAY'S SINGLE VARIABLE. Everything else added Sunday
+        night is test files and documentation.
 
   3. TUESDAY 08:15 TAKES v45 AS ITS SINGLE VARIABLE.  The migration REBUILDS the
      live `trades` table, and a failed migration BLOCKS THE BOOT — there is no flag
