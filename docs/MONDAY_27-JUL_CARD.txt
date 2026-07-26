@@ -1,8 +1,12 @@
 ==============================================================================
 MONDAY 27-JUL-2026 — THE CARD.   Detail: MASTER_PENDING_..._EVENING.txt
 Deployed d0fd7b8 · loads 08:15 · book flat.  Every command below was RE-RUN against
-production 26-Jul 16:1x (schema v44, trades 423). Two originally-drafted checks did
-not exist — see footnote.
+production 26-Jul 16:1x, and every FACT re-verified again 26-Jul 18:4x direct from
+the VM: bare HEAD d0fd7b8 (= main, so the hold branch really is unpushed), service
+inactive/enabled since Fri 24-Jul 08:15:27, schema v44, trades 423 / open 0,
+signals 49,410, innings 322, pb01_watchlist 0, pb01_capture heartbeats 0,
+SOFT_KILL circuit_breaker_force_close_15:15 @ 24-Jul 15:15:01 (prior-day).
+Two originally-drafted checks did not exist — see footnote.
     ssh trading-vm ; cd ~/systems/trading-system ; L=logs/system_$(date +%F).log
     DB="file:data_store/trading_system.db?mode=ro&immutable=1"
 ==============================================================================
@@ -114,10 +118,65 @@ TUESDAY 08:15 — THREE NON-EVENTS
   ⭐ MEASURED AGAIN 26-Jul AND IT PROVES THE POINT: the same unchanged tree gave
   11F here where the recorded figure was 33F — a PATH difference, not a regression.
   The SET is the only thing that means anything.
-  ⚠️ AND A NEW ONE, RECORDED NOT FIXED: test_daily_trade_review::test_main_defaults_
-  date_to_today_and_records_heartbeat fails on WEEKENDS (the report correctly skips
-  a Sunday). Same class as the hour-of-day bomb fixed 25-Jul; it is IN the weekend
-  baseline, so it must not be read as a Monday regression.
+  ⭐ A THIRD COUNT, same night: 31F. BASE 31F/5161P vs MERGE 30F/5164P, both run
+  ALONE. 33 / 11 / 31 on trees that differ by two test files — read the SET.
+  ⛔⛔ AND THE REASON FOR THE THIRD NUMBER IS ITSELF A RULE: NEVER RUN SUITES IN
+  PARALLEL. utils/instance_lock uses a MACHINE-GLOBAL %TEMP% lock, so concurrent
+  runs corrupt each other. Three parallel runs earlier tonight produced 30/50/53
+  and made the 18:15 bomb LOOK like it had regressed; run alone it passes. A
+  corrupted failure set is worse than a slow one — it reads as a finding.
+  ✅ THE WEEKEND ONE IS NOW FIXED (26-Jul, on the hold branch): test_daily_trade_
+  review::test_main_defaults_date_to_today_and_records_heartbeat used to fail every
+  Saturday and Sunday — the report correctly skips a non-trading day, so the xlsx
+  the test demanded was never written. Its clock is now pinned to a real NSE trading
+  day and the real holiday guard still runs against it.
+  ⭐ WHAT THIS MEANT IS THE PART WORTH KEEPING: the SUITE gave a different answer on
+  a Saturday than on a Tuesday, so a WEEKEND baseline was never comparable to a
+  WEEKDAY one — and BASE-vs-MERGE comparability is the whole gate. Two instances on
+  two different axes (hour-of-day 25-Jul, day-of-week 26-Jul) made it a class; the
+  suite was then swept for a third by re-running it under a simulated calendar.
+  ⚠️ Note for Monday specifically: Monday is a WEEKDAY, so the OLD test passes on
+  Monday anyway. Nothing about this is observable Monday morning — it matters only
+  when a baseline is taken on a weekend, which is exactly when they get taken.
+
+⭐⭐ THE MONDAY -> TUESDAY SEQUENCE — THE WHOLE PLAN, IN ONE PLACE
+------------------------------------------------------------------------------
+You should not have to reconstruct this from six documents. It is three steps.
+
+  1. MONDAY CHANGES NOTHING.  Branch `hold-check1-w8-26jul` @ 351c4c5 is UNPUSHED.
+     VERIFIED 26-Jul 18:4x: the VM bare repo HEAD is d0fd7b8 — identical to `main`.
+     Monday therefore runs exactly the code Friday ran, plus the two CONFIG changes
+     that were already deployed and first load at 08:15 (service window 17:35,
+     M-A2 deadline 8s).  Monday's job is to OBSERVE, not to change.
+
+  2. IF MONDAY IS OBSERVED CLEAN -> PUSH MONDAY EVENING.  "Clean" = checks 1-7 on
+     this card pass and no email arrives that is not on the list above. TEN commits
+     go together, in this order, as one push — the nine below, plus this card edit
+     itself as the tenth and the branch tip. Verify with:
+        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  10
+        77b8b04  §B  trades.closure_source + exit_mechanism  (SCHEMA v44 -> v45)
+        10c02ae  §A  the pure closure classifier (component only)
+        2f8fd87  §C  gather -> classify -> act; the alert the evidence supports
+        81f9372  §D  the mid-fill deferral      (ships OFF: bound default 0.0)
+        aaccbda      test hygiene: 3 fixed numbers become the property they meant
+        351c4c5      this card, re-verified against production
+        6f7d27e      the weekend-failing test: pin the clock  (TEST ONLY)
+        ffea817      the YEAR tripwire + the clock-class report  (TEST + DOCS)
+        5cccffb      §D report · paper-fidelity sweep · one standing rule  (DOCS)
+     ⛔ Do NOT push a subset. §C without §D leaves the deleted INFO deleted.
+     ⭐ The last three touch NO production code -- two test files and docs only --
+        so they cannot affect Tuesday's boot. v45 remains the single variable.
+
+  3. TUESDAY 08:15 TAKES v45 AS ITS SINGLE VARIABLE.  The migration REBUILDS the
+     live `trades` table, and a failed migration BLOCKS THE BOOT — there is no flag
+     that makes it a no-op. That is deliberate: it is why this ships on a day whose
+     only change is the migration, and why Monday must be clean first.
+     ⭐ §D ships OFF (0.0) and is a PROVEN structural no-op, so Tuesday's behaviour
+     change is §B + §C only. Raising the §D knob is a SEPARATE, LATER decision and
+     has its own precondition — see check1_deferral_26jul2026.md, which leads with
+     it: paper CANNOT exercise that path at all, so turning it on without either a
+     refusable paper cancel_order or a live canary ships an unrehearsed path
+     straight into live.
 
 ⭐ WHAT MONDAY DOES *NOT* PROVE
 ------------------------------------------------------------------------------
