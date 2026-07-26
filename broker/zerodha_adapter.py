@@ -2158,11 +2158,36 @@ class ZerodhaAdapter:
                 if new_qty == 0:
                     self._paper_positions.pop(symbol, None)
                 else:
+                    # SK-A (26-Jul-2026): REFLECT the order's product, do not assert a
+                    # constant. `_rec` is the SUBMITTED record this fill merged into,
+                    # and _paper_place_order already put the resolved broker code on it
+                    # (":1985 'product': broker_code or ''"). The value was in hand
+                    # three lines up and was being discarded.
+                    #
+                    # WHY IT MATTERED: two safety mechanisms read a POSITION's product,
+                    # and a constant "MIS" blinded both in paper (live was always
+                    # correct — the live branch reads kite's own per-position product):
+                    #   * EOD6/FIX-015 — eod_squareoff.py:1069-1073 filters to
+                    #     ("MIS","CO") and SKIPS anything absent, so a delivery position
+                    #     is exempt from the 15:17 square-off. In paper it reported MIS
+                    #     and got squared ⇒ "paper-proven", the stated gate for delivery
+                    #     going live, could not prove the one thing it had to.
+                    #   * H-5 — kill_switch.py:1588 derives the HARD_KILL orphan-sweep
+                    #     intent from pos.product; an orphan CNC swept as INTRADAY does
+                    #     not offset it and opens a fresh naked MIS short.
+                    #
+                    # FALLBACK DIRECTION IS DELIBERATE: `or "MIS"` only where nothing is
+                    # known. An empty product would fall OUT of the ("MIS","CO") filter
+                    # and be silently CARRIED — the unsafe direction — and
+                    # get_positions()'s own `info.get("product", "MIS")` (:1109) does not
+                    # catch it, because that default fires only on a MISSING KEY, not an
+                    # empty value. Normalising here means an unknown product degrades to
+                    # squared, which is recoverable, never to a carry, which is not.
                     self._paper_positions[symbol] = {
                         "qty": new_qty,
                         "avg_price": fill_price,
                         "side": "BUY" if new_qty > 0 else "SELL",
-                        "product": "MIS",
+                        "product": _rec.get("product") or "MIS",
                     }
 
             if self._bus is None:
