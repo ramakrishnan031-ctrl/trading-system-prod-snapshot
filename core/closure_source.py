@@ -90,6 +90,21 @@ EVIDENCE_PRECEDENCE: Final[tuple[str, ...]] = (
     EV_MID_FILL,
 )
 
+# ⏳ RUNG 4 IS A CLAIM ABOUT *NOW*, AND IT EXPIRES.
+# "Being processed" means a leg is filling at this instant — so the honest response
+# is not to attribute but to WAIT: CHECK1 may DEFER for a bounded number of seconds
+# (`order_reconciler.check1_mid_fill_defer_sec`) and let our own fill callback own
+# the close, and with it the capital release. That is a TIMING mechanism, not a new
+# rung.
+# If the bound elapses with nothing terminal, the claim has gone STALE: the leg we
+# were told was filling never landed. A stale claim stops counting as evidence, so
+# rung 4 falls SILENT and the ladder drops through to whatever source can still
+# speak — and to EXTERNAL_UNATTRIBUTED at CRITICAL if none can, which is the first
+# principle again. Rungs 1-3 are unaffected: expiry retires a stale claim, it never
+# destroys evidence that is still good.
+# ⚠️ An expired deferral is the case where the design was WRONG, so it is never
+# silent — the expiry is logged whatever the resulting verdict.
+
 # ⚠️⚠️ THE CONTRADICTION RULE — this is the safety property, not a detail.
 # If two sources DISAGREE about which leg closed the position, that is NOT a tie and
 # it MUST NOT resolve to the higher-precedence source. It resolves to

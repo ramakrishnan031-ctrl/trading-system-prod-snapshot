@@ -743,6 +743,23 @@ class OrderReconcilerConfig(BaseModel):
     # EXITING (an exit legitimately in progress) is left alone until it ages past
     # this threshold.
     stuck_exiting_timeout_minutes: int = 30
+    # §D (2026-07-26): CHECK1's mid-fill DEFERRAL bound, in SECONDS of wall clock.
+    # When the broker refuses our orphan-leg cancel with "being processed", one of
+    # OUR OWN legs is filling at this instant: the position vanished because our
+    # exit filled, and our fill callback simply has not arrived yet. CHECK1 polls
+    # positions and wins that race by ~0.9s, so it can release capital against a
+    # verdict formed before the callback that owns the close exists. For this many
+    # seconds it therefore finalizes NOTHING and lets the exit path own the close.
+    # On expiry it finalizes anyway and says so — a bound that can expire must
+    # never expire silently.
+    #
+    # SECONDS, NOT CYCLES, deliberately: a cycle count is a proxy for elapsed time
+    # whose meaning changes silently the day poll_interval_sec is retuned.
+    #
+    # 0.0 = OFF = the pre-§D path, exactly — not "approximately". At 0.0 the
+    # deferral code is not entered at all; tests/unit/test_check1_deferral.py
+    # asserts that by booby-trapping the bookkeeping and the clock.
+    check1_mid_fill_defer_sec: float = 0.0
 
     @field_validator("poll_interval_sec")
     @classmethod
@@ -777,6 +794,16 @@ class OrderReconcilerConfig(BaseModel):
     def _validate_drift_alert_interval(cls, v: float) -> float:
         if v < 1.0:
             raise ValueError("capital_drift_alert_interval_sec must be >= 1.0")
+        return v
+
+    @field_validator("check1_mid_fill_defer_sec")
+    @classmethod
+    def _validate_check1_defer(cls, v: float) -> float:
+        # 0.0 is the OFF value, so the floor is 0.0 and not 1.0. A negative bound
+        # would make every deferral expire on the cycle it started — the deferral
+        # silently disabled while the config still claimed it was on.
+        if v < 0.0:
+            raise ValueError("check1_mid_fill_defer_sec must be >= 0.0")
         return v
 
 

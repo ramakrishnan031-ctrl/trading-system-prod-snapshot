@@ -147,6 +147,43 @@ def test_entry_leg_is_never_a_closure_source() -> None:
     assert v.closure_source == EXTERNAL_UNATTRIBUTED
 
 
+# ── ⏳ §D: rung 4 is a claim about NOW, and it expires ────────────────────────
+
+def test_deferral_expiry_makes_a_stale_mid_fill_silent() -> None:
+    """⭐ The leg we were told was "being processed" never landed. The claim has gone
+    stale, so it stops counting as evidence and the first principle takes over --
+    which is what makes an expired deferral LOUD rather than a quiet own-leg
+    attribution nobody would ever look at."""
+    ev = Evidence(our_legs=(_leg("TGT", "OPEN", "O1", mid=True),))
+    assert classify(ev).closure_source == OWN_TGT          # before the window passes
+
+    v = classify(Evidence(our_legs=ev.our_legs, deferral_expired=True))
+    assert v.closure_source == EXTERNAL_UNATTRIBUTED and v.severity == "CRITICAL"
+    assert "deferral_expired" in v.notes, "the alert must say WHY it does not know"
+
+
+def test_deferral_expiry_retires_a_stale_claim_it_does_not_destroy_evidence() -> None:
+    """⚠️ Expiry retires rung 4 ONLY. If the leg did reach COMPLETE while we waited,
+    that is a live source and the close IS ours -- forcing CRITICAL there would be a
+    false alarm manufactured by a timer."""
+    v = classify(Evidence(our_legs=(_leg("TGT", "COMPLETE", "O1", mid=True),),
+                          deferral_expired=True))
+    assert v.closure_source == OWN_TGT and v.severity == "INFO"
+    assert v.rung == EV_LOCAL_COMPLETE
+
+
+def test_a_stale_mid_fill_cannot_manufacture_a_contradiction() -> None:
+    """⭐ The subtle one. A stale rung-4 claim naming the SL while a live local row
+    says the TGT is COMPLETE must not be read as "sources disagree" -- that would
+    turn a correct own-leg close into a CRITICAL because of a claim that had already
+    expired. A silent source cannot disagree with anyone."""
+    v = classify(Evidence(
+        our_legs=(_leg("TGT", "COMPLETE", "O1"), _leg("SL", "OPEN", "O2", mid=True)),
+        deferral_expired=True))
+    assert not v.contradiction
+    assert v.closure_source == OWN_TGT and v.severity == "INFO"
+
+
 def test_classifier_is_pure() -> None:
     """No I/O, no mutation of its input: the same Evidence classifies identically
     however many times it is asked."""

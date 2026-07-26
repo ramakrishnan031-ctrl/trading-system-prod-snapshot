@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta
 from typing import Callable, Dict, List, Optional
@@ -341,6 +342,26 @@ class OrderReconciler:
         # FIX-B: Track orphan cycle counts
         # Maps trade_id -> cycle_count (incremented each cycle orphan is seen; auto-close after 3)
         self._orphan_cycle_count: Dict[str, int] = {}
+
+        # ⏳ §D (2026-07-26): trade_id -> monotonic timestamp of the FIRST cycle that
+        # deferred CHECK1 because one of OUR OWN legs was mid-fill at the broker.
+        # MONOTONIC, not wall time: the bound is a DURATION, and a duration measured
+        # off a clock that can be stepped by NTP is not a bound.
+        #
+        # ⚠️ DELIBERATELY IN MEMORY, AND THAT IS SAFE BY CONSTRUCTION. If the process
+        # dies mid-deferral the trade is still OPEN in the DB with its capital still
+        # reserved, so boot rehydrates it and the next reconcile cycle re-enters
+        # CHECK1 with this map empty -- which starts a NEW bounded window, never an
+        # unbounded one. Losing the clock can only ever cost one more window of
+        # seconds; it can never strand capital. Persisting it would buy nothing and
+        # cost a schema migration on the capital-bearing table.
+        #
+        # An entry whose deferral our own exit path resolved is left behind and never
+        # read again: trade_id is unique and never reused, and a trade that reached a
+        # terminal status cannot re-enter CHECK1. Bounded by trades per process life.
+        self._check1_deferred_since: Dict[str, float] = {}
+        # Injectable so a test can drive the bound without sleeping.
+        self._monotonic: Callable[[], float] = time.monotonic
 
         # FIX-182: human / untracked broker positions (CHECK2 orphans with no
         # local trade record at all). The system manages only system trades;
@@ -1052,6 +1073,99 @@ class OrderReconciler:
 
         return actions
 
+    # ── §D: the mid-fill DEFERRAL (the capital-TIMING fix) ──────────────────────
+
+    def _check1_defer_bound_sec(self) -> float:
+        """§D: CHECK1's mid-fill deferral bound, in SECONDS. 0.0 = OFF.
+
+        WALL CLOCK, NOT CYCLES, deliberately: a cycle count is a proxy for elapsed
+        time whose meaning changes silently the day poll_interval_sec is retuned.
+        A proxy is not the thing it stands for.
+
+        Degrades to OFF on a non-numeric or absent value (an older config, or a test
+        mock whose attribute is not a number) -- OFF is the pre-§D path, so the
+        failure direction is "no new behaviour", never "unbounded new behaviour".
+        """
+        try:
+            v = float(getattr(self._cfg, "check1_mid_fill_defer_sec", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+        return v if v > 0.0 else 0.0
+
+    def _check1_deferral_gate(self, trade_id: str, symbol: str, bound: float, log):
+        """§D: decide whether to hand this cycle to our own fill callback instead.
+
+        Returns ``(orphan_outcome | None, deferred_action | None, expired)``.
+
+        ⚠️ THIS RUNS BEFORE THE CLAIM, and that is the whole mechanism. CHECK1 beats
+        our own exit path by ~0.9s; the instant mark_trade_manually_closed fires,
+        order_placer._handle_exit_fill hits its double-close guard at :2374 and CHECK1
+        owns the close whether or not it should. A deferral decided after the claim
+        would defer nothing.
+
+        ⛔ WHICH MEANS THE ORPHAN-LEG CANCEL IS HOISTED ABOVE THE CLAIM whenever the
+        bound is on -- the broker's refusal IS the mid-fill signal, and an answer
+        gathered after the decision is not evidence. That is safe in both branches:
+        cancelling a resting SL/TGT for a symbol the broker no longer holds is correct
+        either way, and the mid-fill branch deliberately cancels nothing. If the
+        position turns out NOT to be gone (a stale positions snapshot), G5b re-places
+        a recovery SL on the next cycle -- strictly less harm than the pre-§D path,
+        which closes the trade and releases its capital outright on the same premise.
+
+        ⭐ NARROW BY DESIGN: only the broker's own "being processed" defers. A leg
+        already COMPLETE locally -- the common shape, 35 of 41 measured -- finalizes
+        immediately at every bound (design table rows 1-2, "finalize, attribute").
+        """
+        started = self._check1_deferred_since.get(trade_id)
+        now = self._monotonic()
+
+        if started is not None and (now - started) >= bound:
+            # ⭐ EXPIRY. The deferral's premise -- that order_monitor would observe the
+            # terminal state and order_placer would close the trade -- did NOT hold.
+            # That is the case where THIS DESIGN WAS WRONG, and a wrong thing that is
+            # silent is this project's signature failure. Say so, whatever verdict
+            # follows: the classifier may still land on an own leg via a rung that is
+            # not stale, and the design would still have been wrong to wait.
+            self._check1_deferred_since.pop(trade_id, None)
+            log.warning(
+                "CHECK1 DEFERRAL EXPIRED UNRESOLVED: trade_id=%s symbol=%s waited "
+                "%.1fs of a %.1fs bound for our own filling leg's callback and it "
+                "never arrived; finalizing now. The mid-fill claim is a claim about "
+                "NOW and has gone stale, so it no longer counts as evidence.",
+                trade_id, symbol, now - started, bound,
+            )
+            return None, None, True
+
+        orphan = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
+        if not orphan.mid_fill:
+            self._check1_deferred_since.pop(trade_id, None)
+            return orphan, None, False
+
+        if started is None:
+            self._check1_deferred_since[trade_id] = now
+            started = now
+        legs = ",".join(f"{leg}:{oid}" for oid, leg in orphan.mid_fill)
+        log.info(
+            "CHECK1 DEFERRED: trade_id=%s symbol=%s our own %s is being processed at "
+            "the broker, so the position vanished because OUR exit filled; finalizing "
+            "nothing this cycle (%.1fs of %.1fs) and leaving the close -- and its "
+            "capital release -- to the fill callback that owns it.",
+            trade_id, symbol, legs, now - started, bound,
+        )
+        deferred = ReconciliationAction(
+            check_name="MANUAL_CLOSE_DEFERRED",
+            tier="COSMETIC",   # nothing was changed; COSMETIC is the honest tier
+            symbol=symbol,
+            trade_id=trade_id,
+            description=(
+                f"Trade {trade_id}: our own {legs} is mid-fill at the broker; "
+                f"deferring finalize (bound {bound:.1f}s)"
+            ),
+            action_taken=f"deferred({now - started:.1f}s/{bound:.1f}s)",
+            success=True,
+        )
+        return orphan, deferred, False
+
     # ── CHECK 1: MANUAL_CLOSE / RMS_SQUAREOFF ───────────────────────────────────
 
     def _check1_manual_close(self, trade) -> ReconciliationAction:
@@ -1069,6 +1183,26 @@ class OrderReconciler:
         log = bind_trade(self._log, trade_id=trade_id)
         success = True
         steps: List[str] = []
+
+        # ── ⏳ §D: THE DEFERRAL GATE ─────────────────────────────────────────
+        # At the DEFAULT 0.0 this block is not entered at all: the bookkeeping is
+        # never read or written, the clock is never consulted, and everything below
+        # is the pre-§D path unchanged. That is ASSERTED, not assumed --
+        # tests/unit/test_check1_deferral.py replaces both with tripwires that raise
+        # on any access, so a bound-0 build that reaches §D fails naming what it
+        # touched rather than merely behaving differently.
+        _orphan: Optional[OrphanLegOutcome] = None
+        _defer_expired = False
+        _bound = self._check1_defer_bound_sec()
+        if _bound > 0.0:
+            _orphan, _deferred, _defer_expired = self._check1_deferral_gate(
+                trade_id, symbol, _bound, log)
+            if _deferred is not None:
+                # Nothing claimed, nothing released, nothing alerted. The trade stays
+                # OPEN so our own exit path can finalize it properly -- which also
+                # restores the OCO sibling cancel and cost_breakdown persistence that
+                # only that path performs.
+                return _deferred
 
         try:
             actually_closed = self._store.mark_trade_manually_closed(trade_id)
@@ -1107,7 +1241,15 @@ class OrderReconciler:
         # free. The cancel is NOT idempotent and it destroys the mid-fill evidence,
         # so it comes after. What moved is the DECISION: the cause used to be
         # asserted 30 lines before any evidence existed.
-        orphan = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
+        #
+        # §D: at bound > 0 the gate already ran this ABOVE the claim, because that is
+        # the only place the mid-fill answer can come from. At bound 0 it runs here,
+        # in exactly the position it occupied pre-§D. Either way it runs ONCE -- the
+        # cancel is not idempotent and re-running it would destroy the evidence.
+        if _orphan is not None:
+            orphan = _orphan
+        else:
+            orphan = self._cancel_orphaned_orders_for_trade(trade_id, symbol, log)
         if orphan.cancelled > 0:
             steps.append(f"cancelled_{orphan.cancelled}_orphaned_orders")
         cancelled_count = orphan.cancelled
@@ -1165,6 +1307,7 @@ class OrderReconciler:
             broker_trades_read_ok=_broker_ok,
             orders_read_ok=(_legs_read_ok and not orphan.read_failed),
             ambiguous_cancel=bool(orphan.ambiguous),
+            deferral_expired=_defer_expired,
         ))
         steps.append(f"verdict={verdict.closure_source}({verdict.rung or 'none'})")
 

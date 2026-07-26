@@ -344,6 +344,7 @@ order_reconciler:             # RC17 — reconciler tuning
   human_order_margin_tolerance: 5000.0  # FIX-182: extra Rs allowance when human/untracked orders present
   capital_drift_alert_interval_sec: 1800  # TASK-11: min seconds between repeat CAPITAL_DRIFT alerts (30 min)
   stuck_exiting_timeout_minutes: 30  # Task 4: resolve trades stuck in EXITING (HARD_KILL died mid-exit) older than this — flat->CLOSED_MANUAL, still-held->OPEN
+  check1_mid_fill_defer_sec: 0.0  # Section D: SECONDS CHECK1 defers finalizing when the broker refuses our orphan-leg cancel with "being processed" (= one of OUR OWN legs is filling, so our fill callback owns the close). 0.0 = OFF = pre-Section-D behaviour exactly. On expiry it finalizes anyway and logs "DEFERRAL EXPIRED UNRESOLVED". Seconds, not cycles: a cycle count is a proxy that changes meaning if poll_interval_sec is retuned.
 
 eod_reconcile:                 # P1 (02-Jul) — broker-authoritative EOD reconcile (scripts/eod_broker_reconcile.py @15:58)
   authoritative: false        # SHADOW default: P1 runs alongside eod_verify, writes its verdict + shadow comparison, alerts INFO, gates nothing. Flip true (after shadow observation) to make P1 authoritative + retire eod_verify.

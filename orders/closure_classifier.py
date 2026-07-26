@@ -55,6 +55,10 @@ class Evidence:
     orders_read_ok: bool = True
     #: A cancel failed for a reason we do not recognise — explicitly NOT evidence.
     ambiguous_cancel: bool = False
+    #: ⏳ §D: the mid-fill deferral bound elapsed with nothing terminal. "Being
+    #: processed" is a claim about NOW; once the window passes it has gone STALE and
+    #: stops counting as evidence. Retires rung 4 only — rungs 1-3 are untouched.
+    deferral_expired: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,11 +98,15 @@ def classify(ev: Evidence) -> Verdict:
     resolve to the higher-precedence source. Precedence orders sources that are
     SILENT; it never overrules one that SPOKE.
     """
+    # ⏳ §D: carried onto every EXTERNAL verdict below, so the alert body says WHY
+    # the answer is "we do not know" rather than leaving the reader to infer it.
+    stale = ("deferral_expired",) if ev.deferral_expired else ()
+
     # A read failure is never evidence. Fail loud, per the first principle.
     if not ev.orders_read_ok:
-        return _external("orders_read_failed")
+        return _external(*stale, "orders_read_failed")
     if ev.ambiguous_cancel:
-        return _external("ambiguous_cancel_reason")
+        return _external(*stale, "ambiguous_cancel_reason")
 
     legs = [l for l in ev.our_legs if l.leg in _LEG_TO_SOURCE]
 
@@ -108,7 +116,15 @@ def classify(ev: Evidence) -> Verdict:
         if ev.broker_trades_read_ok and l.order_id in ev.broker_filled_order_ids
     }
     named_by_local = {l.leg for l in legs if l.status == "COMPLETE"}
-    named_by_midfill = {l.leg for l in legs if l.mid_fill}
+    # ⏳ §D: a mid-fill claim is a claim about NOW. Once the deferral window has
+    # elapsed with nothing terminal, the leg we were told was filling never landed,
+    # so the source falls SILENT rather than speaking stale -- including for the
+    # contradiction check below, where a stale claim must not manufacture a
+    # disagreement with a source that is still live. Rungs 1-3 are untouched:
+    # expiry retires a stale claim, it never destroys evidence that is still good.
+    named_by_midfill = (
+        set() if ev.deferral_expired else {l.leg for l in legs if l.mid_fill}
+    )
 
     spoke = [s for s in (named_by_broker, named_by_local, named_by_midfill) if s]
 
@@ -117,6 +133,7 @@ def classify(ev: Evidence) -> Verdict:
         for j in range(i + 1, len(spoke)):
             if spoke[i] != spoke[j]:
                 return _external(
+                    *stale,
                     "sources_disagree",
                     f"named={sorted(set().union(*spoke))}",
                     contradiction=True,
@@ -124,7 +141,7 @@ def classify(ev: Evidence) -> Verdict:
     # A single source naming two different legs is equally a disagreement.
     for s in spoke:
         if len(s) > 1:
-            return _external("multiple_legs_named", f"legs={sorted(s)}",
+            return _external(*stale, "multiple_legs_named", f"legs={sorted(s)}",
                              contradiction=True)
 
     # ── the ladder ────────────────────────────────────────────────────────────
@@ -142,4 +159,4 @@ def classify(ev: Evidence) -> Verdict:
         return Verdict(_LEG_TO_SOURCE[leg], "INFO", EV_MID_FILL, leg)
 
     # Nothing of ours accounts for it. THE DEFAULT, and the true-positive path.
-    return _external("no_own_leg_accounts_for_close")
+    return _external(*stale, "no_own_leg_accounts_for_close")

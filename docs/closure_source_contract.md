@@ -78,6 +78,22 @@ RMS marker it becomes a *refinement* of `EXTERNAL_UNATTRIBUTED`, never a retro-f
 can never exercise it and will land on row 2/3. That is why row 3 must exist: dropping it would make
 paper classify every own-leg close as `EXTERNAL_UNATTRIBUTED`.
 
+### ⏳ Row 4 is a claim about *now*, and it **expires**
+
+"Being processed" means a leg is filling *at this instant*, so the honest response is not to
+attribute but to **wait**. CHECK1 may **defer** for a bounded number of seconds
+(`order_reconciler.check1_mid_fill_defer_sec`, **default `0.0` = off**) and let our own fill callback
+own the close — and with it the capital release. That is a *timing* mechanism, not a new rung.
+
+If the bound elapses with nothing terminal, the claim has gone **stale**: the leg we were told was
+filling never landed. A stale claim stops counting as evidence, so **row 4 falls silent** and the
+ladder drops through to whatever source can still speak — and to `EXTERNAL_UNATTRIBUTED` at CRITICAL
+if none can, which is §0 again. **Rows 1–3 are unaffected:** expiry retires a stale claim, it never
+destroys evidence that is still good.
+
+⚠️ An expired deferral is the case where the design was **wrong**, so it is never silent — the expiry
+is logged whatever verdict follows.
+
 ---
 
 ## 5. ⚠️⚠️ The contradiction rule — the safety property

@@ -103,6 +103,19 @@ def test_contradiction_rule_is_recorded_in_both_places() -> None:
         assert "never overrules a source that" in low
 
 
+def test_mid_fill_expiry_is_recorded_in_both_places() -> None:
+    """⏳ §D. Rung 4 is a claim about NOW: CHECK1 may DEFER on it, and once the bound
+    elapses the claim is STALE and falls silent. That is a rule of the ladder, so it
+    lives with the ladder -- and losing the statement must break a test, not just a
+    review, exactly like the contradiction rule above."""
+    src = _CANONICAL.read_text(encoding="utf-8")
+    for text in (src, _doc_text()):
+        low = text.lower()
+        assert "expires" in low, "the ladder must state that rung 4 EXPIRES"
+        assert "stale" in low, "an expired mid-fill claim is STALE, not merely old"
+        assert "defer" in low, "the deferral is the mechanism the expiry bounds"
+
+
 def test_first_principle_is_recorded_in_both_places() -> None:
     """Suppress only on POSITIVE evidence, never on absence."""
     src = _CANONICAL.read_text(encoding="utf-8")
