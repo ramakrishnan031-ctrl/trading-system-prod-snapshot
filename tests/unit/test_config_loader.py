@@ -34,6 +34,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from core.config_loader import (
+    _CONFIG_FILES,
     AlertsConfig,
     AppConfig,
     OrderReconcilerConfig,
@@ -1075,6 +1076,40 @@ def test_real_nse_holidays_yaml_loads() -> None:
     )
     assert any(h.name == "Republic Day" for h in cfg.holidays)
     print(f"  OK Real nse_holidays_2026.yaml: {len(cfg.holidays)} holidays, all valid")
+
+
+def test_every_registered_config_file_exists_for_the_CURRENT_year() -> None:
+    """⏰ A DATED TRIPWIRE, ON PURPOSE — the third axis of the clock-dependency class
+    (26-Jul-2026). The first two were hour-of-day (25-Jul) and day-of-week (26-Jul);
+    this one is YEAR, and unlike those two it is not a test bug — it stops the boot.
+
+    `_CONFIG_FILES` resolves the holiday filename as
+    `f"nse_holidays_{date.today().year}.yaml"`, evaluated ONCE at module import. Only
+    `nse_holidays_2026.yaml` exists. MEASURED by patching `date.today` before import:
+    on the first boot of 2027 `load_all()` raises
+
+        ConfigMissingError: Required config file not found: nse_holidays_2027.yaml
+
+    and `load_all()` is on the boot path, so the service does not start. Nothing in
+    the suite catches that today, because every existing test writes stubs named
+    `nse_holidays_2026.yaml` — which is exactly why they would ALL break on the same
+    morning, for a reason that is not a bug in the code under test.
+
+    ⛔ WHEN THIS GOES RED, THE FIX IS TO ADD THE FILE, NEVER TO EDIT THIS ASSERTION.
+    Red here means: NSE's holiday list for the new year has not been committed yet,
+    and the next 08:15 boot will fail. That is an action, not a stale expectation.
+
+    Stated as the property rather than as one filename, so it also catches any future
+    registry entry added without its file."""
+    config_dir = Path(__file__).parent.parent.parent / "config"
+    missing = [fname for _key, fname, _schema in _CONFIG_FILES
+               if not (config_dir / fname).exists()]
+    assert not missing, (
+        f"config/ is missing {missing} — every file in the _CONFIG_FILES registry must "
+        f"exist or load_all() raises ConfigMissingError and the service cannot boot. "
+        f"If this names nse_holidays_<year>.yaml, the new year's NSE holiday list has "
+        f"not been added yet: create the file, do not edit this test."
+    )
 
 
 def test_system_config_has_no_limits_block() -> None:
