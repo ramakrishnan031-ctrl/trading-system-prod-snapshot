@@ -60,33 +60,84 @@ def _at(y, m, d, hh=9, mm=0) -> datetime:
 
 # ── the window, as a pure function of the date ───────────────────────────────
 
+_BOOT_DEAD = sm._HOLIDAY_PHASE_BOOT_DEAD
+_NOTICE = sm._HOLIDAY_PHASE_NOTICE
+_FINAL = sm._HOLIDAY_PHASE_FINAL
+
+
+def _due(today, lead=None, final=None):
+    c = sm.SecConfig()
+    return sm._holiday_files_due(
+        today,
+        c.holiday_calendar_lead_days if lead is None else lead,
+        c.holiday_calendar_final_days if final is None else final)
+
+
 def test_the_current_year_is_always_due_and_next_year_only_in_the_window():
     """PURE in `today`, so the reminder can be driven to any date without patching
     a clock. The current year is due unconditionally: if THAT file is missing the
     boot is already dead, and no calendar window applies to a thing that already
     happened."""
-    lead = sm.SecConfig().holiday_calendar_lead_days
-    assert sm._holiday_files_due(date(2026, 7, 26), lead) == [2026]
-    assert sm._holiday_files_due(date(2026, 12, 14), lead) == [2026]      # not yet
-    assert sm._holiday_files_due(date(2026, 12, 15), lead) == [2026, 2027]
-    assert sm._holiday_files_due(date(2026, 12, 31), lead) == [2026, 2027]
+    assert _due(date(2026, 7, 26)) == [(2026, _BOOT_DEAD)]
+    assert _due(date(2026, 12, 14)) == [(2026, _BOOT_DEAD)]                      # not yet
+    assert _due(date(2026, 12, 15)) == [(2026, _BOOT_DEAD), (2027, _NOTICE)]
+    assert _due(date(2026, 12, 27)) == [(2026, _BOOT_DEAD), (2027, _NOTICE)]
+    assert _due(date(2026, 12, 28)) == [(2026, _BOOT_DEAD), (2027, _FINAL)]      # escalates
+    assert _due(date(2026, 12, 31)) == [(2026, _BOOT_DEAD), (2027, _FINAL)]
 
 
 def test_the_window_opens_on_15_dec_in_every_december_not_just_2026():
     """A5: generalised to {next_year}. If this were pinned to 2027 the exact same
     conversation would happen in December 2027 and the fix would be a
-    one-character-different version of the bug."""
-    lead = sm.SecConfig().holiday_calendar_lead_days
+    one-character-different version of the bug. The ESCALATION generalises too."""
     for year in (2026, 2027, 2028, 2030, 2099):
-        assert sm._holiday_files_due(date(year, 12, 14), lead) == [year]
-        assert sm._holiday_files_due(date(year, 12, 15), lead) == [year, year + 1]
+        assert _due(date(year, 12, 14)) == [(year, _BOOT_DEAD)]
+        assert _due(date(year, 12, 15)) == [(year, _BOOT_DEAD), (year + 1, _NOTICE)]
+        assert _due(date(year, 12, 28)) == [(year, _BOOT_DEAD), (year + 1, _FINAL)]
+
+
+def test_the_phase_vocabulary_is_CLOSED_and_carries_no_date():
+    """⭐ THE SAFETY ARGUMENT FOR RE-ALERTING AT ALL, as a test rather than a
+    comment. The ledger fires at full severity whenever a key changes, so what
+    bounds the CRITICALs is the number of values the key can take. A phase has
+    three, ever ⇒ at most three CRITICALs per file per year, however long the
+    condition lasts. A DATE in the key would make every day a new condition —
+    MEASURED at 17 CRITICALs across the December window, the exact flood the
+    presence ledger exists to prevent.
+
+    So: every phase a full year of dates can produce must come from the declared
+    set, and no key may contain a date."""
+    import re
+    seen = set()
+    for offset in range(400):                       # more than a year, every day
+        today = date(2026, 1, 1) + timedelta(days=offset)
+        for _year, phase in _due(today):
+            seen.add(phase)
+    assert seen <= set(sm._HOLIDAY_PHASES), f"undeclared phase(s): {seen - set(sm._HOLIDAY_PHASES)}"
+    assert seen == set(sm._HOLIDAY_PHASES), "every declared phase must be reachable"
+
+    cfg = sm.SecConfig()
+    cfg.config_dir = "/nonexistent-for-this-test"
+    for when in (_at(2026, 7, 26), _at(2026, 12, 20), _at(2026, 12, 30)):
+        for f in sm.check_nse_holiday_calendar(cfg, when):
+            assert not re.search(r"\d{4}-\d{2}-\d{2}", f.key), (
+                f"a date in the dedup key makes every day a new condition: {f.key}")
 
 
 def test_the_lead_days_config_moves_the_window_and_is_not_a_hidden_constant():
-    """The date is derived from lead_days, so retuning the knob in security.yaml
-    actually moves the reminder — config, not a number baked into the code."""
-    assert sm._holiday_files_due(date(2026, 12, 2), 16) == [2026]
-    assert sm._holiday_files_due(date(2026, 12, 2), 30) == [2026, 2027]   # 1-Dec window
+    """The dates are derived from the two knobs, so retuning them in security.yaml
+    actually moves the reminder — config, not numbers baked into the code."""
+    assert _due(date(2026, 12, 2), lead=16) == [(2026, _BOOT_DEAD)]
+    assert _due(date(2026, 12, 2), lead=30) == [(2026, _BOOT_DEAD), (2027, _NOTICE)]
+    assert _due(date(2026, 12, 20), final=11) == [(2026, _BOOT_DEAD), (2027, _FINAL)]
+
+
+def test_a_misconfigured_final_days_degrades_to_one_escalation_not_to_silence():
+    """`final` is tested before `notice`, so final_days >= lead_days costs you the
+    early notice — never the alert itself. The direction of the degradation is the
+    point: a config mistake must not be able to silence a boot-blocker."""
+    got = _due(date(2026, 12, 15), lead=16, final=99)
+    assert got == [(2026, _BOOT_DEAD), (2027, _FINAL)]
 
 
 def test_the_committed_security_yaml_actually_reaches_the_behaviour(tmp_path):
@@ -95,9 +146,13 @@ def test_the_committed_security_yaml_actually_reaches_the_behaviour(tmp_path):
     be retuned on the VM without a deploy."""
     import yaml
     real = yaml.safe_load((_REAL_CONFIG_DIR / "security.yaml").read_text(encoding="utf-8"))
+    loaded = sm.SecConfig.load(_REAL_CONFIG_DIR / "security.yaml")
     assert real["security"]["holiday_calendar_alert"] is True
-    assert sm.SecConfig.load(_REAL_CONFIG_DIR / "security.yaml").holiday_calendar_lead_days \
-        == real["security"]["holiday_calendar_lead_days"]
+    assert loaded.holiday_calendar_lead_days == real["security"]["holiday_calendar_lead_days"]
+    assert loaded.holiday_calendar_final_days == real["security"]["holiday_calendar_final_days"]
+    # THE property that buys two escalations rather than one — asserted on the
+    # COMMITTED config, not on the dataclass defaults.
+    assert loaded.holiday_calendar_final_days < loaded.holiday_calendar_lead_days
 
     stub = tmp_path / "security.yaml"
     stub.write_text("security:\n  holiday_calendar_lead_days: 45\n", encoding="utf-8")
@@ -105,10 +160,10 @@ def test_the_committed_security_yaml_actually_reaches_the_behaviour(tmp_path):
     cfg.config_dir = str(tmp_path)
     assert cfg.holiday_calendar_lead_days == 45
     # 45 days out is 17-Nov: silent under the committed 16, loud under this one.
-    assert sm._holiday_files_due(date(2026, 11, 17), 16) == [2026]
+    assert _due(date(2026, 11, 17), lead=16) == [(2026, _BOOT_DEAD)]
     assert [f.key for f in sm.check_nse_holiday_calendar(cfg, _at(2026, 11, 17))] == [
-        "holidaycal:missing:nse_holidays_2026.yaml",
-        "holidaycal:missing:nse_holidays_2027.yaml",
+        f"holidaycal:missing:nse_holidays_2026.yaml:{_BOOT_DEAD}",
+        f"holidaycal:missing:nse_holidays_2027.yaml:{_NOTICE}",
     ]
 
 
@@ -129,9 +184,10 @@ def test_it_fires_on_15_dec_naming_the_file_that_does_not_exist(tmp_path):
     assert len(findings) == 1
     f = findings[0]
     assert f.severity == "CRITICAL"
-    assert f.key == "holidaycal:missing:nse_holidays_2027.yaml"
+    assert f.key == f"holidaycal:missing:nse_holidays_2027.yaml:{_NOTICE}"
     assert "nse_holidays_2027.yaml" in f.body
     assert "2027" in f.title
+    assert "FINAL NOTICE" not in f.title, "the 15-Dec notice is not the escalation"
 
 
 def test_it_is_still_silent_on_14_dec(tmp_path):
@@ -159,16 +215,29 @@ def test_a_missing_CURRENT_year_file_fires_immediately_with_no_window(tmp_path):
     and on that morning it is the only thing on the box that can say WHY the
     service will not start."""
     findings = sm.check_nse_holiday_calendar(_cfg(tmp_path), _at(2026, 7, 26))
-    assert [f.key for f in findings] == ["holidaycal:missing:nse_holidays_2026.yaml"]
+    assert [f.key for f in findings] == [
+        f"holidaycal:missing:nse_holidays_2026.yaml:{_BOOT_DEAD}"]
     assert "CANNOT START" in findings[0].body
 
 
 def test_both_horizons_can_be_missing_at_once(tmp_path):
     findings = sm.check_nse_holiday_calendar(_cfg(tmp_path), _at(2026, 12, 20))
     assert [f.key for f in findings] == [
-        "holidaycal:missing:nse_holidays_2026.yaml",
-        "holidaycal:missing:nse_holidays_2027.yaml",
+        f"holidaycal:missing:nse_holidays_2026.yaml:{_BOOT_DEAD}",
+        f"holidaycal:missing:nse_holidays_2027.yaml:{_NOTICE}",
     ]
+
+
+def test_the_final_escalation_says_it_is_the_last_one(tmp_path):
+    """B2. Two phases, and the second has to READ like a last chance — otherwise
+    it is just another copy of a message that was already ignored once."""
+    (tmp_path / "nse_holidays_2026.yaml").write_text("holidays: []", encoding="utf-8")
+    f = sm.check_nse_holiday_calendar(_cfg(tmp_path), _at(2026, 12, 28))[0]
+    assert f.key == f"holidaycal:missing:nse_holidays_2027.yaml:{_FINAL}"
+    assert f.severity == "CRITICAL"
+    assert "FINAL NOTICE" in f.title
+    assert "LAST escalation" in f.body
+    assert "3 day(s) LEFT" in f.body
 
 
 def test_the_master_switch_turns_it_off(tmp_path):
@@ -201,7 +270,7 @@ def test_the_check_is_actually_WIRED_into_run_pass(tmp_path):
     cfg = _cfg(cfgdir, watched_files=[], authlog_path=str(authlog),
                authorized_keys_path=str(tmp_path / "nope"))
     findings = sm.run_pass(cfg, {}, authlog, _at(2026, 12, 20), baseline=False)
-    assert "holidaycal:missing:nse_holidays_2027.yaml" in [f.key for f in findings]
+    assert f"holidaycal:missing:nse_holidays_2027.yaml:{_NOTICE}" in [f.key for f in findings]
 
 
 def test_run_pass_does_not_raise_it_when_the_file_is_there(tmp_path):
@@ -246,39 +315,71 @@ def _december_alert_stream(tmp_path, *, file_lands_on=None):
     return sent, state
 
 
-def test_seventeen_days_of_a_missing_file_produce_ONE_critical_not_seventeen(tmp_path):
-    """A3. The re-alert backoff built on 26-Jul (`324be50`) already solves this, and
-    the reminder RIDES it rather than inventing a second mechanism — so the fix that
-    stopped 37 CRITICAL emails from one stale SSH baseline also bounds this."""
+def test_the_whole_december_window_is_TWO_criticals_not_seventeen(tmp_path):
+    """⭐ THE DESIGN'S HONESTY CHECK, and the number is MEASURED rather than
+    asserted from the design.
+
+    Two forces pull against each other here. A3 forbids a daily CRITICAL — 17 of
+    them would train Rama to ignore exactly the message that matters. But ONE
+    CRITICAL is thin cover for an outage with a known date: everything after the
+    first notice is downgraded to WARNING, and a WARNING Telegram dies silently on
+    a delivery failure, so missing one message on 15-Dec would mean the next thing
+    he hears is a service that will not start.
+
+    Two phases is the answer, and the ledger delivers it with no new mechanism:
+    the escalation is a different KEY, so it is a different condition, so it fires
+    at full severity — which is the rule working, not a way around it."""
     sent, _ = _december_alert_stream(tmp_path)
-    criticals = [f for _t, f in sent if f.severity == "CRITICAL"]
-    assert len(criticals) == 1, "a persistent condition is never CRITICAL twice"
+    criticals = [(t, f) for t, f in sent if f.severity == "CRITICAL"]
+    assert len(criticals) == 2, (
+        f"expected exactly the 15-Dec notice and the 28-Dec final; got "
+        f"{[(t.strftime('%d-%b %H:%M'), f.key) for t, f in criticals]}")
+    assert criticals[0][0].date() == date(2026, 12, 15)
+    assert criticals[1][0].date() == date(2026, 12, 28)
+    assert criticals[0][1].key.endswith(_NOTICE)
+    assert criticals[1][1].key.endswith(_FINAL)
+    assert "FINAL NOTICE" in criticals[1][1].title
+
     assert len(sent) < 17, (
         f"{len(sent)} alerts over 17 days is at least one a day — the backoff is "
         f"not being applied")
-    for _t, f in sent[1:]:
-        assert "STILL PRESENT" in f.title
-        assert f.severity != "CRITICAL"
+    for _t, f in sent:
+        if f.severity != "CRITICAL":
+            assert "STILL PRESENT" in f.title
 
 
-def test_the_gaps_between_reminders_widen_and_reach_the_weekly_cap(tmp_path):
-    """The shape of the ladder, not a remembered count: each interval is at least as
-    long as the one before it, and the last one is the 7d cap."""
+def test_the_gaps_within_a_phase_widen_and_the_escalation_restarts_the_ladder(tmp_path):
+    """The shape, not a remembered count: inside one phase each interval is at
+    least as long as the one before it; the escalation deliberately breaks that,
+    because a new condition starts a new episode at the top of the ladder."""
     sent, _ = _december_alert_stream(tmp_path)
-    gaps = [(sent[i][0] - sent[i - 1][0]).total_seconds() for i in range(1, len(sent))]
-    assert gaps == sorted(gaps), f"intervals must not shrink: {gaps}"
     cool = sm.SecConfig().realert_cooldown_sec
-    assert gaps[0] == pytest.approx(cool, abs=120)                 # 6h
-    assert gaps[-1] == pytest.approx(cool * 28, abs=120)           # 7d cap
+    for phase in (_NOTICE, _FINAL):
+        times = [t for t, f in sent if f.key.endswith(phase)]
+        assert len(times) >= 2, f"phase {phase} should have a first report and repeats"
+        gaps = [(times[i] - times[i - 1]).total_seconds() for i in range(1, len(times))]
+        assert gaps == sorted(gaps), f"{phase} intervals must not shrink: {gaps}"
+        assert gaps[0] == pytest.approx(cool, abs=120)             # each phase starts at 6h
 
 
 def test_the_stream_stops_dead_when_the_file_is_committed(tmp_path):
-    """A4 end to end: nothing after the file lands, and the ledger stops naming it
-    as a still-present condition — so the Control Tower stops reporting it too."""
+    """A4/B4 end to end: nothing after the file lands, and the ledger stops naming
+    it as a still-present condition — so the Control Tower stops reporting it too."""
     sent, state = _december_alert_stream(tmp_path, file_lands_on=date(2026, 12, 20))
     assert sent, "premise: it was alerting before the file landed"
     assert max(t for t, _f in sent).date() <= date(2026, 12, 20)
-    assert "holidaycal:missing:nse_holidays_2027.yaml" not in state["persistent_conditions"]
+    assert not [k for k in state["persistent_conditions"] if k.startswith("holidaycal:")]
+
+
+def test_it_also_goes_silent_if_the_file_lands_DURING_the_final_phase(tmp_path):
+    """B4: at ANY phase. The escalation must not become a thing that keeps firing
+    once the work is actually done — presence of the file is still the whole clear
+    condition, and the second phase is not an exception to that."""
+    sent, state = _december_alert_stream(tmp_path, file_lands_on=date(2026, 12, 29))
+    assert [f.severity for _t, f in sent].count("CRITICAL") == 2, (
+        "premise: it had escalated before the file landed")
+    assert max(t for t, _f in sent).date() <= date(2026, 12, 29)
+    assert not [k for k in state["persistent_conditions"] if k.startswith("holidaycal:")]
 
 
 # ── the last hop we own: a real sentinel on disk ─────────────────────────────

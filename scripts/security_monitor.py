@@ -126,6 +126,7 @@ class SecConfig:
     # December, since nothing here is written in terms of a particular year.
     holiday_calendar_alert: bool = True
     holiday_calendar_lead_days: int = 16
+    holiday_calendar_final_days: int = 3
     config_dir: str = str(_ROOT / "config")
     expected_ssh_keys: int = 1
     expected_key_fingerprint: str = ""          # committed single-key baseline (legacy)
@@ -159,6 +160,7 @@ class SecConfig:
                 "realert_cooldown_sec", "realert_backoff_multipliers",
                 "realert_presence_gap_sec",
                 "holiday_calendar_alert", "holiday_calendar_lead_days",
+                "holiday_calendar_final_days",
                 "config_dir",
                 "expected_ssh_keys", "expected_key_fingerprint",
                 "sudo_whitelist_prefixes", "watched_files", "authlog_path",
@@ -874,8 +876,31 @@ def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Findin
 # no acknowledgement, no flag, nothing for Rama to remember to switch off.
 
 
-def _holiday_files_due(today: date, lead_days: int) -> list[int]:
-    """The years whose nse_holidays_<year>.yaml must ALREADY be on disk, given today.
+# ── PHASES ───────────────────────────────────────────────────────────────────
+# A CLOSED, THREE-VALUE SET, and that bound IS the safety argument.
+#
+# The dedup ledger re-alerts at full severity whenever a Finding.key changes,
+# because a changed key means a changed CONDITION. That is a sharp tool: putting
+# the DATE in the key would make every day a new condition — MEASURED at 17
+# CRITICALs over the December window, which is precisely the flood the ledger was
+# built to stop. A PHASE is different in kind, not degree: it can take three
+# values, ever, so it can raise at most three CRITICALs per file per year no
+# matter how long the condition lasts.
+#
+# And the re-alert is EARNED, not engineered around the rule. "Sixteen days
+# remain" and "two days remain" are genuinely different conditions — the second
+# one is nearly out of runway and the first is not. A changed condition SHOULD
+# re-alert. This is the rule working.
+_HOLIDAY_PHASE_BOOT_DEAD = "boot-dead"   # the CURRENT year's file is gone: it already failed
+_HOLIDAY_PHASE_NOTICE = "notice"         # next year's file due; there is still room
+_HOLIDAY_PHASE_FINAL = "final"           # next year's file due; the runway is nearly gone
+_HOLIDAY_PHASES = (_HOLIDAY_PHASE_BOOT_DEAD, _HOLIDAY_PHASE_NOTICE, _HOLIDAY_PHASE_FINAL)
+
+
+def _holiday_files_due(today: date, lead_days: int,
+                       final_days: int) -> list[tuple[int, str]]:
+    """The (year, phase) pairs whose nse_holidays_<year>.yaml must ALREADY be on
+    disk, given today.
 
     PURE in `today` and free of any hard-coded year, so (a) the reminder can be
     driven to any date without patching a clock, and (b) December 2027 behaves
@@ -883,11 +908,21 @@ def _holiday_files_due(today: date, lead_days: int) -> list[int]:
     different version of the bug, one year later.
 
       * the CURRENT year, always: if that file is absent the boot is already dead.
-      * the NEXT year, once `lead_days` or fewer remain before 31-Dec.
+      * the NEXT year, once `lead_days` or fewer remain before 31-Dec — and it
+        escalates to `final` at `final_days`, which is a NEW key and therefore a
+        second, deliberate CRITICAL.
+
+    `final` is tested first, so a misconfiguration with final_days >= lead_days
+    degrades to "one escalation instead of two" rather than to silence. A test
+    pins the committed config to final_days < lead_days, which is the property
+    that actually gives two.
     """
-    due = [today.year]
-    if (date(today.year, 12, 31) - today).days <= lead_days:
-        due.append(today.year + 1)
+    due = [(today.year, _HOLIDAY_PHASE_BOOT_DEAD)]
+    days_left = (date(today.year, 12, 31) - today).days
+    if days_left <= final_days:
+        due.append((today.year + 1, _HOLIDAY_PHASE_FINAL))
+    elif days_left <= lead_days:
+        due.append((today.year + 1, _HOLIDAY_PHASE_NOTICE))
     return due
 
 
@@ -899,7 +934,8 @@ def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
     today = now.date()
     config_dir = Path(cfg.config_dir)
     out: list[Finding] = []
-    for year in _holiday_files_due(today, cfg.holiday_calendar_lead_days):
+    for year, phase in _holiday_files_due(today, cfg.holiday_calendar_lead_days,
+                                          cfg.holiday_calendar_final_days):
         fname = f"nse_holidays_{year}.yaml"
         if (config_dir / fname).exists():
             continue
@@ -908,14 +944,26 @@ def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
             f"date/name entries)" if year != today.year else
             "as a `holidays:` list of date/name entries"
         )
-        if year == today.year:
+        days_left = (date(today.year, 12, 31) - today).days
+        if phase == _HOLIDAY_PHASE_BOOT_DEAD:
+            lede = f"CONFIG: NSE holiday calendar {year} is not committed"
             headline = (
                 f"The 08:15 boot CANNOT START while this file is missing: load_all() "
                 f"raises ConfigMissingError and main returns 5. This is not a warning "
                 f"about the future — it is the current state of the machine."
             )
+        elif phase == _HOLIDAY_PHASE_FINAL:
+            lede = f"CONFIG: FINAL NOTICE — NSE holiday calendar {year} is still missing"
+            headline = (
+                f"⏳ {days_left} day(s) LEFT. This is the SECOND and LAST escalation: "
+                f"you were told on the {cfg.holiday_calendar_lead_days}-day notice and "
+                f"the file is still not here. On 1-Jan-{year} the 08:15 boot will raise "
+                f"ConfigMissingError and the service will NOT start — there is no "
+                f"further warning after this one, and no way to fix it on the morning "
+                f"without NSE's list in hand."
+            )
         else:
-            days_left = (date(today.year, 12, 31) - today).days
+            lede = f"CONFIG: NSE holiday calendar {year} is not committed"
             headline = (
                 f"{days_left} day(s) of the {today.year} calendar remain. On "
                 f"1-Jan-{year} the 08:15 boot will raise ConfigMissingError and the "
@@ -923,8 +971,8 @@ def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
                 f"costs a trading day that begins with a dead service."
             )
         out.append(Finding(
-            "CRITICAL", f"holidaycal:missing:{fname}",
-            f"CONFIG: NSE holiday calendar {year} is not committed",
+            "CRITICAL", f"holidaycal:missing:{fname}:{phase}",
+            lede,
             f"config/{fname} does not exist on this machine.\n\n"
             f"{headline}\n\n"
             f"ACTION — commit NSE's PUBLISHED holiday list for {year} as "
@@ -936,8 +984,9 @@ def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
             f"year's list around Nov-Dec — if it is not published yet, wait for it.\n\n"
             f"This alert stops by itself as soon as the file exists. Nothing to "
             f"acknowledge, nothing to switch off. Until then it repeats on the "
-            f"standard backoff (6h, then 24h, then weekly) and only this first one "
-            f"is CRITICAL."))
+            f"standard backoff (6h, then 24h, then weekly), downgraded out of "
+            f"CRITICAL — you get at most TWO CRITICAL notices for a missing "
+            f"calendar, this one and the final one, not one a day."))
     return out
 
 

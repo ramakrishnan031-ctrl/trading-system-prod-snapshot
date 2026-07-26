@@ -67,16 +67,28 @@ security:
   # ConfigMissingError if it is absent, MEASURED), but only NSE can supply the
   # dates and only Rama can commit them. So the watcher — the one process that is
   # always on, independent of cron AND of the trading service — asks for it.
-  #   alert     : master switch. false = no reminder at all.
-  #   lead_days : days back from 31-Dec at which the NEXT year's file becomes
-  #               due. 16 => the reminder opens on 15-Dec, matching the window
-  #               Rama reserves for this. The suite's tripwire fires earlier
-  #               (1-Dec) on purpose: developer first, then the email.
+  #   alert      : master switch. false = no reminder at all.
+  #   lead_days  : days back from 31-Dec at which the NEXT year's file becomes
+  #                due. 16 => the reminder opens on 15-Dec, matching the window
+  #                Rama reserves for this. The suite's tripwire fires earlier
+  #                (1-Dec) on purpose: developer first, then the email.
+  #   final_days : days back from 31-Dec at which it ESCALATES. 3 => 28-Dec.
+  #                This is a second CRITICAL, on purpose. One email is thin cover
+  #                for an outage with a known date, and the backoff downgrades
+  #                everything after the first notice out of CRITICAL — so without
+  #                this, missing ONE message on 15-Dec means the next thing you
+  #                hear is a service that will not start.
+  #                It is NOT a way around the "never CRITICAL twice" rule: the
+  #                key carries a PHASE, and a phase has three possible values
+  #                ever, so this can raise at most three CRITICALs per file per
+  #                year. Putting the DATE in the key instead was measured at 17.
+  #                Must stay BELOW lead_days or you get one escalation, not two.
   # The CURRENT year's file is due unconditionally — if that one is missing the
   # boot is already dead and nothing else on the box will say so.
   # It clears itself: the file existing IS the resolution.
   holiday_calendar_alert: true
   holiday_calendar_lead_days: 16
+  holiday_calendar_final_days: 3
 
   # Known-good SSH baseline. check_authorized_keys alerts if the count grows or
   # a non-matching fingerprint appears. This committed value is the DEFAULT; an
