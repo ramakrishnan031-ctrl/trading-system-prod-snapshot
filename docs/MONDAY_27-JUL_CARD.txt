@@ -150,10 +150,35 @@ You should not have to reconstruct this from six documents. It is three steps.
      M-A2 deadline 8s).  Monday's job is to OBSERVE, not to change.
 
   2. IF MONDAY IS OBSERVED CLEAN -> PUSH MONDAY EVENING.  "Clean" = checks 1-7 on
-     this card pass and no email arrives that is not on the list above. FOURTEEN
-     commits go together, in this order, as one push — the thirteen below, plus this
-     card edit itself as the fourteenth and the branch tip. Verify with:
-        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  14
+     this card pass and no email arrives that is not on the list above. TWENTY
+     commits now go together as one push. Verify with:
+        git rev-list --count d0fd7b8..hold-check1-w8-26jul     ->  20
+     ⭐ TWENTY, NOT FOURTEEN, AND THE REASON MATTERS. Late Sunday `main` gained 5
+     commits of its own (the December holiday-calendar reminder) while this branch
+     sat waiting, so the two DIVERGED — a branch push to origin/main would have been
+     REJECTED non-fast-forward, at exactly the moment you expect it to work. `main`
+     was MERGED INTO the branch on Sunday night (6184e79), not rebased: a rebase
+     would have rewritten all 14 SHAs below and silently invalidated every "gated at
+     <sha>" claim in the ledger and the audit docs. Zero conflicts — the two sides
+     touched disjoint files. The merged tree was then gated in full, on its own.
+        THE FIVE FROM MAIN, PLUS THE MERGE COMMIT:
+        cbcad2c  the 2027 reminder: it now EMAILS you from 15-Dec  (security_monitor)
+        dd51250  the overnight-carry report + register items        (DOCS)
+        cc86839  SYSTEM_MAP "9 checks" -> 10; one fraction corrected (DOCS)
+        359ccd8  alert body no longer says "copy the file that is missing"
+        8316e0a  security-watcher is Type=simple, not a oneshot     (COMMENT)
+        e6ade32  a SECOND, final CRITICAL near the deadline  (security_monitor)
+        ea65581  ⚠️ the paper run announces its own carry blind spot (PRODUCTION,
+                 paper-only by a MODE check; proven silent in live on an identical row)
+        6184e79  the merge commit itself
+     ⭐ NONE of these is loaded by the trading service's boot except ea65581, and
+        that one returns immediately unless mode == "PAPER". security_monitor is a
+        SEPARATE process (security-watcher.service, Type=simple + RestartSec=60), so
+        its changes go live ~60s after the push and cannot touch the 08:15 boot at
+        all. The reminder itself is December-gated: with nse_holidays_2026.yaml
+        present and today not in December it emits nothing.
+        SO v45 IS STILL TUESDAY'S SINGLE VARIABLE.
+     THE ORIGINAL FOURTEEN, unchanged and in this order:
         77b8b04  §B  trades.closure_source + exit_mechanism  (SCHEMA v44 -> v45)
         10c02ae  §A  the pure closure classifier (component only)
         2f8fd87  §C  gather -> classify -> act; the alert the evidence supports
@@ -174,6 +199,12 @@ You should not have to reconstruct this from six documents. It is three steps.
         a test pinning the live no-op. It touches no schema and no capital path.
         ⭐ SO v45 IS STILL TUESDAY'S SINGLE VARIABLE. Everything else added Sunday
         night is test files and documentation.
+     ⏰🔴 AND ONE DEADLINE THAT IS NOT MONDAY'S: the December reminder (cbcad2c +
+        e6ade32) is useless unless it reaches the VM before 15-DEC-2026. Monday's
+        push carries it, which is why the merge above mattered — but if this push
+        slips indefinitely, that item slips with it, silently, for five months. It
+        is logged in the standing UNPUSHED/PENDING-DEPLOY ledger, which is read
+        before every off-market window, so it cannot be lost by forgetting alone.
 
   3. TUESDAY 08:15 TAKES v45 AS ITS SINGLE VARIABLE.  The migration REBUILDS the
      live `trades` table, and a failed migration BLOCKS THE BOOT — there is no flag

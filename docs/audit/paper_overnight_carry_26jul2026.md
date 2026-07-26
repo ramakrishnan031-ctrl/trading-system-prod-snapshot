@@ -168,9 +168,16 @@ Only after the broker question is answered green does the system pair make sense
 > paper carry will be read as coverage — that is what a gate is *for*. So the paper run must
 > assert its own limit, in the run, not only in a document nobody re-reads in three months.
 
-**Specified, not built** (§B4 keeps this section read-only). Three candidates, cheapest first:
+> ✅ **BUILT 26-Jul (`ea65581`) — option (a) below.** `CncGttMonitor._announce_paper_carry_blind_spot`,
+> paper-only by a MODE check, fires BEFORE the misleading `GTT_EXIT` (pinned by a test on
+> the ORDER of the two alerts), names the symbols and the rows, and points here. It
+> **announces without diverging** — the fabricated exit still happens, so paper and live
+> still run the same ladder. Proven silent in LIVE against an identical backdated row,
+> silent on a same-day row, and silent when there are no rows at all (today's state).
 
-**(a) The one-line startup announcement — RECOMMENDED.**
+Three candidates, cheapest first:
+
+**(a) The one-line startup announcement — RECOMMENDED, and now BUILT.**
 At the startup reconcile, in paper mode only, before `_handle_row` acts on anything: if any
 ACTIVE `gtt_state` row has `created_at[:10] < today`, emit ONE CRITICAL —
 
@@ -222,6 +229,7 @@ answer can select.
 
 ## What this section changed
 
-**Nothing.** Read-only: report and specification, per the batch. The one thing it asks for is
-a decision on B3(a) — a ~10-line, paper-only, mode-gated announcement — which is not built
-here.
+**When written: nothing** — report and specification only. **B3(a) was subsequently approved
+and built** (`ea65581`); everything else here stands unchanged, and in particular §B4 still
+holds: no settlement model, no production caller of `seed_paper_holding`, and the Mon→Tue live
+pair remains irreducible.

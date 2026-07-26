@@ -89,15 +89,17 @@ That is a design conversation, not a batch item.
 
 ---
 
-## Available, deliberately NOT taken — an end-of-runway escalation
+## ~~Available, deliberately NOT taken~~ — BUILT 26-Jul (`e6ade32`)
 
-> 📋 **REGISTER LINE (Rama's call, ~4 lines if wanted):** *the December reminder sends exactly ONE
-> email — `security_monitor._send` writes a sentinel only for CRITICAL, so the four backoff
-> repeats are Telegram-only, and a WARNING Telegram dies silently on a delivery failure. A second
-> guaranteed email could be earned for free by folding a phase into the finding key (`…:early` →
-> `…:final` at ≤2 days of runway): a changed key is a NEW episode, so the existing ledger fires it
-> at full severity with no new mechanism. NOT BUILT — the batch's rule was "never CRITICAL twice",
-> and a deliberate second CRITICAL revises that rule rather than applying it.*
+> 📋 **REGISTER LINE — CLOSED.** *Raised here as "available, Rama's call": the December reminder
+> sent exactly ONE email, because `_send` writes a sentinel only for CRITICAL and the backoff
+> downgrades everything after the first notice — so missing one message on 15-Dec meant the next
+> thing heard was a service that would not start. **Approved and built the same night.** The
+> finding key now carries a PHASE from a closed three-value set, so the ledger re-alerts at full
+> severity on the escalation — that is the "a changed condition re-alerts" rule applying, not a
+> way around "never CRITICAL twice", and the CLOSED set is what bounds it (a DATE in the key was
+> measured at 17 CRITICALs). MEASURED window: **7 alerts, 2 CRITICAL** — 15-Dec notice, 28-Dec
+> final.*
 
 Standing backstop meanwhile, so this is a nicety and not a hole: `last_run.json` reports
 `clean=false` on every ~60 s pass while the file is absent, and
