@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from core import db_connect
 from core.state_store import EXPECTED_SCHEMA_VERSION, StateStore
@@ -171,9 +172,36 @@ def test_last_run_writer_is_additive_and_never_raises(tmp_path):
         blocker / "sub" / "last.json", findings, 9, datetime.now(_IST))
 
 
-def test_run_pass_records_check_count_unchanged(tmp_path):
-    # run_pass still runs its 9 isolated checks; the F1 count side-effect is set.
+def _module_level_checks() -> list[str]:
+    """Every `check_*` function defined at module level in security_monitor."""
+    import re as _re
+    src = Path(sm.__file__).read_text(encoding="utf-8")
+    return _re.findall(r"^def (check_\w+)\(", src, _re.MULTILINE)
+
+
+def test_every_check_that_exists_is_actually_RUN(tmp_path):
+    """WAS `assert _LAST_PASS_CHECK_COUNT == 9`. A remembered number is not the
+    property that mattered: 9 only failed when the count moved, and it could not
+    tell a check being ADDED from a check being DROPPED — it just said "edit me".
+    (26-Jul-2026: adding the holiday-calendar check made it red for the one reason
+    that is not a defect.)
+
+    The property underneath it is BUILT-AND-NEVER-RUN — the same class this file's
+    own repo has now hit eight times. So assert that instead: every check_* defined
+    in the module is referenced inside run_pass, and the F1 side-effect counts
+    exactly those. Adding a check needs no edit here; adding one and forgetting to
+    wire it goes red, which is the failure worth catching."""
+    import inspect
+    defined = _module_level_checks()
+    assert defined, "premise: the module defines check_* functions"
+    body = inspect.getsource(sm.run_pass)
+    unwired = [name for name in defined if f"{name}(" not in body]
+    assert not unwired, (
+        f"{unwired} exist but run_pass never calls them — a check nobody runs is "
+        f"not a check. Wire it into the checks list, or delete it.")
+
     authlog = tmp_path / "auth.log"
     authlog.write_text("")
     sm.run_pass(sm.SecConfig(), {}, authlog, datetime.now(_IST), baseline=False)
-    assert sm._LAST_PASS_CHECK_COUNT == 9
+    assert sm._LAST_PASS_CHECK_COUNT == len(defined), (
+        "the F1 checks_run side-effect must count the checks that actually ran")
