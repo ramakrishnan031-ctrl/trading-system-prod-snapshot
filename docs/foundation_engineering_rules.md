@@ -237,6 +237,47 @@ Never depend on OS directory ordering.
 |**Ask Questions**|Ask the user for clarification whenever required (do not assume).|
 |**Uploaded Code as Input Only**|If any uploaded files contain code, treat it as an idea. Modify suitably if needed; do not stick to it blindly.|
 
+### 5.1 Verification Discipline — what counts as proof
+
+> **A clean `git diff` is NOT proof that nothing changed.**
+
+This project infers "the file is back the way it was" from a clean `git diff` constantly —
+after planting a defect to prove a test goes red, after a temporary edit, after a restore.
+That inference is unsound, and it failed silently on 26-Jul-2026.
+
+**How it fails.** Rewriting a file through a text API that normalises newlines (on Windows,
+`pathlib.Path.write_text` converts every `\n` to `\r\n`) changes **every line of the file**.
+`git diff` shows nothing, because git normalises line endings on the way in. The file on
+disk is a different file. Any check that then compares content — an md5 restore-check, a
+hash-based artifact baseline — fails, and it fails for a reason that has nothing to do with
+what was being tested. Time is then spent debugging the wrong thing.
+
+**The rules that follow from it:**
+
+1. **Verify a restore by `md5` AND byte count, never by `git diff`.** Capture both before
+   the edit and compare after. Those are the only two checks that see a line-ending rewrite.
+2. **Never use a whole-file text write to plant or restore a source file.** Use `git stash` /
+   `git checkout -- <path>` for restores, and a byte-preserving targeted edit for plants.
+3. **State which check you actually ran.** "`git diff` is clean" and "md5 matches" are
+   different claims with different strengths. Do not report the weaker one as the stronger.
+
+**The general form, of which the above is one instance:**
+
+> **A green check is evidence ONLY if it could have been red.**
+
+Before trusting any check, name the mechanism by which it would have failed. If you cannot,
+the check is vacuous and proves nothing. Two corollaries earned the hard way:
+
+* **A replacement that cannot fail is worse than the number it replaced, because it looks
+  rigorous.** Swapping a brittle constant (`assert len(x) == 69`) for something that *reads*
+  like a property but can never be false is a regression in disguise — the brittle number at
+  least failed loudly. Prove the new assertion can go red before keeping it.
+* **Control the input; do not disable the check.** When a test depends on ambient state — the
+  wall clock, the day of the week, the environment — pin the input so the real assertion
+  still runs. Skipping or loosening the assertion removes the coverage; pinning the clock
+  keeps it and makes it deterministic. A suite whose answer depends on *when* it runs cannot
+  serve as a baseline, and baseline comparability is what the whole gate rests on.
+
 \---
 
 ## 6\. CSV \& Script Governance Rules
