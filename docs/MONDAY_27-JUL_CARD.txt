@@ -1,7 +1,8 @@
 ==============================================================================
 MONDAY 27-JUL-2026 — THE CARD.   Detail: MASTER_PENDING_..._EVENING.txt
-Deployed 9dd2488+ · loads 08:15 · book flat.  Every command below was RUN against
-production on 25-Jul. Two originally-drafted checks did not exist — see footnote.
+Deployed d0fd7b8 · loads 08:15 · book flat.  Every command below was RE-RUN against
+production 26-Jul 16:1x (schema v44, trades 423). Two originally-drafted checks did
+not exist — see footnote.
     ssh trading-vm ; cd ~/systems/trading-system ; L=logs/system_$(date +%F).log
     DB="file:data_store/trading_system.db?mode=ro&immutable=1"
 ==============================================================================
@@ -38,8 +39,11 @@ AFTER 17:00 — TWO CHECKS. DIFFERENT FACTS. BOTH NEEDED.
 [ ] 5 DID THE ALERT ARRIVE?
       sqlite3 "$DB" "select status,executed_at from cron_heartbeat
                       where job_name='pb01_capture' order by id desc limit 3;"
+      ⭐ VERIFIED 26-Jul: this returns ZERO ROWS today — there has never been a
+         pb01_capture heartbeat. So Monday's would be the FIRST EVER, and an empty
+         result tonight is the honest "it did not run", NOT a stale query.
 [ ] 6 DID THE WORKER FINISH?
-      sqlite3 "$DB" "select count(*) from pb01_watchlist;"     (0 as of 25-Jul)
+      sqlite3 "$DB" "select count(*) from pb01_watchlist;"   (still 0, re-checked 26-Jul)
       ⚠️ The heartbeat records QUEUED, not captured — the worker is async.
          HEARTBEAT-BUT-NO-ROWS IS A REAL STATE (alert landed, worker failed).
 [ ] 7 ~17:40  grep eod_self_exit $L
@@ -82,11 +86,18 @@ EMAILS YOU WILL GET THAT MEAN NOTHING (so a real one still stands out)
    READY and Cron Daily Report ones. They are correctly labelled already.
 · STILL ROUTINE, still worth ignoring: the 15:15 "SOFT KILL ACTIVATED —
   circuit_breaker_force_close_15:15", same second every trading day, by design.
-🔴 "RMS/MANUAL CLOSE — <symbol>" — ⚠️ DO NOT TRUST THE WORDING. All four sent so
-   far (HUHTAMAKI, WAAREERTL, GODIGIT, BLSE) were the system's OWN SL/TGT/EOD
-   order filling, not an external close — the reconciler polled between the
-   broker fill and its own bookkeeping. The MONEY was right every time. Reported,
-   not fixed; the fix is yours to call. See alert_stream_fixes_26jul2026.
+🔴 "RMS/MANUAL CLOSE — <symbol>" — ⚠️ DO NOT TRUST THE WORDING, AND EXPECT IT AGAIN
+   MONDAY. All four sent so far (HUHTAMAKI, WAAREERTL, GODIGIT, BLSE) were the
+   system's OWN SL/TGT/EOD order filling, not an external close — the reconciler
+   polled between the broker fill and its own bookkeeping. The MONEY was right every
+   time. ⭐ WORSE THAN NOISE: because the reconciler wins that race, our own exit
+   path aborts at its double-close guard, so the INFO "TARGET HIT" is never sent —
+   the false CRITICAL REPLACES the good alert.
+   ⭐ THE FIX IS BUILT BUT DELIBERATELY NOT DEPLOYED FOR MONDAY. It sits on branch
+   hold-check1-w8-26jul (unpushed) and ships TUESDAY only if Monday is observed
+   clean — so Monday carries its four existing first-runs alone. Monday's behaviour
+   is therefore UNCHANGED: if this email arrives, it is the known false label, not a
+   new fault. See alert_stream_fixes_26jul2026 + check1_w8_design_26jul2026.
 ⚠️ If an email arrives that is NOT on this list, it is worth stopping for.
 
 TUESDAY 08:15 — THREE NON-EVENTS
@@ -100,6 +111,13 @@ TUESDAY 08:15 — THREE NON-EVENTS
   longer depends on the hour. Residual wobble = the known machine-global
   test_instance_lock flake (2/1/2 on an unchanged tree). Judge by the failure SET
   against a same-shell baseline, NEVER by the count.
+  ⭐ MEASURED AGAIN 26-Jul AND IT PROVES THE POINT: the same unchanged tree gave
+  11F here where the recorded figure was 33F — a PATH difference, not a regression.
+  The SET is the only thing that means anything.
+  ⚠️ AND A NEW ONE, RECORDED NOT FIXED: test_daily_trade_review::test_main_defaults_
+  date_to_today_and_records_heartbeat fails on WEEKENDS (the report correctly skips
+  a Sunday). Same class as the hour-of-day bomb fixed 25-Jul; it is IN the weekend
+  baseline, so it must not be read as a Monday regression.
 
 ⭐ WHAT MONDAY DOES *NOT* PROVE
 ------------------------------------------------------------------------------
