@@ -17,6 +17,11 @@ What it watches (read-only):
   7. root login probes                  -> anomalous spike (INFO)
   8. copy_protection ON->OFF transition -> someone disabled the gate (CRITICAL)  [Phase 2]
   9. auditd copy_attempt bypass         -> outbound scp/sftp/rsync w/o a token (CRITICAL)  [Phase 2]
+ 10. nse_holidays_<year>.yaml presence  -> a required config file that will not exist
+                                           in time (CRITICAL)  [NOT a security check —
+                                           see check_nse_holiday_calendar for why the
+                                           always-on watcher is the only host that can
+                                           reach the operator without anyone acting]
 
 Auth source: /var/log/auth.log (the `ubuntu` user is in group `adm`, so this
 reads it directly — no sudo needed).
@@ -49,7 +54,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -115,6 +120,13 @@ class SecConfig:
     # flicker. Config, not code, so the ladder can be retuned without a deploy.
     realert_backoff_multipliers: list = field(default_factory=lambda: [1, 4, 28])
     realert_presence_gap_sec: int = 300
+    # Calendar expiry (26-Jul-2026). See check_nse_holiday_calendar for WHY this
+    # non-security check is hosted here. lead_days counts back from 31-Dec, so 16
+    # opens the reminder on 15-Dec of a 31-day December -- and on 15-Dec of EVERY
+    # December, since nothing here is written in terms of a particular year.
+    holiday_calendar_alert: bool = True
+    holiday_calendar_lead_days: int = 16
+    config_dir: str = str(_ROOT / "config")
     expected_ssh_keys: int = 1
     expected_key_fingerprint: str = ""          # committed single-key baseline (legacy)
     expected_key_fingerprints: list = field(default_factory=list)  # operator-override list (set by apply_operator_ssh_baseline)
@@ -146,6 +158,8 @@ class SecConfig:
                 "root_probe_spike_threshold", "new_ip_alert", "sudo_alert",
                 "realert_cooldown_sec", "realert_backoff_multipliers",
                 "realert_presence_gap_sec",
+                "holiday_calendar_alert", "holiday_calendar_lead_days",
+                "config_dir",
                 "expected_ssh_keys", "expected_key_fingerprint",
                 "sudo_whitelist_prefixes", "watched_files", "authlog_path",
                 "authorized_keys_path", "sentinel_dir",
@@ -822,6 +836,106 @@ def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Findin
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NSE holiday calendar expiry (26-Jul-2026) — the one check here that is NOT
+# about security
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# WHAT IT PREVENTS. `core/config_loader._CONFIG_FILES` resolves the holiday file
+# as f"nse_holidays_{date.today().year}.yaml" at module import, and `load_all()`
+# requires every registered file to exist. MEASURED (not reasoned) by patching
+# date.today before the import: with only nse_holidays_2026.yaml on disk, the
+# first 08:15 boot of 2027 raises
+#     ConfigMissingError: Required config file not found: nse_holidays_2027.yaml
+# and main returns 5. The service does not start. The fix is one committed file,
+# but only Rama can produce it — NSE publishes the list ~Nov-Dec and a guessed
+# calendar is far worse than a missing one, so this cannot be automated.
+#
+# ⭐ WHY IT LIVES IN THE SECURITY WATCHER, WHICH IS OTHERWISE NOT PART OF THE
+# TRADING APP. Three properties are needed and only this process has all three:
+#
+#   1. IT REACHES RAMA WITH NOBODY DOING ANYTHING. The suite already carries a
+#      dated tripwire for the same condition (test_config_loader.py, from 1-Dec)
+#      but a test only fires if somebody runs it. In December that is a hope with
+#      a date on it, not a reminder.
+#   2. IT IS ALWAYS ON. security-watcher.service is a oneshot with RestartSec=60,
+#      independent of cron and of the trading service — which matters most in the
+#      exact failure it warns about, because on 1-Jan the trading service is the
+#      thing that is dead. A boot-path check cannot warn you that the boot died.
+#   3. IT ALREADY BACKS OFF. A missing file is by nature persistent, and this
+#      module's presence ledger (_dedup, 26-Jul) reports a persistent condition
+#      ONCE at full severity and then on a widening 6h/24h/7d ladder, never
+#      CRITICAL twice. Hosting the reminder anywhere else would mean building a
+#      second suppression mechanism — and 37 CRITICAL emails from ONE stale SSH
+#      baseline is what that costs when it is missing.
+#
+# It resolves ITSELF: presence of the file is the whole clear condition. There is
+# no acknowledgement, no flag, nothing for Rama to remember to switch off.
+
+
+def _holiday_files_due(today: date, lead_days: int) -> list[int]:
+    """The years whose nse_holidays_<year>.yaml must ALREADY be on disk, given today.
+
+    PURE in `today` and free of any hard-coded year, so (a) the reminder can be
+    driven to any date without patching a clock, and (b) December 2027 behaves
+    exactly like December 2026 — otherwise the fix would be a one-character-
+    different version of the bug, one year later.
+
+      * the CURRENT year, always: if that file is absent the boot is already dead.
+      * the NEXT year, once `lead_days` or fewer remain before 31-Dec.
+    """
+    due = [today.year]
+    if (date(today.year, 12, 31) - today).days <= lead_days:
+        due.append(today.year + 1)
+    return due
+
+
+def check_nse_holiday_calendar(cfg: SecConfig, now: datetime) -> list[Finding]:
+    """CRITICAL while a REQUIRED nse_holidays_<year>.yaml is absent; silent the
+    moment it exists. Two horizons, one shape (see the block comment above)."""
+    if not cfg.holiday_calendar_alert:
+        return []
+    today = now.date()
+    config_dir = Path(cfg.config_dir)
+    out: list[Finding] = []
+    for year in _holiday_files_due(today, cfg.holiday_calendar_lead_days):
+        fname = f"nse_holidays_{year}.yaml"
+        if (config_dir / fname).exists():
+            continue
+        if year == today.year:
+            headline = (
+                f"The 08:15 boot CANNOT START while this file is missing: load_all() "
+                f"raises ConfigMissingError and main returns 5. This is not a warning "
+                f"about the future — it is the current state of the machine."
+            )
+        else:
+            days_left = (date(today.year, 12, 31) - today).days
+            headline = (
+                f"{days_left} day(s) of the {today.year} calendar remain. On "
+                f"1-Jan-{year} the 08:15 boot will raise ConfigMissingError and the "
+                f"service will NOT start. Acting now costs one commit; acting late "
+                f"costs a trading day that begins with a dead service."
+            )
+        out.append(Finding(
+            "CRITICAL", f"holidaycal:missing:{fname}",
+            f"CONFIG: NSE holiday calendar {year} is not committed",
+            f"config/{fname} does not exist on this machine.\n\n"
+            f"{headline}\n\n"
+            f"ACTION — commit NSE's PUBLISHED holiday list for {year} as "
+            f"config/{fname}, in the same shape as the {today.year} file "
+            f"(a `holidays:` list of date/name entries), and deploy.\n\n"
+            f"⛔ DO NOT invent, infer or extrapolate the dates, and do not copy the "
+            f"previous year's file forward. A guessed calendar is far worse than a "
+            f"missing one: the system would trade on a market holiday, or skip a real "
+            f"trading day, and believe it was right. NSE publishes the following "
+            f"year's list around Nov-Dec — if it is not published yet, wait for it.\n\n"
+            f"This alert stops by itself as soon as the file exists. Nothing to "
+            f"acknowledge, nothing to switch off. Until then it repeats on the "
+            f"standard backoff (6h, then 24h, then weekly) and only this first one "
+            f"is CRITICAL."))
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Dispatch
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1125,6 +1239,7 @@ def run_pass(cfg: SecConfig, state: dict, authlog: Path, now: datetime,
         lambda: check_active_sessions(cfg, state, lines, now),
         lambda: check_copy_protection_switch(cfg, state, now),   # Phase 2
         lambda: check_copy_bypass(cfg, state, now),              # Phase 2
+        lambda: check_nse_holiday_calendar(cfg, now),            # calendar expiry
     ]
     global _LAST_PASS_CHECK_COUNT
     _LAST_PASS_CHECK_COUNT = len(checks)
