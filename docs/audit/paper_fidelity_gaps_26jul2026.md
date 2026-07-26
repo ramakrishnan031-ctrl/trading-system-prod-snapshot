@@ -133,9 +133,41 @@ up state is naming a gap.** Gap #1 was found exactly that way.
 
 ---
 
+## The three gating gaps, classified WEAKER vs WRONG
+
+Added 26-Jul after gap #1 was fixed. The distinction is the one that decides urgency:
+
+- **WEAKER** — paper proves *less* than the phrase "paper-proven" implies. Absent
+  coverage. Nothing green is a lie; there is simply no green to read.
+- **WRONG** — paper would produce a **green that means the opposite**. A gate could pass
+  something that should fail. **Only this class is urgent.**
+
+| # | gap | class | why |
+|---|---|---|---|
+| **1** | **A GTT never fires in paper** | ~~WRONG~~ → **FIXED** | Was wrong-class: `CncGttMonitor`'s exit paths were unreachable while 25 tests *looked* like coverage. Fixed — see `paper_gtt_trigger_26jul2026.md`. |
+| **2** | **The overnight carry: paper positions are in-memory and die with the nightly restart; `_paper_holdings` has no production writer** | 🔴 **WRONG — and now the only one** | On Tuesday morning a paper CNC carry has neither a position nor a holding, so `_gather` reports `held == 0`. With a `gtt_state` row present, the monitor takes branch 4 — *"GTT active but holding flat (external close)"* — **deletes the GTT and finalises the trade**. A paper Mon→Tue would therefore show a clean `GTT_EXIT` while the protection was actually torn down. **A green that means the opposite.** |
+| **3** | **`cancel_order` returns success unconditionally** | **WEAKER** | The §D deferral is simply unreachable in paper. No test asserts a refusal path works, so nothing passes wrongly — the knob ships OFF and `check1_deferral_26jul2026.md` states the limit up front. |
+
+**Also WEAKER, from the same sweep** (not Slice-2.5-gating but worth the label):
+`get_trades()` returning `[]` makes CHECK1 rungs 1-2 and the broker-vs-local
+contradiction rule unreachable in paper. Absent coverage, not a false green — but note
+the contradiction rule is a *safety* property, so "we ran paper and saw no contradiction"
+must never be offered as evidence it works.
+
+⛔ **Gap #2 is not fixed here and should not be fixed casually.** The cheap-looking
+remedies are both traps: persisting `_paper_positions` across restarts invents a
+settlement model paper does not have, and calling `seed_paper_holding()` from production
+code puts a test seam on the live path. **The honest position is the one already
+recorded — the Mon→Tue live pair is irreducible — and the fix is to keep saying so, not
+to make paper appear to cover it.** The specific hazard to guard is someone running a
+paper Mon→Tue, seeing `GTT_EXIT`, and reporting the carry as proven.
+
+---
+
 ## Recommendation
 
-⛔ **Fix nothing on this pass.** Two observations for whoever takes the design conversation:
+⛔ **Fix nothing further on this pass.** Two observations for whoever takes the design
+conversation:
 
 - The gaps split cleanly into **"legitimately a stub"** (`get_live_margin_pct`,
   `get_quote_raw`, `get_server_time` — no caller needs fidelity) and **"a stub standing where
