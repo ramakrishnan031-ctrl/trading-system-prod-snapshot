@@ -88,6 +88,18 @@ Version map
                  v42 eod_broker_reconciliation (P1 SHADOW broker reconciliation),
                  v43 pb01_watchlist (Step 10b PB-01 overnight watchlist),
                  v44 daily_symbol_stats (M-S4 pre-market scorer-input cache).
+    v44 -> v45 : W8 (P3-r10) — trades gains closure_source + exit_mechanism, the
+                 two closure axes (WHO closed it / HOW the order reached the
+                 broker; permitted values live in core/closure_source.py, contract
+                 in docs/closure_source_contract.md). Rebuild trades (rebuild
+                 copies the intersecting old columns; the two new ones take NULL,
+                 which is the honest value for every pre-v45 row).
+                 DRY-RUN on a copy of production (423 trades / 713 orders /
+                 49,410 signals): 134 ms, integrity ok, 0 FK violations, all 423
+                 rows x 57 old columns byte-identical, trigger + all 5 indexes
+                 restored. Failure path verified ATOMIC by injecting a fault at
+                 the latest point (index creation after DROP+RENAME): the DB was
+                 left at v44, un-rebuilt and undamaged.
 """
 from __future__ import annotations
 
@@ -115,6 +127,7 @@ MIGRATION_TABLES: Dict[int, List[str]] = {
     # 33: pure additions (preflight_* tables) — no rebuild, see schema.sql.
     34: ["trades"],  # Diary #4: add sizing-audit columns (tier_multiplier_mode etc.); rebuild copies old cols, new ones -> NULL
     35: ["trades"],  # Slice 1: add tgt_risk_reward_applied / exits_verified / exits_verify_detail; rebuild copies old cols, new ones -> NULL
+    45: ["trades"],  # W8 (P3-r10): add closure_source / exit_mechanism; rebuild copies old cols, new ones -> NULL
     # 36 (gtt_state) + 37 (sr_detector_results): pure additions — no rebuild, see schema.sql.
     38: ["signals"],  # SNR-V2: widen signals.status CHECK to allow GLOB 'RETEST_*' (WAIT_FOR_RETEST parking)
 }

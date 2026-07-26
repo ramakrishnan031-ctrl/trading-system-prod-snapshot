@@ -41,8 +41,12 @@ def _count(store: StateStore) -> int:
 def test_schema_is_v41_with_config_snapshots_table(tmp_path):
     store = _fresh_store(tmp_path)
     try:
-        assert EXPECTED_SCHEMA_VERSION == 44   # M-S4: +daily_symbol_stats (was 43: pb01_watchlist)
-        assert store.get_schema_version() == 44
+        # ⚠️ This asserts a NUMBER where it means a PROPERTY (config_snapshots
+        # exists) — so every schema bump edits it. v45 = W8 (+closure_source,
+        # +exit_mechanism on trades); config_snapshots is untouched and still
+        # present, verified before this line was changed.
+        assert EXPECTED_SCHEMA_VERSION == 45   # W8: +closure_source/+exit_mechanism (was 44: daily_symbol_stats)
+        assert store.get_schema_version() == 45
         tbl = store.fetch_one(
             "SELECT name FROM sqlite_master WHERE type='table' "
             "AND name='config_snapshots'")

@@ -54,6 +54,9 @@ from core.events import EventBus, OrderStatusChanged
 from core.ids import new_trade_id
 from core.state_store import StateStore
 from core.time_authority import now_ist
+from core.closure_source import (
+    CLOSURE_SOURCES, EXIT_MECHANISMS, OWN_EOD, OWN_SL, OWN_TGT,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -92,6 +95,18 @@ class OrderInsertSpec:
 _VALID_EXIT_REASONS: Final[frozenset[str]] = frozenset({
     "TGT_HIT", "SL_HIT", "MANUAL_CLOSE", "EOD_SQUAREOFF",
 })
+
+# W8 (P3-r10): exit_reason -> closure_source. The VALUES are imported from the
+# canonical core/closure_source.py and never re-typed here -- a second literal copy
+# is the divergence W8 exists to retire (see docs/closure_source_contract.md).
+# MANUAL_CLOSE is deliberately ABSENT: order_placer's _LEG_TO_EXIT_REASON never
+# produces it, so mapping it would be inventing an answer. It falls through to NULL
+# unless a caller passes closure_source explicitly.
+_EXIT_REASON_TO_CLOSURE_SOURCE: Final[dict[str, str]] = {
+    "SL_HIT": OWN_SL,
+    "TGT_HIT": OWN_TGT,
+    "EOD_SQUAREOFF": OWN_EOD,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -500,6 +515,8 @@ class OrderManager:
         gross_pnl: float,
         charges: float,
         cost_breakdown: Optional[object] = None,
+        closure_source: Optional[str] = None,
+        exit_mechanism: Optional[str] = None,
     ) -> Dict:
         """
         Finalize a trade on exit fill (BL-10a).
@@ -596,6 +613,30 @@ class OrderManager:
         net_pnl = gross_pnl - charges
         now = now_ist().isoformat()
         cb = cost_breakdown
+
+        # W8 (P3-r10, v45): write the closure axes HERE, at the single central
+        # finalizer, rather than at five scattered exit paths. This is the only
+        # caller-facing site that already holds a VALIDATED exit_reason, so the
+        # derivation is total and cannot drift: _LEG_TO_EXIT_REASON in
+        # order_placer maps SL/TGT/EOD onto exactly the three reasons below.
+        #
+        # `closure_source` may be passed explicitly to override the derivation —
+        # that is how a caller declares OWN_KILL, which has no exit_reason of its
+        # own (the kill path's exit fills arrive as ordinary SL/TGT/EOD legs).
+        # ⚠️ An UNMAPPED reason writes NULL, never a guess: NULL means "we do not
+        # know", and no reader may treat it as a value (docs/closure_source_contract.md).
+        resolved_source = closure_source or _EXIT_REASON_TO_CLOSURE_SOURCE.get(exit_reason)
+        if resolved_source is not None and resolved_source not in CLOSURE_SOURCES:
+            raise ValueError(
+                f"close_trade.closure_source must be one of "
+                f"{sorted(CLOSURE_SOURCES)}, got {resolved_source!r}"
+            )
+        if exit_mechanism is not None and exit_mechanism not in EXIT_MECHANISMS:
+            raise ValueError(
+                f"close_trade.exit_mechanism must be one of "
+                f"{sorted(EXIT_MECHANISMS)}, got {exit_mechanism!r}"
+            )
+
         with self._store.transaction() as cur:
             cur.execute(
                 """
@@ -613,6 +654,8 @@ class OrderManager:
                     cost_sebi       = ?,
                     cost_gst        = ?,
                     cost_stamp_duty = ?,
+                    closure_source  = ?,
+                    exit_mechanism  = ?,
                     updated_at      = ?
                 WHERE trade_id = ?
                   AND status IN ('OPEN', 'PARTIAL', 'EXITING')
@@ -625,6 +668,7 @@ class OrderManager:
                  cb.sebi if cb else None,
                  cb.gst if cb else None,
                  cb.stamp_duty if cb else None,
+                 resolved_source, exit_mechanism,
                  now, trade_id),
             )
             won = cur.rowcount == 1

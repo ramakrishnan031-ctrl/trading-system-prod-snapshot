@@ -236,6 +236,17 @@ CREATE TABLE IF NOT EXISTS trades (
     exits_verified            INTEGER,  -- 1 = SL+TGT verified ok, 0 = mismatch (see detail)
     exits_verify_detail       TEXT,     -- 'ok' or human-readable mismatch description
 
+    -- W8 (P3-r10, v45): the two closure axes. closure_source = WHO closed the
+    -- position; exit_mechanism = HOW the order reached the broker. They are
+    -- SEPARATE on purpose (a GTT leg is an SL/TGT by REASON; broker-managed is
+    -- its MECHANISM). The permitted values live in ONE place -- core/closure_source.py,
+    -- contract in docs/closure_source_contract.md -- and are deliberately NOT
+    -- restated here; a third copy is the divergence W8 exists to retire.
+    -- NULL on every pre-v45 row and on any row whose closer is unknown: "we do
+    -- not know" is honest, and no reader may treat NULL as a value.
+    closure_source            TEXT,
+    exit_mechanism            TEXT,
+
     updated_at          TEXT NOT NULL,
 
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
@@ -1594,7 +1605,7 @@ CREATE INDEX IF NOT EXISTS idx_daily_symbol_stats_date
 
 -- ─────────────────────────────────────────────────────────────────────────────
 
-INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '44');  -- M-S4: +daily_symbol_stats (pre-market scorer-input cache). Pure addition — no rebuild.
+INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', '45');  -- W8 (P3-r10): trades gains closure_source + exit_mechanism. REBUILD (see MIGRATION_TABLES[45]) — not a pure addition.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- END OF SCHEMA v24 (v1: tables 1-8; v2: +fm_ledger; v3: +kill_switch_state;

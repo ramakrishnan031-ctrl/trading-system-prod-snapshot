@@ -99,7 +99,7 @@ def _parse_ist_dt(value: Optional[str]) -> Optional[datetime]:
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-EXPECTED_SCHEMA_VERSION = 44  # M-S4: +daily_symbol_stats (pre-market scorer-input cache). Pure addition — no rebuild.
+EXPECTED_SCHEMA_VERSION = 45  # W8 (P3-r10): trades +closure_source +exit_mechanism. REBUILD of trades (MIGRATION_TABLES[45]); dry-run on a production copy = 134 ms, atomic on failure.
 
 DEFAULT_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
