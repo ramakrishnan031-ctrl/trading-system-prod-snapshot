@@ -1112,6 +1112,89 @@ def test_every_registered_config_file_exists_for_the_CURRENT_year() -> None:
     )
 
 
+# ── the EARLY half of the same tripwire ──────────────────────────────────────
+
+_HOLIDAY_LEAD_DAYS = 30      # fires from 1-Dec; see the test docstring for why not 60
+
+
+def _missing_next_year_holiday_file(today):
+    """Return the absent `nse_holidays_<next year>.yaml`, or None if not yet due.
+
+    PURE in `today` on purpose: the tripwire can then be driven to any date without
+    patching a clock, so proving it can go RED costs nothing and touches nothing.
+    """
+    from datetime import date as _date
+    year_end = _date(today.year, 12, 31)
+    if (year_end - today).days > _HOLIDAY_LEAD_DAYS:
+        return None
+    fname = f"nse_holidays_{today.year + 1}.yaml"
+    config_dir = Path(__file__).parent.parent.parent / "config"
+    return None if (config_dir / fname).exists() else fname
+
+
+def test_next_years_holiday_file_lands_before_the_current_one_runs_out() -> None:
+    """⏰ THE EARLY HALF OF THE TRIPWIRE — it must fire in DECEMBER, not in January.
+
+    Its sibling above goes red on 1-Jan when `nse_holidays_<new year>.yaml` is absent.
+    By then the 08:15 boot has already failed: `load_all()` raises ConfigMissingError
+    at `main.py:1816` and main returns 5.
+
+    ⭐ AND THE CHECK BUILT TO CATCH EXACTLY THIS CANNOT REACH IT.
+    `check_config_files_present()` explicitly requires `nse_holidays_{current_year}
+    .yaml` and would record `missing_config_files` as a BLOCKING failure with a clear
+    message — but it runs inside `run_all_startup_checks()` at `main.py:2069`, **253
+    lines after** the `load_all()` that already killed the boot. A downstream check
+    cannot catch an upstream death.
+
+    ⭐ Note also that the SAME DATA, read two ways in one boot, has two OPPOSITE
+    failure policies: the SU6 holiday guard reads the YAML directly and explicitly
+    swallows the missing file (`main.py:1769` — "proceed with startup"), while
+    `load_all`'s blanket "all 8 files must exist" turns the very same absence into a
+    dead boot. The file is a HARD boot requirement serving a SOFT purpose.
+
+    So the warning has to arrive EARLY, and the suite is the cheapest place that
+    costs no production code: it runs constantly here, and a red test is read by
+    whoever takes the gate instead of emailed to whoever is asleep.
+
+    ⛔⛔ WHEN THIS GOES RED, THE ACTION IS: obtain NSE's PUBLISHED holiday list for
+    the coming year and commit `config/nse_holidays_<year>.yaml`. **DO NOT invent,
+    infer, or extrapolate the dates.** A guessed calendar is far worse than a missing
+    one — the system would trade on a market holiday, or skip a real trading day, and
+    believe it was right. NSE publishes the following year's list around Nov–Dec.
+
+    LEAD TIME IS 30 DAYS, DELIBERATELY NOT 60. Long enough to act in, short enough
+    that NSE has actually published: a red test nobody *can* fix is precisely the
+    noise this week has spent days undoing. From 1-Dec there is a full month before
+    the boot dies."""
+    from datetime import date
+    missing = _missing_next_year_holiday_file(date.today())
+    assert missing is None, (
+        f"config/{missing} is absent and the current year's calendar runs out within "
+        f"{_HOLIDAY_LEAD_DAYS} days. On 1-Jan load_all() will raise ConfigMissingError "
+        f"and the 08:15 boot will not start. Commit NSE's PUBLISHED list for that year "
+        f"— never a guessed one — and do not edit this test."
+    )
+
+
+def test_the_lead_time_tripwire_is_not_vacuous() -> None:
+    """A green check is evidence only if it could have been red — and today it IS
+    green, so the red has to be demonstrated rather than assumed.
+
+    Driven purely by date, against the REAL config/ directory (which holds 2026 and
+    not 2027), so these assertions exercise the same code path the live test does."""
+    from datetime import date
+    # today (26-Jul-2026): 158 days of runway -> silent, which is why the live test passes
+    assert _missing_next_year_holiday_file(date(2026, 7, 26)) is None
+    # 31 days out -> still silent, the boundary is not off by one
+    assert _missing_next_year_holiday_file(date(2026, 11, 30)) is None
+    # 1-Dec: 30 days -> FIRES, naming the file that does not exist
+    assert _missing_next_year_holiday_file(date(2026, 12, 1)) == "nse_holidays_2027.yaml"
+    assert _missing_next_year_holiday_file(date(2026, 12, 31)) == "nse_holidays_2027.yaml"
+    # and it is satisfied by the file EXISTING, not by the calendar moving on:
+    # 2026's own file is present, so a 2025-year-end check would have been silent.
+    assert _missing_next_year_holiday_file(date(2025, 12, 15)) is None
+
+
 def test_system_config_has_no_limits_block() -> None:
     """
     BL-17 regression guard: the dead `limits:` block must not return.
