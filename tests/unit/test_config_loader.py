@@ -1023,15 +1023,33 @@ def test_real_scan_webhook_map_yaml_loads() -> None:
     project_root = Path(__file__).parent.parent.parent
     raw = yaml.safe_load((project_root / "config" / "scan_webhook_map.yaml").read_text(encoding="utf-8"))
     cfg = ScanWebhookMapConfig.model_validate(raw)
-    # 15 live scanners + the PB-01 shadow playbook scanner (V3 Step 10b) = 16.
-    assert len(cfg.scanners) == 16, f"Expected 16 scanners (15 live + PB-01), got {len(cfg.scanners)}"
-    assert "pb01_breakout_retest" in cfg.scanners, "PB-01 scanner missing from map"
+    # ⭐ THE PROPERTY, NOT THE COUNT (26-Jul-2026). This asserted `== 16`, which
+    # changes the day anyone ADDS A SCANNER -- a routine edit -- so it would fail for
+    # a reason that is not a bug and the number would simply be hand-edited. What the
+    # 16 actually stood in for is the file's own stated contract (its header: "every
+    # strategy name must have a corresponding YAML file in config/strategies/"), and
+    # THAT fails on a real defect (a typo'd or deleted strategy) while staying silent
+    # on a routine addition, because adding a scanner means adding its strategy file.
+    # ⚠️ Deliberately NOT `len(cfg.scanners) == len(raw["scanners"])`: pydantic RAISES
+    # on a bad entry rather than dropping it, so that comparison can never fail --
+    # it would have replaced one weak assertion with a vacuous one.
+    strategy_dir = project_root / "config" / "strategies"
     for name, entry in cfg.scanners.items():
         assert isinstance(entry, ScannerEntry), f"Scanner {name!r} entry not ScannerEntry"
         assert entry.strategy, f"Scanner {name!r} has empty strategy"
+        assert (strategy_dir / f"{entry.strategy}.yaml").is_file(), (
+            f"Scanner {name!r} names strategy {entry.strategy!r} but "
+            f"config/strategies/{entry.strategy}.yaml does not exist"
+        )
         assert entry.chartink_url.startswith("https://"), (
             f"Scanner {name!r} chartink_url not https: {entry.chartink_url!r}"
         )
+    # A floor, not an equality: catches a TRUNCATED or gutted map (the other thing
+    # the count guarded) without firing when a scanner is legitimately added.
+    assert len(cfg.scanners) >= 10, (
+        f"scan_webhook_map.yaml looks truncated: only {len(cfg.scanners)} scanners"
+    )
+    assert "pb01_breakout_retest" in cfg.scanners, "PB-01 scanner missing from map"
     print(f"  OK Real scan_webhook_map.yaml: {len(cfg.scanners)} scanners, all valid")
 
 
@@ -1040,9 +1058,21 @@ def test_real_nse_holidays_yaml_loads() -> None:
     project_root = Path(__file__).parent.parent.parent
     raw = yaml.safe_load((project_root / "config" / "nse_holidays_2026.yaml").read_text(encoding="utf-8"))
     cfg = NseHolidaysConfig.model_validate(raw)
-    assert len(cfg.holidays) == 15, f"Expected 15 holidays, got {len(cfg.holidays)}"
+    # ⭐ THE PROPERTY, NOT THE COUNT (26-Jul-2026). `== 15` changes whenever NSE adds
+    # or moves a holiday -- routine, annual, and not a bug -- so the number would be
+    # hand-edited rather than the change being examined. The properties that a wrong
+    # file actually violates are: every entry parses, every date is in the configured
+    # year, no date repeats, and the file is not truncated.
     assert all(isinstance(h, HolidayEntry) for h in cfg.holidays)
     assert all(h.date.year == 2026 for h in cfg.holidays)
+    assert len({h.date for h in cfg.holidays}) == len(cfg.holidays), (
+        "a duplicated holiday date would silently double-count one closed day"
+    )
+    # A floor: NSE publishes ~15 CM-segment holidays a year, so a file with fewer
+    # than 10 is truncated, not updated. Fires on loss, never on a routine edit.
+    assert len(cfg.holidays) >= 10, (
+        f"nse_holidays_2026.yaml looks truncated: only {len(cfg.holidays)} holidays"
+    )
     assert any(h.name == "Republic Day" for h in cfg.holidays)
     print(f"  OK Real nse_holidays_2026.yaml: {len(cfg.holidays)} holidays, all valid")
 

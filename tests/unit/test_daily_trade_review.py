@@ -18,7 +18,7 @@ import pytest
 from core.state_store import StateStore
 from reports.daily_trade_review import (
     _COLSPECS, _SIGNAL_COLSPECS, _bucket_for, _build_t5_ranking, _day_summary, _fmt_time,
-    _fmt_zone, is_holiday_or_weekend,
+    _fmt_zone, _group_spans, is_holiday_or_weekend,
     _grade, _latency_ms, _minmax_norm, _minutes_between, _parse_dt, _signal_bucket,
     _signal_stage, _trade_bucket, _win_loss_pct, build_config_data, build_dashboard_data,
     build_reconciliation, build_records, build_signal_records, build_slippage_data,
@@ -113,13 +113,28 @@ def test_helpers():
     assert _fmt_zone(None, None, None).startswith("N/A")
 
 
-def test_69_columns_and_groups():
-    assert len(_COLSPECS) == 69
+def test_colspecs_are_well_formed_and_each_group_is_one_contiguous_run():
+    """⭐ THE PROPERTY, NOT THE COUNT (26-Jul-2026). This asserted `len(_COLSPECS) ==
+    69`, which changes the day a COLUMN IS ADDED -- routine -- so it would fail for a
+    reason that is not a bug and the number would be hand-edited.
+
+    What the 69 stood in for is that the column table is COHERENT, and the load-
+    bearing part of that is contiguity: _group_spans() folds only ADJACENT same-group
+    columns, so a group that reappears further along silently yields TWO spans and
+    _apply_outline_groups then calls column_dimensions.group() twice for the same
+    letter. That is a real defect the count could never have caught."""
     groups = [g for g, *_ in _COLSPECS]
     assert set(groups) == set("ABCDEFGHI")
     # keys unique
     keys = [k for _g, _h, k, *_ in _COLSPECS]
     assert len(keys) == len(set(keys))
+    assert [g for g, _cols in _group_spans()] == sorted(set(groups)), (
+        "each group must be ONE contiguous run of columns, in order"
+    )
+    for spec in _COLSPECS:
+        assert len(spec) == 5, f"malformed colspec (want 5 fields): {spec!r}"
+        _g, header, key, _fmt, width = spec
+        assert header and key and width > 0, f"empty colspec field: {spec!r}"
 
 
 # ── DB-pure end-to-end on a synthetic store ───────────────────────────────────
