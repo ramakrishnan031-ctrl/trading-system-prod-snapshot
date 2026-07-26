@@ -857,10 +857,12 @@ def check_copy_bypass(cfg: SecConfig, state: dict, now: datetime) -> list[Findin
 #      dated tripwire for the same condition (test_config_loader.py, from 1-Dec)
 #      but a test only fires if somebody runs it. In December that is a hope with
 #      a date on it, not a reminder.
-#   2. IT IS ALWAYS ON. security-watcher.service is a oneshot with RestartSec=60,
-#      independent of cron and of the trading service — which matters most in the
-#      exact failure it warns about, because on 1-Jan the trading service is the
-#      thing that is dead. A boot-path check cannot warn you that the boot died.
+#   2. IT IS ALWAYS ON. security-watcher.service is Type=simple + Restart=always
+#      + RestartSec=60 (NOT oneshot — systemd refuses Restart=always with
+#      oneshot): ExecStart runs one pass, exits 0, and systemd restarts it ~60 s
+#      later. Independent of cron AND of the trading service — which matters most
+#      in the exact failure it warns about, because on 1-Jan the trading service
+#      is the thing that is dead. A boot-path check cannot warn you the boot died.
 #   3. IT ALREADY BACKS OFF. A missing file is by nature persistent, and this
 #      module's presence ledger (_dedup, 26-Jul) reports a persistent condition
 #      ONCE at full severity and then on a widening 6h/24h/7d ladder, never
