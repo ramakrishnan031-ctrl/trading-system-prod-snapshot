@@ -905,13 +905,41 @@ def test_fix3_filled_label_disambiguated_entered_vs_qty(tmp_path):
 
 # ── Phase C cron entrypoint: default-date + monitored heartbeat ───────────────────
 
+def _freeze_ist(monkeypatch, when):
+    """Freeze the ONE clock main() reads. main() does `from core.time_authority import
+    now_ist` INSIDE the function, so patching the report module's namespace would be a
+    no-op — the patch has to land on the source module."""
+    import core.time_authority as ta
+    monkeypatch.setattr(ta, "now_ist", lambda: when)
+
+
 def test_main_defaults_date_to_today_and_records_heartbeat(tmp_path, monkeypatch):
     """Phase C: `main()` runs with NO --date (defaults to today IST, so the cron line
     needs no date substitution — like the retired daily_review/daily_report) and records
-    a monitored cron_heartbeat('daily_trade_review') SUCCESS to the same DB."""
+    a monitored cron_heartbeat('daily_trade_review') SUCCESS to the same DB.
+
+    THE CLOCK IS PINNED, AND THAT IS THE FIX. This test used to read the real wall
+    clock, so it passed Mon-Fri and FAILED every Saturday and Sunday: the non-trading-day
+    guard skipped the report the xlsx assertion below demands. Same class as the 18:15
+    service-window time-bomb (25-Jul), different axis — and worse, because a suite that
+    answers differently on a Saturday than on a Tuesday makes a weekend BASE run
+    non-comparable to a weekday MERGE run, and the gate discipline rests on exactly that
+    comparison.
+
+    Control the INPUT, do not weaken the check: the clock is frozen to a real NSE trading
+    day and the REAL guard still runs against it (asserted first, so the pin is
+    self-verifying rather than a date literal we hope is still a weekday)."""
     import sys
+    from pathlib import Path
+    from datetime import datetime
     from reports.daily_trade_review import main
-    from core.time_authority import now_ist
+    from core.time_authority import ist_timezone
+
+    pinned = datetime(2026, 7, 14, 16, 7, 0, tzinfo=ist_timezone())   # Tuesday
+    assert is_holiday_or_weekend("2026-07-14", Path("config")) is False, \
+        "the pinned clock must be a real NSE trading day, else this test proves nothing"
+    _freeze_ist(monkeypatch, pinned)
+
     db = tmp_path / "trading_system.db"
     StateStore(db).close()                       # create a real (empty) DB with all tables
     outdir = tmp_path / "out"
@@ -919,13 +947,53 @@ def test_main_defaults_date_to_today_and_records_heartbeat(tmp_path, monkeypatch
                         ["daily_trade_review.py", "--db", str(db), "--output-dir", str(outdir)])
     rc = main()
     assert rc == 0
-    today = now_ist().strftime("%Y-%m-%d")
+    today = pinned.strftime("%Y-%m-%d")
     assert (outdir / f"daily_trade_review_report_{today}.xlsx").exists()
     s = StateStore(db)
     try:
         row = s.fetch_one("SELECT status FROM cron_heartbeat WHERE job_name='daily_trade_review' "
                           "ORDER BY id DESC LIMIT 1")
         assert row is not None and (row["status"] or "").upper() == "SUCCESS"
+    finally:
+        s.close()
+
+
+def test_main_on_a_weekend_skips_the_report_but_still_heartbeats(tmp_path, monkeypatch):
+    """The OTHER half of the same clock, now covered on purpose instead of by accident.
+
+    The weekend behaviour used to be 'tested' only by the calendar happening to be a
+    Saturday — which is not coverage, it is a coin toss that also broke the test above.
+    Pinned to a Sunday, this asserts what the guard is FOR: no report, and still a
+    heartbeat (SUCCESS/SKIPPED) so the Cron Officer does not raise a false 'no
+    heartbeat' alarm every weekend."""
+    import sys
+    from pathlib import Path
+    from datetime import datetime
+    from reports.daily_trade_review import main
+    from core.time_authority import ist_timezone
+
+    pinned = datetime(2026, 7, 19, 16, 7, 0, tzinfo=ist_timezone())   # Sunday
+    assert is_holiday_or_weekend("2026-07-19", Path("config")) is True
+    _freeze_ist(monkeypatch, pinned)
+
+    db = tmp_path / "trading_system.db"
+    StateStore(db).close()
+    outdir = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv",
+                        ["daily_trade_review.py", "--db", str(db), "--output-dir", str(outdir)])
+    assert main() == 0
+    assert not (outdir / "daily_trade_review_report_2026-07-19.xlsx").exists()
+    from utils.cron_heartbeat import parse_functional_status
+    s = StateStore(db)
+    try:
+        row = s.fetch_one("SELECT status, message FROM cron_heartbeat "
+                          "WHERE job_name='daily_trade_review' ORDER BY id DESC LIMIT 1")
+        assert row is not None
+        assert (row["status"] or "").upper() == "SUCCESS"     # the job EXECUTED fine …
+        # … and produced nothing ON PURPOSE. F2 encodes the functional half into
+        # `message` (no schema change) — read it with the shipped parser, never by
+        # matching the free text ourselves.
+        assert (parse_functional_status(row["message"]) or "").upper() == "SKIPPED"
     finally:
         s.close()
 
