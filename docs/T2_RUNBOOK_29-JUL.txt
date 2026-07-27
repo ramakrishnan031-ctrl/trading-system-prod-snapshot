@@ -1,0 +1,271 @@
+================================================================================
+*** T2 --arm-overnight RUNBOOK — WEDNESDAY 29-JUL-2026 ***
+*** REAL MONEY. REAL BROKER. A POSITION HELD OVERNIGHT. ***
+================================================================================
+Written 27-Jul-2026 Mon. Closes Thursday 30-Jul. Account LFL836.
+GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove.
+⛔ UNTRACKED until after tonight's push (the Monday card asserts 24 commits).
+================================================================================
+
+⭐⭐ READ THIS FIRST — THE TWO FACTS THAT SHOULD SET YOUR NERVES CORRECTLY
+
+  1. *** MAXIMUM LOSS OVERNIGHT = THE PRICE OF ONE SHARE (~Rs 10). *** One share
+     of IDEA. Not one lot, not one position size. If the company vanished
+     overnight the loss is about ten rupees.
+  2. ⭐⭐ *** A GTT CANNOT FIRE WHILE YOU SLEEP. *** GTTs trigger on live price
+     only, and the market is CLOSED 15:30 Wed -> 09:15 Thu. *** There is no
+     overnight execution risk. *** The gap risk lands at the Thursday OPEN —
+     when you are awake and holding this card.
+
+================================================================================
+0. ⛔ STEP ZERO — BEFORE ANYTHING ELSE
+================================================================================
+  ssh trading-vm
+  sha256sum /home/ubuntu/t2_proof_run/t2_cnc_gtt_realtest.py
+
+  *** MUST print exactly: ***
+  a5779420d652c60678cecab400c64cc2e36680865f0052d92c78e1d76f006202
+
+  ⛔ *** ANY OTHER HASH -> STOP. DO NOT RUN IT. *** `23aca731...` is the
+     bit-rotted copy in the deployed `scripts/` tree; it fails on 3 signature
+     drifts and would burn the market day.
+  ⚠️ *** `--help` IS NOT A CHECK. *** The bit-rotted copy ALSO has
+     `--arm-overnight`. The flag is not the fingerprint. The hash is.
+
+================================================================================
+1. PRECONDITIONS — each one is an ABORT, not a warning
+================================================================================
+  P1  Tuesday 28-Jul v45 boot was observed CLEAN.        ABORT if not.
+  P2  Service `active`, NRestarts=0, token refreshed.    ABORT if not.
+        ssh trading-vm "systemctl is-active trading-system"
+  P3  Time is between 10:30 and 14:30 IST.               ABORT if not.
+        (Script refuses outside 09:15-15:30. Aim MIDDAY: away from the open,
+         and >1h before close so a same-day trigger is less likely — see §7.)
+  P4  *** DATES VERIFIED against nse_holidays_2026.yaml (27-Jul): ***
+        Wed 29-Jul TRADING · Thu 30-Jul TRADING · Fri 31-Jul TRADING.
+        *** So 29->30 Jul is a ONE-NIGHT carry. Confirmed, not assumed. ***
+        ⛔ NEVER a Friday arm (a Fri->Mon carry holds real stock three
+           unsupervised days for no extra evidence). If the arm slips to Fri
+           31-Jul, *** wait for Mon 3-Aug ***, do not arm on the Friday.
+  P5  No unusual CRITICAL in this morning's alerts.      ABORT if there is.
+  P6  You have ~30 uninterrupted minutes and can be at a screen 08:15 Thursday.
+                                                        ABORT if not.
+
+================================================================================
+1b. ⚠️⚠️ MEASURED 27-JUL — AS WRITTEN, THIS ARM IS ROUGHLY A COIN FLIP
+================================================================================
+*** A DECISION IS PENDING WITH RAMA. Read this before you run §2. ***
+
+The GTT triggers sit -3% / +5%. Measured on 735 real symbol-days of 1-minute
+candles (19-Jun -> 24-Jul 2026): from an 11:30 anchor, *** 33.9% of symbol-days
+touch -3% or +5% before the close *** — and for shares under Rs 150 it is
+*** 52.2%. *** A same-day trigger VOIDS the arm (it becomes a day trade, no
+demat debit, nothing proved) and costs a market day.
+
+⚠️ *** IDEA IS NOT IN THE MEASURED SET AT ALL *** (no candles, no stats; the
+   cheapest symbol measured is Rs 13.90). At ~Rs 10 it sits BELOW the sample
+   floor, so 52.2% is the closest available proxy and probably optimistic.
+
+✅ *** DECIDED (Rama, 27-Jul): KEEP IDEA · WIDEN THE BAND TO -10%/+10% · ARM
+   ~13:00. *** Void rate 52.2% -> ~2.8%. Expected arm-days 2.09 -> 1.03. Band
+   width is by far the strongest lever; it costs nothing in exposure, and NONE of
+   the script's PASS assertions look at trigger levels (they check two-leg/OCO,
+   SELL+CNC+qty, and the durable row — never the levels).
+
+⭐ *** WHY -10 AND NOT WIDER: the broker-side cap is UNCONFIRMABLE FROM SOURCE. ***
+   Our validator has only a MINIMUM (0.25%), no maximum — but the kiteconnect SDK
+   does NO client-side validation of place_gtt, so any cap is enforced server-side
+   at Zerodha and cannot be read from the tree. *** An over-wide band would be
+   REJECTED AT PLACEMENT and burn the day exactly as a trigger would. *** -10 is
+   the smallest band that solves the problem.
+
+⭐ *** AND IF IT IS REJECTED, NOTHING IS LEFT DANGLING. *** If place_for_fill
+   raises, `intentional_hold` is still False, so the `finally` runs ensure_flat
+   and SQUARES the position. A rejected GTT costs the day — it does NOT leave you
+   holding something unprotected. (Still complete §3's by-hand check.)
+
+⏰ *** APPLIED TUESDAY 28-JUL EVENING, with the fix-t2-repair-07jul merge, as ONE
+   operation. *** ⛔ THE STEP-ZERO HASH ABOVE CHANGES WHEN IT IS APPLIED — the
+   card must be rewritten with the new sha256 in the same sitting, or Wednesday's
+   step zero will correctly tell you to STOP. See DEPLOY_CALENDAR §3.1.
+
+⚠️ *** UNTIL IT IS APPLIED THIS CARD DESCRIBES THE OLD SCRIPT. If the change
+   slips, RUN AS-IS: arm as LATE as P3 allows (13:30 -> 23.9%, not 52.2%) and
+   expect ~2 attempts. *** Each void costs one market day, resume. ⛔ Never let
+   this card describe parameters the script does not have.
+
+================================================================================
+2. THE ARM STEP
+================================================================================
+  ssh trading-vm
+  cd /home/ubuntu/systems/trading-system
+  set -a && . ./.env && set +a
+  PYTHONPATH=. /home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/t2_proof_run/t2_cnc_gtt_realtest.py \
+    --arm-overnight --i-understand-this-places-a-real-cnc-order
+
+  Defaults are correct: --symbol IDEA --qty 1 --account LFL836.
+
+  *** A GOOD RESULT LOOKS LIKE: ***
+    1) CNC BUY placed: <order_id> — confirming fill    ... status=COMPLETE
+    2) OCO GTT placed: gtt_id=<GTT_ID> sl_trigger=... tgt_trigger=...
+    3) get_gtt: type=two-leg legs=[('SELL','CNC',1), ('SELL','CNC',1)]
+       verified: broker=True durable_gtt_state(P2)=True
+    ARMED for the overnight TPIN test. Position HELD with GTT <GTT_ID>.
+    exit code 0
+
+  ✍️ *** WRITE THE GTT_ID DOWN NOW. *** You need it Thursday.
+     GTT_ID = ______________________
+
+================================================================================
+3. ⚠️⚠️ IMMEDIATELY AFTER — THE MOST IMPORTANT LINES ON THIS CARD
+================================================================================
+*** A NON-ZERO EXIT DOES NOT MEAN NOTHING HAPPENED. IT MEANS THE OPPOSITE. ***
+
+The script sets `intentional_hold = True` BEFORE it evaluates the result. So on a
+failed verification it STILL holds the position AND STILL skips the GTT cleanup.
+*** exit 1 = "verification failed AND you are carrying stock overnight." ***
+
+⇒ *** CONFIRM BY HAND AT THE BROKER, WHATEVER THE SCRIPT SAID. *** Open Kite:
+
+  [ ] Positions tab  -> IDEA, qty 1, product CNC          (Wednesday it is here)
+  [ ] Orders -> GTT tab -> the GTT_ID above is ACTIVE,
+                           two SELL legs, qty 1 each, product CNC
+  [ ] Funds -> roughly Rs 10 less than before
+
+  *** ALL THREE MUST BE TRUE BEFORE YOU WALK AWAY. ***
+
+  If position EXISTS but GTT is MISSING -> you are holding UNPROTECTED.
+     Either place an OCO GTT manually in Kite, or sell the share now
+     (Positions -> IDEA -> Exit) and re-arm tomorrow. Do not leave it bare.
+  If position is MISSING -> nothing is held; nothing to protect. Re-arm another
+     day. (Read the log for why the BUY did not fill.)
+
+================================================================================
+4. OVERNIGHT — DO NOTHING
+================================================================================
+*** There is no overnight step. No monitoring, no check, no alert to watch. ***
+The market is closed; the GTT cannot fire; our service is not running after
+17:35 and does not manage this position anyway (§6). *** Go to sleep. ***
+
+================================================================================
+5. THURSDAY 08:15-08:25 — ONE EXPECTED WARNING
+================================================================================
+*** EXPECT exactly one WARNING alert, and it is CORRECT: ***
+
+   "Orphan GTT — no open delivery trade (IDEA)"
+   Active broker GTT <id> for IDEA has no gtt_state row and no OPEN/PARTIAL
+   CNC trade to adopt onto; left alone for review.
+
+*** THIS IS NOT A FAILURE. *** The live service's adoption prepass sees your GTT
+(T2's database is isolated; the broker ACCOUNT is not). It is WARNING severity,
+fires once, and by design adoption only ever INSERTs a row or WARNs — *** it can
+never delete your GTT. *** A separate sweep is also forbidden from touching any
+GTT with no gtt_state row.
+
+⭐ *** THIS IS THE FIRST TIME THAT COMPONENT (FIX-183 adoption) HAS EVER RUN IN
+   PRODUCTION *** — you are getting a free proof of it two stages early.
+
+⚠️ *** ITS ABSENCE IS THE MORE INTERESTING RESULT. *** No warning means either
+   the prepass did not run, or `get_gtts()` returned nothing — i.e. your GTT may
+   be GONE. *** If there is no warning, go straight to §6.B and check the broker
+   before anything else. ***
+
+================================================================================
+6. ⚠️⚠️ IF SOMETHING GOES WRONG — DECIDE NOW, NOT AT 08:20 THURSDAY
+================================================================================
+
+A. *** WHAT PROTECTS THE POSITION, AND WHAT DOES NOT ***
+   PROTECTS:  the broker-side OCO GTT. It lives at Zerodha, independent of our
+              service, our process, our database, the VM, and your laptop.
+   DOES NOT:  our trading service (it never sees this position — no gtt_state
+              row, no local trade); the throwaway DB; any alert we send.
+   ⚠️ THE HONEST LIMIT: the SL leg is a stop-LIMIT, not a market order. Trigger
+      sits ~3% below arm price; its limit ~5.9% below. *** A gap-open through
+      about -6% leaves the share UNSOLD *** (still yours, still ~Rs 10).
+      That is a Thursday-09:15 event, not a night event.
+   ⭐⭐ *** AND A GAP-OPEN DOES NOT INVALIDATE THE TEST — IT HELPS IT. *** An
+      unsold share on Thursday is still a share in Holdings, so §7's close step
+      (or a manual sell) still exercises the demat debit. *** The DDPI proof is
+      UNAFFECTED. *** Position SURVIVING to Thursday is exactly what the test
+      needs; a gap is a money event (bounded at ~Rs 10), never a test failure.
+      *** The only outcome that voids the test is the position being SOLD on
+      Wednesday *** — see the box below.
+
+B. *** THE GTT IS GONE THURSDAY MORNING — WHAT FIRST ***
+   1. Kite -> Holdings: is the share still there? (Thursday it is a HOLDING, not
+      a position — T+1 settlement moved it.)
+   2. Share present, GTT gone  -> you are unprotected but not in danger (Rs 10).
+      *** Just run the close step (§7) — it sells and needs no GTT. ***
+      Do not spend time reconstructing the GTT.
+   3. Share gone AND GTT gone  -> something sold it. *** STOP. Do not place any
+      order. *** Screenshot Kite Orders + Holdings, then investigate. This should
+      not be possible and the evidence matters more than the ten rupees.
+
+C. ⭐ *** CAN YOU JUST SELL IT BY HAND? YES. ***
+   Kite -> Holdings -> IDEA -> Sell -> qty 1, product CNC, market/limit.
+   · If DDPI is authorised it simply executes.
+   · If it prompts for *** TPIN / CDSL authorisation ***, complete it (OTP flow)
+     and the sale goes through.
+   ⭐⭐ *** AND IF THAT PROMPT APPEARS, THAT *IS* THE TEST RESULT: DDPI IS NOT
+      AUTHORISED. *** It is not a malfunction — it is the answer we came for.
+      Record it, sell the share, and report. See §8.
+
+D. *** THE SERVICE DOES SOMETHING UNEXPECTED AT 08:15 — DO YOU STOP IT? ***
+   ⭐ *** STOPPING THE SERVICE COSTS THIS CNC POSITION NOTHING. *** The service
+      does not protect it and cannot square it: CNC is exempt from the 15:17 EOD
+      squareoff (it filters to MIS/CO only), there is no local trade row, and the
+      protection is broker-side.
+   ⚠️ *** WHAT STOPPING COSTS IS THE INTRADAY BOOK *** — it halts entries AND
+      exit management AND the 15:17 squareoff for any MIS position.
+   ⇒ *** DECISION RULE: if the intraday book is flat, stopping is free. If MIS
+     positions are open, stopping is expensive — and the CNC is NEVER a reason
+     to stop. ***
+   The only halt (there is no halt.sh):
+       ssh trading-vm sudo systemctl stop trading-system
+
+================================================================================
+7. THURSDAY — THE CLOSE STEP
+================================================================================
+  ssh trading-vm
+  cd /home/ubuntu/systems/trading-system
+  set -a && . ./.env && set +a
+  PYTHONPATH=. /home/ubuntu/systems/venv/bin/python \
+    /home/ubuntu/t2_proof_run/t2_cnc_gtt_realtest.py \
+    --close-overnight <GTT_ID> --i-understand-this-places-a-real-cnc-order
+
+  (Hash-check again first. Market hours only.)
+
+  *** PASS = the CNC SELL polls COMPLETE with ZERO manual TPIN intervention,
+      and the GTT is deleted only after that. *** -> DDPI PROVEN, piece #5 closed.
+
+  *** FAIL = the SELL is REJECTED. *** The script KEEPS the GTT (protection) and
+      flags manual handling — by design. This means DDPI/TPIN is unauthorised:
+      authorise it at the broker, then RE-RUN THE WHOLE PAIR from §2 (§8).
+
+================================================================================
+8. WHAT ABORTS THE DAY, AND WHAT IT COSTS
+================================================================================
+  BUY rejected — nothing held                        RESUME. 1 day.
+  BUY fills, GTT fails — script squares it, ends flat RESUME. 1 day.
+  ⚠️ GTT TRIGGERS Wednesday afternoon (-3% or +5%)    *** ARM IS VOID *** — it
+     became a day trade, no demat debit, nothing proved. RESUME. 1 day.
+     (This is why §1 P3 says midday, not 15:20.)
+  Broker/token outage Wednesday                      RESUME. 1 day.
+  Broker/token outage Thursday                       RESUME — GTT still protects,
+     close Friday. *** The proof is NOT forfeited. ***
+  ⛔ SELL REJECTED Thursday — DDPI unauthorised       *** RESTART the pair. ***
+     2 days + however long broker authorisation takes. A same-day square proves
+     nothing about demat, so there is no shortcut.
+
+================================================================================
+9. WHEN IT PASSES — REPORT
+================================================================================
+  GTT_ID · BUY order id · SELL order id · fill prices · total cost ·
+  whether ANY TPIN prompt appeared (the headline) · the Thursday orphan WARNING
+  present or absent.
+  ⇒ Then piece #5 is closed and the next gate is the FLAG FLIP (Tue 4-Aug),
+    which is the first genuinely irreversible step. Different card, different day.
+================================================================================
+END
+================================================================================
