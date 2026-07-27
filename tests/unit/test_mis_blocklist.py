@@ -222,3 +222,49 @@ class TestScreenerHook:
         result = self._screen(screener, "ORBTEXP")
         assert result.status != "REJECTED_NOT_MIS_TRADABLE"
         quote_fn.assert_called_once()
+
+
+# ── 27-Jul-2026: SHADOW MODE — enabled, but behaviour byte-identical ──────────
+
+class TestMisFilterShadowIsByteIdentical:
+    """The licence for flipping `enabled: true` without Rama signing off on
+    enforcement is that shadow changes NOTHING but the log.
+
+    PROVEN TODAY, live: `mis_blocklist: recorded MIS-block for PYRAMID` appears
+    TWICE in the 27-Jul log -- learned at 10:06, identical order placed again at
+    10:11. Recording already works; only the DROP is gated.
+    """
+
+    def test_shipped_config_is_enabled_AND_shadow_never_enforcing(self):
+        from pathlib import Path
+        from core.config_loader import load_all
+        m = load_all(Path("config")).system.mis_filter
+        assert m.enabled is True, "shadow measurement needs the filter enabled"
+        assert m.shadow is True, (
+            "shadow MUST stay true -- shadow=false is the ENFORCING change and is "
+            "Rama's call, not a config drift")
+
+    def test_the_reject_is_gated_on_shadow_being_FALSE(self):
+        """Structural: the drop path is entered only when shadow is false, and the
+        shadow path falls through. RED if the gate is ever inverted or removed."""
+        import inspect
+        from screening.secondary_screener import SecondaryScreener
+        src = inspect.getsource(SecondaryScreener)
+        assert "if not self._mis_filter_shadow:" in src, (
+            "the reject must be gated on shadow being FALSE")
+        assert src.count("self._mis_filter_shadow") >= 1
+
+    def test_ttl_still_re_tests_the_next_day_under_shadow(self, tmp_path):
+        """Staleness is designed out and shadow does not change that: ttl_days=1
+        means a symbol blocked today is re-tested tomorrow, so the filter can never
+        become a permanent refusal of a symbol that is fine again."""
+        from datetime import date, timedelta
+        from core.mis_blocklist import MisLearnedBlocklist
+        today = date(2026, 7, 27)
+        bl = MisLearnedBlocklist(tmp_path / "b.json", ttl_days=1,
+                                 today_fn=lambda: today)
+        bl.record_block("PYRAMID")
+        assert bl.is_blocked("PYRAMID") is True          # same day
+        bl2 = MisLearnedBlocklist(tmp_path / "b.json", ttl_days=1,
+                                  today_fn=lambda: today + timedelta(days=1))
+        assert bl2.is_blocked("PYRAMID") is False, "ttl=1 must re-test the next day"
