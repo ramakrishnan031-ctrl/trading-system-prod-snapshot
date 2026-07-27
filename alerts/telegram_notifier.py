@@ -376,7 +376,10 @@ class TelegramNotifier:
             self._log.info(
                 "telegram.disabled_via_config: skipping [%s] %s", severity, title
             )
-            return SendResult(success=True, tier=severity, delivered_to=[])
+            disabled = SendResult(success=True, tier=severity, delivered_to=[])
+            self._audit_send(severity, title, source_module, disabled,
+                             outcome="suppressed_disabled")
+            return disabled
 
         result = SendResult(success=False, tier=severity)
 
@@ -389,7 +392,56 @@ class TelegramNotifier:
             # INFO or WARN: attempt, drop on failure (TG4)
             result = self._handle_info_warn(severity, title, body, source_module, context or {})
 
+        self._audit_send(severity, title, source_module, result)
         return result
+
+    def _audit_send(self, severity: str, title: str, source_module: str,
+                    result: "SendResult", outcome: str | None = None) -> None:
+        """27-Jul-2026 — THE SEND-SIDE AUDIT TRAIL.
+
+        Before this, the alert stream could not be audited at all below CRITICAL.
+        CRITICAL leaves a sentinel; failed_alerts.log records only FAILURES (its last
+        entry was 2-Jul); and `send()` logged nothing on the success path, so there
+        was NO `telegram_notifier` line in system_<date>.log on a normal day. On
+        27-Jul that made a concrete question unanswerable from the system's own
+        records: three placement failures occurred (PYRAMID x2, KECL) and there was
+        no way to tell locally whether each produced a message.
+
+        ⭐ THE OUTCOME FIELD IS THE POINT, NOT THE SEND. "we tried" and "it arrived"
+        are different facts, and only the first was ever knowable. SendResult already
+        carries both (`delivered_to` / `failed_to`), so this reads them rather than
+        re-deriving anything.
+
+        ⛔ THIS IS A LOG, NOT AN ALERT. Nothing here pages anyone — the alert stream
+        already has a noise problem and this must not add to it.
+
+        ⛔ AND IT MUST NEVER BREAK A SEND. An alert failing because its own audit
+        line failed would be the worst possible version of this, so the whole body is
+        wrapped and the caller's result is untouched either way.
+        """
+        try:
+            if outcome is None:
+                if not result.success:
+                    outcome = "failed"
+                elif result.delivered_to:
+                    outcome = "delivered"
+                else:
+                    outcome = "suppressed"
+            self._log.info(
+                "alert_send",
+                extra={
+                    "severity": severity,
+                    "source_module": source_module,
+                    "title": str(title)[:120],
+                    "outcome": outcome,
+                    "delivered_to": list(result.delivered_to or []),
+                    "failed_to": list(result.failed_to or []),
+                    "sentinel_written": result.sentinel_path is not None,
+                    "failed_log_written": bool(result.failed_log_written),
+                },
+            )
+        except Exception:  # noqa: BLE001 — an audit line must never break a send
+            pass
 
     # --------------------------------------------------------------------------
     # Tier handlers
