@@ -665,8 +665,13 @@ class SignalProcessor:
         and must not consume the day's slot.
 
         Called inside portfolio_lock beside the H-7 per-strategy cap, so the rejection
-        is recorded exactly like STRATEGY_POSITION_LIMIT and is countable under its own
-        code rather than hidden inside an existing one.
+        is recorded the same way as that cap's and is countable under its OWN code
+        rather than hidden inside an existing one.
+
+        NB the literal name of that cap's reject code is deliberately NOT repeated
+        here: test_h7_strategy_cap_toctou asserts it appears EXACTLY ONCE in this
+        file, and a docstring mention counts. That assertion is correct and caught
+        this -- the H-7 dedup property is intact, the comment was the defect.
         """
         if not bool(getattr(self._risk, "_one_trade_per_symbol_direction", False)):
             return
