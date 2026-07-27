@@ -153,6 +153,12 @@ class RiskEngine:
         # does NOT reject; "enforce" rejects as designed. Default observe so populating
         # trades.sector activates the cap in log-only mode until a soak + Rama's approval.
         sector_cap_mode: str = "observe",
+        # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.
+        # Default False = OFF; the pre-27-Jul path is byte-identical. Held here (not
+        # enforced here) because it is a risk rule and the SignalProcessor already
+        # reads scalars off this engine; enforcement lives in the gate layer beside
+        # the H-7 per-strategy cap so the rejection is recorded the same way.
+        one_trade_per_symbol_direction_per_day: bool = False,
     ) -> None:
         self._fm = fund_manager
         self._store = state_store
@@ -163,6 +169,7 @@ class RiskEngine:
         self._daily_loss_pct = daily_loss_limit_pct
         self._daily_loss_include_unrealized = daily_loss_include_unrealized
         self._sector_cap_mode = sector_cap_mode if sector_cap_mode in ("observe", "enforce") else "observe"
+        self._one_trade_per_symbol_direction = bool(one_trade_per_symbol_direction_per_day)
         self._max_open_delivery = max_open_delivery_positions   # PHASE-3 (A)
         self._max_daily_delivery = max_daily_delivery_trades     # PHASE-3 (A)
         self._sector_fn = sector_lookup_fn

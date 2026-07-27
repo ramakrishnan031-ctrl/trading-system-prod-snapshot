@@ -196,6 +196,14 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_daily_trades: 10        # hard cap on entries per day (>= 1)
   max_open_delivery_positions: 3  # SLICE2.5-PHASE-3 (A): separate cap on concurrent open DELIVERY (CNC) positions; inert while force_intraday_only=true
   max_daily_delivery_trades: 5    # SLICE2.5-PHASE-3 (A): separate cap on DELIVERY (CNC) entries per day; inert while force_intraday_only=true
+  # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.
+  # false (DEFAULT) = OFF, byte-identical to the pre-27-Jul path. true = a second
+  # entry on the same symbol in the same direction is rejected for the rest of the
+  # day (REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT). Opposite direction ALWAYS allowed:
+  # a long exit followed by a short entry is a reversal, not a re-entry.
+  # Ships OFF -- the whole book holds only 2 re-entries, so there is no evidence
+  # base for a value or for turning it on. See docs/audit/senco_double_entry_27jul2026.md
+  one_trade_per_symbol_direction_per_day: false
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 4      # halt after N consecutive losses (both modes)
   daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT

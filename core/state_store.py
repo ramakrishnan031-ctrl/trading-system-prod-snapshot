@@ -704,6 +704,32 @@ class StateStore:
         )
         return int(row["n"]) if row else 0
 
+    def count_executed_trades_today_for_symbol_direction(
+        self, symbol: str, direction: str, date_iso: str
+    ) -> int:
+        """Executed trades on `symbol` in `direction` created on the given IST date.
+
+        27-Jul-2026, for the one-trade-per-symbol+direction-per-day gate.
+
+        REUSES _EXECUTED_TRADE_STATUSES deliberately: FIX-181 already encodes the
+        ONE definition of "a trade actually happened", and a broker-REJECTED or
+        FAILED entry never opened exposure. A second definition of that here would
+        be a second thing to keep in sync -- and the register already lists a class
+        of defects that are exactly that.
+
+        Matches SUBSTR(created_at, 1, 10) like count_trades_today, so the day
+        boundary is the same one the daily-trade cap already uses.
+        """
+        placeholders = ",".join("?" for _ in self._EXECUTED_TRADE_STATUSES)
+        row = self.fetch_one(
+            f"SELECT COUNT(*) AS n FROM trades "
+            f"WHERE symbol = ? AND direction = ? "
+            f"AND SUBSTR(created_at, 1, 10) = ? "
+            f"AND status IN ({placeholders})",
+            (symbol, direction, date_iso, *self._EXECUTED_TRADE_STATUSES),
+        )
+        return int(row["n"]) if row else 0
+
     # Bug B (2026-06-19): the subset of executed statuses that are NO LONGER
     # in-flight — i.e. _EXECUTED_TRADE_STATUSES minus PENDING_FILL. A trade in
     # one of these has had its fund_manager reservation popped (commit at fill /
