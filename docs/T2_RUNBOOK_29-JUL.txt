@@ -8,6 +8,28 @@ GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove
    APPLIED, as ONE operation, and the step-zero hash below is the new one.
 ================================================================================
 
+⛔⛔⛔ STOP — WHAT IS TODAY'S DATE? ⛔⛔⛔
+
+  *** THIS CARD IS FOR WEDNESDAY 29-JULY-2026. NO OTHER DAY. ***
+
+  ⛔ *** DO NOT RUN THIS ON TUESDAY 28-JUL. *** Tuesday is the v45 schema
+     migration — the day's SINGLE VARIABLE. Arming T2 on Tuesday would put a real
+     CNC position into the one boot that has to stay readable, and if anything
+     then went wrong *** nobody could tell which change caused it. *** A day lost
+     to waiting costs one day. A confounded result costs the whole pair, twice.
+
+  ⚠️ You will probably open this card on TUESDAY, while checking the migration.
+     That is expected and fine. *** READING IT TUESDAY IS FINE. RUNNING IT IS
+     NOT. *** Nothing in §2 or §7 should be typed until Wednesday.
+
+  CHECK THE DATE, DO NOT TRUST THE FILENAME OR YOUR MEMORY OF THE WEEK:
+      date "+%A %d-%b-%Y"        -> must print  Wednesday 29-Jul-2026
+  ⛔ Anything else -> CLOSE THIS CARD. It is not today's card.
+
+  ⭐ Filenames drift and get copied; this line is the date that governs.
+
+================================================================================
+
 ⭐⭐ READ THIS FIRST — THE THREE FACTS THAT SHOULD SET YOUR NERVES CORRECTLY
 
   1. *** MAXIMUM LOSS OVERNIGHT = THE PRICE OF ONE SHARE (~Rs 10). *** One share
@@ -55,6 +77,16 @@ GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove
 ================================================================================
 1. PRECONDITIONS — each one is an ABORT, not a warning
 ================================================================================
+  P0  *** TODAY IS WEDNESDAY 29-JULY-2026. ***             ABORT if not.
+        date "+%A %d-%b-%Y"      -> must print  Wednesday 29-Jul-2026
+        ⛔ This is P0 and not P6 because it is the ONLY precondition that can be
+           got wrong while every other check passes cleanly. The script will run
+           perfectly on the wrong day. ⭐ The calendar is the constraint, not the
+           script — nothing in the code knows which date the plan says.
+        ⚠️ If the arm has SLIPPED to a later date, that is fine — but re-check P4
+           (never a Friday arm) and re-read the P1 box, because "Tuesday's boot"
+           then means "the most recent boot", not 28-Jul.
+
   P1  Tuesday 28-Jul v45 boot was observed CLEAN.        SEE THE BOX BELOW.
   P2  Service `active`, NRestarts=0, token refreshed.    ABORT if not.
         ssh trading-vm "systemctl is-active trading-system"
