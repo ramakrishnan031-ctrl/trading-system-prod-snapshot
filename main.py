@@ -2925,6 +2925,28 @@ def _main_locked(args, config_dir: Path) -> int:
             _log.critical("q4c_structure_exit_trailing_sl_contradiction: %s", _a4[0].message)
             store.close()
             return 3
+    # SLICE2.5 #16a (27-Jul-2026) — the delivery capital foot-gun, same shape as Q4(c)
+    # above and for the same reason: config_loader runs group A WITHOUT strategies, so
+    # A5 (delivery live + fixed bucket split + a DELIVERY-ONLY active book => the
+    # intraday bucket's share of capital is stranded) is invisible at config load. It
+    # would otherwise surface only in the 08:30 pre-flight EMAIL — a report, not a gate.
+    # Re-run group A here WITH the loaded strategies and fail-fast before any capital
+    # is reserved.
+    #
+    # Gated on delivery_enabled, which has been false since the 15-Jun incident that
+    # created the lock: on every ordinary boot this is a byte-identical no-op, and it
+    # can only fire on a day someone deliberately turned delivery on. `is True` (not
+    # truthy) for the same reason as Q4(c) — a MagicMock config in a unit test must not
+    # trip it. Exit 3, like Q4(c): RestartPreventExitStatus="3 4", so a config block
+    # stops cleanly instead of restart-looping.
+    if getattr(app_config.system, "delivery_enabled", False) is True:
+        _a5 = [f for f in audit_config(
+                   app_config.system, strategies=strategies, groups="A").blocks
+               if f.code == "A5_delivery_without_conditional_allocation"]
+        if _a5:
+            _log.critical("slice25_delivery_capital_footgun: %s", _a5[0].message)
+            store.close()
+            return 3
     # V3 03.02: index-level Market Regime shadow engine (default-off). Shares the
     # same rate-limited OHLC fetch closure (reused for the index by config token).
     _regime_cfg = getattr(app_config.system, "regime", None)

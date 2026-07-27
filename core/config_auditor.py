@@ -238,6 +238,63 @@ def _group_a_contradictions(sc: Any, strategies: Optional[dict]) -> List[AuditFi
                     metrics={"trailing_strategies": _trailers},
                 ))
 
+    # A5 — SLICE2.5 #16a (27-Jul-2026): the delivery capital foot-gun.
+    #
+    # MEASURED at capital/fund_manager.py:139-146. With
+    # conditional_allocation_enabled FALSE the bucket split is pinned to the fixed
+    # config values. If delivery is live and the ACTIVE book resolves to
+    # DELIVERY-ONLY, the intraday bucket is never reservable -> that share of capital
+    # is stranded, silently. Nothing errors; the system simply trades at the
+    # positional bucket's size and looks like a sizing bug.
+    #
+    # WHY BLOCK AND NOT WARN — the precondition, not the severity of the outcome.
+    # delivery_enabled has been false since the 15-Jun incident that created the
+    # lock, so this rule CANNOT fire on an ordinary morning: it fires only on a day
+    # someone deliberately turned delivery on, in front of the person who did it,
+    # minutes after they did it. A fail-fast whose precondition is a DELIBERATE ACT
+    # costs a minute. One whose precondition is ENVIRONMENTAL costs a trading day --
+    # that is S4, 17-Jul, and it is why the S4 self-check gets the opposite answer.
+    #
+    # ⚠️ CONDITIONED ON THE ACTIVE INTENT SET, NEVER ON THE FLAG PAIR. With
+    # conditional_enabled TRUE *and both intents active* fund_manager returns the
+    # SAME split as FALSE. So the naive rule ("delivery_enabled => require
+    # conditional_allocation_enabled") would BLOCK a trade_type=BOTH book that is
+    # behaviourally IDENTICAL -- and BOTH is the likeliest production configuration.
+    # Uses strategy_will_trade, the same authority A3 already trusts, rather than
+    # re-deriving which strategies are live.
+    if strategies:
+        try:
+            from strategies.control import strategy_will_trade
+            _cap = getattr(sc, "capital", None)
+            _cond_on = bool(getattr(_cap, "conditional_allocation_enabled", False))
+            if bool(getattr(sc, "delivery_enabled", False)) and not _cond_on:
+                _fio = bool(getattr(sc, "force_intraday_only", False))
+                _live = {
+                    n: v for n, v in (
+                        (n, strategy_will_trade(s, trade_type=tt, force_intraday_only=_fio))
+                        for n, s in strategies.items()
+                    ) if v.will_trade
+                }
+                # Verdict.product is the EFFECTIVE post-coercion product -- the one
+                # that actually selects the capital bucket. (Verdict has no .intent.)
+                if _live and all(v.product == "DELIVERY" for v in _live.values()):
+                    _intra = getattr(_cap, "intraday_bucket_pct", None)
+                    _share = f"{_intra:.0%}" if isinstance(_intra, (int, float)) else "the intraday"
+                    out.append(AuditFinding(
+                        "A", "A5_delivery_without_conditional_allocation", Severity.BLOCK,
+                        "CONTRADICTORY CONFIG: delivery_enabled=true and every strategy that "
+                        f"can trade is DELIVERY ({', '.join(sorted(_live))}), but "
+                        "capital.conditional_allocation_enabled=false pins the fixed bucket "
+                        f"split -- the intraday bucket is unreachable, so {_share} of capital "
+                        "is stranded and every delivery position is sized off the remainder. "
+                        "Set capital.conditional_allocation_enabled=true, or enable an "
+                        "INTRADAY strategy, or set delivery_enabled=false.",
+                        metrics={"delivery_only_strategies": sorted(_live),
+                                 "intraday_bucket_pct": _intra},
+                    ))
+        except Exception:  # noqa: BLE001 — the probe must never break the audit
+            pass
+
     # A3 — strategy-dependent: would ANY strategy trade today? trade_type +
     # force_intraday_only + per-strategy enabled/intent can combine to silence the
     # whole book (e.g. trade_type=DELIVERY with every delivery strategy disabled).
