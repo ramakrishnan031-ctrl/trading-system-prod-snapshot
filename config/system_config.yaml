@@ -209,9 +209,14 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   # entry on the same symbol in the same direction is rejected for the rest of the
   # day (REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT). Opposite direction ALWAYS allowed:
   # a long exit followed by a short entry is a reversal, not a re-entry.
-  # Ships OFF -- the whole book holds only 2 re-entries, so there is no evidence
-  # base for a value or for turning it on. See docs/audit/senco_double_entry_27jul2026.md
-  one_trade_per_symbol_direction_per_day: false
+  # 27-Jul EVENING: TURNED ON by Rama. Earliest LIVE = FRI 31-Jul 08:15 (config loads
+  # at boot, and this ships on the Thu 30-Jul evening slot). It is ON from that boot
+  # onward -- there is no end date and no re-arming.
+  # Evidence, stated honestly: the whole book holds only TWO re-entries, so this is a
+  # JUDGEMENT, not a measured optimum -- which is also why it is a hard one-per-day
+  # rule rather than a tuned time window (15/20/30/40 min all give the identical
+  # answer on this data). See docs/audit/senco_double_entry_27jul2026.md
+  one_trade_per_symbol_direction_per_day: true
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 4      # halt after N consecutive losses (both modes)
   daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT

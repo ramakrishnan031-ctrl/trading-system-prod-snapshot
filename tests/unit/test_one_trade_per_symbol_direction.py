@@ -95,11 +95,26 @@ def test_off_is_a_true_no_op_and_never_even_reads_the_store(store):
     p._enforce_one_trade_per_symbol_direction("SENCO", "BUY")   # must not raise
 
 
-def test_default_config_ships_off():
+def test_the_SHIPPED_config_has_the_rule_ON():
+    """27-Jul EVENING: Rama turned it ON. The shipped value is the operative one.
+
+    RED if it ever drifts back to false -- that would silently restore the 27-Jul
+    SENCO behaviour with nothing failing anywhere.
+    """
     from core.config_loader import load_all
     from pathlib import Path
     cfg = load_all(Path("config"))
-    assert cfg.system.risk.one_trade_per_symbol_direction_per_day is False
+    assert cfg.system.risk.one_trade_per_symbol_direction_per_day is True
+
+
+def test_the_CODE_default_stays_off_so_an_absent_key_cannot_silently_enable_it():
+    """The yaml is the operative source; the Pydantic default is only the fallback
+    when the key is missing. It stays False deliberately: a config omission must not
+    silently switch on a rule that rejects entries. Same shape as delivery_enabled
+    and conditional_allocation_enabled -- code-default-off, explicit yaml."""
+    import core.config_loader as cl
+    f = cl.RiskConfig.model_fields["one_trade_per_symbol_direction_per_day"]
+    assert f.default is False
 
 
 # ── B6: today's ACTUAL case, both ways ────────────────────────────────────────
@@ -176,3 +191,51 @@ def test_an_open_position_still_blocks_a_same_direction_entry(store):
     belt and braces, never a loosening."""
     _trade(store, "t1", "SENCO", "LONG", "OPEN")
     assert _at(store, on=True) is not None
+
+
+# ── B4/B5: the ON path, which is now the SHIPPED default ──────────────────────
+#
+# Every test above proved the OFF path. From 27-Jul evening OFF is no longer what
+# ships, so the ON path is the one that matters. These drive the gate with the flag
+# on and the REAL store, covering the four cases plus the day boundary.
+
+class TestOnPathIsNowTheShippedDefault:
+
+    def test_the_block_fires(self, store):
+        _trade(store, "t1", "SENCO", "LONG", "CLOSED")
+        exc = _at(store, on=True)
+        assert exc is not None and exc.check == "SYMBOL_DIRECTION_DAILY_LIMIT"
+
+    def test_the_opposite_direction_still_passes(self, store):
+        _trade(store, "t1", "SENCO", "LONG", "CLOSED")
+        assert _at(store, on=True, side="SELL") is None
+
+    @pytest.mark.parametrize("status", ["FAILED", "REJECTED", "CANCELLED"])
+    def test_a_rejected_order_does_not_consume_the_slot(self, store, status):
+        _trade(store, "t1", "PYRAMID", "LONG", status)
+        assert _at(store, on=True, symbol="PYRAMID") is None
+
+    def test_the_first_trade_of_the_day_is_never_blocked(self, store):
+        assert _at(store, on=True) is None
+
+    def test_the_day_boundary_releases_the_symbol_tomorrow(self, store):
+        """THE 'per trading day' CLAIM, exercised as a live default for the first
+        time. A symbol blocked today must be eligible tomorrow -- otherwise this is
+        a permanent ban wearing a daily label."""
+        _trade(store, "t1", "SENCO", "LONG", "CLOSED",
+               created="2026-07-27T10:02:12+05:30")
+        # same day -> blocked
+        assert _at(store, on=True, now="2026-07-27T14:00:00+05:30") is not None
+        # next trading day -> eligible again
+        assert _at(store, on=True, now="2026-07-28T09:30:00+05:30") is None, (
+            "the rule must RELEASE at the day boundary, not ban the symbol")
+
+    def test_it_blocks_only_the_traded_direction_across_a_full_day(self, store):
+        """Combined shape: SENCO LONG traded -> LONG blocked all day, SHORT free all
+        day, and both eligible tomorrow."""
+        _trade(store, "t1", "SENCO", "LONG", "CLOSED",
+               created="2026-07-27T10:02:12+05:30")
+        for t in ("2026-07-27T10:15:00+05:30", "2026-07-27T14:59:00+05:30"):
+            assert _at(store, on=True, side="BUY", now=t) is not None
+            assert _at(store, on=True, side="SELL", now=t) is None
+        assert _at(store, on=True, side="BUY", now="2026-07-28T09:30:00+05:30") is None
