@@ -1,0 +1,205 @@
+================================================================================
+*** DEPLOYMENT CALENDAR — Tue 28-Jul → Tue 4-Aug 2026 ***
+*** THE UNIT IS THE BOOT, NOT THE PUSH. ***
+================================================================================
+Written 27-Jul-2026 Mon 11:0x IST. ⛔ UNTRACKED today (the Monday card asserts 24).
+Dates verified against config/nse_holidays_2026.yaml: NO weekday NSE holiday
+between 26-Jun and 14-Sep-2026. Every date below is a trading day.
+================================================================================
+
+⭐ WHY THIS FILE EXISTS: six things were queued across five documents and nobody
+could see whether two of them collided. §3 found three collisions. One of them
+would have cost a market day.
+
+================================================================================
+1. THE QUEUE — five heads, and what each costs if it fails
+================================================================================
+                                                     failure   blocks the
+  item                          type                 costs     T2 sequence?
+  ─────────────────────────────────────────────────────────────────────────
+  hold-check1-w8-26jul  (24)    v45 MIGRATION        A DAY     YES - everything
+  fix-tests-27jul       (1)     test-only            NOTHING   no
+  fix-boot-27jul        (2)     BOOT PATH x2         A DAY     yes if mistimed
+  T2 band widen         (--)    operator script      RESTART   YES - stage 1-2
+  fix-t2-repair-07jul   (3)     operator script      RESTART   YES - stage 1-2
+  #16b                  (--)    unbuilt              --        no (post-v45)
+  2FA seed move         (--)    one-way credential   A DAY     yes if on a step day
+
+⭐ THE DISTINCTION THAT MATTERS (A4): a DAY-cost failure loses one day and the
+sequence resumes. A RESTART-cost failure sends stage 1-2 back to the beginning
+(2 days + broker turnaround). *** The two operator-script items are RESTART-class
+because they are what Wednesday runs. *** Everything else is DAY-class.
+
+================================================================================
+2. ONE ROW PER EVENING — what lands, what the NEXT MORNING's boot carries
+================================================================================
+
+  EVENING          LANDS ON main                 NEXT BOOT CARRIES        RISK
+  ───────────────────────────────────────────────────────────────────────────
+  Mon 27-Jul       hold-check1-w8-26jul (24)     Tue 08:15: v45 SCHEMA    DAY
+  (after check 7,   -- ONLY after Rama            MIGRATION, alone.       (blocks
+   Rama confirms)      confirms clean             *** SINGLE VARIABLE ***  all)
+
+  Tue 28-Jul       NOTHING to main.              Wed 08:15: unchanged     none
+  (after the boot   * widen the T2 band on         from Tue.
+   is observed)       fix-t2-repair-07jul
+                    * THEN merge that branch     ⭐ operator script only;
+                      (order matters - §3.1)        main.py never imports it
+
+  Wed 29-Jul       NOTHING.                      Thu 08:15: unchanged     none
+  (T2 ARM day)     ⛔ A position is held
+                     overnight. Change nothing.
+
+  Thu 30-Jul       fix-tests-27jul (2)           Fri 08:15: the #16a      DAY
+  (after the T2      + fix-boot-27jul (2)         BLOCK gate + the S4
+   close PASSES)                                  degrade -- BOOT PATH ONLY,
+                                                  on a quiet day
+
+  Fri 31-Jul       fix-symdir-27jul (7)          Mon 03-Aug 08:15: the     DAY
+  (evening)        ⭐ SPLIT OUT -- see below      symbol+direction rule
+                                                  LIVE, + 2 log-only changes
+
+                   ⛔ NOT the 2FA seed move (deferred to 7/8-Aug)
+
+  Sat/Sun          --                            --                       --
+
+  Mon 03-Aug       nothing                       Tue 04-Aug: THE FLAG     --
+  (OBSERVE the                                   FLIP + carry pilot D1
+   new rule)
+
+  Tue 04-Aug       ⭐ THE IRREVERSIBLE STEP: four flags flipped. Different card.
+
+*** A2 — I AGREE WITH THE THURSDAY-EVENING SLOT, and here is the reasoning
+    made explicit rather than assumed: ***
+  · NOT Mon evening  - Tuesday belongs to v45 alone.
+  · NOT Tue evening  - Wednesday is the T2 ARM; a failed Wed boot wastes the
+                       first market day of the sequence.
+  · NOT Wed evening  - ⛔ THE WORST SLOT. A real position is held overnight.
+                       A failed Thu boot means the service is down on the
+                       morning the carried CNC must be sold. The GTT still
+                       protects it and a manual sell still works, but it turns
+                       a supervised close into an incident.
+  · THU EVENING      - ✅ the T2 pair is COMPLETE by then, so a failed Friday
+                       boot disturbs nothing already proven, costs one quiet
+                       day, and still leaves Mon 3-Aug + Tue 4-Aug clear.
+  · NOT Mon 3-Aug ev - Tuesday 4-Aug is the flag flip; it must be single-variable.
+
+*** ⭐ AND THE TEST-ONLY HALF RIDES ALONG DELIBERATELY. *** It could go any
+evening (zero deploy consequence - no runtime code), but bundling it with the
+boot half on Thursday keeps ONE deploy event instead of two. If a separate
+evening is ever preferred, it is free to move; nothing depends on its timing.
+
+================================================================================
+3. ⚠️ THE COLLISION CHECK (A3) — three found, one would have cost a day
+================================================================================
+
+3.1 ⭐⭐ *** THE T2 BAND WIDEN AND THE T2 MERGE ARE THE SAME FILE, AND THE
+        RUNBOOK'S STEP-ZERO HASH BREAKS THE MOMENT EITHER HAPPENS. ***
+
+    `scripts/t2_cnc_gtt_realtest.py` is edited by the widen AND carried by the
+    merge. Wrong order = the merge overwrites the widen, or the widen lands on
+    the bit-rotted copy.
+    ⚠️ WORSE, AND THIS IS THE DAY-COSTING PART: the runbook's STEP ZERO says the
+    VM canary copy MUST hash `a5779420d652c606...`. *** Widening the band CHANGES
+    THAT HASH. *** If the runbook is not updated, Wednesday's step zero says STOP
+    and Rama correctly aborts the day -- on a card that is telling him the truth
+    about a file that is now correct.
+
+    ⇒ TUESDAY EVENING, AS ONE OPERATION, IN THIS ORDER:
+       1. widen the band on fix-t2-repair-07jul (-10%/+10%)
+       2. merge that branch to main
+       3. re-sync /home/ubuntu/t2_proof_run/ from the deployed tree
+       4. recompute the sha256 and REWRITE the runbook's STEP ZERO + §1b
+       5. verify: deployed file == VM canary copy == the hash on the card
+
+3.2 ⭐ *** #16a's BLOCK FIRST EXECUTES ON THE MOST IMPORTANT BOOT OF THE
+        SEQUENCE — unless it is rehearsed first. ***
+
+    A5 is gated on `delivery_enabled is True`, which is false today, so its
+    no-op path is proven and its FIRING path is not. The first time it can fire
+    is *** Tue 4-Aug — the flag flip ***, the single boot the whole sequence
+    depends on. That is a built-and-never-run component being introduced onto
+    the critical path, which is precisely the class this project keeps getting
+    caught by.
+    ⇒ REHEARSE IT OFF-MARKET before 4-Aug: run the boot path against a THROWAWAY
+      config with the four flags set, confirm exit 3 and the CRITICAL, and
+      confirm the correct combination boots clean. ⛔ Never on the live config.
+
+3.3 ✅ *** B3's DEGRADE vs THURSDAY'S CLOSE — checked, NOT a collision. ***
+    If the webhook self-check fails on Thu 30-Jul, the old behaviour killed the
+    service on the morning a real CNC had to be sold. The degrade is strictly
+    better there. But it ships Thursday EVENING, so Thursday morning still runs
+    the old code. Noted so nobody assumes protection that has not shipped.
+
+3.4 ✅ *** v45 vs fix-boot-27jul — VERIFIED DISJOINT. ***
+    `git diff --name-only` on both: ZERO overlapping files. v45 does not touch
+    main.py or core/config_auditor.py. No merge conflict, no interaction.
+
+3.5 ⛔ *** A COLLISION THAT ALREADY EXISTED AND IS NOW RESOLVED: my B4 test-
+        hygiene commit DUPLICATED work already inside the 24. ***
+    `aaccbda` (26-Jul, in the v45 package) had already converted scanners==16,
+    holidays==15 and _COLSPECS==69 to properties -- and BETTER. Its comment
+    explicitly rejects the assertion I wrote today:
+        "Deliberately NOT len(cfg.scanners) == len(raw['scanners']): pydantic
+         RAISES on a bad entry rather than dropping it, so that comparison can
+         never fail -- it would have replaced one weak assertion with a vacuous
+         one."
+    *** MEASURED today and confirmed: feeding a bad entry raises ValidationError,
+    so the predicate is unreachable. *** B4 was DROPPED. It would also have been
+    the only merge conflict in the queue (two shared test files).
+    ▶️ ONE genuine item survives and is NOT in the 24: `ws.max_column == 69`
+      (test_daily_trade_review.py:211) and `== 21` (:311) are still bare on the
+      v45 branch. Apply AFTER v45 lands, on top of the v45 tree -- with the
+      header-ROW equality, because the width check alone is near-tautological
+      (three loops write from _COLSPECS; measured).
+
+================================================================================
+4. WHAT WOULD MAKE ME CHANGE THIS PLAN
+================================================================================
+  · Tuesday's v45 boot is NOT clean  -> everything below it shifts one day; the
+    T2 arm cannot be Wednesday.
+  · The T2 arm VOIDS (same-day trigger) -> the arm repeats; the boot-path slot
+    moves to the evening after the eventual close, never before it.
+  · Rama wants the boot-path pair earlier -> the only safe earlier slot is
+    Tuesday evening, and that costs Wednesday's arm if the Wed boot fails.
+    Not recommended: it trades a quiet Friday for a scarce market day.
+================================================================================
+END
+================================================================================
+
+================================================================================
+5. ⭐⭐ THE THURSDAY SLOT SPLIT — 27-Jul EVENING. THE RULE GOING ON CHANGED IT.
+================================================================================
+*** THE EARLIER ANSWER IS NO LONGER TRUE AND I AM RETRACTING IT. *** At 15:5x I
+argued fix-symdir-27jul could take ONE slot because it carried "three changes but
+ZERO behavioural variables" -- the symbol+direction rule was INERT at its default.
+
+*** Rama then turned that rule ON. It is no longer inert. It now REJECTS ENTRIES. ***
+
+So the single Thursday slot would have put on ONE Friday boot:
+   · #16a BLOCK gate          -- boot path, CAN STOP THE SERVICE
+   · S4 degrade               -- boot path, changes failure behaviour
+   · symbol+direction rule ON -- signal path, CHANGES WHAT TRADES
+   · mis_filter SHADOW        -- log only
+   · send-side audit trail    -- log only
+Three consequential changes, two of which can stop the boot and one of which
+changes what trades. *** If Friday went wrong you could not tell which. That is
+precisely the multi-variable boot this whole calendar exists to prevent. ***
+
+  ⇒ SPLIT, as scheduled above:
+     Thu 30-Jul eve -> Fri 31-Jul boot : BOOT-PATH PAIR ALONE (+ test-only)
+     Fri 31-Jul eve -> Mon 03-Aug boot : the RULE LIVE (+ 2 log-only)
+     Tue 04-Aug                        : the flag flip, unchanged
+
+  ⭐ THE SPLIT IS BETTER, NOT MERELY SAFER. Mon 3-Aug becomes a FULL TRADING DAY
+  of observation for a brand-new entry rejection rule -- BEFORE Tue 4-Aug, which
+  is the first irreversible delivery step. A new rule that silently over-blocks
+  would otherwise first be seen on the same day delivery goes live.
+
+  ⚠️ THE COST, STATED: 3-Aug stops being an empty buffer. It now carries ONE
+  variable. That does not compromise 4-Aug's single-variable requirement (the
+  rule lands a day earlier and is observed), and the credential variable that
+  originally reserved 3-Aug -- the 2FA seed move -- is already deferred to 7/8-Aug.
+  ⚠️ AND: if the rule misbehaves on Mon 3-Aug, it DELAYS Tue 4-Aug. That is the
+  correct outcome, not a regression -- you would want to know before the flip.
+================================================================================
