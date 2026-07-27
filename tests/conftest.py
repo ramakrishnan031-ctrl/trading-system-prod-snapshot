@@ -29,6 +29,102 @@ _MODULE_LEVEL_SENTINEL_IMPORTERS = (
 )
 
 
+class RealDataStoreBlocked(RuntimeError):
+    """Raised when a test tries to open a DB inside the REAL data_store/."""
+
+
+def _db_path_of(database, uri: bool):
+    """The filesystem path a sqlite3.connect target refers to, or None.
+
+    Handles the plain path, a Path, ``:memory:``, and the ``file:...?mode=ro``
+    URI form the read-only helpers use.
+    """
+    if database is None:
+        return None
+    s = str(database)
+    if s == ":memory:" or s.startswith("file::memory:"):
+        return None
+    if uri or s.startswith("file:"):
+        s = s[5:] if s.startswith("file:") else s
+        s = s.split("?", 1)[0]
+        if not s:
+            return None
+    try:
+        return Path(s)
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _block_real_data_store(monkeypatch):
+    """27-Jul-2026 -- NO test may open a database inside the REAL data_store/.
+
+    THE ONE IN THE SWEEP THAT CAN TOUCH MONEY. On the PC an unisolated write goes
+    to a scratch DB and is harmless -- MEASURED: data_store/trading_system.db had
+    mtime 27-Jul 14:54, written by that day's own test runs. ON THE VM THE SAME
+    RELATIVE PATH IS THE LIVE TRADING DATABASE, the one holding real trades and
+    the capital ledger. And the suite HAS run on the VM before: that is precisely
+    why ``_isolate_real_sentinels`` below exists.
+
+    AT THE DOOR, NOT PER CALL SITE. ``sqlite3.connect`` is called from 10+ modules
+    (core/db_connect, core/state_store, ops_dashboard, and half a dozen scripts),
+    so guarding each one is the convention that already failed for eleven weeks on
+    the alert path. Patching the primitive covers StateStore, db_connect, raw
+    sqlite3 and anything not yet written -- including the ``file:...?mode=ro``
+    URI form.
+
+    READS ARE BLOCKED TOO, deliberately: a read-only open of a WAL database still
+    creates -shm/-wal sidecars next to it (the known ro-open gotcha), so "just
+    reading" the live DB is not side-effect free.
+
+    A test that genuinely needs the real path opts in EXPLICITLY:
+
+        def test_x(allow_real_data_store):
+            ...
+
+    ⛔ Never widen this to make a test pass.
+    """
+    import sqlite3
+    real_connect = sqlite3.connect
+
+    def guarded(database=None, *args, **kwargs):
+        p = _db_path_of(database, bool(kwargs.get("uri", False)))
+        if p is not None:
+            try:
+                resolved = p if p.is_absolute() else (Path.cwd() / p)
+                resolved = resolved.resolve()
+                if resolved == _REAL_DATA_STORE or _REAL_DATA_STORE in resolved.parents:
+                    raise RealDataStoreBlocked(
+                        f"BLOCKED sqlite open of the REAL data_store: {resolved}. "
+                        "On the VM this path is the LIVE trading database. Use "
+                        "tmp_path, or request the allow_real_data_store fixture."
+                    )
+            except RealDataStoreBlocked:
+                raise
+            except Exception:                            # noqa: BLE001 — path math must not break a test
+                pass
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", guarded)
+    yield
+
+
+@pytest.fixture
+def allow_real_data_store(monkeypatch):
+    """Explicit opt-in for the rare test that must touch the real data_store.
+
+    Requesting this fixture is the whole point: it makes the exception visible in
+    the test signature instead of hidden in a conftest exclusion list.
+    """
+    import sqlite3
+    monkeypatch.setattr(sqlite3, "connect", sqlite3.connect.__wrapped__
+                        if hasattr(sqlite3.connect, "__wrapped__") else _REAL_SQLITE_CONNECT)
+    yield
+
+
+_REAL_SQLITE_CONNECT = __import__("sqlite3").connect
+
+
 class OutboundNetworkBlocked(RuntimeError):
     """Raised when a test tries to open a non-loopback connection."""
 
