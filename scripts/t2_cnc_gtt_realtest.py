@@ -79,6 +79,35 @@ _TERMINAL = {"COMPLETE", "REJECTED", "CANCELLED"}
 # deterministic and needs no live quote. sl/tgt straddle it for the C8 distance gate.
 _PAPER_DRY_RUN_REF_PRICE = 100.0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ⭐ THE OCO BAND — ONE DEFINITION, THREE USE SITES (widened 27-Jul-2026, Rama).
+#
+# WHY IT WAS WIDENED, from -3%/+5%: a same-day trigger VOIDS the arm (a day trade
+# means no demat debit, so nothing is proved) and costs a market day. Measured over
+# 735 real symbol-days of 1-min candles (19-Jun..24-Jul-2026, 482 symbols): from an
+# 11:30 anchor, P(touch -3% or +5% before close) = 33.9% overall and 52.2% for
+# shares under Rs 150. At -10%/+10% that falls to ~9.0%, and combined with a ~13:00
+# arm to ~2.8%. ⭐ Band width dominates every other lever AND costs zero exposure.
+#
+# ⛔ WHY NOT WIDER. Our own _validate_trigger_distance has a MINIMUM (0.25%) and NO
+# maximum — but a BROKER-SIDE cap on trigger distance is UNVERIFIED from source. A
+# GTT the broker REJECTS burns the day exactly as a triggered one does, so this is
+# deliberately the SMALLEST band that solves the problem, not the safest-looking
+# one. ⛔ Do not "improve" this to +/-20% without first proving the broker accepts
+# it.
+#
+# ⭐ Widening breaks no assertion: broker_ok/store_ok check the two-leg/OCO shape,
+# SELL+CNC+qty, and the durable gtt_state row. NEITHER LOOKS AT TRIGGER LEVELS --
+# the structure is the proof, the levels are incidental. (Verified 27-Jul: no test
+# in test_t2_limit_paths.py or test_t2_ensure_flat.py references either offset.)
+#
+# ⚠️ The arm TIME (~13:00) is NOT here and must not be: this script has no
+# scheduler, only a 09:15-15:30 market-hours guard. The anchor is an OPERATOR
+# instruction and lives in docs/T2_RUNBOOK_29-JUL.txt.
+_OCO_SL_MULT = 0.90     # -10%
+_OCO_TGT_MULT = 1.10    # +10%
+# ─────────────────────────────────────────────────────────────────────────────
+
 # Synthetic identity for the isolated proof (seeded into the throwaway DB's FK chain).
 _T2_TRADE_ID = "t2"
 _T2_SIGNAL_ID = "t2_signal"
@@ -206,8 +235,8 @@ def _open_throwaway_store(log):
             " risk_amount, created_at, status, order_protocol, updated_at) "
             "VALUES (?, ?, 'IDEA', 'LONG', 't2_proof', 1, ?, ?, ?, 0, 0, ?, 'OPEN', "
             " 'LIMIT_TRIPLE', ?)",
-            (_T2_TRADE_ID, _T2_SIGNAL_ID, ref, round(ref * 0.97, 1),
-             round(ref * 1.05, 1), now, now),
+            (_T2_TRADE_ID, _T2_SIGNAL_ID, ref, round(ref * _OCO_SL_MULT, 1),
+             round(ref * _OCO_TGT_MULT, 1), now, now),
         )
     log.info("t2: throwaway store ready at %s (seeded signals+trades trade_id=%s)",
              db_path, _T2_TRADE_ID)
@@ -339,8 +368,10 @@ def run_single_session(adapter, kite, gtt_placer, store, symbol: str, qty: int, 
         log.info("   BUY status=%s; LTP now %s", buy_st, ltp)
 
         # 2) place the OCO GTT (deep SL, fill-ensuring TGT) — the protection ─────────
-        sl_price = round(ltp * 0.97, 1)      # ~3% below for the test
-        tgt_price = round(ltp * 1.05, 1)     # ~5% above for the test
+        # ⭐ THE REAL PLACEMENT. This is the band that decides whether Wednesday's
+        # arm survives to Thursday, or triggers same-day and voids itself.
+        sl_price = round(ltp * _OCO_SL_MULT, 1)      # -10% below
+        tgt_price = round(ltp * _OCO_TGT_MULT, 1)    # +10% above
         res = gtt_placer.place_for_fill(symbol=symbol, exit_side="SELL", qty=qty,
                                         sl_price=sl_price, tgt_price=tgt_price,
                                         trade_id=_T2_TRADE_ID)
@@ -446,7 +477,10 @@ def run_dry_run(adapter, kite, gtt_placer, store, store_path, symbol: str, qty: 
                  exc, _PAPER_DRY_RUN_REF_PRICE)
 
     ref = _PAPER_DRY_RUN_REF_PRICE
-    sl_price, tgt_price = round(ref * 0.97, 1), round(ref * 1.05, 1)
+    # Same band as the live path, so a --dry-run rehearsal reports the parameters
+    # the real run will actually use. A dry-run printing a different band would be
+    # the same defect as a card describing parameters the script does not have.
+    sl_price, tgt_price = round(ref * _OCO_SL_MULT, 1), round(ref * _OCO_TGT_MULT, 1)
     log.info("DRY-RUN PLAN: BUY %d %s CNC -> OCO GTT (SL~%s/TGT~%s straddling %.2f) -> "
              "verify durable gtt_state row in the throwaway DB -> square -> delete GTT "
              "once flat. ensure-flat squares any held position on every exit.",

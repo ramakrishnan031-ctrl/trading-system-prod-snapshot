@@ -4,10 +4,11 @@
 ================================================================================
 Written 27-Jul-2026 Mon. Closes Thursday 30-Jul. Account LFL836.
 GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove.
-⛔ UNTRACKED until after tonight's push (the Monday card asserts 24 commits).
+✅ REVISED 27-Jul 22:3x — the band widen and the script repair are now BOTH
+   APPLIED, as ONE operation, and the step-zero hash below is the new one.
 ================================================================================
 
-⭐⭐ READ THIS FIRST — THE TWO FACTS THAT SHOULD SET YOUR NERVES CORRECTLY
+⭐⭐ READ THIS FIRST — THE THREE FACTS THAT SHOULD SET YOUR NERVES CORRECTLY
 
   1. *** MAXIMUM LOSS OVERNIGHT = THE PRICE OF ONE SHARE (~Rs 10). *** One share
      of IDEA. Not one lot, not one position size. If the company vanished
@@ -16,6 +17,15 @@ GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove
      only, and the market is CLOSED 15:30 Wed -> 09:15 Thu. *** There is no
      overnight execution risk. *** The gap risk lands at the Thursday OPEN —
      when you are awake and holding this card.
+  3. ⭐⭐ *** IF THE GTT IS REJECTED, NOTHING IS LEFT DANGLING. *** This is the
+     one that separates "burned a day" from "I am holding something unprotected
+     overnight", so it is up here and not buried in §1b.
+     If `place_for_fill` raises, `intentional_hold` is STILL False, so the
+     `finally` block runs ensure_flat and SQUARES the position. You end FLAT.
+     ⇒ *** A REJECTED GTT COSTS THE DAY. IT DOES NOT COST YOU PROTECTION. ***
+     ⚠️ This applies to a REJECTED placement only. A placement that SUCCEEDS and
+        then fails VERIFICATION is the opposite case — see §3, which is the most
+        important section on this card.
 
 ================================================================================
 0. ⛔ STEP ZERO — BEFORE ANYTHING ELSE
@@ -24,23 +34,36 @@ GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove
   sha256sum /home/ubuntu/t2_proof_run/t2_cnc_gtt_realtest.py
 
   *** MUST print exactly: ***
-  a5779420d652c60678cecab400c64cc2e36680865f0052d92c78e1d76f006202
+  0a3c505c25e6518c7b77461965b512bb20f55765842d3b3bfb5fb46a0f582d36
 
-  ⛔ *** ANY OTHER HASH -> STOP. DO NOT RUN IT. *** `23aca731...` is the
-     bit-rotted copy in the deployed `scripts/` tree; it fails on 3 signature
-     drifts and would burn the market day.
-  ⚠️ *** `--help` IS NOT A CHECK. *** The bit-rotted copy ALSO has
+  ⛔ *** ANY OTHER HASH -> STOP. DO NOT RUN IT. ***
+  ⚠️ *** `--help` IS NOT A CHECK. *** Every version of this script has
      `--arm-overnight`. The flag is not the fingerprint. The hash is.
+
+  ⭐⭐ *** THE BIT-ROT TRAP IS NOW REMOVED, NOT MERELY DOCUMENTED (27-Jul eve). ***
+     Previously `~/t2_proof_run/` held the repaired copy while the deployed
+     `scripts/` tree held a bit-rotted one (`23aca731...`), so running the wrong
+     PATH ran the wrong CODE. The repair is now merged and both copies are the
+     same widened script. *** Running the wrong path can no longer run the wrong
+     code. *** The hash check stays anyway — it is what proves that is still true.
+
+  ⛔ OLD HASHES, FOR RECOGNITION ONLY — if you see either of these you are on a
+     stale copy and the 27-Jul sync did not reach it:
+       a5779420...  repaired but NOT widened (band still -3%/+5%)
+       23aca731...  the bit-rotted copy (3 signature drifts)
 
 ================================================================================
 1. PRECONDITIONS — each one is an ABORT, not a warning
 ================================================================================
-  P1  Tuesday 28-Jul v45 boot was observed CLEAN.        ABORT if not.
+  P1  Tuesday 28-Jul v45 boot was observed CLEAN.        SEE THE BOX BELOW.
   P2  Service `active`, NRestarts=0, token refreshed.    ABORT if not.
         ssh trading-vm "systemctl is-active trading-system"
-  P3  Time is between 10:30 and 14:30 IST.               ABORT if not.
-        (Script refuses outside 09:15-15:30. Aim MIDDAY: away from the open,
-         and >1h before close so a same-day trigger is less likely — see §7.)
+  P3  *** AIM 13:00 IST. *** Acceptable 12:30-14:00.      ABORT outside 10:30-14:30.
+        (Script refuses outside 09:15-15:30 — that is its ONLY time gate; 13:00 is
+         an OPERATOR choice, not something the script enforces, so nothing will
+         stop you arming at the wrong time. The later anchor is HALF the -10/+10
+         void reduction: a shorter remaining session is less time in which to
+         touch a trigger. Not so late that a rejection leaves no room to retry.)
   P4  *** DATES VERIFIED against nse_holidays_2026.yaml (27-Jul): ***
         Wed 29-Jul TRADING · Thu 30-Jul TRADING · Fri 31-Jul TRADING.
         *** So 29->30 Jul is a ONE-NIGHT carry. Confirmed, not assumed. ***
@@ -51,48 +74,82 @@ GOAL: prove the DDPI/demat sell — the ONE thing a same-day square cannot prove
   P6  You have ~30 uninterrupted minutes and can be at a screen 08:15 Thursday.
                                                         ABORT if not.
 
-================================================================================
-1b. ⚠️⚠️ MEASURED 27-JUL — AS WRITTEN, THIS ARM IS ROUGHLY A COIN FLIP
-================================================================================
-*** A DECISION IS PENDING WITH RAMA. Read this before you run §2. ***
+  ────────────────────────────────────────────────────────────────────────────
+  ⭐⭐ P1 IN DETAIL — DECIDED NOW, SO YOU ARE NOT DECIDING IT AT 12:55 WEDNESDAY
+  ────────────────────────────────────────────────────────────────────────────
+  "Tuesday was clean" is not one condition, and the three failure shapes have
+  DIFFERENT answers. Find yours, then act — do not re-derive this on the day.
 
-The GTT triggers sit -3% / +5%. Measured on 735 real symbol-days of 1-minute
-candles (19-Jun -> 24-Jul 2026): from an 11:30 anchor, *** 33.9% of symbol-days
-touch -3% or +5% before the close *** — and for shares under Rs 150 it is
-*** 52.2%. *** A same-day trigger VOIDS the arm (it becomes a day trade, no
-demat debit, nothing proved) and costs a market day.
+  (a) *** MIGRATION FAILED — the service did not start Tuesday. ***
+      ⛔ ABORT WEDNESDAY. Do not arm. The whole point of the Tuesday slot was to
+      make v45 the single variable; arming on top of an unresolved migration
+      means a Thursday problem has two candidate causes and proves nothing.
+      ⇒ Fix v45 first. T2 slips to the next TRADING pair with a clean boot
+        behind it. ⛔ NOT Fri 31-Jul — never a Friday arm. That means Mon 3-Aug
+        at the earliest, and 3-Aug is itself blocked by the 2FA seed move, so
+        realistically Tue 4-Aug. *** Slipping is CHEAP. Re-running the pair
+        after a confounded result is not. ***
+
+  (b) *** MIGRATION SUCCEEDED but the day was NOISY *** — alerts you have not
+      explained, an unexpected kill, a reconciliation you do not understand.
+      ⚠️ JUDGEMENT CALL, and the rule is: *** does the noise touch the ORDER or
+      CAPITAL path? *** If yes -> abort, same as (a). If it is reporting,
+      alerting, or a cron unrelated to orders -> PROCEED. T2 runs on its own
+      isolated DB and its own adapter instance; a noisy report does not reach it.
+
+  (c) *** MIGRATION SUCCEEDED, DAY WAS CLEAN, but you did not get to watch it. ***
+      ⇒ PROCEED, after checking three things that take two minutes:
+          ssh trading-vm "systemctl is-active trading-system"          -> active
+          ssh trading-vm "sqlite3 -readonly ~/systems/trading-system/\
+            data_store/trading_system.db 'select value from schema_meta;'" -> 45
+          and no CRITICAL in Tuesday's mail you have not accounted for.
+      *** Observation is preferable, but its ABSENCE is not a failure. Schema 45
+      + service active + no unexplained CRITICAL IS the clean signal. ***
+
+  ⚠️ AND THE ONE THAT IS NOT A JUDGEMENT CALL: if schema_meta still says *** 44 ***
+     on Wednesday, the migration did NOT run. That is case (a). ABORT.
+
+================================================================================
+1b. ✅ THE BAND — WIDENED AND APPLIED 27-JUL. READ THIS BEFORE §2.
+================================================================================
+✅ *** DECIDED (Rama) AND NOW APPLIED IN THE SCRIPT: KEEP IDEA · BAND -10%/+10% ·
+   ARM ~13:00. *** The card and the script agree; the hash in §0 is the proof.
+
+*** THE GTT TRIGGERS NOW SIT -10% / +10%. *** (Was -3%/+5%.)
+
+WHY. A same-day trigger VOIDS the arm — it becomes a day trade, so there is no
+demat debit and nothing is proved — and it costs a market day. Measured on 735
+real symbol-days of 1-minute candles (19-Jun -> 24-Jul 2026, 482 symbols): from an
+11:30 anchor, 33.9% of symbol-days touch -3% or +5% before the close, and for
+shares under Rs 150 it is *** 52.2% — roughly a coin flip. ***
+
+  band -3%/+5%  ->  52.2% void         (what this card used to describe)
+  band -10/+10  ->   ~9.0% void
+  + arm ~13:00  ->   ~2.8% void        *** where we are now ***
+  expected arm-days 2.09 -> 1.03
+
+⭐ Band width dominates every other lever and costs NOTHING in exposure. None of
+   the script's PASS assertions look at trigger LEVELS — they check the two-leg
+   OCO shape, SELL+CNC+qty, and the durable gtt_state row. The structure is the
+   proof; the levels are incidental. (Re-verified 27-Jul: no test references
+   either offset.)
 
 ⚠️ *** IDEA IS NOT IN THE MEASURED SET AT ALL *** (no candles, no stats; the
    cheapest symbol measured is Rs 13.90). At ~Rs 10 it sits BELOW the sample
-   floor, so 52.2% is the closest available proxy and probably optimistic.
+   floor, so 52.2% was the closest available proxy and probably optimistic —
+   which is an argument for the wider band, not against it.
 
-✅ *** DECIDED (Rama, 27-Jul): KEEP IDEA · WIDEN THE BAND TO -10%/+10% · ARM
-   ~13:00. *** Void rate 52.2% -> ~2.8%. Expected arm-days 2.09 -> 1.03. Band
-   width is by far the strongest lever; it costs nothing in exposure, and NONE of
-   the script's PASS assertions look at trigger levels (they check two-leg/OCO,
-   SELL+CNC+qty, and the durable row — never the levels).
+⭐ *** WHY -10 AND NOT WIDER — DO NOT "IMPROVE" THIS TO -20. *** Our validator has
+   only a MINIMUM trigger distance (0.25%) and NO maximum, and the kiteconnect SDK
+   does NO client-side validation of place_gtt — so any cap is enforced
+   SERVER-SIDE at Zerodha and *** cannot be read from our source at all. ***
+   *** An over-wide band would be REJECTED AT PLACEMENT and burn the day exactly
+   as a same-day trigger would. *** -10/+10 is deliberately the SMALLEST band that
+   solves the problem, not the safest-looking one. The reasoning is recorded here
+   and in the script's own constant block so it is not later widened on a hunch.
 
-⭐ *** WHY -10 AND NOT WIDER: the broker-side cap is UNCONFIRMABLE FROM SOURCE. ***
-   Our validator has only a MINIMUM (0.25%), no maximum — but the kiteconnect SDK
-   does NO client-side validation of place_gtt, so any cap is enforced server-side
-   at Zerodha and cannot be read from the tree. *** An over-wide band would be
-   REJECTED AT PLACEMENT and burn the day exactly as a trigger would. *** -10 is
-   the smallest band that solves the problem.
-
-⭐ *** AND IF IT IS REJECTED, NOTHING IS LEFT DANGLING. *** If place_for_fill
-   raises, `intentional_hold` is still False, so the `finally` runs ensure_flat
-   and SQUARES the position. A rejected GTT costs the day — it does NOT leave you
-   holding something unprotected. (Still complete §3's by-hand check.)
-
-⏰ *** APPLIED TUESDAY 28-JUL EVENING, with the fix-t2-repair-07jul merge, as ONE
-   operation. *** ⛔ THE STEP-ZERO HASH ABOVE CHANGES WHEN IT IS APPLIED — the
-   card must be rewritten with the new sha256 in the same sitting, or Wednesday's
-   step zero will correctly tell you to STOP. See DEPLOY_CALENDAR §3.1.
-
-⚠️ *** UNTIL IT IS APPLIED THIS CARD DESCRIBES THE OLD SCRIPT. If the change
-   slips, RUN AS-IS: arm as LATE as P3 allows (13:30 -> 23.9%, not 52.2%) and
-   expect ~2 attempts. *** Each void costs one market day, resume. ⛔ Never let
-   this card describe parameters the script does not have.
+⭐ *** AND IF IT IS REJECTED, NOTHING IS LEFT DANGLING *** — see fact 3 at the top
+   of this card. A rejected GTT ends FLAT. (Still complete §3's by-hand check.)
 
 ================================================================================
 2. THE ARM STEP
@@ -181,9 +238,12 @@ A. *** WHAT PROTECTS THE POSITION, AND WHAT DOES NOT ***
    DOES NOT:  our trading service (it never sees this position — no gtt_state
               row, no local trade); the throwaway DB; any alert we send.
    ⚠️ THE HONEST LIMIT: the SL leg is a stop-LIMIT, not a market order. Trigger
-      sits ~3% below arm price; its limit ~5.9% below. *** A gap-open through
-      about -6% leaves the share UNSOLD *** (still yours, still ~Rs 10).
-      That is a Thursday-09:15 event, not a night event.
+      now sits 10% below arm price and its limit a further 3% below that.
+      COMPUTED 27-Jul at LTP 10.00: *** trigger 9.0, limit 8.7 = -13.0% of the
+      arm price. A gap-open through about -13% leaves the share UNSOLD ***
+      (still yours, still ~Rs 10). That is a Thursday-09:15 event, not a night
+      event. ⭐ The widened band made this floor DEEPER, not shallower — it was
+      -6.0% under the old -3%/+5% band.
    ⭐⭐ *** AND A GAP-OPEN DOES NOT INVALIDATE THE TEST — IT HELPS IT. *** An
       unsold share on Thursday is still a share in Holdings, so §7's close step
       (or a manual sell) still exercises the demat debit. *** The DDPI proof is
@@ -248,9 +308,15 @@ D. *** THE SERVICE DOES SOMETHING UNEXPECTED AT 08:15 — DO YOU STOP IT? ***
 ================================================================================
   BUY rejected — nothing held                        RESUME. 1 day.
   BUY fills, GTT fails — script squares it, ends flat RESUME. 1 day.
-  ⚠️ GTT TRIGGERS Wednesday afternoon (-3% or +5%)    *** ARM IS VOID *** — it
+  ⚠️ GTT TRIGGERS Wednesday afternoon (-10% or +10%)  *** ARM IS VOID *** — it
      became a day trade, no demat debit, nothing proved. RESUME. 1 day.
-     (This is why §1 P3 says midday, not 15:20.)
+     (Now ~2.8% likely, not 52.2%. This is why §1 P3 says 13:00 — the late anchor
+      and the wide band each do about half the work.)
+  ⚠️ GTT REJECTED at placement (band too wide for the broker's
+     server-side cap, which we cannot read from source)  RESUME. 1 day, and you
+     end FLAT — the `finally` squares it. If this happens, the cap is real:
+     record the broker's error text, and NARROW toward -5/+5 rather than
+     abandoning the widen.
   Broker/token outage Wednesday                      RESUME. 1 day.
   Broker/token outage Thursday                       RESUME — GTT still protects,
      close Friday. *** The proof is NOT forfeited. ***
