@@ -209,6 +209,153 @@ def _block_outbound_network(monkeypatch):
     yield
 
 
+class RealArtifactDirBlocked(OSError):
+    """Raised when a test tries to WRITE into the real logs/ or reports/.
+
+    ⭐ DELIBERATELY AN ``OSError``, NOT a ``RuntimeError`` like its two sibling guards
+    -- and the difference is the whole design, not a detail.
+
+    The sibling guards block things a test must NEVER do (touch the live DB, reach the
+    network), so failing loudly is right: the test author has to change the test. Writing
+    into ``logs/`` is DIFFERENT -- it is normal production behaviour, and a test that boots
+    main() is legitimately running it. What we want there is not a dead test but an
+    unwritable directory, which is exactly the condition production already handles:
+    ``main.py:1766`` wraps the holiday sentinel in ``except OSError: pass`` because that
+    write is deliberately best-effort. A ``RuntimeError`` overrides that decision; an
+    ``OSError`` honours it, and faithfully simulates the real-world case (a read-only
+    ``logs/`` raises ``PermissionError``, itself an ``OSError``).
+
+    MEASURED 27-Jul, not assumed: as a ``RuntimeError`` this broke 4 tests in
+    ``test_interactive_startup.py``. ⚠️ THOSE 4 PASSED IN THE GATE RUN ANYWAY -- because
+    ``logs/.holiday_notified_2026-07-27`` already existed from an earlier run that day, so
+    ``if not sentinel.exists()`` short-circuited the write. The failure was masked by
+    same-day pollution and would have surfaced TOMORROW as an unexplained regression.
+    ⛔ That is the trap: this guard's own gate can be poisoned by the artifacts it exists
+    to prevent. Clear the artifact, THEN measure.
+
+    ⚠️ THE ACCEPTED TRADE: an ``except OSError`` swallows this, so a blocked write can pass
+    silently. That is tolerable because the GOAL IS THE WRITE NOT HAPPENING, not the test
+    dying -- and the write does not happen. ``test_real_artifact_dir_guard.py`` asserts the
+    raise directly, so the guard cannot rot into a no-op unnoticed.
+    """
+
+
+_REAL_LOGS = (project_root / "logs").resolve()
+_REAL_REPORTS = (project_root / "reports").resolve()
+_PROTECTED_ARTIFACT_ROOTS = (_REAL_LOGS, _REAL_REPORTS)
+
+
+def _is_write_mode(mode) -> bool:
+    """True for any mode that can create or modify a file. Cheap: this runs on
+    EVERY open in the suite, and the overwhelming majority are plain reads."""
+    try:
+        return any(ch in mode for ch in ("w", "a", "x", "+"))
+    except TypeError:                                    # noqa: BLE001 — mode not a str
+        return False
+
+
+@pytest.fixture(autouse=True)
+def _block_real_artifact_dirs(monkeypatch):
+    """27-Jul-2026 -- NO test may WRITE into the real logs/ or reports/.
+
+    THE LAST TWO DOORS OF THE TEST-SIDE-EFFECT CLASS. Outbound network was closed
+    first (it was posting real Telegram alerts), then the real data_store (it can
+    touch money). These two are what remain, and they are NOT purely cosmetic:
+
+    MEASURED 27-Jul -- ``logs/.holiday_notified_2026-07-27`` was written at 15:01
+    by that day's test runs, through production code at ``main.py:1751``. That file
+    is a per-day SUPPRESSION marker: main.py writes it so the holiday-calendar
+    reminder is not re-sent the same day. It is inert on the PC (production runs on
+    the VM), so this is LATENT, not live -- but the suite HAS run on the VM before,
+    which is why ``_isolate_real_sentinels`` exists at all. On the VM, a test
+    writing that marker silences that day's reminder, and from 15-Dec-2026 those
+    reminders are the only thing standing between us and a 2027 boot that does not
+    start for want of ``nse_holidays_2027.yaml``.
+
+    AT THE DOOR, NOT PER CALL SITE -- the same choice as the sqlite3 guard. Both
+    ``builtins.open`` AND ``io.open`` are patched: ``Path.open``, ``Path.write_text``
+    and ``Path.write_bytes`` all route through ``io.open``, which resolves the name
+    from the ``io`` module at call time and so is untouched by patching builtins
+    alone. ``logging.FileHandler`` resolves ``open`` from its own globals and is
+    covered by the builtins patch.
+
+    WRITES ONLY. Reads are left alone: unlike a WAL database, reading a log file
+    creates nothing. Blocking reads would break the tests that legitimately assert
+    on committed fixture content under reports/.
+
+    ``__pycache__`` is exempt -- reports/ is a real Python package, and bytecode
+    caching is not a test side effect. (CPython writes .pyc via ``os.open`` and so
+    never reaches here; the exemption is belt-and-braces, not load-bearing.)
+
+    A test that genuinely needs to write there opts in EXPLICITLY:
+
+        def test_x(allow_real_artifact_dirs):
+            ...
+
+    ⛔ Never widen this to make a test pass -- write to tmp_path instead.
+    """
+    import builtins
+    import io
+
+    real_builtins_open = builtins.open
+    real_io_open = io.open
+
+    def _check(file, mode):
+        if not _is_write_mode(mode):
+            return
+        try:
+            p = Path(file)
+        except Exception:                                # noqa: BLE001 — fd or buffer, not a path
+            return
+        try:
+            resolved = p if p.is_absolute() else (Path.cwd() / p)
+            resolved = resolved.resolve()
+            if "__pycache__" in resolved.parts:
+                return
+            for root in _PROTECTED_ARTIFACT_ROOTS:
+                if resolved == root or root in resolved.parents:
+                    raise RealArtifactDirBlocked(
+                        f"BLOCKED write into the real {root.name}/: {resolved}. "
+                        "On the VM this is the live artifact tree -- a test wrote a "
+                        "holiday-reminder suppression marker there once already. Use "
+                        "tmp_path, or request the allow_real_artifact_dirs fixture."
+                    )
+        except RealArtifactDirBlocked:
+            raise
+        except Exception:                                # noqa: BLE001 — path math must not break a test
+            return
+
+    def guarded_builtins_open(file, mode="r", *args, **kwargs):
+        _check(file, mode)
+        return real_builtins_open(file, mode, *args, **kwargs)
+
+    def guarded_io_open(file, mode="r", *args, **kwargs):
+        _check(file, mode)
+        return real_io_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", guarded_builtins_open)
+    monkeypatch.setattr(io, "open", guarded_io_open)
+    yield
+
+
+@pytest.fixture
+def allow_real_artifact_dirs(monkeypatch):
+    """Explicit opt-in for a test that must write into the real logs/ or reports/.
+
+    Requesting this fixture is the whole point: it makes the exception visible in
+    the test signature instead of hidden in a conftest exclusion list.
+    """
+    import builtins
+    import io
+    monkeypatch.setattr(builtins, "open", _REAL_BUILTINS_OPEN)
+    monkeypatch.setattr(io, "open", _REAL_IO_OPEN)
+    yield
+
+
+_REAL_BUILTINS_OPEN = __import__("builtins").open
+_REAL_IO_OPEN = __import__("io").open
+
+
 @pytest.fixture(autouse=True)
 def _isolate_real_sentinels(tmp_path, monkeypatch):
     """Test isolation: NO test may write a CRITICAL sentinel into the REAL
