@@ -138,5 +138,20 @@ be re-tuned on evidence as things stand.** That is decision #11's reopen-trigger
 at this item. Closing it needs a code change (raise the noise tier, or persist drift samples) **plus
 time** — a candidate for after 4-Aug, **not a commitment**.
 
+## Test-coverage findings (registered 28-Jul-2026)
+
+### T1 — ⚠️ FIX-061's LTP-retry → emergency-exit → HARD_KILL path has ZERO effective coverage
+The four `test_order_placer_fix061` tests **cannot reach their assertions**: the H-3 guard (05-Jul)
+and the fixture (15-Jun) disagree, so the tests fail before exercising anything. They have been in
+the "known PC-env failures" bucket ever since — **a label standing in for a diagnosis**, the same
+shape as the `test_instance_lock` mislabel.
+⇒ **The path they were written to protect — an exhausted LTP retry escalating to an emergency exit
+and then a HARD_KILL — has had no working test for 22+ days.** ⭐ That path is *exactly* the one K1
+says has the worst consequence shape, so the gap and K1 point at the same machinery.
+**Test-only, ZERO deploy consequence.** Needs its own slot and its own RED-first proof (fix the
+fixture, confirm the tests go RED against today's code, then GREEN). ⛔ Not tonight.
+*(Recorded here as well as in the ledger because the ledger is a deploy queue; this is the register
+someone reads when asking "what do we know is untested?")*
+
 ## Note
 These actions gate several of the decisions (Q10 gates D2/D3/Regime evidence; the security items are independent). They are tracked in `MEMORY.md` under RAMA-ACTIONS and are restated here only so the decision index is complete.

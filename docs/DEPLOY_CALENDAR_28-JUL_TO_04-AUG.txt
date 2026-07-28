@@ -40,12 +40,45 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
   (after check 7,   -- ONLY after Rama            MIGRATION, alone.       (blocks
    Rama confirms)      confirms clean             *** SINGLE VARIABLE ***  all)
 
-  Tue 28-Jul       NOTHING to main.              Wed 08:15: unchanged     none
-  (after the boot  ✅✅ 28-Jul 11:0x: THE T2      from Tue.
-   is observed)      OPERATION IS ALREADY DONE
-                     -- it landed 27-Jul 22:33   ⭐ operator script only;
-                     as e6ec75b. NOTHING is         main.py never imports it
-                     owed tonight. See §3.1.
+  Tue 28-Jul       ⚠️ OVERRIDDEN 15:45 -- the    Wed 08:15: STILL         none
+  (after the        16 local commits DO push      unchanged from Tue.     (see the
+   17:35 CLEAN      tonight. Rama: "PC == VM                              measurement
+   self-exit)       100%."                       ⭐ ZERO live boot         -->)
+                   ✅✅ T2: ALREADY DONE           variables even AFTER
+                     27-Jul 22:33 as e6ec75b.     this push.
+                     Nothing owed. See §3.1.
+
+                   ⭐⭐ WHY THE OVERRIDE IS SAFE, AND IT IS A MEASUREMENT, NOT A
+                   CONCESSION: of the 16 commits, *** 15 are DOCS-ONLY and ONE
+                   touches non-doc files *** -- `scripts/system_manager.py` + its
+                   test. ZERO config, ZERO trading/capital path. `main.py` NEVER
+                   imports `system_manager` (it runs in the 18:45 EOD cron).
+                   ⇒ *** THE CALENDAR'S UNIT IS THE BOOT, AND THE BOOT DOES NOT
+                   MOVE. *** Wednesday's 08:15 carries exactly what it would have
+                   carried had nothing been pushed.
+                   ⛔ THE ROW IS REWRITTEN RATHER THAN VIOLATED. A calendar still
+                   reading "NOTHING to main" while main has moved is a stale
+                   document that gets believed later.
+
+                   ORDER TONIGHT (sequenced, not simultaneous):
+                     1. ✅ reflog protection FIRST (done ~15:3x: gc.reflogExpire
+                        + gc.reflogExpireUnreachable = never, read back; 801
+                        entries intact back to 3-May). ⭐ The push itself was the
+                        thing that could have pruned it via `gc --auto`.
+                     2. the 17:10 / 17:40 evening checks + Wed go/no-go
+                     3. ⛔ GATE: 17:35 self-exit CLEAN (ExecMainStatus=0,
+                        inactive(dead), book flat) -- NOT clean => DO NOT PUSH.
+                        You do not deploy into a state you have not explained.
+                     4. push  5. verify PC==origin==VM tree + the reflog entry
+                     6. watch the 18:45 EOD job
+                   ⭐ AND THE SEQUENCING IS BETTER THAN THURSDAY, NOT MERELY OK:
+                   step 6 is the detector's FIRST PRODUCTION RUN, on a FLAT book,
+                   the night BEFORE the overnight position exists.
+                   ✅ PRE-PUSH SAFETY ANSWERED FROM THE HOST, NOT THE TESTS: a
+                   raising check is CONTAINED -- `system_manager.py:1093-1102`
+                   wraps every check in try/except, logs `check_failed`, marks
+                   that section a WARNING and CONTINUES; the report still builds
+                   and it cannot trip soft_kill. Worst case = one bad line.
 
   Wed 29-Jul       NOTHING.                      Thu 08:15: unchanged     none
   (T2 ARM day)     ⛔ A position is held
@@ -55,10 +88,13 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
   (after the T2      + fix-boot-27jul (2)         boot variable -- S4      (see §6:
    close PASSES)      + cherry-pick 214a878       degrade. #16a is INERT   re-counted
                       (the alert audit trail)     (delivery_enabled=false) 28-Jul)
-                      + the .pyc detector
-                        (MONITORING-ONLY, EOD    ⭐ the detector adds NO boot
-                         path -- NOT a boot         variable: EOD path, and
-                         variable at all)          main.py never imports it
+                    ⛔ 28-Jul 15:45: THE .pyc
+                      DETECTOR AND ALL THE DOCS
+                      ARE **GONE FROM THIS ROW**
+                      -- they went TUESDAY under
+                      Rama's PC==VM override.
+                      Thursday now carries ONLY
+                      the three branches left.
                     ⭐ 28-Jul: counts corrected
                       and the audit trail MOVED
                       here from Friday -- §6
@@ -188,6 +224,61 @@ evening is ever preferred, it is free to move; nothing depends on its timing.
     ⇒ REHEARSE IT OFF-MARKET before 4-Aug: run the boot path against a THROWAWAY
       config with the four flags set, confirm exit 3 and the CRITICAL, and
       confirm the correct combination boots clean. ⛔ Never on the live config.
+
+  ✅✅✅ *** REHEARSED 28-Jul-2026 ~15:5x IST. ALL THREE SCENARIOS PASS. THE
+       "BUILT AND NEVER RUN" LABEL IS RETIRED — A5's FIRING PATH HAS NOW
+       EXECUTED. *** Off-market, THROWAWAY config copies under the session
+       scratchpad; ⛔ the live `config/` was never opened for write and is
+       PROVEN byte-identical (md5 `997d9acc…` before AND after; `git status
+       config/` clean). No new config file entered the repo.
+
+       ⭐ IT DROVE main.py's EXACT EXPRESSION, not a paraphrase of it:
+           _a5 = [f for f in audit_config(app_config.system,
+                     strategies=strategies, groups="A").blocks
+                  if f.code == "A5_delivery_without_conditional_allocation"]
+       loading the throwaway config through the real `config_loader.load_all()`
+       and the real `StrategyLoader`, with `fix-boot-27jul`'s auditor (the branch
+       #16a lives on -- its imports are IDENTICAL to main's, so it loads stand-
+       alone; only 2 non-test files differ on that branch).
+
+         SCENARIO   delivery / force_intraday / conditional / trade_type   RESULT
+         ─────────────────────────────────────────────────────────────────────────
+         FIRING     true  / false / false / DELIVERY   3 live, all DELIVERY
+                    -> *** A5 BLOCK FIRES *** (expected BLOCK)      ✅ PASS
+         CORRECT    true  / false / TRUE  / DELIVERY   3 live, all DELIVERY
+                    -> no A5 block, boot continues     (expected CLEAN) ✅ PASS
+         TODAY      false / true  / false / INTRADAY   gate closed, 12 live INTRADAY
+                    -> no A5 block, boot continues     (expected CLEAN) ✅ PASS
+
+       ⭐ *** B3's HALF MATTERS AS MUCH AS B2's: the CORRECT 4-Aug combination
+       BOOTS CLEAN. *** A gate that refused everything would not be a working
+       gate, and 4-Aug depends on the clean path, not the block path.
+       ⭐ AND A5 FIRES ALONE -- `other_group_A_blocks` was EMPTY in the FIRING
+       scenario, so the operator sees ONE CRITICAL, not a wall of them.
+       ⭐ CROSS-CHECK: 3 live strategies under DELIVERY (positional_momentum_long,
+       positional_sector_rotation, positional_swing_long) vs 12 under today's
+       INTRADAY posture -- consistent with the 10-Jul segregation record (12/3).
+
+    ⚠️ *** PRECISION ON WHAT WAS AND WAS NOT EXECUTED. *** The PREDICATE ran and
+      returned the finding. `main.py` itself was NOT booted, so `_log.critical`
+      and `return 3` were not literally executed -- but they sit UNCONDITIONALLY
+      inside `if _a5:` at main.py:2946-2949 with no branch between them, so a
+      non-empty `_a5` entails both. Stated this way rather than claiming an
+      observed exit code.
+
+  ⭐⭐ B4 -- THE MESSAGE WAS MEASURED, NOT JUST THE EXIT. *** VERDICT: ACTIONABLE;
+      no finding. *** If a real 4-Aug boot hits this, Rama reads only this text,
+      and it names the CAUSE, the COST and three REMEDIES:
+        "CONTRADICTORY CONFIG: delivery_enabled=true and every strategy that can
+         trade is DELIVERY (positional_momentum_long, positional_sector_rotation,
+         positional_swing_long), but capital.conditional_allocation_enabled=false
+         pins the fixed bucket split -- the intraday bucket is unreachable, so
+         *** 70% of capital is stranded *** and every delivery position is sized
+         off the remainder. Set capital.conditional_allocation_enabled=true, or
+         enable an INTRADAY strategy, or set delivery_enabled=false."
+      ⭐ It names the offending strategies BY NAME and the stranded share as a
+      COMPUTED percentage (70%, from `intraday_bucket_pct`), not a generic
+      warning. Nothing to fix here.
 
 3.3 ✅ *** B3's DEGRADE vs THURSDAY'S CLOSE — checked, NOT a collision. ***
     If the webhook self-check fails on Thu 30-Jul, the old behaviour killed the
@@ -647,16 +738,21 @@ REAL Telegram sends: the exact class that posted ~50 live alerts since 6-May.
   ⛔ STANDING RULE: *** never run the alerts suite on a tree that lacks the guard. ***
 
 --------------------------------------------------------------------------------
-7.7 ⭐ THURSDAY'S FULL INVENTORY — RE-STATED 28-Jul WITH THE DOC COMMITS COUNTED
+7.7 ⭐ THE INVENTORY — ⚠️ RE-ASSIGNED 15:45 FROM THURSDAY TO **TUESDAY**
 --------------------------------------------------------------------------------
+⚠️ *** THIS BLOCK ORIGINALLY DESCRIBED THURSDAY'S PUSH. Rama's 15:45 "PC == VM
+100%" moved ALL of it to TUESDAY NIGHT, so it is re-labelled rather than left
+pointing at the wrong evening. *** Thursday now carries ONLY `fix-tests-27jul`,
+`fix-boot-27jul` and the `214a878` cherry-pick.
+
 *** The "could you tell which change caused it?" test only stays honest if the
-inventory is COMPLETE. *** By 28-Jul evening `main` is **12 commits ahead** of
+inventory is COMPLETE. *** By 28-Jul evening `main` is **16 commits ahead** of
 origin, most of them documentation, so the count is re-derived here rather than
 assumed.
 
   MEASURED (`git rev-list origin/main..main`, per-commit file list):
-    · 12 local commits
-    · *** 11 of 12 are DOCS-ONLY ***
+    · 16 local commits
+    · *** 15 of 16 are DOCS-ONLY ***
     · *** EXACTLY ONE touches a non-doc file: `8331fb0` *** —
           scripts/system_manager.py
           tests/unit/test_system_manager.py
@@ -664,11 +760,17 @@ assumed.
     ⇒ *** ZERO config. ZERO trading/capital-path (config/ capital/ core/
       orders/ signals/ main.py all empty in the diff). ***
 
-  ▶️ *** THE LIVE BOOT-VARIABLE COUNT IS STILL **ONE** — the S4 degrade. ***
-     Re-checked against §6's test, term by term:
-       · the 11 doc commits    -- text. CANNOT execute. Not variables.
+  ▶️ *** FRIDAY'S LIVE BOOT-VARIABLE COUNT IS STILL **ONE** — the S4 degrade. ***
+     ⭐ RE-RUN 28-Jul 15:5x AFTER the Tuesday re-assignment: moving the docs and
+     the detector OFF Thursday cannot RAISE Friday's count, and it does not lower
+     it either, because neither was ever a boot variable. Term by term:
+       · the 15 doc commits    -- text. CANNOT execute. Not variables.
+         (they land TUESDAY now, and Wednesday's boot is unaffected for the
+          same reason: text does not execute.)
        · `8331fb0` detector    -- runs in the 18:45 EOD job; `main.py` never
                                   imports `system_manager`. NOT a boot variable.
+                                  ⭐ Lands TUESDAY; its first production run is
+                                  Tue 18:45, on a FLAT book.
        · #16a                  -- INERT, and now GATED by 7.1.
        · the alert audit trail -- LIVE but log-only; cannot fail a boot.
        · S4 degrade            -- **the one live boot variable.**
