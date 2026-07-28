@@ -190,5 +190,49 @@ queued (rank 6).** ⛔ None of the remaining work is done here; this section is 
 - 4 skipped (all genuine ENV, above) · 3 `skipif` decorators · 7 runtime `pytest.skip()` calls,
   most of them inside the uncollected `tests/crash_test/`. **0 collection errors.**
 
+### T2 — ⭐⭐ **9 TEST FILES ARE NEVER COLLECTED BY THE REGRESSION GATE AT ALL**
+`tests/crash_test/` (**8 files**) and `tests/core/` (**1**) are not in `pytest tests/unit
+tests/integration` — the command every deploy is verified against, **including today's**.
+⭐ *A skipped test and a failing test hide the same thing; an **uncollected** test hides more,
+because it appears in **no count whatsoever** — not as a failure, not as a skip.*
+⇒ **THE HONEST CONSEQUENCE: the regression gate's own coverage has never been measured.** Every
+"13 failed / 5,362 passed" figure this project has ever quoted describes 322 files, and nobody
+established that those are all of them.
+⛔ **DO NOT fix it by adding the directories tonight.** Running 9 never-run test files for the
+first time, hours before the T2 arm, is the wrong night for whatever they turn out to say — and it
+would move the regression baseline mid-sequence. **Gate: after Tue 4-Aug**, and expect the first
+run to be noisy.
+
+### T3 — ⚠️ `test_fix181` asserts `LIMIT`; production emits `MARKET` under HARD_KILL — **UNKNOWN**
+`test_inflight_orphan_flattened_when_kill_active` fails on `assert 'MARKET' == 'LIMIT'` for the
+CHECK2 inflight-orphan flatten. **Either the test is stale after a deliberate move to marketable
+exits, or it is a real divergence on the kill path.** ⛔ **Not guessed, and not resolved tonight.**
+⭐ It is the **same machinery as K1 and FIX-061** — the emergency-exit / HARD_KILL path — which is
+the third finding in a day pointing at that area. **Gate: after Tue 4-Aug.**
+*(A `MARKET` exit under an emergency flatten is plausible **by design** — `kill_switch` has
+`_marketable_exit_params` — which is exactly why this needs reading, not assuming.)*
+
+### T4 — `backfill_closure_source_w8.py:92` restates the closure-source vocabulary
+`core/closure_source.py:43-45` is the authority (`OWN_SL` / `OWN_TGT` / `OWN_EOD`, `Final`). The
+script does **not import it** — it restates the literals in a local `_LEG_TO_SOURCE` map. The
+contract test `test_no_module_restates_the_vocabulary_literals` **is working**: it reports this.
+**Unfixed on every branch checked.**
+
+⭐⭐ **DID THIS AFFECT THE 35 ROWS THAT SCRIPT WROTE ON 28-Jul? NO — and the reason matters, so it
+is stated rather than assumed.** Both sides were read and compared today:
+`authority {OWN_SL:"OWN_SL", OWN_TGT:"OWN_TGT", OWN_EOD:"OWN_EOD"}` vs
+`restated {"SL":"OWN_SL","TGT":"OWN_TGT","EOD":"OWN_EOD"}` ⇒ **the values are IDENTICAL today.**
+⛔ **THAT — not the row verification — is what makes the 35 rows safe.** They are two different
+reassurances and must not be blurred:
+1. **The values currently match.** This is what guarantees the written rows are correct. It is a
+   property of *today's state*, **not** a guarantee — nothing enforces it but the failing test.
+2. **The 35 rows were independently verified** the same morning against **8 pre-registered
+   predictions, 8/8 met**. That confirms the *outcome* — it would **not** have caught a literal
+   drift that happened to be self-consistent.
+⇒ **The duplication is harmless TODAY and unsafe GOING FORWARD:** the moment `core/closure_source.py`
+changes, the script silently writes stale values, and this test is the only thing that would notice.
+**Fix = import from the authority** (a one-line change in a non-trading script). **Gate: after
+4-Aug**, with the rest of the sweep.
+
 ## Note
 These actions gate several of the decisions (Q10 gates D2/D3/Regime evidence; the security items are independent). They are tracked in `MEMORY.md` under RAMA-ACTIONS and are restated here only so the decision index is complete.
