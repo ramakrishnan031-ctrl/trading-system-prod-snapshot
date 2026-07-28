@@ -189,13 +189,33 @@ the live VM on 28-Jul between 19:5x and 21:xx. Anything NOT re-checked is marked
      core.daily_stats, the forward-shadow recorder + cron); the LIVE SCORER FIX did
      not. ⇒ a quarter of the selection score distorts every pick. GATE: needs
      re-parity + re-soak before any enforce flip; coupled to R3/D2.
- G3  *** B1 — trades.sector IS NULL AT INSERT, SO THE 40% SECTOR CAP IS DEAD. ***
-     VERIFIED TONIGHT: `secondary_screener.py:409 "sector": None`;
-     `core/state_store.py` sector_exposure() filters `AND sector = ?` ⇒ returns 0
-     for the resting book. It reports PASS while summing nothing.
-     ⭐ HARMLESS TODAY (~₹198/position; peak all-sector margin ever ₹2,742.91 against
-     a ₹3,957 cap) — but it is a *** HARD PREREQUISITE OF ANY SIZING INCREASE ***
-     and therefore BLOCKS R2/D1. Money path ⇒ own review + prediction + deploy.
+ G3  ⚠️⚠️ *** B1 / THE SECTOR CAP — BOTH INHERITED CLAIMS ABOUT THIS WERE WRONG, AND
+     THE TRUTH IS A THIRD THING. MEASURED FROM PRODUCTION TONIGHT: ***
+       sector = (NULL)     *** 361 rows *** 15-Jun → *** 16-Jul ***
+       sector = 'UNKNOWN'  ***  81 rows *** *** 20-Jul *** → 28-Jul
+       sector = 'PSU_BANK' ***   1 row  *** 20-Jul
+     ⇒ (a) The 16-Jul register's *"trades.sector is NULL at INSERT"* is *** NO LONGER
+         TRUE. *** The INSERT fix shipped ~17-Jul: the column stopped being NULL from
+         20-Jul onward. ⇒ (b) `PATHS.md`'s *"B1 is CLOSED"* is *** ALSO WRONG *** —
+         it closed the WRITE path only.
+     🔴 *** WHAT IS ACTUALLY BROKEN IS THE RESOLUTION: 81 OF 82 POPULATED ROWS READ
+     `UNKNOWN`. EXACTLY ONE TRADE IN THE ENTIRE BOOK EVER RESOLVED TO A REAL SECTOR
+     (PSU_BANK, 20-Jul). *** The screener still emits `"sector": None` in its quote
+     dict (`secondary_screener.py:409`), so whatever resolves it downstream is
+     answering UNKNOWN for essentially everything.
+     ⚠️ *** AND THE RISK DIRECTION HAS INVERTED, WHICH MATTERS FOR R2/D1: *** under
+     NULL the cap was silently PERMISSIVE (`sector_exposure()` filters `AND sector=?`
+     ⇒ returned 0, reporting PASS while summing nothing). Under a single `UNKNOWN`
+     bucket every position collapses into ONE sector, so the same query sums the
+     WHOLE BOOK — *** conservative, not permissive. *** ⛔ STATED AS AN IMPLICATION
+     OF THE DATA, NOT AS VERIFIED GATE BEHAVIOUR: `sector_exposure()`'s handling of
+     'UNKNOWN' was NOT read tonight. *** READ IT BEFORE D1 MOVES — the direction of
+     the error decides whether the cap blocks or waves through. ***
+     ⭐ Still HARMLESS at today's size (~₹198/position; peak all-sector margin ever
+     ₹2,742.91 against a ₹3,957 cap) — but it remains a *** HARD PREREQUISITE OF ANY
+     SIZING INCREASE *** and therefore still BLOCKS R2/D1. Money path ⇒ own review +
+     prediction + deploy. ⭐⭐ *** THIS IS WHY THE RULE IS "VERIFY, DO NOT
+     TRANSCRIBE": two source files disagreed, and BOTH were wrong. ***
  G4  *** THE "V3 DECISION CONTENT SPECIFICATION v1.0" DOES NOT EXIST. ***
      VERIFIED TONIGHT by searching for the document itself, not its citations:
      zero files. It is CITED as the authority for PB-01's gates, windows and
