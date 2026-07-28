@@ -5,7 +5,7 @@
 *Summary of the record, not a recommendation. Lettering is a label, not a ranking.*
 
 ## The choice
-- **Option A — leave `max_concentration_pct` at its current value** (~Rs 990-per-position ceiling: 10% of ~Rs 9,875 capital, no leverage).
+- **Option A — leave `max_concentration_pct` at its current value** (a ceiling of **10% of actual capital**, no leverage — ~Rs 987 at the 28-Jul capital of Rs 9,872.30; it was ~Rs 990 at the 19-Jul Rs 9,875.60). ⚠️ **The cap is a PERCENTAGE; the rupee ceiling moves with capital daily** — re-read `fm_ledger`'s latest INIT before deciding against a rupee figure. [[capital-vocabulary]]
 - **Option B — raise it** (the sizing report modelled 0.10→0.25 and →0.50 as illustrative points).
 
 ## What is known (current evidence, with citations)

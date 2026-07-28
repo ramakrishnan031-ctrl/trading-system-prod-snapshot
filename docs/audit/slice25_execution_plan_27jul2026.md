@@ -238,10 +238,14 @@ each individual order.
 2. **v45 stable ≥2 trading days.**
 3. ⚠️ **#16a built or consciously waived** — `delivery_enabled=true` *without*
    `conditional_allocation_enabled=true` **strands 70 % of capital in the idle intraday bucket**
-   (~₹6,913 of ₹9,875.60). Not dangerous; it silently halves capacity and reads like a sizing bug.
+   (~₹6,913 of ₹9,875.60 **as measured 19-Jul** — the *70 %* is the claim; the rupee figures are a
+   snapshot and actual capital moves daily, 9,872.30 on 28-Jul). Not dangerous; it silently halves
+   capacity and reads like a sizing bug.
 4. **The conditional-allocation decision made deliberately** — it is the #1 first-run risk *and* the
    only never-run piece that touches intraday capital, which is the part currently earning.
-5. `max_open_delivery_positions: 3` / `max_daily_delivery_trades: 5` reviewed against ₹9,875.60.
+5. `max_open_delivery_positions: 3` / `max_daily_delivery_trades: 5` reviewed against actual capital
+   **re-read on the day of the review** — ⛔ not against the ₹9,875.60 written here on 27-Jul. This is a
+   review *basis*, so a stale base makes the review stale: read `fm_ledger`'s latest INIT first.
 
 **⭐ The rollback property, which makes this less frightening than it sounds — and its one limit.**
 Setting `delivery_enabled=false` refuses **new** CNC orders, while **GTT operations stay ungated by

@@ -26,7 +26,10 @@ Q() { sqlite3 "file:$PWD/data_store/trading_system.db?mode=ro" "$1"; }   # helpe
   361 · `orders` 610 · `fm_ledger` 2,160 · `kill_switch_state` 1
 - forward shadow `f7c964fd79dec961` · **7,827 lines** · 16-Jul 18:15:21
 - analytics `bb229f4474bb37c0` · 24,133,632 · 02:30:04
-- daily-loss threshold ≈ **Rs 296** (3% × Rs 9,875.60 actual capital); worst-ever intraday cum was **−56.47**.
+- daily-loss threshold ≈ **Rs 296** (3% × actual capital, which was Rs 9,875.60 **as measured 19-Jul**);
+  worst-ever intraday cum was **−56.47**. ⚠️ **If you re-run this checklist on a later date, re-read the
+  base — actual capital moves daily** (`fm_ledger` latest INIT; 9,872.30 on 28-Jul). The 3% is the rule;
+  the rupee figure is a derived reading, not a constant. See `docs/audit/capital_figure_sweep_28jul2026.md`.
 
 ### ✅ SCHEMA-VALIDATED 20-Jul-2026 ~14:30 IST (read-only, `mode=ro`) — before use
 Every SQL query and shell command below was executed read-only against the **live schema**. **16 SQL queries

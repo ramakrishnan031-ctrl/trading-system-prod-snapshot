@@ -50,14 +50,18 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
   (T2 ARM day)     ⛔ A position is held
                      overnight. Change nothing.
 
-  Thu 30-Jul       fix-tests-27jul (2)           Fri 08:15: the #16a      DAY
-  (after the T2      + fix-boot-27jul (2)         BLOCK gate + the S4
-   close PASSES)                                  degrade -- BOOT PATH ONLY,
-                                                  on a quiet day
+  Thu 30-Jul       fix-tests-27jul (4)           Fri 08:15: ONE live      LOW
+  (after the T2      + fix-boot-27jul (2)         boot variable -- S4      (see §6:
+   close PASSES)      + cherry-pick 214a878       degrade. #16a is INERT   re-counted
+                      (the alert audit trail)     (delivery_enabled=false) 28-Jul)
+                    ⭐ 28-Jul: counts corrected
+                      and the audit trail MOVED
+                      here from Friday -- §6
 
-  Fri 31-Jul       fix-symdir-27jul (7)          Mon 03-Aug 08:15: the     DAY
-  (evening)        ⭐ SPLIT OUT -- see below      symbol+direction rule
-                                                  LIVE, + 2 log-only changes
+  Fri 31-Jul       fix-symdir-27jul MINUS        Mon 03-Aug 08:15: the     DAY
+  (evening)          214a878 (audit trail        symbol+direction rule
+                     already landed Thursday)    LIVE (1 behavioural) +
+                   ⭐ SPLIT OUT -- see below      mis_filter SHADOW (log-only)
 
                    ⛔ NOT the 2FA seed move (deferred to 7/8-Aug)
 
@@ -202,4 +206,83 @@ precisely the multi-variable boot this whole calendar exists to prevent. ***
   originally reserved 3-Aug -- the 2FA seed move -- is already deferred to 7/8-Aug.
   ⚠️ AND: if the rule misbehaves on Mon 3-Aug, it DELAYS Tue 4-Aug. That is the
   correct outcome, not a regression -- you would want to know before the flip.
+================================================================================
+
+================================================================================
+6. ⭐⭐ RE-COUNTED 28-JUL — THE OVERLOAD IS NOT THURSDAY. IT WAS FRIDAY.
+================================================================================
+*** Re-counted by MEASUREMENT (git diff against each branch's own fork point,
+non-test files only), not from the queue description. Two counts in §2 were
+stale. ***
+
+  branch            commits  files  tests  NON-TEST files it changes
+  ──────────────────────────────────────────────────────────────────────────
+  fix-tests-27jul      4        7      7   *** NONE. ZERO. ***
+  fix-boot-27jul       2        4      2   main.py (+72), core/config_auditor.py (+57)
+  fix-symdir-27jul     7       14      7   alerts/telegram_notifier.py (+54),
+                                           signals/signal_processor.py (+51),
+                                           core/state_store.py (+26),
+                                           config/system_config.yaml (+23),
+                                           capital/risk_engine.py (+7),
+                                           core/config_loader.py (+7), main.py (+1)
+
+*** THE TEST: "IF FRIDAY'S BOOT MISBEHAVES, COULD YOU TELL WHICH CHANGE CAUSED
+IT?" -- YES. Thursday's slot is NOT overloaded, and the count was misleading. ***
+
+  · fix-tests-27jul changes *** 0 non-test files ***. main.py never imports
+    tests/. It contributes ZERO boot variables. Six commits, but only two of them
+    can reach a boot at all.
+  · #16a (f2e34bc) is *** INERT ***, by its own measured precondition: it fires
+    only when delivery_enabled=true AND conditional_allocation_enabled=false AND
+    every live strategy resolves DELIVERY-only. delivery_enabled has been false
+    since the 15-Jun incident. *** It CANNOT fire on Friday's boot. ***
+  · ⇒ Friday's boot carries exactly *** ONE *** live change: the S4 degrade.
+
+⭐⭐ AND THE PART THAT ANSWERS B3 PROPERLY -- THE PAIR'S FAILURE MODES HAVE
+   OPPOSITE SIGNS, which is a stronger safety property than "each is safe":
+     · #16a can only ADD a boot refusal   (it is a new BLOCK gate)
+     · S4  can only REMOVE one            (it turns a halt into degrade+alarm)
+   So a Friday boot *** FAILURE *** cannot be S4, and cannot be #16a either
+   (inert) -- it would be something unrelated, and that itself is the diagnosis.
+   A Friday boot that *** SUCCEEDS WHERE IT PREVIOUSLY WOULD HAVE HALTED *** is
+   S4, unambiguously. The pair does NOT need its own boot. Rama's instinct that
+   boot-path items deserve isolation is right in general; measured here, it does
+   not bind.
+
+*** SO THE REAL OVERLOAD WAS FRIDAY 31-JUL (-> Mon 3-Aug boot): 7 non-test files
+across 3 subsystems -- alerts, signals, capital -- and 3 distinct behavioural
+changes in one boot. THAT is the slot that failed the test. ***
+
+--------------------------------------------------------------------------------
+THE CHANGE, AND WHY IT ALSO SETTLES THE AUDIT TRAIL'S SLOT (register C1)
+--------------------------------------------------------------------------------
+*** MOVE THE ALERT AUDIT TRAIL (214a878) FROM FRIDAY TO THURSDAY. ***
+
+  WHY IT IS SAFE TO MOVE: it is *** exactly two files *** --
+  alerts/telegram_notifier.py (+54) and its own test (+150). *** NO schema
+  change, NO config change, NO state_store change. *** A clean cherry-pick; it
+  sits before the config flips in symdir's history, so nothing depends on it.
+  It cannot prevent a boot -- its failure mode is a missing log line.
+
+  WHY IT SHOULD MOVE -- THE COST OF DELAY IS PERMANENT, NOT DEFERRED:
+  *** the audit trail only answers from deployment forward. *** Every day it
+  waits is a day that is permanently unauditable -- you cannot backfill "did the
+  send succeed" for a day the instrumentation did not exist. That is the
+  strongest possible argument for the earliest safe slot, and Thursday is the
+  earliest safe slot that exists. Waiting until Mon 3-Aug costs two more
+  permanently-blind trading days for no risk reduction whatsoever.
+
+  ⚠️ HONEST COST: it makes Friday's boot 2 live changes rather than 1 (S4 +
+  the audit trail). They remain distinguishable -- different subsystems, and the
+  audit trail cannot produce a boot failure at all. The test still passes.
+
+  AFTER THE MOVE:
+    Thu 30-Jul -> Fri boot : S4 (live, boot path) + audit trail (live, alerts)
+                             + #16a (inert) + 4 test-only commits
+    Fri 31-Jul -> Mon boot : the one-trade rule (1 behavioural) +
+                             mis_filter SHADOW (log-only, enabled-not-enforcing)
+  *** Both boots now pass the "could you tell which change" test. ***
+
+⛔ NOT DONE TODAY. Nothing deploys 28-Jul. This section is the proposal + the
+   measurement behind it; the cherry-pick happens Thursday evening with the rest.
 ================================================================================
