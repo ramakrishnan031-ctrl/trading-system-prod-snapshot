@@ -787,3 +787,31 @@ assumed.
           ⚠️ *** BEFORE, not after: a `gc --auto` triggered BY THIS PUSH is
           exactly what would prune the 3-May-onward history. ***
 ================================================================================
+
+================================================================================
+7.8 ⏰⛔ *** STANDING RULE: NO PUSH BETWEEN 18:05 AND 18:25 IST ON A WEEKDAY ***
+================================================================================
+cron `15 18 * * 1-5` runs `forward_shadow_record`; it completed 18:16 on 27-Jul,
+so the bracket is 10 minutes either side. *** Its output CANNOT BE REGENERATED ***
+-- it is the ONLY out-of-sample evidence producer and D3/D4 both depend on it --
+so a push landing mid-run, or changing what it loads, costs a day that never
+comes back. ⛔ NEVER produce a missing day manually: a gap is a loss, a
+manufactured day CORRUPTS the only clean evidence set.
+
+⭐ WHY THIS IS A RULE AND NOT A NOTE: on 27-Jul the recorder wrote at 18:16 and
+the v45 deploy landed at *** 18:17:37 -- a 71-SECOND margin. *** Safe BY LUCK,
+NOT DESIGN. A near-miss that is only written down happens again. ⭐ And a rule an
+operator has to ESTIMATE is not a rule, which is why this is a clock time.
+
+⭐⭐ THE STRONGER FORM, stated once: *** any push that could change what
+`state_store` EXPECTS must land IMMEDIATELY BEFORE an off-market boot, never the
+evening before. *** That is M1's first direction and the half that needs no code.
+⛔ The other half (non-boot processes DEGRADE instead of aborting whole) is
+REGISTERED, gated after 4-Aug, and is NOT covered by Thursday's S4 change -- S4 is
+a webhook self-check at BOOT; this is a non-boot cron hitting a SCHEMA guard.
+
+✅ 28-Jul: this did NOT constrain tonight. The push was expected ~17:40-17:45,
+clear of the bracket, and tonight's commits were VERIFIED to carry no schema
+expectation change (0 schema-bearing files in the diff; 0 lines touching
+`EXPECTED_SCHEMA_VERSION`; PC == VM == live DB == 45) ⇒ no refusal window opened.
+================================================================================
