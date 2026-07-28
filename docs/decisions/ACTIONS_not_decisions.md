@@ -142,18 +142,53 @@ time** — a candidate for after 4-Aug, **not a commitment**.
 
 ## Test-coverage findings (registered 28-Jul-2026)
 
-### T1 — ⚠️ FIX-061's LTP-retry → emergency-exit → HARD_KILL path has ZERO effective coverage
-The four `test_order_placer_fix061` tests **cannot reach their assertions**: the H-3 guard (05-Jul)
-and the fixture (15-Jun) disagree, so the tests fail before exercising anything. They have been in
-the "known PC-env failures" bucket ever since — **a label standing in for a diagnosis**, the same
-shape as the `test_instance_lock` mislabel.
-⇒ **The path they were written to protect — an exhausted LTP retry escalating to an emergency exit
-and then a HARD_KILL — has had no working test for 22+ days.** ⭐ That path is *exactly* the one K1
-says has the worst consequence shape, so the gap and K1 point at the same machinery.
-**Test-only, ZERO deploy consequence.** Needs its own slot and its own RED-first proof (fix the
-fixture, confirm the tests go RED against today's code, then GREEN). ⛔ Not tonight.
-*(Recorded here as well as in the ledger because the ledger is a deploy queue; this is the register
-someone reads when asking "what do we know is untested?")*
+### T1 ✅ FIX-061 — RESOLVED 28-Jul. Coverage restored; **no production defect.**
+The four `test_order_placer_fix061` tests died **inside production code** at
+`order_placer.py:3513` (`TypeError: 'Mock' object is not subscriptable`) before reaching a single
+assertion, and had covered **nothing** on the LTP-retry → emergency-exit → HARD_KILL path for 22+
+days. **Root cause: a stale 15-Jun fixture, not a stale test** — H-3 (`a254a82`, 05-Jul) added a
+store re-read whose row the fixture supplied as a bare `Mock`.
+Repaired **test-side only**; **9 passed**. ⇒ *the production path was fine and had merely gone
+unwatched.* ⭐ Not vacuous: returning an SL row instead of `None` makes three of them fail on
+"hard_kill not called", so the assertions can still go red.
+
+---
+
+## ⭐⭐ THE 13-FAILURE SWEEP (28-Jul-2026) — "known PC-env failures" is a LABEL, not a diagnosis
+
+**The headline, and it is stronger than expected: NOT ONE of the 13 is a genuine environment
+limitation.** No network call, no missing binary, no Windows-path problem — **all 13 run in 2.54
+seconds** and fail on mock wiring, a stale fixture, a self-inflicted orphan process, or a real
+contract violation.
+
+⭐⭐ **AND THE GENUINELY ENVIRONMENTAL CASES ARE THE *SKIPS*, NOT THE FAILURES.** The 4 skips each
+name their environmental fact and skip cleanly: `test_zerodha_login` ×2 (`skipif` win),
+`test_backup_retention` (symlinks not permitted), `test_gui_secret_key` ("Windows does not honour
+POSIX file modes"). ⇒ **the "PC-env failures" label borrows the skips' legitimacy for a population
+that has none.** That is precisely how `test_instance_lock` and then FIX-061 stayed unexamined.
+
+| rank | test(s) | why it actually fails | verdict | production path left uncovered |
+|---|---|---|---|---|
+| **1** | `test_order_placer_fix061` **×4** | died at `order_placer.py:3513`, H-3 (05-Jul) vs 15-Jun fixture | **MISLABELLED** → ✅ **FIXED 28-Jul** | **LTP-retry → emergency-exit → HARD_KILL** — same machinery as K1 |
+| **2** | `test_fix181::test_inflight_orphan_flattened_when_kill_active` | asserts `LIMIT`, production emits **`MARKET`** on the CHECK2 inflight-orphan flatten under HARD_KILL | **⚠️ UNKNOWN — needs root-cause** | **the HARD_KILL flatten's order type.** Either the test is stale after a deliberate move to marketable exits, or it is a real divergence. ⛔ Not guessed. |
+| **3** | `test_main::TestContinueFromGate` ×3 | placer never invoked; `release` never called; `0 == 0+1` | **MISLABELLED** (mock harness) | entry gate → order placement (money path) |
+| **4** | `test_closure_source_contract::test_no_module_restates_the_vocabulary_literals` | the scan found `scripts/backfill_closure_source_w8.py:92` restating `OWN_SL`/`OWN_TGT`/`OWN_EOD` | ⭐ **NOT A FAILURE — A REAL FINDING. The test is working.** | none — it is *reporting* a live defect. `core/closure_source.py:43-45` is the authority and that script does **not** import it. **Unfixed on every branch checked.** ⚠️ That script wrote 35 rows on 28-Jul. |
+| **5** | `test_phase17_batch2::test_fix077_flask_max_content_length` | `int(Mock)` at `webhook_receiver.py:212` | **MISLABELLED** (mock harness) | the webhook max-content-length guard (FIX-077) |
+| **6** | `test_instance_lock` ×2 | a stale 120 s orphan `Popen` holds the machine-global lock; **the holder PID differs every run** | **MISLABELLED** (diagnosed 27-Jul) — ⭐ fix already **queued on `fix-tests-27jul`** (Thursday) | the single-instance guard |
+| **7** | `test_main::test_paper_mode_does_not_require_webhook_secret` | `WEBHOOK_SECRET` is present in the required-key list in paper mode | **⚠️ UNKNOWN** | paper-mode boot requirements |
+
+**⇒ Standing at 28-Jul evening: 1 fixed · 2 UNKNOWN and owed a root-cause (ranks 2 and 7) · 1 real
+defect to fix in the script, not the test (rank 4) · 5 mock-harness repairs (ranks 3, 5) · 2 already
+queued (rank 6).** ⛔ None of the remaining work is done here; this section is the sweep.
+
+### ⚠️ A3 — THE POPULATION WIDTH, because a count is only as wide as its search
+- The "13" comes from **`pytest tests/unit tests/integration`** — 308 + 14 = **322 test files**.
+- ⛔ **`tests/crash_test/` (8 test files) and `tests/core/` (1) are NOT in that command.** **9 test
+  files never run in the regression gate at all.** ⭐ *A skipped test and a failing test hide the
+  same thing — but an **uncollected** test hides more, because it appears in no count whatsoever.*
+  Widening the gate is its own item; ⛔ not done tonight (it would change the baseline mid-sequence).
+- 4 skipped (all genuine ENV, above) · 3 `skipif` decorators · 7 runtime `pytest.skip()` calls,
+  most of them inside the uncollected `tests/crash_test/`. **0 collection errors.**
 
 ## Note
 These actions gate several of the decisions (Q10 gates D2/D3/Regime evidence; the security items are independent). They are tracked in `MEMORY.md` under RAMA-ACTIONS and are restated here only so the decision index is complete.
