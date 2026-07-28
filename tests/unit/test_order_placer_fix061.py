@@ -38,6 +38,56 @@ def placer(mock_deps):
     mock_row = Mock(instrument_token=12345, symbol="TESTSTOCK")
     mock_cache.get_by_symbol = Mock(return_value=mock_row)
     placer.set_instrument_cache(mock_cache)
+
+    # ── H-3 fixture repair (28-Jul-2026) ────────────────────────────────────
+    # H-3 (`a254a82`, 05-Jul-2026) added a re-read at the top of
+    # `_retry_limit_triple_exits` (order_placer.py:3512-3513):
+    #     trade = store.get_trade_for_tgt_retry(trade_id)
+    #     if trade is None or trade["status"] not in ("OPEN", "PARTIAL"): return
+    # `store` is `self._om._store`, and `order_manager` is a bare Mock here, so
+    # that returned a Mock and `trade["status"]` raised
+    #     TypeError: 'Mock' object is not subscriptable
+    # ⇒ FOUR tests below died INSIDE production code before reaching a single
+    # assertion, and sat in the "known PC-env failures" bucket for 22+ days
+    # while covering NOTHING on the LTP-retry -> emergency-exit -> HARD_KILL path.
+    #
+    # ⭐ This supplies what the guard REQUIRES; it weakens no assertion. The real
+    # `get_trade_for_tgt_retry` returns an `sqlite3.Row` (state_store.py:1543);
+    # a dict is a faithful stand-in, and the keys below are exactly that query's
+    # SELECT columns, valued to match `fill_entry` (TESTSTOCK / 100 @ 100.0 /
+    # SL 95 / TGT 105 / LONG / MIS). Status is OPEN so the guard PASSES and
+    # execution proceeds to the assertions -- the point is to REACH them, not to
+    # make them green.
+    placer._om._store.get_trade_for_tgt_retry = Mock(return_value={
+        "trade_id": "T001",
+        "signal_id": "S001",
+        "symbol": "TESTSTOCK",
+        "direction": "LONG",
+        "qty_filled": 100,
+        "entry_actual_price": 100.0,
+        "sl_initial": 95.0,
+        "tgt_initial": 105.0,
+        "status": "OPEN",
+        "needs_tgt_retry": 1,
+        "tgt_retry_count": 0,
+        "tgt_risk_reward_applied": None,
+        "product": "MIS",
+        "leg": "ENTRY",
+    })
+    # ⛔ AND `get_sl_order_for_trade` MUST RETURN None -- this one is load-bearing
+    # and easy to get backwards. H-3 added at order_placer.py:3524:
+    #     if store.get_sl_order_for_trade(trade_id) is not None:
+    #         ... self.retry_tgt_for_trade(trade_id); return
+    # i.e. a NON-None SL sends execution down the "an SL already exists, place the
+    # TGT only" branch and RETURNS -- `place_deferred_exits` is never reached and
+    # neither is the hard_kill these tests assert. FIX-061's scenario is the
+    # opposite: the exits were never placed, so there is NO SL yet and the whole
+    # LIMIT_TRIPLE is being retried. A bare Mock is non-None, which is why the
+    # default silently took the wrong branch.
+    placer._om._store.get_sl_order_for_trade = Mock(return_value=None)
+    # Idempotency scan inside retry_tgt_for_trade (iterated at :2687); empty = no
+    # live TGT. Kept for the tests in this file that DO route through that path.
+    placer._om._store.get_orders_for_trade = Mock(return_value=[])
     return placer
 
 
