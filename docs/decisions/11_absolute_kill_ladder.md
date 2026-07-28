@@ -1,100 +1,169 @@
 # 11 — The absolute rupee kill ladder (drift handler + reconciler tolerances)
 
-**Type:** capital-posture · **Status:** OPEN — **Rama's decision, nobody else's**
-**Registered:** 28-Jul-2026. Promoted onto this board so it is not re-discovered a third time.
+**Type:** capital-posture · **Status: ⭐ PARTLY DECIDED (28-Jul-2026)**
+**Registered:** 28-Jul-2026 · **Posture decided by Rama the same day; VALUES still open.**
 
-> ⛔ **This file recommends nothing**, per this board's convention. It states the options, the
-> evidence for each, what is unknown, the exposure in each direction, and what would settle it.
-> ⛔ **Do not re-tune these values as a side-effect of other work.** That is the specific failure
-> this registration exists to prevent — it has now been noticed twice from two different directions.
+> ⛔ **This file recommends nothing**, per this board's convention. It records what Rama decided,
+> what the code actually does, and what was measured — not what anyone would prefer.
+> ⛔ **NO VALUE HAS BEEN CHANGED.** Not the yaml, not a default, not a test fixture.
 
-## The thing being decided
+---
 
-Five rupee thresholds are **absolute** while ACTUAL capital is ~₹9.87k. Evidence, the full table and
-the derivation live in [`../audit/capital_figure_sweep_28jul2026.md` §4](../audit/capital_figure_sweep_28jul2026.md)
-— **not duplicated here**. The load-bearing summary:
+## 1. ✅ DECIDED — the posture. (Rama, 28-Jul-2026)
 
-| key | value | % of ACTUAL capital | gates |
+> *"Agreed — the kill ladder stays ABSOLUTE. SOFT KILL ₹1,500: stop taking new trades / raise
+> warnings. HARD KILL ₹2,500: emergency stop (kill trading)."*
+
+⇒ **Option A/B (absolute) is SETTLED. Options C (capital-relative) and D (hybrid) are CLOSED.**
+A book-vs-broker *discrepancy* is not a risk fraction, so absolute is the coherent semantics.
+
+## 2. ⏳ STILL OPEN — because the decision also contains a VALUE CHANGE
+
+| key | today | Rama's figure | status |
 |---|---:|---:|---|
-| `order_reconciler.human_order_margin_tolerance` | 5,000.0 | **50.6 %** | alert only (non-escalating) |
-| `drift_handler.hard_kill_threshold_rs` | 2,500.0 | **25.3 %** | **HARD kill** |
-| `drift_handler.soft_kill_threshold_rs` | 1,000.0 | **10.1 %** | **SOFT kill** |
-| `drift_handler.log_only_threshold_rs` | 250.0 | 2.5 % | log |
-| `order_reconciler.capital_drift_tolerance` | 50.0 | 0.5 % | alert |
+| `hard_kill_threshold_rs` | 2,500 | 2,500 | **unchanged** |
+| `soft_kill_threshold_rs` | **1,000** | **1,500** | ⏳ **a re-tune of a kill-path threshold** |
+| `log_only_threshold_rs` | 250 | *(not stated)* | ⏳ open — see §6 |
 
-⚠️ **The base is a DAILY figure, not a constant** (memory: `capital-vocabulary`). The percentages
-above are against the **28-Jul-2026 `fm_ledger` INIT = ₹9,872.30** (bucket `both`), read from the
-live DB, not from a document. On 27-Jul it was ₹9,871.80 and on 22-Jul ₹9,838.00. **Any figure here
-is only as current as its date**, which is part of what makes the item worth deciding rather than
-adjusting.
+A kill-path re-tune goes through the full careful loop; it does not land on a decision note.
+**Sequence:** this report → design doc → red-team → implement → **its own single-variable boot**.
 
-**Source lines:** `config/system_config.yaml:598-601` (drift ladder), `:344`
-(`human_order_margin_tolerance`). Consumed at `capital/drift_handler.py:127-129` and
-`orders/order_reconciler.py:3397`.
+---
 
-## Why absolute is DEFENSIBLE and not simply a bug
+## 3. ⭐ WHAT THE CODE ACTUALLY DOES — read from source, not from the config comments
 
-A book-vs-broker **discrepancy** is not a risk fraction. If the ledger and the broker disagree by
-₹2,500, that is a reconciliation failure of a fixed rupee size — its seriousness does not shrink
-because the account is small. **Making these capital-relative is not obviously right.** That is why
-this is a posture decision and not a defect.
+*Because the code outranks everyone's description of it, including Rama's and mine.*
 
-## Why it is nonetheless worth a decision
+| rung | fires when | what it DOES | what it does **NOT** do |
+|---|---|---|---|
+| **NOISE** `< 250` | any drift | `logger.debug` only | **not observable in production** — see §5 limit |
+| **LOG_ONLY** `≥ 250` | escalating source | `logger.CRITICAL` + increments a counter | no kill, no alert to Telegram |
+| **SOFT** `≥ 1,000` | escalating source | `kill_switch.soft_kill()` — **blocks new ENTRIES, ALLOWS EXITS**; persists to DB (persist-first); CRITICAL log; Telegram **CRITICAL** | does **not** touch exits, pending exit orders, or the EOD squareoff |
+| **SOFT_ESCALATED** | 3 consecutive LOG_ONLY cycles | identical to SOFT | — |
+| **HARD** `≥ 2,500` | escalating source | `kill_switch.hard_kill()` — blocks **ALL** orders **and dispatches an async FLATTEN** that cancels resting orders and exits `OPEN`/`PARTIAL`/`PENDING_FILL` trades, retrying up to **2 h**, alerting per trade on failure | does **not** leave positions unmanaged — it actively closes them |
 
-They were calibrated against a **much larger notional account**. At today's capital the ladder reads:
-- a SOFT kill at **10.1 %** of the book,
-- a HARD kill at **25.3 %**,
-- and an alert tolerance (`human_order_margin_tolerance`) at **50.6 %** — *half the account* —
-  though note this one is an **alert-only, non-escalating** source (see below).
+**Enforcement is real, not just docstring** — `kill_switch.is_active(intent)`:
+`entry`/`any` → blocked on SOFT **or** HARD; `exit` → blocked **only** on HARD. SOFT genuinely
+allows exits. On HARD the exit block exists because the kill switch's **own** indestructible
+flatten owns the close; it is not an absence of exit management.
 
-⭐ **The sharp edge is silent re-meaning:** if capital moves materially, every row's meaning changes
-and **nothing announces it**. These are the one place a capital move is felt with no signal.
+⇒ **RAMA'S DESCRIPTION OF BOTH RUNGS IS ACCURATE, in-session.** SOFT = "stop taking new trades /
+raise warnings" ✅ (its alert body literally reads *"New signals: BLOCKED | Open positions: managed
+to SL/TGT/EOD"*). HARD = "emergency stop" ✅ **and it squares off.**
 
-## Options (no recommendation)
+### 3a. ⚠️ THE ONE DIVERGENCE — bounded, but it must be said before a number moves
 
-- **A — Leave as-is.** Absolute values unchanged.
-  *For:* discrepancy semantics are genuinely absolute; zero change risk; the ladder has never
-  misfired in production. *Against:* the percentages keep drifting as capital moves, unannounced.
-- **B — Re-tune the absolute numbers** to today's capital, staying absolute.
-  *For:* keeps the correct semantics, restores the intended severity spacing. *Against:* needs
-  re-tuning again after any material capital change — the same silent-drift problem, deferred.
-- **C — Make them capital-relative (percentages).** *For:* self-maintaining. *Against:* changes
-  what the threshold *means*; a small account would then tolerate only a tiny absolute discrepancy,
-  which may fire on ordinary rounding/fee noise.
-- **D — Hybrid:** relative with an absolute floor/ceiling. *For:* covers both failure modes.
-  *Against:* the most code, and two numbers to justify instead of one.
+A drift kill's reason is `"capital drift SOFT: delta=Rs…"`, which is **not** in
+`SCHEDULED_KILL_REASONS` (`{"circuit_breaker_force_close_15:15", "EOD_SQUAREOFF"}`) ⇒ it is an
+**EMERGENCY** kill. If the service **RESTARTS ON THE SAME DAY** while that kill is persisted, the
+next start hits `StartupScenario.HALT` and **exits 4 — the service does not come back up** without
+`--resume`. In that window there is no exit management and **no 15:15 / EOD squareoff**.
 
-## Constraints any change must respect
+⭐ **BOUNDED, and the bound is Rama's own earlier decision.** `clear_stale_state()` is a
+**HEADLESS GUARANTEE** (20-Jun-2026): *every* prior-day kill clears at the next boot regardless of
+type. Same-day kills deliberately persist within the day. ⇒ **the hazard is a SAME-DAY restart
+only — never overnight.** It is not "SOFT_KILL leaves positions unmanaged"; it is "SOFT_KILL + a
+same-day restart does".
 
-- ⛔ **Ordering is enforced at config load:** `log_only_threshold_rs < soft_kill_threshold_rs <
-  hard_kill_threshold_rs` (`core/config_loader.py:1599-1620`). A re-tune violating it **fails
-  startup**, which on this system means a boot that does not start.
-- `consecutive_cycles_before_escalate: 3` sits in front of the ladder — escalation is not
-  single-sample. Any severity reasoning must include it.
-- **PARITY:** these load identically in paper and live. A change lands in both at once.
-- ⚠️ **Deploy timing:** these are boot-path config. Per the deploy calendar, a config change of this
-  class needs its own single-variable boot — it must not ride a sequence evening.
+### 3b. ⛔ `consecutive_cycles_before_escalate: 3` IS NOT A GATE IN FRONT OF THE LADDER
 
-## What is UNKNOWN
+The desk brief asked to "confirm escalation is not single-sample". **It is single-sample.**
+Source: the counter increments **only** on `TIER_LOG_ONLY`; `TIER_SOFT` and `TIER_HARD` **reset** it
+and dispatch immediately. The 3 cycles govern **only** the LOG_ONLY → SOFT_ESCALATED promotion of a
+*sustained sub-soft* drift. **A single ≥₹1,000 sample soft-kills; a single ≥₹2,500 sample hard-kills.**
 
-- The **empirical distribution of observed drift** — has `log_only` (₹250) ever tripped in
-  production, and how often? Without it, every option is calibration by argument. **This is
-  measurable from the existing logs/DB and nobody has measured it.**
-- Whether the original calibration targeted a specific notional (and which), or was inherited.
+**Wall-clock of "3 cycles" — and it depends on which source drifts:**
+- via `fund_manager_self_check` (reconciler CHECK7, runs every cycle at `poll_interval_sec: 15`) ⇒ **≈ 45 seconds**.
+- via `fund_manager` (FM9) ⇒ **never within one process.** `sync_from_broker` has exactly **one**
+  production caller — `main.py:995`, a **one-shot at 09:15** — so that source fires **once per day**,
+  and the counter is in-memory on an object that dies at the 17:35 self-exit. Three cycles from that
+  source alone is unreachable. *(The counter is shared across escalating sources, by design.)*
 
-## What would SETTLE it
+---
 
-Measure the realised drift distribution over the live history, then choose the rung positions
-against observed noise rather than against a remembered account size. That measurement is
-**not blocked by anything** — it is the cheapest next step and it does not commit to any option.
+## 4. 📉 THE MEASUREMENT decision #11 said was owed — DONE 28-Jul, read-only
 
-## ⛔ Do not re-raise the refuted part
+**Search width, stated up front** *(an absence is only established by a check wide enough to have
+found the thing)*: **22 files**, `logs/system_2026-06-29.log` → `logs/system_2026-07-28.log`,
+**1,539,561 lines**. No `.gz`, no `logs/archive` ⇒ that is the whole on-disk history (~22 trading days).
 
-A neighbouring hypothesis — *"`human_order_margin_tolerance: 5000.0` widens an escalation path"* —
-is **REFUTED on code evidence**, written up at
+| question | answer |
+|---|---|
+| total `drift_handler` lines in 22 days | **2** |
+| events from an **escalating** source (`fund_manager*`) | **ZERO** |
+| `log_only` (₹250) ever tripped? | **No** |
+| `soft` (₹1,000) ever tripped? | **No** |
+| `hard` (₹2,500) ever tripped? | **No** |
+| any kill `triggered_by=drift_handler`? | **No** — the 19 `SOFT_KILL ACTIVATED` lines are all the scheduled 15:15 / EOD kills |
+| `HARD_KILL ACTIVATED` | **0** |
+
+⇒ **THE LADDER HAS NEVER FIRED.**
+
+⭐⭐ **AND THE PART THAT MATTERS MOST.** The only drift ever observed at hard-kill magnitude came
+from a source the ladder **deliberately ignores**. Both events, 06-Jul:
+```
+INFO drift_handler "drift event from non-escalating source"
+     source=order_reconciler tier=HARD delta=10000.0 expected=0.0 actual=10000.0
+```
+₹10,000 = **4× the hard threshold, 200× the ₹50 reconciler tolerance** — logged at **INFO**, no
+escalation, by design (`order_reconciler` is not in `_ESCALATING_SOURCES`; it has its own alert
+path, and this pair also shows as `G3 CAPITAL_DRIFT … tolerance=50.00`).
+⚠️ `expected=0.00` is the tell: that is the *"~zero expected, possible publisher bug"* shape the
+handler warns about for escalating sources. It looks like a seeding/startup artefact rather than a
+genuine ₹10,000 discrepancy — **unresolved, and worth its own look before it is used as evidence.**
+
+### ⛔ WHAT THIS MEASUREMENT CANNOT TELL YOU — stated, not glossed
+1. **There is no realised-drift *distribution*.** `TIER_NOISE` logs at **DEBUG** and production runs
+   at INFO ⇒ **every drift below ₹250 is invisible.** Min/median/p95 of normal drift **cannot be
+   computed from these logs at all.** Getting it needs a code change (raise the noise tier to INFO,
+   or persist drift samples) and then time. **The "cheap and unblocked" framing in the original
+   version of this file was wrong** — the *trip* question was cheap; the *distribution* question is not.
+2. **`kill_switch_state` is a single-row CURRENT-STATE table**, not a history (1 row; one distinct
+   `triggered_by`). It cannot answer "has soft ever tripped" over time. The log grep above is the
+   authority, and it only reaches back 22 trading days.
+
+⇒ **Positioning the rungs "against observed noise" is NOT possible today.** Any value chosen now —
+₹1,000 or ₹1,500 — is chosen against an unmeasured background, on a path that has never fired.
+That is not an argument against Rama's figure; it is the honest statement of what backs it.
+
+---
+
+## 5. ⏰ THE SLOT — and it is not this week
+
+This is boot-path config needing its **own single-variable boot**, and it must not ride a sequence
+evening. Thu 30-Jul (boot pair), Fri 31-Jul (the symbol+direction rule), Mon 3-Aug (observation) and
+Tue 4-Aug (the flag flip) are **all allocated**.
+⇒ ***THE EARLIEST HONEST SLOT IS AFTER THE 4-AUG FLAG FLIP IS COMPLETE AND OBSERVED.***
+⛔ **"Decided" does not mean "shipping this week."**
+
+## 6. ❓ TWO QUESTIONS BACK TO RAMA — recorded as OPEN, not guessed
+
+**Q1 — does `log_only_threshold_rs` stay at ₹250?**
+With SOFT at ₹1,500 the log-only band widens from **250–1,000** to **250–1,500**. In plain words:
+the band is the *quiet warning zone* — drift lands in the log (at CRITICAL severity, but **no
+Telegram, no kill**) and only becomes a halt if it either crosses the soft line or persists 3
+consecutive cycles (**≈45 s** via CHECK7). **Widening the band means a drift of, say, ₹1,200 that
+today would halt entries immediately would instead sit quietly for ~45 s before halting** — so the
+change buys ~45 s of extra tolerance for mid-size drift, and costs an immediate stop in that range.
+⚠️ Note the honest caveat: the band has **never been entered** in 22 trading days, so this is a
+change to lead-time on a path with no observed traffic.
+
+**Q2 — `order_reconciler.human_order_margin_tolerance` (₹5,000) stays untouched?**
+It is **not part of this ladder** — it is **alert-only and non-escalating**
+(`order_reconciler.py:3397` adds it to an *alert* tolerance). Confirm it stays at ₹5,000.
+⛔ **Before re-raising the "it widens an escalation path" idea: it is REFUTED on code evidence** —
 [`../audit/capital_figure_sweep_28jul2026.md` §3](../audit/capital_figure_sweep_28jul2026.md).
-It is an **alert-only, non-escalating** source (`orders/order_reconciler.py:3397` adds it to an
-alert tolerance; the drift *ladder* is a separate mechanism). Read §3 before re-raising it.
+This is the third time it has come up; the refutation is written where a re-raiser would look.
 
-**Related:** memory `capital-vocabulary` · `dual-daily-loss-mechanism` · decision
-[01](01_e4_w10_pnl_contract.md) (the other capital-posture item).
+## 7. Constraints any change must respect
+
+- ⛔ **Ordering is enforced at config load:** `log_only < soft_kill < hard_kill`
+  (`core/config_loader.py:1599-1620`). A violating re-tune **fails startup** — on this system that
+  is a boot that does not start.
+- `consecutive_cycles_before_escalate: 3` — see §3b; it is **not** a gate in front of SOFT/HARD.
+- **PARITY:** these load identically in paper and live; a change lands in both at once.
+- ⚠️ **Only three sources can escalate at all:** `fund_manager`, `fund_manager_self_check`,
+  `fund_manager_bucket_overflow`. Everything else (incl. `order_reconciler`) is INFO-only.
+
+**Related:** memory `capital-vocabulary` · `dual-daily-loss-mechanism` · `persisted-kill-is-halt-21jul`
+· `killswitch-autoclear-prior-day` · decision [01](01_e4_w10_pnl_contract.md).
