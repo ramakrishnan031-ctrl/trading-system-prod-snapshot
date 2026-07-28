@@ -41,10 +41,11 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
    Rama confirms)      confirms clean             *** SINGLE VARIABLE ***  all)
 
   Tue 28-Jul       NOTHING to main.              Wed 08:15: unchanged     none
-  (after the boot   * widen the T2 band on         from Tue.
-   is observed)       fix-t2-repair-07jul
-                    * THEN merge that branch     ⭐ operator script only;
-                      (order matters - §3.1)        main.py never imports it
+  (after the boot  ✅✅ 28-Jul 11:0x: THE T2      from Tue.
+   is observed)      OPERATION IS ALREADY DONE
+                     -- it landed 27-Jul 22:33   ⭐ operator script only;
+                     as e6ec75b. NOTHING is         main.py never imports it
+                     owed tonight. See §3.1.
 
   Wed 29-Jul       NOTHING.                      Thu 08:15: unchanged     none
   (T2 ARM day)     ⛔ A position is held
@@ -115,6 +116,39 @@ evening is ever preferred, it is free to move; nothing depends on its timing.
        3. re-sync /home/ubuntu/t2_proof_run/ from the deployed tree
        4. recompute the sha256 and REWRITE the runbook's STEP ZERO + §1b
        5. verify: deployed file == VM canary copy == the hash on the card
+
+  ✅✅✅ *** DONE -- AND THE INSTRUCTION ABOVE IS SUPERSEDED. DO NOT RE-RUN IT.
+       RE-DOING THE MERGE OR THE WIDEN TONIGHT WOULD BE A CHANGE ON THE EVE OF
+       THE ARM, WHICH IS EXACTLY WHAT THIS SECTION EXISTS TO PREVENT. ***
+       Verified by MEASUREMENT 28-Jul ~11:0x, not by reading a document:
+
+       · IT LANDED AS **e6ec75b**, 27-Jul-2026 22:33:19 IST, and it really was
+         ONE operation -- that single commit carries BOTH files:
+             docs/T2_RUNBOOK_29-JUL.txt      +170/-57
+             scripts/t2_cnc_gtt_realtest.py  +44/-...
+         ⭐ So the runbook's line 59 does NOT "merely happen to agree": it was
+         rewritten in the same commit that changed the band. That is precisely
+         what step 4 asked for.
+       · `fix-t2-repair-07jul` IS merged into main (`git branch --merged main`).
+       · ALL FOUR COPIES = 0a3c505c25e6518c7b77461965b512bb20f55765842d3b3bfb5fb46a0f582d36
+             PC repo scripts/ · VM ~/systems/trading-system/scripts/ ·
+             VM ~/t2_proof_run/ · runbook line 59
+       · ⭐⭐ AND THE BAND WAS READ AS A **VALUE**, NOT INFERRED FROM THE HASH --
+         because a hash proves SYNC, not CORRECTNESS. On the PC copy, the VM
+         deployed copy AND the VM canary, all three:
+             _OCO_SL_MULT  = 0.90   # -10%    (line 107)
+             _OCO_TGT_MULT = 1.10   # +10%    (line 108)
+         with all THREE use sites deriving from those constants (:238-239 seed,
+         :373-374 the real placement, :483 the dry-run) -- so a dry-run rehearsal
+         reports the same band the real run will arm. ⭐ This is the same trap as
+         "the flag is not the fingerprint", one level up: four agreeing hashes
+         would have looked identical if all four were the NARROW band.
+       · Old hashes are deliberately RETAINED at runbook :74-75 for RECOGNITION
+         (`a5779420` = repaired but NOT widened; `23aca731` = bit-rotted), so a
+         failing step zero tells the operator WHICH wrong file they have.
+
+  ⇒ *** TONIGHT'S T2 LIST IS EMPTY. The only work tonight is the three
+    evening checks + the 17:40 go/no-go. ***
 
 3.2 ⭐ *** #16a's BLOCK FIRST EXECUTES ON THE MOST IMPORTANT BOOT OF THE
         SEQUENCE — unless it is rehearsed first. ***
