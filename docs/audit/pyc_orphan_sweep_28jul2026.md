@@ -74,16 +74,54 @@ Type B `.pyc`, and nothing here produces one:
 
 So Type B cannot arise by accident. It would take someone deliberately placing a `.pyc`.
 
-## 4. ⚠️ The one real asymmetry
+## 4. ⛔ CORRECTED 28-Jul — **the "asymmetry" this section claimed DOES NOT EXIST**
 
-`.gitignore:45` is `__pycache__/` — there is **no bare `*.pyc` rule**. That is quietly protective:
+> Recorded as a correction rather than silently edited, because the original claim was carried
+> forward into a desk instruction (C6) that told the next person to preserve something that was
+> never there.
 
-- `__pycache__/x.pyc` → ignored, invisible to `git status`
-- `scripts/x.pyc` (**Type B**) → **not** ignored ⇒ shows as untracked in `git status` **on the PC**
+**What this section originally said:** `.gitignore:45` is `__pycache__/`, there is *no bare `*.pyc`
+rule*, so a Type B "shows as untracked in `git status` **on the PC**" — quietly protective — and the
+residual gap is only that the VM has no `.git`.
 
-**But the deployed tree has no `.git` directory** (verified: only `.gitattributes` and `.gitignore`),
-so on the VM — the only place it would matter — nothing would ever notice. That asymmetry, not the
-`.pyc` files themselves, is the residual gap.
+**⛔ BOTH HALVES ARE FALSE.** Measured 28-Jul, not re-read:
+
+```
+$ sed -n '45,46p' .gitignore
+__pycache__/
+*.py[cod]
+
+$ git check-ignore -v scripts/ghost.pyc
+.gitignore:46:*.py[cod]     scripts/ghost.pyc
+```
+
+`*.py[cod]` matches `.pyc`. A Type B file is **ignored**, so `git status` shows **nothing** —
+confirmed independently by planting one: `git check-ignore` named line 46 and `git status` stayed
+silent.
+
+⇒ **git is blind to this class EVERYWHERE, not only on the VM.** There is no asymmetry to protect;
+the PC has no visibility either. The honest statement of the gap is **nothing detects a Type B on
+either machine**, which is strictly worse than what was written here.
+
+**This makes the §5 detector MORE justified, not less.** It was argued as closing a VM-only hole
+that `git status` already covered on the PC. It does not close a VM-only hole — **it is the only
+detector that exists anywhere.**
+
+⭐ **And the C6 instruction built on this is VOID.** The desk file said: *"⛔ DO NOT ADD A BARE
+`*.pyc` RULE TO `.gitignore` — its absence is quietly PROTECTIVE … put that reasoning in a comment
+beside `.gitignore:45`."* **There is no absence — the rule is already there, at line 46.** So there
+is nothing to preserve, nothing to add, and no comment to write. The instruction is retired here
+instead of being acted on. *(Its underlying intent — don't blind a detector — is sound and is now
+served by the check itself, which does not depend on git at all.)*
+
+**Still true, and unchanged:** the deployed tree has no `.git` directory (verified: only
+`.gitattributes` and `.gitignore`), so even a hypothetical `git status` route was never available
+on the VM.
+
+⭐ **How it got past me:** I read `.gitignore:45`, saw `__pycache__/`, and reported the absence of a
+rule I had not looked one line further to find. **Same shape as the deployed-commit reflog error in
+this same session** — an ABSENCE asserted from a check too narrow to see the thing. Both were caught
+by re-deriving from measurement instead of re-reading the earlier note.
 
 ## 5. A4 — proposed fix (⛔ NOT APPLIED; the hook is not to be touched today)
 
@@ -101,8 +139,9 @@ stray = [p for p in ROOT.rglob("*.pyc")
 # non-empty => a sourceless-import hazard in the deployed tree; CRITICAL.
 ```
 
-It fails loudly on the only condition that can actually break the invariant, and it runs where there
-is no `git status` to fall back on.
+It fails loudly on the only condition that can actually break the invariant. ⭐ **And per the §4
+correction, there is no `git status` fallback to run "instead of" — not on the VM, and not on the PC
+either. This is the only detector, on either machine.**
 
 **Optional hygiene, low value — a `__pycache__` prune in the hook.** Buys no safety (Type A cannot
 execute) and costs a recompile on next import. Would only remove the search hazard. If ever added:
