@@ -80,9 +80,20 @@ _ESCALATING_SOURCES = frozenset({
 })
 ```
 
-**`order_reconciler` is not in it.** That publisher was never a kill path — it is alert-only, exactly
-as `config/system_config.yaml:345` claims (*"Informational only — kill escalation is governed
-separately by drift_handler thresholds"*). The ladder is fed by `fund_manager.sync_from_broker`,
+**`order_reconciler` is not in it.** That publisher was never a kill path — it is alert-only.
+
+> ⚠️ **CORRECTION (28-Jul, same day).** An earlier draft of this section corroborated the above with a
+> config comment — *"Informational only — kill escalation is governed separately by drift_handler
+> thresholds"* — cited as `config/system_config.yaml:345`. **Both halves were wrong.** The comment is
+> in `core/config_loader.py:730-735`, and it documents **`capital_drift_alert_interval_sec`**
+> (TASK-11, alert cadence) — a *different key*. It says nothing about
+> `human_order_margin_tolerance` (FIX-182, `:725-729`), whose own comment makes no escalation claim.
+> ⭐ **The refutation is unaffected and is single-sourced on CODE**, which is the stronger evidence
+> anyway: `_ESCALATING_SOURCES` is a `frozenset` literal read directly by the handler. A comment
+> could be stale; the frozenset is what executes. Recorded rather than silently edited — a citation
+> that survives into a second document is how `:703` propagated on 20-Jul.
+
+The ladder is fed by `fund_manager.sync_from_broker`,
 which publishes on **any** total change `> ₹1.0` (`fund_manager.py:1423`), **un-gated by any
 tolerance**, plus the BL-3 self-check and the bucket-overflow guard.
 

@@ -389,6 +389,12 @@ issue won't crash-loop the kill switch.)
   silences normal deployed-capital drift during trading (FIX-190 Bug I).
 - `human_order_margin_tolerance: 5000.0` — extra ₹ allowance when untracked/human Kite
   orders are present.
+  ⛔ **BEFORE RE-RAISING "this ₹5,000 is 50% of capital and disables the kill ladder": it is
+  REFUTED — 28-Jul-2026.** This publisher is **not** in `capital/drift_handler.py`'s
+  `_ESCALATING_SOURCES` frozenset (`:65-69`), so it was never a kill path; the ladder is fed by
+  `fund_manager.sync_from_broker`, un-gated by this tolerance. The allowance costs **alert
+  sensitivity on one non-escalating source**, not kill coverage. Do not "harden" it.
+  Full working: `docs/audit/capital_figure_sweep_28jul2026.md` §3.
 - `capital_drift_alert_interval_sec: 1800` — min 30 min between repeat drift alerts (TASK-11).
 - `stuck_exiting_timeout_minutes: 30` — an EXITING trade older than this is auto-resolved
   (flat→CLOSED_MANUAL, still-held→OPEN). See `[[followup_reconciler_exiting_gap]]`.
