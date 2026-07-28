@@ -975,12 +975,102 @@ def slippage_overrides_check(store: StateStore, app_config, day: str) -> CheckRe
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Check 11 — Stray .pyc (sourceless-import hazard)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Directories the stray-.pyc scan skips. AN ENTRY MEANS: "bytecode under here is
+# not ours — its layout is upstream's business, not a break of OUR deployed-tree
+# invariant." Both entries were MEASURED on 28-Jul-2026, not assumed:
+#   venv - the third-party virtualenv (8,206 .py files). Present in the DEV root
+#          only; on the VM it lives at ~/systems/venv, OUTSIDE the deployed tree,
+#          so the nightly run never walks it and this entry is inert there.
+#   sats - security-tooling scratch (bandit-env / semgrep-env — more venvs).
+# ⛔ DO NOT ADD AN ENTRY SPECULATIVELY. Measured the same day: there are ZERO
+#    .pyc files outside __pycache__ anywhere — PC tree, deployed tree, and inside
+#    both venvs. So every entry here exists for SCAN COST and OWNERSHIP, never to
+#    silence a known false positive. If you add one, say which file it silences.
+_PYC_SCAN_EXCLUDED_DIRS: tuple[str, ...] = ("venv", "sats")
+
+
+def stray_pyc_check(root: Path) -> CheckResult:
+    """Detect `.pyc` files that can execute code which is not in HEAD.
+
+    ⭐ THE PROPERTY, MEASURED (28-Jul-2026) RATHER THAN ASSUMED — PEP 3147:
+      · `pkg/__pycache__/x.cpython-311.pyc` with no `x.py`  -> NOT importable.
+        `__pycache__` is only a cache KEYED TO an existing source file.
+      · `pkg/x.pyc` with no `x.py`                          -> **IMPORTABLE**.
+        This is the legacy "sourceless" layout and it really does execute.
+    So the hazard is not "a .pyc exists"; it is "a .pyc sits where a .py would".
+
+    WHY THIS CHECK EXISTS AT ALL. `post-receive` deploys with `git checkout -f`,
+    which overwrites tracked files but NEVER removes untracked ones — and all
+    bytecode is untracked. Production proves the residue survives: the source of
+    `tests/unit/test_daily_review.py` was deleted in 01e07b7, yet its bytecode has
+    sat in the deployed tree for over two months. That residue is INERT (Type A),
+    but the same mechanism would preserve an importable Type B indefinitely.
+
+    ⭐ AND THERE IS NO OTHER BACKSTOP — MEASURED, AND IT CORRECTS AN EARLIER
+    CLAIM OF MINE. I previously recorded that `.gitignore` had no bare `*.pyc`
+    rule, so a Type B would at least show up as untracked in `git status` on the
+    PC. That is FALSE: `.gitignore:46` is `*.py[cod]`, which matches `.pyc`.
+    Verified by planting one — `git check-ignore` names line 46 and `git status`
+    shows nothing. ⇒ git is blind to this class EVERYWHERE, not just on the VM,
+    and the deployed tree has no `.git` at all. This check is the only detector.
+
+    SEVERITY IS CONDITIONAL ON THE PROPERTY, NOT ON THE OCCURRENCE COUNT — a
+    count-based ladder ("warn once, escalate on the second") would let the
+    genuinely dangerous case sit at WARNING for a whole night.
+      · sourceless (no sibling .py) -> violation() -> the EOD report goes CRITICAL
+      · beside its .py              -> warn()      -> residue, cannot be imported
+
+    ⛔ MONITORING ONLY: this never sets `soft_kill_reason`. A stray build artefact
+       must not be able to stop tomorrow's trading.
+
+    ⛔⛔ `git clean -xdf` MUST NEVER BE RUN IN THE DEPLOYED TREE. It is the
+    obvious-looking way to fix what this check reports, and it would destroy
+    `data_store/` (the live database AND its backups), `logs/`, and `.env` —
+    all untracked or ignored there. Remove the offending file by path. This
+    prohibition is written HERE, not only in the report, because here is where
+    somebody reaching for the quick fix is standing.
+    """
+    res = CheckResult("🧹 STRAY .pyc")
+    excluded = set(_PYC_SCAN_EXCLUDED_DIRS)
+    try:
+        stray = [
+            p for p in root.rglob("*.pyc")
+            if p.parent.name != "__pycache__"
+            and not (set(p.relative_to(root).parts) & excluded)
+        ]
+    except OSError as exc:  # an unreadable tree must not kill the EOD report
+        res.warn(f"scan could not complete: {exc}")
+        return res
+
+    if not stray:
+        res.ok("no .pyc outside __pycache__ — nothing importable that HEAD lacks")
+        return res
+
+    for p in sorted(stray):
+        rel = p.relative_to(root)
+        if p.with_suffix(".py").exists():
+            res.warn(f"{rel}: bytecode beside its own source — inert residue, "
+                     "not importable on its own")
+        else:
+            res.violation(
+                f"{rel}: SOURCELESS .pyc — importable with NO .py beside it. "
+                "This can execute code that is not in HEAD, which silently "
+                "breaks deployed-tree-equals-HEAD. Delete the file BY PATH "
+                "(never `git clean -xdf` here)."
+            )
+    return res
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Orchestration / CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         db_path: Path, root: Path) -> tuple[str, int, int, List[str]]:
-    """Run all 10 checks (each isolated) and build the report."""
+    """Run all 11 checks (each isolated) and build the report."""
     day = _day(day_date)
     prev = _prev_trading_day(day_date, config_dir)
     specs = [
@@ -994,10 +1084,11 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         lambda: tomorrow_readiness_check(store, app_config, day_date, config_dir),
         lambda: security_check(day, root, config_dir),
         lambda: slippage_overrides_check(store, app_config, day),
+        lambda: stray_pyc_check(root),
     ]
     titles = ["CONFIG vs ACTUAL", "ORDER QUALITY", "REPORT INTEGRITY", "SYSTEM HEALTH",
               "STRATEGY HEALTH", "RISK EVENTS", "vs YESTERDAY", "TOMORROW READINESS",
-              "SECURITY (COPY PROTECTION)", "SLIPPAGE OVERRIDES"]
+              "SECURITY (COPY PROTECTION)", "SLIPPAGE OVERRIDES", "STRAY .pyc"]
     results: List[CheckResult] = []
     for spec, title in zip(specs, titles):
         try:

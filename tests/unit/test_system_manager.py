@@ -185,3 +185,73 @@ def test_trigger_soft_kill_sets_state(tmp_path):
     assert row["triggered_by"] == "system_manager_eod"
     assert "System Manager EOD" in row["reason"]
     s.close()
+
+
+# ── stray .pyc detector (28-Jul-2026) ────────────────────────────────────────
+# ⭐ THE POINT OF THESE TESTS: the detector's trigger condition has MEASURED ZERO
+# occurrences in both trees. A guard whose firing path has never executed is not
+# a guard yet — it is a guard-shaped thing. Every branch below is made to fire.
+# ⛔ Every plant lives in pytest's `tmp_path`, so nothing is ever written into the
+#    repo and NOTHING is ever planted in the deployed tree. Isolation is
+#    structural here, not a cleanup step that could be forgotten.
+
+def _plant(root, relpath: str, body: bytes = b"\x00pyc") -> None:
+    p = root / relpath
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(body)
+
+
+def test_stray_pyc_sourceless_is_CRITICAL(tmp_path):
+    """Type B with NO sibling .py — the importable case. This is the one that
+    silently breaks deployed-tree-equals-HEAD, so it must reach `violation`."""
+    _plant(tmp_path, "scripts/ghost.pyc")
+    res = sm.stray_pyc_check(tmp_path)
+    assert res.violations == 1, res.lines
+    assert res.warnings == 0, res.lines
+    assert "SOURCELESS" in " ".join(res.lines)
+    # ⛔ monitoring only — a build artefact must never stop tomorrow's trading.
+    assert res.soft_kill_reason is None
+
+
+def test_stray_pyc_beside_its_source_is_WARNING_not_critical(tmp_path):
+    """Same file, but its .py is present ⇒ inert residue. Severity is conditional
+    on the PROPERTY (importability), never on how many times it has been seen."""
+    _plant(tmp_path, "scripts/ghost.pyc")
+    (tmp_path / "scripts" / "ghost.py").write_text("x = 1\n")
+    res = sm.stray_pyc_check(tmp_path)
+    assert res.violations == 0, res.lines
+    assert res.warnings == 1, res.lines
+    assert res.soft_kill_reason is None
+
+
+def test_stray_pyc_inside_excluded_dir_is_SILENT(tmp_path):
+    """An entry in _PYC_SCAN_EXCLUDED_DIRS means 'not ours'. Planted in the
+    WORST shape (sourceless) to prove exclusion beats severity."""
+    _plant(tmp_path, "venv/lib/site-packages/vendored.pyc")
+    _plant(tmp_path, "sats/semgrep-env/thing.pyc")
+    res = sm.stray_pyc_check(tmp_path)
+    assert res.violations == 0 and res.warnings == 0, res.lines
+
+
+def test_stray_pyc_type_a_inside_pycache_is_SILENT(tmp_path):
+    """Type A: an orphan inside __pycache__ with no source anywhere. MEASURED
+    28-Jul to be NOT importable (PEP 3147 — __pycache__ is a cache keyed to an
+    existing .py), so it is a search nuisance and must not raise anything."""
+    _plant(tmp_path, "scripts/__pycache__/ghost.cpython-311.pyc")
+    res = sm.stray_pyc_check(tmp_path)
+    assert res.violations == 0 and res.warnings == 0, res.lines
+
+
+def test_stray_pyc_clean_tree_is_SILENT(tmp_path):
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "real.py").write_text("x = 1\n")
+    res = sm.stray_pyc_check(tmp_path)
+    assert res.violations == 0 and res.warnings == 0, res.lines
+    assert any("no .pyc outside __pycache__" in ln for ln in res.lines)
+
+
+def test_stray_pyc_the_real_repo_is_currently_clean():
+    """The live tree, read-only. Documents the measured 28-Jul baseline: if this
+    ever goes red, a real stray appeared — that is the finding, not a flake."""
+    res = sm.stray_pyc_check(Path(__file__).parent.parent.parent)
+    assert res.violations == 0, res.lines
