@@ -98,7 +98,7 @@ VM: 161.118.187.249 | User: ubuntu | System: ~/systems/trading-system
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| Restart loop (exit code 4) | Stale SOFT_KILL in DB | Clear kill_switch_state, reset-failed, start |
+| Service **`failed`** and stays down — exit 4, **NOT a restart loop** (`RestartPreventExitStatus=3 4`; journal: `Failed with result 'exit-code'`) | A **SAME-DAY EMERGENCY kill of ANY kind** — drift, token expiry, live-feed, API auto-trip, fund-manager, reconciler, System Manager EOD (only the 15:15 breaker and EOD squareoff are "scheduled"). ⛔ NOT a *stale* kill: prior-day kills auto-clear since 20-Jun | `sudo bash deploy/resume.sh` (`--force` also clears HARD_KILL). ⛔ **NOT `systemctl restart`** and ⛔ **NOT `main.py --resume`** — both fail. Fix the root cause first or it re-trips. Detail: [05_incident_response.md](05_incident_response.md) |
 | Kill switch SOFT_KILL at 15:15 | Circuit breaker (expected daily) | FIX-154: auto-clears on restart (no open positions); manual: clear DB + restart |
 | IntegrityError fm_ledger.amount | NaN input to reserve() | Fixed in FIX-154 (input validation) |
 | data_store read-only | Permissions changed | `sudo chmod 755 data_store/` |

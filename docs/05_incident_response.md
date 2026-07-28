@@ -36,10 +36,45 @@ sqlite3 ~/systems/trading-system/data_store/trading_system.db \
 6. If daily loss → verify P&L is real (not paper drift artifact)
 7. To resume (if root cause resolved):
 ```bash
-# System auto-resumes after EOD squareoff if auto_resume_kill_switch=true
-# Manual resume: restart the service
-sudo systemctl restart trading-system
+# A PRIOR-DAY kill clears itself at the next 08:15 boot (clear_stale_state,
+# 20-Jun-2026) -- nothing to do. The steps below are for a SAME-DAY kill.
+#
+# ⛔ DO NOT `systemctl restart` -- for a same-day EMERGENCY kill that FAILS.
+#    Startup hits StartupScenario.HALT and exits 4; the unit does NOT come back.
+# ⛔ DO NOT run `main.py --resume` directly -- it competes with the service for
+#    the instance lock (port 5001). That was the 18-Jun collision.
+sudo bash deploy/resume.sh            # SOFT_KILL
+sudo bash deploy/resume.sh --force    # also clears HARD_KILL
+# It does three things: stop the unit + `systemctl reset-failed` -> clear the
+# kill switch in the DB -> start the service under systemd. If the clear is
+# refused it STOPS and does not start the service -- resolve, then re-run.
 ```
+⚠️ **Fix the root cause FIRST.** An emergency kill (API/IP 403, capital drift,
+etc.) simply re-trips otherwise.
+
+> **⛔ WHAT YOU WILL ACTUALLY SEE — and it is NOT a restart loop.**
+> `systemctl is-active trading-system` reads **`failed`**, and the journal says
+> `Failed with result 'exit-code'` (measured: 21-Jul-2026 11:37:53). The unit
+> exits **once** and stays down — `RestartPreventExitStatus=3 4` in the unit file
+> deliberately stops systemd hammering the same kill (the 18-Jun crash-loop).
+> ⭐ **Contrast the normal night:** a clean 17:35 self-exit is exit 0 →
+> `Deactivated successfully` → **`inactive (dead)`**. `inactive` is healthy;
+> **`failed` is the HALT.**
+>
+> **⚠️ THIS IS A CLASS, NOT A DRIFT-ONLY CASE.** `SCHEDULED_KILL_REASONS` holds
+> exactly **two** literals (`circuit_breaker_force_close_15:15`, `EOD_SQUAREOFF`)
+> against **26** `soft_kill`/`hard_kill` call sites — so **every other kill path
+> is an EMERGENCY kill** and behaves this way: capital drift, token expiry,
+> live-feed queue-full / reconnect-exhausted / consumer-dead, the API-failure
+> auto-trip, fund-manager invariant, order-placer, reconciler, cnc_gtt_monitor,
+> System Manager EOD.
+>
+> **✅ DETECTION IS ALREADY COVERED — you will be told.** `liveness_probe`
+> (cron `*/5 9-15 * * 1-5`) raises **ONE CRITICAL** via Telegram, with the
+> CRITICAL-sentinel email fallback, within **~5 minutes** of the unit not being
+> active during **[09:00, 16:00)** on a trading day — including the 15:15
+> squareoff. ⚠️ Its window ends at 15:59, so a 16:00–17:35 outage is unwatched
+> (a separate, already-tracked item — not re-litigated here).
 
 ### HARD_KILL Triggered
 
