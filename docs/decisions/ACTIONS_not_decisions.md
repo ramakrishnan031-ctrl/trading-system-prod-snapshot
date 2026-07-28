@@ -234,5 +234,54 @@ changes, the script silently writes stale values, and this test is the only thin
 **Fix = import from the authority** (a one-line change in a non-trading script). **Gate: after
 4-Aug**, with the rest of the sweep.
 
+## Schema-migration window (registered 28-Jul-2026) — ⛔ register only, gate after 4-Aug
+
+### M1 — ⭐⭐ THE EVENING SCHEMA PUSH OPENS A REFUSAL WINDOW. **IT IS A PROPERTY, NOT A ONE-OFF.**
+**Measured window (boundaries from the deploy reflog, not from memory): OPEN `d3fa5b8` push +
+`checkout -f` at *27-Jul 18:17:37*, CLOSE `migration complete: v44 -> v45` at *28-Jul 08:15:16.875*.**
+Inside it, every **non-boot** process that opens `state_store` raises `MigrationNotPermitted`
+(`state_store.py:355`) and **aborts whole**. ⇒ ***v46 will do exactly this again.***
+
+**CASUALTY LIST, with the distinction that matters — REGENERABLE or GONE:**
+
+| job | in-window | outcome | REGENERABLE? |
+|---|---|---|---|
+| `forward_shadow_record` 18:15 | **NO — ran 18:16, ~71 s BEFORE the 18:17:37 deploy** | ✅ **wrote normally: 3,695 records for 27-Jul, the HIGHEST of any day** | n/a — **nothing lost.** ⭐ Safe **by luck, not design**: a 3-minute-earlier push would have destroyed the only out-of-sample evidence producer. That margin is the real finding here. |
+| `system_manager` 18:45 | yes | **ABORTED** (`MigrationNotPermitted` traceback in `logs/system-manager.log`) | ✅ **REGENERABLE** — `--date 2026-07-27`, and safely: `--dry-run` / `--no-soft-kill` exist. ⛔ not regenerated tonight |
+| `cron_officer --eod-summary` 18:50 | yes | **ABORTED** (same traceback, `logs/cron-officer.log`) | ✅ regenerable (derived from the DB) |
+| `backup_retention` 02:00 | yes | refused | ✅ harmless — it PRUNES old backups; a deletion that did not happen. ⭐ **The BACKUPS THEMSELVES were taken** (`analytics-2026-07-28.db` @ 01:05) because those cron jobs use **raw `sqlite3`, not `state_store`**, so they never hit the guard |
+| `db_retention` 02:30 | yes | refused | ✅ harmless — same shape, a prune that did not run |
+| `auto_refresh_token` 08:15:03 | yes | logged `MIGRATION_REFUSED` | ✅ **THE TOKEN STILL REFRESHED** — `data_store/session/zerodha_token.json` exists, dated **28-Jul 08:15**. The refusal hit the heartbeat write, **not** the token work. ⭐ This is the one that could have cost the whole trading day, and it did not |
+
+⇒ ***NOTHING IS OWED FROM THAT WINDOW. It is CLOSED.*** Two derived reports are re-runnable and
+nothing append-only was lost.
+
+**TWO DIRECTIONS, deliberately not chosen here:** (a) push migration code **immediately before an
+off-market boot** rather than the evening before, shrinking the window to ~minutes; (b) let non-boot
+processes **DEGRADE** — skip the schema-dependent work, keep the rest — instead of aborting whole.
+⛔ Not decided, not built. **Gate: after 4-Aug.**
+
+⚠️ **ADJACENCY, CHECKED RATHER THAN ASSUMED: the S4 change queued for Thursday does NOT cover this
+path.** S4 turns a *webhook self-check* failure at **boot** from a halt into a degrade-plus-alarm.
+This is a **non-boot cron process** hitting a **schema** guard. Same *shape* (halt → degrade), but a
+different trigger, a different code path and a different process class. ⛔ **Do not assume Thursday
+fixes it.**
+
+### M2 — ⚠️ THE DAY'S ERROR CENSUS CANNOT SEE THIS CLASS OF CRITICAL
+**Measured:** `grep -icE "refus|migrat|schema" logs/system_2026-07-27.log` = **1**, and the three
+28-Jul matches are all unrelated (two INFO migration-success lines and a `delivery_lock` WARNING).
+The refusals live in **`logs/cron-officer.log`** and **`logs/system-manager.log`** — per-cron files.
+⇒ ***The census (`grep -cE '"level":"(ERROR|CRITICAL)"' logs/system_<date>.log`) is NOT a complete
+count of CRITICALs. A whole class reaches Rama's email and bypasses it entirely.***
+
+**Consequence for tonight, in one line:** it does **not** confound the 17:40 gate — these cannot
+land in that log — **but "no new CRITICAL in the census" must not be read as "no new CRITICAL".**
+
+⚠️ **AND THE AUDIT TRAIL QUEUED FOR THURSDAY (`214a878`) WOULD NOT CLOSE THIS.** It records the
+**send outcome** in whatever log the *sending process* writes to — for a cron process that is
+`logs/cron-*.log`, **not** `logs/system_<date>.log`. So it improves auditability of the alert stream
+(its actual purpose) but **does not put this class into the census.** ⛔ Stated so nobody assumes it
+does. **Gate: after 4-Aug.**
+
 ## Note
 These actions gate several of the decisions (Q10 gates D2/D3/Regime evidence; the security items are independent). They are tracked in `MEMORY.md` under RAMA-ACTIONS and are restated here only so the decision index is complete.
