@@ -104,22 +104,23 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
                       #16a inert ON THE VM, or
                       *** THE PUSH DOES NOT
                       HAPPEN. ***
-                    ⏰ AND BEFORE THIS PUSH --
-                      §7.3(a): PROTECT THE
-                      DEPLOY REFLOG. gc.reflog
-                      Expire is unset => 90d
-                      default and the 3-May
-                      entries are ~86d old, so
-                      a gc --auto ON THIS PUSH
-                      can prune 3 months of
-                      deploy history. TWO
-                      one-liners, no hook, no
-                      code. ⭐ DECIDED 28-Jul
-                      (Rama): defer to here
-                      rather than mutate the VM
-                      on a no-deploy day.
-                      ⛔ Run them BEFORE the
-                      push, not after.
+                    ✅ REFLOG PROTECTION --
+                      *** DONE 28-Jul ~15:3x,
+                      NOT owed here. *** The
+                      deferral to Thursday was
+                      correct while Tuesday was
+                      a no-deploy day; Rama's
+                      15:45 PC==VM override made
+                      TUESDAY the next push, so
+                      the deadline moved to
+                      tonight and it was applied
+                      BEFORE anything was pushed.
+                      Both keys read back
+                      `never`; 801 entries
+                      intact back to 3-May.
+                      ⭐ The push itself was the
+                      thing that could have
+                      pruned it. See §7.3(a).
 
   Fri 31-Jul       fix-symdir-27jul MINUS        Mon 03-Aug 08:15: the     DAY
   (evening)          214a878 (audit trail        symbol+direction rule
@@ -663,8 +664,12 @@ ref. *** The register's own rule caught it: an audit finding is a HYPOTHESIS.
      7.4, a different item. ⭐ But it is now clear that 7.4's harder half is
      already solved: *** the "known commit" side of "does the tree match a known
      commit" has existed all along. ***
-  ⛔ NOT DONE TODAY (VM ops; today is no-deploy). Owed, on the ledger. (a) is the
-     one with a deadline.
+  ✅ **(a) DONE 28-Jul ~15:3x — BEFORE ANY PUSH.** `gc.reflogExpire` and
+     `gc.reflogExpireUnreachable` both read back `never`; 801 entries intact back
+     to 3-May. ⭐ The Thursday deferral was correct while Tuesday was a no-deploy
+     day; Rama's 15:45 PC==VM override moved the deadline to tonight, and the
+     push was the very thing that could have pruned it. **(b) still owed** —
+     belt-and-braces, no deadline.
 
 --------------------------------------------------------------------------------
 7.4 *** P2-3 — DEPLOYED-TREE-vs-HEAD INTEGRITY. REGISTERED, NOT BUILT. ***

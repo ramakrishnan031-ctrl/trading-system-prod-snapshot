@@ -32,8 +32,10 @@ thing to do, with its own gate. Full reasoning: `../DEPLOY_CALENDAR_28-JUL_TO_04
   - **Action (two one-liners, no hook change, no code):**
     `git -C ~/trading-system.git config gc.reflogExpire never` and
     `… config gc.reflogExpireUnreachable never`
-  - ⭐ **Do it before the next push** (i.e. before Thu 30-Jul) or ~3 months of deployment history is
-    lost to a default nobody chose.
+  - ✅ **DONE 28-Jul-2026 ~15:3x — APPLIED BEFORE ANYTHING WAS PUSHED.** Both keys read back
+    `never`; **801 entries intact back to 3-May**. ⭐ The deadline moved from Thu 30-Jul to Tuesday
+    the moment Rama's 15:45 "PC == VM 100%" made Tuesday the next push — **and the push itself was
+    the thing that could have pruned it via `gc --auto`.**
   - ⛔ **Corrects an earlier claim of mine on 28-Jul** that "the bare repo has no reflog at all".
     That check ran `git reflog show main` — which is genuinely empty, because the repo is bare and
     no *per-ref* log was ever created — and wrongly generalised to "no reflog". The record is on
