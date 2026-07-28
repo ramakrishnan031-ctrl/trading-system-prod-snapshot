@@ -18,6 +18,7 @@ Deploy state at assembly: PC == origin == VM bare == `3dda9f7`; code tag `deploy
 | [08](08_freeze_min_pass_during_measurement.md) | **Freeze `min_pass_score`** during the measurement? | measurement hygiene | OPEN | downstream of Regime (#07) and D3 (#04) |
 | [09](09_prune_retention.md) | **Prune retention** & status-selectivity | data-retention | ✅ **CLOSED 25-Jul — Option A, leave as-is, NO code change** | — (decided: 2,667 rows vs ~9.9 MB/day is noise, not value) |
 | [10](10_entry_throttle_admission.md) | **Entry-throttle admission** — arrival-order vs ranked | strategic / mechanism | OPEN — **new** (throttle analysis) | ranking value coupled to D3; **counter-case is strong** |
+| [11](11_absolute_kill_ladder.md) | **Absolute rupee kill ladder** — drift handler + reconciler tolerances | capital-posture | OPEN — **new (28-Jul)**; registered so it is not re-discovered a third time | nothing blocks it — the settling measurement (realised drift distribution) is available today and unmeasured. ⚠️ Absolute vs ~Rs 9.87k ACTUAL: HARD kill **25.3 %**, SOFT **10.1 %**, `human_order_margin_tolerance` **50.6 %** (alert-only). ⛔ Do NOT re-tune as a side-effect of other work · `../audit/capital_figure_sweep_28jul2026.md` §4 |
 
 ## How they are coupled (stated, not ranked)
 - **D1 ↔ D3:** the concentration cap (D1) scales P&L in both directions; the sizing report frames it as a lever to pull only once expectancy is positive, which depends on the scorer (D3).
