@@ -51,5 +51,77 @@ thing to do, with its own gate. Full reasoning: `../DEPLOY_CALENDAR_28-JUL_TO_04
   reflog above already supplies the *"which known commit"* half, so only the comparison remains.
   ⛔ Do **not** widen the new stray-`.pyc` detector toward this; different scope, different gate.
 
+## Kill-path findings (registered 28-Jul-2026) — ⭐ these SURVIVE decision #11's closure
+
+Decision [11](11_absolute_kill_ladder.md) is **CLOSED** (values unchanged). These three were
+discovered *underneath* it and are **not part of that decision**. ⛔ **A closed decision must not
+bury the findings made underneath it.** All three are **REGISTERED ONLY — nothing built, nothing
+changed, nothing investigated further.** Earliest gate for any of them: **after Tue 4-Aug.**
+
+### K1 — ⚠️⚠️ EMERGENCY KILL + SAME-DAY RESTART ⇒ THE SERVICE DOES NOT COME BACK
+A kill whose reason is not in `SCHEDULED_KILL_REASONS` is an **EMERGENCY** kill. If the service
+restarts **the same day** while it is persisted, startup hits `StartupScenario.HALT` and **exits 4**
+— no boot without `--resume`. **In that window there is no exit management and no 15:15 / EOD
+squareoff.** Bounded to the same day by `clear_stale_state()`, which is correct and is Rama's own
+20-Jun headless guarantee (every *prior-day* kill clears regardless of type).
+
+- **(i) Does it generalise? ⭐ YES — IT IS A CLASS, NOT A DRIFT ITEM.** Measured: **26 non-test
+  `soft_kill`/`hard_kill` call sites**, and `SCHEDULED_KILL_REASONS` contains exactly **two**
+  literals (`circuit_breaker_force_close_15:15`, `EOD_SQUAREOFF`). ⇒ **every other kill path is an
+  emergency kill** — drift, token expiry, live-feed queue-full / reconnect-exhausted / consumer-dead,
+  API-failure auto-trip, fund-manager invariant, order-placer, reconciler, cnc_gtt_monitor,
+  System Manager EOD. Drift is merely where it was noticed. ⛔ Frame any future work as the CLASS;
+  fixing the drift path alone would leave it open.
+- **(ii) Would Rama know? ⭐ YES, and faster than expected — this is MONITORED, not silent.**
+  · **systemd does NOT retry and does NOT loop:** `RestartPreventExitStatus=3 4` (verified in BOTH
+    `deploy/systemd/trading-system.service:35` **and** on the VM — parity). The unit exits once and
+    stays `inactive`. That is deliberate and correct.
+  · **`liveness_probe` is installed and running:** cron `*/5 9-15 * * 1-5` (verified in the live
+    crontab). During **[09:00, 16:00) on a trading day**, a not-active unit that the operator did
+    not park raises **ONE CRITICAL** via Telegram with the CRITICAL-sentinel email fallback.
+  ⇒ **Detection latency ≤ ~5 minutes across the whole trading day, including the 15:15 squareoff.**
+  ⚠️ Gap for completeness: the probe window ends at 15:59, so a 16:00–17:35 outage is unwatched —
+  outside market hours, and already a known separate item.
+- **(iii) Recovery — possible, but NOT documented where an operator would look.**
+  `deploy/resume.sh` does the right thing (stop the unit → `reset-failed` → `clear_kill_switch.py`).
+  ⛔ **It is named in NO incident document.** And the two places that touch this are both wrong:
+  · `docs/RUNBOOK.md:101` — *"Restart loop (exit code 4) | Stale SOFT_KILL in DB"*. **The symptom
+    cannot occur** (`RestartPreventExitStatus=3 4` prevents the loop; the operator sees a service
+    that is simply `inactive`, so they would not match this row at all) **and the cause was fixed**
+    (a *stale*/prior-day kill auto-clears since 20-Jun — the real cause today is a SAME-DAY kill).
+  · `docs/05_incident_response.md:40` — *"Manual resume: restart the service"*. **Restarting is
+    exactly what fails with exit 4.** The doc directs the operator to the action that does not work.
+  ⇒ ⭐ **The cheapest item here is a two-line documentation correction with ZERO deploy
+    consequence.** Deliberately NOT done today (this session is register-only), but it does not
+    need to wait for 4-Aug and is a candidate to pull forward.
+- ⚠️ **WEIGHTING, stated honestly.** The drift path has never fired in 22 trading days, so
+  probability is low — but the consequence is the worst shape this system has: **service down,
+  market hours, positions open, no squareoff.** ⭐ **Low probability × worst consequence is exactly
+  what a register is for**; "never fired" must not argue it away. The liveness probe genuinely
+  reduces this from *unmonitored* to *detected within ~5 minutes*, which is the difference between
+  a bounded hazard and an open-ended one.
+
+### K2 — the 06-Jul ₹10,000 drift events are UNRESOLVED
+Two events, `source=order_reconciler`, tier=HARD, **delta ₹10,000** (4× the hard threshold, 200× the
+₹50 reconciler tolerance), with **`expected=0.00`** — the *"~zero expected, possible publisher bug"*
+shape the drift handler itself warns about. Logged at INFO and ignored by the ladder **by design**
+(`order_reconciler` is not an escalating source).
+**The narrow question: was that a real ₹10,000 book-vs-broker discrepancy, or a seeding/startup
+artefact?** ⭐ **Both answers matter** — a real one means a non-escalating source hid something
+serious; an artefact means a publisher emits garbage that a **future** escalating source could
+inherit. ⛔ Marked **not-to-be-cited as evidence of real drift** until resolved. Gate: after 4-Aug.
+
+### K3 — observability gap: drift below ₹250 is INVISIBLE
+`TIER_NOISE` logs at **DEBUG** and production runs at INFO ⇒ **no realised-drift distribution is
+obtainable from the logs at all** (min/median/p95 cannot be computed). `kill_switch_state` is a
+single-row **current-state** table, not a history, so it cannot answer "has soft ever tripped"
+either — the log grep is the only authority, and only ~22 trading days deep.
+⛔ **Honest correction attached:** decision #11's original *"cheap and unblocked"* framing was mine
+and it was **true of the TRIP question and false of the DISTRIBUTION question.**
+⇒ ⭐ **THE CONSEQUENCE, which is the useful part: if the ladder ever DOES need re-tuning, it cannot
+be re-tuned on evidence as things stand.** That is decision #11's reopen-trigger (c) pointing back
+at this item. Closing it needs a code change (raise the noise tier, or persist drift samples) **plus
+time** — a candidate for after 4-Aug, **not a commitment**.
+
 ## Note
 These actions gate several of the decisions (Q10 gates D2/D3/Regime evidence; the security items are independent). They are tracked in `MEMORY.md` under RAMA-ACTIONS and are restated here only so the decision index is complete.

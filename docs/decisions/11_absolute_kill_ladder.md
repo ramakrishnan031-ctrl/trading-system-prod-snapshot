@@ -1,32 +1,49 @@
 # 11 — The absolute rupee kill ladder (drift handler + reconciler tolerances)
 
-**Type:** capital-posture · **Status: ⭐ PARTLY DECIDED (28-Jul-2026)**
-**Registered:** 28-Jul-2026 · **Posture decided by Rama the same day; VALUES still open.**
+**Type:** capital-posture · **Status: ✅ CLOSED 28-Jul-2026 — Option A, LEAVE AS-IS, NO code change.**
+**Registered and closed the same day.** Closed by *choosing to change nothing* — the same shape as
+decision [09](09_prune_retention.md).
 
 > ⛔ **This file recommends nothing**, per this board's convention. It records what Rama decided,
 > what the code actually does, and what was measured — not what anyone would prefer.
-> ⛔ **NO VALUE HAS BEEN CHANGED.** Not the yaml, not a default, not a test fixture.
+> ⛔ **NO VALUE WAS EVER CHANGED.** Not the yaml, not a default, not a test fixture. Proven, not
+> asserted: `git diff HEAD -- config/ capital/ core/ orders/ signals/ main.py` was empty and the
+> thresholds still read 250 / 1,000 / 2,500 with `consecutive_cycles_before_escalate: 3`.
+
+> ⭐⭐ **THE CLOSURE IS ABOUT THE VALUES ONLY. §3, §3a, §3b, §4 and §7 below are the durable part
+> of this file** — several of them CORRECT how the kill path was understood — and three findings
+> made underneath this decision **survive it** and are registered separately in
+> [`ACTIONS_not_decisions.md`](ACTIONS_not_decisions.md). ⛔ **A closed decision must not bury the
+> findings made underneath it.**
 
 ---
 
-## 1. ✅ DECIDED — the posture. (Rama, 28-Jul-2026)
+## 1. ✅ CLOSED — posture AND values. (Rama, 28-Jul-2026 15:04)
 
-> *"Agreed — the kill ladder stays ABSOLUTE. SOFT KILL ₹1,500: stop taking new trades / raise
-> warnings. HARD KILL ₹2,500: emergency stop (kill trading)."*
+> *"I'll stick with existing amounts — ₹1,000 (soft kill) and ₹2,500 (hard kill). Point 3 CLOSED."*
 
-⇒ **Option A/B (absolute) is SETTLED. Options C (capital-relative) and D (hybrid) are CLOSED.**
-A book-vs-broker *discrepancy* is not a risk fraction, so absolute is the coherent semantics.
+⇒ **OUTCOME: OPTION A — absolute, values UNCHANGED, no code change.**
+Options C (capital-relative) and D (hybrid) are closed; a book-vs-broker *discrepancy* is not a risk
+fraction, so absolute is the coherent semantics. **Independent review concurs**, with *"do not
+reopen unless new production evidence requires it."*
+⇒ **Nothing to design, nothing to red-team, nothing to implement, no boot slot needed.**
 
-## 2. ⏳ STILL OPEN — because the decision also contains a VALUE CHANGE
+## 2. ✅ THE VALUES — RESOLVED
 
-| key | today | Rama's figure | status |
-|---|---:|---:|---|
-| `hard_kill_threshold_rs` | 2,500 | 2,500 | **unchanged** |
-| `soft_kill_threshold_rs` | **1,000** | **1,500** | ⏳ **a re-tune of a kill-path threshold** |
-| `log_only_threshold_rs` | 250 | *(not stated)* | ⏳ open — see §6 |
+| key | value | status |
+|---|---:|---|
+| `hard_kill_threshold_rs` | **2,500** | ✅ unchanged (Rama, 28-Jul) |
+| `soft_kill_threshold_rs` | **1,000** | ✅ **unchanged (Rama, 28-Jul).** ⛔ The ₹1,500 figure proposed earlier the same day is **WITHDRAWN 28-Jul-2026 — not deferred.** *Recorded, not deleted: a withdrawn figure that vanishes gets re-proposed.* |
+| `log_only_threshold_rs` | **250** | ✅ unchanged — see §6 Q1 |
+| `order_reconciler.human_order_margin_tolerance` | **5,000** | ✅ unchanged — see §6 Q2 |
 
-A kill-path re-tune goes through the full careful loop; it does not land on a decision note.
-**Sequence:** this report → design doc → red-team → implement → **its own single-variable boot**.
+## 2a. 🔓 REOPEN TRIGGER — and absent one of these, do not re-litigate
+
+Reopen **only** on: **(a)** a material change in capital · **(b)** the ladder **actually firing in
+production** (it never has — §4) · **(c)** a realised-drift **distribution becoming obtainable**
+(today it is not — §4's limit, registered as its own item).
+⚠️ Note (c) points back at the observability gap: **if this ever does need re-tuning, it cannot be
+re-tuned on evidence as things stand.**
 
 ---
 
@@ -128,32 +145,31 @@ That is not an argument against Rama's figure; it is the honest statement of wha
 
 ---
 
-## 5. ⏰ THE SLOT — and it is not this week
+## 5. ~~THE SLOT~~ — ⛔ STRUCK 28-Jul-2026. THERE IS NO SLOT, BECAUSE THERE IS NO CHANGE.
 
-This is boot-path config needing its **own single-variable boot**, and it must not ride a sequence
-evening. Thu 30-Jul (boot pair), Fri 31-Jul (the symbol+direction rule), Mon 3-Aug (observation) and
-Tue 4-Aug (the flag flip) are **all allocated**.
-⇒ ***THE EARLIEST HONEST SLOT IS AFTER THE 4-AUG FLAG FLIP IS COMPLETE AND OBSERVED.***
-⛔ **"Decided" does not mean "shipping this week."**
+~~This is boot-path config needing its own single-variable boot … earliest slot is after the 4-Aug
+flag flip.~~
+⛔ **Struck deliberately rather than left in place.** With the values unchanged there is nothing to
+deploy and no boot to schedule. **A live "earliest slot is after 4-Aug" line inside a CLOSED file is
+exactly the superseded-instruction hazard** — someone would eventually schedule a deploy for a
+change that was withdrawn.
 
-## 6. ❓ TWO QUESTIONS BACK TO RAMA — recorded as OPEN, not guessed
+## 6. ✅ BOTH QUESTIONS RESOLVED BY THE CLOSURE — nothing is owed by Rama
 
-**Q1 — does `log_only_threshold_rs` stay at ₹250?**
-With SOFT at ₹1,500 the log-only band widens from **250–1,000** to **250–1,500**. In plain words:
-the band is the *quiet warning zone* — drift lands in the log (at CRITICAL severity, but **no
-Telegram, no kill**) and only becomes a halt if it either crosses the soft line or persists 3
-consecutive cycles (**≈45 s** via CHECK7). **Widening the band means a drift of, say, ₹1,200 that
-today would halt entries immediately would instead sit quietly for ~45 s before halting** — so the
-change buys ~45 s of extra tolerance for mid-size drift, and costs an immediate stop in that range.
-⚠️ Note the honest caveat: the band has **never been entered** in 22 trading days, so this is a
-change to lead-time on a path with no observed traffic.
+**Q1 — `log_only_threshold_rs`: ✅ RESOLVED, stays ₹250.** The question only existed because SOFT
+was proposed to move to ₹1,500, which would have widened the quiet band from 250–1,000 to
+250–1,500. **SOFT stays 1,000 ⇒ the band is unchanged at 250–1,000 ⇒ there is nothing to answer.**
+*(For the record, the band is the quiet zone: drift logs at CRITICAL severity but sends no Telegram
+and trips no kill; it becomes a halt only by crossing the soft line or persisting 3 consecutive
+cycles ≈45 s via CHECK7 — see §3b.)*
 
-**Q2 — `order_reconciler.human_order_margin_tolerance` (₹5,000) stays untouched?**
-It is **not part of this ladder** — it is **alert-only and non-escalating**
-(`order_reconciler.py:3397` adds it to an *alert* tolerance). Confirm it stays at ₹5,000.
+**Q2 — `human_order_margin_tolerance`: ✅ CONFIRMED, stays ₹5,000.** It was never part of this
+ladder — it is **alert-only and non-escalating** (`orders/order_reconciler.py:3397` adds it to an
+*alert* tolerance, not to the drift ladder) — and Rama's "existing amounts" covers it.
 ⛔ **Before re-raising the "it widens an escalation path" idea: it is REFUTED on code evidence** —
 [`../audit/capital_figure_sweep_28jul2026.md` §3](../audit/capital_figure_sweep_28jul2026.md).
-This is the third time it has come up; the refutation is written where a re-raiser would look.
+⭐ **The pointer stays even though the decision is closed — that is the entire reason it exists.**
+This has now come up three times.
 
 ## 7. Constraints any change must respect
 
