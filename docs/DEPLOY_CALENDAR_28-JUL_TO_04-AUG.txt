@@ -55,9 +55,35 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
   (after the T2      + fix-boot-27jul (2)         boot variable -- S4      (see §6:
    close PASSES)      + cherry-pick 214a878       degrade. #16a is INERT   re-counted
                       (the alert audit trail)     (delivery_enabled=false) 28-Jul)
+                      + the .pyc detector
+                        (MONITORING-ONLY, EOD    ⭐ the detector adds NO boot
+                         path -- NOT a boot         variable: EOD path, and
+                         variable at all)          main.py never imports it
                     ⭐ 28-Jul: counts corrected
                       and the audit trail MOVED
                       here from Friday -- §6
+                    ✅ 28-Jul: 214a878 PROVEN to
+                      cherry-pick clean -- §7.6
+                    ⛔ PRE-PUSH GATE -- §7.1:
+                      #16a inert ON THE VM, or
+                      *** THE PUSH DOES NOT
+                      HAPPEN. ***
+                    ⏰ AND BEFORE THIS PUSH --
+                      §7.3(a): PROTECT THE
+                      DEPLOY REFLOG. gc.reflog
+                      Expire is unset => 90d
+                      default and the 3-May
+                      entries are ~86d old, so
+                      a gc --auto ON THIS PUSH
+                      can prune 3 months of
+                      deploy history. TWO
+                      one-liners, no hook, no
+                      code. ⭐ DECIDED 28-Jul
+                      (Rama): defer to here
+                      rather than mutate the VM
+                      on a no-deploy day.
+                      ⛔ Run them BEFORE the
+                      push, not after.
 
   Fri 31-Jul       fix-symdir-27jul MINUS        Mon 03-Aug 08:15: the     DAY
   (evening)          214a878 (audit trail        symbol+direction rule
@@ -319,4 +345,304 @@ THE CHANGE, AND WHY IT ALSO SETTLES THE AUDIT TRAIL'S SLOT (register C1)
 
 ⛔ NOT DONE TODAY. Nothing deploys 28-Jul. This section is the proposal + the
    measurement behind it; the cherry-pick happens Thursday evening with the rest.
+================================================================================
+
+================================================================================
+7. ⭐⭐ INDEPENDENT REVIEW 28-JUL — THE AMENDMENTS, WRITTEN AS EXECUTABLE GATES
+================================================================================
+Verdict 28-Jul: P1 (this calendar) APPROVE-WITH-AMEND · P2 (.pyc detector)
+APPROVE-WITH-AMEND · *** NO blocking architectural objection. *** The measured
+re-count (§6), the opposite-sign argument (§6) and the cost-of-delay argument for
+moving the audit trail to Thursday ALL SURVIVED review. Nothing in §2's slot
+allocation changes. The amendments are ADDITIVE.
+
+⭐ A STEP IS ONLY A GATE IF IT PRINTS A VERDICT. Everything below is a command
+with an exact expected output and a binary outcome. "Check that X is still true"
+is a sentence, not a gate, and has been deliberately avoided.
+
+--------------------------------------------------------------------------------
+7.1 *** P1-1 — THURSDAY PRE-PUSH GATE: #16a MUST STILL BE INERT. ***
+--------------------------------------------------------------------------------
+WHY: §6 rests Friday's entire "ONE live boot variable" claim on #16a being inert.
+*** That is a CONFIG fact, not a code fact. *** Anyone could flip it between now
+and Thursday evening and nothing in the system would notice.
+
+THE PREDICATE, READ FROM SOURCE (fix-boot-27jul:core/config_auditor.py:269-291),
+not from the queue description. A5/#16a raises BLOCK only when ALL FOUR hold:
+    T1  delivery_enabled == true
+    T2  capital.conditional_allocation_enabled == false
+    T3  the live-strategy set is NON-EMPTY
+    T4  EVERY live strategy resolves product == "DELIVERY"
+
+⚠️⚠️ THE MEASUREMENT THAT MAKES THIS GATE WORTH HAVING — *** T2 IS ALREADY IN ITS
+FIRING STATE. *** `conditional_allocation_enabled: false` (system_config.yaml:138)
+is the DEFAULT and is deliberate. So one of the four terms is permanently
+satisfied, and today's inertness rests ENTIRELY on T1 and T4. *** A single edit --
+`delivery_enabled: true` -- takes the config from two falsifiers to one. *** That
+is exactly why inertness must not be certified from the first term alone.
+
+⭐ A PRECISION, BECAUSE THE WORDING MATTERS. The amendment says inertness needs
+"the whole conjunction to be false". Strictly, a conjunction is false when ANY ONE
+term is false, so one falsifier is logically sufficient. The gate below keeps the
+amendment's INTENT, which is the operationally correct part: read EVERY term, and
+require TWO INDEPENDENT falsifiers, so that no single config edit can arm #16a
+unobserved.
+
+  ▶️ THE GATE — RUN IT ON THE VM. *** The VM's copy is the one the service loads.
+     ⛔ The PC copy does not count and must not be substituted. ***
+
+     ssh trading-vm '
+       cfg=$HOME/systems/trading-system/config/system_config.yaml
+       d=$(sed -n "s/^delivery_enabled:[[:space:]]*\([a-z]*\).*/\1/p" $cfg)
+       f=$(sed -n "s/^force_intraday_only:[[:space:]]*\([a-z]*\).*/\1/p" $cfg)
+       c=$(sed -n "s/^[[:space:]]*conditional_allocation_enabled:[[:space:]]*\([a-z]*\).*/\1/p" $cfg)
+       echo "T1 delivery_enabled=$d | T2 conditional_allocation_enabled=$c | T4-proxy force_intraday_only=$f"
+       if [ "$d" = "false" ] && [ "$f" = "true" ]; then echo PROCEED; else echo ABORT; fi
+     '
+
+     EXPECTED, EXACTLY:
+       T1 delivery_enabled=false | T2 conditional_allocation_enabled=false | T4-proxy force_intraday_only=true
+       PROCEED
+
+     ⛔ ANY other output -> *** ABORT. THE THURSDAY PUSH DOES NOT HAPPEN. *** Do
+       not reason around it on the night: if either falsifier moved, §6's safety
+       argument no longer holds and the slot moves. That is the whole point.
+
+  WHY force_intraday_only IS A SOUND PROXY FOR T4, and not a hand-wave:
+  force_intraday_only=true coerces EVERY entry to INTRADAY, so no live strategy
+  can resolve product == "DELIVERY" and T4 is false BY CONSTRUCTION.
+  ⭐ CORROBORATED LIVE, NOT ONLY IN CONFIG: on 28-Jul the deployed system logged
+  *** 99 × REJECTED_STRATEGY_CONTROL *** carrying "WON'T TRADE — emergency breaker
+  (force_intraday_only)" (strategies/control.py:90). The coercion is observably
+  RUNNING, not merely configured.
+
+  ⭐ OPTIONAL CORROBORATION (read-only; NOT the gate):
+     ssh trading-vm "sqlite3 -readonly ~/systems/trading-system/data_store/trading_system.db \
+       \"SELECT COUNT(*) FROM signals WHERE DATE(received_at)=DATE('now','localtime') \
+         AND status='REJECTED_STRATEGY_CONTROL';\""
+     Non-zero on a trading day = the breaker visibly working. ⚠️ A ZERO IS NOT A
+     FAILURE -- it can simply mean no signal reached that stage -- so this never
+     blocks. The YAML gate above is the decision.
+
+--------------------------------------------------------------------------------
+7.2 *** P1-3 — MON 3-AUG IS AN OBSERVATION DAY. THE TRIGGER IS A QUERY. ***
+--------------------------------------------------------------------------------
+⭐⭐ FIRST, THE PART THAT COULD HAVE INVALIDATED THE WHOLE OBSERVATION DAY —
+CHECKED 28-JUL, AND IT PASSES. The rejection is DISTINGUISHABLE and STRUCTURED:
+  · signal_processor.py:686 raises _PipelineReject("SYMBOL_DIRECTION_DAILY_LIMIT",
+    ...) -- its OWN code, deliberately not folded into the H-7 cap's (the
+    docstring records why, and a test enforces it).
+  · f"REJECTED_{rej.check}" (5 sites) writes
+    *** signals.status = REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT ***
+  · schema.sql:66 permits it (status GLOB 'REJECTED*'), so the INSERT cannot fail
+    -- worth checking, because a rejected status write would crash the pipeline.
+  · CONFIRMED EMPIRICALLY on the live DB the same day, not from source alone: the
+    sibling REJECTED_ENTRY_THROTTLED appears ×10. The convention is real.
+⇒ *** Monday measures something. The amendment CAN be satisfied. ***
+
+⚠️ THE ONE CONSTRAINT: *** `signals` HAS NO DIRECTION COLUMN *** (schema.sql:42-72).
+   Direction exists on `trades` only. So the query is built on the STRUCTURED side
+   and the free text is RENDERED, never branched on -- the register's standing rule.
+
+⭐ AND THE QUERY MUST COUNT TRADES THE WAY THE RULE COUNTS THEM, or it will
+manufacture false UNEXPLAINED rows. Read from source:
+  · the rule calls count_executed_trades_today_for_symbol_direction()
+  · which matches SUBSTR(created_at,1,10) -- NOT entry_time, NOT exit_time
+  · and status IN _EXECUTED_TRADE_STATUSES =
+        PENDING_FILL, OPEN, PARTIAL, EXITING, CLOSED, CLOSED_MANUAL
+  ⛔ THE AMENDMENT'S WORD "COMPLETED" IS LOOSER THAN THE CODE, AND THE CODE WINS:
+    an OPEN or PENDING_FILL trade ALSO consumes the day's slot. A query written on
+    status='CLOSED' would report correctly-working rejections as UNEXPLAINED and
+    could postpone 4-Aug for no reason at all.
+
+  ▶️ THE MON 3-AUG QUERY — read-only, after the close:
+
+     ssh trading-vm "sqlite3 -readonly -header -column \
+       ~/systems/trading-system/data_store/trading_system.db \"
+       SELECT s.received_at, s.symbol, s.status,
+         (SELECT COUNT(*) FROM trades t WHERE t.symbol=s.symbol
+            AND SUBSTR(t.created_at,1,10)='2026-08-03' AND t.direction='LONG'
+            AND t.status IN ('PENDING_FILL','OPEN','PARTIAL','EXITING','CLOSED','CLOSED_MANUAL')) AS long_today,
+         (SELECT COUNT(*) FROM trades t WHERE t.symbol=s.symbol
+            AND SUBSTR(t.created_at,1,10)='2026-08-03' AND t.direction='SHORT'
+            AND t.status IN ('PENDING_FILL','OPEN','PARTIAL','EXITING','CLOSED','CLOSED_MANUAL')) AS short_today,
+         s.rejection_reason
+       FROM signals s
+       WHERE DATE(s.received_at)='2026-08-03'
+         AND s.status='REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT'
+       ORDER BY s.received_at;\""
+
+     HOW TO READ EACH ROW. `rejection_reason` renders as
+       "<SYMBOL> <DIRECTION> already traded today (<n> executed trade(s)); ..."
+     so the direction is HUMAN-VISIBLE without being parsed:
+       · the named direction's count >= 1  -> ✅ THE RULE WORKING. Expected.
+       · BOTH counts 0                     -> 🔴 *** UNEXPLAINED. POSTPONES 4-AUG. ***
+       · ONLY THE OPPOSITE direction >= 1  -> 🔴 *** WORSE THAN UNEXPLAINED. *** The
+         rule blocked a REVERSAL, which its own docstring (:659-661) says would be
+         wrong: "Exiting a LONG and entering a SHORT on the same symbol is a
+         different bet ... blocking it would be wrong." POSTPONES 4-AUG **and the
+         rule comes back off**.
+
+  ⭐ THE ZERO CASE, RECORDED AS THE AMENDMENT REQUIRES. *** ZERO ROWS IS NOT A
+    PASS. *** It means the rule was never EXERCISED -- 3-Aug simply had no second
+    signal on an already-traded symbol+direction. Read it as NO EVIDENCE, never as
+    good evidence, and say so out loud on the night.
+    · It does NOT postpone 4-Aug: the flip is a DELIVERY change and the
+      symbol+direction rule is not one of the four flags.
+    · It DOES mean the rule enters 4-Aug still unexercised in production -- the
+      "configured but never covered" shape the register already tracks. Carry it
+      forward as an OPEN observation, not a closed one.
+    · ⚠️ AND A ZERO MUST NOT BE A SILENT PLUMBING FAILURE. Prove the day had
+      traffic before believing the zero:
+        ssh trading-vm "sqlite3 -readonly ~/systems/trading-system/data_store/trading_system.db \
+          \"SELECT status, COUNT(*) FROM signals WHERE DATE(received_at)='2026-08-03' \
+            GROUP BY status ORDER BY 2 DESC;\""
+      A day with entries and no such rejection is believable. A day with NO
+      signals at all proves nothing about anything.
+
+  ▶️ THE HARD GATE ON TUE 4-AUG: *** any UNEXPLAINED row -- both counts 0, or only
+    the opposite direction -- POSTPONES THE FLAG FLIP. *** It is not a judgement
+    made at 16:00 on the day. It is the query above, and its answer is binary.
+
+--------------------------------------------------------------------------------
+7.3 *** P1-4 — DEPLOYED-COMMIT ATTRIBUTION. ANTI-DUPLICATION FIRST. ***
+--------------------------------------------------------------------------------
+⛔ THE AMENDMENT SAYS FIND WHAT ALREADY RECORDS THIS BEFORE ADDING ANYTHING —
+*** AND DOING SO OVERTURNED MY OWN EARLIER ANSWER. RECORDED, NOT SILENTLY EDITED. ***
+
+⛔⛔ WHAT I REPORTED EARLIER TODAY WAS WRONG: "the bare repo has NO REFLOG AT ALL,
+there is no logs/ dir, NOTHING records deployment." *** ALL THREE CLAUSES ARE
+FALSE. *** The check behind them ran `git reflog show main`, got nothing, saw
+`core.logAllRefUpdates` unset, and concluded absence. *** It looked at the wrong
+ref. *** The register's own rule caught it: an audit finding is a HYPOTHESIS.
+
+  ✅ *** THE DEPLOY RECORD EXISTS, AND IT IS GOOD. *** `~/trading-system.git/logs/HEAD`
+     -- **801 entries, unbroken back to 3-May-2026 15:13 IST**, 125,774 B.
+     It records BOTH halves of every deploy, timestamped to the second:
+         52ead46 HEAD@{2026-07-28 09:15:25 +0530}: checkout: moving from main to main
+         52ead46 HEAD@{2026-07-28 09:15:25 +0530}: push
+     the `push` = receive-pack taking the commit; the `checkout` = post-receive's
+     `git checkout -f` WRITING THE DEPLOYED TREE. *** That second line is the
+     deploy event itself, not a proxy for it. ***
+
+     ▶️ THE QUERY. There is nothing to build:
+        ssh trading-vm "git -C ~/trading-system.git reflog show HEAD --date=iso | head -20"
+
+     ⭐ AND IT INDEPENDENTLY CORROBORATES §3.1: `e6ec75b` shows push+checkout at
+       *** 27-Jul 22:33:58 IST ***, 39s after its 22:33:19 commit stamp. §3.1's
+       conclusion was reached from the PC's git history; this is a SECOND,
+       VM-side witness that never entered that reasoning.
+
+  WHY IT EXISTS THOUGH THE CONFIG IS OFF -- the mechanism, so nobody "fixes" it:
+  *** git appends to a reflog file that ALREADY EXISTS regardless of
+  core.logAllRefUpdates; the setting only governs whether one is CREATED. ***
+  `logs/HEAD` was created 3-May by the initial `checkout: moving from master to
+  main` (first entry), and every push since has appended to it. It is bare
+  (`core.bare=true`), so no per-ref log was ever created --
+  `git reflog show main` is EMPTY (0 lines) and always has been. That emptiness is
+  what produced the wrong answer.
+
+  THE OTHER CANDIDATES, for completeness:
+  · post-receive hook -> echoes to the PUSHER'S TERMINAL only; nothing persists.
+  · a dedicated deploy log -> does not exist, AND IS NOT NEEDED.
+  · UNPUSHED_PENDING_DEPLOY_LEDGER -> records INTENT (queued/owed) by design.
+      ⛔ Must NOT be turned into an observed log too; it would be both a plan and
+      a record, and reliably wrong as one of them.
+
+  ▶️ SO THE ADDITION IS SMALLER THAN PROPOSED — AND THE REAL ITEM IS PRESERVATION,
+     NOT CREATION:
+
+     (a) ⏰ *** TIME-SENSITIVE, AND THIS IS THE ACTUAL FINDING. *** `gc.reflogExpire`
+         is UNSET -> git's default *** 90 DAYS ***. The oldest entries are dated
+         3-May; on 28-Jul they are ~86 days old. *** The record starts expiring in
+         DAYS, and any `gc --auto` triggered by a push can prune it. *** Two
+         one-line fixes, neither of which touches the hook:
+             ssh trading-vm "git -C ~/trading-system.git config gc.reflogExpire never"
+             ssh trading-vm "git -C ~/trading-system.git config gc.reflogExpireUnreachable never"
+         ⭐ Do this BEFORE the next push, i.e. before Thursday, or three months of
+           deployment history is lost to a default nobody chose.
+     (b) Then, and only as belt-and-braces, create the per-ref log going forward:
+             ssh trading-vm "git -C ~/trading-system.git config core.logAllRefUpdates true"
+         This makes `git reflog show main` work FROM THAT MOMENT. It adds nothing
+         retroactively -- HEAD's log already has the history -- but it stops the
+         whole record depending on one file's continued existence.
+
+  ⚠️ HONEST LIMIT, UNCHANGED: this records what the bare repo RECEIVED and
+     CHECKED OUT. It is NOT a check that the working tree still matches -- that is
+     7.4, a different item. ⭐ But it is now clear that 7.4's harder half is
+     already solved: *** the "known commit" side of "does the tree match a known
+     commit" has existed all along. ***
+  ⛔ NOT DONE TODAY (VM ops; today is no-deploy). Owed, on the ledger. (a) is the
+     one with a deadline.
+
+--------------------------------------------------------------------------------
+7.4 *** P2-3 — DEPLOYED-TREE-vs-HEAD INTEGRITY. REGISTERED, NOT BUILT. ***
+--------------------------------------------------------------------------------
+⛔ DO NOT BUILD IT. ⛔ DO NOT WIDEN THE .pyc DETECTOR TOWARD IT. Separate task,
+its own gate. It is recorded HERE rather than in a report because a report is not
+a place that gets read, and this is.
+
+  THE ITEM: *** the invariant "the deployed tree equals HEAD" is verified by
+  NOTHING. *** The deployed tree has no `.git` at all, so there is no local
+  `git status` to catch drift, and `checkout -f` overwrites tracked files while
+  never removing untracked ones.
+  ⭐ THIS IS THE MORE IMPORTANT OF THE TWO .pyc FINDINGS. The entire Thursday
+  cherry-pick decision (§6) was made to PROTECT the deployed tree's correspondence
+  to a known commit -- and that correspondence is ASSUMED, never measured. The
+  .pyc detector closes one narrow real hole in it; it does not close this.
+  ITS GATE: build and prove it only AFTER Tue 4-Aug's flag flip is complete and
+  observed. It is diagnostics, it competes with nothing, and it must not add a
+  variable to any boot between now and then.
+  ⭐ DEPENDENCY, AND IT GOT CHEAPER ON 28-JUL: "does the deployed tree match a
+  known commit" has two halves, and 7.3 established that the *known commit* half
+  *** ALREADY EXISTS *** -- the HEAD reflog names the exact commit `checkout -f`
+  wrote, with a timestamp, back to 3-May. So this item is now only the SECOND
+  half: compare the tree against that commit. Cheaper than it looked, and it is
+  one more reason to protect the reflog from expiry (7.3a) BEFORE building this.
+
+--------------------------------------------------------------------------------
+7.5 *** P2-4 — THE .pyc DETECTOR RIDES THURSDAY. MONITORING-ONLY. ***
+--------------------------------------------------------------------------------
+WHAT IT IS: an 11th check in scripts/system_manager.py (`stray_pyc_check`),
+surfaced in the EOD report. <BUILT> 28-Jul, plant-tested, NOT PUSHED.
+  · It CANNOT change trading behaviour: it never sets `soft_kill_reason`. A stray
+    build artefact must not be able to stop tomorrow's trading. *** Asserted by
+    test, not merely intended. ***
+  · It changes ZERO boot variables -- system_manager runs at EOD, not at 08:15,
+    and main.py does not import it.
+  · Its worst failure mode is a wrong line in a report.
+⇒ It belongs in Thursday's bundle with the other zero-consequence items.
+
+  ⭐ FRIDAY'S BOOT INVENTORY, RE-STATED AFTER ADDING IT (§6's test, re-run):
+      Thu 30-Jul eve -> Fri 31-Jul boot now carries
+        · S4 degrade          -- LIVE, boot path         <- 1 live boot variable
+        · alert audit trail   -- LIVE, alerts, log-only   (cannot fail a boot)
+        · #16a                -- INERT, and now GATED by 7.1
+        · .pyc detector       -- MONITORING-ONLY, EOD path, NOT a boot variable
+        · 4 test-only commits -- 0 non-test files
+    *** THE COUNT OF LIVE BOOT VARIABLES IS UNCHANGED AT ONE. *** The detector
+    does not move it, because it cannot execute during a boot at all.
+    "If Friday's boot misbehaves, could you tell which change caused it?" -- still
+    YES, and for §6's reason: the detector cannot produce a boot outcome, so it is
+    never a candidate.
+
+--------------------------------------------------------------------------------
+7.6 ✅ *** P1-2 — 214a878 PROVEN TO CHERRY-PICK CLEAN, 28-JUL, NOT THURSDAY. ***
+--------------------------------------------------------------------------------
+*** Thursday evening must not be the first time anyone finds out. *** Proven today
+on a THROWAWAY branch off `main`, since deleted:
+  · cherry-pick exit 0, NO conflicts, exactly 2 files.
+  · *** ZERO new imports *** in alerts/telegram_notifier.py -- so it does NOT lean
+    on anything that lands later in fix-symdir's history. That was the specific
+    risk and it is refuted by measurement, not by reading the diff.
+  · 7 own tests GREEN + the full alerts/notifier set, *** 204 passed ***.
+⇒ VERDICT: **CLEAN**. It stays on Thursday. §6's move is confirmed executable.
+
+⚠️⚠️ A HAZARD FOUND IN THE INSTRUCTION ITSELF, AND IT GENERALISES:
+*** the outbound-network guard is NOT on `main` -- it lives only on
+fix-tests-27jul. *** Running the alerts suite off bare `main` would have risked
+REAL Telegram sends: the exact class that posted ~50 live alerts since 6-May.
+  ⇒ fix-tests-27jul was merged into the throwaway FIRST. That is also the more
+    representative tree, because Thursday carries both.
+  ⛔ STANDING RULE: *** never run the alerts suite on a tree that lacks the guard. ***
 ================================================================================
