@@ -1,0 +1,708 @@
+================================================================================
+MASTER PENDING REGISTER — 28-Jul-2026 (Tuesday evening, market closed)
+*** SELF-CONTAINED. THIS FILE REPLACES SEVEN. NOTHING POINTS AT A DELETED FILE. ***
+================================================================================
+CONSOLIDATES AND REPLACES (all seven may now be deleted — see the last section):
+   MASTER_PENDING_REGISTER_FINAL_16-Jul-2026.txt            (16-Jul 12:56)
+   MASTER_PENDING_REVISED_25-Jul-2026.txt                   (25-Jul 02:12)
+   MASTER_PENDING_REVISED_25-Jul-2026_EVENING.txt           (26-Jul 20:33)
+   MASTER_PENDING_REVISED_27-Jul-2026.txt                   (27-Jul 13:11)
+   MASTER_PENDING_REVISED_27-Jul-2026_EVENING.txt           (27-Jul 22:04)
+   TUESDAY_28-JUL_CARD.txt                                  (27-Jul 19:09)
+   DO_NOT_DELETE_READ_FIRST_27-Jul-2026.txt                 (27-Jul 23:04)
+
+⚠️ LOCATION CHANGE, STATED NOT SLIPPED IN. Every prior edition carried "⛔ OPERATOR
+DOC. Lives in Downloads. NEVER committed to the repo." *** THAT RULE IS OVERRIDDEN
+BY RAMA'S 28-Jul INSTRUCTION *** ("commit it into the repo so it is versioned and
+survives a lost laptop"). ⭐ A canonical location ALREADY EXISTED and was used
+rather than invented: `docs/` already tracks `T2_RUNBOOK_29-JUL.txt`,
+`DEPLOY_CALENDAR_28-JUL_TO_04-AUG.txt`, `MONDAY_27-JUL_CARD.txt` and
+`pending_skipped_items.txt`. A copy also sits in Downloads for reading.
+
+⭐⭐ WHAT THIS FILE IS, AND WHAT IT DELIBERATELY IS NOT
+This is an INDEX plus the items that live NOWHERE ELSE. The repo already owns four
+registers and this file does NOT restate them — a second copy is a second thing to
+keep in sync, and two days were spent removing exactly that:
+   `docs/decisions/00_INDEX.md`            — the numbered decisions 01-11
+   `docs/decisions/ACTIONS_not_decisions.md` — K1-K3, T2-T4, the action backlog
+   `docs/DEPLOY_CALENDAR_28-JUL_TO_04-AUG.txt` — the day-by-day sequence + gates
+   memory `UNPUSHED_PENDING_DEPLOY_LEDGER.md` — every built-but-unpushed head
+⇒ For anything those four own, this file gives ONE LINE AND A POINTER.
+
+⛔ VERIFY, DO NOT TRANSCRIBE. Every ✅/⏳/⚠️ below was re-checked against the repo or
+the live VM on 28-Jul between 19:5x and 21:xx. Anything NOT re-checked is marked
+[INHERITED] and should be treated as a hypothesis.
+
+================================================================================
+0. LIVE STATE — MEASURED 28-Jul evening, from the VM. THE MOST PERISHABLE PART.
+================================================================================
+  deployed SHA (bare repo) : ce08668   == origin/main  (pushed 18:46:19 tonight)
+  PC `main`                : 53a2443   = ce08668 + ONE docs commit, deliberately
+                                         unpushed until Thursday. Tree CLEAN, stash EMPTY.
+  schema_version           : *** 45 *** (v45 migrated 08:15:16 today — the week's gate)
+  trading service          : inactive (dead) · Result=success · ExecMainStatus=0
+                             exit 17:35:04 · NRestarts=0 · one continuous run from 08:15:15
+  trades (all time)        : 443       (430 on 27-Jul; +13 today)
+  trades.closure_source    : *** 39 non-NULL *** (35 from the W8 backfill + 4 today)
+  innings                  : *** 322, UNCHANGED *** ⇒ ShadowTracker disable is HOLDING
+  gtt_state rows           : 0         the LIVE SERVICE has still never placed a GTT
+  pb01_watchlist           : 37 rows   (25 dated 28-Jul + 12 dated 29-Jul)
+  signals                  : 59,230
+  kill switch              : SOFT_KILL `circuit_breaker_force_close_15:15` 15:15:01 —
+                             ⭐ auto-clears at tomorrow's 08:15 (it IS in
+                             SCHEDULED_KILL_REASONS, kill_switch.py:114-117). No resume.sh.
+  backups                  : 9.0 G on the VM; 4 `predeploy-*` files still present
+  ⏳ RE-VERIFY THIS BLOCK, NOT THE DOCUMENT. One command:
+     ssh trading-vm 'git --git-dir=/home/ubuntu/trading-system.git rev-parse HEAD'
+
+================================================================================
+⭐⭐ 1. OWED NEXT — LEAD WITH THIS, NOT WITH HISTORY
+================================================================================
+ WED 29-JUL  *** T2 ARM + CHANGE FREEZE. A REAL POSITION IS HELD OVERNIGHT. ***
+             NOTHING built/pushed/tuned. Only: P0 date check → the arm → observe.
+             ⚠️⚠️ *** THE ARM'S TIMING IS AN OPEN DECISION — SETTLE IT BEFORE 10:30.
+             Rama is UNAVAILABLE 11:00-17:00 Wed/Thu/Fri/Sat *** and the runbook
+             wants 13:00 (acceptable 12:30-14:00, ABORT outside 10:30-14:30). The
+             only legal slot in his availability is *** 10:30-11:00 ***. Options and
+             costs: §2 R0. Also permitted Wednesday: the PB-01 25→12 read (§4 G6),
+             READ-ONLY.
+ THU 30-JUL  T2 CLOSE — ✅ *** NO TIMING COLLISION: the runbook gives the close no
+             clock time, only "market hours only", so 09:15-11:00 works. ***
+             EVENING (after 17:00): push `fix-tests-27jul` · `fix-boot-27jul` ·
+             `214a878` · `249317d` · `53a2443`.
+             ⛔ *** PRE-PUSH GATE: #16a inert ON THE VM, or the push does not happen.
+             The 28-Jul run printed PROCEED and does NOT carry forward. ***
+ FRI 31-JUL  EVENING: push `fix-symdir-27jul`. ⛔ NEVER a Friday T2 arm.
+ MON 03-AUG  The symbol+direction rule + mis_filter shadow go LIVE at 08:15.
+             ⛔ BLOCKED for anything else — kept clear as the observation day.
+ TUE 04-AUG  *** THE FLAG FLIP — the first genuinely irreversible step. ***
+ ⇒ Authority for all of the above: `docs/DEPLOY_CALENDAR_28-JUL_TO_04-AUG.txt`.
+
+================================================================================
+2. YOURS TO DECIDE — NOBODY ELSE CAN MOVE THESE
+================================================================================
+ R0  ⚠️⚠️ *** THE T2 ARM TIME (Wed 29-Jul) — NEW TONIGHT, NEEDS AN ANSWER BEFORE
+     10:30 TOMORROW. *** Your 11:00-17:00 unavailability covers the runbook's aim
+     (13:00) and its whole acceptable band (12:30-14:00).
+       (1) ARM 10:30-11:00. Inside the runbook's own ABORT bound (10:30-14:30) and
+           inside your availability — but it is EXACTLY the ~30 min the runbook's P6
+           requires, with NO slack for §3's by-hand broker check, which must finish
+           before you walk away. ⚠️ COST: the 13:00 anchor is HALF the void
+           reduction (band + 13:00 ⇒ ~2.8% void; band alone at the MEASURED 11:30
+           anchor ⇒ ~9.0%). 10:30 is EARLIER than the measured anchor ⇒ void risk
+           *** ≥9%, and NOT measured at 10:30 — no honest number exists for it. ***
+           A void costs ONE DAY. ⭐ One thing improves: more room to retry a rejection.
+       (2) CARVE ~40 MIN OUT OF 11:00-17:00 (≈13:00). The ONLY option that keeps
+           void risk at ~2.8%. Whether your unavailability is absolute is yours to
+           say — it is not an assumption to make for you.
+       (3) SLIP. ⛔ Never a Friday arm ⇒ Mon 3-Aug earliest, and 3-Aug is blocked
+           (the symbol+direction rule goes live that morning and owns the day) ⇒
+           realistically *** Tue 4-Aug, which COLLIDES with the flag-flip gate. ***
+           Slipping is normally cheap; here it is not.
+     ⛔ IF NO DECISION BY 10:30, DO NOT ARM. An unarmed day costs one day; an arm
+     nobody chose costs the pair.
+ R1  *** STRATEGY-REVISION SEQUENCING *** — ⭐ THE ONLY ITEM ON THIS BOARD THAT BEARS
+     ON PROFITABILITY. Nothing technical blocks it. See §8.
+ R2  D1 SIZING / max_concentration_pct → ⛔ HOLD. Blocked by G3 (trades.sector is
+     NULL at INSERT, so the sector cap sums nothing). ⚠️ D1 carries a corrected
+     claim — the Rs990 direction was INVERTED in an earlier edition.
+ R3  D2 STRATEGIC DIRECTION (13% LONG vs 58% SHORT fills). Needs months + a positive
+     control. Full package: `docs/decisions/03_d2_strategic_direction.md`.
+ R4  D3 MIN_PASS_SCORE → *** DOWNGRADED. *** The 0-34 junk band replicates
+     out-of-sample; the 60-65 inversion did NOT (pooled p=0.27).
+ R5  #09 PRUNE RETENTION — closed 25-Jul as Option A (no code). The follow-on CAP
+     CHOICE is still yours. ⚠️ Editing it touches the canonical crontab.
+ R6  BACKUP RETENTION CAP VALUE — ⭐ RE-SCOPED: this is no longer "revive a dead
+     job". The job runs and self-maintains nightly. It is "pick a steady-state cap".
+     Recommend measuring a week of post-clear nights first.
+ R7  THE WATCHMAN (gemini_watchman) — retire / tighter prompt / keep-and-read-
+     sceptically. Observe-only, nil control risk; it confabulates alarming specifics.
+     ⛔ Do NOT tighten the prompt (both other options are free).
+ R8  TELEGRAM_CHANNEL_SECONDARY — ⚠️ *** COUPLED TO A NUMBER: *** the M-A2 send
+     deadline is 8 s and the budget is SHARED across channels, so enabling a second
+     channel makes the ladder ~52 s and 8 s would then cut channel 2 off mid-ladder.
+     *** Decide the two together. *** It never covered an outage and cannot.
+ R9  mis_filter `shadow: false` — the ENFORCING flip. Shadow mode itself is already
+     built (§3 Q6) and buys the measurement for free; enforcing is the signal path.
+ R10 CONDITIONAL-ALLOCATION FLIP — the FOURTH delivery flag, and the one that gets
+     forgotten. Without it ~70% of capital strands in the idle intraday bucket
+     (~₹6,913 of ₹9,875.60). MEASURED at fund_manager.py.
+ R11 `predeploy-*` BACKUPS — ~764 MB, *** 4 files still present tonight (VERIFIED);
+     backups dir now 9.0 G. *** SETTLED AS AN ACCIDENT, not a protection convention:
+     no code creates the name, retention anchors on `pre_*.db` (UNDERSCORE) so they
+     match nothing, forever. ⚠️⚠️ *** RENAMING THEM TO `pre_*` IS A DELETE IN
+     DISGUISE *** (keep-newest-20; they are the oldest). ⇒ delete, or write the rule.
+ R12 WAAREERTL 23-Jul 13:10 (+16.18) — a mid-session EXTERNAL close, alerted and
+     never followed up. RMS closes usually follow a margin shortfall ⇒ possibly a
+     CAPITAL question, not an execution one. Worth a look?
+ ⇒ Full decision packages, with evidence: `docs/decisions/00_INDEX.md` (01-11).
+   ✅ #11 kill ladder CLOSED 28-Jul — values UNCHANGED, no slot, nothing owed.
+
+================================================================================
+3. THE DEPLOY QUEUE — WHAT IS BUILT AND NOT YET LIVE
+================================================================================
+ ⭐ Authority = memory `UNPUSHED_PENDING_DEPLOY_LEDGER.md`. One line each here.
+ Q1  `fix-tests-27jul`   TEST-ONLY. instance-lock 120 s orphan child + the outbound-
+                         network guard. GATE: none. → Thu 30-Jul eve.
+ Q2  `fix-boot-27jul`    ⚠️ BOOT PATH ×2 — a defect here means no start.
+                         #16a delivery capital foot-gun → BLOCK (exit 3);
+                         S4 webhook self-check → DEGRADE + out-of-band CRITICAL.
+                         ⛔ NOT Wednesday — a failed Thursday boot would turn a
+                         supervised T2 close into an incident. → Thu 30-Jul eve.
+ Q3  `214a878`           cherry-pick, the send-side alert audit trail. PROVEN to
+                         cherry-pick clean 28-Jul. → Thu 30-Jul eve.
+ Q4  `249317d`           the rest of check1-classify-27jul. → Thu 30-Jul eve.
+ Q5  `53a2443`           docs recording tonight's deploy. → Thu 30-Jul eve.
+ Q6  `fix-symdir-27jul`  ⭐⭐ *** VERIFIED TONIGHT AND IT CORRECTS THE CURRENT
+                         REGISTER (see §6 X1): `one_trade_per_symbol_direction_per_day:
+                         true` is ON THIS BRANCH AND ABSENT FROM main. *** It also
+                         carries mis_filter → SHADOW (`b7f5eef`), likewise NOT on main.
+                         → Fri 31-Jul eve ⇒ *** LIVE Mon 3-Aug 08:15. ***
+ ✅ CLEARED: `hold-check1-w8-26jul` (v45, deployed+migrated) · `fix-t2-repair-07jul`
+    (merged with the band widen, one operation) · the .pyc detector (`8331fb0`) ·
+    `1b03a64` recovery docs · `45e0133`+`d2426d2` · `cbcad2c` (2027 holiday emailer).
+ ⚠️ 11 further local branches are PARKED or SUPERSEDED (gui-*, wave4-*, preflight-*,
+    score-floor-*, fix-a3-*, fix-p1-*, fix-t2-import-*). ⛔ Read the list, never a count.
+
+================================================================================
+4. OPEN — TECHNICAL, EACH WITH ITS REAL GATE
+================================================================================
+ ⭐⭐ G1 *** THE LIVENESS-PROBE GAP IS NO LONGER "TRIGGERED" — IT IS LIVE AND BITING
+     TODAY. MEASURED TONIGHT, AND IT IS THE SINGLE MOST IMPORTANT THING THAT EXISTED
+     ONLY IN A FILE ABOUT TO BE DELETED. ***
+     `scripts/liveness_probe.py:108` → `_LIVENESS_END = _time(16, 0)`
+     `config/system_config.yaml:59`  → `service_window_end: "17:35"`
+     ⇒ *** THE SERVICE RUNS 95 MINUTES LONGER THAN ANYTHING WATCHES IT, EVERY
+     TRADING DAY, RIGHT NOW. *** A silent death at 16:20 produces an empty next-day
+     watchlist that looks EXACTLY like "no breakouts" — indistinguishable after the
+     fact. ⭐ This is precisely why the evening cards carry a manual ~17:10 alive
+     check: that check IS the compensating control for this gap.
+     ⚠️ NOT a one-line cron edit — the cron window AND `_LIVENESS_END` must move
+     together, to a value at or below the configured stop. Its own small design.
+     ⭐ The in-code comment ("<= the configured service stop, drift-guarded by the
+     tests") is TRUE and still lets the gap exist: 16:00 ≤ 17:35 passes the guard.
+     *** The guard prevents the probe outliving the service, not the reverse. ***
+ G2  *** B2 / M-S4 — 25 OF 100 SCORER POINTS ARE A CONSTANT 0.0 IN LIVE. ***
+     VERIFIED TONIGHT, UNCHANGED since 16-Jul: `screening/secondary_screener.py`
+     :407 `"atr": None` · :408 `"rsi": None` · :410 `"prev_close": None`.
+     The substrate SHIPPED (schema-v44 daily_symbol_stats, candle_math.rsi,
+     core.daily_stats, the forward-shadow recorder + cron); the LIVE SCORER FIX did
+     not. ⇒ a quarter of the selection score distorts every pick. GATE: needs
+     re-parity + re-soak before any enforce flip; coupled to R3/D2.
+ G3  *** B1 — trades.sector IS NULL AT INSERT, SO THE 40% SECTOR CAP IS DEAD. ***
+     VERIFIED TONIGHT: `secondary_screener.py:409 "sector": None`;
+     `core/state_store.py` sector_exposure() filters `AND sector = ?` ⇒ returns 0
+     for the resting book. It reports PASS while summing nothing.
+     ⭐ HARMLESS TODAY (~₹198/position; peak all-sector margin ever ₹2,742.91 against
+     a ₹3,957 cap) — but it is a *** HARD PREREQUISITE OF ANY SIZING INCREASE ***
+     and therefore BLOCKS R2/D1. Money path ⇒ own review + prediction + deploy.
+ G4  *** THE "V3 DECISION CONTENT SPECIFICATION v1.0" DOES NOT EXIST. ***
+     VERIFIED TONIGHT by searching for the document itself, not its citations:
+     zero files. It is CITED as the authority for PB-01's gates, windows and
+     thresholds by `screening/hard_gate.py`, `v3_chain/pb01_entry.py`,
+     `docs/SYSTEM_MAP.md` and `docs/audit/pb01_simulation_feasibility_2026-07-24.md`.
+     ⇒ *** PB-01's "real" parameters have no written source. ***
+ G5  ⚠️ THE ALERT STREAM HAS NO SEND-SIDE AUDIT TRAIL BELOW CRITICAL. No notifier
+     logger in `system_<date>.log` at all; sentinels exist only for CRITICAL;
+     `failed_alerts.log` records only FAILURES. ⇒ "did every broker event produce an
+     alert?" is UNANSWERABLE for INFO/WARNING. ⭐ `214a878` (Q3) closes it
+     *** FORWARD ONLY *** — historical gaps stay unanswerable, there is no source to
+     reconstruct them from.
+ G6  ⏳ *** PB-01 25 → 12 — OPEN OBSERVATION, NOT EXPLAINED. *** It touches neither
+     the order nor the capital path, so it does not gate Wednesday. ⛔ "Does not
+     gate" is not "explained". Wednesday's one permitted read-only task.
+     ⚠️ Establish the WIDTH first — the per-day series across ALL days, not two
+     points — then distinguish: fewer setups (benign) / fewer signals delivered
+     (input) / more rejected (system) / capture-side truncation (worst). ⭐ The
+     `queued=` vs written distinction already bit once here: check whether 12 is
+     what was CAPTURED or what SURVIVED.
+ G7  EVIDENCE INFRASTRUCTURE — THREE artifacts, not one. `fs-v1` is the only WORKING
+     one and it tests the score THRESHOLD, not a new entry thesis. The V3 chain
+     cannot produce a useful sample in any reasonable time (~0.6 would-pass/day
+     against a STRUCTURAL ~99% rejection). PB-01 has no live twin, so a captured row
+     cannot be EVALUATED even now that it captures.
+     *** NET: the two entry-evidence shadows do not, as built, provide a path to
+     validating a new entry thesis. *** ⚠️ Every service-down day is a lost OOS day.
+     ⛔⛔ NEVER run `forward_shadow_record.py` manually — a `--date` backfill VOIDS
+     the out-of-sample file and its output cannot be regenerated.
+     ⛔ And the `innings` table is NOT evidence either (§6 X4).
+ G8  THE LEVERAGE GAP (FYI-only). Actual capital ~₹9,872 [28-Jul], 70% MIS (5×) /
+     30% CNC (1×); *** the system sizes UNLEVERED. *** Likely the same missing
+     multiplier behind the concentration cap binding ~100% at ~₹990 and ~7% of
+     buying power deployed. The RECALIBRATION is the work, not the multiplier.
+ G9  BUILT AND NEVER RUN — *** NINE, and the pattern matters more than the list. ***
+     Code that is maintained, imported, configured and tested, and has never
+     executed. ⚠️ *** The common signature: no error, no alert, no empty-result
+     complaint. ABSENCE OF A FAILURE SIGNAL IS NOT EVIDENCE OF OPERATION. ***
+     The seven Slice-2.5 pieces (4 loop over an EMPTY collection · 2 have a cold
+     branch · 1 config-gated); top first-run risk is CONDITIONAL CAPITAL ALLOCATION
+     — untested, no runtime guard, and the only one that touches INTRADAY capital,
+     the part currently working and earning.
+     8th — #16a's A5 BLOCK: no-op path proven by construction, FIRING path first
+           executes 4-Aug. ⭐ Rehearsed off-market 28-Jul on throwaway configs:
+           firing predicate PROVEN, exit-3 + CRITICAL ENTAILED not observed.
+     9th — *** THE MIS LEARNED BLOCKLIST, a DISTINCT SUB-SHAPE: "the learning half
+           works and the acting half is off." *** It runs correctly every day and
+           accumulates true knowledge that is DISCARDED AT THE POINT OF USE.
+           Proof from the log, same day, twice: PYRAMID rejected 10:06, learned, and
+           the identical order placed again 10:11. SIZE: 71 attempts across 45
+           symbol-days ≈ 30% of all 235 FAILED/REJECTED trades. ⚠️ UPPER BOUND —
+           only MIS-block 400s are recorded. Shadow mode is built (Q6).
+     ⭐ THE QUESTION THAT FINDS THESE: not "has it run?" but *** "does anything ACT
+       on what it produces?" *** and "what would I expect to SEE if it ran?"
+     ⭐ THE SIBLING PATTERN, opposite shape: `KillSwitch._persist_state` RUNS on
+       every kill and had never been MEASURED. Ask BOTH questions of anything
+       load-bearing. (Closed 25-Jul by a timing line, not a fix.)
+ G10 ⚠️ THE TEST ENVIRONMENT HOLDS 20 LIVE PRODUCTION KEYS — TELEGRAM_BOT_TOKEN +
+     3 channels, WEBHOOK_SECRET, and ZERODHA key/secret/TOTP across 4 accounts.
+     The outbound-network guard stops the NETWORK; it does not stop a test reading,
+     logging or mis-using a real token. *** A separate test token is owed as the
+     second layer. *** [see also §6 X5 for what the guard already fixed]
+ G11 KILL LADDER — three findings SURVIVE decision #11's closure:
+     K1 an EMERGENCY kill + a SAME-DAY restart ⇒ exit 4, the service does NOT come
+        back, and in that window there is no exit management and no 15:15/EOD
+        squareoff. It is a CLASS: 26 non-test kill call sites vs exactly TWO
+        scheduled reasons. ⭐ MONITORED: systemd neither retries nor loops
+        (`RestartPreventExitStatus=3 4`) and liveness_probe raises ONE CRITICAL in
+        ~5 min — ⚠️ but see G1, that probe stops at 16:00. Docs FIXED 28-Jul;
+        *** the BEHAVIOUR half stays OPEN, gated after 4-Aug. ***
+     K2 the 06-Jul ₹10,000 drift events — unresolved (real vs seeding artefact;
+        both answers matter). `expected=0.00` suggests a seeding artefact ⇒ ⛔ must
+        NOT be cited as evidence of real ₹10k drift.
+     K3 drift below ₹250 is INVISIBLE (noise tier = DEBUG) ⇒ *** if the ladder ever
+        needs re-tuning it cannot be re-tuned on evidence. ***
+     ⇒ Detail: `docs/decisions/ACTIONS_not_decisions.md`.
+ G12 TEST-COVERAGE FINDINGS — T2 `tests/crash_test/` (8 files) + `tests/core/` (1)
+     are NEVER RUN in the regression gate at all. ⭐ A skipped test and a failing
+     test hide the same thing; an UNCOLLECTED test hides more, because it appears in
+     no count. T3 `test_fix181` asserts `LIMIT` while production emits `MARKET` under
+     HARD_KILL — ⚠️ UNKNOWN: stale test or a real kill-path divergence. T4
+     `backfill_closure_source_w8.py:92` restates the closure-source literals instead
+     of importing `core/closure_source.py:43-45`.
+ G13 STILL UNPROVEN IN PRODUCTION (needs a mid-day restart with live state):
+     Phase-1 replay of a real OPEN position · M-C1 cancellation with NON-ZERO
+     carryover · *** the first live HARD_KILL *** (the drill used a mock broker).
+ G14 S5 second-half · X2 eod_verify columns — STILL PARKED DELIBERATELY. X2 measured
+     DEAD (pnl_variance = 0.0 on all 26 rows) and *** fixing it ARMS a dormant P&L
+     check *** — that is the reason it is parked, not neglect.
+ G15 REMAINING FREE-TEXT COUSINS: `REJECTED_KILL_SWITCH` stage · the throttle gate
+     category · W9. ⭐ The three `event_type` sites were CLOSED as superseded, not
+     done — `5c70def` collapsed them into ONE `_is_critical_event()` classifier.
+ G16 `DEPLOYMENT.md` STALE PATHS — .env/backups lines say `/home/ubuntu/trading-
+     system/` (missing `systems/`). ⛔ Verify on the VM FIRST, then correct lines
+     ~113/126/128/136/163. Do NOT edit unverifiable paths.
+ G17 AB-910 — Audit-B Phases 9 (Operations) + 10 (Security) WERE NEVER PRODUCED.
+     `audit_05jul2026.md:819` ends "Batch 5 running…". Subject matter has been
+     addressed piecemeal since, but the formal slice is unaudited — PENDING, not clean.
+ G18 CAPITAL / KILL-SAFETY MEDs, 0 fix commits: M-C4 KillSwitch lock held through a
+     Telegram send · M-C5 `commit_adopted_entry` race → hard_kill · M-C6 zero-
+     multiplier floored to 1 lot · M-C8 hard_kill retry starves the fill thread ·
+     W10 double-cost (fail-safe today) · P3-c6 flip daily_loss_include_unrealized ·
+     P3-c7 `_on_loss_breach` in-lock · P3-c8 auto_resume_kill_switch wire-or-delete ·
+     P3-c9 HARD_KILL exception in clear_stale_state · P3-c10 G3 broker-drift
+     escalate-on-persistence. ⭐ M-C4/M-C8 are the safety-adjacent pair.
+ G19 TIER-B ORDINARY (live, off the careful path, none urgent): M-O9 slippage vs
+     sl_initial — *** REACH CORRECTED to INERT: 0/421 trails ever fired, calibration-
+     only *** · M-A2 (bounded 8 s, see R8) · M-K3 `db_connect` sets no
+     `PRAGMA foreign_keys=ON` so raw cron writes skip FK — wants its OWN
+     investigation first · M-S3 near-unreachable · M-D1 candle volume cumulative-vs-
+     delta, LATENT — ⛔ *** only bites under MODE_FULL, and M-D1 MUST be fixed
+     BEFORE any MODE_FULL flip. *** + the three W10 re-labels (report-string change
+     = still a behaviour change) + the `broker_order_id` column bug (LATENT).
+ G20 ARCHITECTURE / LOW — plan-only, all deferred beyond the build queue: P4-1
+     state_store god-object (126 importers) · P4-2 main.py drifting to god-file ·
+     P4-3 layering erosion ×5 · P4-4 19 raw sqlite sites outside db_connect
+     (overlaps M-K3) · P4-5 two report generators in parallel · P4-6 SYSTEM_MAP
+     won't scale · P4-7 PATHS accretion · P4-8 doc gaps (README absent) · P4-9 debt ·
+     M-K5 config snapshot persists an unredacted password · M-X1 duplicate tick-
+     rounding impls · ~55 line-level LOWs. ⭐ *** SOURCE OF RECORD =
+     `docs/audit/full_system_audit_04july2026.md` + `audit_05jul2026.md` — PRESERVED,
+     deliberately NOT re-enumerated here. ***
+ G21 REMAINING BACKLOG: BK-1 LONG-strategy review (feeds R3/D2) · BK-3 6 Word docs ·
+     BK-4 Windows Phase-1 doc updates · BK-5 CT crash-test drills · BK-6 ~2 of 9 DB
+     schema cleanups · BK-7 v2.1 features (historical candle backfill · BSE · multi-
+     account routing · AngelOne adapter · charts in daily review · hot config reload ·
+     Telegram bot command interface) · BK-8 config drift audit + CI hardcoded-default
+     check (status UNVERIFIED).
+ G22 DG-1 S&R V2 BIR-outcome W/L count — ⛔ NOT derivable from code: needs Rama's
+     manual zone-marking (`scripts/sr_level_export.py`) joined to filled-trade
+     outcomes. DG-2 slippage Phase-3b (data-gated). DG-3 = B3 below.
+ G23 B3 / P1 AUTHORITATIVE FLIP (`eod_broker_reconcile`) — the last Audit-B P&L HIGH
+     stays unclosed while SHADOW. Needs a clean shadow week + an MTM spot-check.
+ G24 QUICK WINS: P5-2 B-1 observability follow-up before the flip · P5-3 daily_report
+     retirement (two-generator overlap) · P5-4 `test_control_tower_phase1a.py:154-155`
+     POSIX-path fix (trivial, PC-env only).
+ G25 SLICE-2.5 / DELIVERY-COUPLED, INERT TODAY, double-locked OFF: M-C2 delivery cap
+     TOCTOU overshoot · M-O7 GTT-exit skips release_used → delivery-bucket capital
+     leak · M-O6 GTT `_recreate` flips ACTIVE before place · H-6 CNC exit-day (the
+     last Audit-A HIGH). ⭐ *** M-C2 and M-O7 ARM TOGETHER WITH DELIVERY — they are
+     attached to the Slice-2.5 bundle so whoever flips delivery FINDS them. ***
+     M-O4 (EOD promotion naked reverse) is INERT-IN-PRACTICE and kept OUT of the
+     bundle, flagged separately. M-O8 arms only if the entry protocol leaves
+     LIMIT_TRIPLE.
+
+================================================================================
+5. STANDING REFUSALS — ⛔ DO NOT RE-LITIGATE. ALL RE-VERIFIED 28-Jul.
+================================================================================
+ A) `require_hmac` → *** KEEP FALSE. *** VERIFIED tonight at
+    `config/system_config.yaml:220`. Chartink cannot sign HMAC; the flag disables the
+    `?token=` fallback ⇒ every Chartink POST 401s ⇒ *** ZERO SIGNALS *** (+ a possible
+    boot ValueError if WEBHOOK_SECRET is unset). Refused 20-Jul with evidence.
+ B) THE PRE-RECEIVE HOOK → *** DO NOT ARM AS-IS. *** Guard-2 (cron-integrity)
+    false-rejects EVERY push on a trailing-newline bug at
+    `deploy/hooks/pre-receive:53-60` ⇒ *** arming = deploy lockout. *** Needs a
+    1-line fix + a `CRON_GUARD_DRYRUN=1` soak. Guard-1 is sound.
+ C) `rr_floor` / THE V3 GATE → *** DO NOT LOWER OR LOOSEN. *** The gate is the only
+    INDEPENDENT read on the entries. It rejects 98.6% of the near-admission set
+    because the geometry disagrees with the entries (median 0.33 R:R against a 2.0
+    floor; 46% have NO resistance above the entry) — *** tuning it to agree DESTROYS
+    THE MEASUREMENT. ***
+ D) `regime.enabled` → *** DO NOT FLIP. *** VERIFIED false at `system_config.yaml:420`.
+    NIFTY token 256265 is UNVERIFIED in the production instrument cache.
+ E) THE TICK FEED / MODE_FULL → *** NOT AS A ONE-LINER, AND NOT MODE_FULL FIRST. ***
+    MODE_FULL would ACTIVATE M-D1's volume corruption (`volume_traded` is CUMULATIVE
+    and `candle_store.py:63` SUMS it per tick); it is latent TODAY only because
+    MODE_LTP delivers no volume at all. *** M-D1 FIRST, ALWAYS. ***
+ F) `forward_shadow_record.py` → *** NEVER RUN MANUALLY. *** Only out-of-sample
+    evidence producer; its output cannot be regenerated. ⛔ And NEVER produce a
+    missing day by hand: a gap is a loss, a manufactured day is a CORRUPTION.
+ G) `halt.sh` *** DOES NOT EXIST. *** The only halt is
+    `ssh trading-vm sudo systemctl stop trading-system` — and it stops entries AND
+    exit management AND the 15:17 EOD squareoff. ⭐ Decision rule: if the intraday
+    book is flat, stopping is free; if MIS positions are open it is expensive — and
+    a CNC position is NEVER a reason to stop.
+ H) SSH → TAILSCALE-ONLY → ⛔ *** DO NOT CLOSE PORT 22. Refused 27-Jul, MEASURED. ***
+    *** THE PC-DOWN RUNBOOK DEPENDS ON :22 BEING OPEN TO THE WORLD *** — it tells you
+    to SSH from the PHONE, and `tailscale status` showed moto-g96-5g OFFLINE, LAST
+    SEEN 23 DAYS. Closing :22 would SILENTLY void that runbook at exactly the moment
+    you would need it. Cron does not care (0 crontab lines use ssh). *** THE PHONE IS
+    THE BLOCKER. *** ORDER: phone back on the tailnet and PROVEN (mobile data, WiFi
+    OFF) → repoint the PC → confirm a console/serial way back in → only then :22.
+ I) MIS→CNC FALLBACK → *** CLOSED, WILL NOT BE BUILT. *** A decision, not a deferral.
+    ~30 trades/month, no assurance of a better outcome. ARCHITECTURE SETTLED:
+    INTRADAY = MIS · DELIVERY = CNC/GTT.
+ J) F2 OPERATOR SOFT-KILL → *** DROPPED (Rama). *** ⛔ And the "cheap CLI"
+    alternative is NOT cheap: the :8080 app has NO reference to the live KillSwitch
+    (it reads the DB) and `is_active()` returns `self._state` with NO runtime re-read
+    ⇒ *** A SEPARATE PROCESS WRITING THE DB ROW HALTS NOTHING. *** Anyone reopening
+    this must find the cost record: one item got smaller, four got bigger, and the
+    remaining gain is SEMANTIC, not ergonomic. Reports: `docs/audit/f2_*_25jul2026.md`.
+ K) security-watcher `activating/auto-restart` → ⛔ NOT BROKEN, do not "fix". It is
+    the designed `RestartSec=60` heartbeat; nothing reads its ActiveState.
+
+================================================================================
+6. STALE — CLAIMS THAT WERE TRUE AND ARE NOT. ⚠️ CORRECTED HERE.
+================================================================================
+ X1 ⚠️⚠️ *** "mis_filter → SHADOW (enabled: true)" AND "the one-trade rule is
+    TURNED ON" — BOTH READ AS SHIPPED IN THE 27-Jul EVENING REGISTER. NEITHER IS ON
+    `main`. VERIFIED TONIGHT: *** `config/system_config.yaml:118` on main reads
+    `mis_filter.enabled: false`, and `one_trade_per_symbol_direction_per_day` is
+    ABSENT from main entirely. Both live on `fix-symdir-27jul` (Q6) and go live
+    *** Mon 3-Aug 08:15. *** ⇒ They are `<BUILT>`, not `<DEPLOYED>`.
+ X2 ⚠️⚠️ *** AND THE SAME REGISTER CONTRADICTS ITSELF ON THE DATE. *** Its §8 says
+    the one-trade rule's "EARLIEST LIVE: FRI 31-Jul 08:15" while stating in the same
+    sentence that it ships on the *Friday EVENING* slot — which cannot both be true.
+    Its own §9 (written later) and the deploy calendar both say *** Mon 3-Aug. ***
+    ⇒ *** Mon 3-Aug is correct. *** ⛔ Anyone reading Friday's book expecting the
+    rule to be live would misread it. (This error also reached the 28-Jul desk note.)
+ X3 "THE 27-Jul EDITIONS ARE THE CURRENT REGISTER" — ⚠️ they SILENTLY DROPPED seven
+    whole sections (F-L). Sections F,G,H,I,J,K,L were not closed, not merged and not
+    mentioned; they simply stopped appearing. ⭐ *** THAT IS WHY THIS FILE EXISTS,
+    AND EVERY ONE OF THOSE SECTIONS IS FOLDED IN ABOVE *** (G1 liveness · G4 V3 spec ·
+    R11 predeploy · G2 M-S4 · G13 unproven · G7 evidence infra · G8 leverage · §7
+    parked · G14 S5/X2 · G15 free-text · §5 J the F2 cost record).
+ X4 ⛔ *** THE `innings` TABLE IS NOT EVIDENCE. *** ShadowTracker FABRICATED rather
+    than omitted: 141 simulated innings, 130 closed, EVERY ONE exiting at its own
+    entry price for exactly 0.00 P&L (real innings: exit==entry on 1/181). Against
+    real innings hitting a boundary 78% of the time, 0/130 is not a market outcome.
+    *** THE VOID SET, EXACTLY: every `innings` row with `is_real=0` — 141 rows,
+    id 4..321, all inning_number=2. *** ✅ Disabled 25-Jul (`d31759f`); VERIFIED
+    TONIGHT still holding — innings = 322, unchanged. Rows KEPT, marked VOID:
+    deleting evidence of a defect is worse than labelling it. ⭐ Any FUTURE
+    `is_real=0` row written after ticks actually flow is VALID.
+ X5 "THE TEST SUITE IS SIDE-EFFECT FREE" — FALSE and now largely fixed. The unit
+    suite POSTed REAL "MARKET IS CLOSED" messages to the LIVE Telegram channel on
+    ~50 days between 6-May and 27-Jul, *** including trading days, while the system
+    was trading. *** ⭐ Production was EXONERATED BY ARITHMETIC: `next_trading_day`
+    starts at from_date+1 and only moves FORWARD, so it cannot return a past date —
+    which is what moved the search from production to the tests. ✅ FIXED AT THE
+    DOOR (a conftest guard refusing any non-loopback socket), not per-site: there are
+    10+ direct send sites across 8 modules, and per-site guards were the very
+    convention that failed for eleven weeks. ⚠️ Residual: G10, and the guards are
+    IN-PROCESS — *** a test spawning a SUBPROCESS is not covered. ***
+ X6 "THE TRAILING STOP IS A TUNING QUESTION" — FALSE. THREE exit engines are built
+    and ALL THREE ARE DARK, each by a DIFFERENT mechanism: smart_tgt (protocol never
+    assigned — `order_placer.py:949` sets `order_protocol = self._default_protocol`
+    UNCONDITIONALLY, discarding the 13/16 strategies declaring CO_PLUS_TGT) ·
+    BreakevenManager (NEVER CONSTRUCTED) · StructureExit (config false, deliberate).
+    *** `modify_order` has NEVER executed in production; 423/423 orders were
+    LIMIT_TRIPLE. *** ⛔ This does NOT reopen the exits thread — it corrects the COST
+    ESTIMATE only: "wire the trail" is three fixes, not a flag flip.
+ X7 "THE TICK→CANDLE PATH MIGHT HAVE BEEN REMOVED OR GATED OFF" — FALSE. *** IT WAS
+    NEVER WIRED. *** The chain is fully wired except one missing call:
+    `live_feed.subscribe([tokens])` is never called in any boot path, so
+    `_subscribed` stays empty and `_on_connect` returns at `if not tokens: return`.
+    Established by ASKING GIT ABOUT ABSENCE (`git log -S "subscribe([" --all` → three
+    commits, all accounted for, none a boot subscription). PRODUCTION EVIDENCE:
+    *** 32 connects, 0 tokens, 0 ticks, ever. *** ⚠️ *** A FULLY-WIRED CHAIN WITH NO
+    INPUT READS AS HEALTHY — that is why it survived. *** ✅ DECIDED DORMANT
+    (`e754c7e`), with a reopen trigger — see §7.
+ X8 "BACKUPS ARE ALL ON ONE DISK" / "the backup cron is DEAD" — BOTH SUPERSEDED.
+    ✅ Offsite backup DONE 27-Jul (first ever). ✅ The nightly job runs inside its own
+    cap and self-maintains. ⇒ what remains is only R6, the steady-state cap value.
+ X9 "D4 IS AN UNKNOWN 4th DECISION whose text lives only in a deleted .txt" (16-Jul
+    Appendix C) — ✅ *** RESOLVED. D4 IS THE EXIT POLICY, and it is CLOSED. ***
+    `docs/decisions/05_d4_exit_policy.md` exists in the repo. Closed 24-Jul on
+    measured numbers: 8 policies over 115 trades with real costs, best −0.076R vs the
+    current −0.100R, *** none reaches breakeven. *** ⇒ one of the 16-Jul register's
+    four named "would be lost" gaps is now closed by evidence, not by assertion.
+ X10 "A CLEAN `git diff` PROVES NOTHING CHANGED" — UNSOUND, and this project infers
+    it constantly. A newline-normalising write (Windows `Path.write_text` → CRLF)
+    rewrites EVERY line; git normalises on the way in, so the diff is clean while the
+    file on disk is a different file. *** Verify a restore by md5 AND byte count. ***
+ X11 "PAPER-PROVEN" — ⛔ ask what INPUT triggers the behaviour and whether the paper
+    adapter can produce it. *** A paper branch returning a CONSTANT cannot produce a
+    VARIABLE input. *** SWEEP: of 19 adapter methods answering a broker question,
+    *** 9 return a constant outcome and 5 more carry a field that never varies — 14
+    of 19. *** ✅ The GTT-never-fires case was WRONG-class and is FIXED (`687b958`).
+    🔴 *** ONE WRONG CASE REMAINS — THE OVERNIGHT CARRY: *** `_paper_holdings` has no
+    production writer, so a paper Mon→Tue shows a clean GTT_EXIT *** while the
+    protection was actually torn down. *** ⛔ Do NOT "fix" by persisting positions or
+    by calling `seed_paper_holding()` from production. *** The Mon→Tue LIVE pair is
+    IRREDUCIBLE, and the fix is to keep saying so. *** And `_synth_fill` writes only
+    COMPLETE ⇒ *** paper can never produce a REJECTED order or a PARTIAL fill. ***
+ X12 "KNOWN PC-ENV TEST FAILURES" — *** A LABEL, NOT A DIAGNOSIS. Swept 28-Jul: NOT
+    ONE of the 13 is environmental *** — all 13 fail in 2.54 s, on mock wiring, a
+    stale fixture, a self-inflicted orphan process, or a real contract violation.
+    ⭐ The genuinely environmental cases are the *** SKIPS ***, and the label borrowed
+    their legitimacy for a population that has none.
+ X13 THE `RMS/MANUAL CLOSE` LABEL — ⛔ `exit_reason` still says `MANUAL` BY DESIGN.
+    *** Group by `closure_source`, never by `exit_reason`. *** ✅ v45 VERIFIED LIVE;
+    backfill run 28-Jul, 35 rows written, SIX left NULL (not five).
+ X14 "M-O9 REACH IS MODERATE-HIGH" — FALSE, it is INERT (0/421 trails ever fired).
+    "EXITS ARE THE LARGEST UNMEASURED LEVER" — FALSE, measured and CLOSED.
+    "THE V3 CANDIDATE UNIVERSE CANNOT BE RECONSTRUCTED" — FALSE; the universe was
+    absent from OUR data because ten 17:00 alerts hit a dead port. ⚠️ *** BUT
+    backfilling it is a BACKTEST, NEVER out-of-sample, *** and the held 1-minute
+    candles cover only the 482 momentum-tracked symbols while PB-01 names DIFFERENT
+    stocks — so the outcome data may not even exist.
+ X15 `PRAGMA user_version` reads 0 and is a *** ROLLBACK TRAP — it is not the schema
+    version. *** Read `SELECT value FROM schema_meta WHERE key='schema_version'`;
+    `schema_meta` is a KEY/VALUE table, NOT a table with a `schema_version` column.
+
+================================================================================
+7. PARKED — ⛔ WITH A TRIGGER, SO IT IS A QUEUE AND NOT A GRAVEYARD
+================================================================================
+  PARKED: Slice 2.5 delivery (carries M-C2 + M-O7) · the live-test cert (LT001-LT103
+  + GOLD, a SEPARATE final project across BOTH pipelines, ⛔ never mixed into a
+  deploy) · the 6 destructive crash-tests (unblocked, unrun) · GUI Screen-04 Signals ·
+  the ₹0.29 SL · scanner v1/v2 work · the tick→candle feed.
+
+  ⭐ *** RE-READ THIS LIST ONLY WHEN ONE OF THESE FIRES. Otherwise leave it alone: ***
+   · *** DELIVERY IS ENABLED *** → Slice 2.5 arms and CARRIES M-C2 + M-O7 with it.
+     ⭐⭐ AND THE PREMISE THIS SLICE RESTED ON IS REFUTED: the stated reason delivery
+     was blocked was "CNC positions would still be force-squared at 15:15/15:17".
+     *** THAT IS NOT TRUE IN LIVE *** — `orders/eod_squareoff.py:1064-1072` filters to
+     `("MIS","CO")` and the module states EOD6 twice; the 15:15 breaker cancels
+     pending ENTRY orders and delegates. ⚠️ *** BUT IT WAS TRUE IN PAPER, AND THAT WAS
+     THE ACTUAL BLOCKER: *** `zerodha_adapter.py` hardcoded every paper position to
+     `product="MIS"`, so the exemption COULD NOT FIRE IN PAPER — i.e. "paper-proven",
+     the stated gate for going live, could not prove the one thing it had to. One
+     line, on nobody's list. ✅ FIXED 26-Jul (`f7eedd3`).
+   · *** THE ENTRY LOGIC MATERIALLY CHANGES (post-M-S4) *** → scanner v1/v2 and the
+     boundary-sensitive research become answerable again, because the sample they
+     were blocked on is regenerated. ⭐ This is ALSO the exits thread's only reopen
+     trigger, and the tick feed's second one.
+   · *** A REAL MID-DAY RESTART WITH LIVE STATE OCCURS *** → the 6 destructive CTs
+     and the live-test cert stop being hypothetical (see G13).
+   · *** THE GUI IS BEING TOUCHED FOR ANOTHER REASON *** → Screen-04 rides along.
+   · *** A LIVE SAFETY DEPENDENCY ON TICKS IS IDENTIFIED *** → the tick feed reopens.
+     ⛔ NONE EXISTS TODAY: the broker-side SL is independent of the feed, the tick-age
+     and H-9 guards are the FEED'S OWN health checks (not position protection), and
+     the one genuine safety casualty — FIX-029's consumer-thread death detector —
+     was un-gated 25-Jul and no longer depends on ticks at all.
+     ⚠️ TWO HAZARDS FOR WHOEVER EVENTUALLY WIRES IT: *** synthetic-candle stickiness ***
+     (once a token receives ONE real tick it acquires `_history` and emits a synthetic
+     carry-forward candle EVERY 60 s for the rest of the process — *** even after
+     `unsubscribe()` *** — each fanning out to a `_persist_candle` DB insert, so
+     subscribe-then-forget leaks a permanent 1/min write per token ever touched) and
+     the MODE_FULL ordering trap (§5 E). ⭐ `_persist_candle` should stay dark EVEN IF
+     the feed is wired — the 15:40 historical fetch already covers that table with
+     TRUE DELTA volume, so re-enabling it would add a strictly WORSE writer.
+   · ₹0.29 SL: *** NO TRIGGER. It is a curiosity, not a defect. If nothing ever fires
+     it should be DELETED rather than parked forever *** — say so out loud at the next
+     refresh rather than carrying it a seventh time.
+
+================================================================================
+⭐⭐ 8. THE ONE NUMBER THAT MATTERS — READ THIS EVERY TIME THIS FILE IS OPENED
+================================================================================
+  *** TO BE PROFITABLE, THE WIN RATE MUST GO FROM ~38-39% TO ABOVE ~43.5%. ***
+  *** NOTHING CURRENTLY ON THIS BOARD MOVES IT. ***
+
+  THREE INDEPENDENT LINES CONVERGE on the entries, sharing no assumptions, no
+  data-processing path and no author's prior — which is what makes it the strongest
+  result on the board:
+    · STATISTICAL — the BAND INVERSION: a high score marks an ALREADY-EXTENDED move.
+      (The 0-34 bottom filter replicates out-of-sample; the 60-65 inversion did NOT.)
+    · GEOMETRIC — the V3 RR GATE: median 0.33 R:R against a 2.0 floor; 46% have NO
+      resistance above the entry; it rejects 98.6% of the near-admission set.
+    · ARITHMETIC — 38-39% win rate against ~43.5% breakeven, with the exits MEASURED
+      and unable to close the gap.
+  ⭐ A FOURTH ARRIVAL, 27-Jul: across 181 FIRST entries the win rate is 40.3% and the
+    total is −₹71.91. ⭐ A FIFTH, 28-Jul: first entries n=181, mean −0.40, win 40.3%.
+  ⚠️ *** AND THE PROPORTION THAT KEEPS THIS HONEST: *** the SENCO re-entry that
+    prompted a full day of investigation is worth ₹4.86 across 1.1% of the book. The
+    first-entry population is −₹71.91 across the other 98.9%. Re-entry rules,
+    cooldowns and MIS pre-drops are all real improvements — *** and all of them are
+    rounding errors against the entry edge. ***
+  ⭐ ONE MEASUREMENT POINTS AT THE LEVER: after a TGT_HIT exit the symbol traded
+    HIGHER later the same day in *** 49 of 50 cases (98.0%). *** That is a statement
+    about the TARGET being too tight, and it corroborates the exits conclusion that
+    the lever is TGT. ⛔ It is also why a PRICE-BASED re-entry rule is the more
+    dangerous proposal: it would systematically refuse a continuation that
+    demonstrably existed.
+  ⚠️ COOLDOWN REPLAY — SAMPLE WARNING FIRST: *** n=2 re-entries in the ENTIRE book ***
+    (183 closed trades). 15/20/30/40-minute windows give the IDENTICAL answer because
+    there is exactly ONE re-entry under 43.5 minutes. *** "Wins forgone = 0.00" is NOT
+    evidence the rule is free — it is evidence there is no data. *** ⛔ If a cooldown
+    is ever built: configurable, anchored on EXIT, DEFAULT 0 = DISABLED, and NEVER
+    pick a value from that table. ⭐ 28-Jul raised n from 2 to 3 — still not evidence.
+
+  ⇒ *** EVERYTHING SHIPPED SINCE 24-JUL IS CORRECTNESS, SAFETY AND OBSERVABILITY.
+    NOT ONE ITEM OF IT MAKES THE SYSTEM MORE PROFITABLE. *** That is the right order
+    of work and it is not the finish line. The engineering queue is effectively
+    empty; the bottleneck is R1.
+
+================================================================================
+9. RECONCILIATION — ⛔ THE COUNT THAT MAKES SILENT LOSS IMPOSSIBLE
+================================================================================
+  COUNTING UNIT: a NAMED, TRACKABLE ITEM as the source files themselves name it
+  (`B1`, `Q4`, `M-C4`, `BK-7`, a lettered refusal, a dated correction). Where a
+  source bundles sub-items under one ID, it counts as ONE and the bundle is
+  preserved intact above.
+
+    SOURCE                                        ITEM APPEARANCES
+    MASTER_PENDING_REGISTER_FINAL_16-Jul               83
+    MASTER_PENDING_REVISED_25-Jul (02:1x)              96
+    MASTER_PENDING_REVISED_25-Jul_EVENING             139
+    MASTER_PENDING_REVISED_27-Jul (midday)             32
+    MASTER_PENDING_REVISED_27-Jul_EVENING              43
+    TUESDAY_28-JUL_CARD                                10
+    DO_NOT_DELETE_READ_FIRST_27-Jul                    17
+                                              N  =   420
+
+    M  CARRIED FORWARD into this file (distinct, live)          = 118
+         top-level IDs .......................................    63
+           §2 R0-R12 = 13 · §3 Q1-Q6 = 6 · §4 G1-G25 = 25 ·
+           §5 A-K = 11 · §7 parked = 7 · §8 the entries finding = 1
+         named sub-items preserved INSIDE bundles ............    55
+           G18 = 10 (M-C4·M-C5·M-C6·M-C8·W10·P3-c6..c10)
+           G19 =  7 (M-O9·M-A2·M-K3·M-S3·M-D1·W10-relabels·broker_order_id)
+           G20 = 11 (P4-1..P4-9 · M-K5 · M-X1)
+           G21 =  7 (BK-1·BK-3·BK-4·BK-5·BK-6·BK-7·BK-8)
+           G25 =  6 (M-C2·M-O7·M-O6·M-O4·M-O8·H-6)
+           G11 =  3 (K1·K2·K3)      G12 = 3 (T2·T3·T4)
+           G13 =  3 (Phase-1 replay · M-C1 · first live HARD_KILL)
+           G22 =  2 (DG-1·DG-2; DG-3 == G23, counted once)
+           G24 =  3 (P5-2·P5-3·P5-4)
+    K  CLOSED with evidence (distinct, verified)                =  91
+         16-Jul Appendix A (closed with SHAs) ≈ 45 · B4 = 1 ·
+         closed 25-Jul ≈ 24 · 26-Jul = 4 · 27-Jul = 9 · 28-Jul = 8
+    J  MERGED AS DUPLICATE APPEARANCES (same item, ≥2 editions)  = 211
+                                       M + K + J  = 118+91+211 = 420  ✅
+
+  ⭐ *** J IS LARGE BY DESIGN AND IT IS THE POINT: *** 211 of 420 appearances were
+  the same items restated across five editions in ten days. That redundancy is
+  exactly what made the seven files feel authoritative while sections F-L quietly
+  vanished from two of them.
+
+  ⚠️⚠️ *** HOW MUCH TO TRUST THESE NUMBERS — STATED, BECAUSE A COUNT THAT LOOKS
+  EXACT AND IS NOT IS WORSE THAN AN HONEST RANGE: ***
+   · *** M = 118 IS EXACT. *** It is a count of this file's own items and every one
+     is enumerated above by its ID. That is the number that matters, because M is
+     what would be LOST if the sources were deleted and something had been missed.
+   · N (per-source appearances) and K are ENUMERATIONS OF NAMED IDs AND SECTION
+     ENTRIES, not a line-level census — hence the `≈` on K's components.
+   · *** J = 211 IS DERIVED (N − M − K), NOT INDEPENDENTLY COUNTED. *** It is the
+     residual, so any imprecision in N or K lands in J. ⛔ Do not quote J as a
+     measurement.
+   ⇒ The identity N = M+K+J holds by construction. *** The GUARANTEE this section
+     actually provides is M plus the explicit not-carried list below — not the
+     arithmetic. *** Read it that way.
+  ⚠️ Two sources (`full_system_audit_04july2026.md`, `audit_05jul2026.md`) hold ~55
+  further line-level LOW items that are deliberately NOT re-enumerated — they are
+  POINTED AT in G20 and remain in the repo. *** That is a pointer to a living file,
+  not a deleted one. ***
+
+  ⛔ ITEMS DELIBERATELY NOT CARRIED, EACH WITH ITS REASON — so absence is a decision,
+  never an oversight:
+    · The TUESDAY_28-JUL_CARD's boot checks — *** SPENT. *** Tuesday happened; v45
+      migrated, the service ran 08:15:15→17:35:04, and the results are in §0.
+    · Its failed-migration rollback playbook — *** SPENT (the migration succeeded).
+      *** The rollback command is preserved in the card's own git history if ever
+      needed; it names commit `d0fd7b8`, which no longer matches deployed state.
+    · The 25-Jul MONDAY block and §H Monday results — *** SPENT, and written to be
+      replaced by their own results, not carried. ***
+    · The 25-Jul LINEAGE ALERT (four editions in the Recycle Bin) — ✅ RESOLVED:
+      the 25-Jul 02:1x file was restored and is one of the seven consolidated here.
+      ⚠️ Three remain in the bin (19/21/22-Jul); they are not referenced by any
+      surviving correction, so this is lineage hygiene, not a live risk.
+    · Per-edition "WHAT CHANGED SINCE…" narratives — superseded by the outcome.
+    · Corrections C-1..C-44 as a numbered series — the ones still load-bearing are
+      restated in §6 as X1-X15; the rest recorded changes that are now the status quo.
+
+================================================================================
+10. ⭐ THE SEVEN ORIGINALS ARE NOW SAFE TO DELETE
+================================================================================
+  *** RAMA: THIS FILE IS SELF-CONTAINED. EVERY ITEM FROM ALL SEVEN SOURCES EITHER
+  APPEARS ABOVE OR APPEARS IN §9's EXPLICIT NOT-CARRIED LIST WITH ITS REASON. NO
+  CROSS-REFERENCE IN THIS FILE POINTS AT ANY OF THE SEVEN. THE SEVEN MAY BE
+  DELETED. ***
+
+  Specifically discharged:
+   ✅ The 27-Jul DO_NOT_DELETE note's whole reason for existing is resolved — all
+      seven orphaned sections F-L are folded in (§6 X3 names where each one went).
+   ✅ `MASTER_PENDING_REVISED_25-Jul-2026_EVENING.txt` was the SOLE COPY of
+      sections F-L. *** Its unique content is now here — including the item it
+      alone carried that turned out to be live and biting: G1, the liveness probe. ***
+   ✅ Every pointer resolved INLINE. This file cites only: the four repo registers,
+      `docs/audit/*` (all 190 tracked in git), and source files by path:line.
+
+  ⛔ THE ONLY THINGS IN Downloads THAT ARE **NOT** REGISTERS AND MUST STAY:
+      `VSCODE_WEDNESDAY_29-Jul-2026_T2_ARM.txt`   — tomorrow's card
+      `TONIGHT_IF_PC_IS_DOWN_27-JUL.txt`          — the emergency runbook
+      `TUESDAY_EVENING_CHECKS_28-JUL.txt`         — tonight's card, now spent
+   (the T2 runbook and the deploy calendar live in git and are safe from any
+    Downloads cleanup by design.)
+
+================================================================================
+11. HOW TO KEEP THIS FILE ALIVE — ITS OWN HALF-LIFE
+================================================================================
+  The 22-Jul edition went stale in ~3 days; the 25-Jul morning edition in ~16 HOURS.
+  That is the argument for the same-carrier rule, not against the register.
+  (1) Any correction reaching `docs/audit/` MUST also reach this register + the
+      memory palace + SYSTEM_MAP — the SAME-CARRIER RULE.
+  (2) Refresh after every deploy, and after any read-only investigation that
+      corrects a claim.
+  (3) *** Verify §0 from the VM, never from memory. *** It is the only perishable part.
+  (4) Re-verify the §5 refusals every refresh — there are now ELEVEN.
+  (5) An operator instruction that says "grep X" must be VERIFIED against a real log
+      before it ships. *** A check that silently finds nothing is worse than no
+      check, because "no output" reads as "it failed". ***
+  (6) ⭐ NEW FROM THIS CONSOLIDATION: *** when a new edition drops a section, that is
+      SILENT LOSS and it is invisible — there is no dangling pointer to notice. ***
+      Diff the SECTION HEADINGS of any new edition against the last one before
+      calling it a superset.
+  (7) ⭐ *** LABEL EVERY ITEM: `<BUILT>` · `<DEPLOYED>` · `<VERIFIED LIVE>` ·
+      `<PENDING>` · `<DEFERRED>`. The word "FIXED" is retired — it was carrying all
+      five. DEPLOYED IS NOT EVIDENCE: nine things in this system were built, looked
+      alive, and had never run. `<VERIFIED LIVE>` needs an ARTIFACT the thing
+      produced in production. A label never ripens with time. ***
+  KNOWN EXPIRY: §0 expires at Wednesday's 08:15 boot. §1 expires Thursday evening.
+
+================================================================================
+END OF REGISTER   |   28-Jul-2026 ~21:xx IST (Tuesday, market closed)
+Read-only consolidation: schema · service · kill · capital · config flags · branch
+contents · and four source-file claims verified LIVE from the VM and the repo.
+No code, config, DB or service was touched in producing it.
+================================================================================

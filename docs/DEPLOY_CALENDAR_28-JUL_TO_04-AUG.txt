@@ -80,13 +80,82 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
                    that section a WARNING and CONTINUES; the report still builds
                    and it cannot trip soft_kill. Worst case = one bad line.
 
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ⚠️⚠️ OPERATOR AVAILABILITY — APPLIES TO ALL FOUR DAYS BELOW (28-Jul 19:5x) │
+  │ *** RAMA IS UNAVAILABLE 11:00-17:00 IST ON WED 29, THU 30, FRI 31-JUL AND │
+  │ SAT 01-AUG. He IS available BEFORE 11:00 and AFTER 17:00. ***             │
+  │ ⛔ Do not re-discover this on Friday morning. It is a CONSTRAINT, not a    │
+  │ preference, and it lands on the two market-hours events the whole T2      │
+  │ sequence is built around.                                                 │
+  │                                                                           │
+  │ ⭐ THE ARM (Wed) — ⚠️ *** COLLIDES. NEEDS RAMA'S DECISION BEFORE 10:30. *** │
+  │   Runbook §1 P3: AIM 13:00 · acceptable 12:30-14:00 · *** ABORT outside    │
+  │   10:30-14:30 *** · script's own gate 09:15-15:30 · P6 needs ~30 min.     │
+  │   ⇒ The aim AND the whole acceptable band sit inside the unavailable      │
+  │     window. The ONLY legal slot in his availability is *** 10:30-11:00 ***│
+  │     — exactly the 30 minutes P6 requires, with NO slack for §3's by-hand  │
+  │     broker verification, which must complete before he walks away.        │
+  │   ⚠️ COST OF THE EARLIER ANCHOR, from the runbook's own numbers: the 13:00 │
+  │     anchor is HALF the void reduction (-10/+10 band + 13:00 = ~2.8% void; │
+  │     band alone at the measured *** 11:30 *** anchor = ~9.0%). 10:30 is    │
+  │     EARLIER than the measured anchor ⇒ void risk is *** >=9%, and NOT     │
+  │     measured at a 10:30 anchor — do not quote a number for it. *** A void  │
+  │     costs ONE DAY (day trade, no demat debit, nothing proved).            │
+  │   ⭐ One thing gets BETTER, not worse: P3 wants 13:00 partly so a          │
+  │     rejection "leaves room to retry". At 10:30 there is MORE room.        │
+  │                                                                           │
+  │ ⭐ THE CLOSE (Thu) — ✅ *** NO COLLISION. *** Runbook §7 gives the close    │
+  │   NO clock time at all, only "market hours only" (09:15-15:30). It fits   │
+  │   cleanly in *** 09:15-11:00 ***, and EARLY is if anything better: a SELL │
+  │   REJECTED means DDPI unauthorised and restarts the pair (§8), so finding │
+  │   out at 09:30 leaves the day. Thursday's 08:15-08:25 orphan-GTT WARNING  │
+  │   (§5) and §6.B's morning checks are also before 11:00.                   │
+  │   ⭐ And if Thursday is missed entirely, §8: the GTT still protects and    │
+  │     the close can go FRIDAY — the proof is NOT forfeited. (P4's "never a  │
+  │     Friday" bans a Friday ARM, not a Friday CLOSE.)                       │
+  │                                                                           │
+  │ ⭐ THE UNATTENDED 11:00-17:00 WINDOW — verified from SOURCE, not prose:    │
+  │   · The CNC position's protection is the *** broker-side OCO GTT, and     │
+  │     nothing else. *** It lives at Zerodha, independent of our service,    │
+  │     process, DB, the VM and the laptop ⇒ *** being unattended changes     │
+  │     NOTHING about it. *** Max loss bounded at ~Rs 10 (one IDEA share).    │
+  │   · The 15:15 circuit-breaker / EOD squareoff DO fire unattended —        │
+  │     MEASURED 28-Jul 15:15:01, fully automatic — but they are             │
+  │     *** STRUCTURALLY INCAPABLE *** of touching the CNC share:            │
+  │     `orders/eod_squareoff.py:1064-1072` filters `p.product in            │
+  │     ("MIS","CO")`; docstring EOD6 "DELIVERY (CNC) positions NOT touched". │
+  │     ⇒ That is what keeps the test VALID; an EOD square would void it.    │
+  │   · `scripts/liveness_probe.py` is *** DETECTION, NOT PROTECTION *** —    │
+  │     it reads `systemctl show` (read-only) and calls `deliver_alarm()`:    │
+  │     ONE Telegram CRITICAL, sentinel fallback. *** No restart, no start,   │
+  │     no corrective action anywhere in it. *** And it watches the UNIT, not │
+  │     the T2 position.                                                      │
+  │   ⇒ NET: no added MONEY risk to T2. The real exposures are (i) a Wed      │
+  │     afternoon GTT trigger silently VOIDING the arm, unknown until 17:00,  │
+  │     and (ii) the ORDINARY intraday book — a service death at 11:30 raises │
+  │     one CRITICAL nobody can act on for ~5.5 h. (ii) exists every day and  │
+  │     is not created by T2; it is simply un-actionable on these four days.  │
+  │   ⛔ RAMA'S CALL, not the assistant's — facts above, no recommendation.    │
+  └──────────────────────────────────────────────────────────────────────────┘
+
   Wed 29-Jul       NOTHING.                      Thu 08:15: unchanged     none
   (T2 ARM day)     ⛔ A position is held
                      overnight. Change nothing.
+                   ⚠️ ARM TIMING IS AN OPEN
+                     DECISION -- see the
+                     availability box above.
+                     10:30-11:00 or slip.
 
   Thu 30-Jul       fix-tests-27jul (4)           Fri 08:15: ONE live      LOW
   (after the T2      + fix-boot-27jul (2)         boot variable -- S4      (see §6:
    close PASSES)      + cherry-pick 214a878       degrade. #16a is INERT   re-counted
+                   ⚠️ RAMA UNAVAILABLE 11:00-
+                     17:00 -- but the CLOSE has
+                     NO clock requirement (§7:
+                     "market hours only"), so
+                     09:15-11:00 works. The
+                     EVENING push is after 17:00
+                     ⇒ ✅ NO COLLISION.
                       (the alert audit trail)     (delivery_enabled=false) 28-Jul)
                     ⛔ 28-Jul 15:45: THE .pyc
                       DETECTOR AND ALL THE DOCS
@@ -126,6 +195,16 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
   (evening)          214a878 (audit trail        symbol+direction rule
                      already landed Thursday)    LIVE (1 behavioural) +
                    ⭐ SPLIT OUT -- see below      mis_filter SHADOW (log-only)
+                   ⚠️ RAMA UNAVAILABLE 11:00-
+                     17:00 -- covers the WHOLE
+                     Friday trading day. The
+                     EVENING push is after 17:00
+                     ⇒ ✅ the push does not
+                     collide. ⛔ But an intraday
+                     alert on Fri is DETECTION
+                     ONLY for ~6h (liveness_probe
+                     takes no action). Sat 01-Aug
+                     is also 11:00-17:00 blocked.
 
                    ⛔ NOT the 2FA seed move (deferred to 7/8-Aug)
 
