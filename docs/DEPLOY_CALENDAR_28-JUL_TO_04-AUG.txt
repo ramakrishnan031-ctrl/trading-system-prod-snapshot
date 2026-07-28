@@ -645,4 +645,38 @@ REAL Telegram sends: the exact class that posted ~50 live alerts since 6-May.
   ⇒ fix-tests-27jul was merged into the throwaway FIRST. That is also the more
     representative tree, because Thursday carries both.
   ⛔ STANDING RULE: *** never run the alerts suite on a tree that lacks the guard. ***
+
+--------------------------------------------------------------------------------
+7.7 ⭐ THURSDAY'S FULL INVENTORY — RE-STATED 28-Jul WITH THE DOC COMMITS COUNTED
+--------------------------------------------------------------------------------
+*** The "could you tell which change caused it?" test only stays honest if the
+inventory is COMPLETE. *** By 28-Jul evening `main` is **12 commits ahead** of
+origin, most of them documentation, so the count is re-derived here rather than
+assumed.
+
+  MEASURED (`git rev-list origin/main..main`, per-commit file list):
+    · 12 local commits
+    · *** 11 of 12 are DOCS-ONLY ***
+    · *** EXACTLY ONE touches a non-doc file: `8331fb0` *** —
+          scripts/system_manager.py
+          tests/unit/test_system_manager.py
+    ⇒ THE COMPLETE NON-DOC SET ACROSS ALL 12 COMMITS IS **TWO FILES**.
+    ⇒ *** ZERO config. ZERO trading/capital-path (config/ capital/ core/
+      orders/ signals/ main.py all empty in the diff). ***
+
+  ▶️ *** THE LIVE BOOT-VARIABLE COUNT IS STILL **ONE** — the S4 degrade. ***
+     Re-checked against §6's test, term by term:
+       · the 11 doc commits    -- text. CANNOT execute. Not variables.
+       · `8331fb0` detector    -- runs in the 18:45 EOD job; `main.py` never
+                                  imports `system_manager`. NOT a boot variable.
+       · #16a                  -- INERT, and now GATED by 7.1.
+       · the alert audit trail -- LIVE but log-only; cannot fail a boot.
+       · S4 degrade            -- **the one live boot variable.**
+     ⛔ IF THAT COUNT EVER MOVES, THE SLOT MOVES. It has not moved.
+
+  ▶️ PRE-PUSH STEPS ON THURSDAY, IN ORDER — *** both BEFORE the push: ***
+       1. §7.1  #16a inert on the VM  -> PROCEED, or the push does not happen.
+       2. §7.3(a) protect the deploy reflog (2 `git config` one-liners).
+          ⚠️ *** BEFORE, not after: a `gc --auto` triggered BY THIS PUSH is
+          exactly what would prune the 3-May-onward history. ***
 ================================================================================
