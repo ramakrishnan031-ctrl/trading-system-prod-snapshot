@@ -75,7 +75,10 @@ squareoff.** Bounded to the same day by `clear_stale_state()`, which is correct 
 - **(ii) Would Rama know? ⭐ YES, and faster than expected — this is MONITORED, not silent.**
   · **systemd does NOT retry and does NOT loop:** `RestartPreventExitStatus=3 4` (verified in BOTH
     `deploy/systemd/trading-system.service:35` **and** on the VM — parity). The unit exits once and
-    stays `inactive`. That is deliberate and correct.
+    stays **`failed`** (journal: `Failed with result 'exit-code'` — measured 21-Jul-2026 11:37:53;
+    the unit declares no `SuccessExitStatus`, so exit 4 is a failure exit). That is deliberate and
+    correct. ⭐ **`inactive (dead)` is the HEALTHY nightly state after a clean exit 0 — `failed` is
+    the HALT.** (Corrected 28-Jul: an earlier draft of this entry said `inactive`.)
   · **`liveness_probe` is installed and running:** cron `*/5 9-15 * * 1-5` (verified in the live
     crontab). During **[09:00, 16:00) on a trading day**, a not-active unit that the operator did
     not park raises **ONE CRITICAL** via Telegram with the CRITICAL-sentinel email fallback.
@@ -87,7 +90,7 @@ squareoff.** Bounded to the same day by `clear_stale_state()`, which is correct 
   ⛔ **It is named in NO incident document.** And the two places that touch this are both wrong:
   · `docs/RUNBOOK.md:101` — *"Restart loop (exit code 4) | Stale SOFT_KILL in DB"*. **The symptom
     cannot occur** (`RestartPreventExitStatus=3 4` prevents the loop; the operator sees a service
-    that is simply `inactive`, so they would not match this row at all) **and the cause was fixed**
+    that is `failed` and stationary, so they would not match this row at all) **and the cause was fixed**
     (a *stale*/prior-day kill auto-clears since 20-Jun — the real cause today is a SAME-DAY kill).
   · `docs/05_incident_response.md:40` — *"Manual resume: restart the service"*. **Restarting is
     exactly what fails with exit 4.** The doc directs the operator to the action that does not work.
