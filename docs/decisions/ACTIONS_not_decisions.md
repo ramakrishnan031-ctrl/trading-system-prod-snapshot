@@ -94,9 +94,21 @@ squareoff.** Bounded to the same day by `clear_stale_state()`, which is correct 
     (a *stale*/prior-day kill auto-clears since 20-Jun — the real cause today is a SAME-DAY kill).
   · `docs/05_incident_response.md:40` — *"Manual resume: restart the service"*. **Restarting is
     exactly what fails with exit 4.** The doc directs the operator to the action that does not work.
-  ⇒ ⭐ **The cheapest item here is a two-line documentation correction with ZERO deploy
-    consequence.** Deliberately NOT done today (this session is register-only), but it does not
-    need to wait for 4-Aug and is a candidate to pull forward.
+  ⇒ ✅ **DONE 28-Jul-2026 — PULLED FORWARD, not left for 4-Aug.** The deciding reason:
+    **Wednesday is the first day this system holds a position overnight**, so the window in
+    which the wrong doc could be read is now. Both files corrected (`1b03a64`, committed
+    locally, unpushed — rides Thursday): `05_incident_response.md` now points at
+    `sudo bash deploy/resume.sh` and states what it does; `RUNBOOK.md:101`'s row now names the
+    real symptom (**`failed`, not a loop**) and the real cause (**a SAME-DAY emergency kill of
+    ANY kind**). Both warn off `systemctl restart` **and** off `main.py --resume` (the latter
+    competes with the service for the instance lock — the 18-Jun collision), and both state
+    that detection is already covered by `liveness_probe`.
+    ⭐ **Verified before writing, per "do not correct a wrong doc with a second unverified
+    claim":** `deploy/resume.sh` does **three** things (stop + `reset-failed` → clear the kill
+    switch → **start under systemd**), and it refuses to start if the clear fails.
+  ⇒ 🔓 **WHAT REMAINS OPEN in K1** is the behaviour itself, not the documentation: an
+    emergency kill plus a same-day restart still halts the service. Gate unchanged — after 4-Aug.
+
 - ⚠️ **WEIGHTING, stated honestly.** The drift path has never fired in 22 trading days, so
   probability is low — but the consequence is the worst shape this system has: **service down,
   market hours, positions open, no squareoff.** ⭐ **Low probability × worst consequence is exactly
