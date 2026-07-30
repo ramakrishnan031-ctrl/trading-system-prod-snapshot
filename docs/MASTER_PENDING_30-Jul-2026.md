@@ -184,6 +184,87 @@ questions now closed or registered; no decision outstanding on it).
   `mis-tradability-filter-30jun` with 22 tests (`PATHS.md:235`) is exactly this.
   Also 3 transient `kt-oms` NetworkExceptions — retried, no escalation.
 
+### 3.6 ✅ THREE G-ITEMS CLOSED 30-Jul night (read-only / doc-only)
+
+**G16 — `DEPLOYMENT.md` stale paths ⇒ ✅ CLOSED. ⛔ NO EDIT MADE, AND THAT IS THE
+CORRECT OUTCOME — the register item was STALE.**
+The register claimed the `.env`/backups lines read `/home/ubuntu/trading-system/`
+(missing `systems/`). **They do not.** `DEPLOYMENT.md` asserts exactly TWO distinct
+paths and both are already right: `/home/ubuntu/systems/trading-system/.env`
+(×4) and `/home/ubuntu/systems/trading-system/data_store/backups` (×1 — already the
+correct `data_store/backups`, not `~/backups`). **Both VERIFIED to EXIST on the VM**;
+the wrong forms exist neither in the doc nor on the VM. **Git says why: `67850b8`
+(2026-07-16) "docs(deployment): correct the .env + backups paths to the real VM
+layout" — the fix landed TWELVE DAYS BEFORE the register recorded it as open.**
+⭐ Editing a correct file to satisfy a stale register entry would have been the
+defect. ⚠️ *(`/home/ubuntu/backups` does exist on the VM but `DEPLOYMENT.md` never
+references it — it is a different, unrelated directory.)*
+
+**G4 — the "V3 DECISION CONTENT SPECIFICATION v1.0" ⇒ ⚠️ CONFIRMED ABSENT.
+Status: DOCUMENTED-CURRENT-STATE; the DECISION is owed by Rama. ⛔ No spec invented.**
+**SEARCH WIDTH, stated so the absence is falsifiable:** (1) repo filename variants
+`*v3*decision*` / `*decision*content*` / `*v3*spec*` / `*content*spec*`, case-insens.
+— **0**; (2) repo full-text on the title — 13 hits, **every one a CITATION**, checked
+line by line (the only document-shaped hit was a dangling git blob that proved to be
+an old copy of `core/config_loader.py`); (3) `git log --all --diff-filter=A` —
+**never added**; (4) **`docs/v3/`, where the V3 docs actually live — 9 files, all
+STEP4-10/PHASE0 plans and gapmaps, no content spec**; (5) VM by filename across the
+whole home — **0**; (6) VM by content (`operator_docs`, `preserved`, repo `docs/`) —
+5, the same citations.
+⭐ **AND AN INDEPENDENT SECOND WITNESS ALREADY EXISTED:**
+`docs/audit/pb01_simulation_feasibility_2026-07-24.md:30` recorded the same absence
+on 24-Jul and adds the mitigating fact — **"its thresholds live as config, so the
+detection content is reconstructable even without the prose spec."**
+⚠️ **THE EXPOSURE IS SMALLER THAN "PB-01's PARAMETERS HAVE NO WRITTEN SOURCE"
+IMPLIES, and the reason is worth stating:** PB-01 is `enabled: false`, FAIL-CLOSED,
+and **can never place an order by construction** (G-NO-ORDER, proven by test);
+`v3_chain_mode: shadow` is LOG-ONLY. Its own YAML says every number in it is
+**"a schema-valid SEED for the registration stub only"** — the real parameters were
+always meant to arrive as config at the Step-10b build.
+**OBSERVED-FROM-CODE — the operative values today. ⛔ CURRENT BEHAVIOUR, NOT A
+RATIFIED SPEC:** `level_lookback_sessions: 20` · `gap_guard_pct: 0.03` ·
+`pullback_proximity_pct: 0.005` · `confirm_min_body_frac: 0.50` ·
+`confirm_volume_mult: 1.20` · `hold_buffer_atr_mult: 0.20` · `atr30_period: 14` ·
+`baseline_candles_per_session: 75` · `rr_floor: 2.0` · `sl_buffer_atr_mult: 0.20`
+(all in `config/system_config.yaml`, each with an explanatory inline comment).
+Missing-data rules are stated in `screening/hard_gate.py:218-222` (G-RR must-have →
+missing S&R FAILS; G-HTF and G-EXTREME fail-OPEN).
+⇒ **WHAT IS ACTUALLY MISSING IS A DECISION, NOT A DOCUMENT.** Nobody ratified what
+PB-01's gates/window/thresholds *should* be. ⛔ **Do not close this by writing the
+spec from the code — that manufactures a spec to match whatever the code does.**
+**The decision is owed before PB-01 could ever be promoted to trading**, which is
+gated far beyond 4-Aug ⇒ **NOT urgent, but it must not be quietly dropped.**
+
+**G6 — PB-01 25 → 12 ⇒ ✅ CLOSED, BENIGN. It is an INPUT fact, not a system fact.**
+⭐ **WIDTH FIRST, and the width inverts the question.** Per `trading_date`:
+**25 (28-Jul) · 12 (29-Jul) · 15 (30-Jul) · 14 (31-Jul, PENDING)**. Three of four
+days sit at 12-15 ⇒ **25 is the OUTLIER and 12 is ordinary variance.** The "drop"
+was a return to baseline.
+**THE DECOMPOSITION, from the `pb01_capture` heartbeat `message` (the authority):**
+
+| capture night | `symbols=` (INPUT) | `queued=` | rows written | skipped `<20 sessions` |
+|---|---|---|---|---|
+| 27-Jul | 27 | 27 | 25 | 2 |
+| **28-Jul** | **12** | **12** | **12** | **0** |
+| 29-Jul | 16 | 16 | 15 | 1 |
+| 30-Jul | 16 | 16 | 14 | 2 |
+
+⇒ **The INPUT moved: 27 → 12 → 16 → 16.** On the 12-day the pass-through was
+**perfect — symbols=12, queued=12, written=12, zero skips.**
+**Of the four candidate causes:** ✅ **fewer signals delivered (INPUT) — CONFIRMED** ·
+❌ more rejected by a gate — **REFUTED** (0 skips that night) · ❌ capture-side
+truncation — **REFUTED** (`queued == symbols == rows` on every night) · fewer
+qualifying setups is the same fact one level upstream (inside Chartink) and is
+equally benign.
+⭐ **CAPTURED-vs-SURVIVED, the distinction that bit here before: 12 was what was
+CAPTURED**, and all 12 survived to terminal statuses (2 CONSUMED · 2
+EXPIRED_WINDOW · 2 INVALIDATED · 6 SKIPPED_GAP). **No loss at either boundary.**
+⚠️ One observation registered, NOT a G6 blocker: `sr_detector` **token lookup
+failed** fired **7×** on 30-Jul (vs 1/0/0 before) — ETF-style symbols (LIQUIDBETF,
+AUTOBEES) absent from the instrument cache. They are skipped with a stated reason
+and PB-01 should not trade them, so it is benign; worth a note if the count keeps
+climbing.
+
 ### 3.5 ⚠️ CORRECTIONS TO NUMBERS THAT WERE CARRIED AND ARE WRONG
 
 - **"33–34 test failures past 18:15" is STALE.** Measured tonight in-window: **10**.
