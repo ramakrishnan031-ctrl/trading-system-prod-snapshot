@@ -189,10 +189,12 @@ REASON:
 - ~~(b) Flip on 4-Aug, DEFER the carry pilot until the filter lands.~~
 - ~~(c) Accept the risk explicitly, in writing, given the zero base rate.~~
 
-⚠️ **ONE DESIGN QUESTION INSIDE (i)** — the product comes from a correlated
-subquery on `orders` and CAN BE NULL; `:1510` currently falls back to INTRADAY,
-commented "safest: MIS exits are always allowed." Under the revised decision that
-fallback now means **an unknown-product trade gets FLATTENED.** ⇒ see Q6.
+⚠️ **ONE DESIGN QUESTION INSIDE (i) — ✅ NOW ANSWERED (Q6).** The product comes from
+a correlated subquery on `orders` and CAN BE NULL; `:1510` currently falls back to
+INTRADAY, commented "safest: MIS exits are always allowed." Under the revised
+decision that fallback means **an unknown-product trade gets FLATTENED.**
+⇒ **Q6 CLOSED: KEEP that behaviour — and make it LOUD.** The fallback stays, and
+the filter must raise **CRITICAL** naming the trade whenever it is taken.
 
 ### (ii) The GTT-verification-on-kill check
 
@@ -233,11 +235,24 @@ Rama and independent review both chose (a). ⇒ The buy-day product filter is no
 before Tue 4-Aug, and — per the ordering constraint — **before** reconciliation
 step 1, FORCE_EXIT_ALL, or the §4 GTT check.
 
-### Q6 — the NULL-product fallback. ⚠️ STILL OPEN — Rama's call.
+### Q6 — ✅ CLOSED (Rama, 30-Jul 20:30): FLATTEN THE UNKNOWN, AND RAISE CRITICAL.
 
-**RECOMMENDATION: keep flattening the unknown, AND alert on it.**
+**THE DECISION, in Rama's words:** keep flattening the unknown — fail-safe against
+unbounded exposure — and **raise a CRITICAL whenever the fallback path is taken.**
 
-The reasoning, so it can be argued with:
+⭐ **AND THE CRITICAL IS A BUILD REQUIREMENT OF THE FILTER, NOT A SEPARATE ITEM.**
+When `product` resolves NULL and the fallback flattens, the code **MUST** emit a
+CRITICAL naming the trade. Today that path is **silent — which is how a NULL
+becomes normal.** ⛔ The filter and its alert **ship together**; the filter is not
+complete without it.
+
+⚠️ **THE DIRECTION, STATED SO IT IS NOT LOST:** *fail-safe favours bounded loss
+over unbounded exposure*, and *a NULL product is itself a defect signal*. The alert
+is **not decoration** — it is the thing that surfaces the underlying data problem
+(the correlated subquery found no order rows for a trade that is
+OPEN/PARTIAL/PENDING_FILL, which should not happen).
+
+The reasoning behind the choice, retained so it can be argued with later:
 
 - The two failure modes are **NOT symmetric.** Wrongly flattening a delivery
   position costs ~₹650 and a sequence restart — **bounded, and recoverable.**
@@ -253,10 +268,11 @@ The reasoning, so it can be argued with:
   is exactly the extension-vs-restriction argument from §3, and it applies to this
   line too.
 
-⇒ **PUT TO RAMA AS, one line each:**
-> **Bounded loss** — flatten the unknown: worst case ~₹650 + a pilot restart.
-> **Unbounded exposure** — spare the unknown: worst case a live naked MIS position
-> left open through an emergency.
+⇒ **THE TRADE-OFF AS PUT TO RAMA, and the half he chose:**
+> ✅ **CHOSEN — bounded loss.** Flatten the unknown: worst case ~₹650 + a pilot
+> restart. Bounded, and recoverable.
+> ❌ **REJECTED — unbounded exposure.** Spare the unknown: worst case a live naked
+> MIS position left open through an emergency.
 
 ### Q8 — ✅ ANSWERED: YES, verify quantity, not just existence.
 
@@ -289,12 +305,27 @@ dated commitment is exactly the shape this project keeps catching.**
 
 ## 9. Status of this document
 
+### ⭐ THE BUY-DAY FILTER'S COMPLETE SPECIFICATION, IN ONE LINE
+
+> **Restrict the flatten and the FIX-181 sweep to `product in ("MIS","CO")` —
+> derived from EOD6 / FIX-015, not a new vocabulary — fallback-FLATTEN a trade
+> whose product resolves NULL, and RAISE CRITICAL naming that trade whenever the
+> fallback is taken.**
+
+⛔ That is the whole thing. **Nothing further is owed on the filter until its slot**
+(its own pre-4-Aug evening). It must still land **before** anything makes a live
+component holdings-aware — see the ordering constraint at the top.
+
 | Item | Status |
 |---|---|
 | Q4 revised decision | **RECORDED** (§1) |
 | Narrowed invariant stated | **RECORDED** (§1, B5) |
 | Buy-day product filter | **DECIDED — dated pre-4-Aug commitment** (Q7 = a) |
+| ↳ NULL-product fallback | ✅ **CLOSED — flatten the unknown** (Q6, Rama 30-Jul) |
+| ↳ CRITICAL on fallback | ✅ **IN SCOPE OF THE FILTER — ships with it, not after** (Q6) |
 | GTT-verification-on-kill | **DESIGNED, incl. quantity both directions** (§4, Q8) |
-| NULL-product fallback | ⚠️ **OPEN — awaiting Rama** (Q6) |
 | BL9 reachability trace | **REGISTERED, required before 4-Aug** (Q9) |
 | Code / config / schema | ⛔ **NOTHING BUILT** |
+
+⇒ **All four questions (Q6–Q9) are now closed or registered. No decision is
+outstanding on this document.**
