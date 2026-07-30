@@ -329,11 +329,14 @@ July audit files) · **G21** BK-1…BK-8 · **G22** · **G23** B3 authoritative 
 #### ⚠️ NEEDS-RAMA (13) — open, but only a decision moves them
 
 **G4** (the V3 spec: investigation CLOSED tonight; what remains is a **decision** —
-nobody ratified PB-01's gates/window/thresholds) · **R1 STRATEGY REVISION** ·
-R2 D1 sizing (blocked by G3) · R3 D2 direction · R4 D3 min_pass · R5 prune cap ·
-R6 backup cap · R7 the watchman · R8 secondary Telegram channel (⚠️ coupled to the
-8 s send budget — decide together) · R9 `mis_filter` enforcing flip · R10
-conditional-allocation flip · R11 `predeploy-*` · R12 WAAREERTL.
+nobody ratified PB-01's gates/window/thresholds) · R2 D1 sizing (blocked by G3) ·
+R3 D2 direction · R4 D3 min_pass · R5 prune cap · R6 backup cap · R9 `mis_filter`
+enforcing flip · R10 conditional-allocation flip · R11 `predeploy-*` · R12 WAAREERTL.
+
+⚠️ **SUPERSEDED SAME NIGHT (23:3x) — this list was 13 and is now 10.** Rama decided
+three of them: **R1 ✅ CLOSED (register item)** and **R7 ✅ CLOSED** → §5.0, kept for
+record; **R8 🟪 DECISION DEFERRED** → §5 Bucket 1, retagged with its live caveat.
+⛔ **They moved state; they did not vanish.** See the rebalanced count below.
 
 ⭐ **A3 check on R9/R10 — is the underlying work already done?** **R10: YES, the code
 is BUILT** (`resolve_bucket_allocation`, `fund_manager.py:111`, unit-tested; traced
@@ -351,6 +354,26 @@ decision. ⇒ Neither is closeable, but neither is blocked on engineering.
   D  NEEDS-RAMA     G4 + R1-R12                                  =  13
                                         C + M + P + D  = 4+1+20+13 = 38  ✅
 ```
+
+**⚠️ REBALANCED 30-Jul 23:3x — THREE ITEMS CHANGED STATE (⛔ none vanished).**
+Rama decided R1, R7 and R8, so they move OUT of `D` — but they are **kept for
+record** in §5.0 / §5 Bucket 1, not deleted:
+
+```
+  N  unchanged                                                   =  38
+  C  CLOSE-NOW (evidence)   G5 · G6 · G16 · R0                   =   4
+  M  RETIRE/RECLASS         G14 (decided park)                   =   1
+  P  STAY-OPEN              (unchanged)                          =  20
+  D  NEEDS-RAMA             G4 + R2·R3·R4·R5·R6·R9·R10·R11·R12    =  10   (was 13)
+  ✅ DECIDED 30-Jul         R1 · R7      -> §5.0, kept for record =   2   (new)
+  🟪 DEFERRED 30-Jul        R8           -> §5 B1, retagged       =   1   (new)
+                          C + M + P + D + ✅ + 🟪 = 4+1+20+10+2+1 = 38  ✅
+```
+⛔ **`D` fell 13 → 10 because THREE ITEMS MOVED, not because three disappeared.**
+Each is named above and each is still readable in the register under its tag —
+which is the whole point of the tags.
+⚠️ **And the ✅ on R1 closes a REGISTER LINE, not the profitability problem** — see
+the 📌 standing note in §5.0. **The edge question is DEFERRED, not resolved.**
 ⚠️ **Sub-item closes (M-O9 · DG-3 · P5-4 · G15's three sites · G12's T2 wording) are
 recorded INSIDE their surviving parent and are NOT counted as top-level closes** —
 counting them twice would inflate the close rate, which is the vanity this sweep
@@ -448,22 +471,57 @@ for x in k.get_gtts(): o=x[\"orders\"][0]; print(x[\"id\"], x[\"status\"], x[\"c
 
 ## 5. ⭐⭐ THE TRULY REMAINING ACTIONABLE BACKLOG
 
-⛔ **Closed, parked and historical items are NOT here.** Two buckets only. Post-sweep
-(§3.7), this is the whole live list.
+### 🏷️ LEGEND — READ THIS FIRST. The tag is what separates *done* from *parked*.
+
+| tag | means | how to read it |
+|---|---|---|
+| ✅ **CLOSED (decision final)** | Rama decided; **nothing lives on**. | ⛔ Not open work. Kept for record only. |
+| 🟪 **DECISION DEFERRED** | Rama **parked** it; a decision is **still owed** later. | ⚠️ Still owed — "keep as a placeholder" defers the choice, it does not make it. |
+| 📌 **STANDING NOTE / LIVE CAVEAT** | The technical reason it was raised, **still true after the decision**. | ⛔⛔ **A closed decision and a resolved caveat are DIFFERENT THINGS.** Collapsing them is how a live constraint gets forgotten. |
+
+⛔ **Kept-for-record ≠ open work.** Decided items live in §5.0 below, not in the
+live buckets. Post-sweep (§3.7) + the 30-Jul decisions, this is the whole live list.
+
+---
+
+### 5.0 ✅🟪 DECIDED — KEPT FOR RECORD (⛔ not open work)
+
+**R7 — GEMINI WATCHMAN · ✅ CLOSED (decision final)**
+> **RAMA, 30-Jul:** *"Continue using it. Do not retire it."*
+📌 **ONE CAVEAT SURVIVES, as a DO-NOT:** ⛔ **do not tighten the prompt** — that was
+the single option flagged as carrying risk; the keep-and-use option Rama chose is
+free. **Nothing else lives on.**
+
+**R1 — STRATEGY REVISION · ✅ CLOSED as a REGISTER ITEM**
+⛔⛔ **NOT "the edge is solved".**
+> **RAMA, 30-Jul:** the existing **15 strategies (12 intraday + 3 delivery) remain
+> as-is**; future scanner improvements — **hammer, evening/morning-star patterns** —
+> and any **NEW strategies** are **BACKLOG**, to be done later.
+⭐ That framing is right and needs **no system change**: a new strategy is a
+`strategies.md` / config addition, not a code change.
+📌📌 **STANDING NOTE — THIS DOES *NOT* CLOSE WITH THE REGISTER LINE:**
+**R1 was raised because the system shows no measurable profitable edge.** Three
+independent lines — **statistical** (the band inversion: a high score marks an
+already-EXTENDED move) · **geometric** (the V3 RR gate: median 0.33 R:R against a
+2.0 floor) · **arithmetic** (win rate **~38-39%** against a **~43.5% breakeven**) —
+converge that **the entries buy EXTENSION**.
+⇒ **Parking the register item is a valid decision. The EDGE QUESTION is DEFERRED,
+NOT RESOLVED**, and it reopens if/when Rama chooses to work on strategy.
+⛔ **Do not let the ✅ imply the profitability problem has been answered.**
+
+---
 
 ### BUCKET 1 — NEEDS RAMA'S DECISION (nothing else can move these)
 
 | # | the decision | why it is yours |
 |---|---|---|
-| **R1** | ⭐⭐ **STRATEGY REVISION.** | **THE ONLY ITEM ON THIS BOARD THAT BEARS ON PROFITABILITY, and nothing technical blocks it.** Win rate must go ~38-39% → **above ~43.5%**; three independent lines (statistical · geometric · arithmetic) all point at the **entries**. ⛔ Everything shipped since 24-Jul is correctness/safety/observability — **not one item of it makes the system more profitable.** The engineering queue is effectively empty; **this is the bottleneck.** |
 | **R10** | **Conditional-allocation flip** — the 4th delivery flag (4-Aug). | ⭐ **The code is BUILT and traced** (`resolve_bucket_allocation`, `fund_manager.py:111`; Q9 trace 30-Jul). Purely a flip decision. Without it ~70% of capital strands in the idle intraday bucket. |
 | **R9** | `mis_filter` **enforcing** flip. | The SHADOW half ships Friday, live Mon 3-Aug. Enforcing touches the **signal path** ⇒ your call. |
 | **R2** | D1 sizing / `max_concentration_pct`. | ⛔ **HOLD — blocked by G3.** ⚠️ Read `sector_exposure()`'s handling of `'UNKNOWN'` **before** this moves; the error direction inverted. |
 | **G4** | **Ratify PB-01's gates / window / thresholds.** | The "V3 DECISION CONTENT SPECIFICATION v1.0" **does not exist** (6-search width, 30-Jul). Current values recorded OBSERVED-FROM-CODE. ⛔ **A decision is missing, not a document** — owed before any PB-01 promotion, gated far beyond 4-Aug. |
-| **R8** | `TELEGRAM_CHANNEL_SECONDARY`. | ⚠️ **Coupled to a number** — the M-A2 send deadline is 8 s and the budget is SHARED, so a 2nd channel makes the ladder ~52 s. **Decide both together.** |
+| **R8** 🟪 | `TELEGRAM_CHANNEL_SECONDARY` — 🟪 **DECISION DEFERRED**, ⛔ **not CLOSED.** **Rama, 30-Jul:** *"Keep as a placeholder / provision for future use. No implementation now."* ⭐ That **parks** the choice; it does not make it. | 📌 **LIVE CAVEAT — the reason it stays owed:** if this channel is **EVER** enabled it **MUST** be decided **together with the M-A2 8-second send budget**. The budget is **SHARED across channels**, so a 2nd channel makes the alert ladder **~52 s** and the 8 s deadline would **cut channel 2 off mid-ladder**. ⛔ **Enabling it without that decision silently breaks the alert path.** Carry this caveat wherever R8 appears. |
 | **R11** | `predeploy-*` backups — delete, or write the retention rule. | ⚠️ **Renaming to `pre_*` is a DELETE in disguise.** Re-verified 30-Jul: **4 files present, backups 8.4 G.** |
 | **R5 · R6** | prune-retention cap value · backup-retention cap value. | Both are "pick a steady-state number". R6: measure a week of post-clear nights first. |
-| **R7** | the watchman — retire / keep-and-read-sceptically. | ⛔ Do **not** tighten the prompt; the other two options are free. |
 | **R3 · R4 · R12** | D2 direction · D3 min_pass (downgraded) · WAAREERTL 23-Jul external close. | R3 needs months + a positive control. R12 may be a **capital** question, not execution. |
 | **ops** | 2FA seed → VM-only (**Fri 7 / Sat 8-Aug**) · rotate Telegram token · disable rpcbind. | ⏰ dated / standing. |
 | **⏰ dated** | **Commit NSE's published `nse_holidays_2027.yaml` before 31-Dec-2026.** | MEASURED: the first 08:15 boot of 2027 **does not start** without it. ✅ It emails you from 15-Dec. ⛔ **Never invent the dates.** |

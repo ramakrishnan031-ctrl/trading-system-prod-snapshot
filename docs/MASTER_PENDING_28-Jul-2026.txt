@@ -592,6 +592,12 @@ the live VM on 28-Jul between 19:5x and 21:xx. Anything NOT re-checked is marked
     NOT ONE ITEM OF IT MAKES THE SYSTEM MORE PROFITABLE. *** That is the right order
     of work and it is not the finish line. The engineering queue is effectively
     empty; the bottleneck is R1.
+  ⚠️ SUPERSEDED 30-Jul-2026 (one line, so this section cannot be read stale):
+    *** R1 IS NOW ✅ CLOSED AS A REGISTER ITEM (Rama, 30-Jul) — the 15 strategies
+    stay as-is and new scanners/strategies are BACKLOG. *** ⛔ BUT THE PARAGRAPH
+    ABOVE REMAINS TRUE: closing the register line did NOT answer the profitability
+    problem. *** THE EDGE QUESTION IS DEFERRED, NOT RESOLVED. ***
+    See `docs/MASTER_PENDING_30-Jul-2026.md` §5.0 for the decision + its standing note.
 
 ================================================================================
 9. RECONCILIATION — ⛔ THE COUNT THAT MAKES SILENT LOSS IMPOSSIBLE
