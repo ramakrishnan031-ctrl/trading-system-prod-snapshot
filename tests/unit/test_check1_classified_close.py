@@ -40,11 +40,11 @@ from tests.unit.test_order_reconciler import (
 _LOG = logging.getLogger("test_check1_classified")
 
 
-def _trade_row(trade_id="t1", symbol="IRFC", qty=10):
+def _trade_row(trade_id="t1", symbol="IRFC", qty=10, entry_price=100.0):
     r = MagicMock()
     r.__getitem__ = lambda _s, k: {
         "trade_id": trade_id, "symbol": symbol, "direction": "LONG",
-        "qty_filled": qty, "entry_actual_price": 100.0, "product": "MIS",
+        "qty_filled": qty, "entry_actual_price": entry_price, "product": "MIS",
         "signal_id": "sig1",
     }[k]
     return r
@@ -54,13 +54,40 @@ def _severities(notifier) -> list[str]:
     return [c.kwargs.get("severity") for c in notifier.send.call_args_list]
 
 
+#: Which `orders` read to break, for the planted-failure tests. Discriminated on
+#: the SQL itself so the plant sits at the DB boundary -- the real `except` handler
+#: in order_reconciler runs, rather than a mocked-out verdict.
+_EXIT_LEG_READ = "exit_legs"        # SELECT ... leg IN ('SL','TGT','EOD')
+_ORPHAN_LOOKUP = "orphan_lookup"    # SELECT ... status NOT IN (...)
+
+
+def _plant_orders_read_failure(store, which: str) -> None:
+    """Make exactly ONE of CHECK1's two `orders` reads raise."""
+    real = store.fetch_all
+
+    def _wrapped(sql, *a, **kw):
+        text = " ".join(str(sql).split())
+        is_orphan = "status NOT IN" in text
+        is_exit_legs = "'EOD'" in text
+        if (which == _ORPHAN_LOOKUP and is_orphan) or (
+                which == _EXIT_LEG_READ and is_exit_legs):
+            raise RuntimeError("database disk image is malformed")
+        return real(sql, *a, **kw)
+
+    store.fetch_all = _wrapped
+
+
 def _run_check1(tmp_path: Path, *, legs, cancel_reason=None, cancel_ok=True,
-                broker_trades=None, trades_raises=False):
+                broker_trades=None, trades_raises=False, symbol="IRFC",
+                qty=10, entry_price=100.0, plant_read_failure=None):
     """Drive the REAL _check1_manual_close against a real store."""
     store = _make_store(tmp_path)
-    _insert_trade(store, "t1", symbol="IRFC", status="OPEN")
+    _insert_trade(store, "t1", symbol=symbol, status="OPEN")
     for oid, leg, status in legs:
         _insert_order(store, oid, "t1", leg=leg, status=status, trigger_price=99.0)
+    if plant_read_failure:
+        # After the inserts: planting earlier would break the fixture, not the code.
+        _plant_orders_read_failure(store, plant_read_failure)
 
     adapter = MagicMock()
     adapter.cancel_order.return_value = _cancel_res(cancel_ok, cancel_reason or "")
@@ -76,14 +103,15 @@ def _run_check1(tmp_path: Path, *, legs, cancel_reason=None, cancel_ok=True,
     rec._fm.release_used.return_value = SimpleNamespace(pnl_delta=5.0)
     rec._notifier = notifier
     rec._mode = "LIVE"
-    action = rec._check1_manual_close(_trade_row())
+    action = rec._check1_manual_close(
+        _trade_row(symbol=symbol, qty=qty, entry_price=entry_price))
     row = store.fetch_one(
         "SELECT closure_source, status FROM trades WHERE trade_id='t1'")
     return store, notifier, action, dict(row)
 
 
-def _bt(order_id, qty=10, price=105.0):
-    return {"trade_id": "T", "order_id": order_id, "tradingsymbol": "IRFC",
+def _bt(order_id, qty=10, price=105.0, symbol="IRFC"):
+    return {"trade_id": "T", "order_id": order_id, "tradingsymbol": symbol,
             "transaction_type": "SELL", "quantity": qty, "average_price": price,
             "fill_timestamp": ""}
 
