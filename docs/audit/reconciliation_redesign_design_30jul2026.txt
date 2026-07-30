@@ -1,0 +1,456 @@
+================================================================================
+RECONCILIATION REDESIGN — MIS + DELIVERY. DESIGN DOCUMENT FOR RED-TEAM.
+Written 30-Jul-2026 Thursday, IST. Investigation + design only. NOTHING BUILT.
+================================================================================
+STATUS OF EVERY CLAIM BELOW: each is labelled MEASURED (observed in production or
+via a read-only broker call today), SOURCE (read from code, file:line given),
+INFERENCE (reasoned, not observed), or OPEN (needs Rama).
+⛔ No code, config or schema was changed to produce this document.
+
+⚠️ SCHEDULE NOTE, STATED FIRST: the asking card gated this work on "Thursday's
+five closes being done". Those closes were MOVED TO FRIDAY 31-JUL by Rama this
+morning (the shares were still T1 / undelivered, so a Thursday sell would have
+been a BTST and could not have tested DDPI). The gate is therefore unsatisfiable
+as written. This work proceeded because it is READ-ONLY source analysis that
+cannot touch the held position, and because D4 (does this block the 4-Aug flip?)
+has a calendar deadline. ⛔ If Rama intended the gate to mean "not until the
+position is flat", he should say so and this document waits.
+
+================================================================================
+0. ONE CORRECTION I OWE, BEFORE ANYTHING ELSE
+================================================================================
+⛔⛔ THIS MORNING I TOLD RAMA — in the Friday close card — that today's 15:45
+`reconcile_positions` would FAIL again with ORPHAN_AT_BROKER "exactly as it did
+Wednesday", and that Friday's 15:45 would be a "free second witness" on the
+closes. *** BOTH STATEMENTS ARE WRONG. *** The card has been corrected.
+
+WHY [SOURCE + MEASURED]: `reconcile_positions` reads `kite.positions()` and takes
+the `net` bucket only (`scripts/reconcile_positions.py:158-168`). It NEVER calls
+`holdings()`. A CNC equity position appears in `positions()` ONLY on its buy day
+(T). Overnight it settles out of positions and into holdings.
+MEASURED 30-Jul 10:45 via read-only broker call:
+    positions()['day'] : 1 row  — SYNGENE qty=0 MIS (a closed round-trip)
+    positions()['net'] : 1 row  — SYNGENE qty=0 MIS
+    => adapter get_positions() equivalent: *** 0 positions ***
+    holdings()         : 5 rows — IOB/MSUMI/SJVN/SOUTHBANK/TRIDENT, qty 3, CNC
+⇒ today the job sees an empty broker book AND an empty system book ⇒
+`all_symbols` is empty ⇒ zero rows, `has_mismatch` False ⇒ *** exit 0, SUCCESS,
+no alert *** (`:256-274`). Wednesday's exit 2 happened only because Wednesday was
+the buy day, the one day the position was visible to it.
+
+⭐ THAT MISTAKE IS THE FINDING. It is this project's own recurring class — a green
+check that could not have gone red — and it is now the central gap below.
+
+================================================================================
+A. WHAT ALREADY EXISTS. MAP FIRST. DO NOT DESIGN OVER IT.
+================================================================================
+A1. THE SEVEN MECHANISMS, EACH READ FROM SOURCE
+--------------------------------------------------------------------------------
+(1) `reconcile_positions` — cron 15:45 Mon-Fri [MEASURED from crontab].
+    COMPARES: `positions().net` (non-zero qty) vs `trades` WHERE status IN
+    ('OPEN','PARTIAL') AND qty_filled>0 (`:176-198`).
+    EMITS: per-symbol row into `position_reconciliation`; OK /
+    ORPHAN_AT_BROKER / MISSING_AT_BROKER / QTY_MISMATCH (`:264-274`);
+    ERROR-severity Telegram on any mismatch (`:300-315`); exit 2 on mismatch.
+    ⛔ COVERS THE PROPOSAL: *** ALMOST NONE OF IT. *** It is positions-only and
+    therefore blind to delivery inventory from T+1 for the entire holding life.
+    It is the WRONG host for delivery reconciliation — see G1/G2.
+
+(2) `eod_broker_reconcile` — cron 15:58 Mon-Fri [MEASURED from crontab]. ⭐⭐ THIS
+    IS THE ONE THAT MATTERS FOR ANTI-DUPLICATION.
+    Broker-authoritative, own creds, runs even if the service was down at 15:17.
+    Per-dimension + ONE overall verdict: VERIFIED / ISSUES / UNVERIFIED, with a
+    deliberate "never a false VERIFIED" rule.
+    DIMENSIONS TODAY: positions · orders · broker day-realized P&L (all REQUIRED)
+    · fm_ledger 3-balance invariant (LEDGER) · margin (SUPPLEMENTAL,
+    reliability-gated to [09:00,15:45], FIX-189).
+    Rollout flag `eod_reconcile.authoritative`, default false = SHADOW; when
+    authoritative, ISSUES/UNVERIFIED alert CRITICAL and eod_verify retires.
+    ⇒ *** RAMA'S "ONE CONSOLIDATED ALERT" IS ALREADY BUILT, AS A FRAMEWORK. ***
+    ⛔ It has NO holdings / CNC / delivery dimension — grep for
+    holdings|CNC|DELIVERY|delivery over the file returns nothing but the docstring
+    words. It is delivery-blind, not delivery-wrong.
+
+(3) `CncGttMonitor._gather()` — `orders/cnc_gtt_monitor.py:422-455`. ⭐⭐ THE OTHER
+    THING ALREADY BUILT, AND THE PART EVERYONE WOULD OTHERWISE REWRITE.
+    It builds `held_qty_by_symbol` by merging BOTH buckets: `get_holdings()`
+    (settled + T1, i.e. qty = quantity + t1_quantity, adapter `:955`) PLUS
+    `get_positions()` **filtered to product == "CNC"** (`:447-454`).
+    ⇒ *** A CORRECT SYMBOL->HELD-QTY BROKER PICTURE THAT SPANS THE T-DAY / T+1
+    BOUNDARY ALREADY EXISTS IN PRODUCTION. *** This is precisely the read that
+    `reconcile_positions` lacks. Reuse it; do not re-derive it.
+    Also: Y4 — a broker failure DEFERS with a WARNING and never treats no-data as
+    no-positions. That is the right failure posture and it is already coded.
+
+(4) G3 `_g3_capital_drift` (`orders/order_reconciler.py`, 15s cadence) — compares
+    `adapter.get_margins().net` vs `fm.get_snapshot().total`. CAPITAL, not
+    inventory. Publishes `source_module="order_reconciler"`, which is NOT in
+    `_ESCALATING_SOURCES` ⇒ non-escalating by design; it can never reach a kill
+    rung. Tolerance ladder is where FIX-182 lives (`:3392-3397`).
+    ⇒ COVERS THE PROPOSAL: nothing. Different axis (rupees, not shares).
+
+(5) CHECK1 / CHECK2 — CHECK1 is the mid-fill / external-close classifier.
+    CHECK2 classifies a broker position with **no local trade** as HUMAN_ORDER
+    (`:1815-1822`, logged once/day) and adds `human_order_margin_tolerance`
+    (default Rs 5,000, `:379-383`) to G3's tolerance while any such symbol exists
+    (`:3396-3397`).
+    ⇒ COVERS THE PROPOSAL: nothing, but it is the source of the FIX-182 concern
+    carried into this file. See G6 — it is an ARTEFACT.
+
+(6) `position_reconciliation` table — 5 rows across 1 date, its entire life
+    [MEASURED 29-Jul]. All five = ORPHAN_AT_BROKER broker_qty=3 system_qty=0.
+    Every one of the 11 prior runs (14->28-Jul) was an EMPTY-BOOK SUCCESS.
+    ⇒ *** THE TABLE IS NOT EVIDENCE OF A WORKING RECONCILER. It is evidence of one
+    run that could go red, and it went red for a test-only reason. ***
+
+(7) 09:15 `sync_from_broker` (FM9) — ONE production caller, `main.py:995`, a
+    one-shot thread that waits for 09:15, syncs, returns. No loop. Publishes only
+    if abs(delta) > 1.0. ⇒ after 09:15 nothing re-reads broker cash all day.
+    ⇒ COVERS THE PROPOSAL's "09:15 next-day check": *** the HOOK exists (a 09:15
+    one-shot that talks to the broker) but it reconciles CASH, not INVENTORY. ***
+
+(8) Slice-2.5 delivery scaffolding already built: `get_holdings()` (adapter :928),
+    `CncGttMonitor` built unconditionally (`main.py:2686`, NOT gated on
+    delivery_enabled), `adopt_orphan_gtts()` as a prepass on every reconcile cycle
+    (`order_reconciler.py:682`), `delivery_symbols` exclusion in the orphan sweep
+    (`:847`, `:904`), GTT ops ungated by design ("protection must survive
+    disablement").
+
+A2. NEW vs RE-STATEMENT — SAID PLAINLY
+--------------------------------------------------------------------------------
+  ALREADY THERE (do not rebuild):
+   · one consolidated per-dimension verdict + alert  -> eod_broker_reconcile
+   · never-a-false-pass discipline (UNVERIFIED)      -> eod_broker_reconcile
+   · a correct broker held-qty read spanning T/T+1   -> CncGttMonitor._gather
+   · broker-unavailable = defer, not "flat"          -> _gather Y4
+   · a 09:15 broker-facing one-shot hook             -> FM9
+   · MIS zero-closing-inventory check                -> eod_verify + positions
+                                                         dimension (already)
+  GENUINELY NEW (small):
+   · a DELIVERY dimension inside the existing verdict, fed by the existing reader
+   · a persisted expected-closing-inventory number to compare against
+   · carrying that number across a weekend
+⇒ *** THE CORRECT SHAPE IS ONE NEW DIMENSION IN AN EXISTING JOB, NOT A NEW
+RECONCILER. *** A second reconciler would be the third thing reading broker
+inventory on three different definitions.
+
+================================================================================
+B. THE SIX HYPOTHESES, MEASURED. B1 FIRST.
+================================================================================
+B1. DOES 15:15 / 15:17 FORCE-CLOSE A CNC POSITION?  *** NO — REGISTER REFUTED. ***
+--------------------------------------------------------------------------------
+[SOURCE, three independent sites]
+ · The 15:15 "circuit breaker" is a SOFT_KILL, reason
+   `circuit_breaker_force_close_15:15` (`capital/kill_switch.py:115`, and `:331`
+   names it a normal daily scheduled kill). SOFT_KILL blocks ENTRIES and allows
+   exits; `is_blocked(intent="exit")` is True only for HARD_KILL (`:476-484`).
+   *** It closes nothing. ***
+ · The 15:17 EOD squareoff EXPLICITLY excludes delivery. EOD6, stated in the
+   module docstring: "DELIVERY (CNC) positions NOT touched. Only INTRADAY (MIS)
+   and COVER_ORDER (CO) products exited" (`orders/eod_squareoff.py:23-24`,`:34`).
+   Enforced by filter `p.product in ("MIS","CO")` (`:1064-1072`, FIX-015).
+ · The FIX-182 residual broker flatten in the SAME file also filters
+   `product in ("MIS","CO")` (`:1439`) and its docstring says non-system CNC
+   positions "are intentionally NOT squared off" (`:1411-1419`).
+⇒ *** The register's claim that "CNC positions would be force-squared without the
+Slice 2.5 lifecycle fix" is FALSE. The product filter is already there, at both
+sites. *** This is the second premise in two days to be refuted from source.
+
+⚠️⚠️ BUT THERE IS A REAL FINDING NEXT DOOR, AND IT IS THE OPPOSITE SHAPE:
+*** HARD_KILL DOES FLATTEN CNC — DELIBERATELY — AND FROM T+1 IT CANNOT. ***
+ · The flatten's trade SELECT has NO product filter: it selects every trade in
+   ('OPEN','PARTIAL','PENDING_FILL') and fetches `product` only to exit under the
+   SAME product ("MIS vs CNC matters", `kill_switch.py:1463-1479`, `:1510`).
+ · The FIX-181 LAYER A broker sweep (`:1567-1611`) reads `get_positions()` and
+   flattens ANY non-zero position not already handled — filtering only on symbol,
+   qty and already-handled. It maps CNC->DELIVERY intent on purpose (H-5,
+   `:1582-1590`) so the CNC exit actually offsets.
+ · Its stated invariant: "A HARD_KILL must leave NO live broker position".
+⇒ ON THE BUY DAY (T) a delivery position IS in positions() ⇒ a HARD_KILL WILL
+  sell it. [INFERENCE from the T-day/T+1 mechanic + Wednesday's ORPHAN row proving
+  the position was visible in positions() on T.] That is arguably CORRECT for an
+  emergency, but it must be a KNOWN, DELIBERATE consequence of the flip.
+⇒ FROM T+1 the holding is in holdings() only [MEASURED today: get_positions()
+  returns 0 while holdings() returns all five] ⇒ *** the sweep CANNOT see it, and
+  HARD_KILL's "no live broker position" invariant is FALSE for delivery. *** A
+  HARD_KILL would report success while leaving real delivery inventory exposed.
+⭐ NOTE FOR THE T2 TEST, WHICH IS LIVE RIGHT NOW: the basket was exposed to a
+  HARD_KILL sweep on Wednesday 11:43-15:30 and survived because NO HARD_KILL
+  FIRED — not because of DB isolation. Today and tomorrow it is invisible to the
+  sweep. The memory line crediting DB isolation for that survival is imprecise.
+
+B2. DOES ANYTHING COMPARE THIS MORNING'S HOLDINGS TO LAST NIGHT'S INVENTORY?
+--------------------------------------------------------------------------------
+*** NO. *** [SOURCE] Nothing persists a closing inventory, so nothing can compare
+to it. `position_reconciliation` stores a same-day snapshot only, and only of
+`positions()`. FM9 at 09:15 compares CASH. `CncGttMonitor` compares GTT coverage
+against current holdings, not against yesterday's expectation.
+⇒ Rama's point 3 is a GENUINE GAP. The 09:15 hook exists; the stored expectation
+does not.
+
+B3. IS DAILY P&L / CAPITAL CORRECT WITH UNREALIZED OVERNIGHT POSITIONS?
+--------------------------------------------------------------------------------
+PARTLY, AND ONE PART IS OPEN. [SOURCE + prior MEASURED]
+ · The daily-loss limit reads `fm_ledger.pnl_delta`, not `trades.net_pnl`. An
+   OPEN delivery position writes no pnl_delta until it closes ⇒ *** the daily-loss
+   limit is blind to unrealized overnight drawdown, and the whole loss lands in
+   the P&L of the day the position is finally SOLD. ***
+ · The FM baseline self-heals: the 08:15 boot re-seeds from `broker.net`, which is
+   already net of cash blocked by the holding ⇒ no drift from the carry itself
+   [MEASURED precedent 29->30 Jul].
+⇒ GENUINE GAP, but *** possibly a deliberate scope choice *** (daily loss =
+realized intraday risk). ⛔ I am NOT calling this a defect. OPEN QUESTION Q3.
+
+B4. WHAT HAPPENS TO A REAL DELIVERY POSITION'S GTT AT BOOT?
+--------------------------------------------------------------------------------
+IT IS ADOPTED, NOT WARNED — the warnings are the artefact. [SOURCE]
+`adopt_orphan_gtts()` matches a broker GTT to a candidate local CNC trade; with a
+candidate it INSERTs a `gtt_state` row (adoption); with none it emits
+`adopt_no_trade:<SYMBOL>` and a WARNING. T2 has no local trade (isolated DB) ⇒
+candidates == 0 ⇒ the five warnings. A real delivery trade lives in the live DB ⇒
+it has a candidate ⇒ adopted silently. Adoption only ever INSERTs or WARNs, never
+deletes; `_orphan_sweep_and_cap` never touches a GTT with no gtt_state row
+(FIX-182).
+⇒ B4 is a TEST ARTEFACT. No design work needed. ⚠️ Its corollary is a real
+one though: once adopted, `delivery_symbols` becomes non-empty and starts
+excluding those symbols from the orphan sweep (`:847`,`:904`) — a path that has
+NEVER run in production, because `delivery_symbols` has always been empty.
+
+B5. DO THE 15:45 EXIT CODES / ALERTS BEHAVE ON A LEGITIMATE DELIVERY HOLDING?
+--------------------------------------------------------------------------------
+*** NO — AND IT IS WORSE THAN THE CARD GUESSED. *** [SOURCE, high confidence]
+The card expected a daily false ORPHAN_AT_BROKER. The actual failure is the
+MIRROR of that, and it fires from T+1 for the whole holding period:
+    broker_positions from positions()  = {} (holding is invisible from T+1)
+    system_positions from trades       = {SYM: qty} (still OPEN — correctly so)
+    ⇒ broker_qty == 0 and system_qty != 0  ⇒ *** MISSING_AT_BROKER *** (`:267-269`)
+    ⇒ log.critical + ERROR Telegram + exit 2, EVERY DAY THE POSITION IS HELD.
+*** "MISSING_AT_BROKER" is the single most alarming string this system can emit
+about a position — it reads as "our stock is gone" — and it would fire daily on a
+perfectly healthy delivery holding. *** That is how alert fatigue starts, on the
+capital path, on day one of delivery.
+⇒ GENUINE GAP. Highest-priority item in this document.
+
+B6. DOES A LEGITIMATE CNC HOLDING GRANT Rs 5,000 OF BLINDNESS DAILY?
+--------------------------------------------------------------------------------
+*** NO — TEST ARTEFACT. *** [SOURCE] CHECK2 classifies HUMAN_ORDER only when
+there is *** no local trade *** (`:1815-1822`). A real delivery trade IS in the
+live DB ⇒ never classified HUMAN_ORDER ⇒ `_human_order_symbols` stays empty ⇒ the
+Rs 5,000 is never added (`:3396-3397`).
+Two reinforcements: (a) T2 got it only because its DB is isolated; (b) CHECK2 reads
+broker POSITIONS, so from T+1 it would not see a holding anyway.
+⇒ *** The FIX-182 concern carried into the asking card does NOT belong in this
+redesign's scope. *** It remains real for a genuine by-hand operator order, which
+is its designed purpose and is unchanged. Registered, not tuned, not in scope.
+
+================================================================================
+C. ARTEFACT vs GENUINE GAP — EVERY FINDING SORTED
+================================================================================
+TEST ARTEFACT — vanishes the moment delivery writes to the LIVE DB.
+⛔ DESIGNING FOR THESE WOULD ADD PERMANENT COMPLEXITY FOR A CONDITION THAT WILL
+   NEVER RECUR. This is the most likely way this redesign goes wrong.
+  · Wednesday's five ORPHAN_AT_BROKER rows (system_qty=0 only because of isolation)
+  · the five boot "Orphan GTT" WARNINGs  (B4)
+  · CHECK2 HUMAN_ORDER + the Rs 5,000 tolerance widening  (B6)
+  · "T2 survived 15:15 because of DB isolation" — imprecise; it survived because
+    no HARD_KILL fired, and today it is invisible to that sweep anyway
+
+GENUINE GAP — appears the moment delivery goes live, or is already true.
+  G1 [B5] reconcile_positions emits a false MISSING_AT_BROKER CRITICAL every day a
+         delivery position is held, from T+1.                       *** WORST ***
+  G2 [B2/0] No mechanism reads holdings for INVENTORY reconciliation, and no
+         closing inventory is persisted, so no morning comparison is possible.
+         Corollary: a 15:45 SUCCESS on a delivery day is a green check that
+         cannot go red.
+  G3 [B1] HARD_KILL's "no live broker position" invariant is FALSE for delivery
+         from T+1 (sweep reads positions(), holding lives in holdings()).
+  G4 [B1] A HARD_KILL on the BUY day WILL sell a delivery position. Correct for an
+         emergency, but currently an undocumented consequence of the flip.
+  G5 [B3] Daily-loss limit is blind to unrealized overnight drawdown. May be
+         deliberate — Q3.
+  G6 [B4] `delivery_symbols` orphan-sweep exclusion has never executed.
+  G7 eod_broker_reconcile has no delivery dimension, so the one job designed to be
+         broker-authoritative at EOD cannot see delivery inventory at all.
+
+================================================================================
+D. PROPOSED DESIGN
+================================================================================
+OBJECTIVE: make EOD and next-morning reconciliation correct for a book that can
+hold stock overnight, WITHOUT adding a second reconciler.
+
+D-1. THE SHAPE: ADD ONE `delivery` DIMENSION TO `eod_broker_reconcile` (15:58),
+     FED BY THE EXISTING `CncGttMonitor._gather()` HELD-QTY READER.
+     · Broker side: holdings() + CNC positions(), merged — the existing reader,
+       lifted to a shared helper. It is the ONLY read that is correct across the
+       T/T+1 boundary. ⛔ Do not write a third definition of "held".
+     · System side: expected closing inventory per symbol =
+       opening + buys − sells, derived from `trades`/`orders`, NOT stored twice.
+     · Verdict: reuse VERIFIED / ISSUES / UNVERIFIED. Broker holdings
+       unavailable ⇒ UNVERIFIED, never a false VERIFIED (the existing rule).
+     · Classification: REQUIRED once `delivery_enabled` is true; NOT_CHECKED while
+       it is false — so the dimension can ship BEFORE the flip, inert, and be
+       exercised by the flip rather than by a redesign.
+
+D-2. PERSIST A CLOSING INVENTORY SNAPSHOT (new, small) so a morning comparison is
+     possible at all. One row per symbol per trading date, written by the 15:58
+     job. *** Friday's snapshot is simply the most recent one *** — "Friday EOD
+     becomes Monday's opening" needs NO weekend special-case if the morning check
+     reads "the last trading day's snapshot" rather than "yesterday". ⛔ Do not
+     build a calendar rule where a MAX(date) does the job.
+
+D-3. MOVE THE 09:15 CHECK ONTO THE EXISTING FM9 ONE-SHOT (do not add a cron):
+     compare broker holdings at 09:15 against the last snapshot; mismatch ⇒ ONE
+     consolidated alert. This is the only place a corporate action, an unexpected
+     settlement, or an overnight broker-side change becomes visible.
+
+D-4. FIX G1 AT ITS ROOT, NOT WITH A SUPPRESSION: `reconcile_positions` must stop
+     comparing a delivery trade against `positions()`. Two candidates, and I
+     recommend the first:
+     (a) *** Scope it honestly to intraday: *** exclude trades whose product is a
+         delivery product from `_get_system_positions`, and rename what it reports
+         to MIS. It then does one thing correctly and the delivery dimension in
+         (D-1) owns delivery. ⭐ Smallest change, removes the false CRITICAL,
+         removes the green-check-that-cannot-go-red.
+     (b) Teach it holdings too — rejected: it duplicates D-1 and leaves two jobs
+         alerting on the same axis 13 minutes apart.
+
+D-5. RAMA'S FIVE REQUIREMENTS — MET / PARTLY / NEW
+     · MIS: zero closing inventory, matched ⇒ OK else CRITICAL
+              -> *** PARTLY MET. *** The check exists (positions dimension +
+                 eod_verify); what is missing is that it is not labelled MIS and
+                 currently mixes delivery in. D-4(a) completes it.
+     · DELIVERY: opening + buys − sells vs broker holdings, symbol-wise
+              -> *** NEW as a comparison; the BROKER-SIDE READ ALREADY EXISTS ***
+                 (CncGttMonitor._gather). The expected-inventory arithmetic and
+                 the persisted opening are the new parts.
+     · ONE consolidated alert naming MIS and DELIVERY separately
+              -> *** MET, ARCHITECTURALLY. *** eod_broker_reconcile already emits
+                 exactly one per-dimension verdict + one alert. Adding a dimension
+                 gets this for free. ⛔ Do NOT build a new alert.
+     · 09:15 next-day check: broker opening vs previous EOD closing
+              -> *** NEW as a comparison; the 09:15 HOOK EXISTS *** (FM9 one-shot,
+                 main.py:995). Needs D-2's snapshot to compare against.
+     · Friday EOD becomes Monday's opening
+              -> *** MET FOR FREE if D-2 keys on "last trading date" *** (MAX(date))
+                 instead of "yesterday". No weekend logic.
+
+D-6. EXPLICITLY NOT CHANGING
+     · No second reconciler. No new cron job.
+     · No change to the 15:15 breaker or the 15:17 squareoff — B1 shows the CNC
+       exclusion is already correct at both sites.
+     · No change to FIX-182 / `human_order_margin_tolerance` — B6 shows it is an
+       artefact here. Registered, not tuned.
+     · No schema change proposed as part of the DESIGN decision; D-2 needs a table
+       and that is called out as the one schema dependency, to be decided
+       separately (and an evening schema push buys a night of CRITICALs).
+     · No change to GTT adoption (B4 is an artefact).
+     · The K1 EOD-report doc bug stays registered, out of scope.
+
+D-7. DEPENDENCIES / RISKS
+     · SCHEMA: D-2 needs one new table. That is the only schema touch, and it must
+       migrate at an 08:15 boot, never in an evening push.
+     · The `delivery` dimension is untestable in PAPER for the TRANSITION: paper can
+       inject a carry's end state but nothing promotes a filled paper CNC position
+       into a holding. ⇒ its first real exercise is a live delivery day. State that
+       in the report rather than claiming coverage.
+     · Lifting `_gather` to a shared helper touches a LIVE protection path
+       (CncGttMonitor). Refactor risk on a capital path ⇒ careful loop, and the
+       lift must be behaviour-identical with the existing tests green FIRST.
+     · G6: enabling delivery makes `delivery_symbols` non-empty for the first time,
+       activating a never-executed exclusion branch in the orphan sweep. That is a
+       flip risk independent of this redesign and should be named in the flip plan.
+
+D-8. IMPLEMENTATION ORDER (no dates — see the slot below)
+     1. D-4(a): scope reconcile_positions to intraday. Kills the false CRITICAL.
+        Standalone, no schema, no dependency. *** Do this first regardless. ***
+     2. Lift `_gather`'s held-qty merge into a shared helper, behaviour-identical.
+     3. D-2 snapshot table + write it from the 15:58 job.
+     4. D-1 delivery dimension, NOT_CHECKED while delivery_enabled is false.
+     5. D-3 the 09:15 comparison on FM9.
+     ⭐ Steps 1-4 can all ship INERT before the flip. Only step 5 needs a snapshot
+        to exist first.
+
+     ⛔⛔ ORDERING CONSTRAINT — ADDED 30-JUL EVENING, FROM RAMA'S REVISED Q4. ⛔⛔
+     *** The buy-day product filter (Q4 §6(i), now a DATED pre-4-Aug commitment)
+     MUST LAND BEFORE ANY STEP THAT MAKES A LIVE COMPONENT HOLDINGS-AWARE. ***
+     Today a HARD_KILL spares a delivery holding from T+1 only because it CANNOT
+     SEE it. The moment something can see it, that accident is gone and the filter
+     is the ONLY thing left preventing delivery liquidation.
+     ⇒ APPLIED TERM BY TERM, BECAUSE IT DOES NOT BITE EVERYWHERE:
+       · STEP 1 (D-4(a), scope to intraday) — *** NOT AFFECTED. *** It makes the
+         reconciler IGNORE delivery: a RESTRICTION, not an extension. So "do this
+         first regardless" and "before or with the flip" BOTH STAND unchanged.
+       · STEP 2 (lift `_gather`'s held-qty merge) — *** BLOCKED until the filter
+         lands. *** This is precisely the holdings-aware reader.
+       · STEP 4 (D-1 delivery dimension) — *** BLOCKED until the filter lands. ***
+       · Q1 option (b) (teach `reconcile_positions` holdings) — *** BLOCKED. ***
+       ⇒ Same restrict-vs-extend asymmetry that chose Option 2 in the Q4 decision.
+     ⚠️ AND §D4 ITEM 2 IS SUPERSEDED. "Register G3/G4 as known consequences" was
+     right while G4 was UNDECIDED. *** G4 IS NOW A DECIDED DEFECT WITH A DATED FIX
+     (Rama, 30-Jul; Q7 = ship the filter before 4-Aug) — to be FIXED, not
+     accepted. *** ⇒ §E's Q4 is ANSWERED, and its "it IS a flip blocker" reading is
+     NARROWED: the filter blocks the CARRY PILOT, not the flag flip (the flip alone
+     puts no delivery position on the book).
+     Full reasoning: `docs/audit/q4_hard_kill_delivery_decision_30jul2026.md`.
+
+================================================================================
+D4 (THE SIZING QUESTION). IS ANY OF THIS REQUIRED BEFORE TUE 4-AUG'S FLIP?
+================================================================================
+*** NO — AND THE PREMISE THAT SAID YES IS REFUTED. *** The asking card said: if
+B1 shows the 15:15 breaker would square a real CNC position, then this blocks the
+flip. B1 says it would NOT. The 15:15 kill is a SOFT_KILL that closes nothing, and
+the 15:17 squareoff excludes CNC at both of its sites, already, by explicit design
+(EOD6 / FIX-015 / FIX-182). *** The flip is not gated on this work. ***
+
+⚠️ THREE THINGS SHOULD NEVERTHELESS TRAVEL WITH IT, and none is a redesign:
+  1. *** SHIP D-8 STEP 1 BEFORE OR WITH THE FLIP. *** Without it, the first held
+     delivery day emits a daily false "MISSING_AT_BROKER" CRITICAL. It is small,
+     standalone and needs no schema. Not shipping it trains Rama to ignore a
+     capital-path alert — which is more expensive than the bug.
+  2. *** REGISTER G3/G4 AS KNOWN CONSEQUENCES OF THE FLIP, IN WRITING, BEFORE IT.***
+     A HARD_KILL sells a delivery position on its buy day; from T+1 a HARD_KILL
+     silently leaves it. Both are acceptable if KNOWN. Neither is written down now.
+  3. Name G6 in the flip plan — `delivery_symbols` goes non-empty for the first
+     time and activates a never-run branch.
+
+⭐ AND THE REVERSE DEPENDENCY, WHICH IS THE REAL POINT: *** the flip is what makes
+this work testable at all. *** The delivery dimension cannot be exercised in paper.
+So the honest sequence is flip-then-observe-then-build, not build-then-flip — with
+step 1 as the one exception that must precede it.
+⛔ Whether that reorders the 4-Aug sequence is RAMA'S CALL, not mine.
+
+SLOT, STATED HONESTLY: Thu 30-Jul evening, Fri 31-Jul evening, Mon 3-Aug and
+Tue 4-Aug are all allocated. ⇒ the earliest realistic slot for steps 2-5 is AFTER
+the 4-Aug flip. *** Step 1 is small enough to fit an existing evening slot and I
+recommend it does. ***
+
+================================================================================
+E. OPEN QUESTIONS FOR RAMA
+================================================================================
+Q1. D-4: scope `reconcile_positions` to intraday-only (recommended), or teach it
+    holdings and retire the delivery dimension idea? One of the two, not both.
+Q2. Does D-2's snapshot table justify a schema change, or should the closing
+    inventory be derived on demand from `trades`/`orders` with no new table?
+    (Derive-don't-duplicate argues for no table; the morning check argues for one.)
+Q3. B3/G5: is the daily-loss limit's blindness to unrealized overnight drawdown a
+    deliberate scope choice, or a gap to close? This changes whether delivery
+    positions can breach the loss limit unnoticed.
+Q4. ✅ ANSWERED 30-Jul (Rama, revising Q4): NO — that is NOT the wanted behaviour.
+    ⇒ It IS a code change (the buy-day product filter), and it is now a DATED
+    pre-4-Aug commitment. ⚠️ But the "flip blocker" wording above is NARROWED: it
+    blocks the CARRY PILOT, not the flag flip. See the ORDERING CONSTRAINT in D-8
+    and `docs/audit/q4_hard_kill_delivery_decision_30jul2026.md`.
+Q5. The gate question at the top: did "not before Thursday's closes" mean "not
+    while the position is held"? If so, this document waits for Friday.
+
+================================================================================
+F. WHAT WAS NOT DONE
+================================================================================
+⛔ No code, config or schema change. No second reconciler. No FIX-182 tuning. No
+K1 fix. Nothing built. This document is a design proposal and a set of measured
+findings; two of the asking card's premises (the 15:15/15:17 CNC force-close, and
+the FIX-182 daily blindness) are refuted from source, and one of my own statements
+from this morning is corrected in §0.
+================================================================================
+END
+================================================================================
