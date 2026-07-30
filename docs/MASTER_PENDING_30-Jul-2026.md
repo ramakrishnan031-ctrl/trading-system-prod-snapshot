@@ -265,6 +265,97 @@ AUTOBEES) absent from the instrument cache. They are skipped with a stated reaso
 and PB-01 should not trade them, so it is benign; worth a note if the count keeps
 climbing.
 
+### 3.7 ⭐⭐ THE STALE-REGISTER SWEEP (30-Jul night) — every open G/R item, one verdict
+
+**Why:** two of three items earlier tonight **dissolved on contact** — G16 was fixed
+16-Jul (twelve days before it was logged open) and G4 had an independent 24-Jul
+witness. That is a signal the register carried entries resolved out-of-band and never
+marked. **"Open" must mean open.**
+⛔ **The bar: CLOSE only with a cited commit / file:line / measurement. Ambiguous ⇒
+STAY-OPEN. Aggressive on evidence, conservative on inference** — closing a real
+kill/capital item on a hopeful reading is the worse error.
+
+#### ✅ CLOSE-NOW (4 top-level) — each with its evidence
+
+| item | evidence |
+|---|---|
+| **G5** — no send-side alert audit trail below CRITICAL | `214a878` → cherry-picked `264dd5b`, **DEPLOYED 30-Jul 19:55:30** in `4cc4d04`; `_audit_send` verified present in the **deployed VM tree** (3 refs) and md5-identical to the pushed blob. ⚠️ **FORWARD-ONLY** — historical gaps stay unanswerable, there is no source to reconstruct them from. 🏷️ `<DEPLOYED>`, **not** `<VERIFIED LIVE>`: it first executes on the next alert send. |
+| **G6** — PB-01 25 → 12 | §3.6. Width **25·12·15·14**; heartbeat `symbols=` **27→12→16→16**; the 12-day was `symbols=12 queued=12 written=12`, **zero skips**. INPUT fact; gate-rejection and capture truncation both **refuted**. |
+| **G16** — `DEPLOYMENT.md` stale paths | §3.6. **`67850b8` (16-Jul)** already fixed it; both asserted paths **verified to exist on the VM**. ⛔ No edit made — the register entry was stale, not the doc. |
+| **R0** — the T2 arm time | **SPENT** — armed 29-Jul 11:31; 5 CNC + 5 GTTs, all re-verified `active` broker-side 30-Jul. |
+
+#### 🔗 RETIRE / RECLASSIFY (1 top-level)
+
+| item | disposition |
+|---|---|
+| **G14** — S5 second-half · X2 `eod_verify` columns | ⇒ **DECIDED PARK, not a TODO.** X2 **re-measured tonight: `eod_verification` 30 rows, `pnl_variance = 0.0` on ALL 30, zero nulls, min=max=0.0** — still dead. It is parked **because fixing it ARMS a dormant P&L check**, which is a decision, not neglect. ⛔ Stop reading it as pending work. |
+
+#### 🔗 SUB-ITEM resolutions — folded into their survivor, survivor stays open
+
+- **G15** — the three `event_type` sites: **CONFIRMED closed** by `5c70def` (21-Jul);
+  `_is_critical_event()` verified at `reports/daily_report.py:262`, used `:575`.
+  ⏳ **G15 stays open** for the *remaining* cousins — `REJECTED_KILL_SWITCH` verified
+  **still a free-text literal** at `ops_dashboard/backend/readers/db_reader.py:41`.
+- **G19 — M-O9 CLOSED as INERT.** Re-measured at **467 trades**: exit reasons are
+  SL_HIT 92 · TGT_HIT 65 · MANUAL 43 · … — **no trail exit has ever fired.** Reopen
+  trigger = the entry protocol leaving `LIMIT_TRIPLE`. ⏳ G19's other 6 sub-items open.
+- **G22 — DG-3 MERGED into G23.** The register itself said *"DG-3 == G23, counted
+  once"*; the duplicate line is retired. ⏳ DG-1 / DG-2 stay open.
+- **G24 — P5-4 CLOSED.** `test_control_tower_phase1a` is **not** in tonight's
+  enumerated 10-failure set (AFTER tree `4cc4d04`, in-window) ⇒ it passes.
+  ⏳ P5-2 / P5-3 stay open.
+- **G12 — T2's wording CORRECTED, item stays open.** *"`tests/crash_test/` is never
+  run"* is true **only of the narrower `pytest tests/unit tests/integration`**.
+  MEASURED tonight: `run_tests.py` runs `pytest tests/`, which **does** collect
+  `tests/crash_test/` — that is how F2's three failures surfaced. ⏳ T3/T4 unchanged.
+
+#### ⏳ STAY-OPEN (20) — ⛔ deliberately NOT closed
+
+**Money path** (need re-parity + Rama's sizing call): **G2** scorer 25/100 constant
+0.0 · **G3** sector resolution (blocks R2/D1) · **G8** leverage gap.
+**Kill / capital, careful-loop, gated after 4-Aug or the first live kill:** **G11**
+(K1/K2/K3) · **G13** first live HARD_KILL · **G18** the 10 MEDs · **G25** Slice-2.5
+(M-C2/M-O7/M-O6/H-6 — **correctly bundled to arm WITH delivery**).
+**Other genuinely open:** **G1** liveness-probe 95-min gap (own small design; the
+manual ~17:10 check is the compensating control) · **G7** evidence infrastructure ·
+**G9** built-and-never-run — **re-verified tonight: `conditional_allocation_enabled:
+false`, `mis_filter.enabled: false`, both still never-run** · **G10** 20 live keys in
+the test env (the network guard shipped tonight is only the FIRST layer; a separate
+test token is still owed) · **G12** · **G15** · **G17** AB-910 phases 9+10 never
+produced · **G19** · **G20** (~55 line items — ⛔ pointer only, do not touch the two
+July audit files) · **G21** BK-1…BK-8 · **G22** · **G23** B3 authoritative flip ·
+**G24**.
+
+#### ⚠️ NEEDS-RAMA (13) — open, but only a decision moves them
+
+**G4** (the V3 spec: investigation CLOSED tonight; what remains is a **decision** —
+nobody ratified PB-01's gates/window/thresholds) · **R1 STRATEGY REVISION** ·
+R2 D1 sizing (blocked by G3) · R3 D2 direction · R4 D3 min_pass · R5 prune cap ·
+R6 backup cap · R7 the watchman · R8 secondary Telegram channel (⚠️ coupled to the
+8 s send budget — decide together) · R9 `mis_filter` enforcing flip · R10
+conditional-allocation flip · R11 `predeploy-*` · R12 WAAREERTL.
+
+⭐ **A3 check on R9/R10 — is the underlying work already done?** **R10: YES, the code
+is BUILT** (`resolve_bucket_allocation`, `fund_manager.py:111`, unit-tested; traced
+tonight under Q9) ⇒ R10 is **purely a flip decision**. **R9: the SHADOW half is built
+on `fix-symdir-27jul` and goes live Mon 3-Aug**; the **enforcing** flip is the
+decision. ⇒ Neither is closeable, but neither is blocked on engineering.
+
+#### ⛔ RECONCILIATION — N = C + M + P + D
+
+```
+  N  open G/R items at the start of the sweep (G1-G25 + R0-R12)  =  38
+  C  CLOSE-NOW      G5 · G6 · G16 · R0                           =   4
+  M  RETIRE/RECLASS G14 (decided park)                           =   1
+  P  STAY-OPEN                                                   =  20
+  D  NEEDS-RAMA     G4 + R1-R12                                  =  13
+                                        C + M + P + D  = 4+1+20+13 = 38  ✅
+```
+⚠️ **Sub-item closes (M-O9 · DG-3 · P5-4 · G15's three sites · G12's T2 wording) are
+recorded INSIDE their surviving parent and are NOT counted as top-level closes** —
+counting them twice would inflate the close rate, which is the vanity this sweep
+exists to avoid. ⛔ **Nothing vanished: every one of the 38 appears above by name.**
+
 ### 3.5 ⚠️ CORRECTIONS TO NUMBERS THAT WERE CARRIED AND ARE WRONG
 
 - **"33–34 test failures past 18:15" is STALE.** Measured tonight in-window: **10**.
@@ -355,21 +446,56 @@ for x in k.get_gtts(): o=x[\"orders\"][0]; print(x[\"id\"], x[\"status\"], x[\"c
 
 ---
 
-## 5. NEEDS RAMA — nothing else can move these
+## 5. ⭐⭐ THE TRULY REMAINING ACTIONABLE BACKLOG
 
-| # | item | state |
+⛔ **Closed, parked and historical items are NOT here.** Two buckets only. Post-sweep
+(§3.7), this is the whole live list.
+
+### BUCKET 1 — NEEDS RAMA'S DECISION (nothing else can move these)
+
+| # | the decision | why it is yours |
 |---|---|---|
-| — | **The Friday 09:20 close** | ⛔ his action, tomorrow |
-| R1 | **STRATEGY REVISION** — ⭐ the only item on the board that bears on **profitability**. Nothing technical blocks it. | OPEN, the real bottleneck |
-| R2 | D1 sizing / `max_concentration_pct` | ⛔ HOLD — blocked by G3 (sector resolution) |
-| R5/R6 | prune-retention cap · backup-retention cap | OPEN |
-| R7/R8 | the watchman · `TELEGRAM_CHANNEL_SECONDARY` (⚠️ coupled to the 8 s send budget) | OPEN |
-| R9/R10 | `mis_filter` enforcing flip · **conditional-allocation flip** (the 4th delivery flag) | OPEN — R10 is part of 4-Aug |
-| R11 | `predeploy-*` — 4 files, ~764 MB. ⚠️ **renaming to `pre_*` is a DELETE in disguise** | OPEN, re-verified 30-Jul |
-| R12 | WAAREERTL 23-Jul external close — possibly a CAPITAL question | OPEN |
-| — | **2FA seed → VM-only** (Fri 7 / Sat 8-Aug) · rotate Telegram token · disable rpcbind | OPEN |
-| — | ⛔ **REFUSED, do not re-propose:** SSH→Tailscale-only (phone off the tailnet 23+ days) · `require_hmac` → keep FALSE · arm `pre-receive` → not as-is | settled |
-| — | ⏰ **Commit NSE's published `nse_holidays_2027.yaml` before 31-Dec-2026** — the first 08:15 boot of 2027 does **not** start without it (MEASURED). ✅ emails from 15-Dec. | dated |
+| **R1** | ⭐⭐ **STRATEGY REVISION.** | **THE ONLY ITEM ON THIS BOARD THAT BEARS ON PROFITABILITY, and nothing technical blocks it.** Win rate must go ~38-39% → **above ~43.5%**; three independent lines (statistical · geometric · arithmetic) all point at the **entries**. ⛔ Everything shipped since 24-Jul is correctness/safety/observability — **not one item of it makes the system more profitable.** The engineering queue is effectively empty; **this is the bottleneck.** |
+| **R10** | **Conditional-allocation flip** — the 4th delivery flag (4-Aug). | ⭐ **The code is BUILT and traced** (`resolve_bucket_allocation`, `fund_manager.py:111`; Q9 trace 30-Jul). Purely a flip decision. Without it ~70% of capital strands in the idle intraday bucket. |
+| **R9** | `mis_filter` **enforcing** flip. | The SHADOW half ships Friday, live Mon 3-Aug. Enforcing touches the **signal path** ⇒ your call. |
+| **R2** | D1 sizing / `max_concentration_pct`. | ⛔ **HOLD — blocked by G3.** ⚠️ Read `sector_exposure()`'s handling of `'UNKNOWN'` **before** this moves; the error direction inverted. |
+| **G4** | **Ratify PB-01's gates / window / thresholds.** | The "V3 DECISION CONTENT SPECIFICATION v1.0" **does not exist** (6-search width, 30-Jul). Current values recorded OBSERVED-FROM-CODE. ⛔ **A decision is missing, not a document** — owed before any PB-01 promotion, gated far beyond 4-Aug. |
+| **R8** | `TELEGRAM_CHANNEL_SECONDARY`. | ⚠️ **Coupled to a number** — the M-A2 send deadline is 8 s and the budget is SHARED, so a 2nd channel makes the ladder ~52 s. **Decide both together.** |
+| **R11** | `predeploy-*` backups — delete, or write the retention rule. | ⚠️ **Renaming to `pre_*` is a DELETE in disguise.** Re-verified 30-Jul: **4 files present, backups 8.4 G.** |
+| **R5 · R6** | prune-retention cap value · backup-retention cap value. | Both are "pick a steady-state number". R6: measure a week of post-clear nights first. |
+| **R7** | the watchman — retire / keep-and-read-sceptically. | ⛔ Do **not** tighten the prompt; the other two options are free. |
+| **R3 · R4 · R12** | D2 direction · D3 min_pass (downgraded) · WAAREERTL 23-Jul external close. | R3 needs months + a positive control. R12 may be a **capital** question, not execution. |
+| **ops** | 2FA seed → VM-only (**Fri 7 / Sat 8-Aug**) · rotate Telegram token · disable rpcbind. | ⏰ dated / standing. |
+| **⏰ dated** | **Commit NSE's published `nse_holidays_2027.yaml` before 31-Dec-2026.** | MEASURED: the first 08:15 boot of 2027 **does not start** without it. ✅ It emails you from 15-Dec. ⛔ **Never invent the dates.** |
+
+⛔ **SETTLED — do not re-propose:** SSH→Tailscale-only (phone off the tailnet 23+
+days ⇒ closing `:22` voids the emergency runbook) · `require_hmac` → **keep FALSE**
+(Chartink cannot sign ⇒ zero signals) · arm `pre-receive` → **not as-is** (guard-2
+false-rejects every push) · MIS→CNC fallback → **will not be built** · F2 operator
+soft-kill → **dropped**.
+
+### BUCKET 2 — GATED IMPLEMENTATION (each with its gate)
+
+| # | work | gate |
+|---|---|---|
+| — | **The buy-day product filter** (+ its CRITICAL-on-NULL-fallback) | ⏰ **BEFORE 4-Aug**, and ⛔ **before anything holdings-aware** |
+| — | `fix-symdir-27jul` | **Fri 31-Jul evening** → live Mon 3-Aug |
+| **G3** | sector **resolution** (81/82 populated rows read `UNKNOWN`) | money path ⇒ own review + prediction + deploy. **Hard prerequisite of any sizing increase** |
+| **G2** | B2/M-S4 — 25 of 100 scorer points are a constant `0.0` | needs re-parity + re-soak; coupled to R3/D2 |
+| **G8** | the leverage gap (system sizes UNLEVERED) | the **recalibration** is the work, not the multiplier |
+| **G1** | liveness probe stops 16:00 vs service 17:35 — **95 min unwatched daily** | its own small design (cron window **and** `_LIVENESS_END` move together). Compensating control = the manual ~17:10 check |
+| **G11** K1 | emergency kill + same-day restart ⇒ service does not come back | after 4-Aug. *(Docs already fixed; the BEHAVIOUR half is what is open)* |
+| **G13** | first live HARD_KILL · Phase-1 replay · M-C1 non-zero carryover | needs a real mid-day restart with live state |
+| **G18** | the 10 capital/kill MEDs (M-C4/M-C5/M-C6/M-C8/W10/P3-c6…c10) | careful-loop, after 4-Aug |
+| **G25** | Slice-2.5: M-C2 · M-O7 · M-O6 · H-6 | ⭐ **arm WITH delivery — correctly bundled so whoever flips delivery FINDS them** |
+| **G23** | B3 / P1 authoritative flip (`eod_broker_reconcile`) | a clean shadow week + an MTM spot-check |
+| **G7** | evidence infrastructure — the two shadows cannot validate a new entry thesis | ⚠️ every service-down day is a lost OOS day |
+| **G10** | a **separate test token** (20 live prod keys sit in the test env) | the network guard shipped 30-Jul is only the first layer |
+| **G12** | T3 `test_fix181` LIMIT-vs-MARKET · T4 `backfill…w8.py:92` restates the vocabulary · **F2** `CT_SCRATCH_DIR` inside `data_store/` | after 4-Aug; all test-side |
+| **G15** | remaining free-text cousins (`REJECTED_KILL_SWITCH` @ `db_reader.py:41`, throttle category, W9) | low |
+| **G17** | AB-910 phases 9+10 never produced | formal slice unaudited |
+| **G19** · **G20** · **G21** · **G22** · **G24** | 6 TIER-B · ~55 architecture/LOW (⛔ pointer only) · BK-1…BK-8 · DG-1/DG-2 · P5-2/P5-3 | all low / deferred |
+| **G9** | 9 built-and-never-run — ⭐ ask *"does anything ACT on what it produces?"* | re-verified 30-Jul: still never-run |
 
 ---
 
