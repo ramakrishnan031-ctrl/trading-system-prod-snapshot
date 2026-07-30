@@ -21,6 +21,9 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+import utils.instance_lock as il
 from utils.instance_lock import (
     _LOCK_FILE,
     _pid_is_alive,
@@ -34,37 +37,94 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # Ports private to this module, so a stray 5001 listener cannot colour results.
 _PORT_A = 59321
 _PORT_B = 59322
+# 27-Jul-2026: the port-availability probes below used bare 59996-59999, and 59996
+# COLLIDED with tests/unit/test_phase17_batch3.py, which binds+listens on it. Moved
+# into this module's private range — the class, not just the one instance.
+_PORT_FREE = 59323      # must stay UNBOUND for the whole run
+_PORT_BUSY1 = 59324
+_PORT_BUSY2 = 59325
+_PORT_SEQ = 59326
+
+
+@pytest.fixture(autouse=True)
+def _isolate_lock_file(tmp_path, monkeypatch):
+    """27-Jul-2026 — give every test its OWN lock path.
+
+    ``_LOCK_FILE`` is a machine-global constant (``/tmp`` or ``%TEMP%``), shared by
+    every test here AND by tests/unit/test_phase17_batch3.py, which takes the same
+    lock. This module isolated its PORTS (above) and left the AUTHORITATIVE layer-1
+    file global — so concurrent or closely-spaced runs contended on it.
+
+    Redirecting the path weakens nothing: P1 and P2 are properties of CONTENTION ON
+    WHATEVER PATH IS CONFIGURED, and every participant (this process and the spawned
+    holder children, which are told the path explicitly) reads the same patched value.
+    Precedent: tests/conftest.py::_isolate_real_sentinels does exactly this for
+    sentinels.
+    """
+    p = tmp_path / "trading-system.lock"
+    monkeypatch.setattr(il, "_LOCK_FILE", p)
+    monkeypatch.setitem(globals(), "_LOCK_FILE", p)   # this module imported it by value
+    yield
 
 
 def _holder_process(lock_port: int) -> subprocess.Popen:
-    """Spawn a REAL second process that takes the lock and holds it until killed.
-    Returns once the child has reported the outcome on stdout."""
+    """Spawn a REAL second process that takes the lock and holds it until released.
+    Returns once the child has reported the outcome on stdout.
+
+    27-Jul-2026 — the child used to ``time.sleep(120)``. It is a bare Popen with no
+    job object and no atexit, so ANY run that failed to reap it left a live process
+    holding the machine-global lock for up to two minutes — into the NEXT pytest
+    invocation, which was then refused by a live PID that differed every run. It now
+    blocks on stdin instead, so it dies the moment this process closes the pipe or
+    dies itself, on both platforms. It still holds the lock for exactly as long as
+    the test needs it, so P1/P2 are tested identically.
+    """
     src = textwrap.dedent(f"""
-        import sys, time
+        import sys
         sys.path.insert(0, {str(_REPO_ROOT)!r})
-        from utils.instance_lock import acquire_instance_lock
-        ok, reason = acquire_instance_lock(lock_port={lock_port})
+        import utils.instance_lock as il
+        from pathlib import Path
+        il._LOCK_FILE = Path({str(_LOCK_FILE)!r})   # share the parent's isolated path
+        ok, reason = il.acquire_instance_lock(lock_port={lock_port})
         print("ACQUIRED" if ok else "REFUSED " + reason, flush=True)
         if not ok:
             sys.exit(2)
-        time.sleep(120)
+        sys.stdin.read()   # blocks until the parent closes stdin or dies
     """)
     proc = subprocess.Popen(
         [sys.executable, "-c", src],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        stdin=subprocess.PIPE,           # REQUIRED: without a pipe the child inherits
+        stdout=subprocess.PIPE,          # pytest's stdin and read() returns instantly
+        stderr=subprocess.PIPE, text=True,
     )
-    line = proc.stdout.readline().strip()
-    assert line == "ACQUIRED", f"holder child failed to acquire: {line!r}"
+    try:
+        line = proc.stdout.readline().strip()
+        assert line == "ACQUIRED", f"holder child failed to acquire: {line!r}"
+    except BaseException:
+        # The assert used to fire BEFORE `proc` was bound in the caller, so the
+        # caller's `finally: _reap(holder)` never ran and the child leaked.
+        _reap(proc)
+        raise
     return proc
 
 
 def _reap(proc: subprocess.Popen) -> None:
-    if proc.poll() is None:
+    if proc.stdin is not None:
+        try:
+            proc.stdin.close()       # EOF -> the child exits on its own
+        except OSError:
+            pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
         proc.kill()
-    proc.wait(timeout=10)
-    for stream in (proc.stdout, proc.stderr):
+        proc.wait(timeout=10)
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
         if stream is not None:
-            stream.close()
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 class TestSingleInstanceAcrossProcesses:
@@ -95,13 +155,38 @@ class TestSingleInstanceAcrossProcesses:
         # refused whenever that PID had been recycled -- and refusing means the
         # unit restart-loops.
         holder = _holder_process(_PORT_A)
-        holder.kill()
+        holder.kill()          # deliberately KILL, not close stdin: this is the crash path
         holder.wait(timeout=10)
-        for stream in (holder.stdout, holder.stderr):
-            stream.close()
+        for stream in (holder.stdin, holder.stdout, holder.stderr):
+            if stream is not None:
+                stream.close()
 
         ok, reason = acquire_instance_lock(lock_port=_PORT_A)
         assert ok is True, f"legitimate restart blocked after a crash: {reason}"
+
+    def test_holder_child_exits_when_its_parent_goes_away(self):
+        """27-Jul-2026 — pins the fix for the flake this file used to cause.
+
+        The holder child must not outlive the process that spawned it. It used to
+        ``time.sleep(120)``, so an unreaped child held the machine-global lock for
+        two minutes and refused the NEXT pytest invocation -- naming a live PID that
+        differed every run, which is exactly what the failure looked like.
+
+        RED on the old code for a real reason: with ``time.sleep(120)`` and no stdin
+        pipe there is nothing to close, and the child ignores EOF, so the wait below
+        raises TimeoutExpired.
+        """
+        holder = _holder_process(_PORT_A)
+        try:
+            assert holder.poll() is None, "child should still be alive holding the lock"
+            holder.stdin.close()            # exactly what the parent's death does
+            holder.wait(timeout=10)         # must exit ON ITS OWN -- not be killed
+            assert holder.poll() is not None, "child outlived its parent's stdin"
+            # and the lock it held must now be free for a legitimate restart
+            ok, reason = acquire_instance_lock(lock_port=_PORT_A)
+            assert ok is True, f"lock not released by the departed child: {reason}"
+        finally:
+            _reap(holder)
 
     def test_p2_restart_after_clean_exit_works(self):
         ok, _ = acquire_instance_lock(lock_port=_PORT_A)
@@ -176,11 +261,13 @@ class TestAcquireInstanceLock:
 
     def setup_method(self):
         release_instance_lock()
-        if _LOCK_FILE.exists():
-            try:
-                _LOCK_FILE.unlink()
-            except OSError:
-                pass
+        # 27-Jul-2026: the unlink that used to live here is GONE. instance_lock.py's
+        # own docstring says the lock file "is never unlinked" -- unlinking a path a
+        # holder still has open lets the next start lock a FRESH inode and run
+        # alongside it, which is the false-PASS direction. test_release_leaves_the_
+        # file_in_place asserts that invariant; this setup was breaking it. The
+        # per-test tmp path (see _isolate_lock_file) makes the unlink unnecessary:
+        # every test already starts with a path that does not exist.
 
     def teardown_method(self):
         release_instance_lock()
@@ -236,19 +323,19 @@ class TestCheckPortAvailable:
     """GUARD 1: Port conflict detection before binding."""
 
     def test_available_port_returns_true(self):
-        ok, reason = check_port_available(59999)
+        ok, reason = check_port_available(_PORT_FREE)
         assert ok is True
         assert reason == ""
 
     def test_occupied_port_returns_false(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", 59998))
+        server.bind(("127.0.0.1", _PORT_BUSY1))
         server.listen(1)
         try:
-            ok, reason = check_port_available(59998)
+            ok, reason = check_port_available(_PORT_BUSY1)
             assert ok is False
-            assert "59998" in reason
+            assert str(_PORT_BUSY1) in reason
             assert "already in use" in reason
         finally:
             server.close()
@@ -256,10 +343,10 @@ class TestCheckPortAvailable:
     def test_checks_correct_host(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(("127.0.0.1", 59997))
+        server.bind(("127.0.0.1", _PORT_BUSY2))
         server.listen(1)
         try:
-            ok, _ = check_port_available(59997, "127.0.0.1")
+            ok, _ = check_port_available(_PORT_BUSY2, "127.0.0.1")
             assert ok is False
         finally:
             server.close()
@@ -277,7 +364,7 @@ class TestIntegrationMainGuards:
     def test_lock_then_port_check_sequence(self):
         ok1, _ = acquire_instance_lock(lock_port=_PORT_A)
         assert ok1 is True
-        ok2, _ = check_port_available(59996)
+        ok2, _ = check_port_available(_PORT_SEQ)
         assert ok2 is True
         release_instance_lock()
 

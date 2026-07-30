@@ -73,7 +73,22 @@ def test_merged_readonly_read_and_f2_functional_status_coexist(tmp_path, monkeyp
     assert non_traded == [("ZZZ", "Score too low")]
 
     # ── Branch B (F2): functional_status derived from the CSV artifact ──
-    reports = Path(gsc.__file__).parent.parent / "reports" / "daily_review"
+    # 27-Jul-2026: this used to write into the REAL reports/daily_review/. The
+    # far-future date + unlink() in `finally` kept it tidy, which is why it went
+    # unnoticed — but on the VM that directory holds the LIVE 16:01 artifacts
+    # (screened_stocks_<real-date>.csv), so the suite was dropping a fabricated
+    # future-dated file in among genuine ones. Caught by conftest's
+    # _block_real_artifact_dirs guard.
+    #
+    # _csv_functional_status() takes no path argument — it derives one from the
+    # module's own __file__ at CALL time (generate_screened_stocks_csv.py:320,
+    # `Path(__file__).parent.parent / "reports" / "daily_review"`). Repointing that
+    # global roots the SAME production path-derivation logic under tmp_path, so the
+    # behaviour under test is unchanged and nothing touches the real tree. Preferred
+    # over the allow_real_artifact_dirs opt-in: an exemption would have preserved the
+    # exact pollution this guard exists to remove.
+    monkeypatch.setattr(gsc, "__file__", str(tmp_path / "scripts" / "gsc.py"))
+    reports = tmp_path / "reports" / "daily_review"
     reports.mkdir(parents=True, exist_ok=True)
     test_date = "2099-01-01"   # far-future date → cannot clash with a real artifact
 

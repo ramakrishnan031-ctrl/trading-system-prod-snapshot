@@ -10,7 +10,7 @@ Phase 17 Audit Batch 3 tests (substantive fixes):
 from unittest.mock import Mock, MagicMock
 import queue
 import tempfile
-from pathlib import Path
+from pathlib import Path  # noqa: F401  (used by test_fix081's tmp lock path)
 
 def test_fix079_hollow_tick_discarded() -> None:
     """
@@ -63,25 +63,39 @@ def test_fix081_persistent_socket_lock() -> None:
     assert "_lock_socket.close()" in release_source, \
         "FIX-081: release_instance_lock must close _lock_socket"
 
-    # Test port is configurable
-    test_port = 59996
+    # 27-Jul-2026 — three fixes, all for the same root cause: this test is a SECOND
+    # holder of the machine-global instance lock, and it had no cleanup of any kind.
+    #   (1) port 59996 COLLIDED with tests/unit/test_instance_lock.py, which asserts
+    #       that same port is AVAILABLE. Moved to a port private to this file.
+    #   (2) the lock PATH is now redirected to a tmp dir, so this test cannot contend
+    #       with test_instance_lock.py or with a concurrent run.
+    #   (3) the acquires are wrapped in try/finally. This file has no classes, no
+    #       fixtures and no teardown, so ANY raise between the first acquire and the
+    #       final release leaked the file lock AND the bound socket for the rest of
+    #       the pytest process.
+    # The `il._LOCK_FILE.unlink(missing_ok=True)` that used to sit here is GONE:
+    # instance_lock.py's docstring says the lock file is never unlinked (unlinking a
+    # path a holder still has open lets the next start lock a FRESH inode and run
+    # alongside it), and a fresh tmp path makes it unnecessary anyway.
+    test_port = 59990                      # private to this module
+    tmp_lock = Path(tempfile.mkdtemp(prefix="t_fix081_")) / "trading-system.lock"
+    original_lock_file = il._LOCK_FILE
+    il._LOCK_FILE = tmp_lock
+    try:
+        ok1, msg1 = il.acquire_instance_lock(lock_port=test_port)
+        assert ok1 is True, f"FIX-081: First acquire should succeed, got: {msg1}"
+        assert il._lock_socket is not None, "FIX-081: _lock_socket should be set after acquire"
 
-    # Clean start
-    il._LOCK_FILE.unlink(missing_ok=True)
-    ok1, msg1 = il.acquire_instance_lock(lock_port=test_port)
-    assert ok1 is True, f"FIX-081: First acquire should succeed, got: {msg1}"
-    assert il._lock_socket is not None, "FIX-081: _lock_socket should be set after acquire"
+        # Release
+        il.release_instance_lock()
+        assert il._lock_socket is None, "FIX-081: _lock_socket should be None after release"
 
-    # Release
-    il.release_instance_lock()
-    assert il._lock_socket is None, "FIX-081: _lock_socket should be None after release"
-
-    # Can re-acquire after release
-    ok2, msg2 = il.acquire_instance_lock(lock_port=test_port)
-    assert ok2 is True, f"FIX-081: After release, acquire should succeed again, got: {msg2}"
-
-    # Cleanup
-    il.release_instance_lock()
+        # Can re-acquire after release
+        ok2, msg2 = il.acquire_instance_lock(lock_port=test_port)
+        assert ok2 is True, f"FIX-081: After release, acquire should succeed again, got: {msg2}"
+    finally:
+        il.release_instance_lock()
+        il._LOCK_FILE = original_lock_file
 
     print("  OK fix081_persistent_socket_lock")
 
