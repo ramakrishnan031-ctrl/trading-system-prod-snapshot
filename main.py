@@ -2925,6 +2925,28 @@ def _main_locked(args, config_dir: Path) -> int:
             _log.critical("q4c_structure_exit_trailing_sl_contradiction: %s", _a4[0].message)
             store.close()
             return 3
+    # SLICE2.5 #16a (27-Jul-2026) — the delivery capital foot-gun, same shape as Q4(c)
+    # above and for the same reason: config_loader runs group A WITHOUT strategies, so
+    # A5 (delivery live + fixed bucket split + a DELIVERY-ONLY active book => the
+    # intraday bucket's share of capital is stranded) is invisible at config load. It
+    # would otherwise surface only in the 08:30 pre-flight EMAIL — a report, not a gate.
+    # Re-run group A here WITH the loaded strategies and fail-fast before any capital
+    # is reserved.
+    #
+    # Gated on delivery_enabled, which has been false since the 15-Jun incident that
+    # created the lock: on every ordinary boot this is a byte-identical no-op, and it
+    # can only fire on a day someone deliberately turned delivery on. `is True` (not
+    # truthy) for the same reason as Q4(c) — a MagicMock config in a unit test must not
+    # trip it. Exit 3, like Q4(c): RestartPreventExitStatus="3 4", so a config block
+    # stops cleanly instead of restart-looping.
+    if getattr(app_config.system, "delivery_enabled", False) is True:
+        _a5 = [f for f in audit_config(
+                   app_config.system, strategies=strategies, groups="A").blocks
+               if f.code == "A5_delivery_without_conditional_allocation"]
+        if _a5:
+            _log.critical("slice25_delivery_capital_footgun: %s", _a5[0].message)
+            store.close()
+            return 3
     # V3 03.02: index-level Market Regime shadow engine (default-off). Shares the
     # same rate-limited OHLC fetch closure (reused for the index by config token).
     _regime_cfg = getattr(app_config.system, "regime", None)
@@ -3452,8 +3474,54 @@ def _main_locked(args, config_dir: Path) -> int:
     webhook_url = f"http://127.0.0.1:{wh_cfg.bind_port}/health"
     wh_result = check_webhook_endpoint(webhook_url, _http_fetch, _log)
     if not wh_result.reachable:
-        _log.critical("Webhook endpoint not reachable at %s", webhook_url)
-        _shutdown_event.set()
+        # S4 follow-up, ANSWERED 27-Jul-2026: DEGRADE, do not block the boot.
+        #
+        # This used to _shutdown_event.set(). On 17-Jul that cost a whole trading day
+        # (0 trades) behind an exit 0 that looked like a normal stop, because S4 had
+        # just put /health behind the webhook secret and this probe called it
+        # anonymously. The 401 was fixed; the DECISION -- should one non-2xx from one
+        # local endpoint stop everything -- was left open. It is answered here.
+        #
+        # THE ARGUMENT IS SAFETY, NOT CONVENIENCE. Halting does not prevent the bad
+        # outcome; it ENLARGES it. No Flask means no new signals, so entries stop
+        # either way -- but _shutdown_event.set() also takes down exit management, the
+        # reconciler and the 15:17 EOD squareoff. It converts "no new entries, all
+        # protection still running" into "nothing running at all". On 17-Jul the book
+        # happened to be flat. That was luck, not design.
+        #
+        # THE RULE (27-Jul): fail-fast when the failing condition can only arise from
+        # a DELIBERATE ACT; degrade-and-alarm when the ENVIRONMENT can cause it. This
+        # one is environmental and fires on an unattended 08:15 boot -- the opposite
+        # of the #16a delivery-flag BLOCK above, which needs a human to have flipped
+        # a flag first.
+        #
+        # DEGRADING IS ONLY SAFE IF SOMETHING ALARMS, and liveness_probe is NOT that
+        # something: it detects a service that is DOWN, and after this change the
+        # service is UP. So the alarm has to be raised here, out-of-band, on the path
+        # that is verified to reach a human: sentinel -> alert_watcher -> email
+        # (same mechanism, same reason, as state_store's migration-refused CRITICAL).
+        # A bare _log.critical() would NOT have reached anyone.
+        _log.critical("Webhook endpoint not reachable at %s -- DEGRADED: entries "
+                      "cannot arrive, exits/reconciler/EOD squareoff continue",
+                      webhook_url)
+        try:
+            from alerts.critical import write_critical_sentinel
+            write_critical_sentinel(
+                title="Webhook endpoint unreachable at boot -- DEGRADED, still running",
+                body=(f"The post-start self-check could not reach {webhook_url}.\n\n"
+                      "NO SIGNALS CAN ARRIVE, so no new entries will be taken. The "
+                      "service is deliberately STILL RUNNING so that exit management, "
+                      "the order reconciler and the 15:17 EOD squareoff keep "
+                      "protecting anything already open.\n\n"
+                      "If the book is flat this can wait. If anything is open, it is "
+                      "still being managed. Investigate the webhook server; a restart "
+                      "is the fix once the cause is known."),
+                source_module="main.webhook_selfcheck",
+                context={"url": webhook_url, "detail": getattr(wh_result, "detail", None),
+                         "degraded": True, "shutdown": False},
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort; the log line still stands
+            _log.error("webhook self-check: CRITICAL sentinel write failed (%s)", exc)
 
     # E-4 (audit 02-Jul): expose the core daemon poll threads' liveness on /health.
     # order_monitor / order_reconciler / eod_scheduler gate health (a dead poll

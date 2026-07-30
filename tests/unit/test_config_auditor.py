@@ -131,6 +131,117 @@ class TestGroupAContradictions:
         r = audit(s, groups="A")   # no strategies
         assert not any(f.code == "A4_structure_exit_trailing_sl" for f in r.blocks)
 
+    # ── A5 (SLICE2.5 #16a, 27-Jul): delivery live + fixed split + delivery-only book ──
+    @staticmethod
+    def _intent(intent: str, enabled: bool = True):
+        class _S:
+            def __init__(self):
+                self.intent, self.enabled = intent, enabled
+                self.trailing_sl_enabled = False    # keep A4 out of these results
+        return _S()
+
+    @staticmethod
+    def _a5(r):
+        return [f for f in r.blocks if f.code == "A5_delivery_without_conditional_allocation"]
+
+    def _delivery_live(self, base_system, **over):
+        kw = dict(delivery_enabled=True, force_intraday_only=False,
+                  trade_type="DELIVERY", capital__conditional_allocation_enabled=False)
+        kw.update(over)
+        return _mut(base_system, **kw)
+
+    def test_a5_delivery_only_book_with_fixed_split_blocks(self, base_system):
+        strategies = {"pos_swing": self._intent("DELIVERY"),
+                      "gap_go_long": self._intent("INTRADAY", enabled=False)}
+        r = audit(self._delivery_live(base_system), groups="A", strategies=strategies)
+        a5 = self._a5(r)
+        assert r.verdict == "BLOCK" and a5, "delivery-only book + fixed split must BLOCK"
+        assert "CONTRADICTORY CONFIG" in a5[0].message
+        # names the offender, not the innocent
+        assert "pos_swing" in a5[0].message and "gap_go_long" not in a5[0].message
+        assert a5[0].metrics["delivery_only_strategies"] == ["pos_swing"]
+
+    def test_a5_does_not_fire_when_both_intents_are_live(self, base_system):
+        """THE false positive the naive rule would have caused.
+
+        MEASURED at fund_manager.py:139-146: with conditional_enabled TRUE *and both
+        intents active* the split is the SAME as with it FALSE. So a rule keyed on
+        the flag PAIR would block a behaviourally IDENTICAL config -- and
+        trade_type=BOTH is the likeliest production setting. RED if A5 is ever
+        rewritten to test the flags instead of the active intent set.
+        """
+        strategies = {"pos_swing": self._intent("DELIVERY"),
+                      "gap_go_long": self._intent("INTRADAY")}
+        r = audit(self._delivery_live(base_system, trade_type="BOTH"),
+                  groups="A", strategies=strategies)
+        assert not self._a5(r), "BOTH with both intents live is not a foot-gun"
+
+    def test_a5_silent_when_conditional_allocation_is_on(self, base_system):
+        strategies = {"pos_swing": self._intent("DELIVERY")}
+        r = audit(self._delivery_live(base_system, capital__conditional_allocation_enabled=True),
+                  groups="A", strategies=strategies)
+        assert not self._a5(r)
+
+    def test_a5_cannot_fire_on_an_ordinary_morning(self, base_system):
+        """The precondition is what makes BLOCK the right severity: delivery_enabled
+        has been false since 15-Jun, so this rule cannot cost an unattended boot."""
+        strategies = {"pos_swing": self._intent("DELIVERY")}
+        r = audit(self._delivery_live(base_system, delivery_enabled=False),
+                  groups="A", strategies=strategies)
+        assert not self._a5(r)
+
+    def test_a5_silent_when_no_strategy_can_trade(self, base_system):
+        # a silent book is A3's WARN, not this BLOCK -- do not double-report it
+        strategies = {"pos_swing": self._intent("DELIVERY", enabled=False)}
+        r = audit(self._delivery_live(base_system), groups="A", strategies=strategies)
+        assert not self._a5(r)
+
+    def test_a5_skipped_without_strategies_context(self, base_system):
+        # the config-only startup subset cannot resolve the active set -> no false block
+        r = audit(self._delivery_live(base_system), groups="A")
+        assert not self._a5(r)
+
+    def test_a5_is_wired_as_a_boot_gate_not_only_a_preflight_report(self, base_system):
+        """A5 needs `strategies`, which config_loader's startup audit does NOT pass --
+        so without a re-run in main.py the BLOCK degrades silently into an 08:30
+        pre-flight EMAIL. main.py re-runs group A with strategies and exits 3
+        (RestartPreventExitStatus="3 4" -> stops cleanly, no restart loop).
+
+        Pinned as a source predicate because the realistic drift is silent: rename the
+        finding code in the auditor and the guard's string filter stops matching, with
+        nothing failing anywhere. RED if either side drifts, or if the guard stops
+        passing strategies.
+        """
+        # Derive the code from a finding the auditor ACTUALLY emits, identified by its
+        # subject rather than by the literal -- so a rename on EITHER side goes red.
+        # (Asserting the literal against main.py alone does not: main.py still contains
+        # the old string, so the test passed while the coupling was broken. MEASURED.)
+        strategies = {"pos_swing": self._intent("DELIVERY")}
+        r = audit(self._delivery_live(base_system), groups="A", strategies=strategies)
+        emitted = [f for f in r.blocks if "conditional_allocation_enabled" in f.message]
+        assert emitted, "precondition: the auditor must emit the foot-gun BLOCK"
+        code = emitted[0].code
+
+        src = (Path("main.py")).read_text(encoding="utf-8")
+        i = src.find("slice25_delivery_capital_footgun")
+        assert i > 0, "boot guard missing from main.py -- A5 would be a report, not a gate"
+        # CODE lines only. A window that includes the explanatory comment above the
+        # guard would match on prose -- the same trap as grepping source for an
+        # option name (see test_lock_socket_does_not_set_so_reuseaddr). MEASURED:
+        # with comments included, disabling the guard with `if False:` stayed GREEN.
+        window = src[max(0, i - 1400):i + 300].splitlines()
+        guard = "\n".join(
+            ln for ln in window if ln.strip() and not ln.strip().startswith("#"))
+        assert code in guard, (
+            f"boot guard does not filter on the auditor's emitted code {code!r} -- a "
+            "rename on either side silently turns the BLOCK back into a pre-flight report")
+        assert "strategies=strategies" in guard, (
+            "boot guard must pass strategies; without them A5 can never be seen")
+        assert "return 3" in guard, "config block must exit 3 (no restart loop)"
+        assert "delivery_enabled" in guard, (
+            "boot guard must be GATED on delivery_enabled -- a guard disabled by"
+            " a constant is dead code that this scan would otherwise still find")
+
 
 # ── Group B — single-source regression guards ─────────────────────────────────
 
