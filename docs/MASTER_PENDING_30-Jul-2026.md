@@ -50,7 +50,7 @@ against the live VM or the repo on **30-Jul between 19:1x and 20:5x**.
 | **FRI 31-JUL 09:15–11:00** | ⛔⛔ **THE T2 CLOSE — LIVE MONEY, RAMA'S ACTION.** 5 × 3 CNC. | Card: `Downloads/FRI_31-JUL_T2_CLOSE_COMMANDS.txt`. Shares are settled demat ⇒ **this is the real DDPI test**. Thursday's card is SUPERSEDED. |
 | **FRI 31-JUL evening** | Push `fix-symdir-27jul` (`300a247`, +7) **+ the unpushed docs commit `67939eb`** | Still ONE code branch. ⇒ goes LIVE **Mon 3-Aug 08:15**. |
 | **MON 3-AUG** | Observation day — the symbol+direction rule + mis_filter shadow go live 08:15 | ⛔ kept clear for anything else. |
-| **BEFORE TUE 4-AUG** | **(a) the buy-day product filter** (Q7, dated commitment) · **(b) the BL9 reachability trace** (Q9, required) | ⭐ **The filter must land BEFORE anything holdings-aware — see §3.3.** |
+| **BEFORE TUE 4-AUG** | **the buy-day product filter** (Q7, dated commitment) — ✅ **Q9's BL9 trace is DONE (30-Jul), so the filter is the only pre-4-Aug build left** | ⭐ **The filter must land BEFORE anything holdings-aware — see §3.3.** ⭐ Q9 = reachability **UNCHANGED** ⇒ the filter's urgency rests on the **carry pilot alone**. |
 | **TUE 4-AUG** | ⚠️ **THE FLAG FLIP — first irreversible step.** ⭐ **The flip and the CARRY PILOT must be SEPARATED** | flip = non-blocker; carry pilot = blocked until the filter ships. |
 | **AFTER 4-AUG** | GTT-verification-on-kill (Q8) · reconciliation step 1 · FORCE_EXIT_ALL · security monitor · K1–K3 · T2–T4 · M1/M2 | ⛔ all gated. |
 
@@ -136,10 +136,20 @@ questions now closed or registered; no decision outstanding on it).
 ### 3.4 🔴 NEW FINDINGS — registered 30-Jul, none a blocker
 
 - **F1 — `reconcile_positions` is BLIND to delivery from T+1.** It reads
-  `positions()` only ⇒ **a 15:45 SUCCESS is NOT evidence the book is flat** (measured:
-  0 positions vs 5 holdings), and a *held* delivery trade emits a daily **false
-  `MISSING_AT_BROKER` CRITICAL**. ✅ Refuted: 15:15/15:17 do **not** force-close CNC.
+  `positions()` only (`:158-168`; ⛔ **never `holdings()`**) ⇒ **a 15:45 SUCCESS is NOT
+  evidence the book is flat.** ✅ Refuted: 15:15/15:17 do **not** force-close CNC.
   ⚠️ HARD_KILL **does**, on the buy day only (that is §3.3's filter).
+  ⭐⭐ **TRACED 30-Jul night — and the "daily false CRITICAL" wording was too strong.
+  F1 IS REAL BUT LATENT: it has NEVER FIRED AND COULD NOT HAVE.** The misfire needs a
+  delivery trade `OPEN` in the **live** DB; MEASURED, the only CNC orders ever written
+  there are **3** — AVL FAILED, SETL CANCELLED, HARIOMPIPE CANCELLED — **none** reaching
+  `OPEN/PARTIAL` with `qty_filled>0`. ⇒ **gate = the first live delivery trade (4-Aug
+  flip + carry pilot).** ⛔ **Two OPPOSITE cases must not be blurred:** the T2 basket has
+  **no** live trade row ⇒ it produces **ORPHAN_AT_BROKER** (a *test artefact* of the
+  isolated DB — MEASURED 29-Jul: 5 rows, `broker_qty=3`; and 30-Jul: **zero** rows,
+  SUCCESS); the real-delivery case produces **MISSING_AT_BROKER**, the opposite
+  direction. ⇒ **Folds into reconciliation step 1** (`D-4(a)`, scope to intraday) —
+  ⛔ **not a separate workstream**. Full evidence: `ACTIONS_not_decisions` → "F1".
 - **F2 — `fix-tests-27jul` shipped 3 test failures.** `tests/crash_test/
   test_ct_harness_safety.py` ×3, **one root cause**: `SCRATCH_DIR = data_store/
   ct_scratch` (`ct_utils.py:80`) sits **inside** the dir `1542c6e`'s autouse

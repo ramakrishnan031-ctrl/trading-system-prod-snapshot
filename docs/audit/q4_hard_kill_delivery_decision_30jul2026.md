@@ -171,13 +171,20 @@ REASON:
   holds it. That position sits in `positions()` all day on its buy day ⇒
   **reachable by both flatten sites** ⇒ a HARD_KILL that day liquidates exactly
   the thing Rama has just ruled must survive.
-- ⚠️ **AND 4-AUG IS THE WORST DAY FOR THE MOST REACHABLE TRIGGER.** The flip turns
-  `conditional_allocation_enabled` TRUE for the first time, which is what makes
-  the capital bucket split depend on the active trade types. The FundManager
-  invariant/bucket-overflow sites (`:982`, `:2329`) are precisely the class that
-  new capital arithmetic perturbs. Low probability, but its highest probability is
-  on the one day a delivery position is also open. `INFERENCE` — the trace is now
-  **required before 4-Aug**, see Q9.
+- ~~⚠️ **AND 4-AUG IS THE WORST DAY FOR THE MOST REACHABLE TRIGGER.** The flip turns
+  `conditional_allocation_enabled` TRUE for the first time … the FundManager
+  invariant/bucket-overflow sites (`:982`, `:2329`) are precisely the class that new
+  capital arithmetic perturbs.~~
+  ⛔⛔ **STRUCK 30-Jul — TRACED AND NOT SUPPORTED (Q9, now answered).** The flag never
+  reaches FundManager (`grep` = 0; single consumer `main.py:2318`, which states
+  *"FundManager is UNCHANGED — it only receives the final pcts"*). BL-9's predicate is a
+  **non-negativity guard**, not a split check, and cannot be reached by an
+  over-reservation because `reserve()` consults only the intent's bucket and returns
+  failure gracefully (the no-borrow guarantee). In the BOTH-active case the resolver
+  returns **the config split unchanged**. ⇒ **reachability UNCHANGED.**
+  ⭐ **This does NOT weaken (a) — the filter still ships before 4-Aug — but its urgency
+  now rests on the CARRY PILOT ALONE**, not on an interaction with the flip. Evidence and
+  file:line in `docs/decisions/ACTIONS_not_decisions.md` → "Q9".
 - **COST IF IT FIRES:** not money — ~₹650 of stock sold at market. **The cost is
   the SEQUENCE:** the carry pilot's evidence is an UNBROKEN carry, so a
   liquidation forces a full restart (2+ days), pushing completion into mid-August.
@@ -286,7 +293,18 @@ held-qty against live-GTT-qty in both directions.
 
 ⛔ Design only; it ships with or after the filter.
 
-### Q9 — ✅ ANSWERED: YES, trace it. REQUIRED before 4-Aug, not optional.
+### Q9 — ✅✅ **TRACED AND CLOSED 30-Jul (read-only). ANSWER: reachability UNCHANGED.**
+
+**The trace was done the same night rather than deferred, because it was gated on
+nothing.** Verdict, evidence and file:line: `docs/decisions/ACTIONS_not_decisions.md`
+→ "Q9". In one sentence: **flipping `conditional_allocation_enabled` does NOT make the
+BL-9/BL-4 HARD_KILL sites more reachable — so Q7 stands, but on the carry pilot alone.**
+⚠️ Sized against the base rate: HARD_KILL has never fired. The trace **removed** a stated
+reason for alarm rather than adding one.
+
+<details><summary>The original question, kept for the record</summary>
+
+### Q9 (original) — YES, trace it. REQUIRED before 4-Aug, not optional.
 
 It is the **ONLY `INFERENCE`** holding up §6(i)'s argument, and that argument is
 what puts a code change on the calendar before 4-Aug. **An unmeasured link under a
@@ -300,6 +318,11 @@ dated commitment is exactly the shape this project keeps catching.**
 - ⚠️ **If the trace shows those sites become MORE reachable after the flip, that
   strengthens (a) from "recommended" to "required"** — and it is worth knowing
   before the pilot is scheduled, not after.
+
+</details>
+
+⇒ **Outcome: the third bullet's condition did NOT hold.** Reachability is UNCHANGED, so
+(a) stays "required" on the carry-pilot argument, which never depended on the flip.
 
 ---
 
@@ -324,7 +347,7 @@ component holdings-aware — see the ordering constraint at the top.
 | ↳ NULL-product fallback | ✅ **CLOSED — flatten the unknown** (Q6, Rama 30-Jul) |
 | ↳ CRITICAL on fallback | ✅ **IN SCOPE OF THE FILTER — ships with it, not after** (Q6) |
 | GTT-verification-on-kill | **DESIGNED, incl. quantity both directions** (§4, Q8) |
-| BL9 reachability trace | **REGISTERED, required before 4-Aug** (Q9) |
+| BL9 reachability trace | ✅ **TRACED + CLOSED 30-Jul — reachability UNCHANGED** (Q9) |
 | Code / config / schema | ⛔ **NOTHING BUILT** |
 
 ⇒ **All four questions (Q6–Q9) are now closed or registered. No decision is

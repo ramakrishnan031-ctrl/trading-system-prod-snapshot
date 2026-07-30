@@ -283,5 +283,98 @@ land in that log — **but "no new CRITICAL in the census" must not be read as "
 (its actual purpose) but **does not put this class into the census.** ⛔ Stated so nobody assumes it
 does. **Gate: after 4-Aug.**
 
+## Read-only traces completed 30-Jul-2026 night — F1 and Q9. ⛔ Nothing built.
+
+### F1 — `reconcile_positions` vs a delivery book. **REAL, but LATENT — it has never been reachable.**
+
+**Mechanism, read from source.** `scripts/reconcile_positions.py`:
+- **Broker side** `:158-168` — `kite.positions()`, takes `["net"]`, keeps `qty != 0`.
+  ⛔ **`holdings()` is NEVER called.** Confirmed by grep across the file.
+- **System side** `:183-187` — `SELECT symbol, qty_filled, direction … WHERE status IN
+  ('OPEN','PARTIAL') AND qty_filled > 0` from the **live** DB.
+- **Comparison** `:255-274` — over `set(broker) | set(system)`:
+  `broker≠0 & system==0 → ORPHAN_AT_BROKER` · `broker==0 & system≠0 → MISSING_AT_BROKER` ·
+  `broker≠system → QTY_MISMATCH` · else `OK`. **`OK` rows ARE written**, so *zero rows*
+  means *zero symbols on either side*, not "no discrepancies".
+
+**⭐ THE TWO CASES ARE OPPOSITE AND MUST NOT BE BLURRED:**
+
+| | system side | broker side | result |
+|---|---|---|---|
+| **TEST-ARTEFACT (T2)** — isolated DB, **no live trade row** | 0 | position present on any day the basket trades | **ORPHAN_AT_BROKER** |
+| **REAL DELIVERY (future)** — a delivery trade OPEN in the **live** DB, held past T+1 | ≠0 | 0 (it left `positions()` for `holdings()`) | **MISSING_AT_BROKER** ← *this* is F1 |
+
+**MEASURED, from `position_reconciliation` — the table's entire history is one date:**
+- **29-Jul (buy day):** 5 rows, `ORPHAN_AT_BROKER`, `broker_qty=3`, `system_qty=0`.
+- **30-Jul (T+1, nothing traded):** **zero rows**, job SUCCESS — the stock had left
+  `positions()` for `holdings()`, so it was invisible on **both** sides.
+
+**⭐⭐ AND THE CONCLUSION THAT SIZES IT: F1's misfire has NEVER FIRED, and could not
+have.** It requires a delivery trade `OPEN` in the **live** `trades` table. MEASURED: the
+only CNC orders ever written to the live DB are **3** — AVL **FAILED**, SETL **CANCELLED**,
+HARIOMPIPE **CANCELLED**. **None ever reached `OPEN/PARTIAL` with `qty_filled > 0`**, which
+is exactly what the job selects on. ⇒ **F1 is LATENT; its gate is the first live delivery
+trade, i.e. the 4-Aug flip + carry pilot.** ⛔ Do not report it as a live daily false alarm.
+
+**⇒ IT FOLDS INTO RECONCILIATION STEP 1 — NOT A SEPARATE WORKSTREAM.** D-8 step 1
+(`D-4(a)`: scope `reconcile_positions` to intraday) **is** the fix. Per the ordering
+constraint, step 1 is a **RESTRICTION**, so it is unaffected by the buy-day-filter
+sequencing and its "ship before or with the flip" slot stands.
+
+**⚠️ FRIDAY 31-JUL, PREDICTED:** the closes are a **SELL**, and a sell is a fresh day
+position ⇒ the five should reappear in `positions()` at **qty −3** with no system row ⇒
+**ORPHAN_AT_BROKER ×5 and a CRITICAL ~15:46 — which would be evidence the sells HAPPENED.**
+⚠️ Buy-day direction MEASURED; sell-day direction **inferred by symmetry, not measured**.
+⛔ **Either way the 15:45 job is NOT the witness** — the five `EXIT=0` codes and the Kite
+holdings/GTT check are. Briefing line added to the Friday card (it previously predicted
+SUCCESS; corrected 30-Jul).
+
+### Q9 — does `conditional_allocation_enabled=TRUE` make the BL9 HARD_KILL sites more reachable? **NO — UNCHANGED.**
+
+**The two sites, read from source:**
+- **`fund_manager.py:982` (BL-4)** — fires when `commit_to_used` **raises**; reason
+  `commit_to_used failed for reservation_id=…`. An **exception** path (ledger/apply
+  failure), not an arithmetic threshold.
+- **`fund_manager.py:2329` (BL-9)** — `_handle_invariant_violation`, fired by
+  `_check_invariant` (`:2228`) raising `CapitalInvariantViolation`.
+
+**⭐ THE BL-9 PREDICATE IS A NON-NEGATIVITY GUARD, NOT A SPLIT CHECK.** It calls
+`assert_capital_invariant` **only when a partition is already negative**:
+`if (self._intraday_avail < -TOL or self._intraday_used < -TOL or
+self._intraday_reserved < -TOL)` (and the positional mirror). The code's own comment is
+explicit: *"a legitimate PnL-shifted per-bucket split (avail+reserved+used != total\*pct)
+is never reached, so this cannot false-fire."*
+
+**⭐ THE FLAG NEVER REACHES FundManager.** `grep conditional_allocation_enabled
+capital/fund_manager.py` = **0**. Its single production consumer is `main.py:2318`, which
+resolves it through `resolve_bucket_allocation()` into two floats — and states
+*"FundManager is UNCHANGED — it only receives the final pcts."*
+
+**⭐ AND AN OVER-RESERVATION CANNOT DRIVE A BUCKET NEGATIVE.**
+`resolve_bucket_allocation`'s docstring (`fund_manager.py:111-136`): *"delivery 0% => every
+delivery reserve() rejects 'Insufficient positional capital' and never borrows intraday
+(**the no-borrow guarantee is already in reserve(): it consults ONLY the intent's
+bucket**)."* `reserve()` *"does NOT raise on insufficient capital — returns failure
+gracefully"* (`:494`, `:761`).
+
+⇒ The flip changes only the **VALUE** of `intraday_pct`/`positional_pct` (used at `:441`,
+`:1395` to seed bucket balances, and as `cash_floor` at `:2271`/`:2285` — which is only
+evaluated *after* a partition is already negative). It changes **neither the predicate,
+nor the frequency of evaluation, nor the reachability**.
+⭐ And in the **BOTH-active** case the resolver returns **the config split unchanged**
+(`elif delivery_active and intraday_active: delivery = positional_pct`) — i.e. **value-neutral**.
+
+**⇒ VERDICT: UNCHANGED. The §6(i) `[INFERENCE]` — "4-Aug is the worst day for the most
+reachable trigger" — is NOT SUPPORTED and should be struck.**
+⭐ **Effect on the plan, in one sentence: it does NOT weaken Q7 — the buy-day filter still
+ships before 4-Aug — but its urgency rests on the CARRY PILOT ALONE, not on any interaction
+with the flag flip.**
+⚠️ **Sized against the base rate:** HARD_KILL has **never fired** in production (measured).
+This trace **removes** a stated reason for alarm rather than adding one.
+⚠️ Non-kill consequence worth naming separately: in the **only-delivery** configuration the
+resolver returns **0/100**, so the intraday bucket is seeded at **zero** and every intraday
+`reserve()` would reject — correct and intended (that is R10's entire purpose), but it is a
+real behavioural change and not a kill.
+
 ## Note
 These actions gate several of the decisions (Q10 gates D2/D3/Regime evidence; the security items are independent). They are tracked in `MEMORY.md` under RAMA-ACTIONS and are restated here only so the decision index is complete.
