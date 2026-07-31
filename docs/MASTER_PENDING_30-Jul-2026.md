@@ -50,7 +50,8 @@ against the live VM or the repo on **30-Jul between 19:1x and 20:5x**.
 | **FRI 31-JUL 09:15–11:00** | ⛔⛔ **THE T2 CLOSE — LIVE MONEY, RAMA'S ACTION.** 5 × 3 CNC. | Card: `Downloads/FRI_31-JUL_T2_CLOSE_COMMANDS.txt`. Shares are settled demat ⇒ **this is the real DDPI test**. Thursday's card is SUPERSEDED. |
 | **FRI 31-JUL evening** | Push `fix-symdir-27jul` (`300a247`, +7) **+ the unpushed docs commit `67939eb`** | Still ONE code branch. ⇒ goes LIVE **Mon 3-Aug 08:15**. |
 | **MON 3-AUG** | Observation day — the symbol+direction rule + mis_filter shadow go live 08:15 | ⛔ kept clear for anything else. |
-| **BEFORE TUE 4-AUG** | **the buy-day product filter** (Q7, dated commitment) — ✅ **Q9's BL9 trace is DONE (30-Jul), so the filter is the only pre-4-Aug build left** | ⭐ **The filter must land BEFORE anything holdings-aware — see §3.3.** ⭐ Q9 = reachability **UNCHANGED** ⇒ the filter's urgency rests on the **carry pilot alone**. |
+| **SAT 1-AUG / SUN 2-AUG** | ⛔⛔ **THE BUY-DAY PRODUCT FILTER'S REAL WINDOW — re-flagged 31-Jul, see §3.8/F6** | Mon 3-Aug is **BUILD NOTHING, MEASURE**, and the filter is a **careful-loop** item (it decides a PRODUCT on a live order) ⇒ it is **not** a Monday-night patch. If it misses the weekend, ⛔ do not rush it — **something slips, and which thing is Rama's call.** |
+| **BEFORE TUE 4-AUG** | **the buy-day product filter** (Q7, dated commitment) — ✅ **Q9's BL9 trace is DONE (30-Jul), so the filter is the only pre-4-Aug build left** | ⭐ **The filter must land BEFORE anything holdings-aware — see §3.3.** ⭐ Q9 = reachability **UNCHANGED** ⇒ the filter's urgency rests on the **carry pilot alone**. ⚠️ **OPEN (§7.9(f)): 2-part gate (flip goes, pilot waits) or 3-part (all of 4-Aug waits)? Decide BEFORE Monday.** |
 | **TUE 4-AUG** | ⚠️ **THE FLAG FLIP — first irreversible step.** ⭐ **The flip and the CARRY PILOT must be SEPARATED** | flip = non-blocker; carry pilot = blocked until the filter ships. |
 | **AFTER 4-AUG** | GTT-verification-on-kill (Q8) · reconciliation step 1 · FORCE_EXIT_ALL · security monitor · K1–K3 · T2–T4 · M1/M2 | ⛔ all gated. |
 
@@ -391,6 +392,51 @@ exists to avoid. ⛔ **Nothing vanished: every one of the 38 appears above by na
 - **`backups` 9.0 G → 8.4 G**, still **4 `predeploy-*`** ⇒ **R11 UNCHANGED and still
   open.** (⚠️ They are at `data_store/backups/`, **not** `~/backups` — a wrong path
   reads as "they are gone".)
+
+---
+
+### 3.8 🔴 REGISTERED 31-Jul NIGHT — **F6, a PROCESS finding: a scheduling fact was asserted from memory and nearly moved an irreversible step**
+
+- **F6 — a trading-day claim reached a re-gating proposal without ever being checked
+  against its source.** On 31-Jul ~22:0x, after the symdir deploy was already recorded,
+  it was claimed that **Mon 3-Aug-2026 is an NSE holiday** ("Sunday / Independence-Day
+  weekend") and that the observe-Mon → flip-Tue sequence therefore had to move. Rama
+  pulled the primary source at 22:09 — circular **NSE/CMTR/71775 (12-Dec-2025)** — which
+  refutes it twice over: **3-Aug-2026 is a MONDAY**, and Independence Day is **15-Aug**,
+  a **Saturday**, on the circular's weekend list. ⇒ **3-Aug and 4-Aug are normal trading
+  days; there was no collision.**
+  - ⭐⭐ **ROOT CAUSE = MISREAD, NOT A DATA DEFECT — and the two have opposite fixes, so
+    the distinction IS the finding.** `config/nse_holidays_2026.yaml` (resolved at
+    `config_loader.py:2166`; sole source, every consumer routes through
+    `utils/holiday_guard.py`) has **no 2026-08-03 entry and no August entry at all** —
+    the list jumps `2026-06-26` → `2026-09-14`. Its only "Aug" string is the comment
+    `#   15-Aug-2026 (Sat) Independence Day`, quoted verbatim. ⛔ **A COMMENT IN A DATA
+    FILE WAS READ AS DATA.** The loader confirms: `is_trading_day` = **True** for both
+    2026-08-03 and 2026-08-04, set size **15**. ⇒ **NO holiday-file edit is owed**, and
+    the "register a gated boot-path config change" branch does **not** apply.
+  - ✅ **THE WHOLE FILE RECONCILES TO THE CIRCULAR EXACTLY — 15/15 trading holidays and
+    4/4 weekend holidays**, date and description, no extra, none missing. ⇒ **no
+    mismatch finding to register.** (Done while the circular was open, per the standing
+    "it is cheap now" rule.)
+  - ✅ **NOTHING HAD TO BE REVERTED — the false claim never reached an artifact.** Clean
+    tree · no commit after `2b2ea77` on any branch · no stash · the card still
+    `MON_03-AUG_OBSERVATION_CARD.txt` with `'2026-08-03'` three times in its body ·
+    Downloads calendar **md5-identical** to the tracked one. ⭐ The no-holiday-language
+    sweep was run **with a control first** (same corpus returns 17 + 2 hits for
+    "3-Aug"), so the zero is a real absence and not a dead search.
+  - ⛔ **THE CONTROL THIS EARNS:** *any holiday / trading-day / weekday claim that
+    affects SCHEDULING must be verified against the file text — quote the line, or do
+    not make the claim.* A weekday is a one-line check; nothing about it is cheaper to
+    assume than to verify. ⭐ It is the same "verify, don't assume" rule the project
+    already runs on — it failed on the one class of fact that felt too ordinary to check.
+  - ⚠️ **THE ONE REAL CONSEQUENCE: the buy-day product filter's window is short again**
+    (the false slip would have bought a day). See §1 and calendar §7.9(f) — including
+    the **open Rama decision** on whether a filter slip postpones only the carry pilot
+    or all of 4-Aug.
+  - ⚠️ **2027 UNCHANGED AND STILL OWED:** `config/nse_holidays_2027.yaml` absent
+    (re-checked 31-Jul). First 08:15 boot of 2027 raises `ConfigMissingError` and does
+    not start; 15-Dec email reminder DEPLOYED (`cbcad2c`). ⛔ Never invent the dates.
+  - Full evidence and the verbatim file lines: calendar **§7.9**.
 
 ---
 

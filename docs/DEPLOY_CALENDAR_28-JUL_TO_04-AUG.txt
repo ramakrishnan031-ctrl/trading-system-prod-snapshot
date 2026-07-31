@@ -5,6 +5,11 @@
 Written 27-Jul-2026 Mon 11:0x IST. ⛔ UNTRACKED today (the Monday card asserts 24).
 Dates verified against config/nse_holidays_2026.yaml: NO weekday NSE holiday
 between 26-Jun and 14-Sep-2026. Every date below is a trading day.
+⭐ RE-VERIFIED 31-Jul 22:5x AGAINST THE PRIMARY SOURCE, not the file: NSE circular
+NSE/CMTR/71775 (12-Dec-2025), 15 trading holidays + 4 weekend holidays. The file
+reconciles to it EXACTLY, 15/15 and 4/4, date and description. ⛔ 03-Aug-2026 is a
+MONDAY and appears on NEITHER list; the only August entry in the whole circular is
+15-Aug (a SATURDAY). ⇒ Mon 3-Aug and Tue 4-Aug are NORMAL TRADING DAYS. See §7.9.
 ================================================================================
 
 ⭐ WHY THIS FILE EXISTS: six things were queued across five documents and nobody
@@ -265,9 +270,22 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
                    ⚠️ STILL OWED BEFORE THE CARRY PILOT: the buy-day product
                      filter (+ CRITICAL-on-NULL), with Q9's BL9 trace attached.
                      Schedule it in the gap between Monday and the flip.
+                   ⛔⛔ *** AND THAT GAP IS ONE EVENING. *** Tue 4-Aug carries the
+                     carry pilot D1, so the filter's deadline is Mon NIGHT -- but
+                     Monday DAYTIME is "BUILD NOTHING, MEASURE" and the filter is
+                     a CAREFUL-LOOP item (it decides a PRODUCT on a live order).
+                     ⇒ *** THE REAL WINDOW IS THE WEEKEND: Sat 1-Aug / Sun 2-Aug.***
+                     If it is not built by Monday night it does NOT get rushed on
+                     Monday night -- something slips instead, and §7.9(c) says what.
+                   ✅ THE "3-AUG IS A HOLIDAY" QUESTION IS CLOSED -- FALSE, checked
+                     against the circular itself. ⛔ Do not re-open it. See §7.9.
 
   Tue 04-Aug       ⭐ THE IRREVERSIBLE STEP: four flags flipped. Different card.
                    ⛔ GATED on Monday's observation coming back clean -- above.
+                   ⚠️ THE GATE HAS TWO PARTS TODAY, NOT THREE -- see §7.9(c). The
+                     product filter gates the CARRY PILOT half, not the flip.
+                     ⇒ ⭐ RAMA'S CALL IS OPEN: does a filter slip postpone ONLY the
+                     carry pilot, or the WHOLE of 4-Aug? Decide it BEFORE Monday.
 
 *** A2 — I AGREE WITH THE THURSDAY-EVENING SLOT, and here is the reasoning
     made explicit rather than assumed: ***
@@ -946,4 +964,110 @@ a webhook self-check at BOOT; this is a non-boot cron hitting a SCHEMA guard.
 clear of the bracket, and tonight's commits were VERIFIED to carry no schema
 expectation change (0 schema-bearing files in the diff; 0 lines touching
 `EXPECTED_SCHEMA_VERSION`; PC == VM == live DB == 45) ⇒ no refusal window opened.
+================================================================================
+
+================================================================================
+7.9 ⛔⛔ *** "3-AUG IS A HOLIDAY" — RAISED 31-Jul ~22:0x, FALSE, AND IT NEVER
+    REACHED AN ARTIFACT. THE ROOT CAUSE WAS A MISREAD, NOT A BAD DATA FILE. ***
+================================================================================
+(a) WHAT THE CLAIM WAS, AND WHAT THE SOURCE SAYS.
+    A claim was made that Mon 3-Aug-2026 is an NSE holiday (offered as "Sunday /
+    Independence-Day weekend"), and on that basis the observe-Mon → flip-Tue
+    sequence was said to need re-gating. Rama pulled the primary source
+    (`~/Downloads/NSE_HOLIDAY.pdf` = circular NSE/CMTR/71775, 12-Dec-2025) at
+    22:09 and it refutes the claim on BOTH counts:
+      · 03-Aug-2026 is a **MONDAY**, not a Sunday.
+      · Independence Day is **15-Aug**, and in 2026 it falls on a **SATURDAY** --
+        it is on the circular's weekend list, not its trading-holiday list.
+    ⇒ *** 03-Aug-2026 AND 04-Aug-2026 ARE NORMAL NSE TRADING DAYS. ***
+
+(b) ⭐⭐ ROOT CAUSE: **THE DATA FILE IS CORRECT. THE READ OF IT WAS NOT.**
+    This distinction is the whole finding, because the two have opposite fixes.
+    `config/nse_holidays_2026.yaml` -- resolved by year at `config_loader.py:2166`,
+    and the SOLE source, since every consumer routes through
+    `utils/holiday_guard.py` -- contains **NO 2026-08-03 entry**. It contains no
+    August entry AT ALL: the list jumps `2026-06-26` (Muharram) → `2026-09-14`
+    (Ganesh Chaturthi). The only string "Aug" anywhere in the file is a COMMENT
+    in the weekend block, quoted verbatim:
+
+        #   15-Aug-2026 (Sat) Independence Day
+
+    ⛔ *** THAT COMMENT IS THE MOST LIKELY ORIGIN OF THE ERROR: the one August
+    line in the file is a holiday name next to a weekend marker, and it was read
+    as if it applied to the August date then under discussion. *** A comment in a
+    data file was treated as data. ⇒ **MISREAD / FABRICATION IN THE PRIOR
+    SESSION, NOT A DATA DEFECT.** There is NO holiday-file fix owed, and D's
+    "register a gated file edit" branch does NOT apply.
+
+    The system's own loader agrees, run 31-Jul on the current config:
+        is_trading_day(2026-08-03) = True   get_holiday_name = None
+        is_trading_day(2026-08-04) = True   get_holiday_name = None
+        is_trading_day(2026-08-15) = False  get_holiday_name = None   (SATURDAY --
+          correctly non-trading for the WEEKEND reason, not the holiday reason)
+        loaded holiday set size = 15
+
+(c) ⭐⭐ **THERE WAS NOTHING TO REVERT — THE FALSE CLAIM NEVER LANDED.**
+    Checked at 22:5x, and stated with its WIDTH so the zero can be trusted:
+      · `git status --short` -- EMPTY. No uncommitted calendar edit.
+      · HEAD is `2b2ea77` (21:51:02) and NO commit exists after it, on ANY branch
+        (`git log --since=21:51 --all` = that one commit). `git stash list` empty.
+      · `2b2ea77`'s own diff is what SET Mon 3-Aug = OBSERVE and Tue 4-Aug = FLIP.
+        The correct sequence is the LAST thing written, not something restored.
+      · The card is still `Downloads/MON_03-AUG_OBSERVATION_CARD.txt`, mtime
+        21:50, and its BODY is dated 3-Aug throughout (the query filters
+        `'2026-08-03'`, twice in the trades sub-selects and once on `signals`).
+      · The Downloads calendar copy is **md5-identical** to the tracked one
+        (`4030bd0…`) ⇒ the single-authority property from `2b2ea77` still holds.
+      · CONTENT sweep for holiday/regate language across the calendar + card:
+        no hit. ⭐ CONTROL FIRST: the same corpus returns 17 and 2 hits for
+        "3-Aug", so the search could have found a regate had one existed.
+    ⇒ The claim was raised in conversation, was refuted in the same evening, and
+    was **never propagated into the calendar, the card, or the memory index.**
+    ⭐ THE ARTIFACTS WERE RIGHT THE WHOLE TIME. The damage was confined to one
+    session's reasoning -- which is exactly why it must still be registered.
+
+(d) ⭐ THE WHOLE FILE RECONCILED TO THE CIRCULAR WHILE IT WAS OPEN (asked for in
+    A2). **15/15 trading holidays and 4/4 weekend holidays MATCH EXACTLY**, on
+    both date and description, with no extra and no missing row:
+      26-Jan Republic Day · 03-Mar Holi · 26-Mar Shri Ram Navami · 31-Mar Shri
+      Mahavir Jayanti · 03-Apr Good Friday · 14-Apr Dr Baba Saheb Ambedkar
+      Jayanti · 01-May Maharashtra Day · 28-May Bakri Id · 26-Jun Muharram ·
+      14-Sep Ganesh Chaturthi · 02-Oct Mahatma Gandhi Jayanti · 20-Oct Dussehra ·
+      10-Nov Diwali Balipratipada · 24-Nov Prakash Gurpurb · 25-Dec Christmas
+      weekend: 15-Feb (Sun) · 21-Mar (Sat) · 15-Aug (Sat) · 08-Nov (Sun, Muhurat)
+    ⇒ **NO MISMATCH FOUND ⇒ NO GATED FILE EDIT TO REGISTER.** The 15-count also
+    matches the property test noted at line 429.
+
+(e) ⚠️ **2027 IS STILL ABSENT — UNCHANGED, STILL OWED.** `config/nse_holidays_2027.yaml`
+    does not exist (checked tonight). MEASURED previously: the first 08:15 boot of
+    2027 raises `ConfigMissingError` and does NOT start. The 15-Dec email reminder
+    is DEPLOYED (`cbcad2c`). ⛔ NOT created tonight, and ⛔ NEVER invent the dates --
+    they come from NSE's 2027 circular when published.
+
+(f) ⛔⛔ **THE ONE THING THAT DID CHANGE: THE PRODUCT FILTER'S WINDOW.**
+    The false slip would have bought a day; the real calendar does not. Tue 4-Aug
+    carries the flag flip **and** carry pilot D1, and the buy-day product filter
+    (+ CRITICAL-on-NULL, with Q9's BL9 trace) gates the carry pilot. Its deadline
+    is therefore Monday night -- but Monday DAYTIME is "BUILD NOTHING, MEASURE",
+    and the filter decides a PRODUCT on a live order, i.e. a careful-loop item
+    (design → review → implement), not an evening patch.
+    ⇒ *** THE HONEST WINDOW IS THE WEEKEND: Sat 1-Aug / Sun 2-Aug. ***
+    ⭐ AND AN OPEN DECISION FOR RAMA, WHICH THIS FILE WILL NOT MAKE: tonight's
+    instruction described the flip's hard gate as THREE-part (observation ran ·
+    came back clean · filter shipped). **AS RECORDED it is TWO-part on the flip,
+    with the filter gating the CARRY PILOT half.** Both readings share the same
+    deadline, so nothing moves today -- but they differ if the filter SLIPS:
+      two-part  ⇒ the four flags still flip Tue; only the carry pilot waits.
+      three-part ⇒ a filter slip postpones ALL of 4-Aug.
+    ⛔ Do not resolve this by picking one on the day. Decide it BEFORE Monday.
+
+(g) 🔴 **THE PROCESS FINDING, WHICH IS THE REAL OUTPUT OF TONIGHT.**
+    A trading-day assertion was made from recollection, was not checked against
+    the file text or the circular, and was allowed to reach a proposal to move an
+    IRREVERSIBLE step. It was caught only because Rama went to the primary source.
+    ⇒ **CONTROL: any holiday / trading-day / weekday claim that affects SCHEDULING
+    must be verified against the file TEXT before it drives a decision -- quote
+    the line, or do not make the claim.** A weekday is a one-line check; there is
+    no version of this that is cheaper to assume than to verify.
+    Registered as **F6** in `docs/MASTER_PENDING_30-Jul-2026.md` §3.8.
 ================================================================================
