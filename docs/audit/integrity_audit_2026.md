@@ -850,3 +850,337 @@ in P2 scope does).
 R:R confirmed compute-then-gate on every path; PB-01 values recorded, no spec invented;
 nothing fixed; nothing pushed; the 3-Aug/4-Aug sequence untouched.
 *(Phase 3 — sizing/risk — appends below this line.)*
+
+---
+
+## PHASE 3 — SCREENING → RISK / SIZING (sizer + caps + sector + leverage, and the P3→P4 seam)
+
+### P3.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~01:0x → ~01:2x IST** (measure+draft; killed by a power cut pre-commit) **+ ~01:3x–01:5x** (resume: review, re-verify, commit) |
+| Measurements taken | 01-Aug **01:07–01:1x IST**, from the VM; resume re-checks **01:4x** (note below) |
+| Deployed SHA (VM bare) | **`297b587`** (reflog checkout 31-Jul 21:44:48 — unchanged since P1/P2) |
+| PC tree read | `f2a277b` = `297b587` + 4 docs-only commits ⇒ code read == deployed |
+| Service | `inactive` (designed nightly state) |
+| DB access | read-only (`mode=ro` URIs); log greps; **zero writes** |
+| Primary windows | trades: the v34 sizing-audit slice (**415 all-time**, 67 in 24→31-Jul); signals all-time (12-Jun→) with prune caveat as P1; logs = 23 retained `system_*.log` (01→31-Jul) |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed/tuned; no multiplier computed; July audits read-only |
+
+Deployed-tree config ground truth (VM grep): `risk_per_trade_pct 0.01` · `max_concentration_pct
+0.10` · `max_position_value_pct 0.40` · tier 1.0/0.70/0.50 · `slm_margin_buffer_pct 0.05` ·
+leverage_map INTRADAY 5.0/CO 6.0/DELIVERY 1.0/BO 5.0 · risk: `max_open_positions 5` ·
+`max_daily_trades 10` · `max_sector_exposure_pct 0.40` · `max_consecutive_losses 4` ·
+`daily_loss_limit_pct 0.03` · `sector_cap_mode: observe` · `daily_loss_include_unrealized false`.
+Day-capital (fm_ledger INIT) across the window: **9,865.30 / 9,871.80 / 9,872.30 / 9,997.40 /
+9,359.80 / 9,360.00**.
+
+Resume verification (01:4x, after the power cut, before commit): re-measured read-only from
+the VM — conc-binding **415/415** unchanged, trades 478 total / 415 v34, closed = 161 CLOSED +
+45 CLOSED_MANUAL — and re-read every load-bearing citation on the PC tree
+(`position_sizer.py:402-404/:425-440/:506` · `main.py:2428-2448` ·
+`signal_processor.py:198/:1219-1244` · `risk_engine.py:260-266/:613-639` ·
+`fund_manager.py:518-523`): all exact. One P3.4 cell (costs) was made precise from
+re-measurement; nothing else changed on resume.
+
+### P3.1 Path as verified (current tree == deployed)
+
+One sizer, one call site per entry path: `PositionSizer.calculate()` (pure, PS1-PS13) computes
+`qty_by_risk = floor(total×0.01 / sl_dist)` · `qty_by_capital = floor(bucket_avail /
+(entry/leverage))` · `qty_by_concentration = floor(total×0.10 / entry)` → `raw = min(...)` →
+`× tier_mult × perf_weight` (floor 1, cap 2×raw) → lot rounding (lot_size 1 everywhere) →
+value-cap check (40%) → SizingResult (`position_sizer.py:176-647`). Then, inside
+`portfolio_lock`: H-7 strategy cap → symdir gate → `risk_engine.approve()` — 10 checks in
+order: KILL_SWITCH → SIZING_VALID → CAPITAL → OPEN_POSITIONS → DAILY_TRADES →
+CONSECUTIVE_LOSSES → DAILY_LOSS → SECTOR_EXPOSURE (observe) → CONTRARY_POSITION →
+DUPLICATE_SYMBOL (`risk_engine.py:408-679`) → `fm.reserve()` (recomputes margin static +5%
+SL-M buffer, `fund_manager.py:518-523`) → RESERVED → entry throttle (post-reserve, releases on
+reject, `signal_processor.py:1219-1227`) → `place(qty=sizing.qty, …)` verbatim (:1230-1244).
+The placer re-derives only the margin METADATA for the trade row via `fm.required_margin`
+(same static function, `order_placer.py:960`) — no second qty computation exists (grep width:
+`required_margin` callers = FM.reserve, placer row metadata, FIX-075 drift top-up :1213-1214;
+all one formula, one leverage map).
+
+### P3.2 Headline re-measurements (mandated)
+
+**(a) The dead risk sizer — re-measured fresh: the cap still binds 100%, and the risk path is
+unreachable BY ALGEBRA, not just empirically.** Fresh v34 evidence (415 trades all-time, 67 in
+window): `binding_constraint = 'concentration'` on **415/415 and 67/67**; trades where
+`qty_by_risk ≤ qty_by_concentration` (risk would bind): **0**; where `qty_by_capital <
+qty_by_concentration`: **0**. The margin: `qty_by_risk/qty_by_concentration` = 0.01/(0.10 ×
+sl_pct) = **0.1/sl_pct** — measured mean **11.1×**, median 10.75×, **minimum ever 5.00×**
+(= the sl_pct=2% strategies). For risk to bind needs sl_pct > 10%, and `sl_max_pct = 0.05`
+caps every strategy at 5% ⇒ **given (risk 0.01, conc 0.10, sl_max 0.05), the risk-based
+formula (PS2) cannot bind for ANY config-legal SL — the intended risk path is structurally
+dead, not merely never-observed.** Actual vs intended risk, fresh: intended = 1% × INIT =
+**₹93.60–99.97/day**; actual `trades.risk_amount` window = **mean ₹4.63, median ₹4.04**
+(all-v34 mean 5.52, max ever 17.64) ⇒ **~20× below intent; effective risk ≈ 0.048% of
+capital per trade vs the configured 1%.** Decomposition: concentration allows ≤10% of total
+as position value (measured mean ₹459, max ₹999) → × sl_pct (0.8–2%) → × tier 0.5 (67/67,
+415/415) — the tier constant from P2 halves what the cap already shrank. `perf_weight_applied`
+distinct values all-time = **[1.0]** (see IA-P3-03).
+
+**(b) SECTOR — the UNKNOWN handling, determined definitively from source: UNKNOWN does NOT
+wave through; it is POOLED as a bucket — but the cap is inert three independent ways.**
+Mechanism (`risk_engine.py:260-266, 613-639, 695-712`): `_resolve_sector` maps every
+failure/blank to the literal "UNKNOWN"; gate 8 then computes `sector_exposure('UNKNOWN') +
+margin > 40% × total` like any sector — the fail-CLOSED direction (pooling unrelated symbols
+can only make the cap bind EARLIER, never later; there is no skip-on-UNKNOWN branch). What
+actually neutralizes it: **(1) mode** — `sector_cap_mode: observe` ⇒ a breach only logs
+`sector_cap_would_reject` (enforce is the Rama-gated F1 flip); **(2) input** — trades.sector
+all-time: NULL 361 (pre-16-Jul rows) · **UNKNOWN 113 · real 4** (PNB/PSU_BANK 20-Jul,
+SAIL/METAL + JIOFIN/FIN_SERVICES 29-Jul, SYNGENE/HEALTHCARE 30-Jul) = 96.6% UNKNOWN among
+populated; source coverage `instruments.csv` = **142/2,228 symbols (6.4%) carry a sector**
+(identical PC and VM) — index-member large caps the breakout universe rarely touches;
+**(3) reachability** — max book margin = 5 positions × ~₹92 ≈ ₹460 ≈ 4.7% of capital vs the
+40% threshold (₹3,744–3,999) ⇒ **even in enforce, even fully pooled, the cap cannot fire at
+current sizing — measured `sector_cap_would_reject` lines all-time: 0** (23 logs). The
+data-quality alert IS alive: `order_placer.sector_data_quality` fired **7×** all-time
+(window: 24/28/29/31-Jul ×1; 27/30-Jul 0 — the ≥10-inserts session gate), sample: "10/10
+(100%) trades this session resolved to UNKNOWN sector". RE9's engine-side WARNING is
+unreachable (`InstrumentCache.sector` never raises — 0 lines ever), so the engine resolves
+UNKNOWN fully silently; the placer alert is the only loudness (IA-P3-06a).
+
+**(c) G8 — unlevered sizing CONFIRMED, and the leverage surface mapped (no multiplier
+computed).** The binding constraint (concentration) is computed on **notional** —
+`total × 0.10 / entry_price` — with no leverage term (`position_sizer.py:402-404`), so the
+position the system takes is sized as if leverage were 1× while MIS buying power is 5×.
+Leverage enters only: `qty_by_capital` (never bound: 0/415), `margin_required` bookkeeping,
+`fm.reserve` (static map + 5% SL-M buffer; window avg RESERVE ₹93.36 vs row margin ₹86.26 —
+populations differ by released reservations; the ×1.05 mechanism is code-verified), and the
+CAPITAL gate. The FIX-072 live-broker-margin branch is **DEAD in production**: main.py's
+`PositionSizer(...)` construction (:2428-2448) passes **no `broker_adapter`** ⇒ static map
+always; measured `live_margin_used` + `live_margin_fallback` = **0 lines across all 23
+retained logs** (IA-P3-02). What a leverage recalibration would touch (mapped, ⛔ not
+computed): the three candidate-qty formulas' relative order, both margin computations, the
+SL-M buffer base, the CAPITAL gate, and — dominant — the concentration/value-cap notional
+semantics; the recalibration is the work, exactly as G8 states.
+
+**(d) The units sweep (H lens) — every sizing/risk %-knob checked against its consuming
+expression: NO new fraction-vs-percent mismatch found.** Width: 13 knobs traced end-to-end —
+`risk_per_trade_pct` (×capital ✓), `max_concentration_pct` (×capital ✓),
+`max_position_value_pct` (×capital ✓), `max_sector_exposure_pct` (×total ✓),
+`daily_loss_limit_pct` (×total ✓), `sector_unknown_alert_pct` (fraction vs fraction ✓,
+`order_placer.py:732-733`), `lot_skew_rejection_threshold` (fraction vs fraction ✓),
+`slm_margin_buffer_pct` (×margin ✓), `entry_offset_pct` (fraction ✓), `tgt_min_pct`
+(fraction vs |tgt−entry|/entry ✓), `price_drift_threshold` (fraction, consumed by the
+FIX-075 top-up), tier multipliers (dimensionless), `min_tick_size` (rupees ✓). Two NAMING
+hazards of the P2-02 class recorded, both internally consistent today:
+`DEFAULT_CIRCUIT_MARGIN_PCT = 0.02` (a fraction named PCT) and the schema comment
+`margin_reserved -- qty * entry * 0.20` (describes 5× leverage as a hardcoded 0.20;
+the code uses the map).
+
+### P3.3 NEW findings
+
+---
+**IA-P3-01**
+- **WHAT:** The concentration cap's integer floor is a hard PRICE CEILING on the tradeable
+  universe: any symbol whose entry price exceeds 10% of live total capital sizes to
+  `qty_by_concentration = 0` and dies as `REJECTED_SIZING_CONCENTRATION` — at current
+  capital, **everything above ~₹936–1,000 is unsizeable** — and this couples destructively
+  with P2's spread artifact: the ONLY score slack the live screener grants (spread +5,
+  needing mid ≳ ₹1000) is granted to exactly the price class sizing cannot size.
+- **EVIDENCE:** `floor((total × 0.10)/entry)` = 0 ⇔ entry > 0.10×total
+  (`position_sizer.py:402-404`); raw_qty=0 early-exit with constraint=CONCENTRATION
+  (:425-440). Measured: `REJECTED_SIZING_CONCENTRATION` = **3,340 all-time — the ONLY
+  `REJECTED_SIZING_*` status that has ever occurred** (full LIKE split); window 8–74/day
+  (184 total); trigger-price of those signals: **min 986.1, p10 1,125/1,281, median
+  1,496/2,087 (all-time/window), max 4,763** — the min sits exactly at 0.10× that day's
+  live total (INIT 9,865 → cutoff ~986; 30/31-Jul INIT 9,360 → cutoff ~936). Cross-phase:
+  the 62/64/65-score passes (P2.2(b)) need mid ≳ ₹1000 (1-tick book) — above every window
+  cutoff — so the spread-bonus route to a pass mostly terminates here; the surviving 62s
+  trade via the locked-book (bid==ask) sub-₹1000 route. Census B1's price bias (>₹990:
+  24% of admissions → 0.14% at the risk engine) is this mechanism, now named at its site.
+- **CLASS:** Correctness/Consistency (an emergent interaction of two configs and one
+  screener artifact — none of the three documents it) / Architecture.
+- **NEW or KNOWN:** the census price-bias observation is KNOWN (B1, 19-Jul); **NEW is the
+  mechanism identification** (the one-share floor at 0.10×total), its exact price cutoff,
+  its status vocabulary (`REJECTED_SIZING_CONCENTRATION` ⇔ this and only this), and the
+  coupling with IA-P2-02.
+- **ROOT CAUSE:** integer sizing at small capital: the cap is a percentage rule whose floor
+  becomes a binary price gate when 10% of capital ≈ one share.
+- **RECOMMENDATION (described, not applied):** record it as universe selection in the
+  strategy docs (or decide it away when capital scales); any D1 sizing decision should
+  treat "the tradeable price band is capital-dependent" as an input. ⛔ No config change
+  proposed — money-path, Rama's.
+- **SEVERITY-BY-IMPACT:** MED — a silent, undocumented universe filter (~8-74 signals/day)
+  that also interacts with the screener's price selector; no money is computed wrongly.
+
+---
+**IA-P3-02**
+- **WHAT:** FIX-072 (live broker margin in sizing) is built-and-never-wired: `PositionSizer`
+  accepts `broker_adapter` and implements the live-margin branch, but main.py never passes
+  it — the static leverage map decides every live sizing. Two sibling knobs on the same
+  constructor — `min_tick_size`, `max_single_order_qty` — are also NOT passed: the YAML
+  values (0.05 / 10000) are dead config that merely COINCIDE with the code defaults.
+- **EVIDENCE:** ctor call `main.py:2428-2448` (argument list verified complete — no
+  broker_adapter/min_tick_size/max_single_order_qty); branch `position_sizer.py:298-327`;
+  measured `position_sizer.live_margin_used` = 0 and `live_margin_fallback` = 0 across all
+  23 retained logs (the branch logs on BOTH outcomes, so 0 lines ⇒ 0 executions).
+- **CLASS:** Reachability (built-never-run — the IA-P2-01/EntryGate class, sizing edition) /
+  Config-vs-code.
+- **NEW or KNOWN:** NEW (the July audits treat FIX-072 as an active mechanism; the adapter
+  side — `get_live_margin_pct`, TTL cache, 16388 invalidation — is real and reachable only
+  from order_placer's cache-invalidation path).
+- **ROOT CAUSE:** the fix wired the adapter into `order_placer` (which got `broker_adapter`)
+  but the sizer construction predates it and was never revisited; the YAML knobs were added
+  to config without adding ctor pass-throughs.
+- **RECOMMENDATION (described):** decide which margin source sizing SHOULD use (static map
+  is arguably the safer, deterministic choice — but then delete the dead branch/knobs or
+  mark them inert); if live margin is wanted, wiring it changes qty_by_capital only (never
+  binding today) — low behavioural risk but careful-loop by policy.
+- **SEVERITY-BY-IMPACT:** LOW-MED — today's behaviour is consistent and deterministic; the
+  hazard is the false belief (docs/FIX list) that live margins already protect sizing, plus
+  two YAML knobs that silently do nothing if ever edited.
+
+---
+**IA-P3-03**
+- **WHAT:** The performance-weight channel is connected to nothing: `dynamic_by_winrate:
+  true` and the boot banner ("tier weights … x perf_weights") advertise performance-weighted
+  sizing, but no production code ever populates `SignalProcessor._perf_weights` — it is `{}`
+  for the life of every session, so `perf_weight = 1.0` on every sizing call ever made.
+- **EVIDENCE:** the only writer is the constructor param (`signal_processor.py:198`);
+  repo-wide grep for `perf_weights=`/`set_perf_weights`: production callers = **none**
+  (tests only, and `test_q9_sizing_floors_caps_wired.py:871` ASSERTS the production value
+  is `{}`); measured `trades.perf_weight_applied` distinct values all-time = **[1.0]**
+  (415 rows). Config: `dynamic_by_winrate: true` + `min_multiplier 0.5` / `max_multiplier
+  2.0` (system_config.yaml:182-184) — three knobs governing a multiplier that never varies.
+- **CLASS:** Config-vs-code / Reachability.
+- **NEW or KNOWN:** the emptiness is KNOWN to the test layer (Q9 pinned it) and the M-C6
+  comment ("performance_allocator clamps min_weight=0.5" — describing a wiring that does
+  not exist); **NEW is the finding-level statement**: FIX-132 Item 9 + FIX-133 Item 21
+  shipped plumbing whose SOURCE (a PerformanceAllocator feeding weights at boot or runtime)
+  was never built — decision #06 (PerfAllocator) is still open, and until it lands these
+  config knobs are dead.
+- **ROOT CAUSE:** the multiplier plumbing and its data source were split across work items;
+  the source half never shipped, and `dynamic_by_winrate: true` reads as if it did.
+- **RECOMMENDATION (described):** fold into decision #06 — either build the source (Rama's
+  open decision, D2/D3-gated) or set `dynamic_by_winrate: false` to make config truthful.
+  ⛔ Neither done here.
+- **SEVERITY-BY-IMPACT:** LOW-MED — no wrong number (1.0 is neutral); the cost is a config
+  surface that misdescribes live behaviour, in the money path's sizing formula.
+
+---
+**IA-P3-04**
+- **WHAT:** Third instance of the "config-legal ranges make a documented constraint
+  unreachable" class: the risk-per-trade path (PS2's headline formula) cannot bind for any
+  legal strategy config — `qty_by_risk/qty_by_concentration = 0.1/sl_pct ≥ 2` for every
+  sl_pct the schema admits under `sl_max_pct ≤ 0.05` (measured floor of the ratio: 5.0) —
+  joining IA-P2-03 (tier HIGH ≥ 80 vs ceiling 65) and the v3-medium/spread case (P2.2). No
+  startup or test invariant checks that configured constraints are reachable given the
+  other knobs' ranges.
+- **EVIDENCE:** algebra + measurement in P3.2(a); the three knobs live in three files
+  (risk_per_trade_pct system_config:166 · max_concentration_pct :167 · sl_max_pct
+  strategy schema/YAMLs) with no cross-validation (config_loader validates each in
+  isolation; grep width: no validator references two of them together).
+- **CLASS:** Invariant coverage (G-lens) / Architecture.
+- **NEW or KNOWN:** the dead-sizer FACT is KNOWN (P2-carry, board); NEW is (i) the
+  upgrade from empirical to structural (algebraic unreachability), and (ii) the named
+  CLASS with its three instances.
+- **ROOT CAUSE:** per-knob validation without cross-knob reachability checks.
+- **RECOMMENDATION (described):** one boot-time (or test-time) reachability assertion per
+  documented constraint — "there exists a config-legal input for which this constraint
+  binds" — would have caught all three instances. ⛔ Not built.
+- **SEVERITY-BY-IMPACT:** MED as a class (each instance silently retires a documented
+  protection or intent; the next knob edit can create a fourth instance unnoticed).
+
+---
+**IA-P3-05**
+- **WHAT:** The F1 sector-cap observe soak is structurally EVENTLESS: the flip condition
+  ("observe soak ≥1 session → evidence → Rama-gated enforce") assumed would-reject events
+  would accrue, but at current sizing the cap cannot be approached — so the soak has
+  produced, and can produce, zero evidence, while the flip decision waits on it.
+- **EVIDENCE:** threshold arithmetic P3.2(b)(3): whole-book margin ceiling ≈ ₹460 ≈ 4.7% of
+  capital vs the 40% trigger — an ~8× gap that `max_open_positions=5` makes unbridgeable;
+  measured `sector_cap_would_reject` = **0 lines all-time** (23 logs, gate live since
+  16-Jul); `risk_engine.sector_toctou_degraded` = 0 (the hardened read runs).
+- **CLASS:** Reachability / Decision-process (a soak that cannot discriminate).
+- **NEW or KNOWN:** F1 and G3 are KNOWN; NEW is the quantified vacuousness of the soak —
+  the same shape as IA-P2-05's shadow-gate leg (an observation channel whose event rate is
+  structurally zero).
+- **ROOT CAUSE:** the cap % was chosen for a larger book; nobody re-derived the trigger's
+  reachability at ₹9.9k capital with a 5-position cap.
+- **RECOMMENDATION (described):** the enforce-flip decision should be re-framed: at current
+  sizing the flip is FREE (it cannot reject anything) and therefore also USELESS — the real
+  prerequisites remain sector coverage (G3: 142/2,228 source symbols) and a sizing scale at
+  which 40% is reachable. Record that in the F1/R2/D1 decision context; ⛔ nothing flipped.
+- **SEVERITY-BY-IMPACT:** MED for decision-hygiene (a gate that cannot fire is soaking
+  toward a flip that cannot matter — while reading as "protection being validated").
+
+---
+**IA-P3-06** (hygiene bundle, one ID)
+- **WHAT:** (a) The engine-side sector resolution is FULLY silent: RE9's WARNING fires only
+  on exception/non-string, and `InstrumentCache.sector()` never raises (returns "UNKNOWN")
+  — measured 0 warning lines ever; the only loudness is the placer's DQ alert, which is
+  one-shot per session AND sample-gated (≥10 inserts) — 2 of 6 window days stayed silent
+  (27/30-Jul). (b) Margin is computed at three sites from one function (sizer inline,
+  `fm.reserve` ×1.05 buffer, placer row metadata) — agreeing by construction today, but the
+  sizer's dead live-margin branch (IA-P3-02) is exactly the code that would have made them
+  disagree if ever wired. (c) Schema comment drift: `margin_reserved -- qty * entry * 0.20`
+  hardcodes an old 5× assumption in prose. (d) The `_track_sector_dq` counters reset per
+  process, so the "one-shot" alert re-fires each session — adequate, but its absence on a
+  <10-trade day is indistinguishable from a fixed data source.
+- **CLASS:** Consistency / Documentation / Silent-failure (posture notes).
+- **NEW or KNOWN:** NEW-trivial; (b) sharpens the E-lens answer (one formula, three
+  invocations, no independent recomputation ⇒ sizing and placement CANNOT disagree on
+  margin while the branch stays dead).
+- **RECOMMENDATION (described):** none urgent; fold (c) into any future schema-comment pass.
+- **SEVERITY-BY-IMPACT:** LOW.
+
+### P3.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| Dead risk-sizer (P2-carry; "₹7 vs ₹99") | **CONFIRMED and now measured tighter: median actual risk ₹4.04 (window) vs intended ₹93.60–99.97 — ~20×; conc binds 415/415 + 67/67; risk-binds 0 ever (ratio floor 5.0×); upgraded from empirical to ALGEBRAIC (IA-P3-04)** |
+| **G3** sector resolution | Status moved: **4 real-sector trades now** (PNB 20-Jul; SAIL, JIOFIN 29-Jul; SYNGENE 30-Jul), not 1 — the 29/30-Jul entries post-date the G-register text. Populated split 113 UNKNOWN / 4 real (96.6%); root quantified: `instruments.csv` sector coverage **142/2,228 (6.4%)**, identical PC and VM. The DQ alert works (7 fires; sample-gated). R2/D1 remain blocked on coverage, not on code |
+| **G8** unlevered sizing | CONFIRMED — the binding constraint is notional (no leverage term); leverage touches only never-binding/bookkeeping surfaces (P3.2(c)); ⛔ no multiplier computed |
+| Sector-cap gate 8 (F1, observe since 16-Jul) | Mode verified `observe` on the deployed tree; would-reject 0 ever; UNKNOWN handling = pooled fail-closed direction (P3.2(b)); the soak is eventless by arithmetic (IA-P3-05) |
+| B-1 daily-loss unrealized (shadow) | `would_reject_with_unrealized` = **0 lines ever**; `mtm_unavailable` = 0 — the shadow has logged no event; the flip decision has accumulated no evidence either way |
+| Q9 sizing-guard unreachability verdicts | Re-confirmed by absence, all-time widths: `zero_multiplier_skip` 0 · `qty_explosion_guard` 0 · `invalid_sl_distance` 0 · `position_value_cap_exceeded` 0 · `REJECTED_LOT_SKEW` 0 · `sl_direction_warning` 0 (23 logs; plus signals: only `REJECTED_SIZING_CONCENTRATION` has ever occurred among SIZING_*) |
+| M-C6 ZERO_MULTIPLIER + FIX-133 2× ceiling (`position_sizer.py:506`, board latent) | Both latent as recorded: effective_mult = tier 0.5 × perf 1.0 = 0.5 always ⇒ the ≤0 branch and the 2× cap are unreachable until a weight source exists (IA-P3-03) |
+| Risk-gate reachability census (fresh, all-time signals) | Fired-ever: STRATEGY_CONTROL 17,521 · DAILY_TRADES 5,146 (window 0) · SHADOW_INNING 4,168 (off since 25-Jul) · SIZING_CONCENTRATION 3,340 · CIRCUIT_PROXIMITY 2,408 · STRATEGY_CIRCUIT_BREAKER 1,560 · OPEN_POSITIONS 453 · ENTRY_THROTTLED 300 · STRATEGY_POSITION_LIMIT 275 · DUPLICATE_SYMBOL 107 · **CONSECUTIVE_LOSSES 1 (20-Jul 14:39, COMSYN — the gate is reachable)**. Never-fired (0 rows ever): KILL_SWITCH (+_LATE), CAPITAL, DAILY_LOSS, SECTOR_EXPOSURE, CONTRARY_POSITION, RESERVE_FAILED, every SIZING_* except CONCENTRATION |
+| Throttle time-selection (19-Jul census) | Alive at the same seam (post-reserve, releases reservation): 4–27 REJECTED_ENTRY_THROTTLED/day in the window |
+| Costs-dominate (43.5% breakeven; size-independent cost_R) | Fresh interaction datapoint, ⛔ no scaling proposed: closed v34 trades (CLOSED+CLOSED_MANUAL, n=181) charges median **₹0.45**, risk_amount median ₹4.68 in this population (the ₹4.04 in P3.2(a) is the open-window slice — a different population); per-trade charges/risk **median 8.9%**, ratio-of-medians 9.6%, sum/sum 7.4% (all three aggregates re-measured 01:4x) ⇒ **≈8–10% of at-risk rupees consumed by charges at current size** (29 zero-charge rows = the known CHECK1 costs=0 class) |
+| Funnel (window) | screener PASSED 410 → trades created 67 (16%); the gap decomposes into SIZING_CONCENTRATION 184 · ENTRY_THROTTLED 88 · DUPLICATE_SYMBOL 42 · OPEN_POSITIONS 4 · placement-path remainder |
+| approve() volume | 20–49 calls/day in the window, approved=False 2–12/day — the gates are consulted at sized-signal rate (post-P1's census inversion, still true) |
+
+### P3.5 Open questions (not guessed into findings)
+
+- **OQ-P3-1:** Is the ~₹936–1,000 price ceiling (IA-P3-01) INTENDED universe selection?
+  Nothing documents it; it emerged from `max_concentration_pct` × small capital. Only Rama
+  can ratify it as intent or queue it as a D1 input. (It also bounds every backtest's
+  comparability as capital changes.)
+- **OQ-P3-2:** What evidence should now gate the F1 enforce flip, given the observe soak is
+  structurally eventless (IA-P3-05)? The original "≥1 session soak" cannot produce data.
+  Rama/design; blocked-with is G3 coverage.
+- **OQ-P3-3 (curiosity):** `REJECTED_DAILY_TRADES` = 5,146 all-time but 0 in the window —
+  the histogram implies a pre-throttle era when the daily cap did the throttling. Settle
+  (if ever needed) with a by-month slice; no defect implied.
+
+### P3.6 SEAM SUMMARY — can sizing and the order placer disagree about qty/risk
+
+Almost nowhere, by construction. `place()` receives `qty=sizing.qty` VERBATIM
+(`signal_processor.py:1233`) plus (entry, SL, TGT, trigger, the sizing breakdown for the
+audit row, and the strategy R:R frozen for fill-time TGT recalc); the placer computes no
+second quantity — repo-wide, the only qty-shaping after sizing is execution truth
+(qty_filled vs qty_planned on partial fills, P4's territory). Margin exists in three figures
+that agree by construction today (one static formula: sizer's check, FM's reservation ×1.05
+SL-M buffer, placer's row metadata) — the one mechanism that could split them (live broker
+margin in the sizer) is dead code (IA-P3-02), and the FIX-075 drift top-up recomputes with
+the same function. Risk exists in two figures: `sizing.risk_amount` = `trades.risk_amount`
+(same number, persisted), and realized risk can exceed it only through execution-side
+slippage (the entry-slippage budget guards it — P4). So the P3→P4 seam carries: an exact
+qty, a frozen (entry, SL, TGT) basis, a margin already reserved (+5% buffer the placer
+does not know about), and an audit breakdown. Where P4 starts: whether execution preserves
+that basis — fill-price slippage vs the sized SL distance, partial-fill handling of
+qty_planned/qty_filled, the drift top-up path, and the placement-failure statuses that
+release the reservation.
+
+**Phase 3 done** = findings above; the dead-sizer gap re-measured fresh (conc 415/415 and
+67/67; actual ₹4.63 mean vs intended ~₹95; upgraded to algebraic unreachability); the sector
+UNKNOWN handling determined definitively (pooled, fail-closed direction — inert by mode ×
+input × arithmetic); unlevered sizing confirmed and the leverage surface mapped with no
+multiplier computed; every sizing %-knob units-checked (no new mismatch, width stated);
+nothing fixed; nothing pushed; the 3-Aug/4-Aug sequence untouched.
+*(Phase 4 — order construction/execution — appends below this line.)*
