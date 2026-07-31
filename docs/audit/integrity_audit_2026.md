@@ -1320,3 +1320,168 @@ path anyway) · `entry_gate.max_spread_pct 0.5` percent (dead — IA-P4-01) ·
 `_MIN_TRIGGER_DISTANCE_PCT 0.0025` fraction ✓ · `DEFAULT_CIRCUIT_MARGIN_PCT 0.02`
 fraction-named-PCT (P3-recorded naming hazard, consistent) · tick 0.05 rupees ✓. The units
 discipline held at this layer; what the sweep surfaced is dead KNOBS, not wrong units.
+
+### P4.3 NEW findings
+
+---
+**IA-P4-01**
+- **WHAT:** FIX-134 shipped dark — BOTH halves. **(a)** The pre-entry liquidity check is
+  configured ON and has never run: `entry_gate.liquidity_check_enabled: true`
+  (system_config.yaml:556, with `max_spread_pct 0.5` :554 and `min_depth_qty 500` :555), and
+  the schema even defaults it True (`config_loader.py:1523-1524`) — but main.py passes NONE of
+  the three liquidity args to OrderPlacer (:2639-2665), so the ctor default **False** rules
+  (`order_placer.py:587`) and `_check_liquidity` returns before any work (:4053-4055).
+  **(b)** `orders/sl_breach_monitor.py` (FIX-134 Item 39 — the tick-level BACKUP SL monitor
+  that fires an emergency exit when the broker SL is missing AND LTP breaches the stop) has
+  **no importer anywhere in the repo**; its own docstring claims "wired into the tick
+  dispatcher in main.py" — no such wiring exists. Had it been wired, the dormant tick feed
+  would starve it anyway — two independent disablers, the X6 shape. Sibling note: the
+  `price_drift_threshold` yaml key (:235) is also not passed — the code default 0.005 is
+  coincidentally equal (the IA-P3-02 "coincide" pattern).
+- **EVIDENCE:** grep widths — `liquidity_check_enabled`/`liquidity_max_spread`/`min_depth_qty`
+  consumers = placer ctor + config schema + tests only (repo-wide, *.py);
+  `sl_breach_monitor` importers outside the module = **0** (repo-wide, tests excluded).
+  Measured: `insufficient_liquidity` + ANY `liquidity` log line = **0 across all 23 retained
+  logs**; `sl_breach` lines = **0 ever**.
+- **CLASS:** Config-vs-code / Reachability / Silent-failure.
+- **NEW or KNOWN:** NEW (the FIX list and config read as delivered protections; the yaml says
+  `true`).
+- **ROOT CAUSE:** identical to IA-P3-02 — config keys and module shipped without the
+  constructor pass-through / construction site; instances 4 and 5 of the IA-P3-04
+  "no reachability assertion" class.
+- **RECOMMENDATION (described, ⛔ not applied):** decide wire-or-delete per half. The
+  liquidity check is a 3-arg ctor plumb; the SL monitor is tick-fed and therefore ⛔ GATED
+  BEHIND the dormant-feed decision (do not reopen it for this). Until decided, set the yaml
+  key false so config tells the truth.
+- **SEVERITY-BY-IMPACT:** MED — two documented pre-trade/position protections silently absent
+  while config claims one of them ON; the belief hazard, not a wrong number.
+
+---
+**IA-P4-02**
+- **WHAT:** The B-lens determination: no order-size ceiling exists between the sizer and the
+  broker — a defective qty entering `place()` would travel to Kite unchecked. With the
+  sizer's `max_single_order_qty` yaml dead (IA-P3-02), the effective ceiling for the entire
+  money path is one unconfigured code default (10000) inside the sizer.
+- **EVIDENCE:** P4.2(b): ZA13 = `qty > 0` only (:2028-2031); `max_single_order_qty` 0 refs in
+  orders/+broker/; measured max ever = 6 requested / 9 sized.
+- **CLASS:** Safety / Invariant coverage.
+- **NEW or KNOWN:** NEW (sharpens IA-P3-02's consequence to the placement layer; settles the
+  5-Jul UNCERTAIN).
+- **ROOT CAUSE:** the guard was placed in the sizer only; its config wire then broke, and
+  nothing downstream re-checks.
+- **RECOMMENDATION (described):** if a ceiling is wanted at the money chokepoint, ZA13 is the
+  single site (one comparison against a config value); pairs with IA-P3-04's
+  reachability-assertion idea. ⛔ Not built.
+- **SEVERITY-BY-IMPACT:** LOW-MED — latent defense-in-depth gap; today's exposure is bounded
+  by upstream capital math (~6-9 shares), but the shape is single-point-of-failure.
+
+---
+**IA-P4-03**
+- **WHAT:** Order validity is never constructed: `kite.place_order` is called with no
+  `validity` argument (:604-615), no config key exists, and the orders table has no validity
+  column — every order ever placed relied on Zerodha's implicit DAY default.
+- **EVIDENCE:** the kite call site (verified complete argument list); orders pragma (no such
+  column); repo grep `validity` in orders/+broker/ = no order-construction consumer.
+- **CLASS:** Correctness-by-default / Documentation.
+- **NEW or KNOWN:** NEW-trivial.
+- **ROOT CAUSE:** DAY-only was always the intent; never stated anywhere.
+- **RECOMMENDATION (described):** record it as a one-line contract (optionally pass
+  `validity="DAY"` explicitly). ⛔ Not done.
+- **SEVERITY-BY-IMPACT:** LOW — correct today by broker contract.
+
+---
+**IA-P4-04**
+- **WHAT:** `orders.qty_filled` is written by nothing: **0 of 805 rows** carry qty_filled > 0
+  — including all 405 COMPLETE orders and the 145 real entry fills. Fill truth lives on
+  `trades.qty_filled` (max 6) + events. Anyone auditing fills from the orders table concludes
+  nothing ever filled.
+- **EVIDENCE:** measured (A7o); writer sweep: the only `UPDATE orders` sites set
+  status/updated_at (`state_store.py:1030` day-rollover cancel) and reconciliation_status
+  (:3054) — neither touches qty_filled. (Reader sweep not exhaustive; the WRITER absence is
+  the measured fact.)
+- **CLASS:** Consistency / Documentation (schema promises data it never receives).
+- **NEW or KNOWN:** NEW.
+- **ROOT CAUSE:** fill accounting was built on trades+events; the orders column predates it
+  and was never wired or removed.
+- **RECOMMENDATION (described):** document the column dead in schema.sql, or drop it
+  (schema change ⇒ careful-loop). ⛔ Neither done.
+- **SEVERITY-BY-IMPACT:** LOW — misleads audits/tools; no runtime consumer found.
+
+---
+**IA-P4-05** (hygiene bundle, one ID)
+- **WHAT:** (a) **R:R fallback boundary**: `tgt_risk_reward_applied` = {**2.0 ×36 rows,
+  23→24-Jun** · **1.5 ×365 rows, 24-Jun→31-Jul**; window 1.5 on 67/67} — the 2.0 era is
+  exactly pre-Slice-1 (the placer's ctor default `rr_ratio=2.0`); the fallback (2.0 + WARN,
+  `_resolve_fill_rr`) is LATENT today and DISAGREES with the universal strategy 1.5 — a loud
+  but wrong number if a future strategy omits R:R. (b) the `cnc_gtt_adoption` boot sweep
+  failure is ERROR-swallowed (1× 08-Jul ReadTimeout; no alert; one blind morning per
+  failure). (c) `_safe_delete_gtt` swallows to ERROR — a failed delete would leave a live GTT
+  standing with only a log line (never yet executed). (d) `snap_to_tick.missing_tick_size`
+  WARN fired **8×** (SEIL, LIQUID, …) — the FIX-170 fail-safe works; those instruments were
+  absent from the cache (the G6-adjacent ETF/token cluster). (e) OP-NS4 docstring drift
+  (5-Jul finding): **CLOSED 22-Jul** — a SUPERSEDED note was added doc-only, original left
+  legible (:131-137).
+- **CLASS:** Silent-failure posture / Documentation. **SEVERITY:** LOW.
+
+### P4.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| X6 / 5-Jul protocol adjudication (LIMIT_TRIPLE forced; 3 exit engines dark) | **CONFIRMED fresh, every link, current lines** (P4.2(a)); a FOURTH dark exit-safety module added (IA-P4-01b) |
+| 5-Jul [HIGH] "loaded config gun" (CO not activation-safe) | Unchanged: `modify_order` hardcodes `variety="regular"` (:1093); CO entry `order_type="SL"` (`order_protocol_co.py:121`); 12/15 YAMLs still declare CO_PLUS_TGT |
+| 5-Jul [HIGH] alert-truth divergence (Smart TGT claimed on every alert) | **LIVE today** — `smart_on` = global-config-true (:1735-1743; yaml `smart_tgt.enabled: true`) |
+| FIX-141 pending-R:R cancel (`min_pending_rr 1.0`) | **STATUS UPGRADE → VERIFIED LIVE: `pending_rr_cancel` 15 · `pending_rr_cancelled` 15 · `_failed` 0** (23 logs) — an armed, working order-construction guard |
+| FIX-128 + Phase-3a slippage guard | Alive and binding: `entry_slippage_observed` **305 == place_start 305 (1:1)**; `slippage_guard_exceeded` **45 all-time, 11 in window == the window's 11 REJECTED trades exactly** (per-day 1/1/2/1/2/4); the 2×ERROR-per-rejection double-log (30-Jul note) stands |
+| FIX-075 drift top-up | Fired **once ever** in retained logs (detected 1 · top-up 1 · rejected 0) |
+| FIX-072 16388 margin retry | **Never fired** — 0 real occurrences (the 3 grep hits are signal-ID substring false positives) |
+| BL-19 429 placer retry · FIX-068 UNKNOWN_IN_FLIGHT | 0 · 0 ever — both recovery paths unexercised (trades UNKNOWN% = 0 rows) |
+| NOCIL clamp gate + FIX-190 Bug C | 6 benign band-clamps; `sl_unplaceable` 0 · `tgt_unplaceable` 0 · SL-only partials 0 · `skipped_unplaceable` 0 ⇒ TGTRetryManager constructed-idle (26 boot lines, 0 retries ever) |
+| FIX-148/181 emergency exit + hard-kill ladder | **0 executions ever** — width: the 17.5k raw "emergency" log matches are all strategy_control breaker TEXT; no order_placer emergency marker exists in any retained log. Consistent with HARD_KILL-never-fired (Q4 record) |
+| FIX-017 zero-fill / 60s fill timeout | Working: `entry_cancelled_zero_fill` 96 all-time; ENTRY terminal = CANCELLED 160/805; orders statuses = **{COMPLETE 405, CANCELLED 400} ONLY** — `orders.status` never REJECTED (memory rule re-confirmed in data) |
+| P0 SL-M removal (OPL7) | In DATA: leg×type = ENTRY LIMIT 365 · SL "SL" 213 · TGT LIMIT 202 · EOD LIMIT 25; **SL-M 0 · MARKET 0**; variety regular 805/805 |
+| Option-A coercion + SLICE2.5 CNC master lock | 0 coercions · 0 CNC refusals ever (nothing non-INTRADAY survives strategy control — both locks are unexercised backstops); product MIS 802 / CNC 3 (the 3 = pre-Option-A CANCELLED entries) |
+| M-C4 / M-C8 (lock held through Telegram send; retry starves fill thread) | Placement touches the pair at the ORDER PLACED / slippage alerts (:1745, :1163) — noted per brief, ⛔ NOT re-opened (careful-loop, gated) |
+| F5 / G9 (broker MIS-block class + learned blocklist) | The 400-handler records into the shared `mis_blocklist` (main.py:2633-2637); P1's measured PLACEMENT_FAILED rows carry broker text verbatim; signals PLACEMENT_FAILED = 113 all-time |
+| `gtt_state` trap (MASTER_PENDING §4.1) | Re-confirmed: live `gtt_state` 0 rows AND that is correct (the T2 store was throwaway) |
+| check1_mid_fill_defer_sec | Still 0.0 = OFF on the deployed tree (KNOWN; paper cannot exercise it) |
+
+### P4.5 Open questions (not guessed into findings)
+
+- **OQ-P4-1:** Is implicit DAY validity a deliberate contract (IA-P4-03)? One-line locked
+  decision settles it.
+- **OQ-P4-2:** FIX-134 wire-or-delete, per half (IA-P4-01) — Rama's; the SL-monitor half is
+  tick-feed-gated (⛔ the dormant-feed reopen trigger governs, not this audit).
+- **OQ-P4-3 (accounting curiosity):** place_start 305 − place_complete 241 = 64 aborted
+  placements; measured aborts: slippage 45 · EOD-cutoff 0 · kill last-mile 0 · link 0 ·
+  empty-broker-id 0 · liquidity 0 · drift 0 · 16388 0 ⇒ residual **19 = broker-side rejects
+  raised by the engine** (the F5 class — PYRAMID/ASAHISONG/GALLANTT examples). Settle exactly
+  (if ever needed) by sweeping `_handle_placement_failure` reasons; no defect implied.
+
+### P4.6 SEAM SUMMARY — can the placer and the broker adapter disagree about the order
+
+Three fields are ADAPTER-owned and can legitimately differ from what the placer asked — all
+by design, all logged: (1) **product** — the placer sends INTENT only; the adapter coerces
+intent under `force_intraday_only`, resolves the product code, and enforces the CNC master
+lock (:543-567). The placer separately derives product for the DB rows via the SAME
+ProductResolver, so rows and broker agree by construction. (2) **price/trigger** — the
+adapter's authoritative fail-safe tick-snap (:532) may move any price the protocol computed
+(protocol-side rounding pre-aligns SL/GTT limits; the entry LIMIT relies on the snap alone).
+(3) **tag** — truncated at the chokepoint. One field NOBODY owns: **validity** (IA-P4-03).
+Everything else crosses VERBATIM: qty (checked only `> 0` — IA-P4-02), side, order_type;
+exchange is fixed NSE. Reverse direction: `PlacedOrder` echoes what was SENT (post-snap
+price, resolved product), and an empty broker_order_id is a hard failure (OP-LM3) — no silent
+divergence path found in P4 scope. What P4 hands P5: the adapter internals behind this seam —
+rate limiter, order state machine, OrderMonitor polling truth (fill_timeout, FIX-141),
+paper-parity (the 14/19 constant-branch class), the reconciler CHECK battery + external-close
+classification — plus two measured zeros worth re-proving there (the 429 path and the
+UNKNOWN_IN_FLIGHT recovery, both never exercised).
+
+**Phase 4 done** = findings above; the exit-engine / order_protocol / LIMIT_TRIPLE state
+re-measured fresh (still dead config · still forced 478/478 + 67/67 · still never fires, with
+a fourth dark module found); the order-size cap DETERMINED (none exists placer→broker; ZA13 =
+qty>0 only); the GTT-OCO construction+cancel path reconciled against T2 (deployed code
+live-proven; prepass status moved to live-proven; service deletes never executed); 14
+order-construction knobs units-checked (no new mismatch — the yield was dead knobs);
+committed incrementally (`f0ea74f` + this commit); ⛔ nothing fixed, nothing pushed, the
+3-Aug/4-Aug sequence untouched.
+*(Phase 5 — broker adapter / execution truth — appends below this line.)*
