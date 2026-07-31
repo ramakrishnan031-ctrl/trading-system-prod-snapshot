@@ -146,6 +146,18 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
                      availability box above.
                      10:30-11:00 or slip.
 
+  ✅✅ THIS ROW IS DONE — PUSHED 30-Jul 19:55:30 IST as `ce08668..4cc4d04`, 15
+     commits. ALL of `fix-tests-27jul` + `fix-boot-27jul` + `214a878` (as `264dd5b`)
+     + `249317d` + the 4 docs commits LANDED. Regression BASE 10F/5435P vs AFTER
+     10F/5469P, NEW-FAILURE SET EMPTY. Verified 3 ways (SHA identity · deployed
+     bytes md5-identical to the pushed blobs · reflog push+checkout @ 19:55:30).
+     `load_all()` on the DEPLOYED tree = CONFIG_LOAD_OK. Schema 45==45==45, NO
+     migration at the Fri 08:15 boot. ⛔ NOTE: the omitted-confirm-flag rehearsal
+     returned EXIT=2 as required but CANNOT reach `load_all()` (it returns at the
+     confirm guard, before `_build_live_adapter()`) — the direct `load_all()` run is
+     what actually closed that coupling. Don't reuse the rehearsal alone as that gate.
+  ⏳ FRI 31-JUL EVENING NOW CARRIES `fix-symdir-27jul` (`300a247`, +7) **ALONE.**
+
   Thu 30-Jul       fix-tests-27jul (4)           Fri 08:15: ONE live      LOW
   (after the T2      + fix-boot-27jul (2)         boot variable -- S4      (see §6:
    close PASSES)      + cherry-pick 214a878       degrade. #16a is INERT   re-counted
@@ -191,6 +203,28 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
                       thing that could have
                       pruned it. See §7.3(a).
 
+  ✅✅ THIS ROW IS DONE — PUSHED 31-Jul 21:44:48 IST as `96a5e66..297b587`, 13
+     commits: `fix-symdir-27jul` merged as `d282322`, plus `297b587` correcting the
+     config go-live comment (Rama-approved; proven value-neutral by parsing the YAML
+     both sides). ⭐ RESUMED AFTER A POWER-DOWN mid-deploy — and BOTH halves of the
+     regression were RE-TAKEN in one session+window per the standing rule, because
+     the killed run's BASE does not carry forward: BASE 10F/5469P (pre-merge
+     `0171bd8`) vs AFTER 10F/5495P (the pushed tree), *** NEW-FAILURE SET EMPTY ***,
+     the sets identical in BOTH directions, and all 26 new tests ran and passed.
+     Verified 3 ways (SHA identity PC==origin==bare · the 3 symdir markers ABSENT
+     before the push and PRESENT after — with CONTROL greps first proving that
+     absence check could have found them · reflog push+checkout both @ 21:44:48).
+     `load_all()` on the DEPLOYED tree = CONFIG_LOAD_OK, and the probe read back the
+     LOADED values, not just the YAML text: one_trade..._per_day=True,
+     mis_filter=(enabled True, shadow True). ZERO schema movement ⇒ no migration at
+     the Mon 08:15 boot and no overnight refusal window.
+  ⭐ MONDAY'S BOOT CHAIN VERIFIED ALIVE, not assumed: there is NO systemd timer —
+     08:15 cron runs `auto_refresh_token.py`, `token-watcher.service`
+     (active + enabled) sees the fresh token and starts the service. That is exactly
+     how it started at 08:15:17 today. ⇒ Monday will carry the rule.
+  ⏳ MON 3-AUG IS THE OBSERVATION DAY — card written to
+     `Downloads/MON_03-AUG_OBSERVATION_CARD.txt`. ⛔ TUE 4-AUG IS GATED ON IT.
+
   Fri 31-Jul       fix-symdir-27jul MINUS        Mon 03-Aug 08:15: the     DAY
   (evening)          214a878 (audit trail        symbol+direction rule
                      already landed Thursday)    LIVE (1 behavioural) +
@@ -212,9 +246,28 @@ because they are what Wednesday runs. *** Everything else is DAY-class.
 
   Mon 03-Aug       nothing                       Tue 04-Aug: THE FLAG     --
   (OBSERVE the                                   FLIP + carry pilot D1
-   new rule)
+   new rule)       ▶️ CARD: `Downloads/MON_03-AUG_OBSERVATION_CARD.txt`
+                   ⛔⛔ *** HARD GATE ON TUE 4-AUG. *** Run §7.2's query after
+                     the close. ANY UNEXPLAINED row -- both direction counts 0,
+                     or ONLY the opposite direction -- *** POSTPONES THE FLIP. ***
+                     It is the query's answer, not a judgement made on the day.
+                     (Opposite-direction-only is WORSE: the rule blocked a
+                     REVERSAL, which its own docstring says would be wrong ⇒ the
+                     rule also comes back OFF.)
+                   ⭐ ZERO ROWS IS **NOT** A PASS -- it means the rule was never
+                     EXERCISED. It does NOT postpone the flip (the flip is a
+                     DELIVERY change), but it carries forward as an OPEN
+                     observation, and ⚠️ prove the day had signal traffic before
+                     believing the zero.
+                   ⚠️ EXPECT a new `REJECTED_NOT_MIS_TRADABLE (shadow)` WARNING
+                     from Monday. *** That is the mis_filter SHADOW log; nothing
+                     was dropped. *** Do not misread it as the filter enforcing.
+                   ⚠️ STILL OWED BEFORE THE CARRY PILOT: the buy-day product
+                     filter (+ CRITICAL-on-NULL), with Q9's BL9 trace attached.
+                     Schedule it in the gap between Monday and the flip.
 
   Tue 04-Aug       ⭐ THE IRREVERSIBLE STEP: four flags flipped. Different card.
+                   ⛔ GATED on Monday's observation coming back clean -- above.
 
 *** A2 — I AGREE WITH THE THURSDAY-EVENING SLOT, and here is the reasoning
     made explicit rather than assumed: ***
