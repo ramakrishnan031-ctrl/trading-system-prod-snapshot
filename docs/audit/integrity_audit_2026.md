@@ -1184,3 +1184,139 @@ input × arithmetic); unlevered sizing confirmed and the leverage surface mapped
 multiplier computed; every sizing %-knob units-checked (no new mismatch, width stated);
 nothing fixed; nothing pushed; the 3-Aug/4-Aug sequence untouched.
 *(Phase 4 — order construction/execution — appends below this line.)*
+
+---
+
+## PHASE 4 — RISK → ORDER CONSTRUCTION / PLACEMENT (placer + protocols + exit engines + GTT, and the P4→P5 seam)
+
+### P4.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~01:5x → ~03:0x IST** |
+| Measurements taken | 01-Aug **~02:1x–02:4x IST**, from the VM (`mode=ro` DB reads + log greps; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 |
+| PC tree read | `413c957` = `297b587` + 5 docs-only commits ⇒ code read == deployed |
+| Service | `inactive` (designed nightly state) |
+| Primary windows | trades all-time **478** / orders all-time **805** / 24→31-Jul window (67 trades); logs = **23 retained** `system_*.log`; T2 artifacts read-only |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed/tuned; no live order or GTT touched; July audits read-only |
+
+Deployed-tree config ground truth (VM grep == PC): `entry_gate`: `slippage_buffer 2.0`(₹) ·
+`max_entry_slippage_pct 1.0`(%) · `max_spread_pct 0.5` + `min_depth_qty 500` +
+`liquidity_check_enabled true` · `min_effective_rr 1.0` · `min_pending_rr 1.0` ·
+`circuit_proximity_reject_enabled true` · `slippage_control {enabled, mode sl_fraction,
+max_slippage_fraction 0.22, absolute_cap_rs 5, hard_max_slippage_rs 10, also_apply_pct_check
+true, overrides all empty}` · `capital`: `sl_limit_offset_pct 0.005` · `gtt_sl_limit_offset_pct
+0.03` · `emergency_exit_buffer_pct 0.01` · `order_monitor`: poll 2s / `fill_timeout_sec 60` ·
+`smart_tgt {enabled true, trigger_pct 0.005, step_pct 0.003}` · `tgt_retry {enabled, 30s ×5,
+backoff ×2}` · `structure_exit_enabled false` · `delivery_enabled false` +
+`force_intraday_only true` · strategy YAMLs: `order_protocol` = 12/15 CO_PLUS_TGT + 3
+LIMIT_TRIPLE; `tgt_risk_reward 1.5` on all 15.
+
+### P4.1 Path as verified (current tree == deployed)
+
+One placement pipeline, `OrderPlacer.place()` (`order_placer.py:864`): FIX-025 gate-release
+buffer (**dead branch** — `release_ltp` arrives only from the never-fed EntryGate, IA-P2-01;
+measured `slippage_protection` lines = 0 ever) → FIX-136 R:R gate (**armed**,
+`min_effective_rr 1.0`, :927-947) → **OP9 `order_protocol = self._default_protocol`
+:949-950 — unconditional** → trade row (risk_amount/margin/sector/sizing-audit, :985-1004) →
+link (hard-fail, :1016-1026) → OP-LM1 kill check :1039 → PENDING → FIX-073 EOD-cutoff :1065 →
+FIX-128/Phase-3a slippage guard :1092-1181 (`sl_fraction`: tolerance = min(0.22 × SL-distance,
+₹5), hard ₹10, plus the 1% flat check; **fail-open when no LTP**) → FIX-075 drift top-up
+:1183-1278 (threshold 0.005; **fail-open on quote failure**) → FIX-134 liquidity check
+:1282-1294 (**never runs — IA-P4-01**) → A-3 kill re-check INSIDE the BL-19 429-retry loop
+:1324 + FIX-072 16388 retry :1348-1391 → `FullEntryEngine.execute` (string-routed, unknown →
+ValueError, `full_entry_engine.py:93-103`) → `LimitTripleProtocol.execute` = **ENTRY LIMIT
+only** (:167-241; SNR-V2 MARKET variant dormant) → the adapter chokepoint
+(`zerodha_adapter.place_order:478`): ZA13 validation (**`qty > 0` and nothing above it**,
+:2028-2031) → authoritative fail-safe tick-snap (:532, :1361-1415; cache wired `main.py:2140`)
+→ **Option-A intent coercion** :543-549 → ProductResolver :552 → **CNC master lock** :558-567 →
+`kite.place_order` :604-615 (`exchange="NSE"` hardcoded; **no `validity` argument — DAY is the
+implicit broker default**; tag truncated at the chokepoint) → atomic persist (OP-BL8) → track →
+ORDER PLACED alert :1731-1752. Fill side: OrderMonitor (poll 2s; `fill_timeout_sec 60` →
+zero-fill terminal → release+FAILED :1950-1985; FIX-141 pending-R:R cancel
+`order_monitor.py:1143-1198`) → OrderFilled → TGT recalc from the ACTUAL fill with the FROZEN
+strategy R:R (:2861-2868; fallback 2.0+WARN — latent) → `place_deferred_exits` (:2886): **the
+intent gate** — `intent == "DELIVERY"` + placer wired → **ONE two-leg OCO GTT**
+(`full_entry_engine.py:151-177` → `cnc_gtt.py:94-157`: triggers tick-snapped, C8
+straddle + 0.25% distance validation, durable `gtt_state` persist best-effort) — else
+LIMIT_TRIPLE `place_exits` (`order_protocol_limit.py:263-495`): circuit-band clamp gate with
+the NOCIL polarity check (:297-360) → **SL FIRST**, stop-limit `"SL"` with limit =
+trigger ∓ 0.5% (:362-419) → TGT LIMIT (:458-495); TGT-unplaceable/rejected → SL-only partial +
+TGTRetryManager (FIX-190 Bug C). Exit-failure ladder (:2898-2934): LTP-validation error →
+retry queue (FIX-061); anything else → **emergency marketable-LIMIT exit (LTP ∓ 1%, FIX-181)
++ HARD_KILL**; SL-unplaceable → `SLUnplaceableError` → same ladder. After-check:
+`record_exits_verification` per trade (Slice 1 Part B).
+
+### P4.2 Headline re-measurements (mandated)
+
+**(a) order_protocol / LIMIT_TRIPLE / the exit engine — re-measured fresh: all three verdicts
+HOLD, at current line numbers and in current data.** The 5-Jul adjudication chain re-verified
+link-by-link on the deployed tree: `place()` still has no protocol parameter (:864-882); OP9
+assigns `self._default_protocol` unconditionally (:949-950); main.py constructs OrderPlacer
+**without** `default_order_protocol` (:2639-2665) ⇒ the ctor default `"LIMIT_TRIPLE"` (:570)
+decides every trade. Measured: `trades.order_protocol` = **LIMIT_TRIPLE on 478/478 all-time
+and 67/67 in the window** — the YAML `order_protocol` field (12/15 declare CO_PLUS_TGT)
+remains dead config, and the CO surface remains dormant AND activation-unsafe (`modify_order`
+still hardcodes `variety="regular"` :1093; the CO entry is `order_type="SL"`
+`order_protocol_co.py:121`, never live-validated). The exit engines, fresh: **`smart_tgt_state`
+0 rows ever · `trades.sl_trail_count>0` on 0/478 · StructureExitManager flag-off ·
+BreakevenManager not constructed (no reference in main.py, repo grep)** — X6's
+three-dark-engines verdict CONFIRMED, **plus a fourth dark module found (IA-P4-01b:
+`sl_breach_monitor`)**. SmartTgtManager is constructed EVERY boot with hardcoded
+`enabled=True` (`main.py:2557`; 26 boot lines / 23 logs, 0 action lines) and its registration
+gate requires `order_protocol == "CO_PLUS_TGT"` (:2193-2197) ⇒ **structurally unreachable
+under the forced LIMIT_TRIPLE** — running-but-starved. **Every ORDER PLACED Telegram still
+claims "Smart TGT monitoring: ACTIVE (FIXED mode)"** (`smart_on` keys on global config only,
+:1735-1743, and yaml `smart_tgt.enabled: true`) — the 5-Jul [HIGH] alert-truth divergence is
+live today.
+
+**(b) The order-size cap — DETERMINED from source: NO upper bound exists between sizing and
+the broker.** ZA13 `_validate_place_order` checks `qty > 0` (positive integer) and nothing
+above it (:2028-2031) — the July-audit UNCERTAIN ("qty>0 verified by ZA13 docstring only") is
+settled by source read: the docstring was accurate, and the check is exactly that. Grep widths:
+`max_single_order_qty` = **0 references in orders/ + broker/**; no notional cap at placement
+(the 40% value cap is sizer-internal). The ONLY ceiling anywhere is the sizer's internal guard
+at its **code default 10000** — whose YAML twin is dead config (IA-P3-02). Measured exposure
+context: **max qty ever submitted = 6 (`orders.qty_requested`), max ever sized = 9
+(`trades.qty_planned`)** — three orders of magnitude below the unconfigured default.
+Mitigating structure (E-lens): qty flows VERBATIM sizer→placer→protocol→adapter→kite (P3.6:
+no second qty computation = no corruption site), and notional is bounded upstream by
+CAPITAL/reserve. → IA-P4-02.
+
+**(c) GTT-OCO — reconciled against the T2 live evidence: the construction path IS the deployed
+code, live-proven; and the orphan-GTT machinery moved from "never-run" to LIVE-PROVEN — 
+exercised by the T2 basket itself.** Construction: `scripts/t2_cnc_gtt_realtest.py` drives
+**the deployed `CncGttPlacer.place_for_fill`** (:375/:490; import :581-584) with a throwaway
+store (`gtt_state.trade_id` FKs to trades ⇒ the prod store cannot be used — the §4.1 trap,
+correct) → `adapter.place_gtt` (`_gtt_legs` :654-661: both legs exit-side LIMIT, product CNC,
+`trigger_values [sl, tgt]` ascending, NSE) — the broker accepted **5/5 on 29-Jul, every field
+== the `gtt_state` mirror** (T2 record). Service side, fresh: live `gtt_state` **0 rows ever**
++ `cnc_gtt.placed` **0 lines** — correct, no DELIVERY fill has ever occurred in the service
+(entry double-locked). **Status moved — the Slice-2.5 record said "FIX-183 prepass never-run";
+it RAN, on the T2 GTTs, and behaved exactly as designed:** `cnc_gtt_monitor.forensic`
+`unknown_gtt_left_alone` ×**220** (29→31-Jul, the 5 T2 GTTs, "no gtt_state row → treated as
+human/external"), **5× WARNING "Orphan GTT — no open delivery trade" at 31-Jul 08:15:27-29 —
+SJVN/MSUMI/SOUTHBANK/TRIDENT/IOB, exactly the T2 five, exactly as the Slice-2.5 record
+predicted**; the adoption branch untriggered (correct: no open delivery trade in the live DB).
+One blemish: `cnc_gtt_adoption: get_gtts failed: ReadTimeout` **1× (08-Jul), ERROR-swallowed,
+no alert** (IA-P4-05b). Deletion: service-side GTT deletes exist ONLY in
+`cnc_gtt_monitor._safe_delete_gtt` (:344 heal / :497 / :632 wrong-qty; failure → ERROR only)
+— **never executed in production**; the T2 GTTs were deleted by the close script's direct
+kite calls, not by the service.
+
+**(d) Units sweep (H lens) — every order-construction %-knob checked against its consuming
+expression: NO fraction-vs-percent defect found.** Width, 14 knobs: `sl_limit_offset_pct
+0.005` → ×(1∓pct) ✓ · `gtt_sl_limit_offset_pct 0.03` ✓ (deep GTT-SL floor; the GTT TGT leg
+deliberately reuses 0.005, `main.py:2608`) · `emergency_exit_buffer_pct 0.01` ✓ ·
+`price_drift_threshold 0.005` fraction vs fraction ✓ (⚠️ the yaml key is DEAD — not passed;
+the code default is coincidentally equal — IA-P4-01 note) · `max_entry_slippage_pct 1.0` =
+**percent**, consumed `/100` ✓ (the one percent-unit knob among fraction siblings — internally
+consistent, flagged as a naming hazard only) · `slippage_control.max_slippage_fraction 0.22`
+fraction-of-SL-distance ✓ · `absolute_cap_rs 5` / `hard_max_slippage_rs 10` / tier table =
+rupees ✓ · `entry_gate.slippage_buffer 2.0` = **RUPEES**, name carries no unit (dead FIX-025
+path anyway) · `entry_gate.max_spread_pct 0.5` percent (dead — IA-P4-01) ·
+`smart_tgt.trigger_pct 0.005` / `step_pct 0.003` fractions ✓ (starved consumer) ·
+`_MIN_TRIGGER_DISTANCE_PCT 0.0025` fraction ✓ · `DEFAULT_CIRCUIT_MARGIN_PCT 0.02`
+fraction-named-PCT (P3-recorded naming hazard, consistent) · tick 0.05 rupees ✓. The units
+discipline held at this layer; what the sweep surfaced is dead KNOBS, not wrong units.
