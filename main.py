@@ -2483,6 +2483,7 @@ def _main_locked(args, config_dir: Path) -> int:
         state_store=store,
         max_open_positions=risk_cfg.max_open_positions,
         max_daily_trades=risk_cfg.max_daily_trades,
+        one_trade_per_symbol_direction_per_day=risk_cfg.one_trade_per_symbol_direction_per_day,
         max_sector_exposure_pct=risk_cfg.max_sector_exposure_pct,
         max_consecutive_losses=risk_cfg.max_consecutive_losses,
         daily_loss_limit_pct=risk_cfg.daily_loss_limit_pct,

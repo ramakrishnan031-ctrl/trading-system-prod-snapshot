@@ -535,6 +535,13 @@ class RiskConfig(BaseModel):
     # exist then). Defaults make them optional in YAML.
     max_open_delivery_positions: int = 3   # hard cap on concurrent open DELIVERY positions (>= 1)
     max_daily_delivery_trades: int = 5     # hard cap on DELIVERY entries per day (>= 1)
+    # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.
+    # false (default) = OFF, byte-identical to the pre-27-Jul path. true = a second
+    # entry on the same symbol in the same direction is rejected for the rest of the
+    # day. Opposite direction is ALWAYS allowed (a long exit followed by a short
+    # entry is a reversal, not a re-entry). Ships OFF: the whole book contains only
+    # 2 re-entries, so there is no evidence base for turning it on.
+    one_trade_per_symbol_direction_per_day: bool = False
     max_sector_exposure_pct: float   # RE13: max fraction of capital in one sector (> 0, <= 1)
     max_consecutive_losses: int      # RE13: halt after N consecutive losses (>= 1)
     daily_loss_limit_pct: float      # RE13: daily loss limit as fraction of total capital (> 0, <= 1)

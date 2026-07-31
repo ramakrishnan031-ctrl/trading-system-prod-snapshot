@@ -115,7 +115,15 @@ product_map:                  # PR8: broker -> {INTENT -> broker_code}
 # warms up); only the screener DROP is gated by `enabled`. Rollout: false -> enabled+shadow
 # (validate vs real 400s) -> shadow:false (active).
 mis_filter:
-  enabled: false              # master switch; false = fully dormant (existing flow byte-identical)
+  # 27-Jul-2026: flipped false -> true in SHADOW ONLY. shadow: true below means the
+  # would-drop is LOGGED and the signal FALLS THROUGH (secondary_screener.py:144
+  # rejects only when shadow is false; :159 falls through) -- so behaviour is
+  # byte-identical and only the log changes. This buys the measurement that the
+  # 71/45 same-day-repeat figure is currently only an UPPER BOUND for.
+  # PROVEN TODAY, live: `mis_blocklist: recorded MIS-block for PYRAMID` appears
+  # TWICE -- learned at 10:06, identical order placed again at 10:11.
+  # ⛔ DO NOT set shadow: false without Rama. That is the enforcing change.
+  enabled: true               # SHADOW-ONLY (see shadow: true below); false = fully dormant
   shadow: true                # when enabled: true = log would-drop only; false = actually reject
   ttl_days: 1                 # re-test TTL in calendar days; blocked symbol re-allowed NEXT day (>= 1; default 1 = daily re-test)
 
@@ -196,6 +204,19 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   max_daily_trades: 10        # hard cap on entries per day (>= 1)
   max_open_delivery_positions: 3  # SLICE2.5-PHASE-3 (A): separate cap on concurrent open DELIVERY (CNC) positions; inert while force_intraday_only=true
   max_daily_delivery_trades: 5    # SLICE2.5-PHASE-3 (A): separate cap on DELIVERY (CNC) entries per day; inert while force_intraday_only=true
+  # 27-Jul-2026: one COMPLETED trade per symbol+DIRECTION per trading day.
+  # false (DEFAULT) = OFF, byte-identical to the pre-27-Jul path. true = a second
+  # entry on the same symbol in the same direction is rejected for the rest of the
+  # day (REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT). Opposite direction ALWAYS allowed:
+  # a long exit followed by a short entry is a reversal, not a re-entry.
+  # 27-Jul EVENING: TURNED ON by Rama. Earliest LIVE = FRI 31-Jul 08:15 (config loads
+  # at boot, and this ships on the Thu 30-Jul evening slot). It is ON from that boot
+  # onward -- there is no end date and no re-arming.
+  # Evidence, stated honestly: the whole book holds only TWO re-entries, so this is a
+  # JUDGEMENT, not a measured optimum -- which is also why it is a hard one-per-day
+  # rule rather than a tuned time window (15/20/30/40 min all give the identical
+  # answer on this data). See docs/audit/senco_double_entry_27jul2026.md
+  one_trade_per_symbol_direction_per_day: true
   max_sector_exposure_pct: 0.40  # max 40% of total capital in one sector (> 0, <= 1)
   max_consecutive_losses: 4      # halt after N consecutive losses (both modes)
   daily_loss_limit_pct: 0.03  # BUILD 1 (#1): SOLE daily-loss authority (3% of capital), PERMANENT

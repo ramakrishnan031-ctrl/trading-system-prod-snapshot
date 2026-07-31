@@ -642,6 +642,54 @@ class SignalProcessor:
                 f"active_incl_pending={active_incl_pending})",
             )
 
+    def _enforce_one_trade_per_symbol_direction(self, symbol: str, side: str) -> None:
+        """27-Jul-2026: at most ONE executed trade per symbol+DIRECTION per trading day.
+
+        DEFAULT OFF. When `risk.one_trade_per_symbol_direction_per_day` is false this
+        returns before touching the store, so the pre-27-Jul path is byte-identical.
+
+        WHY IT EXISTS. 27-Jul: SENCO entered 10:02:17 @418.75, exited TGT 10:13:31
+        @425.05, and re-entered 80 SECONDS later at 425.25 -- fractionally ABOVE the
+        price its own strategy had just taken profit at -- then stopped out for -4.86,
+        giving back 83% of the first trade's gain. Nothing was broken: the scanner had
+        been firing SENCO every ~5-6 minutes all morning and the open-position guard is
+        a QUEUE, not a filter. It releases the instant the position closes, so the next
+        queued hit went straight in.
+
+        SCOPE IS symbol + DIRECTION, not symbol alone. Exiting a LONG and entering a
+        SHORT on the same symbol is a REVERSAL -- a different bet, consistent with the
+        price having moved -- and blocking it would be wrong.
+
+        WHAT COUNTS AS "a trade happened" is FIX-181's _EXECUTED_TRADE_STATUSES, reused
+        rather than restated: a broker-REJECTED or FAILED entry never opened exposure
+        and must not consume the day's slot.
+
+        Called inside portfolio_lock beside the H-7 per-strategy cap, so the rejection
+        is recorded the same way as that cap's and is countable under its OWN code
+        rather than hidden inside an existing one.
+
+        NB the literal name of that cap's reject code is deliberately NOT repeated
+        here: test_h7_strategy_cap_toctou asserts it appears EXACTLY ONCE in this
+        file, and a docstring mention counts. That assertion is correct and caught
+        this -- the H-7 dedup property is intact, the comment was the defect.
+        """
+        if not bool(getattr(self._risk, "_one_trade_per_symbol_direction", False)):
+            return
+        # `side` is BUY/SELL here; `trades.direction` is LONG/SHORT. The forward mapping
+        # already exists three times in this file (the `side = "BUY" if ...` lines);
+        # this is the single inverse, not a fourth restatement.
+        direction = "LONG" if str(side).upper() == "BUY" else "SHORT"
+        today = now_ist().date().isoformat()
+        n = self._store.count_executed_trades_today_for_symbol_direction(
+            symbol, direction, today)
+        if n >= 1:
+            raise _PipelineReject(
+                "SYMBOL_DIRECTION_DAILY_LIMIT",
+                f"{symbol} {direction} already traded today ({n} executed trade(s)); "
+                f"one completed trade per symbol+direction per day",
+            )
+
+
     def _process_one(self, signal_tuple) -> None:
         """
         Run the full processing pipeline for one signal (SP6, SPW3).
@@ -1071,6 +1119,7 @@ class SignalProcessor:
             # portfolio_lock, immediately before reserve(), so a Chartink burst can't
             # slip past a stale pre-lock count. One deduped check for all 3 paths.
             self._enforce_strategy_position_cap(strategy_name, strategy_obj)
+            self._enforce_one_trade_per_symbol_direction(symbol, side)
             try:
                 approval = self._risk.approve(
                     symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -1850,6 +1899,7 @@ class SignalProcessor:
                 # H-7 (Wave-5): per-strategy cap enforced atomically inside portfolio_lock
                 # (gate path). One deduped check for all 3 paths.
                 self._enforce_strategy_position_cap(strategy_name, strategy_obj)
+                self._enforce_one_trade_per_symbol_direction(symbol, side)
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
@@ -2159,6 +2209,7 @@ class SignalProcessor:
                 # H-7 (Wave-5): per-strategy cap enforced atomically inside portfolio_lock
                 # (retest path). One deduped check for all 3 paths.
                 self._enforce_strategy_position_cap(strategy_name, strategy_obj)
+                self._enforce_one_trade_per_symbol_direction(symbol, side)
                 try:
                     approval = self._risk.approve(
                         symbol, side, strategy_obj.intent, sizing, signal_id,
