@@ -209,9 +209,14 @@ risk:                         # RE13 — portfolio-level pre-trade gate limits
   # entry on the same symbol in the same direction is rejected for the rest of the
   # day (REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT). Opposite direction ALWAYS allowed:
   # a long exit followed by a short entry is a reversal, not a re-entry.
-  # 27-Jul EVENING: TURNED ON by Rama. Earliest LIVE = FRI 31-Jul 08:15 (config loads
-  # at boot, and this ships on the Thu 30-Jul evening slot). It is ON from that boot
-  # onward -- there is no end date and no re-arming.
+  # 27-Jul EVENING: TURNED ON by Rama. Earliest LIVE = MON 3-Aug 08:15 (config loads
+  # at boot; the calendar's 5 split moved this OFF the Thu 30-Jul slot and onto the
+  # FRI 31-Jul evening slot, so the Thursday boot never carried it). It is ON from
+  # that boot onward -- there is no end date and no re-arming.
+  # 31-Jul-2026: date corrected. The line above previously read "FRI 31-Jul 08:15 /
+  # ships on the Thu 30-Jul evening slot" -- true when written on 27-Jul, made wrong
+  # by the split. Left uncorrected it would date the rule's first rejections a
+  # trading day EARLY, which is exactly what Mon 3-Aug's observation is read against.
   # Evidence, stated honestly: the whole book holds only TWO re-entries, so this is a
   # JUDGEMENT, not a measured optimum -- which is also why it is a hard one-per-day
   # rule rather than a tuned time window (15/20/30/40 min all give the identical
