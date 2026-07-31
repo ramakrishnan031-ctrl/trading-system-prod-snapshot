@@ -429,3 +429,424 @@ whole signals by design.
 
 **Phase 1 done** = findings above; nothing fixed; nothing pushed; live sequence
 untouched. *(Phase 2 — screening — appends below this line.)*
+
+---
+
+## PHASE 2 — SIGNAL → SECONDARY SCREENING (scorer + gates + S&R/R:R + PB-01, and the P2→P3 seam)
+
+### P2.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~00:2x → ~00:5x IST** (post-midnight ⇒ every date-scoped query uses explicit dates) |
+| Measurements taken | 01-Aug **00:37–00:4x IST**, from the VM |
+| Deployed SHA (VM bare) | **`297b587`** — reflog shows push + checkout both at 31-Jul 21:44:48 (unchanged since P1) |
+| PC tree read | `05595a7` = `297b587` + 3 commits; `git diff --name-only 297b587..HEAD` = **4 docs files, zero code/config** ⇒ every file:line cited below is the deployed code |
+| Service | `inactive` at measurement time — designed nightly state |
+| DB access | read-only only: `sqlite3.connect("file:…?mode=ro", uri=True)`; JSONL reads; log greps; **zero writes, no service touched**. `screener_results` lives in the MAIN DB (not analytics) |
+| Primary window | 6 trading days **24→31-Jul** (17,893 `screener_results` rows); all-time = 12-Jun→31-Jul (49,209 rows); log width = 23 retained `system_*.log` (01→31-Jul) |
+| Scope guard | 3-Aug/4-Aug sequence untouched; nothing fixed/tuned; forward-shadow JSONL not read, recorder not run |
+
+Deployed-tree config ground truth (grepped on the VM checkout, not the PC):
+`min_pass_score: 60` · tiers 80/65 · `v3_hardgate_mode: "shadow"` · `v3_chain_mode: "shadow"` ·
+`allocator_mode: "shadow"` · `mis_filter` enabled **true**, shadow **true** · `regime.enabled: false` ·
+`wait_for_retest_enabled: false` · `watchlist.enabled: true`.
+
+### P2.1 Screening path as verified (current tree == deployed)
+
+For every intraday signal the processor calls ONE live seam, `SecondaryScreener.screen()`
+(`signal_processor.py:824`, `market_data=None` ⇒ the screener always fetches its own quote).
+Order inside `screen()` on the deployed config (`v3_hardgate_mode=shadow` ⇒ the OLD path decides):
+**(0)** mis_filter pre-drop — enabled, SHADOW ⇒ log-only fall-through (`secondary_screener.py:142-159`) →
+**(1)** quote fetch; no quote ⇒ `SKIPPED_QUOTE_UNAVAILABLE` (silent absorption by design, :161-190) →
+**(1b)** circuit-proximity hard reject at the **trigger price** vs quote bands ±2% margin
+(`hard_gate.py:52-111`, `DEFAULT_CIRCUIT_MARGIN_PCT=0.02`, `price_math.py:256`) →
+**(2-4)** 10 steps, all always run, never short-circuit (`step_executor.py:141-153`) →
+**(5)** proportional score (`quality_scorer.py:59-129`) → **(5b)** v3 shadow compare, log-only
+(`_log_v3_shadow_compare`, one `v3_shadow […] OLD … NEW … gate=…` line per scored signal) →
+**(6)** `effective_min` = strategy `min_score` if >0 else global 60 — **all 16 YAMLs are `min_score: 0`**
+⇒ 60 for everyone → **(7)** `signal_age==0.0` defense → **(8)** PASSED.
+Downstream: entry/SL derived from trigger (`_derive_prices` :1508), momentum re-anchor
+(FIX-067, :904-927), sizing (`:932` — receives **tier**, not score), v3-chain observe (:957),
+allocator shadow observe (:968), fused admit. The screener persists every decision twice:
+`signals.status` + a `screener_results` row (`_persist`, :592-626) — 0 persist failures in all
+retained logs (`state_store write failed` = 0).
+
+### P2.2 Headline re-measurements (mandated)
+
+**(a) G2 — the dead scorer points, re-measured fresh: STILL EXACTLY 25/100, and the full
+constant fraction is 45/100.** Window 24→31-Jul, all 16,705 step-bearing rows:
+
+| step (weight) | live value | width |
+|---|---|---|
+| volume_surge (15) | **0.0 on 16,705/16,705** | `avg_volume_20d=None` → `return 0.0` (`step_executor.py:251-253`) |
+| atr_filter (10) | **0.0 on 16,705/16,705** | `atr=None` → `return 0.0` (:277) |
+| rsi_range (10) | **0.5 on 16,705/16,705** | `rsi=None` → neutral (:297) |
+| sector_strength (10) | **0.5 on 16,705/16,705** | `sector=None` → 0.5 (:336) |
+
+Root: `_build_market_data` hardcodes `atr/rsi/sector/prev_close/avg_volume_20d = None` on
+every quote ("Still not in Kite quote API; would need instruments cache",
+`secondary_screener.py:406-411`); measured **null on 17,714/17,714** snapshot-bearing window
+rows, while `vwap/upper_circuit/lower_circuit/bid/ask` are populated on 17,714/17,714 (the
+Kite quote does carry them, `zerodha_adapter.py:1724-1729`). ⇒ **25 points dead-at-0.0
+(G2's figure CONFIRMED) + 20 points pinned at half = 45/100 of the score is a constant on
+every live signal.** ⚠️ G2's input list is imprecise: the 0.0-pair is `avg_volume_20d`+`atr`;
+**`prev_close` is read by NO step at all** (grep width: all 10 step bodies) — it is a dead
+snapshot field, not a dead score input.
+
+**(b) The reachable-score geometry this creates (NEW precision).** Max achievable live score
+= 10(vwap) + 5(rsi·½) + 15(price_action) + 5(sector·½) + 5(time) + 5(spread) + 10(circuit)
++ 10(age) = **65**. Measured: MAX(score) over all 49,209 rows ever = **65; scores >65 = zero
+ever.** Against `min_pass_score=60` the entire pass band is **[60,65] — 5 points of a nominal
+100**, and it decomposes almost entirely into TIME-OF-DAY × PRICE-LEVEL, because the other
+variable steps are near-constant in practice (window: vwap 1.0 on 98.0%, price_action 1.0 on
+74.8% (mean 0.902 — `min(1,body_pct×2)` saturates), circuit 1.0 on 100%, age 1.0 on 99.3%):
+- the saturated profile scores **40 + time + spread**: after 12:15 (time=0.5) → 57.5 →
+  **57** (float: `57.5/100*100`=57.4999…); 10:15–12:15 (0.8) → **59**; 10:00–10:15 (1.0) → **60 = pass**.
+- `spread_check` adds its 5 only on 166/16,705 rows (1.0%) — see IA-P2-02.
+Measured wall: window rejects mass at **57 ×8,958 and 59 ×3,321** (the two "perfect signal,
+wrong time band" scores = 69% of all window score-rejects); passes all-time: 60 ×1,010 ·
+62 ×266 · 64 ×101 · 65 ×5 (+ sub-60 passes only in the 55-floor eras, below). **Tier:
+HIGH (≥80) is unreachable — 0 rows ever; MEDIUM (≥65) = exactly-65 only — 5 rows ever;
+49,204/49,209 rows are LOW.** Traded book: every joinable trade since 24-Jul scored
+**60 ×47 · 61 ×1 · 62 ×18 · 63 ×1** (all-time trades span 55–64; 0 unjoinable).
+
+**(c) The min_pass floor is NOT a constant of the sample (context for D3, not re-litigated).**
+Measured `eligible_score` eras: 55 on 13,082 rows (15-Jun→10-Jul) · 60 on 30,544 rows
+(19-Jun→now) · NULL 5,583 (skip paths, by design). Git history of the global floor:
+55 → **60** (`6450ee9`, 18-Jun) → **55** (`8a3e0b7`, 06-Jul "min-score floor 60->55") →
+**60** (`61ae9cc`, 10-Jul 10:04 — a mid-morning flip). Last sub-60 PASS = 10-Jul (4,303 that
+day; ~70/day pass since vs ~4,300/day under the 55 floor — **the floor edit changed the pass
+population ~60×**). Any band analysis pooling across 06→10-Jul straddles two regimes.
+
+**(d) Band-inversion mechanism — CONFIRMED present, and located.** The scorer still computes
+exactly the shape the 5-sigma finding described; nothing was changed (⛔ and nothing is
+proposed here — no band rules, no re-tune). WHERE it enters, mechanically: (1) 45/100 of the
+score is constant ⇒ ranking power lives only in vwap-position, body-saturation, freshness,
+time-band and the spread/price proxy — all **extension/chase proxies**, so a higher score
+selects the more-extended entry, not the better setup; (2) the pass gate sits at the TOP of
+the reachable range (60 of 65) ⇒ "PASSED" ≡ "maximally chase-profiled", which is the
+measured-worst band (M-S4: 60-65 = 31% win, −0.27R; rho +0.003); (3) within-pass variance is
+mostly time-of-day and the ₹1000+ spread artifact (b), neither a quality signal. The scorer
+cannot rank inside the band it admits — consistent with the throttle finding (19-Jul: score
+gap 0.21pt, non-monotone).
+
+**(e) R:R — compute-then-gate CONFIRMED; no ratio manufacturing anywhere (lens H).**
+- The live path has **no S&R and no R:R gate at screening**: TGT is constructed as
+  `sl_distance × tgt_risk_reward` (=1.5 on all 15 YAMLs, `_derive_prices`/`_derive_target`,
+  `signal_processor.py:1508-1701`) — a fixed ratio by definition, not a manufactured one.
+- The V3 shadow `gate_rr` (`hard_gate.py:233-287`) selects zone edges → derives SL/TGT →
+  computes RR → compares to `rr_floor=2.0`. No branch adjusts TGT/SL toward the floor;
+  missing S&R **fails** (must-have), and the conservative edges are used (LONG: SL below
+  support band_low − 0.20×ATR30 buffer; TGT = near edge of resistance above). PB-01's runner
+  (`pb01_runner.py:127-140`) uses the deterministic SL = min(retest_low, LEVEL) − buffer and
+  the nearest resistance as TGT — same compute-then-gate shape.
+- Measured live shadow output (474 records since 12-Jul): **WOULD_REJECT_RR 385 (81%)** ·
+  WOULD_REJECT_HTF 73 · WOULD_PASS_GATES 16 (3.4%); `v3_rr` NULL (no zone) on 179/474;
+  G-RR passed 21/474. The S&R R:R floor would reject ~4 of every 5 signals the live book
+  actually sized — the Kalyan-rule shadow is live and accruing.
+
+**(f) PB-01 — live values recorded (G4 stands: values ≠ ratified spec).** Deployed values
+verified on the VM tree: `watchlist.enabled true` · `level_lookback_sessions 20` ·
+`capture_fetch_lookback_days 60` · entry window 09:20–11:00 @5min · `gap_guard_pct 0.03` ·
+`poll_interval_sec 20` (system_config.yaml:517-529) + v3_chain gate seeds `rr_floor 2.0` ·
+`sl_buffer_atr_mult 0.20` · `confirm_min_body_frac 0.50` · `confirm_volume_mult 1.20` ·
+`baseline_candles_per_session 75` · `pullback_proximity_pct 0.005` /
+`_atr_mult 0.50` · `hold_buffer_atr_mult 0.20` · `atr30_period 14` (:474-487). Missing-data
+rules as documented: G-CONFIRM/G-PULLBACK must-have→FAIL, G-HTF/G-EXTREME fail-OPEN
+(`hard_gate.py:218-222` comment; behavior verified in the four gate bodies). Live state:
+`pb01_watchlist` per trading_date = 25 (28-Jul: 6 CONSUMED/1 EXPIRED_WINDOW/3 INVALIDATED/
+15 SKIPPED_GAP) · 12 (29-Jul) · 15 (30-Jul) · 14 (31-Jul) · **18 PENDING for Mon 03-Aug**
+(last night's capture); `pb01_would_be.jsonl` = **17 records == the 17 CONSUMED rows**
+(16 WOULD_REJECT_RR · 1 WOULD_PASS_GATES) — capture→confirm→record reconciles exactly.
+
+**(g) Regime — PREFERENCE only, and today not even that; it cannot disable a scan.**
+`regime.enabled: false` ⇒ the runner is never constructed (`main.py:2999-3024`), VM
+`data_store/regime/` is **empty** (never ran once), `regime_asof_unavailable` on **474/474**
+v3 records, `regime_preference` contribution 0.0 on 474/474. Structural: in the LIVE 10-step
+path regime appears nowhere; in the V3 shadow it enters only as 8/40 Context preference +
+`gate_extreme`, which is fail-OPEN on None/UNKNOWN (`hard_gate.py:333-345`) and log-only.
+Even if enabled, `extreme_flag` has **no feed** (`exchange_status_fn=None`, `main.py:3013`)
+⇒ the one regime condition that could ever block is unreachable by construction today.
+
+### P2.3 NEW findings
+
+---
+**IA-P2-01**
+- **WHAT:** The pullback entry gate (`EntryGate`, P11a) is constructed, started and cleared
+  at EOD on every boot — **and nothing has ever put an entry into it.** The divert that
+  should route `pullback_wait_enabled` strategies into the gate was never wired (EG14/EG15:
+  "integration deferred to Module 33" — never done), so **6 of the 10 live strategies**
+  (first_pullback_long/short, open_high_breakdown_short, open_low_breakout_long,
+  vwap_bounce_long, vwap_rejection_short) place IMMEDIATELY from trigger-derived prices while
+  their YAML + the locked decision say they wait for a pullback.
+- **EVIDENCE:** repo-wide: the only `WatchEntry(` constructions are `entry_gate.py:204`
+  (rehydrate) and tests; no production `EntryGate.add()` caller exists;
+  `pullback_wait_enabled`'s only pipeline consumer is `signal_processor.py:904` — the FIX-067
+  re-anchor SKIP ("EntryGate already waits for current price", :901 — a false premise).
+  Runtime, all-time widths: `signals.status LIKE 'GATE_%'` = **0** (12-Jun→); `gate_state`
+  rows = **0** (no sqlite_sequence row ever); across all 23 retained logs `EntryGate.add:` =
+  0 · `Gate PRICE_HIT` = 0 · `EntryGate: released` = 0 — while `EntryGate started` = **26**
+  (it runs every boot). The 6 strategies trade daily via the direct path (trades exist).
+- **CLASS:** Reachability (built-and-never-fed — G9's class, on the entry path) /
+  Consistency (config-vs-behavior) / Documentation (docs model it as live).
+- **NEW or KNOWN:** **NEW.** Adjacent KNOWNs believed the opposite: the 14-Jul deploy
+  prediction calls `continue_from_gate` "LIVE (EntryGate always starts)"; 5-Jul §4.5 counts
+  it among "three near-duplicate pipeline bodies" to keep in sync; `crash_test_info` lists
+  `EntryGate.add()` as pipeline Step 10; a V3 plan claims the resume paths "route through
+  screen()" (they bypass it, :1776). None of the July audits state the gate is unfed.
+- **ROOT CAUSE:** the wiring module was deferred and the deferral was lost; every later
+  document inferred liveness from construction ("it starts" ≠ "it is fed").
+- **RECOMMENDATION (described, not applied):** decision first — either wire the divert
+  (careful-loop: it changes entry semantics for 60% of the live book) or set the 6 YAMLs
+  `pullback_wait_enabled: false` and retire the gate+resume body; in EITHER case re-scope the
+  FIX-067 re-anchor to cover pullback strategies (today they are the only entries placed from
+  a stale trigger with no re-anchor — the M-S1 class, excluded from the fix on this premise).
+- **SEVERITY-BY-IMPACT:** **MED-HIGH.** No number is computed wrongly, but declared entry
+  semantics are silently absent for 6/10 strategies; their entries carry the stale-trigger
+  basis (bounded by the FIX-128/slippage-guard, which is fail-open on quote outage — 5-Jul
+  [MED]); ~200 lines of unreachable resume path (`continue_from_gate`, :1770-2000) must be
+  kept in sync forever; and the gap invalidates the premise under which M-S1's fix scope and
+  several audits reasoned.
+
+---
+**IA-P2-02**
+- **WHAT:** The spread step's threshold is off by ~100×: strategy YAMLs supply
+  `max_spread_pct: 0.005` following the schema-wide FRACTION convention (0.5%), but the step
+  compares it against a PERCENT value — so the gate demands spread ≤ 0.005% (0.5bp), which a
+  1-tick book can only satisfy at mid ≳ ₹1000. The 5-point step has become a price-level
+  selector.
+- **EVIDENCE:** `step_executor.py:393-395` (`spread_pct = ((ask-bid)/mid)*100`;
+  `1.0 if spread_pct <= max_spread`), YAML/schema value 0.005 (`strategies/schema.py:119`,
+  all 16 YAMLs); every sibling `*_pct` in that schema is a fraction (sl_pct 0.008-0.02,
+  tolerance 0.005...); the OTHER spread knob of the same name is percent-units
+  (`entry_gate.max_spread_pct: 0.5`, system_config.yaml:554) — same name, two files, 100×
+  apart. Measured (window): spread_check = 0.0 on 16,539/16,705, 1.0 on **166 (1.0%)**;
+  crosstab: 1.0 occurs on 134/4,542 rows ≥₹1000 and 32/7,952 <₹500 (locked/crossed books) —
+  0 in ₹500-999. Effect on the geometry: without the spread 5, the ceiling is 60 ⇒ sub-₹1000
+  symbols can pass ONLY in 10:00-10:15 with a perfect profile; the 62/64/65 passes (372
+  all-time) are almost exactly the spread-1.0 population.
+- **CLASS:** Correctness (units/config-vs-code) / Consistency (two same-named knobs, two
+  unit conventions).
+- **NEW or KNOWN:** NEW (neither July audit nor the census flags the units; the schema table
+  in 5-Jul §5 records the value without the unit mismatch).
+- **ROOT CAUSE:** `*_pct` names carry no unit contract; the step author used percent, the
+  schema convention is fraction. Same class as `DEFAULT_CIRCUIT_MARGIN_PCT = 0.02` (a
+  fraction named PCT — consistent internally, but the naming invites the next instance).
+- **RECOMMENDATION (described, not applied):** decide the intended unit (OQ-P2-1 — Rama);
+  then fix ONE side and add a unit suffix convention (`_frac` vs `_pct`) checked at load.
+  ⛔ Not applied here: re-unitizing to 0.5% would multiply the pass population and silently
+  re-tune the entry gate — the same trap as populating the dead inputs (careful-loop).
+- **SEVERITY-BY-IMPACT:** MED — it actively shapes today's selection (one of the two live
+  discriminators in (b)); it also means the knob's per-strategy tuning intent is
+  unimplementable at the current unit.
+
+---
+**IA-P2-03**
+- **WHAT:** The tier ladder — the ONLY quality channel screening hands to sizing — is
+  degenerate in live: HIGH is unreachable (80 > the 65 ceiling), MEDIUM is reachable only at
+  exactly 65, so **every trade the system has ever sized ran at the LOW multiplier 0.5**
+  (415/415 v34 trades; the 5 MEDIUM screener rows never became trades). `tier_multipliers
+  HIGH: 1.0 / MEDIUM: 0.70` are dead config in effect; "full size" does not exist.
+- **EVIDENCE:** tiers 80/65 (`scoring_weights.yaml:28-29`); ceiling 65 measured in P2.2(b);
+  `screener_results` tier all-time: LOW 49,204 · MEDIUM 5 · HIGH 0; `trades.tier_weight_applied`
+  = **0.5 on 415/415** rows that carry it (63 NULL = pre-v34/recovered); sizing receives the
+  tier string only (QS7; `signal_processor.py:939`, `position_sizer.py:443-446`);
+  `position_sizing.enabled: true` (system_config.yaml:161) so the multiplier is applied.
+- **CLASS:** Consistency (E-lens: the scorer's output range vs the consumer's thresholds) /
+  Reachability (dead tiers) / Config-vs-code.
+- **NEW or KNOWN:** the ceiling is NEW (P2.2(b)); the consequence sharpens KNOWN G2 ("min_pass
+  calibrated against the broken instrument" — the tier thresholds are too). The sizing-side
+  multiplier itself is P3 scope; this finding is the seam fact.
+- **ROOT CAUSE:** tier thresholds were set for a 0-100 scorer; the input universe shrank to
+  0-65 when the dead inputs froze, and nothing checks reachability of config thresholds
+  against the achievable range.
+- **RECOMMENDATION (described, not applied):** any future re-tune of scorer inputs/floor must
+  treat tier thresholds + multipliers as the SAME calibration object (they bind sizing);
+  the class fix is an invariant/startup assertion that each configured threshold is
+  reachable given the current live input set. ⛔ No values changed here.
+- **SEVERITY-BY-IMPACT:** MED — every position is sized at half the nominal full size as a
+  side effect of dead inputs (interacts with min-qty floors and the concentration cap that
+  binds 415/415 — P3's territory); and the tier vocabulary in every report ("LOW") carries
+  no information (constant).
+
+---
+**IA-P2-04**
+- **WHAT:** Two per-strategy screening knobs are dead config: `min_volume_surge` (tuned
+  per-strategy 1.2/1.3/1.5/1.8/2.0 across the YAMLs) and `min_adr_pct` (0.005 everywhere)
+  have ZERO effect — their steps return 0.0 on the missing input before ever consulting the
+  threshold.
+- **EVIDENCE:** `step_executor.py:251-256` (`if not avg_vol: return 0.0` precedes the
+  `min_surge` read) and :277-281 (`if not atr or not ltp: return 0.0` precedes `min_adr`);
+  inputs None on 17,714/17,714 (P2.2(a)). The visible tuning variation (gap_go 2.0 vs
+  positional_swing 1.2) implies intent that has never executed. (`min_adr_pct` would ALSO be
+  units-suspect under IA-P2-02's reading — `adr_pct` is percent, 0.005 would be 0.005% ≈
+  always-true — but that branch is unreachable today.)
+- **CLASS:** Config-vs-code (F-lens: knobs with no effect).
+- **NEW or KNOWN:** NEW at this precision (G2 records the dead points; not that the
+  per-strategy thresholds are thereby inert).
+- **ROOT CAUSE:** same as G2 — the inputs were never wired; the knobs assume them.
+- **RECOMMENDATION (described):** when G2's inputs are ever populated (a decision, not a
+  chore — it re-tunes the gate), these thresholds re-arm SILENTLY at their tuned values —
+  that re-arming must be part of that decision's blast-radius list.
+- **SEVERITY-BY-IMPACT:** LOW today (inert), MED at the moment anyone fixes G2 — a silent
+  simultaneous re-arm of 30 threshold instances.
+
+---
+**IA-P2-05**
+- **WHAT:** The V3 shadow evidence base inherits the same dead inputs it is meant to help
+  replace, on both of its legs: (i) the 8-step re-scale (`v3_hardgate_mode: shadow`) has the
+  same time-band cliff — NEW score mode 47 (×2,042) / 49 (×706) / max 50 on 31-Jul, i.e.
+  `v3_min_pass_score: 50` is reachable ONLY by the 10:00-10:15 or spread-1.0 populations, and
+  v3-MEDIUM (56) needs the spread artifact; (ii) the compose_score Context/Execution record
+  is constant on 4 of its 9 inputs across ALL 474 records (regime_preference 0.0,
+  sector_strength 4.0, exec volume_surge 0.0, exec atr 0.0) and near-constant on a 5th
+  (momentum_position 6.0 on 474/474 — every SIZED signal has vwap=1.0+rsi=0.5 by selection);
+  (iii) the shadow hard-gate leg has measured ZERO divergence power — `gate=PASS` on
+  3,536/3,536 compares (31-Jul) because the OLD path pre-rejects at-circuit/proximity BEFORE
+  the compare runs and queue-expiry eats stale signals upstream.
+- **EVIDENCE:** log distribution + `would_be.jsonl` component counters (P2.0 battery);
+  `compose_score` reuses `step_results` verbatim (`v3_chain/score.py:104-154` — by design,
+  "NOT a second scorer"); shadow compare placement `secondary_screener.py:304-308` (after
+  the circuit-proximity reject at :207).
+- **CLASS:** Correctness-of-evidence / Reachability (the soak cannot observe what it exists
+  to measure: gate divergence + threshold fit on live-quality inputs).
+- **NEW or KNOWN:** the inheritance is KNOWN-by-design at the reuse level (anti-duplication
+  was deliberate); NEW is the measured consequence: the soak distributions on which
+  `v3_min_pass/56/75 MUST be data-fit before enforce` (scoring_weights.yaml:36-38) are 45%+
+  constants, and the gate-leg comparison is structurally vacuous as instrumented.
+- **ROOT CAUSE:** the shadow compare observes the OLD path's SURVIVORS, not its INPUTS; and
+  the score re-composition inherits whatever the step layer could not compute.
+- **RECOMMENDATION (described):** before any enforce discussion, the threshold fit needs
+  either populated inputs (the G2 decision) or an explicit statement that v3 thresholds are
+  being fit to the SAME two live discriminators (time band, price level); the gate leg's soak
+  claim should be reworded to what it can show (freshness parity only). ⛔ Nothing reworded
+  here — this register is the record.
+- **SEVERITY-BY-IMPACT:** MED — research-integrity: 19 days of soak accrue evidence with
+  much less information content than the soak design assumes.
+
+---
+**IA-P2-06**
+- **WHAT:** The two resume entry paths skip the V3 observe hook: `continue_from_gate`
+  (:1770-2000) and `continue_from_retest` (:2106+) size and admit WITHOUT
+  `self._v3_chain.observe(...)` — only `_process_one` has the hook (:957-964). Today both
+  paths are production-unreachable (IA-P2-01; `wait_for_retest_enabled: false`, RETEST_%
+  statuses = 0 all-time), so the shadow dataset is complete — but wiring either path arms a
+  silent sampling hole (their entries would vanish from the V3 evidence).
+- **EVIDENCE:** grep width: `_v3_chain.observe` has exactly one call site
+  (`signal_processor.py:959`); resume-path sizing at :1868/:2191 with no observe between
+  sizing and admit.
+- **CLASS:** Invariant coverage (the "observe every sized signal" intent, :955-956 comment,
+  is enforced in one of three bodies) / latent Consistency.
+- **NEW or KNOWN:** NEW (folds INTO the 5-Jul "three near-duplicate bodies" debt item as one
+  more divergence).
+- **ROOT CAUSE:** triplicated pipeline bodies; the hook landed in one.
+- **RECOMMENDATION (described):** whichever future decision touches IA-P2-01 (wire vs
+  retire), add the hook (or delete the body) so the invariant holds by construction.
+- **SEVERITY-BY-IMPACT:** LOW, doubly-latent today.
+
+---
+**IA-P2-07**
+- **WHAT:** A step TIMEOUT yields a neutral 0.5 for ANY step — including the two
+  safety-shaped ones: a timed-out `circuit_check` contributes 0.5 instead of rejecting, and a
+  timed-out `signal_age` (0.5) also slips past the `==0.0` defense-in-depth (:334). The
+  at-circuit backstop then rests solely on the circuit-proximity pre-check, which is
+  fail-open when the quote carries no bands.
+- **EVIDENCE:** `step_executor.py:168-181` (TIMEOUT → 0.5, any step); reject-on-timeout
+  exists nowhere; incidence measured **ZERO all-time** (`timed out after` = 0 lines across
+  all 23 retained logs; pool rotations = 0; M-S3's 25-Jul measurement of 287,600 latencies,
+  max 66ms, still holds shape). Bands measured present on 17,714/17,714 window rows ⇒ the
+  proximity pre-check is currently never blind.
+- **CLASS:** Safety posture (fail-open on infrastructure jitter for gate-shaped steps),
+  fully latent.
+- **NEW or KNOWN:** the timeout-neutral design is KNOWN (FIX-091); NEW is the observation
+  that it spans the two steps the v3 design itself classifies as GATES, plus the fresh
+  zero-incidence width.
+- **ROOT CAUSE:** one uniform timeout policy across steps with two different roles.
+- **RECOMMENDATION (described):** if ever revisited (only with a live incident to justify
+  it): gate-shaped steps should fail toward reject/skip, score-shaped toward neutral. The v3
+  ENFORCE design already fixes this by construction (gate before steps) — noted, not
+  advanced.
+- **SEVERITY-BY-IMPACT:** LOW (0 occurrences ever; steps are pure arithmetic).
+
+---
+**IA-P2-08** (hygiene bundle, one ID)
+- **WHAT:** (a) `REJECTED_SCORE_{n}` embeds a variable in the status column (28 distinct
+  statuses in the window) — the open-set CHECK admits it and the census must prefix-match;
+  data belongs in a column, not the enum (same family as the free-text classification
+  class, though nothing BRANCHES on the suffix — grep width: no consumer parses it).
+  (b) `watchlist_capture._market_closed` returns True ("settled") when it cannot read the
+  clock — the comment calls that conservative, but for a SETTLED-ONLY defense the
+  conservative direction is skip (`watchlist_capture.py:212-217`); unreachable in practice
+  (market_close is config-backed). (c) The signal-age defense (:333-348) is shadowed by the
+  upstream 600s receiver expiry + 60s queue expiry — `REJECTED_SIGNAL_AGE` = 0 in the window
+  and `signal_age`=0.0 occurred 0 times; it is belt-over-belt, fine, but its test-visible
+  purpose should not be mistaken for live incidence.
+- **CLASS:** Consistency / Documentation.
+- **NEW or KNOWN:** (a) folds into the KNOWN P1.6(3) open-set status observation; (b)(c) NEW-trivial.
+- **RECOMMENDATION (described):** none urgent; (a) any future status-vocabulary cleanup
+  should move the score into `screener_results` only (it already lives there).
+- **SEVERITY-BY-IMPACT:** LOW.
+
+### P2.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| **G2** (B2/M-S4: 25/100 constant 0.0) | **CONFIRMED by fresh measurement, and sharpened**: 25/100 dead-at-0.0 (vol 15 + atr 10) on 16,705/16,705 window rows + 20 more points pinned at half ⇒ 45/100 constant; ceiling 65 (measured, 49,209 rows, 0 ever above); pass band [60,65]; input-list correction: the 0.0 pair is `avg_volume_20d`+`atr`, `prev_close` is unread by any step. Stays OPEN (money path; the fix is a decision, not a patch — populating inputs re-tunes gate+tiers+knobs together: IA-P2-03/04) |
+| Board note "screener score is 40% constant — 4/10 steps (1/3 always 0.0, 4/6 always 0.5)" | Head claim right (4/10 steps constant); parenthetical superseded: it is **2 steps at 0.0 + 2 steps at 0.5** (weights 15+10 / 10+10) |
+| M-S4 band inversion (60-65 worst; rho +0.003) | Mechanism CONFIRMED present + located (P2.2(d)); ⛔ not fixed, no band rule built. D3's OOS status unchanged (unresolved) — with the NEW caveat that the floor flapped 60→55→60 on 06/10-Jul inside the sample window (P2.2(c)) |
+| **G3** (sector resolution) | Second dead consumer found: `_sector_for` (`signal_processor.py:1389-1401`) probes `sector_for`/`get_sector` — **no such method exists anywhere** (repo-wide grep) ⇒ v3/allocator records carry sector="UNKNOWN" constantly while the screener's own `sector` is None→0.5. Two sources, both empty, one emission (G3 unchanged, evidence widened) |
+| **G4** (PB-01 spec absent) | Values re-recorded fresh from the deployed tree (P2.2(f)); statuses reconcile capture→confirm→would-be exactly (17==17); the DECISION remains owed — nothing invented |
+| Ph-4 gap: no LTP-vs-trigger sanity | Re-confirmed with new precision: `screen()` holds BOTH the quote LTP and the trigger price in one scope and no step compares them; the proximity check uses trigger-vs-bands only |
+| `SKIPPED_QUOTE_UNAVAILABLE` silent absorption (by design) | Re-measured: 179 in window (0/8/6/80/85/0 per day) — the 29/30-Jul bulge coincides with the sr_detector token-lookup ETF cluster (G6 note); class unchanged |
+| mis_filter (G9 built-never-run half) | On the deployed tree: `enabled: true, shadow: true`; `REJECTED_NOT_MIS_TRADABLE` lines = 0 ever (blocklist empty); first reachable Mon 3-Aug as the OBSERVATION-day WARNING — consistent with the card |
+| M-S3 (step-timeout pool poisoning; fixed by rotation) | Rotation code in place; **0 timeouts / 0 rotations all-time** (23 logs) — fix remains DEPLOYED-not-VERIFIED-LIVE, and the step bodies stay pure arithmetic |
+| 5-Jul §4.5 "three near-duplicate pipeline bodies" | Sharpened: one of the three (`continue_from_gate`) is production-UNREACHABLE (IA-P2-01), a second (`continue_from_retest`) is flag-dormant (RETEST_% = 0 all-time) — the sync burden protects paths that never run |
+| SNR-V2 retest divert (Phase A) | Dormant CONFIRMED: `wait_for_retest_enabled: false` on the deployed tree + RETEST statuses 0 all-time + diverter constructor-gated (`main.py:3245-3280`) |
+| S&R V1 shadow detector (calibration deferred, data-gated) | Alive and accruing: `sr_detector_results` 270 rows, 29-Jun→31-Jul (observes sized candidates only — the calibration data grows at ~trades-rate, still power-bound) |
+| FIX-042 proportional scoring (missing-step denominator) | The degraded branch has NEVER fired: `quality_scorer.missing_step` 0 lines; `effective_weights=100 / total_weights=100` on 3,536/3,536 scores (31-Jul) — all 10 steps always present |
+| Screener persist trail (P18) | 0 `state_store write failed` lines all-time; window rows internally reconcile: 17,893 = 16,705 scored + 1,009 circuit-proximity (steps empty) + 179 quote-skips (snapshot empty) |
+| Kill-switch / throttle / symdir / H-7 (processor-side, post-screen) | Out of P2 scope (P1 mapped; P3 audits sizing/risk seams). Symdir observation-day preconditions re-confirmed in passing: 0 `REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT` rows pre-Monday |
+
+### P2.5 Open questions (not guessed into findings)
+
+- **OQ-P2-1:** Is `max_spread_pct` MEANT as a fraction (schema convention: 0.005 = 0.5%) or
+  as percent (the step's units, = 0.5bp)? Only intent settles it (P9b notes / Rama). The
+  answer decides whether IA-P2-02 is "gate 100× too tight" or "schema convention violated" —
+  either way the unit contract is absent. ⚠️ Changing it re-tunes the entry gate (pass
+  population multiplies) — careful-loop, post-audit, Rama-gated.
+- **OQ-P2-2:** Was the 06→10-Jul floor flap (60→55→60, `8a3e0b7`/`61ae9cc`) a deliberate
+  calibration experiment, and is its existence recorded anywhere the D3 analysis reads? If
+  not, D3's pooled sample silently mixes two admission regimes. Settles: Rama / decision
+  notes; the commit messages alone carry no rationale.
+- **OQ-P2-3 (curiosity):** 32 sub-₹500 rows scored spread=1.0 — locked/crossed books at
+  capture, or a quote artifact? Settles: sample those snapshots' bid/ask. No defect implied.
+
+### P2.6 SEAM SUMMARY — can screening and sizing disagree, and where
+
+Mostly no — because almost nothing crosses the seam. What sizing receives from a passed
+signal is exactly: (symbol, side, entry_price, sl_price, intent, **tier**, lot_size,
+perf_weight) (`signal_processor.py:932-942`). The SCORE does not cross (persisted to
+analytics only); the LEVELS the screener saw (quote LTP, vwap, bands) do not cross; S&R
+does not exist on the live path. So screening and sizing cannot disagree about score or
+levels — the seam carries three narrower hazards instead. (1) **The tier is a constant**:
+LOW→0.5 on 415/415 sized trades ever (IA-P2-03) — the one quality channel is carrying no
+information, and P3 should audit the sizer knowing its tier input never varies. (2) **The
+BASIS can diverge**: for the 4 momentum strategies FIX-067 re-anchors entry+SL to a fresh
+LTP AFTER screening — the screened snapshot (and the circuit-proximity verdict, taken at
+trigger price) describes a price the order may no longer use; bounded by the slippage abort
++ post-fill placeability gate, both fail-open on quote outage. For the 6 pullback strategies
+the OPPOSITE holds (IA-P2-01): no gate, no re-anchor — they size and place on the raw
+trigger-derived basis. (3) **Parallel observers, not deciders**: the v3 chain and the
+shadow allocator receive the full (score, tier, sizing, sector="UNKNOWN") candidate
+post-sizing; both are log-only, and the allocator's enforce scope (`v3_only`) governs zero
+strategies. Where P3 starts: the sizer's internals under a constant 0.5 tier ×
+concentration binding 415/415 (the dead risk-sizer class), the risk engine's approve()
+inputs, and whether anything downstream re-derives or re-reads the score (nothing found
+in P2 scope does).
+
+**Phase 2 done** = findings above; G2 re-measured fresh (still 25/100 dead-at-0.0, plus the
+45-constant/65-ceiling geometry); band-inversion mechanism confirmed + located, not fixed;
+R:R confirmed compute-then-gate on every path; PB-01 values recorded, no spec invented;
+nothing fixed; nothing pushed; the 3-Aug/4-Aug sequence untouched.
+*(Phase 3 — sizing/risk — appends below this line.)*
