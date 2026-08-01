@@ -68,7 +68,14 @@ path outside the card's two sites, and it is product-blind.** Ruling applied:
 | Kill drill (PAPER, composed boot, mixed MIS+CNC+NULL book) | **MONDAY PC** — weekend gate blocks composition (measured in #1); PC only, VM stays `297b587` |
 | Revert | `git revert 43043a2` restores product-blind behaviour exactly |
 
-### 4a. Regression stamp — *(filled post-run)*
+### 4a. Regression stamp (filled post-run)
+**Definitive run (post-adjudications, `2e606ec`): 7F/5,475P — ⭐ NEW-FAILURE SET EMPTY
+vs the standing 8F baseline;** one GONE = the q9 streak test (the documented
+consecutive-losses-family oscillator — red→red→green→red→green across five same-family
+runs; §6a of the #1 record). Intermediate l2 run (pre-adjudication) had exactly the
+three superseded-contract tests as its delta — all three updated to the Q4 contract
+(`15adf75`, `2e606ec`), each superseded-but-legible with the original concern's
+survivor named. All runs post-18:15 Saturday; no clock-window flip appeared in any set.
 
 ## 5. DEPLOY GATES (unchanged from the card — ⛔ nothing deploys from this build)
 

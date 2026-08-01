@@ -155,7 +155,19 @@ expansion.**
 
 ---
 
-## ⛔⛔ A4 — THE BUY-DAY PRODUCT FILTER (+ CRITICAL-on-NULL) `<PENDING>` — ***the single most sequencing-critical item in this register***
+## ⛔⛔ A4 — THE BUY-DAY PRODUCT FILTER (+ CRITICAL-on-NULL) ✅ **`<BUILT — NOT DEPLOYED>` 01-Aug night** — ***the single most sequencing-critical item in this register***
+
+> ✅ **BUILT `43043a2`+`15adf75`+`2e606ec` (01-Aug ~20:0x–20:5x):** both HARD_KILL
+> emergency sites product-filtered via the ONE shared source
+> (`core.constants.EMERGENCY_FLATTEN_PRODUCTS`, also read by the two scheduled EOD
+> passes — no second copy to drift); **CNC SPARED loud** (honest attempted-count);
+> **NULL/NRML/unknown FLATTEN + CRITICAL** (the silent fallback is gone); the Kite
+> per-product-row hazard (spared CNC must not shadow a same-symbol MIS row) found in
+> design and test-pinned both directions; regression **NEW-set EMPTY**. Record:
+> `docs/audit/buyday_filter_build_01aug2026.md`. ⛔ **DEPLOY = Mon-eve stack, gated on
+> D1–D3 ratification + Monday observation clean + Monday PC gates (kill drill, #1
+> composition boot, calm regression confirm).** 🔴 **NEW ruling owed (record §2): the
+> reconciler CHECK2 third site — #2b Mon-eve (~6 lines) or a named carry-pilot blocker.**
 
 > **⭐ THIS IS THE ONE OVERLAP BETWEEN §A AND §B. IT IS DEBT-LEDGER RANK #2 AND IT IS
 > COUNTED EXACTLY ONCE — HERE.** §B#2 is a cross-reference to this entry, not a second item.
@@ -240,7 +252,7 @@ before 18:15 · label BUILT/DEPLOYED/VERIFIED LIVE, never "fixed".
 | # | debt | why it ranks here | register IDs |
 |---|---|---|---|
 | **1** | **No effect-verification** (α/β/γ; BK-8 + acted-telemetry) | **Highest leverage in the register:** it created ~22 defects and will create the next one; **one mechanism closes the class** | IA-XARCH-01 · IA-XCFG-01 · IA-XCFG-02 · IA-XTEST-01 |
-| **2** | **The buy-day product filter** (delivery liquidation on buy day) | The ONLY item with a **hard date** and an **ordering constraint that blocks three other workstreams** | **Q4/Q7 · P7.2(b)** ⇒ ⭐ **= §A4. SAME WORK, COUNTED ONCE, IN §A.** |
+| **2** | **The buy-day product filter** (delivery liquidation on buy day) | The ONLY item with a **hard date** and an **ordering constraint that blocks three other workstreams** | **Q4/Q7 · P7.2(b)** ⇒ ⭐ **= §A4. SAME WORK, COUNTED ONCE, IN §A.** ✅ **`<BUILT>` 01-Aug night (`43043a2`+`2e606ec`)** — both HARD_KILL sites filtered via the ONE shared source; CNC spared-loud; NULL/NRML flatten+CRITICAL; per-product-row hazard test-pinned; regression NEW-set EMPTY. Record: `docs/audit/buyday_filter_build_01aug2026.md`. 🔴 **NEW RULING OWED (record §2):** the reconciler CHECK2 inflight-orphan flatten = a product-blind THIRD sell-under-kill site (CNC-unreachable pre-flip) — **ride Mon-eve as #2b (~6 lines) or name it a CARRY-PILOT blocker.** ⏳ Mon PC kill drill owed pre-deploy |
 | **3** | **Fill/cancel seam truth** (zeroed `qty_filled`; the cancel-race → HUMAN_ORDER) | Money-path correctness with a **naked-unbooked-position endpoint**; 2-line fix for one half | IA-P5-01 · IA-P5-02 |
 | **4** | **Kill-flatness verification + the fault-injecting fake** | The last-line safety layer is **unverified at kill time** and has **one failed live rehearsal** | IA-P7-01 · IA-P7-02 *(BANSALWIRE — ⚠️ the ledger cites this as "IA-P9/BANSALWIRE"; the BANSALWIRE finding is **IA-P7-02**, `integrity_audit_2026.md:2435-2437`; IA-P9-02:2978 also references it. **Citation flagged, not smoothed.**)* · IA-XTEST-05 |
 | **5** | **Broker-truth capital escalation** (G3 non-escalating; the seed absorbs) | The kill ladder is **structurally deaf to real cash divergence**; measured **−₹637.6 crossing 3 sessions silently** | IA-P6-01 · IA-P6-02 |
