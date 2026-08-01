@@ -3328,3 +3328,202 @@ enablement); the loop-closure ledger written; M-DP1 closed-by-removal; committed
 incrementally; ⛔ nothing fixed, nothing pushed, nothing armed, the 3-Aug/4-Aug sequence
 untouched.
 *(The flow phases P1–P10 end here. Cross-cutting phases append below when commissioned.)*
+
+---
+
+# CROSS-CUTTING PHASES
+
+## PHASE X-ARCH — ARCHITECTURE (structure, ownership, and the dead-subsystem common cause)
+
+### XA.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~11:4x → ~12:2x IST** |
+| Measurements taken | 01-Aug **~11:5x–12:0x IST** — a fresh AST import-graph over the PC tree (== deployed `297b587` + docs; **208 modules, 679 internal edges**, production packages + scripts + main) + targeted greps; zero writes anywhere |
+| Evidence base | the completed P1–P10 register (this file) · the July audits' architecture section (G20 prior art: P4-1..P4-9 + M-K5 + M-X1 + ~55 line LOWs — **cited, not re-derived**) · BK-8 (the pre-existing config-drift/CI-hardcoded-default backlog item, status UNVERIFIED) |
+| Scope guard | findings only; no refactor, no config-contract check built; other X-phases not started (hand-offs noted); 3-Aug/4-Aug untouched |
+
+### XA.1 Headline determinations
+
+**(a) THE DEAD-SUBSYSTEM COMMON CAUSE — determined: THREE mechanisms, not one, sharing a
+single missing meta-mechanism (the phase's core question, answered).** The flow's
+inert-machinery findings partition cleanly:
+- **Family α — the constructor-pass-through gap** (config schema defines it, YAML sets it,
+  the CONSTRUCTION SITE never passes it ⇒ the code default silently wins): `order_protocol`
+  (X6/P4.2a — the forced LIMIT_TRIPLE) · `liquidity_check_enabled`+2 siblings (IA-P4-01a) ·
+  `price_drift_threshold` (IA-P4-01n) · `auto_resume_kill_switch` (IA-P7-04) ·
+  `max_single_order_qty` + `min_tick_size` (IA-P3-02) · `connect_sec` +
+  `backoff_sequence_sec` (IA-P5-08) · `dynamic_by_winrate` (IA-P3-03) — **9 measured
+  instances**.
+- **Family β — structural starvation** (built, constructed, often STARTED — but the feed or
+  gate never delivers): EntryGate (IA-P2-01, never fed) · SmartTgtManager (registration
+  gated on the protocol α killed) · `sl_breach_monitor` (zero importers + dormant feed) ·
+  TGTRetryManager (constructed-idle) · BreakevenManager (never constructed) · the CO
+  protocol surface · FIX-072 live-margin — **~7 instances**.
+- **Family γ — algebraic unreachability** (the knob is wired and live, but its configured
+  value puts the trigger outside the reachable envelope): the risk-sizer floor (~20×,
+  IA-P3-01/-04) · tier HIGH (IA-P2-03) · the sector cap ×3 (IA-P3-05) · the drift-ladder
+  rungs against structurally-zero inputs (IA-P6-01) · the score ceiling 65 vs pass 60 (G2)
+  — **~6 instances**.
+**⇒ ~22 instances across three families ≈ half the campaign's headline defects — and all
+three families share ONE meta-cause: the system has NO mechanism that verifies a declared
+thing has an effect.** No dead-knob detector, no "constructed component acted ≥once or
+declares itself dormant" telemetry, no constraint-bindability check (IA-P3-04 named this
+locally for sizing; this generalises it system-wide). The fix idea ALREADY EXISTS as
+backlog: **BK-8** ("config drift audit + CI hardcoded-default check", UNVERIFIED) covers
+family α; families β/γ need the acted-telemetry sibling. → IA-XARCH-01.
+
+**(b) The import graph, measured (B/F lens).** In-degree god-objects (true AST imports,
+production+scripts): `core.time_authority` **79** · `core.logger` 55 · **`core.state_store`
+35** (raw-reference widths: 63 non-test files, 149 test files — reconciling G20-P4-1's
+"126 importers" figure, which is the all-tree grep) · `utils.cron_heartbeat` 32 ·
+`alerts.telegram_notifier` 30 · `core.config_loader` 28. **Cycles: ONE 12-module SCC**
+spanning core↔broker↔orders (config_loader/config_auditor ↔ zerodha_adapter/rate_limiter/
+slippage_engine/cost_calculator/order_monitor ↔ order_placer/protocols/full_entry_engine/
+smart_tgt_manager) **closed by exactly ONE lazy edge** (`core/config_auditor.py:494`,
+function-local import of order_placer) — so the graph is **acyclic at import time** (no
+boot-crash hazard) while the change-ripple coupling is real: a rename in order_placer
+breaks the config auditor at RUNTIME mid-audit, not at import. One 2-module scripts SCC
+(check_cron_drift↔cron_officer). **Top-level layering is CLEAN**: core imports NOTHING
+above it at module load — every upward reach is one of **8 lazy call-site imports**
+(candle_math→sr_detector ×2, config_auditor→strategies ×2 +→orders, cron_registry→utils,
+daily_stats→sr_detector, **state_store:344→alerts.critical** — the migration-refusal
+sentinel, load-bearing) — refining G20-P4-3's "layering erosion ×5" to: one genuine
+top-level upward edge exists, `broker/zerodha_adapter.py:121 → orders.price_math`
+(DEFAULT_TICK — M-X1's duplication sibling). → IA-XARCH-02.
+
+**(c) The ownership census — every concept with more than one authority (C lens).**
+| Concept | Authorities | Agreement status |
+|---|---|---|
+| "held" / a position | **4 definitions**: `positions()`-only (reconcile_positions, eod_broker_reconcile, the kill sweep) vs holdings+CNC-positions (`CncGttMonitor._gather`) | Measured disagreement = F1's three false-alarm faces (P8.2a); the correct reader exists and is used by ONE consumer |
+| Fill truth | 3 stores: the OrderFilled event (authoritative) / `orders` row / `trades` row | orders row systematically WRONG (zeroed by the stale payload, IA-P5-01); trades row correct for entries |
+| Order state | 3 models: OSM (memory) / orders.status (DB) / broker — the July "three order-state models" | PERSISTS; data agreement OK except the fill fields |
+| Capital total | 3 computations: FM (authoritative) / broker.net (compared by G3) / ebr's last-ledger-row | The third is semantically WRONG (0.0 at 15:58 — IA-P8-03), masked by a gate |
+| "Flatness" after a kill | 4 verifiers: kill flatten (placement-level) / stuck-EXITING (broker, +30min) / 15:45 job / EOD residual sweep | None at kill time (IA-P7-01); the 30-min one is the only positive check |
+| Alert severity | 3 vocabularies: log level / alert tier / sentinel-worthiness | Never contracted (IA-P9-01); measured divergence daily (the kill chorus) |
+| Daily P&L | fm_ledger `pnl_delta` (canonical, E4) / trades.net_pnl / broker day-realized | CONTRACTED + cross-compared (the ebr pnl dimension); one reader quirk (M-K1) |
+| The clock | time_authority / 5 direct-read sites | KNOWN class (26-Jul), unchanged |
+| **The counter-example** | `closure_source`: ONE canonical vocabulary + a tree-scan test that fails on any restatement (v45) | **The model** — proof the codebase knows how to contract a concept when it decides to |
+→ IA-XARCH-03.
+
+**(d) Intended-vs-actual architecture (H lens).** The intended-architecture DOCUMENT no
+longer exists as a map: SYSTEM_MAP.md is a 597KB newest-first changelog (its own P4-7-era
+header says so honestly), PATHS.md self-describes as "no longer a quick reference", and
+the real intended structure lives in per-module docstring layer numbers (Layer 0-5) —
+which the measured graph shows are HONORED at top level (b). ⇒ the drift is DOCUMENTARY,
+not structural: the code kept the layering; the map of it became a log. G20-P4-6/P4-7
+already own the restructure decision (⛔ neither file split here — both are pointed into
+by section from every report and memory). Hand-off to X-DOCS. **One causal link is new:
+main.py-as-sole-composer is WHY family α exists** — every α instance lives at one of
+main.py's ~25 hand-maintained constructor calls, with no completeness check between the
+config schema and the ctor argument lists; the composition root is the single point where
+declared config silently detaches from running code. → folded into IA-XARCH-01/-04.
+
+### XA.2 Findings
+
+---
+**IA-XARCH-01**
+- **WHAT:** The dead-subsystem common cause: three families (α pass-through gap ×9 ·
+  β starvation ×7 · γ algebraic unreachability ×6) covering ~22 register findings ≈ half
+  the campaign's headline defects — unified by the absence of any effect-verification
+  mechanism, and family α unified further by the composition root (main.py's
+  hand-maintained ctor calls, no schema↔ctor completeness check).
+- **EVIDENCE:** the family inventories above, each item citing its flow ID; main.py ctor
+  sites (P4.2a :2639-2665 is the exemplar — three liquidity args simply absent).
+- **CLASS:** Architecture / Config-vs-code. **SYNTHESIS** (unifies X6, IA-P2-01/-03,
+  IA-P3-01/-02/-03/-04/-05, IA-P4-01, IA-P5-08, IA-P6-01, IA-P7-04, G2).
+- **ROOT CAUSE:** config was grown schema-first with hand-plumbed consumption; nothing
+  closes the loop from "declared" to "took effect".
+- **RECOMMENDATION (described, ⛔ not built):** (i) family α: execute BK-8 (already on the
+  backlog — a config-key→consumer assertion or CI hardcoded-default check), anchored at
+  the composition root; (ii) families β/γ: one EOD telemetry line per constructed manager
+  — "acted N times today | declared dormant" — turning silent starvation into a daily
+  visible zero (the IA-P6-06 census, automated).
+- **SEVERITY-BY-IMPACT (future-defects weight):** **HIGH — the highest-leverage finding in
+  the register**: it is the class that produced the forced exit-protocol, the dead risk
+  floor, the unfed gate and the dark liquidity check, and it will produce the next one
+  the day another knob ships.
+
+---
+**IA-XARCH-02**
+- **WHAT:** The measured dependency structure: 208 modules / 679 edges; god-objects
+  time_authority(79)/logger(55)/state_store(35 imports · 63 files · 149 test files)/
+  cron_heartbeat(32)/telegram_notifier(30)/config_loader(28); ONE 12-module
+  core↔broker↔orders SCC closed by a single lazy edge (runtime-coupled, import-time
+  acyclic); top-level layering otherwise clean with 8 lazy upward reaches and one genuine
+  upward edge (zerodha_adapter→orders.price_math). Blast-radius ranking for change safety:
+  state_store (every layer + 46 tables) > main.py (sole composer, ~25 ctor sites — the α
+  locus) > order_placer (4,686 LOC) > order_reconciler (4,118) > kill_switch (1,714).
+- **EVIDENCE:** the AST graph run (scratchpad tool, this session); the lazy-edge greps
+  (config_auditor:494; the 8 core call-site imports; zerodha_adapter:121).
+- **CLASS:** Architecture / Coupling. **KNOWN-REFINED** (G20-P4-1/P4-2/P4-3 held the
+  qualitative claims; the graph, the SCC, the lazy-vs-top-level distinction and the
+  reconciled importer counts are new precision).
+- **RECOMMENDATION (described):** none urgent — the two structural risks worth naming for
+  X-EVOLVE: the lazy-import idiom hides dependencies from static layering (fine until
+  someone "cleans it up" into a top-level import and creates the real cycle), and the
+  composition root has no completeness check (see -01).
+- **SEVERITY-BY-IMPACT:** MED as context; the SCC is the one concrete change-hazard
+  (12 modules, money path included).
+
+---
+**IA-XARCH-03**
+- **WHAT:** The ownership census: 8 concepts with 2-4 authorities each (table above), of
+  which three have a MEASURED wrong-or-divergent authority today (fill truth, capital
+  total, "held") and one has a measured daily vocabulary split (severity) — against ONE
+  contracted counter-example (closure_source) proving the pattern is fixable in this
+  codebase's own idiom (canonical module + tree-scan test).
+- **EVIDENCE:** each row cites its flow measurement; the closure_source contract
+  (`core/closure_source.py` + the scanning test, v45 — KNOWN).
+- **CLASS:** Consistency / Architecture. **SYNTHESIS** (unifies IA-P5-01, IA-P8-03/-04,
+  IA-P7-01, IA-P9-01, F1, the July three-models class).
+- **RECOMMENDATION (described):** the closure_source pattern, applied in priority order:
+  "held" first (the redesign's D-8 step 2 shared reader IS this — one definition, all
+  consumers), severity second (IA-P9-01's contract), fill-fields third (IA-P5-01's 2-line
+  fix makes the orders row true).
+- **SEVERITY-BY-IMPACT:** HIGH for future defects — every multi-authority concept in the
+  table has already produced at least one measured flow finding.
+
+---
+**IA-XARCH-04**
+- **WHAT:** The intended-vs-actual verdict: the CODE honors its layer scheme (measured);
+  the ARCHITECTURE DOCUMENTS have inverted into changelogs (SYSTEM_MAP 597KB / PATHS
+  ~120KB, both self-aware of it) — so the system's structure is currently better than its
+  map, and a new reader would learn the architecture faster from module docstrings than
+  from the designated documents.
+- **EVIDENCE:** XA.1(d); the files' own honest headers; G20-P4-6/P4-7 (the owned
+  restructure decisions, deliberately not executed pending an agreed shape).
+- **CLASS:** Documentation / Architecture. **KNOWN-CONFIRMED** (P4-6/P4-7), with the
+  measured layering-is-clean half NEW.
+- **RECOMMENDATION (described):** none beyond the existing G20 items — hand-off to X-DOCS
+  with one added input: the layer docstrings are the de-facto intended-architecture record
+  and any future map should be generated FROM them, not written beside them.
+- **SEVERITY-BY-IMPACT:** LOW-MED (a doc problem — but it taxes every audit and onboarding,
+  including this one).
+
+### XA.3 Open questions
+
+- **OQ-XARCH-1:** The `scripts→main` import edge (which script imports main, and does it
+  execute main-module side effects at import?) — flagged by the package table, not chased.
+- **OQ-XARCH-2:** G20-P4-4's "19 raw sqlite sites outside db_connect" — not re-counted
+  this phase (the July figure carried; a fresh count belongs to X-DUP/X-CONFIG).
+
+### XA.4 Hand-offs to the remaining cross-cutting phases
+
+**X-DUP** inherits the ownership census (-03) + M-X1's tick-math duplication (with the
+measured zerodha_adapter→price_math edge showing the partial dedup) + G20-P4-5 (two report
+generators). **X-CONFIG** inherits the family-α quantification (9 dead/half-dead knobs,
+the BK-8 anchor, the composition-root cause) — its job is the exhaustive knob-by-knob
+sweep the flow phases sampled. **X-EVOLVE** inherits the blast-radius ranking and the
+SCC/lazy-import hazards (-02) — "how safe is a new feature" now has numbers. **X-DOCS**
+inherits -04 and the P9 told-vs-real map. **X-TEST** inherits the green-check census
+(P8.2d) and the paper-cannot-exercise class as its reachability baseline.
+
+**X-ARCH done** = the import graph measured fresh (god-objects, one SCC, lazy-vs-top-level
+layering verdict); the dead-subsystem common cause DETERMINED (three families, one missing
+meta-mechanism, ~22 instances, the composition-root causal link); the ownership census
+enumerated with the contracted counter-example; intended-vs-actual settled (code better
+than map); hand-offs written; committed incrementally; ⛔ nothing fixed, nothing pushed,
+the 3-Aug/4-Aug sequence untouched.
+*(X-DUP / X-CONFIG / X-DOCS / X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
