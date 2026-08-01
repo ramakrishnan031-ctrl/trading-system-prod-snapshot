@@ -1933,3 +1933,343 @@ first all-time reachability census (7,804 rows: 3 checks carry 99% of rows, all 
 checks have never fired); committed incrementally; ⛔ nothing fixed, nothing pushed, the
 3-Aug/4-Aug sequence untouched.
 *(Phase 6 — fund/capital state — appends below this line.)*
+
+---
+
+## PHASE 6 — FUND / CAPITAL / STATE (fund_manager + reservation ledger + drift topology, and the P6→P7 seam)
+
+### P6.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~09:22 → ~10:1x IST** |
+| Measurements taken | 01-Aug **~09:4x–09:5x IST**, from the VM (`mode=ro` DB reads + log greps; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 (re-verified in P5, same session) |
+| PC tree read | `5420709` = `297b587` + 8 docs-only commits ⇒ code read == deployed |
+| Service | `inactive` (designed weekend state) |
+| Primary windows | fm_ledger all-time **2,997 rows** (RESERVE 1,234 · RELEASE 1,019 · RELEASE_USED 205 · COMMIT 205 · INIT 63 · SYNC 32 · RESET_PNL 32 · TOP_UP 7) / 23 retained `system_*.log` / reconciliation_log 7,804 (P5 census, same session) |
+| Config ground truth (VM == PC, P5-verified + fresh greps) | `capital {intraday 0.70 / positional 0.30, conditional_allocation_enabled false, slm_margin_buffer_pct 0.05, leverage_map {INTRADAY 5.0, CO 6.0, DELIVERY 1.0, BO 5.0}}` · `risk.daily_loss_limit_pct 0.03` (SOLE authority; limit = 3% × current `_total`) · `max_open_positions 5` · `order_reconciler {capital_drift_tolerance ₹50, _pct 0.10 in-session, human_order_margin_tolerance ₹5,000, alert throttle 1800s}` · `drift_handler {log_only ₹250, soft ₹1,000, hard ₹2,500, consecutive 3}` |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed/tuned; FIX-182 not tuned; kill internals not audited (P7); reconcile jobs not audited (P8); July audits read-only |
+
+### P6.1 Path as verified — THE CAPITAL MODEL AND ITS TRUTH SOURCES
+
+**One capital authority** (`capital/fund_manager.py`): 3-balance invariant per bucket pair
+(avail+reserved+used == total, tolerance ₹1.0, INV6/M-C3 per-bucket non-negativity guards —
+the Q9-settled BL9 triggers, confirmed at source :2264-2291: they fire only on a NEGATIVE
+partition, never on the split), write-ahead `fm_ledger` (BL-5), violations → hard_kill
+(FM19/BL-9) + on_critical. **Boot sequence (LIVE):** 08:15 `initialize(compute_live_seed)`
+where seed = `broker.net − today_realized_pnl_carryover` (M-C1; cold boot Σ=0 ⇒ seed =
+broker.net verbatim, main.py:1692-1696, :2373-2376) → `rehydrate_from_open_trades` (replays
+RESERVE/COMMIT chains of OPEN trades + today's RELEASE_USED PnL) → **09:15 FM9 one-shot
+sync** (`main.py:955-1018`: fires only if the service started BEFORE 09:15; holiday-gated; a
+single `sync_from_broker(broker.net)`; INFO alert only when |Δ|>1; **nothing re-syncs broker
+cash for the rest of the day**). Bucket split: `resolve_bucket_allocation` computed ONCE in
+main.py:2317 — with `conditional_allocation_enabled: false` it returns the config split
+verbatim; the 1.0/0.0 conditional legs are unreachable (KNOWN, R10 on the MASTER_PENDING
+board — the flip is Rama's 4-Aug decision). **Drift escalation topology**
+(`capital/drift_handler.py`): `_ESCALATING_SOURCES = {fund_manager (FM9),
+fund_manager_self_check (CHECK7), fund_manager_bucket_overflow (H-1)}` — BL-2 tiers log
+₹250 / soft ₹1,000 / hard ₹2,500 (#11 K-ladder: DECIDED, do-not-retune) apply to those three
+ONLY; **every reconciler-sourced event (G3, CHECK5, CHECK7-actions aside) is INFO-only by DH1
+design** — G3's CRITICAL Telegram (30-min throttle) is its terminal escalation. Daily loss:
+post-close check in `release_used` (:1302-1314) — Σ(fm_ledger.pnl_delta today) ≤ −(3% ×
+current _total) → callback = EodSquareoff.fire_now (late-bound) + soft_kill. Pre-trade gate
+reads the same pct + the B-1 unrealized-MTM term (fresh-gated, realized-only fallback).
+
+### P6.2 Headline re-measurements (mandated)
+
+**(a) THE P5→P6 STING CHAIN — TRACED END-TO-END AND PROVEN, with a sharpening: the ₹5,000
+widening is the THIRD blindness layer; the first two absorb a real divergence on their own,
+and did, measurably, in the T2 window.** The chain in code: a broker position with no local
+trade → CHECK2 HUMAN_ORDER (`order_reconciler.py:1815-1822`; IA-P5-02's FAILED-trade orphan
+lands here) → `_human_order_symbols` non-empty → G3's effective tolerance += ₹5,000
+(:3396-3397). The three layers, measured:
+1. **In-session base tolerance = max(₹50, 10% × expected)** (FIX-190 Bug I, :3393-3395) ≈
+   **₹987-1,000** on this book — the T2 basket's real blocked cash (−₹637.6) rode UNDER it
+   for three sessions: **G3 fired ZERO times in the entire T2 window** (last G3 firing ever:
+   2×, 06-Jul, `expected=0.00 actual=10000.00` — a startup-order artifact, pre-current-era).
+2. **The overnight seed absorb, measured to the rupee:** fm_ledger INIT 29-Jul 08:15 =
+   **9,997.4** → 30-Jul 08:15 = **9,359.8** (−₹637.6, the basket's cash) → 31-Jul 9,360.0.
+   No alert exists on this boundary — the seed is DESIGNED to re-base to `broker.net`
+   (anything unbooked is inside broker.net and becomes the new total silently).
+3. **The escalating comparison is structurally behind the absorb:** FM9's 09:15
+   `sync_from_broker` — the ONLY broker-truth publisher the BL-2 kill ladder listens to —
+   measured **delta = 0.0 on ALL 8 retained SYNC days including both T2 mornings**
+   (`old==new` at 09:15:00.0xx each day): it compares broker@09:15 against a total that was
+   seeded FROM broker@08:15 the same morning. It cannot see accumulated divergence, ever, by
+   ordering.
+4. The ₹5,000 widening (armed live 29/31-Jul — the T2 ten HUMAN_ORDER rows, P5 census) lifts
+   the blind band to ≈ ₹6,000 ≈ **60% of the ₹9,997 book** — and IA-P5-02 guarantees a
+   SYSTEM-caused orphan can open it.
+⇒ **VERDICT: a real broker-cash divergence of ~6.4% of the book crossed three sessions with
+zero alerts of any kind, and a divergence of up to ~60% would do the same while any
+untracked order exists. The one check that could catch it (G3) is non-escalating by DH1
+design; the one escalating check (FM9) is blind by ordering; the seed absorbs the rest
+nightly.** → IA-P6-01/-02. (The 30-Jul redesign doc's B6 "artefact" verdict stands for
+LEGITIMATE delivery trades — those write live-DB rows and never classify HUMAN_ORDER — but
+it predates IA-P5-02 and does NOT cover the mislabelled-system-orphan entry route.)
+
+**(b) The internal-capital == broker-cash invariant: ENFORCEMENT exists, VERIFICATION does
+not (G-lens crux, confirmed).** CHECK7 re-measured fresh (:3491-3574): it compares FM
+in-memory reservation margins against fm_ledger margin_delta sums — **internal vs internal**
+(28-Jul note CONFIRMED); its ledger-orphan direction is explicitly "deferred to Phase E"
+(:3503-3504). The 3-balance invariant, BL-9/BL-4 kill wiring, INV6 guards: all enforce
+INTERNAL consistency. The only broker-truth comparisons are G3 (non-escalating, tolerance as
+above) and FM9 (once, post-seed, measured 0.0 forever). **Nothing verifies the system's
+capital belief against broker cash in a way that can reach a kill rung** — the P6→P7 seam
+headline.
+
+**(c) RESERVE→COMMIT→RELEASE integrity — measured, with one structural surprise.**
+**True leaks (RESERVE with NO terminal row ever): 10 all-time, Σ ₹1,628.13 — ALL June-era**
+(15-18 Jun: 8 × MIS ₹62-188 incl. GICRE 16-Jun; HARIOMPIPE ₹462.44 + SETL ₹353.04 DELIVERY —
+the June delivery attempts), **0 since 18-Jun** — the leak class died with the June fixes;
+each leaked in-memory only until its process restart (the next seed re-based; the ledger
+chains remain permanently open). TOP_UP 7 rows (FIX-075's one firing + June). **The
+surprise: the per-reservation ledger chain cannot express a CLOSED lifecycle** — COMMIT rows
+write `margin_delta=0.0` (the excess-return leg moves money with no delta) and RELEASE_USED
+rows carry **`reservation_id=NULL`** (release_used's `_write_ledger` call passes trade_id
+only, fund_manager.py:1257-1277) ⇒ **every committed reservation's signed sum ends at the
+FULL original margin: measured 205/205 committed rids, residual avg ₹98.66 / max ₹202.29**
+(sample chain: RESERVE +51.29 → COMMIT amount=48.85 delta=0.0 → nothing). The
+`sum_fm_ledger_margin_delta` docstring contract ("for a closed reservation: sum is 0…
+RESERVE and RELEASE_USED net out exactly", state_store.py:1126-1134) is **false for every
+fill the system has ever made**. CHECK7's live-only iteration is unaffected (a live rid's
+sum == its reserved margin, correct); anything built on the stated contract — including the
+deferred Phase-E orphan detection — would be wrong on arrival. → IA-P6-03.
+
+**(d) Units + config-vs-code sweep at this layer (F/H lens).** Units: 16 capital knobs
+checked against consuming expressions — bucket pcts (fractions, FM12 sum-validated) ·
+`daily_loss_limit_pct 0.03` fraction × `_total` ✓ (:1304) · `slm_margin_buffer_pct 0.05`
+fraction ✓ · leverage divisors ✓ · drift trio rupees ✓ · `capital_drift_tolerance` ₹50 /
+`_pct 0.10` fraction (`max(tol, |expected|×pct)` ✓) · human ₹5,000 rupees ✓ · invariant
+tolerances ₹1.0 / ₹0.01 ✓ — **no fraction-vs-percent mismatch found** (width: every knob in
+`capital:`, `risk:` daily-loss, `drift_handler:`, `order_reconciler:` tolerance family).
+Config-vs-code yield, as in every phase, is DEAD or HALF-DEAD knobs, not wrong units:
+`conditional_allocation_enabled false` ⇒ the 1.0/0.0 legs never run (KNOWN, R10 flip
+pending); **`slm_margin_buffer_pct` is HALF-dead** — the 5% buffer is still levied on every
+reservation (:520-523) while its named release path (`release_slm_buffer`, fired on SL-M
+accept) is unreachable since P0 removed SL-M — the buffer silently rides into commit-excess
+or release instead (money-effect live, stated purpose dead) → IA-P6-07b. The 30/70 split
+itself: with delivery double-locked, the positional 30% of every seed idles by design
+(no-borrow) — the system trades on ~70% of ACTUAL (KNOWN allocation; R10 is the tracked
+decision; sized here only for the record: ₹9,360 seed ⇒ ₹6,552 intraday spendable).
+
+**(e) The leverage asymmetry, stated once so nobody re-derives it (E lens).** The FM is
+leverage-AWARE: reservations = notional/5 for MIS (yaml `leverage_map.INTRADAY: 5.0`,
+consumed :518, :901); the SIZER is leverage-BLIND (binds on notional/concentration — G8,
+P3-confirmed). Both are internally consistent (reserve ≈ broker margin; size ≈ conservative
+notional) but "capital consumed" differs ×5 between the two layers by design, and the
+capital-vocabulary memory line "system UNAWARE of leverage" is imprecise at the FM layer.
+Documentation-only. → folded into IA-P6-05.
+
+### P6.3 NEW findings
+
+---
+**IA-P6-01**
+- **WHAT:** The invariant that matters most — internal capital == broker cash — has no
+  verification that can escalate, and three stacked mechanisms guarantee a real divergence
+  stays alarm-free: (1) G3's in-session tolerance max(₹50, 10%·expected) ≈ ₹1,000; (2) the
+  FIX-182 human-order widening +₹5,000 (armed by exactly the IA-P5-02 mislabel class, and
+  live 29/31-Jul via T2) ⇒ blind band ≈ 60% of the book; (3) DH1's source filter makes G3
+  INFO-only to the kill ladder regardless of magnitude, while the only ESCALATING
+  broker-truth publisher (FM9) runs once a day at 09:15, one hour AFTER the 08:15 seed
+  re-based the books to the same broker number — measured delta 0.0 on all 8 retained SYNC
+  days. The kill ladder is structurally deaf to broker-truth capital divergence.
+- **EVIDENCE:** P6.2(a) — the measured T2 trace (INIT 9,997.4→9,359.8; SYNC 0.0×8; G3
+  firings in window = 0, last ever 06-Jul); code sites `order_reconciler.py:3388-3397`,
+  `drift_handler.py:65-69,140-153`, `main.py:955-1018,1692-1696`.
+- **CLASS:** Safety / Invariant-coverage. **NEW-or-KNOWN:** KNOWN-COMPOSED → PROVEN — the
+  T2 seam memory, FIX-182 concern, CHECK7-internal note and P5's sting hypothesis each held
+  a piece; the end-to-end chain with live measurements is new, as is the sharpening that
+  layers (1)+(3) suffice without the widening.
+- **ROOT CAUSE:** each layer is individually deliberate (FIX-190 noise fix; FIX-182 operator
+  policy; DH1 unit-safety; seed-as-truth) — the blindness is their COMPOSITION, which no
+  single design reviewed.
+- **RECOMMENDATION (described, ⛔ not applied):** one escalating broker-truth rung: G3 above
+  a hard ceiling (e.g. >X% of book, UNCONDITIONAL — not widenable by the human set) publishes
+  under an escalating source; and/or an 08:15 seed-delta check (see IA-P6-02). ⛔ FIX-182
+  itself not tuned (out of scope per brief).
+- **SEVERITY-BY-IMPACT:** MED-HIGH — measured: 6.4% of the book crossed silently; bounded
+  only by the EOD sweeps' inventory checks (P8) and the operator's own broker statement.
+
+---
+**IA-P6-02**
+- **WHAT:** The boot seed silently absorbs ANY unbooked P&L or external cash movement — by
+  construction (seed = broker.net − booked carryover; the unbooked part is inside broker.net)
+  — and NO day-over-day comparison exists on that boundary: nothing persists yesterday's
+  expected closing capital to compare the seed against (the CASH sibling of the 30-Jul
+  redesign doc's B2 inventory gap).
+- **EVIDENCE:** measured live: INIT 30-Jul = 9,359.8 vs 29-Jul = 9,997.4 (−₹637.6, the T2
+  cash) with no alert artifact of any kind (the only trace is the INIT ledger row + an INFO
+  boot log); `compute_live_seed` main.py:1692-1696; the 09:15 INFO alert fires only on the
+  SYNC delta, which is 0.0 by ordering.
+- **CLASS:** Silent-failure. **NEW** (the 30-Jul doc registered the INVENTORY version; the
+  cash version was implicit in "the FM baseline self-heals" and is here named as the gap it
+  is).
+- **ROOT CAUSE:** seed-as-truth is correct for RE-BASING; it was never paired with a
+  "was this the number we expected?" check.
+- **RECOMMENDATION (described):** at initialize, compare the seed against (prior INIT +
+  Σ subsequent pnl_delta − known cash flows) and emit INFO/WARNING on unexplained delta —
+  one query, no schema; pairs with the redesign doc's D-2/D-3 morning-check shape.
+- **SEVERITY-BY-IMPACT:** MED — it is the terminal absorber in the IA-P5-02/IA-P6-01 chain;
+  every upstream miss becomes permanent and invisible here.
+
+---
+**IA-P6-03**
+- **WHAT:** The reservation ledger cannot express a closed lifecycle: COMMIT rows carry
+  margin_delta=0.0 while moving the excess, and RELEASE_USED rows carry reservation_id=NULL
+  (keyed by trade_id only) — so every committed reservation's signed margin_delta sum
+  permanently equals its FULL original margin, and `sum_fm_ledger_margin_delta`'s stated
+  contract ("closed ⇒ sum 0") is false for every fill ever made.
+- **EVIDENCE:** measured: 205/205 committed rids, residual avg ₹98.66 / max ₹202.29; sample
+  chain RESERVE +51.29 → COMMIT 0.0 → (end); writer sites fund_manager.py:914-928 (COMMIT,
+  margin_delta=0.0) and :1257-1277 (RELEASE_USED, no reservation_id passed); the contract
+  text state_store.py:1122-1137.
+- **CLASS:** Consistency / Documentation. **NEW.** **ROOT CAUSE:** E4 keyed RELEASE_USED by
+  trade_id and nobody re-derived the per-rid arithmetic the docstring still promises.
+- **RECOMMENDATION (described):** either pass reservation_id through release_used's ledger
+  write (1 arg; restores per-rid conservation) or rewrite the docstring + mark Phase-E
+  orphan detection as needing a different key. Current CHECK7 (live-only) is unaffected
+  either way.
+- **SEVERITY-BY-IMPACT:** LOW-MED — no runtime consumer is wrong today; the next consumer
+  built on the stated contract would be wrong on arrival (and the deferred Phase-E is
+  exactly that consumer).
+
+---
+**IA-P6-04**
+- **WHAT:** The committed quantity — an arithmetic input to every close's margin release —
+  round-trips through free text: `get_entry_commit_margin` regex-parses `qty=(\d+)` out of
+  the COMMIT row's human-readable `reason` string (written by commit_to_used as
+  `"fill: qty={n} price={p} …"`), guarded only by a "keep that token parse-stable" comment.
+  M-C7's leverage-change-invariance rests on prose.
+- **EVIDENCE:** state_store.py:2573-2588 (the regex); fund_manager.py:922-926 (the writer);
+  fallback = the exact current-leverage recompute M-C7 exists to avoid, loud
+  (`release_used_commit_unresolved` WARN) — measured **0 occurrences ever** (23 logs).
+- **CLASS:** Architecture / Consistency (the free-text-dependency class, here as data
+  carriage on the money path rather than classification). **NEW.**
+- **ROOT CAUSE:** fm_ledger deliberately carries no qty column (EF-5 "each table owns what
+  it owns"); M-C7 needed qty and took it from the only place it existed.
+- **RECOMMENDATION (described):** persist committed qty structurally (a column, or parse-at-
+  write into an existing numeric field) — schema-touch ⇒ careful-loop; until then the
+  parse-stability comment is the guard.
+- **SEVERITY-BY-IMPACT:** LOW — fail direction is loud + fallback-correct-at-current-config;
+  it becomes real the day someone edits the reason format or the leverage map.
+
+---
+**IA-P6-05**
+- **WHAT:** Documentation bundle on the capital model, recorded to stop re-derivation:
+  (a) the FM reserves LEVERED margin (notional/5 MIS; yaml leverage_map is live config)
+  while the sizer binds UNLEVERED — two coherent capital models ×5 apart by design; the
+  memory line "system unaware of leverage" is imprecise at the FM layer. (b) the daily-loss
+  limit is fully DYNAMIC — ₹ = 3% × current `_total`, and `_total` moves with every net
+  close (both the base and the threshold move intraday; the dual-daily-loss memory rule
+  re-confirmed at :1302-1305). (c) profits are excluded from the tradable floor until T+1
+  (INV2 `min(0, pnl)` — invariant.py:75-89) while `release_used` credits them to avail
+  immediately — the invariant's rhs and the bucket arithmetic use different conventions,
+  reconciled only because `_check_invariant` passes `cash_floor=self._total` and
+  `realized_pnl_today=0.0` (:2292-2297), making the INV2 profit-exclusion DEAD CODE at the
+  FM call sites (compute_rhs returns _total unchanged — stated in the FM's own comment).
+- **CLASS:** Documentation / Reachability (c: the INV2 P7a term is structurally inert in
+  production). **NEW-as-registered.** **SEVERITY:** LOW.
+
+---
+**IA-P6-06**
+- **WHAT:** Escalation-reachability census — the capital layer's entire alarm surface is
+  production-unexercised: invariant violations **0 ever** (window grep; `capital_invariant`
+  0), commit hard-kill **0**, bucket_overflow **0**, daily_loss_breach **0** (and 0/23
+  outcomes by the E4 study — worst day −₹56 vs limit ≈₹296), CHECK7 rows **0 ever** (7,804
+  census), drift-handler escalating CRITICAL **0** in window / SOFT / HARD / SOFT_ESCALATED
+  never, M-C7 fallback 0, rehydrate anomalies 0, `reserve_restored_for_recovery` 0, FM9
+  drift events ≈ never (delta 0.0 ×8 measured; INFO "Capital Updated" alert unexercised).
+  Every capital guard except the pre-trade gates has enforcement but no verification-by-fire
+  — the "alive but never measured / built but never run" sibling pattern, now quantified for
+  this layer.
+- **EVIDENCE:** the zero table above (each grep across 23 logs; DB censuses this section).
+- **CLASS:** Reachability. **KNOWN-COMPOSED** (individual zeros scattered across prior
+  records; the census is new). **RECOMMENDATION (described):** none to build — but any
+  future capital change should state which of these zeros it expects to move, since none of
+  them can currently distinguish "correct" from "dead".
+- **SEVERITY-BY-IMPACT:** LOW as a finding; HIGH as context for P7 (the kill ladder's
+  capital triggers have never fired — see seam).
+
+---
+**IA-P6-07** (hygiene bundle, one ID)
+- (a) The only G3 firings ever in retained logs (2×, 06-Jul) read `expected=0.00
+  actual=10000.00` — G3 ran against a zero FM total (startup-order artifact; drift_handler
+  even carries a "~zero expected ⇒ possible publisher bug" WARN for the escalating twin).
+  None since; not re-opened.
+- (b) `slm_margin_buffer_pct 0.05` — HALF-dead: levied on every reserve, releasable only by
+  the SL-M-accept path that P0 removed; the buffer rides into commit-excess/release. Config
+  claims a purpose the system no longer has.
+- (c) The daily-loss breach callback's position-close leg (late-bound EodSquareoff.fire_now)
+  has never executed (`eod_not_wired` 0 = wired-or-never-invoked; breach count 0 ⇒
+  unexercised either way).
+- (d) June-era ledger hygiene, now closed: RELEASE_USED with costs=0 (36) and with
+  trade_id=NULL (159) are 100% 2026-06; the E4 17-Jul fix is VERIFIED IN DATA (0 since).
+- (e) INIT 63 vs SYNC 32 vs RESET_PNL 32 — the INIT surplus = mid-day warm restarts (each
+  re-constructs the FM; H-4 guards double-INIT per process); not chased row-by-row (OQ-P6-2).
+- **CLASS:** Documentation / Config-vs-code. **SEVERITY:** LOW.
+
+### P6.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| T2 isolated-DB / shared-cash seam (memory, 29-Jul) | **NOW FULLY MEASURED**: blocked cash = −₹637.6 (INIT 9,997.4→9,359.8), held flat 31-Jul (9,360.0), zero alerts across 3 sessions; the ₹643.98 memory figure ≈ the ledger's 637.6 + rounding/fees. The seam's mechanism (FM synced 09:15, T2 armed 11:37, nothing re-reads broker cash) confirmed at source |
+| FIX-182 ₹5,000 human tolerance | Re-measured: default 5000.0 (:379-383), applied :3396-3397; ARMED live 29/31-Jul (T2's HUMAN_ORDER rows); ⛔ not tuned (per brief). The 30-Jul B6 "test artefact" verdict STANDS for legitimate delivery and DOES NOT cover the IA-P5-02 system-orphan route (sharpened, not contradicted) |
+| CHECK7 internal-only (28-Jul note) | CONFIRMED at :3491-3574 — fm-memory vs fm_ledger, unidirectional, ledger-orphan direction deferred; 0 rows ever |
+| G3 non-escalating (30-Jul doc §A1(4) + memory) | CONFIRMED at source — DH1 `_ESCALATING_SOURCES` excludes "order_reconciler"; G3's terminal escalation is the throttled CRITICAL Telegram; **P5.6's wording "G3 → BL-2 ladder therefore never arms" is REFINED: the ladder never arms for G3 by SOURCE FILTER, not merely by tolerance** |
+| FM9 one-shot (30-Jul doc §A1(7)) | CONFIRMED + sharpened: skip-if-started-after-09:15; holiday-gated; measured delta 0.0 on all 8 retained days — the escalating comparison is structurally post-seed |
+| Q9 BL9 (conditional_allocation does not reach FM; BL9 = non-negativity) | CONFIRMED from source (resolve_bucket_allocation consumed in main.py:2317 only; INV6/M-C3 triggers = negative partitions, :2264-2291) — not re-derived, verified |
+| Dual daily-loss memory (ONE limit, both sides move) | CONFIRMED live at :1302-1314: limit = 0.03 × current `_total`; base = Σ(pnl_delta) via the indexed date column; ≈₹296 at the July book — never breached (0/23 outcomes, E4) |
+| W10 double-subtract (July :211) | **CLOSED-confirmed in current SQL**: `get_daily_realized_net_pnl` sums pnl_delta only (state_store.py:2542-2548, E4 contract in the docstring); the July-audit line is stale for this reader |
+| M-C1 live-seed carryover | Verified in code (compute_live_seed) and in data (INIT values consistent with post-close re-seeds; no phantom drift on any retained SYNC) |
+| RMS/GTT closes pass costs=0 (July :212) | For CHECK1/CHECK4: E4-closed (P5.4). For `cnc_gtt_monitor` finalize: the path has never run live (0 delivery closes in the live DB) — stands as LATENT |
+| K-ladder #11 (drift thresholds vs ~₹9.9k book: soft 10%, hard 25.3%) | Values re-read unchanged (₹250/1,000/2,500); DECIDED do-not-retune (28-Jul); this phase adds: those rungs listen only to sources measured at delta 0.0 — see seam |
+| B3/G5 (daily-loss blind to unrealized overnight drawdown) — OPEN Q3 | Not re-litigated; noted: the B-1 unrealized-MTM term covers OPEN intraday trades when fresh (45s staleness gate, realized-only fallback); the overnight-delivery case remains Rama's Q3 |
+| R10 (conditional-allocation flip, 4-Aug board item) | Confirmed BUILT-not-flipped (`resolve_bucket_allocation` unit-tested, flag false); the 30% positional strand TODAY / 70% intraday strand POST-FLIP asymmetry is R10's documented subject |
+| FIX-075 top-up | TOP_UP rows = 7 all-time (June cluster + the one P4-cited firing) — consistent |
+
+### P6.5 Open questions (not guessed into findings)
+
+- **OQ-P6-1:** The 06-Jul `expected=0.00` G3 pair — did G3 run before initialize() then, and
+  can it still (startup ordering today puts initialize at :2376, reconciler start later —
+  looks closed by ordering, not proven). One boot-sequence read settles it; LOW.
+- **OQ-P6-2:** INIT 63 vs SYNC 32 — assumed mid-day restarts + holidays; a per-day partition
+  would prove it. Not chased.
+- **OQ-P6-3 (= the redesign doc's Q3, restated for Rama):** is the daily-loss limit's
+  blindness to unrealized OVERNIGHT drawdown a scope choice or a gap? Decides whether
+  delivery positions can breach 3% unnoticed. Owner: Rama.
+
+### P6.6 SEAM SUMMARY — can a wrong capital picture drive the kill ladder to act, or fail to act (P7's starting point)
+
+**Fail-to-act: PROVEN.** The kill ladder's capital-drift inputs are exactly three escalating
+sources, and each is structurally quiet: FM9 (measured delta 0.0 on every retained day —
+post-seed by ordering), CHECK7 (internal-vs-internal, 0 rows ever), bucket_overflow
+(sync-window only, 0 ever). G3 — the only continuous broker-truth check — is INFO-only to
+the ladder by DH1, tolerance-widened by FIX-182, and throttled; the T2 window proved a real
+−₹637.6 divergence crosses three sessions without any of soft/hard/alert firing. **A wrong
+capital picture therefore cannot summon the kill ladder — the ladder is insulated from
+broker truth in both directions** (it also cannot false-fire on phantom drift, DH1's stated
+rationale). **Act-on-wrong-picture: the remaining capital triggers into the kill are the
+3-balance invariant (BL-9), commit-failure (BL-4) and the daily-loss breach — all internal
+computations over the same possibly-wrong total (a seed-absorbed total shrinks the 3% limit
+proportionally: after the T2 absorb the daily-loss ₹ limit silently moved 9,997→9,360 ×3% ≈
+₹300→₹281, i.e. a wrong-but-conservative direction THIS time; an unbooked PROFIT would
+loosen it instead).** What P7 inherits: audit the kill ladder knowing (1) its capital rungs
+have NEVER fired (IA-P6-06 census — every trigger zero), (2) its drift inputs are
+structurally near-zero, so the ladder's real-world firing surface is the SCHEDULED kills +
+operator paths (the K-ladder record), and (3) the Q4/30-Jul linkage stands: HARD_KILL's
+flatten is delivery-blind from T+1 (G3/G4 of the redesign doc) with the buy-day product
+filter a dated pre-4-Aug commitment — noted for P7, not audited here.
+
+**Phase 6 done** = the sting chain traced end-to-end in code and PROVEN with the T2 window
+as the live experiment (three blindness layers, each measured; the seed absorb measured to
+the rupee); the internal-vs-broker invariant confirmed enforcement-only (CHECK7 internal;
+the single escalating broker comparison structurally post-seed at measured delta 0.0);
+reservation-ledger integrity measured (10 true leaks Σ₹1,628, all June, 0 since; the
+205/205 committed-rid residual disproving the ledger's own closed-sum contract); the
+isolated-DB/shared-cash seam mapped with rupee-exact evidence; 16 knobs units-clean; the
+P6→P7 seam written (fail-to-act proven; act-on-wrong-total bounded and direction-analyzed);
+committed incrementally; ⛔ nothing fixed, nothing pushed, FIX-182 untuned, the 3-Aug/4-Aug
+sequence untouched.
+*(Phase 7 — kill/safety ladder — appends below this line.)*
