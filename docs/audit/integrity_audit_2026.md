@@ -3707,3 +3707,184 @@ so the template is visible; committed incrementally; ⛔ nothing fixed, nothing 
 corrected — it had been extrapolated rather than clock-read; an F6-class slip, caught by
 the next phase's `date` call and amended in place.)*
 *(X-CONFIG / X-DOCS / X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
+
+---
+
+## PHASE X-CONFIG — CONFIGURATION INTEGRITY (the full-surface classification)
+
+### XC.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026, clock-read start 11:27:47 IST** (per the F6 rule — read, not extrapolated) |
+| Measurements taken | 01-Aug ~11:28–11:3x IST — an automated key-sweep tool (scratchpad; extracts every LEAF key from `system_config.yaml` (651 lines) + `broker_limits.yaml` (40), git-greps the production tree per key) + targeted verifications + a VM config-identity check; zero writes |
+| Evidence base | IA-XARCH-01 (family α ×9 + BK-8) · IA-XDUP-01 (constant-shadows-config) · the per-phase config ground-truth tables (P1–P10 — ~70 money-path knobs individually verified live across the flow) |
+| Scope guard | findings only; BK-8 not built; no knob removed; G4's spec decision stays Rama's; 3-Aug/4-Aug untouched |
+
+### XC.1 Headline determinations
+
+**(a) THE FULL-SURFACE CLASSIFICATION (the phase's core deliverable).** 280 deduped leaf
+keys across the two config files. Automated verdicts: **3 ORPHANS** (zero references
+anywhere, including the loader and tests — they survive `load_all` only because their
+sections are extra-tolerant containers): `multi_account_mode` · `playbook_scanner` ·
+`entry_tf`. **7 SCHEMA/TEST-ONLY** (loader + tests, no other production file):
+`pipeline_timeout_sec` · `auto_resume_kill_switch`† · `personal_chat_id_env` ·
+`whitelist_only` · `reconnect_backoff_base_seconds` · `reconnect_backoff_max_seconds` ·
+`connect_sec`† († = the tool independently re-derived two register findings — IA-P7-04 and
+IA-P5-08 — cross-validating both the tool and the findings). **270 keys have ≥1 non-loader
+reference — an UPPER bound on live**, because name-grep cannot see the semantic deads: the
+register adds ~13 keys with consumers but no (or wrong) effect (the α set: `order_protocol`,
+the liquidity trio, `price_drift_threshold`, `max_single_order_qty`, `min_tick_size`,
+`dynamic_by_winrate`; plus `backoff_sequence_sec` (its only "consumer" is a docstring
+mention), `slm_margin_buffer_pct` (half-dead), `min_volume_surge` (per-strategy, zero
+effect), `entry_gate.max_spread_pct` (units-100× — consumer live, effect≠intent), the
+smart_tgt trio (β-starved consumers)). **⇒ the consolidated dead/ineffective inventory =
+~23 distinct keys ≈ 8% of the surface; nominal-live ≈ 92% as an upper bound, with ~70
+money-path knobs POSITIVELY verified live by the flow phases and the residual ~187 carrying
+name-grep-only assurance** (the honest three-tier statement). → IA-XCFG-01.
+
+**(b) SIX NEW dead keys found by the sweep** (beyond the register's set): **(1)
+`pipeline_timeout_sec: 30`** — the SP15 "hard per-signal processing deadline" is consumed
+by NOTHING (0 hits in signal_processor; verified directly) — a claimed processing-safety
+mechanism that does not exist (M-S3's per-step-timeout finding was its sibling; the
+per-signal deadline turns out to be config fiction); **(2,3) `reconnect_backoff_base_seconds`
++ `reconnect_backoff_max_seconds`** — live_feed contains no backoff consumer (0 'backoff'
+hits in the file; `max_reconnect_attempts` IS live) — the FIX-134 Item-37 yaml comment
+promises tunable reconnect pacing that is not wired; **(4) `personal_chat_id_env` · (5)
+`whitelist_only`** (alerts section, schema-only); **(6) the pb01 orphans** (`playbook_scanner`,
+`entry_tf` — the G4 no-ratified-spec section's own keys, unread even by the code they
+describe) + `multi_account_mode` (FIX-133, declared for an untested future).
+
+**(c) The verification gap — CONFIRMED, and the closing set is now precise.** Nothing in
+the system catches any class above: `config_auditor` covers strategy-YAML validity, the
+go-live date, slippage-override validation and the config-block gate — NOT key consumption;
+pydantic `extra="forbid"` catches unknown keys only in MODELED sections (the 3 orphans
+prove dict-typed sections escape it); no test fails on a dead knob (→ X-TEST). **BK-8
+assessed against the classes: as named ("config drift audit + CI hardcoded-default check")
+it targets exactly family α + the ctor-default shadows — it would catch the 9 α instances
+and the schema-only set, but NOT the orphans-in-dict-sections (needs extra=forbid closure),
+comment-only consumers, units-wrong, or family γ.** The full closing set = BK-8 + forbid
+everywhere + a name-sweep of this phase's shape (the scratchpad tool is a working
+prototype of that third leg — noted, ⛔ not shipped). → IA-XCFG-02.
+
+**(d) Constant-shadows-config — the sweep completed (from X-DUP's hand-off).** Exactly
+**TWO true shadows exist** (a config key AND a module constant for the same tunable, equal
+by luck): the X-DUP pair (`emergency_exit_buffer_pct` ↔ `EMERGENCY_EXIT_BUFFER_PCT`;
+`sl_limit_offset_pct` ↔ `DEFAULT_SL_LIMIT_OFFSET_PCT`). The OTHER direction —
+**hardcoded-governs-live with NO config authority** — inventories ~15 notable constants:
+`DEFAULT_TICK` 0.05 (exchange fact — acceptable) · `_MIN_TRIGGER_DISTANCE_PCT` 0.0025 ·
+`DEFAULT_CIRCUIT_MARGIN_PCT` 0.02 · `_G5B_SETTLING_WINDOW_SEC` 10 ·
+`_HARD_KILL_MAX_RETRY_HOURS` 2 + the 5/15/45 retry ladder · `_EXIT_ALERT_DEDUP_SEC` 300 ·
+`_IP403_ALERT_THROTTLE_SEC` 3600 · `_INVARIANT_TOLERANCE` ₹1.0 ·
+`_RECOVERY_ABSENCE_POLL_BUDGET` 3 · `_OVERSELL_LOOKBACK/TOL` 300s/2% · the liveness
+[09:00,16:00) and watcher [08,16) windows · the [08:00,18:15) boot cutoff — each
+single-source (no divergence risk) but unratified (the G4 class; PB-01 remains the
+flagship authority gap, KNOWN, Rama's decision). → IA-XCFG-03.
+
+**(e) The delivery-flag dependency graph — COHERENT; no unguarded contradictory combination
+found.** The four flags and their verified consumers: `delivery_enabled` (adapter CNC lock +
+GTT-ungated-by-design + eod ctor) · `force_intraday_only` (adapter intent coercion — runs
+BEFORE the CNC lock, so both-true is well-defined) · `conditional_allocation_enabled`
+(main.py:2317 resolver ONLY — Q9-confirmed it never reaches FM; the (1.0, 0.0) leg makes a
+delivery reserve fail gracefully, so enabled+no-delivery-strategies is defined) ·
+`trade_type` (strategy control + the resolver's intraday_active input). #16a's
+two-condition inertness (P4-verified) and the §7.1 gate's premise hold. Width: these four
+flags × their session-verified consumers; not every flag pair in the file. **And the §7.1
+premise's other half measured fresh: VM config == repo config, md5-identical ×3**
+(system_config / broker_limits / scoring_weights) — config drift today rides only the
+deployed-tree channel (IA-P10-01's scope). → IA-XCFG-04.
+
+### XC.2 Findings
+
+---
+**IA-XCFG-01**
+- **WHAT:** The config surface classified: 280 leaf keys → 3 orphan + 7 schema-only
+  (automated) + ~13 semantically dead/ineffective (register) ≈ **23 dead ≈ 8%**; ~70
+  positively-verified live (the flow tables); ~187 name-grep-only. Six of the dead keys
+  are NEW this phase — headlined by `pipeline_timeout_sec` (a nonexistent per-signal
+  safety deadline) and the two live_feed backoff knobs.
+- **EVIDENCE:** the sweep output (counts + names); the three direct verifications
+  (signal_processor 0-hit, live_feed 0-'backoff', the yaml orphan contexts); the register
+  cross-validation (the tool re-found IA-P7-04 + IA-P5-08 blind).
+- **CLASS:** Configuration / Correctness. **SYNTHESIS + NEW** (unifies IA-XARCH-01's α
+  set with 6 new instances and produces the surface-wide numbers).
+- **ROOT CAUSE:** family α's (keys ship schema-first; nothing closes declared→effect) +
+  dict-typed sections escaping `extra=forbid`.
+- **RECOMMENDATION (described, ⛔ not built):** the XC.1(c) closing set — BK-8 + forbid
+  everywhere + the name-sweep as a nightly/CI leg; the scratchpad tool demonstrates the
+  third leg costs ~80 lines.
+- **SEVERITY-BY-IMPACT:** MED-HIGH — 8% of the config surface is instructions the
+  operator can turn with no effect, two of them safety-flavored (a processing deadline, a
+  reconnect pacing), and the class regrows with every schema-first addition.
+
+---
+**IA-XCFG-02**
+- **WHAT:** The verification gap confirmed as total: no mechanism (config_auditor,
+  pydantic, tests, CI) catches a dead knob, an orphan key in a dict section, a
+  comment-only consumer, or a constant-shadow divergence; BK-8 as named would close
+  family α only.
+- **EVIDENCE:** config_auditor's actual coverage (session reads: strategy validation /
+  go-live / slippage overrides / raise_if_blocked — width stated, not a fresh full-file
+  audit); the 3 orphans surviving load_all (measured); X-TEST hand-off for the test claim.
+- **CLASS:** Configuration / Invariant-coverage. **SYNTHESIS** (IA-XARCH-01's meta-cause,
+  now with the exact per-class closing map).
+- **RECOMMENDATION (described):** execute BK-8 for α; add `extra="forbid"` to the
+  dict-typed sections (closes orphans loudly at load); adopt the name-sweep for the rest.
+- **SEVERITY-BY-IMPACT:** HIGH as leverage (same rationale as IA-XARCH-01 — this is the
+  mechanism that stops the class regrowing).
+
+---
+**IA-XCFG-03**
+- **WHAT:** The single-source-of-truth sweep: exactly TWO config-vs-constant shadows
+  (both equal-by-luck today, both on the emergency-exit path — IA-XDUP-01); ~15 notable
+  behavior-governing constants with no config authority (the ratified-spec gap, G4 class)
+  — single-source so no divergence risk, but untunable and unratified.
+- **EVIDENCE:** XC.1(d) inventory with values; the X-DUP measurements.
+- **CLASS:** Configuration / Consistency. **SYNTHESIS (IA-XDUP-01) + NEW width** (the
+  "exactly two" bound and the ~15-constant inventory).
+- **RECOMMENDATION (described):** the two shadows: one authority each (config), constant
+  deleted or derived; the ~15 constants: no action needed EXCEPT a one-line ratification
+  note each (G4's pattern) so a future tuner knows they are policy, not accident.
+- **SEVERITY-BY-IMPACT:** MED (the two shadows are the live hazard; the rest is
+  documentation).
+
+---
+**IA-XCFG-04**
+- **WHAT:** The delivery-flag graph verdict (coherent; no unguarded combination) + the
+  deploy-consistency verdict (VM config md5-identical to repo ×3 today; drift possible
+  only via the deployed-tree channel).
+- **EVIDENCE:** XC.1(e); the fresh md5 pairs.
+- **CLASS:** Configuration / Safety. **KNOWN-COMPOSED, verdict NEW** (each edge was
+  verified in a flow phase; the graph-level "no contradiction" statement and the config
+  identity check are this phase's).
+- **RECOMMENDATION (described):** none — record that the 4-Aug flip's flag semantics are
+  internally consistent as configured; the flip plan's own sequencing rules (Q4 ordering)
+  remain the binding constraints.
+- **SEVERITY-BY-IMPACT:** LOW (a clean bill, recorded so the flip doesn't re-derive it).
+
+### XC.3 Open questions
+
+- **OQ-XCFG-1:** Why do the three orphan keys' sections tolerate unknown keys (dict-typed
+  vs extra-allowed models)? One config_loader read per section settles it — folded into
+  the -02 recommendation's forbid-everywhere step.
+- **OQ-XCFG-2:** Of the ~187 name-grep-only keys, how many would the BK-8 check upgrade
+  to verified-live for free? (Answerable only by building it — deliberately left there.)
+
+### XC.4 Hand-offs
+
+**X-TEST** inherits: no test fails on a dead knob (the α test shape = "every schema field
+is either passed at the composition root or explicitly defaulted-with-intent"); the two
+shadow constants have no divergence test. **X-DOCS** inherits the comment-vs-behavior
+drift inventory (yaml comments promising dead mechanisms: the SP15 deadline, the Item-37
+backoff, `auto_resume_kill_switch`, `backoff_sequence_sec`'s "then soft_kill") — the
+config file is itself a document that lies in places. **X-SEC** inherits nothing new
+(`whitelist_only`/`personal_chat_id_env` being dead is alert-plumbing, not an exposure).
+
+**X-CONFIG done** = 280 keys classified with the live-% stated honestly in three tiers
+(8% dead · ~25% positively-verified · the rest name-grep-only); six new dead keys found
+(one safety-flavored); the verification gap confirmed with a per-class closing map and
+BK-8 assessed against it; the shadow sweep completed (exactly two, both known); ~15
+unratified governing constants inventoried; the flag graph and VM-config identity given
+clean bills; committed incrementally; ⛔ nothing fixed, nothing pushed, the 3-Aug/4-Aug
+sequence untouched.
+*(X-DOCS / X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
