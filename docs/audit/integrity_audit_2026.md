@@ -3339,8 +3339,8 @@ untouched.
 
 | | |
 |---|---|
-| Session window | **Sat 01-Aug-2026 ~11:4x → ~12:2x IST** |
-| Measurements taken | 01-Aug **~11:5x–12:0x IST** — a fresh AST import-graph over the PC tree (== deployed `297b587` + docs; **208 modules, 679 internal edges**, production packages + scripts + main) + targeted greps; zero writes anywhere |
+| Session window | **Sat 01-Aug-2026 ~11:0x → ~11:1x IST** *(corrected in the X-DUP session: the original stamp here was extrapolated, not read from a clock — an F6-class slip caught when the next phase's `date` returned 11:14; the measurements themselves are unaffected)* |
+| Measurements taken | 01-Aug **~11:0x–11:1x IST** — a fresh AST import-graph over the PC tree (== deployed `297b587` + docs; **208 modules, 679 internal edges**, production packages + scripts + main) + targeted greps; zero writes anywhere |
 | Evidence base | the completed P1–P10 register (this file) · the July audits' architecture section (G20 prior art: P4-1..P4-9 + M-K5 + M-X1 + ~55 line LOWs — **cited, not re-derived**) · BK-8 (the pre-existing config-drift/CI-hardcoded-default backlog item, status UNVERIFIED) |
 | Scope guard | findings only; no refactor, no config-contract check built; other X-phases not started (hand-offs noted); 3-Aug/4-Aug untouched |
 
@@ -3527,3 +3527,183 @@ enumerated with the contracted counter-example; intended-vs-actual settled (code
 than map); hand-offs written; committed incrementally; ⛔ nothing fixed, nothing pushed,
 the 3-Aug/4-Aug sequence untouched.
 *(X-DUP / X-CONFIG / X-DOCS / X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
+
+---
+
+## PHASE X-DUP — DUPLICATION / MULTIPLE TRUTH (the copies behind the census, agree-or-diverge)
+
+### XD.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~11:14 → ~11:4x IST** (clock read at start: 11:14:57) |
+| Measurements taken | 01-Aug **~11:15–11:2x IST** — targeted PC-tree greps/reads (== deployed `297b587` + docs); zero writes |
+| Evidence base | IA-XARCH-03 (the 8-concept ownership census — this phase's primary target list) · the P1–P10 register · July-audit :200-201 duplication rows + M-X1 + G20-P4-5 (KNOWN prior art) |
+| Scope guard | findings only; nothing de-duplicated; other X-phases hand-off-only; 3-Aug/4-Aug untouched |
+
+### XD.1 Headline determinations
+
+**(a) THE AGREE-BY-LUCK EXEMPLAR, MEASURED — the emergency-exit buffer has TWO sources and
+four consumers split across them.** `orders/price_math.py:124` defines the CONSTANT
+`EMERGENCY_EXIT_BUFFER_PCT = 0.01`; `config/system_config.yaml` defines
+`capital.emergency_exit_buffer_pct: 0.01`. The four "flatten a position" sites split:
+**kill_switch** (main.py:1868) and **order_placer** (main.py:2662) receive the CONFIG value;
+**eod residual sweep** (eod_squareoff.py:1522) and **reconciler flatten**
+(order_reconciler.py:2077) call `marketable_limit_price(…, EMERGENCY_EXIT_BUFFER_PCT, …)` —
+the CONSTANT. Today 0.01 == 0.01, so all four agree — **by value coincidence, not by
+construction. The future fix that misses copies is exact: re-tuning
+`capital.emergency_exit_buffer_pct` moves the kill and placer exits and silently leaves the
+EOD and reconciler flattens at the old constant** — four emergency paths, two behaviours,
+no test that would notice. The same constant-shadows-config pattern:
+`DEFAULT_SL_LIMIT_OFFSET_PCT = 0.005` (:159) == `capital.sl_limit_offset_pct: 0.005` — live
+consumers get config via main; the (dead) BreakevenManager and any future direct caller get
+the constant. → IA-XDUP-01.
+
+**(b) The live/terminal TRADE-status vocabulary is spelled out ~34 times.** Fresh census:
+**30 inline SQL literals** across 9 production files (state_store 13 · eod_cleanup 5 ·
+sl_breach_monitor 3 · healthcheck_server 3 · signal_processor 2 · order_manager /
+kill_switch / eod_verify / reconcile_positions 1 each) **+ 4 named sets**
+(`_FLATTEN_LIVE_TRADE_STATUSES`, `_SECTOR_EXPOSURE_STATUSES`, `_RECOVERY_STATES`, OSM's
+`TERMINAL_STATES` — the last being the one PARTIAL canonical, correctly imported by the
+monitor). At least **three distinct "live" memberships** coexist — (OPEN,PARTIAL) ·
+(OPEN,PARTIAL,PENDING_FILL) · recovery's (UNKNOWN_IN_FLIGHT,PENDING,PENDING_FILL) — each
+individually defensible, none derived from a shared vocabulary. The codebase KNOWS the
+hazard locally (kill_switch's M-C8 comment: the SELECT and the write-condition "MUST agree…
+derive, don't duplicate" — and does, within that one file); it lacks the same contract
+globally. **The fix that misses copies: any new trade status (or a change to EXITING
+handling) must find ~34 sites**; IA-P5-04 (CHECK2's dispatch omitting UNKNOWN_IN_FLIGHT) is
+this class's already-measured casualty. → IA-XDUP-02.
+
+**(c) The multi-owner concepts traced to code — agree/diverge verdicts consolidated.**
+| Concept (IA-XARCH-03) | The copies | Verdict |
+|---|---|---|
+| "held" | 3× positions()-only readers vs `_gather`'s holdings+CNC | **DIVERGE, measured** (F1's three faces) — B4's "no third definition" rule already names the fix |
+| Fill truth | OrderFilled payload vs orders row vs trades row | **DIVERGE, measured** (orders row zeroed — IA-P5-01) |
+| Capital total | FM vs broker.net vs ebr's last-ledger-row | **DIVERGE, measured** (0.0 vs 9,360 — IA-P8-03) |
+| Flatness | kill / stuck-EXITING / 15:45 / residual sweep | **Complementary layers, NOT code copies** — except their flatten IMPLEMENTATIONS, which are the -01 quartet |
+| Severity | log level / alert tier / sentinel | **DIVERGE daily** (the kill chorus — IA-P9-01) |
+| R:R value | strategy yaml 1.5 vs placer ctor default 2.0 | **Historical divergence measured in data** (36 rows at 2.0 pre-Slice-1; fallback latent — IA-P4-05a) |
+| Daily P&L | fm_ledger / trades / broker | **CONTRACTED (E4) + cross-compared** — the healthy pattern |
+| Clock | time_authority vs 5 direct sites | KNOWN class, not re-swept (width stated) |
+
+**(d) The tick-rounding twins (M-X1) — sharpened.** Both implementations are Decimal-based
+with the same rounding modes (price_math `round_to_tick` ROUND_CEILING/FLOOR/HALF_UP;
+slippage_engine `_round_*_to_tick` FIX-014 same trio) — **agreement by parallel
+implementation, not by sharing**. The adapter's own import block mixes provenance
+(`zerodha_adapter.py:115-121`: the rounding trio FROM slippage_engine, DEFAULT_TICK FROM
+price_math); smart_tgt uses the slippage copy on the money path (July :160). The fix that
+misses copies: any tick-policy change (per-exchange tick tables, a new rounding rule) lands
+in one family and silently not the other.
+
+### XD.2 Findings
+
+---
+**IA-XDUP-01**
+- **WHAT:** Four implementations of "flatten a position with a marketable LIMIT", fed by
+  TWO sources of the same 1% buffer that agree only by value coincidence (config
+  `capital.emergency_exit_buffer_pct` → kill_switch + order_placer; constant
+  `EMERGENCY_EXIT_BUFFER_PCT` → eod residual + reconciler flatten; kill additionally
+  inlines its own `ltp*(1±buf)` formula instead of the shared `marketable_limit_price`).
+- **EVIDENCE:** XD.1(a) — six file:line sites; values 0.01 == 0.01 verified.
+- **CLASS:** Duplication / Correctness-latent (agree-by-luck). **SYNTHESIS** (July :200's
+  "flatten ×3" + P7's kill read, now with the buffer-source split and the exact
+  fix-miss).
+- **ROOT CAUSE:** FIX-181 hardened each site in place; the buffer was constant-ised in
+  price_math and config-ised in capital at different times.
+- **RECOMMENDATION (described, ⛔ not applied):** one flatten helper on the closure_source
+  template — single function, single buffer source (config), all four call it; until
+  then, a comment on the constant naming its config twin would at least fail loudly in
+  review.
+- **SEVERITY-BY-IMPACT (fix-miss weight):** **HIGH** — the missed copies are emergency
+  paths; a tuned buffer diverging silently across kill-vs-EOD flattens is a
+  worst-moment surprise.
+
+---
+**IA-XDUP-02**
+- **WHAT:** The trade-status vocabulary exists as ~30 inline SQL literals + 4 named sets
+  with ≥3 distinct "live" memberships and no shared source; ORDER states have a partial
+  canonical (OSM TERMINAL_STATES, correctly imported) while TRADE states have none.
+- **EVIDENCE:** XD.1(b) census (9 files, counts per file); the three memberships;
+  kill_switch's own local derive-don't-duplicate comment as the in-repo statement of the
+  rule.
+- **CLASS:** Duplication / Consistency. **NEW-as-measured** (the July audits flagged the
+  terminal-set divergence pair; the 34-site width and the membership taxonomy are new).
+- **ROOT CAUSE:** statuses accreted (EXITING, UNKNOWN_IN_FLIGHT, PENDING_FILL) after the
+  original queries were written; each addition patched the sites its author knew.
+- **RECOMMENDATION (described):** a `core/trade_status.py` on the closure_source template
+  — the named sets (LIVE, LIVE_WITH_INFLIGHT, RECOVERY, TERMINAL) + a tree-scan test
+  banning inline restatement; IA-P5-04 is the measured defect it would have prevented.
+- **SEVERITY-BY-IMPACT (fix-miss weight):** **HIGH** — a new status touches ~34 sites
+  today; the one already-missed site produced a registered latent naked-position path.
+
+---
+**IA-XDUP-03**
+- **WHAT:** M-X1 sharpened: the two Decimal tick-rounding families are same-semantics
+  parallel implementations; the adapter mixes their provenance in one import block; the
+  money path (smart_tgt SL trail, adapter snap) rides the slippage_engine copy while
+  price_math is the nominal home.
+- **EVIDENCE:** XD.1(d); zerodha_adapter.py:115-121; price_math.py:27-70 vs
+  slippage_engine.py:147-175.
+- **CLASS:** Duplication. **KNOWN (M-X1) → sharpened** (implementation-level agreement
+  verified; the mixed import block is the new tell).
+- **RECOMMENDATION (described):** fold one family into the other (price_math as home,
+  slippage_engine imports) — mechanical, but money-path ⇒ careful-loop; G20 already
+  holds it.
+- **SEVERITY-BY-IMPACT:** MED — agreement is real today; the fix-miss (a tick-policy
+  change) is plausible (BSE support is on BK-7).
+
+---
+**IA-XDUP-04**
+- **WHAT:** T4 line-verified: `scripts/backfill_closure_source_w8.py:92` restates the
+  closure vocabulary as string literals (`{"SL": "OWN_SL", …}`) with NO import from
+  `core.closure_source` (import block :53-60 checked) — a restatement surviving INSIDE
+  the one concept that HAS a canonical contract and a tree-scan test, which means the
+  guard's width does not cover this shape/location.
+- **EVIDENCE:** the file's import block + :92; the canonical contract (`bc19aab`, KNOWN).
+- **CLASS:** Duplication / Consistency. **KNOWN (T4) → line-verified + widened** (the
+  contract-test width gap is the new half).
+- **RECOMMENDATION (described):** import the literals; and extend the scanning test's
+  width to scripts/ mapping-shapes — the counter-example should enforce itself
+  everywhere.
+- **SEVERITY-BY-IMPACT:** LOW-MED — the backfill is a one-shot tool, but it is exactly
+  the tool someone re-runs after a vocabulary change, with the stale copy.
+
+---
+**IA-XDUP-05** (positives + carried, one ID)
+- The dedup idiom WORKS where applied — recorded so the fix pattern is visible:
+  `_resolve_credentials` shared (ebr imports reconcile_positions') ·
+  `round_trip_costs_or_zero` shared by CHECK1/CHECK4 (E4) · `marketable_limit_price`
+  shared by 3 of the 4 flatten sites · `correlate_entry_by_tag` pure+shared · OSM
+  `TERMINAL_STATES` imported by the monitor · kill_switch's M-C8 derive-don't-duplicate
+  constants · `closure_source` itself. Carried-not-re-measured (width stated):
+  G20-P4-5 (two report generators in parallel) · July :201 (~8 IST re-implementations;
+  naive `datetime.now()` sites) · eod_verify's dead P&L-variance branch vs ebr's live
+  `pnl_reconciliation` writer (duplicate-then-supersede; the dead copy remains — KNOWN
+  :214 + P8.4).
+- **CLASS:** Documentation. **SEVERITY:** n/a (inventory).
+
+### XD.3 Open questions
+
+- **OQ-XDUP-1:** Does the closure_source tree-scan test intentionally exclude scripts/ or
+  only ban re-DEFINITIONS (not mappings)? One test-read settles the -04 width question.
+- **OQ-XDUP-2:** G20-P4-4's "19 raw sqlite sites outside db_connect" — still deferred to
+  X-CONFIG (not re-counted here; stated as carried width).
+
+### XD.4 Hand-offs
+
+**X-CONFIG** inherits the constant-shadows-config class (-01's pattern: every price_math /
+module-level default that shadows a config key — the sweep completing family α from the
+other side) and OQ-XDUP-2. **X-DOCS** inherits the -04 contract-width gap (a documented
+canonical whose enforcement doesn't reach all restatements). **X-TEST** inherits the
+"which duplication has a divergence test" question — today: none of -01/-02/-03 does.
+
+**X-DUP done** = the 8 census concepts traced to code with agree/diverge verdicts (3
+measured divergences, 1 daily vocabulary split, 1 historical data divergence, 1 healthy
+contract); the agree-by-luck exemplar measured to the value (two 0.01s, four consumers,
+the exact missed-copy list); the status vocabulary counted (~34 sites, 3 memberships);
+the tick twins sharpened; T4 line-verified with the guard-width gap; positives inventoried
+so the template is visible; committed incrementally; ⛔ nothing fixed, nothing pushed, the
+3-Aug/4-Aug sequence untouched. *(Also in this session: the X-ARCH window stamp was
+corrected — it had been extrapolated rather than clock-read; an F6-class slip, caught by
+the next phase's `date` call and amended in place.)*
+*(X-CONFIG / X-DOCS / X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
