@@ -1485,3 +1485,451 @@ order-construction knobs units-checked (no new mismatch — the yield was dead k
 committed incrementally (`f0ea74f` + this commit); ⛔ nothing fixed, nothing pushed, the
 3-Aug/4-Aug sequence untouched.
 *(Phase 5 — broker adapter / execution truth — appends below this line.)*
+
+---
+
+## PHASE 5 — ORDER → BROKER / EXECUTION TRUTH (adapter + fill ingestion + intraday reconcile, and the P5→P6 seam)
+
+### P5.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~08:34 → ~09:1x IST** |
+| Measurements taken | 01-Aug **~08:54–09:0x IST**, from the VM (`mode=ro` DB reads + log greps; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 (re-verified `git -C ~/trading-system.git rev-parse`) |
+| PC tree read | `fa7c45c` = `297b587` + 7 docs-only commits ⇒ code read == deployed |
+| Service | `inactive` (designed weekend state) |
+| Primary windows | orders all-time **805** ({COMPLETE 405, CANCELLED 400}) / trades all-time **478** / reconciliation_log all-time **7,804** rows / logs = **23 retained** `system_*.log` (≈10-Jul→31-Jul) |
+| Config ground truth (VM grep == PC) | `broker_limits.yaml`: order **8/8** · quote 3/3 · historical 2/2 · margins **8/8** · `timeouts {connect_sec 5, read_sec 10}` · `backoff_sequence_sec [1,5,30]` · `rate_limit_backoff {0.2s, ×2, cap 5.0s, jitter 0.05, max_placer_retries 3}` — `order_monitor {poll 2s, fill_timeout 60s}` · `circuit_breaker {partial_fill_timeout 5m, force_close "15:15", max_api_failures 3}` · `order_reconciler {poll 15s, drift tol ₹50 / 10% in-session, human_order_margin_tolerance ₹5,000, check1_mid_fill_defer_sec **0.0 = OFF**}` · `entry_gate.min_pending_rr 1.0` |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed/tuned; no live order, GTT or cancel issued; July audits read-only |
+
+### P5.1 Path as verified (current tree == deployed) — HOW THE SYSTEM LEARNS WHAT FILLED
+
+**Fill detection is polling, and only polling.** Repo-wide width: `on_order_update`/postback
+consumers = **0** (one comment mention, `state_store.py:2294`). The mechanism:
+`OrderMonitor` (`broker/order_monitor.py`) runs ONE daemon thread, every **2s** snapshots its
+`_watched` dict (keyed `(broker_order_id, symbol, date)` — FIX-086) and calls
+`adapter.get_order_history(id)` per order (rides the **"order" rate bucket**, ZA3 map
+`zerodha_adapter.py:238-253`). Status = `history[-1]` mapped via OM5 sets (:84-88) →
+`_handle_open` (fill-timeout 60s + FIX-141 pending-R:R, ENTRY legs only; SL/TGT/EOD exempt) ·
+`_handle_partial` (FIX-130: ENTRY cancelled on first PARTIAL) · `_handle_complete` → OSM
+transition → **`OrderFilled`** (the authoritative fill event: qty/avg from the poll) ·
+terminal → `OrderStatusChanged` (+ `OrderPartiallyTerminated` first when `entry.filled_qty>0`,
+FIX-028). Consumers of fill truth: `order_placer._on_order_filled` → `commit_to_used` +
+`record_entry_fill` (trades.qty_filled/entry_actual_price/status=OPEN, `order_manager.py:393`)
+→ exits placed; `_on_order_status_changed` zero-fill → `release` + trade FAILED
+(`order_placer.py:1950-2004`); **`OrderManager` (OMgr10, constructed with `bus=event_bus`,
+main.py:2624-2628) persists every `OrderStatusChanged` into the orders row via
+`update_order_status` — including `qty_filled`/`avg_fill_price` unconditionally
+(`order_manager.py:726-752`)**. Behind the monitor: the 15s `OrderReconciler` cycle
+(prepasses: GTT-adoption, A-1/E-1 in-flight-entry recovery by broker **tag** via
+`get_all_orders()`; then CHECK1 MANUAL_CLOSE w/ closure classifier · CHECK2
+inflight/oversell/HUMAN_ORDER · CHECK4/5 qty deltas · CHECK6 orphan orders · CHECK9 missing
+exits · G5b recovery SL · duplicate-exit net · G3/CHECK7/CHECK8). Escalation wiring: monitor
+auth×3 or api×3 → `on_critical` = HARD_KILL callback + self-stop (`is_alive()` exposed to
+/health, E-4); cancel-fail orphan → `_make_orphan_cb` = **soft_kill + CRITICAL Telegram**
+(main.py:803-826). Rate limiter: token buckets, `max_wait_sec` 30 (ctor default, main.py:1966
+passes none), 429 → `penalize` freeze ≤5s + typed raise; **adapter never retries (ZA11)** —
+BL-19 in the placer retries 429 only (≤3), timeout → **UNKNOWN_IN_FLIGHT** + in-memory
+recovery queue (FIX-068, `order_placer.py:1422-1454`), rejection → single attempt.
+
+### P5.2 Headline re-measurements (mandated)
+
+**(a) IA-P4-04 follow-through — RE-MEASURED, and the P4 root cause is CORRECTED: `orders.qty_filled`
+is not "written by nothing"; it is written by a LIVE writer on every fill, with a STALE payload.**
+Fresh, all-time: COMPLETE rows with `qty_filled>0` = **0/405** · with `avg_fill_price` NOT NULL =
+**0/405** · with `filled_at` NOT NULL = **405/405**. `filled_at` is set in the SAME
+`update_order_status` UPDATE (`order_manager.py:740-752`, `filled_at` passed only on COMPLETE,
+:155) ⇒ the writer provably RAN on all 405 COMPLETE rows and in that same statement wrote
+`qty_filled=0, avg_fill_price=NULL`. Mechanism: `OrderStatusChanged` is published by
+`_safe_transition` with `qty_filled = entry.filled_qty` / `avg_fill_price = entry.avg_fill_price or
+None` (`order_monitor.py:1310-1314`) — and `_handle_complete` computes `final_qty`/`final_price`
+but **never writes them back into `entry` before transitioning** (:985-988), so for every
+straight-to-COMPLETE fill (all 205 ever — no PARTIAL has ever been observed) the event carries the
+pre-fill snapshot (0/None). The real fill data travels only in `OrderFilled` — which OrderManager
+does not subscribe to. → IA-P5-01. Corrected sub-figure: **entry fills all-time = 205**
+(ENTRY∧COMPLETE orders == distinct trade_ids == trades with qty_filled>0, cross-validated 3 ways;
+P4's "145 real entry fills" matches neither all-time nor the July window (88) — the 0-of-N
+conclusion is unchanged, the denominator is corrected). Consequence: **the orders table carries NO
+true fill quantity or price for any leg, ever** — exit-leg fill prices exist locally ONLY in
+`trades.exit_price` when our own finalize path wrote them (see (c)).
+
+**(b) The T2 question generalised — CAN the system's fill belief diverge from the broker's?
+YES — one measured production instance, one measured proxy-P&L instance, and one latent
+silent path; enumerated exhaustively (D lens):**
+1. **Measured precedent (June era): AGARIND 16-Jun** — CHECK5 POSITION_GREW "broker qty=2 >
+   local qty_filled=1" ×14 cycles (13:27:48→13:31:06) — the system's book UNDER-recorded a live
+   position for ~3.5 min. All 14 POSITION_GREW rows ever = this ONE incident. It sits in the
+   June storm era (same day: ORPHAN_ADOPTION + a G5b re-place storm — the 2,647 ORPHAN_ADOPTION
+   and 915 CRASH_RECOVERY_SL rows, success 11/915, are **100% June-2026**; last-14-days = 0 of
+   each) — the RAMCOIND/FIX-181/182 layers were built against exactly this; fresh window shows
+   zero recurrence.
+2. **Measured current-era (28-Jul): SWIGGY** — CHECK1 finalized the 15:17 EOD exit at
+   `exit_price=267.82 (entry_proxy)`, net −0.30 (= charges only): `kite.trades()` had not yet
+   surfaced the seconds-old fill, the FIX-148 fallback booked entry-as-exit, and the monitor's
+   real fill price arrived moments later only to be DISCARDED by the double-close guard
+   (`order_placer.py:2368-2374`). fm_ledger and trades carry the proxy number; the broker's true
+   exit price exists nowhere locally (compounded by (a): orders.avg_fill_price is NULL). Width:
+   exit-price resolution all-time = broker_trades **42** / entry_proxy **2**. → IA-P5-03.
+3. **Latent silent path — the entry-cancel finalize-from-last-poll race** (the phase's core
+   finding): all 4 entry-cancel sites (fill-timeout :1103 · pending-RR :1188 · force-close :827
+   · shutdown :550) finalize belief from the LAST pre-cancel poll and never re-read the
+   post-cancel state. Zerodha cancels the REMAINDER — a partial fill landing in the poll→cancel
+   window stands at the broker while the system releases the reservation and marks the trade
+   FAILED (zero-fill path). The resulting position is dispatched by CHECK2 to **HUMAN_ORDER**
+   (deliberately unmanaged — FAILED is outside both the inflight statuses :915-917 and
+   `_RECOVERY_STATES` :3734) ⇒ un-SL'd, invisible to daily-loss, P&L never booked; the EOD
+   residual sweep WILL flatten it (a today-trade row exists ⇒ "system-owned",
+   `eod_squareoff.py:1449-1481`) but books nothing. The full-fill variant makes the cancel FAIL
+   → **loud** (orphan CRITICAL + soft_kill, main.py:808-826). Exposure to date: 96
+   `entry_cancelled_zero_fill` + 15 `pending_rr_cancelled` = **111 windows, 0 hits** (0
+   `orphan_detected` ever in retained logs; July HUMAN_ORDER rows = exactly the T2 ten; EOD
+   residual flattens = 0 ever). → IA-P5-02.
+4. **Latent, crash-shaped:** UNKNOWN_IN_FLIGHT recovery is not restart-durable (queue
+   in-memory; the crash feed selects `status='PENDING'` only, `state_store.py:1012`; CHECK2's
+   dispatch omits the status) → IA-P5-04. And CHECK6 declares a PENDING_FILL order "orphaned"
+   by its ABSENCE FROM `get_open_orders()` — a COMPLETE (filled) order is also absent ⇒
+   FAILED+release after 3 cycles if the monitor is dead; bounded because every monitor-death
+   path also fires HARD_KILL → flatten-all. 0 CHECK6 rows ever. → IA-P5-09.
+5. **Working as designed (fresh evidence):** fill_timeout 80 == timeout_cancelled 80 (100%
+   cancel success in window) · FIX-141 15/15/0 (VERIFIED LIVE, P4) · INFLIGHT_ORPHAN benign
+   branch fired 13× (reconciler sees the fill before the monitor — correctly no-action) ·
+   CHECK1 all-time 44, closure_source on CLOSED_MANUAL = OWN_EOD 25 / OWN_SL 9 / OWN_TGT 5 /
+   NULL 6 (the KNOWN six) — **zero genuinely-EXTERNAL closes have ever occurred**; every CHECK1
+   close was our own leg racing our own finalize.
+
+**(c) Qty-verbatim / no-cap seam (IA-P4-02 follow-through) — CONFIRMED at the adapter, worst
+case traced to the wire.** `_validate_place_order` = symbol/side/type/price/trigger sanity +
+`qty > 0` and nothing above (:2028-2046); qty then crosses into `kite.place_order(quantity=qty)`
+verbatim (:604-615). No notional or qty ceiling exists anywhere in `broker/` (re-grep, 0 refs);
+the sizer's internal 10000 default remains the money path's only ceiling (IA-P3-02/IA-P4-02
+stand). Mitigating chokepoint behaviors verified in the same call: fail-safe tick-snap →
+Option-A intent coercion → ProductResolver (fail-loud on unknown intent/broker,
+`product_resolver.py:111-130`) → CNC master lock → tag truncation. Adapter-side additions this
+phase: **cancel_order/modify_order collapse EVERY failure to `success=False` + free-text reason**
+(:1029-1035, :1102-1108 — including timeouts; and per the July audit, without 429
+penalize/reset — KNOWN :175 stands at current lines); callers branch on `success` alone except
+the reconciler's FIX-186 marker classifier (`order_reconciler.py:117-125`), whose "already
+gone" set contains no "complete" variant — coverage of Zerodha's cancel-of-COMPLETE refusal
+text is UNVERIFIED (→ OQ-P5-2; ambiguous falls to the safe no-mark/retry branch).
+
+**(d) Cache→token resolution (I lens) — failure modes confirmed LOUD or FAIL-SAFE, and
+placement is never cache-blocked.** `InstrumentCache.load` is fail-fast (ConfigMissingError /
+ConfigSchemaError abort the boot via startup gate BL-20 `instrument_cache_too_small`);
+per-symbol lookups raise typed `InstrumentNotFoundError` (IC2); the adapter's only
+placement-path consumer is `_resolve_tick` → **DEFAULT_TICK 0.05 fallback + once-per-symbol
+WARN** (FIX-170, `zerodha_adapter.py:1335-1359`) — measured fired 8× ever (P4.5d), orders stay
+PLACEABLE. Order placement itself is symbol-keyed (`exchange="NSE"`, tradingsymbol) — **tokens
+are never used to place**; the NIFTY-token class (absent instrument = live failure) lives in
+the quote/candle/sr paths (P1 territory), not the order path. `get_quote` returns whatever
+subset Kite returned — a missing symbol is indistinguishable from no-data at the adapter
+(KNOWN, main.py:546-549 census note), and every placement-path quote consumer (slippage guard,
+drift top-up, FIX-141, liquidity-if-wired) fails OPEN on absence ⇒ one quote outage silently
+disables all price-sanity guards simultaneously — each individually documented (P4.1), the
+aggregation noted here.
+
+**(e) Units + config-vs-code sweep at this layer (F/H lens).** Units: the adapter/monitor
+layer's knobs are seconds/counts/rupees (poll 2s · fill-timeout 60s · partial 5m · penalize
+0.2-5s · max_wait 30s · drift ₹50/₹5,000); consuming expressions verified — **no
+fraction-vs-percent defect found** (width: every numeric knob in `broker_limits.yaml` +
+`order_monitor`/`circuit_breaker`/`order_reconciler` sections, 19 knobs). Config-vs-code: TWO
+dead keys found — `timeouts.connect_sec` (schema+tests only; main.py:380 passes only
+`read_sec` as KiteConnect's single timeout) and `backoff_sequence_sec [1,5,30]` (the G7 ladder
+its comment still promises — "then soft_kill" — was superseded by BL-6; production consumers =
+0, schema+tests only) → IA-P5-08. Declared-reserved (not counted): adapter ctor
+`cost_calculator` (`self._cc` write-only) and `account_id` (IC9). Stale comment: the D.3 note
+in `get_server_time` still describes the margins bucket as "burst=1, 1/sec" — it is 8/8.
+
+### P5.3 NEW findings
+
+---
+**IA-P5-01**
+- **WHAT:** The fill-truth event payload is stale at source, and a live writer faithfully
+  persists it: `_safe_transition` publishes `OrderStatusChanged` with `entry.filled_qty` /
+  `entry.avg_fill_price` (`order_monitor.py:1310-1314`), but `_handle_complete` never updates
+  `entry` with the poll's fill data before transitioning (:985-988) — so OrderManager's OMgr10
+  subscriber (live in production, `bus=event_bus` main.py:2624-2628) overwrites every COMPLETE
+  orders row with `qty_filled=0, avg_fill_price=NULL` (`order_manager.py:740-752`, both columns
+  unconditional).
+- **EVIDENCE:** measured all-time: COMPLETE 405 → qty_filled>0 **0**, avg NOT NULL **0**,
+  filled_at NOT NULL **405** (same UPDATE ⇒ the writer ran 405/405 and wrote the zeros);
+  `on_order_status_changed_failed` = 0 in 23 logs.
+- **CLASS:** Correctness / Consistency. **NEW-or-KNOWN:** KNOWN-CORRECTED — **IA-P4-04's root
+  cause was wrong** ("written by NOTHING… never wired or removed"): the column is wired and
+  written on every fill; the PAYLOAD is stale. The July audit knew the partial-path staleness
+  (:174); the complete-path staleness and its persistence were not registered. P4's
+  recommendation ("document the column dead, or drop it") is superseded: the third option —
+  fix the 2-line payload — makes the column TRUE.
+- **ROOT CAUSE:** `_handle_complete` computes `final_qty/final_price` locally and hands them
+  only to `OrderFilled`; the BL-12 snapshot reads the un-updated watch entry.
+- **RECOMMENDATION (described, ⛔ not applied):** update `entry.filled_qty/avg_fill_price`
+  from the poll before `_safe_transition` in `_handle_complete` (2 lines) — orders rows then
+  carry real fill truth; also gives IA-P5-02's finalize sites a fresher snapshot for free.
+- **SEVERITY-BY-IMPACT:** MED — every fill audit from the orders table is wrong today
+  (205 fills read as zero-fill); no runtime consumer reads the column (P4 sweep), so the
+  damage is to audits/tooling/forensics — the exact surface this campaign runs on.
+
+---
+**IA-P5-02**
+- **WHAT:** Entry-cancel finalization trusts the last pre-cancel poll and never re-reads the
+  broker after the cancel — across ALL FOUR entry-cancel sites (60s fill-timeout, FIX-141
+  pending-R:R, 15:15 force-close, shutdown sweep). Zerodha's cancel kills only the REMAINDER:
+  shares filled between the last 2s poll and the broker's cancel processing stand. Believed
+  zero-fill ⇒ reservation released + trade FAILED ⇒ the standing position is dispatched by
+  CHECK2 to **HUMAN_ORDER** (FAILED is outside the inflight statuses and `_RECOVERY_STATES`)
+  — the A-1/E-1 objective "never call a system order human" (`order_reconciler.py:3766-3770`)
+  is structurally unreachable for this path. The position sits without SL, outside daily-loss
+  and fm_ledger, until the EOD residual sweep flattens it unbooked (`eod_squareoff.py:1449-1481`
+  treats any today-trade symbol as system-owned) — the realized P&L never enters the books and
+  is absorbed silently by the next boot's broker-net capital seed (the T2 shared-cash seam
+  shape). The full-fill-in-window variant fails the cancel and is LOUD (orphan CRITICAL +
+  soft_kill; July-audit :173's "backstop catches it" is hereby made precise: the backstop
+  ALERTS and BLOCKS ENTRIES — it does not adopt, protect, or book).
+- **EVIDENCE:** cancel sites and their finalize-from-`entry.filled_qty` publishes
+  (`order_monitor.py:1103-1122, 1188-1203, 823-854, 542-586`); CHECK2 dispatch
+  (`order_reconciler.py:903-923`); recovery-states gate (:3734); EOD sweep ownership test
+  (`eod_squareoff.py:1447-1474`). Exposure width: 111 cancel windows to date (96 zero-fill +
+  15 pending-RR), 0 hits (orphan_detected 0 ever; July HUMAN_ORDER rows = exactly the T2 ten;
+  EOD residual flattens 0 ever; partial evidence 0 — no PARTIAL status ever observed live).
+- **CLASS:** Safety / Silent-failure. **NEW-or-KNOWN:** NEW as an endpoint trace — sharpens
+  two KNOWN LOWs (July :173 cancel-fail race, :174 partial-cancel stale qty) into the policy
+  endpoint (HUMAN_ORDER + unbooked P&L + tolerance-widening, see P5.6) and extends them to the
+  cancel-SUCCESS variant, which is the silent one. ⚠️ Paper CANNOT exercise any of it (paper
+  cancel always succeeds, no PARTIAL synth — the 14/19 constant-branch class).
+- **ROOT CAUSE:** cancel result carries no fill data at Zerodha; nothing re-reads
+  `get_order_history` after the cancel; the FIX-186 refusal classifier exists only
+  reconciler-side.
+- **RECOMMENDATION (described, ⛔ not applied):** one post-cancel history re-read (on success
+  AND failure) before finalizing, routing any discovered fill through the existing
+  OrderPartiallyTerminated machinery; and/or include FAILED-with-broker-fills in the A-1/E-1
+  correlator. Careful-loop: touches the live order path.
+- **SEVERITY-BY-IMPACT:** MED-HIGH latent / LOW likelihood-to-date — the surviving shape is a
+  naked, unbooked intraday position for up to ~5h with only a once-daily "Naked untracked"
+  WARNING mislabelled as operator action; capital math self-heals at next seed, the P&L record
+  never does.
+
+---
+**IA-P5-03**
+- **WHAT:** When CHECK1 wins the finalize race against our own fill callback (~0.9s, KNOWN)
+  and `kite.trades()` has not yet surfaced the seconds-old execution, the FIX-148 fallback
+  books the EXIT AT ENTRY PRICE (`entry_proxy`) — and the monitor's real fill price, arriving
+  moments later, is discarded by the double-close guard (`order_placer.py:2368-2374`).
+  trades.net_pnl and fm_ledger.pnl_delta then disagree with the broker's cash by the full
+  price move; with orders.avg_fill_price NULL (IA-P5-01) no local record of the true exit
+  price exists anywhere.
+- **EVIDENCE:** measured live — SWIGGY 28-Jul 15:17:17: `exit_price=267.82(entry_proxy)`,
+  closure_source=OWN_EOD, net_pnl −0.30 (charges only). Width: exit-price resolution all-time
+  = broker_trades 42 / **entry_proxy 2**.
+- **CLASS:** Correctness / Consistency. **NEW-or-KNOWN:** the substrate is KNOWN (D-1
+  close-race + §C/§D CHECK1-wins + FIX-148 proxy-by-design); the measured price-truth
+  consequence and the discarded-real-price mechanism are NEW evidence.
+- **ROOT CAUSE:** trades()-lag at T+seconds; the double-close guard returns before comparing
+  its (real) price against the (proxy) booked one.
+- **RECOMMENDATION (described, ⛔ not applied):** in the double-close-guard branch, when the
+  discarded event carries a real `avg_fill_price`, COALESCE-update the proxy financials (exit
+  price + P&L delta) — bounded, evidence-based, no new close path. (§D deferral would also
+  prevent it but is the shipped-OFF knob with its own paper-rehearsal blocker — KNOWN, not
+  reopened.)
+- **SEVERITY-BY-IMPACT:** LOW-MED by rupees to date (2/44, EOD-shaped closes near entry);
+  MED by principle — it is the one MEASURED live divergence between booked P&L and broker
+  truth in the current era.
+
+---
+**IA-P5-04**
+- **WHAT:** UNKNOWN_IN_FLIGHT (place-timeout) recovery is not restart-durable: the recovery
+  queue is in-memory only (`order_placer.py:1446-1452`, getter :750-756), the crash feed
+  selects `status='PENDING'` only (`state_store.py:1012`), and CHECK2's in-flight dispatch
+  lists `("PENDING_FILL","PENDING")` only (`order_reconciler.py:915-917`) — so a restart
+  between the timeout and its resolution strands the trade in a state no feed re-produces,
+  even though `_RECOVERY_STATES` itself includes it (:205). If the ambiguous entry FILLED, the
+  position lands in the IA-P5-02 HUMAN_ORDER endpoint; if not, a non-terminal
+  UNKNOWN_IN_FLIGHT row lingers.
+- **EVIDENCE:** the three feeds cited; `place_timeout_UNKNOWN_IN_FLIGHT` 0 ever (23 logs);
+  trades status census: 0 UNKNOWN_IN_FLIGHT rows ever (P1's non-terminal strays = 2 RESERVED,
+  18-Jun, re-confirmed disjoint).
+- **CLASS:** Reachability / Correctness. **NEW.** **ROOT CAUSE:** FIX-068 pre-dates the
+  A-1/E-1 unification; the crash feed was never widened to the status FIX-068 introduced.
+- **RECOMMENDATION (described):** widen `get_orphaned_pending_trades` (or a sibling feed) to
+  `('PENDING','UNKNOWN_IN_FLIGHT')` and add the status to CHECK2's in-flight tuple — pure
+  SELECT-widening, but careful-loop (recovery path).
+- **SEVERITY-BY-IMPACT:** LOW-MED — needs timeout ∧ crash inside ~45s ∧ fill (triple
+  coincidence, never yet); consequence when it lands is the -02 endpoint.
+
+---
+**IA-P5-05**
+- **WHAT:** OM5's Kite status vocabulary is incomplete — measured live: `kite_status="CANCEL
+  PENDING"` hit the `unknown_status` WARN branch **2×** (28-Jul 13:21, 29-Jul 12:03). Same
+  class: "PUT ORDER REQ RECEIVED", "VALIDATION PENDING", "AMO REQ RECEIVED". An unmapped
+  status gets WARN-only cycles: no OSM transition AND no fill-timeout check (the timeout runs
+  only inside `_handle_open`), so an order PARKED in an unmapped status is exempt from the
+  cancel machinery for as long as it stays there.
+- **EVIDENCE:** `order_monitor.py:84-88` (the five sets) vs the 2 measured lines; :766-786
+  (the dispatch; no timeout call on the else branch).
+- **CLASS:** Correctness / Documentation. **NEW-trivial** (both live instances were 1-cycle
+  transients of our own cancels). **RECOMMENDATION (described):** map the transient statuses
+  into `_KITE_STATUS_OPEN` (they are open-equivalents) so the timeout clock keeps running.
+- **SEVERITY-BY-IMPACT:** LOW.
+
+---
+**IA-P5-06**
+- **WHAT:** CHECK2's naked-position detector is GTT-blind and delivery-sell-blind:
+  `_position_is_naked` greps regular open orders for an opposite-side `trigger_price>0`
+  (`order_reconciler.py:1976-1980`) — GTT-based protection (the ONLY protection delivery
+  trades have) is invisible to it, and a delivery SELL day surfaces as an untracked "short"
+  with no stop. Measured: **5/5 false "Naked untracked position" WARNINGs = exactly the T2
+  five (IOB/TRIDENT/SOUTHBANK/MSUMI/SJVN), 31-Jul** — an alert artifact of the T2 seam the
+  Slice-2.5 record did NOT predict (it predicted the Orphan-GTT WARNINGs, which also fired,
+  P4.2c).
+- **EVIDENCE:** the grep + `system_2026-07-31.log`; July ORPHAN_ADOPTION rows = exactly the
+  T2 ten (5 symbols × buy-day 29-Jul + sell-day 31-Jul), zero non-T2.
+- **CLASS:** Silent-failure posture (false-alarm side). **NEW.** **ROOT CAUSE:** the
+  protective-stop probe predates GTTs. **RECOMMENDATION (described):** consult `get_gtts()`
+  in `_position_is_naked` (or suppress the naked probe for CNC-product positions). Matters
+  BEFORE any delivery go-live: every legitimately GTT-protected overnight holding will
+  otherwise emit a daily false "naked" WARNING — desensitization against the one alert that
+  flags the -02 endpoint.
+- **SEVERITY-BY-IMPACT:** LOW today (alert noise); rises with delivery.
+
+---
+**IA-P5-07**
+- **WHAT:** Rate-pressure coupling at the "order" bucket (8 burst / 8 per-sec): per-order 2s
+  history polls share it with place/cancel/modify — each open trade contributes 2 watched exit
+  legs, so ~5 open trades + pending entries ≈ 6 req/s SUSTAINED of the 8/s refill, and a
+  broker-429 `penalize` freeze (≤5s) pauses SL/TGT placement behind the same gate. The
+  client-side `BrokerRateLimitError` raised by a saturated `acquire` inside
+  `get_order_history` (:1151, outside the try) lands in the monitor's generic handler and
+  counts toward the ×3 HARD_KILL breaker — self-inflicted pacing can escalate to flatten-all
+  (July-audit :176, KNOWN, stands).
+- **EVIDENCE:** ZA3 category map :238-253; bucket values `broker_limits.yaml:9-23`; measured
+  zeros — broker_429 0 ever, bucket freezes 0, rate-limit timeouts 0, api_failure_counted 0,
+  timeout_skipped 5 (transient), across 23 logs.
+- **CLASS:** Architecture / Coupling. **KNOWN-composed** (fresh arithmetic + fresh zeros; the
+  July :176 escalation line re-confirmed at current lines). **RECOMMENDATION (described):**
+  none urgent at today's scale (positions capped ~5); if position count ever scales, move
+  history polling to its own bucket or batch via `orders()` (one call for all watched).
+  Hygiene: the `get_server_time` D.3 comment still says margins "burst=1, 1/sec" — it is 8/8.
+- **SEVERITY-BY-IMPACT:** LOW today; scales with open-position count, not sizing.
+
+---
+**IA-P5-08**
+- **WHAT:** Dead config at the broker layer: **(a)** `broker_limits.timeouts.connect_sec: 5`
+  — consumed by the config schema + tests only; main.py:380 passes only `read_sec` to
+  KiteConnect (single timeout param) — the TCP-connect knob has never had an effect. **(b)**
+  `backoff_sequence_sec: [1,5,30]` — the G7 429-ladder its comment still promises ("4-step
+  backoff then soft_kill") was superseded by BL-6 penalize/BL-19; production consumers = 0
+  (schema + tests only).
+- **EVIDENCE:** repo-wide greps (`connect_sec`, `backoff_sequence`) — consumers =
+  config_loader + tests only.
+- **CLASS:** Config-vs-code. **NEW** (IA-P3-02 family, instances 6-7).
+- **RECOMMENDATION (described):** delete both keys or wire them; until then the YAML claims
+  429 behavior the system does not have.
+- **SEVERITY-BY-IMPACT:** LOW — belief hazard only.
+
+---
+**IA-P5-09**
+- **WHAT:** CHECK6 declares a PENDING_FILL order "orphaned" by its absence from
+  `get_open_orders()` (OPEN/TRIGGER-PENDING only) — a FILLED (COMPLETE) order is equally
+  absent, so if the trade were still PENDING_FILL (only possible with the monitor dead),
+  CHECK6 would mark it FAILED + release after 3 cycles (~45s) while the position stands. The
+  A-1/E-1 recovery already models the correct source (`get_all_orders`, any status, with
+  tags); CHECK6 predates it. Bounded: every monitor-death path (auth×3 / api×3) also fires
+  HARD_KILL → broker-position flatten sweeps.
+- **EVIDENCE:** `order_reconciler.py:2350-2434`; adapter :1796-1855 (open statuses only);
+  measured: **CHECK6 has never logged a row, ever** (0 in 7,804).
+- **CLASS:** Consistency / Reachability. **NEW-latent.** **RECOMMENDATION (described):**
+  point CHECK6 at `get_all_orders` and branch on the real status (COMPLETE → hand to the
+  fill/recovery path, not FAILED). Careful-loop.
+- **SEVERITY-BY-IMPACT:** LOW (double-shielded by kill coupling; never fired).
+
+---
+**IA-P5-10** (hygiene bundle, one ID)
+- (a) **Timeout-class non-escalation**: monitor `BrokerTimeoutError` = skip-and-retry forever
+  (auth escalates ×3, api ×3, timeout ∞ — :651-658); a sustained network partition suspends
+  fill detection with only per-cycle WARNINGs (5 transient in window). Posture note.
+- (b) OSM docstring says "all 8 valid state names"; STATES has 9 (UNKNOWN_IN_FLIGHT added,
+  `order_state_machine.py:64-74,131-133`). Doc drift.
+- (c) `rehydrate_from_store` re-tracks with `expected_price=row["price"]` — a MARKET leg
+  re-tracks at 0.0 with no LTP fallback (the `track()` fallback is not on this path;
+  :448-468); slippage analytics only.
+- (d) Paper `cancel_order` overwrites a COMPLETE paper fill to CANCELLED (:1004-1010) —
+  July-audit :177 KNOWN, re-confirmed; it is the reason the -02 branches are
+  paper-unexercisable.
+- (e) `_on_order_filled` claims via `get()` not `pop()` (:1764-1769) — July :179 KNOWN,
+  stands, still single-poll-thread-safe.
+- (f) Fill handlers run ON the single poll thread — `_handle_entry_fill` places SL/TGT and
+  sends the ORDER PLACED alert synchronously, stalling all other order polls for its duration
+  (M-A2 bounds the alert leg at 8s; M-C4/M-C8 family — noted per brief, ⛔ not re-opened).
+- **CLASS:** Silent-failure posture / Documentation. **SEVERITY:** LOW.
+
+### P5.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| IA-P4-04 (orders.qty_filled written by nothing) | **ROOT CAUSE CORRECTED → IA-P5-01**: written by OMgr10 on all 405 COMPLETE rows (filled_at proves it), payload stale (0/NULL). Data conclusion unchanged; "document dead or drop" superseded by the 2-line payload fix option. Sub-figure: entry fills all-time = **205**, not 145 |
+| July-audit LOW :173 (fill-timeout cancel-fail → FAILED+orphan, "backstop catches it") | STANDS at :1103-1122, **made precise by IA-P5-02**: the backstop = CRITICAL + soft_kill only; adoption is impossible from FAILED; 0 occurrences ever |
+| July-audit LOW :174 (partial immediate-cancel publishes stale filled_qty) | STANDS at :907-935; broadened by IA-P5-02 to all 4 cancel sites + the cancel-success zero-fill variant; **no PARTIAL has ever occurred live** (0 log lines, 0 qty mismatches, 0 CANCELLED-with-fill rows) — the entire partial machinery rests on tests |
+| July-audit LOW :175 (429 backoff bypassed on cancel/modify) | STANDS at :1029-1035 / :1102-1108 (blanket except → success=False; no penalize, no counter reset) |
+| July-audit LOW :176 (client-side rate-limit error counts toward HARD_KILL breaker) | STANDS (acquire outside the try at :1151 → generic handler :659-685); composed with fresh arithmetic in IA-P5-07; 0 occurrences ever |
+| July-audit LOW :177 (paper cancel overwrites COMPLETE; synth drift) | STANDS at :1004-1010; is the paper-cannot-exercise root for the -02 branches |
+| July-audit :200/:215 (terminal-set divergence; flatten ×3; pending_rr ERROR-no-escalation; in-memory _fill_map; CO SL broker-managed) | ALL STAND; pending-RR measured 15/15/0 = VERIFIED LIVE (P4); flatten trio re-confirmed (eod :1495 / reconciler :2046 / structure-exit) |
+| D-1 (CHECK1 vs _handle_exit_fill double-release race) | STANDS as designed-mitigated (CAS in close_trade; §D deferral shipped-OFF); its PRICE consequence measured fresh → IA-P5-03 (SWIGGY 28-Jul) |
+| check1_mid_fill_defer_sec (memory: default 0.0 OFF; paper cannot exercise) | RE-VERIFIED on the VM today: 0.0 = OFF; deferral bookkeeping tripwire-asserted untouched at bound 0 |
+| FIX-068 / UNKNOWN_IN_FLIGHT · BL-19 429 retry | 0 · 0 ever (fresh: place_timeout 0 lines, broker_429 0, trades status census 0) — both recovery paths remain production-unexercised; **+ the crash-durability hole → IA-P5-04** |
+| FIX-186 cancel-refusal markers | Present and reconciler-only; marker coverage of the COMPLETE-refusal text unverified → OQ-P5-2 |
+| H-15 empty-history second source | Verified; open-orders-only source with documented fail-toward-orphan direction; 0 firings ever (all three empty-history counters 0) |
+| M-O2 / E4 (CHECK1/CHECK4 costs) | CLOSED-confirmed in code: `round_trip_costs_or_zero` at :1333 (CHECK1) and :2213 (CHECK4) — the July ":215 costs=0.0" list is stale for these two sites |
+| CHECK2 HUMAN_ORDER policy + ₹5,000 G3 widening (T2 seam memory) | RE-VERIFIED: policy at :1773-1862, widening at :3396-3397; G3 in-session tolerance = max(₹50, 10%·expected) + ₹5,000 when human set non-empty; G3 publishes CapitalDriftDetected → BL-2 ladder (soft ₹1,000 / hard ₹2,500, single-sample — K-ladder record) — "non-escalating" holds for T2-sized deltas, not unconditionally |
+| Reconciler June storms (context for RC counters) | ORPHAN_ADOPTION 2,647 · CRASH_RECOVERY_SL 915 (success 11) · CAPITAL_DRIFT 4,183 — **100% June-2026**; last-14-days = 0/0/0. The RAMCOIND/FIX-181/182/190 layers hold in the current era |
+| AGARIND 16-Jun (POSITION_GREW) | The ONE measured production fill-belief divergence (broker 2 vs local 1, 14 cycles, ~3.5 min) — June era, no recurrence since |
+| Paper-cannot-exercise class (14/19 adapter methods) | This phase adds the enumeration for fill ingestion: PARTIAL, REJECTED, empty-history, unknown-status, cancel-failure, and all four -02 races are constant-in-paper — the monitor's divergence machinery is live-only |
+
+### P5.5 Open questions (not guessed into findings)
+
+- **OQ-P5-1:** June-storm archaeology (why G5b success=11/915; what resolved AGARIND) — June
+  register territory; post-fix window is clean; not re-opened here.
+- **OQ-P5-2:** Zerodha's literal refusal text for cancelling a COMPLETE order vs the FIX-186
+  "already gone" markers (no "complete" variant present). Settled only by a live probe or
+  vendor docs; ambiguity currently falls to the safe no-mark/retry branch.
+- **OQ-P5-3:** Source of P4's "145 real entry fills" sub-figure (all-time is 205, July window
+  88, om.complete-in-window 290) — the 0-of-N conclusion is unaffected either way.
+- **OQ-P5-4:** `force_close_triggered` = 40 lines vs ~20 trading days in window — likely the
+  in-memory once-per-day latch re-arming on intraday restarts; benign; not chased.
+
+### P5.6 SEAM SUMMARY — can the adapter's fill belief and the capital state disagree (P6's starting point)
+
+**Yes — and this seam is the isolated-DB / shared-cash boundary, generalised.** What crosses
+into capital: `commit_to_used(actual_fill_price, actual_qty)` on entry fills,
+`release(reservation)` on zero-fill terminals, `release_used(exit_price, exit_qty, costs)` on
+exits — every argument sourced from the MONITOR's last-poll snapshot or a reconciler broker
+read. Three divergence channels cross it: (1) a stale-snapshot finalize (IA-P5-02) releases a
+reservation while broker cash is actually deployed in a standing position — fm_ledger books
+nothing, daily-loss is blind to the position's P&L, and the discrepancy is absorbed SILENTLY
+at the next boot's `broker.net` seed (FM9 syncs once, 09:15 — the T2 seam mechanism, now with
+an in-system trigger rather than an external basket); (2) a proxy-priced close (IA-P5-03)
+books pnl_delta ≠ broker cash delta — measured live once (SWIGGY, −0.30 booked vs the real
+exit); (3) an untracked HUMAN_ORDER position **widens G3's tolerance by ₹5,000**
+(`order_reconciler.py:3396-3397`) — on a ~₹10k book, the mislabelling of a SYSTEM orphan as
+human does not merely skip management, it **suppresses the one broker-cash check that could
+have caught the resulting drift** (≈50% of capital of headroom), and G3's CapitalDriftDetected
+→ BL-2 ladder (soft ₹1,000 / hard ₹2,500) therefore never arms. The only broker-truth checks
+on this seam are G3 (cash, 15s, throttled 30-min alerts, tolerance as above) and the
+15:45/15:58 EOD jobs (P8 scope). **What P5 hands P6:** verify the capital internals against
+this seam — the fm_ledger INIT/seed semantics (does the boot seed silently absorb unbooked
+P&L, and is that visible anywhere), reservation-vs-used lifecycle under the -02/-03 event
+orderings, the daily-loss base's exposure to unbooked positions, and whether the ₹5,000
+human-order widening is bounded per-day or compounding. Fill-side ground truth for P6:
+entry fills all-time 205, all one-shot full-qty (0 partials ever); the orders table carries
+no fill truth (IA-P5-01) — trades + fm_ledger are the only local fill record, and both are
+written by the paths whose divergences this phase enumerated.
+
+**Phase 5 done** = fill detection re-measured fresh (polling-only, mechanism + payload traced
+to source; the IA-P4-04 root cause corrected by a 3-way measurement); every silent-divergence
+path enumerated with its endpoint and exposure width (one June precedent, one measured
+current-era proxy-P&L instance, two latent races, four cancel sites, the HUMAN_ORDER endpoint
++ ₹5,000 widening); the qty-verbatim/no-cap seam confirmed at the adapter chokepoint; the
+cache→token failure mode confirmed loud/fail-safe and placement-independent; 19 knobs
+units-checked (no mismatch) with two dead config keys found; the CHECK battery given its
+first all-time reachability census (7,804 rows: 3 checks carry 99% of rows, all June-era; 6
+checks have never fired); committed incrementally; ⛔ nothing fixed, nothing pushed, the
+3-Aug/4-Aug sequence untouched.
+*(Phase 6 — fund/capital state — appends below this line.)*
