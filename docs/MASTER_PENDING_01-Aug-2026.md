@@ -210,11 +210,15 @@ one more commit always moves.**
 
 # §B — THE AUDIT FIX CAMPAIGN (the debt ledger — ⛔ NOT STARTED, NOT AUTHORISED)
 
-> ## ⛔⛔ **STATUS OF EVERY ITEM IN THIS BAND: FINDINGS-ONLY. NOTHING HERE IS STARTED.**
+> ## ⛔⛔ **STATUS: #1 COMMISSIONED BY RAMA 01-Aug (implementation card) — PHASE A ONLY; EVERYTHING ELSE FINDINGS-ONLY, NOT STARTED.**
 > S3's own closing words: *"**⛔ No fix work is authorised by this document.** It is a
 > register of what is true, measured on 01-Aug-2026 against `297b587`."*
-> **This band is a RUNNING ORDER for when Rama commissions the campaign — it is not a
-> task list to execute and it is not an authorisation.**
+> **This band is a RUNNING ORDER — items move only when Rama commissions them.**
+> ⭐ **#1 state 01-Aug evening:** `<PENDING — Phase A contract FROZEN, ⛔ NO CODE>` —
+> `docs/audit/effect_verification_contract_01aug2026.md` + `config/expected_managers.yaml`
+> committed; **GATE: Phase B starts ONLY on Rama's approval of the frozen "acted"
+> contract (7 gate questions in the contract).** Scope = families β/γ only; BK-8 (α) is
+> a separate next iteration.
 
 **THE SEQUENCING S3 MANDATES when it IS commissioned:** **(1)** the buy-day product filter
 **FIRST** (A4 — the Q4 ordering constraint, binding across three workstreams); **(2)**

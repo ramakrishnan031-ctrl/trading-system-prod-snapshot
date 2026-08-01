@@ -1,0 +1,379 @@
+# ============================================================================
+# EXPECTED-MANAGER / EXPECTED-STATE REGISTRY — the single source of truth (C2/C6)
+# Ledger item #1 (effect-verification telemetry, families beta/gamma).
+# Frozen 01-Aug-2026 against deployed code 297b587.
+# Contract: docs/audit/effect_verification_contract_01aug2026.md  (THE authority;
+# where this file and the contract disagree, the contract wins until Phase B ships.)
+#
+# ⛔ RULES (review-mandatory from this commit forward):
+#   1. A new manager ctor in main.py REQUIRES an entry here IN THE SAME DIFF.
+#   2. ONE effect_point per entry. No fallback/secondary counters (C1).
+#   3. Every dormant/absent entry carries reason + register ID. A dormant entry
+#      going acted>0 is a MISMATCH — never edit the state to silence it without
+#      the decision that makes the new behaviour intended.
+#   4. A registry edit rides the SAME deploy as the behaviour change it
+#      describes (e.g. the 4-Aug flip carries the cnc_gtt_* flips below).
+#   5. states: expected-active | expected-dormant | expected-event-driven |
+#              expected-absent | infra | covered-existing
+#      mismatch classes: (i) active&0  (ii) dormant&>0  (iii) absent-but-
+#      constructed  (iv) constructed-but-unregistered (B2).
+#      infra / covered-existing / event-driven never enter the mismatch block.
+#
+# NOT part of the system_config.yaml schema. Consumer: core/effect_telemetry
+# (Phase B — NOT YET BUILT; until then this file is the frozen contract artifact).
+# ============================================================================
+version: 1
+frozen_at: "2026-08-01"
+frozen_against: "297b587"
+
+managers:
+  # ── ACTIVE units ──────────────────────────────────────────────────────────
+  - name: kill_switch
+    class: capital.kill_switch.KillSwitch
+    ctor: "main.py:1861"
+    state: expected-active
+    effect_point: "capital/kill_switch.py:859 _persist_state — count ONLY SOFT_KILL/HARD_KILL states (clears excluded)"
+    acted_means: "a kill activation persisted (persist-first)"
+    note: "15:15 circuit-breaker guarantees >=1 per trading day"
+  - name: fund_manager
+    class: capital.fund_manager.FundManager
+    ctor: "main.py:2333"
+    state: expected-active
+    effect_point: "capital/fund_manager.py:2354 _write_ledger (single writer, 10 callers)"
+    acted_means: "an fm_ledger row written"
+    note: "daily INIT guarantees >=1"
+  - name: position_sizer
+    class: capital.position_sizer.PositionSizer
+    ctor: "main.py:2428"
+    state: expected-active
+    effect_point: "capital/position_sizer.py:176 calculate verdict return"
+    acted_means: "a sizing verdict produced (incl. rejections)"
+  - name: risk_engine
+    class: capital.risk_engine.RiskEngine
+    ctor: "main.py:2481"
+    state: expected-active
+    effect_point: "capital/risk_engine.py:189 approve verdict return"
+    acted_means: "an approve/reject verdict issued"
+  - name: signal_processor
+    class: signals.signal_processor.SignalProcessor
+    ctor: "main.py:3058"
+    state: expected-active
+    effect_point: "signals/signal_processor.py:1230 _process_one dispatch to order_placer.place()"
+    acted_means: "an approved entry dispatched to placement"
+    note: "zero-trade-day reads 0 truthfully; resume sites :1995/:2272 EXCLUDED (unreachable today — IA-P2-01/retest-off; awakening surfaces at entry_gate/retest units). GATE-Q4"
+  - name: secondary_screener
+    class: screening.secondary_screener.SecondaryScreener
+    ctor: "main.py:2826"
+    state: expected-active
+    effect_point: "screening/secondary_screener.py:592 _persist (P18 — all verdict paths route through it)"
+    acted_means: "a screening verdict persisted"
+  - name: quality_scorer
+    class: screening.quality_scorer.QualityScorer
+    ctor: "main.py:2808"
+    state: expected-active
+    effect_point: "screening/quality_scorer.py:121 return ScoreResult("
+    acted_means: "a composite score produced"
+  - name: hard_gate
+    class: screening.hard_gate.HardGate
+    ctor: "main.py:2820"
+    state: expected-active
+    effect_point: "screening/hard_gate.py:135 evaluate verdict"
+    acted_means: "a V3 hardgate verdict produced (shadow)"
+    note: "0 => IA-P2-05's shadow leg broke further — investigate, do not reclassify"
+  - name: order_placer
+    class: orders.order_placer.OrderPlacer
+    ctor: "main.py:2639"
+    state: expected-active
+    effect_point: "orders/order_placer.py:3914 self._adapter.place_order( — THE single adapter chokepoint"
+    acted_means: "an order dispatched to the broker"
+    note: "zero-trade-day reads 0 truthfully (GATE-Q3)"
+  - name: limit_protocol
+    class: orders.order_protocol_limit.LimitTripleProtocol
+    ctor: "main.py:2596"
+    state: expected-active
+    effect_point: "orders/order_protocol_limit.py:167 execute"
+    acted_means: "a LIMIT_TRIPLE entry sequence executed"
+    note: "423/423 historical; zero-trade-day caveat"
+  - name: order_monitor
+    class: broker.order_monitor.OrderMonitor
+    ctor: "main.py:2576"
+    state: expected-active
+    effect_point: "broker/order_monitor.py:1207 _safe_transition commit"
+    acted_means: "an order state transition committed"
+    note: "zero-order-day caveat"
+  - name: order_reconciler
+    class: orders.order_reconciler.OrderReconciler
+    ctor: "main.py:2702"
+    state: expected-active
+    effect_point: "orders/order_reconciler.py:615 reconcile_once return — count += len(actions) (RC20)"
+    acted_means: "a reconciliation action enacted (CHECK1 finalizations dominate)"
+    note: "clean cycles return [] — zero-trade-day caveat"
+  - name: eod_squareoff
+    class: orders.eod_squareoff.EodSquareoff
+    ctor: "main.py:2844"
+    state: expected-active
+    effect_point: "orders/eod_squareoff.py:320 _fire completion (EodFireResult)"
+    acted_means: "an EOD square-off sequence executed"
+    note: ">=1 per trading day"
+  - name: sr_detector
+    class: "sr_detector.build_sr_detector (sr_detector/__init__.py:25)"
+    ctor: "main.py:2979 (gate: sr_detector.enabled=true yaml:407)"
+    state: expected-active
+    effect_point: "sr_detector/detector.py:254 _write"
+    acted_means: "an sr_detector_results row written"
+  - name: v3_chain_runner
+    class: v3_chain.runner.V3ChainRunner
+    ctor: "main.py:3165 (gate: v3_chain_mode=shadow yaml:472)"
+    state: expected-active
+    effect_point: "v3_chain/runner.py:272 fh.write(would-be jsonl)"
+    acted_means: "a V3 would-be observation appended"
+  - name: pb01_capture_worker
+    class: v3_chain.watchlist_capture.WatchlistCaptureWorker
+    ctor: "main.py:3214 (gate: watchlist.enabled=true yaml:518)"
+    state: expected-active
+    effect_point: "v3_chain/watchlist_capture.py:131 _capture — the ROW write"
+    acted_means: "a pb01_watchlist ROW written — rows, never queued= (memory silent_failure_gaps_25jul)"
+  - name: pb01_entry_stage
+    class: v3_chain.pb01_entry.Pb01EntryStage
+    ctor: "main.py:3223 (gate: watchlist.enabled=true)"
+    state: expected-active
+    effect_point: "v3_chain/pb01_entry.py:318 _terminate (update_pb01_watchlist_status :322)"
+    acted_means: "a watchlist row driven to a terminal status"
+  - name: portfolio_allocator
+    class: allocation.PortfolioAllocator
+    ctor: "main.py:3118 (gate: allocator_mode=shadow yaml:463)"
+    state: expected-active
+    effect_point: "allocation/portfolio_allocator.py:144 _process_window completion"
+    acted_means: "a shadow allocation window adjudicated"
+    note: "0 only on no-candidate days"
+  - name: webhook_receiver
+    class: signals.webhook_receiver.WebhookReceiver
+    ctor: "main.py:2892"
+    state: covered-existing
+    effect_point: "webhook_audit day-count (WR13 finally, webhook_receiver.py:498-503) — NO new counter"
+    acted_means: "a POST audited"
+
+  # ── EVENT-DRIVEN units (0 and >0 both normal; never in mismatch) ──────────
+  - name: mis_blocklist
+    class: core.mis_blocklist.MisLearnedBlocklist
+    ctor: "main.py:2633"
+    state: expected-event-driven
+    effect_point: "core/mis_blocklist.py:81 record_block (sole path to _persist_locked :141)"
+    acted_means: "a broker MIS-block learned + persisted (F5)"
+  - name: drift_handler
+    class: capital.drift_handler.CapitalDriftHandler
+    ctor: "main.py:3332"
+    state: expected-event-driven
+    effect_point: "capital/drift_handler.py:135 _handle — an enacted outcome, any tier"
+    acted_means: "a drift ladder action enacted"
+  - name: pb01_would_be_runner
+    class: v3_chain.pb01_runner.Pb01WouldBeRunner
+    ctor: "main.py:3218 (gate: watchlist.enabled=true)"
+    state: expected-event-driven
+    effect_point: "v3_chain/pb01_runner.py:246 fh.write(would-be jsonl)"
+    acted_means: "a PB-01 would-be verdict appended (on confirm; confirms rare by design)"
+
+  # ── DORMANT units — the beta/gamma tripwires (acted>0 => MISMATCH) ────────
+  - name: entry_gate
+    class: screening.entry_gate.EntryGate
+    ctor: "main.py:3318"
+    state: expected-dormant
+    effect_point: "screening/entry_gate.py:283 add"
+    acted_means: "an entry admitted into the pullback gate"
+    reason: "IA-P2-01 — never fed; EG14/EG15 divert unwired. acted>0 = someone wired it"
+  - name: smart_tgt
+    class: orders.smart_tgt_manager.SmartTgtManager
+    ctor: "main.py:2551"
+    state: expected-dormant
+    effect_point: "orders/smart_tgt_manager.py:588 adapter.modify_order("
+    acted_means: "a broker modify executed (SL trail / TGT move)"
+    reason: "starved — protocol never assigned (order_placer.py:949 unconditional default, X6); modify_order 0 ever; exits thread CLOSED"
+  - name: tgt_retry
+    class: orders.tgt_retry_manager.TGTRetryManager
+    ctor: "main.py:2722"
+    state: expected-dormant
+    effect_point: "orders/tgt_retry_manager.py:306 retry_tgt_for_trade outcome"
+    acted_means: "a TGT retry enacted"
+    reason: "constructed-idle — 26 boot lines, 0 acts; sl_unplaceable 0 ever"
+  - name: co_protocol
+    class: orders.order_protocol_co.CoPlusTgtProtocol
+    ctor: "main.py:2592"
+    state: expected-dormant
+    effect_point: "orders/order_protocol_co.py:87 execute"
+    acted_means: "a CO entry sequence executed"
+    reason: "CO never used — 805/805 variety=regular; 12/15 YAMLs declare it, :949 discards (X6)"
+  - name: shadow_tracker
+    class: orders.shadow_tracker.ShadowTracker
+    ctor: "main.py:2524"
+    state: expected-dormant
+    effect_point: "orders/shadow_tracker.py:461 _start_simulated_inning (inning row write)"
+    acted_means: "a simulated inning row written"
+    reason: "SH13 shadow.enabled=false (yaml:402) — disabled 25-Jul d31759f (X4 fabrication; VOID set stays)"
+  - name: live_feed
+    class: data.live_feed.LiveFeedManager
+    ctor: "main.py:2505"
+    state: expected-dormant
+    effect_point: "data/live_feed.py:167 subscribe"
+    acted_means: "a tick subscription made"
+    reason: "DORMANT BY DECISION e754c7e — 32 connects, 0 tokens ever. ENFORCES IA-P1-06 (order_placer.py:3393 latent caller); acted>0 = the decision silently ended"
+  - name: candle_persist
+    class: "main._persist_candle (closure, main.py:3399; registered :3415)"
+    ctor: "main.py:3415 register_on_candle_close"
+    state: expected-dormant
+    effect_point: "main.py:3399 _persist_candle body"
+    acted_means: "a tick-driven candle persisted to DB"
+    reason: "X8 — stays dark even if the feed wires; the 15:40 fetch covers the table with TRUE delta volume"
+  - name: sizer.risk_bind
+    class: "(gamma unit inside PositionSizer)"
+    ctor: "main.py:2428"
+    state: expected-dormant
+    effect_point: "capital/position_sizer.py:407 — min() resolving to qty_by_risk"
+    acted_means: "the risk-per-trade term actually bound a size"
+    reason: "IA-P3-04 — cannot bind for any legal config (ratio >=2 structurally); acted>0 = the algebra changed"
+  - name: sizer.live_margin
+    class: "(gamma/alpha unit inside PositionSizer)"
+    ctor: "main.py:2428"
+    state: expected-dormant
+    effect_point: "capital/position_sizer.py:298-307 live-margin branch (rides existing live_margin_used log event — extend, not duplicate)"
+    acted_means: "live broker margin consulted in sizing"
+    reason: "IA-P3-02 / FIX-072 — broker_adapter never passed by main.py; unreachable until wired"
+  - name: risk.sector_cap_bound
+    class: "(gamma unit inside RiskEngine)"
+    ctor: "main.py:2481"
+    state: expected-dormant
+    effect_point: "capital/risk_engine.py:618 projected>cap branch (observe :628-637 / enforce :622 — one branch, both modes counted)"
+    acted_means: "the sector cap bound a decision (would-reject or reject)"
+    reason: "IA-P3-05 — cap unapproachable at current sizing; the soak is structurally eventless. acted>0 = the soak finally has evidence"
+  - name: risk.daily_loss_gate
+    class: "(gamma unit inside RiskEngine)"
+    ctor: "main.py:2481"
+    state: expected-dormant
+    effect_point: "capital/risk_engine.py:605-607 enforced-reject branch"
+    acted_means: "the daily-loss gate rejected an entry"
+    reason: "IA-P6-06 — 0 ever (E4 worst day -Rs107 vs ~Rs296 limit). DUAL mechanism: see fm.daily_loss_post_trade"
+  - name: fm.daily_loss_post_trade
+    class: "(gamma unit inside FundManager)"
+    ctor: "main.py:2333"
+    state: expected-dormant
+    effect_point: "capital/fund_manager.py:1314 _on_loss_breach()"
+    acted_means: "the post-trade daily-loss breach callback fired"
+    reason: "FM7 half of the DUAL mechanism (memory dual_daily_loss_mechanism); 0 ever"
+  - name: fm.invariant_violation
+    class: "(alarm unit inside FundManager)"
+    ctor: "main.py:2333"
+    state: expected-dormant
+    effect_point: "capital/fund_manager.py:2310 _handle_invariant_violation"
+    acted_means: "a 3-balance invariant violation handled/escalated"
+    reason: "IA-P6-06 — 0 ever, by design"
+  - name: fm.bucket_overflow
+    class: "(alarm unit inside FundManager)"
+    ctor: "main.py:2333"
+    state: expected-dormant
+    effect_point: "capital/fund_manager.py:1438 H-1 overflow branch"
+    acted_means: "a bucket overflow detected"
+    reason: "IA-P6-06 — 0 ever"
+  - name: fm.commit_hard_kill
+    class: "(alarm unit inside FundManager)"
+    ctor: "main.py:2333"
+    state: expected-dormant
+    effect_point: "capital/fund_manager.py:982 BL-4 kill_switch.hard_kill( from commit_to_used"
+    acted_means: "a commit failure escalated to HARD_KILL"
+    reason: "IA-P6-06 — 0 ever"
+  - name: drift.soft_rung
+    class: "(rung unit inside CapitalDriftHandler)"
+    ctor: "main.py:3332"
+    state: expected-dormant
+    effect_point: "capital/drift_handler.py:236 soft_kill( enactment"
+    acted_means: "the drift SOFT rung fired"
+    reason: "K-ladder — never fired (28-Jul); single-sample rung"
+  - name: drift.hard_rung
+    class: "(rung unit inside CapitalDriftHandler)"
+    ctor: "main.py:3332"
+    state: expected-dormant
+    effect_point: "capital/drift_handler.py:231 hard_kill( enactment"
+    acted_means: "the drift HARD rung fired"
+    reason: "HARD_KILL has never fired anywhere (Q4 record)"
+  - name: scorer.tier_high
+    class: "(gamma unit inside QualityScorer)"
+    ctor: "main.py:2808"
+    state: expected-dormant
+    effect_point: "screening/quality_scorer.py:113 tier=HIGH branch"
+    acted_means: "a HIGH tier assigned"
+    reason: "IA-P2-03 — unreachable: threshold 80 > achievable ceiling 65"
+  - name: scorer.score_gt_ceiling
+    class: "(gamma tripwire inside QualityScorer)"
+    ctor: "main.py:2808"
+    state: expected-dormant
+    effect_point: "screening/quality_scorer.py:121 observation score>65 at result return"
+    acted_means: "a composite score above the G2 ceiling"
+    reason: "algebraically impossible while G2's 25 pts are dead-at-0 + 20 pinned-at-half; acted>0 = G2 moved"
+  - name: cnc_gtt_placer
+    class: orders.cnc_gtt.CncGttPlacer
+    ctor: "main.py:2605"
+    state: expected-dormant
+    effect_point: "orders/cnc_gtt.py:94 place_for_fill"
+    acted_means: "a CNC OCO-GTT placed at broker"
+    reason: "delivery_enabled=false — acted>0 BEFORE the 4-Aug flip is an alarm"
+    flip_note: "4-AUG FLIP-RIDER: state -> expected-event-driven IN THE FLIP DEPLOY (GATE-Q7)"
+  - name: cnc_gtt_monitor
+    class: orders.cnc_gtt_monitor.CncGttMonitor
+    ctor: "main.py:2687"
+    state: expected-dormant
+    effect_point: "orders/cnc_gtt_monitor.py:101 reconcile — count += len(actions)"
+    acted_means: "a GTT reconcile action enacted"
+    reason: "delivery_enabled=false"
+    flip_note: "4-AUG FLIP-RIDER: state -> expected-event-driven IN THE FLIP DEPLOY"
+
+  # ── EXPECTED-ABSENT (constructed => MISMATCH(iii)) ────────────────────────
+  - name: breakeven_manager
+    class: orders.breakeven_manager.BreakevenManager
+    state: expected-absent
+    reason: "NEVER constructed — 0 refs in main.py (X6); exits thread CLOSED. Census must flag as NEVER-CONSTRUCTED [expected]"
+  - name: sl_breach_monitor
+    class: orders.sl_breach_monitor
+    state: expected-absent
+    reason: "zero importers repo-wide (IA-P4-01b)"
+  - name: structure_exit_manager
+    class: orders.structure_exit_manager.StructureExitManager
+    state: expected-absent
+    reason: "structure_exit_enabled=false (yaml:532; ctor guard main.py:3296; import main.py:3292)"
+  - name: market_regime_runner
+    class: regime.MarketRegimeShadowRunner
+    state: expected-absent
+    reason: "regime.enabled=false (yaml:446; refusal D — token 256265 unverified; import main.py:3003)"
+  - name: zone_cache
+    class: sr_detector.zone_cache.ZoneCache
+    state: expected-absent
+    reason: "wait_for_retest_enabled=false (yaml:427; ctor main.py:3041)"
+  - name: zone_warmer
+    class: sr_detector.zone_warmer.ZoneWarmer
+    state: expected-absent
+    reason: "same flag (ctor main.py:3047)"
+  - name: retest_monitor
+    class: screening.retest_monitor.RetestMonitor
+    state: expected-absent
+    reason: "same flag (ctor main.py:3263; import main.py:3253)"
+  - name: retest_diverter
+    class: screening.retest_monitor.RetestDiverter
+    state: expected-absent
+    reason: "same flag (ctor main.py:3268; import main.py:3253)"
+
+  # ── INFRA (registered for the B2 assertion; no counter, no census line) ───
+  - {name: state_store,        class: core.state_store.StateStore,            ctor: "main.py:1851", state: infra}
+  - {name: event_bus,          class: core.events.EventBus,                   ctor: "main.py:1856", state: infra}
+  - {name: market_windows,     class: core.market_windows.MarketWindows,      ctor: "main.py:1938", state: infra}
+  - {name: order_state_machine, class: broker.order_state_machine.OrderStateMachine, ctor: "main.py:1964", state: infra}
+  - {name: rate_limiter,       class: broker.rate_limiter.RateLimiter,        ctor: "main.py:1966", state: infra}
+  - {name: product_resolver,   class: broker.product_resolver.ProductResolver, ctor: "main.py:1967", state: infra}
+  - {name: cost_calculator,    class: broker.cost_calculator.CostCalculator,  ctor: "main.py:1968", state: infra}
+  - {name: broker_adapter,     class: broker.zerodha_adapter.ZerodhaAdapter,  ctor: "main.py:2001", state: infra, note: "chokepoint counted at order_placer:3914"}
+  - {name: instrument_cache,   class: core.instrument_cache.InstrumentCache,  ctor: "main.py:2059", state: infra}
+  - {name: telegram_notifier,  class: alerts.telegram_notifier.TelegramNotifier, ctor: "main.py:2243", state: infra, note: "existing effect-trail = _audit_send :398 (G5); alert-truth is ledger #9's scope (GATE-Q6)"}
+  - {name: strategy_loader,    class: strategies.loader.StrategyLoader,       ctor: "main.py:2736", state: infra, note: "boot-loud by design"}
+  - {name: strategy_governor,  class: capital.strategy_governor.StrategyGovernor, ctor: "main.py:835 (helper)", state: infra, note: "verdicts persisted as signals.status (covered-existing)"}
+  - {name: full_entry_engine,  class: orders.full_entry_engine.FullEntryEngine, ctor: "main.py:2618", state: infra, note: "pass-through router; effect IS the protocol executes"}
+  - {name: order_manager,      class: orders.order_manager.OrderManager,      ctor: "main.py:2624", state: infra, note: "thin DB layer (own docstring)"}
+  - {name: step_executor,      class: screening.step_executor.StepExecutor,   ctor: "main.py:2812", state: infra}
+  - {name: token_monitor,      class: broker.token_monitor.TokenMonitor,      ctor: "main.py:2873", state: infra, note: "paper no-op by design (FIX-128 E)"}
+  - {name: clock_skew_probe,   class: broker.clock_skew_probe.BrokerClockSkewProbe, ctor: "main.py:3384-3386", state: infra, modes: "live-only ctor BY DESIGN (paper skew always ~0) — the ONE mode-conditional entry"}
+  - {name: ohlc_fetchers,      class: "OhlcFetcher x4 (regime/structure/v3/watchlist)", ctor: "main.py:3004/:3043/:3160/:3209", state: infra, note: "per-feature fetch plumbing"}
