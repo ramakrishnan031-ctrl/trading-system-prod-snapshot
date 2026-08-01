@@ -2568,3 +2568,282 @@ exemption live; K1 re-confirmed from repo source with fresh window evidence (24/
 else); committed incrementally; ⛔ nothing fixed, nothing pushed, the 3-Aug/4-Aug sequence
 untouched.
 *(Phase 8 — reconciliation / EOD jobs — appends below this line.)*
+
+---
+
+## PHASE 8 — STATE → RECONCILIATION / EOD (the truth arbiters, the EOD chain, and the P8→P9 seam)
+
+### P8.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~10:06 → ~10:5x IST** |
+| Measurements taken | 01-Aug **~10:2x–10:3x IST**, from the VM (`mode=ro` DB reads + log greps + one report-file read; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 (same session) |
+| PC tree read | `2859d48` = `297b587` + 10 docs-only commits ⇒ code read == deployed |
+| Service | `inactive`; the 15:45 job self-skips on weekends (`is_broker_api_available` gate, verified :362-365) |
+| Primary windows | `position_reconciliation` **15 rows all-time** / `eod_broker_reconciliation` **16 rows** (16→31-Jul) / `eod_verification` **31 rows** / EOD-chain heartbeats: reconcile_positions 34 (4 non-SUCCESS) · eod_broker_reconcile 16 (0) · eod_verify 32 (**0**) · eod_cleanup 36 (6) · system_manager_eod 38 (6) |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed; the redesign audited NOT built; F1/F4 not fixed; the authoritative flip not touched; report internals deferred to P9; July audits read-only |
+
+### P8.1 The reconciliation surface as verified (current tree == deployed)
+
+Four arbiters compare DB/memory/broker: **(1)** the in-service 15s battery (P5-read in full:
+CHECK1..9, G3, G5b, recovery prepasses, duplicate-exit net, stuck-EXITING); **(2)** the 15:45
+`scripts/reconcile_positions.py` cron — `kite.positions()["net"]` vs OPEN/PARTIAL trades
+(qty>0, signed, `created_at <= date` cumulative), verdicts OK / ORPHAN_AT_BROKER /
+MISSING_AT_BROKER / QTY_MISMATCH, exit 2 on mismatch + ERROR Telegram, exit 1 + heartbeat-only
+alert on broker-fetch failure (:244-254 — the script's own alert fires on mismatch only);
+**(3)** the 15:58 `scripts/eod_broker_reconcile.py` shadow — own creds, five dimensions
+(positions/orders/pnl REQUIRED · ledger · margin reliability-gated), never-false-VERIFIED
+roll-up, persists a per-day verdict row + the eod_verify shadow comparison, INFO alerts while
+`eod_reconcile.authoritative: false`; **(4)** the 15:55 `eod_verify` (M-SC1 KNOWN: exits 0 +
+SUCCESS heartbeat even on ISSUES). EOD chain jobs are independent cron processes — **abort
+does NOT propagate** (measured: 29-Jul reconcile_positions FAILED exit 2 while the 15:50/
+15:55/15:58/18:45 jobs all still ran). The kill-adjacent afterlife: `_check_stuck_exiting`
+(:1477-1528) resolves EXITING trades older than 30 min against real broker positions — flat →
+`_check1_manual_close` finalize; held → revert OPEN + WARNING (:1530-1585).
+
+### P8.2 Headline re-measurements (mandated)
+
+**(a) F1 — the delivery-blind 15:45 job: all THREE faces now measured in one window, and the
+sell-day face is NEW evidence.** Source confirmed: positions()-only (:158-168, no holdings()
+anywhere — width: the whole file), system side has no product filter (:181-189) ⇒ a REAL
+delivery holding produces the false **MISSING_AT_BROKER** CRITICAL daily from T+1 (:267-269,
+the 30-Jul doc's B5, confirmed at source). Measured via T2: **29-Jul buy-day = 5×
+ORPHAN_AT_BROKER (+3) exit 2 · 30-Jul T+1 = zero rows, exit 0 (the empty-book silent face —
+the green check that cannot go red, §0 of the design doc, re-confirmed in data) · 31-Jul
+sell-day = 5× ORPHAN_AT_BROKER (−3) exit 2** — the sell-side face the design doc did not
+predict (the CNC sells sat in positions() net at 15:45). All-time table: 15 rows, 3 firing
+days, ALL T2; the 11 pre-T2 runs were empty-book successes (KNOWN §A1(6), re-measured). ⛔
+Redesign posture re-stated: D-4(a) scope-to-intraday is the audited answer; the reconciler
+must NOT learn holdings() before the buy-day product filter lands (the Q4 ordering
+constraint) — reconcile must not "fix" what the missing filter merely exposes.
+
+**(b) ⭐ THE AUTHORITATIVE-FLIP EVIDENCE STREAM IS DOUBLE-BROKEN — the phase's top NEW
+finding.** (i) **`eod_verify`'s verdict has been stuck at PENDING for 18 consecutive trading
+days**: last VERIFIED = **07-Jul**, PENDING every day since **08-Jul** — while its own
+heartbeat reports SUCCESS **32/32, zero failures** (the M-SC1 exit-0 family, now with a
+stuck verdict on top). (ii) The 15:58 shadow comparison consumes that lifecycle status as a
+verdict: `ev_clean := (status == "VERIFIED")` (:293) ⇒ PENDING reads as "eod_verify
+disagrees" ⇒ **`mismatch=1` on ALL 14 P1-VERIFIED days and 0 on the 2 ISSUES days** —
+inverted noise, persisted daily, alerted at INFO, noticed by nobody. **The B3/G23 flip gate
+("a clean shadow WEEK") is unservable while this holds — the gate's evidence column cannot
+go clean.** The shadow verdicts themselves behaved correctly all window: VERIFIED 14 /
+ISSUES 2 (29+31-Jul, exactly the T2 positions dimension, which also correctly folded in the
+15:45 job's non-OK rows). → IA-P8-01.
+
+**(c) The flagship never-false-VERIFIED job carries two structural soft spots of its own.**
+(i) **The LEDGER dimension is vacuous**: `_local_capital_snapshot` returns
+`invariant_ok=True` on BOTH paths (:455, :458 — "treat a readable ledger as OK") ⇒
+`ledger_status` can NEVER be ISSUES while the docstring sells it as "fm_ledger 3-balance
+invariant" — a green check that cannot go red inside the job built to abolish that class.
+(ii) **`total` = the last fm_ledger row's `balance_after`** (:450-452) — which at every
+15:58 run is the RESET_PNL row's **0.0** (measured: last ledger row 31-Jul 15:19 RESET_PNL
+balance_after=0.0; second-last is a BUCKET-avail figure, never the capital total). Masked
+today ONLY because the margin dimension is always NOT_CHECKED at 15:58 (the FIX-189
+reliability gate); it arms the moment the job time, the margin window, or an in-session
+authoritative run changes. → IA-P8-02/-03.
+
+**(d) "A green check that only ran on an empty book is not a check" — the census,
+generalised across the surface.** Checks that have EVER gone red on real input:
+CHECK1 (44) · CHECK2-family (June storms + the T2 ten) · CHECK4/CHECK5 (June; AGARIND) ·
+CHECK9 (once, BANSALWIRE) · the 15:45 job (3 days, all T2) · the 15:58 positions dimension
+(2 days, T2). **Everything else is green-only or never-run**: CHECK6/CHECK7/CHECK8/
+SYSTEM_OVERSELL/STUCK_EXITING/INFLIGHT_ORPHAN_FLATTEN/RECOVERY_* = 0 rows ever (7,804-row
+census, P5); the duplicate-exit net, the EOD residual sweep flatten, G5b post-June — quiet in
+the current era; the LEDGER dimension = cannot-go-red (c); eod_verify = stuck-PENDING (b);
+paper reconcile_positions = all-OK by construction (:225-242); paper eod_broker_reconcile =
+self-consistency mirror (honest label). The battery's real-input track record rests almost
+entirely on the June storms and the T2 experiment.
+
+**(e) HARD_KILL flatness verification — answered: it is NEVER positively verified at kill
+time; the stuck-EXITING pass is the only positive verifier, 30 minutes late, and mislabeled
+as recovery.** Characterised precisely: timeout = `stuck_exiting_timeout_minutes: 30`
+(consumed ✓); runs inside the raw_positions guard (never blind); flat → CHECK1 finalize —
+which prices the exit via the get_trades→entry-proxy chain (IA-P5-03) ⇒ **a kill-flatten's
+booked P&L inherits the trades()-lag proxy class**; held → revert OPEN + WARNING — under a
+still-active HARD that resurrect re-arms G5b against the single-flight flatten worker
+(IA-P7-03, carried). 0 STUCK_EXITING rows ever — the verifier itself is production-untested.
+
+**(f) The 30-Jul redesign doc, audited item-by-item against `297b587` (§H mandate).** Every
+§A1 mechanism claim re-verified at source this session: (1) reconcile_positions
+positions-only ✓ (a) · (2) eod_broker_reconcile has NO holdings/delivery dimension ✓ (grep
+width: the file; its false-alarm face from T+1 would DUPLICATE F1's, 13 min apart — the
+doc's two-jobs-one-axis point stands) · (3) **`CncGttMonitor._gather` (:422-455) merges
+holdings() + CNC-filtered positions() with Y4 defer-on-failure ✓ — the correct reader
+exists; ⚠️ ONE lift-review nuance found: the positions leg adds `abs(qty)` (:454), so a
+sell-day CNC net of −3 ADDS 3 to held-qty — whether that double-counts against a
+not-yet-settled holding on sell day is unmeasurable today (→ OQ-P8-2), and must be settled
+before D-8 step 2 lifts this as THE shared definition of "held"** · (4) G3 ✓ (P6) · (5)
+CHECK1/CHECK2 + ₹5,000 ✓ (P5/P6, B6 artefact verdict stands WITH the IA-P5-02 caveat) · (6)
+position_reconciliation ✓ (now 15 rows/3 red days) · (7) FM9 hook ✓ (P6, delta 0.0×8) · (8)
+Slice-2.5 scaffolding ✓ (P4/P5/P7). Hypotheses: B1 ✓ (P7, scheduled kills delivery-correct,
+LIVE-proven via T2) · B2 ✓ (nothing persists a closing inventory — width: every reconcile
+reader this session) · B3 = OQ-P6-3, open · B4 ✓ artefact (P4 prepass evidence) · B5 ✓
+source-confirmed (a) · B6 ✓ sharpened (P6). Gaps G1-G7 all stand. **Verdict on
+buildability: the redesign is buildable as stated EXCEPT (α) the flip gate needs IA-P8-01
+fixed first (the shadow evidence stream cannot go clean), (β) its D-1 host job needs the
+vacuous ledger dimension and the wrong `total` corrected (IA-P8-02/-03) before a delivery
+dimension makes it MORE load-bearing, and (γ) IA-P6-03 stands — the deferred Phase-E
+reservation-orphan direction cannot be built on per-rid ledger sums as stated.**
+
+### P8.3 NEW findings
+
+---
+**IA-P8-01**
+- **WHAT:** The authoritative-flip evidence stream is double-broken: (i) `eod_verify`'s
+  persisted verdict has been stuck at PENDING for every trading day since 08-Jul (18 days;
+  last VERIFIED 07-Jul) while its heartbeat reports SUCCESS 32/32 — the verdict-finalize
+  path silently stopped; (ii) the 15:58 shadow comparison consumes that lifecycle status as
+  a verdict (`ev_clean := status=="VERIFIED"`, eod_broker_reconcile.py:293) ⇒ the persisted
+  `mismatch` flag reads **1 on every clean day, 0 on every ISSUES day** — structurally
+  inverted noise — and the B3/G23 flip gate ("clean shadow week") is unservable.
+- **EVIDENCE:** eod_verification per-date census (PENDING 18, boundary exactly
+  07/08-Jul); eod_broker_reconciliation: mismatch=1 on all 14 VERIFIED days, 0 on both
+  ISSUES days; heartbeats eod_verify 32/0-failures.
+- **CLASS:** Correctness / Silent-failure. **NEW** (B3/G23 recorded the flip as "stuck in
+  shadow, needs a clean week" — that the gate's own evidence column is broken, and since
+  when, was not known).
+- **ROOT CAUSE:** two composed: whatever stopped eod_verify finalizing on 08-Jul (the
+  FIX-181/GICRE deploy era — → OQ-P8-1, archaeology), and the shadow reading a 3-state
+  lifecycle field as a boolean verdict (the classify-by-the-wrong-field family).
+- **RECOMMENDATION (described, ⛔ not applied):** treat PENDING as "no eod_verify verdict"
+  (mismatch=NULL — the code already models None for absent), and separately find/fix why
+  eod_verify stopped finalizing; only then can a shadow week mean anything.
+- **SEVERITY-BY-IMPACT:** MED-HIGH for the flip programme (its gate cannot be satisfied and
+  the INFO alerting hid that for 3+ weeks); LOW for daily safety (the shadow verdicts
+  themselves behaved correctly).
+
+---
+**IA-P8-02**
+- **WHAT:** The LEDGER dimension of the never-false-VERIFIED job is vacuous:
+  `_local_capital_snapshot` returns `invariant_ok=True` unconditionally on both its paths
+  (:455 readable-ledger, :458 exception) ⇒ `ledger_status` can never be ISSUES, while the
+  module docstring advertises "fm_ledger 3-balance invariant" as a checked dimension.
+- **EVIDENCE:** eod_broker_reconcile.py:441-458 + :165-167; 16/16 rows ledger=VERIFIED.
+- **CLASS:** Reachability / Documentation — the green-check-that-cannot-go-red class,
+  inside the job built against it. **NEW.**
+- **ROOT CAUSE:** the standalone job has no live FM to ask; the honest "deeper invariant
+  audit left to CHECK7" note in the comment never made it into the dimension's status
+  (NOT_CHECKED exists and is the truthful value).
+- **RECOMMENDATION (described):** report ledger=NOT_CHECKED (or compute the 3-balance sum
+  from fm_ledger directly — one query); update the docstring either way.
+- **SEVERITY-BY-IMPACT:** LOW-MED — no wrong verdict yet (CHECK7 territory is quiet), but
+  the dimension's green is currently unfalsifiable, and the flip would promote it to a
+  CRITICAL-grade claim.
+
+---
+**IA-P8-03**
+- **WHAT:** `_local_capital_snapshot.total` = the LAST fm_ledger row's `balance_after` —
+  semantically never the capital total (per-bucket avail for RESERVE/RELEASE/COMMIT rows;
+  **0.0 for the RESET_PNL row that is last on every trading day by 15:19**). The margin
+  dimension would compare broker.net against 0.0 — masked today ONLY by the FIX-189
+  NOT_CHECKED gate at 15:58.
+- **EVIDENCE:** :450-452; measured last-ledger rows 31-Jul: RESET_PNL balance_after=0.0
+  (15:19), prior RELEASE_USED 6,532.89 (a bucket figure); margin NOT_CHECKED 16/16 rows.
+- **CLASS:** Correctness (latent, gate-masked). **NEW** — and note the code COMMENT already
+  documents fixing a previous always-raised bug here ("no such column: id" → silent 0.0);
+  the fix made the query run, but the VALUE it fetches is the wrong semantic.
+- **ROOT CAUSE:** fm_ledger's balance_after is per-entry-scope, not a running total; no
+  ledger row carries "total".
+- **RECOMMENDATION (described):** derive total the way rehydrate does (INIT/SYNC base +
+  Σpnl_delta), or mark margin permanently NOT_CHECKED in this job and delete the
+  pseudo-total. Must precede any in-session/authoritative use of the margin dimension.
+- **SEVERITY-BY-IMPACT:** LOW today (fully masked); MED the day the margin window or job
+  schedule moves.
+
+---
+**IA-P8-04**
+- **WHAT:** F1's sell-day face: a CNC sell (from holdings) sits in `positions()` net at
+  15:45 as a NEGATIVE quantity with no local trade ⇒ **ORPHAN_AT_BROKER (−qty)** — a third
+  false-alarm face beyond the doc's buy-day ORPHAN and T+1 MISSING. Measured: 31-Jul, 5
+  rows, broker_qty=−3 each, exit 2, ERROR Telegram.
+- **EVIDENCE:** position_reconciliation 31-Jul rows; the 15:58 positions dimension
+  correctly went ISSUES the same evening (double coverage of the same artefact).
+- **CLASS:** Correctness (KNOWN-F1, widened). **KNOWN → SHARPENED** — the redesign's D-4(a)
+  fix (scope to intraday product) covers this face too, PROVIDED the system-side filter
+  also excludes the delivery trade's exit day; noted for the design review, not designed
+  here.
+- **SEVERITY-BY-IMPACT:** folds into F1's (a false CRITICAL per delivery lifecycle event —
+  buy day, every held day, sell day: the full delivery lifecycle alarms daily somewhere).
+
+---
+**IA-P8-05** (hygiene bundle, one ID)
+- (a) **F4 measured in production output**: `reports/system_manager/2026-07-31.txt` carries
+  "⚠️ Kill switch: SOFT_KILL — needs deploy/resume.sh before market open" — fires EVERY
+  evening against the persisted scheduled 15:15 kill, and the instruction is wrong on both
+  sites (:698 nightly; :855's own-kill case ALSO auto-clears overnight under the headless
+  guarantee — resume.sh is needed only for a SAME-day restart). KNOWN-F4, now
+  frequency-measured (nightly) and widened (both sites overstate).
+- (b) reconcile_positions' broker-fetch-ERROR path (exit 1) alerts only via the cron
+  heartbeat FAILED alert — the script's own Telegram fires on mismatch only (:300).
+- (c) The `--db`-after-heartbeat trap (⛔ memory rule) has the same shape here: `_cron_main`
+  heartbeats to the LIVE DB before `main()` parses `--db` (:437-450).
+- (d) The 15:58 pnl dimension inherits M-K1 (`get_today_closed_pnl` keys on
+  DATE(updated_at) — July-audit :144, KNOWN): a later touch of a closed row makes a
+  spurious next-day variance.
+- (e) The positions dimension double-fires on the same artefact (its own diff + the 15:45
+  flag) — consistent, but one T2-class event produces 2 dimensions' worth of ISSUES text.
+- (f) eod_cleanup 6 / system_manager_eod 6 non-SUCCESS heartbeats all-time (incl. the
+  15-Jul FK crash, KNOWN #09-adjacent) — chain independence means none of these stopped
+  later jobs (measured 29-Jul).
+- **CLASS:** Documentation / Posture. **SEVERITY:** LOW.
+
+### P8.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| F1 (positions-only reconciler, delivery-blind) | CONFIRMED at source (:158-168, :181-189, :267-269); all three faces measured (buy +3 / T+1 silent / sell −3); MISSING_AT_BROKER remains REAL-but-latent for a genuine delivery holding — T2 could only produce the ORPHAN faces (isolated DB) |
+| The 29-Jul "first real failure; 11 prior empty-book successes" | RE-MEASURED: now 15 rows / 3 red days (29/31-Jul + the 5-row history); 30-Jul's exit-0 was the empty-book silent face, exactly as the 30-Jul doc's §0 self-correction predicted |
+| B3/G23 (authoritative flip stuck in shadow) | **SHARPENED → IA-P8-01**: the gate's evidence column is structurally broken (stuck-PENDING comparand since 08-Jul + inverted mismatch flag); a "clean shadow week" is currently impossible |
+| M-SC1 (eod_verify exits 0 / SUCCESS heartbeat on ISSUES) | STANDS + WORSE: the verdict itself no longer finalizes (PENDING×18 since 08-Jul) while heartbeats stay SUCCESS |
+| eod_verify dead P&L-variance branch (July :214) | Superseded in practice by the 15:58 job's pnl dimension writing `pnl_reconciliation` with correct columns (:304-312) — the dead branch stands, its function is duplicated correctly elsewhere |
+| IA-P7-01/-03 (flatten verified late; reconciler places without kill consult) | CHARACTERISED in (e): stuck-EXITING is the only positive flatness verifier — 30 min late, CHECK1-proxy-priced, 0 rows ever, revert-side re-arms G5b under HARD |
+| IA-P6-03 (Phase-E orphan detection unbuildable on per-rid sums) | STANDS — restated as redesign-buildability caveat (γ) in (f) |
+| IA-P5-03 (CHECK1 entry-proxy pricing) | COMPOSED: the kill-flatten finalize path (stuck-EXITING → CHECK1) inherits it |
+| The reconciler battery census (P5) + June storms | CARRIED unchanged; (d) generalises it into the green-only/never-run partition |
+| CHECK2 HUMAN_ORDER / ₹5,000 / seed-absorb (P6) | CARRIED — the reconciliation layer is where the classification happens; nothing here re-litigated |
+| ⛔ `scripts/*.py --db <copy>` memory rule | Shape re-confirmed in both P8 scripts (heartbeat-before-parse) |
+| Q4 ordering constraint (filter before holdings-awareness) | RE-STATED as binding on D-8 step 2/4 and on any F1 fix — reconcile must not learn holdings() first |
+
+### P8.5 Open questions (not guessed into findings)
+
+- **OQ-P8-1:** What stopped `eod_verify` finalizing its verdict on 08-Jul? (The FIX-181/
+  GICRE deploy era; the job heartbeats SUCCESS throughout.) One log-diff of the 07-Jul vs
+  08-Jul runs settles it. Prerequisite to IA-P8-01's fix.
+- **OQ-P8-2:** Does `CncGttMonitor._gather`'s `abs(qty)` on the CNC-positions leg (:454)
+  double-count held stock on a SELL day (sell −3 in positions + holding still visible until
+  settlement)? Unmeasurable until a real delivery sell day with the service up; MUST be
+  settled before the D-8 step-2 lift makes this THE shared "held" definition.
+- **OQ-P8-3:** The 6 non-SUCCESS eod_cleanup and 6 system_manager_eod heartbeats — dates
+  and causes not itemized here (the 15-Jul FK crash is one); archaeology if ever needed.
+
+### P8.6 SEAM SUMMARY — can reconcile's truth and the report's claim disagree (P9's starting point)
+
+**They already do, in three measured ways.** (1) `eod_verify`'s persisted claim is PENDING
+×18 days while its heartbeat — the thing the cron officer and the daily health view consume —
+says SUCCESS: the report layer has been telling the operator "EOD verification ran fine"
+about a job whose verdict never finalizes (IA-P8-01). (2) The nightly system_manager report
+instructs a recovery action (deploy/resume.sh) that the next boot performs automatically —
+a standing false instruction in the operator's most-read artifact (F4, nightly, measured).
+(3) The shadow INFO alerts have carried an inverted mismatch flag for three weeks — a
+correct verdict wrapped in a wrong comparison. What P9 inherits: the report layer consumes
+`trades`/`fm_ledger` P&L that P5/P6 showed can carry proxy-priced and seed-absorbed values
+(SWIGGY's −0.30; the unbookable IA-P5-02 class); `exit_reason` free text that memory rules
+say must never be grouped on (`closure_source` is canonical); the W-placeholder honesty
+markers; and the three disagreement instances above. P9's question is whether the
+reports/alerts layer ADDS divergence of its own on top of a reconciliation layer that — in
+the current era — is measurably quiet on real input but green-by-construction across most of
+its surface.
+
+**Phase 8 done** = F1 re-confirmed at source with all three faces measured (the sell-day
+face new); the green-check class generalised across the surface (the ever-went-red list vs
+the green-only/never-run partition); HARD_KILL flatness verification answered (never at kill
+time; stuck-EXITING characterised as the 30-min mislabeled verifier, itself untested); the
+30-Jul redesign audited item-by-item (all §A1 claims verified at source; buildable with
+three named caveats α/β/γ); the flip gate found double-broken (IA-P8-01) with the vacuous
+ledger dimension (IA-P8-02) and masked wrong-total (IA-P8-03) in the host job; the EOD
+chain's abort-independence measured; the P8→P9 seam written with three already-measured
+truth/claim disagreements; committed incrementally; ⛔ nothing fixed, nothing pushed, the
+3-Aug/4-Aug sequence untouched.
+*(Phase 9 — reports / alerts — appends below this line.)*
