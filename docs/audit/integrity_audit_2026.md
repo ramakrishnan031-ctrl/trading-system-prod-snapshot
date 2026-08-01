@@ -2847,3 +2847,232 @@ chain's abort-independence measured; the P8→P9 seam written with three already
 truth/claim disagreements; committed incrementally; ⛔ nothing fixed, nothing pushed, the
 3-Aug/4-Aug sequence untouched.
 *(Phase 9 — reports / alerts — appends below this line.)*
+
+---
+
+## PHASE 9 — REPORTS / ALERTS / OBSERVABILITY (told-vs-real, the census, delivery proof, and the P9→P10 seam)
+
+### P9.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~10:23 → ~11:0x IST** |
+| Measurements taken | 01-Aug **~10:4x–10:5x IST**, from the VM (`mode=ro` + log greps + sentinel-dir listing; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 (same session) |
+| PC tree read | `1d2b9cb` = `297b587` + 11 docs-only commits ⇒ code read == deployed |
+| Service | `inactive`; `gui-dashboard.service` **active** (loopback:8500, read-only GUI — my earlier unit-name guess "ops-dashboard" was wrong, corrected) |
+| Primary windows | `alert_send` audit lines: **49 on 31-Jul (first full day; all outcome=delivered; INFO 31 / WARNING 18 / ERROR 0 / CRITICAL 0)** — service-log stream; cron-side sends audit into their own `logs/cron-*.log` (verified present in cron-control-tower.log) · sentinels: **0 pending / 39 `.delivered` all-time** (`data_store/`) · `failed_alerts.log`: last entry **02-Jul** (both tail entries = the pre-rotation chat-id era) · CRITICAL log lines: **exactly 4/day** (29/30/31-Jul) |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed (not the ACTIVE claim, not resume.sh, not the inverted flag); security-monitor redesign and channel-2 not built; deploy/recovery internals deferred to P10; July audits read-only |
+
+### P9.1 The observability topology as verified
+
+**Send path** (`alerts/telegram_notifier.py`): tier routing (G8/TG3-5) — **CRITICAL** →
+sentinel FIRST (`data_store/`, TG5) → Telegram all-chats → `failed_alerts.log` on failure →
+notifier-side email fallback only if ALL chats failed (:519-523 — INERT in production:
+`ALERT_EMAIL_*` absent from the VM env, KNOWN board item; the WORKING email path is the
+alert-watcher reading the sentinel); **ERROR** → attempt; `failed_alerts.log` on failure —
+no sentinel, no email; **INFO/WARN** → attempt, drop silently (by design). Every send —
+including suppressed/disabled — now emits a structured **`alert_send` audit line** (G5's
+`_audit_send`, :398-444: severity/source/outcome ∈ {delivered, failed, suppressed,
+suppressed_disabled}/delivered_to/failed_to/sentinel_written). **Email leg**
+(`scripts/alert_watcher.py`, LIVE systemd service): consumes pending sentinels → SMTP →
+rename `.delivered` (earned — send confirmed first, KNOWN 25-Jul), with Telegram-fallback,
+SMTP-state tracking, degraded-marker and presence-based re-alert (26-Jul rebuild).
+**Liveness**: probe window `[09:00, 16:00)` (`liveness_probe.py:108`) vs
+`service_window_end: "17:35"` (yaml:59) — **G1's 95-minute blind spot re-verified at
+current lines**; compensating control unchanged (the manual ~17:10 check). **Dashboard**:
+`gui-dashboard.service` active, `backend.app` under its own venv, 127.0.0.1:8500 behind
+Tailscale, read-only; kill state read from the persisted DB row (accurate — KS9
+persist-first makes the row authoritative). The July-audit GUI LOWs (ephemeral secret_key,
+lockout DoS, `verify_totp` fail-open on empty secret, prod TOTP seed in the dev tree) stand
+un-re-audited here (KNOWN; P9 scope is what it asserts, and read-only-from-DB asserts
+truthfully).
+
+### P9.2 Headline re-measurements (mandated)
+
+**(a) THE TOLD-vs-REAL MAP — every operator-facing assertion that is measurably false or
+misleading on the current system (the phase's core deliverable).**
+| # | The claim the operator sees | The reality | Status |
+|---|---|---|---|
+| 1 | Every ORDER PLACED Telegram: **"Smart TGT monitoring: ACTIVE (FIXED mode)"** | The exit engine is structurally starved (registration requires CO_PLUS_TGT; LIMIT_TRIPLE forced 478/478) — it has NEVER acted | KNOWN (5-Jul HIGH), re-verified P4.2(a), LIVE on every placement alert |
+| 2 | Nightly system_manager report: **"Kill switch: SOFT_KILL — needs deploy/resume.sh before market open"** | Prior-day kills ALWAYS auto-clear at boot; resume.sh is same-day-emergency only | KNOWN-F4, P8-measured NIGHTLY (:698; :855's own-kill case also auto-clears) |
+| 3 | eod_verify heartbeat: **SUCCESS 32/32** | Its verdict has been stuck PENDING for 18 trading days (since 08-Jul) | IA-P8-01 — the health view certifies a dead verdict |
+| 4 | Shadow INFO alerts: **"⚠️ shadow mismatch vs eod_verify"** on clean days | The flag is inverted by the PENDING-as-verdict read; 14/14 clean days flagged | IA-P8-01 |
+| 5 | **"Naked untracked position"** WARNING | GTT-protected/delivery flows read as naked (detector is GTT-blind); 5/5 false on 31-Jul | IA-P5-06 |
+| 6 | **"POSITION RECONCILIATION MISMATCH"** ERROR | All 3 firing days ever were healthy delivery-lifecycle artefacts (T2); a real delivery book would alarm EVERY day of every position's life | KNOWN-F1 + IA-P8-04 |
+| 7 | The daily **4-line CRITICAL log chorus** (ACTIVE-AT-STARTUP · force_close · KillSwitchActivated · SOFT_KILL ACTIVATED) | All four describe the DESIGNED 15:15 scheduled kill; the same event's Telegram is WARNING (SK-B) and writes no sentinel — **three severity vocabularies on one routine event** | NEW-observation → IA-P9-01 |
+| 8 | `sl_breach_monitor` docstring: "wired into the tick dispatcher in main.py" | Zero importers repo-wide | KNOWN IA-P4-01b (doc-claim) |
+| 9 | HARD_KILL completion: **"all N attempted position(s) flat"** | Placement-verified only; no positions() re-check | IA-P7-01 (latent — never yet emitted live) |
+| 10 | EOD report "System Manager EOD — clean" era-alerts | Carried five CRITICAL-labeled scheduled events pre-SK-B (fixed 26-Jul); 16 of 85 sentinels self-identified INFO | KNOWN (26-Jul review), improved since |
+**Closed as stale while building this map: M-R2** (daily_report legacy P&L excluding
+CLOSED_MANUAL) — the current tree uses `_CLOSED_STATUSES = ("CLOSED","CLOSED_MANUAL")`
+(daily_report.py:58); the July-audit citation no longer holds.
+
+**(b) Can the system prove an alert was actually sent? — ANSWERED, with a status upgrade.**
+**G5 → VERIFIED LIVE**: the send-side audit trail is producing in production — 49
+`alert_send` lines on 31-Jul (the first full day after the 30-Jul deploy), every send's
+outcome recorded; cron-side senders audit into their own cron logs (width: verified in
+cron-control-tower.log; the 49 is the SERVICE stream only). The proof ladder as it now
+stands: **attempt + HTTP-accept** = audited per send, every tier, forward-only from 30-Jul ·
+**delivery to the operator's inbox** = provable only for CRITICAL (sentinel → alert-watcher
+SMTP → `.delivered` earned; measured drained: 0 pending / 39 delivered) · **Telegram-outage
+behaviour by tier**: CRITICAL falls back to the watcher email (working) + failed-log; ERROR
+degrades to `failed_alerts.log` ONLY (an ERROR during an outage reaches nobody until that
+file is read — last real failures 22-Jun/02-Jul, the old-chat-id era); INFO/WARN drop
+silently by design. M-A2's 8s shared budget: KNOWN, shipped, not re-measured (no send
+failures in the window to time).
+
+**(c) The CRITICAL census — NEITHER ledger is complete, both directions now measured.**
+The two counting surfaces disagree structurally: (i) **system-log CRITICAL lines**: exactly
+4/day, and ALL FOUR are the scheduled-kill chorus — a log census counts pure routine noise
+and would count it forever; (ii) **sentinels**: ~0/day current-era (the chorus's alert is
+WARNING and writes none), 39 all-time all-delivered; (iii) the **27-Jul schema-refusal
+class** (KNOWN M2): cron-process CRITICALs write sentinels + reach email but never appear
+in system_*.log — so the log census MISSES a real class while over-counting a routine one.
+⇒ **"no new CRITICAL in the census" is trustworthy ONLY as "no new sentinel", and only for
+notifier-routed CRITICALs** — a raw `logger.critical` with no accompanying notifier call
+reaches no one (the chorus proves the class exists; BANSALWIRE's CHECK9 CRITICAL had its
+soft_kill alert accompany it, so the one real emergency did page). → IA-P9-01.
+
+**(d) Alert fatigue, quantified from the first audited day.** 31-Jul (a healthy, profitable
+trading day, zero real incidents): **49 alerts — 18 at WARNING**, of which **≥10 were
+false-or-artefact** (5 GTT-blind "naked" + 5 predicted orphan-GTT artefacts) plus the
+cron-side recon ERROR ×5 symbols (sell-day F1 face) — **the majority of elevated-severity
+traffic on a clean day described non-problems**, and a real delivery book would add F1's
+daily ERROR. The fatigue mechanism is not hypothetical: the T2 week trained the operator
+that "POSITION RECONCILIATION MISMATCH — ERROR" and "Naked untracked position — WARNING"
+mean *everything is fine*. → IA-P9-02.
+
+### P9.3 NEW findings
+
+---
+**IA-P9-01**
+- **WHAT:** The system has three uncoordinated severity vocabularies for the same events —
+  log level, alert severity, sentinel-worthiness — and its CRITICAL accounting is complete
+  in none of them: the routine 15:15 kill emits 4 CRITICAL log lines + 1 WARNING alert + 0
+  sentinels daily, while the schema-refusal class emits 0 system-log lines + sentinels +
+  email (27-Jul, KNOWN), and a raw `logger.critical` without a notifier call reaches
+  no external channel at all. Any census over one surface is wrong about the others.
+- **EVIDENCE:** the 4-line chorus identified verbatim (31-Jul); sentinel inventory 0
+  pending/39 delivered; SK-B routing (kill_switch.py:596-611); the 27-Jul instance (KNOWN).
+- **CLASS:** Consistency / Architecture. **NEW as a named, measured class** (the pieces —
+  SK-B, M2, the noise review — were individually known).
+- **ROOT CAUSE:** log-level and alert-severity were never contracted to each other;
+  sentinel-writing is a property of the notifier path, not of severity.
+- **RECOMMENDATION (described, ⛔ not applied):** one written contract: "CRITICAL log line
+  ⟺ operator-pageable ⟺ sentinel" — demote the chorus lines to WARNING/INFO (they have a
+  WARNING alert already) or accept and DOCUMENT that log-CRITICAL is not a pageable
+  category; either way the census must be defined as the sentinel ledger.
+- **SEVERITY-BY-IMPACT:** MED for auditability (this campaign itself had to discover which
+  ledger to trust); LOW for daily safety (the working pageable path — sentinel→email — is
+  drained and verified).
+
+---
+**IA-P9-02**
+- **WHAT:** Alert fatigue is a measured, present defect, not a risk: on the first fully
+  audited day, ≥10 of 18 WARNING-tier alerts were false-or-artefact and the only ERROR-tier
+  traffic (recon mismatch ×5) described a healthy delivery event; ALL elevated-severity
+  traffic in the T2 window described non-problems. Delivery go-live multiplies it (F1 daily
+  per held position: ERROR Telegram + exit-2 + heartbeat FAILED). The operator is being
+  conditioned to skim exactly the severities that must never be skimmed — while the one
+  real emergency ever (BANSALWIRE) arrived in the same WARNING/CRITICAL stream.
+- **EVIDENCE:** the 31-Jul alert_send histogram (49/18/0/0) + per-alert classification
+  (P5-06 naked ×5 false; orphan-GTT ×5 artefact; F1 faces ERROR); the K1/F4 nightly false
+  instruction compounds it in the report channel.
+- **CLASS:** Safety (posture). **KNOWN-COMPOSED → quantified** (SK-B and the 26-Jul noise
+  review addressed earlier layers; the delivery-artefact layer is new traffic).
+- **ROOT CAUSE:** each false stream is individually explained (isolated-DB artefact,
+  GTT-blind probe, missing product filter) — their SUM is what the operator experiences,
+  and nothing owns the sum.
+- **RECOMMENDATION (described):** the fixes are already owed elsewhere (the buy-day filter
+  + D-4(a) kill F1's stream; the GTT-aware naked probe kills P5-06's; IA-P8-01's fix kills
+  the inverted flag) — the P9-specific ask is only: after those land, re-measure this
+  histogram and set a standing budget (e.g. "an elevated-severity alert on a clean day is
+  itself a defect").
+- **SEVERITY-BY-IMPACT:** MED — it is the multiplier on every other phase's "the alert
+  fired" mitigation.
+
+---
+**IA-P9-03** (hygiene bundle, one ID)
+- (a) The notifier's OWN email fallback (:519-523) remains INERT (`ALERT_EMAIL_*` absent
+  on the VM — KNOWN board item) — the code path that reads `enabled: true` is the dead one;
+  the alert-watcher is the real email leg. Config-vs-code standing note, re-confirmed.
+- (b) An ERROR-tier alert during a Telegram outage reaches no channel (failed-log only) —
+  by-design TG4/TG8, but worth one line in the operator docs; the audit line now at least
+  records `outcome=failed` (G5).
+- (c) `_build_email`'s CRITICAL-inference for absent severity — LATENT, pinned by test
+  (KNOWN 26-Jul), unchanged.
+- (d) The 22-Jun/02-Jul `failed_alerts.log` tail entries are pre-rotation chat-id failures
+  — the file has been silent for 30 days; its emptiness since is itself evidence the
+  current chat/token pair works (composes with the 25-Jul `getMe` verification).
+- (e) The dashboard unit is `gui-dashboard.service` (active, loopback-only); the July GUI
+  LOWs stand unre-audited; its kill-state panel reads the persisted row, which KS9 makes
+  authoritative — no dashboard-specific false assertion found (width: unit identity +
+  listening socket + the KS9 reasoning; panel-by-panel content NOT audited).
+- (f) G1 re-verified at current lines (16:00 probe vs 17:35 service); the compensating
+  manual check stands; ⛔ not a 1-line fix (KNOWN).
+- **CLASS:** Documentation / Posture. **SEVERITY:** LOW.
+
+### P9.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| G5 (send-side audit trail, `214a878`, FORWARD-only) | **STATUS UPGRADE → VERIFIED LIVE**: 49 structured `alert_send` lines on 31-Jul, outcomes recorded, both service and cron streams |
+| 5-Jul [HIGH] alert-truth divergence ("Smart TGT ACTIVE") | LIVE — map row 1; unchanged since P4's fresh verification |
+| F4 (resume.sh in the EOD report) | Map row 2 — P8-measured nightly, both sites |
+| G1 (liveness 16:00 vs 17:35 blind spot) | RE-VERIFIED at current lines (`liveness_probe.py:108` / yaml:59); compensating control unchanged |
+| M-A2 (8s shared send budget) | KNOWN, shipped `488e7e3`; not re-measured (zero send failures in window to time); the R8 shared-budget caveat stands |
+| M2 / schema-refusal census bypass (27-Jul) | CONFIRMED as one direction of IA-P9-01's two-way incompleteness |
+| SK-B (scheduled kills route WARNING) + the 26-Jul 85-sentinel noise review | Working as designed — and jointly the CAUSE of the log-vs-alert vocabulary split IA-P9-01 names |
+| Out-of-band email path (25-Jul production verification) | Re-confirmed operational by artifact: 39/39 sentinels `.delivered`, 0 pending, SMTP state clean |
+| M-R1 (daily_report legacy holiday guard broken) | NOT re-verified this phase (report-internals width limited to the M-R2 check + F4; state honestly) |
+| M-R2 (legacy P&L excludes CLOSED_MANUAL) | **CLOSED-STALE**: `_CLOSED_STATUSES` includes CLOSED_MANUAL (daily_report.py:58) — the July citation no longer holds |
+| ~249/day silent-drop class | ⛔ Not re-opened (P1 re-measured it dead). The P9 answer to "would a recurrence be visible": YES — the drop pattern's absence signals (webhook_audit counts, the daily xlsx W9 counter) plus the P1-measured zero-baselines are all operator-visible artifacts |
+| Test-suite real-alert leakage (~50 since 6-May) | KNOWN CLOSED 27-Jul (in-process guards); the subprocess hole stands as recorded |
+| W1-W9 report placeholders | Unchanged honesty markers (KNOWN); not re-audited |
+| require_hmac /health oracle (AB-910 §1.7) | CLOSED by P1-17-Jul (KNOWN); dashboard/health surfaces not re-probed (no live probe on a weekend) |
+
+### P9.5 Open questions (not guessed into findings)
+
+- **OQ-P9-1:** The 28-Jul-cited 04:29/04:36 same-hour double-fire (dedup question) — not
+  reconstructed this phase (the presence-based re-alert rebuild post-dates it; whether the
+  current dedup would collapse it needs a planted-sentinel test, not a weekend log read).
+- **OQ-P9-2:** Panel-by-panel dashboard content audit (what each panel asserts vs DB truth)
+  — deferred; the read-only-from-DB architecture bounds the risk, but "no false panel" was
+  NOT verified here (width stated in IA-P9-03e).
+- **OQ-P9-3:** Whether any OTHER raw `logger.critical` sites lack an accompanying notifier
+  call on a REAL emergency path (the chorus is benign; the width of the "unaccompanied
+  CRITICAL" class was not swept repo-wide).
+
+### P9.6 SEAM SUMMARY — can deploy/recovery's true state differ from what is reported (P10's starting point)
+
+**The instruments that would tell the operator about a deploy or recovery are themselves
+the ones this phase found lying in both directions.** What P10 inherits: (1) the
+**deploy-record ground truth exists and is complete** (`~/trading-system.git/logs/HEAD` —
+801 entries, both halves of every deploy, KNOWN 28-Jul) but NOTHING reports it — deploy
+verification is a manual ritual, and the reflog is consulted only when someone remembers
+it exists; (2) **recovery instructions in the operator's channel are wrong in the easy
+direction** (F4's nightly resume.sh line; the RUNBOOK's exit-4 "restart loop" text — K1) —
+a real HALT would be handled against documentation that misdescribes both the failure and
+the fix; (3) the **boot window itself is the least-observed moment**: the 08:15 chorus
+writes 4 CRITICAL log lines every day (noise), the schema-refusal class emails without
+logging (M2), and the liveness probe doesn't start until 09:00 — a failed boot's
+observability rests on the boot guard + token-watcher chain P10 must audit; (4) the
+**green signals P10 will meet are now calibrated**: SUCCESS heartbeats can sit over dead
+verdicts (IA-P8-01), `.delivered` is earned (trustworthy), `alert_send` outcomes are
+trustworthy-forward-from-30-Jul, and a quiet `failed_alerts.log` means the CURRENT
+credentials work. P10's question — can a deploy/crash/recovery leave the system in a state
+the operator was never told about — already has one measured YES from this session's
+archive (the 27-Jul missing EOD report), and the reporting layer's blind spots mapped here
+say where to look for more.
+
+**Phase 9 done** = the told-vs-real map built (10 rows, each with evidence and status; one
+KNOWN closed stale in the process); delivery-proof answered with G5 upgraded to VERIFIED
+LIVE on production artifacts (49 audited sends; 39/39 sentinels delivered; the per-tier
+outage behaviour stated); the census question settled — neither ledger is complete, the
+trustworthy statement is sentinel-scoped, and the three-vocabulary split is named
+(IA-P9-01); alert fatigue quantified from the first audited day (≥10/18 WARNING false —
+IA-P9-02); G1/M-A2/M2 re-verified or carried at current lines; the P9→P10 seam written;
+committed incrementally; ⛔ nothing fixed, nothing pushed, the 3-Aug/4-Aug sequence
+untouched.
+*(Phase 10 — deploy / recovery / boot — appends below this line.)*
