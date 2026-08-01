@@ -3888,3 +3888,185 @@ unratified governing constants inventoried; the flag graph and VM-config identit
 clean bills; committed incrementally; ⛔ nothing fixed, nothing pushed, the 3-Aug/4-Aug
 sequence untouched.
 *(X-DOCS / X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
+
+---
+
+## PHASE X-DOCS — DOCUMENTATION INTEGRITY (does the doc match reality; weighted by operator-harm)
+
+### XDOC.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026, clock-read start 11:45:55 IST** |
+| Measurements taken | 01-Aug ~11:46–11:5x IST — fresh doc↔code verifications on the PC tree (== deployed `297b587` for everything ancestor-checked) + git archaeology; zero writes; ⛔ July audits untouched |
+| Evidence base | the three hand-offs (IA-XARCH-04 map inversion · IA-XDUP-04 contract-width · X-CONFIG's lying-comments inventory) + F4/K1 + the P9 told-vs-real map |
+| Scope guard | ⛔ NO doc fixed — hardest to resist here, resisted; the 3-Aug/4-Aug sequence untouched |
+
+### XDOC.1 Headline determinations
+
+**(a) THE OPERATOR-ACTION VERDICT TABLE (A/H lens — Safety-graded).**
+| Action doc / message | Verdict against current code | Status |
+|---|---|---|
+| `docs/RUNBOOK.md:101` (exit-4 row) | **NOW CORRECT — K1's doc half is FIXED**: commit `1b03a64` ("correct the two docs that get exit-4 recovery WRONG"), **ancestor of the deployed `297b587`** ✓; the row's claims (failed-not-loop, resume.sh, ⛔NOT-restart/⛔NOT---resume, prior-day auto-clear, the exact scheduled-vs-emergency partition) each match this session's P7 source measurements | **KNOWN → CLOSED-VERIFIED** |
+| `docs/05_incident_response.md:37-55` | **NOW CORRECT** — same commit; carries the DO-NOTs + resume.sh ± --force | **KNOWN → CLOSED-VERIFIED** |
+| **`docs/03_daily_operations_runbook.md:133-139`** ("Kill Switch Won't Clear") | **WRONG — the site the K1 fix MISSED** (the X-DUP fix-miss pattern, in docs): prescribes a **raw sqlite UPDATE on the live DB** + `systemctl restart` — bypassing `clear_kill_switch.py`/resume.sh (no audit trail, no backup), and the F2-measured trap applies: while the service RUNS, the in-memory KS is authoritative — the UPDATE alone changes nothing; it "works" only via the restart's reload. Also stale mechanically (single-row id=1 table; the MAX(rowid) subquery works by luck) | **NEW — the highest-harm live doc defect** |
+| **`docs/03_daily_operations_runbook.md:141-147`** ("Database Locked") | **CONDITIONALLY WRONG**: `systemctl restart` — with ANY same-day emergency kill persisted this is exit-4 HALT (service stays down, no exit management); DB-locked and an emergency kill plausibly co-occur in exactly one incident | **NEW** |
+| `reports/system_manager` nightly: "needs deploy/resume.sh before market open" | **STILL WRONG nightly** (F4 — both sites overstate; prior-day kills auto-clear) | KNOWN (P8-measured) |
+| Every ORDER PLACED alert: "Smart TGT monitoring: ACTIVE" | **STILL FALSE** (engine starved) | KNOWN (P9 map row 1) |
+**Recovery guidance exists in FOUR sources: two now correct (RUNBOOK, incident-response),
+two stale (03_daily ×2 sites, the nightly report line)** — `disaster_recovery.md`,
+`first_day_live_runbook.md`, `monitoring_prevention_checklist.md` are silent on kill
+recovery (checked: 0 restart/resume instructions). → IA-XDOCS-01.
+
+**(b) Comments and docstrings that lie — the consolidated inventory (D lens, ~12 traps).**
+YAML comment layer (X-CONFIG's hand-off): `pipeline_timeout_sec` promises a "hard
+per-signal deadline" (consumed by nothing) · the two `reconnect_backoff_*` comments
+promise tunable pacing (no consumer) · `auto_resume_kill_switch`'s comment describes a
+conditionality that doesn't exist · `backoff_sequence_sec`'s "4th step is soft_kill"
+describes a superseded mechanism · `smart_tgt.enabled: true` + `liquidity_check_enabled:
+true` assert mechanisms that are dark (β/α). Code docstring layer: `sl_breach_monitor`
+"wired into the tick dispatcher in main.py" (zero importers — IA-P4-01b) ·
+`sum_fm_ledger_margin_delta` "for a closed reservation: sum is 0" (false for all 205
+commits ever — IA-P6-03) · eod_broker_reconcile's LEDGER-dimension docstring (vacuous
+implementation — IA-P8-02) · the adapter's D.3 note "margins… burst=1, 1/sec" (actual
+8/8 — IA-P5-07) · OSM "all 8 valid state names" (9 — IA-P5-10b). **The counter-idiom is
+also present and should be named as the standard: superseded-but-legible labels**
+(kill_switch's KS5/KS11/KS13 supersession notes; the post-receive hook's 17-Jul
+header self-correction; get_daily_realized's fixed-history docstring) — the codebase
+knows how to keep a stale claim visibly stale. → IA-XDOCS-02.
+
+**(c) The map inversion — reader-harm characterised (C lens).** SYSTEM_MAP.md (597KB) and
+PATHS.md (~120KB) are honest ABOUT their state (both headers self-describe as
+changelog/not-orientation — no false claim), but the READ-FIRST rule points every new
+session at 600KB of newest-first narrative in which no current structural description
+exists. The practical harm is measured by this campaign's own workflow: thirteen phases
+never once read "the map" as a map — orientation came from module docstrings (whose layer
+numbers the X-ARCH graph verified honored) and from banner-greps. A new reader would be
+misled not by wrong content but by the ABSENCE of any current-state section under a title
+that promises one. G20-P4-6/P4-7 own the restructure; X-ARCH's input stands (generate any
+future map FROM the docstrings). → IA-XDOCS-03 (KNOWN-composed; the harm
+characterisation is the addition).
+
+**(d) Citations-to-phantoms + the register's own rot (B/E lens).** Phantoms: **G4 stands**
+(the PB-01 spec cited as authority by multiple files, never written — KNOWN; not
+re-counted here, width stated) · the `halt.sh` precedent (a hypothetical cited as if
+real — KNOWN, memory-pinned) — no NEW phantom surfaced in this phase's verifications
+(width: the docs actually opened this session; not an exhaustive link-sweep). **The
+register's own rot, measured across this campaign as the E-lens evidence:** 4 stale
+KNOWNs found-and-closed by re-measurement in 13 phases (M-R2 closed-stale P9 · M-DP1
+closed-by-removal P10 · K1's doc half closed-stale TODAY · IA-P4-04's root cause
+corrected P5) + 1 self-inflicted-and-corrected error (the X-ARCH clock stamp). ⇒ the
+30-Jul sweep's bar ("open must mean open; close only with cited evidence") is not
+optional hygiene — the measured stale-rate is ~1 per 3 phases even in a register
+maintained this carefully. → IA-XDOCS-04.
+
+**(e) Coverage gaps — what the operator will hit with NO guidance (G lens).** (1) **F1's
+false MISSING_AT_BROKER/ORPHAN CRITICALs on a real delivery book** — the single most
+alarming string the system emits, explained only in audit documents; no operator-facing
+doc says "this fires daily on a healthy holding until D-4(a) ships" (the flip plan must
+carry it). (2) **The migration-window night** — a schema-push evening produces a storm of
+cron CRITICALs (M1/M2, 27-Jul measured) with no doc telling the operator "this is the
+refuse-window, it self-heals at the next boot". (3) **The daily journal CRITICAL chorus**
+(4 lines every healthy morning — IA-P9-01) — nowhere documented as routine. (4)
+**T2-class artefact alerts** (naked-untracked warnings on delivery flows) — documented
+only in the external observation card. (5) The **exit-3 alert-vs-silent matrix** exists
+only inside this register (P10.2a) — the operator doc for "the service didn't start"
+remains the two fixed-but-minimal K1 rows. **The pattern: this REGISTER has become the
+de-facto operator reference for edge behaviour — a doc-architecture smell handed to
+X-EVOLVE.** → IA-XDOCS-05.
+
+### XDOC.2 Findings
+
+---
+**IA-XDOCS-01**
+- **WHAT:** The operator-action verdict table: K1's two doc sites FIXED-and-deployed
+  (verified line-by-line against this session's code measurements) — while the fix
+  MISSED the third recovery doc: `03_daily_operations_runbook.md` still prescribes a
+  raw live-DB kill-clear + restart (:133-139 — the pre-resume.sh anti-pattern, carrying
+  the F2 memory-authoritative trap and no audit trail) and an unconditional restart for
+  a locked DB (:141-147 — exit-4 HALT whenever a same-day kill coincides). The nightly
+  report line (F4) and the "monitoring ACTIVE" alert remain the other two live false
+  claims.
+- **EVIDENCE:** the table above — each row cites doc line + the code measurement it was
+  checked against; `1b03a64` ancestry-verified deployed.
+- **CLASS:** **Safety** (action-docs). **KNOWN(K1,F4) → status-split + NEW (the 03_daily
+  pair)**.
+- **ROOT CAUSE:** recovery guidance lives in four places (the docs' own X-DUP problem);
+  the K1 fix updated the two sites its author knew.
+- **RECOMMENDATION (described, ⛔ not applied):** fix the 03_daily pair to point at
+  resume.sh (2 lines each); longer-term, ONE recovery authority with the others linking
+  to it — the closure_source pattern for docs.
+- **SEVERITY-BY-OPERATOR-HARM:** **HIGH** — the wrong sites live in the DAILY-operations
+  runbook, the most likely doc open during a mid-day incident; the induced action (raw
+  DB write on a live emergency) is the worst of the four sources' answers.
+
+---
+**IA-XDOCS-02**
+- **WHAT:** The lying-comment/docstring inventory: ~12 sites where a comment describes a
+  mechanism the code does not have (6 yaml, 5-6 code) — each a trap for the next editor
+  — against the codebase's own working counter-idiom (superseded-but-legible labels).
+- **EVIDENCE:** XDOC.1(b), each item citing its register ID.
+- **CLASS:** Documentation / Consistency. **SYNTHESIS** (consolidates X-CONFIG's yaml
+  inventory + the flow phases' docstring catches into one list).
+- **RECOMMENDATION (described):** when each underlying finding is fixed, fix the comment
+  IN THE SAME COMMIT (the SK-B/hook precedent); until then, the supersession-label idiom
+  applied to the six yaml comments would cost six lines.
+- **SEVERITY-BY-OPERATOR-HARM:** MED — these mislead editors and auditors rather than
+  the operator mid-incident; two (smart_tgt/liquidity "true") also feed the P9
+  false-safety surface.
+
+---
+**IA-XDOCS-03**
+- **WHAT:** The map inversion's reader-harm: honest-but-empty orientation — 600KB of
+  changelog under map titles, zero current-state description; measured by this
+  campaign's own 13-phase workflow never using the map as a map.
+- **CLASS:** Documentation. **KNOWN (IA-XARCH-04 / G20-P4-6/7) — harm characterisation
+  added.** **RECOMMENDATION:** carried (generate from docstrings; the restructure is
+  owned). **SEVERITY:** MED (a tax on every future session, not an incident hazard).
+
+---
+**IA-XDOCS-04**
+- **WHAT:** Register self-rot, quantified: 4 stale KNOWNs + 1 self-inflicted stamp error
+  across 13 phases (~1 per 3 phases) — in the best-maintained document in the repo —
+  proving the 30-Jul evidence-bar is load-bearing, not ceremonial. G4's phantom-spec
+  citation stands as the one live phantom class.
+- **CLASS:** Documentation / Process. **SYNTHESIS** (the campaign's own corrections as
+  the dataset). **RECOMMENDATION:** none new — the bar exists; this finding is its
+  measured justification. **SEVERITY:** LOW as a defect, HIGH as method-evidence.
+
+---
+**IA-XDOCS-05**
+- **WHAT:** Five operator-coverage gaps (XDOC.1e) — the common shape: edge behaviour
+  this audit documented exists ONLY in the register/audit layer, making the register the
+  de-facto operator reference (a role it is not designed for).
+- **CLASS:** Documentation / Safety-posture. **NEW-as-enumerated.**
+- **RECOMMENDATION (described):** the flip plan carries (1); a one-page "expected alarms
+  and what they mean" note covers (1)-(4) in ~15 lines — the highest-value single doc
+  the system currently lacks.
+- **SEVERITY-BY-OPERATOR-HARM:** MED-HIGH for (1) specifically (a daily false CRITICAL
+  with no explanation is how alert fatigue becomes policy — IA-P9-02's doc-layer face).
+
+### XDOC.3 Open questions
+
+- **OQ-XDOCS-1:** Whether `03_daily_operations_runbook.md`'s other sections carry
+  further stale instructions (only the kill/DB blocks were verified — width stated; a
+  full read of the six operator docs is the natural next slice).
+- **OQ-XDOCS-2:** G4's citation count (the "4 files") not re-measured — the spec's
+  absence is the finding either way; the count matters only for the fix's checklist.
+
+### XDOC.4 Hand-offs
+
+**X-SEC** inherits: no security-doc drift found in this phase's width (the gui_config
+LOWs remain the July-known set; not re-audited). **X-EVOLVE** inherits: the
+doc-restructure as a maintainability cost (-03), the register-as-de-facto-reference
+smell (-05), and the docs' own fix-miss pattern (-01) as evidence that doc maintenance
+needs the same single-owner discipline as code.
+
+**X-DOCS done** = every located operator-action instruction verified against current code
+(2 fixed-and-verified, 2 newly-found wrong, 2 known-wrong standing — Safety-graded); the
+lying-comment inventory consolidated (~12) with the counter-idiom named; the map
+inversion's harm characterised; register self-rot quantified from this campaign's own
+corrections; five coverage gaps enumerated with the one-page fix described; ⛔ NO doc
+touched (the discipline held where it is hardest); committed incrementally; nothing
+pushed; the 3-Aug/4-Aug sequence untouched.
+*(X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
