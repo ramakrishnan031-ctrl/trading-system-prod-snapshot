@@ -4371,7 +4371,7 @@ The security posture as a **constraint on future change**: (1) the PC/VM credent
 |---|---|
 | Session window | **Sat 01-Aug-2026, clock-read start 12:25:03 IST** |
 | Method | **Synthesis** over the 16 committed phases, with fresh measurement ONLY for this phase's new claims (the strategy-addition path; campaign metrics) |
-| Fresh measurements | register **4,362 lines / 17 register commits / 19 total commits** ahead of `297b587` · **16 strategy YAMLs** in `config/strategies/` (10 carrying `enabled: false` lines) · `scan_webhook_map.yaml` = the scanner→strategy map (58 keys), startup-validated (P17/S10: every mapped strategy must have a YAML; duplicate scanner names ⇒ CRITICAL boot failure) |
+| Fresh measurements | register **4,362 lines at the start of this phase → 4,593 with this section appended** (self-referential count, corrected post-append rather than left stale — the same discipline applied to the X-ARCH clock stamp) / **18 register commits / 20 total commits** ahead of `297b587` · **16 strategy YAMLs** in `config/strategies/` (10 carrying `enabled: false` lines) · `scan_webhook_map.yaml` = the scanner→strategy map (58 keys), startup-validated (P17/S10: every mapped strategy must have a YAML; duplicate scanner names ⇒ CRITICAL boot failure) |
 | Scope guard | ⛔ debt is DESCRIBED, not scheduled; no fix authorised; 3-Aug/4-Aug untouched |
 
 ### XE.1 (I) MAINTAINABILITY RISKS
@@ -4571,7 +4571,7 @@ to fix.
 
 **Delivered:** P1–P10 (the flow: signal → screen → size → place → execute → capital →
 kill → reconcile → report → boot) + X-ARCH · X-DUP · X-CONFIG · X-DOCS · X-TEST · X-SEC ·
-X-EVOLVE (cross-cutting). **Register: 4,362 lines, 17 incremental commits** (19 total ahead
+X-EVOLVE (cross-cutting). **Register: ~4,600 lines, 18 incremental commits** (20 total ahead
 of the deployed `297b587`, all docs-only, all unpushed by design so Monday boots the
 regression-tested SHA). **Method held throughout:** findings only — measured on the
 deployed code, `mode=ro` reads and log greps, every "found nothing" carrying its search
