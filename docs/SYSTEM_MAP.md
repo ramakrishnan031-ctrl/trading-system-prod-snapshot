@@ -669,9 +669,20 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > keeping intruders off `ubuntu` (SSH→Tailscale-only + key passphrase), NOT `.env` file-mode. Controls
 > PROPOSE-not-apply; recovery path for any SSH change = **OCI serial/VNC console**.
 
-> 🧾🔍 **PENDING SOURCE-OF-TRUTH (14-Jul-2026):** the 10-Jul master pending list was reconciled
-> against HEAD → **`docs/audit/pending_reconciliation_14jul2026.md` is now the authoritative pending
-> register** (supersedes `MASTER_PENDING_TRUE_FINAL_10JUL.txt`, a Downloads file not in-repo).
+> 📋⭐ **PENDING SOURCE-OF-TRUTH — CURRENT (01-Aug-2026): `docs/MASTER_PENDING_01-Aug-2026.md`.**
+> The consolidated WORKING register, four bands, **231 items reconciled** (132 pre-audit + the
+> integrity audit's **95 finding IDs** + 4 new): **§A live-trading 6 · §B the XE.3 debt-ledger
+> running order 96 · §C still-open 105 · §D settled 24.** ⛔ **`MASTER_PENDING_28-Jul-2026.txt` and
+> `MASTER_PENDING_30-Jul-2026.md` are SUPERSEDED as the working register but RETAINED as the cited
+> authorities — DO NOT DELETE EITHER, and where they disagree with the 01-Aug file THEY WIN.**
+> ⭐ The debt ledger is a **running order, not an authorisation** — no fix work is authorised by the
+> audit. 🔴 **§A0 carries the ONE decision owed Rama before Mon 3-Aug's close** (does a buy-day-filter
+> slip postpone only the carry pilot, or all of 4-Aug). The lines below are the SUPERSEDED 14-Jul
+> pointer, kept for lineage.
+
+> 🧾🔍 **PENDING SOURCE-OF-TRUTH (14-Jul-2026) — 🔁 SUPERSEDED, see above:** the 10-Jul master pending
+> list was reconciled against HEAD → **`docs/audit/pending_reconciliation_14jul2026.md` was then the
+> authoritative pending register** (superseded `MASTER_PENDING_TRUE_FINAL_10JUL.txt`, a Downloads file not in-repo).
 > Durable facts it establishes: **Audit-B Phases 9 (Operations) + 10 (Security) were NEVER completed**
 > (`docs/audit/audit_05jul2026.md` ends mid-Phase-9, "Batch 5 running") → pending, not clean.
 > **M-S4 is PARTIAL** — substrate (schema-v44 `daily_symbol_stats`, `candle_math.rsi`, forward-shadow
