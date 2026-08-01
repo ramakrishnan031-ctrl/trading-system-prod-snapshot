@@ -226,6 +226,7 @@ from broker.product_resolver import ProductResolver
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch
 from core.config_loader import RateLimitBackoffConfig, SmartTgtConfig
+from core.effect_telemetry import handle as _effect_handle
 from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged, PositionClosed
 from core.exceptions import BrokerError, BrokerRateLimit429Error, BrokerTimeoutError, OrderRejectedError, SLUnplaceableError
 from core.ids import new_trade_id, truncate_tag_for_broker
@@ -604,6 +605,11 @@ class OrderPlacer:
         self._fm = fund_manager
         self._bus = bus
         self._log = logger
+        # effect-telemetry (ledger #1, contract AMENDMENT B-2, approved):
+        # place() is the single public placement entry — the manager's one
+        # effect-point; the emergency-exit path is its own dormant tripwire.
+        self._fx_place = _effect_handle("order_placer")
+        self._fx_emergency = _effect_handle("placer.emergency_exit")
         self._order_monitor = order_monitor  # BL-7b: required for A.3.c track() wiring
         self._cost_calculator = cost_calculator  # BL-10a: exit-path cost computation
         self._rr_ratio = rr_ratio
@@ -891,6 +897,10 @@ class OrderPlacer:
           LONG:  adjusted = min(entry_price + buffer, release_ltp)
           SHORT: adjusted = max(entry_price - buffer, release_ltp)
         """
+        # effect-telemetry (amendment B-2): an entry-placement request
+        # executed — counted at dispatch, mirroring signal_processor's
+        # semantics (a raise downstream does not un-execute the request).
+        self._fx_place.inc()
         # FIX-025: Apply slippage protection if release_ltp provided
         requested_entry = entry_price
         if release_ltp is not None:
@@ -3856,6 +3866,10 @@ class OrderPlacer:
         Does NOT handle capital release — that happens when the exit fills
         via the normal _handle_exit_fill path.
         """
+        # effect-telemetry (amendment B-2): dormant tripwire — the FIX-148/181
+        # emergency path has 0 executions ever (audit P5.2); ANY entry here is
+        # exactly what this census exists to notice.
+        self._fx_emergency.inc()
         symbol = fill_entry.symbol
         fallback_side = "SELL" if fill_entry.side == "BUY" else "BUY"
 

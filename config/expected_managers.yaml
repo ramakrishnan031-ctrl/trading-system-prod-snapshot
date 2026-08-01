@@ -84,8 +84,8 @@ managers:
     class: orders.order_placer.OrderPlacer
     ctor: "main.py:2639"
     state: expected-active
-    effect_point: "orders/order_placer.py:3914 self._adapter.place_order( — THE single adapter chokepoint"
-    acted_means: "an order dispatched to the broker"
+    effect_point: "orders/order_placer.py place() — the single public placement entry (AMENDED B-2, approved; was :3914, measured to be _emergency_market_exit — see the contract's amendment note)"
+    acted_means: "an entry-placement request executed"
     note: "zero-trade-day reads 0 truthfully (GATE-Q3)"
   - name: limit_protocol
     class: orders.order_protocol_limit.LimitTripleProtocol
@@ -307,6 +307,13 @@ managers:
     effect_point: "screening/quality_scorer.py:121 observation score>65 at result return"
     acted_means: "a composite score above the G2 ceiling"
     reason: "algebraically impossible while G2's 25 pts are dead-at-0 + 20 pinned-at-half; acted>0 = G2 moved"
+  - name: placer.emergency_exit
+    class: "(dormant tripwire inside OrderPlacer — ADDED B-2, approved)"
+    ctor: "main.py:2639"
+    state: expected-dormant
+    effect_point: "orders/order_placer.py:3849 _emergency_market_exit body"
+    acted_means: "the emergency market-exit path fired"
+    reason: "FIX-148/181 path — 0 executions ever (audit P5.2 census); acted>0 = the never-fired last-line exit finally ran"
   - name: cnc_gtt_placer
     class: orders.cnc_gtt.CncGttPlacer
     ctor: "main.py:2605"
@@ -376,4 +383,4 @@ managers:
   - {name: step_executor,      class: screening.step_executor.StepExecutor,   ctor: "main.py:2812", state: infra}
   - {name: token_monitor,      class: broker.token_monitor.TokenMonitor,      ctor: "main.py:2873", state: infra, note: "paper no-op by design (FIX-128 E)"}
   - {name: clock_skew_probe,   class: broker.clock_skew_probe.BrokerClockSkewProbe, ctor: "main.py:3384-3386", state: infra, modes: "live-only ctor BY DESIGN (paper skew always ~0) — the ONE mode-conditional entry"}
-  - {name: ohlc_fetchers,      class: "OhlcFetcher x4 (regime/structure/v3/watchlist)", ctor: "main.py:3004/:3043/:3160/:3209", state: infra, note: "per-feature fetch plumbing"}
+  - {name: ohlc_fetchers,      class: "OhlcFetcher x5 (regime/structure/v3/watchlist/retest — CORRECTED B-2: the 5th sits in the flag-OFF retest block)", ctor: "main.py:~3031/:3070/:3187/:3236/:3281", state: infra, note: "per-feature fetch plumbing; all five sites register (idempotent)"}

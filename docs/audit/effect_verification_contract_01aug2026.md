@@ -130,7 +130,7 @@ sub-units, and no others were invented). "Acted" always means the CONSEQUENTIAL 
 | `secondary_screener` | main:2826 | `screening/secondary_screener.py:592` `_persist` (P18 trail — all verdict paths route through it, :157-:279) | a screening verdict persisted | **ACTIVE** (thousands/day) |
 | `quality_scorer` | main:2808 | `screening/quality_scorer.py:121` `return ScoreResult(` | a composite score produced | **ACTIVE** (thousands/day) |
 | `hard_gate` | main:2820 | `screening/hard_gate.py:135` `evaluate` verdict | a V3 hardgate verdict produced (shadow) | **ACTIVE** — if census reads 0, IA-P2-05's shadow leg broke further: investigate, do NOT reclassify |
-| `order_placer` | main:2639 | `orders/order_placer.py:3914` — THE single adapter chokepoint `self._adapter.place_order(` (audit P4: one placement pipeline; only call site in the module) | an order dispatched to the broker | **ACTIVE** (zero-trade-day caveat) |
+| `order_placer` | main:2639 | **[AMENDED B-2, approved]** `orders/order_placer.py` `place()` — the single PUBLIC placement entry (def :864 at freeze) | an entry-placement request executed | **ACTIVE** (zero-trade-day caveat) — *original row superseded; see §AMENDMENTS* |
 | `limit_protocol` | main:2596 | `orders/order_protocol_limit.py:167` `execute` | a LIMIT_TRIPLE entry sequence executed | **ACTIVE** (423/423 historical; zero-trade-day caveat) |
 | `order_monitor` | main:2576 | `broker/order_monitor.py:1207` `_safe_transition` commit | an order state transition committed | **ACTIVE** (zero-order-day caveat) |
 | `order_reconciler` | main:2702 | `orders/order_reconciler.py:615` `reconcile_once` return — count += len(actions) (RC20: "the list of ReconciliationActions TAKEN") | a reconciliation action enacted (CHECK1 finalizations dominate) | **ACTIVE** (zero-trade-day caveat: clean cycles return `[]`) |
@@ -173,6 +173,7 @@ sub-units, and no others were invented). "Acted" always means the CONSEQUENTIAL 
 | `drift.hard_rung` | `capital/drift_handler.py:231` `hard_kill(` enactment | same — HARD has never fired anywhere (Q4 record) |
 | `scorer.tier_high` (γ) | `screening/quality_scorer.py:113` `tier = "HIGH"` branch | **IA-P2-03**: HIGH unreachable (threshold 80 > achievable ceiling 65) |
 | `scorer.score_gt_ceiling` (γ) | `screening/quality_scorer.py:121` — observation `score > 65` at result return | **G2 tripwire**: >65 is algebraically impossible while 25 pts are dead-at-0 + 20 pinned-at-half; acted>0 = the dead inputs came alive (G2 moved) — the census notices the fix before anyone reports it |
+| `placer.emergency_exit` **[ADDED B-2, approved]** | `orders/order_placer.py:3849` `_emergency_market_exit` body | FIX-148/181 last-line exit — **0 executions ever** (audit P5.2 census); acted>0 = the never-fired emergency path finally ran — exactly what this census exists to watch |
 | `cnc_gtt_placer` | `orders/cnc_gtt.py:94` `place_for_fill` | delivery OFF (`delivery_enabled: false`); acted>0 BEFORE the 4-Aug flip = an alarm. ⭐ **FLIP-RIDER: the 4-Aug deploy carries the registry edit → event-driven** (GATE-Q7) |
 | `cnc_gtt_monitor` | `orders/cnc_gtt_monitor.py:101` `reconcile` — count += len(actions) | same flip-rider |
 
@@ -238,6 +239,37 @@ deferred.**
 | **Q5** | Census hook = `_shutdown()` entry (16:05 report is out-of-process — measured, not assumed) | **Approve** |
 | **Q6** | `webhook_receiver` covered-existing via `webhook_audit`; `telegram_notifier` = infra (its `_audit_send` trail exists; alert-truth is ledger #9's scope, not #1's) | **Approve** |
 | **Q7** | Flip-rider rule: the 4-Aug flip deploy carries the `cnc_gtt_*` registry edits | **Approve** — else Wednesday's census mismatches by design |
+
+## §AMENDMENTS
+
+**AMENDMENT B-2 — 01-Aug-2026 late (executed 01-Aug ~18:2x IST) — APPROVED VIA THE GATE
+(Rama relayed; ChatGPT concurred: "update the frozen contract and registry to match the
+measured code, then implement the corrected effect-point"). Never a silent edit; the
+superseded text is quoted here in full.**
+
+- **What was wrong:** the original A2.1 `order_placer` row read: *effect-point
+  "`orders/order_placer.py:3914` — THE single adapter chokepoint
+  `self._adapter.place_order(` (audit P4: one placement pipeline; only call site in the
+  module)", acted = "an order dispatched to the broker"*. **Measured during Phase B:
+  :3914 sits inside `_emergency_market_exit` (:3849) — the FIX-148/181 emergency path,
+  0 executions ever (audit P5.2)** — instrumenting it as expected-active would have
+  manufactured a permanent false MISMATCH(i).
+- **The Phase-A error class, recorded so the census design never re-absorbs it:** a
+  FILE-scoped grep ("only call site in the module") was read as a SYSTEM fact, and the
+  audit's "one placement pipeline / one broker chokepoint" (which is about the ADAPTER
+  being the chokepoint) was over-read to mean one call line. Repo-wide, the
+  `adapter.place_order()` sites disperse: `order_protocol_limit.py:204/:375/:459/:573`,
+  `order_protocol_co.py:116/:193`, `eod_squareoff.py` ×3, the reconciler's G5b direct
+  call, and the placer's emergency :3914. ⇒ **rule: an effect-point's "single
+  chokepoint" claim must be established repo-wide, never file-wide** (same lesson as
+  memory `feedback_absence_needs_wide_check`).
+- **What changed:** (a) `order_placer` effect-point → `place()` (single public
+  placement entry; acted = an entry-placement request executed; state and the
+  zero-trade-day caveat unchanged); (b) NEW A2.3 dormant tripwire
+  `placer.emergency_exit` at `_emergency_market_exit` :3849; (c) the registry's
+  `ohlc_fetchers` descriptive string corrected ×4→×5 (the 5th ctor sits in the flag-OFF
+  retest block) — the approved edit it was waiting for. Registry and code amended in
+  the same commit as this note.
 
 **Phase B constraints restated (binding, from the card):** counter = pre-allocated handle,
 single integer add, no dict-miss, no allocation, no logging, cannot raise (C4) · B2
