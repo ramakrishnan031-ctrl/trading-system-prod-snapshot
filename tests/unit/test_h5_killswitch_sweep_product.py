@@ -70,17 +70,25 @@ def _sweep_intent(tmp_path, position):
     return adapter.placed[0]["intent"], adapter.placed[0]["side"]
 
 
-def test_sweep_cnc_orphan_uses_delivery_intent(tmp_path):
-    """Test 1 (core bug): a CNC orphan → the sweep places its exit with the
-    CNC-mapped intent (DELIVERY), so Kite nets it against the CNC position — NOT
-    hardcoded INTRADAY (which would leave the CNC + open a naked MIS short).
-    RED on unfixed: intent == 'INTRADAY'."""
-    intent, side = _sweep_intent(
-        tmp_path, SimpleNamespace(symbol="RELIANCE", qty=10, product="CNC"))
-    assert intent == "DELIVERY", (
-        "H-5: CNC orphan swept as INTRADAY → naked MIS short (Kite nets per product)."
+def test_sweep_cnc_orphan_is_spared_q4(tmp_path):
+    """[SUPERSEDED CONTRACT, 02-Aug-2026 — ledger #2 / Q4] The original H-5
+    test asserted a CNC orphan is flattened under DELIVERY intent ("CNC orphan
+    swept as INTRADAY → naked MIS short"). Q4 (Rama, 30-Jul) narrows the
+    HARD_KILL invariant to "no live INTRADAY position": a CNC position now
+    SURVIVES the kill — the sweep SPARES it (logged CRITICAL-loud) and places
+    NOTHING. H-5's real concern (never exit under the WRONG product) lives on
+    in the NRML test below, which still flattens under its own DELIVERY intent."""
+    store = StateStore(str(tmp_path / "h5.db"))
+    adapter = _SweepAdapter(SimpleNamespace(symbol="RELIANCE", qty=10, product="CNC"))
+    ks = KillSwitch(state_store=store, bus=EventBus(),
+                    logger=logging.getLogger("test_h5"), adapter=adapter,
+                    enable_auto_trip=False)
+    ks._exit_all_trades_indestructible()
+    store.close()
+    assert adapter.placed == [], (
+        "Q4/ledger #2: a CNC orphan must be SPARED by the HARD_KILL sweep "
+        "(delivery survives the kill), not flattened."
     )
-    assert side == "SELL"   # long → SELL
 
 
 def test_sweep_nrml_orphan_uses_delivery_intent(tmp_path):
