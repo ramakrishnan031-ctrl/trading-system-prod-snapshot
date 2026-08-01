@@ -4070,3 +4070,196 @@ corrections; five coverage gaps enumerated with the one-page fix described; ⛔ 
 touched (the discipline held where it is hardest); committed incrementally; nothing
 pushed; the 3-Aug/4-Aug sequence untouched.
 *(X-TEST / X-SEC / X-EVOLVE append below when commissioned.)*
+
+---
+
+## PHASE X-TEST — TEST INTEGRITY (real coverage vs manufactured confidence)
+
+### XT.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026, clock-read start 11:57:18 IST** |
+| Measurements taken | 01-Aug ~11:57–12:0x IST — collection census (`--collect-only`, both commands), marker greps, targeted test reads; ⛔ NO test run as remediation, none fixed/added; the 31-Jul full-suite result (10F/5495P, new-failure set EMPTY) cited as the fresh execution baseline rather than re-running |
+| Evidence base | the campaign's ~60 findings as the coverage benchmark (the brief's mandate) · T2-corrected/T3/T4/F2 + the fixture-blindness memory rules · G10/G13 · the X-ARCH/X-DUP/X-CONFIG hand-offs |
+| Scope guard | measure-don't-improve enforced throughout; 3-Aug/4-Aug untouched |
+
+### XT.1 Headline determinations
+
+**(a) What the gate actually runs (A lens).** Fresh census: **`tests/` collects 5,510**
+(run_tests.py = the full tree, verified :17-18); **the narrow `tests/unit tests/integration`
+command collects 5,466** ⇒ the gate gap = **44 tests** (the tests/crash_test + tests/core
+files — the T2-corrected 9-file set, now with its test count). Skip surface: **12 skip
+markers in 7 files + 7 xfail references** (marker-name grep width) — the suite runs almost
+everything it collects; the risk is PROCEDURAL: which command a given session runs (the T2
+stale-count lesson stands ⛔ un-reopened). The 31-Jul regression ran ~the full tree
+(5,495P) with both halves retaken in one window — the gate discipline at its best.
+
+**(b) ⭐ THE STRUCTURAL BLINDNESS — family α is invisible to the entire unit layer BY
+SHAPE (the phase's core synthesis).** Unit tests construct their own objects and therefore
+PASS THE ARGUMENTS PRODUCTION FORGOT: a test of the liquidity check constructs
+OrderPlacer WITH the three liquidity args; production main.py doesn't pass them
+(IA-P4-01) — both facts true, the test green, the mechanism dark. The same shape covers
+every α instance (9), the EntryGate wiring (β — component tests exercise the gate's own
+logic; nothing asserts production FEEDS it), and the IA-P5-01 seam (component tests assert
+`update_order_status` writes what it is GIVEN; no test drives the monitor's one-shot
+COMPLETE into the OMgr10 subscriber and asserts the ROW — the two components are each
+"correct", the seam wrong). **⇒ the suite's 5,495 greens and the audit's ~22 dead-subsystem
+instances coexist without contradiction because they measure different things: component
+correctness vs composition truth.** The only test shapes that see α/β are
+composition-root assertions (BK-8's CI half) and acted-telemetry — neither exists.
+→ IA-XTEST-01.
+
+**(c) The gate's power against this campaign's haul — quantified (C lens).** The
+regression gate is DELTA-shaped (base-failures vs after-failures on a tree pair). Every
+one of the campaign's ~60 findings is a STANDING state (dead subsystems, races, config
+gaps, vocabulary splits) present in base AND after — **the gate would have caught
+approximately ZERO of the audit's findings, by construction**; its real power is
+confined to fresh regressions of already-tested behaviour. On top sits the KNOWN
+structural hole (base-includes-the-fix: a defect whose cause is IN the base range never
+appears in the delta — the crash_test failures were found by READING, not counting).
+Both statements together define what "10F/5495P, new-failure set empty" certifies: no
+NEW breakage of TESTED component behaviour — nothing more. → IA-XTEST-02.
+
+**(d) Assertions that cannot fail / tests protecting fiction (B lens) — the inventory.**
+1. **`test_kill_switch_resumed_after_fire_auto_resume_true`** (test_eod_squareoff:167-175)
+   — fixture kwarg `auto_resume: bool = True` (:57), test name and docstring assert the
+   `auto_resume_kill_switch=True` conditionality — **production eod_squareoff.py contains
+   ZERO `auto_resume` references** (IA-P7-04): the conditionality is fiction end-to-end,
+   the kwarg is swallowed, and a `False` companion (absent) would pass anyway — DOUBLY
+   vacuous. The test-layer face of the dead knob.
+2. `test_config_loader:368/:546-547` assert the dead knobs PARSE (`auto_resume… is True`,
+   `connect_sec == 5`) — schema tests protecting keys with no effect (mild: the schema IS
+   real; the implied effect is not).
+3. The fix061 never-reach class (tests that exit before their assertions — KNOWN from the
+   repair task, the archetype) and T3 (`test_fix181` asserting kill-path LIMIT-vs-MARKET
+   behaviour of UNKNOWN currency — stands OPEN).
+4. **The counter-idiom is strong where practiced and should be named**: the §D tripwire
+   tests (bookkeeping raises on ANY access at bound 0), plant-to-bite (ct_guard planted
+   bypass 2F/3P; the missing-direction RED-first), the closure tree-scanner (with its T4
+   width gap — IA-XDUP-04), and the 31-Jul both-halves-one-window regression discipline.
+→ IA-XTEST-03.
+
+**(e) The missing-test table — each headline finding as a coverage finding (D/G lens).**
+| Campaign finding | A test that would have caught it | Exists? |
+|---|---|---|
+| EntryGate never fed (IA-P2-01) | production-wiring assertion ("the divert path calls .add") | **NO** — component tests only |
+| Dead risk floor ~20× (IA-P3-01/γ) | algebra-over-config test ("risk can bind within sl_max_pct") | **NO** (the γ class has none) |
+| orders.qty_filled zeroed (IA-P5-01) | monitor→OMgr seam test asserting the ROW after a one-shot fill | **NO** |
+| The cancel-race → HUMAN_ORDER (IA-P5-02) | live-shaped cancel-vs-fill race test | **NO — paper cannot express it** (cancel always succeeds; KNOWN class) |
+| Kill flatness unverified (IA-P7-01) | post-flatten positions() assertion | **NO** (and the G13 drill was mocked) |
+| The 2 buffer sources diverging (IA-XDUP-01) | a constant==config divergence test | **NO** (X-DUP: none of the 3 big duplications has one) |
+| internal==broker capital (IA-P6-01) | any broker-truth invariant test | **NO** |
+| tree==HEAD (IA-P10-01) | manifest/diff check | **NO** (the .pyc slice only) |
+| Dead knobs (IA-XCFG-01, 23×) | schema↔ctor completeness (BK-8) | **NO** |
+| eod_verify stuck-PENDING (IA-P8-01) | a verdict-finalizes test / staleness alarm | **NO** |
+**⇒ ten-for-ten: every headline finding doubles as a missing-test finding, and they
+cluster into exactly THREE missing test SHAPES: composition-root assertions,
+seam/integration truth tests, and invariant-divergence tests.** → IA-XTEST-04.
+
+**(f) False-confidence modes + hermeticity (E/H lens).** Paper mode: 14/19 constant
+adapter branches, a broker that never rejects (the BANSALWIRE tag-length rejection was
+UNREHEARSABLE — its only live test failed), the overnight-carry WRONG gap — all KNOWN,
+consolidated here as the "paper-proven ≠ proven" boundary. Trivial-input greens: the
+paper reconcile writes all-OK rows by construction (P8). Hermeticity: the 27-Jul guard
+class (network/DB/logs) is real but IN-PROCESS ONLY (the subprocess hole stands, KNOWN) —
+and **G10 stands: the test environment carries ~20 LIVE production keys** (the historic
+~50 real Telegram alerts were this class's measured cost before the guards). Grade:
+partially hermetic, one named escape hatch, live credentials present → Safety-flagged,
+X-SEC hand-off. Fixture staleness: the KNOWN class (3-in-one-session, the 15-Jun fix061
+fixture) cited; NOT fresh-swept (width honest — a per-fixture date-vs-contract sweep is
+its own slice). → IA-XTEST-05.
+
+### XT.2 Findings
+
+---
+**IA-XTEST-01**
+- **WHAT:** The unit layer is structurally blind to the audit's dominant defect class:
+  tests that construct their own objects pass the arguments production forgot (α),
+  feed the components production starves (β), and exercise seams production never
+  crosses — so 5,495 greens coexist with 22 dead-subsystem instances.
+- **EVIDENCE:** XT.1(b) — the liquidity/EntryGate/qty_filled exemplars, each pairing a
+  green test with its register finding.
+- **CLASS:** Tests / Architecture. **SYNTHESIS** (IA-XARCH-01 × the test layer).
+- **ROOT CAUSE:** the suite grew component-first; no layer asserts composition.
+- **RECOMMENDATION (described, ⛔ not built):** the three missing shapes from (e) —
+  composition-root assertions (BK-8's test half), one seam-truth test per event
+  contract, invariant-divergence tests for the X-DUP pairs. A handful of tests, not a
+  rewrite.
+- **SEVERITY-BY-IMPACT:** HIGH — this is WHY the flow findings existed at green: the
+  measure of what "tests pass" fails to certify.
+
+---
+**IA-XTEST-02**
+- **WHAT:** The gate's certifying power quantified against the campaign: ~0 of ~60
+  findings were delta-visible (all standing states); plus the base-includes-the-fix
+  structural hole (KNOWN). "New-failure set empty" certifies exactly: no fresh breakage
+  of tested component behaviour.
+- **CLASS:** Tests / Process. **SYNTHESIS + KNOWN** (the hole was carried; the
+  power-quantification against the register is new).
+- **RECOMMENDATION (described):** none against the gate itself (it does its job); the
+  fix is (a)'s missing shapes — standing-state defects need standing-state checks
+  (telemetry/CI), not deltas.
+- **SEVERITY-BY-IMPACT:** MED as calibration — it re-prices every future "regression
+  green" claim.
+
+---
+**IA-XTEST-03**
+- **WHAT:** The cannot-fail/fiction inventory: the auto_resume test (fiction end-to-end,
+  doubly vacuous), the dead-knob schema assertions, the never-reach class (KNOWN), T3's
+  unknown-currency assertion — against the strong counter-idiom (tripwires,
+  plant-to-bite, the scanner) that proves the codebase knows how to make tests falsifiable.
+- **EVIDENCE:** XT.1(d), file:line each; production zero-reference greps.
+- **CLASS:** Tests. **KNOWN-COMPOSED + 1 NEW** (the auto_resume test's double vacuity is
+  newly line-verified).
+- **RECOMMENDATION (described):** when IA-P7-04's knob is deleted/wired, delete/fix its
+  test IN THE SAME COMMIT (the X-DOCS same-commit rule, applied to tests).
+- **SEVERITY-BY-IMPACT:** LOW-MED individually; the class manufactures the confidence
+  X-TEST exists to audit.
+
+---
+**IA-XTEST-04**
+- **WHAT:** The ten-for-ten missing-test table (e): every headline campaign finding lacks
+  the test that would have caught it, clustering into three missing shapes.
+- **CLASS:** Tests / Coverage. **SYNTHESIS** (the whole register × the suite).
+- **RECOMMENDATION (described):** treat the table as the test backlog's priority order —
+  each row names its finding, its test shape, and (via the register) its severity.
+- **SEVERITY-BY-IMPACT:** HIGH as a roadmap; it converts the audit into ~10 concrete
+  test specifications.
+
+---
+**IA-XTEST-05**
+- **WHAT:** Hermeticity grade: partially hermetic — real in-process guards (network/DB/
+  logs, 27-Jul), one named escape (subprocess), ~20 live production keys in the test env
+  (G10, the separate test token still owed), paper's never-rejecting broker as the
+  rehearsal ceiling (BANSALWIRE's class stays unrehearsable until a fault-injecting
+  fake).
+- **CLASS:** **Safety** / Tests. **KNOWN-COMPOSED** (G10 + the 27-Jul class + P5's paper
+  census), graded here as one verdict.
+- **RECOMMENDATION (described):** G10's test token is the standing owed item; a
+  fault-injecting adapter fake (rejects, partials, timeouts) is the single highest-value
+  test asset the suite lacks — it un-blinds the entire paper-cannot-exercise class.
+- **SEVERITY-BY-IMPACT:** MED-HIGH (the live keys are exposure; the rehearsal ceiling is
+  why emergency paths carry BANSALWIRE-class risk).
+
+### XT.3 Open questions
+
+- **OQ-XTEST-1:** The 12 skip markers' identities (which are genuine env-conditionals vs
+  parked debt) — not itemised (marker-grep width only).
+- **OQ-XTEST-2:** Whether the fixture tree contains further pre-contract-change fixtures
+  (the F-lens sweep deferred; the 25-Jul class is the known shape).
+
+### XT.4 Hand-offs
+
+**X-SEC** inherits the hermeticity verdict (live keys in the test env = an exposure
+surface, G10). **X-EVOLVE** inherits: the suite will NOT catch the next dead subsystem
+(IA-XTEST-01) — a maintainability cost to price into every "ship it, tests are green";
+and the three missing test shapes as the highest-leverage evolvability investment.
+
+**X-TEST done** = the collection census fresh (5,510/5,466/44-test gate gap; 12 skips/7
+xfails); the structural α-blindness of the unit layer named with paired evidence; the
+gate's power quantified against the campaign (~0 of ~60 delta-visible); the cannot-fail
+inventory with one new double-vacuity; the ten-for-ten missing-test table clustering into
+three shapes; hermeticity graded with G10 standing; ⛔ nothing fixed, nothing added,
+nothing pushed; committed incrementally; the 3-Aug/4-Aug sequence untouched.
+*(X-SEC / X-EVOLVE append below when commissioned.)*
