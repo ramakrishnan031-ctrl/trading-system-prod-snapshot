@@ -230,7 +230,14 @@ class TestBugC_KillSwitchExit:
     """
 
     def test_exit_passes_intent_derived_from_product(self, tmp_path: Path) -> None:
-        """Emergency exit passes intent derived from the position's product (CNC->DELIVERY)."""
+        """[SUPERSEDED CONTRACT, 02-Aug-2026 — ledger #2 / Q4] Originally the
+        Bug-C assertion: a CNC OPEN trade is flattened with intent=DELIVERY.
+        Q4 (Rama, 30-Jul) narrows the kill to "no live INTRADAY position": a
+        local CNC trade is now SPARED (no placement, honest zero attempted).
+        Bug C's real concern (intent derived from product, never hardcoded)
+        survives in the NRML anomaly path — covered by
+        test_kill_switch_product_filter.py::test_site1_nrml_flattens_loud_
+        under_its_own_intent — and in the MIS sibling below, unchanged."""
         store = StateStore(tmp_path / "ks.db")
         _insert_trade_with_order(store, "t1", symbol="HARIOMPIPE",
                                  direction="LONG", status="OPEN", qty=10, product="CNC")
@@ -240,12 +247,11 @@ class TestBugC_KillSwitchExit:
 
         report = ks._exit_all_trades_indestructible()  # M-C8: hard_kill dispatches this
 
-        assert len(adapter.calls) == 1
-        call = adapter.calls[0]
-        assert call["intent"] == "DELIVERY"          # Bug C: required + correct
-        assert call["side"] == "SELL"                # exit a LONG
-        assert call["order_type"] == "MARKET"
-        assert report.succeeded == 1 and report.failed == []
+        assert adapter.calls == [], (
+            "Q4/ledger #2: a CNC trade must be SPARED by the HARD_KILL flatten "
+            "(delivery survives the kill), not exited."
+        )
+        assert report.attempted == 0 and report.failed == []
         store.close()
 
     def test_mis_position_exits_with_intraday(self, tmp_path: Path) -> None:

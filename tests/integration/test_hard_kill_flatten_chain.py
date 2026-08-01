@@ -148,14 +148,19 @@ def test_hard_kill_flatten_chain_composes(tmp_path, monkeypatch):
         "H-4: the retry re-fired the stale full qty (oversell) instead of the residual 40."
     )
 
-    # (3)+(5) H-5: the CNC orphan is swept/retried with DELIVERY intent — never INTRADAY (no naked MIS short)
-    assert tcs, "the CNC orphan must be swept"
-    assert all(p["intent"] == "DELIVERY" for p in tcs), \
-        "H-5: the CNC orphan was swept as INTRADAY → naked MIS short"
-    assert not any(p["symbol"] == "TCS" and p["intent"] == "INTRADAY" for p in adapter.placed)
-
-    # (6) delivery-disabled: the CNC exit is refused → surfaced → escalated via _alert_exit_failed
-    assert len(alerts) == 1, "the refused CNC orphan must be escalated (not silently swallowed)"
-    assert any(t[0] == "sweep" and t[1] == "TCS" for t in alerts[0]), \
-        "the escalation must carry the un-flattened CNC orphan"
-    assert report.failed == ["sweep"], "the CNC orphan remains reported as un-flattened"
+    # (3)+(5)+(6) [SUPERSEDED CONTRACT, 02-Aug-2026 — ledger #2 / Q4]
+    # Originally: the CNC orphan is swept with DELIVERY intent, the SLICE2.5-P1
+    # delivery-disabled lock REFUSES it, and the refusal escalates via
+    # _alert_exit_failed (report.failed == ["sweep"]). Q4 (Rama, 30-Jul)
+    # narrows the HARD_KILL invariant to "no live INTRADAY position": the CNC
+    # orphan is now SPARED — the kill never ATTEMPTS the CNC exit, so the
+    # refusal/escalation path can no longer arise from the sweep. H-5's real
+    # concern survives inverted: NO order of ANY intent may be placed for the
+    # spared CNC row (a naked MIS short is impossible when nothing is placed).
+    assert tcs == [], (
+        "Q4/ledger #2: the CNC orphan must be SPARED by the HARD_KILL sweep "
+        "(delivery survives the kill) — nothing may be placed for TCS."
+    )
+    assert not any(p["symbol"] == "TCS" for p in adapter.placed)
+    assert alerts == [], "a deliberately-spared CNC orphan is not an exit failure"
+    assert report.failed == [], "spared CNC must not be reported as un-flattened"
