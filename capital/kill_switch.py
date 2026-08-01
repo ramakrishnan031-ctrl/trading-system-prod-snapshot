@@ -71,7 +71,10 @@ from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
 from broker.position_helpers import determine_close_direction  # FIX-190 (Bug A)
-from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
+from core.constants import (
+    EMERGENCY_FLATTEN_PRODUCTS as _EMERGENCY_FLATTEN_PRODUCTS,
+    PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT,
+)
 
 # Part 11 (FIX-180): HARD_KILL emergency-exit retry guards.
 # Max wall-clock time to keep retrying a trade that won't exit before we stop
@@ -1311,6 +1314,50 @@ class KillSwitch:
             return "LIMIT", ltp * (1.0 - buf)
         return "LIMIT", ltp * (1.0 + buf)
 
+    def _alert_unknown_product(
+        self,
+        *,
+        site: str,
+        symbol: str,
+        raw_product: str,
+        qty: int,
+        trade_id: Optional[str],
+    ) -> None:
+        """
+        Q4 / ledger #2 (G2): a position reached the emergency flatten with a
+        NULL/unrecognised product. Policy is FLATTEN + CRITICAL — never soften,
+        never silently spare — this replaces the former silent ""->INTRADAY
+        fallback. One shared emitter for both sites (no duplicate wording to
+        drift). Best-effort: alerting must never break the flatten itself.
+        """
+        shown = raw_product if raw_product else "<NULL>"
+        self._log.critical(
+            "kill_switch: UNKNOWN PRODUCT %s on %s (qty=%d, trade=%s, site=%s) "
+            "— flattening LOUDLY under the INTRADAY fallback (Q4/G2); a product "
+            "outside %s and not CNC should not exist on this account",
+            shown, symbol, qty, trade_id or "-", site,
+            sorted(_EMERGENCY_FLATTEN_PRODUCTS),
+        )
+        if self._notifier is None:
+            return
+        try:
+            self._notifier.send(
+                severity="CRITICAL",
+                title=f"[{self._mode}] HARD_KILL UNKNOWN PRODUCT -- {symbol}",
+                body=(
+                    f"Emergency flatten met product={shown} on {symbol} "
+                    f"(qty={qty}, trade={trade_id or '-'}, site={site}).\n"
+                    f"Position IS being flattened (fail-loud, Q4/G2). "
+                    f"Investigate how a product outside "
+                    f"{sorted(_EMERGENCY_FLATTEN_PRODUCTS)}/CNC entered the book."
+                ),
+                source_module="kill_switch",
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the flatten
+            self._log.error(
+                "kill_switch: unknown-product CRITICAL send failed: %s", exc
+            )
+
     def _alert_exit_failed(self, failed_trades: list) -> None:
         """
         Part 11 (FIX-180): escalate trades that could not be exited within the
@@ -1508,15 +1555,48 @@ class KillSwitch:
         for trade in open_trades:
             trade_id = trade["trade_id"]
             symbol = trade["symbol"]
-            handled_symbols.add(symbol)
             local_qty = abs(trade["qty_filled"] or 0)
             if local_qty == 0:
+                # (pre-existing semantics preserved) qty-0 trades were always
+                # marked handled so the sweep does not act on their symbol.
+                handled_symbols.add(symbol)
                 continue
+
+            # Q4 / ledger #2 — THE BUY-DAY PRODUCT FILTER (SITE 1, local pass).
+            # The Q4 invariant is "no live INTRADAY position": a delivery (CNC)
+            # trade SURVIVES a HARD_KILL. Anything neither CNC nor in the
+            # shared emergency set (NULL, NRML, unrecognised) is flattened
+            # LOUDLY (G2) — on this account NRML should not exist at all, so
+            # it is treated as an anomaly per the approved 2e ruling: flatten
+            # + CRITICAL, never a silent spare.
+            raw_product = str(trade["product"] or "").strip().upper()
+            if raw_product == "CNC":
+                attempted -= 1  # honestly not attempted: deliberately spared
+                self._log.critical(
+                    "kill_switch: SPARED delivery position %s (trade %s, "
+                    "product=CNC, qty=%d) — HARD_KILL flattens intraday only "
+                    "(Q4); site=local-pass", symbol, trade_id, local_qty,
+                )
+                # ⛔ Deliberately NOT added to handled_symbols: Kite positions()
+                # is per-product, so this symbol may ALSO hold a live MIS row
+                # the sweep below must still flatten. The sweep's own CNC
+                # exclusion spares this delivery position again there.
+                continue
+            if raw_product not in _EMERGENCY_FLATTEN_PRODUCTS:
+                # NULL/unknown product: include in the flatten + CRITICAL (G2)
+                # — replaces the former SILENT ""->INTRADAY fallback.
+                self._alert_unknown_product(
+                    site="local-pass", symbol=symbol, raw_product=raw_product,
+                    qty=local_qty, trade_id=trade_id,
+                )
+            handled_symbols.add(symbol)
             # Bug C (P0 2026-06-15): derive the product intent from the open
             # position so place_order gets its required `intent` and exits under
-            # the same product (MIS/CNC). Unknown product -> INTRADAY (safest:
-            # MIS exits are always allowed and the common case).
-            intent = _PRODUCT_TO_INTENT.get(trade["product"] or "", "INTRADAY")
+            # the same product. A KNOWN non-intraday product (NRML) exits under
+            # its own intent (H-5 correctness); only a truly-unknown/NULL
+            # product falls back to INTRADAY (the pre-filter default) — now
+            # loud instead of silent.
+            intent = _PRODUCT_TO_INTENT.get(raw_product, "INTRADAY")
             fallback_side = "SELL" if trade["direction"] == "LONG" else "BUY"
 
             # FIX-190 (Bug E): cancel this trade's resting SL/TGT BEFORE flattening
@@ -1585,6 +1665,27 @@ class KillSwitch:
                 pqty = int(getattr(pos, "qty", 0) or 0)
                 if psym is None or pqty == 0 or psym in handled_symbols:
                     continue
+                # Q4 / ledger #2 — THE BUY-DAY PRODUCT FILTER (SITE 2, broker
+                # sweep). The predicate reads the RAW broker product string —
+                # validated INDEPENDENTLY of the local-DB vocabulary (G3);
+                # broker rows are per (symbol, product).
+                sweep_product = str(getattr(pos, "product", "") or "").strip().upper()
+                if sweep_product == "CNC":
+                    self._log.critical(
+                        "kill_switch: SPARED delivery position %s (broker "
+                        "product=CNC, qty=%d) — HARD_KILL flattens intraday "
+                        "only (Q4); site=broker-sweep", psym, pqty,
+                    )
+                    # No handled_symbols.add and no attempted+=1: this row is
+                    # deliberately untouched; a same-symbol MIS row (Kite is
+                    # per-product) must still be processed on its own turn.
+                    continue
+                if sweep_product not in _EMERGENCY_FLATTEN_PRODUCTS:
+                    # Missing/unknown broker product: include + CRITICAL (G2).
+                    self._alert_unknown_product(
+                        site="broker-sweep", symbol=psym,
+                        raw_product=sweep_product, qty=abs(pqty), trade_id=None,
+                    )
                 handled_symbols.add(psym)
                 attempted += 1
                 exit_side = "SELL" if pqty > 0 else "BUY"
@@ -1592,11 +1693,9 @@ class KillSwitch:
                 # the first pass (Bug C). Kite nets per product, so an orphan CNC
                 # position swept with an MIS (intent=INTRADAY) exit does NOT offset
                 # it: the CNC position stays AND a fresh naked MIS short is created.
-                # Map the position's product to its intent (MIS→INTRADAY,
-                # CNC/NRML→DELIVERY); absent product → INTRADAY.
-                sweep_intent = _PRODUCT_TO_INTENT.get(
-                    getattr(pos, "product", "") or "", "INTRADAY"
-                )
+                # Map the position's product to its intent; truly-unknown/absent
+                # product → INTRADAY (the pre-filter default, now loud above).
+                sweep_intent = _PRODUCT_TO_INTENT.get(sweep_product, "INTRADAY")
                 self._log.critical(
                     "kill_switch: SWEEP orphan broker position %s qty=%d — no "
                     "matching local trade; flattening (FIX-181)",

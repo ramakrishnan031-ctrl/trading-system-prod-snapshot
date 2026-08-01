@@ -48,6 +48,7 @@ from datetime import date, datetime
 from typing import Optional, TYPE_CHECKING
 
 from broker.order_state_machine import OrderStateMachine
+from core.constants import EMERGENCY_FLATTEN_PRODUCTS
 from core.effect_telemetry import handle as _effect_handle
 from broker.zerodha_adapter import ZerodhaAdapter
 from capital.fund_manager import FundManager
@@ -1076,7 +1077,12 @@ class EodSquareoff:
             broker_qty = {
                 p.symbol: abs(int(p.qty))
                 for p in broker_positions
-                if int(p.qty) != 0 and p.product in ("MIS", "CO")
+                # ledger #2: the FIX-015 intraday set now reads the ONE shared
+                # source (core.constants.EMERGENCY_FLATTEN_PRODUCTS) — same
+                # {MIS, CO} membership, zero behaviour change; scheduled and
+                # emergency vocabularies can no longer drift (G1: one name,
+                # no second copy to assert against).
+                if int(p.qty) != 0 and p.product in EMERGENCY_FLATTEN_PRODUCTS
             }
         except Exception as exc:  # noqa: BLE001
             log_exception(self._log, exc)
@@ -1443,7 +1449,8 @@ class EodSquareoff:
         residual = [
             p for p in positions
             if int(getattr(p, "qty", 0)) != 0
-            and getattr(p, "product", "") in ("MIS", "CO")
+            # ledger #2: shared source (see the EOD6 pass above) — no drift.
+            and getattr(p, "product", "") in EMERGENCY_FLATTEN_PRODUCTS
             and getattr(p, "symbol", "") not in handled_symbols
         ]
         if not residual:
