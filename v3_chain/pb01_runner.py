@@ -29,6 +29,7 @@ import os
 from typing import Any, List, Optional
 
 from core.candle_math import ema
+from core.effect_telemetry import handle as _effect_handle
 from screening.hard_gate import (
     GATE_CONFIRM, GATE_EXTREME, GATE_HTF, GATE_PULLBACK, GATE_RR,
     gate_confirm, gate_extreme, gate_htf, gate_pullback, gate_rr,
@@ -74,6 +75,9 @@ class Pb01WouldBeRunner:
         self._fetcher = fetcher
         self._knobs = zone_knobs
         self._scoring = zone_scoring
+        # effect-telemetry (ledger #1, frozen contract A2.2): event-driven —
+        # a PB-01 would-be verdict appended (confirms are rare by design).
+        self._fx_wouldbe = _effect_handle("pb01_would_be_runner")
         self._log = logger
         self._now = now_fn
         self._regime_runner = regime_runner
@@ -244,6 +248,8 @@ class Pb01WouldBeRunner:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec.to_json_dict()) + "\n")
+            # effect-telemetry (frozen A2.2): counted after the append succeeded.
+            self._fx_wouldbe.inc()
             self._safe_log(
                 "info", "pb01 would-be[%s]: verdict=%s entry=%s sl=%s tgt=%s rr=%s score=%.1f",
                 rec.symbol, rec.v3_verdict, rec.live_entry, rec.v3_sl, rec.v3_tgt, rec.v3_rr,

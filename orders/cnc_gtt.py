@@ -22,6 +22,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from core.effect_telemetry import handle as _effect_handle
 from core.exceptions import BrokerError
 from core.time_authority import now_ist
 from orders.price_math import DEFAULT_TICK, calc_gtt_limit_price, round_to_tick
@@ -67,6 +68,9 @@ class CncGttPlacer:
         store: Any = None,
     ) -> None:
         self._adapter = adapter
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # until the 4-Aug flip (flip-rider: registry -> event-driven with it).
+        self._fx_place = _effect_handle("cnc_gtt_placer")
         self._gtt_sl_off = float(gtt_sl_limit_offset_pct)
         self._gtt_tgt_off = float(gtt_tgt_limit_offset_pct)
         self._delivery_enabled = bool(delivery_enabled)
@@ -104,6 +108,9 @@ class CncGttPlacer:
     ) -> CncGttResult:
         """Place (or modify, if a GTT already exists for this trade) the OCO GTT.
         Raises BrokerError on a missing LTP or a C8 distance/straddle violation."""
+        # effect-telemetry (frozen A2.3): a CNC OCO-GTT placement enacted —
+        # any call before the flip is an alarm (delivery_enabled=false today).
+        self._fx_place.inc()
         tick = self._safe_tick(symbol)
         sl_trigger = round_to_tick(sl_price, tick, mode="nearest")
         tgt_trigger = round_to_tick(tgt_price, tick, mode="nearest")

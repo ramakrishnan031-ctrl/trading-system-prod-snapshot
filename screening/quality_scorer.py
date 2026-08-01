@@ -11,6 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from core.effect_telemetry import handle as _effect_handle
+
+# effect-telemetry (frozen contract A2.3, gamma tripwire): the G2 achievable
+# ceiling — 25/100 pts dead-at-0 + 20 pinned-at-half make >65 algebraically
+# impossible today. A score above it means G2's dead inputs came alive.
+_G2_CEILING_TRIPWIRE = 65
+
 if TYPE_CHECKING:
     from core.config_loader import ScoringConfig
 
@@ -41,6 +48,11 @@ class QualityScorer:
     def __init__(self, weights: "ScoringConfig", logger) -> None:
         self._weights = weights
         self._logger = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1 + A2.3): handles
+        # resolved once; hot-path ops are single integer increments.
+        self._fx_score = _effect_handle("quality_scorer")
+        self._fx_tier_high = _effect_handle("scorer.tier_high")
+        self._fx_ceiling = _effect_handle("scorer.score_gt_ceiling")
         # FIX-101: Derive step names from config instead of hardcoding
         # Check if real Pydantic model (not MagicMock which also has model_fields!)
         if hasattr(weights.steps, "model_fields") and isinstance(
@@ -111,12 +123,21 @@ class QualityScorer:
         med_thr = self._weights.medium_score_threshold
         if total_score >= high_thr:
             tier = "HIGH"
+            # effect-telemetry (frozen A2.3, gamma): a HIGH tier assigned —
+            # unreachable today (IA-P2-03: threshold 80 > ceiling 65).
+            self._fx_tier_high.inc()
         elif total_score >= med_thr:
             tier = "MEDIUM"
         else:
             tier = "LOW"
 
         passed = total_score >= self._weights.min_pass_score
+
+        # effect-telemetry (frozen A2.1 + A2.3): a composite score produced;
+        # the >65 observation is the G2 ceiling tripwire.
+        self._fx_score.inc()
+        if total_score > _G2_CEILING_TRIPWIRE:
+            self._fx_ceiling.inc()
 
         return ScoreResult(
             total_score=total_score,

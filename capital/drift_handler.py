@@ -54,6 +54,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Final, Optional
 
+from core.effect_telemetry import handle as _effect_handle
 from core.events import CapitalDriftDetected
 from core.logger import log_exception
 
@@ -87,6 +88,11 @@ class CapitalDriftHandler:
         self._config = config
         self._kill_switch = kill_switch
         self._log = logger or logging.getLogger(__name__)
+        # effect-telemetry (ledger #1, frozen contract A2.2 + A2.3): handles
+        # resolved once; manager-level is event-driven, the rungs are dormant.
+        self._fx_handled = _effect_handle("drift_handler")
+        self._fx_soft = _effect_handle("drift.soft_rung")
+        self._fx_hard = _effect_handle("drift.hard_rung")
         # DH4: escalating-source-scoped counter; non-escalating reconciler
         # events (CHECK5 POSITION_GREW etc.) never touch it. Both escalating
         # sources (fund_manager, fund_manager_self_check) share this counter.
@@ -133,6 +139,9 @@ class CapitalDriftHandler:
         return TIER_NOISE
 
     def _handle(self, event: CapitalDriftDetected) -> None:
+        # effect-telemetry (frozen A2.2): a drift ladder outcome enacted
+        # (any tier — event-driven; CapitalDriftDetected is rare, IA-P6-01).
+        self._fx_handled.inc()
         drift_rs = abs(event.delta)
         tier = self._compute_tier(drift_rs)
         is_escalating = event.source_module in _ESCALATING_SOURCES
@@ -228,11 +237,17 @@ class CapitalDriftHandler:
         )
         try:
             if tier == TIER_HARD:
+                # effect-telemetry (frozen A2.3): the drift HARD rung fired
+                # (never fired in production — Q4 record).
+                self._fx_hard.inc()
                 self._kill_switch.hard_kill(
                     reason=reason,
                     triggered_by="drift_handler",
                 )
             else:  # SOFT or SOFT_ESCALATED
+                # effect-telemetry (frozen A2.3): the drift SOFT rung fired
+                # (K-ladder — never fired; single-sample rung).
+                self._fx_soft.inc()
                 self._kill_switch.soft_kill(
                     reason=reason,
                     triggered_by="drift_handler",

@@ -57,6 +57,7 @@ from core.config_loader import SERVICE_WINDOW_END_MAX, load_all
 from core.config_auditor import audit as audit_config
 from core.config_snapshotter import snapshot_config
 from core.config_validator import config_validator
+from core import effect_telemetry
 from core.events import EventBus, CapitalDriftDetected, KillSwitchActivated
 from core.exceptions import CapitalStateInconsistent, TradingSystemError
 from core.instrument_cache import InstrumentCache
@@ -832,6 +833,10 @@ def _build_strategy_governor(store, app_config, notifier, mode: str):
     cfg = getattr(app_config.system, "strategy_circuit_breaker", None)
     if cfg is None:
         return None
+    # effect-telemetry (B2): registered only on the constructed path — if the
+    # circuit-breaker config is ever removed, the assertion flags it and the
+    # registry edit rides that change (C2 discipline).
+    effect_telemetry.register_constructed("strategy_governor")
     return StrategyGovernor(
         store=store,
         config=cfg,
@@ -1291,6 +1296,25 @@ def _shutdown(
                 _log.info("flatten worker drained (or none was running)")
         except Exception as exc:
             _log.critical("flatten drain failed: %s — continuing shutdown", exc)
+
+    # effect-telemetry (ledger #1, B4): the EOD census — emitted at the single
+    # clean-stop convergence point, AFTER the flatten drain (so drain-time acts
+    # are counted) and BEFORE any manager teardown. emit_census() can never
+    # raise; a crash day produces no census by design (B5 heartbeat deferred).
+    try:
+        from core.time_authority import now_ist as _census_now_ist
+        _census_day = _census_now_ist().date().isoformat()
+        effect_telemetry.emit_census(
+            logger=get_logger("effect_census"),
+            day=_census_day,
+            webhook_day_count=(
+                lambda d=_census_day: (store.fetch_one(
+                    "SELECT COUNT(*) FROM webhook_audit WHERE date = ?", (d,)
+                ) or [0])[0]
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — belt over emit's own braces
+        _log.error("effect_census: emit wrapper failed: %s", exc)
 
     # FIX-062: Invalidate token if auth error occurred
     if _broker_auth_failed:
@@ -2198,6 +2222,9 @@ def _main_locked(args, config_dir: Path) -> int:
     # stale. Every downstream read (set_paper_capital, notifier paper_mode,
     # SU19 capital branch) must use this refreshed value.
     is_paper = (args.mode == "paper")
+    # effect-telemetry (ledger #1, B2): record the mode once — the assertion's
+    # consequence differs by it (paper fail-fast; live CRITICAL + continue).
+    effect_telemetry.set_mode(is_paper)
 
     # EF-4: late-bind adapter paper_capital to the selected account's value.
     # Single source of truth = AccountRow.paper_capital (accounts.csv). No-op
@@ -3006,6 +3033,7 @@ def _main_locked(args, config_dir: Path) -> int:
                 lookback_days=int(getattr(_regime_cfg, "daily_lookback_days", 400)),
                 logger=get_logger("market_regime"), now_fn=time_authority.now_ist,
                 cache_ttl_sec=float(getattr(_sr_cfg, "cache_ttl_sec", 1800.0)))
+            effect_telemetry.register_constructed("ohlc_fetchers")  # B2 (idempotent)
             _regime_engine = build_market_regime(
                 config=_regime_cfg, fetcher=_regime_fetcher,
                 logger=get_logger("market_regime"), now_fn=time_authority.now_ist,
@@ -3044,6 +3072,7 @@ def _main_locked(args, config_dir: Path) -> int:
                 _sr_fetch_fn, instrument_cache, lookback_days=_sr_cfg.lookback_days,
                 logger=get_logger("sr_zone_warmer"), now_fn=time_authority.now_ist,
                 cache_ttl_sec=_sr_cfg.cache_ttl_sec)
+            effect_telemetry.register_constructed("ohlc_fetchers")  # B2 (idempotent)
             zone_warmer = ZoneWarmer(
                 fetcher=_structure_fetcher, cache=_v2_zone_cache, knobs=_v2_knobs,
                 scoring=_v2_scoring, logger=get_logger("sr_zone_warmer"),
@@ -3162,6 +3191,7 @@ def _main_locked(args, config_dir: Path) -> int:
                 lookback_days=int(getattr(_v3_cfg, "fetch_lookback_days", 180)),
                 logger=get_logger("v3_chain"), now_fn=time_authority.now_ist,
                 cache_ttl_sec=float(getattr(_v3_cfg, "fetch_cache_ttl_sec", 1800.0)))
+            effect_telemetry.register_constructed("ohlc_fetchers")  # B2 (idempotent)
             v3_chain_runner = V3ChainRunner(
                 config=_v3_cfg,
                 zone_knobs=build_zone_knobs(_sr_cfg),      # REUSE the sr_detector zone knobs (no duplicate tuning)
@@ -3211,6 +3241,7 @@ def _main_locked(args, config_dir: Path) -> int:
                 lookback_days=int(getattr(_wl_v3_cfg, "fetch_lookback_days", 180)),
                 logger=get_logger("pb01_watchlist"), now_fn=time_authority.now_ist,
                 cache_ttl_sec=0.0)
+            effect_telemetry.register_constructed("ohlc_fetchers")  # B2 (idempotent)
             pb01_capture_worker = WatchlistCaptureWorker(
                 config=_watchlist_cfg, store=store, fetcher=_wl_fetcher,
                 market_windows=market_windows, logger=get_logger("pb01_watchlist"),
@@ -3255,6 +3286,7 @@ def _main_locked(args, config_dir: Path) -> int:
                 _sr_fetch_fn, instrument_cache, lookback_days=_sr_cfg.onem_lookback_days,
                 logger=get_logger("sr_retest_monitor"), now_fn=time_authority.now_ist,
                 cache_ttl_sec=0.0)  # fresh 1m each poll (no cache)
+            effect_telemetry.register_constructed("ohlc_fetchers")  # B2 (idempotent)
             _retest_params = RetestParams(
                 timeout_sec=_sr_cfg.retest_timeout_sec,
                 max_away_pct=_sr_cfg.retest_max_away_pct,
@@ -3389,6 +3421,10 @@ def _main_locked(args, config_dir: Path) -> int:
             config=app_config.system.clock.probe,
             logger=get_logger("clock_skew_probe"),
         )
+        # effect-telemetry (B2): the ONE mode-conditional registration —
+        # live-only ctor BY DESIGN; the registry's `modes:` field exempts it
+        # from the paper assertion.
+        effect_telemetry.register_constructed("clock_skew_probe")
     else:
         _log.info("clock_skew_probe skipped in paper mode")
 
@@ -3396,7 +3432,11 @@ def _main_locked(args, config_dir: Path) -> int:
     # candle_store.start() BEFORE live_feed.connect() (BLOCKER #2 fix)
     candle_store.start()
     # v14: persist candles to DB on each close
+    # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire —
+    # X8: this writer must stay dark even if the tick feed ever wires.
+    _fx_candle_persist = effect_telemetry.handle("candle_persist")
     def _persist_candle(candle):
+        _fx_candle_persist.inc()
         try:
             store.insert_candle(
                 symbol=candle.symbol,
@@ -3673,6 +3713,37 @@ def _main_locked(args, config_dir: Path) -> int:
         print("[OK] System ready for signals")
         print()
         print("Press Ctrl+C to initiate clean shutdown.")
+
+    # ── effect-telemetry (ledger #1, B2) ─────────────────────────────────────
+    # Composition-root registration for units that carry NO counter (infra +
+    # covered-existing). Counter-bearing managers registered themselves inside
+    # their own __init__ via handle(). Then the startup assertion: registry
+    # expectation vs what actually registered — paper FAILS FAST, live emits
+    # CRITICAL and continues (never crash a live boot on a registration gap).
+    for _infra_name in (
+        "state_store",          # ctor main:~1851
+        "event_bus",            # ctor main:~1856
+        "market_windows",       # ctor main:~1938
+        "order_state_machine",  # ctor main:~1964
+        "rate_limiter",         # ctor main:~1966
+        "product_resolver",     # ctor main:~1967
+        "cost_calculator",      # ctor main:~1968
+        "broker_adapter",       # ctor main:~2001
+        "telegram_notifier",    # ctor main:~2243 (its effect-trail = _audit_send, G5)
+        "strategy_loader",      # ctor main:~2736
+        "full_entry_engine",    # ctor main:~2618 (pass-through router)
+        "order_manager",        # ctor main:~2624 (thin DB layer)
+        "step_executor",        # ctor main:~2812
+        "token_monitor",        # ctor main:~2873 (paper no-op by design)
+        "webhook_receiver",     # ctor main:~2892 — covered-existing (webhook_audit)
+    ):
+        effect_telemetry.register_constructed(_infra_name)
+    if instrument_cache is not None:
+        effect_telemetry.register_constructed("instrument_cache")  # ctor main:~2059
+    try:
+        effect_telemetry.assert_composition(notifier=notifier, logger=_log)
+    except effect_telemetry.EffectCompositionError:
+        raise  # paper/dev fail-fast — this IS the missing composition assertion
 
     # ── Runtime loop (MAIN13) ────────────────────────────────────────────────
     _shutdown_event.wait()

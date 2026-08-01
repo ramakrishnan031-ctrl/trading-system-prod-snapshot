@@ -39,6 +39,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from core.effect_telemetry import handle as _effect_handle
+
 from core.time_authority import ist_timezone, now_ist
 
 _MAX_QUOTE_FAILURES = 3
@@ -117,6 +119,9 @@ class EntryGate:
         self._quote_fn = quote_fn
         self._log = logger
         self._state_store = state_store
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # — an entry admitted (IA-P2-01: nothing has ever fed this gate).
+        self._fx_admit = _effect_handle("entry_gate")
         self._on_release = on_release
         self._poll_interval_sec = poll_interval_sec
         self._worker_count = max(1, worker_count)
@@ -291,6 +296,9 @@ class EntryGate:
         Persistence errors are logged but do not abort the add (the in-memory
         watchlist remains the source of truth for the running session).
         """
+        # effect-telemetry (frozen A2.3): an entry admitted into the pullback
+        # gate — the IA-P2-01 dormancy tripwire (any call = someone wired it).
+        self._fx_admit.inc()
         with self._lock:
             if entry.signal_id in self._watchlist:
                 raise ValueError(

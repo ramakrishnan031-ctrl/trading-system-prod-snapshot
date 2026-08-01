@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from broker.zerodha_adapter import ZerodhaAdapter
+from core.effect_telemetry import handle as _effect_handle
 from core.exceptions import BrokerError, OrderRejectedError, SLUnplaceableError
 from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
@@ -157,6 +158,9 @@ class LimitTripleProtocol(EntryEngine):
     ) -> None:
         self._adapter = adapter
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — a LIMIT_TRIPLE entry sequence executed.
+        self._fx_execute = _effect_handle("limit_protocol")
         # P0 (2026-06-15): SL legs are placed as SL (stop-limit), never SL-M
         # (Zerodha rejects SL-M via API). This is the offset of the limit price
         # past the trigger so a triggered stop fills reliably. See calc_sl_limit_price.
@@ -189,6 +193,9 @@ class LimitTripleProtocol(EntryEngine):
         with CoPlusTgtProtocol but are NOT used — the caller must forward
         them to place_exits() at fill time.
         """
+        # effect-telemetry (frozen A2.1): an entry sequence executed —
+        # counted at protocol dispatch (the protocol's consequential act).
+        self._fx_execute.inc()
         # FIX-093: Truncate tag to 16 chars for Kite API compliance
         order_tag = truncate_tag_for_broker(tag or trade_id)
         self._log.debug(

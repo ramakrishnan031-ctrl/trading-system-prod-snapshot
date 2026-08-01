@@ -25,6 +25,7 @@ import threading
 from typing import Any, List, Optional
 
 from core.candle_math import atr, ema
+from core.effect_telemetry import handle as _effect_handle
 from screening.hard_gate import (
     GATE_EXTREME, GATE_HTF, GATE_RR, gate_extreme, gate_htf, gate_rr,
 )
@@ -58,6 +59,9 @@ class V3ChainRunner:
         self._scoring = zone_scoring
         self._fetcher = fetcher
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — a V3 would-be observation appended.
+        self._fx_wouldbe = _effect_handle("v3_chain_runner")
         self._now = now_fn
         self._regime_runner = regime_runner
         self._q: queue.Queue = queue.Queue(maxsize=int(getattr(config, "max_queue", 512)))
@@ -270,6 +274,8 @@ class V3ChainRunner:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(rec.to_json_dict()) + "\n")
+            # effect-telemetry (frozen A2.1): counted after the append succeeded.
+            self._fx_wouldbe.inc()
             self._safe_log(
                 "info", "v3_chain[%s/%s]: verdict=%s v3_rr=%s live_rr=%s score=%.1f sync_hit=%s",
                 rec.symbol, rec.signal_id, rec.v3_verdict, rec.v3_rr, rec.live_rr,

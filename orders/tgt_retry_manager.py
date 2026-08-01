@@ -43,6 +43,7 @@ from core.market_windows import (
     DEFAULT_MARKET_OPEN,
     is_within_market_hours,
 )
+from core.effect_telemetry import handle as _effect_handle
 from core.time_authority import now_ist
 
 
@@ -70,6 +71,9 @@ class TGTRetryManager:
         self._placer = order_placer
         self._notifier = notifier
         self._kill_switch = kill_switch
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # — a TGT retry enacted (constructed-idle today: 0 acts ever).
+        self._fx_retry = _effect_handle("tgt_retry")
         self._log = logger or logging.getLogger("tgt_retry_manager")
         self._poll_interval = max(1, int(poll_interval_sec))
         self._max_attempts = max(1, int(max_attempts))
@@ -303,6 +307,9 @@ class TGTRetryManager:
                 continue
 
             try:
+                # effect-telemetry (frozen A2.3): a TGT retry enacted —
+                # counted at dispatch, success or raise (dormancy tripwire).
+                self._fx_retry.inc()
                 outcome = self._placer.retry_tgt_for_trade(trade_id)
             except Exception as exc:
                 self._log.error(

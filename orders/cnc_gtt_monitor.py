@@ -37,6 +37,8 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
+from core.effect_telemetry import handle as _effect_handle
+
 from broker.cost_calculator import round_trip_costs_or_zero
 from core.constants import PRODUCT_TO_INTENT
 from core.events import PositionClosed
@@ -71,6 +73,9 @@ class CncGttMonitor:
         self._placer = placer
         self._fm = fund_manager
         self._ks = kill_switch
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # until the 4-Aug flip; counted as len(actions) per completed cycle.
+        self._fx_actions = _effect_handle("cnc_gtt_monitor")
         self._notifier = notifier
         self._bus = bus
         self._log = logger
@@ -141,6 +146,11 @@ class CncGttMonitor:
 
         # Step 5: orphan sweep + 50-cap guard (operates on the broker GTT list).
         actions.extend(self._orphan_sweep_and_cap(broker_gtts, rows))
+        # effect-telemetry (frozen A2.3): GTT reconcile actions enacted this
+        # completed cycle. The deferred:broker_unavailable early-return above
+        # is deliberately NOT counted — it enacted nothing.
+        if actions:
+            self._fx_actions.add(len(actions))
         return actions
 
     # ── FIX-183: orphan-GTT ADOPTION (reconcile_once prepass) ───────────────────

@@ -79,6 +79,30 @@ def _restore_main_log():
         _main_module._log = saved
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_effect_telemetry(monkeypatch):
+    """Ledger #1 (effect-telemetry): this module MOCKS the manager classes, so
+    nothing registers with core.effect_telemetry — and the B2 composition
+    assertion then fail-fasts a paper main() BY DESIGN (that is its job on a
+    real boot). A mocked composition can neither satisfy nor meaningfully fail
+    composition-truth (IA-XTEST-01: unit-construct proves nothing about the
+    composition root), so the assertion is NEUTRALIZED here — never
+    satisfied-by-mock. The real assertion is validated by its own unit tests
+    (test_effect_telemetry.py) and by booting the actual system.
+    Test-only; no production change.
+    """
+    from core import effect_telemetry as _et
+    _et.reset_for_tests()
+    monkeypatch.setattr(
+        _et, "assert_composition",
+        lambda **kw: {"ok": True, "missing": [], "ghosts": [], "unknown": []},
+    )
+    try:
+        yield
+    finally:
+        _et.reset_for_tests()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────

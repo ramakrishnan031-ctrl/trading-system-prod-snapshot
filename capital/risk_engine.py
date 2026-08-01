@@ -53,6 +53,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, List, Optional, TYPE_CHECKING
 
+from core.effect_telemetry import handle as _effect_handle
 from core.time_authority import now_ist
 
 if TYPE_CHECKING:
@@ -176,6 +177,12 @@ class RiskEngine:
         self._log = logger
         self._ks = kill_switch
 
+        # effect-telemetry (ledger #1, frozen contract A2.1 + A2.3): handles
+        # resolved once; hot-path ops are single integer increments.
+        self._fx_verdict = _effect_handle("risk_engine")
+        self._fx_sector_cap = _effect_handle("risk.sector_cap_bound")
+        self._fx_daily_loss = _effect_handle("risk.daily_loss_gate")
+
         if kill_switch is None:
             self._log.warning(
                 "RiskEngine: kill_switch=None; KILL_SWITCH check will be skipped. "
@@ -186,7 +193,17 @@ class RiskEngine:
     # Public API
     # ─────────────────────────────────────────────────────────────────────────
 
-    def approve(
+    def approve(self, *args, **kwargs) -> ApprovalResult:
+        """effect-telemetry (frozen A2.1): the ONE lexical point for "an
+        approve/reject verdict issued" — `_approve` returns via the reject()
+        closure at five sites plus the final approval; all funnel here. A
+        raise is not a verdict and is deliberately not counted. Signature and
+        behaviour identical to `_approve` (pure pass-through)."""
+        result = self._approve(*args, **kwargs)
+        self._fx_verdict.inc()
+        return result
+
+    def _approve(
         self,
         symbol: str,
         side: str,
@@ -603,6 +620,9 @@ class RiskEngine:
                 )
 
         if enforced_pnl < 0 and snap.total > 0 and abs(enforced_pnl) >= limit:
+            # effect-telemetry (frozen A2.3, gamma): the daily-loss gate
+            # rejected an entry (IA-P6-06 — 0 ever).
+            self._fx_daily_loss.inc()
             u_note = f" + unrealized={unrealized_mtm:.2f}" if use_unrealized else " (realized-only)"
             return reject(
                 "DAILY_LOSS",
@@ -616,6 +636,10 @@ class RiskEngine:
         if snap.total > 0:
             projected = effective_sector_margin + sizing_result.margin_required
             if projected > self._max_sector_pct * snap.total:
+                # effect-telemetry (frozen A2.3, gamma): the sector cap bound
+                # a decision — would-reject AND enforce both counted at this
+                # one branch (IA-P3-05: structurally eventless soak today).
+                self._fx_sector_cap.inc()
                 # F1 (16-Jul): in "observe" (default) LOG a would-reject record and CONTINUE
                 # (do not reject) — behaviour-neutral while trades.sector fills and the cap is
                 # soaked. In "enforce" reject as designed (the live sector cap).

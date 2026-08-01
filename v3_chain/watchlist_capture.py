@@ -24,6 +24,8 @@ import threading
 from datetime import date as _date
 from typing import Any, List, Optional
 
+from core.effect_telemetry import handle as _effect_handle
+
 _SENTINEL = object()
 _TF_30 = "30minute"
 _TF_60 = "60minute"
@@ -70,6 +72,9 @@ class WatchlistCaptureWorker:
         self._fetcher = fetcher
         self._mw = market_windows
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle —
+        # a pb01_watchlist ROW written (rows, never queued= — the memory rule).
+        self._fx_row = _effect_handle("pb01_capture_worker")
         self._now = now_fn
         self._knobs = zone_knobs
         self._scoring = zone_scoring
@@ -172,6 +177,9 @@ class WatchlistCaptureWorker:
         }
         inserted = self._store.insert_pb01_watchlist(row)
         if inserted:
+            # effect-telemetry (frozen A2.1): a ROW actually written —
+            # dedupes deliberately not counted (rows are the only proof).
+            self._fx_row.inc()
             self._safe_log(
                 "info", "pb01 captured %s LEVEL=%.4f breakout=%s trading_date=%s",
                 symbol, level, breakout_date, trading_date)

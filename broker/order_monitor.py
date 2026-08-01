@@ -43,6 +43,7 @@ from datetime import datetime
 from typing import Callable, Optional
 
 from broker.order_state_machine import TERMINAL_STATES, EARLIER_STATES, OrderStateMachine  # FIX-089
+from core.effect_telemetry import handle as _effect_handle
 from broker.zerodha_adapter import ZerodhaAdapter
 from core.events import EventBus, OrderFilled, OrderPartiallyTerminated, OrderStatusChanged
 from core.exceptions import BrokerAuthError, BrokerTimeoutError, InvalidTransitionError
@@ -204,6 +205,9 @@ class OrderMonitor:
         self._osm = state_machine
         self._bus = bus
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — the hot-path op is a single integer increment.
+        self._fx_transition = _effect_handle("order_monitor")
         self._poll_interval = poll_interval_sec
         self._fill_timeout = fill_timeout_sec
         self._on_orphan = on_orphan_callback
@@ -1268,6 +1272,10 @@ class OrderMonitor:
                 try:
                     self._osm.transition(internal_order_id, "SUBMITTED")
                     self._osm.transition(internal_order_id, "OPEN")
+                    # effect-telemetry (frozen A2.1): transition committed via
+                    # the auto-step success exit (second lexical site of the
+                    # one semantic point; main site below the except).
+                    self._fx_transition.inc()
                     return True
                 except InvalidTransitionError:
                     pass  # fall through to re-raise path below
@@ -1294,6 +1302,10 @@ class OrderMonitor:
             # order_id not in OSM (untracked race) -- ignore
             return False
 
+        # effect-telemetry (frozen A2.1): an order state transition COMMITTED —
+        # this line is reachable only when osm.transition() succeeded (every
+        # failure path returned False or re-raised inside the except above).
+        self._fx_transition.inc()
         # BL-12: publish broker-status snapshot. Any failure here is logged
         # but does not reverse the transition (OSM is authoritative).
         try:

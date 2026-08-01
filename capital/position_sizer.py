@@ -37,6 +37,8 @@ import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
+from core.effect_telemetry import handle as _effect_handle
+
 if TYPE_CHECKING:
     from capital.fund_manager import FundManager
 
@@ -164,6 +166,11 @@ class PositionSizer:
         # enforces this, but guard here too (PositionSizer is built directly in tests).
         self._enabled = enabled
         self._flat_value_rs = flat_value_rs
+        # effect-telemetry (ledger #1, frozen contract A2.1 + A2.3): handles
+        # resolved once; hot-path ops are single integer increments.
+        self._fx_verdict = _effect_handle("position_sizer")
+        self._fx_risk_bind = _effect_handle("sizer.risk_bind")
+        self._fx_live_margin = _effect_handle("sizer.live_margin")
         # V3 03.06 delivery scaffold (INERT; see ctor note).
         self._delivery_risk_per_trade_pct = delivery_risk_per_trade_pct
         self._delivery_max_position_value_pct = delivery_max_position_value_pct
@@ -173,7 +180,16 @@ class PositionSizer:
                 f"got {flat_value_rs!r}"
             )
 
-    def calculate(
+    def calculate(self, *args, **kwargs) -> "SizingResult":
+        """effect-telemetry (frozen A2.1): the ONE lexical point for "a sizing
+        verdict produced" — `_calculate` has eight return sites, all funnel
+        here. A raise is not a verdict and is deliberately not counted.
+        Signature/behaviour identical to `_calculate` (pure pass-through)."""
+        result = self._calculate(*args, **kwargs)
+        self._fx_verdict.inc()
+        return result
+
+    def _calculate(
         self,
         symbol: str,
         side: str,
@@ -298,6 +314,11 @@ class PositionSizer:
         if self._broker_adapter is not None:
             try:
                 margin_pct = self._broker_adapter.get_live_margin_pct(symbol, intent)
+                # effect-telemetry (frozen A2.3): live broker margin consulted
+                # (FIX-072 / IA-P3-02) — rides the success branch that already
+                # emits `position_sizer.live_margin_used` below; the fallback
+                # except-path is deliberately NOT counted.
+                self._fx_live_margin.inc()
                 # Convert margin_pct to leverage: leverage = 1 / margin_pct
                 # e.g., margin_pct=0.20 (20%) -> leverage=5.0
                 live_leverage = 1.0 / margin_pct if margin_pct > 0 else 1.0
@@ -409,6 +430,9 @@ class PositionSizer:
             constraint = "CAPITAL"
         elif qty_by_risk <= qty_by_concentration:
             constraint = "RISK"
+            # effect-telemetry (frozen A2.3, gamma): the risk-per-trade term
+            # actually bound a size (IA-P3-04 — algebraically never today).
+            self._fx_risk_bind.inc()
         else:
             constraint = "CONCENTRATION"
 

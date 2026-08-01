@@ -49,6 +49,7 @@ from dataclasses import dataclass, replace as dc_replace
 from datetime import datetime
 from typing import Dict, List, Optional
 
+from core.effect_telemetry import handle as _effect_handle
 from core.events import EodSquareoffComplete, EventBus, PositionClosed
 from core.logger import log_exception
 from core.time_authority import ist_timezone, now_ist, today_ist
@@ -132,6 +133,9 @@ class ShadowTracker:
     ) -> None:
         self._store = state_store
         self._bus = bus
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # — a simulated inning started (SH13 disabled 25-Jul; X4 VOID set).
+        self._fx_inning = _effect_handle("shadow_tracker")
         self._live_feed = live_feed
         self._market_windows = market_windows
         self._time_authority = time_authority
@@ -472,6 +476,9 @@ class ShadowTracker:
         Derives new SL/TGT from strategy object if available; otherwise uses
         effective percentages computed from trade record (fallback).
         """
+        # effect-telemetry (frozen A2.3): any entry here violates the SH13
+        # disable decision — the dormancy tripwire fires before the row write.
+        self._fx_inning.inc()
         entry_price = prev_inning.exit_price
         entry_ts = prev_inning.exit_ts or self._now()
         direction = prev_inning.direction

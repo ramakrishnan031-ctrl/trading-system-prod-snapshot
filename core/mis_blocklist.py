@@ -27,6 +27,7 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
 
+from core.effect_telemetry import handle as _effect_handle
 from core.time_authority import now_ist
 
 # The broker's literal, stable signal that intraday/MIS is disallowed for a symbol
@@ -71,6 +72,9 @@ class MisLearnedBlocklist:
         self._path = Path(path)
         self._ttl_days = int(ttl_days)
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.2): event-driven —
+        # a broker MIS-block learned + persisted (F5 class).
+        self._fx_block = _effect_handle("mis_blocklist")
         # Injected clock for testability; default = IST calendar date.
         self._today_fn = today_fn or (lambda: now_ist().date())
         self._lock = threading.Lock()
@@ -87,6 +91,8 @@ class MisLearnedBlocklist:
         with self._lock:
             self._data[key] = today
             self._persist_locked()
+        # effect-telemetry (frozen A2.2): counted after the persist succeeded.
+        self._fx_block.inc()
         if self._log is not None:
             self._log.info(
                 "mis_blocklist: recorded MIS-block for %s (date=%s, ttl_days=%d)",

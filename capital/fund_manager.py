@@ -83,6 +83,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Final, Optional
 
 from capital.invariant import assert_capital_invariant
+from core.effect_telemetry import handle as _effect_handle
 from core.events import CapitalDriftDetected, EventBus
 from core.exceptions import CapitalInvariantViolation, CapitalStateInconsistent
 from core.logger import log_exception
@@ -336,6 +337,14 @@ class FundManager:
         self._on_loss_breach = on_daily_loss_breach
         self._on_critical = on_critical_failure
         self._kill_switch = kill_switch  # FM19 / BL-9
+
+        # effect-telemetry (ledger #1, frozen contract A2.1 + A2.3): handles
+        # resolved once; hot-path ops are single integer increments.
+        self._fx_ledger = _effect_handle("fund_manager")
+        self._fx_loss_breach = _effect_handle("fm.daily_loss_post_trade")
+        self._fx_invariant = _effect_handle("fm.invariant_violation")
+        self._fx_overflow = _effect_handle("fm.bucket_overflow")
+        self._fx_commit_kill = _effect_handle("fm.commit_hard_kill")
 
         self._lock = threading.RLock()
 
@@ -978,6 +987,9 @@ class FundManager:
                 },
             )
             if self._kill_switch is not None:
+                # effect-telemetry (frozen A2.3): a commit failure escalated
+                # to HARD_KILL (BL-4).
+                self._fx_commit_kill.inc()
                 try:
                     self._kill_switch.hard_kill(
                         reason=reason,
@@ -1311,6 +1323,10 @@ class FundManager:
                                "capital": self._total},
                     )
                     if self._on_loss_breach is not None:
+                        # effect-telemetry (frozen A2.3): the post-trade
+                        # daily-loss breach callback fired (FM7 half of the
+                        # dual mechanism).
+                        self._fx_loss_breach.inc()
                         self._on_loss_breach()
 
                 _result = ReleaseResult(
@@ -1436,6 +1452,9 @@ class FundManager:
                 or self._positional_avail < -_INVARIANT_TOLERANCE
             )
             if bucket_overflow:
+                # effect-telemetry (frozen A2.3): a bucket overflow detected
+                # (H-1; IA-P6-06 — 0 ever, by design).
+                self._fx_overflow.inc()
                 # Most-negative bucket gives the rupee magnitude for BL-2
                 # tiering; drift_handler routes escalating sources by
                 # source_module (fund_manager_bucket_overflow is a new
@@ -2324,6 +2343,9 @@ class FundManager:
         Both wrapped in best-effort try/except so the caller can always
         re-raise the original CapitalInvariantViolation cleanly.
         """
+        # effect-telemetry (frozen A2.3): a 3-balance invariant violation
+        # handled/escalated (IA-P6-06 — 0 ever, by design).
+        self._fx_invariant.inc()
         if self._kill_switch is not None:
             try:
                 self._kill_switch.hard_kill(
@@ -2400,6 +2422,9 @@ class FundManager:
                      self._session_id, direction, trade_id,
                      margin_delta, pnl_delta, costs),
                 )
+            # effect-telemetry (frozen A2.1): an fm_ledger row written —
+            # counted only after the transaction committed.
+            self._fx_ledger.inc()
         except Exception as exc:
             log_exception(self._log, exc)
             raise

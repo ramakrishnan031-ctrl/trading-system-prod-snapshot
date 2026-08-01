@@ -47,6 +47,7 @@ from __future__ import annotations
 import logging
 
 from broker.zerodha_adapter import ZerodhaAdapter
+from core.effect_telemetry import handle as _effect_handle
 from core.exceptions import BrokerError, OrderRejectedError
 from core.ids import truncate_tag_for_broker
 from core.logger import log_exception
@@ -81,6 +82,9 @@ class CoPlusTgtProtocol(EntryEngine):
     ) -> None:
         self._adapter = adapter
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # — a CO entry sequence executed (CO never used: 805/805 regular, X6).
+        self._fx_execute = _effect_handle("co_protocol")
 
     # ── Phase 1: CO ENTRY ONLY ────────────────────────────────────────────────
 
@@ -104,6 +108,9 @@ class CoPlusTgtProtocol(EntryEngine):
         CO entry order has built-in SL bracket (trigger_price=sl_price).
         TGT is NOT placed here — caller must use place_exits() after entry fills.
         """
+        # effect-telemetry (frozen A2.3): ANY execute here is the dormancy
+        # tripwire — CO is declared by 12/15 YAMLs and discarded at :949 (X6).
+        self._fx_execute.inc()
         # FIX-093: Truncate tag to 16 chars for Kite API compliance
         order_tag = truncate_tag_for_broker(tag or trade_id)
         self._log.debug(

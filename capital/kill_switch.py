@@ -94,6 +94,7 @@ _FLATTEN_TERMINAL_ORDER_STATUSES = ("CANCELLED", "FAILED", "EXPIRED", "COMPLETE"
 # burst of failed entries does not spam the channel (the system self-recovers on
 # the next signal once the IP is allowlisted).
 _IP403_ALERT_THROTTLE_SEC = 3600.0
+from core.effect_telemetry import handle as _effect_handle
 from core.events import EventBus, KillSwitchActivated
 from core.exceptions import (
     BrokerAuthError,
@@ -231,6 +232,9 @@ class KillSwitch:
         self._store = state_store
         self._bus = bus
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — the hot-path op is a single integer increment.
+        self._fx_activation = _effect_handle("kill_switch")
         self._cancel_fn = on_hard_kill_cancel_fn
         self._threshold = api_failure_threshold
         self._auto_trip = enable_auto_trip
@@ -894,6 +898,11 @@ class KillSwitch:
                     """,
                     (state.value, reason, ts.isoformat(), triggered_by),
                 )
+            # effect-telemetry (frozen A2.1 predicate): a kill ACTIVATION
+            # persisted — SOFT/HARD only; INACTIVE clears deliberately not
+            # counted. Runs only after the persist transaction committed.
+            if state in (KillState.SOFT_KILL, KillState.HARD_KILL):
+                self._fx_activation.inc()
         finally:
             # `finally`, not the happy path: the case most worth seeing is a write
             # that WAITS and then FAILS (the busy-timeout case). The original

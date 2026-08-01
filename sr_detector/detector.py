@@ -23,6 +23,8 @@ import json
 import queue
 import threading
 from datetime import datetime
+
+from core.effect_telemetry import handle as _effect_handle
 from statistics import mean
 from typing import Dict, List, Optional
 
@@ -67,6 +69,9 @@ class SRDetector:
         self._fetcher = fetcher
         self._store = store
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — an sr_detector_results row written.
+        self._fx_write = _effect_handle("sr_detector")
         self._mode = mode
         self._now_fn = now_fn
         self._version = detector_version
@@ -288,6 +293,9 @@ class SRDetector:
                 "created_at": _iso(self._safe_now()),
             }
             self._store.insert_sr_detector_result(row)
+            # effect-telemetry (frozen A2.1): an sr_detector_results row
+            # written — counted only after the insert succeeded.
+            self._fx_write.inc()
         except Exception as exc:
             # Shadow logging must never raise (parity with screener_results write).
             self._safe_log("error", "sr_detector: write failed for %s: %s", candidate.symbol, exc)

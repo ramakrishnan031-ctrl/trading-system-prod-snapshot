@@ -48,6 +48,7 @@ from datetime import date, datetime
 from typing import Optional, TYPE_CHECKING
 
 from broker.order_state_machine import OrderStateMachine
+from core.effect_telemetry import handle as _effect_handle
 from broker.zerodha_adapter import ZerodhaAdapter
 from capital.fund_manager import FundManager
 from capital.kill_switch import KillSwitch, KillState
@@ -137,6 +138,9 @@ class EodSquareoff:
         self._ta = time_authority
         self._ks = kill_switch
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — incremented once per completed _fire sweep.
+        self._fx_fire = _effect_handle("eod_squareoff")
         self._order_monitor = order_monitor
         self._inter_order_delay_sec = inter_order_delay_ms / 1000.0
         self._notifier = notifier
@@ -558,6 +562,9 @@ class EodSquareoff:
                 log_exception(self._log, exc)
                 self._log.error("EOD daily summary alert failed: %s", exc)
 
+        # effect-telemetry (frozen A2.1): an EOD square-off sequence executed
+        # (EodFireResult produced).
+        self._fx_fire.inc()
         return result
 
     # ------------------------------------------------------------------

@@ -15,6 +15,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Callable, Optional
 
+from core.effect_telemetry import handle as _effect_handle
 from core.logger import SafeJSONEncoder  # FIX-104: Reuse instead of duplicating
 from core.time_authority import now_ist
 # Single source of truth for the circuit-band margin: the SAME constant the
@@ -82,6 +83,9 @@ class SecondaryScreener:
         self._state_store = state_store
         self._quote_fn = quote_fn
         self._logger = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — every verdict path funnels through _persist (P18).
+        self._fx_verdict = _effect_handle("secondary_screener")
 
         # V3 03.03/03.04 — Hard-Gate + scorer re-scale. DEFAULT-OFF: when the mode
         # is "off" (or no scoring_config is injected, as in most tests) NONE of the
@@ -597,6 +601,9 @@ class SecondaryScreener:
         SS5: Write to state_store. DB failure is logged but never raised
         (don't crash signal pipeline for a DB write issue).
         """
+        # effect-telemetry (frozen A2.1): a screening verdict persisted —
+        # the single P18 funnel for every verdict path.
+        self._fx_verdict.inc()
         ts = now_ist().isoformat()
         try:
             # Update signal status row (P18)

@@ -52,6 +52,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from core.effect_telemetry import handle as _effect_handle
 from core.exceptions import BrokerError, BrokerRateLimitError, BrokerTimeoutError
 from core.time_authority import ist_timezone, now_ist
 from strategies.control import (  # Slice 2: strategy-control gate
@@ -177,6 +178,11 @@ class SignalProcessor:
         self._scorer = quality_scorer
         self._placer = order_placer
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — counts the _process_one dispatch only (GATE-Q4:
+        # the two resume-path dispatch sites are production-unreachable and
+        # deliberately uncounted; their awakening surfaces at the gate units).
+        self._fx_dispatch = _effect_handle("signal_processor")
         self._in_flight_release = in_flight_release_fn
         self._in_flight_heartbeat = in_flight_heartbeat_fn  # FIX-011
         self._worker_count = max(1, worker_count)
@@ -1227,6 +1233,9 @@ class SignalProcessor:
             )
 
         try:
+            # effect-telemetry (frozen A2.1): an approved entry DISPATCHED to
+            # placement — counted at dispatch, whether or not place() raises.
+            self._fx_dispatch.inc()
             self._placer.place(
                 symbol=symbol,
                 side=side,

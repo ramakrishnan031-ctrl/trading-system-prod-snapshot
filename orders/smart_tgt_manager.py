@@ -55,6 +55,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from broker.slippage_engine import _round_down_to_tick, _round_up_to_tick
+from core.effect_telemetry import handle as _effect_handle
 from core.time_authority import now_ist_iso
 
 # DUP-1 (2026-04-26 audit): _IST removed; never read locally.
@@ -113,6 +114,10 @@ class SmartTgtManager:
         # alongside fresh placements/cancels owned by OrderPlacer. Optional
         # to keep the existing test suite (which constructs without RL) green.
         self._rl = rate_limiter
+
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # — a broker modify executed. Starved today (protocol never assigned).
+        self._fx_modify = _effect_handle("smart_tgt")
 
         self._tracked: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.RLock()
@@ -585,6 +590,9 @@ class SmartTgtManager:
 
         # Broker call (outside lock -- may be slow)
         try:
+            # effect-telemetry (frozen A2.3): any reach of this modify is the
+            # dormancy tripwire — counted at dispatch, success or raise.
+            self._fx_modify.inc()
             result = self._adapter.modify_order(
                 broker_order_id=co_order_id,
                 trigger_price=new_sl,

@@ -25,6 +25,7 @@ from typing import Optional
 
 # Single source of truth for the circuit-band margin (same constant the post-fill
 # placeability gate uses) — kept identical to the pre-relocation import.
+from core.effect_telemetry import handle as _effect_handle
 from orders.price_math import DEFAULT_CIRCUIT_MARGIN_PCT
 
 # Gate reject reasons (status vocabulary — screen() maps these to REJECTED_<reason>).
@@ -131,10 +132,16 @@ class HardGate:
         self._log = logger
         self._freshness_max_sec = float(freshness_max_sec)
         self._proximity_enabled = bool(circuit_proximity_reject_enabled)
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once — the hot-path op is a single integer increment.
+        self._fx_verdict = _effect_handle("hard_gate")
 
     def evaluate(
         self, *, trigger_price, triggered_at, direction, market_data: dict,
     ) -> GateVerdict:
+        # effect-telemetry (frozen A2.1): a hardgate verdict produced — every
+        # path returns and evaluate() never raises, so entry-count == verdicts.
+        self._fx_verdict.inc()
         # 1. at-circuit (mirrors step_executor._step_9_circuit_check: hard reject).
         cs = market_data.get("circuit_state", "")
         if cs in ("upper_circuit", "lower_circuit"):

@@ -66,6 +66,7 @@ from typing import Callable, Dict, List, Optional
 
 from broker.cost_calculator import round_trip_costs_or_zero
 from capital.fund_manager import FundManager
+from core.effect_telemetry import handle as _effect_handle
 from capital.kill_switch import KillSwitch
 from alerts.telegram_notifier import TelegramNotifier
 from core.config_loader import OrderReconcilerConfig
@@ -301,6 +302,9 @@ class OrderReconciler:
         self._notifier = notifier
         self._bus = bus
         self._log = logger
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle,
+        # resolved once; counted as len(actions) per completed cycle (RC20).
+        self._fx_actions = _effect_handle("order_reconciler")
         self._cfg = cfg
         self._quote_fn = quote_fn
         self._broker_orders_fn = broker_orders_fn
@@ -625,7 +629,12 @@ class OrderReconciler:
         try:
             # FIX-038: increment poll count for backoff calculations
             self._poll_count += 1
-            return self._reconcile()
+            actions = self._reconcile()
+            # effect-telemetry (frozen A2.1): reconciliation actions TAKEN
+            # this cycle (RC20 list length; clean cycles add 0).
+            if actions:
+                self._fx_actions.add(len(actions))
+            return actions
         except Exception as exc:
             self._log.error("reconcile_once unhandled error: %s", exc, exc_info=True)
             return []

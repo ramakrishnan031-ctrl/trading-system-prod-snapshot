@@ -17,6 +17,7 @@ from typing import Callable, List, Optional, Set
 
 from kiteconnect import KiteTicker
 
+from core.effect_telemetry import handle as _effect_handle
 from core.logger import log_exception
 from core.time_authority import now_ist
 
@@ -54,6 +55,10 @@ class LiveFeedManager:
         self._api_key = api_key
         self._access_token = access_token
         self._paper_mode = paper_mode
+        # effect-telemetry (ledger #1, frozen contract A2.3): dormant tripwire
+        # — a tick subscription made. ENFORCES IA-P1-06 (the tick path is
+        # dormant BY DECISION e754c7e; acted>0 = the decision silently ended).
+        self._fx_subscribe = _effect_handle("live_feed")
         # G.2 (2026-04-25): never log even a prefix of the API key or access
         # token. Logs are read by support, cloud providers, and anyone with
         # incident access; even 6 chars narrows the brute-force search space
@@ -169,6 +174,9 @@ class LiveFeedManager:
         LF4: Subscribe tokens. MODE_LTP default. Tracks in _subscribed.
         FIX-059: Batched subscription (default 50 tokens/batch) to avoid broker limits.
         """
+        # effect-telemetry (frozen A2.3): ANY call is the dormancy tripwire
+        # (only latent caller: order_placer exit-retry — IA-P1-06).
+        self._fx_subscribe.inc()
         with self._lock:
             new = [t for t in instrument_tokens if t not in self._subscribed]
             self._subscribed.update(instrument_tokens)

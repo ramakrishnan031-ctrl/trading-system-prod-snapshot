@@ -93,7 +93,10 @@ def test_risk_engine_approve_sources_date_from_now_ist() -> None:
         "core.time_authority.now_ist"
     )
     # 2. Source guard: approve() uses now_ist(), not datetime.now(...).
-    src = inspect.getsource(risk_engine_mod.RiskEngine.approve)
+    # Ledger #1 (effect-telemetry): approve() is now a pure pass-through
+    # counting wrapper; the gate logic lives in _approve(). Inspect the real
+    # body so this sweep keeps its power (getsource(approve) would be vacuous).
+    src = inspect.getsource(risk_engine_mod.RiskEngine._approve)
     assert "now_ist()" in src, "approve() must call now_ist()"
     assert "datetime.now(" not in src, (
         "approve() must not call datetime.now() directly (H-17 regression)"

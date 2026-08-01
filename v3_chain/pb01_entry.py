@@ -37,6 +37,7 @@ from datetime import datetime, time as _dt_time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.candle_math import atr
+from core.effect_telemetry import handle as _effect_handle
 from screening.hard_gate import gate_confirm, gate_pullback
 from v3_chain.truncate import close_ts, truncate_to_asof
 
@@ -94,6 +95,9 @@ class Pb01EntryStage:
         self._store = store
         self._fetcher = fetcher
         self._mw = market_windows
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle —
+        # a watchlist row driven to a TERMINAL status.
+        self._fx_terminal = _effect_handle("pb01_entry_stage")
         self._on_confirm = on_confirm
         self._log = logger
         self._now = now_fn
@@ -323,6 +327,8 @@ class Pb01EntryStage:
                 int(row["id"]), status,
                 outcome_json=json.dumps(outcome, default=str),
                 consumed_at=_naive_iso(self._safe_now()))
+            # effect-telemetry (frozen A2.1): a terminal status persisted.
+            self._fx_terminal.inc()
             self._safe_log("info", "pb01 entry %s (%s) → %s", row.get("symbol"),
                            row.get("trading_date"), status)
         except Exception as exc:

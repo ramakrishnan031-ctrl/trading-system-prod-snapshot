@@ -29,6 +29,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from allocation.models import RegretRecord, ScoredCandidate
 from allocation.ranker import arrival_ordered, rank_candidates
 from allocation.window_buffer import WindowBuffer
+from core.effect_telemetry import handle as _effect_handle
 
 
 class PortfolioAllocator:
@@ -56,6 +57,9 @@ class PortfolioAllocator:
         self._enforce_admit_fn = enforce_admit_fn
         self._enforce_reject_fn = enforce_reject_fn
         self._v3_scope_fn = v3_scope_fn or (lambda _s: False)
+        # effect-telemetry (ledger #1, frozen contract A2.1): one handle —
+        # a shadow allocation window adjudicated.
+        self._fx_window = _effect_handle("portfolio_allocator")
         self._buffer = WindowBuffer()
         self._running = False
         self._stop = threading.Event()
@@ -146,6 +150,10 @@ class PortfolioAllocator:
         if not drained:
             return
         free_slots, avail, deployed, total = self._capacity_snapshot()
+        # effect-telemetry (frozen A2.1): a non-empty window adjudicated
+        # (shadow regret or enforce batch — the drain above already returned
+        # on empty windows, so this counts real adjudications only).
+        self._fx_window.inc()
         if self.mode == "shadow":
             self._log_regret(drained, free_slots, avail, deployed, total)
         elif self.mode == "enforce":
