@@ -1,5 +1,18 @@
 # MASTER PENDING REGISTER — 30-Jul-2026 (Thursday night, market closed)
 
+> # 🔁 SUPERSEDED BY `docs/MASTER_PENDING_01-Aug-2026.md` AS THE WORKING REGISTER (01-Aug-2026) — ⛔ RETAINED AS THE CITED SOURCE AUTHORITY. DO NOT DELETE.
+> Read the **01-Aug register** to know **what is open**. Read **this file** for the full
+> text of the 29–31 Jul delta, the G/R stale-sweep (N=38), **F1–F6**, the state tags, §4's
+> rescued operator knowledge and §7's delete verdicts — the 01-Aug register carries one
+> line and a pointer for each.
+> ⭐ **Where the two disagree, THIS FILE WINS** and the 01-Aug register is the thing to
+> correct.
+> ⚠️ **ONE KNOWN DISCREPANCY, recorded by the 01-Aug register (its §D.3) rather than
+> edited here:** §3.7's sweep closes **G5 · G6 · G16** with evidence, but §6's `K` list
+> does not deduct them — so the carried figure **M=131 still contains those 3**. ⛔ Nothing
+> is lost by it (all three are named with evidence in §3.6/§3.7); the 01-Aug register
+> places them in its settled band and accounts for them explicitly in its reconciliation.
+
 > **THIS FILE IS A DELTA PLUS AN INDEX. IT DOES NOT REPLACE
 > `docs/MASTER_PENDING_28-Jul-2026.txt` — IT SITS ON TOP OF IT.**
 
