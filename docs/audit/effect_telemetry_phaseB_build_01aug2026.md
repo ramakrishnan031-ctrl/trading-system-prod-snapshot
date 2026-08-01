@@ -123,10 +123,38 @@ One commit, additive-only, `git revert`-clean. Nothing downstream consumes the c
 yet. Reverting also removes the B2 assertion (a paper boot then stops checking
 composition — the pre-change state exactly).
 
+## 6a. PHASE B-2 ADDENDUM (01-Aug ~18:5x IST) — THE STOP IS RESOLVED
+
+**Approved amendment executed as ONE commit `4959111`:** contract §AMENDMENTS block
+(superseded row quoted; the Phase-A error class + the repo-wide-not-file-wide rule
+recorded) · registry 70 entries (`order_placer` → `place()`; NEW `placer.emergency_exit`
+dormant tripwire @ `_emergency_market_exit` :3849; fetcher string ×4→×5) · 4 code lines
+in `orders/order_placer.py` (import + 2 handles + inc at `place()` entry + inc at the
+emergency body). **Registry consistency: every counter-bearing entry has one
+effect-point; MISSING: NONE — no unregistered constructed unit remains. Module tests
+12/12. Census demo: `order_placer: acted 1 | active` · `placer.emergency_exit: acted 0 |
+dormant`, zero class-ii/iii/iv.** Money-path hunks: import/handle/inc only.
+
+**Regression (vs the 8F confirmatory baseline), stated exactly:** 10F/5,464P. The q9
+streak test left the set; **3 entered** (`test_consecutive_losses_at_limit`,
+`test_bugb_restart_floor_via_pending_fill`, `test_daily_delivery_cap_rejects_6th`) —
+**all 3 PASS in isolation on this tree**, all sit in the consecutive-losses/risk_engine
+fixture family B-2 never touched, and that family's q9 streak member has now oscillated
+red→red→green across three runs with no relevant tree change — **run-to-run
+nondeterminism in a shared-state family, the same pre-existing class stash-proven in
+§4a, not the B-2 delta.** ⚠️ Honestly flagged, not smoothed: a calm-machine confirm
+rerun is OWED alongside Monday's composition check before the deploy-slot decision uses
+this gate.
+
+**MONDAY OWED (ChatGPT deploy precondition):** PC PAPER boot on a trading day —
+composes fully; **B2 assertion must PASS clean** (no fail-fast, no unknown/ghost); a
+mid-day manual stop on the PC copy may witness one real partial-day census. ⛔ PC only —
+the VM observation run stays untouched on `297b587`.
+
 ## 7. ⛔ OPEN ITEMS CARRIED OUT OF THIS BUILD
 
-1. **§1 — the order_placer effect-point review** (Rama/gate). 2 registry edits + ~4
-   lines once decided; until then dev/paper boots fail-fast by design.
+1. ~~**§1 — the order_placer effect-point review**~~ ✅ **RESOLVED — Phase B-2
+   `4959111` (§6a); paper boots no longer fail-fast on it.**
 2. **The deploy slot** — ⛔ NOT pushed tonight ON PURPOSE: `main` is frozen unpushed so
    **Mon 3-Aug boots the regression-tested `297b587`** (observation day must stay
    single-variable). Options for Rama: ride the Mon-evening slot WITH the flip stack

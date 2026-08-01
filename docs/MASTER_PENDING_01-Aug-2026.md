@@ -218,12 +218,15 @@ one more commit always moves.**
 > Phase B landed as ONE commit `132e571` (42/43 units instrumented; B2 assertion; EOD
 > census at `_shutdown()`; regression **NEW-failure set EMPTY**, 8F/5,466P vs base
 > 10F/5,452P). Build record: `docs/audit/effect_telemetry_phaseB_build_01aug2026.md`.
-> 🔴 **TWO THINGS OWED RAMA:** (1) **the `order_placer` effect-point review** — the
-> frozen row's ":3914 single chokepoint" premise was WRONG (it is the never-fired
-> `_emergency_market_exit`); per condition #4 the unit is UNinstrumented, and **a
-> paper/dev boot fail-fasts at B2 naming it until the review lands** (recommendation in
-> the build record §1); (2) **the deploy slot** — Mon-eve-with-the-flip vs Tue-eve→Wed
-> boot (§7). ⛔ Mon still boots `297b587`. Scope β/γ only; BK-8 (α) separate.
+> ✅ **B-2 (01-Aug night, `4959111`): the `order_placer` STOP is RESOLVED** — approved
+> amendment (place() effect-point + NEW `placer.emergency_exit` dormant tripwire;
+> registry 70 entries, MISSING: NONE; census demo clean). Status now
+> **`<BUILT — STOP RESOLVED, awaiting deploy slot>`**.
+> 🔴 **OWED RAMA:** the **deploy slot** — Mon-eve-with-the-flip vs Tue-eve→Wed boot (§7).
+> ⛔ Mon still boots `297b587`. ⏳ **MONDAY OWED (pre-deploy):** PC-paper composition
+> boot — B2 assertion PASSES clean — plus a calm-machine regression confirm (the B-2
+> gate carries 3 isolation-passing flips in the known-flaky consecutive-losses family;
+> build record §6a states it exactly). Scope β/γ only; BK-8 (α) separate.
 
 **THE SEQUENCING S3 MANDATES when it IS commissioned:** **(1)** the buy-day product filter
 **FIRST** (A4 — the Q4 ordering constraint, binding across three workstreams); **(2)**
