@@ -3076,3 +3076,255 @@ IA-P9-02); G1/M-A2/M2 re-verified or carried at current lines; the P9→P10 seam
 committed incrementally; ⛔ nothing fixed, nothing pushed, the 3-Aug/4-Aug sequence
 untouched.
 *(Phase 10 — deploy / recovery / boot — appends below this line.)*
+
+---
+
+## PHASE 10 — RECOVERY / DEPLOYMENT / HEADLESS (boot, deploy, self-restart — and the loop closure)
+
+### P10.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~11:0x → ~11:4x IST** |
+| Measurements taken | 01-Aug **~11:1x–11:2x IST**, from the VM (md5/crontab/systemctl/grep reads; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 (same session) |
+| PC tree read | `94af692` = `297b587` + 12 docs-only commits ⇒ code read == deployed |
+| Fresh identity evidence | live hook `~/trading-system.git/hooks/post-receive` == tracked `deploy/hooks/post-receive` (**md5 `b7166732…` both**) · crontab 50 active entries incl. `15 8 * * 1-5 auto_refresh_token.py` · `token-watcher` + `trading-system` both **enabled** · `stray_pyc` present in the DEPLOYED system_manager (2 refs) · `deploy/post-receive` (the M-DP1 stale duplicate) **GONE from the tree** |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed/built (no tree-vs-HEAD check, no degrade path, no 2027 file); cross-cutting phases NOT started; July audits read-only |
+
+### P10.1 The boot/deploy/recovery topology as verified
+
+**Deploy**: push to the bare repo → post-receive (the Option-A hook, md5-verified identical
+to the tracked copy) → `git checkout -f main` into `/home/ubuntu/systems/trading-system`
+(no .git; untracked files NEVER removed — KNOWN) → crontab regen-verify-install (belt-and-
+suspenders diff against the deployed canonical; WARNING-not-install on mismatch). The
+reflog (`logs/HEAD`, 801+ entries, both halves, expiry=never) remains the complete deploy
+record nothing reports (KNOWN 28-Jul). **Boot (the headless chain, all links fresh-verified
+or session-verified)**: 08:15 cron `auto_refresh_token.py` (its failures alert via the cron
+path) → token file → `token-watcher.service` (root, 30s poll, `Restart=always`) sees a
+fresh today-token + `within_service_window` [08,16) → `systemctl start trading-system` →
+main.py: start-cutoff guard **[08:00, 18:15) hardcoded** (:1613-1624 — cannot read config,
+KNOWN, fresh-verified) → StateStore open with `allow_migrate=True` (**the ONLY migrating
+opener; AC2 refuses even boot while the market is open**, state_store.py:137,182-183) →
+`clear_stale_state` (:1878, BEFORE the checks — every prior-day kill clears) →
+`run_all_startup_checks` (:2069; blocking failures ⇒ exit 3) → capital seed
+(`compute_live_seed` = broker.net − carryover) → rehydrate (FM chains, monitor watch-list,
+placer fill-map) → reconciler startup cycle (RC14) → 09:15 FM9 one-shot. **Recovery**: the
+two-layer restart matrix below; `deploy/resume.sh` (stop → reset-failed → clear → start)
+for same-day emergencies; `--resume` in main.
+
+### P10.2 Headline re-measurements (mandated)
+
+**(a) The self-restart matrix — EVERY failure class, both layers (systemd unit
+:27-35 + token_watcher.sh :125-191), with the stays-down-silent assessment.**
+| Failure class | systemd | token-watcher | Net coverage |
+|---|---|---|---|
+| Crash (exit 1/2, signals, OOM) | `Restart=on-failure`, 10s | + backoff cap 3/hr, WARNING-alert once/day at the cap | ✓ restarts; alerted on hammer |
+| Clean exit 0 (EOD 17:35 / holiday) | no restart | no restart if exited TODAY; next fresh token → daily start | ✓ by design |
+| Exit 3 (startup checks) | `RestartPreventExitStatus` | today: NO restart + **WARNING-tier Telegram once/day**; prior-day: ONE retry | stays down (correct — would loop); alert is WARNING-tier only |
+| Exit 4 (HALT, kill active) | `RestartPreventExitStatus` | today: NO restart + **WARNING-tier Telegram once/day**; prior-day: one clean start (matches `clear_stale_state`) | ✓ K1 semantics EXACTLY re-verified — and the watcher's prior-day retry half AGREES with the headless guarantee |
+| Hung-but-active | no `WatchdogSec` | sees `active` ⇒ nothing | ⚠️ **NO external detector** — the liveness probe reads UNIT STATE only (its own docstring: a deliberate stop is indistinguishable from silent death) and cannot see a hang; bounded only by in-app self-checks (→ OQ-P10-1) |
+| Token never arrives | — | waits silently (no watcher alert) | covered one layer up: the 08:15 cron job's own failure alert |
+| Start attempted after window | — | won't start ≥16:00 | main's own [08:00,18:15) guard is the backstop — two windows, coherent (starter narrower) |
+**The named silent-ish case (K1×G1 composition, NEW-named): an emergency kill + same-day
+restart AFTER 16:00 → exit 4 → the only automatic notification is the watcher's
+WARNING-tier Telegram (TG4: no sentinel, no email, drop-on-failure) and the liveness probe
+is already past its window — no CRITICAL-grade page until 09:00 the next day.** Inside
+[09:00,16:00) the probe's ~5-min CRITICAL covers every down-state (K1's "detection is
+fine" re-confirmed). → IA-P10-03.
+
+**(b) The deployed-tree-vs-HEAD invariant — enforcement NONE, verification ONE NARROW
+SLICE; the meta-example characterised (G lens).** Fresh width: the ONLY HEAD-adjacent
+verification in the entire tooling is the stray-`.pyc` detector (system_manager.py:996-1061
+— its docstring names the invariant verbatim: code "not in HEAD… silently breaks
+deployed-tree-equals-HEAD"), DEPLOYED and measured-0 nightly; no rev-parse/manifest/diff
+check exists anywhere in scripts/ or preflight (grep width stated). What holds the
+invariant today: the hook's `checkout -f` (which never deletes untracked files), the
+cherry-pick discipline, and manual SHA rituals — this campaign itself performed the ritual
+ten times ("code read == deployed") against an invariant the SYSTEM never checks. The
+reflog supplies the known-commit half for free (KNOWN). **Closing mechanism (described, ⛔
+not built):** one boot-or-18:45 check — `git --git-dir=~/trading-system.git
+--work-tree=$TARGET diff --stat HEAD` (empty = clean; plus the untracked-.py sweep the
+.pyc detector already approximates) — a read-only two-liner that turns ten manual rituals
+into a nightly artifact. → IA-P10-01.
+
+**(c) The schema-migration window — traced at source; v46 WILL repeat it; NEITHER M1
+direction exists in code.** The guard (`ed1c4b9`, state_store.py:137/:182-183/:326/:427):
+`allow_migrate=True` is passed by the main.py boot path alone; AC2 makes even boot refuse
+while the market is open; **every other opener** — all 33 heartbeat-writing crons, the
+monitors, reports — hits `_refuse_migration` → CRITICAL sentinel ("Schema migration
+refused (non-boot process)") → process aborts. ⇒ an evening schema push opens a
+refuse-window for every cron until the next off-market 08:15 boot **by construction** —
+the 27-Jul night (missing EOD report; forward-shadow safe by 71s of luck) is the measured
+instance (KNOWN M1/M2). Today's code supports NEITHER registered M1 direction:
+push-immediately-before-boot is a PROCEDURE (calendar rule), not code; a degrade-read mode
+does not exist. The no-push-before-18:15 forward-shadow rule is likewise procedural — the
+hook has no time gate; a 18:10 push deploys (the calendar is the protection). → IA-P10-02.
+
+**(d) Loop closure — does the boot re-establish what the flow assumes? (J lens — the
+audit's final synthesis.)** Verified-matching: the capital seed is EXACTLY P6's measured
+mechanism (re-base to broker.net − carryover — with its measured absorb); kill-state
+persistence/clearing is EXACTLY P7's (24 startup-active sightings, 28 audited clears; the
+watcher's prior-day-retry agrees); OPEN-trade state rehydrates on all three surfaces (FM
+chains, monitor watch-list, placer fill-map) and the reconciler runs a synchronous startup
+cycle before polling. **The named NON-guarantees — start-of-day assumptions the flow makes
+that the boot does not honor:** (1) *capital continuity* — the boot guarantees
+re-base-to-broker, not continuity; unbooked P&L is absorbed silently (IA-P6-02, measured
+−₹637.6); (2) *in-flight completeness* — only PENDING-status crash trades are re-fed;
+UNKNOWN_IN_FLIGHT strands across a restart (IA-P5-04); (3) *schema access for non-boot
+processes* — guaranteed only AFTER the boot ran (the (c) window); (4) *deployed-tree ==
+HEAD* — every phase's own premise, held by ritual not code ((b)); (5) *the 2027 New-Year
+boot* — `nse_holidays_2027.yaml` absent ⇒ the first 2027 boot does NOT start (KNOWN
+MEASURED; the 15-Dec mailer is deployed; ⛔ file not created here); (6) *rate/burst
+limiter continuity* — the entry throttle, burst window and 429 counters are in-memory and
+start COLD after a mid-day restart (a restart-burst is bounded only by the DB-side
+fingerprint dedup and caps). → IA-P10-04.
+
+### P10.3 NEW findings
+
+---
+**IA-P10-01**
+- **WHAT:** The deployed-tree-vs-HEAD invariant has no enforcement and only one
+  narrow-slice verification (the .pyc detector); the system cannot itself answer "is the
+  running code the audited code" — the question this audit manually re-answered at every
+  phase.
+- **EVIDENCE:** P10.2(b) — grep width (system_manager + preflight; the sole HEAD reference
+  is the .pyc check); `checkout -f` semantics (untracked files survive, KNOWN); the ten
+  manual SHA verifications this campaign performed as the de-facto mechanism.
+- **CLASS:** Invariant-coverage / Architecture. **KNOWN-COMPOSED → characterised** (the
+  gap was registered; the .pyc slice shipped 28-Jul; the precise enforcement-vs-
+  verification statement and the two-liner closing mechanism are this phase's addition).
+- **ROOT CAUSE:** the deploy path was built for speed (hook checkout) and its integrity
+  was inherited from discipline, never from a check.
+- **RECOMMENDATION (described, ⛔ not built):** the P10.2(b) two-liner as a 12th
+  system_manager check (read-only, nightly artifact, no schema).
+- **SEVERITY-BY-IMPACT:** MED — the failure it would catch (partial checkout, stray
+  untracked .py, hook drift) is exactly the class that looks right while wrong, at the
+  layer everything else trusts.
+
+---
+**IA-P10-02**
+- **WHAT:** The schema-migration refuse-window is confirmed at source as a PROPERTY of the
+  guard design: only the off-market boot migrates; every other opener aborts with a
+  CRITICAL sentinel until that boot happens. v46 (or any future bump) repeats the 27-Jul
+  night by construction. Neither registered M1 direction exists in code — the
+  push-before-boot rule and the no-push-before-18:15 forward-shadow rule are both
+  procedural (calendar), with no code/time gate in the hook.
+- **EVIDENCE:** state_store.py:137, :182-183 (AC1/AC2), :326-346 (_refuse_migration +
+  sentinel), :427 (the call); the 27-Jul measured instance (KNOWN M1/M2); the hook's lack
+  of any time/schema gate (deploy/hooks/post-receive, 41 lines, read in full).
+- **CLASS:** Architecture / Coupling. **KNOWN (M1) → source-confirmed + sharpened** ("the
+  code supports neither direction" is now a verified statement, not an inference).
+- **ROOT CAUSE:** the guard was built to stop mid-market corruption (correct) and its
+  off-market blast radius was accepted implicitly.
+- **RECOMMENDATION (described):** M1's decision stands OPEN for Rama; the cheapest
+  code-side half is a refuse-window HEARTBEAT suppression note (the refusing process
+  already sentinels — the gap is that its JOB shows FAILED with no "this is the migration
+  window" context). ⛔ Not designed further here.
+- **SEVERITY-BY-IMPACT:** MED on any schema-push evening (one night of CRITICALs + missing
+  artifacts, some unregenerable); zero between schema changes.
+
+---
+**IA-P10-03**
+- **WHAT:** Two composed observability gaps in the recovery layer, named: (i) an
+  emergency HALT after 16:00 has no CRITICAL-grade notification until 09:00 next day (the
+  watcher's exit-3/4 alerts are WARNING-tier Telegram — TG4: no sentinel, no email,
+  drop-on-failure — and the liveness probe window has closed: the K1×G1 composition);
+  (ii) a HUNG-but-active process has NO external detector at all (probe = unit-state
+  only, by its own docstring; no systemd WatchdogSec) — bounded only by in-app
+  self-checks whose current end-to-end wiring was not traced (OQ-P10-1).
+- **EVIDENCE:** token_watcher.sh:144-179 (`send_telegram` → `send_alert(level="WARNING")`
+  :74-90); liveness_probe.py:9,40,204-218 (systemctl-show basis); the unit (no Watchdog);
+  G1 re-verified P9.
+- **CLASS:** Safety-posture / Coupling. **NEW-COMPOSED** (K1, G1, TG4 each KNOWN; the
+  composition and the hung-class width are the additions).
+- **RECOMMENDATION (described):** route the watcher's exit-4 alert through a CRITICAL
+  sentinel (one flag change lands it in the working email leg); the hung-class fix is the
+  G1 probe-window question, already registered (⛔ not a 1-line cron edit — KNOWN).
+- **SEVERITY-BY-IMPACT:** LOW-MED — both need an emergency in a specific window; both
+  degrade detection, not action.
+
+---
+**IA-P10-04**
+- **WHAT:** The loop-closure ledger: six start-of-day assumptions the flow makes that the
+  boot does not guarantee — capital continuity (re-base absorbs), UNKNOWN_IN_FLIGHT
+  recovery (PENDING-only feed), pre-boot schema access for crons, deployed-tree==HEAD,
+  the 2027 holiday file, and warm rate/burst-limiter state after a mid-day restart.
+- **EVIDENCE:** each item's own registered evidence (IA-P6-02, IA-P5-04, IA-P10-02,
+  IA-P10-01, the 2027 MEASURED boot-block, signal_processor in-memory throttle state).
+- **CLASS:** Consistency (synthesis). **KNOWN-COMPOSED** — the enumeration is the
+  deliverable; items 1-5 are individually registered; item 6 (cold limiters post-restart)
+  is the one previously unregistered corner (LOW: bounded by DB-side dedup + caps).
+- **SEVERITY-BY-IMPACT:** the ledger itself is LOW; its value is that the cross-cutting
+  phases and any future boot-path change now have the explicit list.
+
+---
+**IA-P10-05** (hygiene bundle, one ID)
+- (a) **M-DP1 CLOSED-BY-REMOVAL**: the stale `deploy/post-receive` duplicate is gone from
+  the tree; the live hook is md5-identical to the tracked `deploy/hooks/post-receive`
+  (`b7166732…` both) — the KEEP-IN-SYNC identity proof holds today.
+- (b) token-watcher `STATE_DIR=/tmp` — crash counters and once-per-day alert flags are
+  lost on a VM reboot (worst case: one duplicate alert / a reset backoff window; benign).
+- (c) token-watcher runs as root (needed for systemctl start; surface noted, loopback
+  host, no listener).
+- (d) The pre-receive hook remains UNARMED and must stay so as-is (KNOWN 20-Jul
+  false-reject bug; not re-tested here).
+- (e) The crontab auto-install's mismatch branch prints a WARNING to the PUSH OUTPUT only
+  (the pusher's terminal) — a drifted registry-vs-canonical crontab would deploy code but
+  keep the OLD crontab with no persistent alert (narrow; the generate-diff has matched on
+  every observed push).
+- **CLASS:** Documentation / Posture. **SEVERITY:** LOW.
+
+### P10.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| Headless chain (token→watcher→service; 20-Jun guarantee) | **CONFIRMED end-to-end**: crontab entry present, both units enabled, the 31-Jul session-verified 08:15:17 start (KNOWN) + the watcher's full state machine read; the guarantee HOLDS for crash classes and degrades to WARNING-alerts for exit-3/4 (correct — those must not loop) |
+| K1 (exit 4, no reboot, resume.sh; runbook text wrong) | RE-CONFIRMED from repo unit + watcher (:145-156 agrees with clear_stale_state); the doc-debt stands (P9 map row 2) |
+| Boot capital seed == P6's measured mechanism | CONFIRMED — same `compute_live_seed` call chain (main.py:2373-2376), no drift since P6's read hours earlier |
+| Kill persistence across boot == P7's evidence | CONFIRMED — the weekend-persisted 15:15 row + the :1878 clear site |
+| nse_holidays_2027 missing = a measured 2027 boot-blocker | CARRIED (⛔ file NOT created); the 15-Dec reminder mailer is deployed (`cbcad2c`) |
+| Stray-.pyc detector | **DEPLOYED-CONFIRMED on the VM tree** (2 refs in the deployed system_manager); measured-0 via its nightly runs |
+| Reflog protections (expiry=never) + the complete deploy record | CARRIED (28-Jul DONE); still unreported by any tool (folded into IA-P10-01's closing mechanism) |
+| Pre-receive hook DO-NOT-ARM | STANDS (not re-tested) |
+| M-DP1 (stale tracked hook) | **CLOSED-BY-REMOVAL** (P10.3-05a) |
+| Boot guard cannot read config; cutoff 18:15 | Fresh-verified at main.py:1613-1624 (hardcoded window, documented in-line) |
+| 27-Jul schema-refusal night (M1/M2) | The measured instance behind IA-P10-02; nothing re-run |
+| IA-P7-04 (`auto_resume_kill_switch` dead) | The F-lens sweep here found NO additional dead boot/recovery knobs (width: the unit files, token_watcher.sh env knobs — all consumed; SLEEP_SEC/LONG_SLEEP/MAX_CRASH_PER_HOUR live) |
+
+### P10.5 Open questions (not guessed into findings)
+
+- **OQ-P10-1:** The in-app hang mitigation — does a failed /health self-check still fire
+  `_shutdown_event` (the S4-era history in liveness_probe.py:9), and is that path alive on
+  the current tree? One trace settles the hung-class bound.
+- **OQ-P10-2:** token_watcher's `exit_status` parse when systemd reports an empty
+  `ExecMainStatus` (first-boot edge) — falls into the `*` crash arm; benign-looking, not
+  chased.
+
+### P10.6 LOOP CLOSURE — the flow phases are complete
+
+**P1–P10 are done.** The signal→screen→size→place→execute→capitalize→kill→reconcile→
+report→boot loop has been walked end-to-end on the deployed `297b587`, every phase
+findings-only, every seam written, all in one campaign register with 12 local commits.
+The boot re-establishes what P6/P7 measured (seed and kill-state confirmed matching), and
+the six start-of-day assumptions it does NOT guarantee are now an explicit ledger
+(IA-P10-04).
+
+**Bridge to the cross-cutting phases (X-ARCH · X-DUP · X-CONFIG · X-DOCS · X-TEST ·
+X-SEC · X-EVOLVE):** the flow map those phases need is now complete — including the
+recurring classes they will formalise (the IA-P3-02 dead-knob family now at 8 instances;
+the green-check-that-cannot-go-red census; the three severity vocabularies; the
+free-text-dependency instances; the enforcement-without-verification meta-pattern that
+P10's tree-vs-HEAD finding exemplifies). ⛔ They are NOT started here — this note only
+records that the flow half of the audit is closed and the cross-cutting half has its
+baseline.
+
+**Phase 10 done** = the self-restart matrix built for every failure class with the silent
+cases named (K1×G1 composition; the hung-class no-detector); the tree-vs-HEAD invariant
+characterised (enforcement none / verification one slice / closing two-liner described);
+the migration window source-confirmed with v46's repeat and the neither-direction status;
+the headless chain end-to-end confirmed with fresh identity evidence (hook md5, crontab,
+enablement); the loop-closure ledger written; M-DP1 closed-by-removal; committed
+incrementally; ⛔ nothing fixed, nothing pushed, nothing armed, the 3-Aug/4-Aug sequence
+untouched.
+*(The flow phases P1–P10 end here. Cross-cutting phases append below when commissioned.)*
