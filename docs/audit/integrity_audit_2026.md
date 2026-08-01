@@ -2273,3 +2273,298 @@ P6→P7 seam written (fail-to-act proven; act-on-wrong-total bounded and directi
 committed incrementally; ⛔ nothing fixed, nothing pushed, FIX-182 untuned, the 3-Aug/4-Aug
 sequence untouched.
 *(Phase 7 — kill/safety ladder — appends below this line.)*
+
+---
+
+## PHASE 7 — STATE → KILL / SAFETY (the kill ladder, its firing surface, and the P7→P8 seam)
+
+### P7.0 Measurement window & system state
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026 ~09:46 → ~10:3x IST** |
+| Measurements taken | 01-Aug **~10:0x–10:1x IST**, from the VM (`mode=ro` DB reads + log greps; zero writes) |
+| Deployed SHA (VM bare) | **`297b587`** — unchanged since P1 (same session) |
+| PC tree read | `0a9b469` = `297b587` + 9 docs-only commits ⇒ code read == deployed |
+| Service | `inactive`; `kill_switch_state` row = **SOFT_KILL / circuit_breaker_force_close_15:15 / 31-Jul 15:15 / order_monitor** — the routine scheduled kill persisted over the weekend BY DESIGN, will clear at Monday's 08:15 `clear_stale_state` |
+| Primary windows | **23 retained logs = 01-Jul → 31-Jul** (the full retained history); `system_events` KILL_AUTO_CLEARED **28 all-time**; #11's prior measure (29-Jun→28-Jul, 1.54M lines) as the KNOWN baseline |
+| Config ground truth (VM == PC) | `SCHEDULED_KILL_REASONS = {circuit_breaker_force_close_15:15, EOD_SQUAREOFF}` (code constant, kill_switch.py:114-117) · `circuit_breaker {force_close "15:15", max_api_failures 3}` · KS7 `api_failure_threshold 3, enable_auto_trip true` · drift ladder ₹250/1,000/2,500 ×3-cycle (#11 CLOSED — not reopened) · `emergency_exit_buffer_pct 0.01` · systemd `RestartPreventExitStatus=3 4` (deploy/systemd/trading-system.service:35, no SuccessExitStatus) |
+| Scope guard | 3-Aug/4-Aug untouched; nothing fixed; the buy-day filter and GTT-verify NOT built (owed, out of scope); #11 values not re-litigated; reconcile internals deferred to P8; July audits read-only |
+
+### P7.1 The kill topology as verified (current tree == deployed)
+
+**One switch, three states** (`capital/kill_switch.py`): INACTIVE / SOFT (blocks entries,
+allows exits — `is_active("entry")` ✓ / `"exit"` only on HARD, :472-488) / HARD (blocks all +
+dispatches the async flatten). Persist-first (KS9, single-row `kill_switch_state`, timed with
+a ≥1s WARN — 0 firings); publish+alert outside the lock (M-C4); scheduled kills alert WARNING,
+emergency CRITICAL (SK-B). **Clears:** `clear_stale_state` at boot wipes EVERY prior-day kill
+(headless guarantee, audited to system_events); `auto_clear_scheduled_kill` clears a SAME-day
+scheduled kill only when 0 open positions; HARD never auto-clears same-day ⇒ HALT (exit 4,
+`main.py:1901`; same-day emergency SOFT ⇒ HALT too; the unit's `RestartPreventExitStatus=3 4`
+makes exit 4 a one-shot `failed`, no loop — **K1 re-confirmed from the repo unit file**,
+VM-side verified 21-Jul). **Production callers measured (repo census, tests excluded):
+17 soft_kill sites, 6 hard_kill sites** — the six HARD: monitor api×3 cb (main.py:710-725),
+drift HARD (drift_handler.py:231), FM BL-4 commit-fail (:982) + BL-9 invariant (:2329),
+placer persist-fail-post-placement (order_placer.py:1534) + exit-ladder final failure
+(:3792). **The HARD flatten** (M-C8): async single-flight non-daemon worker (inline fallback
+on thread-exhaustion), per-trade: cancel resting SL/TGT with terminal-status write guards
+(Bug E) → reverse-aware close from CURRENT broker net (`determine_close_direction`, re-derived
+per retry) → marketable LIMIT (LTP∓1%, tick-snapped) with MARKET fallback → conditional
+EXITING write → LAYER A sweep flattens any residual broker position (H-5 product-mapped
+intent) → retry 5/15/45s to a 2h deadline → per-trade CRITICAL alerts (5-min dedup).
+`record_api_failure`: whitelist = BrokerTimeoutError + BrokerRateLimitError only (FIX-191);
+BrokerAuthError → the 1/hr actionable IP-403 alert, never counted.
+
+### P7.2 Headline re-measurements (mandated)
+
+**(a) THE RUNG CENSUS — every kill rung classified, with its firing history (the phase's
+core deliverable).** Window: the full retained history 01→31-Jul; #11's 29-Jun→28-Jul measure
+as corroboration. **Fired ever: exactly TWO rungs.**
+
+| Rung (reason / trigger) | Class | Verdict |
+|---|---|---|
+| 15:15 `circuit_breaker_force_close_15:15` (order_monitor cb) | SOFT, scheduled | **FIRING — 20/20 trading days in window**; persists overnight by design; 28 lifetime auto-clears audited |
+| `EOD_SQUAREOFF` (eod fire step 2) | SOFT, scheduled | REACHABLE, **0 in window** — fires only when nothing is already active, and the 15:15 kill always was; its resume-half (step 8) equally unexercised in window |
+| CHECK9 `MISSING_EXITS` (reconciler :2594) | SOFT, emergency | **FIRED ONCE — the only emergency kill in the retained history** (BANSALWIRE, 01-Jul 11:31, see (d)) |
+| `daily_loss_limit_breached` (FM cb → main:794) | SOFT, emergency | UNFIRED-BUT-REACHABLE — pure algebra on realized Σpnl_delta ≤ −3%·total (≈−₹296); worst day ever −₹56.47 (margin ₹243); its position-close leg (late-bound EodSquareoff.fire_now) has never run |
+| `Auto-trip` (KS7, 3× transient) | SOFT, emergency | UNFIRED-BUT-REACHABLE — narrowed to Timeout+RateLimit (FIX-191, after the 23-Jun false trip); needs a genuine connectivity outage; window transients: 5 non-consecutive |
+| `orphan_order` (monitor orphan cb) | SOFT, emergency | UNFIRED-BUT-REACHABLE — the IA-P5-02 loud variant / H-15 confirm are its inputs; 0 ever |
+| Reconciler auth×3 (RC12 :708) · token-expiry (main:2875) · clock-skew (main:361) | SOFT, emergency | UNFIRED-BUT-REACHABLE (token death / NTP disaster); clock-skew carries the M-K4 KNOWN (a second `configure()` silently disarms it) |
+| LIVEFEED trio (:303/:474/:648) | SOFT, emergency | UNFIRED; QUEUE_FULL/CONSUMER_DEAD ~unreachable while the tick feed is dormant (no ticks, no consumer load); RECONNECT_EXHAUSTED reachable on a WS outage — a feed nothing consumes can halt entries (noted; ⛔ feed thread stays closed) |
+| `cnc_gtt_monitor` kills (:695) | SOFT, emergency | UNFIRED — arms with delivery |
+| `system_manager_eod` (18:45 cron :914) | SOFT, emergency | UNFIRED in window; fires against an already-exited service (17:35) ⇒ would persist to next boot, cleared as prior-day |
+| `scripts/reconcile_pnl.py:276` | SOFT | **UNREACHABLE — dead script, never scheduled** (July-audit :215 KNOWN, stands) |
+| Drift SOFT / SOFT_ESCALATED / HARD (drift_handler) | SOFT+HARD, emergency | **UNFIRED-BECAUSE-STRUCTURALLY-NEAR-UNREACHABLE** — IA-P6-01 carried: the three escalating sources measure delta 0.0 (post-seed FM9), internal-only (CHECK7), sync-window-only (bucket overflow). The ladder's own rungs cannot be summoned by real broker divergence |
+| Monitor api×3 → HARD (`circuit_breaker_api_failure`) | HARD, emergency | UNFIRED-BUT-REACHABLE — sustained non-auth/non-timeout broker failures; includes the client-side BrokerRateLimitError class (July :176 KNOWN) |
+| FM BL-9 invariant · BL-4 commit-fail · placer persist-fail · exit-ladder exhaustion | HARD, emergency | UNFIRED, reachable ONLY by internal bug / DB failure / broker-reject cascade — 0 ever, each (IA-P6-06 census) |
+
+**⇒ The definitive answer to "can any capital-LOSS condition reach a kill": exactly one path
+— the realized daily-loss SOFT rung (3% of current total, post-close, fm_ledger-based),
+reachable and never fired. No broker-truth divergence can reach any rung (IA-P6-01), no
+UNREALIZED loss reaches any rung (the B-1 MTM term gates new ENTRIES only), and every HARD
+rung is bug-triggered rather than loss-triggered.** The last-line layer is armed against
+internal corruption and connectivity death; it is NOT armed against losing money at the
+broker beyond the single realized-3% line.
+
+**(b) HARD_KILL flatten scope vs the Q4/Q6 decision — re-verified at `297b587`: the owed
+state is exactly as recorded, and one NEW gap found (no post-flatten verification).**
+Current code: the local-pass SELECT has **no product filter** (:1471-1480, every
+OPEN/PARTIAL/PENDING_FILL trade); product NULL → INTRADAY **silently** (:1510 — Q6's owed
+CRITICAL is not built); the LAYER A sweep flattens **any** non-zero `positions()` entry
+(:1567-1617, H-5 product-mapped intent :1588-1590) ⇒ on a delivery BUY DAY both sites would
+sell the position Rama ruled must survive; from T+1 both are holdings-blind (the Q4-2B
+accident). **The owed delta (Q4 §9, confirmed still-owed):** restrict both sites to
+`product in ("MIS","CO")` (the EOD6 vocabulary) + CRITICAL-on-NULL-fallback — a dated
+pre-4-Aug commitment, ⛔ not built here. **NEW (G lens): the flatten verifies PLACEMENT, not
+FLATNESS** — a trade leaves the failed list when its exit order is ACCEPTED
+(broker_order_id non-empty); `succeeded = attempted` by construction (:1712-1714) and the
+completion CRITICAL says "all N attempted position(s) flat" with no post-flatten
+`get_positions()` assertion. A marketable-LIMIT exit that rests unfilled (gap through the
+1% band, circuit lock) counts as success; the de-facto verifier is the reconciler's
+stuck-EXITING path 30 minutes later. → IA-P7-01.
+
+**(c) The scheduled kills — the real firing surface — audited, with the T2 window as a live
+natural experiment.** The 15:15 breaker: SOFT-only, closes nothing (the 30-Jul B1 refutation
+re-confirmed at source — `is_blocked("exit")` only on HARD); carried by the order_monitor
+poll thread (`_check_force_close` → main.py:684-700 cb) — a single carrier, bounded because
+every monitor-death path also fires HARD_KILL (P5); fired 20/20 window days at 15:15:00±;
+persists overnight by design; cleared at each 08:15 boot (24 "ACTIVE AT STARTUP" sightings /
+28 lifetime KILL_AUTO_CLEARED audits, recent 4 all = the 15:15 kill). The 15:17 EOD fire:
+sets its own kill only if none active (**0× in window** — the breaker always won),
+step-8 resume gated on `_we_set_soft_kill` only, then RESET_PNL (the 32 ledger rows).
+**Delivery exemption LIVE-PROVEN by T2:** on buy-day 29-Jul the five CNC positions sat in
+`positions()` through the 15:15 kill (closes nothing), the 15:17 MIS/CO-filtered pass
+(EOD6/FIX-015), and the FIX-182 residual sweep (CNC excluded before the human check even
+runs) — **5/5 survived to be carried overnight, all three scheduled sites behaving exactly
+as designed** — while the same-day EMERGENCY path (HARD flatten, filter absent) would have
+sold them. The asymmetry the Q4 decision exists to close, measured in one window.
+
+**(d) K1 + the one emergency firing, reconstructed end-to-end.** K1 re-confirmed fresh:
+`RestartPreventExitStatus=3 4` in the repo unit (:35, no SuccessExitStatus ⇒ exit 4 =
+one-shot `failed`); HALT = HARD any-day, emergency-SOFT same-day (startup_checks :242-274 →
+main.py:1901 → exit 4); scheduled kills auto-clear (same-day needs 0 open positions);
+`resume()` unused in the entire window (0 RESUMED lines). **The BANSALWIRE firing (01-Jul
+11:31:26):** CHECK9 found the local SL order absent at the broker → CRITICAL → soft_kill
+(MISSING_EXITS) fired within 15ms — **the detection and kill rungs WORKED** — but the
+emergency close itself was **REJECTED by Zerodha: "Invalid tags: max allowed tag length
+is 20"** (`reconciliation_log`: `emergency_exit=failed(...)`) — the last line of defense
+failed to place on its only live firing, for a mundane validation bug. The fix is the
+01-Jul adapter chokepoint truncation (P5-verified at :601-602, since idempotent for every
+caller). No same-day restart followed ⇒ the K1 HALT window was not entered; the service
+continued under SOFT (entries blocked) as designed. → IA-P7-02.
+
+**(e) Config-vs-code + units at this layer (F/H lens).** Consumed and correct: force_close
+"15:15" (20 firings) · max_api_failures 3 · KS7 threshold 3 / auto_trip true ·
+emergency_exit_buffer_pct 0.01 (fraction, ∓LTP ✓) · drift trio (₹, #11) · retry ladder
+5/15/45s + 2h deadline + 5-min dedup + 1h IP-403 throttle (code constants, each consumed).
+**One dead knob found: `eod_squareoff.auto_resume_kill_switch: true`** — consumers = config
+schema + tests only; the step-8 resume is gated on `_we_set_soft_kill` alone
+(eod_squareoff.py:530-538) — the YAML claims a configurability that does not exist
+(IA-P3-02 family, instance 8) → IA-P7-04. (The G7 `backoff_sequence_sec` "then soft_kill"
+dead-config sibling was already IA-P5-08.) Units: no fraction-vs-percent defect (width:
+every knob named in this cell).
+
+### P7.3 NEW findings
+
+---
+**IA-P7-01**
+- **WHAT:** HARD_KILL's flatten claims an invariant it never verifies: success is counted at
+  order ACCEPTANCE (empty-broker_order_id is the only non-exception failure), the final
+  report hard-codes `succeeded = attempted`, and the worker's completion CRITICAL announces
+  "all N attempted position(s) flat" without a closing `get_positions()` check. A marketable
+  LIMIT that rests unfilled (gap through the ∓1% band, circuit freeze — precisely the
+  regimes in which HARD_KILLs happen) reads as success; the trade sits EXITING until the
+  reconciler's stuck-EXITING pass ~30 minutes later becomes the de-facto verifier.
+- **EVIDENCE:** kill_switch.py:1549-1560 (accept == success), :1712-1714 (succeeded :=
+  attempted), :1160-1169 (the "flat" log); no positions() read exists after the retry loop
+  (width: the whole `_exit_all_trades_indestructible` body). Retry re-derivation (H-4)
+  applies only to trades whose PLACEMENT failed.
+- **CLASS:** Safety / Invariant-coverage. **NEW** (the Q4 doc narrowed the invariant's
+  SCOPE; nobody checked whether it is VERIFIED at all).
+- **ROOT CAUSE:** the loop's unit of work is "an exit order placed", not "a position gone";
+  the two coincide except in the market conditions a HARD_KILL selects for.
+- **RECOMMENDATION (described, ⛔ not applied):** one closing sweep — after the loop, re-read
+  positions(); any residual (product-filtered once Q7 lands) re-enters the retry set or
+  escalates the existing per-trade CRITICAL. Pairs naturally with the owed buy-day filter
+  edit. Careful-loop.
+- **SEVERITY-BY-IMPACT:** MED — latent (HARD has never fired); when it fires it will be in
+  exactly the conditions that widen the placement-vs-fill gap, and the operator will read
+  "all flat" from a claim nothing checked.
+
+---
+**IA-P7-02**
+- **WHAT:** The emergency-kill layer's entire live evidence base is ONE firing, and on it
+  the last line failed: CHECK9→soft_kill worked (01-Jul BANSALWIRE, 15ms detect-to-kill),
+  but the emergency close was rejected by the broker for tag length — the class "last-line
+  order rejected by mundane validation" has exactly one datapoint, one fix (the 01-Jul
+  chokepoint truncation, P5-verified), and no rehearsal path (the G13 drill was mocked; the
+  flatten and the emergency closes are production-unexercised since).
+- **EVIDENCE:** the 01-Jul log triplet + `reconciliation_log` row
+  (`emergency_exit=failed(Zerodha rejected order: Invalid tags…)`); rung census (a): 2 of
+  ~20 rungs have ever fired; HARD_KILL ACTIVATED = 0 all-time (window + #11's 1.54M-line
+  measure).
+- **CLASS:** Reachability / Safety-posture. **KNOWN-COMPOSED → sharpened** (the incident
+  produced the 01-Jul fix; that its firing was the ONLY live exercise of any emergency
+  close, and what that implies about the rest of the unfired surface, was not registered).
+- **ROOT CAUSE:** emergency paths are exercised only by emergencies; nothing rehearses them
+  (paper cannot: its broker never rejects — the P5 constant-branch class).
+- **RECOMMENDATION (described):** none buildable in-audit; the honest posture line is that
+  every unfired rung in table (a) carries BANSALWIRE-class risk — correct wiring, unproven
+  last mile — and any future drill design should target the flatten/emergency-close bodies,
+  not the kill-state machine (which IS proven, 21 firings).
+- **SEVERITY-BY-IMPACT:** LOW-MED as a finding (the known instance is fixed); HIGH as
+  context — it is the phase's base-rate calibration.
+
+---
+**IA-P7-03**
+- **WHAT:** Kill enforcement is consultation-based, and the reconciler's own order-placing
+  paths mostly do not consult it: `is_active` is read at exactly two reconciler sites
+  (inflight-orphan :2004, recovery :3717) — G5b crash-recovery SL placement, the CHECK9
+  emergency close, and the duplicate-exit cancels place/cancel regardless of kill state.
+  Under an active HARD_KILL the state machine can chain: flatten marks EXITING → exit rests
+  unfilled (IA-P7-01) → stuck-EXITING resurrects the trade to OPEN after 30 min → G5b
+  places a fresh SL — while the single-flight flatten worker still owns the position. Two
+  writers, broker-truth-mediated, never exercised together.
+- **EVIDENCE:** the is_active grep (2 hits, width: order_reconciler.py); G5b places via
+  adapter directly (RC18); the flatten's Bug-E cancel + re-derive would contend with a G5b
+  SL on the next retry.
+- **CLASS:** Architecture / Coupling. **NEW** (the individual pieces are each designed;
+  their composition under an active HARD is unexamined). ⛔ M-C4/M-C8 family — noted, not
+  re-opened.
+- **RECOMMENDATION (described):** decide and document the intended precedence (simplest: the
+  reconciler's protective placements early-return under `is_active("exit")` — the flatten
+  owns the book during HARD); verify against the IA-P7-01 closing-sweep idea so the two
+  don't fight.
+- **SEVERITY-BY-IMPACT:** LOW-MED latent — requires HARD (never fired) ∧ a resting exit ∧
+  30 minutes; the failure shape is duplicate exit orders, which Layer-2/oversell nets then
+  have to catch.
+
+---
+**IA-P7-04**
+- **WHAT:** `eod_squareoff.auto_resume_kill_switch: true` is dead config — the schema
+  defines it (config_loader.py:467), tests assert it, and the YAML comments promise it, but
+  `eod_squareoff.py` never reads it: step-8 resume is unconditional-when-we-set-it
+  (:530-538). The real semantics (resume only the kill EOD itself set; never the 15:15
+  breaker's) are GOOD — the knob just doesn't govern them.
+- **EVIDENCE:** repo-wide grep `auto_resume_kill_switch` = config_loader + tests only.
+- **CLASS:** Config-vs-code. **NEW** (IA-P3-02 family, instance 8).
+- **RECOMMENDATION (described):** delete the key (and fix the test that asserts a
+  behavior-coupling that does not exist), or wire it. LOW.
+- **SEVERITY-BY-IMPACT:** LOW — belief hazard only; the behavior itself is correct.
+
+---
+**IA-P7-05** (hygiene bundle, one ID)
+- (a) The 15:15 breaker fires ON the order_monitor poll thread — the soft_kill persist +
+  WARNING send run inside the poll cycle (M-A2 bounds the send at 8s; M-C4 family, noted
+  not re-opened). Single-carrier, bounded by the monitor-death→HARD coupling.
+- (b) LIVEFEED_RECONNECT_EXHAUSTED can halt entries on behalf of a feed nothing consumes
+  (dormant-by-decision, 0 tokens) — a false-positive-shaped rung; ⛔ the feed decision is
+  gated, recorded only.
+- (c) `system_manager_eod`'s 18:45 kill always lands on an already-exited service (17:35
+  self-exit) ⇒ its only effect is a persisted row cleared as prior-day at the next boot —
+  a rung whose action cannot reach a running process on a normal day.
+- (d) The K1 documentation debt stands (RUNBOOK exit-4 text wrong; resume.sh unnamed in
+  incident docs — K1 registered 28-Jul, unchanged; `resume()` unused ever in window).
+- (e) `_persist_state` timing: 0 slow-warns against 21 live kills in window (the 25-Jul
+  instrumentation is alive and quiet).
+- **CLASS:** Documentation / Posture. **SEVERITY:** LOW.
+
+### P7.4 KNOWN items re-verified — status updates (no re-numbering)
+
+| Known ID | Status on the current system (fresh evidence) |
+|---|---|
+| Q4/Q6/Q7 (HARD_KILL flattens only MIS; buy-day filter pre-4-Aug; NULL→flatten+CRITICAL) | **CONFIRMED STILL-OWED at `297b587`**: no product filter at either flatten site (:1471-1480, :1567-1617), NULL→INTRADAY silent (:1510). The decision's premise re-verified line-by-line; the filter's exact delta = the Q4 §9 one-liner |
+| Q4-2B (T+1 holdings-blindness = the protective accident) | STANDS — the sweep reads `get_positions()` only; the ordering constraint (filter BEFORE anything holdings-aware) remains binding |
+| K1 (emergency kill + same-day restart ⇒ exit 4, no reboot) | **RE-CONFIRMED from repo source** (unit :35; startup_checks :242-274; main :1901); scheduled-vs-emergency partition = the 2-literal frozenset; window evidence: 24 startup-active sightings / 28 auto-clears / 0 HALTs / 0 resumes |
+| K2 (06-Jul ₹10k drift, expected=0.00, unresolved) | Unchanged; P6's IA-P6-07a carries it; not re-opened |
+| K3 (sub-₹250 drift invisible at DEBUG ⇒ ladder un-retunable on evidence) | STANDS — #11 §2a's reopen trigger (c) remains unobtainable |
+| #11 (ladder values CLOSED; single-sample SOFT/HARD; 3-cycles gates only LOG_ONLY→SOFT) | Values re-read unchanged; single-sample semantics re-confirmed at drift_handler.py:169-183; ⛔ not re-litigated |
+| 15:15 = SOFT, closes nothing; 15:17 excludes CNC at all three sites (30-Jul B1) | **LIVE-PROVEN via T2** (P7.2c): 5/5 CNC survived buy-day through all three scheduled sites |
+| HARD_KILL never fired (Q4 base rate) | RE-MEASURED: 0 in the full retained history (01→31-Jul) + #11's 1.54M-line window |
+| G13 (kill drill was mocked) | STANDS — composed into IA-P7-02's posture line |
+| FIX-191 auto-trip whitelist (23-Jun false trip) | Verified at :741-775; the breaker is connectivity-only; BrokerAuthError → IP-403 alert path (0 firings) |
+| M-K4 (second time_authority.configure() silently disarms the skew kill) | STANDS (July-audit KNOWN); the clock-skew rung's reachability caveat in table (a) |
+| KS9 persist-first + busy_timeout posture (25-Jul memory) | Instrumentation verified live and quiet (0 slow-warns / 21 kills); `busy_timeout` untouched as decided |
+| IA-P6-01/-06 (capital rungs structurally quiet; alarm surface unexercised) | CARRIED — table (a) inherits the P6 verdicts unchanged, now placed inside the full rung census |
+| July-audit :215 (`reconcile_pnl.py` dead/unscheduled) | STANDS — its soft_kill site is the census's one UNREACHABLE rung |
+
+### P7.5 Open questions (not guessed into findings)
+
+- **OQ-P7-1:** After BANSALWIRE's rejected emergency close (01-Jul 11:31), by what path did
+  the position actually flatten that day? (Predates several fixes; archaeology only — the
+  chokepoint fix is verified regardless.)
+- **OQ-P7-2:** The 12 window log lines matching 'flatten' with 0 HARD_KILLs — assumed
+  wording from non-kill modules (oversell/eod text); not itemized. A 5-minute grep settles
+  it if ever needed.
+- **OQ-P7-3:** Should the reconciler's protective placements consult `is_active("exit")`
+  under HARD (IA-P7-03's precedence question)? Design decision — Rama's, post-4-Aug.
+
+### P7.6 SEAM SUMMARY — can a kill leave state the reconciler mis-reads (P8's starting point)
+
+**Yes — three specific shapes, none exercised.** (1) **EXITING is kill-authored state with a
+reconciler-owned afterlife:** the flatten marks trades EXITING on placement (not fill); the
+stuck-EXITING pass resolves them ≥30 min later by broker truth (flat → CLOSED_MANUAL +
+release; still-held → resurrect OPEN) — under an active HARD that resurrection re-arms G5b
+against the flatten's single-flight worker (IA-P7-03), and the CLOSED_MANUAL finalize prices
+the exit via the same get_trades/entry-proxy chain whose lag P5 measured (IA-P5-03). (2)
+**The flatten's success claim is placement-level (IA-P7-01):** P8 must treat a
+"flatten complete" log as unverified — the reconciler IS the verification layer, 30 minutes
+late, and nothing labels it as such. (3) **A kill's cancel side writes CANCELLED into orders
+under terminal-guards** (Bug E, correct) but its EXITING trades still hold released-vs-used
+capital state that CHECK1/stuck-exiting finalize with `costs` via the E4 path — the
+kill→reconcile capital handoff has never run end-to-end (0 HARD ever). Also handed to P8:
+the 15:45 `reconcile_positions` job's delivery-blindness (F1/step-1, the 30-Jul doc's G1 —
+the false MISSING_AT_BROKER CRITICAL from T+1) is P8's headline inherited item, now with the
+P7 addendum that the SCHEDULED kills are delivery-correct while the EMERGENCY path awaits
+its filter — reconciliation must not "fix" what the filter's absence merely exposes.
+
+**Phase 7 done** = every rung classified with firing history (2 fired ever: the daily 15:15
++ one emergency; 3 structurally near-unreachable, all capital-drift; 1 dead; the rest
+reachable-unfired with the BANSALWIRE base-rate caveat); the HARD flatten traced against
+Q4/Q6 (owed state confirmed at the deployed SHA; placement-vs-flatness verification gap
+found); the scheduled kills audited with the T2 natural experiment proving the delivery
+exemption live; K1 re-confirmed from repo source with fresh window evidence (24/28/0/0);
+"can a capital loss reach a kill" answered definitively (one realized-3% path, nothing
+else); committed incrementally; ⛔ nothing fixed, nothing pushed, the 3-Aug/4-Aug sequence
+untouched.
+*(Phase 8 — reconciliation / EOD jobs — appends below this line.)*
