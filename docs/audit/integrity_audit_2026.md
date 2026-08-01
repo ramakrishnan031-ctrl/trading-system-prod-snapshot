@@ -4263,3 +4263,100 @@ inventory with one new double-vacuity; the ten-for-ten missing-test table cluste
 three shapes; hermeticity graded with G10 standing; ⛔ nothing fixed, nothing added,
 nothing pushed; committed incrementally; the 3-Aug/4-Aug sequence untouched.
 *(X-SEC / X-EVOLVE append below when commissioned.)*
+
+---
+
+## PHASE X-SEC — SECURITY / CONTAINMENT (secrets, surface, blast radius)
+
+### XS.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026, clock-read start 12:07:24 IST** |
+| Measurements taken | 01-Aug ~12:07–12:2x IST — PC + VM: git-tracking status, permission stats, key-NAME inventories, listening sockets, effective `sshd -T`, root-authorized_keys structure (count + forced-command presence), monitor source reads; **⛔ no secret value was read, printed, or logged anywhere in this phase**; zero writes, nothing rotated |
+| Evidence base | X-TEST's hermeticity hand-off (G10) · the Q8/board security items (SSH/2FA/rpcbind — DECIDED/DATED, audited-not-re-proposed) · the July GUI LOWs · the security-monitor redesign notes (registered, after-4-Aug) |
+| Scope guard | ⛔ nothing rotated, no permission changed, no SSH/firewall touched, monitor not rebuilt; 3-Aug/4-Aug untouched |
+| ⚠️ Measurement-honesty note | My first key-name pattern (`^[A-Z_]*=`) **excluded digits and silently under-reported the VM inventory 9 vs 24** — caught and re-measured with `^[A-Za-z0-9_]+=` in the same session. The corrected numbers are used throughout (the "state the width" rule catching its own tool) |
+
+### XS.1 Headline determinations
+
+**(a) THE SECRETS MAP — location and exposure class per secret (A lens; values never read).**
+| Secret family | Location | Exposure class |
+|---|---|---|
+| Broker API keys + secrets + TOTP seeds — **5 accounts × 3 = 15 vars** (`ZERODHA_API_KEY_/API_SECRET_/TOTP_` × LFL836·DR6114·D351962·ZA004·ZA005) | VM `.env` **only** | `600 ubuntu:ubuntu`, **untracked** (`.gitignore:6`); **NOT present on the PC** |
+| Zerodha login (`ZERODHA_USER_ID`, `ZERODHA_PASSWORD`) | VM `.env` only | same |
+| SMTP password (`ALERT_SMTP_PASSWORD`) | VM `.env` only | same |
+| Telegram bot token + 3 chat ids, `WEBHOOK_SECRET` | **BOTH** PC `.env` (5 keys) and VM `.env` | PC: untracked, ACL-fixed 25-Jul; VM: 600 |
+| Kite access token (daily) | VM `data_store/session/zerodha_token.json` | dir `700`; **absent at measurement** (the 05:00 delete cron — expected weekend state) |
+| Dashboard TOTP seed + password hash | `ops_dashboard/backend/config/gui_config.local.yaml` | **untracked** (`ops_dashboard/.gitignore:9`) but **PRESENT ON THE PC** — the July LOW, re-confirmed live |
+| VM totals | **24 assignment lines** in one `.env` | one file, one mode, one owner |
+**⇒ Two structural facts.** (1) **The PC/VM split is a real containment boundary and it holds**: a full PC compromise yields Telegram + webhook secrets but **cannot place an order** — no broker credential exists on the PC (the one exception is the dashboard credential file, which grants *observation*, not trading). (2) **The VM `.env` is a single-file, single-mode blast radius covering FIVE accounts** while only LFL836 is enabled (`accounts.csv`: 4 of 5 `enabled=FALSE`) — one file read exposes four dormant accounts' complete credential triples that the system never uses. → IA-XSEC-01.
+
+**(b) G10 re-graded — the "test env holds ~20 live keys" claim is TRUE ON THE VM AND FALSE ON THE PC, and that distinction is the finding.** Corrected count: **24 live keys on the VM**; the PC dev/test environment has **5** and **zero broker credentials**. Tests import `load_dotenv` in **3 crash-test files only** (`ct140/ct143×2`; unit/integration tests set env via `monkeypatch.setenv` in 8 files — no real-env load). **Blast radius grade: a PC-side test run CANNOT place a real order** (no credentials to load, and the 27-Jul in-process network guard sits on top). **A VM-side test run CAN** — `load_dotenv()` in a crash-test file resolves the real `.env`, and the X-TEST subprocess escape means the in-process guards do not cover a spawned child. Since the crash-test files are exactly the set the narrow gate does NOT collect (44 tests, X-TEST), the dangerous set is also the un-run set — protection by non-execution, not by design. → IA-XSEC-02.
+
+**(c) The network surface, confirmed CURRENT (E lens).** Listeners: **`0.0.0.0:22`** (public SSH — the DECIDED state; ⛔ not re-proposed) · **Tailscale-only** `100.74.84.44:443` + `:42423` · **`127.0.0.1:8500`** dashboard (loopback-only, reachable remotely only via Tailscale) · local DNS stubs · **rpcbind `inactive`/`inactive`** (the 25-Jul disable HOLDS, both units, re-verified). **⚠️ Width statement: the webhook receiver (`0.0.0.0:5000`, C-2, `require_hmac: false` — DECIDED) does NOT appear because the service is stopped on a weekend; the public surface DURING MARKET HOURS is :22 + :5000, and this measurement cannot see the second.** `ufw` returned nothing under the non-interactive sudo context (→ OQ-XSEC-1). Effective `sshd -T`: **`permitrootlogin no` · `passwordauthentication no` · `pubkeyauthentication yes`**.
+
+**(d) The false-premise hardening comment — DETERMINED: the comment is WRONG and the exposure is CLOSED (G lens).** `deploy/security/sshd_config.d/99-trading-security.conf:6` states "No root keys exist"; measured: `/root/.ssh/authorized_keys` contains **exactly 1 key line, and exactly 1 line carrying `command=`** — the cloud-image decoy with a forced command, alongside `60-cloudimg-settings.conf`. Triple-blocked: `PermitRootLogin no` **confirmed at the RUNNING daemon** (this settles the carried "not confirmed at the running daemon" uncertainty), plus the forced command, plus key-only auth. ⇒ **the false comment masks nothing — it is an X-DOCS lying-comment instance (a trap for a future editor who might "clean up" the config on its premise), not a security exposure.** → IA-XSEC-03.
+
+**(e) The security monitor — line-verified: it reports, but its ladder is structurally disabled for its noisiest finding (F lens).** Source: `check_root_probe_spike` emits `Finding("INFO", f"rootspike:{now:%Y%m%d%H}", …)` (`scripts/security_monitor.py:695-700`) — **the dedup key embeds the clock HOUR**, so every hour mints a NEW identity and the configured `realert_cooldown_sec: 21600` (6h) and `realert_backoff_multipliers: [1, 4, 28]` **can never engage for this finding** (carried claim, now source-confirmed). With `root_probe_spike_threshold: 400` sitting inside the observed noise band (p95 413, max 516 — KNOWN 30-Jul), the design produces ~1.6 INFO findings/day forever. Two mitigations found while reading: the severity is **INFO** (not CRITICAL — it does not page), and the monitor's genuinely-valuable checks are elsewhere (`authorized_keys` change → CRITICAL, with an operator-approved baseline file). **What it MISSES (stated as the audit's answer, ⛔ not built): a hardening REGRESSION check** — nothing re-asserts `sshd -T` effective values after a package upgrade, which is exactly how `PermitRootLogin no` could silently revert; the monitor watches keys and login volume, not configuration drift. → IA-XSEC-04.
+
+**(f) Containment and trust (D/I lens).** **Segmentation observe-vs-trade: partial and asymmetric.** Trading capability requires (broker key ∧ secret ∧ TOTP ∧ a fresh daily token) — all VM-only ⇒ the PC cannot trade. **But there is no segmentation WITHIN the VM**: the service user `ubuntu` owns `.env`, the DB, the bare repo, the deployed tree and the hooks; anything running as `ubuntu` has the full trading capability. The dashboard (read-only by design, loopback) and the webhook (:5000, market hours) are the two remote-reachable surfaces; both run under the same user. **Headless-autostart trust (I lens):** the trigger is a *file-shaped* trust — `token_is_fresh` validates only `date == today` and a non-empty `access_token` (`token_watcher.sh:53-71`); there is no signature, no provenance check, and the watcher runs as **root** (`token-watcher.service:8-12`) to issue `systemctl start`. The compensating structure is filesystem permissions (`data_store/session` = `700 ubuntu`), so the trust reduces to "anyone who can write that path can trigger a start" — which is the same `ubuntu` identity that already has full capability, so it adds no NEW privilege. **⇒ no escalation path found from an observe-only surface to order placement** (width: the surfaces and identities enumerated here; not a pen-test). → IA-XSEC-05.
+
+**(g) Positives worth recording (they are load-bearing).** The `pre-commit` hook running `deploy/hooks/secret_scan.py` is **ARMED on the PC** (verified) — the mechanism that keeps `.env`/`gui_config.local` out of history; both files verified **untracked** by `git check-ignore`, not merely absent. Permissions are correct where it matters (`.env` 600, `session/` 700). `.env.example` is `664` and tracked — correct, it holds names only.
+
+### XS.2 Findings
+
+---
+**IA-XSEC-01**
+- **WHAT:** The VM `.env` is a single-file blast radius holding **24 secrets across five broker accounts** (15 = 5 accounts × key/secret/TOTP) while only ONE account is enabled — four dormant accounts' complete credential triples sit in the live process's environment for no operational reason.
+- **EVIDENCE:** corrected name inventory (24 lines; the five `_LFL836/_DR6114/_D351962/_ZA004/_ZA005` triples) + `accounts.csv` (4 of 5 `enabled=FALSE`, LFL836 primary); `.env` `600 ubuntu:ubuntu`, untracked. ⛔ No value read.
+- **CLASS:** Security / Containment. **NEW** (G10 counted keys; that 60% of them belong to accounts the system never uses is the new fact).
+- **ROOT CAUSE:** the multi-account registry was built for a future capability (`multi_account_mode` — measured DEAD in X-CONFIG); its credentials were provisioned anyway.
+- **RECOMMENDATION (described, ⛔ not applied — this is a careful-loop op with no dated slot):** hold only the enabled account's triple in the runtime `.env`; park the other four elsewhere (or remove them until `multi_account_mode` is real). Reduces a single-file read from 5 accounts to 1.
+- **SEVERITY-BY-IMPACT (can-this-reach-capital):** **MED-HIGH** — it does not create the exposure (the live account's credential is necessarily present), but it multiplies its consequence 5× for zero benefit.
+
+---
+**IA-XSEC-02**
+- **WHAT:** G10 re-graded with the PC/VM distinction: **PC test runs cannot place a real order** (5 keys, zero broker credentials, plus the in-process network guard); **VM test runs can** — three crash-test files call `load_dotenv()` against the real `.env`, and the X-TEST subprocess escape means in-process guards don't cover spawned children. The dangerous set coincides with the set the narrow gate doesn't collect ⇒ **today's protection is non-execution, not design.**
+- **EVIDENCE:** the two `.env` inventories; `load_dotenv` grep (3 crash-test files vs 8 monkeypatch files); the 44-test gate gap (X-TEST); the 27-Jul in-process guard class (KNOWN).
+- **CLASS:** **Security / Safety.** **KNOWN (G10) → GRADED + split** (the PC-is-safe half is newly established and materially changes the risk picture).
+- **ROOT CAUSE:** crash-tests were written to exercise real paths; the guard layer that followed was in-process only.
+- **RECOMMENDATION (described):** G10's owed separate test token remains the right fix; the sharper interim statement is procedural — **never run the crash-test set on the VM against the live `.env`** (it is already excluded from the gate; making that exclusion explicit costs one comment).
+- **SEVERITY-BY-IMPACT:** **HIGH if the VM path is ever exercised** (real orders, real capital); LOW today (never run in the gate).
+
+---
+**IA-XSEC-03**
+- **WHAT:** The "no root keys exist" hardening comment is FALSE (one cloud-image root key with a forced command exists) while the exposure it describes is genuinely CLOSED — `PermitRootLogin no` now **confirmed effective at the running daemon**, alongside key-only auth and the forced command.
+- **EVIDENCE:** `99-trading-security.conf:6` (the comment) vs measured `authorized_keys` = 1 key / 1 `command=` line; `sshd -T` = permitrootlogin no · passwordauthentication no · pubkeyauthentication yes.
+- **CLASS:** Documentation (X-DOCS lying-comment class) — **NOT a security exposure**. **KNOWN → RESOLVED-AS-INERT**, with the running-daemon confirmation newly obtained.
+- **RECOMMENDATION (described):** correct the comment to "a cloud-image root key exists and is triple-blocked" — the danger is a future editor acting on the false premise.
+- **SEVERITY-BY-IMPACT:** LOW (documentation), with the note that its correction removes a trap.
+
+---
+**IA-XSEC-04**
+- **WHAT:** The security monitor's root-probe finding is structurally un-deduplicable: its dedup key embeds the clock hour (`f"rootspike:{now:%Y%m%d%H}"`, :697), so the 6h cooldown and the [1,4,28] backoff ladder can never engage; with the 400 threshold inside the measured noise band it emits ~1.6 findings/day indefinitely (INFO tier — it does not page). Separately, the monitor watches keys and login VOLUME but has **no hardening-regression check** — nothing re-asserts the effective `sshd -T` values after a package upgrade, the one path by which today's confirmed-good posture could silently revert.
+- **EVIDENCE:** `security_monitor.py:695-700` (verbatim key), `:113` (threshold), `:116-121` (cooldown/backoff it disables); the KNOWN noise distribution (p95 413 / max 516); the effective-config measurement in (c).
+- **CLASS:** Security / Silent-failure (alert-fatigue) + Coverage. **KNOWN → source-confirmed + the missing-check named.**
+- **RECOMMENDATION (described, ⛔ not built — the redesign is registered after-4-Aug):** the dedup key should identify the CONDITION, not the hour (the same "classify by a stable identity" principle as `closure_source`); the higher-value addition is the sshd-effective-config drift check the monitor currently lacks.
+- **SEVERITY-BY-IMPACT:** LOW-MED — it cannot reach capital; it degrades the channel that would report something that could, and it leaves the config-regression path unwatched.
+
+---
+**IA-XSEC-05**
+- **WHAT:** Containment verdict: the **PC/VM boundary is a genuine observe-vs-trade segmentation and it holds** (no broker credential on the PC); **within the VM there is none** — one user (`ubuntu`) owns `.env`, the DB, the bare repo, the deployed tree and the hooks, so any code executing as that user has full trading capability. The headless-autostart trigger is file-shaped trust (date + non-empty token, no provenance) executed by a **root** watcher, but it grants no privilege beyond what writing that path already implies.
+- **EVIDENCE:** the secrets map (a); `token_watcher.sh:53-71` + `token-watcher.service:8-12` (root); permission stats; the listener census.
+- **CLASS:** Security / Architecture. **SYNTHESIS + NEW** (the explicit "no escalation path found, width stated" verdict).
+- **RECOMMENDATION (described):** none actionable at this scale — record the boundary explicitly so future changes (e.g. any new service, or moving a credential to the PC for convenience) are recognised as boundary-crossing decisions.
+- **SEVERITY-BY-IMPACT:** informational-HIGH — it is the frame every other security decision should be argued in.
+
+### XS.3 Open questions
+
+- **OQ-XSEC-1:** `ufw` status returned empty under non-interactive sudo — firewall rules unverified this session (the listener census is the substitute; a `sudo ufw status` in an interactive shell settles it).
+- **OQ-XSEC-2:** The market-hours surface (`:5000` webhook) could not be observed on a stopped service — a weekday re-check would confirm bind address and that `require_hmac` remains the decided FALSE.
+- **OQ-XSEC-3:** Whether `deploy/hooks/pre-commit` is armed on the VM side as well (only the PC was verified; the VM does not normally commit).
+
+### XS.4 Hand-off to X-EVOLVE (the final phase)
+
+The security posture as a **constraint on future change**: (1) the PC/VM credential boundary means any convenience that moves a broker secret toward the dev machine is a containment regression, not a workflow tweak; (2) **adding a test that touches live services is dangerous by construction on the VM** (IA-XSEC-02) — the fault-injecting fake X-TEST asked for is also the security-correct answer; (3) the single-user VM means every new service or script inherits full trading capability — there is no "safe" place to run untrusted code; (4) the dated ops (2FA seed 7/8-Aug, the monitor redesign after-4-Aug) are the only sanctioned change slots in this area, and X-EVOLVE should price them as such.
+
+**X-SEC done** = the secrets map built with exposure class per family (⛔ zero values read or printed); G10 re-graded and split (PC cannot trade, VM can, protected today only by non-execution); the network surface confirmed current with the weekend-width stated; the false-premise root-key comment DETERMINED inert-but-trap (with `PermitRootLogin no` newly confirmed at the running daemon); the monitor's disabled ladder source-verified and its missing hardening-regression check named; containment answered (PC/VM boundary real, intra-VM none, no escalation path found — width stated); a tool-level under-measurement caught and corrected in-session; committed incrementally; ⛔ nothing fixed, rotated, hardened or pushed; the 3-Aug/4-Aug sequence untouched.
+*(X-EVOLVE appends below when commissioned — the final phase.)*
