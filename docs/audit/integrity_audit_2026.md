@@ -4360,3 +4360,234 @@ The security posture as a **constraint on future change**: (1) the PC/VM credent
 
 **X-SEC done** = the secrets map built with exposure class per family (⛔ zero values read or printed); G10 re-graded and split (PC cannot trade, VM can, protected today only by non-execution); the network surface confirmed current with the weekend-width stated; the false-premise root-key comment DETERMINED inert-but-trap (with `PermitRootLogin no` newly confirmed at the running daemon); the monitor's disabled ladder source-verified and its missing hardening-regression check named; containment answered (PC/VM boundary real, intra-VM none, no escalation path found — width stated); a tool-level under-measurement caught and corrected in-session; committed incrementally; ⛔ nothing fixed, rotated, hardened or pushed; the 3-Aug/4-Aug sequence untouched.
 *(X-EVOLVE appends below when commissioned — the final phase.)*
+
+---
+
+## PHASE X-EVOLVE — EVOLUTION / CHANGE-SAFETY (and the campaign verdict)
+
+### XE.0 Measurement window & evidence base
+
+| | |
+|---|---|
+| Session window | **Sat 01-Aug-2026, clock-read start 12:25:03 IST** |
+| Method | **Synthesis** over the 16 committed phases, with fresh measurement ONLY for this phase's new claims (the strategy-addition path; campaign metrics) |
+| Fresh measurements | register **4,362 lines / 17 register commits / 19 total commits** ahead of `297b587` · **16 strategy YAMLs** in `config/strategies/` (10 carrying `enabled: false` lines) · `scan_webhook_map.yaml` = the scanner→strategy map (58 keys), startup-validated (P17/S10: every mapped strategy must have a YAML; duplicate scanner names ⇒ CRITICAL boot failure) |
+| Scope guard | ⛔ debt is DESCRIBED, not scheduled; no fix authorised; 3-Aug/4-Aug untouched |
+
+### XE.1 (I) MAINTAINABILITY RISKS
+
+**(a) THE NEXT FEATURE JOINS THE DEAD PILE — the headline evolution risk, quantified.**
+Base rate from the register: **~22 inert subsystems/knobs across three families** (α×9
+pass-through, β×7 starvation, γ×6 unreachability) against a codebase of ~208 modules — and
+every one shipped through review, tests and a deploy without anyone noticing it never ran.
+The mechanism is not carelessness; it is **structural**: (1) a new manager is wired at
+main.py's ~25 hand-maintained ctor calls with no schema↔ctor completeness check (α is born
+here); (2) the unit suite constructs its own objects and therefore *passes the arguments
+production forgot* (X-TEST: component correctness ≠ composition truth); (3) nothing emits
+"this component acted N times today", so β/γ death is invisible for as long as nobody
+audits. **The probability shape: any new feature that (i) takes config, (ii) is
+constructed in main.py, and (iii) has no daily-visible output inherits ~the same odds as
+its 22 predecessors.** The single mechanism that breaks the chain is **effect
+verification** — BK-8's schema↔ctor check for α, plus one acted-telemetry line per
+constructed manager for β/γ (the IA-P6-06 census, automated into a daily artifact). One
+mechanism, two legs, ~half the campaign's defect classes closed at the source.
+→ IA-XEVOLVE-01 (I).
+
+**(b) THE CHANGE-SAFETY MAP — "before you touch X, this must be true" (B lens).**
+| Hot spot (blast radius) | The dangerous change class | What would make it safe |
+|---|---|---|
+| **`state_store`** (63 prod files / 149 test files / 46 tables) | Any schema change — it opens the migration refuse-window (IA-P10-02: every non-boot opener aborts until the next 08:15 boot; v46 repeats 27-Jul by construction) | Push only immediately before an off-market boot (the calendar rule — procedural, not enforced); a degrade-read mode is the code-side alternative (M1, undecided) |
+| **`main.py`** (sole composer, ~25 ctor sites) | Adding/rewiring any manager — the α locus | The BK-8 completeness check; until then, a reviewer must diff config schema against the ctor arg list by hand |
+| **`order_placer`** (4,686 LOC, money path) | Anything touching the qty→broker path (no ceiling exists — IA-P4-02) or the fill/cancel seams (IA-P5-01/-02) | The seam tests X-TEST specified; a qty ceiling at ZA13 if one is ever wanted |
+| **`order_reconciler`** (4,118 LOC, 9 checks, 6 never fired) | Adding a check, or changing "held"/status semantics — ~34 status literals (IA-XDUP-02) and 4 definitions of held (IA-XARCH-03) | A `trade_status` module + the shared held-reader (D-8 step 2) — **and the Q4 ordering rule: the buy-day filter lands FIRST** |
+| **`kill_switch`** (1,714 LOC, capital rungs never fired) | Any change to the flatten — it is verified by nothing at kill time (IA-P7-01) and has one live rehearsal ever, which failed (BANSALWIRE) | A fault-injecting adapter fake (X-TEST's highest-value missing asset) + the post-flatten positions() sweep |
+
+**(c) THE STRATEGY-ADDITION PATH (R1) — evaluated: the decided "config + docs, no code"
+path is STRUCTURALLY SOUND but has ONE measured silent-failure mode, and it is already
+live twice.** What adding strategy #17 actually requires, measured: a YAML in
+`config/strategies/` (16 today) + an entry in `scan_webhook_map.yaml` (58 keys) + a
+Chartink scanner posting under that exact name — and the boot validates the config half
+properly (P17/S10: every mapped strategy must have a YAML; duplicate scanner names ⇒
+CRITICAL boot failure; `load_all_strategies` raises on a bad YAML and the 18-Jul alert
+names every bad file). **⇒ the config-side of R1's path is genuinely safe — a
+misconfigured strategy fails LOUD at boot.** The silent mode is the SOURCE side:
+**`range_breakout_long` + `range_breakout_short` are enabled, mapped, loaded at every boot
+and have received ZERO webhook POSTs for 7 weeks — and nothing in-system can notice**
+(IA-P1-01; the per-scanner-silence check remains unwired). A new strategy whose Chartink
+scanner is mis-named, unsaved, or unarmed lands in exactly that state, indistinguishable
+from "the market gave no signals". Second-order: a new strategy declaring
+`pullback_wait_enabled: true` inherits IA-P2-01 (the gate that never receives anything) —
+it will place immediately and skip the FIX-067 re-anchor, silently differing from its
+declared semantics. **⇒ #17 would load, and might never trade, with two live precedents.**
+📌 **And R1's standing note survives into this verdict verbatim: the edge question is
+DEFERRED, not resolved — adding strategies does not address the measured no-edge finding
+(entries buy extension; ~38-39% win vs ~43.5% breakeven).** → IA-XEVOLVE-02 (I).
+
+**(d) Coupling growth + onboarding (E/G lens).** The 12-module core↔broker↔orders SCC is
+held acyclic by ONE lazy import (IA-XARCH-02) — a growth hazard only in the specific sense
+that a future "tidy-up" converting that call-site import to a top-level one creates a real
+cycle on the money path; the delivery expansion does not tighten it (its new work is
+reader-sharing, not new cross-package imports). Onboarding: the architecture is
+recoverable from module docstrings (whose layer scheme the graph verified honored), but
+the *designated* maps are changelogs (IA-XDOCS-03) and **this register is now the de-facto
+reference for both operator edge-behaviour and architecture** — a single 4,362-line
+document whose loss or staleness would take the system's institutional memory with it.
+That is knowledge concentration, not knowledge capture. → folded into the debt ledger.
+
+### XE.2 (II) OPERATIONAL RISKS INHERITED BY FUTURE CHANGE
+
+**(e) The compound hazard, stated plainly (H lens).** Three measured facts compose into
+one operational rule: **(1)** the VM test path can reach real capital (IA-XSEC-02: 3
+crash-test files load the real `.env`; protected today only by non-collection), **(2)** no
+test would catch a newly-dead subsystem (IA-XTEST-01), and **(3)** there is no qty ceiling
+between the sizer and the broker (IA-P4-02). ⇒ **a future change that is wrong in the α
+shape, exercised on the VM, could place real orders that no test and no config check would
+flag** — not a hypothetical: BANSALWIRE proved the emergency path's last mile fails in
+ways nothing rehearsed. **The operational rule this yields: no new code path that can
+place an order should be exercised on the VM until the fault-injecting fake exists and the
+crash-test exclusion is explicit.** → IA-XEVOLVE-03 (II).
+
+**(f) The delivery expansion's change-safety (D lens) — assessed against every prior
+phase.** The next real evolution step (4-Aug flip + carry pilot + Slice-2.5) is the
+best-prepared change in the register — and the phases predict exactly four things that
+will happen or must not: **(1) MUST-FIRST: the buy-day product filter** (Q4/Q7 — confirmed
+still-owed at `297b587` in P7; HARD_KILL currently sells a delivery position on its buy
+day, and the T+1 protection is an *accident* of holdings-blindness that any holdings-aware
+change destroys — the ordering constraint is the single most important sequencing rule in
+this document). **(2) WILL HAPPEN, harmlessly-but-noisily:** F1's three false-alarm faces
+(P8/IA-P8-04) on every delivery lifecycle event; the GTT-blind "naked" warnings
+(IA-P5-06); the never-run `delivery_symbols` exclusion branch going live (G6). **(3) WILL
+NOT be caught by the flip's own instruments:** the eod_verify/shadow gate is broken
+(IA-P8-01), so "a clean shadow week" cannot certify the expansion. **(4) CLEARED by this
+audit:** the flag graph is coherent (IA-XCFG-04), the scheduled kills correctly exempt
+delivery (T2-proven, P7), VM config == repo config, and the GTT construction path is
+broker-proven end-to-end (T2 5/5). → IA-XEVOLVE-04 (II).
+
+### XE.3 THE TECHNICAL-DEBT LEDGER (ranked by change-risk × blast-radius, NOT defect count)
+
+| # | Debt | Why it ranks here | Register IDs |
+|---|---|---|---|
+| **1** | **No effect-verification** (α/β/γ; BK-8 + acted-telemetry) | Highest leverage in the register: it created ~22 defects and will create the next one; one mechanism closes the class | IA-XARCH-01, IA-XCFG-01/-02, IA-XTEST-01 |
+| **2** | **The buy-day product filter** (delivery liquidation on buy day) | The ONLY item with a hard date and an ordering constraint that blocks three other workstreams | Q4/Q7, P7.2(b) |
+| **3** | **Fill/cancel seam truth** (zeroed `qty_filled`; the cancel-race → HUMAN_ORDER) | Money-path correctness with a naked-unbooked-position endpoint; 2-line fix for one half | IA-P5-01, IA-P5-02 |
+| **4** | **Kill-flatness verification + the fault-injecting fake** | The last-line safety layer is unverified at kill time and has one failed live rehearsal | IA-P7-01, IA-P9/BANSALWIRE, IA-XTEST-05 |
+| **5** | **Broker-truth capital escalation** (G3 non-escalating; the seed absorbs) | The kill ladder is structurally deaf to real cash divergence; measured −₹637.6 crossing 3 sessions silently | IA-P6-01/-02 |
+| **6** | **`eod_verify` stuck-PENDING + the inverted shadow flag** | Blocks the authoritative-flip gate outright; cheap to fix, high unblocking value | IA-P8-01 |
+| **7** | **Multi-authority concepts** ("held" ×4, status ×34 sites) | Every future reconciliation/delivery change pays this tax; the fix template already exists in-repo | IA-XARCH-03, IA-XDUP-02 |
+| **8** | **The 03_daily runbook's raw-DB kill-clear** | Wrong instruction in the most-likely-open doc during an incident; 2 lines | IA-XDOCS-01 |
+| **9** | **Alert fatigue / false-safety claims** ("Smart TGT ACTIVE", F4, the naked warnings) | Degrades the channel every other mitigation depends on | IA-P9-01/-02 |
+| **10** | **Deployed-tree-vs-HEAD unverified** | The invariant every phase's premise rested on, held by ritual | IA-P10-01 |
+| **11** | **Secrets concentration** (5 accounts in one `.env`; VM test path) | Multiplies consequence 5× for zero benefit; constrains how tests may evolve | IA-XSEC-01/-02 |
+| **12** | **Doc/knowledge concentration** (map inversion; register-as-reference) | Slows every future change; no incident hazard | IA-XDOCS-03/-05 |
+
+### XE.4 Findings
+
+- **IA-XEVOLVE-01 (I) — "the next feature joins the dead pile."** SYNTHESIS (IA-XARCH-01 ×
+  IA-XTEST-01 × IA-XCFG-02). Base rate ~22 inert instances; three structural enablers; one
+  breaking mechanism (BK-8 + acted-telemetry). **SEVERITY (change-risk × blast-radius):
+  HIGHEST in the register.**
+- **IA-XEVOLVE-02 (I) — the strategy path is config-safe and source-silent.** NEW
+  (measured: 16 YAMLs, the 58-key map, the boot validations) + SYNTHESIS (IA-P1-01's two
+  live precedents; IA-P2-01's pullback semantics). R1's decided path works; the failure it
+  cannot see is a scanner that never posts. 📌 carries R1's deferred-edge note.
+  **SEVERITY: MED-HIGH** (a new strategy can be silently absent for weeks).
+- **IA-XEVOLVE-03 (II) — the compound operational hazard.** SYNTHESIS (IA-XSEC-02 ×
+  IA-XTEST-01 × IA-P4-02): a wrong change, exercised on the VM, can place real orders that
+  nothing would flag. **SEVERITY: HIGH, conditional on VM-side exercise.**
+- **IA-XEVOLVE-04 (II) — the delivery expansion assessed:** one must-first (the filter),
+  three predicted-noisy-but-harmless, one broken certifier (the shadow gate), four cleared
+  properties. **SEVERITY: MED with the filter, HIGH without it.**
+
+### XE.5 Open questions
+
+- **OQ-XEVOLVE-1:** Whether a new strategy's *first* live signal would surface anywhere an
+  operator watches (the 10-vs-15 tradeable-population question is measured; the
+  first-signal visibility path was not traced).
+- **OQ-XEVOLVE-2:** The 10 `enabled: false` occurrences across 16 strategy YAMLs are
+  key-level, not necessarily strategy-level (sub-features) — not itemised; the
+  tradeable-population figures from P1 stand as the authority.
+
+---
+
+# ⭐ THE AUDIT VERDICT — SYSTEM INTEGRITY AS MEASURED ACROSS 16 PHASES
+
+**What is SOUND (measured, not assumed).** The capital arithmetic is correct and
+defended: the 3-balance invariant holds with per-bucket guards, the ledger is
+write-ahead with a replay that reconciles to broker.net by construction, and the E4
+net-P&L contract is honoured by every current reader. The order path is disciplined
+where it matters most — one placement pipeline, one broker chokepoint, qty crossing
+verbatim with no second computation to corrupt it, an authoritative tick-snap, and
+product/intent double-locked. Concurrency is handled with unusual care (the persist-first
+kill, the M-C4/M-C5/M-C8 lock and claim work, conditional writes that make the losing side
+of every race a clean no-op). The containment boundary is real: the dev machine cannot
+place an order. Recovery is genuinely headless for the failure classes that matter, and
+the deploy record is complete. And the codebase demonstrably knows how to do things right
+— `closure_source`'s canonical vocabulary with a scanning test, the tripwire and
+plant-to-bite test idioms, superseded-but-legible documentation labels, the derive-don't-
+duplicate constants. **Where this system is careful, it is more careful than most
+production software.**
+
+**The DOMINANT STRUCTURAL RISK — one sentence: the system has no mechanism that verifies a
+declared thing actually has an effect.** ~22 subsystems and knobs are configured, built,
+often constructed and started — and inert: the exit-management engine forced dark, the risk
+sizer bound ~20× below its intended level, an entry gate that has never received an entry,
+a liquidity check whose YAML says `true`, a backup SL monitor with no importers. They pass
+every test because tests construct their own objects and pass the arguments production
+forgot. This one gap explains roughly half of everything this campaign found.
+
+**The TOP findings by leverage:** (1) no effect-verification (above); (2) the buy-day
+product filter — dated, ordering-critical, blocks three workstreams; (3) the fill/cancel
+seams — `orders.qty_filled` written zeroed on all 405 completions and a cancel-race that
+files the system's own position as a human order, unbooked and unprotected; (4) the kill
+ladder's deafness to broker-cash truth (proven live: −₹637.6 crossed three sessions with
+no alarm) and its flatten that verifies placement rather than flatness — on a layer whose
+single live rehearsal was rejected by the broker for a tag-length bug; (5) the broken
+certifier — `eod_verify` stuck PENDING for 18 trading days while its heartbeat reported
+SUCCESS.
+
+**Is it "worth and powerful, not a toy"? — Yes, as engineering. With one honest caveat
+that must not be softened.** Measured across sixteen phases: this is a real trading system
+with real safety architecture, defended capital arithmetic, genuine operational discipline,
+and an audit trail most professional systems lack. It is not a toy. **But R1 stands and its
+standing note is part of this verdict: the system shows NO MEASURABLE PROFITABLE EDGE.**
+Statistical, geometric and arithmetic evidence converge — entries buy extension, ~38-39%
+win rate against a ~43.5% breakeven. **The correct summary is therefore: a well-built
+machine that is not yet profitable, whose defects are overwhelmingly of the
+"declared-but-inert" class rather than the "wrong when it runs" class.** The edge question
+is deferred, not answered, and no amount of fixing the findings in this register will
+answer it — that is strategy work, not engineering work.
+
+**One structural observation the campaign earned:** the defects cluster in what the system
+*claims* rather than what it *does*. Config says a check is on; an alert says monitoring is
+active; a heartbeat says a job succeeded; a runbook says to run a script; a docstring says
+a module is wired. In each case the executing code was doing something simpler and usually
+safer than its description. **This system's integrity problem is a truth-telling problem,
+not a correctness problem** — which is a far better problem to have, and a far easier one
+to fix.
+
+---
+
+# 🏁 CAMPAIGN COMPLETE — 16 PHASES
+
+**Delivered:** P1–P10 (the flow: signal → screen → size → place → execute → capital →
+kill → reconcile → report → boot) + X-ARCH · X-DUP · X-CONFIG · X-DOCS · X-TEST · X-SEC ·
+X-EVOLVE (cross-cutting). **Register: 4,362 lines, 17 incremental commits** (19 total ahead
+of the deployed `297b587`, all docs-only, all unpushed by design so Monday boots the
+regression-tested SHA). **Method held throughout:** findings only — measured on the
+deployed code, `mode=ro` reads and log greps, every "found nothing" carrying its search
+width, every stale claim re-measured rather than transcribed (4 KNOWNs closed stale, 1
+root cause corrected, 2 of my own measurement errors caught and amended in-session).
+**Nothing was fixed, nothing pushed, no secret printed, no config or permission touched,
+and the 3-Aug/4-Aug sequence was never approached.**
+
+**Bridge to the FIX CAMPAIGN — a SEPARATE effort, not authorised by this phase.** When it
+is commissioned, its sequencing must honour, in order: **(1) the buy-day product filter
+FIRST** — before anything that makes a live component holdings-aware (the Q4 ordering
+constraint, binding across three workstreams); **(2) then the debt ledger's order**
+(XE.3), which ranks by change-risk × blast-radius rather than by defect count; **(3) with
+the standing rules this campaign confirmed:** careful-loop for anything touching capital,
+kill, orders, schema or sizing; no schema push except immediately before an off-market
+boot; no push before 18:15 (the forward-shadow recorder's output cannot be regenerated);
+and label every item BUILT / DEPLOYED / VERIFIED LIVE rather than "fixed". **⛔ No fix work
+is authorised by this document. It is a register of what is true, measured on 01-Aug-2026
+against `297b587`.**
