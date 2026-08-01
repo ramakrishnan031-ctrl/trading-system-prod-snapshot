@@ -669,6 +669,8 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 > keeping intruders off `ubuntu` (SSH→Tailscale-only + key passphrase), NOT `.env` file-mode. Controls
 > PROPOSE-not-apply; recovery path for any SSH change = **OCI serial/VNC console**.
 
+> 🔬🛠️ **EFFECT-TELEMETRY (ledger #1) — `<BUILT>` 01-Aug `132e571`, ⛔ NOT DEPLOYED.** `core/effect_telemetry.py` + **`config/expected_managers.yaml` (the C2/C6 single source of truth — ⛔ a new main.py manager ctor REQUIRES a registry entry in the SAME diff)**; 42/43 units counted at frozen effect-points; **B2 assertion at end-of-boot (paper fail-fast · live CRITICAL+continue); EOD census emits at `_shutdown()` entry (main.py:1236)** — the 16:05 report cron is out-of-process. Contract + build record in `docs/audit/effect_*_01aug2026.md`. 🔴 OPEN: the `order_placer` effect-point review (paper boots fail-fast until decided) · the deploy slot · the 4-Aug `cnc_gtt_*` registry flip-rider.
+
 > 📋⭐ **PENDING SOURCE-OF-TRUTH — CURRENT (01-Aug-2026): `docs/MASTER_PENDING_01-Aug-2026.md`.**
 > The consolidated WORKING register, four bands, **231 items reconciled** (132 pre-audit + the
 > integrity audit's **95 finding IDs** + 4 new): **§A live-trading 6 · §B the XE.3 debt-ledger

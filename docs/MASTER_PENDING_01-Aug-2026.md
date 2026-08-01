@@ -214,11 +214,16 @@ one more commit always moves.**
 > S3's own closing words: *"**⛔ No fix work is authorised by this document.** It is a
 > register of what is true, measured on 01-Aug-2026 against `297b587`."*
 > **This band is a RUNNING ORDER — items move only when Rama commissions them.**
-> ⭐ **#1 state 01-Aug evening:** `<PENDING — Phase A contract FROZEN, ⛔ NO CODE>` —
-> `docs/audit/effect_verification_contract_01aug2026.md` + `config/expected_managers.yaml`
-> committed; **GATE: Phase B starts ONLY on Rama's approval of the frozen "acted"
-> contract (7 gate questions in the contract).** Scope = families β/γ only; BK-8 (α) is
-> a separate next iteration.
+> ⭐ **#1 state 01-Aug night:** `<BUILT — ⛔ NOT DEPLOYED, NOT PUSHED>` — gate cleared,
+> Phase B landed as ONE commit `132e571` (42/43 units instrumented; B2 assertion; EOD
+> census at `_shutdown()`; regression **NEW-failure set EMPTY**, 8F/5,466P vs base
+> 10F/5,452P). Build record: `docs/audit/effect_telemetry_phaseB_build_01aug2026.md`.
+> 🔴 **TWO THINGS OWED RAMA:** (1) **the `order_placer` effect-point review** — the
+> frozen row's ":3914 single chokepoint" premise was WRONG (it is the never-fired
+> `_emergency_market_exit`); per condition #4 the unit is UNinstrumented, and **a
+> paper/dev boot fail-fasts at B2 naming it until the review lands** (recommendation in
+> the build record §1); (2) **the deploy slot** — Mon-eve-with-the-flip vs Tue-eve→Wed
+> boot (§7). ⛔ Mon still boots `297b587`. Scope β/γ only; BK-8 (α) separate.
 
 **THE SEQUENCING S3 MANDATES when it IS commissioned:** **(1)** the buy-day product filter
 **FIRST** (A4 — the Q4 ordering constraint, binding across three workstreams); **(2)**
