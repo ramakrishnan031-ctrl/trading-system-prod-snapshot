@@ -155,7 +155,7 @@ expansion.**
 
 ---
 
-## ⛔⛔ A4 — THE BUY-DAY PRODUCT FILTER (+ CRITICAL-on-NULL) ✅ **`<BUILT — NOT DEPLOYED>` 01-Aug night** — ***the single most sequencing-critical item in this register***
+## ⛔⛔ A4 — THE BUY-DAY PRODUCT FILTER (+ CRITICAL-on-NULL) ✅ **`<BUILT — NOT DEPLOYED>` — ALL THREE SELL-UNDER-KILL SITES (01-Aug night + #2b 02-Aug)** — ***the single most sequencing-critical item in this register***
 
 > ✅ **BUILT `43043a2`+`15adf75`+`2e606ec` (01-Aug ~20:0x–20:5x):** both HARD_KILL
 > emergency sites product-filtered via the ONE shared source
@@ -166,8 +166,28 @@ expansion.**
 > design and test-pinned both directions; regression **NEW-set EMPTY**. Record:
 > `docs/audit/buyday_filter_build_01aug2026.md`. ⛔ **DEPLOY = Mon-eve stack, gated on
 > D1–D3 ratification + Monday observation clean + Monday PC gates (kill drill, #1
-> composition boot, calm regression confirm).** 🔴 **NEW ruling owed (record §2): the
-> reconciler CHECK2 third site — #2b Mon-eve (~6 lines) or a named carry-pilot blocker.**
+> composition boot, calm regression confirm).** ~~🔴 NEW ruling owed (record §2): the
+> reconciler CHECK2 third site — #2b Mon-eve (~6 lines) or a named carry-pilot blocker.~~
+
+> ✅ **#2b — THE THIRD SITE IS NOW ALSO `<BUILT — NOT DEPLOYED>` (02-Aug `6495baa`+`c5c2668`).**
+> `order_reconciler._check2_inflight_orphan` reads the SAME
+> `EMERGENCY_FLATTEN_PRODUCTS`: **CNC SPARED loud** (new `check_name`
+> `INFLIGHT_ORPHAN_SPARED_DELIVERY`, and deliberately recorded as resolved NOWHERE so it
+> stays visible each cycle) · **NULL/unknown FLATTEN + CRITICAL through the EXISTING
+> shared emitter** (no second definition) · MIS/CO unchanged. **0 status literals, 0
+> `holdings()` ⇒ the Q4 ordering rule holds and D-8 stays blocked exactly as before.**
+> 16 targeted tests (incl. a single-caller tripwire); RED-on-old 11F/5P; regression
+> **7F/5,491P, NEW-set EMPTY** vs a base measured fresh the same session; revert verified.
+> Record: `docs/audit/reconciler_product_filter_build_02aug2026.md`.
+> ⛔ **NOT a new register item — this is A4's own third site, and A4 is debt-ledger #2
+> counted ONCE here** (§B#2 stays a cross-reference; adding a §B#2b row would inflate the
+> register by 1, the exact vanity S1 §9 / S2 §3.7 warn against). **231 stands.**
+> 🔴 **R4 — what remains owed is a DEPLOY-SLOT choice, no longer a build choice:** ride
+> the Mon-eve stack, or name it a documented carry-pilot blocker. It never gated the flip.
+> ⚪ **Newly disclosed, not patched** (a 4th thing, outside the filter's three): the
+> reconciler's flatten passes `intent="INTRADAY"` unconditionally ⇒ a **CO** position
+> would exit under an MIS intent (H-5 class). No CO position has ever reached it. Owed: a
+> ruling, not a fix-in-passing.
 
 > **⭐ THIS IS THE ONE OVERLAP BETWEEN §A AND §B. IT IS DEBT-LEDGER RANK #2 AND IT IS
 > COUNTED EXACTLY ONCE — HERE.** §B#2 is a cross-reference to this entry, not a second item.
