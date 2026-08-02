@@ -20,9 +20,20 @@ that incident**, because a rule without its scar gets argued away.
 
 ## 0. THE DOCUMENTATION RULE (adopted 02-Aug-2026)
 
-Record **immediately**, in the appropriate permanent place, every: **design completion ·
-architectural decision · REJECTED option and why · sequencing decision · governance
-ruling.**
+Record **immediately**, in the appropriate permanent place, every:
+
+1. **design completion**
+2. **architectural decision**
+3. **REJECTED option — and why**
+4. **sequencing decision**
+5. **governance ruling**
+6. **REVIEW CONCLUSION — including *"reviewed, nothing to change"***. ⭐ A review that left
+   no trace **cannot later be relied on as having happened** — and "we looked at that" is
+   exactly the claim this campaign has repeatedly found to be untrue.
+7. **DEPLOYMENT DECISION — including a decision NOT to deploy, and its reason.** A hold is
+   a decision; an unrecorded hold decays into a forgotten item.
+8. **IMPLEMENTATION COMPLETION**
+9. ⭐ **RISK ACCEPTANCE — see §R.**
 
 | what it is | where it goes |
 |---|---|
@@ -122,6 +133,103 @@ never explain them away.**
 Tests construct their own objects and **pass the args production forgot** — which is how
 5,500 greens coexisted with ~22 dead subsystems. Assert that production **feeds** the
 thing, not merely that the thing works when fed. (IA-XTEST-01.)
+
+---
+
+## R. ACCEPTED RISKS — the register
+
+**Why this section exists:** this campaign has accepted risks **repeatedly and
+correctly**, but the acceptances were scattered across build records and transcripts.
+⭐ **An accepted risk nobody can find later quietly becomes an *unaccepted* one** — someone
+rediscovers it, reads it as a fresh defect, and either re-litigates a settled call or
+"fixes" it in passing (which G3 forbids).
+
+**Every entry carries five fields — and the fifth is the point:**
+*what was accepted · the reasoning · who accepted it · the date · **the condition that
+would REOPEN it**.*
+⛔ An entry with no reopen condition is not an accepted risk; it is an abandoned one.
+
+---
+
+### AR1 · GATE-Q3 — the tradeless-day MISMATCH is KEPT, not suppressed
+- **Accepted:** on a genuinely tradeless day the five money-path ACTIVE units
+  (`signal_processor` · `order_placer` · `limit_protocol` · `order_monitor` ·
+  `order_reconciler`) legitimately read **acted-0** and **will appear in MISMATCH(i)**.
+- **Reasoning:** the line is **truthful** — *"nothing acted today"* is exactly G9's
+  question being answered daily. Suppressing it would reclassify real information away.
+- **Who / when:** recommendation in `docs/audit/effect_verification_contract_01aug2026.md`
+  §A2.4 + Q-table row Q3; **Rama accepted all 7 gate recommendations, 01-Aug-2026** (Phase
+  B build record: *"approved, all 7 recommendations accepted (Rama relayed; ChatGPT
+  conditions binding)"*).
+- ⭐ **REOPENS IF:** it produces **alert fatigue in practice** — it sits closest to the
+  IA-P9-02 disease the campaign is trying to cure. The contract already records the
+  standing alternative (**event-driven**), so reopening is a switch, not a redesign.
+
+### AR2 · The q9 consecutive-losses oscillator + the isolation-only failures
+- **Accepted:** treated as **pre-existing shared-state flake**, not a campaign delta.
+- **Reasoning:** ⭐ **PROVEN, not assumed** — the q9-streak member oscillated
+  **red→red→green across three runs of the same tree**, and the isolation-only failures
+  **pass when run alone**. Two consecutive isolated runs of one tree gave different
+  failure sets.
+- **Who / when:** recorded in the ledger #1 Phase-B record §6a (01-Aug) and carried
+  through the #2 / #2b / #2c-R regression stamps (01–02-Aug).
+- ⭐ **REOPENS IF:** a **NEW-failure set is ever non-empty because of that family**.
+  *(Status 02-Aug: absent from **both** halves of the #2c-R run — a calm pair.)*
+
+### AR3 · The T3 `test_fix181` LIMIT-vs-MARKET standing failure
+- **Accepted:** **carried and named in every gate**, not fixed.
+- **Reasoning:** pre-existing and unrelated to the changes under test — and, decisively,
+  it appears on **BOTH sides of every base/after pair**, so it **cannot mask a delta**.
+- **Who / when:** named in the ledger #2 and #2b records; re-measured on both sides
+  02-Aug (#2c-R §R6a).
+- ⭐ **REOPENS IF:** it ever appears on **only one side** of a pair — that makes it a delta,
+  not a standing item — or when the exits thread reopens post-M-S4.
+
+### AR4 · CHECK6's capital-release-while-the-position-is-LIVE
+- **Accepted:** disclosed, **not fixed**. FIX-B marks a `PENDING_FILL` trade FAILED and
+  **releases its reservation at 3 cycles while the position is still live at the broker**,
+  after which it routes to `_check2_orphan_adoption` (`HUMAN_ORDER`).
+- **Reasoning:** **latent-on-latent** — it needs a HARD_KILL **and** an in-flight entry
+  **and** a fill, and **HARD_KILL has never fired**. Bounding is **CHECK6's** to change;
+  widening a CO card into CHECK6 is the blast-radius error the campaign exists to prevent.
+- **Who / when:** measured 02-Aug (#2c-R); **registered to debt-ledger #3** (IA-P5-02
+  family) rather than left in a build record.
+- ⭐ **REOPENS AT:** the **first real HARD_KILL** — or sooner if delivery makes the path
+  reachable, since **post-flip a CNC holding spared by #2b follows exactly this path**.
+
+### AR5 · CO dormancy accepted rather than un-dormanted
+- **Accepted:** CO stays **doubly dormant** (never used, 805/805 regular;
+  `force_intraday_only` coerces non-INTRADAY back inside `place_order`). We did **not**
+  enable or exercise CO in order to test it.
+- **Reasoning:** the **correct behaviour is built anyway** — #2c-R refuses a CO position
+  at the reconciler, and #2d is carded for `kill_switch`'s three sell sites — so dormancy
+  is **not load-bearing for correctness**. ⚠️ **#2d is GATED and NOT started.**
+- **Who / when:** #2c Step-1, 02-Aug-2026.
+- ⭐ **REOPENS IF:** **CO trading is ever intentionally enabled** — which is also Option
+  2's unpark trigger (AR7), so the two reopen together.
+
+### AR6 · The label ceilings — accepted as permanent honesty limits
+- **Accepted:** several items **cannot reach `<VERIFIED LIVE>` today**: HARD_KILL has
+  never fired · CO is doubly dormant · a runbook is unverified until an operator uses it
+  in a real incident.
+- **Reasoning:** these are **honesty limits, not obstacles**. ⛔ They are **not things to
+  be argued upward** — the whole point of D4 is that a label must be earned by a
+  production artifact, not by confidence.
+- **Who / when:** standing; formalised as **D4** in this document, 02-Aug-2026.
+- ⭐ **REOPENS ONLY BY THE REAL EVENT** — a real HARD_KILL, a real CO position, an
+  operator actually reaching for the runbook. ⛔ **Never by re-labelling.**
+
+### AR7 · #2c-R's **Option 2** parked, with an explicit unpark trigger
+- **Accepted:** Option 1 (refuse-and-escalate) shipped as the permanent safe fix; **Option
+  2** (parent-order-id lookup → `cancel_order(variety="co")`) is **parked, not abandoned**.
+- ⛔ **Cross-reference, not a duplicate** — the full entry with its trigger and owner lives
+  in **register §C.7**, and the reasoning in
+  `docs/audit/reconciler_product_filter_build_02aug2026.md` §R8.
+- ⚠️ **Correction to how this was handed to me:** it was described as *"Ledger #2's
+  Option-2 parking"*. The record says it is **#2c-R's** Option 2. Recorded as measured.
+- ⭐ **REOPENS IF:** **CO trading is intentionally enabled**, **OR** the broker layer
+  provides **reliable parent-order lookup**. **Owner: the CO protocol surface — ⛔ NOT the
+  reconciler.**
 
 ---
 

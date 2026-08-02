@@ -806,6 +806,21 @@ supersession mark (1, src C) = **4+3+1+3+11+1+1 = 24**.
    ⛔ It is **process** practice — distinct from `docs/foundation_engineering_rules.md` and
    `docs/trading_system_project_specific_rules.md`, which are **product** engineering
    rules. Do not merge them.
+   ⭐ **It also carries §R — THE ACCEPTED-RISKS REGISTER (AR1-AR7)**, each entry naming
+   *what was accepted · the reasoning · who accepted it · the date · **the condition that
+   would REOPEN it***. **An accepted risk nobody can find later quietly becomes an
+   UNACCEPTED one** — rediscovered as a fresh defect, then either re-litigated or "fixed"
+   in passing (which G3 forbids). ⛔ **An entry with no reopen condition is not an accepted
+   risk; it is an abandoned one.** Seeded from the acceptances already made: **AR1** the
+   GATE-Q3 tradeless-day MISMATCH (Rama accepted all 7 gate recommendations, 01-Aug) ·
+   **AR2** the q9 oscillator / isolation-only flake · **AR3** the T3 `test_fix181` standing
+   failure · **AR4** CHECK6's capital-release-while-live (reopens at the first real
+   HARD_KILL) · **AR5** CO dormancy · **AR6** the label ceilings (⛔ reopen only by the real
+   event, **never by re-labelling**) · **AR7** #2c-R's Option 2 — **cross-referenced to
+   §C.7, not duplicated.**
+   ⛔ The trigger list at item 8 also covers **review conclusions (incl. "nothing to
+   change") · deployment decisions (incl. a decision NOT to deploy) · implementation
+   completions · risk acceptances.**
 
 ---
 
