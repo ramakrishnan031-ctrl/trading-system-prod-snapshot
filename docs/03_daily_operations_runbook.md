@@ -130,18 +130,62 @@ and weekends. On non-trading days, `main.py` exits with code 0 immediately.
 4. Check if symbol is in F&O ban list
 
 ### Kill Switch Won't Clear
-Previous-day kill switches auto-clear at startup. If still stuck:
+A **previous-day** kill auto-clears at the next 08:15 startup — every type, including
+HARD_KILL (`clear_stale_state`, `capital/kill_switch.py:284`). **Only a SAME-DAY kill
+needs clearing by hand.**
+
+**LIVE / VM — the sanctioned path:**
 ```bash
-sqlite3 data_store/trading_system.db \
-  "UPDATE kill_switch_state SET state='INACTIVE', reason='manual_clear'
-   WHERE rowid = (SELECT MAX(rowid) FROM kill_switch_state);"
-sudo systemctl restart trading-system
+sudo bash deploy/resume.sh            # SOFT_KILL
+sudo bash deploy/resume.sh --force    # also clears HARD_KILL (emergency)
 ```
+It stops the unit (releasing the instance lock and any restart loop), clears the kill via
+`scripts/clear_kill_switch.py`, then starts the service — and if the clear is **refused it
+does not start the service**.
+
+**PAPER / PC (no systemd — `resume.sh` is VM-only):**
+```bash
+python scripts/clear_kill_switch.py --dry-run   # report state, change nothing
+python scripts/clear_kill_switch.py [--force]   # clear
+```
+
+⛔ **Never clear a kill by editing the DB, and never restart to "clear" one.** A raw
+`UPDATE`:
+- **does nothing to a running service** — `is_active()` reads *in-memory* state
+  (`kill_switch.py:487-491`), not the DB, so the process stays killed until it restarts;
+- leaves `triggered_at`/`triggered_by` stale and writes **no `system_events` audit trail**,
+  so the row still attributes the clear to whoever tripped the kill;
+- **bypasses the HARD_KILL guard** — `clear_kill_switch.py` refuses a HARD_KILL without
+  `--force` precisely because an emergency kill **re-trips if the root cause is unfixed**.
+- ⛔ **And if the clear did not actually take, the restart HALTS the box:** a boot with a
+  kill still persisted returns **exit 4** (`main.py:1925-1932`), and
+  `RestartPreventExitStatus=3 4` (`deploy/systemd/trading-system.service:35`) tells systemd
+  **not** to bring it back. Fix the root cause first.
+
+> ~~**SUPERSEDED 02-Aug-2026 (ledger #8 / IA-XDOCS-01)** — kept legible. This section used
+> to say "Previous-day kill switches auto-clear at startup. If still stuck:" followed by
+> `sqlite3 data_store/trading_system.db "UPDATE kill_switch_state SET state='INACTIVE',
+> reason='manual_clear' WHERE rowid = (SELECT MAX(rowid) FROM kill_switch_state);"` and
+> `sudo systemctl restart trading-system`.~~ It was the pre-`resume.sh` anti-pattern: no
+> audit trail, no HARD_KILL gate, no effect on the running process, and its restart step is
+> exactly what converts a stuck kill into an exit-4 HALT.
 
 ### Database Locked
 ```bash
-# Check for WAL checkpoint
+# 1. Checkpoint the WAL
 python3 scripts/wal_checkpoint.py
-# If still locked, restart service
-sudo systemctl restart trading-system
+# 2. If STILL locked, check for an active kill BEFORE restarting anything
+sqlite3 data_store/trading_system.db \
+  "SELECT state, triggered_at FROM kill_switch_state WHERE id=1;"
 ```
+- **`INACTIVE`** → `sudo systemctl restart trading-system` is safe.
+- ⛔ **HARD_KILL (any date), or SOFT_KILL triggered TODAY** → a restart returns **exit 4**
+  and **systemd will not bring the service back** (`utils/startup_checks.py:242-286` →
+  `main.py:1932`). Clear it first with `sudo bash deploy/resume.sh` (which restarts for
+  you), or leave the service alone.
+  ⚠️ **This is the COMMON case after 15:15**, when the daily circuit-breaker SOFT_KILL is
+  active and persists overnight by design.
+
+> ~~**SUPERSEDED 02-Aug-2026 (ledger #8 / IA-XDOCS-01)**~~ — this previously said only
+> *"If still locked, restart service: `sudo systemctl restart trading-system`"*, an
+> **unconditional** restart that HALTS the system whenever a same-day kill coincides.

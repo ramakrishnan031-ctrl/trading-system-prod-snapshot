@@ -43,10 +43,24 @@ VM: 161.118.187.249 | User: ubuntu | System: ~/systems/trading-system
 
 ## 5. Kill Switch Recovery
 
-1. Check: `python3 tests/crash_test/state_inspector.py --live` (see kill switch state)
-2. If SOFT_KILL: Fix root cause -> clear via DB: `sqlite3 data_store/trading_system.db "UPDATE kill_switch_state SET state='INACTIVE', reason='manual_clear', triggered_at=datetime('now'), triggered_by='operator' WHERE id=1"` -> restart
-3. If HARD_KILL: Verify capital + positions -> same clear + restart
-4. Post-resume: Inject test signal -> verify processing
+1. Check: `python scripts/clear_kill_switch.py --dry-run` (reports state, changes nothing)
+2. **A previous-day kill needs none of this** — it auto-clears at the next 08:15 startup
+   (`clear_stale_state`). Only a **same-day** kill needs clearing.
+3. If SOFT_KILL: fix the root cause, then **LIVE/VM** `sudo bash deploy/resume.sh` ·
+   **PAPER/PC** `python scripts/clear_kill_switch.py`
+4. If HARD_KILL: verify capital + positions, **confirm the root cause is handled** (an
+   emergency kill re-trips if it is not), then `sudo bash deploy/resume.sh --force`
+   (PC: `python scripts/clear_kill_switch.py --force`)
+5. Post-resume: Inject test signal -> verify processing
+
+> ⛔ ~~**SUPERSEDED 02-Aug-2026 (ledger #8 / IA-XDOCS-01)** — steps 2-3 previously said
+> "clear via DB: `sqlite3 … "UPDATE kill_switch_state SET state='INACTIVE',
+> reason='manual_clear', triggered_at=datetime('now'), triggered_by='operator' WHERE
+> id=1"` -> restart".~~ A raw `UPDATE` writes no `system_events` audit trail, **bypasses
+> the HARD_KILL `--force` gate**, and has **no effect on a running service** (`is_active()`
+> reads in-memory state). ⛔ And restarting while a kill is still persisted returns
+> **exit 4**, which `RestartPreventExitStatus=3 4` makes permanent — the service will not
+> come back. Use `deploy/resume.sh`.
 
 **Verified by crash test**: YES — CT007 (kill switch edges), multiple scenarios required kill switch clearing.
 

@@ -158,11 +158,27 @@ sudo journalctl -u trading-system -n 100 --no-pager
 
 ### Force Clear Kill Switch
 
+A **previous-day** kill auto-clears at the next 08:15 startup — do nothing. Only a
+**same-day** kill needs this.
+
 ```bash
-# Only if kill switch is blocking startup inappropriately
-sqlite3 ~/systems/trading-system/data_store/trading_system.db \
-    "UPDATE kill_switch_state SET state='INACTIVE' WHERE id=1;"
+# LIVE / VM — stops the unit, clears the kill, restarts it (refused clear => no start)
+sudo bash deploy/resume.sh            # SOFT_KILL
+sudo bash deploy/resume.sh --force    # also clears HARD_KILL (confirm root cause first)
+
+# PAPER / PC (no systemd)
+python scripts/clear_kill_switch.py --dry-run    # report only
+python scripts/clear_kill_switch.py [--force]
 ```
+
+> ⛔ ~~**SUPERSEDED 02-Aug-2026 (ledger #8 / IA-XDOCS-01)** — this previously read
+> `sqlite3 ~/systems/trading-system/data_store/trading_system.db "UPDATE
+> kill_switch_state SET state='INACTIVE' WHERE id=1;"`.~~ A raw `UPDATE` writes no
+> `system_events` audit trail, leaves `triggered_at`/`triggered_by` stale, **bypasses the
+> HARD_KILL `--force` gate** (an emergency kill re-trips if its cause is unfixed), and has
+> **no effect on a running service** — `is_active()` reads in-memory state, not the DB.
+> ⛔ Restarting while a kill is still persisted returns **exit 4**, and
+> `RestartPreventExitStatus=3 4` means systemd will **not** bring the service back.
 
 ---
 
