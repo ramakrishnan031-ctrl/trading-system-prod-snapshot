@@ -2102,13 +2102,36 @@ class OrderReconciler:
                 #   hands the operator a named, actionable CRITICAL.
                 #
                 # ⚠️ CADENCE, deliberate: like the CNC spare, this is recorded
-                # as handled/resolved NOWHERE, so it re-fires EVERY cycle while
-                # the kill is active and the position is held — log AND alert.
-                # That is intended: a CO position surviving a HARD_KILL is an
-                # unresolved hazard needing human action, not a settled state
-                # (which is what makes it louder than the spare). Doubly
-                # dormant today (CO unused; force_intraday_only coerces), so the
-                # realistic rate is zero.
+                # as handled/resolved NOWHERE, so it re-fires every cycle for as
+                # long as this trade stays in-flight — log AND alert. That is
+                # intended: a CO position surviving a HARD_KILL is an unresolved
+                # hazard needing human action, not a settled state (which is what
+                # makes it louder than the spare). Doubly dormant today (CO
+                # unused; force_intraday_only coerces), so the realistic rate is
+                # zero.
+                #
+                # ⚠️⚠️ BUT THE ALERT IS BOUNDED, AND NOT BY THIS BRANCH — measured
+                # 02-Aug, disclosed, NOT patched (it is CHECK6's behaviour, and
+                # pre-existing: the #2b CNC spare inherits exactly the same
+                # ceiling, so its "re-alerts every cycle" note is bounded too).
+                # CHECK6 (_check6_orphan_orders, wired in production at
+                # main.py:2739) walks PENDING_FILL trades whose ENTRY order is
+                # absent from the broker's OPEN orders — which is precisely the
+                # FIX-181 shape that reaches this branch, since the entry already
+                # filled. Its FIX-B counter marks the trade FAILED and releases
+                # the reservation on the 3rd consecutive cycle. CHECK6 runs AFTER
+                # CHECK2 in a cycle, so cycle 3 still emits this refusal; from
+                # cycle 4 the trade is no longer in-flight, the caller's `if
+                # inflight:` is False, and the SAME broker position routes to
+                # _check2_orphan_adoption instead — which carries a once-a-day
+                # per-symbol suppression set and can label it HUMAN_ORDER
+                # (IA-P5-02's class). ⇒ the operator gets ~3 CRITICALs, not an
+                # unbounded stream, while the CO position is still live at the
+                # broker and its capital has been released. A `PENDING` (not
+                # PENDING_FILL) trade is outside CHECK6's query and does re-fire
+                # unbounded. Backlogged with Option 2, NOT fixed here: bounding
+                # is CHECK6's to change, and widening this card into CHECK6 is
+                # exactly the blast-radius error this campaign exists to prevent.
                 msg = (
                     f"INFLIGHT_ORPHAN + HARD_KILL: REFUSING to flatten {symbol} "
                     f"qty={bp.qty} (trade {trade_id}, broker product=CO). A COVER "

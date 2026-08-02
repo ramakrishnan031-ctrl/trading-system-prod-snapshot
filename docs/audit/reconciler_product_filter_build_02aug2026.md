@@ -266,3 +266,250 @@ from the live adapter's per-row return, not from a paper drill.
 - 🔴 **R4 — Rama's ruling, unchanged and now unblocked in both directions:** ride the
   Monday-evening deploy stack, **or** name it a documented carry-pilot blocker. Building
   it now keeps both options open; it is no longer an *unbuilt* blocker either way.
+
+---
+---
+
+# LEDGER #2c-R — ORPHAN-CO **REFUSE-AND-ESCALATE**: BUILD RECORD
+
+**Executed 02-Aug-2026 (Sunday). Code committed `42db913` ~12:4x before a power-down;
+validation completed in a fresh session 12:1x–1x:xx IST — same day, same pre-18:15
+window, neither run crossing midnight.**
+**Status: `<BUILT — NOT DEPLOYED, NOT PUSHED>`.**
+Authority: the #2c-R card (Option 1, ChatGPT red-team Q1–Q6 binding) · #2c Step-1 proof
+(F1–F8, recorded above) · Audit 3.1 · #2b build record §2b as amended.
+⛔ **OFF Monday's critical path.** `origin/main` still `297b587`; nothing pushed.
+
+## R1. WHY REFUSE — the permanent fix, not a patch (#4 permanent-fixation)
+
+#2c Step-1 proved this path **cannot** square a CO position: Audit 3.1 says a CO position
+cannot be closed by a reverse order at all (the broker rejects it and auto-squares at
+15:20 with a ₹50+GST penalty), the correct action is
+`cancel_order(entry_broker_id, variety="co")` on the parent bracket, and **this path has
+no parent broker order id** — its inputs are `(symbol, bp, tag_prefix, trade_id)` and `bp`
+is a broker *position* row. The pre-#2c-R code sold `product="MIS"`, which the broker
+**accepts** but which does **not** net against a CO position (Kite nets per
+`(symbol, product)`) ⇒ it **opened a naked MIS short while the CO position survived**.
+⇒ **Placing no order is strictly safer than placing a wrong, position-CREATING one.**
+The cure is to stop emitting the wrong order, not to relabel it.
+
+## R2. STEP-1 RE-CHECK (the card's 1a/1b, reported inline as instructed)
+
+| item | finding |
+|---|---|
+| **1a — structure at the site** | **Confirmed, no STOP condition.** CO fell through the membership test into the silent flatten exactly as F4 described (reproduced in-code, not by running). The site's structure matches the #2b record |
+| **1b — does Audit 3.1 also bite `kill_switch`?** | ⭐ **YES — REAL, and REPORTED NOT PATCHED** (see §R7). It is now its own carded item |
+| Placement without touching the shared constant | **Possible** ⇒ no STOP. The refusal is a site-local branch **before** the membership test |
+
+## R3. WHAT WAS BUILT (one code commit, `42db913`)
+
+`orders/order_reconciler.py`, inside the `kill_active` branch of
+`_check2_inflight_orphan`. **Branch order (ChatGPT Q2 — no gaps, no double-alert):**
+
+1. **CNC → SPARE** — existing #2b behaviour, unchanged.
+2. **CO → REFUSE + CRITICAL escalate** — **NEW**, and placed **BEFORE the membership
+   test** (`:2077` vs `:2174`).
+3. **unknown/NULL → FLATTEN + CRITICAL** via the existing shared emitter — unchanged.
+4. **MIS / remaining allowed → flatten** — unchanged.
+
+- **The refusal places NO order of any kind.** It emits a CRITICAL naming the reason
+  (CO position · Audit 3.1: cannot be squared by a reverse order · no parent broker order
+  id on this path · operator/EOD action required) with symbol, qty, product, trade_id and
+  `site="reconciler_check2"`, through the **existing** notifier — **no second emitter**
+  (Q3). A broken notifier still leaves the refusal intact (pinned by test).
+- **Predicate reads the RAW BROKER product string** (`bp.product`, G3 style, same as
+  #2b), deliberately **not** routed through the local `_PRODUCT_TO_INTENT`.
+- **Disposition:** a dedicated `check_name` in the ORPHAN family —
+  **`INFLIGHT_ORPHAN_REFUSED_CO`**, distinct from `INFLIGHT_ORPHAN_SPARED_DELIVERY`.
+- ⭐ **`success=False`, and the asymmetry is deliberate:** the CNC spare is a correct
+  **final** state (nothing owed) and records `success=True`; a refusal is
+  **correct-but-INCOMPLETE** — the position is still live and still needs a human — so the
+  audit row must say so. The only consumer of that column is a dashboard timeline reader
+  (`ops_dashboard/backend/readers/db_reader.py:1484`), which **renders** it and never
+  branches on it. ⚠️ Checked explicitly: `success=False` **cannot** drive an escalation —
+  the reconciler's only escalating counter (RC12 → `soft_kill`) counts consecutive
+  **`BrokerAuthError` cycles**, not failed actions.
+- **`_flatten_broker_position` docstring** — the precondition now names **both** CNC and
+  CO, states that the one caller applies both branches, and that a new caller must too.
+
+### R3a. ⛔ THE SHARED CONSTANT WAS NOT TOUCHED — asserted, not assumed
+`CO` **is** a member of `core.constants.EMERGENCY_FLATTEN_PRODUCTS` (`frozenset({"MIS",
+"CO"})`), and that one name is read by **five** sites: `kill_switch` `:1585` + `:1683`,
+`eod_squareoff` `:1085` + `:1453`, and the reconciler `:2174`. Removing CO from it would
+have silently changed **four** other sites — the exact blast-radius error this campaign
+exists to prevent. Hence the site-local branch. **Measured across `42db913`:**
+`core/constants.py`, `capital/kill_switch.py`, `orders/eod_squareoff.py`,
+`broker/zerodha_adapter.py`, `broker/product_resolver.py` and
+`scripts/clear_kill_switch.py` are all **byte-identical** (md5 both sides), and
+`core/constants.py` does not appear in the commit's file list at all.
+
+⚪ **Documentation nit, recorded and deliberately NOT fixed:** that constant's own comment
+(`core/constants.py:15-17`) still names **four** readers — it predates the reconciler
+joining at #2b, so there are now **five**. Fixing it would mean editing the one file this
+card forbids touching; it is left for whenever `core/constants.py` is next legitimately
+opened. Filed with the campaign's lying-comment inventory.
+
+## R4. THE CADENCE — and ⭐ A NEW MEASUREMENT THAT BOUNDS IT
+
+The refusal is recorded as handled/resolved **nowhere**, so it re-fires for as long as the
+trade stays in-flight — intended, and louder than the spare, because a CO position
+surviving a HARD_KILL is an unresolved hazard needing human action.
+
+⚠️⚠️ **But it is BOUNDED, and not by this branch — measured 02-Aug, disclosed, NOT
+patched.** `_check6_orphan_orders` (**wired in production**, `main.py:2739`) walks
+`PENDING_FILL` trades whose ENTRY order is absent from the broker's open orders — which is
+*precisely* the FIX-181 shape that reaches this branch, since the entry has already
+filled. Its **FIX-B** counter marks the trade **FAILED and releases the reservation on the
+3rd consecutive cycle**. CHECK6 runs **after** CHECK2 within a cycle, so cycle 3 still
+emits the refusal; from cycle 4 the trade is no longer in-flight, the caller's
+`if inflight:` (`:930`) is False, and the **same broker position routes to
+`_check2_orphan_adoption`** — which carries a once-a-day per-symbol suppression set and
+can label it `HUMAN_ORDER` (IA-P5-02's class).
+
+⇒ **the operator gets ~3 CRITICALs, not an unbounded stream, while the CO position is
+still live at the broker and its capital has been released.** A `PENDING` (not
+`PENDING_FILL`) trade is outside CHECK6's query and does re-fire unbounded.
+
+⭐ **This is PRE-EXISTING and SHARED: #2b's CNC spare inherits exactly the same ceiling**,
+so that record's "re-alerts EVERY cycle BY DESIGN" is **bounded too** — corrected here
+rather than left standing. ⛔ **Not fixed in this card:** bounding is CHECK6's behaviour,
+and widening a CO-refusal card into CHECK6 is the blast-radius error above. Backlogged
+with Option 2. **Latent today** for both branches (CO doubly dormant; no delivery entries
+exist yet) — it arms for CNC with the carry pilot.
+
+## R5. DOWNSTREAM TRACE — the same four consumers #2b traced, re-confirmed
+
+| consumer | matcher | effect of `INFLIGHT_ORPHAN_REFUSED_CO` | verdict |
+|---|---|---|---|
+| `reports/daily_trade_review.py:93` `_ORPHAN_CHECKS` | explicit **set** | **not** a member | ✅ **correct — a refusal closes nothing.** Pinned by test |
+| `reports/daily_report.py:576` | `"ORPHAN" in check_name` | **counted** | ✅ correct — it **is** an orphan detection |
+| `scripts/system_manager.py:612` | `check_name LIKE '%ORPHAN%'` | **counted ⇒ warns** | ✅ correct — a CO position refused under a kill *should* warn |
+| `reconciliation_log` | columns `(ts, check_name, tier, symbol, trade_id, description, action_taken, success)` | one row per cycle; tier ≠ COSMETIC ⇒ persisted (RC10) | ✅ **no schema change, no migration** |
+
+## R6. VALIDATION
+
+| check | result |
+|---|---|
+| **Targeted tests** — `tests/unit/test_reconciler_co_refusal.py`, **15 collected, all green** | CO refused, **nothing sold** · CRITICAL emitted naming the reason · a **broken notifier** does not break the refusal · a **short** CO row refused too (the refusal is on PRODUCT, never direction) · case/whitespace variants (`" co "`) still refused · CO under **no kill** ⇒ no product decision at all · MIS still flattens **and** CNC still spares · a CO refusal on one symbol does not silence another · the refused row **stays visible to the next cycle** · the refusal is **not** in `_ORPHAN_CHECKS` · the shared vocabulary is **unnarrowed** · ⭐ a **structural pin** that the CO branch precedes the membership test |
+| **RED-on-old** — base worktree, **never a stash**; test file md5-identical both sides | **11 failed / 4 passed on old vs 15 passed on new.** The tests could have been red |
+| **#2b suite — UNWEAKENED, and by count too** | **16 collected, all green — the same 16 as at #2b.** Its parametrisation ran over the whole shared set and asserted CO flattens *quietly*; that row is now **wrong, not weakened**, so it is marked **SUPERSEDED-BUT-LEGIBLE** in place and the set is parametrised over `EMERGENCY_FLATTEN_PRODUCTS − {"CO"}` (**still derived from the shared constant, never a hardcoded list**), with a new test asserting the exclusion is *exactly* `{"CO"}` and the shared set is un-narrowed. −1 parametrised row, +1 assertion ⇒ 16 → 16. Single-vocabulary and single-caller tripwires still hold |
+| **Diff scope** | `orders/order_reconciler.py` + the new test file + the #2b test file. **`core/constants.py` UNTOUCHED** (§R3a) · `kill_switch` / `eod_squareoff` / adapter / resolver **byte-identical** · 0 status literals · 0 `holdings()` ⇒ **Q4 ordering rule intact, D-8 still blocked** · no schema, migration, config key, cron or new path |
+| **Full regression** | see §R6a |
+| **Revert** | see §R6b |
+
+### R6a. Regression stamp — ⭐ NEW-FAILURE SET **EMPTY (0)**, base measured fresh
+
+Both halves `pytest tests/unit tests/integration -q --tb=no -rf`, **02-Aug 12:1x–12:4x IST
+— same session, same pre-18:15 window, neither crossing midnight** (the two clock rules
+the attribution depends on). Base = a worktree at **`0a9e13a`** (the pre-#2c-R tree),
+**never a stash**, with the git-ignored `config/instruments.csv` copied in.
+
+| run | result |
+|---|---|
+| **new code** (primary tree) | **7 failed / 5,506 passed / 4 skipped** — 881s |
+| **base** (worktree at `0a9e13a`) | **10 failed / 5,488 passed / 4 skipped** — 875s |
+| **`comm -23` (failures in MINE, not in base)** | ⭐ **EMPTY — 0** |
+
+**The base's 3 extra failures are worktree ARTIFACTS, and they are the already-PROVEN
+subprocess-PATH class** (the standing rule: *"known env failures" is a label, not a
+diagnosis*): `test_t4_deploy_preflight` ×3 (`test_check_tz_passes_on_agreement`,
+`test_check_tz_fails_on_broken_utc_form`, `test_ist_now_emits_valid_ist`) spawn
+`bash`/`python`, which a scratchpad worktree cannot resolve. ⭐ **The 26 `test_main`
+phantoms of the #2b run did NOT recur — because `config/instruments.csv` was copied into
+the worktree up front**, which is that mechanism's own control.
+
+**The arithmetic closes exactly on both axes, which independently corroborates the
+diagnosis:** collected **5,517 − 5,502 = 15** = *exactly* the new CO-refusal tests (the
+#2b file is net 0: −1 superseded row, +1 assertion). Failures **10 − 3 = 7** = measured.
+Passes **5,488 + 3 (artifacts, now green in-tree) + 15 (new tests) = 5,506** = measured.
+
+**The 7 standing failures, named — all present in BOTH sets:** `test_fix181`
+inflight-orphan **LIMIT-vs-MARKET (the known T3 item the card names)** ·
+`test_closure_source_contract` vocabulary scanner (offender
+`scripts/backfill_closure_source_w8.py:92`, unrelated — its regex matches only
+`OWN_SL|OWN_TGT|OWN_EOD|OWN_KILL|EXTERNAL_UNATTRIBUTED`, none of which this change
+introduces) · `test_main` ×4 (3 × `TestContinueFromGate` — the IA-P2-01
+production-unreachable gate — + 1 × BL15) · `test_phase17_batch2` flask
+max-content-length. *(Identical to the #2b run's 7 by name — a cross-check, not a
+dependency: every number here was measured this session.)*
+
+⚪ **The documented q9 consecutive-losses oscillator did not fire in either run** — absent
+from both failure sets. A calm pair; no flake needed naming.
+
+⚠️ **METHOD NOTE, recorded because it is a standing trap:** the campaign invocation is the
+**narrow** `tests/unit tests/integration`, **not** `run_tests.py`, which runs the full tree
+including the 44 never-gated `tests/crash_test/` files — the ones that `load_dotenv()` the
+real `.env` and carry the uncovered subprocess hole. Harmless in a worktree (which has no
+`.env`), **not** in the main tree. A wide run was started here, stopped, and its partial
+output deleted rather than left to be mistaken for a baseline.
+
+### R6b. Revert check — **done, not asserted**
+`git revert --no-commit 42db913` in a scratch worktree applied cleanly (exit 0) and the
+resulting tree diffs to **ZERO BYTES** against the pre-#2c-R tree `0a9e13a`
+(`git diff 0a9e13a | wc -c` = **0**), with exactly the three expected paths showing as
+reverted. The change is additive inside one branch of one method plus one docstring; no
+extracted helper, no moved code, no renamed symbol.
+
+## R7. ⭐ STEP-1b — A NEW DISCLOSURE, REPORTED AND **NOT** PATCHED
+
+The card asked whether the same Audit 3.1 constraint bites `kill_switch`'s own emergency
+sites. **It does — measured at source, all three of its adapter sell sites:**
+
+- `capital/kill_switch.py` places at **`:1629`** (local pass), **`:1708`** (broker sweep)
+  and **`:1789`** (the retry loop); the intent is mapped just before the first two at
+  `:1599` / `:1698` via the shared `PRODUCT_TO_INTENT`, in which **`CO → "COVER_ORDER"`**.
+- **`variety` appears NOWHERE in `capital/kill_switch.py`** (grepped; zero hits) ⇒ it
+  always defaults to `"regular"`.
+- ⇒ with the intraday coercion **off**, it would send a reverse order with
+  `product="CO", variety="regular"` — **the order Audit 3.1 says the broker rejects**;
+  with the coercion **on** (today) it sends **MIS** — accepted, doesn't net, **naked MIS
+  short**: the identical defect the reconciler just fixed.
+- ⛔ **NOT patched here** (the twice-earned *report, don't expand* rule). **It needs its
+  own card.**
+
+⭐ **Two corollaries worth carrying:**
+1. **`kill_switch` is BETTER PLACED than the reconciler for Option 2** — its open-trades
+   query already joins `orders … leg IN ('ENTRY','CO')` (`:1531`) and `orders.order_id`
+   **is** the broker id, so the CO parent bracket id is **one column away**.
+2. ✅ **`eod_squareoff` is CLEAN** — its position map is only a qty **filter**, and its
+   trade-driven pass already does `cancel_order(entry_broker_id, variety="co")`
+   (`:1189`, rationale at `:1037`/`:1162`). **It is the reference implementation** the
+   other two sites should mirror.
+
+## R8. OPTION 2 — PARKED, WITH AN EXPLICIT UNPARK TRIGGER
+
+**Option 2 = parent-order-id lookup → `cancel_order(variety="co")` on the parent bracket.**
+It is the *correct* close for a CO position, and it remains **BACKLOG, not built**.
+
+- **UNPARK TRIGGER (either):** CO trading is **intentionally enabled**, **OR** the broker
+  layer provides **reliable parent-order lookup**.
+- **OWNER: the CO protocol surface — ⛔ NOT the reconciler.** Per §R7 corollary 1, the
+  natural home is `kill_switch` (the parent id is one column from a query it already runs);
+  the reconciler's CHECK2 path structurally cannot reach a parent id.
+- **Also owed to it:** the CHECK6/FIX-B alert ceiling of §R4 (bounding belongs to CHECK6).
+
+## R9. THE RECORD-ONLY ITEM CARRIED FORWARD (ChatGPT Q4)
+
+**`variety` is never validated against `product`** — anywhere. `place_order` defaults
+`variety="regular"` and `_validate_place_order` checks side/qty/price/trigger only. This
+is an **independent future hardening item**, carried forward deliberately with **no guard
+built** in this card (a guard here would be scope creep into the placement path).
+
+## R10. PAPER / LIVE PARITY (#5/#8)
+
+One shared code path, both modes, one commit; the targeted tests are mode-agnostic.
+⚠️ **Parity is proven by TARGETED TESTS, never by a paper drill** — paper nets by
+**symbol** while live Kite nets per **(symbol, product)**, so a paper drill of this class
+is **vacuously green** (#2c Step-1 finding (f), now a standing rule). This is the class's
+first build to be validated entirely under that rule.
+
+## R11. LABEL HONESTY & GATES
+
+- **CO is DOUBLY DORMANT**: never used (805/805 regular) **and** `force_intraday_only:
+  true` coerces non-INTRADAY back inside `place_order`. A HARD_KILL has also **never
+  fired**.
+- ⇒ **Label ceiling: this can only reach `<BUILT>` → `<DEPLOYED>` + dormant-armed.
+  `<VERIFIED LIVE>` requires a real CO position under a real HARD_KILL** and will not be
+  claimed on anything less.
+- ⛔ **Nothing deploys or pushes from this build.** It does not gate the flip, the
+  observation day, or the deploy sequence.

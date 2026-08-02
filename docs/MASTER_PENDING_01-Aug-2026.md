@@ -219,9 +219,43 @@ expansion.**
 > caller never passes `variety`, `place_order` defaults `"regular"`, and **nothing
 > validates variety-against-product**.
 > ⛔ **NOT a new register item** — like #2b this is A4's own site, and A4 is debt-ledger #2
-> counted ONCE. **231 stands.** 🔴 Redesign **#2c-R** is with ChatGPT for red-team; ⛔
-> neither candidate architecture has been started. ⛔ **Never "fix" this by mapping the
-> intent.** ⛔ #2c never touched Monday's critical path.
+> counted ONCE. **231 stands.** ~~🔴 Redesign **#2c-R** is with ChatGPT for red-team; ⛔
+> neither candidate architecture has been started.~~ **→ #2c-R IS NOW BUILT, see below.**
+> ⛔ **Never "fix" this by mapping the intent.** ⛔ #2c never touched Monday's critical path.
+
+> ✅ **#2c-R — ORPHAN-CO REFUSE-AND-ESCALATE `<BUILT — NOT DEPLOYED, NOT PUSHED>`
+> (02-Aug `42db913` code+15 tests, `[stamp commit]` record+stamps).** Option 1 of the
+> red-team, binding. Under an active HARD_KILL the reconciler's CHECK2 orphan path now
+> **REFUSES** to flatten a **CO** position and escalates instead of selling: **no order of
+> any kind is placed**, a CRITICAL names the reason (Audit 3.1 — a CO position cannot be
+> squared by a reverse order; this path has no parent bracket id; operator/EOD action
+> required), disposition `INFLIGHT_ORPHAN_REFUSED_CO` with **`success=False`** (a refusal
+> is correct-but-INCOMPLETE, unlike the CNC spare's correct FINAL state).
+> ⭐ **Because CO IS a member of the shared `EMERGENCY_FLATTEN_PRODUCTS` (read by FIVE
+> sites), the refusal is a site-LOCAL branch placed BEFORE the membership test — ⛔ CO was
+> NOT removed from the constant, which would have silently changed four other sites.**
+> `core/constants.py` **byte-untouched**, as are `kill_switch`/`eod_squareoff`/adapter/
+> resolver. **0 status literals · 0 `holdings()` ⇒ Q4 ordering rule intact, D-8 still
+> blocked.** RED-on-old 11F/4P; **regression NEW-failure set EMPTY** (base measured fresh,
+> same session + window); **revert proven to ZERO BYTES** against `0a9e13a`.
+> ⚠️ **NEW MEASUREMENT — the alert is BOUNDED, and it bounds #2b too:** CHECK6's FIX-B
+> (wired, `main.py:2739`) marks a `PENDING_FILL` trade FAILED + releases its reservation on
+> the **3rd consecutive cycle**, after which the position routes to
+> `_check2_orphan_adoption` (once-a-day suppression, `HUMAN_ORDER` label) ⇒ **~3 CRITICALs,
+> not an unbounded stream**, while the position is still live at the broker. **#2b's CNC
+> spare inherits the same ceiling** — its "re-alerts EVERY cycle" note is corrected, not
+> left standing. ⛔ Disclosed, NOT patched (bounding is CHECK6's).
+> ⭐⭐ **STEP-1b — A NEW DISCLOSURE, REPORTED NOT PATCHED, NEEDS ITS OWN CARD: `kill_switch`
+> HAS THE SAME CO DEFECT AT ALL THREE OF ITS SELL SITES** (`:1629` local · `:1708` sweep ·
+> `:1789` retry). It maps CO→`COVER_ORDER` and **`variety` appears NOWHERE in the file** ⇒
+> coercion OFF sends the reverse order Audit 3.1 says the broker **rejects**; coercion ON
+> (today) sends **MIS** — accepted, doesn't net, **naked MIS short**. ✅ **`eod_squareoff`
+> is CLEAN and is the REFERENCE implementation** (`cancel_order(entry_broker_id,
+> variety="co")` `:1189`).
+> ⛔ **NOT a new register item** — A4's own site, counted ONCE. **231 stands.**
+> ⛔ Label ceiling: **CO is doubly dormant ⇒ `<VERIFIED LIVE>` is unreachable** without a
+> real CO position under a real HARD_KILL. ⛔ #2c-R never touched Monday's critical path.
+> Record: `docs/audit/reconciler_product_filter_build_02aug2026.md` §R1–R11.
 
 > **⭐ THIS IS THE ONE OVERLAP BETWEEN §A AND §B. IT IS DEBT-LEDGER RANK #2 AND IT IS
 > COUNTED EXACTLY ONCE — HERE.** §B#2 is a cross-reference to this entry, not a second item.
@@ -460,6 +494,7 @@ ranking does not hide them:**
 | **the ₹0.29 SL** | ⛔ **NO TRIGGER — it is a curiosity, not a defect.** S1 §7: *"If nothing ever fires it should be DELETED rather than parked forever — **say so out loud at the next refresh** rather than carrying it a seventh time."* ⇒ ⭐ **SAYING IT OUT LOUD, as instructed: this refresh carries it again with no trigger and no firing. It is the one parked item whose disposition is DELETE-OR-KEEP and it is owed to Rama.** *(⛔ the exact carry-number is NOT asserted — S1 gives the instruction, not a running count, and this file does not invent one.)* |
 | **scanner v1/v2 work** | **the entry logic materially changes (post-M-S4)** |
 | **the tick→candle feed** | **a live SAFETY dependency on ticks is identified — ⛔ NONE EXISTS TODAY.** ⭐ **IA-P1-06 sharpens this:** dormancy is **UN-ENFORCED** — `order_placer.py:3393` calls `live_feed.subscribe(...)` on the exit-retry path and the candle-persist consumer is armed at every boot |
+| ⭐ **#2c-R OPTION 2 — parent-order-id lookup → `cancel_order(variety="co")`** (the *correct* close for a CO position; #2c-R shipped Option 1, refuse-and-escalate, as the permanent safe fix) — ⛔ **a CROSS-REFERENCE, not an 8th S1 item: this is A4's own parked half, counted ONCE in §A4. 231 stands, and S1 §7's original count of 7 is unchanged.** **OWNER: the CO protocol surface — ⛔ NOT the reconciler** (CHECK2 structurally cannot reach a parent id; `kill_switch` can — its open-trades query already joins `orders … leg IN ('ENTRY','CO')` `:1531` and `orders.order_id` IS the broker id). Carries two riders: the §R7 `kill_switch` three-site CO defect (**needs its own card**) and the §R4 CHECK6/FIX-B alert ceiling | **EITHER: CO trading is INTENTIONALLY ENABLED · OR the broker layer provides RELIABLE PARENT-ORDER LOOKUP.** ⛔ Neither is true today (CO doubly dormant) |
 
 ## §C.8 — ⭐⭐ THE ENTRIES FINDING — 📌 R1's STANDING NOTE (S1 §8)
 
