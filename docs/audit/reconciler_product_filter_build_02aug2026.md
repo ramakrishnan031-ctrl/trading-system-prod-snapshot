@@ -14,7 +14,31 @@ ordering rule. 🔴 **Which deploy it rides is Rama's ruling (R4) — see §6.**
 | Callers of `_flatten_broker_position` | **Exactly ONE** (the check2 kill branch). That is what makes a filter in the caller equivalent to a filter in the sell itself — and it is now **pinned by a test** so a second caller cannot appear silently |
 | Product source (G3) | `bp` is a **RAW BROKER row**: `zerodha_adapter.Position.product` (`:185` "broker code") is Kite's `net[].product` passed straight through (`:1235`). Predicate reads the raw broker string — validated independently of the local-DB vocabulary, exactly like ledger #2's SITE 2. ⛔ Deliberately NOT routed through `_PRODUCT_TO_INTENT` (which maps LOCAL products) |
 | Broker domain | Kite equities {MIS, CNC, NRML, CO(+MTF)}; anything beyond-set hits the loud-unknown path by construction |
-| **Disposition recording (the card's step 2)** | **VERIFIED — the card's assumption holds.** This path records the orphan **nowhere**: no per-symbol suppression set (unlike `_check2_orphan_adoption`'s once-a-day `_human_order_symbols`), no `handled` mark, no resolve write. A spared CNC row is therefore **re-seen and re-reported every cycle**. Pinned by test |
+| **Disposition recording (the card's step 2)** | **VERIFIED — the card's assumption holds.** This path records the orphan **nowhere**: no per-symbol suppression set (unlike `_check2_orphan_adoption`'s once-a-day `_human_order_symbols`), no `handled` mark, no resolve write. ~~A spared CNC row is therefore **re-seen and re-reported every cycle**.~~ Pinned by test. ⛔ **AMENDED 02-Aug (#2c-R) — see the CHECK6 amendment note directly below: within this method the statement is exact, but the CADENCE IT IMPLIES IS BOUNDED from outside it** |
+
+> ### ⛔ AMENDED 02-Aug (#2c-R) — **"RE-ALERTS EVERY CYCLE BY DESIGN" IS BOUNDED, AND**
+> ### **THE BOUND COMES FROM OUTSIDE THIS METHOD.**
+> Measured 02-Aug, **disclosed, NOT patched.** `_check6_orphan_orders` (**wired in
+> production**, `main.py:2739`) walks `PENDING_FILL` trades whose ENTRY order is absent
+> from the broker's open orders — the same shape that reaches CHECK2 — and its **FIX-B**
+> counter marks the trade **FAILED and releases its reservation on the 3rd consecutive
+> cycle**. CHECK6 runs **after** CHECK2 in a cycle, so cycle 3 still alerts; from cycle 4
+> the caller's `if inflight:` (`:930`) is False and the **same broker position routes to
+> `_check2_orphan_adoption`** — once-a-day per-symbol suppression, and it can file the
+> position as `HUMAN_ORDER`.
+> ⇒ **the spare yields ~3 CRITICALs, not an unbounded stream**, while the delivery
+> position is **still live at the broker** and **its capital has been released**.
+> ⭐ **This applies to the CNC spare exactly as it does to #2c-R's CO refusal** — the claim
+> is corrected here rather than left standing, in both records.
+>
+> ➡️ **FORWARD POINTER (do not re-derive):** capital-released-while-live and the
+> `HUMAN_ORDER` misfiling are **NOT this item's defect and are NOT repaired here** — they
+> are the cancel-race's endpoint reached by a **second, independent** path, and they are
+> **registered to debt-ledger #3 (IA-P5-02 family)**, whose scope note was expanded for
+> exactly this. ⛔ #3's **ordering is unchanged**; **not a new register row — 231 stands.**
+> 🔴 **Post-flip, a CNC delivery holding spared by #2b follows exactly this path**;
+> reachability is **latent-on-latent** (HARD_KILL **and** an in-flight entry **and** a
+> fill; HARD_KILL has never fired) ⇒ **documented, NOT flip-blocking.**
 | Persistence | `ReconciliationAction` tier ≠ COSMETIC ⇒ one `reconciliation_log` row per cycle (`:1055-1069`). No CHECK constraint on `check_name`; **schema unchanged, no migration** |
 | Closure-classifier safety | `reports/daily_trade_review._ORPHAN_CHECKS` (`:93-94`) is an explicit **set**, not a substring match. The new `INFLIGHT_ORPHAN_SPARED_DELIVERY` is **not** in it, so a spare is never classified `ORPHAN_RECOVERY` — correct: a spare closes nothing. Pinned by test |
 
@@ -369,6 +393,19 @@ can label it `HUMAN_ORDER` (IA-P5-02's class).
 ⇒ **the operator gets ~3 CRITICALs, not an unbounded stream, while the CO position is
 still live at the broker and its capital has been released.** A `PENDING` (not
 `PENDING_FILL`) trade is outside CHECK6's query and does re-fire unbounded.
+
+### ➡️ FORWARD POINTER — where that downstream consequence is OWNED (do not re-derive)
+The two things that follow the bound — **capital released while the position is still
+live at the broker**, and **the system's own position filed as `HUMAN_ORDER`** — are
+**NOT this item's defect and are NOT repaired here.** They are the *same endpoint* as the
+cancel-race, reached by a *second, independent* path, and they are **registered to
+debt-ledger #3 ("Fill/cancel seam truth"), IA-P5-02 family**, whose scope note was
+expanded for exactly this on 02-Aug. ⛔ **#3's ordering is unchanged** and it is **not a
+new register item — 231 stands.** 🔴 **Live relevance: post-flip, a CNC delivery holding
+spared by #2b follows exactly this path.** Reachability is **latent-on-latent** (needs a
+HARD_KILL **and** an in-flight entry **and** a fill; HARD_KILL has never fired) ⇒
+**documented, NOT flip-blocking.** *A future reviewer should not have to re-derive this
+relationship: it was measured 02-Aug and it lives in §B.1 row 3.*
 
 ⭐ **This is PRE-EXISTING and SHARED: #2b's CNC spare inherits exactly the same ceiling**,
 so that record's "re-alerts EVERY cycle BY DESIGN" is **bounded too** — corrected here
