@@ -271,6 +271,49 @@ superseded text is quoted here in full.**
   retest block) — the approved edit it was waiting for. Registry and code amended in
   the same commit as this note.
 
+**AMENDMENT B-2a — 02-Aug-2026 (ledger #2b, docs-only) — RECORD ONLY: the B-2 dispersal
+list was itself incomplete, and this completes it by MEASUREMENT. ⛔ NO effect-point
+change, NO registry change, NO code change follows from this note.**
+
+- **Why it is here:** B-2's own lesson was *"a single-chokepoint claim must be established
+  repo-wide, never file-wide"*. Its dispersal list was written from recall and reproduces
+  the very error class it names — so the error-class ledger was left incomplete. The
+  ledger-#2 build record (`buyday_filter_build_01aug2026.md` §2) opened this by noting
+  *"the B-2 amendment's `place_order()` dispersal list missed kill_switch's own two
+  adapter calls (:1549/:1609)"*. **That correction was itself short by one.**
+- **The measurement (02-Aug, HEAD `99ca2eb`). SEARCH WIDTH, stated:**
+  `grep -rn "\.place_order(" --include=*.py .` over the whole repo, then excluding
+  `tests/`, `venv/` (the kiteconnect SDK), and the adapter's own `def place_order`.
+  **19 in-service `adapter.place_order()` call sites across 8 modules:**
+
+  | module | sites (HEAD line nos.) | in B-2's list? |
+  |---|---|---|
+  | `orders/order_protocol_limit.py` | :211 · :382 · :466 · :580 | ✅ all 4 |
+  | `orders/order_protocol_co.py` | :123 · :200 | ✅ both |
+  | `orders/eod_squareoff.py` | :1293 · :1543 · :1656 | ✅ (named as "×3") |
+  | `orders/order_placer.py` | :3928 (`_emergency_market_exit`) | ✅ — the A2.3 dormant tripwire |
+  | `capital/kill_switch.py` | :1629 local pass · :1708 broker sweep · **:1789 retry loop** | ❌ **all 3 missed** |
+  | `orders/order_reconciler.py` | :1938 · :2188 · :2857 · :3066 | ⚠️ **1 of 4** ("the reconciler's G5b direct call") |
+  | `orders/sl_breach_monitor.py` | :221 | ❌ missed |
+  | `orders/structure_exit_manager.py` | :445 | ❌ missed |
+
+  (`scripts/t2_cnc_gtt_realtest.py` ×4 is an operator script, not the service — excluded
+  from the count, named so the exclusion is a decision and not an oversight.)
+- **The kill_switch detail the #2 record owed, corrected:** the record named **two**
+  sites; there are **three**. At the then-deployed `297b587` they were :1540 · :1600 ·
+  **:1681** (the record's ":1549/:1609" carries the same +9 line-shift its §1 documents);
+  at HEAD they are :1629 · :1708 · **:1789**. The third is the **retry pass** inside
+  `_exit_all_trades_indestructible` — a fourth sell-under-kill line, on the same
+  `intent`-carrying path as :1629. ⭐ Q4 note: it is **already product-correct** — it
+  re-fires with the `intent` its first pass derived, and after ledger #2 a CNC row never
+  reaches the retry list, because it is spared before the first attempt. Nothing owed.
+- **Why NO effect-point moves:** kill-flatten sells go through the adapter **directly**,
+  by design; the telemetry counts `placer.place()` — entry-placement requests — on
+  purpose, and the reconciler is counted at its own effect-point (`reconcile_once`
+  return, actions enacted), not per order. Counting these sites would double-count and
+  change what the counter MEANS. The list above is an accuracy record of where the
+  capability lives, nothing more.
+
 **Phase B constraints restated (binding, from the card):** counter = pre-allocated handle,
 single integer add, no dict-miss, no allocation, no logging, cannot raise (C4) · B2
 assertion fail-fast in dev/paper, **CRITICAL-and-continue in live** · stable census order
