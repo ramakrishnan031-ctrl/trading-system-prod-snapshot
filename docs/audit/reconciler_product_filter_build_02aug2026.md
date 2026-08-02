@@ -67,12 +67,74 @@ dict before any check runs**. Consequences, stated plainly:
 ### 2b. ⚠️ DISCLOSED, NOT PATCHED — `intent` is hardcoded INTRADAY at the sell
 `_flatten_broker_position` passes `intent="INTRADAY"` unconditionally. Post-filter the
 reachable products are MIS, CO and unknown/NULL — right for MIS, and the deliberate loud
-fallback for unknown — but **a CO position would be exited under an MIS intent**, the
-same H-5 wrong-product class the kill_switch sites map away via `PRODUCT_TO_INTENT`.
-This is a **fourth thing**, not one of the card's three (spare-CNC / loud-unknown /
-spared-log), so patching it here would be the silent scope expansion (G5) the card's
-OUT-list forbids. Recorded in the code docstring and here; **no CO position has ever
-reached this path**. 🔴 Owed: a ruling, not a fix-in-passing.
+fallback for unknown — but **a CO position would be exited under an MIS intent**. This is
+a **fourth thing**, not one of the card's three (spare-CNC / loud-unknown / spared-log),
+so patching it here would be the silent scope expansion (G5) the card's OUT-list forbids.
+🔴 Owed: a ruling, not a fix-in-passing.
+
+> ### ⛔ AMENDED 02-Aug (#2c Step-1) — **THIS ENTRY UNDERSTATED THE FINDING.**
+> The original text above (kept legible) read as *"CO would exit under an MIS intent, the
+> H-5 class the kill_switch sites map away via `PRODUCT_TO_INTENT`"* — which implies **a
+> mapping fix would cure it. IT WOULD NOT.** #2c was carded to do exactly that mapping;
+> its Step-1 gate measured the runtime semantics **and stopped before any edit**. What was
+> measured, with the citations:
+>
+> **(a) `intent` IS the live Kite `product` field — not a label.** `place_order` resolves
+> it through `broker/product_resolver.py:12` (`INTRADAY→"MIS"`, `DELIVERY→"CNC"`,
+> `COVER_ORDER→"CO"`) and sends it to Kite as `product=broker_code`. Three hops, no
+> branching: reconciler sell → `zerodha_adapter.place_order` `broker_code = self._pr.resolve(...)`
+> → `self._kite.place_order(..., product=broker_code, ...)`.
+>
+> **(b) ⛔ A CO POSITION CANNOT BE SQUARED OFF BY A REVERSE ORDER AT ALL** — and this repo
+> already says so. `orders/eod_squareoff.py`, the Audit-3.1 comment above `is_co`, verbatim:
+> *"CO positions cannot be squared off with a reverse MARKET -- Zerodha rejects and
+> auto-squares at 15:20 with a ₹50+GST penalty. The correct path is
+> `cancel_order(variety="co")` on the CO entry bracket; the broker collapses the bracket
+> and closes the position at market."* EOD implements precisely that — the
+> `cancel_order(entry_broker_id, variety="co")` call, gated on
+> `is_co = (order_protocol == "CO_PLUS_TGT") and (entry_variety == "co")`, with a missing
+> `entry_broker_order_id` treated as a CRITICAL that cannot proceed. ⇒ **mapping
+> CO→COVER_ORDER here would merely emit the order the broker refuses.**
+>
+> **(c) THIS PATH CANNOT REACH A PARENT ORDER ID.** Inputs are
+> `(symbol, bp, tag_prefix, trade_id)`; `bp` is a broker **position** row
+> (`symbol, qty, avg_price, product, side`) — no order id anywhere on the path.
+> ⭐ `trade_id` **is** present: the only affordance any redesign has to look one up.
+>
+> **(d) TODAY'S REAL BEHAVIOUR on a CO position, stated plainly — worse than the original
+> disclosure implied:** `product="MIS"` is **ACCEPTED** by the broker, does **NOT** net
+> against the CO position (Kite nets per `(symbol, product)`), and therefore **opens a
+> NAKED MIS SHORT while the CO position survives.** *(Nuance for the redesign: the carded
+> mapping would have converted this silent-wrong-outcome into a loud rejection — a better
+> failure MODE, but still not an exit. That is not a reason to ship it.)*
+>
+> **(e) Doubly dormant ⇒ LATENT, not live.** CO has never been used
+> (`orders/order_protocol_co.py`: *"CO never used: 805/805 regular, X6"*; declared by 12/15
+> YAMLs and discarded) **AND** `force_intraday_only: true` (`config/system_config.yaml:89`)
+> coerces every non-INTRADAY intent back to INTRADAY inside `place_order` before
+> resolution. ⇒ the carded fix would also have been **a no-op in today's configuration**,
+> whose only observable effect would be a new `WARNING` per flatten — arming silently the
+> day that breaker is flipped.
+>
+> **(f) ⭐⭐ PAPER CANNOT VALIDATE THIS CLASS — the most reusable thing Step-1 found, and a
+> STANDING RULE beyond #2c.** Paper nets by **SYMBOL** (`_paper_positions`, and
+> `get_positions` iterates `self._paper_positions.items()`); live Kite nets per
+> **(symbol, product)**. ⇒ **a paper drill of ANY product-semantics change is vacuously
+> green.** Any future work whose correctness depends on product identity must be validated
+> against live semantics or by construction — never by a paper run. Joins the
+> `paper_cannot_exercise` class.
+>
+> **(g) No `orders` row is written on this path** (RC18 — direct adapter call), so there is
+> no audit-row side effect either way. **And the variety hazard, record-only:** this caller
+> never passes `variety`; `place_order` defaults `variety="regular"` and **nothing validates
+> variety-against-product** (`_validate_place_order` checks side/qty/price/trigger only). A
+> latent hazard for **any** future non-INTRADAY intent placed at this site.
+>
+> ⇒ **#2c is CLOSED as STOPPED AT STEP-1 — a validated redesign trigger, NOT an
+> implementation failure.** The redesign is **#2c-R** (with ChatGPT for red-team). ⛔ Neither
+> candidate architecture (parent-id lookup → `cancel_order(variety="co")`, mirroring EOD's
+> proven path rather than copying it; or refuse-and-escalate) has been started.
+> ⛔ **Do not "fix" this by mapping the intent.**
 
 ### 2c. Downstream effect of the NEW `check_name` — traced, and knowingly accepted
 A new `check_name` is read by four consumers. All four were checked; **none is edited**:

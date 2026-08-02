@@ -186,8 +186,42 @@ expansion.**
 > the Mon-eve stack, or name it a documented carry-pilot blocker. It never gated the flip.
 > ⚪ **Newly disclosed, not patched** (a 4th thing, outside the filter's three): the
 > reconciler's flatten passes `intent="INTRADAY"` unconditionally ⇒ a **CO** position
-> would exit under an MIS intent (H-5 class). No CO position has ever reached it. Owed: a
-> ruling, not a fix-in-passing.
+> would exit under an MIS intent (H-5 class). ~~No CO position has ever reached it. Owed: a
+> ruling, not a fix-in-passing.~~ **→ SUPERSEDED, see #2c below.**
+
+> ⛔ **#2c — CLOSED as `<STOPPED AT STEP-1>` (02-Aug, docs-only `[this commit]`) — a
+> VALIDATED REDESIGN TRIGGER, not an implementation failure. NO CODE WAS WRITTEN.**
+> #2c was carded to map the intent (CO→COVER_ORDER) at that sell. Its Step-1 runtime-
+> semantics gate **measured all three limbs and stopped before any edit** — the card's
+> premise (*intent = a label*) was **FALSE**:
+> **(a)** `intent` **IS** the live Kite `product` field (`product_resolver`
+> INTRADAY→MIS · DELIVERY→CNC · COVER_ORDER→CO), sent as `product=`.
+> **(b)** ⛔ **Audit 3.1 — a CO position CANNOT be squared by a reverse order at all**
+> (broker rejects; auto-squares 15:20 with a **₹50+GST penalty**). The correct path is
+> `cancel_order(entry_broker_id, variety="co")` on the parent bracket — **`eod_squareoff`
+> already does exactly this.** ⇒ the carded mapping would only emit the order the broker
+> refuses.
+> **(c)** the path **cannot reach a parent order id** — inputs are `(symbol, bp,
+> tag_prefix, trade_id)` and `bp` is a broker POSITION row; ⭐ `trade_id` IS present = the
+> only affordance a redesign has.
+> **(d) 🔴 TODAY'S REAL BEHAVIOUR, worse than first disclosed:** `product="MIS"` is
+> **ACCEPTED**, does **NOT** net against the CO position, and **opens a NAKED MIS SHORT
+> while the CO position survives.**
+> **(e)** LATENT not live — **double dormancy**: CO never used (805/805 regular, X6;
+> declared by 12/15 YAMLs, discarded) **AND** `force_intraday_only: true` coerces
+> non-INTRADAY back inside `place_order` ⇒ the carded fix was also a **no-op today**, its
+> only effect a new WARNING, arming silently on the breaker flip.
+> **(f) ⭐⭐ STANDING RULE (the most reusable finding, beyond #2c): PAPER CANNOT VALIDATE
+> PRODUCT SEMANTICS** — paper nets by **SYMBOL**, live Kite nets per **(symbol, product)**
+> ⇒ **a paper drill of any product-semantics change is vacuously GREEN.** Validate against
+> live semantics or by construction, never by a paper run.
+> **(g)** no `orders` row is written here (RC18); and **record-only latent hazard:** this
+> caller never passes `variety`, `place_order` defaults `"regular"`, and **nothing
+> validates variety-against-product**.
+> ⛔ **NOT a new register item** — like #2b this is A4's own site, and A4 is debt-ledger #2
+> counted ONCE. **231 stands.** 🔴 Redesign **#2c-R** is with ChatGPT for red-team; ⛔
+> neither candidate architecture has been started. ⛔ **Never "fix" this by mapping the
+> intent.** ⛔ #2c never touched Monday's critical path.
 
 > **⭐ THIS IS THE ONE OVERLAP BETWEEN §A AND §B. IT IS DEBT-LEDGER RANK #2 AND IT IS
 > COUNTED EXACTLY ONCE — HERE.** §B#2 is a cross-reference to this entry, not a second item.

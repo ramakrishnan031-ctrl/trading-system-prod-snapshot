@@ -2146,13 +2146,43 @@ class OrderReconciler:
         applies the EMERGENCY_FLATTEN_PRODUCTS filter before calling; a test pins
         that it stays the only caller. A NEW caller must apply the filter too.
 
-        ⚠️ DISCLOSED, NOT CHANGED (#2b was scoped to the product filter): `intent`
-        below is hardcoded INTRADAY. Post-filter the reachable products are MIS,
-        CO and unknown/NULL, so this is right for MIS and is the deliberate loud
-        fallback for unknown — but a CO position would be exited under an MIS
-        intent, the H-5 wrong-product class the kill_switch sites map away via
-        PRODUCT_TO_INTENT. Reported for a separate ruling; no CO position has
-        ever reached this path.
+        ⚠️⚠️ DISCLOSED, NOT CHANGED — AND ⛔ A MAPPING FIX CANNOT CURE IT.
+        `intent` below is hardcoded INTRADAY. #2b reported this as "a CO position
+        would exit under an MIS intent", which understated it; #2c's Step-1
+        (02-Aug, read-only) measured the real shape and STOPPED before editing:
+
+          (a) `intent` IS the live Kite `product` field, not a label —
+              place_order resolves it via product_resolver (INTRADAY→MIS,
+              DELIVERY→CNC, COVER_ORDER→CO) and sends it as `product=`.
+          (b) ⛔ Audit 3.1: a CO position CANNOT be squared off by a reverse
+              order at all — the broker rejects it and auto-squares at 15:20
+              with a ₹50+GST penalty. The correct path is
+              `cancel_order(entry_broker_id, variety="co")` on the parent
+              bracket, which is what EOD already does (eod_squareoff.py: the
+              Audit-3.1 comment above `is_co`, the cancel call, and the
+              missing-entry-id CRITICAL). So mapping CO→COVER_ORDER here would
+              merely emit the order the broker refuses.
+          (c) THIS PATH CANNOT REACH A PARENT ORDER ID. Inputs are (symbol, bp,
+              tag_prefix, trade_id); `bp` is a broker POSITION row (symbol, qty,
+              avg_price, product, side). `trade_id` IS present — it is the only
+              affordance any redesign has to look one up.
+          (d) TODAY'S REAL BEHAVIOUR on a CO position, stated plainly: product
+              "MIS" is ACCEPTED by the broker, does NOT net against the CO
+              position (Kite nets per (symbol, product)), and therefore opens a
+              NAKED MIS SHORT while the CO position survives.
+          (e) Doubly dormant, so this is LATENT, not live: CO has never been
+              used (order_protocol_co.py — 805/805 regular, X6; declared by
+              12/15 YAMLs and discarded), AND force_intraday_only: true coerces
+              every non-INTRADAY intent back to INTRADAY inside place_order.
+          (f) ⚠️ PAPER CANNOT VALIDATE THIS CLASS: paper nets by SYMBOL
+              (_paper_positions) while live Kite nets per (symbol, product) — a
+              paper drill of any product-semantics change is vacuously green.
+          (g) This caller never passes `variety`; place_order defaults
+              "regular" and nothing validates variety-against-product. Latent
+              hazard for ANY future non-INTRADAY intent placed here.
+
+        ⇒ #2c is CLOSED as STOPPED AT STEP-1 (a validated redesign trigger).
+        ⛔ Do not "fix" this by mapping the intent. The redesign is #2c-R.
         """
         try:
             qty = abs(int(bp.qty))
