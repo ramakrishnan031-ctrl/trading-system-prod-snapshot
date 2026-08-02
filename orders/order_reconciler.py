@@ -93,7 +93,10 @@ from orders.price_math import (
 
 # FIX-166 F17: canonical copy now in core.constants
 from core.closure_source import EXTERNAL_UNATTRIBUTED, OWN_CLOSURE_SOURCES
-from core.constants import PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT
+from core.constants import (
+    EMERGENCY_FLATTEN_PRODUCTS as _EMERGENCY_FLATTEN_PRODUCTS,
+    PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT,
+)
 from orders.closure_classifier import Evidence, OurLeg, classify
 
 # Terminal order statuses — never overwritten by a cancel/sweep (FIX-186).
@@ -2003,6 +2006,9 @@ class OrderReconciler:
         must not survive the kill, so we flatten it here as a backstop to the
         kill_switch broker-position sweep.
 
+        Q4 / ledger #2b: "the position must not survive the kill" is narrowed to
+        INTRADAY products only — see the filter below.
+
         Otherwise -> the normal fill path (order_monitor) will transition this
         trade to OPEN within a cycle or two; we do NOT act destructively on a
         transient state. No scary CapitalDriftDetected for a known in-flight trade.
@@ -2015,6 +2021,80 @@ class OrderReconciler:
             kill_active = False
 
         if kill_active:
+            # ── Q4 / ledger #2b — THE BUY-DAY PRODUCT FILTER ────────────────
+            # The reconciler's own sell-under-kill site: the third site the
+            # ledger-#2 build disclosed but did not patch (build record §2).
+            # SAME root cause, SAME cure, SAME single vocabulary as the two
+            # kill_switch sites — the Q4 invariant is "no live INTRADAY
+            # position", NOT "no live broker position", so a delivery (CNC)
+            # position SURVIVES a HARD_KILL (Rama, 30-Jul).
+            #
+            # G3: `bp` is a RAW BROKER row — the adapter passes Kite's own
+            # `product` string straight through (zerodha_adapter Position
+            # :1235) — so the predicate is validated against the BROKER
+            # vocabulary, independently of the local-DB one. Deliberately NOT
+            # routed through _PRODUCT_TO_INTENT, which maps LOCAL products.
+            raw_product = str(getattr(bp, "product", "") or "").strip().upper()
+            if raw_product == "CNC":
+                # SPARED. ⛔ Deliberately recorded as handled/resolved NOWHERE:
+                # this row is STILL an orphan and the NEXT cycle must see it
+                # again. This path carries no per-symbol suppression set (unlike
+                # _check2_orphan_adoption's once-a-day human-order set), so the
+                # CRITICAL re-fires every cycle for as long as the kill is active
+                # and the position is held. That is the correct loud behaviour,
+                # NOT spam to be silenced — a delivery position surviving a kill
+                # is exactly what an operator must keep being told about.
+                #
+                # ⚠️ The per-product-row hazard (ledger #2) is upstream of this
+                # site and PRE-EXISTING: the cycle's snapshot is symbol-keyed
+                # ({p.symbol: p} at :863), so a same-symbol MIS row is already
+                # collapsed away by the broker-position dict before any check
+                # runs — sparing here suppresses nothing that the snapshot had
+                # not already dropped. The kill_switch broker sweep, which reads
+                # per (symbol, product) rows, is what still flattens that MIS
+                # row. Not repaired here: re-keying the snapshot changes checks
+                # 1-5 too and is outside this filter's scope.
+                self._log.critical(
+                    "CHECK2 INFLIGHT_ORPHAN + HARD_KILL: SPARED delivery position "
+                    "%s qty=%d trade=%s (broker product=CNC) — HARD_KILL flattens "
+                    "intraday only (Q4); site=reconciler_check2",
+                    symbol, bp.qty, trade_id,
+                )
+                return ReconciliationAction(
+                    check_name="INFLIGHT_ORPHAN_SPARED_DELIVERY",
+                    tier="CRITICAL",
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    description=(
+                        f"In-flight {symbol} qty={bp.qty} filled at broker during "
+                        f"HARD_KILL with broker product=CNC; SPARED — delivery "
+                        f"survives the kill (Q4). Still an orphan: re-reported "
+                        f"every cycle until it is resolved"
+                    ),
+                    action_taken="none (delivery spared under Q4)",
+                    success=True,
+                )
+            if raw_product not in _EMERGENCY_FLATTEN_PRODUCTS:
+                # NULL / NRML / anything unrecognised: FLATTEN + CRITICAL (G2 —
+                # never soften, never silently spare the unknown). ONE emitter,
+                # shared with both kill_switch sites (no second definition); its
+                # `site=` parameter is the designed discriminator. self._ks is
+                # non-None here by construction (kill_active implies it).
+                try:
+                    self._ks._alert_unknown_product(
+                        site="reconciler_check2",
+                        symbol=symbol,
+                        raw_product=raw_product,
+                        qty=abs(int(bp.qty or 0)),
+                        trade_id=trade_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 — must still be LOUD
+                    self._log.critical(
+                        "CHECK2 INFLIGHT_ORPHAN + HARD_KILL: UNKNOWN PRODUCT %s on "
+                        "%s (qty=%d, trade=%s) — flattening loudly; shared unknown-"
+                        "product emitter unavailable: %s",
+                        raw_product or "<NULL>", symbol, bp.qty, trade_id, exc,
+                    )
             self._log.critical(
                 "CHECK2 INFLIGHT_ORPHAN + HARD_KILL: %s qty=%d trade=%s — entry "
                 "filled at broker during/after kill; FLATTENING",
@@ -2059,6 +2139,20 @@ class OrderReconciler:
         FIX-181: flatten a broker position with a marketable LIMIT (LTP ± buffer,
         adapter snaps to tick) so it fills but caps slippage; MARKET fallback if
         no LTP. Returns True if an order was placed. Best-effort — never raises.
+
+        ⛔ Q4 / ledger #2b — PRECONDITION, enforced by the caller, not here: this
+        function SELLS, so it must never be reached for a delivery (CNC) position
+        (delivery survives a HARD_KILL). Its ONE caller, _check2_inflight_orphan,
+        applies the EMERGENCY_FLATTEN_PRODUCTS filter before calling; a test pins
+        that it stays the only caller. A NEW caller must apply the filter too.
+
+        ⚠️ DISCLOSED, NOT CHANGED (#2b was scoped to the product filter): `intent`
+        below is hardcoded INTRADAY. Post-filter the reachable products are MIS,
+        CO and unknown/NULL, so this is right for MIS and is the deliberate loud
+        fallback for unknown — but a CO position would be exited under an MIS
+        intent, the H-5 wrong-product class the kill_switch sites map away via
+        PRODUCT_TO_INTENT. Reported for a separate ruling; no CO position has
+        ever reached this path.
         """
         try:
             qty = abs(int(bp.qty))
