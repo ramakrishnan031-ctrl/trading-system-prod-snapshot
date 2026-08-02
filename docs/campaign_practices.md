@@ -16,6 +16,17 @@ that incident**, because a rule without its scar gets argued away.
 > cross-references. Byte budgets still apply. **If this rule and the count ever conflict,
 > REPORT it — never resolve it silently.**
 
+> ## 🔒 THE DOCUMENTATION THREAD IS **CLOSED** as of 02-Aug-2026
+> Four consecutive refinement rounds produced this file, each smaller than the last. **The
+> architecture is now sound and is not to be re-opened for polish:**
+> `MASTER_PENDING` = **index** · `docs/audit/` = **evidence** · this file = **the process
+> handbook** · **§R** = the accepted-risk register · **SHA-pinned citations** = the
+> authority chain.
+> ⛔ **Further additions land ONLY when a NEW INCIDENT earns a rule — not as refinement
+> passes.** A fifth polishing round would be process work displacing ledger work, which is
+> the failure mode this closure exists to prevent.
+> ⇒ **The next work is LEDGER work.**
+
 ---
 
 ## 0. THE DOCUMENTATION RULE (adopted 02-Aug-2026)
@@ -186,6 +197,30 @@ condition that would REOPEN it**.*
 - ⛔ **Never invent a citation.** If a record is missing, **say so in the entry** — an
   honest "no written record; rests on X" is usable; a fabricated pointer is not.
 
+**CITATION FORMAT:** `<file> §<section> @ <SHA>` — **the commit SHA at which the acceptance
+was made**, determined from git (`git log -S`), **never assigned from memory** (§M3
+applies to our own entries first).
+⭐ **Why the SHA:** it pins the exact text relied upon **at acceptance time**, permanently
+and verifiably. Build records **do** get amended later; when that happens git shows the
+divergence on demand. That is the *"did this citation merely exist, or was it
+revalidated?"* distinction — **solved by construction rather than by attestation.**
+
+> ### ⛔ REJECTED OPTION — a verification TIMESTAMP beside each citation (02-Aug-2026)
+> Proposed (ChatGPT, 16:10) as an alternative to the SHA: record *when* each citation was
+> last verified. **Declined, and recorded here so it is not re-litigated:**
+> - **it decays** — *"verified 02-Aug"* tells a reader in November nothing about whether
+>   the target still says that;
+> - **it implies a revalidation CADENCE nobody has committed to and no one owns** — an
+>   unmet implied obligation is worse than an absent one;
+> - **a stale "revalidated" stamp asserts currency it does not have** — the same
+>   false-claim class this campaign exists to remove (cf. **D4**: `<DEPLOYED>` is not
+>   evidence);
+> - ⭐ **the SHA subsumes the intent and does it better: a timestamp cannot tell you
+>   whether the target CHANGED; a SHA can.**
+>
+> If periodic revalidation is ever genuinely wanted, it is **a scheduled task with a named
+> owner** — not a field on a risk entry.
+
 ---
 
 ### AR1 · GATE-Q3 — the tradeless-day MISMATCH is KEPT, not suppressed
@@ -195,9 +230,9 @@ condition that would REOPEN it**.*
 - **Reasoning:** the line is **truthful** — *"nothing acted today"* is exactly G9's
   question being answered daily. Suppressing it would reclassify real information away.
 - **Who / when:** **Rama, 01-Aug-2026** — he accepted all 7 gate recommendations.
-- 📄 **SOURCE:** `docs/audit/effect_verification_contract_01aug2026.md` **§A2.4** (the
+- 📄 **SOURCE:** `docs/audit/effect_verification_contract_01aug2026.md` **§A2.4 @ `a5c3704`** (the
   zero-trade-day rule) + its **Q-table row Q3**; the acceptance itself is
-  `docs/audit/effect_telemetry_phaseB_build_01aug2026.md`, **opening status line** —
+  `docs/audit/effect_telemetry_phaseB_build_01aug2026.md`, **opening status line @ `132e571`** —
   *"approved, all 7 recommendations accepted (Rama relayed; ChatGPT conditions binding)"*.
   ⭐ Both citations are needed: the contract alone reads as a **recommendation**, and only
   the build record shows it was **accepted**.
@@ -213,7 +248,7 @@ condition that would REOPEN it**.*
   failure sets.
 - **Who / when:** the implementer, at each regression stamp, 01–02-Aug-2026 (no separate
   ruling was sought — it is a measurement judgement, not a decision).
-- 📄 **SOURCE:** `docs/audit/effect_telemetry_phaseB_build_01aug2026.md` **§6a** (the
+- 📄 **SOURCE:** `docs/audit/effect_telemetry_phaseB_build_01aug2026.md` **§6a @ `e9abe36`** (the
   three-run oscillation + "all 3 PASS in isolation"), and **§4** for the two GONE;
   re-confirmed absent both halves in
   `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R6a**.
@@ -226,7 +261,7 @@ condition that would REOPEN it**.*
   it appears on **BOTH sides of every base/after pair**, so it **cannot mask a delta**.
 - **Who / when:** the implementer, carried from the ledger #2 build onward (01-Aug) and
   re-measured at every gate since.
-- 📄 **SOURCE:** `docs/audit/buyday_filter_build_01aug2026.md` **§4** (validation table —
+- 📄 **SOURCE:** `docs/audit/buyday_filter_build_01aug2026.md` **§4 @ `2e606ec`** (validation table —
   the adjudicated `test_fix181` LIMIT-vs-MARKET row) · re-measured both sides in
   `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R6a**.
 - ⭐ **REOPENS IF:** it ever appears on **only one side** of a pair — that makes it a delta,
@@ -241,9 +276,9 @@ condition that would REOPEN it**.*
   widening a CO card into CHECK6 is the blast-radius error the campaign exists to prevent.
 - **Who / when:** the implementer measured and disclosed it, 02-Aug-2026; ⚠️ **no Rama
   ruling was sought** — it was judged latent and registered, not decided.
-- 📄 **SOURCE:** `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R4** (the
+- 📄 **SOURCE:** `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R4 @ `bb25fa6`** (the
   measurement + the bound) and its **forward pointer** immediately after; registered in
-  `docs/MASTER_PENDING_01-Aug-2026.md` **§B.1 row 3** (scope-expansion note).
+  `docs/MASTER_PENDING_01-Aug-2026.md` **§B.1 row 3 @ `07c7fc0`** (scope-expansion note; the forward pointer landed in the same commit).
 - ⭐ **REOPENS AT:** the **first real HARD_KILL** — or sooner if delivery makes the path
   reachable, since **post-flip a CNC holding spared by #2b follows exactly this path**.
 
@@ -257,7 +292,7 @@ condition that would REOPEN it**.*
 - **Who / when:** #2c Step-1 measurement, 02-Aug-2026; the *"build it correctly anyway"*
   posture is Rama's standing direction, executed as #2c-R and carded as #2d.
 - 📄 **SOURCE:** `docs/audit/reconciler_product_filter_build_02aug2026.md` — the
-  **"AMENDED 02-Aug (#2c Step-1)"** block, finding **(e)** double dormancy — and **§R11**
+  **"AMENDED 02-Aug (#2c Step-1)"** block **@ `0a9e13a`**, finding **(e)** double dormancy — and **§R11**
   (label ceiling); register `docs/MASTER_PENDING_01-Aug-2026.md` **§A4**, the #2c entry.
 - ⭐ **REOPENS IF:** **CO trading is ever intentionally enabled** — which is also Option
   2's unpark trigger (AR7), so the two reopen together.
@@ -271,7 +306,7 @@ condition that would REOPEN it**.*
   production artifact, not by confidence.
 - **Who / when:** **Rama, 27-Jul-2026** (the label rule itself); formalised as **D4** in
   this document, 02-Aug-2026.
-- 📄 **SOURCE:** `docs/MASTER_PENDING_01-Aug-2026.md` **§2 item 3** (*"Label every item …
+- 📄 **SOURCE:** `docs/MASTER_PENDING_01-Aug-2026.md` **§2 item 3 @ `f9582e9`** (*"Label every item …
   'fixed' is retired. DEPLOYED IS NOT EVIDENCE — nine things in this system were built,
   looked alive, and had never run"*) + **§D4** of this document. Per-item ceilings:
   `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R11** (CO) and **§6** (the
@@ -284,8 +319,8 @@ condition that would REOPEN it**.*
   2** (parent-order-id lookup → `cancel_order(variety="co")`) is **parked, not abandoned**.
 - **Who / when:** the #2c-R card's HALT+RECORD step (ChatGPT Q1-Q5 binding, Rama's
   campaign), 02-Aug-2026.
-- 📄 **SOURCE:** `docs/MASTER_PENDING_01-Aug-2026.md` **§C.7** (the parked row with its
-  trigger and owner) + `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R8**.
+- 📄 **SOURCE:** `docs/MASTER_PENDING_01-Aug-2026.md` **§C.7 @ `bb25fa6`** (the parked row with its
+  trigger and owner) + `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R8 @ `bb25fa6`**.
   ⛔ **Cross-reference, not a duplicate** — the authoritative entry stays in §C.7.
 - ⚠️ **Correction to how this was handed to me — and this entry is §M3's worked example:**
   the card described it as *"Ledger #2's Option-2 parking"*. **The record says it is
