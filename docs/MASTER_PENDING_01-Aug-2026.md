@@ -224,7 +224,7 @@ expansion.**
 > ⛔ **Never "fix" this by mapping the intent.** ⛔ #2c never touched Monday's critical path.
 
 > ✅ **#2c-R — ORPHAN-CO REFUSE-AND-ESCALATE `<BUILT — NOT DEPLOYED, NOT PUSHED>`
-> (02-Aug `42db913` code+15 tests, `[stamp commit]` record+stamps).** Option 1 of the
+> (02-Aug `42db913` code+15 tests, `bb25fa6` record+stamps).** Option 1 of the
 > red-team, binding. Under an active HARD_KILL the reconciler's CHECK2 orphan path now
 > **REFUSES** to flatten a **CO** position and escalates instead of selling: **no order of
 > any kind is placed**, a CRITICAL names the reason (Audit 3.1 — a CO position cannot be
