@@ -287,9 +287,20 @@ from the live adapter's per-row return, not from a paper drill.
   will not be claimed on anything less.
 - ⛔ **Nothing deploys or pushes from this build.** It does **not** gate the flag flip
   (no delivery entries exist until the carry pilot trades).
-- 🔴 **R4 — Rama's ruling, unchanged and now unblocked in both directions:** ride the
-  Monday-evening deploy stack, **or** name it a documented carry-pilot blocker. Building
-  it now keeps both options open; it is no longer an *unbuilt* blocker either way.
+- ✅ ~~🔴 **R4 — Rama's ruling, unchanged and now unblocked in both directions:** ride the
+  Monday-evening deploy stack, **or** name it a documented carry-pilot blocker.~~
+  **ANSWERED 02-Aug ~16:32 — IT RIDES THE MONDAY-EVENING PUSH.** Rama's **R2** (deploy slot
+  = **Option Y**: Mon eve = code + docs **without** the flip flags) and **R3** (*#2b and
+  #2c-R ride the same push; they already sit in the same linear history and cannot be
+  excluded* — `campaign_practices.md` §D1, there is no partial deploy).
+  ⚠️ **NAMING COLLISION, stated so the two are never conflated:** *this record's* "R4" is
+  **#2b's own deploy-slot question** (now closed). **Rama's new R4** in
+  `docs/MASTER_PENDING_01-Aug-2026.md` §A-DEC is a **different ruling** — the
+  `cnc_gtt_placer`/`cnc_gtt_monitor` **registry edits ride the flip-flag push (Tue 4-Aug
+  eve)**. Same label, unrelated subjects.
+  ⭐ And the flip date itself moved: **the flip is now WED 5-AUG**, with **Tue 4-Aug** a
+  shakedown day carrying the first real EOD census (**R2**). Full ruling + provenance:
+  `docs/MASTER_PENDING_01-Aug-2026.md` **§A-DEC**.
 
 ---
 ---

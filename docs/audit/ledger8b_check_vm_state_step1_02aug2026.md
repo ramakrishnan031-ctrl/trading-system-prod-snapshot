@@ -4,8 +4,20 @@
 Authority: the #8b card (Step-1 measure-only gate) · the #8 build disclosure ·
 IA-XDOCS-01. Companion to ledger **#8** (the docs half, `<BUILT>` `17fb7a6`).
 
-**Status: `<MEASURED — FIX GATED, AWAITING RAMA'S GO AND THE RIDE-OR-HOLD RULING>`.**
+**Status: ~~`<MEASURED — FIX GATED, AWAITING RAMA'S GO AND THE RIDE-OR-HOLD RULING>`~~
+→ ✅ `<MEASURED — OPTION A AUTHORISED, HELD OUT OF MONDAY; STEP 2 NOT YET STARTED>`.**
 Nothing in this document changed any code. `scripts/check_vm_state.py` is **untouched**.
+
+> ## ✅ THE RIDE-OR-HOLD QUESTION IS **ANSWERED** — Rama, 02-Aug-2026 ~16:32 IST
+> - **R5(a) — APPROVED: Option A.** Remove `--reset` from `scripts/check_vm_state.py`
+>   **entirely** (§10's recommendation, ratified). Basis as measured here: **no automation
+>   caller** (§5) · **no runtime coupling** (§5) · **no second VM copy** (§6) ·
+>   `clear_kill_switch.py` already serves the use case correctly in **both** modes (§4).
+> - **R5(b) — HOLD.** ⛔ **#8b does NOT ride Monday's push.** Implement **only after
+>   Monday's critical path has finished.**
+> ⇒ **§10's open recommendation is now a RULING, and this record's question is CLOSED.**
+> ⛔ **Step 2 is authorised but NOT started**; its trigger is Monday's critical path
+> completing. Full ruling + provenance: `docs/MASTER_PENDING_01-Aug-2026.md` **§A-DEC**.
 
 ---
 
@@ -142,6 +154,9 @@ narrow the allowlist.
 exist.**
 
 ## 10. THE RECOMMENDATION CARRIED FORWARD
+
+✅ **RATIFIED 02-Aug ~16:32 — R5(a) approves Option A; R5(b) holds it out of Monday. What
+follows is the reasoning that was ratified, kept as the record of why.**
 
 - **Option A — remove `--reset`** (Step-1 verdict, unchanged): §5 shows no automation
   caller and `clear_kill_switch.py` already serves the use case correctly in **both**

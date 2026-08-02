@@ -54,7 +54,55 @@ DEPLOYED IS NOT EVIDENCE.**
 
 # §A — LIVE-TRADING THREAD (hard dates, highest priority)
 
-## ⚠️⚠️ A0 — ***THE ONE OPEN DECISION OWED TO RAMA. IT IS NOT MADE IN THIS FILE.***
+## ⭐⭐ A-DEC — **RAMA'S RULINGS R1–R5 — RATIFIED 02-Aug-2026 ~16:32 IST. AUTHORITATIVE OVER EVERY DATED REFERENCE BELOW.**
+
+> ### 📜 PROVENANCE — recorded because the authority chain matters as much as the content
+> **These are RAMA'S OWN decisions, confirmed by him directly on 02-Aug-2026 ~16:32 IST**
+> (*"I agreed/approved"*), relayed through the bridge.
+> ⛔ **That is precisely what distinguishes them from the THREE auto-filled console prompts
+> that impersonated an approval** (`campaign_practices.md` **§G1** — six occurrences, of
+> which #5 and #6 asserted rulings verbatim of the kind below) **and from ChatGPT's
+> repeated unprompted answers to Rama-only questions** (**§G2**). A ruling is authoritative
+> because of **who made it and how it arrived**, not because of what it says.
+
+| # | THE RULING |
+|---|---|
+| **R1** | ⭐ **THE FILTER-SLIP GATE IS 3-PART.** If the buy-day filter is not live, **postpone the ENTIRE flip** until the filter is available — **not** just the carry pilot. ⇒ **A0 is CLOSED** (see below) |
+| **R2** | ⭐⭐ **DEPLOY SLOT = OPTION Y.** **Mon 3-Aug eve:** push **code + docs, WITHOUT the flip flags.** · **Tue 4-Aug:** one additional **clean observation / shakedown day** — first real EOD census that evening, filter **dormant-armed**. · **Tue 4-Aug eve:** push **the flip flags alone.** ⇒ ⭐ **WED 5-AUG IS THE FLIP DAY — no longer Tue 4-Aug** |
+| **R3** | **CONFIRMED — #2b and #2c-R ride the same push.** They already sit in the same linear history and **cannot be excluded** (`campaign_practices.md` **§D1** — there is no partial deploy) |
+| **R4** | **CONFIRMED YES — the `cnc_gtt_placer` + `cnc_gtt_monitor` registry edits** (expected-dormant → expected-event-driven) ride the **SAME push as the flip flags**, i.e. **Tue 4-Aug evening** under Option Y. ⛔ Otherwise the census **mismatches by design** on the day delivery goes live |
+| **R5(a)** | **APPROVED — OPTION A: remove `--reset` from `scripts/check_vm_state.py` entirely.** Basis: no automation caller · no runtime coupling · **no second VM copy** (Rama's own VM check) · `clear_kill_switch.py` already serves the use case correctly in **both** modes |
+| **R5(b)** | ⛔ **HOLD — #8b does NOT ride Monday's push.** Implement **only AFTER Monday's critical path has finished** |
+
+⭐ **THE CALENDAR, RESTATED ONCE SO NOTHING BELOW HAS TO BE INFERRED (authority: R2):**
+| day | what happens |
+|---|---|
+| **MON 3-AUG** | observation day on `297b587` · PC gates (#1 composition boot · #2 kill drill · calm regression confirm) · observation query at close · **18:15+ push CODE + DOCS ONLY**, book flat, **Rama flattens MANUALLY** |
+| **TUE 4-AUG** | ⭐ **SHAKEDOWN DAY — a real role, not an empty gap:** one additional clean observation day, **the first real EOD census** that evening, the buy-day filter **dormant-armed**. Then **push the flip flags + the R4 registry edits** |
+| **WED 5-AUG** | ⭐ **THE FLIP** |
+
+⛔ **Every "Tue 4-Aug flip" / "the 4-Aug flip" phrasing anywhere below or in any other
+document is SUPERSEDED BY R2 and now means WED 5-AUG.** The **4-Aug date itself is NOT
+deleted** — it is reassigned to the **shakedown day + the flip-flag push**, which is why
+this is a *resequencing*, not drift. ⭐ **Where a date moved, R2 is the reason.**
+
+⛔ **These are DECISIONS, not accepted risks — they are deliberately NOT filed in
+`campaign_practices.md` §R.** If any of them later has a risk accepted as part of it, that
+becomes its own AR entry with a reopen condition and a SHA-pinned source.
+
+---
+
+## ~~⚠️⚠️ A0 — THE ONE OPEN DECISION OWED TO RAMA~~ → ✅ **CLOSED 02-Aug-2026 BY R1: THE GATE IS 3-PART.**
+
+> ✅ **ANSWERED — the THREE-part reading wins** (Rama's earlier lean, ratified): a
+> buy-day-filter slip **postpones ALL of the flip**, not merely the carry pilot. The gate
+> is *observation ran · came back clean · **filter shipped***.
+> ⭐ **Decided BEFORE the query, exactly as both sources demanded** — *"otherwise tonight's
+> result gets read through whichever answer is more convenient"* — so the reason this
+> mattered was honoured, not just the deadline. **The question below is kept legible (§G4)
+> as the record of what was decided and against what alternative; it is NOT open work.**
+
+### ~~The original open question, preserved:~~ ***Did a buy-day-product-filter SLIP postpone only the carry pilot, or all of the flip?***
 
 > ### Does a buy-day-product-filter SLIP postpone **only the carry pilot**, or **all of 4-Aug**?
 
@@ -67,10 +115,11 @@ DEPLOYED IS NOT EVIDENCE.**
 | **TWO-part gate** *(as recorded in S4/S2)* | the **four flags still flip Tue 4-Aug**; only the **carry pilot** waits. | S4 line 285–286: *"THE GATE HAS TWO PARTS TODAY, NOT THREE"* |
 | **THREE-part gate** *(Rama's earlier lean)* | a filter slip **postpones ALL of 4-Aug** — observation ran · came back clean · **filter shipped**. | S4 §7.9(f): *"tonight's instruction described the flip's hard gate as THREE-part"* |
 
-⛔⛔ **DECIDE IT BEFORE MONDAY'S CLOSE — not after the query.** Both sources give the same
-reason, and it is the whole point: *"otherwise tonight's result gets read through
-whichever answer is more convenient."* (S5:114-116; S4:1062 *"Do not resolve this by
-picking one on the day."*)
+✅ ~~⛔⛔ **DECIDE IT BEFORE MONDAY'S CLOSE — not after the query.**~~ **DONE — decided
+02-Aug, before Monday opened.** Both sources gave the same reason and it was the whole
+point: *"otherwise tonight's result gets read through whichever answer is more
+convenient."* (S5:114-116; S4:1062 *"Do not resolve this by picking one on the day."*)
+⇒ **R1 chose the THREE-part reading.**
 
 ⚠️ **THE MATERIAL FACT THE DECISION NOW HAS THAT IT DID NOT HAVE ON 31-JUL:** the
 filter's *"honest window"* was **this weekend, Sat 1-Aug / Sun 2-Aug** (S4:1054, S5:109)
@@ -116,19 +165,31 @@ observation, never as a closed one.** Cross-ref: **IA-XARCH-01 / IA-XCFG-02 / IA
 
 ---
 
-## A2 — TUE 4-AUG: THE FLAG FLIP `<PENDING>` — ⭐ the first irreversible step
+## A2 — ~~TUE 4-AUG~~ ⭐ **WED 5-AUG: THE FLAG FLIP** `<PENDING>` — the first irreversible step
 
-**SOURCE:** S4 line 283–288 · S2 §1 · S3 IA-XCFG-04.
+⭐ **DATE MOVED BY R2 (Option Y), 02-Aug — a RESEQUENCING, not drift.** 4-Aug is **not
+deleted**: it is now the **shakedown day**, and the **flip flags are pushed on Tue 4-Aug
+evening** so the flip itself lands **Wed 5-Aug**. The extra day buys **one additional
+clean observation day and the first real EOD census** before anything irreversible.
+
+**SOURCE:** S4 line 283–288 · S2 §1 · S3 IA-XCFG-04 · **the date and sequence: A-DEC R2.**
 **WHY-PENDING:** gated on A1. **The four flags** (verified consumers, IA-XCFG-04):
 `delivery_enabled` · `force_intraday_only` · `capital.conditional_allocation_enabled`
 (= **R10**, §C) · `trade_type` (strategy control).
+⭐ **RIDING THE SAME FLIP-FLAG PUSH (R4):** the `cnc_gtt_placer` + `cnc_gtt_monitor`
+registry edits (expected-dormant → **expected-event-driven**). ⛔ Without them the census
+**mismatches by design** on the very day delivery goes live.
 
-**THE HARD GATE, stated as the sources state it:**
+**THE HARD GATE — now THREE parts, all settled (R1):**
 1. **Monday's observation ran** (A1);
 2. **it came back clean** — ⛔ ANY unexplained row postpones it; it is the query's binary
    answer, **not a judgement made at 16:00 on the day**;
-3. **⚠️ and the third part is A0's open decision** — whether the filter (A4) is part of
-   this gate at all.
+3. ✅ **THE THIRD PART IS NOW DECIDED, NOT OPEN — R1: the gate IS 3-part.** **The buy-day
+   filter (A4) must be live.** ⛔ **If the filter slips, the ENTIRE flip postpones** — not
+   merely the carry pilot. *(A0 closed 02-Aug; see A-DEC.)*
+   ⚪ Status: A4 is `<BUILT — NOT DEPLOYED>` across all three sell-under-kill sites and
+   rides the **Mon 3-Aug** code push (R2/R3), so on the current plan part 3 is **satisfied
+   by Tuesday** — this gate binds only if that push slips.
 
 ✅ **CLEARED BY THE AUDIT, recorded so the flip does not re-derive it** (IA-XCFG-04,
 §B-below-line): the delivery-flag graph is **coherent, no unguarded combination**; **VM
@@ -346,7 +407,7 @@ before 18:15 · label BUILT/DEPLOYED/VERIFIED LIVE, never "fixed".
 | **5** | **Broker-truth capital escalation** (G3 non-escalating; the seed absorbs) | The kill ladder is **structurally deaf to real cash divergence**; measured **−₹637.6 crossing 3 sessions silently** | IA-P6-01 · IA-P6-02 |
 | **6** | **`eod_verify` stuck-PENDING + the inverted shadow flag** | **Blocks the authoritative-flip gate outright**; cheap to fix, high unblocking value | IA-P8-01 |
 | **7** | **Multi-authority concepts** ("held" ×4, status ×34 sites) | Every future reconciliation/delivery change pays this tax; **the fix template already exists in-repo** | IA-XARCH-03 · IA-XDUP-02 |
-| **8** | **The 03_daily runbook's raw-DB kill-clear** — ✅ **`<BUILT>` 02-Aug (ledger #8, docs-only)** | **Wrong instruction in the most-likely-open doc during an incident**; ~~2 lines~~ ⭐ **THREE DOCS, not one** — the audit scoped only `03_daily`, but a repo-wide sweep found the same raw-DB clear presented as the operator procedure in **`docs/RUNBOOK.md:47`** and **`docs/disaster_recovery.md:164`** too; **all three corrected in ONE commit** (a fix at one site would not have been permanent). All now point at **`deploy/resume.sh`** (LIVE/VM) and **`scripts/clear_kill_switch.py`** (PAPER/PC — `resume.sh` is VM-only), state **why** the raw route is wrong, and keep the old text **struck-through-but-legible**. ⭐ **The `03_daily` "Database Locked" section was the more dangerous half:** its **unconditional** `systemctl restart` HALTS the box whenever a same-day kill coincides — **the COMMON case after 15:15**, since the daily breaker SOFT_KILL is active and persists overnight by design. ⚠️ **NEW DISCLOSURE, reported NOT fixed (it is CODE, out of this card's scope): `scripts/check_vm_state.py --reset` (`:34-40`) performs the SAME raw clear** — no audit trail, stale `triggered_at`, and it bypasses the HARD_KILL `--force` gate. ⛔ Label honesty: a runbook reaches `<DEPLOYED>` when it ships Monday; **there is no `<VERIFIED LIVE>` until an operator actually uses it in an incident.** ⛔ No new register row — **231 stands**. ⭐⭐ **#8b — THE EXECUTABLE HALF — `<MEASURED, FIX GATED>` 02-Aug (Step-1 only; ⛔ NO CODE WRITTEN).** `scripts/check_vm_state.py --reset` (`:34-40`) is the same wrong procedure in executable form. **Worst property: it PRINTS "Kill switch RESET to INACTIVE" while changing NOTHING on a running service** (`is_active()` reads in-memory state) — **and `_persist_state` is `INSERT OR REPLACE`, so the DB edit can be silently overwritten back to killed.** Also: no `system_events` audit · `triggered_at` left stale (audit-integrity only — `clear_stale_state` early-returns on INACTIVE) · **HARD_KILL `--force` gate bypassed entirely** · no `--dry-run` · no already-INACTIVE handling · **ZERO test coverage** · **NO automation caller** (not in `cron_registry.yaml`, no hook/unit/deploy script) · **NO runtime coupling** (zero importers; not reachable from `main.py` — the fact the ride decision turns on). ✅ **THE SECOND-COPY QUESTION IS CLOSED — RULED OUT (Rama ran the VM check 02-Aug): `~/check_vm_state.py` DOES NOT EXIST and no stray copy exists outside the repo, so a repo-only fix IS permanent.** ⭐ Recorded honestly: that **dissolves the stronger half** of the hold reasoning ("a repo-only fix is likely incomplete"); the hold now rests only on "no urgency + Monday's stack is already large" — **still the recommendation, but weaker, and Rama's call.** **RECOMMENDATION: Option A (remove `--reset`) + HOLD out of Monday.** ⛔ The read-only diagnostics (`--signals`/`--symbol=`/`--trades`/`--positions`/`--health`/`--orders`/table+kill display) are legitimate and MUST survive any fix. ⛔ Still **one** debt-ledger item with #8 — **231 stands.** Record: `docs/audit/ledger8b_check_vm_state_step1_02aug2026.md` | IA-XDOCS-01 |
+| **8** | **The 03_daily runbook's raw-DB kill-clear** — ✅ **`<BUILT>` 02-Aug (ledger #8, docs-only)** | **Wrong instruction in the most-likely-open doc during an incident**; ~~2 lines~~ ⭐ **THREE DOCS, not one** — the audit scoped only `03_daily`, but a repo-wide sweep found the same raw-DB clear presented as the operator procedure in **`docs/RUNBOOK.md:47`** and **`docs/disaster_recovery.md:164`** too; **all three corrected in ONE commit** (a fix at one site would not have been permanent). All now point at **`deploy/resume.sh`** (LIVE/VM) and **`scripts/clear_kill_switch.py`** (PAPER/PC — `resume.sh` is VM-only), state **why** the raw route is wrong, and keep the old text **struck-through-but-legible**. ⭐ **The `03_daily` "Database Locked" section was the more dangerous half:** its **unconditional** `systemctl restart` HALTS the box whenever a same-day kill coincides — **the COMMON case after 15:15**, since the daily breaker SOFT_KILL is active and persists overnight by design. ⚠️ **NEW DISCLOSURE, reported NOT fixed (it is CODE, out of this card's scope): `scripts/check_vm_state.py --reset` (`:34-40`) performs the SAME raw clear** — no audit trail, stale `triggered_at`, and it bypasses the HARD_KILL `--force` gate. ⛔ Label honesty: a runbook reaches `<DEPLOYED>` when it ships Monday; **there is no `<VERIFIED LIVE>` until an operator actually uses it in an incident.** ⛔ No new register row — **231 stands**. ⭐⭐ **#8b — THE EXECUTABLE HALF — `<MEASURED, FIX GATED>` 02-Aug (Step-1 only; ⛔ NO CODE WRITTEN).** `scripts/check_vm_state.py --reset` (`:34-40`) is the same wrong procedure in executable form. **Worst property: it PRINTS "Kill switch RESET to INACTIVE" while changing NOTHING on a running service** (`is_active()` reads in-memory state) — **and `_persist_state` is `INSERT OR REPLACE`, so the DB edit can be silently overwritten back to killed.** Also: no `system_events` audit · `triggered_at` left stale (audit-integrity only — `clear_stale_state` early-returns on INACTIVE) · **HARD_KILL `--force` gate bypassed entirely** · no `--dry-run` · no already-INACTIVE handling · **ZERO test coverage** · **NO automation caller** (not in `cron_registry.yaml`, no hook/unit/deploy script) · **NO runtime coupling** (zero importers; not reachable from `main.py` — the fact the ride decision turns on). ✅ **THE SECOND-COPY QUESTION IS CLOSED — RULED OUT (Rama ran the VM check 02-Aug): `~/check_vm_state.py` DOES NOT EXIST and no stray copy exists outside the repo, so a repo-only fix IS permanent.** ⭐ Recorded honestly: that **dissolves the stronger half** of the hold reasoning ("a repo-only fix is likely incomplete"); the hold now rests only on "no urgency + Monday's stack is already large" — **still the recommendation, but weaker, and Rama's call.** ~~**RECOMMENDATION: Option A (remove `--reset`) + HOLD out of Monday.**~~ ✅✅ **BOTH RATIFIED BY RAMA 02-Aug ~16:32 — see §A-DEC: R5(a) APPROVES Option A (remove `--reset` entirely; basis = no automation caller · no runtime coupling · no second VM copy · `clear_kill_switch.py` already serves the case in both modes), and R5(b) HOLDS it OUT of Monday's push — implement ONLY AFTER Monday's critical path finishes.** ⛔ **The ride-or-hold question is CLOSED; Step 2 is authorised but NOT YET started, and its trigger is Monday's critical path completing.** ⛔ The read-only diagnostics (`--signals`/`--symbol=`/`--trades`/`--positions`/`--health`/`--orders`/table+kill display) are legitimate and MUST survive any fix. ⛔ Still **one** debt-ledger item with #8 — **231 stands.** Record: `docs/audit/ledger8b_check_vm_state_step1_02aug2026.md` | IA-XDOCS-01 |
 | **9** | **Alert fatigue / false-safety claims** ("Smart TGT ACTIVE", F4, the naked warnings) | **Degrades the channel every other mitigation depends on** | IA-P9-01 · IA-P9-02 |
 | **10** | **Deployed-tree-vs-HEAD unverified** | The invariant **every phase's premise rested on**, held by ritual | IA-P10-01 |
 | **11** | **Secrets concentration** (5 accounts in one `.env`; VM test path) — ⭐ **SCOPE EXPANDED 02-Aug (#8b): this row now also carries AUTHORISATION-SURFACE concentration.** `.claude/settings.local.json` → `/permissions/allow` holds **21 `check_vm_state` entries — 2 × `--reset` plus both `--cleanup-*` flags** ⇒ the allowlist **pre-authorises an AI agent to run destructive mass-mutation commands against the LIVE trading DB WITHOUT prompting.** ⛔ **Removing `--reset` from the script does NOT narrow the allowlist** — the two are independent surfaces, which is why this sits here and not inside #8b. ⚠️ **It is also STALE: eleven of those entries point at `~/check_vm_state.py`, a path Rama's 02-Aug VM check proved DOES NOT EXIST.** 🔴 Needs Rama's review — see §C.4 **R12**. ⛔ **NOT a new register item — an authorisation-surface facet of THIS row, counted ONCE here; 231 stands** | Multiplies consequence **5×** for zero benefit; constrains how tests may evolve | IA-XSEC-01 · IA-XSEC-02 *(+ the #8b allowlist facet)* |
