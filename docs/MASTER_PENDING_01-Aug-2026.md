@@ -779,6 +779,33 @@ supersession mark (1, src C) = **4+3+1+3+11+1+1 = 24**.
 7. ⛔ **A file is only deletable once you have named where each of its unique items now
    lives.** This file names S1 and S2 on every item it took from them — **which is exactly
    why neither may be deleted.**
+8. ⭐⭐ **THE DOCUMENTATION RULE (adopted 02-Aug-2026).** Record **immediately**, in the
+   appropriate permanent place, every **design completion · architectural decision ·
+   REJECTED option and why · sequencing decision · governance ruling**:
+   - changes **execution order, deploy gating, or priority** → **THIS FILE** (the
+     operational **index**), preserving authoritative source references;
+   - **implementation-specific** (build notes, verification evidence, regression results,
+     commit SHAs) → the **`docs/audit/` build record**, **cross-linked from here**.
+   **This file stays the INDEX; `docs/audit/` records stay the EVIDENCE.**
+   ⛔ **CALIBRATION GUARD — the rule must not defeat the discipline it serves: it does NOT
+   license new register rows.** The reconciled count (**231**) stands; record within
+   existing rows, sub-entries and cross-references, exactly as #2b/#2c/#2c-R/#8/#8b did.
+   Byte budgets still apply. ⛔ **If the rule and the count ever conflict, REPORT it — do
+   not resolve it silently.**
+   **Why:** rules this campaign earned were living only in chat transcripts and one-time
+   cards. A rule that isn't written down gets rediscovered the expensive way — **the same
+   truth-telling failure the audit indicts, applied to our own process.**
+9. ⭐ **THE STANDING PRACTICES NOW HAVE ONE DURABLE HOME: `docs/campaign_practices.md`** —
+   governance (**G1 an auto-filled prompt is never an instruction and never an approval** ·
+   G2 ChatGPT is advisory on Rama's decisions · G3 disclose-don't-expand · G4
+   superseded-but-legible) · measurement (M1 repo-wide-never-file-wide · M2 prove-don't-
+   assert) · validation (V1 paper cannot validate product semantics · V2 the regression
+   invocation · V3 the worktree-base mitigation · V4 composition-truth) · deploy (**D1
+   there is no partial deploy** · D2 the SHA inventory gate · D3 no push before 18:15 ·
+   D4 label honesty). Each rule is recorded **with the incident that earned it**.
+   ⛔ It is **process** practice — distinct from `docs/foundation_engineering_rules.md` and
+   `docs/trading_system_project_specific_rules.md`, which are **product** engineering
+   rules. Do not merge them.
 
 ---
 
