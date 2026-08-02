@@ -58,7 +58,30 @@ def _trade(tid="t1", status="PENDING_FILL"):
 
 # ── the filter: MIS/CO flatten, CNC survives, unknown flattens loudly ────────
 
-@pytest.mark.parametrize("product", sorted(EMERGENCY_FLATTEN_PRODUCTS))
+# ⛔ SUPERSEDED-BUT-LEGIBLE (#2c-R, 02-Aug). This case originally ran over the
+# WHOLE shared set — sorted(EMERGENCY_FLATTEN_PRODUCTS) == ["CO", "MIS"] — and
+# asserted that BOTH flatten quietly. CO's row is now WRONG, not weakened: #2c
+# Step-1 measured that a CO position cannot be squared by a reverse order at all
+# (Audit 3.1), so this site REFUSES it. The original concern — "a KNOWN intraday
+# product flattens, and does so QUIETLY (no unknown-product alert)" — survives
+# in full for every product this site still sells, and CO's own behaviour is
+# pinned by tests/unit/test_reconciler_co_refusal.py.
+# ⛔ Still DERIVED from the shared constant, never a hardcoded list: a product
+# added to EMERGENCY_FLATTEN_PRODUCTS is automatically covered here, and the
+# subtraction below is itself asserted so the exclusion cannot silently widen.
+_REFUSED_AT_THIS_SITE = frozenset({"CO"})   # #2c-R, site-local (the set is shared)
+
+
+def test_the_refusal_exclusion_is_exactly_co_and_the_set_is_unnarrowed():
+    # If either half of this drifts, the parametrisation below is lying.
+    assert _REFUSED_AT_THIS_SITE == frozenset({"CO"})
+    assert _REFUSED_AT_THIS_SITE < EMERGENCY_FLATTEN_PRODUCTS   # proper subset
+    assert EMERGENCY_FLATTEN_PRODUCTS - _REFUSED_AT_THIS_SITE == frozenset({"MIS"})
+
+
+@pytest.mark.parametrize(
+    "product", sorted(EMERGENCY_FLATTEN_PRODUCTS - _REFUSED_AT_THIS_SITE)
+)
 def test_intraday_products_flatten_quietly(tmp_path, product):
     recon, store, adapter, ks = _recon(tmp_path)
     action = recon._check2_inflight_orphan(

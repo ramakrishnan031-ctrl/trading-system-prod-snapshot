@@ -2074,6 +2074,80 @@ class OrderReconciler:
                     action_taken="none (delivery spared under Q4)",
                     success=True,
                 )
+            if raw_product == "CO":
+                # ── #2c-R — REFUSE + ESCALATE (the approved redesign) ────────
+                # ⛔ THIS BRANCH MUST SIT *BEFORE* THE MEMBERSHIP TEST BELOW,
+                # because CO IS a member of the shared EMERGENCY_FLATTEN_PRODUCTS
+                # frozenset {MIS, CO} — a set read by FIVE sites (kill_switch's
+                # two emergency sites, the two scheduled EOD passes, and here).
+                # ⛔⛔ DO NOT "simplify" this by removing CO from that constant:
+                # it would silently change four other call sites. The refusal is
+                # deliberately reconciler-site-LOCAL.
+                #
+                # WHY REFUSE RATHER THAN SELL (#2c Step-1, measured 02-Aug):
+                #   · Audit 3.1 — a CO position CANNOT be squared off by a
+                #     reverse order at all. The broker rejects it and auto-
+                #     squares at 15:20 with a ₹50+GST penalty. The correct path
+                #     is cancel_order(entry_broker_id, variety="co") on the
+                #     parent bracket, which eod_squareoff already implements.
+                #   · This path has NO parent broker order id: its inputs are
+                #     (symbol, bp, tag_prefix, trade_id) and `bp` is a broker
+                #     POSITION row. It structurally cannot do the correct thing.
+                #   · What the old code did instead: sold product="MIS", which
+                #     the broker ACCEPTS but which does NOT net against the CO
+                #     position (Kite nets per (symbol, product)) — so it opened
+                #     a NAKED MIS SHORT while the CO position survived.
+                # ⇒ Placing NO order is strictly safer than placing a wrong,
+                #   position-CREATING one. Refusing leaves the book as-is and
+                #   hands the operator a named, actionable CRITICAL.
+                #
+                # ⚠️ CADENCE, deliberate: like the CNC spare, this is recorded
+                # as handled/resolved NOWHERE, so it re-fires EVERY cycle while
+                # the kill is active and the position is held — log AND alert.
+                # That is intended: a CO position surviving a HARD_KILL is an
+                # unresolved hazard needing human action, not a settled state
+                # (which is what makes it louder than the spare). Doubly
+                # dormant today (CO unused; force_intraday_only coerces), so the
+                # realistic rate is zero.
+                msg = (
+                    f"INFLIGHT_ORPHAN + HARD_KILL: REFUSING to flatten {symbol} "
+                    f"qty={bp.qty} (trade {trade_id}, broker product=CO). A COVER "
+                    f"ORDER position cannot be squared off by a reverse order — "
+                    f"the broker rejects it and auto-squares at 15:20 with a "
+                    f"penalty (Audit 3.1). The correct action is to cancel the CO "
+                    f"entry bracket (variety=\"co\"), and this path has no parent "
+                    f"broker order id, so it cannot. NO ORDER WAS PLACED — the "
+                    f"previous behaviour sold MIS, which does not net against a CO "
+                    f"position and left a NAKED SHORT. OPERATOR/EOD ACTION "
+                    f"REQUIRED. site=reconciler_check2"
+                )
+                self._log.critical("CHECK2 %s", msg)
+                if self._notifier is not None:
+                    try:
+                        self._notifier.send(
+                            severity="CRITICAL",
+                            title=(f"[{self._mode}] HARD_KILL could NOT flatten CO "
+                                   f"position — {symbol}"),
+                            body=msg, source_module="order_reconciler",
+                        )
+                    except Exception as exc:  # noqa: BLE001 — never break reconcile
+                        self._log.error(
+                            "CHECK2 CO refusal: notifier.send failed: %s", exc
+                        )
+                return ReconciliationAction(
+                    check_name="INFLIGHT_ORPHAN_REFUSED_CO",
+                    tier="CRITICAL",
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    description=msg,
+                    # success=False: unlike the CNC spare (a correct FINAL state,
+                    # nothing owed), a refusal is correct-but-INCOMPLETE — the
+                    # position is still live and still needs a human. The audit
+                    # row must say so.
+                    action_taken="none — REFUSED (CO cannot be reverse-squared; "
+                                 "no parent order id on this path)",
+                    success=False,
+                )
             if raw_product not in _EMERGENCY_FLATTEN_PRODUCTS:
                 # NULL / NRML / anything unrecognised: FLATTEN + CRITICAL (G2 —
                 # never soften, never silently spare the unknown). ONE emitter,
@@ -2140,11 +2214,17 @@ class OrderReconciler:
         adapter snaps to tick) so it fills but caps slippage; MARKET fallback if
         no LTP. Returns True if an order was placed. Best-effort — never raises.
 
-        ⛔ Q4 / ledger #2b — PRECONDITION, enforced by the caller, not here: this
-        function SELLS, so it must never be reached for a delivery (CNC) position
-        (delivery survives a HARD_KILL). Its ONE caller, _check2_inflight_orphan,
-        applies the EMERGENCY_FLATTEN_PRODUCTS filter before calling; a test pins
-        that it stays the only caller. A NEW caller must apply the filter too.
+        ⛔ PRECONDITION, enforced by the caller, not here: this function SELLS, so
+        it must never be reached for a delivery (CNC) position — Q4/#2b, delivery
+        survives a HARD_KILL — **nor for a COVER ORDER (CO) position** — #2c-R,
+        a CO position cannot be squared by a reverse order at all (Audit 3.1) and
+        this path has no parent bracket id to cancel, so the caller REFUSES and
+        escalates instead. Its ONE caller, _check2_inflight_orphan, applies both
+        branches before calling; a test pins that it stays the only caller.
+        A NEW caller must apply them too.
+        ⚠️ CO is a MEMBER of EMERGENCY_FLATTEN_PRODUCTS (that set is shared with
+        four other sites and must not be narrowed) — which is exactly why the CO
+        refusal is a site-local branch placed BEFORE the membership test.
 
         ⚠️⚠️ DISCLOSED, NOT CHANGED — AND ⛔ A MAPPING FIX CANNOT CURE IT.
         `intent` below is hardcoded INTRADAY. #2b reported this as "a CO position
