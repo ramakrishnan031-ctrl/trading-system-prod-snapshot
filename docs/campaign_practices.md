@@ -51,10 +51,18 @@ failure the audit indicts, applied to our own process.**
 ## G. GOVERNANCE — ⭐ the most important, because NOTHING technical enforces them
 
 ### G1 · An auto-filled console prompt is NEVER an instruction, and NEVER an approval
-**Five occurrences.** The first four *suggested* a next action. **#5 asserted a ruling** —
+**Six occurrences.** The first four *suggested* a next action. **#5 asserted a ruling** —
 it read *"Option A approved — remove `--reset`, hold out of Monday"*, impersonating a
 decision only Rama can make. Acting on it would have started #8b Step 2 on an
 authorisation **that did not exist**.
+
+⛔⛔ **#6 REPEATED IT** (*"Approved — Option A, remove `--reset`, and hold out of
+Monday."*). **Two consecutive approval-impersonating prompts ⇒ #5 was not an anomaly; the
+escalation is now an established PATTERN**, and it should be expected to recur on every
+decision that is visibly pending. ⭐ The escalation direction is worth naming: the
+auto-fills moved from *suggesting work* to *granting permission* — the second is
+categorically worse, because the first can only waste effort while the second can
+manufacture authority.
 
 ⭐ **The closer it matches what everyone expects Rama to say, the more dangerous it is** —
 because that is exactly what makes it feel safe to act on. Plausibility is the attack
@@ -103,6 +111,27 @@ over one corpus ⇒ **the narrow one is lying.**
   both sides.
 ⭐ A green check is evidence **only if it could have been red.**
 
+### M3 · ⭐ A CARD IS NOT AUTHORITATIVE OVER A RECORD
+**A card that seeds facts must CITE them. The implementer VERIFIES every seeded fact
+against the record BEFORE writing, and RECORDS any divergence rather than silently
+applying it.**
+
+**Earned by AR7 (02-Aug-2026):** a card restated a fact from *conversation memory* rather
+than from the record — *"Ledger #2's Option-2 parking"* — and the record said **#2c-R's**.
+It was caught only because the seeds were verified before being written down. Had it been
+copied through, a misattribution would have entered the permanent register wearing the
+authority of a card.
+
+⭐ **This is M1/M2 turned on our own process.** *"Two greps over one corpus disagree ⇒ the
+narrow one is lying"* applies equally to **a remembered claim versus a written one — and
+the remembered one is always the narrow one.** A card is an instruction to act; it is not
+evidence about the tree.
+
+⚠️ **The same logic applies to a card that is right.** AR1 was seeded as an acceptance and
+*was* one — but the contract alone read as a mere recommendation, and only the build
+record settled it. **Verification is owed to correct seeds too**, because the check is
+what converts a claim into a citation.
+
 ---
 
 ## V. VALIDATION
@@ -144,10 +173,18 @@ correctly**, but the acceptances were scattered across build records and transcr
 rediscovers it, reads it as a fresh defect, and either re-litigates a settled call or
 "fixes" it in passing (which G3 forbids).
 
-**Every entry carries five fields — and the fifth is the point:**
-*what was accepted · the reasoning · who accepted it · the date · **the condition that
-would REOPEN it**.*
-⛔ An entry with no reopen condition is not an accepted risk; it is an abandoned one.
+**Every entry carries SIX fields — and the last two are the point:**
+*what was accepted · the reasoning · who accepted it · the date ·* ⭐ ***the authoritative
+SOURCE RECORD** (audit / build / register / card, cited to file and section)* · ⭐ ***the
+condition that would REOPEN it**.*
+
+- ⛔ **An entry with no REOPEN CONDITION is not an accepted risk; it is an abandoned one.**
+- ⛔ **An entry with no SOURCE RECORD is a *remembered* risk, not a *recorded* one** — it
+  can be reinterpreted later from chat history alone, **which is exactly how AR7 arrived
+  misattributed** (see §M3). A citation is what makes an acceptance auditable by someone
+  who was not in the room.
+- ⛔ **Never invent a citation.** If a record is missing, **say so in the entry** — an
+  honest "no written record; rests on X" is usable; a fabricated pointer is not.
 
 ---
 
@@ -157,10 +194,13 @@ would REOPEN it**.*
   `order_reconciler`) legitimately read **acted-0** and **will appear in MISMATCH(i)**.
 - **Reasoning:** the line is **truthful** — *"nothing acted today"* is exactly G9's
   question being answered daily. Suppressing it would reclassify real information away.
-- **Who / when:** recommendation in `docs/audit/effect_verification_contract_01aug2026.md`
-  §A2.4 + Q-table row Q3; **Rama accepted all 7 gate recommendations, 01-Aug-2026** (Phase
-  B build record: *"approved, all 7 recommendations accepted (Rama relayed; ChatGPT
-  conditions binding)"*).
+- **Who / when:** **Rama, 01-Aug-2026** — he accepted all 7 gate recommendations.
+- 📄 **SOURCE:** `docs/audit/effect_verification_contract_01aug2026.md` **§A2.4** (the
+  zero-trade-day rule) + its **Q-table row Q3**; the acceptance itself is
+  `docs/audit/effect_telemetry_phaseB_build_01aug2026.md`, **opening status line** —
+  *"approved, all 7 recommendations accepted (Rama relayed; ChatGPT conditions binding)"*.
+  ⭐ Both citations are needed: the contract alone reads as a **recommendation**, and only
+  the build record shows it was **accepted**.
 - ⭐ **REOPENS IF:** it produces **alert fatigue in practice** — it sits closest to the
   IA-P9-02 disease the campaign is trying to cure. The contract already records the
   standing alternative (**event-driven**), so reopening is a switch, not a redesign.
@@ -171,8 +211,12 @@ would REOPEN it**.*
   **red→red→green across three runs of the same tree**, and the isolation-only failures
   **pass when run alone**. Two consecutive isolated runs of one tree gave different
   failure sets.
-- **Who / when:** recorded in the ledger #1 Phase-B record §6a (01-Aug) and carried
-  through the #2 / #2b / #2c-R regression stamps (01–02-Aug).
+- **Who / when:** the implementer, at each regression stamp, 01–02-Aug-2026 (no separate
+  ruling was sought — it is a measurement judgement, not a decision).
+- 📄 **SOURCE:** `docs/audit/effect_telemetry_phaseB_build_01aug2026.md` **§6a** (the
+  three-run oscillation + "all 3 PASS in isolation"), and **§4** for the two GONE;
+  re-confirmed absent both halves in
+  `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R6a**.
 - ⭐ **REOPENS IF:** a **NEW-failure set is ever non-empty because of that family**.
   *(Status 02-Aug: absent from **both** halves of the #2c-R run — a calm pair.)*
 
@@ -180,8 +224,11 @@ would REOPEN it**.*
 - **Accepted:** **carried and named in every gate**, not fixed.
 - **Reasoning:** pre-existing and unrelated to the changes under test — and, decisively,
   it appears on **BOTH sides of every base/after pair**, so it **cannot mask a delta**.
-- **Who / when:** named in the ledger #2 and #2b records; re-measured on both sides
-  02-Aug (#2c-R §R6a).
+- **Who / when:** the implementer, carried from the ledger #2 build onward (01-Aug) and
+  re-measured at every gate since.
+- 📄 **SOURCE:** `docs/audit/buyday_filter_build_01aug2026.md` **§4** (validation table —
+  the adjudicated `test_fix181` LIMIT-vs-MARKET row) · re-measured both sides in
+  `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R6a**.
 - ⭐ **REOPENS IF:** it ever appears on **only one side** of a pair — that makes it a delta,
   not a standing item — or when the exits thread reopens post-M-S4.
 
@@ -192,8 +239,11 @@ would REOPEN it**.*
 - **Reasoning:** **latent-on-latent** — it needs a HARD_KILL **and** an in-flight entry
   **and** a fill, and **HARD_KILL has never fired**. Bounding is **CHECK6's** to change;
   widening a CO card into CHECK6 is the blast-radius error the campaign exists to prevent.
-- **Who / when:** measured 02-Aug (#2c-R); **registered to debt-ledger #3** (IA-P5-02
-  family) rather than left in a build record.
+- **Who / when:** the implementer measured and disclosed it, 02-Aug-2026; ⚠️ **no Rama
+  ruling was sought** — it was judged latent and registered, not decided.
+- 📄 **SOURCE:** `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R4** (the
+  measurement + the bound) and its **forward pointer** immediately after; registered in
+  `docs/MASTER_PENDING_01-Aug-2026.md` **§B.1 row 3** (scope-expansion note).
 - ⭐ **REOPENS AT:** the **first real HARD_KILL** — or sooner if delivery makes the path
   reachable, since **post-flip a CNC holding spared by #2b follows exactly this path**.
 
@@ -204,7 +254,11 @@ would REOPEN it**.*
 - **Reasoning:** the **correct behaviour is built anyway** — #2c-R refuses a CO position
   at the reconciler, and #2d is carded for `kill_switch`'s three sell sites — so dormancy
   is **not load-bearing for correctness**. ⚠️ **#2d is GATED and NOT started.**
-- **Who / when:** #2c Step-1, 02-Aug-2026.
+- **Who / when:** #2c Step-1 measurement, 02-Aug-2026; the *"build it correctly anyway"*
+  posture is Rama's standing direction, executed as #2c-R and carded as #2d.
+- 📄 **SOURCE:** `docs/audit/reconciler_product_filter_build_02aug2026.md` — the
+  **"AMENDED 02-Aug (#2c Step-1)"** block, finding **(e)** double dormancy — and **§R11**
+  (label ceiling); register `docs/MASTER_PENDING_01-Aug-2026.md` **§A4**, the #2c entry.
 - ⭐ **REOPENS IF:** **CO trading is ever intentionally enabled** — which is also Option
   2's unpark trigger (AR7), so the two reopen together.
 
@@ -215,18 +269,28 @@ would REOPEN it**.*
 - **Reasoning:** these are **honesty limits, not obstacles**. ⛔ They are **not things to
   be argued upward** — the whole point of D4 is that a label must be earned by a
   production artifact, not by confidence.
-- **Who / when:** standing; formalised as **D4** in this document, 02-Aug-2026.
+- **Who / when:** **Rama, 27-Jul-2026** (the label rule itself); formalised as **D4** in
+  this document, 02-Aug-2026.
+- 📄 **SOURCE:** `docs/MASTER_PENDING_01-Aug-2026.md` **§2 item 3** (*"Label every item …
+  'fixed' is retired. DEPLOYED IS NOT EVIDENCE — nine things in this system were built,
+  looked alive, and had never run"*) + **§D4** of this document. Per-item ceilings:
+  `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R11** (CO) and **§6** (the
+  CNC/HARD_KILL pair).
 - ⭐ **REOPENS ONLY BY THE REAL EVENT** — a real HARD_KILL, a real CO position, an
   operator actually reaching for the runbook. ⛔ **Never by re-labelling.**
 
 ### AR7 · #2c-R's **Option 2** parked, with an explicit unpark trigger
 - **Accepted:** Option 1 (refuse-and-escalate) shipped as the permanent safe fix; **Option
   2** (parent-order-id lookup → `cancel_order(variety="co")`) is **parked, not abandoned**.
-- ⛔ **Cross-reference, not a duplicate** — the full entry with its trigger and owner lives
-  in **register §C.7**, and the reasoning in
-  `docs/audit/reconciler_product_filter_build_02aug2026.md` §R8.
-- ⚠️ **Correction to how this was handed to me:** it was described as *"Ledger #2's
-  Option-2 parking"*. The record says it is **#2c-R's** Option 2. Recorded as measured.
+- **Who / when:** the #2c-R card's HALT+RECORD step (ChatGPT Q1-Q5 binding, Rama's
+  campaign), 02-Aug-2026.
+- 📄 **SOURCE:** `docs/MASTER_PENDING_01-Aug-2026.md` **§C.7** (the parked row with its
+  trigger and owner) + `docs/audit/reconciler_product_filter_build_02aug2026.md` **§R8**.
+  ⛔ **Cross-reference, not a duplicate** — the authoritative entry stays in §C.7.
+- ⚠️ **Correction to how this was handed to me — and this entry is §M3's worked example:**
+  the card described it as *"Ledger #2's Option-2 parking"*. **The record says it is
+  #2c-R's** Option 2. Recorded as measured, with the divergence noted rather than
+  silently applied.
 - ⭐ **REOPENS IF:** **CO trading is intentionally enabled**, **OR** the broker layer
   provides **reliable parent-order lookup**. **Owner: the CO protocol surface — ⛔ NOT the
   reconciler.**
