@@ -1,4 +1,4 @@
-# #2 KILL DRILL — MONDAY PC GATE (03-Aug-2026) — **9/10 PASS, ONE RED**
+# MONDAY PC GATES (03-Aug-2026) — (b) KILL DRILL **9/10, ONE RED** · (c) REGRESSION **PASS** · (a) NOT RUN
 
 **⛔ FINDINGS-ONLY. NOTHING WAS FIXED, and nothing here authorises a fix.**
 The RED cell needs its own card (G3: disclose, don't expand).
@@ -148,12 +148,73 @@ owns the fix.
 
 ---
 
-## 5. THE OTHER TWO GATES
+## 5. GATE (c) — CALM REGRESSION CONFIRM: **PASS**, with two PROVEN artifacts
 
-- **(c) calm regression confirm** — run separately, reported with this gate.
-- **(a) composition boot** — ⛔ **NOT RUN.** Deliberately withheld: it starts a paper
-  session on a live trading day, and it was not run while an open finding on the kill
-  path was unreported. It is Rama's call whether it proceeds today.
+**Run:** `pytest tests/unit tests/integration -q` (the campaign invocation — ⛔ not
+`run_tests.py`), main tree, 09:54:03 → 10:08:54 IST, **879.33s**. No midnight crossing.
+
+**Result: 9 failed · 5,504 passed · 4 skipped.**
+
+### 5a. This is a true CONFIRM, not a re-validation — the tree is code-identical
+
+Both `.py` edits since the last code commit (`42db913`) are **comment-only, proven not
+asserted**: `core/constants.py` (@ `07c7fc0`) and `orders/order_reconciler.py`
+(@ `bb25fa6`) are both **AST-IDENTICAL with docstrings stripped** (M2). The constant's
+value was asserted, not eyeballed: `EMERGENCY_FLATTEN_PRODUCTS == frozenset({'CO','MIS'})`
+— CO present (the #2c-R refusal is site-local; CO was never removed), CNC absent (Q4).
+
+### 5b. The 7 standing failures — ALL present, by name
+
+`test_fix181` inflight-orphan LIMIT-vs-MARKET (the T3/AR3 item) · `test_closure_source_contract`
+vocabulary scanner · `test_main` ×4 (3 × `TestContinueFromGate` + 1 × BL15) ·
+`test_phase17_batch2` flask max-content-length. **Identical to the set named in the #2b
+and #2c-R stamps.** The q9 consecutive-losses oscillator did **not** fire.
+
+### 5c. The 2 extra failures — PROVEN artifacts of the TEST INTERPRETER, not of code
+
+`tests/unit/test_instance_lock.py::TestSingleInstanceAcrossProcesses::test_p1_…` and
+`::test_p2_…`. ⛔ Not labelled "env" — **diagnosed**:
+
+| step | measurement |
+|---|---|
+| deterministic, not flake | 2F/4P on **4 consecutive** isolated runs, 0.23-0.25s each |
+| not concurrency with the drill | fails identically with nothing else running |
+| not a stale port | port 59321 free; `Get-NetTCPConnection` empty |
+| not a stale PID | the PID named in the refusal did **not exist** when checked |
+| **root cause** | **`venv/Scripts/python.exe` is a LAUNCHER STUB that re-spawns the real interpreter.** Measured: `Popen.pid = 4060` vs the child's own `os.getpid() = 30908`. Under `C:\Python314\python.exe` they are **the same number**. |
+| the two assertions that fail | `assert str(holder.pid) in reason` (the lock correctly names the *grandchild*), and p2's "crash" kills only the stub, so the grandchild keeps the OS lock |
+| **the guard itself WORKS** | p1's first two assertions PASSED — the second instance **was** refused with `"Another instance is running"`. Only the PID-*naming* assertion failed. |
+| **direct confirmation** | the same class under `C:\Python314\python.exe`: **6 passed in 0.18s** |
+
+⛔ **The full suite CANNOT be run under the non-stub interpreter** — `C:\Python314` lacks
+the project deps (`ModuleNotFoundError: cachetools` at collection). So the venv is the
+only interpreter that can run the gate, and V3's *prove-and-subtract* is the correct
+standard here rather than artifact-free running.
+
+### 5d. The arithmetic closes on BOTH axes (V3)
+
+- failures: **9 − 2 artifacts = 7** = the named standing set, exactly;
+- passes: **5,504 + 2 = 5,506** = the #2c-R stamp;
+- collection: **9 + 5,504 + 4 = 5,517**, and the 02-Aug pair was **7 + 5,506 + 4 = 5,517**
+  — *identical collection*, so nothing appeared or vanished.
+
+⇒ **NEW-FAILURE SET ATTRIBUTABLE TO CODE = EMPTY. Gate (c) PASSES.**
+
+### 5e. ⚠️ A GATE-INTEGRITY FINDING, recorded not fixed
+
+**V2 pins the pytest ARGUMENTS but not the INTERPRETER**, and the build-record stamps do
+not name which interpreter produced them. Two runs that both honestly claim "the campaign
+invocation" **differ by two failures** depending on whether pytest is launched by the venv
+stub or a real interpreter. ⛔ Left for Rama: V2 should name the interpreter as part of the
+baseline. ⚠️ Secondary consequence: under the venv these two tests fail for a fixed reason,
+so **the single-instance guard is effectively unexercised by the gate** — they cannot mask
+a delta (they fail on both sides) but they can no longer detect a real regression.
+
+## 6. GATE (a) — COMPOSITION BOOT: ⛔ **NOT RUN**
+
+Deliberately withheld: it starts a paper session on a live trading day, and it was not
+started while an open finding on the kill path was unreported. **Rama's call whether it
+proceeds today.**
 
 ## 6. LABEL
 
