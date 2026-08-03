@@ -1,4 +1,4 @@
-# MONDAY PC GATES (03-Aug-2026) — (b) KILL DRILL **9/10, ONE RED** · (c) REGRESSION **PASS** · (a) NOT RUN
+# MONDAY PC GATES (03-Aug-2026) — (b) KILL DRILL **9/10, ONE RED** · (c) REGRESSION **PASS** · (a) **BLOCKED**
 
 **⛔ FINDINGS-ONLY. NOTHING WAS FIXED, and nothing here authorises a fix.**
 The RED cell needs its own card (G3: disclose, don't expand).
@@ -210,11 +210,61 @@ baseline. ⚠️ Secondary consequence: under the venv these two tests fail for 
 so **the single-instance guard is effectively unexercised by the gate** — they cannot mask
 a delta (they fail on both sides) but they can no longer detect a real regression.
 
-## 6. GATE (a) — COMPOSITION BOOT: ⛔ **NOT RUN**
+## 6. GATE (a) — COMPOSITION BOOT: ⛔ **BLOCKED — NOT RED, NOT A PASS**
 
-Deliberately withheld: it starts a paper session on a live trading day, and it was not
-started while an open finding on the kill path was unreported. **Rama's call whether it
-proceeds today.**
+Authorised and attempted 03-Aug 10:30:03 IST. **The boot refused to start**, and the
+thing that refused it was **working correctly**.
+
+```
+CRITICAL state_store.migrations — MIGRATION_REFUSED schema v44 -> v45 pending;
+  this process may not migrate the live DB (allow_migrate=True, market_open=True).
+  It applies at the next OFF-MARKET boot of the trading app.
+core.state_store.MigrationNotPermitted   (main.py:1875 -> state_store.py:427 -> :355)
+EXIT=1
+```
+
+### 6a. What happened, and why it is the guard doing its job
+
+The PC's `data_store/trading_system.db` is at **schema_version 44**; the tree expects
+**45**. **AC2 of the migration-on-open guard** (`ed1c4b9`) refuses a migration **even on
+the sanctioned `main.py` boot path** while the market is open — measured here at 10:30
+IST on a trading Monday. The boot exits **before** composition, so `assert_composition`
+(`main.py:3744`, the last step before the runtime wait) is **never reached**.
+
+⇒ **The B2 assertion was not exercised.** ⛔ **Per this campaign's own rule — an
+unexercised check is NO EVIDENCE, never a pass** (the same logic the observation card
+applies to zero rows). Gate (a) is therefore **BLOCKED**, which is **distinct from RED**:
+RED would mean the composition claim is false; BLOCKED means it was never put to the
+question.
+
+### 6b. No artifact was touched — proven, not asserted
+
+`data_store/trading_system.db` **byte-identical before and after**: md5
+`27df20d51e966f88fa1f04952a3887bc`, mtime `2026-07-27 15:37:27.138808200`, 995,328
+bytes, `schema_version` still **44**. The refusal happens *before* any write. A
+pre-boot backup was taken anyway (`scratchpad/trading_system.db.pre_gate_a_v44.bak`,
+same md5) and was not needed.
+
+⛔ **The PC DB was NOT hand-migrated to unblock the gate.** The error says *"No manual
+DB surgery"* and the standing rule forbids side-door DB writes — the guard is not an
+obstacle to route around.
+
+### 6c. ⭐ The real window for gate (a), and why this reshapes tonight
+
+A PC composition boot needs a **trading day** (a weekend trips the holiday/weekend gate
+— that is what #1 measured) **and off-market hours** (during the session, AC2 refuses
+the pending migration). Those two constraints leave exactly one slot today:
+
+> **after 15:30 and before the 18:15 push** — `market_open` is then False, the boot
+> migrates v44 → v45 on the sanctioned path, and composition proceeds to B2.
+
+⇒ **Gate (a) should run in that window, and its result is known before the push
+decision** — which preserves the card's rule that a RED (a) holds the push, without
+requiring the push to wait on anything else.
+
+⚠️ Note for that run: it will migrate the PC DB **v44 → v45**, and v45 is a **REBUILD of
+`trades`** (`MIGRATION_TABLES[45]`), not a pure addition — atomic on failure, 134 ms on
+a production-copy dry-run. The backup above should be kept until it completes.
 
 ## 6. LABEL
 
