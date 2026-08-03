@@ -303,6 +303,17 @@ construction — never by a paper run. (#2c Step-1 finding (f).)
   `.env`**. Harmless in a worktree (no `.env`); ⛔ **never in the main tree.**
 - **Copy the git-ignored `config/instruments.csv`** into any base worktree — else **26
   phantom `test_main` failures**.
+- ⭐ **AND `venv/` — the other half of the same recipe, and it was missing here until
+  04-Aug-2026.** Without it **3 `test_t4` tests fail as PHANTOMS** (a Store-python stub — ⛔ not
+  TZ, not code) ⇒ the base reads **12F where it should read 9F**, and a phantom in the BASE is
+  the asymmetry **§V3** warns about: it can **MASK a real new failure**.
+  ⛔⛔ **NEVER `robocopy … /MIR` a tree containing the `venv` junction without `/XJ`** — it
+  follows the junction and **mirrors into the REAL venv**, which is how the working venv was
+  destroyed on 03-Aug. Delete the junction with `cmd /c rmdir` first, or pass `/XJ`.
+  (`Remove-Item -Recurse` carries the identical hazard.)
+  ⚠️ **The damage is INVISIBLE TO PIP** — package directories go, `*.dist-info` stays, so `pip`
+  reports them installed and a plain `pip install -r …` is a **silent no-op**. Repair is
+  `--force-reinstall`, and then **re-check the pins** (§V2's interpreter bullet below).
 - **A stopped run's partial log is DELETED**, never left to be mistaken for a baseline.
 - Both halves must use the **same** invocation or the sets are not comparable.
 - ⭐ **THE INTERPRETER IS PART OF THE BASELINE — name it beside the result (R14 / D6,
