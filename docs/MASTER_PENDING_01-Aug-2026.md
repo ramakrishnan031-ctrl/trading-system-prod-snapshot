@@ -107,6 +107,40 @@ destructive hole** — and this surface already has 21 `check_vm_state` entries 
 pre-authorised. **Removing `--reset` from the script did not narrow the allowlist** — they
 are independent surfaces, which is why R12 is still owed after `38f8ab9`.
 
+##### ✅ R12 — **MEASURED 04-Aug ~02:3x. ⛔ NOTHING NARROWED.** 📄 `docs/audit/r12_allowlist_enumeration_04aug2026.md`
+⭐⭐ **D4's REMEDY AS WRITTEN NARROWS ONE OF TWO INDEPENDENT CHANNELS, AND WOULD HAVE LEFT
+EVERY DESTRUCTIVE OPERATION REACHABLE.** All **21** `check_vm_state` entries are on the
+**PowerShell** tool, and there is **no `PowerShell(ssh *)`** — so removal genuinely bites there
+(**21/21 unsubsumed**). ⛔ **But `Bash(ssh *)` and `Bash(ssh trading-vm *)` exist**, and
+`Bash(ssh *)` alone pre-authorises
+`ssh trading-vm "python3 scripts/check_vm_state.py --cleanup-pending"` — **the exact command D4
+exists to stop.** ⇒ there are **THREE** independent surfaces, not two: the **script**
+(narrowed by `38f8ab9`) · the **PowerShell** channel · the **Bash** channel, **which D4 does
+not name.**
+⛔⛔ **AND THE DESTRUCTIVE SURFACE IS FAR WIDER THAN `check_vm_state`'s three flags.** Measured
+across 533 entries: **26** restart the live service · ⭐ **15 POST a hand-written payload to
+the LIVE webhook** — *a fabricated signal injected into the running system, on the SIGNAL PATH,
+never registered anywhere* · **6** push/deploy (incl. `deploy_audit_fixes.ps1 -Force`) · **5**
+mutate the production venv · **3** `git pull` the deployed code · **2** `sed -i` the production
+`.env` — ⚠️ **one of which comments out `WEBHOOK_SECRET`, disabling an auth control.**
+⚠️ **THE STALE COUNT WAS WRONG, AND LOW: 66 entries name a VM address that is not live, not
+11.** Four identities coexist — `trading-vm` alias **149** (✅ live, `~/.ssh/config` →
+`161.118.187.249`) · `ubuntu@80.225.198.195` **51** · `ubuntu@161.118.188.171` **12**
+(⛔ **also stale** — the tracked record carries `161.118.187.249` ×19 vs this ×1) ·
+`opc@…` **3**. Path generations: `~/trading-system/` **69** (⛔ stale, **6× the flagged
+eleven**) · `~/check_vm_state.py` **11** · `~/systems/trading-system/` **7** (current).
+⛔ **Staleness is not safety** — inert only until a host or path returns, and the wildcard
+channel does not depend on any path being correct.
+⚠️ **SEVERITY BOUNDED, per the scope correction:** VM assistant work is **agy (Google/Gemini)**;
+**Claude has no production role there** ⇒ this governs an **interactive dev-time agent in a
+session Rama is driving**, ⛔ not autonomous production access. ⭐ It does not dissolve the
+finding — pre-authorisation's whole effect is **removing the prompt**.
+🔴 **OPEN, none decided:** the **Bash channel** · whether the 15 webhook-POST entries are
+acceptable · whether deleting the 66 stale entries is anything but cosmetic while the channel
+stands · ⭐ **whether `permissions.deny` should carry the guarantee instead** — an allowlist
+cannot express *"never `--cleanup-*`"* while a broad channel exists, and the precedent is
+already in this system (`~/tools/claude/.claude/settings.json`, **14 deny rules**).
+
 ### ✅ D5 · R13 — **RETIREMENT SCOPE MEASURED 04-Aug 00:0x (M1 sweep, repo-wide)**
 **28 files · 58 mentions** — ⭐ **and the actionable set is far smaller than the sweep**, which
 is the finding:
