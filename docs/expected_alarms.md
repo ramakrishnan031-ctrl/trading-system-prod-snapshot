@@ -134,6 +134,126 @@ service back.** So a failed start is **quiet by design**, and the process stays 
 ⛔ **The `(shadow)` suffix is load-bearing.** If someone reads the `mis_filter` line as
 enforcing, they will "fix" a working system.
 
+## 6. ⚠️ The daily WARNING stream — six that fire, and are not incidents
+
+**Why this section was added (03-Aug, ledger #9 Step 1).** §1–§5 covered the *structural* alarms
+but none of the **WARNING traffic that actually arrives**. Measured across the two days for which
+a send-side audit trail exists: **31-Jul = 49 alerts (18 WARNING) · 03-Aug = 84 alerts (8 WARNING
++ 1 `WARN`)** — and **six of the nine non-INFO alerts on 03-Aug were not listed anywhere in this
+document.** Combined with the closing rule below (*"an unlisted alarm is an incident until proven
+otherwise"*), this doc was instructing you to treat most of a normal day's WARNINGs as incidents.
+Record: `docs/audit/ledger_3a_9_5_step1_03aug2026.md`.
+
+⛔⛔ **READ FIRST — WARNING TIER IS NOT DURABLE.** Measured on both audited days: **zero of the
+non-INFO alerts wrote a sentinel.** Everything at WARNING is Telegram-only, no email, dropped
+silently on send failure (TG4). ⇒ **the absence of a WARNING proves nothing**, and you cannot go
+looking for one after the fact. Only CRITICAL leaves a durable trace.
+
+### 6a. 🩳 `Naked untracked position — <SYM>` — ⛔ **the one that has been FALSE every time it fired**
+
+**You will see:** *"Untracked/operator position SYM qty=N avg=X — no local trade and NO protective
+stop at the broker. … If unexpected, check for a manual order or a system anomaly."*
+
+⛔ **The detector is GTT-blind (IA-P5-06).** All five that fired on 31-Jul were **T2's own CNC
+basket, deliberately held, each with a verified GTT at the broker.** The line *"NO protective stop
+at the broker"* was false 5/5, and its instruction sends you hunting a manual order that does not
+exist.
+
+- **Do:** check the symbol against your known delivery holdings **first**. If it is one of them,
+  a GTT is its stop and this alert is blind to it.
+- ⛔ **Do NOT** start an incident on the words "no protective stop" alone — this detector cannot
+  see GTTs.
+- **THIS IS REAL IF:** the symbol is **not** a delivery holding you know about, **or** the
+  quantity does not match the holding. Then it is a genuine untracked position →
+  `05_incident_response.md`.
+
+### 6b. 📉 `SLIPPAGE GUARD — <SYM>` — the most frequent WARNING, and it is **correct**
+
+**You will see:** *"Order aborted: BUY | … Trigger: ₹X | LTP: ₹Y | Slip: ₹Z"* — 3–4 on a typical
+day.
+
+This is the guard **working**: the price moved past tolerance between signal and placement, so the
+order was refused before it reached the broker. The trade appears as `REJECTED`. No money moved.
+
+- **Do:** nothing. It is a protective refusal, not a failure.
+- **THIS IS REAL IF:** the count is far outside the normal handful — a sustained run suggests a
+  stale feed or a signal source firing on old prices, not slippage.
+
+### 6c. 🏷️ `Sector data-quality: high UNKNOWN rate` — daily, correct, and **you cannot act on it**
+
+**You will see, once per session:** *"N/M (96%) trades this session resolved to UNKNOWN sector …
+the sector concentration cap is operating on incomplete data; check instruments.csv…"*
+
+The statement is true and will stay true: `instruments.csv` carries sector for **142 of 2,228**
+symbols, so the sector cap runs on mostly-UNKNOWN input (which fails **closed** — pooled, never
+waved through). Improving it is a reference-data project, not a runtime action.
+
+- **Do:** nothing at the time. It is one-shot per session and cannot be silenced by anything you
+  do during the day.
+- **THIS IS REAL IF:** it **stops** appearing on a normal trading day — that would mean the
+  sector source changed, which nobody planned.
+
+### 6d. ⏸️ `STRATEGY PAUSED -- <name>` — real, protective, and ⚠️ **its own text is wrong about duration**
+
+**You will see:** *"Daily loss N exceeded 2x avg daily loss (M). Strategy paused for the rest of
+today."*
+
+The pause is genuine and other strategies keep trading. ⚠️ **But "for the rest of today" is not
+true across a restart** — the pause set is in-memory (`strategy_governor.py:42`, comment:
+*"in-memory; clears on restart/new day"*). **Restart the service and the strategy resumes.**
+
+- **Do:** nothing. It is the per-strategy circuit breaker doing its job.
+- ⛔ **Do NOT** restart the service to "clear" something else without knowing this un-pauses every
+  strategy paused today.
+- **THIS IS REAL IF:** several strategies pause in quick succession — that is a market-wide or
+  system-wide loss pattern, not a single-strategy breaker.
+
+### 6e. 🧾 `⚠️ Config Changed Since Last Session` — expected after **every** push
+
+**You will see, at the 08:15 boot following an evening deploy:** *"Files: …"*
+
+⚠️ Note its severity is spelled **`WARN`**, not `WARNING` — the only alert in the system that does.
+Both route identically today; the spelling is a known inconsistency, not a different tier.
+
+- **Do:** confirm the listed files match what was deployed the previous evening.
+- **THIS IS REAL IF:** it names files **no push touched** — the deployed tree then differs from
+  HEAD, which is ledger #10's check 12 territory.
+
+### 6f. ⏰ `EOD SQUAREOFF IN ~30 MIN` — only when you still hold something
+
+**You will see at 14:45**, listing each open position, **only if positions are open.** Silence
+here means flat, not broken.
+
+- **Do:** nothing, unless you want to exit manually before 15:17.
+- **THIS IS REAL IF:** it lists a position you did not expect to still be open.
+
+## 7. ⏳ DECISION PENDING — two daily 15:15 alerts go **false at the flip**
+
+⛔ **Applies from the delivery flip onward. Until then both lines below are correct.**
+
+The two alerts in §1 arrive together every afternoon and both make a claim about EOD:
+
+| alert | the claim |
+|---|---|
+| `CIRCUIT BREAKER — Force Close` | *"EOD squareoff will close **all** positions at 15:17."* |
+| `SOFT KILL — scheduled (…)` | *"Open positions: managed to SL/TGT/**EOD**"* |
+
+⛔ **Both become wrong once delivery is enabled.** Verified at source — `eod_squareoff.py:23 / :34
+/ :1073`: **EOD6 — DELIVERY (CNC) positions are NOT touched.** A CNC leg is *deliberately carried
+overnight*; it is neither closed at 15:17 nor "managed to EOD".
+
+🔴 **Owed to Rama:** whether the two string literals are corrected on the flip push, or left and
+warned about here. **Until that is ruled:**
+
+- **Do:** read both lines as applying to **INTRADAY (MIS/CO) positions only**. Any delivery
+  holding survives 15:15, 15:17, and the residual sweep **by design** (that is ledger #2's whole
+  point, and the Q4 ruling behind it).
+- ⛔ **Do NOT** conclude a carried CNC position was missed by the squareoff because these alerts
+  said "all". They are the stale text; **EOD6 is the behaviour.**
+- **THIS IS REAL IF:** a **delivery** position is actually gone after 15:17, or an **intraday**
+  position survives it. Either is the opposite of the designed behaviour →
+  `05_incident_response.md`.
+
 ---
 
 ## What this document does NOT cover
