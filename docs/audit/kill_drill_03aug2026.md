@@ -3,12 +3,15 @@
 **⛔ FINDINGS-ONLY. NOTHING WAS FIXED, and nothing here authorises a fix.**
 The RED cell needs its own card (G3: disclose, don't expand).
 
-**Gate status (03-Aug): (b) RED · (c) PASS · (a) BLOCKED.**
-**Rama's ruling on the RED (10:30):** it does **NOT** block tonight's push — the defective
-helper is already live and the push is a strict improvement — but it **IS a hard gate on
-the CARRY PILOT**, carded as **#2e**. It does **not** gate Wednesday's flip: the flip alone
-does not create the two-row book. Gate (a) is **BLOCKED, not RED** (§6) and must run in the
-15:30 → 18:15 window, before the push decision.
+**FINAL GATE STATUS (03-Aug): (b) RED · (c) PASS · (a) GREEN.**
+- **(b) RED — Rama ruled 10:30 it does NOT block tonight's push:** the defective helper is
+  **already live** and the push is a **strict improvement** (0 → 2 CNC-spare sites). It
+  **IS a hard gate on the CARRY PILOT**, carded as **#2e**, and it does **not** gate
+  Wednesday's flip — the flip alone does not create the two-row book.
+- **(c) PASS** — new-failure set attributable to code EMPTY (§5).
+- **(a) GREEN** — ⛔ **not a bare PASS: SHARED composition proven; the ONE live-only ctor
+  (`clock_skew_probe`) unproven until the Tuesday 08:15 VM boot** (§6-RESULT).
+  *(Its 10:30 first attempt was BLOCKED, not RED — §6, kept for the record.)*
 
 ---
 
