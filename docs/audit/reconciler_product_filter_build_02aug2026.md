@@ -418,6 +418,25 @@ HARD_KILL **and** an in-flight entry **and** a fill; HARD_KILL has never fired) 
 **documented, NOT flip-blocking.** *A future reviewer should not have to re-derive this
 relationship: it was measured 02-Aug and it lives in §B.1 row 3.*
 
+### ⛔⛔ BINDING ON ANY FUTURE CHECK6 WORK (R-3, registered 03-Aug-2026)
+**If you are here to change CHECK6, this constraint is yours.** The 3-cycle FIX-B bound
+described above is what holds **BOTH** shipped items to ~3 CRITICALs rather than an
+unbounded stream — **#2b**'s CNC spare (`INFLIGHT_ORPHAN_SPARED_DELIVERY`, `6495baa`) and
+**#2c-R**'s CO refusal (`INFLIGHT_ORPHAN_REFUSED_CO`, `42db913`).
+
+⛔ **Any CHECK6 redesign MUST explicitly document whether it changes (a) alert count,
+(b) escalation behaviour, or (c) refusal semantics — and state the answer for #2b and
+#2c-R BY NAME**, so neither silently regresses.
+
+⭐ **Why it is written here and not only in #3's record:** the coupling runs the wrong way
+for discovery. **Nothing in either item's code mentions CHECK6** — the bound is an emergent
+property of cycle ordering (CHECK6 runs *after* CHECK2), so a CHECK6 author retuning a
+counter gets **no local signal** that two other items depend on it. Registered at three
+sites for that reason: this section · `MASTER_PENDING_01-Aug-2026.md` §B.1 row 3 ·
+`docs/audit/ledger3_design_registration_03aug2026.md` §5 (the fuller reasoning — ⛔ **not
+duplicated here**). ⛔ Registration only: **no CHECK6 change is authorised**, and all of #3
+remains gated.
+
 ⭐ **This is PRE-EXISTING and SHARED: #2b's CNC spare inherits exactly the same ceiling**,
 so that record's "re-alerts EVERY cycle BY DESIGN" is **bounded too** — corrected here
 rather than left standing. ⛔ **Not fixed in this card:** bounding is CHECK6's behaviour,
