@@ -1,9 +1,44 @@
 #!/usr/bin/env python3
-"""Quick VM state check/reset script."""
+"""Quick VM state CHECK script — read-only diagnostics only.
+
+LEDGER #8b / Rama's ruling R5(a), 03-Aug-2026: the `--reset` flag was REMOVED
+entirely. It performed a raw `UPDATE kill_switch_state SET state='INACTIVE'`,
+which was both ineffective and impermanent:
+  - NO effect on a running service — `is_active()` reads in-memory state
+    (kill_switch.py:487-491) — while PRINTING "Kill switch RESET to INACTIVE";
+  - the DB edit could be silently overwritten back to killed, because
+    `_persist_state` is INSERT OR REPLACE (kill_switch.py:898);
+  - no `system_events` audit row, and `triggered_at`/`triggered_by` left stale;
+  - the HARD_KILL `--force` gate was bypassed entirely.
+
+The flag is REJECTED loudly rather than quietly ignored. A silent no-op would
+preserve the original trap in a new form — the operator reads success where
+nothing happened. Typing a flag is a deliberate act, so it gets a BLOCK.
+
+SANCTIONED PATH:
+  LIVE / VM : sudo bash deploy/resume.sh          (--force for HARD_KILL)
+  PAPER / PC: python scripts/clear_kill_switch.py ([--dry-run] [--force])
+"""
 import sqlite3
 import os
 import sys
 from pathlib import Path
+
+# Reject `--reset` BEFORE the live DB is opened, and match it in ANY argument
+# position (the old code only checked argv[1]).
+if "--reset" in sys.argv[1:]:
+    print(
+        "ERROR: `--reset` has been REMOVED from this script (ledger #8b, R5(a)).\n"
+        "It never worked on a running service: it printed success while the\n"
+        "in-memory kill state was unchanged, and its DB write could be silently\n"
+        "overwritten back to killed.\n"
+        "\n"
+        "Use the sanctioned path instead:\n"
+        "  LIVE / VM : sudo bash deploy/resume.sh           (--force for HARD_KILL)\n"
+        "  PAPER / PC: python scripts/clear_kill_switch.py  ([--dry-run] [--force])",
+        file=sys.stderr,
+    )
+    sys.exit(2)
 
 # Bug 8 (FIX-180): the hardcoded "~/trading-system/data_store/..." path was
 # wrong on the VM (active deploy is ~/systems/trading-system) and CWD-fragile.
@@ -29,16 +64,6 @@ if "kill_switch_state" in tables:
     row = c.execute("SELECT * FROM kill_switch_state WHERE id=1").fetchone()
     if row:
         print(f"Kill switch: state={row['state']}, reason={row['reason']}")
-
-        # Reset if requested
-        if len(sys.argv) > 1 and sys.argv[1] == "--reset":
-            c.execute("""
-                UPDATE kill_switch_state
-                SET state='INACTIVE', reason='manual reset via script', triggered_by='operator'
-                WHERE id=1
-            """)
-            c.commit()
-            print("Kill switch RESET to INACTIVE")
     else:
         print("Kill switch: no row (will default to INACTIVE)")
 else:
