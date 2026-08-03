@@ -146,15 +146,3 @@ SHELL=/bin/bash
 
 # backup_restore_drill  [03:00 1st-of-month]
 0 3 1 * * cd /home/ubuntu/systems/trading-system && set -a && . ./.env && set +a && PYTHONPATH=. /home/ubuntu/systems/venv/bin/python scripts/backup_restore_drill.py --quiet >> logs/cron-backup-drill.log 2>&1
-
-# claude_heartbeat_0530  [05:30 daily]
-30 5 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1
-
-# claude_heartbeat_1031  [10:31 daily]
-31 10 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1
-
-# claude_heartbeat_1532  [15:32 daily]
-32 15 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1
-
-# claude_heartbeat_2033  [20:33 daily]
-33 20 * * * cd /home/ubuntu/tools/claude && /usr/bin/claude -p "Generate a random 8-character string. Print only the string." >> /home/ubuntu/tools/claude/cron.log 2>&1

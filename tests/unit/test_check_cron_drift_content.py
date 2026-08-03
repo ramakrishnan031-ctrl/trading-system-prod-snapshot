@@ -49,11 +49,47 @@ def test_enabled_absent_is_critical() -> None:
     print("  OK enabled non-personal absent -> CRITICAL")
 
 
-def test_personal_tooling_absent_is_warn() -> None:
-    """A claude heartbeat removed from live -> WARN, NOT critical."""
-    name = next(j["name"] for j in load_jobs(_REG) if j.get("personal_tooling"))
-    live = _perfect_live().replace(_line_for(name) + "\n", "")
-    cd = content_drift(_REG, live)
+def test_personal_tooling_absent_is_warn(tmp_path) -> None:
+    """A personal_tooling job removed from live -> WARN, NOT critical.
+
+    Builds its OWN registry rather than reading the live one. This test used to
+    do `next(j for j in load_jobs(_REG) if j.get("personal_tooling"))`, which
+    made it depend on a production job carrying that flag: when the four claude
+    heartbeats (the only ones) were removed on 04-Aug-2026, it died with
+    StopIteration. The behaviour under test never changed -- only the fixture
+    source did, which is exactly what a test should not be exposed to.
+
+    NOTE the branch is DORMANT, NOT DEAD: `personal_tooling: true` is still a
+    valid registry flag, so this warn path fires the moment any future job
+    carries it. That is why the branch is pinned here rather than deleted.
+    """
+    reg = tmp_path / "reg.yaml"
+    reg.write_text(
+        "jobs:\n"
+        "  synthetic_normal:\n"
+        "    enabled: true\n"
+        "    personal_tooling: false\n"
+        "    cron_expression: 0 1 * * *\n"
+        "    command: scripts/synthetic_normal.py\n"
+        "    env_wrapper: none\n"
+        "    log_target: '>> logs/x.log 2>&1'\n"
+        "  synthetic_personal:\n"
+        "    enabled: true\n"
+        "    personal_tooling: true\n"
+        "    cron_expression: 0 2 * * *\n"
+        "    command: scripts/synthetic_personal.py\n"
+        "    env_wrapper: none\n"
+        "    log_target: '>> logs/y.log 2>&1'\n",
+        encoding="utf-8",
+    )
+    jobs = load_jobs(reg)
+    name = next(j["name"] for j in jobs if j.get("personal_tooling"))
+    perfect = "\n".join(compose(j) for j in jobs if j.get("enabled", True)) + "\n"
+    dropped = next(compose(j) for j in jobs if j["name"] == name)
+    live = perfect.replace(dropped + "\n", "")
+    assert live != perfect, "fixture did not actually drop the personal_tooling line"
+
+    cd = content_drift(reg, live)
     assert name in cd.absent_warn and name not in cd.absent_critical
     assert not cd.has_critical, "a missing heartbeat is not a trading outage"
     print(f"  OK personal_tooling absent ({name}) -> WARN, not CRITICAL")
