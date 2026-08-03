@@ -1,6 +1,19 @@
-# D4 — THE MATCHER MEASUREMENT (deny-first precondition) — 04-Aug-2026
+# D4 — THE MATCHER MEASUREMENT + THE DENY RULES — 04-Aug-2026
 
-**Status: `<MEASURED — NO DENY RULE WRITTEN, THE ALLOWLIST IS UNCHANGED>`.**
+> # ⛔⛔ READ THIS BEFORE ANYTHING ELSE
+> ## **THIS DENY PROTECTS AGAINST THE AGENT'S MISTAKES. IT IS *NOT* A SECURITY BOUNDARY.**
+> The remote command inside `ssh host "…"` is a **quoted argument**, not a subcommand Claude Code
+> parses ⇒ these patterns **string-match an opaque payload**. They catch the honest spelling; they
+> would **not** catch a variable, a heredoc, or `scp`-then-run.
+> ⭐ **Local compound commands ARE parsed** and do not evade them (§4) — that part is genuinely
+> strong. **OS-level enforcement is SANDBOXING, not permission rules (§9).**
+> ⛔ **A later reader who treats these rules as making the surface safe has re-created the exact
+> declared-vs-effective gap this campaign exists to close.** That is why this sits at the top of
+> the record and at the top of the rules block itself, not in a footnote.
+
+**Status: `<BUILT — 16 DENY RULES WRITTEN, ⛔ NOT YET VERIFIED>`.** The `allow[]` array is
+**untouched and byte-identical to its pre-edit snapshot** (533 entries, hash
+`a9d274d4…`) — narrowing is step 2 and is deliberately not in this change.
 Precondition step 1 of the re-scoped D4 (deny-first). Source: Claude Code's own documentation,
 `https://code.claude.com/docs/en/permissions`, fetched 04-Aug-2026 ~03:0x IST. ⛔ Nothing below is
 inferred from the entries' shape — that inference is what R12 flagged, and it is now retired.
@@ -104,7 +117,90 @@ looks identical in the file whether or not it works.**
    the file and **restart Claude Code**, then probe in the fresh session; or accept the rules
    unverified — ⛔ **which the ruling already refused, correctly.**
 
-⛔ **HALT. NO DENY RULE WRITTEN. THE ALLOWLIST IS BYTE-IDENTICAL TO ITS SNAPSHOT.**
-⭐ **The matcher precondition PASSED — this halt is not step 1 failing.** It is step 3's proof
-being uninterpretable from inside a running session, which the measurement only revealed by asking
-how the rule would be *verified* rather than how it would be *written*.
+---
+
+# ⚖️ RULED 04-Aug-2026 (§G2) — **DENY BOTH.** THE RULES AS WRITTEN
+
+**§2's two all-or-nothing patterns were re-decided on the measured facts, and the answer is still
+deny** — for a reason the earlier framing missed:
+
+⭐⭐ **The deny governs what the AGENT may do unprompted. It does not govern what RAMA can do.**
+He restarts the service from his own shell whenever he likes; the deny removes only the *agent's*
+ability to do it **with no human beat.** ⭐ That is not a new posture — it is **the campaign's
+existing rule for its most dangerous action** (`§D3`: *the book is flattened MANUALLY; never build
+an auto-flatten*), applied to the agent's authority instead of to the system's.
+
+⭐ **And "you must edit the deny out" is not friction — it IS the human beat, made structural.** A
+deliberate edit cannot happen by accident, cannot happen mid-unrelated-task, and cannot be
+produced by an auto-filled prompt (§G1). For a webhook POST — **a fabricated trading signal
+injected into a running system** — that is the correct cost.
+
+**Measured against real need:**
+- **live-service restart** — costs the deploy path **nothing**: per §D3 the service is already
+  **down at push time by design**, and the deploy never restarts it (code loads at the next
+  08:15). ⇒ this deny does not touch a single authorised workflow.
+- **webhook POST** — a real diagnostic, so the cost is real but occasional. Against it: **15
+  allow entries currently permit it with no prompt, on the signal path, registered nowhere.**
+
+## 7. THE 16 RULES — 5 PATTERNS × 2 TOOL NAMESPACES
+
+| # | pattern (written for **both** `Bash(…)` and `PowerShell(…)`) | stops | note |
+|---|---|---|---|
+| 1 | `*--cleanup-*` | `--cleanup-pending`, `--cleanup-orders` | no word boundary — the suffix is the point |
+| 2 | `*--reset *` | `… --reset` / `… --reset foo` | ⭐ trailing ` *` **enforces a word boundary**, so `git commit --reset-author` is deliberately **NOT** caught |
+| 3 | `*sed -i*.env*` | in-place edits of any `.env` | catches the `WEBHOOK_SECRET` comment-out |
+| 4 | `*curl*webhook*` · `*wget*webhook*` | POSTing to the webhook | ⭐ scoped to the **transfer tool**, so `grep`/`journalctl` on "webhook" stay allowed — log diagnosis is untouched |
+| 5 | `*systemctl restart*` · `*systemctl start *` · `*systemctl stop *` | live-service lifecycle | ⭐ `systemctl status` is **not** matched and stays allowed |
+
+⛔ **Every pattern is written twice.** Tools are separate namespaces; omitting one reproduces the
+half-narrowing R12 measured, on the deny side.
+✅ **`allow[]` verified untouched** — 533 entries, hash identical to the snapshot.
+
+## 8. 🔬 THE PROBE PLAN — ⛔ RUN IN A FRESH SESSION, NOT THIS ONE
+
+Route **(b)** was ruled: **write → restart Claude Code → probe fresh**, where *"is the rule
+loaded?"* is not in question. ⛔ These have **not** run; the rules are `<BUILT>`, not
+`<VERIFIED>`.
+
+⭐ **Every probe is an `echo` of the pattern — safe in BOTH outcomes by construction.** If a deny
+silently fails to match, all that happens is a string is printed. ⛔ **Never probe a deny with a
+command that would be destructive if the deny fails.**
+
+| # | probe | expected |
+|---|---|---|
+| 1 | `echo --cleanup-pending` | **BLOCKED** |
+| 2 | `echo x --reset y` | **BLOCKED** |
+| 2b | `echo git commit --reset-author` | ✅ **ALLOWED** — proves the word boundary works and the rule is not over-broad |
+| 3 | `echo sed -i s/a/b/ .env` | **BLOCKED** |
+| 4 | `echo curl http://x/webhook/y` | **BLOCKED** |
+| 4b | `echo grep webhook logfile` | ✅ **ALLOWED** — proves log diagnosis survives |
+| 5 | `echo systemctl restart trading-system` | **BLOCKED** |
+| 5b | `echo systemctl status trading-system` | ✅ **ALLOWED** |
+
+⭐ **The negative probes (2b, 4b, 5b) matter as much as the positive ones** — a deny that blocks
+everything is not evidence it blocks the *right* thing. Record per rule: **pattern · probe ·
+observed result.**
+
+⚠️ **If a positive probe is NOT blocked, there are three causes and they must be distinguished, not
+guessed:** (i) rules not loaded, (ii) pattern wrong, (iii) `echo` short-circuited as a read-only
+built-in before deny evaluation. Distinguish (iii) by re-probing with a non-read-only but harmless
+command, e.g. `ssh --cleanup-pending` (invalid flag ⇒ ssh prints usage and exits).
+
+## 9. 🔴 SANDBOXING — REGISTERED AS ITS OWN ITEM, ⛔ NOT FOLDED INTO D4
+
+The docs name **sandboxing** as the OS-level layer: *"restricts the Bash tool's filesystem and
+network access… applies only to Bash commands and their child processes"*, and *"prevent Bash
+commands from reaching resources outside defined boundaries, even if a prompt injection bypasses
+Claude's decision-making."*
+⇒ **It is the answer to a different question than the one D4 asked** — D4 asks *what may the agent
+be pre-authorised to do*; sandboxing asks *what can any subprocess reach at all*. **Not folded in.**
+
+> ⚠️ **CALIBRATION CONFLICT, REPORTED NOT RESOLVED (per §2's standing guard).** The guard says
+> *"this document does not license new register rows; the reconciled count (231) stands"*, and
+> *"if this rule and the count ever conflict, REPORT it — never resolve it silently."* The ruling
+> asks for sandboxing as **its own item**. ⛔ **I have NOT minted row 232.** It is recorded here
+> and flagged; **whether it becomes a row is Rama's call.**
+
+⛔ **HALT — the rules are `<BUILT>`, not `<VERIFIED>`.** ⭐ The matcher precondition **passed**;
+what remains is §8, which needs a restart. Step 2 (narrow both channels together) and step 3
+(stale sweep) are untouched and stay separate, in that order.
