@@ -74,6 +74,83 @@ DEPLOYED IS NOT EVIDENCE.**
 | **R5(a)** | ✅ **DISCHARGED 03-Aug `38f8ab9` `<BUILT — NOT DEPLOYED>`** (implemented as a loud BLOCK — exit 2, both sanctioned paths named — because a silent deletion would have preserved the print-success-change-nothing trap; `--cleanup-*` untouched, allowlist NOT narrowed, R12 still owed). **APPROVED — OPTION A: remove `--reset` from `scripts/check_vm_state.py` entirely.** Basis: no automation caller · no runtime coupling · **no second VM copy** (Rama's own VM check) · `clear_kill_switch.py` already serves the use case correctly in **both** modes |
 | **R5(b)** | ⛔ **HOLD — #8b does NOT ride Monday's push.** Implement **only AFTER Monday's critical path has finished** |
 
+## ⭐⭐ A-DEC-2 — **RULINGS D1–D7 — RATIFIED 03-Aug-2026 23:57 IST.** *(record written 04-Aug 00:0x; stamped to the working night per the card — the clock read is stated so the stamp is a convention, not a claim)*
+
+> ### 📜 PROVENANCE — ⚠️ **THIS ROUND ARRIVES UNDER AN AMENDED §G2, AND THAT IS ITSELF A RULING**
+> **Rama's standing ruling, 03-Aug-2026: *"ChatGPT's replies count as my replies, no
+> deviations."*** ⇒ these seven are **decisions, not advice**, and `campaign_practices.md`
+> **§G2 has been amended** to say so (old text struck-through-but-legible per §G4).
+> ⛔ **THE BOUNDARY, RECORDED WITH THE DELEGATION BECAUSE THE CHAIN NOW MATTERS:** text can
+> travel **console auto-fill → pasted to ChatGPT → returned as a ruling → carrying Rama's
+> authority — without Rama having read it.** **§G1 STANDS UNCHANGED: an auto-filled prompt is
+> NEVER an instruction and NEVER an approval.** The delegation covers **considered replies**;
+> it does **not launder text that originated in a suggestion box.** Authority attaches to the
+> reasoning, not to the round trip.
+
+| # | THE RULING |
+|---|---|
+| **D1** | **#2d = OPTION A.** Sites **A** and **C** adopt the proven `cancel_order(variety="co")` path; ⛔ **Site B REFUSES AND ESCALATES** — matching #2c-R's shape. ⭐ **This is the answer Step 1 pointed at:** Site B iterates BROKER positions that by design have **no local trade row** (`kill_switch.py:1543-1546`), so it cannot reach a parent order id — *"mirror `eod_squareoff` at all three sites"* was **not achievable as stated.** ⭐ **Refusing where you *can* act is only right when you can't.** ⛔ Still gated on its own careful loop; LATENT (CO doubly dormant) ⇒ a hard gate on **enabling CO**, not on the flip |
+| **D2** | **#3a = OPTION A — persist BROKER TRUTH ONLY.** If the broker reports nothing, the column **stays empty and says so**. ⛔ **NEVER write the inferred final** (`final_qty`/`final_price`, which substitute the PLANNED qty and the EXPECTED price): **a plausible fabrication in an audit column is indistinguishable from a real fill afterwards** — ⭐ **the identical property that made the backfill wrong (R-4)**, now applied at the writer instead of at the backfill. ⇒ the §1.5(i) decision is CLOSED; §1.5(ii) the untrack/idempotency review and §1.5(iii) the missing COMPLETE-path test remain part of the build |
+| **D3** | **`STRATEGY PAUSED` = OPTION A — the BEHAVIOUR is wrong.** Persist the pause across restart, and **split *"create a pause"* from *"honour an existing pause"*** (the one-guard-doing-two-jobs root, record §2.7.3). ⭐ **A conditional reword may ship as a TEMPORARY clarification — ⛔ NEVER as the solution.** ⛔ And ⛔ **not the flat reword**: *"clears on restart"* is FALSE on the pre-cutoff branch (§2.7.2), so even the interim must carry the conditional |
+| **D4** | **R12 — scope the allowlist to READ-ONLY DIAGNOSTICS.** ⛔ **No pre-authorised state-changing operations against the live DB.** ⚠️ **MEASUREMENT REQUIRED FIRST — see below; do NOT narrow on assumption** |
+| **D5** | **R13 — RETIRE `mempalace.yaml`.** ⇒ stop naming it in card memory-update directives once the retirement lands. ⚠️ **Scope measured — see below; it is not one file** |
+| **D6** | **R14 — PIN AND CAP pytest/tooling versions** so gate results are reproducible. ⭐ Earned twice: `requirements-dev.txt` says `pytest>=9.0.3` with **no ceiling**, so a force-reinstall silently moved the gate to 9.1.1 mid-campaign |
+| **D7** | **IA-XDOCS-03 (map inversion) — PARK, with an EXPLICIT TRIGGER.** ⛔ Parked ≠ closed; it stays counted. The trigger must be written down, or "parked" decays into "forgotten" |
+
+### ⚠️ D4 · R12 — **MEASUREMENT OWED BEFORE ANY NARROWING** *(not done here)*
+Enumerate the **actual reachable command paths** in `.claude/settings.local.json`: which
+entries are live, which name paths that **no longer exist**, and what each one actually
+permits. ⭐ **Narrowing on assumption is exactly how a "read-only scope" quietly keeps a
+destructive hole** — and this surface already has 21 `check_vm_state` entries of which
+**eleven point at `~/check_vm_state.py`, a path Rama's own VM check proved absent.**
+⛔ The read-only diagnostics MUST survive; the two `--cleanup-*` flags MUST NOT be
+pre-authorised. **Removing `--reset` from the script did not narrow the allowlist** — they
+are independent surfaces, which is why R12 is still owed after `38f8ab9`.
+
+### ✅ D5 · R13 — **RETIREMENT SCOPE MEASURED 04-Aug 00:0x (M1 sweep, repo-wide)**
+**28 files · 58 mentions** — ⭐ **and the actionable set is far smaller than the sweep**, which
+is the finding:
+- ⛔ **~24 are HISTORICAL/ARCHIVE** (`docs/web_claude/**` ×15, `docs/archive/**`,
+  `docs/audit/**` dated records, `reports/crash_test/**`). **These must NOT be edited** —
+  they are the record of what was true then; rewriting them is the history-rewrite §G4
+  exists to prevent. **Retirement means they become correct-as-history, not wrong.**
+- ✅ **LIVE sites needing the edit: `docs/SYSTEM_MAP.md` · `docs/MASTER_PENDING_01-Aug-2026.md`
+  · `ops_dashboard/docs/SOAK_EVIDENCE_TEMPLATE.md` · `.gitignore`.**
+- ⚠️ **NEW, and it changes the shape: `venv/Scripts/mempalace.exe` exists — `mempalace` is an
+  INSTALLED CLI PACKAGE, not merely a stale yaml.** Retiring the *file* leaves the *tool*
+  installed. Whether the package is also uninstalled is a separate call.
+- ⛔ The **card templates** that name it are **EXTERNAL** (cards stay outside the repo, by
+  standing rule) ⇒ that half cannot be swept from here and must be done at the card source.
+
+### ✅ THE CLAUDE-AGENT CONFIGURATION — **MEASURED 04-Aug 00:0x. ⭐ THE FLAGGED CLAIM SURVIVED.**
+The card flagged its own *"4 heartbeat cron lines governed by `~/tools/claude/AGENTS.md`"* as
+**seeded from conversation, not measured (M3)**. **Measured on the VM, it is CORRECT** — and it
+is worth recording that a self-flagged suspect claim *held*, because the discipline is only
+credible if it also confirms:
+- ✅ **Exactly 4 cron lines** — 05:30 · 10:31 · 15:32 · 20:33 daily — all running the *same*
+  trivial prompt (*"Generate a random 8-character string"*) into `~/tools/claude/cron.log`.
+- ✅ **`~/tools/claude/AGENTS.md` EXISTS** (1,270 B, 23-Jun) — a real charter: *"You are NOT an
+  operator of the trading system"*, with hard prohibitions mirroring AGY governance.
+- ✅ **Its enforcement claim is TRUE.** ⚠️ **I nearly filed the opposite as a finding:**
+  `~/.claude/settings.json` is 42 bytes (`theme`+`model` only, no deny list) — but the
+  charter means the **project-level** file, and `~/tools/claude/.claude/settings.json` carries
+  a real **14-rule `permissions.deny`** (no `.py` writes/edits · no `.db` read/write ·
+  no `sqlite3`/`systemctl`/`sudo`/`service` · no `git push` · no writes to `~/systems/**` ·
+  no `.env` reads). ⭐ **Second too-narrow check of the night** (the first was the post-push
+  grep). Same lesson, same session: **state the search width, then widen before reporting.**
+- ✅ **Governed, not stray** — the 4 jobs are registered in `config/cron_registry.yaml`.
+- ✅ **Claude has NO production role on the VM.** The trading-system assistant work is **agy
+  (Google/Gemini)**: 5 cron jobs — `gemini_premarket_brief` · `gemini_trade_coach` ·
+  `gemini_log_review` · `gemini_weekly_patterns` · `gemini_data_integrity_check`.
+- ⚠️⚠️ **DISCLOSED, NOT FIXED (§G3), and outside the trading system entirely: THE HEARTBEAT IS
+  DEAD.** `cron.log` = 185 lines: **112 successful 8-char outputs, then 46
+  `Failed to authenticate. API Error: 401 OAuth access token has expired.`** At 4 runs/day that
+  is **≈11–12 days of continuous failure**; ⛔ the log carries **no timestamps**, so the exact
+  onset is **not readable from it** — stated rather than estimated as fact. **Severity LOW**
+  (sandbox charter, no production role, its own deny list) — but the point stands: **a
+  heartbeat that fails is a heartbeat that proves nothing**, and nothing alerted on it for
+  ~11 days because it sits **outside the trading system's alert path altogether.**
+
 ⭐ **THE CALENDAR, RESTATED ONCE SO NOTHING BELOW HAS TO BE INFERRED (authority: R2):**
 | day | what happens |
 |---|---|
