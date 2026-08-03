@@ -270,6 +270,33 @@ requiring the push to wait on anything else.
 `trades`** (`MIGRATION_TABLES[45]`), not a pure addition — atomic on failure, 134 ms on
 a production-copy dry-run. The backup above should be kept until it completes.
 
+### 6d. ⭐⭐ HOW TO READ THE RE-RUN — the verdict is ASYMMETRIC (Rama, 03-Aug ~11:30)
+
+⛔ **RED and GREEN do not carry the same weight, and conflating them is the trap.**
+
+**RED → HOLDS THE PUSH, subject to ONE discriminator.** B2 asserts *constructed-set ==
+registered-set*, which is a property of the **WIRING, not the database** — the DB decides
+schema and state, never which managers `main.py` constructs. So an unregistered
+constructed manager is a **code-level** defect that is equally true on the VM.
+⛔ **The discriminator, to be MEASURED before concluding: is the offending manager
+paper-only?** A gap in a ctor that fires only in paper is a real finding but **not** a
+push-blocker. A gap on a **shared** path blocks — and shared is the likely case, since the
+composition root is shared. **Report which; do not assume.**
+
+**GREEN → does NOT fully clear the live path, and must not be recorded as if it did.**
+A **PC PAPER** boot cannot exercise **live-only ctors** — `clock_skew_probe` is the known
+one (registered inside its existing `if not is_paper`), and any other live-conditional
+construction is equally unproven.
+⇒ the honest label for a green result is: **"SHARED composition proven; live-only ctors
+UNPROVEN until the Tuesday 08:15 VM boot."**
+⚠️ **Recording it as a bare "gate (a) PASS" would commit, inside our own evidence, exactly
+the declared-vs-effective gap this campaign exists to close.**
+
+✅ **The residual is BOUNDED, and saying so stops it being over-read:** on the VM, B2 is
+**CRITICAL-and-continue by design, never fail-fast**. An unproven live-only registration
+therefore surfaces Tuesday morning as an **alert**, not as a system that will not start —
+the deliberate mode split from ledger #1, working as intended.
+
 ## 6. LABEL
 
 **`<MEASURED — ONE RED, NOT FIXED>`.** No code changed. No register row (231 stands).

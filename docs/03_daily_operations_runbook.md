@@ -2,6 +2,14 @@
 
 Standard operating procedures for the trading system.
 
+> ⭐ **ALERT ARRIVED? CHECK [`expected_alarms.md`](expected_alarms.md) FIRST.**
+> A number of CRITICAL-grade messages fire on a **completely healthy** day — the 15:15
+> breaker's 4-line chorus, the post-schema-push refuse-window, the delivery-reconciler
+> strings, and the deliberate loudness ledger #2/#2b/#2c-R adds. Measured: 31-Jul, a
+> healthy day with **zero real incidents**, emitted **49 alerts**.
+> ⛔ It lowers the **alarm**, never the **check** — every entry has a *"THIS IS REAL IF…"*
+> line, and **an unlisted alarm is an incident until proven otherwise**.
+
 ## Morning Startup (08:00-09:14 IST)
 
 ### Automated (Cron)
