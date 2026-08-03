@@ -464,6 +464,37 @@ revalidated?"* distinction — **solved by construction rather than by attestati
   provides **reliable parent-order lookup**. **Owner: the CO protocol surface — ⛔ NOT the
   reconciler.**
 
+### AR8 · #2d's DUPLICATE CO CRITICAL — noise accepted to protect the money path
+- **Accepted:** a CO position handled at `kill_switch` **Site A** (local pass) is
+  **deliberately NOT added to `handled_symbols`**, so the **Site B** broker sweep can still see
+  it — a bracket cancel is not instantaneous at the broker — and, under **D1**, refuse it with a
+  **CRITICAL**. ⇒ **one HARD_KILL can emit a CRITICAL about a position that was already
+  correctly handled.**
+- **Reasoning:** ⭐ **the two costs are not comparable.** Not adding costs a **duplicate alert —
+  noise.** Adding costs a **same-symbol MIS row skipped by the sweep** — i.e. **a live intraday
+  position left unflattened during a HARD_KILL**, a **money-path failure** and a direct breach of
+  the Q4 invariant. ⇒ take the noise. ⭐ **This is not a fresh judgement: it is the ruling #2b
+  already made for the CNC spare, for the same reason and at the same line range**
+  (`capital/kill_switch.py:1592-1596` documents it) — so the register records **consistency**,
+  not a new trade-off.
+  ⚠️ **Bounded by an obligation, not left bare:** Site B's CO refusal message **must name the
+  in-flight case** (*"a bracket cancel may already be in flight from the local pass"*). ⛔ A
+  duplicate that reads as a second, unrelated failure is **worse than no duplicate** — that is
+  the line between accepted noise and manufactured confusion, and it is what keeps this
+  acceptance clear of **IA-P9-02** (the alert-fatigue disease the campaign exists to cure).
+- **Who / when:** **ChatGPT under the amended §G2, 04-Aug-2026 ~00:55 IST** — ruling R-b of the
+  three raised by the #2d Step-1b prep pass. ⚠️ Recorded as a **§G2 decision**, not as an
+  implementer judgement: it trades an operator-visible alert against a money-path guarantee, and
+  §G2 is what makes that call authoritative rather than advisory.
+- 📄 **SOURCE:** `docs/audit/ledger2d_step1_measurement_03aug2026.md` **§A5 R-b @ `38208fc`**
+  (the measurement of both costs **and** the ruling recorded beneath it). SHA determined by
+  `git log -S`, per the citation format above.
+- ⭐ **REOPENS IF:** **CO ever becomes live AND the duplicate proves to cause real operator
+  confusion in practice.** ⛔ **Both halves are required** — CO is doubly dormant (**AR5**), so
+  until it is enabled this risk **cannot be observed at all**, and a reopen argued from
+  anticipated confusion rather than observed confusion is exactly the re-litigation §R exists to
+  prevent. **Reopens together with AR5 and AR7.**
+
 ---
 
 ## D. DEPLOY
