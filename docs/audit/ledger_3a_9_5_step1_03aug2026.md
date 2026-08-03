@@ -559,10 +559,44 @@ change first matters — with two alerts telling the operator that positions whi
 survive will be closed. That is exactly the truth-telling failure this campaign exists to remove,
 arriving on the worst possible day.
 
-⛔ **Rama's call.** If ruled against, the two are recorded in `expected_alarms.md` as
-**KNOWN-FALSE-AFTER-FLIP** so the operator is warned by the doc instead.
-**Either way it must not be silent** — an entry now stands in `expected_alarms.md` §6 marked
-`⏳ DECISION PENDING`, correct under both outcomes, to be resolved when the ruling lands.
+✅✅ **RULED BY RAMA 03-Aug — APPROVED: fix the two strings, ride the flip push.**
+`<BUILT — NOT DEPLOYED>`; first executes **WED 08:15**, which is the point — the corrected text
+is live the first afternoon it matters.
+
+**What shipped** (two string literals + comments; **no logic, no imports, no new code path** —
+`git diff` shows only these two bodies):
+
+| site | now reads |
+|---|---|
+| `main.py:703` | *"EOD squareoff closes **INTRADAY (MIS/CO)** positions at 15:17.\nDelivery (CNC) is carried by design (EOD6) — not squared off."* |
+| `capital/kill_switch.py:613` | *"New signals: BLOCKED \| **Intraday** positions: managed to SL/TGT/EOD\nDelivery (CNC) is carried by design (EOD6) — not squared off."* |
+
+⚠️ **The `kill_switch` body is SHARED by the scheduled (WARNING) and emergency (CRITICAL) paths**
+(`:606-618`). The new wording holds for both because **SOFT_KILL never flattens** — it blocks
+entries and lets exits run — so "intraday managed to SL/TGT/EOD, delivery carried" is true on
+either path. The test asserts it on both.
+
+⭐ **Both bodies now name the carve-out in the SAME vocabulary.** They land seconds apart at 15:15;
+previously they made the same wrong claim two *different* ways, so reading both gave the operator
+no signal that either was wrong.
+
+✅ **Pinned by `tests/unit/test_kill_alerts_delivery_carveout.py` (7 tests).** It asserts the
+**CLAIM, not the string** — no unqualified `"all positions"`, the managed set scoped to intraday,
+the carve-out named — because pinning the exact body would go red on a harmless rewording and
+green on a reworded-but-still-wrong one. ⭐ **It covers BOTH sites in one test file, and one test
+asserts they AGREE**: that test is green when both are right *and* when both are wrong, red only
+when they diverge — the ledger-#8 lesson (a fix at one site was not permanent because the same
+wrong instruction lived at two more) encoded as a guard.
+
+✅ **RED-first proven by planting**: with the two source files stashed, the new tests ran
+**3F/4P** — the three failures are exactly the property assertions; the four passes are the
+"what must NOT change" guards (reason-in-body · `BLOCKED` · `cancelled`) plus the agreement test.
+✅ **Gate `pytest tests/unit tests/integration`: 8F / 5,534P / 4skip** vs tonight's #8c baseline
+**8F / 5,527P** — **+7 passed = exactly the new tests**, and the **NEW-FAILURE SET IS EMPTY**,
+established by re-running all 8 failures against the stashed base source in the same session and
+window (all 8 fail identically) — ⛔ **not inferred from the "known PC-env failures" label.**
+✅ Also corrected: `test_scheduled_kill_severity.py:32` quoted the old body in its docstring and
+would have become a lying comment on the same night two were removed.
 
 ---
 

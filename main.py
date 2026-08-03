@@ -700,7 +700,19 @@ def _make_force_close_cb(
                 notifier.send(
                     severity="WARNING",
                     title=f"[{mode}] CIRCUIT BREAKER — Force Close",
-                    body="15:15 circuit breaker fired: pending entry orders cancelled.\nEOD squareoff will close all positions at 15:17.",
+                    # ⛔ Do NOT restore "will close all positions". EOD6
+                    # (eod_squareoff.py:23/:34/:1073) does NOT touch DELIVERY
+                    # (CNC) positions — a spared delivery leg is CARRIED by
+                    # design (ledger #2 / Q4). The old wording was correct only
+                    # while delivery was impossible; it goes false at the flip
+                    # and would tell the operator, every afternoon, that
+                    # positions which deliberately survive are about to be
+                    # closed. Pinned by test_kill_alerts_delivery_carveout.py.
+                    body=(
+                        "15:15 circuit breaker fired: pending entry orders cancelled.\n"
+                        "EOD squareoff closes INTRADAY (MIS/CO) positions at 15:17.\n"
+                        "Delivery (CNC) is carried by design (EOD6) — not squared off."
+                    ),
                     source_module="main",
                 )
             except Exception as ne:

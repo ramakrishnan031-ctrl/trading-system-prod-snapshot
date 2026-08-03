@@ -610,9 +610,21 @@ class KillSwitch:
                         if scheduled
                         else f"[{self._mode}] ⚠️ SOFT KILL ACTIVATED"
                     ),
+                    # ⛔ Do NOT restore the unqualified "Open positions: managed
+                    # to SL/TGT/EOD". EOD6 (eod_squareoff.py:23/:34/:1073) does
+                    # NOT touch DELIVERY (CNC) — it is CARRIED by design
+                    # (ledger #2 / Q4), so "managed to EOD" is false for it.
+                    # This body is shared by BOTH the scheduled (WARNING) and
+                    # the emergency (CRITICAL) path above; the wording holds for
+                    # both because SOFT_KILL never flattens — it blocks entries
+                    # and lets exits run. Pinned by
+                    # test_kill_alerts_delivery_carveout.py, which asserts the
+                    # SAME property here and at main.py's force-close alert —
+                    # the two arrive together at 15:15 and must not disagree.
                     body=(
                         f"Reason: {reason}\n"
-                        "New signals: BLOCKED | Open positions: managed to SL/TGT/EOD"
+                        "New signals: BLOCKED | Intraday positions: managed to SL/TGT/EOD\n"
+                        "Delivery (CNC) is carried by design (EOD6) — not squared off."
                     ),
                     source_module="kill_switch",
                 )

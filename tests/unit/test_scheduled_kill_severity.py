@@ -29,7 +29,9 @@ that cannot equal either literal:
 ⭐ AND IT DOES NOT GO QUIET. The alert still SENDS, at WARNING -- it is not
 suppressed. Independently, the 15:15 event already carries a dedicated and MORE
 informative WARNING from a DIFFERENT module (`main.py:699`, "CIRCUIT BREAKER -- Force
-Close ... EOD squareoff will close all positions at 15:17"), and the kill is still
+Close ... EOD squareoff closes INTRADAY (MIS/CO) positions at 15:17"; the wording was
+"will close all positions" until 03-Aug-2026 -- corrected because EOD6 does not touch
+delivery, see test_kill_alerts_delivery_carveout.py), and the kill is still
 logged CRITICAL to the log (`kill_switch.py:562`) and persisted to
 `kill_switch_state`. So a downgrade here cannot manufacture a silent success.
 """

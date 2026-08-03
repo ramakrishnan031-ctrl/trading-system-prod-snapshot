@@ -227,29 +227,34 @@ here means flat, not broken.
 - **Do:** nothing, unless you want to exit manually before 15:17.
 - **THIS IS REAL IF:** it lists a position you did not expect to still be open.
 
-## 7. ⏳ DECISION PENDING — two daily 15:15 alerts go **false at the flip**
+## 7. ✅ The 15:15 pair now NAMES the delivery carve-out — corrected 03-Aug
 
-⛔ **Applies from the delivery flip onward. Until then both lines below are correct.**
+**From Wednesday's boot you will see, in both alerts:**
 
-The two alerts in §1 arrive together every afternoon and both make a claim about EOD:
+> `CIRCUIT BREAKER — Force Close` —
+> *"15:15 circuit breaker fired: pending entry orders cancelled.
+> EOD squareoff closes **INTRADAY (MIS/CO)** positions at 15:17.
+> Delivery (CNC) is carried by design (EOD6) — not squared off."*
 
-| alert | the claim |
-|---|---|
-| `CIRCUIT BREAKER — Force Close` | *"EOD squareoff will close **all** positions at 15:17."* |
-| `SOFT KILL — scheduled (…)` | *"Open positions: managed to SL/TGT/**EOD**"* |
+> `SOFT KILL — scheduled (…)` —
+> *"Reason: …
+> New signals: BLOCKED | **Intraday** positions: managed to SL/TGT/EOD
+> Delivery (CNC) is carried by design (EOD6) — not squared off."*
 
-⛔ **Both become wrong once delivery is enabled.** Verified at source — `eod_squareoff.py:23 / :34
-/ :1073`: **EOD6 — DELIVERY (CNC) positions are NOT touched.** A CNC leg is *deliberately carried
-overnight*; it is neither closed at 15:17 nor "managed to EOD".
+**Why they changed.** Until 03-Aug they read ~~*"EOD squareoff will close **all** positions at
+15:17"*~~ and ~~*"Open positions: managed to SL/TGT/**EOD**"*~~. Both were correct only while
+delivery was impossible. Verified at source — `eod_squareoff.py:23 / :34 / :1073`: **EOD6 —
+DELIVERY (CNC) positions are NOT touched.** A CNC leg is *deliberately carried overnight*, so from
+the flip onward both statements would have been **false every single afternoon**, in the two
+alerts an operator reads at exactly the moment positions are being closed. Corrected by Rama's
+ruling on the flip push; pinned by `tests/unit/test_kill_alerts_delivery_carveout.py`, which
+asserts the *claim* (no unqualified "all positions"; the managed set scoped to intraday; the
+carve-out named) at **both** sites rather than the wording at one.
 
-🔴 **Owed to Rama:** whether the two string literals are corrected on the flip push, or left and
-warned about here. **Until that is ruled:**
-
-- **Do:** read both lines as applying to **INTRADAY (MIS/CO) positions only**. Any delivery
-  holding survives 15:15, 15:17, and the residual sweep **by design** (that is ledger #2's whole
-  point, and the Q4 ruling behind it).
-- ⛔ **Do NOT** conclude a carried CNC position was missed by the squareoff because these alerts
-  said "all". They are the stale text; **EOD6 is the behaviour.**
+- **Do:** nothing. **A delivery holding surviving 15:15, 15:17 and the residual sweep is the
+  designed behaviour** — ledger #2 and the Q4 ruling behind it.
+- ⭐ **The two now agree, deliberately.** They land seconds apart; if you ever see them give
+  *different* answers about delivery, one has been edited without the other.
 - **THIS IS REAL IF:** a **delivery** position is actually gone after 15:17, or an **intraday**
   position survives it. Either is the opposite of the designed behaviour →
   `05_incident_response.md`.
