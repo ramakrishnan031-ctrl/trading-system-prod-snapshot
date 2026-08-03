@@ -1065,12 +1065,154 @@ def stray_pyc_check(root: Path) -> CheckResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Check 12 — Deployed tree vs HEAD  (ledger #10 / IA-P10-01)
+# ─────────────────────────────────────────────────────────────────────────────
+# Deploy is `git --git-dir=<bare> --work-tree=<target> checkout -f`
+# (deploy/hooks/post-receive). Its integrity was inherited from DISCIPLINE and
+# never from a check — this campaign re-answered "is the running code the
+# audited code" BY HAND ten times. This turns that ritual into a nightly
+# artifact. `checkout -f` also leaves UNTRACKED files in place, so a stray .py
+# is the other half of the question (check 11 covers only the .pyc slice).
+#
+# ⛔⛔ READ-ONLY BY CONSTRUCTION — and getting there required a correction that
+# is worth stating, because the obvious form is WRONG:
+#   · `git diff HEAD` needs an index. Pointing GIT_INDEX_FILE at an EMPTY temp
+#     file makes git treat every tracked file as deleted. MEASURED on a
+#     provably CLEAN tree: "1250 files changed, 344936 deletions(-)" — i.e. the
+#     check would scream on its very first, perfectly healthy run.
+#   · Using the repo's REAL index instead would let git refresh (write) the
+#     DEPLOY repo's index from a monitoring job.
+#   ⇒ We COPY the real index to a temp file and diff against the COPY. Correct
+#     output, and the deploy repo is never written. Both halves are asserted by
+#     test (clean⇒empty, planted change⇒detected, real index mtime unchanged).
+#
+# ⛔ This check NEVER sets soft_kill_reason. A dirty deployed tree is reported
+# loudly and is NOT a reason to halt tomorrow automatically: the failure class
+# (partial checkout, stray file, hook drift) is environment-caused, so the rule
+# is DEGRADE+ALARM, not BLOCK. Escalation is the operator's call.
+
+_DEPLOY_GIT_TIMEOUT_SEC = 30
+
+
+def _resolve_deploy_git_dir(root: Path) -> Optional[Path]:
+    """The bare repo the hook pushes into, else the tree's own .git (PC).
+
+    VM layout: work tree /home/ubuntu/systems/trading-system has NO .git of its
+    own — the bare repo lives at ~/trading-system.git. PC layout: an ordinary
+    .git inside the tree. Returns None when neither is present, which is a
+    DEGRADE case, not a violation.
+    """
+    bare = Path.home() / "trading-system.git"
+    if (bare / "HEAD").exists():
+        return bare
+    local = root / ".git"
+    if local.exists():
+        return local
+    return None
+
+
+def deployed_tree_check(root: Path, git_dir: Optional[Path] = None) -> CheckResult:
+    """Ledger #10 / IA-P10-01: does the deployed work tree still equal HEAD?"""
+    res = CheckResult("🌳 DEPLOYED TREE vs HEAD")
+    gd = git_dir or _resolve_deploy_git_dir(root)
+    if gd is None:
+        res.warn(
+            "no git dir found (looked for ~/trading-system.git then "
+            f"{root}/.git) — cannot verify deployed-tree-equals-HEAD here"
+        )
+        return res
+
+    import tempfile
+
+    common = ["git", f"--git-dir={gd}", f"--work-tree={root}"]
+    tmp_index = None
+    try:
+        src_index = gd / "index"
+        with tempfile.NamedTemporaryFile(prefix="sysmgr_idx_", delete=False) as fh:
+            tmp_index = Path(fh.name)
+        if src_index.exists():
+            shutil.copyfile(src_index, tmp_index)
+        else:
+            # No index yet (a bare repo that has never checked out). An empty
+            # index would report every file as deleted, so say so and stop
+            # rather than emit a false violation.
+            res.warn(f"{gd}/index does not exist — deploy has not checked out "
+                     "here yet; nothing to compare")
+            return res
+
+        env = dict(os.environ, GIT_INDEX_FILE=str(tmp_index))
+
+        head = subprocess.run(common + ["rev-parse", "--short", "HEAD"],
+                              capture_output=True, text=True,
+                              timeout=_DEPLOY_GIT_TIMEOUT_SEC, env=env)
+        head_sha = head.stdout.strip() if head.returncode == 0 else "<unknown>"
+
+        diff = subprocess.run(common + ["diff", "--stat", "HEAD"],
+                              capture_output=True, text=True,
+                              timeout=_DEPLOY_GIT_TIMEOUT_SEC, env=env)
+        if diff.returncode != 0:
+            res.warn(f"git diff failed (rc={diff.returncode}): "
+                     f"{(diff.stderr or '').strip()[:200]}")
+            return res
+
+        drift = [ln for ln in diff.stdout.splitlines() if ln.strip()]
+
+        untracked = subprocess.run(
+            common + ["ls-files", "--others", "--exclude-standard", "--", "*.py"],
+            capture_output=True, text=True,
+            timeout=_DEPLOY_GIT_TIMEOUT_SEC, env=env)
+        stray_py = [ln for ln in untracked.stdout.splitlines() if ln.strip()] \
+            if untracked.returncode == 0 else []
+
+        if not drift and not stray_py:
+            res.ok(f"deployed tree == HEAD ({head_sha}) — no tracked drift, "
+                   "no untracked .py")
+            return res
+
+        if drift:
+            res.violation(
+                f"deployed tree DIFFERS from HEAD ({head_sha}) in "
+                f"{len(drift) - 1 if len(drift) > 1 else len(drift)} file(s) — "
+                "the running code is NOT the audited code. "
+                f"First lines: {'; '.join(drift[:5])}"
+            )
+        # Output is bounded deliberately: this check runs LAST, so it is the
+        # first thing Telegram's 4096-char truncation drops — on exactly the
+        # night it matters most. The full list always survives in
+        # reports/system_manager/<day>.txt and the email sentinel.
+        for rel in sorted(stray_py)[:10]:
+            res.violation(
+                f"{rel}: UNTRACKED .py in the deployed tree — `checkout -f` "
+                "leaves untracked files in place, so this can be imported and "
+                "is in NO commit."
+            )
+        if len(stray_py) > 10:
+            res.warn(f"...and {len(stray_py) - 10} more untracked .py file(s) "
+                     "— see the saved report for the full list")
+        return res
+
+    except subprocess.TimeoutExpired:
+        res.warn(f"git did not answer within {_DEPLOY_GIT_TIMEOUT_SEC}s — "
+                 "check skipped, NOT a verdict")
+        return res
+    except (OSError, ValueError) as exc:
+        res.warn(f"check could not complete: {exc}")
+        return res
+    finally:
+        if tmp_index is not None:
+            try:
+                tmp_index.unlink()
+            except OSError:
+                pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Orchestration / CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
 def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         db_path: Path, root: Path) -> tuple[str, int, int, List[str]]:
-    """Run all 11 checks (each isolated) and build the report."""
+    """Run all 12 checks (each isolated) and build the report."""
     day = _day(day_date)
     prev = _prev_trading_day(day_date, config_dir)
     specs = [
@@ -1085,10 +1227,12 @@ def run(store: StateStore, app_config, day_date: date, config_dir: Path,
         lambda: security_check(day, root, config_dir),
         lambda: slippage_overrides_check(store, app_config, day),
         lambda: stray_pyc_check(root),
+        lambda: deployed_tree_check(root),
     ]
     titles = ["CONFIG vs ACTUAL", "ORDER QUALITY", "REPORT INTEGRITY", "SYSTEM HEALTH",
               "STRATEGY HEALTH", "RISK EVENTS", "vs YESTERDAY", "TOMORROW READINESS",
-              "SECURITY (COPY PROTECTION)", "SLIPPAGE OVERRIDES", "STRAY .pyc"]
+              "SECURITY (COPY PROTECTION)", "SLIPPAGE OVERRIDES", "STRAY .pyc",
+              "DEPLOYED TREE vs HEAD"]
     results: List[CheckResult] = []
     for spec, title in zip(specs, titles):
         try:
