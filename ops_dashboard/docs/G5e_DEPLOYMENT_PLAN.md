@@ -244,7 +244,8 @@ days. No patches during soak** — any FAIL → stop, root-cause, report.
 > the redesigned dashboard could **not** show?"
 
 - **YES** → record each instance: (a) exactly what was missing, (b) the screen that
-  SHOULD have shown it, (c) proposed enhancement → **F-backlog** (F10+ numbering).
+  SHOULD have shown it, (c) proposed enhancement → **F-backlog**
+  (`ops_dashboard/docs/F_BACKLOG.md`, F10+ numbering).
 - **NO** → state explicitly: *"The redesigned dashboard became the primary
   operational interface."*
 

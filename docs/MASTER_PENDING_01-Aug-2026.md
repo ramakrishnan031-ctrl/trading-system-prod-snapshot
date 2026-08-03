@@ -93,7 +93,7 @@ DEPLOYED IS NOT EVIDENCE.**
 | **D2** | **#3a = OPTION A — persist BROKER TRUTH ONLY.** If the broker reports nothing, the column **stays empty and says so**. ⛔ **NEVER write the inferred final** (`final_qty`/`final_price`, which substitute the PLANNED qty and the EXPECTED price): **a plausible fabrication in an audit column is indistinguishable from a real fill afterwards** — ⭐ **the identical property that made the backfill wrong (R-4)**, now applied at the writer instead of at the backfill. ⇒ the §1.5(i) decision is CLOSED; §1.5(ii) the untrack/idempotency review and §1.5(iii) the missing COMPLETE-path test remain part of the build |
 | **D3** | **`STRATEGY PAUSED` = OPTION A — the BEHAVIOUR is wrong.** Persist the pause across restart, and **split *"create a pause"* from *"honour an existing pause"*** (the one-guard-doing-two-jobs root, record §2.7.3). ⭐ **A conditional reword may ship as a TEMPORARY clarification — ⛔ NEVER as the solution.** ⛔ And ⛔ **not the flat reword**: *"clears on restart"* is FALSE on the pre-cutoff branch (§2.7.2), so even the interim must carry the conditional |
 | **D4** | **R12 — scope the allowlist to READ-ONLY DIAGNOSTICS.** ⛔ **No pre-authorised state-changing operations against the live DB.** ⚠️ **MEASUREMENT REQUIRED FIRST — see below; do NOT narrow on assumption** |
-| **D5** | **R13 — RETIRE `mempalace.yaml`.** ⇒ stop naming it in card memory-update directives once the retirement lands. ⚠️ **Scope measured — see below; it is not one file** |
+| **D5** | **R13 — RETIRE `mempalace.yaml`.** ⇒ stop naming it in card memory-update directives once the retirement lands. ⚠️ **Scope measured — see below; it is not one file.** ✅ **EXECUTED 04-Aug ~02:0x `<BUILT>`** — but ⛔ **only after a re-measurement halted it once: the file held `F1..F9` with NO tracked copy, so retiring it as scoped would have been a DELETION.** ⭐ Ruled that **moving unique content out is not a G3 "fix" but the PRECONDITION of the authorised retirement** ⇒ migrated verbatim (md5-proven) to `ops_dashboard/docs/F_BACKLOG.md`, **then** retired: 2 pointers repointed (incl. a 5th site the name-keyed sweep could not see), `.gitignore` **ignore KEPT + annotated**, ⛔ `SYSTEM_MAP.md` untouched (dated history). 🔴 **Tail open, non-blocking: the `.exe` stays installed; external card templates unswept.** ⭐ Earned **§M5** |
 | **D6** | **R14 — PIN AND CAP pytest/tooling versions** so gate results are reproducible. ⭐ Earned twice: `requirements-dev.txt` says `pytest>=9.0.3` with **no ceiling**, so a force-reinstall silently moved the gate to 9.1.1 mid-campaign. ✅ **LANDED 04-Aug ~01:2x `<BUILT>`** — `pytest==9.0.3` + `pytest-cov==7.1.0`, exact pins matching the versions verified installed, so the pin cannot itself move the gate; the interpreter is now named in **§V2**. ✅ Gate scope collects **5,546** = the recorded **5,539 + exactly the 7 tests `4149263` added** ⇒ the repaired venv and the pin are both sound. ⚠️ `cryptography` also drifted 46.0.7→50.0.0 in the same repair, but it lives in **`requirements.txt` (PRODUCTION)** — ⛔ **deliberately NOT touched here** (§G3); it is a separate call with a VM blast radius. ⚠️ **§V2 still lacks the `venv/` half of the base-worktree recipe** — known, recorded, **not folded in silently** |
 | **D7** | **IA-XDOCS-03 (map inversion) — PARK, with an EXPLICIT TRIGGER.** ⛔ Parked ≠ closed; it stays counted. The trigger must be written down, or "parked" decays into "forgotten" |
 
@@ -163,9 +163,44 @@ wrong-and-erased. Executing it as written would have done real damage.
 
 ✅ **NET: live sites needing an edit are `MASTER_PENDING` · `SOAK_EVIDENCE_TEMPLATE` ·
 `G5e_DEPLOYMENT_PLAN` (+ `.gitignore` as an annotation only) — ⛔ NOT `SYSTEM_MAP.md`.**
-⛔ **NO POINTER REWRITTEN AND NOTHING RETIRED IN THIS PASS.** The `.exe` gap of the bullet above
-stands unchanged and uncollected. ⛔ **NOT a new register item — this is D5's own execution
-record; 231 stands.**
+⛔ **NOT a new register item — this is D5's own execution record; 231 stands.**
+
+#### ✅✅ D5 · R13 — **UNBLOCKED AND EXECUTED, 04-Aug ~02:0x. `<BUILT>`**
+🔴 **The blocker was ruled (§G2, 04-Aug):** ⭐ *"**G3 forbids FIXING things found out of scope.
+Moving unique content out of a file you were authorised to retire is not a fix — it is the
+PRECONDITION that makes the authorised retirement safe.**"* Read the other way D5 was
+**unexecutable by construction**: retire and lose F1–F9, or don't retire and ignore the ruling.
+⇒ **the migration is D5's step 1, not a separate item.**
+
+1. ✅ **F1–F9 MIGRATED — `ops_dashboard/docs/F_BACKLOG.md` (new).** ⭐ **Proven verbatim, not
+   asserted: the 9 extracted strings are `diff`-clean and md5-identical against
+   `mempalace.yaml:216-224` (`53d195f7…`, 9/9).** *A migration that paraphrases is a rewrite.*
+   Provenance, the source key and the date are recorded **in the file itself**, so the next
+   reader does not need this register to know where it came from.
+   ⛔ **Anti-duplication checked first and the rejected candidate is NAMED** (§G3 sibling): no
+   roadmap/backlog home exists under `ops_dashboard/docs/` or `docs/gui_project/`; the sole
+   candidate — `G5_REDESIGN_PHASE_B.md` **§SECTION K "PHASE-C IMPLEMENTATION BACKLOG"** — was
+   **rejected deliberately**: an ordered list of buildable units for Phase C is a **different
+   lifecycle** from a locked post-soak roadmap, and its `1./2./3.` numbering cannot host the
+   **F10+** scheme both soak documents reference. ⛔ Not `MASTER_PENDING` either — roadmap
+   content is not register content, and 231 is not a home for nine backlog lines.
+2. ✅ **BOTH POINTERS REPOINTED** at the new home: `SOAK_EVIDENCE_TEMPLATE.md:72` (which also
+   **records what it used to say**, so the change is legible per §G4) and
+   `G5e_DEPLOYMENT_PLAN.md:247` — **the fifth site the name-keyed sweep could not see.**
+3. ✅ **`.gitignore` — THE IGNORE STAYS, and now says why.** `mempalace.yaml` is still on disk
+   (22,585 B) and PC-local; dropping the line would surface it as untracked in every
+   `git status` and **risk committing it by accident.** ⛔ **Retiring an artifact is not the same
+   act as making it committable.** Verified after the edit with `git check-ignore -v` — still
+   ignored (`.gitignore:88`), still untracked.
+4. ⛔ **`SYSTEM_MAP.md` DELIBERATELY UNTOUCHED** — both mentions are dated changelog entries.
+   Editing them is the §G4 rewrite. **The file is live; those lines are not.**
+5. 🔴 **D5's TAIL, OPEN AND NOT BLOCKING:** `venv/Scripts/mempalace.exe` stays **installed**.
+   Uninstalling a CLI is a different risk class and nothing depends on its timing.
+6. ⛔ **The EXTERNAL card templates that name it are still unswept** — cards live outside the
+   repo by standing rule, so that half must be done at the card source.
+
+⭐ **THE RULE THIS EARNED: `campaign_practices.md` §M5 — *a measurement's conclusion may not be
+wider than its subject*,** with all three of D5's joins as its worked instances.
 
 ### ✅ THE CLAUDE-AGENT CONFIGURATION — **MEASURED 04-Aug 00:0x. ⭐ THE FLAGGED CLAIM SURVIVED.**
 The card flagged its own *"4 heartbeat cron lines governed by `~/tools/claude/AGENTS.md`"* as

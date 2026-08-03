@@ -69,7 +69,9 @@ understand something the dashboard could not show?"**
 | 1 | | | F10 |
 | 2 | | | F11 |
 
-*(append each (c) to the F-backlog in mempalace with F10+ numbering)*
+*(append each (c) to the F-backlog — `ops_dashboard/docs/F_BACKLOG.md` — with F10+ numbering)*
+*(⚠️ this said "in mempalace" until 04-Aug-2026; that file is retired and F1–F9 moved to the
+path above. Appending is not scheduling — see the note at the foot of `F_BACKLOG.md`.)*
 
 **IF NO — state explicitly:**
 > "The dashboard became the primary operational interface."

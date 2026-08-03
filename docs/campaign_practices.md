@@ -247,6 +247,47 @@ adding to.**
 
 (Record: `docs/audit/ledger10_deployed_tree_check_03aug2026.md` §2 and §4.)
 
+### M5 · ⭐⭐ A MEASUREMENT'S CONCLUSION MAY NOT BE WIDER THAN ITS SUBJECT
+
+**M1 governs how wide you SEARCH. M5 governs how wide you may then SPEAK.** They fail
+differently, and that is why M5 is its own rule: ⭐ **M1 gives you a WRONG ANSWER; M5 gives you a
+RIGHT ANSWER TO A QUESTION YOU DID NOT ASK** — which is far harder to catch, because the
+measurement really was performed and really was sound.
+
+⇒ **State the SUBJECT of a measurement in the same sentence as its conclusion**, and ⛔ never let
+a later reader carry the conclusion past that subject.
+
+**Earned by D5 / R13 (04-Aug-2026), and the honest record is the whole chain — three links, no
+one of them careless:**
+
+1. The seeding caution — *"`mempalace.yaml` is the only written trace of the GUI workstream
+   anywhere"* — was **unmeasured, and wrong as stated.**
+2. Its refutation **was measured and was right**: 137 tracked files under `ops_dashboard/` plus
+   `G0_BACKEND_INVESTIGATION_REPORT.md` and `SYSTEM_MAP.md:282` ⇒ *"retiring it discards nothing
+   unique."*
+3. ⛔ **That refutation was then applied wider than its subject.** It had answered *"is the GUI
+   **workstream** traced elsewhere?"* It had **never** asked *"is **every line** of
+   `mempalace.yaml` duplicated elsewhere?"* — and the answer to the second is **no**:
+   `:215-224` held `future_backlog_LOCKED_ROADMAP_ONLY: F1..F9`, **nine roadmap items with no
+   tracked copy.** Executing the retirement on the widened reading would have **deleted them.**
+
+⭐ **The failure is at the JOINS, not in any link.** That is worth more than either correction,
+because a process that only catches careless work will not catch this at all.
+
+**Two sibling instances, same rule, different joins — both from the same D5 sweep:**
+- **NAME vs DESTINATION.** The sweep was keyed on the word *"mempalace"* (58 mentions, 28 files)
+  and therefore could not see `ops_dashboard/docs/G5e_DEPLOYMENT_PLAN.md:247`, which directs work
+  to the **same retiring destination** without ever naming it. ⇒ *"58 mentions of the word"* is
+  **not** *"every file that depends on the thing."*
+- **FILE vs LINE granularity.** The same sweep classified `docs/SYSTEM_MAP.md` as a **live site
+  needing the edit**, because the *file* is live. Its two mentions (`:282`, `:1200`) are **dated
+  changelog entries** — history, and editing them is the rewrite **§G4** exists to prevent. ⇒ the
+  scope was measured at **file** granularity while the criterion is a **line** property.
+  ⛔ **Expect this in every future sweep:** *"which files mention X"* rarely answers *"which
+  lines must change."*
+
+(Record: `docs/MASTER_PENDING_01-Aug-2026.md` §D5 — the re-measurement block and its resolution.)
+
 ---
 
 ## V. VALIDATION

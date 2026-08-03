@@ -79,6 +79,12 @@ Thumbs.db
 
 # Claude Code internals
 memory/
+# RETIRED 04-Aug-2026 (D5 / R13) — but the ignore STAYS, deliberately.
+# The file is still on disk and is PC-local; dropping this line would surface it
+# as untracked in every `git status` and risk committing it by accident.
+# ⛔ Retiring an artifact is NOT the same act as making it committable.
+# Its one piece of unique content (F1–F9) was migrated verbatim first, to
+# ops_dashboard/docs/F_BACKLOG.md — that migration is what made the retirement safe.
 mempalace.yaml
 CLAUDE_md_and_explanations.txt
 .claude/settings.local.json
