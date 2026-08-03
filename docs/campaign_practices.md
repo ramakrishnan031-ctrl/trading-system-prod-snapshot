@@ -247,15 +247,27 @@ adding to.**
 
 (Record: `docs/audit/ledger10_deployed_tree_check_03aug2026.md` §2 and §4.)
 
-### M5 · ⭐⭐ A MEASUREMENT'S CONCLUSION MAY NOT BE WIDER THAN ITS SUBJECT
+### M5 · ⭐⭐ STATE THE SUBJECT IN THE SAME SENTENCE AS THE CONCLUSION
+
+**Because a measurement's conclusion may not be wider than its subject** — and the only place
+that can be enforced is at **write time**.
+
+⭐⭐ **THE RULE IS DELIBERATELY PHRASED AS A WRITING INSTRUCTION, NOT A READING ONE.** *"Don't
+read a conclusion too widely"* asks **every future reader** to be careful and is checkable by
+none of them. *"Write the subject beside the claim"* is checkable **at the moment of writing, by
+the one person who has the measurement in front of them.** Same content; only one of them is
+enforceable.
+
+⚠️ **This correction was itself earned.** The rule was first drafted as a reading error waiting
+to happen. It is worse than that: in the incident below **the widened claim was already
+WRITTEN** — the register carried a flat *"retiring it discards nothing unique"* with **no
+subject attached**. ⇒ **the join failed at write time, not at read time**, and nobody reading it
+later could have known which question it had answered.
 
 **M1 governs how wide you SEARCH. M5 governs how wide you may then SPEAK.** They fail
 differently, and that is why M5 is its own rule: ⭐ **M1 gives you a WRONG ANSWER; M5 gives you a
 RIGHT ANSWER TO A QUESTION YOU DID NOT ASK** — which is far harder to catch, because the
 measurement really was performed and really was sound.
-
-⇒ **State the SUBJECT of a measurement in the same sentence as its conclusion**, and ⛔ never let
-a later reader carry the conclusion past that subject.
 
 **Earned by D5 / R13 (04-Aug-2026), and the honest record is the whole chain — three links, no
 one of them careless:**
