@@ -2,6 +2,15 @@
 
 Procedures for handling trading system incidents during market hours.
 
+> ⭐ **BEFORE TREATING AN ALERT AS AN INCIDENT, CHECK [`expected_alarms.md`](expected_alarms.md).**
+> Several CRITICAL-grade messages fire on a **completely healthy** day — the 15:15
+> breaker's 4-line chorus, the post-schema-push refuse-window, the delivery-reconciler
+> strings, and the deliberate loudness added by ledger #2/#2b/#2c-R. Measured: on 31-Jul,
+> a healthy day with **zero real incidents**, the system emitted **49 alerts**.
+> ⛔ That document lowers the **alarm**, never the **check** — every entry there carries a
+> *"THIS IS REAL IF…"* line. If what you are looking at does not match the expected
+> signature exactly, it is an incident: continue here.
+
 ## Severity Levels
 
 | Level | Description | Response Time |
