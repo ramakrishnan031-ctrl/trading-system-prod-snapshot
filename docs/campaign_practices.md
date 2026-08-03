@@ -264,6 +264,14 @@ construction — never by a paper run. (#2c Step-1 finding (f).)
   phantom `test_main` failures**.
 - **A stopped run's partial log is DELETED**, never left to be mistaken for a baseline.
 - Both halves must use the **same** invocation or the sets are not comparable.
+- ⭐ **THE INTERPRETER IS PART OF THE BASELINE — name it beside the result (R14 / D6,
+  04-Aug-2026).** The gate runs **`pytest==9.0.3`** with **`pytest-cov==7.1.0`**, now pinned
+  exactly in `requirements-dev.txt`. **Earned 03-Aug-2026:** those lines carried **no ceiling**
+  (`pytest>=9.0.3`), so a `--force-reinstall` venv repair pulled **9.1.1** and silently replaced
+  the interpreter every campaign baseline had been measured under. ⛔ **Nothing failed — which
+  is what made it dangerous.** ⇒ **a gate result compared across a version change is not a
+  comparison**, and a bump is a deliberate **re-baselining** (re-run the full suite, record the
+  new standing-failure **SET**).
 
 ### V3 · A worktree base is sound ONLY with the mitigation, and ONLY because the arithmetic closes
 Copy the ignored runtime files in, then **prove and subtract** residual artifacts, and

@@ -4,5 +4,24 @@
 
 -r requirements.txt
 
-pytest>=9.0.3
-pytest-cov>=7.1.0
+# R14 / D6 (04-Aug-2026) — PINNED AND CAPPED. Exact pins, deliberately.
+#
+# EARNED 03-Aug-2026: these read `pytest>=9.0.3` / `pytest-cov>=7.1.0`, with NO
+# CEILING. Repairing a damaged venv with
+#     pip install --force-reinstall -r requirements-dev.txt
+# therefore pulled pytest 9.1.1 and silently replaced the interpreter that EVERY
+# campaign gate baseline had been measured under. Nothing failed; that is what
+# made it dangerous.
+#
+# A gate result is only comparable to another gate result run on the SAME
+# interpreter — so the version is part of the baseline, not an implementation
+# detail. The pins below are the versions every current baseline was measured
+# under, verified installed at the time of pinning.
+#
+# ⛔ Do NOT relax these to `>=`: an unbounded floor is precisely what drifted,
+# and it drifts again on the next restore. Changing a pin is a deliberate act
+# that RE-BASELINES the gate — bump it, re-run the full suite, and record the
+# new standing-failure SET (⛔ never the count: the standing set is 8 OR 9,
+# because test_instance_lock is flaky rather than deterministic).
+pytest==9.0.3
+pytest-cov==7.1.0

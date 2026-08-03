@@ -94,7 +94,7 @@ DEPLOYED IS NOT EVIDENCE.**
 | **D3** | **`STRATEGY PAUSED` = OPTION A — the BEHAVIOUR is wrong.** Persist the pause across restart, and **split *"create a pause"* from *"honour an existing pause"*** (the one-guard-doing-two-jobs root, record §2.7.3). ⭐ **A conditional reword may ship as a TEMPORARY clarification — ⛔ NEVER as the solution.** ⛔ And ⛔ **not the flat reword**: *"clears on restart"* is FALSE on the pre-cutoff branch (§2.7.2), so even the interim must carry the conditional |
 | **D4** | **R12 — scope the allowlist to READ-ONLY DIAGNOSTICS.** ⛔ **No pre-authorised state-changing operations against the live DB.** ⚠️ **MEASUREMENT REQUIRED FIRST — see below; do NOT narrow on assumption** |
 | **D5** | **R13 — RETIRE `mempalace.yaml`.** ⇒ stop naming it in card memory-update directives once the retirement lands. ⚠️ **Scope measured — see below; it is not one file** |
-| **D6** | **R14 — PIN AND CAP pytest/tooling versions** so gate results are reproducible. ⭐ Earned twice: `requirements-dev.txt` says `pytest>=9.0.3` with **no ceiling**, so a force-reinstall silently moved the gate to 9.1.1 mid-campaign |
+| **D6** | **R14 — PIN AND CAP pytest/tooling versions** so gate results are reproducible. ⭐ Earned twice: `requirements-dev.txt` says `pytest>=9.0.3` with **no ceiling**, so a force-reinstall silently moved the gate to 9.1.1 mid-campaign. ✅ **LANDED 04-Aug ~01:2x `<BUILT>`** — `pytest==9.0.3` + `pytest-cov==7.1.0`, exact pins matching the versions verified installed, so the pin cannot itself move the gate; the interpreter is now named in **§V2**. ✅ Gate scope collects **5,546** = the recorded **5,539 + exactly the 7 tests `4149263` added** ⇒ the repaired venv and the pin are both sound. ⚠️ `cryptography` also drifted 46.0.7→50.0.0 in the same repair, but it lives in **`requirements.txt` (PRODUCTION)** — ⛔ **deliberately NOT touched here** (§G3); it is a separate call with a VM blast radius. ⚠️ **§V2 still lacks the `venv/` half of the base-worktree recipe** — known, recorded, **not folded in silently** |
 | **D7** | **IA-XDOCS-03 (map inversion) — PARK, with an EXPLICIT TRIGGER.** ⛔ Parked ≠ closed; it stays counted. The trigger must be written down, or "parked" decays into "forgotten" |
 
 ### ⚠️ D4 · R12 — **MEASUREMENT OWED BEFORE ANY NARROWING** *(not done here)*
@@ -121,6 +121,51 @@ is the finding:
   installed. Whether the package is also uninstalled is a separate call.
 - ⛔ The **card templates** that name it are **EXTERNAL** (cards stay outside the repo, by
   standing rule) ⇒ that half cannot be swept from here and must be done at the card source.
+
+#### ⛔⛔ D5 · R13 — **RE-MEASURED 04-Aug ~01:2x AT EXECUTION TIME. THE EDIT IS HALTED; THE SCOPE ABOVE DOES NOT SURVIVE IT.**
+The scope block above is **kept verbatim per §G4** — it is superseded on three points, not
+wrong-and-erased. Executing it as written would have done real damage.
+
+1. ⛔⛔ **RETIREMENT WOULD DISCARD UNIQUE LIVE CONTENT — THE BLOCKER.**
+   `mempalace.yaml:215-224` holds `future_backlog_LOCKED_ROADMAP_ONLY:` — **F1…F9, nine
+   concrete GUI roadmap items** *(replay timeline · "explain why" reason chain · config
+   snapshot history · strategy lifecycle · reports download · journal viewer · CSV exports ·
+   multi-day trend charts · unrealized/LTP)*. **No tracked file holds them** — repo-wide, the
+   only tracked hits are two *pointers* and a numbering directive.
+   ⚠️ **This does NOT contradict §C.4 R13's *"retiring it discards nothing unique"* — it
+   BOUNDS it.** That refutation was measured about **the GUI workstream** (137 tracked files
+   under `ops_dashboard/` + `G0_BACKEND_INVESTIGATION_REPORT.md` + `SYSTEM_MAP.md:282`) and
+   **holds for that.** It was **never measured about F1–F9**, and for F1–F9 it is **false.**
+   ⭐ **The claim was right about what it checked and was then read wider than it was measured**
+   — §M1 applied to our own register.
+   🔴 **DECISION OWED: where F1–F9 lives after retirement.** ⛔ Until then the retirement is a
+   **deletion**, and ⛔ rewriting the two pointers first would aim live files at nothing. **Not
+   carried into the repo here: that is a new file, i.e. expansion, and §G3 forbids it in passing.**
+
+2. ⛔ **`docs/SYSTEM_MAP.md` IS MISCLASSIFIED ABOVE AS A LIVE SITE.** Both its mentions are
+   **dated changelog entries** — `:282` (*"G2c — VM DEPLOY (03-Jul ~17:25 IST …)"*) and `:1200`
+   (*"2026-07-06 — Claude Code (Opus 4.8) — Wave-3 H-9 FIXED …"*). They are **identical in kind
+   to the `docs/audit/**` dated records the bullet above excludes as history.** The *file* is
+   live; **those lines are not.** ⇒ **editing them is exactly the history-rewrite §G4 exists to
+   prevent.** ⭐ The scope was measured at **file** granularity while the criterion is a
+   **line** property — the file-level sweep is the narrow one here.
+
+3. ⚠️ **A FIFTH LIVE SITE THE SWEEP COULD NOT SEE:** `ops_dashboard/docs/G5e_DEPLOYMENT_PLAN.md:247`
+   directs work to the **F-backlog (F10+ numbering)** — the same retiring destination — but
+   **never says "mempalace"**, so a `mempalace`-keyed grep cannot find it. ⭐ **§M1, sharpened:
+   the sweep was keyed on the NAME; the blast radius belongs to the DESTINATION.** State the
+   search width — *"58 mentions of the word"* is not *"every file that depends on the thing."*
+
+4. ⛔ **`.gitignore:82` MUST NOT SIMPLY BE DELETED.** `mempalace.yaml` is **still on disk**
+   (22,585 B, 17-Jul). Dropping the ignore turns a PC-local artifact into an untracked file in
+   every `git status` — noise, **and a live risk of committing it by accident.** **Retiring an
+   artifact is not the same act as un-ignoring it**; the correct edit is an annotation.
+
+✅ **NET: live sites needing an edit are `MASTER_PENDING` · `SOAK_EVIDENCE_TEMPLATE` ·
+`G5e_DEPLOYMENT_PLAN` (+ `.gitignore` as an annotation only) — ⛔ NOT `SYSTEM_MAP.md`.**
+⛔ **NO POINTER REWRITTEN AND NOTHING RETIRED IN THIS PASS.** The `.exe` gap of the bullet above
+stands unchanged and uncollected. ⛔ **NOT a new register item — this is D5's own execution
+record; 231 stands.**
 
 ### ✅ THE CLAUDE-AGENT CONFIGURATION — **MEASURED 04-Aug 00:0x. ⭐ THE FLAGGED CLAIM SURVIVED.**
 The card flagged its own *"4 heartbeat cron lines governed by `~/tools/claude/AGENTS.md`"* as
