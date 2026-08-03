@@ -176,6 +176,32 @@ evidence about the tree.
 record settled it. **Verification is owed to correct seeds too**, because the check is
 what converts a claim into a citation.
 
+**⭐ SECOND ENTRY — A LINE NUMBER IS A CLAIM ABOUT A SHA, 04-Aug-2026.** The first entry
+covers a card seeding a *fact* from memory. This one covers a card seeding a **correct fact
+with a stale coordinate** — and it is the sharper case, because nothing about the card was
+wrong except *where it pointed.*
+
+⇒ **A card's line numbers are valid ONLY at the SHA they were measured at. Cite that SHA
+beside them, and the implementer RE-MEASURES at HEAD before editing.**
+
+**Earned by the #2d card (04-Aug-2026).** It was written from a Step-1 record measured at
+`d6c298d`; `4149263` then landed `+13/-1` at `@@ -612,0 +613,11 @@` — **entirely above all
+three target sites** — so every `kill_switch.py` citation in the card was stale by a uniform
+**+12**, including the `⛔ DO NOT TOUCH` line. Caught before a single edit, by re-measuring
+rather than by noticing.
+
+⛔ **The rule is RE-MEASURE, never "add the offset."** This drift was *uniform and
+one-file*, which is the **benign** case and the reason it was easy to see. A drift that is
+partial, or spread across files, **does not announce itself** — and an implementer who
+learned "apply +12" would carry the wrong correction into the first case that mattered.
+
+⭐ **Why this belongs beside M3 rather than under V:** it is the same failure as AR7 —
+**seeding from a record without asking what has landed since** — and the fix is the same
+shape: the SHA is what converts a pointer into a citation. §R already requires
+`<file> §<section> @ <SHA>` for accepted risks *"because a timestamp cannot tell you whether
+the target CHANGED; a SHA can."* **A card's line numbers are the same kind of claim and had
+been exempt.**
+
 ### M4 · ⭐⭐ AN AUDIT-DESCRIBED FIX IS A **HYPOTHESIS**, NOT A SPEC
 
 **M2 says *measure, don't infer* about our OWN claims. M4 extends it to the SOURCE
