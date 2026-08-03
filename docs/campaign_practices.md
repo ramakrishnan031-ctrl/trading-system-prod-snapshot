@@ -127,6 +127,34 @@ passing.** Earned repeatedly, and every time the disclosure became its own item:
 kill-clear) · `#8b → the `--cleanup-*` flags`.
 ⭐ Sibling: **anti-duplication — check for an existing home before creating a file.**
 
+### G5 · ⭐⭐ A RULING IS AN **INTENT** PLUS A **PROPOSED MECHANISM** — Step 1 tests the mechanism
+
+**The intent survives even when the mechanism does not.** A Step-1 measurement that refutes
+*how* a ruling said to do something has **not** overturned the decision to do it.
+
+**Earned on the third instance (04-Aug-2026), which is what makes it a rule and not an anecdote:**
+
+| ruling | its stated mechanism | Step 1 found | intent |
+|---|---|---|---|
+| **#6** | as described | **misdiagnosis** | ✅ stood |
+| **#5** | *"the ladder is deaf"* | **misdiagnosis** — it is never spoken to; the real target is IA-P6-02 | ✅ stood |
+| **D4 / R12** | *"scope the allowlist to read-only diagnostics"* | ⛔ **insufficient** — narrows 1 of **3** independent surfaces; `Bash(ssh *)` re-permits the exact command it exists to stop | ✅ stands |
+
+⇒ ⭐ **Three "refuted" rulings in the register are evidence the gate HOLDS, not evidence that
+rulings are unreliable.** A reader who has not been here will otherwise draw the second
+conclusion, and it is the wrong one: each of these was caught **before** implementation, by the
+measurement step that exists for exactly this.
+
+⛔ **THE COROLLARY, AND IT IS THE LOAD-BEARING HALF: a Step 1 that refutes a mechanism MUST SAY
+IN THE SAME BREATH THAT THE INTENT STANDS, and return the mechanism for re-scoping.** Otherwise
+the refutation reads as **overturning the decision** — which is **not the implementer's to do**
+(§G1/§G2). ⇒ *"mechanism refuted, intent intact, returned for a ruling on the mechanism only"*
+is the required shape. **Never** *"the ruling was wrong."*
+
+⚠️ **Sibling worth stating:** this is why a card's mechanism should be written as a **proposal
+with its reasoning**, not as a bare instruction. A mechanism whose *why* is recorded can be
+re-scoped by the next person; one that arrives as a bare imperative can only be obeyed or defied.
+
 ### G4 · Superseded text is STRUCK THROUGH but kept LEGIBLE
 With an **amendment note and date**. ⛔ Never silently deleted, never quietly reworded. A
 reader must be able to see what the guidance used to say and why it changed — otherwise
