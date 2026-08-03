@@ -1,4 +1,4 @@
-# MONDAY PC GATES (03-Aug-2026) — (b) KILL DRILL **9/10, ONE RED** · (c) REGRESSION **PASS** · (a) **BLOCKED**
+# MONDAY PC GATES (03-Aug-2026) — (b) KILL DRILL **9/10, ONE RED** · (c) REGRESSION **PASS** · (a) **GREEN** (shared composition; one live-only ctor unproven)
 
 **⛔ FINDINGS-ONLY. NOTHING WAS FIXED, and nothing here authorises a fix.**
 The RED cell needs its own card (G3: disclose, don't expand).
@@ -214,7 +214,76 @@ baseline. ⚠️ Secondary consequence: under the venv these two tests fail for 
 so **the single-instance guard is effectively unexercised by the gate** — they cannot mask
 a delta (they fail on both sides) but they can no longer detect a real regression.
 
-## 6. GATE (a) — COMPOSITION BOOT: ⛔ **BLOCKED — NOT RED, NOT A PASS**
+## 6-RESULT. GATE (a) RE-RUN 15:33 → **GREEN**, with the honest label
+
+**Run:** PC paper composition boot, 15:33:31 → force-stopped 16:08:22. The
+`market_open` guard was clear after 15:30, so the **v44 → v45 migration ran on the
+sanctioned path** and the boot proceeded. **VM untouched, still `297b587`.**
+
+### 6-R(a). B2 PASSED — and it logged its own verdict
+
+```
+2026-08-03T15:34:40.334 INFO main — effect_telemetry: composition OK (61 registered, 62 expected)
+```
+
+⛔ **Not inferred from "the process was alive".** Three independent confirmations:
+
+1. **the line above** — `composition OK`, emitted by `assert_composition` itself;
+2. **zero** occurrences of `EffectCompositionError` / ghost / missing / unknown in
+   `logs/system_2026-08-03.log`;
+3. ⭐ **it reached the runtime loop, which is only reachable PAST the assertion:**
+   `assert_composition` is `main.py:3744`, `_shutdown_event.wait()` is `:3749`, and the
+   log shows **134 monitoring cycles** (`get_positions`/`get_margins` every 15 s) running
+   steadily to **16:06:07**. A failed assertion raises and the boot dies; this one idled
+   for 35 minutes.
+
+⚠️ **`EXIT=127` in the wrapper log is MY force-kill at 16:08, not the boot's verdict.**
+Recorded so nobody later reads it as a failure.
+
+### 6-R(b). THE 61 vs 62 DELTA IS NAMED — it is not a defect
+
+`config/expected_managers.yaml:385`:
+
+> `clock_skew_probe … ctor: "main.py:3384-3386", state: infra,`
+> `modes: "live-only ctor BY DESIGN (paper skew always ~0) — the ONE mode-conditional entry"`
+
+⇒ 62 expected − **1 declared mode-exemption** = 61 registered, which is why `_mode_exempt`
+returns `composition OK` rather than a mismatch. **The registry itself asserts this is the
+ONLY mode-conditional entry**, so the unproven surface is not "some live-only ctors" — it
+is **exactly one, by name.**
+
+⛔ **The card's RED discriminator ("is the offending manager paper-only?") does not
+arise** — there is no offending manager. Composition is clean.
+
+### 6-R(c). THE HONEST LABEL — ⛔ not a bare "PASS"
+
+> **SHARED COMPOSITION PROVEN** (61/61 non-exempt managers registered; no ghosts, no
+> unknown, no missing). **THE ONE LIVE-ONLY CTOR — `clock_skew_probe` — REMAINS UNPROVEN
+> UNTIL THE TUESDAY 08:15 VM BOOT.**
+
+✅ **And the residual is bounded:** on the VM, B2 is **CRITICAL-and-continue, never
+fail-fast**, so if `clock_skew_probe` failed to register it surfaces Tuesday morning as an
+**alert**, not as a system that will not start.
+
+### 6-R(d). SIDE-EFFECTS, all PC-local and all expected
+
+| effect | status |
+|---|---|
+| `data_store/trading_system.db` migrated **v44 → v45** (the `trades` REBUILD) | ✅ completed; `schema_version = 45`. Backup `trading_system.db.pre_gate_a_v44.bak` retained but **not needed** |
+| `kill_switch_state` = **SOFT_KILL**, `circuit_breaker_force_close_15:15`, 15:34:38 | ⚠️ PC-local. It is a **prior-day** kill by tomorrow ⇒ **auto-clears at the next 08:15 boot** (`clear_stale_state`). ⛔ No `resume.sh` needed |
+| `CRITICAL eod_squareoff — EOD squareoff was NOT fired today … Manual intervention required` | ⚠️ artifact of booting **after** the close on a PC instance that never ran the 15:17 job. **Not a finding**, and **not** true of the VM |
+
+### 6-R(e). ⭐ `expected_alarms.md` VALIDATED ITSELF ON THE DAY IT WAS WRITTEN
+
+The boot emitted **exactly** the four-line chorus documented this morning in
+`expected_alarms.md` §1 — `order_monitor.force_close_triggered` (WARNING) →
+`circuit_breaker.force_close_triggered` (CRITICAL) → `KillSwitchActivated` (CRITICAL) →
+`SOFT_KILL ACTIVATED` (CRITICAL) — one designed event in three severity vocabularies,
+precisely as described. **The doc predicted its own first real sighting.**
+
+---
+
+## 6. GATE (a) — FIRST ATTEMPT 10:30: ⛔ **BLOCKED — NOT RED, NOT A PASS**
 
 Authorised and attempted 03-Aug 10:30:03 IST. **The boot refused to start**, and the
 thing that refused it was **working correctly**.
