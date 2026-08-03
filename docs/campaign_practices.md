@@ -143,6 +143,51 @@ evidence about the tree.
 record settled it. **Verification is owed to correct seeds too**, because the check is
 what converts a claim into a citation.
 
+### M4 · ⭐⭐ AN AUDIT-DESCRIBED FIX IS A **HYPOTHESIS**, NOT A SPEC
+
+**M2 says *measure, don't infer* about our OWN claims. M4 extends it to the SOURCE
+DOCUMENT** — which this campaign had been treating as authority. **Every remaining
+audit-sourced item must be MEASURED before implementation, never transcribed.**
+
+**Earned by ledger #10 (03-Aug-2026).** `integrity_audit_2026.md:3145-3149` described the
+closing mechanism as a *"read-only two-liner"*:
+
+```
+git --git-dir=~/trading-system.git --work-tree=$TARGET diff --stat HEAD
+```
+
+Measured before writing it, it is **wrong as described**. `git diff HEAD` needs an index,
+and the deployed work tree has **no `.git` of its own** — the index lives in the bare
+repo. Three distinct behaviours, all measured:
+
+| form | result |
+|---|---|
+| `GIT_INDEX_FILE` → a non-existent path (valid but **EMPTY** index) | **`1250 files changed, 344936 deletions(-)` — on a provably CLEAN tree** |
+| `GIT_INDEX_FILE` → a **zero-byte** file | `fatal: index file smaller than expected` (corrupt, not empty — a *different* failure) |
+| the repo's **real** index | correct output, **but a monitoring job then WRITES the deploy repo's index** |
+
+⇒ the correct form **copies the index and diffs against the copy**.
+
+⛔⛔ **WHY THIS MATTERS MORE THAN A BUG: shipped as described, the check would have fired
+on its FIRST HEALTHY NIGHT.** An alarm that goes off when nothing is wrong is
+**IA-P9-02's own disease — alert fatigue / false-safety claims — delivered by the audit's
+own recommendation.** ⭐ It is this campaign's central verdict class turned on the audit
+itself: **a declared thing that does not have the effect it declares.**
+
+⚠️ **The description was not careless** — it was a sound sketch by someone who had not run
+it. That is exactly the point: **a described fix carries the authority of the document and
+none of the evidence of a measurement.** Treat it as the hypothesis it is.
+
+**Sibling, same class, same item: "additive" is a BLAST-RADIUS CLAIM and must be measured
+too.** Check 12 looked purely additive — a new read-only check appended to a list. It is
+not: `system_manager` **can trip tomorrow's SOFT_KILL** (`generate_full_report` →
+`trigger_soft_kill`, `:1144-1145`), so any new `CheckResult` is **kill-adjacent by
+default**. Measuring that changed the design (never set `soft_kill_reason`; assert it by
+test). ⛔ **Never accept "it's additive" without checking what consumes the thing you are
+adding to.**
+
+(Record: `docs/audit/ledger10_deployed_tree_check_03aug2026.md` §2 and §4.)
+
 ---
 
 ## V. VALIDATION

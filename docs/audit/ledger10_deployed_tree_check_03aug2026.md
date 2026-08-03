@@ -68,6 +68,18 @@ untracked `.py`, hook drift) is **environment-caused**, and the standing discrim
 *BLOCK when the failing condition needs a deliberate act; DEGRADE+ALARM when the
 environment can cause it.* Escalation stays the operator's call.
 
+### ⭐ 4a. "ADDITIVE" WAS A CLAIM, AND IT WAS FALSE — measured, not assumed
+
+This item *looked* purely additive: a new read-only check appended to a list of eleven.
+That framing is what would have made it a safe, boring change — and it was **wrong**.
+`system_manager` is a **kill-capable** job, so **every new `CheckResult` is kill-adjacent
+by default**, and only measuring `trigger_soft_kill`'s input showed it.
+
+⇒ the measurement **changed the design**: never set `soft_kill_reason`, and assert that by
+test rather than by intention. ⛔ **"It's additive" is a blast-radius claim like any other
+— check what consumes the thing you are adding to.** Registered as the sibling half of
+practices **§M4**.
+
 **Every failure path degrades to a warning, never a violation:** no git dir · no index
 yet · `git diff` non-zero rc · timeout (30 s) · `OSError`/`ValueError`. A check that
 cannot run must not look like a check that found something.
