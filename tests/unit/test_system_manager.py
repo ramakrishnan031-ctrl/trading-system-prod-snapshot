@@ -255,3 +255,110 @@ def test_stray_pyc_the_real_repo_is_currently_clean():
     ever goes red, a real stray appeared — that is the finding, not a flake."""
     res = sm.stray_pyc_check(Path(__file__).parent.parent.parent)
     assert res.violations == 0, res.lines
+
+
+# ── Ledger #8c: TOMORROW READINESS must not prescribe resume.sh ──────────────
+#
+# The old line said "Kill switch: {state} — needs deploy/resume.sh before market
+# open" for ANY non-INACTIVE state. That instruction is WRONG and it sits where
+# the operator reads it at night. main.py:1902 calls clear_stale_state(<boot
+# date>), which clears ANY kill dated strictly before the boot date regardless of
+# type (HEADLESS GUARANTEE, kill_switch.py:284-297), and `nxt` is always after
+# day_date -- so a kill visible in this report always auto-clears.
+#
+# ⛔ The discriminator is the DATE, not the reason: SCHEDULED_KILL_REASONS governs
+# the SAME-DAY restart path, a different question. These tests pin that, and pin
+# that the type does NOT matter (a prior-day HARD_KILL auto-clears too).
+#
+# Dates are set far in the past / far in the future so the assertions hold
+# whatever the holiday calendar makes `nxt` -- no dependence on calendar data.
+
+def _set_kill(store, state, reason, triggered_at):
+    with store.transaction() as cur:
+        cur.execute(
+            "INSERT OR REPLACE INTO kill_switch_state "
+            "(id,state,reason,triggered_at,triggered_by) VALUES (1,?,?,?,?)",
+            (state, reason, triggered_at, "order_monitor"),
+        )
+
+
+def _readiness(store, tmp_path, day_date):
+    # A non-existent config dir makes next_trading_day fall back to day+1; the
+    # assertions below do not depend on which branch runs.
+    return sm.tomorrow_readiness_check(store, _cfg(), day_date, tmp_path / "no_cfg")
+
+
+def _kill_line(res):
+    return next(l for l in res.lines if "Kill switch:" in l)
+
+
+def test_8c_prior_day_scheduled_kill_does_not_prescribe_resume(tmp_path):
+    """The real-world daily case: the 15:15 breaker kill."""
+    from datetime import date
+    s = _store(tmp_path)
+    _set_kill(s, "SOFT_KILL", "circuit_breaker_force_close_15:15",
+              "2026-08-03T15:15:01.522549+05:30")
+    res = _readiness(s, tmp_path, date(2026, 8, 3))
+    line = _kill_line(res)
+    assert "needs deploy/resume.sh" not in line, line
+    assert "auto-clears" in line, line
+    assert "do NOT run deploy/resume.sh" in line, line
+    s.close()
+
+
+def test_8c_prior_day_HARD_KILL_also_auto_clears(tmp_path):
+    """Type-independence -- the corrected premise. clear_stale_state clears ANY
+    prior-day kill, so an emergency HARD_KILL must not be told to resume either."""
+    from datetime import date
+    s = _store(tmp_path)
+    _set_kill(s, "HARD_KILL", "emergency_manual", "2026-07-20T11:00:00+05:30")
+    line = _kill_line(_readiness(s, tmp_path, date(2026, 8, 3)))
+    assert "needs deploy/resume.sh" not in line, line
+    assert "auto-clears" in line, line
+    s.close()
+
+
+def test_8c_future_dated_kill_still_warns_and_points_at_resume(tmp_path):
+    """The genuinely actionable case must KEEP its warning."""
+    from datetime import date
+    s = _store(tmp_path)
+    _set_kill(s, "SOFT_KILL", "clock_anomaly", "2027-01-01T10:00:00+05:30")
+    res = _readiness(s, tmp_path, date(2026, 8, 3))
+    line = _kill_line(res)
+    assert "will NOT" in line and "auto-clear" in line, line
+    assert "deploy/resume.sh" in line, line
+    assert res.warnings >= 1
+
+
+def test_8c_unreadable_triggered_at_warns_rather_than_claiming_safe(tmp_path):
+    """If the date cannot be established we must not claim it is safe."""
+    from datetime import date
+    s = _store(tmp_path)
+    _set_kill(s, "SOFT_KILL", "weird", "not-a-timestamp")
+    res = _readiness(s, tmp_path, date(2026, 8, 3))
+    line = _kill_line(res)
+    assert "CANNOT be confirmed" in line, line
+    assert res.warnings >= 1
+    s.close()
+
+
+def test_8c_inactive_is_unchanged(tmp_path):
+    from datetime import date
+    s = _store(tmp_path)
+    _set_kill(s, "INACTIVE", "clear", "2026-08-03T08:15:00+05:30")
+    line = _kill_line(_readiness(s, tmp_path, date(2026, 8, 3)))
+    assert "INACTIVE (no --resume needed)" in line, line
+    s.close()
+
+
+def test_8c_readiness_check_is_not_kill_adjacent(tmp_path):
+    """Ledger #10's rule: system_manager CAN trip tomorrow's SOFT_KILL, so every
+    change here must prove it does not. This check must NEVER set the reason."""
+    from datetime import date
+    s = _store(tmp_path)
+    for state, ts in (("SOFT_KILL", "2026-08-03T15:15:01+05:30"),
+                      ("HARD_KILL", "2027-01-01T10:00:00+05:30"),
+                      ("SOFT_KILL", "not-a-timestamp")):
+        _set_kill(s, state, "r", ts)
+        assert _readiness(s, tmp_path, date(2026, 8, 3)).soft_kill_reason is None
+    s.close()

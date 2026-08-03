@@ -33,6 +33,31 @@ mismatch is the documented defect (IA-P9-01), **not** a second incident.
   ~15:15**, or the trigger reason is anything other than the scheduled breaker. Then it is
   an emergency kill → `05_incident_response.md`.
 
+### 1a. ⛔ The 18:45 EOD report used to TELL YOU to run `resume.sh` — ledger #8c
+
+**You will see, in the 18:45 `system_manager` EOD report under 🔮 TOMORROW READINESS:**
+`Kill switch: SOFT_KILL (circuit_breaker_force_close_15:15) from <date> — prior-day at the
+next open, so the <date> 08:15 boot auto-clears it (HEADLESS GUARANTEE). No action needed.`
+
+**Why this section exists at all.** Until 03-Aug-2026 that same line read *"needs
+`deploy/resume.sh` before market open"* — for **any** non-INACTIVE state. It was **wrong
+every single trading day**, and it is the surface an operator reads at night, so it
+contradicted §1 above with an instruction. §1 stated the principle but **never named
+`system_manager`**, so nothing connected the prohibition to the instruction. Fixed in the
+code (`tomorrow_readiness_check`); this entry closes the doc half.
+
+- **Do:** nothing. It is now an **INFO** line, not a warning.
+- ⭐ **The discriminator is the DATE, not the reason.** `clear_stale_state`
+  (`kill_switch.py:284-297`, called `main.py:1902`) clears **ANY** kill dated strictly
+  before the boot date — **SOFT or HARD, scheduled or emergency**. The next trading day is
+  always after the report's day, so a kill visible here always auto-clears.
+  ⛔ Do **not** reach for `SCHEDULED_KILL_REASONS` here — that governs the **same-day
+  restart** path (`auto_clear_scheduled_kill`), a different question.
+- **THIS IS REAL IF:** the line is a **⚠️ WARNING** rather than INFO — i.e. it says the kill
+  is **not** dated before the next trading day (clock skew / a future-dated row), or that
+  `triggered_at` was **unreadable** so auto-clear could not be confirmed. Both mean the kill
+  will survive the boot → `05_incident_response.md`, and `resume.sh` **is** then correct.
+
 ## 2. 🗄️ The migration-window night — a storm of cron CRITICALs after a schema push
 
 **You will see:** `Schema migration refused (non-boot process)` / `MIGRATION_REFUSED

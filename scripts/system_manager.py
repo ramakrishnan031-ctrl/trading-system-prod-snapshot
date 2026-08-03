@@ -689,13 +689,58 @@ def tomorrow_readiness_check(store: StateStore, app_config, day_date: date,
     (res.ok if clean else res.warn)(
         f"DB clean: {stuck_sig} stuck signals, {stuck_trades} stuck trades, {orphan_orders} orphan orders")
 
-    # Kill switch — must be cleared before market open
-    ks = store.fetch_one("SELECT state,reason FROM kill_switch_state WHERE id=1", ())
+    # Kill switch — will it still be active at the NEXT open?
+    #
+    # Ledger #8c (03-Aug-2026). This line used to say "needs deploy/resume.sh
+    # before market open" for ANY non-INACTIVE state. That instruction was WRONG,
+    # and it is the one an operator reads at night: `main.py:1902` calls
+    # `clear_stale_state(<boot date>)`, which clears ANY kill whose triggered_at
+    # DATE is strictly earlier than the boot date — regardless of type
+    # (SOFT_KILL/HARD_KILL, scheduled or emergency). That is the HEADLESS
+    # GUARANTEE (kill_switch.py:284-297). Since `nxt` is always AFTER day_date,
+    # a kill visible here is a prior-day kill on `nxt` and auto-clears.
+    #
+    # ⛔ The discriminator is the DATE, not the reason. SCHEDULED_KILL_REASONS
+    # governs `auto_clear_scheduled_kill()`, which is the SAME-DAY restart path —
+    # a different question from "is tomorrow ready?". Reusing it here would
+    # encode a distinction that decides nothing at this call site.
+    ks = store.fetch_one(
+        "SELECT state,reason,triggered_at FROM kill_switch_state WHERE id=1", ())
     state = (ks["state"] if ks else "INACTIVE") or "INACTIVE"
     if state == "INACTIVE":
         res.ok("Kill switch: INACTIVE (no --resume needed)")
     else:
-        res.warn(f"Kill switch: {state} — needs deploy/resume.sh before market open")
+        reason = (ks["reason"] or "")[:50] if ks else ""
+        # Parse defensively: if we cannot establish the date we must NOT claim
+        # it is safe — fall through to the actionable warning.
+        trig_date = None
+        try:
+            raw = (ks["triggered_at"] or "") if ks else ""
+            if raw:
+                trig_date = datetime.fromisoformat(raw).date()
+        except (ValueError, TypeError, KeyError, IndexError):
+            trig_date = None
+
+        if trig_date is not None and trig_date < nxt:
+            res.info(
+                f"Kill switch: {state} ({reason}) from {trig_date.isoformat()} — "
+                f"prior-day at the next open, so the {nxt.isoformat()} 08:15 boot "
+                f"auto-clears it (HEADLESS GUARANTEE). No action needed; "
+                f"⛔ do NOT run deploy/resume.sh for this."
+            )
+        elif trig_date is not None:
+            res.warn(
+                f"Kill switch: {state} ({reason}) is dated {trig_date.isoformat()}, "
+                f"NOT before the next trading day {nxt.isoformat()} — it will NOT "
+                f"auto-clear. Investigate (clock skew or a future-dated row); "
+                f"deploy/resume.sh is the sanctioned clear."
+            )
+        else:
+            res.warn(
+                f"Kill switch: {state} ({reason}) — triggered_at unreadable, so "
+                f"auto-clear CANNOT be confirmed. Verify before market open; "
+                f"deploy/resume.sh is the sanctioned clear."
+            )
 
     # BUILD 1 (#3): base caps are the sole authority now (live_test deleted).
     eff_open, eff_daily = _effective_caps(app_config)
