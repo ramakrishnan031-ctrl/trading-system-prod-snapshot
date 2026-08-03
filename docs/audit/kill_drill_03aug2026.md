@@ -3,7 +3,7 @@
 **⛔ FINDINGS-ONLY. NOTHING WAS FIXED, and nothing here authorises a fix.**
 The RED cell needs its own card (G3: disclose, don't expand).
 
-**Gate status: (b) kill drill = RED.** Per the day's card, a RED gate outranks every
+**Gate status (03-Aug): (b) RED · (c) PASS · (a) BLOCKED.** Rama ruled the RED does NOT block
 backlog item, so the work sequence stopped here and was reported.
 
 ---

@@ -174,6 +174,36 @@ Tests construct their own objects and **pass the args production forgot** — wh
 5,500 greens coexisted with ~22 dead subsystems. Assert that production **feeds** the
 thing, not merely that the thing works when fed. (IA-XTEST-01.)
 
+**⭐ SECOND ENTRY — EARNED ON THE MONEY PATH, 03-Aug-2026.** The first entry was
+structural; this one is an incident, and it is the stronger evidence.
+
+Eight unit tests (`tests/unit/test_kill_switch_product_filter.py`) said the buy-day
+product filter was sound. They monkeypatch the broker seam at `:40-41`:
+
+```python
+monkeypatch.setattr(ks_mod, "determine_close_direction",
+                    lambda _a, _s, side, qty: (side, qty))
+```
+
+⇒ the stub hands back the **local** qty **by construction**, so no test in that file can
+observe what the real helper computes from broker truth. Those tests are sound about
+*which* positions get flattened and **structurally blind to how many shares are sold.**
+
+The Monday PC drill ran the **real** `determine_close_direction` / `broker_net_qty` in a
+composed call and found, in **one run**, what the suite could not see at all: on a
+same-symbol `(MIS 10) + (CNC 5)` book, site 1 sells **15** — eating 5 shares of the
+delivery position the filter had just spared. `broker_net_qty` sums by **symbol** with no
+product filter (`broker/position_helpers.py:34-39`), and site 2 — which uses the per-row
+qty instead — is correct, so **the two sites disagreed and only one had ever been
+measured.**
+
+⭐ **The lesson, sharpened:** *a mock whose return value you order cannot test the thing
+you ordered.* A seam stubbed "because it isn't what's under test" **defines** what the
+test can conclude — and the eight green tests were, on the quantity question, vacuous.
+⛔ **When a stubbed seam sits between the code under test and the decision that reaches
+the broker, the suite is not evidence about that decision.** Drive it composed, or state
+plainly that the question is untested. (Record: `docs/audit/kill_drill_03aug2026.md` §2.)
+
 ---
 
 ## R. ACCEPTED RISKS — the register
