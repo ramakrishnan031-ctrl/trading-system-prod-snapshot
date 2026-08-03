@@ -422,8 +422,122 @@ both audited days.**
 otherwise"* — the document as written instructs the operator to treat the majority of the real
 daily WARNING stream as an incident.** That inverts its purpose, and it is a **docs-only** fix.
 
-✅ **CLOSED SAME NIGHT:** `expected_alarms.md` §6 added (docs-only, this batch). ⛔ The three
-wrong prescriptions in §2.4 are **CODE** and remain **RECORDED, NOT FIXED**.
+✅ **CLOSED SAME NIGHT:** `expected_alarms.md` §6 added (docs-only, this batch).
+✅ **The 15:15 pair — §2.4(2)+(3) — was RULED, BUILT, GATED and DEPLOYED the same night** (§4).
+⛔ **§2.4(1) `Naked untracked position` and §2.4(4) `STRATEGY PAUSED` remain OPEN.** They are
+**not the same animal**: (1) is a GTT-blind *detector* (IA-P5-06) — logic, not text, and it
+cannot ride on the reasoning that carried the 15:15 strings; (4) is measured below.
+
+## 2.7 `STRATEGY PAUSED` — STEP 1 `<MEASURED — NOT BUILT>` ⛔ **IT IS NOT A STRING FIX**
+
+### 2.7.1 The contradiction originates in the SOURCE, five lines apart
+
+```
+capital/strategy_governor.py:4-7   "pauses a strategy for the rest of the trading day"
+capital/strategy_governor.py:9     "Pause state is in-memory only; resets on process restart"
+```
+
+The alert body (`:154-157`) is faithfully reproducing `:4-7`. **It invents nothing** — the
+module's headline claim and its implementation note already disagree with each other.
+
+### 2.7.2 The lifetime is CONDITIONALLY wrong — the condition is the cutoff
+
+After a restart `_paused_today` is empty, so `check()` re-derives. But the cutoff guard
+(`:64-65`) returns **before any P&L computation**:
+
+| restart lands in | behaviour | is *"paused for the rest of today"* true? |
+|---|---|---|
+| **[10:00, 12:00)** | recomputes today's P&L vs threshold → **RE-PAUSES** | **yes** — self-healing |
+| **[12:00, 15:00)** | `now_time >= cutoff` → `return False, ""` | **NO** — the strategy resumes, however large the loss |
+
+Entry window is `[10:00, 15:00)`; `cutoff_time: "12:00"` ⇒ the hole spans **3 of the 5 entry
+hours**.
+
+⛔⛔ **THIS IS WHY (b) "just reword it" IS NOT A LITERAL.** A flat *"clears on restart"* would be
+**FALSE on the pre-cutoff branch** — a new wrong statement in the opposite direction. Any honest
+interim must carry the **conditional** (*"unless the service restarts at or after 12:00 IST"*),
+which is a claim about two-branch behaviour on the signal path, not a string edit.
+
+### 2.7.3 ⭐ THE ROOT — AND IT IS NOW A NAMED PATTERN: **ONE GUARD DOING TWO JOBS**
+
+`cutoff_time` conflates two different questions:
+
+1. **"May I CREATE a pause now?"** — what the config comment says, and all it says:
+   `cutoff_time: "12:00"   # don't pause after 12:00 IST`
+2. **"Is this strategy CURRENTLY paused?"** — which it also silently answers, with `False`.
+
+⭐⭐ **THIS IS THE SECOND INSTANCE OF THE SAME SHAPE IN THIS CAMPAIGN.** #3b's registered
+direction-to-test is *separate **release the reservation** from **disown the position*** — today
+one action answering two questions. Here it is *separate **may I create a pause** from **honour an
+existing pause***. ⇒ **Name it as a class when it appears a third time**: a single predicate that
+is correct for the decision it was written for and silently wrong for the decision it also
+answers. ⚠️ Note the tell in both cases: **the comment/name describes only ONE of the two jobs**,
+which is exactly why neither was noticed.
+
+### 2.7.4 Reachability — ⚠️ **UNKNOWABLE, NOT ZERO** (and the widths are the finding)
+
+Off-schedule restarts, classified against the entry window and the cutoff (44-day journal):
+
+| restart window | count | effect |
+|---|---|---|
+| outside `[10:00, 15:00)` | 9 | cannot expose — no signals arrive |
+| `[10:00, 12:00)` | 5 | **self-heals** (re-derives, re-pauses) |
+| **`[12:00, 15:00)` — EXPOSED** | **7** | 21-Jun ×2 · 23-Jun ×2 · 26-Jun · 28-Jun · 01-Jul |
+
+Days a strategy was actually paused: **09-Jul · 14-Jul · 20-Jul · 03-Aug ×2** (5 pauses, 4 days).
+
+⛔⛔ **THE NAIVE INTERSECTION IS EMPTY, AND THAT READING IS WORTHLESS.**
+**`system_*.log` retention starts 03-Jul. ALL SEVEN exposed-window restarts predate it.** For
+every date where the hole could have opened, the evidence needed to answer **does not exist and
+never will**.
+
+⭐ **THE EVIDENCE WINDOWS DO NOT ALIGN, AND THAT IS ITSELF THE FINDING:** the systemd journal
+retains **44 days** (21-Jun → 03-Aug) while `system_*.log` retains **32** (03-Jul → 03-Aug). The
+restart evidence **outlives** the pause evidence, so the two overlap only partially ⇒ **the empty
+intersection is an ARTIFACT OF THE GAP, not a measurement.** Stated with widths:
+
+- ✅ **03-Jul → 03-Aug (33 days, full overlap): ZERO exposed-window restarts, 4 pause days ⇒ no
+  coincidence, genuinely established.**
+- ⛔ **21-Jun → 01-Jul: 7 candidate events, pause status PERMANENTLY UNKNOWABLE.**
+
+⭐ All 7 sit in the **June instability era** (the ORPHAN_ADOPTION / G5b / CAPITAL_DRIFT storms
+were 100% June-2026). Since 01-Jul the mid-day restart behaviour that reaches this hole has **not
+recurred once in 33 days.**
+
+⇒ **LATENT by current behaviour, with an unknowable history.** Per the live-vs-latent rule:
+document + pin with a test that fails when it becomes reachable — ⛔ not stop-and-fix.
+
+### 2.7.5 ⚠️ A CORRECTION TO MY OWN MEASUREMENT, RECORDED AS A CORRECTION
+
+My first pass reported **"no service start after 12:00, ever."** That was **wrong**, and the
+mechanism is the point: it keyed on the `System Active` alert line, which only exists from
+**31-Jul** — a **2-day** width. The full journal shows **52 starts, 31 scheduled at 08:15, and 16
+at/after 12:00.**
+
+⭐ *"An absence is only established by a check wide enough to have found the thing"* and *"two
+greps over one corpus disagree ⇒ the NARROW one is lying"* — both earned again here, in the same
+session, by the same reader. **The zero was caught only because the width was stated alongside
+it.** ⇒ that habit is what made this recoverable; the number alone would have shipped.
+
+### 2.7.6 Two smaller measurements
+
+- ⛔ **`_pause_strategy` writes NO DB row** — `self._log.warning(...)` + `notifier.send(...)` only.
+  A pause that silently lifts therefore leaves **nothing to reconcile against**, and the 5 pauses
+  counted above exist **only in logs** — i.e. they inherit the same 32-day retention ceiling.
+- ⚠️ **`is_paused()` (`:46-47`) is a public method with ZERO production callers.** Only `check()`
+  reads the set, internally. Dead API — the family-α/β shape, recorded not fixed.
+
+### 2.7.7 The decision this needs (⛔ not made here; latent, so no deadline)
+
+- **(a) THE BEHAVIOUR IS WRONG** ⇒ the pause must **survive a restart**: persist it, and separate
+  *"don't create new pauses after cutoff"* from *"honour an existing pause"* (§2.7.3). Real work,
+  touches the signal path.
+- **(b) THE TEXT IS WRONG** ⇒ reword it — ⛔ **and only with the conditional** (§2.7.2). Cheap,
+  honest, and **it enshrines the hole.**
+
+⭐ **Recommendation: (a), with a correctly-conditional (b) as an INTERIM only — never as the
+substitute.** A system that documents its own gap and stops there is precisely how ~22 dormant
+subsystems acquired their accurate-sounding descriptions.
 
 ---
 
@@ -602,7 +716,16 @@ would have become a lying comment on the same night two were removed.
 
 # §5 WHAT THIS BATCH DID **NOT** DO
 
-- ⛔ **No `.py` changed.** No fix applied for #3a, #9 or #5. All three remain `<MEASURED — NOT BUILT>`.
+- ⛔ **#3a and #5 remain `<MEASURED — NOT BUILT>`.** No fix applied to either.
+- ✅ **#9's 15:15 pair is the ONE exception, and it was explicitly ruled** (§4): `<DEPLOYED>` in
+  `4149263`, pushed 23:05 — two string literals, no logic, gate clean, NEW-failure set empty.
+  It landed at **TUE 08:15** rather than riding Wednesday's flip push, which buys it a full
+  shakedown day of exposure *and* returns Tuesday evening's push to flip flags alone.
+- ⛔ **`STRATEGY PAUSED`'s interim wording was CONSIDERED AND DELIBERATELY NOT SHIPPED tonight**
+  (§2.7.2). The "cheap literal" framing was **wrong, refuted by this record's own measurement**: a
+  flat *"clears on restart"* is FALSE on the pre-cutoff branch, so the honest interim must carry
+  the conditional — a two-branch behavioural claim on the signal path, not a string edit, and not
+  a 23:40 task. It is LATENT; nothing worsens by waiting for a fresh gate.
 - ⛔ **No new register rows.** **231 stands.** #3a stays inside row #3; the alert findings stay
   inside row #9; the seed-check re-scope stays inside row #5.
 - ⛔ **No backfill.** R-4's fix-forward ruling is reinforced by §1.6, not overturned.
