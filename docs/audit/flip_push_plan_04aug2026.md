@@ -19,6 +19,47 @@ correctly at the right moment, without existing until that moment.
 
 ---
 
+## 0a. ✅ RULED 04-Aug ~13:00 — `trade_type` IS IN THE FLIP, AND WHAT THAT MEANS FOR R2
+
+**`trade_type: INTRADAY → BOTH` is accepted into the flip's edit list.** ⛔ `BOTH`, never
+`DELIVERY`.
+
+⭐⭐ **STATE IT PLAINLY, BECAUSE THE SHAPE MATTERS MORE THAN THE FLAG: the flip's INTENT was
+ruled and stands; its MECHANISM was incomplete. The flag list was short.** That is
+`campaign_practices.md` **§G5, now its FOURTH instance** (#6 · #5 · D4 · here). ⛔ **R2 is
+not overturned, questioned, or weakened** — a mechanism found insufficient is returned for
+re-scoping, and the intent survives it. ⛔ **Never "the flip plan was wrong."**
+
+⭐ **And the reason this one was nearly missed is the reusable lesson:** the evidence that
+looked like *"LAYER 1 is satisfied"* — **zero** LAYER-1 rejections in a full trading day —
+was in fact *"LAYER 1 is unreachable"*. **A zero from a guard that sits BELOW an
+earlier-returning guard measures the guard above it, not itself.** Reading that zero the
+other way is precisely the class of error this campaign keeps finding.
+
+## 0b. ⛔ VERIFICATION CANNOT USE AN EXISTING POSITION — MEASURED 04-Aug 13:05
+
+Read-only broker probe (three GETs — `holdings()`, `get_gtts()`, `positions()`; no writes,
+no DB touch, no credential printed):
+
+| | measured |
+|---|---|
+| Holdings (T+1+ delivery) | **0** |
+| Active GTTs | **0** |
+| Net positions | **0** |
+
+⇒ **T2's 29-Jul basket is FULLY CLOSED** — all 5 CNC positions and all 5 GTTs are gone.
+**There is no already-past-T+1 position to test the holdings-blindness of §1 against.**
+
+✅ **The probe is not vacuous — it could have returned non-zero.** SCI was OPEN at 10:30 and
+closed `SL_HIT`/`OWN_SL` (−2.78) before the probe; today's book is flat, 0 open trades. The
+zeros are a reading, not a silent auth failure.
+
+⛔ **DO NOT BUY A CNC TEST POSITION TODAY**, and the reason is not the missing position: a
+manually-bought CNC row is **untracked to the reconciler**, so it fires the
+`Naked untracked position` alert already known false 5/5 (IA-P5-06, GTT-blind), and it adds
+a variable to the **one morning deliberately reserved for having none.** ⇒ **Buy after the
+flip, and only if the flip's own delivery orders do not supply one naturally.**
+
 ## 1. ⛔⛔ THE FINDING THAT CHANGES THE FLIP: `trade_type` IS A SECOND, MASKED GATE
 
 **The flag list this plan was commissioned with did not name `trade_type`. It must.**
