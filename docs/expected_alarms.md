@@ -58,6 +58,37 @@ code (`tomorrow_readiness_check`); this entry closes the doc half.
   `triggered_at` was **unreadable** so auto-clear could not be confirmed. Both mean the kill
   will survive the boot → `05_incident_response.md`, and `resume.sh` **is** then correct.
 
+### 1b. ⏱️ The 08:15 boot emits the **CRITICAL first and the auto-clear 4 ms later**
+
+**You will see, in the log at every 08:15 boot that follows a 15:15 breaker day — in this
+order:**
+
+```
+08:15:10.594  CRITICAL  kill_switch  KILL SWITCH ACTIVE AT STARTUP: state=SOFT_KILL
+              reason=circuit_breaker_force_close_15:15 triggered_by=order_monitor
+              -- operator must call resume() to clear (Audit Issue #18 fix)
+08:15:10.598  WARNING   kill_switch  Kill switch auto-cleared: prior SOFT_KILL from
+              2026-08-03 ... -- new day 2026-08-04 starts clean (HEADLESS)
+```
+
+⛔⛔ **The CRITICAL is emitted BEFORE the auto-clear, and its text is wrong by the time
+you read it.** The startup check reports the state it found; `clear_stale_state` then
+clears it ~4 ms later. **`operator must call resume()` is stale the instant it is
+written** — nothing calls `resume()` on this path and nothing needs to.
+
+This is the *log* half of §1a. §1a fixed the 18:45 report, which is the surface an
+operator reads **at night**; this is the surface read **in the morning**, and it still
+carries the old instruction because it is a factual record of the pre-clear state.
+
+- **Do:** read **both** lines. The pair is the event; the CRITICAL alone is misleading.
+- ⛔ **Do NOT run `deploy/resume.sh`.** Measured 04-Aug-2026: the gap was **4 ms**.
+- ⭐ **The discriminator is the same as §1a — the DATE.** The auto-clear line names the
+  date it cleared *from*; if that date is **before** the boot date, this is the designed
+  prior-day path.
+- **THIS IS REAL IF:** the `Kill switch auto-cleared` line **does not appear in the same
+  boot**, or the kill's date **is the boot date** (a same-day emergency kill). Then the
+  kill survives, `resume.sh` **is** correct → `05_incident_response.md`.
+
 ## 2. 🗄️ The migration-window night — a storm of cron CRITICALs after a schema push
 
 **You will see:** `Schema migration refused (non-boot process)` / `MIGRATION_REFUSED
@@ -133,6 +164,34 @@ service back.** So a failed start is **quiet by design**, and the process stays 
 
 ⛔ **The `(shadow)` suffix is load-bearing.** If someone reads the `mis_filter` line as
 enforcing, they will "fix" a working system.
+
+### 5a. ⏳ `CRON INTEGRITY WARNING` naming the 4 claude heartbeats — ⛔ **EXPIRES AT THE NEXT PUSH**
+
+⏳ **THIS ENTRY HAS A CLEAR-CONDITION. Delete it once met — an "expected" entry with no
+expiry becomes permanent noise.**
+
+**You will see, from `check_cron_drift` (`0 18 * * 1-5`, next run 18:00):**
+`[LFL836] CRON INTEGRITY WARNING` listing `claude_heartbeat_0530 / _1031 / _1532 / _2033`
+as enabled in the registry but absent from the live crontab.
+
+**Why.** The 4 dead claude heartbeat jobs were removed from the **live crontab** on
+04-Aug ~02:12 (160→148 lines, 0 claude refs). The commit that removes them from the
+**registry** — `71f331b` — is **not yet pushed**, so the VM's
+`config/cron_registry.yaml` at `4149263` still declares all four (49 jobs). Live and
+registry therefore genuinely disagree, and the check is **correct to say so**.
+
+⭐ **It arrives as WARNING and not CRITICAL for exactly one reason: those four carry
+`personal_tooling: true`.** `check_cron_drift.py:123-127` routes an absent-from-live job
+to `absent_warn` when that flag is set and to `absent_critical` when it is not. **That
+flag is load-bearing** — it is what makes it safe to retire a personal-tooling job from
+live ahead of the registry push. ⚠️ They are the **only** four jobs carrying it.
+
+- **Do:** nothing.
+- ✅ **CLEAR-CONDITION — delete this entry when:** `71f331b` has ridden a push and the VM
+  registry reads **45 jobs, 0 claude**. The WARNING stops by itself; no action clears it.
+- **THIS IS REAL IF:** the list names **any job that is not one of those four**, or it
+  arrives as **CRITICAL** rather than WARNING. Either means a non-personal-tooling job is
+  missing from live — a real scheduling gap → `05_incident_response.md`.
 
 ## 6. ⚠️ The daily WARNING stream — six that fire, and are not incidents
 
