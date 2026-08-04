@@ -790,7 +790,7 @@ ranking does not hide them:**
 | **G10** | a **separate test token** — 20 live prod keys sit in the test env | the network guard shipped 30-Jul is only the **first** layer | S1 §4, S2 §5-B2 | **RE-GRADED + SPLIT → IA-XSEC-02** (§B#11): **PC test runs CANNOT place a real order** (newly established, materially better) — **but VM test runs CAN** (3 crash-test files `load_dotenv()` the real `.env`). **HIGH if the VM path is ever exercised.** Also **IA-XTEST-05** (the subprocess escape) |
 | **G12** | **T2** *(wording corrected)* · **T3** `test_fix181` LIMIT-vs-MARKET · **T4** `backfill…w8.py:92` restates the vocabulary · **F2** `CT_SCRATCH_DIR` inside `data_store/` | after 4-Aug; all test-side | S1 §4 (3 sub-items), S2 §3.4/§3.7 | **T4 LINE-VERIFIED + WIDENED → IA-XDUP-04**: `scripts/backfill_closure_source_w8.py:92` restates the closure vocabulary as string literals with **NO import from `core.closure_source`** — *a restatement surviving inside the one concept that HAS a canonical contract* |
 | **G15** | remaining free-text cousins (`REJECTED_KILL_SWITCH` @ `db_reader.py:41`, throttle category, W9) | low | S1 §4, S2 §3.7 | **W9/G15 unchanged** (S3 P1.4): per-symbol reject reasons remain response-only. Class kin: **IA-P2-08(a)** (`REJECTED_SCORE_{n}` embeds a variable in the status column) |
-| **G17** | AB-910 phases 9+10 never produced | formal slice unaudited | S1 §4 | — |
+| ~~**G17**~~ | ~~AB-910 phases 9+10 never produced~~ ➡️ **MOVED 04-Aug-2026 TO §E (GOVERNANCE). The row is struck here, NOT deleted (§G4), so a reader arriving from an old citation finds where it went instead of concluding it was closed.** | ~~formal slice unaudited~~ ⭐ **unchanged in substance — it is a PROCESS/records gap, and nothing in production behaves differently because of it. ⛔ Moving it did NOT deprioritise it: §E is a separate QUEUE, not a lower tier** | S1 §4 | ⛔ **NOT a new row and NOT a closure — 231 stands** |
 | **G19** | 6 TIER-B sub-items (M-A2·M-K3·M-S3·M-D1·W10-relabels·broker_order_id) — **M-O9 CLOSED as INERT** | low | S1 §4 (7 sub-items), S2 §3.7 | **M-S3 re-measured** (S3 P2.4): rotation in place, **0 timeouts / 0 rotations all-time** ⇒ DEPLOYED-not-VERIFIED-LIVE. **M-A2** carries R8's live caveat (§D) |
 | **G20** | **~55 architecture/LOW line items** | ⛔⛔ **POINTER ONLY — the two July audits (S6) are the source of record. DO NOT re-enumerate, DO NOT delete them** | S1 §4 (11 named sub-items), S6 | S3 P5.4 **re-verified 5 of them line-by-line** (July-audit LOWs :173–:177 all **STAND**, several *made precise* by **IA-P5-02**/**IA-P5-07**) |
 | **G21** | BK-1 · BK-3 · BK-4 · BK-5 · BK-6 · BK-7 · BK-8 | low / deferred | S1 §4 (7 sub-items) | ⭐ **BK-8 IS NOW THE HEADLINE FIX** — the schema↔ctor completeness check is **half of §B#1's one mechanism** (**IA-XCFG-02**: *"BK-8 as named would close family α only"*; the other leg is acted-telemetry) |
@@ -994,6 +994,64 @@ commissioning.
 ⛔ **Neither is deleted, and every §C item names which one it came from.** The 12 delete
 verdicts in S2 §7 are **unchanged and still valid** — ⛔ and **`DEPLOY_CALENDAR_28-JUL_TO_04-AUG.txt`
 and `MON_03-AUG_OBSERVATION_CARD.txt` still say KEEP.**
+
+---
+
+# §E — GOVERNANCE (⭐ NEW BAND, 04-Aug-2026) — ⛔ A SEPARATE QUEUE, NOT A PRIORITY TIER
+
+> ## ⛔ WHY THIS BAND EXISTS, AND THE ONE RULE THAT COMES WITH IT
+> Governance improvements have been ranked **against implementation defects** — and they are
+> not comparable. A records rule and a live money-path defect answer different questions, so
+> putting them in one ranking means priority gets swapped **by accident**, not by decision.
+> ⛔ **§E IS A SEPARATE QUEUE, NOT A LOWER ONE.** Nothing here is deprioritised by being moved;
+> it is removed from a comparison it never belonged in.
+>
+> ### ⭐⭐ THE PRIORITISATION RULE — write it down, because it has been doing the work unwritten
+> > **DEFECTS ARE RANKED BY EXPOSURE AND REACHABILITY, NOT BY EFFORT.**
+>
+> ✅ **It is already the operative criterion; it has simply never been stated:** H1/H5 lead the
+> coupling work **because they are live from the first delivery fill** (reachability), not
+> because they are small — H1 is not. **§B#6 was deferred because its first run lands on a
+> census day** (timing/exposure), explicitly *not* because it was expensive — the row calls it
+> cheap. ⛔ **And twice a "cheap to fix" label did the ranking and was wrong: §B#3 and §B#6 both
+> carry a struck *"~2 lines"*.** ⇒ **effort belongs in scheduling, never in ranking.**
+>
+> ### 🧾 ACCOUNTING — stated explicitly, exactly as for the two §C.5 rows
+> ⛔ **MOVING an existing item between bands does NOT create one. 231 STANDS.** ⭐ **And the
+> honest count of what moved is ONE: `G17`.** I am **not** manufacturing moves to populate a
+> new band — that would be tidiness masquerading as work, and it would corrupt a reconciliation
+> that four documents depend on.
+>
+> | item | from | why it is governance |
+> |---|---|---|
+> | **G17** — *AB-910 phases 9+10 never produced; the formal slice is unaudited* | §C.3 | It is a **process/records** gap, not a system defect: nothing in production behaves differently because of it. Ranking it beside `G1`'s 95-minute unwatched window was the exact category error this band fixes |
+>
+> ⚠️ **AND THE MEASUREMENT THAT MATTERS MORE THAN THE MOVE: §C was NOT where the governance
+> content actually lived.** A sweep of §C.1–§C.10 finds **one** genuinely-governance row. The
+> register's governance content has been living in **§A-DEC / §A-DEC-2 / §A-DEC-3**, in
+> **§D.4's standing refusals**, and in **`docs/campaign_practices.md`** — none of which was
+> ever ranked against defects at all. ⇒ ⭐ **the mixing the band was created to stop was real
+> but SMALL; the larger truth is that governance was UNINDEXED rather than mis-ranked.**
+> **This band is therefore primarily an INDEX**, and that is the useful thing it does.
+>
+> ### 📇 THE INDEX — governance content that lives elsewhere and is NOT moved (⛔ pointers, not copies)
+> | where | what it owns | ⛔ do not |
+> |---|---|---|
+> | **§A-DEC** (R1–R5) · **§A-DEC-2** (D1–D7) | Rama's ratified rulings | re-litigate; **§D.4** lists the standing refusals |
+> | **§A-DEC-3** | the settled SHAPE: the five annotation axes + separate STATUS · the pipeline-dimension code rule · the missing home for MODIFIERS · the isolation suite born failing · the wind-down requirement · the order | ⛔ treat as authorised work — **it is shape, nothing is designed or built** |
+> | **`docs/campaign_practices.md`** | G1–G5 · M1–M5 · V1–V4 · D1–D4 · AR1–AR8, each with its incident | duplicate a rule into this register; **cite it** |
+> | **§D.4** | the 11 standing refusals | re-open without new evidence |
+> | **§2** (below) | how to keep this file alive; the AR accepted-risk register | ⛔ let an accepted risk exist without a **reopen condition** |
+>
+> 🔴 **OPEN GOVERNANCE WORK — carried, not scheduled** (⛔ none authorised; all gated behind
+> Wednesday's observation): **(a)** annotate the Part A control inventory with the five axes +
+> STATUS — ⛔ **EXTEND the existing inventory, do NOT create a second one**, which would be the
+> multi-authority defect (§B#7) committed by the very work meant to cure it · **(b)** the
+> pipeline-isolation suite, **seeded with H1 and H5 as its first two FAILING tests** (⛔ written
+> after the fixes, they pass on day one and prove nothing) · **(c)** a test that fails if any
+> **modifier** applies to 100% of trades without an acknowledgement flag — that single test
+> would have caught the tier ladder · **(d)** a home in the taxonomy for **modifiers** at all
+> (the tier multiplier and `dynamic_by_winrate` are both uninventoried).
 
 ---
 
