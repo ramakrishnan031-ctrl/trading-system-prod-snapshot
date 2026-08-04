@@ -225,6 +225,25 @@ trustworthy; the 221 was a false finding produced by the old comment above.**
 - ⚠️ **Which is exactly why this is a trap and not a bug:** ₹1,628.13 on a ~₹9,871 book is
   **16.5% of capital**. A tool that silently inherited it **would not look obviously
   broken** — it would just be wrong by a sixth.
+- ⛔⛔ **BUT READ THAT 16.5% WITH ITS DENOMINATOR, AND PREFER THE OTHER TWO (added 04-Aug-2026).**
+  **16.5% is measured against TODAY'S CAPITAL, which is a TESTING value, not the design
+  capital** — so that figure **shrinks as the account grows and will quietly stop sounding
+  alarming** while the defect is entirely unchanged. **It is the least durable way to state
+  this.** The scale-free measurements, each with its denominator named:
+
+  | figure | value | denominator |
+  |---|---|---|
+  | by **count** | **10 / 1,327 = 0.75%** | every reservation ever opened |
+  | by **value** | **₹1,628.13 / ₹133,274.95 = 1.22%** | every rupee ever reserved |
+  | ~~by capital~~ | ~~16.5%~~ | ⚠️ *today's ₹9,882.30 — a test value; kept because it is what makes the TOOLING risk vivid, ⛔ not because it is the durable number* |
+
+  ⭐ **The three do not disagree — they answer different questions, and that is the point.**
+  **0.75% / 1.22% say how much of the LEDGER is affected** (small, and it does not grow).
+  **16.5% says how badly ONE TOOL would be wrong TODAY if it reconstructed capital from the
+  ledger alone** (a sixth). ⇒ **quote the count/value ratios when describing the DATA; quote
+  the capital ratio only when describing the CONSEQUENCE, and say which capital.**
+  ⛔ **Never write a bare "16.5%" without its denominator** — a reader who meets it later will
+  reasonably assume it means 16.5% of the ledger, which is off by ~13×.
 - ⭐ **And note what protects you: `rehydrate` keys on TRADE STATUS, not on ledger
   completeness.** Re-key any reconstruction on the ledger "for accuracy" and you inherit all
   ten immediately. Record: `docs/audit/reservation_nonatomicity_latent_or_live_04aug2026.md`.
