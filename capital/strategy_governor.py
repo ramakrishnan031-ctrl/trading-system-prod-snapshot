@@ -141,10 +141,36 @@ class StrategyGovernor:
         )
         if self._notifier is not None:
             try:
+                # ⏳ INTERIM WORDING ONLY (ledger #9, D3 04-Aug-2026). D3 ruled
+                # that the BEHAVIOUR is what is wrong -- the pause should PERSIST
+                # and `cutoff_time` should stop doing two jobs (it conflates "may
+                # I CREATE a pause now?" with "is this strategy CURRENTLY
+                # paused?"). Until that lands, this text must not LIE, so it
+                # states the conditional. ⛔ Do not treat this string as the fix
+                # and close #9 on it.
+                #
+                # The old text said "paused for the rest of today", which is
+                # false across a restart (`_paused_today` is in-memory). ⛔ But
+                # the obvious correction -- "clears on restart" -- is ALSO false,
+                # in the opposite direction: `check()`'s cutoff guard returns
+                # BEFORE any P&L computation, so a restart before the cutoff
+                # re-derives the loss and RE-pauses, while a restart at/after it
+                # cannot pause at all. Two branches, so the alert states two.
+                cutoff = self._cutoff_time.strftime("%H:%M")
                 body = (
                     f"Daily loss {today_pnl:.0f} exceeded "
                     f"{self._loss_multiplier}x avg daily loss ({avg_loss:.0f}).\n"
-                    f"Strategy paused for the rest of today."
+                    f"Strategy paused for the rest of today -- UNLESS the service "
+                    f"restarts. The pause is held in memory only, so a restart "
+                    f"drops it and what happens next depends on the {cutoff} "
+                    f"cutoff:\n"
+                    f"  - restart BEFORE {cutoff}: the loss is re-derived and the "
+                    f"strategy RE-PAUSES (self-heals).\n"
+                    f"  - restart AT/AFTER {cutoff}: the breaker can no longer "
+                    f"fire, so the strategy RESUMES for the remainder of the "
+                    f"session however large the loss.\n"
+                    f"If the service restarts at/after {cutoff}, verify this "
+                    f"strategy manually."
                 )
                 self._notifier.send(
                     # WARNING (not CRITICAL): a single-strategy daily-loss pause is

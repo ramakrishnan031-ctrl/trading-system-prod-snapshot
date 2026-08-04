@@ -219,6 +219,39 @@ class TestStrategyGovernor:
             store.close()
         print("  OK: pause alert dispatches with required severity=WARNING")
 
+    def test_pause_alert_states_both_restart_branches(self) -> None:
+        """Ledger #9 (interim, D3): the alert body must not make a FLAT claim
+        about how long the pause lasts — in either direction.
+
+        `_paused_today` is in-memory, so "paused for the rest of today" is false
+        across a restart. ⛔ But the obvious correction, "clears on restart", is
+        ALSO false: check()'s cutoff guard returns BEFORE any P&L computation, so
+        a restart before the cutoff re-derives and RE-pauses, while a restart
+        at/after it cannot pause at all. Two branches ⇒ the text must state two.
+
+        This pins the honesty of the string, not its prose. It goes red if
+        someone "simplifies" it back to a single unconditional sentence — which
+        is how a wrong claim was introduced here twice already.
+        """
+        with TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            store = _make_store(Path(tmp))
+            for i in range(1, 6):
+                _seed_closed_trade(store, "gap_go_long", -100.0, date_offset_days=i)
+            _seed_closed_trade(store, "gap_go_long", -250.0, date_offset_days=0)
+            notifier = _StrictNotifier()
+            gov = StrategyGovernor(store, _FakeConfig(), notifier=notifier, mode="LIVE")
+            gov.check("gap_go_long", time(10, 0))
+
+            body = notifier.calls[0]["body"]
+            assert "RE-PAUSES" in body, "the before-cutoff branch must be stated"
+            assert "RESUMES" in body, "the at/after-cutoff branch must be stated"
+            # The configured cutoff is named, not hardcoded, so the text cannot
+            # drift from config into a second wrong literal.
+            cutoff = gov._cutoff_time.strftime("%H:%M")
+            assert body.count(cutoff) >= 2
+            store.close()
+        print("  OK: pause alert states BOTH restart branches (ledger #9 interim)")
+
 
 if __name__ == "__main__":
     tests = [

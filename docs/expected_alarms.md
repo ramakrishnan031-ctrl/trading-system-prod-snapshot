@@ -252,18 +252,33 @@ waved through). Improving it is a reference-data project, not a runtime action.
 - **THIS IS REAL IF:** it **stops** appearing on a normal trading day — that would mean the
   sector source changed, which nobody planned.
 
-### 6d. ⏸️ `STRATEGY PAUSED -- <name>` — real, protective, and ⚠️ **its own text is wrong about duration**
+### 6d. ⏸️ `STRATEGY PAUSED -- <name>` — real, protective, and ⚠️ **a restart does not simply clear it**
 
 **You will see:** *"Daily loss N exceeded 2x avg daily loss (M). Strategy paused for the rest of
-today."*
+today — UNLESS the service restarts…"* followed by the two restart branches.
 
-The pause is genuine and other strategies keep trading. ⚠️ **But "for the rest of today" is not
-true across a restart** — the pause set is in-memory (`strategy_governor.py:42`, comment:
-*"in-memory; clears on restart/new day"*). **Restart the service and the strategy resumes.**
+The pause is genuine and other strategies keep trading.
 
-- **Do:** nothing. It is the per-strategy circuit breaker doing its job.
-- ⛔ **Do NOT** restart the service to "clear" something else without knowing this un-pauses every
-  strategy paused today.
+⚠️⚠️ **THIS ENTRY WAS ITSELF WRONG UNTIL 04-Aug-2026 AND THE CORRECTION IS THE POINT.** It used to
+say flatly *"Restart the service and the strategy resumes."* That is **false before the cutoff** —
+it replaced one wrong duration claim with a wrong claim in the **opposite direction**. Measured:
+`check()`'s cutoff guard (`strategy_governor.py:63-65`) returns **before any P&L computation**, and
+the pause set is in-memory (`:42`). So a restart has **two** outcomes, not one:
+
+| restart time | what actually happens |
+|---|---|
+| **before `cutoff_time`** (default **12:00**) | the loss is **re-derived** and the strategy **RE-PAUSES** — it self-heals |
+| **at/after `cutoff_time`** | the breaker **cannot fire at all**, so the strategy **RESUMES** for the remainder of the session **however large the loss** |
+
+⇒ With the entry window `[10:00, 15:00)`, the resuming branch covers **3 of the 5 entry hours**.
+
+⏳ **The alert text is an INTERIM (D3).** D3 ruled the **BEHAVIOUR** is what is wrong — the pause
+should persist, and `cutoff_time` should stop doing two jobs (*"may I CREATE a pause now?"* vs
+*"is this strategy CURRENTLY paused?"*). ⛔ **Do not read the reworded alert as #9 being closed.**
+
+- **Do:** nothing on the alert itself. It is the per-strategy circuit breaker doing its job.
+- ⛔ **Do NOT** restart the service to "clear" something else **at/after the cutoff** without
+  knowing it un-pauses every strategy paused today, permanently for that session.
 - **THIS IS REAL IF:** several strategies pause in quick succession — that is a market-wide or
   system-wide loss pattern, not a single-strategy breaker.
 
