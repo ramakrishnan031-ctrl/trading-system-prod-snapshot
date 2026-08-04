@@ -70,7 +70,10 @@ from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Callable, List, Optional, TYPE_CHECKING
 
-from broker.position_helpers import determine_close_direction  # FIX-190 (Bug A)
+from broker.position_helpers import (  # FIX-190 (Bug A)
+    cancel_co_bracket,  # ledger #2d
+    determine_close_direction,
+)
 from core.constants import (
     EMERGENCY_FLATTEN_PRODUCTS as _EMERGENCY_FLATTEN_PRODUCTS,
     PRODUCT_TO_INTENT as _PRODUCT_TO_INTENT,
@@ -1370,6 +1373,55 @@ class KillSwitch:
                 "kill_switch: unknown-product CRITICAL send failed: %s", exc
             )
 
+    def _alert_co_refused(
+        self,
+        *,
+        site: str,
+        symbol: str,
+        qty: int,
+        trade_id: Optional[str],
+        sentinel: str,
+        detail: str,
+    ) -> None:
+        """
+        Ledger #2d: the HARD_KILL could NOT close a CO position and refused
+        rather than guess. This is a money-path event -- the Q4 invariant is
+        "no live INTRADAY position" and a CO position is intraday -- so it must
+        reach the operator, not just the log. Per AR8 the refusal IS the
+        accepted noise, and per expected_alarms only a CRITICAL leaves a durable
+        trace, so a bare _log.critical would not be enough.
+
+        One shared emitter for all three refusal sites so the alert envelope
+        cannot drift; `sentinel` and `detail` carry each site's specific cause.
+        Best-effort: alerting must never break the flatten itself.
+        """
+        self._log.critical(
+            "kill_switch: %s -- CO position %s (qty=%d, trade=%s, site=%s) was "
+            "NOT closed: %s. Position may still be LIVE -- MANUAL INTERVENTION "
+            "REQUIRED.",
+            sentinel, symbol, qty, trade_id or "-", site, detail,
+        )
+        if self._notifier is None:
+            return
+        try:
+            self._notifier.send(
+                severity="CRITICAL",
+                title=f"[{self._mode}] HARD_KILL CO NOT CLOSED -- {symbol}",
+                body=(
+                    f"{sentinel}: {detail}\n"
+                    f"Symbol {symbol} (qty={qty}, trade={trade_id or '-'}, "
+                    f"site={site}).\n"
+                    f"A CO position cannot be closed by a reverse order "
+                    f"(Audit 3.1) and was NOT reversed. It may still be LIVE -- "
+                    f"verify and flatten at the broker."
+                ),
+                source_module="kill_switch",
+            )
+        except Exception as exc:  # noqa: BLE001 — never break the flatten
+            self._log.error(
+                "kill_switch: CO-refusal CRITICAL send failed: %s", exc
+            )
+
     def _alert_exit_failed(self, failed_trades: list) -> None:
         """
         Part 11 (FIX-180): escalate trades that could not be exited within the
@@ -1380,7 +1432,10 @@ class KillSwitch:
             return
         import time
         now_mono = time.monotonic()
-        for trade_id, symbol, exit_side, qty, intent in failed_trades:
+        # Ledger #2d: the 6th element is the CO bracket order id (None for a
+        # normal reverse-order exit). Unused here -- the escalation text is the
+        # same either way -- but it must be unpacked.
+        for trade_id, symbol, exit_side, qty, intent, _co_oid in failed_trades:
             last = self._exit_alert_ts.get(trade_id, 0.0)
             if now_mono - last < _EXIT_ALERT_DEDUP_SEC:
                 continue
@@ -1437,6 +1492,45 @@ class KillSwitch:
                 "kill_switch: DB write (EXITING) failed for trade %s: %s",
                 trade_id, exc,
             )
+
+    def _fetch_co_entry(self, trade_id: str) -> tuple[str, str]:
+        """Ledger #2d / R-a: return (entry_broker_order_id, variety) for a trade
+        whose product reads CO. ("", "") if it cannot be read.
+
+        R-a ruled a TWO-STAGE test: GATE on `product == 'CO'` (already in hand
+        from the open-trades query, zero query change) and only then CONFIRM
+        `variety == 'co'` with this targeted lookup, for gated rows only. The
+        reason is what the ACTION needs: a bracket cancel is only valid if a
+        bracket EXISTS, and a bracket exists iff variety='co' -- not because the
+        product string says CO. The two are set from different inputs two lines
+        apart in order_placer, so they CAN diverge; CO is dormant, so this lookup
+        costs nothing in practice and everything in correctness.
+
+        `leg IN ('ENTRY','CO')` mirrors the open-trades subquery. Per the #2d
+        Step-1b measurement the entry writer actually persists leg='ENTRY' with
+        variety='co'; the 'CO' arm is a tolerated superset, not a live shape.
+        """
+        try:
+            row = self._store.fetch_one(
+                "SELECT o.order_id, o.variety FROM orders o "
+                "WHERE o.trade_id = ? AND o.leg IN ('ENTRY','CO') LIMIT 1",
+                (trade_id,),
+            )
+        except Exception as exc:
+            self._log.warning(
+                "kill_switch: could not read CO entry row for %s: %s",
+                trade_id, exc,
+            )
+            return ("", "")
+        if not row:
+            return ("", "")
+        try:
+            return (
+                str(row["order_id"] or ""),
+                str(row["variety"] or "").strip().lower(),
+            )
+        except (KeyError, IndexError, TypeError):
+            return ("", "")
 
     def _cancel_trade_resting_exits(self, trade_id: str) -> None:
         """FIX-190 (Bug E): cancel a trade's resting SL/TGT orders at the broker
@@ -1559,6 +1653,13 @@ class KillSwitch:
         open_trades = open_trades or []
         attempted = len(open_trades)
         failed_trades = []
+        # Ledger #2d: CO positions we REFUSED to act on (no bracket to cancel,
+        # or no entry order id). They are NOT retryable — a retry cannot conjure
+        # a bracket — but they are emphatically not successes either: the
+        # position may still be live. They are counted in `attempted` and
+        # reported in `failed` so `succeeded = attempted - len(failed)` cannot
+        # quietly count an unclosed CO position as closed.
+        co_refused: list[tuple[str, str]] = []
         # FIX-181 LAYER A: symbols covered by a local trade exit, so the broker
         # sweep below does not double-fire on a position we already handled.
         handled_symbols: set[str] = set()
@@ -1593,6 +1694,83 @@ class KillSwitch:
                 # is per-product, so this symbol may ALSO hold a live MIS row
                 # the sweep below must still flatten. The sweep's own CNC
                 # exclusion spares this delivery position again there.
+                continue
+
+            # Q4 / ledger #2d — THE CO BRACKET BRANCH (SITE A, local pass).
+            # Audit 3.1: a CO position CANNOT be closed with a reverse order --
+            # Zerodha rejects it and auto-squares at 15:20 with a Rs50+GST
+            # penalty. The only correct gesture is cancelling the CO bracket,
+            # which makes the broker collapse it and close at market.
+            #
+            # ⭐ R-c: this branch sits ABOVE determine_close_direction on
+            # purpose. That call reads broker_net_qty, which is #2e's territory,
+            # so branching above it avoids #2e BY CONSTRUCTION rather than by
+            # discipline -- and discipline is the thing that fails at 2am.
+            if raw_product == "CO":
+                co_intent = _PRODUCT_TO_INTENT.get(raw_product, "INTRADAY")
+                co_side = "SELL" if trade["direction"] == "LONG" else "BUY"
+                entry_oid, entry_variety = self._fetch_co_entry(trade_id)
+                # R-a stage 2: the product gated us in; the VARIETY decides
+                # whether a bracket actually exists to cancel.
+                if entry_variety != "co":
+                    # ⛔ NEVER fall through to a reverse order (Audit 3.1).
+                    co_refused.append((trade_id, symbol))
+                    self._alert_co_refused(
+                        site="local-pass", symbol=symbol, qty=local_qty,
+                        trade_id=trade_id, sentinel="KS_CO_VARIETY_DIVERGENCE",
+                        detail=(
+                            f"product=CO but variety={entry_variety or '<missing>'}, "
+                            f"so there is NO bracket to cancel"
+                        ),
+                    )
+                    continue
+                if not entry_oid:
+                    co_refused.append((trade_id, symbol))
+                    self._alert_co_refused(
+                        site="local-pass", symbol=symbol, qty=local_qty,
+                        trade_id=trade_id, sentinel="KS_CO_NO_BROKER_ID",
+                        detail="CO bracket has no entry order id to cancel",
+                    )
+                    continue
+                # ⭐ REORDERED, NOT SKIPPED (R-c). The resting-exit cancel that
+                # non-CO trades get below is still WANTED here: a CO_PLUS_TGT
+                # trade carries a separate regular-variety TGT order. It runs
+                # FIRST so that when the bracket cancel closes the position no
+                # live TGT is left resting to fill into a naked reverse -- that
+                # is FIX-190 Bug E's invariant, preserved. ⛔ Do NOT read the
+                # call's absence further down this branch as a removal.
+                self._cancel_trade_resting_exits(trade_id)
+                try:
+                    co_ok, co_reason = cancel_co_bracket(self._adapter, entry_oid)
+                except Exception as exc:  # noqa: BLE001
+                    # The helper deliberately does not catch (see its docstring);
+                    # this loop must never crash the flatten, so the kill path
+                    # owns its own handling here.
+                    co_ok, co_reason = False, f"{type(exc).__name__}: {exc}"
+                if co_ok:
+                    self._mark_trade_exiting(trade_id)
+                    self._log.info(
+                        "kill_switch: CO bracket cancelled for trade %s (%s) "
+                        "order=%s -- broker closes the position",
+                        trade_id, symbol, entry_oid,
+                    )
+                else:
+                    self._log.critical(
+                        "kill_switch: KS_CO_CANCEL_REJECTED -- trade %s (%s) "
+                        "order=%s reason=%s; will retry as a CANCEL, never as "
+                        "a reverse order.",
+                        trade_id, symbol, entry_oid, co_reason,
+                    )
+                    failed_trades.append(
+                        (trade_id, symbol, co_side, local_qty, co_intent, entry_oid)
+                    )
+                # ⛔ R-b: deliberately NOT added to handled_symbols -- the same
+                # ruling, for the same reason, as the CNC spare above. Kite
+                # positions() is per-product, so this symbol may ALSO hold a live
+                # MIS row the sweep must still flatten. The cost is a DUPLICATE
+                # CRITICAL from the sweep (accepted risk AR8); the alternative
+                # cost is a live intraday position left unflattened during a
+                # HARD_KILL, which is a money-path failure. Take the noise.
                 continue
             if raw_product not in _EMERGENCY_FLATTEN_PRODUCTS:
                 # NULL/unknown product: include in the flatten + CRITICAL (G2)
@@ -1663,7 +1841,9 @@ class KillSwitch:
                 self._log.critical(
                     "kill_switch: exit failed for trade %s: %s", trade_id, exc
                 )
-                failed_trades.append((trade_id, symbol, close_side, close_qty, intent))
+                failed_trades.append(
+                    (trade_id, symbol, close_side, close_qty, intent, None)
+                )
 
         # FIX-181 LAYER A (GICRE incident): broker-position-driven sweep. A
         # HARD_KILL must leave NO live broker position, even one with no matching
@@ -1691,6 +1871,37 @@ class KillSwitch:
                     # No handled_symbols.add and no attempted+=1: this row is
                     # deliberately untouched; a same-symbol MIS row (Kite is
                     # per-product) must still be processed on its own turn.
+                    continue
+                if sweep_product == "CO":
+                    # D1 / ledger #2d — SITE B REFUSES AND ESCALATES.
+                    # This sweep exists precisely for the case where NO local
+                    # trade row exists (FIX-181 LAYER A), so there is nothing to
+                    # join to and no entry bracket order id to cancel. Without
+                    # that id the bracket cannot be cancelled, and a reverse
+                    # order is rejected by the broker (Audit 3.1) -- BOTH
+                    # available actions are wrong, so it refuses loudly instead
+                    # of guessing. ⛔ "Mirror eod_squareoff at all three sites"
+                    # was never achievable here; Step 1 refuted that premise by
+                    # measurement, and this is the different answer it needs.
+                    attempted += 1
+                    co_refused.append((psym, psym))
+                    self._alert_co_refused(
+                        site="broker-sweep", symbol=psym, qty=abs(pqty),
+                        trade_id=None, sentinel="KS_CO_SWEEP_REFUSED",
+                        detail=(
+                            "no local trade row, therefore no bracket order id "
+                            "to cancel. NOTE: if the local pass already handled "
+                            "this symbol, a bracket cancel may still be IN "
+                            "FLIGHT at the broker (a cancel is not "
+                            "instantaneous) -- in that case this is the EXPECTED "
+                            "duplicate alert (accepted risk AR8) and the "
+                            "position is already closing. Verify at the broker "
+                            "before acting"
+                        ),
+                    )
+                    # No handled_symbols.add, for the same per-product reason as
+                    # the CNC spare above: a same-symbol MIS row must still be
+                    # flattened on its own turn.
                     continue
                 if sweep_product not in _EMERGENCY_FLATTEN_PRODUCTS:
                     # Missing/unknown broker product: include + CRITICAL (G2).
@@ -1732,7 +1943,9 @@ class KillSwitch:
                     self._log.critical(
                         "kill_switch: SWEEP exit failed for %s: %s", psym, sweep_exc
                     )
-                    failed_trades.append(("sweep", psym, exit_side, abs(pqty), sweep_intent))
+                    failed_trades.append(
+                        ("sweep", psym, exit_side, abs(pqty), sweep_intent, None)
+                    )
         except Exception as exc:
             self._log.error("kill_switch: broker position sweep failed: %s", exc)
 
@@ -1753,7 +1966,10 @@ class KillSwitch:
                     _HARD_KILL_MAX_RETRY_HOURS, len(failed_trades),
                 )
                 self._alert_exit_failed(failed_trades)
-                remaining = [t[0] for t in failed_trades]
+                # Ledger #2d: refused CO positions join the failed list. They
+                # were never retryable, but they may still be LIVE, so they must
+                # not be subtracted into `succeeded`.
+                remaining = [t[0] for t in failed_trades] + [c[0] for c in co_refused]
                 return CancellationReport(
                     attempted=attempted,
                     succeeded=attempted - len(remaining),
@@ -1769,7 +1985,36 @@ class KillSwitch:
             retry_attempt += 1
 
             still_failed = []
-            for trade_id, symbol, exit_side, qty, intent in failed_trades:
+            for trade_id, symbol, exit_side, qty, intent, co_oid in failed_trades:
+                # Ledger #2d — SITE C. A CO retry is a CANCEL retry, NEVER a
+                # reverse order (Audit 3.1): the thing that failed was the
+                # bracket cancel, and re-firing it is the only correct retry.
+                # ⭐ Branched above determine_close_direction for the same
+                # reason as Site A -- broker_net_qty is #2e's territory, so the
+                # placement avoids #2e by construction, not by discipline.
+                if co_oid:
+                    try:
+                        co_ok, co_reason = cancel_co_bracket(self._adapter, co_oid)
+                    except Exception as exc:  # noqa: BLE001
+                        co_ok, co_reason = False, f"{type(exc).__name__}: {exc}"
+                    if co_ok:
+                        self._mark_trade_exiting(trade_id)
+                        self._log.info(
+                            "kill_switch: CO bracket cancelled for trade %s "
+                            "(%s) on retry -- broker closes the position",
+                            trade_id, symbol,
+                        )
+                    else:
+                        self._log.critical(
+                            "kill_switch: KS_CO_CANCEL_REJECTED -- retry failed "
+                            "for trade %s (%s) order=%s reason=%s",
+                            trade_id, symbol, co_oid, co_reason,
+                        )
+                        still_failed.append(
+                            (trade_id, symbol, exit_side, qty, intent, co_oid)
+                        )
+                    continue
+
                 # H-4: re-derive (close_side, close_qty) from the CURRENT signed
                 # broker net on EVERY retry — mirror the first pass
                 # (determine_close_direction) — instead of re-firing the STALE
@@ -1825,10 +2070,19 @@ class KillSwitch:
                     self._log.critical(
                         "kill_switch: retry failed for trade %s: %s", trade_id, exc
                     )
-                    still_failed.append((trade_id, symbol, close_side, close_qty, intent))
+                    still_failed.append(
+                        (trade_id, symbol, close_side, close_qty, intent, co_oid)
+                    )
 
             failed_trades = still_failed
 
-        # All trades exited or confirmed flat at broker.
-        succeeded = attempted
-        return CancellationReport(attempted=attempted, succeeded=succeeded, failed=[])
+        # All RETRYABLE trades exited or confirmed flat at broker.
+        # Ledger #2d: a refused CO position is not retryable, so it never
+        # entered failed_trades and the loop above drained without it -- but it
+        # is emphatically not a success. Report it failed, or `succeeded` would
+        # claim a possibly-live CO position as closed.
+        co_refused_ids = [c[0] for c in co_refused]
+        succeeded = attempted - len(co_refused_ids)
+        return CancellationReport(
+            attempted=attempted, succeeded=succeeded, failed=co_refused_ids,
+        )

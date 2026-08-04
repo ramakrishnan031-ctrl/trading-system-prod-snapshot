@@ -48,6 +48,7 @@ from datetime import date, datetime
 from typing import Optional, TYPE_CHECKING
 
 from broker.order_state_machine import OrderStateMachine
+from broker.position_helpers import cancel_co_bracket  # ledger #2d seam
 from core.constants import EMERGENCY_FLATTEN_PRODUCTS
 from core.effect_telemetry import handle as _effect_handle
 from broker.zerodha_adapter import ZerodhaAdapter
@@ -1185,11 +1186,17 @@ class EodSquareoff:
                         )
 
                     # Cancel the CO bracket -- broker exits the position.
-                    cancel_result = self._adapter.cancel_order(
-                        entry_broker_id, variety="co",
-                    )
-                    if not getattr(cancel_result, "success", False):
-                        reason = getattr(cancel_result, "reason", "") or "rejected"
+                    # Ledger #2d: the broker gesture itself now lives in
+                    # broker/position_helpers.cancel_co_bracket, shared with the
+                    # kill switch's HARD_KILL flatten so the two cannot drift.
+                    # ONLY the two lines that called the adapter and normalised
+                    # its result moved. The helper neither logs nor catches, so
+                    # everything below -- the CRITICAL, its
+                    # CO_SQUAREOFF_CANCEL_REJECTED sentinel, _mark_exit_failed,
+                    # the counters, and the outer handlers that catch a raising
+                    # cancel_order -- is unchanged and stays here.
+                    ok, reason = cancel_co_bracket(self._adapter, entry_broker_id)
+                    if not ok:
                         self._log.critical(
                             "EOD CO cancel rejected by broker: "
                             "CO_SQUAREOFF_CANCEL_REJECTED "

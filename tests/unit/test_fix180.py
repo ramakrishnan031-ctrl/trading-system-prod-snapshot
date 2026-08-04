@@ -156,7 +156,9 @@ class TestKillSwitchExitAlertDedup:
     def test_duplicate_alert_suppressed_within_window(self, tmp_path: Path):
         notifier = MagicMock()
         ks = _make_ks_with_adapter(tmp_path, MagicMock(), notifier=notifier)
-        failed = [("trd_1", "RELIANCE", "SELL", 10, "INTRADAY")]
+        # 6th element is the ledger-#2d CO bracket id; None = a normal
+        # reverse-order exit, which is what this dedup test is about.
+        failed = [("trd_1", "RELIANCE", "SELL", 10, "INTRADAY", None)]
 
         ks._alert_exit_failed(failed)
         ks._alert_exit_failed(failed)  # immediate repeat -> deduped
@@ -170,15 +172,15 @@ class TestKillSwitchExitAlertDedup:
         notifier = MagicMock()
         ks = _make_ks_with_adapter(tmp_path, MagicMock(), notifier=notifier)
         ks._alert_exit_failed([
-            ("trd_1", "RELIANCE", "SELL", 10, "INTRADAY"),
-            ("trd_2", "INFY", "BUY", 5, "INTRADAY"),
+            ("trd_1", "RELIANCE", "SELL", 10, "INTRADAY", None),
+            ("trd_2", "INFY", "BUY", 5, "INTRADAY", None),
         ])
         assert notifier.send.call_count == 2
 
     def test_no_notifier_is_noop(self, tmp_path: Path):
         ks = _make_ks_with_adapter(tmp_path, MagicMock(), notifier=None)
         # Must not raise when notifier is absent.
-        ks._alert_exit_failed([("trd_1", "RELIANCE", "SELL", 10, "INTRADAY")])
+        ks._alert_exit_failed([("trd_1", "RELIANCE", "SELL", 10, "INTRADAY", None)])
 
 
 # ─────────────────────────────────────────────────────────────────────────────

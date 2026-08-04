@@ -15,6 +15,9 @@ intended direction:
 On a broker error the qty cannot be determined; callers fall back to their
 intended exit so the kill switch still errs toward flattening, never toward
 leaving a position open.
+
+Also hosts `cancel_co_bracket` (ledger #2d): the one broker gesture that closes a
+CO position, shared by `eod_squareoff` and the kill switch's HARD_KILL flatten.
 """
 from __future__ import annotations
 
@@ -63,3 +66,36 @@ def determine_close_direction(
     if net < 0:
         return ("BUY", -net)
     return (None, 0)  # broker confirms flat -> do NOT fire another exit
+
+
+def cancel_co_bracket(adapter, broker_order_id: str) -> Tuple[bool, str]:
+    """Cancel a CO bracket at the broker; return (ok, reason). Ledger #2d.
+
+    Audit 3.1: a CO position CANNOT be closed with a reverse MARKET -- Zerodha
+    rejects it and auto-squares at 15:20 with a Rs50+GST penalty. The only
+    correct gesture is `cancel_order(entry_broker_order_id, variety="co")`; the
+    broker then collapses the bracket and closes the position at market. This
+    function is that gesture and nothing else.
+
+    ⛔ IT DELIBERATELY DOES NOT LOG. Both callers emit their own CRITICAL with
+    their own grep sentinel (`CO_SQUAREOFF_CANCEL_REJECTED` for EOD -- asserted
+    by tests/unit/test_eod_squareoff.py -- and `KS_CO_CANCEL_REJECTED` for the
+    kill path). A log line here would duplicate them and change EOD's alert
+    stream, which is the behaviour change ledger #2d's card forbids.
+
+    ⛔⛔ IT ALSO DOES NOT CATCH. This looks like it contradicts the "neither logs
+    nor raises" contract in the #2d design record (§A4), so read this before
+    "fixing" it: today a raising `cancel_order` propagates out of EOD's CO branch
+    to its generic handler, which logs `EOD exit unexpected error` and calls
+    `_mark_exit_failed`. If this helper swallowed the exception and returned
+    (False, reason) instead, EOD would take its `CO_SQUAREOFF_CANCEL_REJECTED`
+    branch -- a DIFFERENT CRITICAL and a DIFFERENT sentinel. That is precisely
+    the altered behaviour the card's STOP condition forbids, so the boundary rule
+    wins over the literal wording: exceptions belong to the caller. The (ok,
+    reason) pair covers only the non-raising rejection -- an adapter that returns
+    a result object with success=False.
+    """
+    result = adapter.cancel_order(broker_order_id, variety="co")
+    if not getattr(result, "success", False):
+        return (False, getattr(result, "reason", "") or "rejected")
+    return (True, "")

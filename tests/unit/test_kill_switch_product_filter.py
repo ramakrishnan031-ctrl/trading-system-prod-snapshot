@@ -62,16 +62,52 @@ def _placed_symbols(adapter):
 
 # ── SITE 1 (local pass) ──────────────────────────────────────────────────────
 
-def test_site1_mis_and_co_flatten_quietly(monkeypatch):
+def test_site1_mis_flattens_quietly(monkeypatch):
+    """⚠️ CONTRACT NARROWED 04-Aug-2026 by ledger #2d — recorded, not rewritten.
+
+    This test used to be `test_site1_mis_and_co_flatten_quietly` and asserted
+    that BOTH a MIS and a CO trade received a reverse order ("AAA", "BBB").
+    That was ledger #2's view, where CO was simply another intraday product to
+    flatten. It is now known to be WRONG for CO: Audit 3.1 — Zerodha REJECTS a
+    reverse order on a CO position and auto-squares it at 15:20 with a Rs50+GST
+    penalty. A CO position is closed by cancelling its bracket, never by a
+    reverse.
+
+    The MIS half was always right and is unchanged here. The CO half moved to
+    tests/unit/test_ledger2d_co_bracket.py, which drives the real bracket-cancel
+    path against a real StateStore; the guard below only pins that CO no longer
+    takes THIS path.
+    """
     notifier = MagicMock()
     ks, adapter, _ = _mk_ks(monkeypatch,
-                            trades=[_trade("t1", "AAA", "MIS"),
-                                    _trade("t2", "BBB", "CO")],
+                            trades=[_trade("t1", "AAA", "MIS")],
                             positions=[], notifier=notifier)
     report = ks._exit_all_trades_indestructible()
-    assert [s for s, _, _ in _placed_symbols(adapter)] == ["AAA", "BBB"]
-    notifier.send.assert_not_called()  # known intraday products: quiet
-    assert report.attempted == 2 and report.succeeded == 2
+    assert [s for s, _, _ in _placed_symbols(adapter)] == ["AAA"]
+    notifier.send.assert_not_called()  # a known intraday product: quiet
+    assert report.attempted == 1 and report.succeeded == 1
+
+
+def test_site1_co_is_never_given_a_reverse_order(monkeypatch):
+    """Ledger #2d guard at this site: whatever else happens to a CO trade, it
+    must NOT receive a place_order. Here the bracket lookup is made to fail
+    deterministically (no ENTRY row), so the trade takes the R-a refusal path --
+    and a refusal must still never fall through to a reverse."""
+    notifier = MagicMock()
+    ks, adapter, log = _mk_ks(monkeypatch,
+                              trades=[_trade("t2", "BBB", "CO")],
+                              positions=[], notifier=notifier)
+    ks._store.fetch_one.return_value = None   # no CO entry row -> cannot confirm
+    report = ks._exit_all_trades_indestructible()
+
+    assert _placed_symbols(adapter) == [], (
+        "Audit 3.1: a CO position must never receive a reverse order"
+    )
+    assert any("KS_CO_VARIETY_DIVERGENCE" in str(c)
+               for c in log.critical.call_args_list), "the refusal must be loud"
+    assert report.failed == ["t2"] and report.succeeded == 0, (
+        "a refused CO position may still be live -- it is not a success"
+    )
 
 
 def test_site1_cnc_spared_and_attempt_count_honest(monkeypatch):
