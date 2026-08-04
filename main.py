@@ -2438,6 +2438,33 @@ def _main_locked(args, config_dir: Path) -> int:
     # and trading cannot resume safely; we exit with code 3 (startup check
     # failure) so ops can distinguish this from the generic unexpected-
     # exception path (code 2).
+    #
+    # ⛔⛔ DO NOT RE-KEY THIS ON THE LEDGER. It walks OPEN/PARTIAL *trades*
+    # (fund_manager.rehydrate_from_open_trades -> store.get_all_open_trades),
+    # and that choice -- trade status as the source of truth, not fm_ledger --
+    # is the ONLY reason a corrupt ledger cannot poison startup capital.
+    #
+    # WHY THIS COMMENT EXISTS AT ALL (04-Aug-2026): fm_ledger is NOT
+    # self-consistent. 10 reservations (Rs1,628.13, dated 15-18 Jun 2026) carry
+    # NO terminating row and never will -- their cause predates all retained
+    # logs, so they are deliberately annotated and NOT reconciled (writing a
+    # terminator would assert a termination nobody can prove). All 10 sit on
+    # trades that are CANCELLED or CLOSED_MANUAL, i.e. terminal, so
+    # get_all_open_trades() never returns them and they have never touched
+    # in-memory capital.
+    #
+    # ⚠️ That safety is CORRECT BY ACCIDENT, and this venue is the dangerous
+    # one because the wrong change LOOKS LIKE AN IMPROVEMENT: "rebuild capital
+    # from the capital ledger rather than from trade rows" reads as the more
+    # principled design, and it would silently inherit all 10 phantom
+    # reservations at the next boot. On today's book that is ~16.5% of capital
+    # -- wrong by a sixth, and not obviously broken to anyone reading the
+    # startup log.
+    #
+    # The rule, in full, lives at docs/04_db_schema_reference.md ("THE LEDGER
+    # IS NOT SELF-CONSISTENT"): capital reconstructed from fm_ledger MUST be
+    # reconciled against trade status, or must exclude reservations belonging
+    # to terminal trades.
     try:
         _rehydrate_summary = fund_manager.rehydrate_from_open_trades(
             _start_of_today_iso
