@@ -86,20 +86,20 @@ excluded_symbols:
 # intent=INTRADAY at load time, so the system can never place CNC/DELIVERY
 # orders (first-live-day incident: HARIOMPIPE/SETL went CNC). Set false only
 # when positional/DELIVERY trading is deliberately re-enabled and re-tested.
-force_intraday_only: true
+force_intraday_only: false
 
 # Slice 2 (LAYER 1 — master product gate): which product type may trade today.
 # INTRADAY (default) = only intraday-intent strategies trade · DELIVERY = only
 # delivery · BOTH = either. Only GATES which strategies trade; it does NOT rewrite
 # intent or place CNC by itself (force_intraday_only above still forces MIS-only).
 # Delivery strategies need the Slice 2.5 delivery lifecycle before going live.
-trade_type: INTRADAY
+trade_type: BOTH
 
 # SLICE2.5-P1: master CNC/delivery capability lock (default false). A REAL CNC order
 # or its OCO-GTT is placed ONLY when delivery_enabled=true AND force_intraday_only=false
 # AND trade_type in {DELIVERY,BOTH}. Stays false until the Slice 2.5 lifecycle + the
 # market-hours real-API proof (T2) pass. Enforced at the broker boundary.
-delivery_enabled: false
+delivery_enabled: true
 
 product_map:                  # PR8: broker -> {INTENT -> broker_code}
   zerodha:

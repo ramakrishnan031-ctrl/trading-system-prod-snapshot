@@ -317,19 +317,19 @@ managers:
   - name: cnc_gtt_placer
     class: orders.cnc_gtt.CncGttPlacer
     ctor: "main.py:2605"
-    state: expected-dormant
+    state: expected-event-driven
     effect_point: "orders/cnc_gtt.py:94 place_for_fill"
     acted_means: "a CNC OCO-GTT placed at broker"
-    reason: "delivery_enabled=false — acted>0 BEFORE the 4-Aug flip is an alarm"
-    flip_note: "4-AUG FLIP-RIDER: state -> expected-event-driven IN THE FLIP DEPLOY (GATE-Q7)"
+    reason: "delivery_enabled=true from the 04-Aug flip — fires only on a CNC entry fill, so 0 on a day with no delivery entry is expected and >0 is normal. Event-driven units never enter the mismatch block (see the state list at the head of this file)."
+    flip_note: "EXECUTED in the 04-Aug-2026 evening flip push; first effective at the 05-Aug 08:15 boot. Superseded instruction, kept legible per practices G4: '4-AUG FLIP-RIDER: state -> expected-event-driven IN THE FLIP DEPLOY (GATE-Q7)'."
   - name: cnc_gtt_monitor
     class: orders.cnc_gtt_monitor.CncGttMonitor
     ctor: "main.py:2687"
-    state: expected-dormant
+    state: expected-event-driven
     effect_point: "orders/cnc_gtt_monitor.py:101 reconcile — count += len(actions)"
     acted_means: "a GTT reconcile action enacted"
-    reason: "delivery_enabled=false"
-    flip_note: "4-AUG FLIP-RIDER: state -> expected-event-driven IN THE FLIP DEPLOY"
+    reason: "delivery_enabled=true from the 04-Aug flip — reconciles only when a GTT exists, so 0 with no live GTT is expected and >0 is normal. Event-driven units never enter the mismatch block."
+    flip_note: "EXECUTED in the 04-Aug-2026 evening flip push; first effective at the 05-Aug 08:15 boot. Superseded instruction, kept legible per practices G4: '4-AUG FLIP-RIDER: state -> expected-event-driven IN THE FLIP DEPLOY'."
 
   # ── EXPECTED-ABSENT (constructed => MISMATCH(iii)) ────────────────────────
   - name: breakeven_manager

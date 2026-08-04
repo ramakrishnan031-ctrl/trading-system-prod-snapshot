@@ -95,8 +95,42 @@ class TestSchemaConfig:
             assert isinstance(cfg.enabled, bool)
 
     def test_trade_type_default_intraday(self):
-        from core.config_loader import load_all
-        assert load_all(_CFG).system.trade_type == "INTRADAY"
+        """The SCHEMA default for trade_type is INTRADAY: a config that omits the
+        key gets the safe intraday-only value.
+
+        04-Aug-2026 — this body was rewritten, and the reason is worth keeping.
+        It used to read:
+
+            assert load_all(_CFG).system.trade_type == "INTRADAY"
+
+        which asserted the SHIPPED CONFIG VALUE while its name, and its class
+        (TestSchemaConfig, whose every other test asserts a schema property),
+        promise the DEFAULT. Those are two different claims, and the test passed
+        for as long as the two happened to agree — it was a fixed value standing
+        in for a property. The 4-Aug delivery flip set the shipped value to BOTH
+        by decision (R2), and the old body went red for a change it was never
+        meant to police, while remaining unable to go red if the DEFAULT itself
+        were changed — the failure mode it is named for.
+
+        The property is unchanged by the flip and is asserted directly here, so
+        this test now DOES go red if the default moves.
+
+        ⛔ Deliberately not replaced by a "shipped config says X" assertion:
+        post-flip, pinning delivery OFF would assert the opposite of the ruled
+        state. The shipped config is covered where it matters by
+        test_config_auditor.py::test_real_config_full_audit_no_blocks (it must
+        produce zero BLOCKs) and by the cnc_gtt_* entries in
+        config/expected_managers.yaml, which the EOD census reads.
+        """
+        from core.config_loader import SystemConfig, load_all
+
+        # (a) the declared default
+        assert SystemConfig.model_fields["trade_type"].default == "INTRADAY"
+
+        # (b) and it is actually honoured on construction when the key is absent
+        data = load_all(_CFG).system.model_dump()
+        data.pop("trade_type")
+        assert SystemConfig.model_validate(data).trade_type == "INTRADAY"
 
     def test_trade_type_validator_rejects_invalid(self):
         from core.config_loader import SystemConfig, load_all
