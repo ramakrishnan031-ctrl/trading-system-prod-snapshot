@@ -99,7 +99,37 @@ exactly the kind of tooling this campaign keeps building.
 | Does it affect live capital? | ✅ **No** — rehydrate keys on OPEN/PARTIAL, so they are never replayed |
 | Does it affect anything? | ⚠️ **Ledger-based reconstruction only** — `fm_ledger` is not self-consistent |
 
-🔴 **OPEN, ⛔ nothing decided:** whether the 10 rows should be reconciled, annotated, or left
-as history. ⛔ **A correction to capital state is its own carded decision and was NOT made.**
+## ✅ RULED 04-Aug-2026 ~14:10 — ⛔ **DO NOT RECONCILE. ANNOTATE THE RECORD, NOT THE DATA.**
+
+**No DB write. The 10 rows stay exactly as they are.**
+
+**Why, and it is not squeamishness:** writing terminating rows would **assert a termination
+that cannot be proven** — the cause is permanently unknowable (the 15–18 Jun window predates
+every retained log). ⛔ **A wrong correction is indistinguishable from correct data
+afterwards.** That is R-4's hazard, already ruled once in this campaign, and the precedent is
+set: the **141 fabricated `innings` rows were marked VOID and KEPT, never deleted.**
+
+⇒ **The mitigation is a TOOLING RULE, because the risk is tooling — and it is registered
+where a tool author will actually hit it: `docs/04_db_schema_reference.md` → `fm_ledger`.**
+
+⛔⛔ **AND THAT DOC WAS ITSELF THE TRAP.** It described `reservation_id` as
+*"Links RESERVE ↔ RELEASE"* — **precisely the false model that produced the 221** — listed
+three `entry_type` values that **do not exist** (`PNL`, `COST`, `ADJUSTMENT`), omitted four
+that do (`RELEASE_USED`, `COMMIT`, `INIT`, `SYNC`, `RESET_PNL`, `TOP_UP`), and named the PK
+and timestamp columns wrongly (`id`/`timestamp` vs the real `ledger_id`/`ts`). ⇒ **the
+document a tool author would consult was actively steering them into the exact false finding
+this record exists to prevent.** Corrected against the live DB, struck-not-deleted per §G4.
+
+## ⏳ QUEUED, ⛔ NOT TONIGHT — the `rehydrate` guard comment
+
+`fund_manager.rehydrate_from_open_trades` deserves a comment stating **why** it keys on
+OPEN/PARTIAL — **at the call site, where someone "improving" it will read it**, not only in a
+doc they will not open. ⭐ This is the **third venue for correct-by-accident** (kill path ·
+reconciler · now the capital layer) and the only one with a **plausible-looking trigger**:
+re-keying reconstruction on the ledger "for accuracy" would look like a correctness
+improvement and would inherit all ₹1,628.13 immediately.
+
+⛔ **Comment-only and therefore near-zero surface — but it has no urgency, and flip morning
+stays clean. AFTER Wednesday.**
 
 ⛔ **HALT.**

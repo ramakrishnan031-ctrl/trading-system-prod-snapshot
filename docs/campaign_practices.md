@@ -328,6 +328,38 @@ because a process that only catches careless work will not catch this at all.
 
 (Record: `docs/MASTER_PENDING_01-Aug-2026.md` §D5 — the re-measurement block and its resolution.)
 
+### M6 · ⭐⭐ A ZERO MEASURES THE GUARD **ABOVE** IT, NOT ITSELF
+
+**Named 04-Aug-2026 on its second and third instances in one day.** A zero is only evidence
+about the thing you were asking about **if that thing was reachable when you measured**.
+⛔ **Otherwise the zero measures whatever short-circuited above it** — and it reads exactly
+like success.
+
+Two instances, different guises, same shape:
+
+- **The masked gate.** `strategies/control.py` — **723/723** STRATEGY_CONTROL rejections were
+  LAYER 0 (`force_intraday_only`, `:90`); LAYER 1 (`trade_type`, `:100`) had **zero**. That
+  zero looked like *"LAYER 1 is satisfied"*. It meant *"LAYER 1 is **unreachable**"*, because
+  LAYER 0 returns first. ⛔ Acting on the first reading would have shipped a **silent no-op
+  flip** — the delivery flip changing nothing while appearing complete.
+- **The unreached error branch.** `order_reconciler` FIX-B — all three `FIX-B:` error strings
+  were **0**, which reads as *"the failure never happened"*. But the **SUCCESS `log.info` was
+  also 0** ⇒ the enclosing block **has never executed**, so the error branches are
+  **UNREACHED, not never-failed.** ⭐ **The success line is what disambiguates the two, and it
+  is the line nobody thinks to grep.**
+
+**The rule:** before reporting a zero, establish that the code path *could have produced a
+non-zero* — name the guard above it, or find a positive control (a success line, a
+neighbouring counter) proving the block ran at all.
+
+⚠️ **Sibling of §M5, not a duplicate.** M5 governs how wide you may SPEAK about a sound
+measurement. **M6 governs whether the measurement was of the thing you named at all.**
+⭐ And it composes with §V's *"a green check is evidence only if it could have been red"* —
+M6 is that rule turned on a **zero** instead of on a **pass**.
+
+(Records: `docs/audit/flip_push_plan_04aug2026.md` §1 ·
+`docs/audit/reservation_nonatomicity_latent_or_live_04aug2026.md` §a.)
+
 ---
 
 ## V. VALIDATION

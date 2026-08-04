@@ -133,15 +133,73 @@ rejection_reason TEXT
 
 ### fm_ledger
 Append-only double-entry capital accounting log.
+
+⛔⛔ **CORRECTED 04-Aug-2026 AGAINST THE LIVE DB — the previous description was wrong in
+three ways, and one of them actively caused a false finding.** Struck rather than deleted
+(§G4), because *what* it said is the reason the rule below exists:
+
+- ~~`id INTEGER PK`~~ → the PK is **`ledger_id`**; ~~`timestamp`~~ → the column is **`ts`**.
+- ~~`entry_type … RESERVE/RELEASE/PNL/COST/ADJUSTMENT`~~ → **`PNL`, `COST` and `ADJUSTMENT`
+  DO NOT EXIST.** Measured vocabulary, all-time: **`RESERVE` · `RELEASE` · `RELEASE_USED` ·
+  `COMMIT` · `INIT` · `SYNC` · `RESET_PNL` · `TOP_UP`**.
+- ⛔ ~~`reservation_id -- Links RESERVE ↔ RELEASE`~~ → **THIS IS THE TRAP.** See below.
+
 ```
-id INTEGER PK AUTOINCREMENT
-entry_type TEXT NOT NULL     -- RESERVE/RELEASE/PNL/COST/ADJUSTMENT
+ledger_id INTEGER PK AUTOINCREMENT
+ts TEXT NOT NULL
+entry_type TEXT NOT NULL   -- RESERVE | RELEASE | RELEASE_USED | COMMIT
+                           -- INIT | SYNC | RESET_PNL | TOP_UP
 amount REAL NOT NULL
-balance_after REAL NOT NULL
-reservation_id TEXT          -- Links RESERVE ↔ RELEASE
+bucket TEXT                -- intraday | positional
+balance_before REAL
+balance_after REAL
+signal_id TEXT
+reservation_id TEXT        -- ⛔ NOT a simple RESERVE↔RELEASE pair — read below
+reason TEXT
+session_id TEXT
+direction TEXT
 trade_id TEXT
-timestamp TEXT NOT NULL
+margin_delta REAL
+pnl_delta REAL             -- the daily-loss limit reads THIS, not trades.net_pnl
+costs REAL
 ```
+
+#### ⛔⛔ A RESERVATION HAS **TWO** TERMINATION SHAPES, NOT ONE
+
+| the trade | its ledger chain | does the terminator carry `reservation_id`? |
+|---|---|---|
+| **cancelled / rejected** (never filled) | `RESERVE` → **`RELEASE`** | ✅ yes |
+| **filled** | `RESERVE` → **`COMMIT`** → `RELEASE_USED` | ✅ COMMIT yes · ⛔ **`RELEASE_USED` NO — 0 of 211** |
+
+⭐ **`release_used()`'s signature takes no `reservation_id` at all** (it keys on
+`symbol` + `trade_id`). ⇒ **a query for "RESERVE with no RELEASE" marks EVERY FILLED TRADE as
+un-released.** Measured 04-Aug-2026: that query returns **221**; the correct one — *RESERVE
+with neither `RELEASE` nor `COMMIT`* — returns **10**, which reconciles exactly with the
+independent arithmetic `1327 − 1106 − 211 = 10`. **Two methods agreeing is what makes the 10
+trustworthy; the 221 was a false finding produced by the old comment above.**
+
+#### 🔴 THE LEDGER IS **NOT SELF-CONSISTENT** — the rule for anyone reconstructing capital
+
+> **Capital reconstructed from `fm_ledger` MUST be reconciled against trade status, or must
+> exclude reservations belonging to terminal trades. The ledger alone is not
+> self-consistent: 10 reservations (₹1,628.13, dated 15–18 Jun 2026) have NO terminating row
+> and never will.**
+
+- **Why they will never be terminated:** the cause is **permanently unknowable** — the
+  15–18 Jun window predates all retained logs (`system_*.log` begins 06-Jul). ⛔ **They are
+  deliberately NOT reconciled.** Writing terminating rows would assert a termination that
+  cannot be proven, and *a wrong correction is indistinguishable from correct data
+  afterwards* — the same ruling that kept the 141 fabricated `innings` rows **VOID and
+  KEPT**, never deleted.
+- ✅ **They do NOT affect live capital.** `fund_manager.rehydrate_from_open_trades` walks
+  **OPEN/PARTIAL** trades only, so reservations on terminal trades are never replayed and
+  the in-memory state has never held them.
+- ⚠️ **Which is exactly why this is a trap and not a bug:** ₹1,628.13 on a ~₹9,871 book is
+  **16.5% of capital**. A tool that silently inherited it **would not look obviously
+  broken** — it would just be wrong by a sixth.
+- ⭐ **And note what protects you: `rehydrate` keys on TRADE STATUS, not on ledger
+  completeness.** Re-key any reconstruction on the ledger "for accuracy" and you inherit all
+  ten immediately. Record: `docs/audit/reservation_nonatomicity_latent_or_live_04aug2026.md`.
 
 ## Common Queries
 
