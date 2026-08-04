@@ -1,7 +1,35 @@
 # Database Schema Reference
 
-**Schema version:** 24 (FIX-150)
-**Database:** SQLite 3 (`data_store/trading_system.db`)
+> ## ⛔⛔ VERIFIED SCOPE — READ BEFORE TRUSTING ANY SECTION BELOW
+>
+> **Only the `fm_ledger` section has been checked against the live DB (04-Aug-2026).
+> Everything else in this document is UNVERIFIED.**
+>
+> ⚠️ **This warning exists because a PARTIALLY corrected document is more dangerous than a
+> uniformly stale one.** A reader who checks `fm_ledger`, finds it precise, measured and
+> dated, will reasonably extend that credibility to the rest — which has been verified
+> against nothing. **The correction lends authority to the parts it did not touch**, so the
+> scope has to travel with it (§M5: state the subject in the same sentence as the conclusion).
+>
+> **Measured against the live VM DB, 04-Aug-2026:**
+>
+> | | this document claims | **live** |
+> |---|---|---|
+> | schema version | ~~24 (FIX-150)~~ | **45** |
+> | tables described | 29 in the summary, **11** in detail | **45** in `trading_system.db` |
+> | databases | one | **two** — `trading_system.db` + `analytics.db` (3 tables, ATTACHed) |
+>
+> ⇒ **21 schema versions stale · ~16 live tables entirely undocumented · the second database
+> unmentioned.** The version-history table below stops at **v24**.
+>
+> ⛔ **Do NOT treat the un-flagged sections as current.** ⛔ **And do not "fix" this by
+> re-verifying all 45 tables in passing — that is a project, not a task.** Verify the table
+> you need, against `core/schema.sql` or the live DB, and mark what you verified.
+
+**Schema version:** ~~24 (FIX-150)~~ → **45 live** (measured 04-Aug-2026; this document
+describes v24 except where a section says otherwise)
+**Database:** SQLite 3 (`data_store/trading_system.db`) — ⚠️ **plus `data_store/analytics.db`,
+ATTACHed; raw sqlite access must go through `core.db_connect.connect`**
 **File:** `core/schema.sql`
 
 ## Table Summary
