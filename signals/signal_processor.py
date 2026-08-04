@@ -450,9 +450,32 @@ class SignalProcessor:
         if self._notifier is None:
             return
         try:
-            risk_amt = abs(float(entry_price) - float(sl_price)) * int(qty)
-            capital_at_risk = float(entry_price) * int(qty)
-            risk_pct = (risk_amt / capital_at_risk * 100.0) if capital_at_risk else 0.0
+            # CAPITAL VOCABULARY (04-Aug-2026). FOUR distinct quantities exist here
+            # and only ONE of them is "risk". Name each for what it holds:
+            #   position_notional_rs -- qty x entry. EXPOSURE, not risk, not capital.
+            #   account_risk_rs      -- qty x (entry - SL). The real money at risk.
+            #   sl_distance_pct      -- (entry - SL) / entry. A property of the LEVEL.
+            #   margin blocked       -- notional / leverage. NOT AVAILABLE HERE, and
+            #                           deliberately not fetched: see below.
+            #
+            # This block previously named the notional `capital_at_risk` and rendered
+            # `risk_amt / capital_at_risk` as "Risk: Rs8.86 (1.5%)". The rupee figure
+            # was right; the PERCENTAGE was not what it appeared to be. `qty` cancels
+            # in that ratio, so it is identically (entry - SL) / entry AT EVERY
+            # QUANTITY -- the SL distance -- while every reader parses "1.5%" beside
+            # the word "Risk" as 1.5% OF CAPITAL. At risk_per_trade_pct = 1% of total
+            # capital the true account figure is ~1% and unrelated to this number.
+            #
+            # A genuine "% of capital" is NOT rendered here on purpose: this helper
+            # receives no capital, and reaching into FundManager to get one would turn
+            # a display fix into a capital-state reader. Name what we have; do not
+            # fabricate what we do not.
+            account_risk_rs = abs(float(entry_price) - float(sl_price)) * int(qty)
+            position_notional_rs = float(entry_price) * int(qty)
+            sl_distance_pct = (
+                (account_risk_rs / position_notional_rs * 100.0)
+                if position_notional_rs else 0.0
+            )
             est_profit = abs(float(tgt_price) - float(entry_price)) * int(qty)
             score_str = f"{int(score)}/100" if score is not None else "N/A"
             # Direction line FIRST (LONG/SHORT). direction may arrive as
@@ -465,8 +488,9 @@ class SignalProcessor:
                 f"Entry: ₹{float(entry_price):,.2f} (LIMIT) | "
                 f"SL: ₹{float(sl_price):,.2f} | "
                 f"TGT: ₹{float(tgt_price):,.2f}\n"
-                f"Qty: {int(qty)} | Risk: ₹{risk_amt:,.2f} ({risk_pct:.1f}%) | "
-                f"Est. net TGT: +₹{est_profit:,.2f}\n"
+                f"Qty: {int(qty)} | Exposure: ₹{position_notional_rs:,.2f}\n"
+                f"Risk: ₹{account_risk_rs:,.2f} (SL is {sl_distance_pct:.1f}% "
+                f"from entry) | Est. net TGT: +₹{est_profit:,.2f}\n"
                 f"Smart TGT: enabled | Timeout: 10 min"
             )
             self._notifier.send(
