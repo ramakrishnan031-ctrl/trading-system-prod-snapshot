@@ -217,6 +217,55 @@ than assuming it.
 
 ---
 
+## 4a. ⭐⭐ THE WEDNESDAY-EVENING GATE — NEW, AND IT IS NOT PART OF TONIGHT
+
+**Ruled 04-Aug ~13:45. ⛔ CHECK1 is NOT changed tonight, and the flip is not held for it.**
+
+**Why the decision is not owed tonight — the calendar is the whole argument.**
+**Wednesday's exposure is ZERO:** at **T+0** a CNC position **is** in `positions()`, so
+CHECK1 sees it and does nothing wrong. The hazard is **Thursday**, and **Wednesday evening
+sits between the two.** ⇒ deciding tonight is deciding **blind**; deciding Wednesday evening
+is deciding on a **measurement**. Changing CHECK1 tonight would put a reconciler-behaviour
+change on flip morning against **zero exposure that morning**.
+
+### The gate: after Wednesday's close, before Thursday's 08:15 boot — ONE question
+
+> ### 🔴 **Is there a held CNC position with NO `ACTIVE` `gtt_state` row?**
+
+⛔ **Ask it exactly that way.** It covers **both** routes, and checking only for a failed
+placement misses the second:
+1. **Placement failed** — `cnc_gtt.place_for_fill` raises (missing LTP / C8 violation), so
+   `insert_gtt_state` never runs and no row exists.
+2. **No failure at all** — the GTT is placed fine, **triggers Wednesday**, leaves `ACTIVE`,
+   and a partially-filled sell leaves a **residual holding** Thursday with no ACTIVE row.
+
+| branch | what it means | action |
+|---|---|---|
+| **No held CNC at all** | the fuse is unlit | nothing to decide; record it |
+| **Held CNC + ACTIVE row** | protected | record it — ⭐ and note the protection has now **actually run once in production** |
+| 🔴 **Held CNC, NO ACTIVE row** | ⛔ **Thursday's 08:15 must not run undecided** | harden the skip (§4b) **or** Rama closes the position Wednesday. Either is a decision with a fact in hand |
+
+⚠️ **Carry this sentence into Wednesday evening:** `gtt_state` holds **0 rows today**, so
+Wednesday's first CNC trade writes the **first row that table will ever carry in
+production** ⇒ **the protection is exactly as good as a write that has never executed.**
+
+## 4b. ⭐ WHAT Q4 DOES **NOT** BLOCK — so Wednesday evening knows its options
+
+The obvious remedy is to key CHECK1's delivery skip on **`product == 'CNC'` from the local
+trade row** instead of on GTT liveness.
+
+⇒ **That is PRODUCT-aware, not HOLDINGS-aware.** It calls no `holdings()`, so ⛔ **Q4's
+ordering rule does NOT bar it**, and ledger **#2 (the prerequisite) already landed.**
+**The option is genuinely available Wednesday night.** ⛔ Not authorised now and not designed
+here — but recorded so a future reader does not assume Q4 blocks it and rule it out wrongly.
+
+⭐ **Recorded separately, because it is the real defect and not the symptom: keying a
+delivery skip on GTT liveness rather than on product is ONE GUARD DOING TWO JOBS.** The
+guard answers *"does this trade have a live GTT?"* when the question is *"is this trade
+delivery?"* — two different questions, one guard. **`campaign_practices.md` §G-one-guard-two-
+jobs, FIFTH instance** (`cutoff_time` · #3b's release-vs-disown · `determine_close_direction`
+· `trades.status` · here).
+
 ## 5. WHAT THE FLIP DOES **NOT** INCLUDE — stated so it cannot be assumed
 
 - ⛔ **THE CARRY PILOT IS SEPARATE.** The flip enables delivery *trading*; it does not
