@@ -280,6 +280,157 @@ already measured** (the concentration cap combined with the permanently-low tier
 
 ---
 
+## §4c — 🔴🔴 **THE PREDICTION, SHARPENED AT SOURCE 05-Aug 23:2x — ⛔ WRITTEN BEFORE THE BOOT**
+
+**(S) THE SEED FORMULA, exact** — `main.py:1728-1732`:
+```python
+def compute_live_seed(broker_adapter, fund_manager, start_of_today_iso=None) -> float:
+    return broker_adapter.get_margins().net - fund_manager.today_realized_pnl_carryover(start_of_today_iso)
+```
+⭐ **On Thursday at 08:15 the carryover term is ZERO** — it sums *Thursday's* `RELEASE_USED` rows and
+no trade has closed yet. ⇒ **the seed is `broker.net`, full stop.**
+
+> ### 📌 THE PREDICTION — scoreable because it is written first
+> **The system will start Thursday believing its total capital is ~₹587 LOWER than what it actually
+> controls** — because that value is sitting in **stock, not cash** — **and nothing will flag it**,
+> since `initialize()` (`capital/fund_manager.py:417-457`) performs **no comparison of any kind**
+> *(verified: it writes `balance_before=0.0` and sets the buckets; no threshold, no drift event)*.
+> ⇒ **BOTH buckets are sized off that shrunken total.**
+
+**Expressed as ratios — ⛔ `₹10,000` is a TESTING value and no rupee figure here is a target:**
+
+| quantity | Wednesday 05-Aug | Thursday 06-Aug (predicted) |
+|---|---|---|
+| seed (`broker.net`) | **9,883.70** | **≈ 9,296** *(± overnight settlement of the 44.61)* |
+| **seed ratio Thu/Wed** | — | **≈ 0.940** |
+| **shrinkage** | — | **≈ 5.94 %** = **587.40 / 9,883.70** = *the carried position's own share of the base* |
+| intraday bucket (70 %) | ≈ 6,918.59 | ≈ 6,507 — **same 0.940 ratio** |
+| positional bucket (30 %) | ≈ 2,965.11 | ≈ 2,789 — **same 0.940 ratio** |
+
+⚠️ **The split is a FIXED 70/30** (`conditional_allocation_enabled: false`, verified on the VM) ⇒
+**both buckets shrink by exactly the same fraction. Neither is protected.**
+
+### ⭐ §3.2 — THE STRUCTURAL CONSEQUENCE, STATED ONCE
+> **Every carried position shrinks the next day's capital base by its own raw value, and the
+> delivery bucket by its share of that.**
+
+🏷️ **CLASSIFICATION: `(d)` — UNDETERMINED.** ⛔ **I am not classifying this (a) or (b), and the
+source does not settle it.** The two readings are both coherent:
+- **correct-by-design** — the cash genuinely is not deployable while it sits in the share, so sizing
+  off `broker.net` is the *conservative* and arguably right thing;
+- **a defect** — the system then **under-counts what it owns**, and a book with several carried
+  positions would compound the shrinkage every day it holds them.
+⛔ **That is a DESIGN QUESTION and it is not tonight's.** ⭐ What tonight establishes is only that the
+behaviour is **real, predicted in advance, and silent.**
+
+### ⭐ §3.3 — THE FOLLOW-ON NOBODY HAS ASKED — **recorded, ⛔ not chased**
+**When the carried position eventually SELLS, the proceeds arrive as capital the seed never
+counted.** The same-day exit path worked on 05-Aug; **across a boot boundary it is UNTESTED.**
+⇒ 🔴 **That is the carry's SECOND unverified half, and it does NOT resolve on Thursday** — Thursday
+scores the *hold*; only a *sale* scores this. ⛔ **Named so it is not rediscovered. Nothing started.**
+
+---
+
+## §6 — ✅ **RESOLVED 05-Aug-2026 23:2x — THE MECHANISM IS RAMA'S, AND EVERY TERM NOW HAS ITS OWN MEASUREMENT**
+
+### 📌 CREDIT, STATED FIRST
+⭐⭐ **The mechanism is RAMA'S, in his words:** *"the broker deducts the CNC purchase value from free
+cash; the system does not. In MIS this never shows, because everything is squared off by 15:30 and
+the two reconverge."*
+⭐ **The second half is the part that turns this from a bug report into a classification** — it is
+what makes the drift **structurally a DELIVERY-ONLY phenomenon** rather than something new.
+⚠️ **One refinement, and it is MINE, not his:** he wrote *purchase value = scrip price + brokerage &
+taxes*. **The blocked figure is the RAW scrip value — costs are not in it** (measured below).
+
+### (P) THE ALERT, VERBATIM FROM PRODUCTION — `order_reconciler`, 22:19:13.993
+```
+G3 CAPITAL_DRIFT: expected=9928.31 actual=9296.30 delta=632.01 tolerance=50.00 (base=50.00 human_orders=none)
+```
+
+### (S) WHAT THE CODE ACTUALLY COMPARES — `orders/order_reconciler.py:3590-3592`
+```python
+expected = snapshot.total     # the system's TOTAL capital
+actual   = margins.net        # the broker's FREE CASH
+delta    = abs(actual - expected)
+```
+⇒ ✅ **RAMA'S MECHANISM CONFIRMED AT SOURCE.** The system keeps the purchase inside its *total*
+(moved avail → used); the broker removes it from *net*. **In MIS the position closes by 15:30, `used`
+returns to zero, and the two reconverge — which is exactly why five months of intraday trading never
+showed this.**
+
+### ✅ EVERY TERM, MEASURED INDEPENDENTLY — ⛔ not taken from the delta
+
+| term | value | how it was measured — **(P)** |
+|---|---|---|
+| **opening** | **9,883.70** | `fm_ledger` `INIT` row, ledger_id 10019, ts `08:15:15.181` |
+| **realised P&L** | **44.61** | **TWO independent paths:** 7 `RELEASE_USED` rows sum `+44.61`; **and** 7 trades `CLOSED` today sum `net_pnl = 44.61` — **same 7 trades** |
+| **CNC purchase** | **587.40** | `trades`: `qty_filled 1 × entry_actual_price 587.40` = **raw scrip value** |
+| `expected` | 9,928.31 | = 9,883.70 + 44.61 ✅ closes |
+| `actual` | 9,296.30 | = 9,883.70 − 587.40 ✅ closes |
+| `delta` | 632.01 | = 587.40 + 44.61 ✅ closes |
+
+> ### ⛔⛔ **AND THE THING THAT MUST BE SAID, BECAUSE THIS CAMPAIGN ALREADY DELETED A CLAIM OF THIS EXACT SHAPE (V5):**
+> Written as `delta = (opening − actual) + (expected − opening)`, this identity is **VACUOUS** —
+> `opening` cancels and it closes for any values. **That version was refuted earlier today and
+> deleted.**
+> ⭐⭐ **THIS VERSION IS NOT THAT.** Neither `587.40` nor `44.61` was obtained by subtraction from the
+> alert. **Both came from independent subsystems** — the trade record and the P&L ledger — and were
+> then found to reconstruct the delta. ⭐ **It could have gone red:** had the trade value been 590, or
+> the realised P&L 40, the sum would not be 632.01. **That is the difference between a check and an
+> identity, and it is the whole reason the terms were measured separately.**
+
+### ⚠️ WHAT I COULD **NOT** VERIFY — stated, not glossed
+🔴 **`actual = opening − CNC purchase` is arithmetic against a BROKER figure I cannot audit.** I
+confirmed `actual = 9,296.30` **(P)** from the alert, and that `587.40` matches the trade record
+**(P)**. **But the claim that Kite's own `available + used` decomposes to `9,296.30 + 587.40`
+comes from a screenshot, not from a measurement I took.** ⛔ It is consistent; it is not independently
+established here.
+⭐ **The cost question is settled in ONE direction only:** the 7 closed trades' `gross 49.36 −
+charges 4.75 = net 44.61` ⇒ **their** costs are already inside the 44.61. ⛔ **ATULAUTO's own purchase
+costs are NOT** — it is unsold, so nothing is booked. **The contract note remains the only thing that
+settles that, exactly as the card said.**
+
+### ⚠️ A FALSE ZERO I PRODUCED AND CAUGHT — recorded because it nearly refuted a correct finding
+My **first** query for realised P&L summed `pnl_delta` over *all* non-zero rows and returned
+**`0.0`**. Had I stopped there I would have reported *"realised P&L is 0 — the decomposition fails."*
+**The 8th row is a `RESET_PNL` of `−44.61`** which cancels the seven `RELEASE_USED` rows **by
+design**. ⇒ **the filter was wider than the subject.** ⭐ **Second false zero of the night from the
+same cause; both were caught only because a control was run beside the zero.**
+
+---
+
+## §7 — 🔴 **AR9 — THE OVERNIGHT SCOPE GAP, IN PRODUCTION, EXACTLY AS REGISTERED**
+
+**(P)** `tolerance=50.00 (base=50.00)` — the **flat overnight band**, not the in-session percentage
+band. **Delta 632.01 ÷ 50.00 = 12.64×.**
+**(S)** `order_reconciler.py:3626-3631`: the percentage widening is applied **during market hours
+only** (`max(Rs, expected × pct)`); **outside hours the flat ₹ tolerance stands.**
+
+⭐⭐ **THIS IS AR9's REGISTERED SCOPE GAP ARRIVING EXACTLY WHERE IT WAS PREDICTED: the acceptance
+scored the IN-SESSION regime, and overnight is the ONLY regime in which a delivery position can
+exist.** ⇒ the one band that was never scored is the only one delivery ever meets.
+
+⛔ **Recorded as an INSTANCE against AR9. ⛔ The acceptance is NOT widened. ⛔ No tolerance is
+proposed, and no config value appears anywhere in this section.**
+
+---
+
+## §8 — ⚠️ **THE ₹4.36 — REMAINS `(d)`. THE TEST COULD NOT BE RUN.**
+
+**The system holds no closing price for ATULAUTO.** *(Width, with its control: **46 tables** in the
+DB, **none** matching `%candle%`/`%price%`/`%tick%`/`%quote%`; the only price-bearing log line for
+the symbol all day is the **10:01:22 GTT placement**, `last_price: 586.5` — a placement snapshot
+**5½ hours before the close**, not a close.)*
+**(P)** `583.04` appears **0 times** in the day's log — ⭐ **against a working control: the same
+price-pattern grep matches 32 times across other symbols**, so the zero is real and not a broken
+pattern.
+⇒ ⛔ **The realised-vs-marked hypothesis is NEITHER confirmed NOR refuted.** The single price on
+record (586.50) would imply an unrealised of **−0.90**, not −4.36 — **but it is not a close, so it
+proves nothing.** ⭐ **Kite is the only source that can settle it.**
+⛔ **Scored and stopped. Not reconciled.**
+
+---
+
 ## §5 — WHAT TO WRITE DOWN
 
 1. **§1 reading A** — time, available, used, opening. **And whether available + used = opening.**
