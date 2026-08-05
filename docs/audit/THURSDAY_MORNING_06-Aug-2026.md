@@ -1,5 +1,33 @@
 # ☀️ THURSDAY MORNING — 06-Aug-2026. **ONE SCREEN. START HERE.**
 
+> ## ⚡✅ **YOUR PC BEING OFF 07:55–08:25 DOES NOT AFFECT THE BOOT. SHUT IT DOWN WITHOUT WORRYING.**
+> **The 08:15 token refresh IS PC-INDEPENDENT** — verified at source, not assumed from the fact that
+> it worked yesterday *(evidence below)*. **Everything happens on the VM, which is remote and
+> unaffected by your PC.**
+> ⭐ **What the power-down costs is WATCHING it live — not the boot itself.** You return ~08:25 and
+> read the aftermath from the logs; **the market opens 09:15, so there is a full hour of margin even
+> on the worst branch.**
+>
+> **Why it is PC-independent — (S), with the width stated:**
+> · the cron line is entirely VM-resident — VM working dir, VM `.env`, VM venv python, VM script,
+>   VM log *(live crontab: `15 8 * * 1-5 … scripts/auto_refresh_token.py`)*;
+> · the script is **"fully headless … via TOTP (no browser, no manual OTP)"** — **five outbound
+>   HTTPS calls to `kite.zerodha.com` / `api.kite.trade`** and nothing else;
+> · a width-stated grep across the script **and both modules it reuses**, for `tailscale` ·
+>   private-IP ranges · `/mnt/` · `smb`/`nfs` · `scp`/`rsync` · `listen`/`bind`/`socket` ·
+>   `localhost` · Windows paths, returns **only the Zerodha URLs** *(control: the same pattern
+>   matches elsewhere in the repo, so it is not a broken search)*;
+> · the single `localhost` hit is a `print()` inside `run_login_flow()` — the **interactive** path,
+>   and it is **not imported** *(only `exchange_request_token` and `save_token` are)*;
+> · **(P)** the VM has **no network mounts at all**, and **(P)** every credential is present in the
+>   VM's own `.env` under the account-specific names `config/accounts.csv` declares for the primary
+>   account.
+>
+> ⚠️ **The one honest bound: the mechanism is verified, the OBSERVATION is not.** This will be the
+> **first** run with the PC off. ⛔ **That is a reason to check the token file first thing at 08:25 —
+> not a reason to stay up.** *(A failed refresh is SILENT: no token ⇒ no watcher start ⇒ no boot,
+> with no error and no alert. The token file is the first thing to look at, always.)*
+
 > **Last night ended well.** The service was stopped cleanly at **22:46:36** with the delivery
 > position still held. It squared off nothing, cancelled nothing, released no capital, closed no
 > position — and the census was recovered (`mismatches=0`). **Nothing is outstanding from Wednesday.**
@@ -60,6 +88,51 @@ skip that worked, and it is not a refutation either.
 The contingency file routes you: **B** = no boot · **C** = HALT, `ExecMainStatus=4` ·
 **D** = anything else, **including `ExecMainStatus=3`**, which is now named there rather than left
 as "nobody predicted this". ⛔ **Do not improvise, do not run `resume.sh`, do not touch `gtt_state`.**
+
+---
+
+---
+
+## 💰 TWO NUMBERS TO CAPTURE WHILE YOU ARE IN KITE ANYWAY
+
+### **A. THE OPENING BALANCE — ⭐ it settles a `(d)` with ONE number off the Funds page**
+
+**This test exists because of what you established last night:** costs *and* profits both settle on
+the **next** trading day. So today's opening balance is the first moment the ledger can be checked
+against the broker's own settlement.
+
+> **Thursday's opening ≈ 9,883.70 − 587.40 + whatever P&L actually settles**
+
+| you see | means | reading |
+|---|---|---|
+| ≈ **9,340.91** | **44.61 settled** | ✅ the ledger was right, and the **₹4.36 was an unrealised mark** on the held share |
+| ≈ **9,336.55** | **40.25 settled** | 🔴 **the ledger over-books by 4.36** — points at the **cost model** |
+| **neither** | — | ⭐ **that is itself the finding.** Write the number down |
+
+⚠️ **Bound it, or you will over-read it:** ATULAUTO's own purchase costs settle on **its** contract
+note too, so **an exact match is not required.** ⭐ **The two candidates are ₹4.36 apart — that gap
+is the signal, not the absolute figure.**
+⛔ **Record which. Do not adjust anything, either way.**
+
+### **B. THE BOOT SEED** — cross-reference only
+➡️ **`ADDENDUM_capital_drift_05-Aug-2026.md` §4b + §4c.** ⛔ **Commands live there, not here.**
+Predicted: **seed ratio ≈ 0.940**, a **≈5.94 %** shrinkage, **both buckets identically** (fixed 70/30).
+
+---
+
+## 🔇 A PREDICTION OF **SILENCE** — and silence is interpretable today
+
+> **The capital-drift CRITICAL should NOT fire at all today.**
+
+**Why:** the boot seeds from `broker.net` **after** settlement, so local and broker **start equal** —
+the ₹587.40 that was missing from `actual` all yesterday is now missing from **both** sides.
+
+🔴 **IF A DRIFT CRITICAL FIRES TODAY WITHOUT A NEW CNC PURCHASE, THE DELIVERY-ONLY CHARACTERISATION
+IS WRONG, AND THAT IS A REAL FINDING.** ⛔ Do not dismiss it as "the usual one".
+
+> ⭐⭐ **A prediction of silence is still a prediction — and silence is only readable here because the
+> alarm fired SIX times yesterday.** ⛔ **Do not read a quiet Thursday as "nothing happened": it is a
+> scored result.**
 
 ---
 
