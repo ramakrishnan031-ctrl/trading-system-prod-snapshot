@@ -923,3 +923,65 @@ register action and belongs in §9's sub-entry.
 §8.3 H5's own first production instance RESULT = NOT RUN -- still LATENT, not confirmed
 §8.4 the Thursday prediction           RESULT = NOT RUN -- scoreable 06-Aug
 ```
+
+---
+
+# ▶️▶️ §9. RESUME HERE — POWER-DOWN HAND-OFF, WRITTEN 16:55
+
+## 🔴 THE ONE THING STILL OWED, AND IT IS TIME-SENSITIVE
+
+**AMEND REGISTER ROW 7 (H5) — `docs/MASTER_PENDING_01-Aug-2026.md:832`.**
+⛔ **NOT DONE. Interrupted mid-edit by the power-down. Nothing was written — the file is clean.**
+
+**What to add** (a **sub-entry** on row 7 — ⛔ **no new row, 231 stands**), all of it already
+measured and committed in **§8** above:
+- row 7 tells a reader the H5 rejection will read **`DUPLICATE_SYMBOL`**. 🔴 **On the FILL DAY it
+  does not** — `signal_processor.py:693` `SYMBOL_DIRECTION_DAILY_LIMIT` rejects **earlier**.
+  **(P) today: 6 × symdir, 0 × `DUPLICATE_SYMBOL`.**
+- row 7's **mechanism is correct** (`has_active_position` = symbol + status, **no product, no
+  date**, `state_store.py:839-853`) and its **multi-day claim is correct.** ⛔ **Only the expected
+  code name is wrong, and only for day 1.**
+- ⇒ **H5's OWN mechanism has NOT had its first production instance. Still LATENT.**
+- ⏰ **THE THURSDAY PREDICTION:** the symdir counter is date-bounded (`SUBSTR(created_at,1,10)`,
+  `:707-725`) and **resets at midnight**; `has_active_position` **does not**. ⇒ **if ATULAUTO is
+  still held on 06-Aug and any intraday signal arrives on it, the code SWITCHES to
+  `DUPLICATE_SYMBOL`** — H5's genuine first instance. ⛔ **No signal ⇒ NOT DETERMINABLE, not a
+  refutation.**
+
+⚠️ **Why it matters tonight rather than whenever:** an operator following row 7 as written greps
+`DUPLICATE_SYMBOL`, gets **zero**, and records *"no H5 instance"* — **while a real product-blind
+block DID happen.** ⭐ **The register itself is currently the source of a wrong search string.**
+
+⚠️ **Editing note for whoever does it:** row 7 is **one enormous single-line table cell**. Appending
+inside it is risky; **safer to add the sub-entry as a titled block immediately AFTER the table
+ends**, cross-referenced to row 7. ⛔ **Do not break the table.**
+
+## ⏰ THE CLOCK-BOUND ITEMS — UNCHANGED, AND STILL THE PRIORITY
+
+| when | what | notes |
+|---|---|---|
+| 🔴 **17:40+** | **THE CENSUS — operator card §1a** | ⛔ **irrecoverable · outranks everything above** · the VM is remote and **unaffected by the PC power-down**; the log is written at ~17:35 regardless |
+| **18:00** | the cron-drift WARNING should be **GONE** | if it still fires, `71f331b`'s registry half did not take |
+| **18:15+** | the push decision (**D3**) | ⛔ **gate is CLEAN ⇒ optional and routine.** No confirmed defect ⇒ **implementation gate NOT met** |
+| **THU 08:20** | the boot seed — addendum §4b | and ⭐ **score the §8.4 prediction** |
+
+⭐ **THE CENSUS CARRIES A SHARPENED QUESTION:** does **`cnc_gtt_monitor`** read **`acted > 0`**?
+**It is the ONLY source that separates *"the monitor observed the trigger"* from *"a cleanup swept
+the row"*** — `gtt_state` reads `CLEANED` and answers neither.
+
+## ✅ WHAT IS DONE — 15 COMMITS, ALL LOCAL
+
+**Post-gate card:** §1 `qty_by_flat` (verdict survives) · §2 the real H5 gate (product-blind) ·
+§3 cost model (branches on product; hypothesis refuted) · §4 FIX-133 + sizing pinned by arithmetic.
+**Second card:** §1 the ₹4.36 (day figure **is** realised-only ⇒ **category error**) · §2 **M9**
+promoted · §3 sizing shape + intraday twin.
+**Register card:** §1 item-4 sub-entry (`RECOMMENDED — NOT RULED`) · §2 **M10** promoted, two
+corollaries added, two candidates held with their trigger.
+**Plus:** §8's correction of two of my own claims, and §5's timestamp correction.
+
+## ⛔ STANDING — RE-CONFIRMED AT POWER-DOWN
+**Nothing pushed** · **no code changed** · **no VM writes** (every VM call was `SELECT`/`PRAGMA`) ·
+**no design decided** · **no delivery config value proposed** · **231 stands** ·
+**no implementation begun.**
+🏷️ **`<DELIVERY ROUND TRIP VERIFIED LIVE 05-Aug; T+1 CARRY UNVERIFIED>`.** ⛔ Nothing wider.
+⛔ **Do NOT run `deploy/resume.sh`** — tonight's same-day `SOFT_KILL` is the routine 15:15 breaker.
