@@ -97,6 +97,111 @@ grep -iE "auto-cleared|MISSING_EXITS|capital_invariant|soft_kill|hard_kill" logs
 
 ---
 
+# ✅▶️ BRANCH A CONTINUED — **THE BOOT WAS NORMAL. NOW DO THIS.**
+
+> ## ⚠️⚠️ READ THIS BEFORE THE LIST — **a normal-looking morning is the easiest place to stop reading.**
+> **Steps 1 and 2 will both look fine, and then most people stop.** ⭐⭐ **STEP 3 IS THE MEASUREMENT
+> OF THE WEEK** — it is the one thing the whole of Wednesday was spent making possible, it can only
+> be taken on a T+1 morning, and **it is unrecoverable once the day moves on.** ⛔ **Do not stop at
+> step 2 because nothing looked wrong. Nothing looking wrong is the expected case.**
+
+> ### 🔗 PRECONDITION — this section assumes **Wednesday's stop procedure RAN**.
+> If it did not, the service never exited, no boot happened, and **you are in Branch B, not here.**
+> Step 1 is what tells you which. ⭐ Step 6's census exists **only** if the stop ran.
+
+### 1️⃣ Confirm the boot — *the timestamp, not `is-active`*
+Already run at the top of this page. ✅ **`ActiveState=active` · `ExecMainStatus=0` ·
+`ExecMainStartTimestamp` = Thu 2026-08-06 ~08:15.** ⭐ **The timestamp is the whole check** — it is
+the only thing separating a fresh boot from Wednesday's survivor.
+
+### 2️⃣ Confirm the kill actually cleared
+Run the Branch-A command above (the `auto-cleared|MISSING_EXITS|capital_invariant` grep).
+⛔ **"Active with a Thursday timestamp" does NOT establish this** — a boot can reach the trading loop
+having set a *new* kill on the way (the Q3 table above). **This is a separate check, not a formality.**
+
+### 3️⃣ 🔴🔴 **THE CARRY OBSERVATION — THIS IS THE ONE. TAKE IT BEFORE ANYTHING ELSE MOVES.**
+
+**What is happening:** at **T+1** ATULAUTO leaves `positions()` for `holdings()`. **CHECK1 therefore
+runs against a trade that is `OPEN` in the DB with no broker position** — the exact condition its
+delivery skip exists for, meeting it for the first time.
+
+> #### 📌 THE FALSIFIABLE EXPECTATION — **written before the fact, 05-Aug 22:2x, and scoreable either way**
+> The trade's `trade_id` is in `delivery_trade_ids` (the **`ACTIVE` `gtt_state` row verified
+> Wednesday**) ⇒ **CHECK1 SKIPS IT** ⇒ **the trade stays `OPEN`, its capital stays reserved, and
+> nothing is cancelled.**
+
+**Wednesday's baseline, measured 22:2x — this is what Thursday is scored against:**
+```
+trades:     status=OPEN   exit_reason=(empty)   closure_source=(empty)   exit_mechanism=(empty)
+            qty_filled=1  margin_reserved=587.4228  reservation_id=ee9af41eae554c35
+fm_ledger:  10021  10:00:21  RESERVE  616.79394  positional   (margin_delta +616.79394)
+            10047  10:01:21  COMMIT   587.4      positional   (margin_delta 0.0)
+            ⇒ RESERVE then COMMIT, and NO release row.
+gtt_state:  330456580 | trd_e66ee17b1844491db5d2e99afa6f104b | ATULAUTO | ACTIVE
+control:    trades.status='OPEN' count = 1  (this trade is the only OPEN row in the DB)
+```
+
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system; DB=data_store/trading_system.db
+T=trd_e66ee17b1844491db5d2e99afa6f104b; R=ee9af41eae554c35
+echo "== A. the trade — did CHECK1 leave it alone? =="
+sqlite3 -header "file:${DB}?mode=ro" "SELECT status, exit_reason, closure_source, exit_mechanism FROM trades WHERE trade_id='"'"'$T'"'"';"
+echo "== B. capital — did anything release it? (keyed on reservation_id, NOT trade_id) =="
+sqlite3 -header "file:${DB}?mode=ro" "SELECT ledger_id, ts, entry_type, amount, bucket FROM fm_ledger WHERE reservation_id='"'"'$R'"'"' ORDER BY ledger_id;"
+echo "== C. the GTT row =="
+sqlite3 -header "file:${DB}?mode=ro" "SELECT gtt_id, trade_id, status FROM gtt_state WHERE trade_id='"'"'$T'"'"';"
+echo "== D. control — how many OPEN trades exist at all =="
+sqlite3 "file:${DB}?mode=ro" "SELECT COUNT(*) FROM trades WHERE status='"'"'OPEN'"'"';"'
+```
+
+| | ✅ **SKIPPED — the expectation held** | 🔴 **NOT SKIPPED — the expectation is REFUTED** |
+|---|---|---|
+| **A** trade | `status=OPEN`, all three closure fields still empty | `status=CLOSED` or **`CLOSED_MANUAL`**, and `exit_reason` / `closure_source` / `exit_mechanism` populated |
+| **B** capital | **exactly the two rows above** — `RESERVE` + `COMMIT`, nothing after | **a third row appears** with `entry_type` **`RELEASE`** or **`RELEASE_USED`** ⇒ capital was released |
+| **C** GTT | still `ACTIVE` | `CANCELLED` / gone |
+| **D** control | `1` | `0` |
+
+> ⛔⛔ **KEY THE CAPITAL QUERY ON `reservation_id`, NOT `trade_id` — this is a real trap I hit.**
+> **(P)** `fm_ledger` has **3,145 rows and only 59 carry a `trade_id` (1.9%)**; this trade's rows
+> carry **none**. ⇒ a `WHERE trade_id=…` query returns **empty**, and **an operator would read empty
+> as "capital released"** — a certain false alarm on the one morning it matters.
+> ⭐ **Vocabularies above (`RELEASE`/`RELEASE_USED`, `CLOSED_MANUAL`) were read from the live DB, not
+> from memory.**
+
+⛔ **WHATEVER IT SHOWS, IT IS RECORDED — NOT ACTED ON.** ⛔ Do not re-open, do not re-place a GTT, do
+not touch `gtt_state`. A refutation is a **finding**, and the position's protection is broker-side
+and unaffected either way. ➡️ **Step 4 is what tells you whether this measured anything at all.**
+
+### 4️⃣ Confirm the T+1 transition actually happened — *⚠️ this validates step 3*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system
+grep "get_holdings call_end"  logs/system_2026-08-06.log | tail -1
+grep "get_positions call_end" logs/system_2026-08-06.log | tail -1'
+```
+- ✅ **`"1 holdings"` (or more) and `"0 positions"`** ⇒ T+1 happened; **step 3 measured something real.**
+  *(Wednesday's baseline for contrast: `get_holdings` → **`"0 holdings"`**, `get_positions` → `"1 positions"`.)*
+- 🔴 **STILL `"1 positions"` and `"0 holdings"`** ⇒ **T+1 HAS NOT HAPPENED AND STEP 3 MEASURED
+  NOTHING.** ⛔⛔ **Say exactly that. Do NOT record step 3 as a pass** — a skip that was never asked
+  for is not a skip that worked. **The observation is simply NOT YET AVAILABLE**, and it is not a
+  refutation either.
+
+### 5️⃣ The boot-seed reading
+➡️ **`ADDENDUM_capital_drift_05-Aug-2026.md` §4b.** ⛔ **Its commands are NOT restated here** — run
+them from the addendum so there is one copy.
+⭐ **Carry its honest bound with it: an inexact match is SETTLEMENT, not a finding.** The prediction
+was `tomorrow ≈ today − CNC block ± settled P&L`, and "≈" is doing real work.
+
+### 6️⃣ Read Wednesday's census — *an artifact recovered, not a question answered*
+Captured by the stop procedure (§e). ⭐ **It is the artifact the whole Wednesday-evening decision was
+taken to recover.**
+> ⛔⛔ **CARRY THE CORRECTION OR YOU WILL MISREAD IT: `acted` COUNTS ROWS *EXAMINED*, NOT ACTIONS
+> *TAKEN*.** `orders/cnc_gtt_monitor.py:145-153` appends a label on **every** path — `healthy:`,
+> `needs_review:`, `noop:` — and counts them all. ⇒ **`cnc_gtt_monitor acted > 0` does NOT mean the
+> GTT was observed working.** ⛔ Four earlier cards said it did. **Record the census; do not conclude
+> from `acted`.**
+
+---
+
 ## ⚠️ BRANCH B — active, but the timestamp is still Wednesday
 
 **This is the "no boot" case.** It is the expected outcome **if the stop procedure was NOT run**.
