@@ -5,6 +5,127 @@
 
 ---
 
+## ⚡ §EXEC — DO THIS. **Commands only, in order. Everything below this sheet is the reasoning.**
+
+> ⛔ **This sheet is NAVIGATION, not a summary and not a second card.** Every command is **byte-identical** to the one in its section, and every line points at the section that explains it. **When anything is not what you expect — go to that section.**
+
+### ⏰ ANY TIME
+
+**Token file** — is it dated today?  → *§0*
+```bash
+ssh trading-vm 'cat /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json'
+```
+*You should see:* `"date": "2026-08-05"`
+
+
+### ⏰ FROM 16:00 — **START HERE.** Nothing in this section can change after 15:30
+
+**STEP 0 — unfiltered count.** ⛔ Do not skip.  → *§2 STEP 0*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 data_store/trading_system.db "SELECT o.product, t.status, COUNT(*) FROM trades t LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' GROUP BY o.product, t.status ORDER BY o.product, t.status;"'
+```
+*You should see:* a small (product, status) table. 🔴 **A BLANK product = a finding.**
+
+**STEP 0b — duplicate check.**  → *§2 STEP 0b*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT t.trade_id, COUNT(*) AS entry_rows FROM trades t JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' GROUP BY t.trade_id HAVING COUNT(*) > 1;"'
+```
+*You should see:* **nothing.** Any row ⇒ the totals below are unreliable.
+
+**CHECK (1)** — open Kite in the browser and count GTT triggers.  → *§2 CHECK (1)*
+*You should see:* a count. ⛔ **No script — the only GTT script places real orders.**
+
+**CHECK (2)** — ACTIVE rows in `gtt_state`.  → *§2 CHECK (2)*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT gtt_id, trade_id, symbol, status, created_at FROM gtt_state ORDER BY created_at;"'
+```
+*You should see:* one row per protective GTT, `status` = `ACTIVE`.
+
+**CHECK (3)** — does the row's `trade_id` match the trade's?  → *§2 CHECK (3)*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT t.trade_id, o.product, t.status, t.qty_filled, t.entry_actual_price, g.gtt_id, g.status AS gtt_status FROM trades t LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' LEFT JOIN gtt_state g ON g.trade_id = t.trade_id WHERE o.product = '\''CNC'\'' AND t.status NOT IN ('\''CLOSED'\'','\''CLOSED_MANUAL'\'','\''CANCELLED'\'','\''FAILED'\'');"'
+```
+*You should see:* every row with a non-empty `gtt_id` and `gtt_status` = `ACTIVE`.
+
+**(A) Money reconcile** — count + total, then compare with Kite.  → *§2 (A)*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT COUNT(*) AS positions, ROUND(SUM(v), 2) AS total_cnc_value FROM (SELECT DISTINCT t.trade_id AS tid, t.qty_filled * t.entry_actual_price AS v FROM trades t LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' WHERE o.product = '\''CNC'\'' AND t.status NOT IN ('\''CLOSED'\'','\''CLOSED_MANUAL'\'','\''CANCELLED'\'','\''FAILED'\''));"'
+```
+*You should see:* a position count and one total. **Check the count against Kite first.**
+
+> ## 🛑 **STOP HERE AND READ §2 BEFORE CONCLUDING ANYTHING.**
+> The **zero-row rule**, the **branch table**, and — if you land on the hazard branch — **§2b's three options and their `systemctl` commands** are all DECISIONS.
+> ⛔ **A decision must never be taken from a checklist without its reasoning.** They are deliberately not on this sheet.
+
+
+### ⏰ ⛔ NOT BEFORE 17:40 — the census. Irrecoverable, so **scheduled**, not deprioritised
+
+**Capture 1 — the real source.**  → *§1a*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && cp logs/system_2026-08-05.log ~/census_system_2026-08-05.log && wc -l ~/census_system_2026-08-05.log'
+```
+*You should see:* a line count.
+
+**Capture 2 — insurance.**  → *§1a*
+```bash
+ssh trading-vm 'journalctl -u trading-system.service --since "2026-08-05 16:00" --no-pager > ~/census_journal_2026-08-05.txt; wc -l ~/census_journal_2026-08-05.txt'
+```
+*You should see:* a line count (small or empty is expected).
+
+**Copy both to the PC** *(run in Git Bash on the PC, not the VM)*.  → *§1a*
+```bash
+mkdir -p ~/Documents/trading-evidence/2026-08-05
+scp trading-vm:~/census_system_2026-08-05.log trading-vm:~/census_journal_2026-08-05.txt ~/Documents/trading-evidence/2026-08-05/
+```
+*You should see:* two files copied.
+
+**Read the census.**  → *§1b*
+```bash
+ssh trading-vm 'grep effect_census ~/census_system_2026-08-05.log'
+```
+*You should see:* `effect_census | BEGIN …` … `END … mismatches=0`.
+
+**🔴 **The reading that matters tonight.****  → *§1c*
+```bash
+ssh trading-vm 'grep -E "cnc_gtt_placer|cnc_gtt_monitor" ~/census_system_2026-08-05.log'
+```
+*You should see:* **`acted 0` on either unit IS A FINDING.**
+
+**Census self-check.**  → *§1d*
+```bash
+ssh trading-vm 'grep -E "effect_census \| (BEGIN|END)|composition OK" ~/census_system_2026-08-05.log'
+```
+*You should see:* `mismatches=0`.
+
+
+### ⏰ AFTER DINNER
+
+**Is any CNC trade `EXITING`?**  → *§2c*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT t.trade_id, o.product, t.status FROM trades t LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' WHERE o.product = '\''CNC'\'';"'
+```
+*You should see:* one row per CNC trade with its status.
+
+
+**Score the sizing prediction.**  → *§3*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT t.trade_id, t.qty_filled, t.qty_by_risk, t.qty_by_capital, t.qty_by_concentration, t.binding_constraint FROM trades t LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' WHERE o.product = '\''CNC'\'';"'
+```
+*You should see:* the three `qty_by_*` numbers — **strictly smallest wins.**
+
+
+**Watch item only — nothing to do.**  → *§4*
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -inE "gtt_state|database is locked|OperationalError|DatabaseError" logs/system_2026-08-05.log logs/reconciler_2026-08-05.log | head -30'
+```
+*You should see:* nothing, or ordinary `gtt_state` lines.
+
+---
+
+# 📚 THE REASONING, THE COMMANDS IN FULL, AND THE HISTORY
+
+*(Everything from here down explains the sheet above. The revision tables are history — they are last-but-one on purpose.)*
+
 ## 🔄 REVISION — 05-Aug ~12:5x IST. **The first version of this card had four faults that would have failed at the console. All measured against source; all fixed.**
 
 | # | what was wrong | now |
@@ -85,7 +206,8 @@ silence there means success. **The FILE is the gate.**
 **This is written to the log ONCE, when the service shuts down around 17:35. If the service is
 restarted or disturbed, IT IS GONE AND CANNOT BE RE-CREATED.**
 
-### 1a. FIRST — capture. **TWO commands. Run BOTH. Do this before anything else.**
+### 1a. FIRST **WITHIN §1** — capture. **TWO commands. Run BOTH, before anything else in this section.**
+⏰ **§2 comes before all of §1.** See the order block above.
 
 ⭐ **Why two:** the census is written by the application's own logging to a **file**, not to the
 systemd journal — its stdout only carries `WARNING` and above, and the census is `INFO`. **The file
@@ -170,7 +292,7 @@ they begin `MISMATCH(i)`, `MISMATCH(ii)` or `MISMATCH(iv)`.
 ⭐ **Do this section FIRST.** Nothing in it can change after 15:30 — the market is shut, no fill can happen, no GTT can trigger, and `gtt_state` cannot gain a row.
 
 ### Why this matters, in one paragraph
-Two CNC (delivery) positions are held. **Tomorrow they leave the broker's "positions" list and move
+Two CNC (delivery) positions are **REPORTED** held — ⭐ **STEP 0 below is what confirms it, and it is the first thing you run.** ⚠️ **Nobody has measured this yet** (the PC's database copy is two days stale). **If STEP 0 shows a different number, or a blank product, that is a FINDING — not your mistake.** **Tomorrow they leave the broker's "positions" list and move
 to "holdings".** A reconciler check called CHECK1 looks only at *positions*. When it sees a trade it
 believes is open but finds no position, it concludes the position was closed by hand — and then
 **cancels that trade's broker orders and releases its capital, on shares you still own.** There is a
@@ -277,6 +399,8 @@ ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -colum
 carried in production.**
 **If it returns nothing:** that is a real result, not an error — and it is the hazard. Go to the
 branch table.
+⚠️ **If you see MORE `ACTIVE` rows than you have positions:** note the count and move on — an orphan
+GTT row is expected noise on delivery days and is **not** tonight's gate.
 
 ### CHECK (3) — 🔴 does that row's `trade_id` MATCH the held trade's?
 
@@ -369,14 +493,35 @@ writes only the token file, and `deploy/token_watcher.sh` starts the service **o
 > **What you should see:** `inactive` for the watcher, and `inactive` for `trading-system` (it
 > self-exited at 17:35). **If either says `active`, stop and do not assume it worked.**
 >
+> ⚠️ **IF IT SAYS `sudo: no tty present and no askpass program specified`, OR IT SEEMS TO HANG:**
+> press **Ctrl-C** and use this instead — it will ask for your password:
+> ```bash
+> ssh -t trading-vm 'sudo systemctl stop token-watcher.service'
+> ```
+> *(Then re-run the plain command above to see the two `inactive` lines.)*
+>
 > **UNDO (run this when the decision is made and you want Friday to start — or Thursday, if the
 > position is resolved during the day):**
 > ```bash
 > ssh trading-vm 'sudo systemctl start token-watcher.service && systemctl is-active token-watcher.service'
 > ```
 > **What you should see:** `active`.
+> ⚠️ **Same `no tty` fallback applies to the UNDO** — and it matters more here, because an undo you
+> cannot run is the state you cannot leave:
+> ```bash
+> ssh -t trading-vm 'sudo systemctl start token-watcher.service'
+> ```
 > ⚠️ **If you undo it inside 08:00–16:00 on a day with a fresh token, the service will start within
 > 30 seconds.** That is the intended behaviour — just know it is immediate.
+>
+> 📌 **ON `sudo` OVER `ssh` — EVIDENCE, STATED AS EVIDENCE AND NOT AS PROOF:** this exact pattern is
+> already written down as an operational command in **four tracked files** — `PATHS.md:223`
+> (`ssh trading-vm 'sudo systemctl restart trading-system.service'`), `DEPLOYMENT.md:135` and `:191`,
+> and `deploy/setup_uptimerobot.md:39`. **`deploy/resume.sh:25,38` also runs `sudo systemctl`
+> stop/start as the `ubuntu` user** — though it runs *on* the VM, so it evidences the sudo right, not
+> the non-interactive-ssh path. ⚠️ **UNVERIFIED from the PC: I could not confirm passwordless sudo
+> without contacting the VM.** ⇒ **the `-t` fallback above is on the card precisely because the
+> primary form is evidenced but not proven.**
 >
 > ⭐ **WHY THIS MECHANISM AND NOT THE OTHERS** *(the HOW is an engineering answer; the WHETHER is
 > Rama's)*: stopping the unit is **deterministic, edits no file, and undoes with one command.**
