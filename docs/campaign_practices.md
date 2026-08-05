@@ -247,9 +247,18 @@ over one corpus ⇒ **the narrow one is lying.**
 > | **wrong source** | the census is `INFO`, so `journalctl` (stdout = `WARNING`+) **structurally cannot hold it** | read `logs/system_<date>.log` |
 > | **truncated view** | a 15-file limit read as an absence (nearly denied MTM exists); an `[Omitted long matching line]` read as a non-match | re-run narrowed; **never read a truncated result as evidence** |
 >
-> ⇒ ⭐⭐ **GROUP 1 is a defect in the PATTERN; GROUP 2 is a defect in WHERE YOU LOOKED — and the
-> second is the one "state your search width" does not catch, because the width was fine.**
-> ⛔ **So the width must name the CORPUS as well as the pattern.**
+> **GROUP 3 — ⭐ ADDED 05-Aug LATE: THE PATTERN AND THE CORPUS WERE BOTH RIGHT; THE *SELECTION
+> BOUNDARY* DID NOT MATCH THE SUBJECT'S.** ⛔ Still M1 instances, not a new rule.
+> | mechanism | that night's instance | the fix that caught it |
+> |---|---|---|
+> | ⭐ **filter WIDER than the subject** | realised P&L summed over *all* non-zero `pnl_delta` rows → **`0.0`**; the 8th row is a `RESET_PNL −44.61` that **cancels the seven by design** — it would have refuted a **correct** finding | restrict to the row TYPE that carries the quantity (`RELEASE_USED`) — **7 rows, +44.61** |
+> | ⭐ **filter NARROWER than the subject** | `ZERODHA_API_KEY` reported **MISSING** from the VM `.env` — I checked the **fallback** name; the real key is the **declared** `ZERODHA_API_KEY_LFL836` from `accounts.csv` | enumerate what actually exists (`grep -oE "^ZERODHA_[A-Z0-9_]+"`) before asserting an absence |
+>
+> ⇒ ⭐⭐ **GROUP 1 is a defect in the PATTERN; GROUP 2 is a defect in WHERE YOU LOOKED; GROUP 3 is a
+> defect in WHAT YOU SELECTED — and it is the nastiest, because the pattern, the corpus AND the
+> width are all defensible, so nothing about the query looks wrong.**
+> ⛔ **So the width must name the CORPUS as well as the pattern — and, per Group 3, the PREDICATE
+> too: say which rows/keys the zero was taken over, not just which file.**
 > 🔴 **The costliest of the six is `predicted string vs emitted string`: it is the only one that
 > would have INVERTED a live conclusion** — recording a real, six-times-observed coupling as inert —
 > rather than merely leaving a gap.
