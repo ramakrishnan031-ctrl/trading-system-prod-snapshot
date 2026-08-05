@@ -1149,6 +1149,41 @@ residual.**
 §10.5 drift decomposition ......... RESULT = PASS -- exact, zero residual, 4th arrival at 587.40
 ```
 
-⛔ **STANDING, RE-CONFIRMED:** nothing pushed · no code changed · **no VM writes — every VM call was
-`grep`/`cat`/`sed`/`systemctl show`, and the card's `cp`-capture was deliberately NOT run** ·
-no design decided · no delivery config value proposed · **231 stands** · no implementation.
+---
+
+# ✅ §11. THE 18:00 CRON-DRIFT ITEM — **PASS.** ⭐ AND A FOURTH NARROW-CHECK NEAR-MISS.
+
+**RESULT:** the last line written to `logs/cron-drift-check.log` at **18:00** is
+`✅ [LFL836] Cron integrity OK: live == registry; all due heartbeats present.`
+⇒ 🟢 **THE WARNING IS GONE. `71f331b`'s registry half took.**
+
+### ⚠️ 11.1 — but my first check returned a **false zero**, and it is the same shape as §8 and §6
+
+I first grepped `cron.*drift|drift.*cron|cron_integrity|cron_registry` over
+`logs/system_2026-08-05.log` → **0 hits**, and `cron` alone over the same file → **0**.
+⛔ **That zero was not the answer to the question I asked.** The cron drift check **does not log to
+the service's log at all** — it owns **`logs/cron-drift-check.log`**, and only a directory listing
+by mtime revealed it.
+
+> ### ⭐⭐ **THE FOURTH INSTANCE TODAY OF ONE FAILURE MODE: A ZERO FROM THE WRONG CORPUS.**
+> ① the 15-file truncation that nearly denied MTM exists (§6) · ② the `[Omitted long matching line]`
+> read as a non-match (§8.1) · ③ the predicted-string grep that would have inverted the H5
+> conclusion (§2.3) · ④ **this one.**
+> ⛔ **All four were caught, and none by being careful in general — each was caught by widening the
+> check after the zero and before believing it.** ⭐ **That is the operational form of the rule: a
+> zero is not a result until you have named the corpus it came from.**
+> ⚠️ **And note what makes ④ different: the first three were wrong PATTERNS over a right corpus.
+> This was a right pattern over the WRONG FILE** — the `census_not_in_journalctl` lesson,
+> reappearing one rung down. **Recorded in that memory rather than as a new rule: same class.**
+
+```
+§11 the 18:00 cron-drift item     RESULT = PASS -- WARNING gone, verified at the real source
+§11.1 the false zero              RESULT = CAUGHT -- 4th same-class near-miss, width restated
+```
+
+---
+
+⛔ **STANDING, RE-CONFIRMED AT 18:05:** nothing pushed (`origin/main` = `0197923`, unmoved) ·
+no code changed · **no VM writes — every VM call was `grep`/`cat`/`sed`/`ls`/`systemctl show`, and
+the operator card's `cp`-capture was deliberately NOT run** · no design decided · no delivery config
+value proposed · **231 stands** · no implementation.
