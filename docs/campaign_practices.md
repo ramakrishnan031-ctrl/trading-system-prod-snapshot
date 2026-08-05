@@ -188,6 +188,32 @@ the correction is indistinguishable from a rewrite of history.
 ⇒ **State the search width in the same sentence as the claim.** Two greps that disagree
 over one corpus ⇒ **the narrow one is lying.**
 
+> #### ⭐⭐ 05-Aug-2026 — **A FIFTH INSTANCE, AND IT IS A DISTINCT SUB-SHAPE: RIGHT PATTERN, WRONG FILE**
+> ⛔ **Not a new rule — an M1 instance.** The 18:00 cron-drift check: I grepped
+> `cron.*drift|cron_integrity` over `logs/system_2026-08-05.log` → **0**, and plain `cron` over the
+> same file → **0**. ⭐ **The pattern was right. The corpus was wrong** — the job writes to its own
+> **`logs/cron-drift-check.log`**, which only a directory listing by mtime revealed. *(The real
+> answer was a clean PASS, so the false zero cost nothing this time — which is exactly why it is
+> worth writing down.)*
+>
+> **Four same-class near-misses in ONE day, and the sub-shapes differ — the distinction is the
+> useful part:**
+> | # | what was wrong | how it was caught |
+> |---|---|---|
+> | 1 | a **truncated result set** (15-file limit) read as an absence — nearly denied MTM exists in `fund_manager.py` | re-ran narrowed to the one file |
+> | 2 | an **`[Omitted long matching line]`** read as a non-match — nearly left the register's H5 error unrecorded | chased the omitted line |
+> | 3 | a **predicted string** instead of an emitted one — would have INVERTED the H5 conclusion | enumerated the real `rejection_reason` values |
+> | 4 | ⭐ **right pattern, WRONG FILE** — the cron job owns its own log | listed the log directory by mtime |
+> | 5 | a pattern that **cannot fail to match** — `502` hit price digits in ~100 INFO lines | constrained to level + logger |
+>
+> ⇒ ⭐⭐ **1–3 and 5 are wrong PATTERNS over a right corpus; 4 is a right pattern over the wrong
+> CORPUS.** ⛔ **Stating the width is therefore not enough — the width must name the CORPUS as well
+> as the pattern.** *(Same lesson as `census_not_in_journalctl`, one rung down: there, the right
+> grep over the wrong SOURCE.)*
+> ⭐ **The general form: a zero is not a result until you have named the corpus it came from — and
+> a control that proves the corpus is live is what turns it into evidence.** *(0 `effect_census`
+> against **8,204** `effect` hits; 0 auth errors against **25** ERROR/CRITICAL lines.)*
+
 ### M2 · MEASURE, don't infer — and PROVE, don't assert
 - comment-only edit ⇒ **AST identity with docstrings stripped**, plus the constant's value
   asserted (not eyeballed);
@@ -956,6 +982,21 @@ and had never run.
   ⭐ **The tolerance is `max(₹50, 10% of expected)`, and FIX-190 (Bug I) added that band to silence
   exactly this noise FOR A LEVERED INTRADAY BOOK.** Delivery is 1× ⇒ **a delivery book deploying more
   than ~10% of capital breaches it by construction**, and the bucket is 30% of total.
+> ### 🔴🔴 **SCOPE CORRECTION — 05-Aug-2026 EVENING. AR9 SCORED THE *IN-SESSION* REGIME ONLY.**
+> ⛔ **The `max(₹50, 10%)` band above is IN-SESSION. Out of session the tolerance is a flat ₹50** —
+> `config/system_config.yaml:368` labels it *"Production threshold (**out-of-session / overnight**)"*,
+> `:369` labels the pct *"**in-session** tolerance"*.
+> ⭐⭐ **AND OVERNIGHT IS THE ONLY TIME A DELIVERY POSITION CAN BE HELD.** ⇒ **the regime AR9
+> actually needs to cover is the one it was never scored against.**
+> **(P) MEASURED the same evening:** 3 in-session breaches at `tolerance≈990`, then **5 out-of-session
+> at `tolerance=50.00`, exactly 30 min apart, identical operands, ALL DELIVERED as CRITICAL** — and
+> continuing, because the service stays up while delivery is held.
+> ⛔ **This is a SCOPE CORRECTION ON AR9, not a new finding and not a reopen.** ⭐ It is recorded so
+> nobody later reads *"accepted, 3×, one session"* as covering an overnight carry. **It does not
+> propose a tolerance, and the one-session evidence bar is UNCHANGED.**
+> ✅ **What DID close: the delta decomposes exactly** — `632.01 = 587.40 deployed + 44.61 unsettled
+> realised`, both sides to the paisa across two independent subsystems. **No money is missing.**
+
 - **Accepted by:** the bridge, 05-Aug-2026, on the measurement above. **Rama has not been asked to
   ratify a tolerance and must not be, on this evidence base.**
 - ⛔⛔ **THE EVIDENCE BASE IS ONE SESSION. That is explicitly NOT enough to justify changing a
