@@ -52,6 +52,11 @@ confirm it rather than take my word for it.**
 | **A — now** | ____:____ | ____________ | ____________ | ____________ |
 | **B — after 15:30** | ____:____ | ____________ | ____________ | ____________ |
 
+⭐ **IF YOU ALREADY TOOK A FUNDS SCREENSHOT EARLIER TODAY, THAT *IS* READING A** — write its four
+numbers and its clock time into the row above. ⛔ **Do not retake it.** **An earlier reading, taken
+while the intraday book was still open, is MORE useful than a later one** — it is the only kind that
+can be compared against a mid-session alert. A 19:00 reading cannot be.
+
 **A screenshot is fine. The numbers typed out are better** — a screenshot cannot be searched next
 month.
 
@@ -80,6 +85,24 @@ month.
 > ⚠️ **BOTH READINGS MUST BE TAKEN CLOSE IN TIME, AND BOTH AFTER THE SQUAREOFF.** Reading B at 15:35
 > against a database figure read at 19:00 is a comparison that should not have been made — the same
 > timing trap as §3 below.
+>
+> ### ⚠️ **THE SAME INFORMATION MAY APPEAR IN EITHER OF TWO PLACES — CHECK BOTH BEFORE CALLING IT A FINDING**
+> A delivery purchase is a **cash debit**, not a margin block. Kite may therefore show it **either**
+> way, and ⛔ **which one this account uses has NOT been verified — it cannot be settled from the PC,
+> and reading B is the measurement that settles it.**
+>
+> | shape | what you will see after the squareoff | **the delivery figure is** |
+> |---|---|---|
+> | **1 — blocked as margin** | `used margin` stays **high**, `available` low | **`used margin`** |
+> | **2 — taken as a debit** | `used margin` ≈ **0**, `available` ≈ `opening − CNC value` | **`opening − available`** |
+>
+> ⭐⭐ **IN BOTH SHAPES `available + used = opening` STILL HOLDS.** ⇒ **that identity is the invariant,
+> and it breaking is what would actually be a finding** — not which of the two shapes you see.
+> 🔴 **So if `used margin` is ~0, do NOT record a discrepancy.** Read the delivery figure as
+> `opening − available` instead and carry on with the comparison below. ⛔ **The cross-check against
+> the operator card's §2 (A) database total is UNCHANGED — only the field you read it from moves.**
+> 📌 **Whichever shape it turns out to be, write it down once** — it is worth recording permanently
+> and never re-deriving.
 
 ---
 
@@ -159,11 +182,45 @@ table (`kill_switch_state`, `core/schema.sql:563-570`):
 ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT state, reason, triggered_at, triggered_by FROM kill_switch_state;"'
 ```
 
-**What you should see:** one row.
-- `state = INACTIVE` → ✅ **no kill has fired.**
-- `state = SOFT_KILL` with a `triggered_at` of **today** → 🔴 stop and read the reason.
-- `state = SOFT_KILL` with **yesterday's** date → ⚠️ **that is the routine 15:15 circuit-breaker
-  kill, which persists overnight BY DESIGN and auto-clears at the next 08:15 boot.** Not an incident.
+> ## ⛔⛔ **READ THIS BEFORE THE TABLE — OTHERWISE YOU WILL READ THE NORMAL RESULT AS AN EMERGENCY.**
+> **You are running this in the EVENING. The routine 15:15 circuit-breaker fires EVERY TRADING DAY,
+> so at 19:00 the row will almost certainly say `SOFT_KILL` WITH TODAY'S DATE.** ⭐ **THAT IS THE
+> EXPECTED RESULT, NOT A PROBLEM.**
+> ⇒ **THE DATE DOES NOT TELL YOU ANYTHING TONIGHT. THE `reason` AND THE `triggered_at` TIME DO.**
+> *(An earlier draft of this sheet used the date as the discriminator — it would have told you to
+> stop, on the ordinary daily breaker, in the middle of a real-money gate. It is corrected here.)*
+
+**What you should see:** one row. **Match the `reason` text, do not judge intent:**
+
+| row | meaning | what to do |
+|---|---|---|
+| `SOFT_KILL` · `triggered_at` ≈ **15:15 today** · `reason` = **`circuit_breaker_force_close_15:15`** | ✅ **ROUTINE. Every single trading day.** | ⛔ **Nothing.** Record it and move on. |
+| `SOFT_KILL` · today · **any other time**, or **any other `reason`** | 🔴 **THAT is the finding** | Read the reason, write it down verbatim, stop. |
+| `SOFT_KILL` · `reason` = `EOD_SQUAREOFF` | ✅ also a scheduled reason | Record it. Not an incident. |
+| `INACTIVE` | ⚠️ **see the note below — this is NOT automatically good at 19:00** | Read the note. |
+| **`HARD_KILL`** · any time · any reason | 🔴🔴 **STOP.** | **It has never fired in this system's life. It would be the first.** Record everything and stop. |
+
+*(The two routine reason strings are `circuit_breaker_force_close_15:15` and `EOD_SQUAREOFF` —
+quoted verbatim from `capital/kill_switch.py:120-123`, where they are defined as the kills that are
+"part of normal daily operations". The first is written at `main.py:695`.)*
+
+> ### ⚠️ **AND `INACTIVE` AT 19:00 IS NOT OBVIOUSLY GOOD — BOTH ANSWERS HAVE TO BE INTERPRETABLE**
+> The breaker fires at 15:15 **every** trading day. So an `INACTIVE` row at 19:00 means **either**:
+> **(a)** the breaker did not fire today — 🔴 **which is itself worth recording**, because something
+> that runs daily did not; **or**
+> **(b)** something cleared it after 15:15 — 🔴 **also worth recording**, because nothing routine
+> does that in the evening *(the automatic clear happens at the NEXT morning's boot, not tonight)*.
+> ⇒ **Write down which one you think it is, and the `reason` text, either way.** A check whose PASS
+> you cannot interpret is only half a check.
+
+> ### ✅ **AND THE THING NOT TO WORRY ABOUT TONIGHT, MEASURED SO YOU DO NOT HAVE TO WONDER**
+> **Tomorrow's 08:15 boot WILL clear tonight's breaker automatically, even though CNC positions are
+> held.** The auto-clear (`kill_switch.py:287-335`) turns on **ONE thing: was the kill triggered on a
+> PREVIOUS calendar day.** ⛔ **It does not look at open positions, and it does not look at the
+> reason** — its own words: *"a new trading day ALWAYS starts with a clean slate — EVERY prior-day
+> kill is cleared regardless of type… The system never blocks the next-day startup."*
+> ⛔⛔ **SO DO NOT RUN `deploy/resume.sh` TONIGHT.** It begins with `systemctl stop`, and nothing here
+> calls for it.
 
 *(Belt and braces — the log side. `soft_kill` writes a CRITICAL after persisting, so this should be
 empty if the row above says `INACTIVE`:)*
@@ -234,6 +291,24 @@ already measured** (the concentration cap combined with the permanently-low tier
 5. **§3(ii)** — the number, and whether it looks like today's P&L.
 6. **§4** — the `kill_switch_state` row, verbatim.
 7. **Anything that did not match what this sheet said to expect.**
+
+---
+
+## ❓ THE FOUR QUESTIONS OWED AFTER TONIGHT — ⛔ **WRITTEN NOW, DELIBERATELY UNANSWERED**
+
+> ⭐⭐ **A question written BEFORE the evidence is a PREDICTION. The same question written AFTER it is
+> a RATIONALISATION.** These are recorded now so they survive the session boundary — and so that
+> whoever answers them cannot quietly reshape the question to fit what arrived.
+
+1. **Did every runtime observation match the operator card — or were undocumented behaviours found?**
+2. **Did the three figures converge:** reading B's delivery figure, the database CNC total
+   (operator card §2 (A)), and Kite's own positions total?
+3. **Did Thursday's boot seed match the written prediction** (§4b) **within settlement tolerance?**
+4. **If all three hold, is the delivery evidence sufficient to close the capital-drift thread
+   formally?**
+
+⛔ **None of these is answered here, and none may be answered from reasoning — only from what tonight
+and tomorrow morning actually produce.**
 
 ---
 
