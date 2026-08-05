@@ -96,7 +96,11 @@ DEPLOYED IS NOT EVIDENCE.**
 
 ---
 
-# 🔴 05-AUG-2026 EVENING CONSOLIDATION — **N 231 → 232.** ⛔ ONE NEW ROW; FIFTEEN SUB-ENTRIES.
+# 🔴 05-AUG-2026 EVENING CONSOLIDATION — **N 231 → 233.** ⛔ TWO NEW ROWS (**A6**, **A7**); EIGHTEEN SUB-ENTRIES.
+
+> ⏱️ **Written in two passes:** **A6 + its sub-entries** at ~18:00 (the delivery-carry thread);
+> **A7 + A7-i/-ii/-iii** at ~21:50 (the registry / pre-flight / Q3 batch). ⭐ **The second pass
+> REFUTED a premise the first pass carried** — see A7-i. The count moved **232 → 233** there.
 
 > ⛔ **EVERY ITEM BELOW IS A POINTER TO A COMMITTED RECORD. Nothing here is re-derived, and no
 > figure is retyped from conversation.** Primary record: **`docs/audit/HANDOFF_05-Aug-EVENING.md`**

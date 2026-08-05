@@ -182,5 +182,8 @@ Why it struck me as odd (even if I think it is nothing):
   variables on a night that already contains one first-ever decision. The unpushed commits are docs
   and one display-only fix — they cost nothing to hold a day.
 - **NO IMPLEMENTATION.** Requires evidence CONFIRMED **and** Rama's approval in his own words.
-- **231 stands.** No register row is created by this.
+- **No register row is created by this procedure.** ⚠️ *(The bare number that used to sit here read
+  "231 stands"; N has since moved to **233** via the evening measurement batch — A6 and A7, neither
+  of which is this procedure. **The gate is "the stop creates no row", not a specific integer** —
+  a count written into a procedure rots the moment anything else in the session is registered.)*
 - ⛔ **Do NOT run `deploy/resume.sh`** — tonight's same-day `SOFT_KILL` is the routine 15:15 breaker.
