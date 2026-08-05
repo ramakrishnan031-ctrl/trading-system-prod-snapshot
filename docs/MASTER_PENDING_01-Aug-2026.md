@@ -15,6 +15,16 @@ or the live gate buries the fix campaign.
 **Clock-read:** 01-Aug-2026, **Saturday**, session start **14:44 IST**. ~~Deployed SHA
 `297b587`; `main` **21 ahead**, all docs-only, unpushed by design.~~
 
+> # ▶️▶️ **RESUME — CURRENT AS OF 05-Aug-2026 EVENING. READ THIS BLOCK, THEN THE 05-AUG CONSOLIDATION BELOW.**
+> **N = 232** *(was 231; A6 added, A1 discharged to §D — reconciliation in §1)*. ⛔ **DEPLOYED SHA `0197923`, UNMOVED. NOTHING FROM TODAY IS DEPLOYED.**
+> ⛔ **THE AHEAD-COUNT IS NOT QUOTED HERE — it has moved ~60 times today and a number in prose ROTS.** Measure it: `git rev-list --count origin/main..main`. Its authority is the memory ledger's top block.
+> 🔴 **THE STATE, IN FOUR LINES:**
+> **1.** **The flip worked end to end.** Delivery entry AND exit are `VERIFIED LIVE 05-Aug`; **one CNC position is held overnight, a first.** ⛔ `<T+1 CARRY UNVERIFIED>` — nothing wider.
+> **2.** **The CHECK1 gate PASSED** and ran in production for the first time. ⇒ **§2b is not reached; no decision is owed on the gate; Thursday's 08:15 boot may run.**
+> **3.** 🔴 **A6 (NEW): the service never shut down** — the EOD self-exit is unreachable while delivery is held ⇒ **no census, and (I) no 08:15 boot, so the day's `SOFT_KILL` never auto-clears.** ⛔ **A restart is NOT the safe default** — it hits the HALT trap. **A decision is OWED and it is Rama's.**
+> **4.** ⛔ **A stop procedure and a Thursday contingency are WRITTEN AND UNRUN** — `docs/audit/STOP_PROCEDURE_05-Aug-2026.md` (awaits Rama's GO, in his own words) · `docs/audit/THURSDAY_CONTINGENCY_06-Aug-2026.md` (route on `ExecMainStartTimestamp`, ⛔ **never on `is-active` alone**).
+> ⛔ **STANDING:** no push (D3) · no code changed today (every commit is `.md`) · **no implementation authorised** — it needs evidence CONFIRMED **and** Rama's approval in his own words.
+>
 > ## 🔄 CURRENCY BLOCK — **BROUGHT CURRENT 04-Aug-2026 ~23:xx IST · ⭐ RE-MEASURED 05-Aug-2026 00:15 IST (the clock was READ, not recalled — `date` on the PC, offset `+0530`, cross-checked against `date -u`) · ⭐⭐ BROUGHT CURRENT AGAIN 05-Aug-2026 POST-BOOT — see the BOOT PASS below.** ⛔ THE FILENAME STILL SAYS 01-AUG AND MUST NOT BE RENAMED — it is cited by SHA-pinned references across the audit records. **The date in the title is the file's IDENTITY, not its currency; this block is its currency.**
 >
 > **STATE:** deployed SHA **`0197923`** — ⛔ **UNCHANGED; NOTHING FROM TONIGHT IS DEPLOYED.** ~~**PC == origin == VM bare** · **ahead 0** · `main` **clear**~~ ~~⭐ **SUPERSEDED (§G4), MEASURED 05-Aug 00:15: `main` is AHEAD 5 of `origin/main` (`0197923`); tree clean.**~~ ⭐⭐ **SUPERSEDED AGAIN (§G4), RE-MEASURED 05-Aug POST-BOOT: `main` is AHEAD 6 — `git rev-list --count origin/main..main` = 6, `origin/main` = `0197923ecb4954…`, `HEAD` = `e64146f…`, tree CLEAN.** ⛔ **"AHEAD 5" WAS NEVER WRONG AND IS NOW STALE — it was written INSIDE the commit that made it 6 (`e64146f`, 00:32:43), which is the fixed-point §A5 already names for `4603b75`: a count written in prose cannot include the commit that writes it.** The old counts are struck rather than edited in place because **an ahead-count written in prose ROTS**; the memory ledger's top block is its authority, not this line. *(`origin/main` measured directly; **the VM bare repo was NOT re-measured post-boot from here** — the 07:49–07:54 read-only VM control recorded in the memory ledger measured it at `0197923ecb4954…` == origin, and that is the citation, not an inference.)*
@@ -83,6 +93,88 @@ ACTIONS_not_decisions.md` (K1–K3, T1–T4, M1–M2, security backlog) · memor
 **Status labels** (S1 §11(7), Rama's rule): `<BUILT>` · `<DEPLOYED>` · `<VERIFIED LIVE>`
 · `<PENDING>` · `<DEFERRED>`. ⛔ **"fixed" is retired — it was carrying all five.
 DEPLOYED IS NOT EVIDENCE.**
+
+---
+
+# 🔴 05-AUG-2026 EVENING CONSOLIDATION — **N 231 → 232.** ⛔ ONE NEW ROW; FIFTEEN SUB-ENTRIES.
+
+> ⛔ **EVERY ITEM BELOW IS A POINTER TO A COMMITTED RECORD. Nothing here is re-derived, and no
+> figure is retyped from conversation.** Primary record: **`docs/audit/HANDOFF_05-Aug-EVENING.md`**
+> (§0–§12). Procedures: `STOP_PROCEDURE_05-Aug-2026.md` · `THURSDAY_CONTINGENCY_06-Aug-2026.md`.
+> ⛔ **No symbol names appear in this section — totals only.**
+> 🏷️ **M9 classes on every claim: (P) production evidence · (S) source, SHA-pinned · (I) inference.**
+
+## 🆕 A6 — **THE DELIVERY CARRY BREAKS THE DAILY PROCESS LIFECYCLE** *(THE ONE NEW ROW)*
+
+**Root cause:** the system assumes **one process per trading day, flat at EOD.** A carried delivery
+position falsifies that premise and three guards that silently depended on it fail together.
+
+**(a) THE EOD SELF-EXIT COUPLING — the day's structural finding.**
+**(P)** `17:35:00.002 WARNING main: "eod_self_exit: past 17:35 IST but 1 active position(s) remain
+— staying up to manage them; will exit once flat"`; service still `active` at 17:49, start
+timestamp unchanged from 08:15:05. **(S)** `_eod_self_exit_due` (`main.py:1073-1113`) is due only at
+**zero** active positions; **`emit_census()` runs at `_shutdown()` entry (`main.py:1319`)**.
+⇒ 🔴 **THE CENSUS IS ABSENT, NOT LATE.**
+⭐ **The interpretability control travels with the zero: 0 `effect_census` against 8,204 `effect`
+hits in 93,833 lines** — that control is what makes it evidence rather than a worry.
+⭐ **(S) UPGRADE — one production call site, inside `_shutdown()`** *(width: `emit_census` repo-wide,
+tests included)* ⇒ **no census can EVER be emitted without a shutdown**, not merely "none today".
+⭐⭐ **This is the "declared thing with no effect" family arriving on a GUARD rather than a manager**
+— and the coupling was invisible until the day it mattered. **Record: HANDOFF §10.1–10.2.**
+
+**(b) THE RESTART TRAP — a LIVE operational hazard, not a historical note.**
+**(S)** at the deployed SHA: `clear_stale_state` refuses a **same-day** kill
+(`triggered_date >= today`); `auto_clear_scheduled_kill` refuses on **`open_count > 0`**. Both run
+at `main.py:1914`/`:1919`, **before** the scenario check at `:1937`, which returns **4 = HALT** with
+`--resume` the only escape — **the command the standing instruction forbids that evening.**
+⇒ ⛔ **A restart on a delivery evening leaves the service DOWN AND HALTED with its remedy
+prohibited.** 🔴 **True again on ANY evening a delivery position is held.** **Record: HANDOFF §12,
+`STOP_PROCEDURE` basis table.**
+
+**Also owned by A6:** no boot ⇒ `clear_stale_state` never runs ⇒ the day's kill survives into the
+next session **(I)**; and every alarm emitter stays alive overnight (see the drift loop below).
+⛔ **A6 is MEASURED AND REGISTERED ONLY. No fix is designed, proposed or authorised.**
+
+## 📌 THE FIFTEEN SUB-ENTRIES — each named to the row that owns it
+
+| # | finding | class | filed as a sub-entry on |
+|---|---|---|---|
+| **c** | **the delivery ROUND TRIP closed in the ledger** — `GTT_EXIT`, `exits_verified=1`, `RELEASE_USED` in the same second as `exit_time`, bucket restoration exact; total CNC value reconciles four independent ways | **(P)** | **§A2** — 🏷️ `<ROUND TRIP VERIFIED LIVE 05-Aug; T+1 CARRY UNVERIFIED>`. ⛔ nothing wider |
+| **d** | **the CHECK1 gate PASSED, and ran in production for the first time** (`gtt_state` was empty before today) | **(P)** | **§C.5** CHECK1 row. ⭐ **Discharges** Thursday's 08:15 boot meeting a T+1 holding. ⛔ **Does NOT discharge the 4th entry path** `_check_stuck_exiting`, still unguarded, reachability still **(d)** |
+| **e** | **FIX-133's floor is LOAD-BEARING for delivery** — `floor(1 × 0.5) = 0`; without it: no order, no GTT, no evidence | 🔴 **(I)** | **§C.1 G8** sizing. ⛔ **NEVER OBSERVED — arithmetic, not measurement.** ⚠️ its removal presents as *"no signals qualified today"*, indistinguishable from a quiet day |
+| **f** | **sizing is PINNED BY ARITHMETIC, not configuration** — concentration binds strictly at 1 against 8 and 5; tier multiplier inert at `raw_qty=1` for every `m<1`; `raw_qty` must reach **4** for one extra share | **(S)+(I)** | **§C.1 G8** + **A-DEC-3 item 5**. ⭐ **the intraday twin is already registered** — risk sizer dead by algebra, 298/298 and 415/415. ⇒ **two pipelines with two config surfaces produce TWO INERT SURFACES; the binding constraint is arithmetic and SHARED.** ⛔ item 5's **ORDER** changes, not its existence — a knob inert at ₹10k is not inert at ₹100k, and ₹10k is a testing value. ⛔ **no value proposed** |
+| **g** | **the H5 coupling, with the RIGHT code** — `SYMBOL_DIRECTION_DAILY_LIMIT` (`signal_processor.py:693` at `0197923`), and it is **product-BLIND** | **(P)+(S)** | **§B.1 row 7** — ✅ **already filed** (`e3edeb4`). ⛔ *"delivery blocks intraday"* is the wrong description and would send the next reader hunting a product branch that does not exist. **The two codes the run sheet named fired ZERO times** |
+| **h** | **the cost model BRANCHES on product** — two rate tables; the day's recorded CNC cost reproduces by hand to the paisa; MIS rates would give ~40% of it | **(S)+(P)** | **§C.1**. 🏷️ **the CNC cost path moves to `VERIFIED LIVE 05-Aug`** ⚠️ hand computation, not an execution |
+| **h2** | 🔴 **A CORRECTION I OWE: the "falls back to hardcoded rates" claim is IN NO REGISTER EDITION** | **(P)** | see the correction block below |
+| **i** | **the day-P&L gap — (d) CANNOT DETERMINE.** Both hypotheses on the record: **H-A** cost-model asymmetry **REFUTED** (§3.1); **H-B** realised-only ledger vs a marked open position — **PC-side half CONFIRMED** (`fund_manager.py:1809-1847`), broker half open | **(S)** | **§C.1**. ⛔ **neither adopted; nothing reconciled** |
+| **j** | **AR9 scored the IN-SESSION regime only** — overnight the band is a flat ₹50, ⭐ **and overnight is the only time delivery can be held** ⇒ the acceptance does not cover the regime that matters | **(P)+(S)** | **§C.2 G18** → pointer to `campaign_practices.md` **AR9** scope correction (`b7d3a18`) |
+| **k** | **two `reconcile_once` cycles ABORTED mid-flight** on broker 502s (17:22:37, 17:50:58) | **(P)** | **§C.3**. ⛔ *"transient"* understates it — those cycles' safety checks did **not** complete. ⭐ **whether OTHER cycles completed CANNOT BE DETERMINED** — a healthy cycle logs only when it has actions |
+| **l** | 🔴 **`acted` COUNTS ROWS EXAMINED, NOT ACTIONS TAKEN** — `cnc_gtt_monitor.py:145-153` appends a label on **every** path incl. `healthy:`/`noop:`, then counts them all | **(S)** | **§B.1 row 1** (effect-verification / acted-telemetry). 🔴 **changes the reading of ALL historical census evidence.** ⭐ **Four cards asserted otherwise; this correction is the record.** Also carried in `STOP_PROCEDURE` §(g) so a future census reader hits it |
+| **m** | **`get_gtts` is UNINSTRUMENTED — 0 call sites logged** ⇒ observed-trigger vs swept-row is **(d)**, and ⛔ **the census was never going to settle it** | **(S)** | **§B.1 row 1**. ⭐ what WOULD settle it: instrument `get_gtts`, or log `bg_status` in `_handle_row`. ⛔ **neither proposed** |
+| **n** | **item 4 changed shape** — *"Part A"* does not exist; two real inventories do, and they overlap ⇒ **item 4 begins with a RECONCILIATION, not an annotation** | **(P)** | **§B item 4** — ✅ **already filed** (`0d444f4`), marked **`RECOMMENDED — NOT RULED`** |
+| **o** | **122 blank-product rows** — all `FAILED`/`REJECTED`, never filled ⇒ **LATENT, not live** | **(P)** | **§C.3**. ⭐ **the discriminator that would make it LIVE: a blank-product row that ever reaches a FILLED state.** Until then it is a data-completeness gap, not a capital risk |
+| **p** | **the 18:45 `system_manager` independently predicted Thursday's auto-clear**, in its own words, and scoped the `resume.sh` prohibition correctly | **(P)** | **§C.5**. ⭐ a second, independent source for the Branch-A prediction ⚠️ **its sentence assumes a boot happens** — which is exactly what A6(a) removes |
+
+### 🔴 h2 — THE CORRECTION, STATED PLAINLY BECAUSE IT IS MINE
+
+**`HANDOFF §3.2` records: *"the older pending register's 'falls back to hardcoded rates' claim is
+REFUTED."*** ⛔ **THAT ATTRIBUTION IS WRONG. No register edition ever made that claim.**
+**Width, stated:** `grep -iE "fallback|hardcod|hard-cod"` across **all three editions**
+(`01-Aug` · `30-Jul` · `28-Jul`) → **13 hits, not one about cost rates** — NULL-product FLATTEN,
+the manual-GTT formula, MIS→CNC, the `?token=` fallback, BK-8 config drift, paper positions.
+⭐ **The underlying FACT stands and is unaffected** — `config_loader.py:1852` says outright that no
+hardcoded fallback exists, and a test enforces it (`test_fix131_broker_costs.py`). **What was wrong
+was the attribution, not the finding.**
+⛔ **So there is nothing in the register to correct — and saying "corrected 1 record" would have
+been the same defect in the other direction.** ⭐ **Third instance today of attributing a claim to a
+record without reading the record** *(the M8 shape — see `campaign_practices.md` M8 and the M1
+sub-taxonomy)*.
+
+### 📎 PRACTICES WRITTEN TODAY — ⛔ POINTERS ONLY, TEXT LIVES IN `docs/campaign_practices.md`
+**M7** (a digest without its method) · **M8** (read the record before measuring) · **M9** (evidence
+classes P/S/I) · **M10** (the ownership test) · **V5** (a check with no failing input) · **AR9**
+(+ its 05-Aug scope correction) · **the M1 sub-taxonomy** (six mechanisms, two groups) · **the first
+*positive* G1 instance**. ⛔ **Do not copy their text here.**
 
 ---
 
@@ -1103,6 +1195,17 @@ note (§4.3) · the reconciliation-redesign **D-8** step map (S2 §3.3).
 | **F3 — the close-rehearsal gate could not prove what it claimed** | ✅ **RESOLVED IN-LINE 30-Jul**: `main()` returns at `if not args.confirm` **before** `_build_live_adapter()` where `load_all()` lives ⇒ a **direct `load_all()` run** was added ⇒ `CONFIG_LOAD_OK`. ⛔ **Do not reuse the rehearsal alone as evidence about config.** Recorded as case #6 in memory `feedback_verify_rc_not_output` | S2 §3.4 |
 | **F6 — the process finding** (a scheduling fact asserted from memory nearly moved an irreversible step) | ✅ **CONTROL ADOPTED, and nothing had to be reverted — the false claim never reached an artifact.** ⛔ **THE CONTROL: any holiday / trading-day / weekday claim affecting SCHEDULING must be verified against the file TEXT — quote the line, or do not make the claim.** ⭐ Root cause = **a COMMENT in a data file read as DATA**, not a data defect. ✅ `nse_holidays_2026.yaml` reconciles to circular NSE/CMTR/71775 **exactly: 15/15 + 4/4** | S2 §3.8, S4 §7.9 |
 
+### 🔄 ARRIVED FROM §A, 05-Aug-2026 EVENING — **A MOVE, NOT A CLOSURE**
+
+| item | why it is discharged | accounting |
+|---|---|---|
+| **A1 — the Mon 3-Aug observation window** | ✅ **It ran, and the flip proceeded on it.** The window's purpose was to observe a full session before flipping; the flip happened Wed 5-Aug (R2, Option Y) and **entry + exit are now `VERIFIED LIVE`**. There is no residual work. **(P)** — see the 05-Aug consolidation §(c)/(d) | **§A → §D.** `from A`: §A **5 → 4**, §D **22 → 23**. ⛔ **N is UNCHANGED by this move — a move creates nothing.** *(The count moved to 232 for a different reason: A6.)* |
+
+> ⛔ **A2 (the flip) DID NOT MOVE, and the reason is recorded so nobody moves it later on a glance:**
+> its entry and exit are verified live, but **`<T+1 CARRY UNVERIFIED>`** — the carry has never
+> survived a settlement cycle. ⭐ **Discharging the easy half of an item is how a register loses the
+> hard half.** ⛔ **A5 did not move either** — the deploy slot is still open and still unpushed.
+
 ## §D.2 — ✅🟪 DECIDED 30-JUL — KEPT FOR RECORD
 
 **R7 — GEMINI WATCHMAN · ✅ CLOSED (decision final).** *Rama, 30-Jul: "Continue using it.
@@ -1309,27 +1412,58 @@ enumerates them** (S1 §9's 55).
           (P3-06a · P4-01a/b/n · P4-05a/b · P5-10b · P6-07a/b ·
            P9-03e) = 95 top-level IDs.
 
-  C  ARISING 31-Jul evening -> 01-Aug (this period)                =   4
+  C  ARISING 31-Jul evening -> 01-Aug, + 05-Aug evening           =   5   <- was 4
         the 21-commit unpushed docs deploy-slot ledger  (-> §A5)
         the XE.3 debt-ledger RUNNING ORDER              (-> §B)
         the campaign verdict + its "no fix authorised" gate (-> §D.5)
         this file's supersession of S1/S2               (-> §D.6)
+        A6 the delivery-carry lifecycle break (05-Aug)  (-> §A6)   <- NEW
 
-                                                   N = A + B + C  = 231
+                                                   N = A + B + C  = 232
 ```
 
 ### THE DISTRIBUTION ACROSS §A–~~§D~~ **§E** *(⭐ AMENDED 05-Aug 00:15 — §E added; **N unchanged**)*
 
 ```
   BAND                                          from A   from B   from C   TOTAL
-  §A  LIVE-TRADING THREAD                            5        0        1       6
+  §A  LIVE-TRADING THREAD                            4        0        2       6
   §B  THE AUDIT FIX CAMPAIGN                         0       95        1      96
-  §C  PRE-AUDIT ITEMS STILL OPEN                   104        0        0     104   <- was 105
-  §D  SETTLED / DECIDED / KEPT FOR RECORD           22        0        2      24
-  §E  GOVERNANCE (new band, 6112791)                 1        0        0       1   <- G17, MOVED
+  §C  PRE-AUDIT ITEMS STILL OPEN                   104        0        0     104
+  §D  SETTLED / DECIDED / KEPT FOR RECORD           23        0        2      25   <- A1 ARRIVES
+  §E  GOVERNANCE (new band, 6112791)                 1        0        0       1
                                                  -----    -----    -----   -----
-                                                   132       95        4     231  ✅
+                                                   132       95        5     232  ✅
 ```
+
+### 🔴 **AMENDED 05-Aug-2026 EVENING — N MOVES 231 → 232. ONE NEW ROW, AND IT IS SAID OUT LOUD.**
+
+⛔ **"231 stands" was repeated correctly all day — every finding was a sub-entry. Tonight produced
+one thing that is not.** ⭐ **A register that cannot grow is not a register**, so the count was
+decided by test rather than by habit.
+
+**THE TEST APPLIED TO EACH CANDIDATE:** *does it have a root cause no existing row owns, and would
+fixing it be separate work?* **Sixteen findings were scored. Fifteen failed the test and are
+sub-entries. One passed:**
+
+> ### 🆕 **A6 — THE DELIVERY CARRY BREAKS THE DAILY PROCESS LIFECYCLE.** *(source C, band §A)*
+> Root cause owned by no existing row: **the system assumes ONE PROCESS PER TRADING DAY, FLAT AT
+> EOD.** A carried delivery position falsifies that premise, and three guards that silently depended
+> on it fail together. ⛔ **Not a facet of A2 (the flip worked), not of A3 (the carry pilot is not
+> started), not of debt-ledger #1 (that is telemetry coverage, not lifecycle).**
+
+**THE TWO CHANGES, AND BOTH AXES BALANCE:**
+1. **+1 NEW ROW** — A6, source **C** ⇒ `from C` **4 → 5**, `§A from C` **1 → 2**, **N 231 → 232**.
+2. **A1 MOVES §A → §D** (the Mon 3-Aug observation window is discharged — it ran, and the flip
+   proceeded on it) ⇒ `§A from A` **5 → 4**, `§D from A` **22 → 23**. ⭐ **A move changes no total**,
+   which is why §A still reads 6 while its composition changed.
+
+**COLUMN CHECK, both axes:** `from A` = 4+0+104+23+1 = **132** ✅ · `from B` = **95** ✅ ·
+`from C` = 2+1+0+2+0 = **5** ✅ · rows = 6+96+104+25+1 = **232** ✅ · N = 132+95+5 = **232** ✅
+⛔ **Nothing was closed, re-graded or dropped to make this reconcile.**
+
+⚠️ **A2 IS DELIBERATELY NOT MOVED.** The flip's entry AND exit are now verified live, but
+**`<T+1 CARRY UNVERIFIED>`** — it is not discharged and moving it would bank a green that was never
+measured. ⭐ **Discharging the easy half of an item is how a register loses the hard half.**
 
 ⭐ **THE ONLY CHANGE IS A MOVE, AND IT BALANCES ON BOTH AXES:** `G17` left **§C** and arrived
 in **§E**; **`from A` still totals 132** and **N is still 231.** ⛔ **Nothing was added, closed,
@@ -1348,11 +1482,19 @@ were), the sizing prediction and the `:596/:609` mislabel on **§C.1 G8 / §C.2 
 §1**, and the composite-verdict lesson on **§A2**. ⇒ **§C stays 104 · §E stays 1 · `from A`
 stays 132 · N = 231.** ⛔ **231 STANDS.**
 
+> ⏰ **SUPERSEDED THE SAME DAY, 05-Aug EVENING — and the paragraph above is left standing because
+> it was TRUE WHEN WRITTEN.** It records the POST-BOOT morning check, and at that point 231 was
+> correct. **The evening produced A6, a root cause no row owned, and N moved to 232.**
+> ⭐ **The two are not in conflict: the morning check found no new item because there was none yet.**
+> ⛔ **Do not read the morning's "231 STANDS" as the current count — see the amendment above.**
+
 ### THE PER-BAND TALLY, ITEM BY ITEM
 
-**§A = 6** — A0 the open decision · A1 Mon observation *(A1(z) is a read-rule of A1, not a
-separate item)* · A2 the 4-Aug flip · A3 the carry pilot · A4 the buy-day filter · A5 the
-unpushed deploy slot. ⭐ **A4 is debt-ledger #2 and is counted HERE ONLY.**
+**§A = 6** *(⭐ AMENDED 05-Aug evening — composition changed, total unchanged)* — A0 the open
+decision · ~~A1 Mon observation~~ **→ §D, discharged 05-Aug** · A2 the 4-Aug flip *(⛔ NOT
+discharged — `<T+1 CARRY UNVERIFIED>`)* · A3 the carry pilot · A4 the buy-day filter · A5 the
+unpushed deploy slot · 🆕 **A6 the delivery-carry lifecycle break (new 05-Aug)**.
+⭐ **A4 is debt-ledger #2 and is counted HERE ONLY.**
 
 **§B = 96** — the XE.3 running order (1, src C) + **all 95 findings**: **22 ranked into
 the ledger's 12 rows**, **73 below the line and cited by phase in §B.2**. ⛔ **The 12
@@ -1383,8 +1525,8 @@ supersession mark (1, src C) = **4+3+1+3+11+1+1 = 24**.
 
 - ⭐ **B = 95 is EXACT and independently re-measurable** — the derivation (105 unique
   strings − 10 named sub-IDs) is given above so anyone can falsify it in one grep.
-- ⭐ **C = 4 is EXACT** — all four are enumerated by name.
-- ⭐ **§A, §B's ledger, §C's group totals, §D and §E are EXACT** — every one of the 231 is
+- ⭐ **C = 5 is EXACT** *(was 4; A6 added 05-Aug evening)* — all five are enumerated by name.
+- ⭐ **§A, §B's ledger, §C's group totals, §D and §E are EXACT** — every one of the 232 is
   named or points at a source that names it. **§C's 55 sub-items are the one group carried
   by pointer, and S1 §9 enumerates all 55 by ID.**
 - ⚠️ **A = 132 is TAKEN FROM S2, NOT RE-DERIVED.** S2 states its M=131 is exact and
@@ -1450,8 +1592,10 @@ supersession mark (1, src C) = **4+3+1+3+11+1+1 = 24**.
      commit SHAs) → the **`docs/audit/` build record**, **cross-linked from here**.
    **This file stays the INDEX; `docs/audit/` records stay the EVIDENCE.**
    ⛔ **CALIBRATION GUARD — the rule must not defeat the discipline it serves: it does NOT
-   license new register rows.** The reconciled count (**231**) stands; record within
-   existing rows, sub-entries and cross-references, exactly as #2b/#2c/#2c-R/#8/#8b did.
+   license new register rows.** The reconciled count (**232** since 05-Aug evening; **231** when
+   this guard was written) stands; record within existing rows, sub-entries and cross-references,
+   exactly as #2b/#2c/#2c-R/#8/#8b did. ⭐ **The guard forbids rows created for EMPHASIS — it has
+   never forbidden a row with a root cause no existing row owns, which is the A6 test.**
    Byte budgets still apply. ⛔ **If the rule and the count ever conflict, REPORT it — do
    not resolve it silently.**
    **Why:** rules this campaign earned were living only in chat transcripts and one-time
@@ -1496,5 +1640,7 @@ unpushed audit commits (§A5).~~
 it rides is the **new** one: `main` is **ahead 5** of `origin/main` (`0197923`), and the four
 04-Aug-night commits + this pass sit in it. **§A5 holds the per-commit D1 test and the
 corrected first-execution dates.**
-⛔ **The 05-Aug currency pass changed STATUS, SHAs, PLACEMENT and one refuted timing premise.
-It created NO register row, closed nothing, and re-derived no finding — N = 231 stands.**
+⛔ **The 05-Aug MORNING currency pass changed STATUS, SHAs, PLACEMENT and one refuted timing
+premise. It created NO register row, closed nothing, and re-derived no finding — N = 231 stands.**
+⏰ **The 05-Aug EVENING pass DID create one (A6) and discharged one (A1 → §D): N = 232.** ⭐ Both
+sentences are true of their own pass; the count in this line is the morning's.
