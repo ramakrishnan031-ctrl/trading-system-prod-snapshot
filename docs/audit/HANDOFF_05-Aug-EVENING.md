@@ -198,10 +198,10 @@ do not conflict:**
 > because it was not predicted and it is the load-bearing fact under every other result on this
 > page.**
 
-⚠️ **A FOURTH CANDIDATE EXISTS THAT THE CARD DOES NOT LIST: `qty_by_flat`** (`trades` has
-`qty_by_risk`, `qty_by_capital`, `qty_by_concentration`, **`qty_by_flat`**). It is **NULL on both**
-trades, so it changes nothing tonight — ⛔ but the card's §3 compares three of four, and a scoring
-method that cannot see a candidate would be silently wrong the day it is populated.
+⚠️ **A FOURTH `qty_by_*` COLUMN EXISTS THAT THE CARD DOES NOT LIST: `qty_by_flat`.** It is **NULL on
+both** trades. ⛔ **See §1 below — this was chased to the source, the verdict SURVIVES, and my
+framing of it here was WRONG.** *(Corrected in place rather than deleted: the wrong framing is the
+useful half.)*
 
 ```
 STAGE 1b (§C.2 sizing)   RESULT = PASS -- prediction DISPROVED, bucket (c)
@@ -408,3 +408,65 @@ NOT place a sell. The shares stay in the account either way.**
 ⛔ **never quote a number from prose; it has rotted four times today alone.**
 ⭐ **And read `docs/SYSTEM_MAP.md` first, before any measurement** — that is **M8**, written today,
 after the campaign twice re-derived facts the map already held.
+
+---
+
+## 🔴 §1. `qty_by_flat` — CHASED TO THE SOURCE 16:30. **THE VERDICT SURVIVES.**
+
+### 1.1 — the measurement, unambiguous
+
+```
+symbol      filled  by_risk  by_capital  by_concentration  by_flat  typeof(by_flat)  tier_mode  tier_w  perf_w
+ATULAUTO    1       8        5           1                 (empty)  null             ON         0.5     1.0
+ASKAUTOLTD  1       8        4           1                 (empty)  null             ON         0.5     1.0
+```
+**`typeof()` = `null` on both.** ⛔ Not zero, not empty string — **SQL NULL.**
+
+### 1.2 — 🟢 THE VERDICT IS UNCHANGED: **DISPROVED STILL STANDS.**
+
+⛔ **And not because "flat happened to be null" — that would be luck. It is STRUCTURAL:**
+
+**`capital/position_sizer.py:428`** *(HEAD)*:
+```python
+raw_qty = min(qty_by_risk, qty_by_capital, qty_by_concentration)
+```
+⭐⭐ **`qty_by_flat` IS NOT A MEMBER OF THAT `min()`. The population is exactly three, by
+construction.** `qty_by_flat` is computed **only** in the `else` branch (`:536-548`, mode
+`OFF_FLAT`) and is explicitly set to `None` in the `ON` branch (`:495`, `:535`). `core/schema.sql:221`
+states it outright: `qty_by_flat INTEGER, -- candidate qty from flat_value_rs (NULL when ON)`.
+**Measured `tier_multiplier_mode = ON` on both trades** ⇒ **NULL by construction.**
+
+⭐ **The two modes are MUTUALLY EXCLUSIVE and cannot both be live:**
+| | `ON` (today) | `OFF_FLAT` |
+|---|---|---|
+| `qty_by_flat` | `None` | computed |
+| where it acts | — | `tiered_qty = min(raw_qty, qty_by_flat)` **after** the min(), `:541` |
+| tier × perf | applied | ⛔ not applied |
+| **the floor at 1** | ✅ **applied (FIX-133, `:530`)** | ⛔ **none** — `:539`: *"NO floor-at-1: a flat below 1 lot → BELOW_MIN skip"* |
+
+⇒ **Concentration was strictly the minimum of the COMPLETE `raw_qty` population.** Verdict:
+**(c) ASSUMPTION DISPROVED**, now computed over a population verified against source.
+
+### ⚠️ 1.4 — AND THE CORRECTION I OWE: **THE CARD WAS RIGHT AND MY FLAG WAS WRONG**
+
+I wrote that the card *"compares three of four, and a scoring method that cannot see a candidate
+would be silently wrong the day it is populated."* ⛔ **That framing is incorrect.** The four columns
+are **not four peers**. The card's three-candidate list is the **correct and complete** population
+for `raw_qty`. And the day `qty_by_flat` *is* populated, `:542-543` overwrites `constraint` to
+`"FLAT"`, so the label follows too.
+⭐ **So the card's §3 list is not an incomplete population — it is the right one, and it does not
+say why.** *(That last part is the only residual weakness, and it is documentation, not method.)*
+
+### 1.3 — the search width, stated
+
+**Four sources, agreeing:** ① `PRAGMA table_info(trades)` — all **59** columns enumerated, the
+`qty_by_*` family is **exactly 4**; ② `core/schema.sql:218-221` declares exactly those 4;
+③ a repo-wide grep for `qty_by` (tests excluded) surfaces **no fifth name**; ④ `position_sizer.py`
+read end-to-end across the sizing block (`:415-559`) — the only other quantity gates are
+`max_single_order_qty` (`:386`, a **REJECT guard**, not a candidate), the lot-size rounding (`:554`)
+and the lot-skew check (`:558`). ⛔ **Neither the card's list nor this card's list was taken as the
+population — the schema and the `min()` call were.**
+
+```
+§1 qty_by_flat / verdict integrity   RESULT = PASS -- DISPROVED stands, population verified
+```
