@@ -370,6 +370,15 @@ measurement. **M6 governs whether the measurement was of the thing you named at 
 ⭐ And it composes with §V's *"a green check is evidence only if it could have been red"* —
 M6 is that rule turned on a **zero** instead of on a **pass**.
 
+> ### ⭐ COROLLARY (05-Aug-2026) — ⛔ **a corollary, NOT a new rule: PRINT THE ZERO.**
+> **A printed zero is a MEASUREMENT. An absent one is SILENCE — and afterwards the two are
+> indistinguishable.**
+> ⚠️ **05-Aug supplied the sharpened version: a zero that was never printed at all is not the only
+> failure — a zero READ OFF A TRUNCATED LIST is worse, because it looks printed.** Twice in one
+> session a `grep` result cut by a display limit (`files_with_matches` capped at 15; an
+> `[Omitted long matching line]`) was one step from being recorded as a measured absence.
+> ⇒ **print the zero, and say what was searched — see §M1 width and `feedback_absence_needs_wide_check`.**
+
 (Records: `docs/audit/flip_push_plan_04aug2026.md` §1 ·
 `docs/audit/reservation_nonatomicity_latent_or_live_04aug2026.md` §a.)
 
@@ -612,6 +621,14 @@ algebra, not of the account.**
 survived, but on a completely different basis: the **structural** measurement that the two operands
 are different quantities (`snapshot.total` vs `margins.net`, one net of blocked margin and one not).
 **The answer was right; the offered proof was empty.**
+
+> ### ⭐ COROLLARY (05-Aug-2026) — ⛔ **a corollary, NOT a new rule: THE SAME TEST APPLIES TO RULES.**
+> **A RULE WITH NO FAILING INPUT IS GUIDANCE IN STRICTER PROSE.** ⇒ **Either name the check that
+> ENFORCES an invariant, or record it as `UNENFORCED — human discipline only`.**
+> ⛔ **Both are acceptable. Pretending is not.**
+> ⭐ **Why it belongs under V5 rather than beside it:** V5 is about a *check* that cannot go red;
+> this is about a *rule* that cannot be violated detectably. **Same failure — confidence with no
+> possible counter-evidence — one level up.**
 
 ### ⭐⭐ WHY THIS FAMILY IS DANGEROUS RATHER THAN MERELY USELESS
 **A tautological check is not neutral — it MANUFACTURES CONFIDENCE.** It presents as *"the arithmetic
