@@ -1041,6 +1041,20 @@ and had never run.
 > propose a tolerance, and the one-session evidence bar is UNCHANGED.**
 > ✅ **What DID close: the delta decomposes exactly** — `632.01 = 587.40 deployed + 44.61 unsettled
 > realised`, both sides to the paisa across two independent subsystems. **No money is missing.**
+>
+> #### ✅⭐ **VERIFICATION UPGRADED 05-Aug 23:2x — ⛔ NOT a new instance; the SAME breach, held to a higher standard.**
+> The decomposition above was previously **arithmetic that closed**. It is now **operands measured
+> independently**: opening `9,883.70` **(P)** `fm_ledger` INIT 08:15:15 · realised `44.61` **(P)** by
+> **two** paths (7 `RELEASE_USED` rows **and** the same 7 trades' `net_pnl`) · CNC purchase `587.40`
+> **(P)** `qty_filled × entry_actual_price`. **(S)** `order_reconciler.py:3590-3592` —
+> `expected = snapshot.total`, `actual = margins.net` ⇒ **the mechanism is confirmed at source, not
+> inferred from the numbers.** **(P)** the band: `tolerance=50.00 (base=50.00)`, **delta = 12.64× it**;
+> **(S)** `:3626-3631` applies the pct widening **during market hours only**.
+> ⛔⛔ **AND THE VACUITY TRAP IS EXPLICITLY EXCLUDED — which matters, because `V5` deleted a claim of
+> this exact shape earlier the same day.** Written as `(opening−actual)+(expected−opening)` the
+> identity is vacuous; **neither term here was obtained by subtraction from the alert.** ⭐ **It could
+> have gone red: a trade value of 590, or a realised P&L of 40, and the sum is not 632.01.**
+> ⛔ **Nothing about the acceptance changes: still ONE session, still no tolerance proposed.**
 
 - **Accepted by:** the bridge, 05-Aug-2026, on the measurement above. **Rama has not been asked to
   ratify a tolerance and must not be, on this evidence base.**
