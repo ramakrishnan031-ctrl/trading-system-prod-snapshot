@@ -178,6 +178,150 @@ classes P/S/I) · **M10** (the ownership test) · **V5** (a check with no failin
 
 ---
 
+## 🆕 A7 — **`strategy_direction_registry.yaml`: A TRACKED CONFIG FILE THAT PRODUCTION WRITES DAILY** *(N 232 → 233 — ONE new row; the three items below it are sub-entries, not rows)*
+
+**The deployed-tree divergence flagged as a possible pre-push blocker is REAL, EXPLAINED, and its
+mechanism is a bigger finding than the divergence.** ⛔ **It is NOT a stale checkout.**
+
+**(a) IT IS WRITTEN AT RUNTIME — ANSWERED YES.**
+**(S)** `save_registry` (`core/strategy_direction.py:81-88`, atomic tmp+rename) — **sole non-test
+caller** `scripts/strategy_registry_officer.py:254`, driven by the cron job
+`strategy_registry_officer` **16:22 Mon-Fri** (`config/cron_registry.yaml`, `market_day_only: true`).
+**Width, stated:** `git grep "save_registry|DEFAULT_REGISTRY_PATH|load_registry"` repo-wide → 3
+production sites, exactly **one** writes; plus `git grep "yaml\.(safe_)?dump" -- '*.py'` → no other
+writer touches this path.
+**(P) THE MTIME SETTLES IT: `2026-08-05 16:22:01` IST — today, to the second of the cron slot.**
+⇒ ⛔ **"the deploy did not overwrite it" is REFUTED; something on the VM writes it, on schedule.**
+
+**(b) TRACKED, NOT IGNORED — ⇒ the defect is the COMBINATION, and a push does revert it.**
+**(P)** `git ls-files` → `config/strategy_direction_registry.yaml` is **tracked**;
+`git check-ignore` → **rc=1, not ignored**; `.gitattributes` has no rule for it.
+**(P)** the live hook (`~/trading-system.git/hooks/post-receive`) runs
+`git --work-tree=… --git-dir=… checkout -f main` ⇒ **the next push DOES overwrite the live copy.**
+⭐ **And this was FORESEEN AND DOCUMENTED ON THE DAY IT SHIPPED** —
+`docs/audit/strategy_direction_registry_done_17jul2026.md:125-127` calls it the *"Deploy-reset
+note … the officer re-derives status/health from the DB on its next run (self-healing) — a benign,
+documented behaviour."* ⛔ **So this is not an unknown; it is a known design accepted in 17-Jul.**
+
+**(c) WHAT THE TWO VERSIONS DISAGREE ABOUT — ⛔ reported, NOT judged. Three classes, nothing else:**
+| class | direction | what it is |
+|---|---|---|
+| **24-line comment banner** | in **git**, absent on the **VM** | the purpose/mandate/3-concept header. `yaml.safe_dump` round-trips **data only** ⇒ the first officer write destroyed it, permanently, by construction |
+| **`registration_status: PENDING → CONFIRMED`** | on the **VM**, not in git | **13 of 16** strategies. This is the officer's actual work product, derived from FILLED trades. The 3 still PENDING never traded |
+| **`"2026-07-17"` → `'2026-07-17'`** | VM | pure `safe_dump` quote normalisation, all 16 — semantically identical |
+⭐ **`direction` is IDENTICAL on all 16 and `health: OK` everywhere — ZERO `DIRECTION_CONFLICT`.**
+⇒ **the divergence is 100% registration-status + formatting; the authoritative field never moved.**
+**(P)** numbers reproduce exactly: **29 insertions / 54 deletions**; and **the committed file is
+byte-identical at `0197923` and at HEAD** (md5 `f87787ff…` both) ⇒ **none of the unpushed commits
+touch this file.**
+
+**(d) 🔴 THE PUSH QUESTION — ANSWERED, and it is NOT the blocker it looked like.**
+**(S) Nothing reads this file except its own writer.** Width: `load_registry` production callers →
+**1** (`strategy_registry_officer.py:224`); `registered_direction` → **ZERO callers anywhere**,
+tests included; `registration_status` / `DIRECTION_CONFLICT` appear in **no** trading-path module.
+`build_direction_map` has one live consumer (`orders/eod_squareoff.py:695`) and it reads
+`config/strategies/*.yaml`, **never this registry**.
+⇒ ✅ **A push is SAFE with respect to this file's runtime effect.** What it destroys is derived
+state that self-heals silently at the next officer run (`_notify` early-returns unless a strategy is
+**new** or **conflicted** — `strategy_registry_officer.py:173`; a re-confirmation is silent).
+⚠️ **With one stated consequence: the officer is `market_day_only` at 16:22, so a push tonight
+leaves the live file all-PENDING until THU 16:22.** Inert, because nothing reads it — but say it.
+
+**(e) ⭐⭐ THE FINDING THAT IS LARGER THAN THE DIVERGENCE — 🔴 RAMA'S RULING, AND IT IS NOT
+"WHICH VERSION SURVIVES".** Neither survives: **the file oscillates by design** — deploy restores
+the banner and all-PENDING, the next officer run destroys the banner and restores CONFIRMED. The
+real question is the one the 17-Jul note settled without stating: **should a file that production
+rewrites daily be version-controlled at all?** ⭐ **Same shape as the `mempalace.yaml` /
+ledger-not-in-git facet (debt-ledger #12) — a document whose authority and whose writer disagree.**
+⛔ **NOT decided here. NOT fixed. NO change proposed to the file, the officer, or `.gitignore`.**
+
+**(f) §1.5 ADJACENCY — CHECKED, AND IT IS EMPTY. ⛔ THREAD NOT OPENED.**
+Today's live H5 gate `SYMBOL_DIRECTION_DAILY_LIMIT` lives in `signals/signal_processor.py`, which
+has **zero** occurrences of `strategy_direction`, `load_registry`, `registration_status`, or
+`strategy_direction_registry` *(width: those 4 patterns across both files that mention the H5 code)*.
+⇒ **The adjacency is NAME-ONLY ("direction" in both), not a code coupling.** Recorded, not followed.
+
+## 🆕 A7-i — **THE 08:30 AUTOFIX: THE PREMISE WAS WRONG, AND THE TRUE HAZARD IS ITS MIRROR IMAGE** *(sub-entry)*
+
+⛔ **"Pre-flight will retry the failed boot up to three times" is REFUTED.** It will attempt **zero**.
+**(S)** `scripts/preflight/checks/__init__.py:48` — `ServiceActiveCheck("trading-system.service",
+auto_fixable=False)`, commented *"ALERT-ONLY (token-watcher owns lifecycle; never auto-start)"*;
+`checks/services.py:5-8` states the same design; `SUPPORT_SERVICES` (`services.py:85-92`) is **six
+daemons** and `trading-system` is not among them. The `systemctl_start_service` auto-fix is genuinely
+armed and whitelisted (`autofix.py:35`) — **it just does not cover the app.**
+**(P)** `RestartPreventExitStatus=3 4` confirmed on the **live** unit ⇒ systemd will not loop either.
+⭐⭐ **THE REAL HAZARD, AND IT LANDS ON BRANCH B:** Phase B's probe is `systemctl is-active`
+(`services.py:31-39`), which **cannot separate a fresh boot from Wednesday's surviving process** ⇒
+under the predicted no-boot, **pre-flight reports `svc_trading_system` PASS at 09:14 on exactly the
+failure mode being predicted.** ⇒ **the same unchecked-precondition defect as A7-ii, arriving from a
+more authoritative-looking direction.** **Folded into `THURSDAY_CONTINGENCY_06-Aug-2026.md`.**
+⚠️ **Also found, LATENT, ⛔ not fixed:** `autofix.py` whitelists **8** fix actions but only **5** are
+declared by any check — **`kill_switch_prior_day_clear`, `wal_checkpoint_passive`,
+`cancel_stale_orphan_order` have ZERO implementers** *(width: `git grep` each across all tracked
+files)*. ⇒ the whitelist **pre-authorises a kill-switch mutation that nothing performs.** Inert
+today; same family as the allowlist pre-authorisation item.
+
+## 🆕 A7-ii — **THE 18:45 `system_manager` "HEADLESS GUARANTEE": AN INSTANCE OF §B#9 / `F4`, NOT A NEW ROW** *(sub-entry)*
+
+**(P)** it printed, unprompted: *"prior-day at the next open, so the 2026-08-06 08:15 boot
+auto-clears it (HEADLESS GUARANTEE). No action needed; ⛔ do NOT run deploy/resume.sh for this."*
+⭐ **As corroboration it is excellent** — a (P) artifact agreeing with the (S) reading, from a process
+that did not know it was being watched.
+🔴 **AND IT IS THE FAMILY'S SHAPE EXACTLY: THE PREDICATE IT TESTS IS NOT THE PREDICATE IT NEEDS.**
+**(S)** `scripts/system_manager.py:724` guards the sentence on **`trig_date < nxt`** — a pure **DATE**
+comparison. **THE MISSING PREDICATE IS THE EXISTENCE OF THE BOOT ITSELF:** the message names *"the
+2026-08-06 08:15 boot"* as a fact, and **nothing in the guard establishes that a boot will occur.**
+On the one night it might not, it still says *"No action needed"* — ⛔ **an operator who read only
+that would have gone to bed.**
+⭐⭐ **WHAT MAKES THIS THE SHARPEST INSTANCE YET: THE CODE IS MORE CAREFUL THAN AVERAGE, NOT LESS.**
+Its own comment (`:703-706`) argues explicitly for the date axis over the reason axis, and its two
+`else` branches defend against an **unreadable** `triggered_at` (*"if we cannot establish the date we
+must NOT claim it is safe"*) and a **future-dated** row. ⇒ **all three branches reason carefully
+about one axis and all three assume a boot happens.** **The defensive care was spent entirely on the
+axis that was considered.**
+⛔ **NO FIX PROPOSED — deliberately.** **(M5)** the honest form would have to carry the precondition
+**in the same sentence as the conclusion** rather than leave it to the reader.
+📌 **Filed as an instance of §B#9 (IA-P9-01/-02, alert fatigue / false-safety claims) and of §C.6
+`F4`. ⛔ Not a new rule; not a new row.**
+
+## 🆕 A7-iii — **ChatGPT's Q3, ANSWERED: YES for a KILL, NO for the HALT SCENARIO** *(sub-entry)*
+
+**Q3:** *"Could `clear_stale_state` succeed while another initialisation stage recreates HALT before
+trading starts?"* **Width:** `git grep` for every `.soft_kill(`/`.hard_kill(`/`.record_api_failure(`
+call in production `.py` (**40 sites**), each mapped to its enclosing `def` by AST, then filtered to
+those invoked between `main.py:1914` and the first trading action. **All cites at `0197923`.**
+- ✅ **The six `main.py` kill sites are all inside deferred CALLBACKS** (`_on_critical_skew`,
+  `_on_critical_failure`, `_on_force_close`, `_on_api_failure`, `_on_daily_loss_breach`, `_on_orphan`)
+  — registered at boot, fired only by their runtime conditions.
+- 🔴 **TWO real boot-path stages CAN set a kill, both AFTER the clear and BEFORE trading:**
+  **(1)** `main.py:2442` `rehydrate_from_open_trades()` → `capital/fund_manager.py:1761` invariant →
+  `:1769` → `:2351` **`hard_kill`** + raises ⇒ **main returns 3** — **single sample**;
+  **(2)** `main.py:3403` `reconcile_once()` → `orders/order_reconciler.py:976`
+  `_check9_missing_exits` → `:2830` **`soft_kill("MISSING_EXITS…")`** — **single sample**.
+  Both precede `main.py:3497` `signal_processor.start()`, guarded by the boot-order assert `:3491`.
+- ✅ **The third is NOT reachable on the boot cycle:** `_finalise_auth_counter` (`:720`) needs **3
+  consecutive** cycles; the counter starts at 0.
+⭐ **THE SOURCE SAYS SO AT THE CALL SITE** (`main.py:1911-1913`): *"if the trigger was legitimate,
+startup reconciliation will re-trigger it within seconds"* — **now traced to a real mechanism rather
+than taken on the comment's word.**
+✅ **BUT THE HALT *SCENARIO* CANNOT BE RE-CREATED:** it is decided **once** at `main.py:1922` and
+consumed at `:1938-1944`; `scenario` is never recomputed ⇒ a post-gate kill **does not** produce
+exit 4. ⭐ **This weakens Branch A rather than strengthening it** — "active with a Thursday
+timestamp" does **not** establish the kill is clear — and Branch A now carries a confirming command.
+**§4.2 — the boot capital seed: (S) CONFIRMED it cannot itself trigger anything.**
+`fund_manager.initialize()` (`capital/fund_manager.py:417-457`) is a pure **INIT** —
+`balance_before=0.0`, set buckets, **no comparison, no threshold, no drift publish, no kill**;
+`check_paper_capital_consistency` is a **no-op in live mode** (`utils/startup_checks.py:982`).
+⚠️ **But the stage immediately after it is stage (1) above, and THURSDAY IS ITS FIRST RUN WALKING AN
+OPEN CNC DELIVERY TRADE.** **(I)** the guard needs a **negative** bucket (`fund_manager.py:2297`) and
+the positional bucket is a fixed **30%** (`conditional_allocation_enabled: false`, verified on the
+VM) ⇒ ~₹2,789 of a ~₹9,296 seed vs a ~₹587 block ≈ **4.7× headroom** ⇒ **not expected to fire.**
+⛔⛔ **THAT IS AN ESTIMATE FROM WEDNESDAY'S FIGURES, NOT A MEASUREMENT OF THURSDAY — recorded as
+`CANNOT DETERMINE`, ⛔ NOT as a NO.** ⭐ **And it exposed a gap: an exit-3 boot failure falls into
+Branch D, which said "nobody predicted this". It is now named there.**
+
+---
+
 # §A — LIVE-TRADING THREAD (hard dates, highest priority)
 
 ## ⭐⭐ A-DEC — **RAMA'S RULINGS R1–R5 — RATIFIED 02-Aug-2026 ~16:32 IST. AUTHORITATIVE OVER EVERY DATED REFERENCE BELOW.**
