@@ -626,3 +626,66 @@ wrong, and today is the first day it could be scored at all. ⇒ 🟢 **It was s
 §3.2 broker_costs.yaml / fallback       RESULT = PASS -- loaded, and NO fallback exists
 §3.3 the 4.36 gap                       RESULT = NOT DETERMINABLE (contract note; bucket (d))
 ```
+
+---
+
+## ⭐⭐ §4. WHAT FIX-133 TURNED OUT TO BE — MEASURED 16:52. **THE DAY'S BIGGEST FINDING.**
+
+### 4.1 — FIX-133's floor is **LOAD-BEARING FOR DELIVERY**, not a rounding nicety
+
+`capital/position_sizer.py:527-530`:
+```python
+tiered_qty = int(math.floor(raw_qty * effective_mult))
+# FIX-133 Item 21: cap at 2x base_qty, floor at 1 — for a POSITIVE multiplier only
+tiered_qty = max(1, min(tiered_qty, raw_qty * 2))
+```
+**Measured today:** `raw_qty = 1` · `tier_weight_applied = 0.5` · `perf_weight_applied = 1.0`
+⇒ `effective_mult = 0.5` ⇒ `floor(1 × 0.5) = 0` ⇒ **`max(1, 0) = 1`.** ✅ **The floor did the work.**
+
+> ### 🔴 WITHOUT THAT ONE `max(1, …)`: `tiered_qty = 0` → `final_qty = 0` (`:554`) → **`BELOW_MIN`
+> skip.** ⇒ **zero delivery orders, zero GTTs, zero evidence — and the entire flip day would have
+> produced nothing.**
+
+⚠️ **AND ITS FAILURE MODE IS SILENCE.** A later reader trimming it as "an unnecessary rounding
+guard" **stops delivery trading outright**, and it presents as *"no signals qualified today"* —
+⛔ **indistinguishable from a normal quiet day.** 🏷️ **Register it as exactly that class: a removal
+whose failure mode is silence.** *(Sub-entry on an existing row. ⛔ 231 stands.)*
+
+### 4.2 — 🔴🔴 THE CONSEQUENCE FOR ITEM 5 — **AND IT IS STRONGER THAN THE CARD SUPPOSED**
+
+The card expected concentration **and the tier multiplier** to be the axes that matter first.
+⛔ **Measured, the tier multiplier is inert too.**
+
+**At `raw_qty = 1`, every legal multiplier yields qty 1:**
+`floor(1 × m) = 0` for **any** `m < 1`, and the floor lifts it to **1**; `m = 1.0` gives 1 directly.
+Production bounds `effective_mult ∈ [0.25, 1.0]` (`:486-489`: `performance_allocator` clamps
+`min_weight = 0.5`, unknown strategies default to 1.0). ⇒ **no value in that range changes the
+outcome.**
+
+**And moving `raw_qty` barely helps** — at the measured tier weight 0.5:
+```
+raw_qty  1 -> floor(0.5) = 0 -> floored to 1
+raw_qty  2 -> floor(1.0) = 1
+raw_qty  3 -> floor(1.5) = 1
+raw_qty  4 -> floor(2.0) = 2     <- the FIRST raw_qty that changes the ordered quantity
+```
+⇒ **`raw_qty` must reach 4 before a single extra share is ordered.**
+⭐⭐ **But `raw_qty = min(risk 8, capital 5, concentration 1)` — so the moment concentration is
+relaxed far enough to reach 4, CAPITAL binds at 4–5 and becomes the new ceiling.**
+
+> ### ⇒ **AT TODAY'S CAPITAL THE DELIVERY QUANTITY IS PINNED AT 1 BY ARITHMETIC, NOT BY
+> CONFIGURATION.**
+> `delivery_risk_per_trade_pct` and `delivery_max_position_value_pct` **cannot** become binding —
+> risk is at 8, capital at 4–5, and neither is anywhere near the floor. ⛔ **And concentration, the
+> one axis that can move at all, runs into capital almost immediately.**
+> ⭐ **This REORDERS ITEM 5: the config surface is largely INERT at ~₹9.9k total capital against
+> ~₹580 share prices. The lever is CAPITAL or price selection — not a config value.**
+
+⛔ **RECORDED, NOT ACTED ON. ⛔ NO VALUE IS PROPOSED FOR ANY DELIVERY CONFIG KEY**, and this finding
+is expressly **not** an argument for changing one — it is the measured reason most of them would do
+nothing today.
+
+```
+§4.1 FIX-133 load-bearing + silent-failure class   RESULT = PASS
+§4.2 delivery sizing pinned by arithmetic          RESULT = PASS -- item 5 reordered
+```
