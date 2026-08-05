@@ -847,3 +847,79 @@ config surfaces produce TWO INERT CONFIG SURFACES** — because what is inert is
 ```
 §7 sizing shape + intraday twin + two-inert-surfaces   RESULT = PASS (recorded, not acted on)
 ```
+
+---
+
+## 🔴🔴 §8. A CORRECTION TO §2 AND TO §0e — AND IT PRODUCES A DATED PREDICTION
+
+### 8.1 — ⛔ **MY "IN-REPO SWEEP = 0" WAS WRONG. THERE IS ONE, AND IT IS THE REGISTER.**
+
+`docs/MASTER_PENDING_01-Aug-2026.md:763` (row 7, H5) says:
+> *"a delivery position held for N days **BLOCKS EVERY INTRADAY ENTRY ON THAT SYMBOL FOR ALL N DAYS —
+> invisibly, because it rejects as `DUPLICATE_SYMBOL`**, which looks entirely normal in the record."*
+> …⭐ *"**CHECKABLE TONIGHT:** was any intraday signal on a held CNC symbol rejected AFTER the CNC
+> fill? If yes, H5 has its **FIRST PRODUCTION INSTANCE** — record it."*
+
+⇒ **The register DOES name `DUPLICATE_SYMBOL` as tonight's expected code, and I reported zero records
+to correct.**
+
+⚠️ **HOW I MISSED IT, because the mechanism matters more than the miss:** my sweep grep returned
+`docs\MASTER_PENDING_01-Aug-2026.md:763:` **`[Omitted long matching line]`** — and **I read an omitted
+line as a non-match.** ⛔ It was a *match whose text was too long to display.*
+🔴🔴 **THIS IS THE SECOND TIME TODAY A TRUNCATED GREP RESULT PRODUCED A FALSE CONCLUSION** — the
+first was the 15-file limit that nearly had me deny MTM exists in `fund_manager.py` (§6). ⭐ **Once
+is an error; twice in one session on the same shape is the M9 near-miss clause earning itself
+immediately: a truncated or omitted result is not evidence of anything, and must be re-run, not
+read.**
+
+### 8.2 — ⭐⭐ BUT THE REGISTER IS **MOSTLY RIGHT**, AND THE CORRECTION IS NARROW
+
+| the register's claim | verdict |
+|---|---|
+| the mechanism: `has_active_position` filters **symbol + status only, no product, no date** | ✅ **CORRECT (S)** — `state_store.py:839-853`, verified verbatim today |
+| consumed at `risk_engine.py:690` as `DUPLICATE_SYMBOL` | ✅ **CORRECT (S)** |
+| a delivery hold blocks intraday on that symbol **for all N days** | ✅ **CORRECT** |
+| ⛔ **the code you will see is `DUPLICATE_SYMBOL`** | 🔴 **WRONG FOR THE FILL DAY** — and right from day 2 |
+
+**Why:** a **second, earlier, also product-blind** gate shadows it.
+`signal_processor.py:693` `SYMBOL_DIRECTION_DAILY_LIMIT` rejects **before** `risk_engine` is reached
+⇒ **(P)** today: **6 × `SYMBOL_DIRECTION_DAILY_LIMIT`, 0 × `DUPLICATE_SYMBOL`.**
+
+### 8.3 — 🔴 AND SO §0e's "H5 CONFIRMED" WAS TOO WIDE. THE PRECISE STATEMENT:
+
+- **(P) CONFIRMED:** a **product-blind** gate blocked intraday signals on a symbol a CNC fill had
+  claimed. Real, observed, six times. ⭐ **The coupling class is confirmed.**
+- 🔴 **(S) NOT H5's MECHANISM:** `has_active_position` was **never reached today** — the pipeline
+  rejected upstream. ⇒ ⛔ **H5 itself has NOT had its first production instance. It is still LATENT.**
+
+### ⭐⭐⭐ 8.4 — THE DATED, FALSIFIABLE PREDICTION FOR **THURSDAY 06-Aug**
+
+**(S)** the two gates have **different reset semantics**, both verified today:
+| gate | scope | resets? |
+|---|---|---|
+| `SYMBOL_DIRECTION_DAILY_LIMIT` | `count_executed_trades_today_for_symbol_direction` — `SUBSTR(created_at,1,10)` = **today** (`state_store.py:707-725`) | ✅ **resets at midnight** |
+| `DUPLICATE_SYMBOL` | `has_active_position` — `status IN ('PENDING_FILL','OPEN','PARTIAL')`, **no date** (`:839-853`) | ⛔ **does NOT reset while the position is OPEN** |
+
+**(I)** ⇒ ATULAUTO's `created_at` is **05-Aug**, so on **06-Aug** the daily counter returns **0** and
+that gate goes quiet — while the trade is still `OPEN`, so `has_active_position` still returns True.
+
+> ## 🔴 **PREDICTION: IF ATULAUTO IS STILL HELD ON THURSDAY AND ANY INTRADAY SIGNAL ARRIVES ON IT,
+> THE REJECTION CODE WILL SWITCH FROM `SYMBOL_DIRECTION_DAILY_LIMIT` TO `DUPLICATE_SYMBOL`.**
+> ⭐ **That would be H5's genuine first production instance — the one the register has been waiting
+> for.** ⛔ **And if no intraday signal arrives on ATULAUTO, the result is `NOT DETERMINABLE`, not a
+> refutation** — the same can-confirm-never-refute shape the register already flagged.
+
+⚠️ **THE RISK THE REGISTER CREATED, stated plainly:** an operator checking tonight for
+`DUPLICATE_SYMBOL` gets **zero**, records *"no H5 instance"* — ⛔ **and a real product-blind block
+that DID happen goes unrecorded.** ⭐ **That is the exact inversion this campaign exists to catch,
+and the register itself was the source of the wrong search string.**
+
+⛔ **The register line is NOT edited here** — this is a measurement record; amending row 7 is a
+register action and belongs in §9's sub-entry.
+
+```
+§8.1 my "sweep = 0" claim              RESULT = FAIL -- corrected above
+§8.2 the register's H5 mechanism       RESULT = PASS -- correct (S); only the code name is wrong for day 1
+§8.3 H5's own first production instance RESULT = NOT RUN -- still LATENT, not confirmed
+§8.4 the Thursday prediction           RESULT = NOT RUN -- scoreable 06-Aug
+```
