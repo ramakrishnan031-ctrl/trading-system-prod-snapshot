@@ -2,7 +2,51 @@
 
 > **Written BEFORE it was needed (P3), and kept current as work proceeded.** The PC powers down
 > ~16:30–17:00; this is what survives that.
-> ⏰ **Last updated: 16:07 IST — 🔴 THE CHECK1 GATE IS MEASURED AND IT PASSES. See §0 below.**
+> ⏰ **Last updated: 16:25 IST — ✅ ALL OF STAGE 1 IS MEASURED AND EVERY PART PASSES.**
+
+---
+
+## ▶️ THE STATE, IN ONE BLOCK — read this first if you are picking up cold
+
+```
+STAGE 1a  §A  the CHECK1 gate .............. RESULT = PASS      (measured 16:03-16:06)
+STAGE 1b  §B  was the trigger observed ..... RESULT = PASS      (measured 16:10)
+              why gtt_state says CLEANED ... RESULT = NOT DETERMINABLE -> Stage 2 answers it
+STAGE 1b  §C.1 H5 coupling ................. RESULT = PASS      (CONFIRMED, measured 16:21)
+STAGE 1b  §C.2 sizing prediction ........... RESULT = PASS      (prediction DISPROVED, 16:11)
+          §0d fm_ledger capital path ....... RESULT = PASS      (reconciles exactly, 16:14)
+          §0d the 4.36 day-P&L gap ......... RESULT = NOT DETERMINABLE (needs Kite)
+          §2c is any CNC trade EXITING ..... RESULT = PASS      (NO -- see below)
+STAGE 2   the 17:35 census ................. RESULT = NOT RUN   (⛔ not before 17:40)
+STAGE 3   the push decision ................ RESULT = NOT RUN   (⛔ not before 18:15)
+CHECK (1) broker GTT on the Kite web page .. RESULT = NOT RUN   (⛔ OPERATOR ONLY)
+```
+
+### ⭐ §2c IS ALREADY ANSWERED — BY STEP 0, WITH NO EXTRA COMMAND
+STEP 0's unfiltered count lists **every** CNC status held today: `CANCELLED 2 · CLOSED 1 ·
+FAILED 5 · OPEN 1`. ⇒ **NO CNC TRADE IS IN `EXITING`.** ⇒ 🟢 **the second, unguarded CHECK1 path
+(`_check_stuck_exiting`) CANNOT reach a delivery trade today.** An unknown became a known, and
+tomorrow's design discussion is simpler for it. ⛔ *Reachability only — it says nothing about
+whether that path has ever fired, which remains CANNOT DETERMINE.*
+
+### 🔴 THE NEXT EXACT STEP
+**Wait for 17:40, then run the census — operator card §1a.** Capture **both** files **before**
+filtering. ⭐ **It now carries a sharpened question:** does `cnc_gtt_monitor` read `acted > 0`?
+**That is what separates "the monitor observed the trigger" from "a cleanup swept the row."**
+
+### ⛔ WHAT IS OUTSTANDING
+1. **CHECK (1)** — the Kite GTT page. ⛔ **Only Rama can do this.** *(The gate does not depend on
+   it: (2) and (3) both passed, so (1) is corroboration.)*
+2. **Kite's positions total** vs the measured **₹587.40**, and **Kite's day P&L** vs the ledger's
+   **44.61**.
+3. **Stage 2** — the census, 17:40+.
+4. **Stage 3** — the push decision, 18:15+.
+
+### ✅ AND THE HEADLINE, WITH ITS CEILING HELD
+**The gate is CLEAN. No decision is owed tonight. §2b is not reached. Thursday's 08:15 boot may
+run.** ⛔ **The Stage-3 implementation gate is NOT met — there is no confirmed defect**, so the push
+is optional and routine, and **no implementation is authorised.**
+🏷️ **`<DELIVERY ROUND TRIP VERIFIED LIVE 05-Aug; T+1 CARRY UNVERIFIED>`.** ⛔ Write nothing wider.
 
 ---
 
