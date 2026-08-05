@@ -169,7 +169,10 @@ Why it struck me as odd (even if I think it is nothing):
 ⚠️ **Two things already known to be in flight tonight, so they are NOT surprises:**
 - the **capital-drift CRITICAL every ~30 min** — expected, explained, `632.01 = 587.40 + 44.61`;
 - the **deployed-tree violation** in `config/strategy_direction_registry.yaml` — pre-existing, also
-  present on 04-Aug against a different SHA. ⛔ **Neither is in the shutdown path.**
+  present on 04-Aug against a different SHA. ✅ **NOW EXPLAINED (05-Aug, 21:5x): the file is
+  WRITTEN AT RUNTIME by the `strategy_registry_officer` cron at 16:22 Mon-Fri — its live mtime is
+  `2026-08-05 16:22:01`, the cron slot to the second. Documented behaviour since 17-Jul; nothing
+  outside the officer reads the file.** ⛔ **Neither is in the shutdown path.**
 
 ---
 
