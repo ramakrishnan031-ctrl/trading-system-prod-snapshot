@@ -186,10 +186,17 @@ grep "get_positions call_end" logs/system_2026-08-06.log | tail -1'
   refutation either.
 
 ### 5️⃣ The boot-seed reading
-➡️ **`ADDENDUM_capital_drift_05-Aug-2026.md` §4b.** ⛔ **Its commands are NOT restated here** — run
-them from the addendum so there is one copy.
+➡️ **`ADDENDUM_capital_drift_05-Aug-2026.md` §4b — and now also §4c.** ⛔ **Their commands are NOT
+restated here** — run them from the addendum so there is one copy.
 ⭐ **Carry its honest bound with it: an inexact match is SETTLEMENT, not a finding.** The prediction
 was `tomorrow ≈ today − CNC block ± settled P&L`, and "≈" is doing real work.
+🔴 **§4c SHARPENED IT AT SOURCE the night before, so it is scoreable as a ratio, not a vibe:**
+**(S)** the seed is `broker.net` minus a carryover term that is **zero at 08:15** ⇒ **seed =
+`broker.net`.** ⇒ predicted **Thu/Wed seed ratio ≈ 0.940** (a **≈5.94 %** shrinkage = the carried
+position's own share of the base), with **both buckets shrinking by the same fraction** (fixed 70/30).
+⭐⭐ **The claim to score: the system starts today believing it holds ~₹587 LESS than it controls —
+because that value is in stock, not cash — and NOTHING flags it**, since `initialize()` performs no
+comparison. ⛔ **Record the two seeds and the ratio. Do not reconcile, and do not act.**
 
 ### 6️⃣ Read Wednesday's census — *an artifact recovered, not a question answered*
 Captured by the stop procedure (§e). ⭐ **It is the artifact the whole Wednesday-evening decision was
