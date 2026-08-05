@@ -372,6 +372,75 @@ becomes its own AR entry with a reopen condition and a SHA-pinned source.
 
 ---
 
+### 🏷️ SUB-ENTRY ON ITEM **4** — THE 05-Aug DESIGN THREAD, FILED SO IT STOPS BEING RE-DERIVED
+### ⛔⛔ **`RECOMMENDED — NOT RULED`. RAMA HAS NOT CHOSEN THE AUTHORITY.** ⛔ No new register row; **231 stands.**
+
+> ⭐ **Why this block exists:** *"we've revisited several of these ideas multiple times."* **An idea
+> that has to be re-derived is an idea the project does not actually own.** A four-round design
+> thread produced these conclusions and they existed **only in chat**, which is not a record.
+> ⚠️ **AND ITEM 4's OWN PREMISE IS ALREADY KNOWN FALSE:** step 1 measured that **"Part A" does not
+> exist** and that **TWO control inventories do** (record:
+> `docs/audit/item4_partA_inventory_survey_05aug2026.md`). ⇒ **item 4 BEGINS WITH A RECONCILIATION,
+> not an annotation** — item 4's wording at `:368` above is superseded by that measurement (§G4:
+> struck-through in effect, kept legible because the instruction is the historical record).
+
+**RECOMMENDED AUTHORITY — inventory #2 (`G2a_capacity_inventory.md`), as SHAPE AND KEY,
+⛔ NOT NECESSARILY LOCATION.** Four criteria, each a reason and not a preference:
+1. it has a **live consumer** (`capacity.py`) ⇒ **it cannot rot unnoticed**;
+2. it is keyed on the **dotted key**, not a prose name;
+3. its **SCOPE axis is already populated**;
+4. **#1 is a section inside a dated 05-Jul audit report** ⇒ extending it would **edit dated history**.
+
+⚠️ **CAVEAT, NOT A BLOCKER:** `ops_dashboard/` is a **subsystem home for a system-wide authority** —
+the same shape as the `CT_SCRATCH_DIR`-inside-`data_store/` finding.
+⛔⛔ **AUTHORITY, LOCATION AND MIGRATION PLAN ARE THREE SEPARATE RULINGS AND ARE NEVER BUNDLED** — ⭐
+**if a bundle fails you cannot tell which part failed.**
+
+**SEQUENCE (each step gates the next):**
+`authority` → **STATUS validation (+ ownership)** → **row identity** *(step 2.5 —
+`locked_decisions.yaml`'s 181 `LOCKED` may already supply one)* → `reconciliation` → **freeze #1
+with a pointer** → **then item 5.**
+
+**THE ROW CONTRACT — the parts that are structural rather than stylistic:**
+- **THREE IDENTITY FIELDS, NEVER ONE:** **Row ID** (immutable) · **dotted key** (current
+  implementation reference) · **display name** (presentation only).
+  ⛔ **Nothing joins on the display name; nothing infers identity from the dotted key.**
+- **ALIASES ARE FOR RENAMES ONLY** — append-only, each with **date + SHA**.
+  🔴 **A change of SCOPE, DENOMINATOR, BASIS or BEHAVIOUR is a NEW ROW**, the old one `RETIRED` and
+  pointing at it. ⭐ *Otherwise a 40%-of-**total** silently becomes 40%-of-**bucket** and nobody can
+  find the moment it changed.*
+- **RETIRED ROWS ARE NEVER DELETED** — `status=RETIRED` + date + SHA. ⭐ *"This control existed,
+  enforced X, was removed on D"* **is evidence**, and historical citations still resolve — to a row
+  that says RETIRED.
+- **PROVENANCE PER IMPORTED ROW:** source inventory · import SHA · migration date ·
+  **`verified_at_sha` + `verified_on` + verifier (`human` / `tool:<name>`)**.
+  ⛔ **NOT A BOOLEAN** — ⭐ **a date says when someone looked; only a SHA says what they looked at.**
+  ⚠️ *(The card's supporting figure — "we are 33 commits ahead of deployed" — **has already rotted**.
+  ⛔ Never quote an ahead-count from prose; re-measure: `git rev-list --count origin/main..main`.)*
+- **CONFLICT TAXONOMY:** `documentation error` · `implementation drift` · `intentional divergence` ·
+  `insufficient evidence`.
+  ⛔ **NEVER DRIVE CONFLICTS TO ZERO** — where the two inventories disagree, **one has been wrong in
+  production for months, and WHICH is a MEASUREMENT.**
+  🔴 **`intentional divergence` must name WHO decided, WHEN, and WHERE it is recorded — otherwise it
+  is `insufficient evidence` wearing a better coat.**
+  ⭐ *(It is the four finding-buckets specialised to a migration — ⛔ **not a new scheme.**)*
+- **THE RECONCILIATION SUMMARY MUST BALANCE ARITHMETICALLY**, with the **expected equation printed
+  in the document beside its result.** ⛔ **Print both sides AND the difference even when it is
+  zero** *(M6's corollary: a printed zero is a measurement, an absent one is silence).*
+
+⭐ **THE ARGUMENT FOR DOING ITEM 4 AT ALL, IN ONE LINE — and it is now evidenced, not asserted:**
+inventory #1's **row 24 already carried the G3 drift control AND its non-escalating source.** What it
+lacked was **SCOPE and DENOMINATOR** — ⭐⭐ **the two axes that would have shown the 10% band is an
+*intraday-leverage* calibration.** ⇒ **THE MISSING AXES WOULD HAVE PREDICTED THIS MORNING'S CAPITAL-
+DRIFT `CRITICAL` BEFORE IT FIRED.**
+
+⚠️ **OPEN AND UNCHECKED — carried forward, ⛔ not answered here:** do `[LAUNCH-PHASE]` /
+`[PERMANENT]` and `locked_decisions.yaml` already constitute the **STATUS** axis — and ⭐ **is either
+tag ever READ BY CODE, or are they comments?** *(This is the **ownership test** applied to the
+inventory's own STATUS column — see `campaign_practices.md` §M10.)*
+
+---
+
 ## ~~⚠️⚠️ A0 — THE ONE OPEN DECISION OWED TO RAMA~~ → ✅ **CLOSED 02-Aug-2026 BY R1: THE GATE IS 3-PART.**
 
 > ✅ **ANSWERED — the THREE-part reading wins** (Rama's earlier lean, ratified): a
