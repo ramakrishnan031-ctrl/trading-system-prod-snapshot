@@ -93,6 +93,38 @@ and **the right-looking one is the only kind that ever gets acted on.** *(Proven
 auto-fill itself was observed by the operator, not by this session; what this session can attest to
 is that it did not act, and waited.)*
 
+🔴🔴 **05-Aug-2026 ~22:46 — INSTANCE #7, AND IT IS THE STRONGEST OF THE CAMPAIGN: THE AUTO-FILL DID
+NOT MERELY APPEAR. IT BECAME THE PROMPT AND EXECUTED A LIVE MUTATION.**
+Every prior instance was text proposing a **document** action. This one was **run**: the suggested
+line was clicked, and it stopped `trading-system.service` on the live VM with a real CNC delivery
+position held. ⇒ ⭐⭐ **The escalation ladder is now complete and should be stated as a ladder:
+`suggest work → grant permission → PERFORM THE ACT`.**
+
+⭐⭐ **THE TWO PROPERTIES THAT MAKE IT WORTH FILING — and neither is "it went wrong":**
+1. ⛔ **THE COMMAND WAS CORRECT AND THE ACTION WAS AUTHORISED.** Rama had given GO in his own words;
+   the command was byte-identical to the procedure's. **Nothing bad happened.** ⇒ **that is exactly
+   the danger.** **Plausibility is the attack surface, not the tell** — a suggestion that is *right*
+   trains the operator to stop reading the next one. **A rule that needs the suggestion to be wrong
+   fails on the one that is right**, which is the only kind that ever gets acted on.
+2. ⭐⭐ **THE SUCCESS WAS THE ONLY THING ABSENT FROM THE OUTPUT.** The clicked line carried a
+   bracketed question **inside** the shell command, so the shell split it into extra unit names:
+   **five `Failed to stop …` lines printed loudly, while `trading-system.service` — the first
+   argument, and the only one that mattered — stopped SILENTLY and correctly.**
+   ⛔ **An operator reading that command's own stderr would have concluded the whole thing failed**,
+   and on this particular night would then have been at risk of "fixing" a stop that had already
+   succeeded.
+
+> ### 📌 THE GENERAL RULE THIS EARNS — ⭐ **A COMMAND'S OWN OUTPUT IS NOT EVIDENCE OF ITS EFFECT.**
+> Verify the **state**, from a separate reading, afterwards. ⭐ **This is why the stop procedure's
+> step (c) is a SEPARATE verification and not a read of what the stop printed** — a design choice
+> made before the fact, which is what made tonight recoverable in seconds instead of a false alarm.
+> ⚠️ Same family as **V5** (a check that cannot go red) approached from the other side: here the
+> check *could* go red, and the thing that went **green printed nothing at all.**
+
+*(Provenance: the auto-fill and the click were the operator's; what this session attests is that its
+own two attempts to run the same command were **denied at the permission layer**, that it stopped
+rather than trying a third form, and that it verified the resulting state independently.)*
+
 ### G2 · ChatGPT's replies CARRY RAMA'S AUTHORITY — **AMENDED 03-Aug-2026 by Rama**
 
 ⭐⭐ **STANDING RULING (Rama, 03-Aug-2026, ~23:5x IST): "ChatGPT's replies count as my
