@@ -78,12 +78,37 @@ Not "available on the row" — **CHECK1 itself reads it.**
 product = trade["product"]
 intent  = _PRODUCT_TO_INTENT.get(product or "", "")
 ```
-`trades.product` is `TEXT NOT NULL -- MIS/CNC/CO` (`core/schema.sql:326`), and
-`get_all_open_trades()` names `product` among its returned columns in its own docstring
-(`core/state_store.py`). `get_stuck_exiting_trades()` states *"Same JOIN/columns as
-get_all_open_trades"* ⇒ **the second call path's rows carry `product` too.**
-⇒ **The data question is closed. Any future remedy consults `core.constants.PRODUCT_TO_INTENT`
-and the existing `trades.product` column, and needs no new source of truth.**
+⛔⛔ **CORRECTED 05-Aug ~13:0x — MY OWN CITATION ABOVE WAS WRONG ON THE TABLE, AND THE CORRECTION
+MATTERS BECAUSE IT BROKE THREE OPERATOR COMMANDS.** The first version of this section said
+*"`trades.product` is `TEXT NOT NULL` (`core/schema.sql:326`)"*. **`:326` is the right LINE and the
+WRONG TABLE — it is inside `CREATE TABLE orders`, declared at `:313`.**
+⭐ **MEASURED: `product` does NOT exist on `trades` at all** — `awk 'NR>=117 && NR<=255 && /product/'`
+over the `trades` CREATE TABLE (declared `:117`) returns **ZERO hits**, and no migration adds it
+(width: `grep -rn "ALTER TABLE trades" --include=*.py --include=*.sql`, `venv` excluded → **3 hits,
+all in `tests/`, all `DROP COLUMN`**).
+**HOW THE CODE ACTUALLY GETS IT — `core/state_store.py`, `get_all_open_trades()`:**
+```sql
+SELECT t.trade_id, … , t.reservation_id,
+       o.product,                       -- <-- from ORDERS, not TRADES
+       o.order_id AS entry_broker_order_id
+FROM trades t
+LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = 'ENTRY'
+WHERE t.status IN ('OPEN', 'PARTIAL')
+```
+`get_stuck_exiting_trades()` states *"Same JOIN/columns as get_all_open_trades"* ⇒ **the second call
+path's rows carry `product` the same way.**
+⇒ ⭐ **THE CONCLUSION IS UNCHANGED AND THE MECHANISM IS NOT: `product` IS in hand at
+`_check1_manual_close:1271` — but it arrives by a `LEFT JOIN` on `orders.leg='ENTRY'`, not as a
+column of `trades`.** Any future remedy consults `core.constants.PRODUCT_TO_INTENT` and **that
+join**, and needs no new source of truth.
+🔴 **AND THE CONSEQUENCE THE JOIN CARRIES, WHICH A COLUMN WOULD NOT: IT IS A *LEFT* JOIN.** A trade
+whose `ENTRY` order row is missing yields **`product IS NULL`** ⇒ **invisible to any
+`WHERE product='CNC'` filter, and `_PRODUCT_TO_INTENT.get(product or "", "")` at `:1272` maps it to
+the empty intent.** ⇒ **a second, independent route to a false "no delivery trades" — one that no
+status filter can catch.**
+**CLASSIFICATION: (c) ASSUMPTION DISPROVED** *(my own, from this document's first version)* — and the
+`NULL`-product route is **(a) CONFIRMED DEFECT — latent**, disclosed here, ⛔ not fixed, ⛔ not a new
+row.
 
 ---
 
