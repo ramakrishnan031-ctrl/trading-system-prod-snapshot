@@ -25,18 +25,41 @@
 | 9 | §2c and §4 asked whole-day / "has it ever" questions against a **two-hour** capture window | Both now read the **full-day log**, and "ever" is stated as bounded by **30-day** log retention (`config/cron_registry.yaml:9,:19`) |
 | 10 | ⛔ The hazard branch offered *"harden the skip, or close the position"* — **at 18:00 the market is shut and a capital-path code change is not doable.** Two impossible options | **Three real options with their costs**, plus the mitigation that actually exists (§2b), and the plain statement that **CHECK1 does not sell anything** |
 
+## 🔄 REVISION 3 — 05-Aug ~13:1x IST. **The order was backwards, two more greps could not answer their own questions, and one option had no command.**
+
+| # | what was wrong | now |
+|---|---|---|
+| 11 | 🔴🔴 **THE ORDER WAS BACKWARDS.** The card said *"do §1 first"* — but **§1's census is not written until ~17:35** and the operator is back at **17:00** ⇒ he would have run it too early, got an empty result, and hit exactly the frightening ambiguity the last two revisions existed to remove | **Every section now carries a CLOCK**, and the order is **§0 → §2 → §1 → §2b/2c → §3 → §4.** ⭐ **§2 is stable from 15:30 and §1 is impossible before 17:40** — so §1 is **scheduled, not deprioritised** |
+| 12 | 🔴 §2c's *"has that path ever fired?"* grep **could not answer its own question** — `-l` lists filenames, and `stuck_exiting` also matches the config key `stuck_exiting_timeout_minutes` and ordinary startup lines | **DELETED.** Measured: that path emits `check_name="MANUAL_CLOSE"` — **identical to CHECK1's own disposition** — and logs only on *failure*. **Nothing distinguishes it in the log.** ⭐ A check that cannot go red is not a check |
+| 13 | 🔴 §4's grep hid its own failure with `2>/dev/null`, and its prose (a `gtt_state` read failure) named something different from its pattern (generic DB errors) | **`2>/dev/null` removed** — an error you can see beats a silence you cannot interpret. Log filenames verified against `core/logger.py:400-416`. Pattern and prose now match |
+| 14 | 🔴🔴 Option (i) explained **why** not-booting works but **never said what to type** — an option the operator cannot execute | **The exact command, its verification, and its undo are now in the same block**, gated behind three conditions, with the one residual hole named as **UNVERIFIED** |
+| 15 | Option (i)'s costs were incomplete | **Two real costs added** (a permanently lost forward-shadow day; an unobserved GTT trigger) — **and one cost that is NOT real is stated so it is not assumed** |
+| 16 | ⛔ The `scp` destination was inside `data_store/` — **a guarded directory, and "scratch inside `data_store/`" is already a registered finding (F2)** | Destination moved **outside the repo tree** |
+
 *(History is here, on purpose. Nothing below is struck through — a struck-out command is a command you might still run.)*
 
 ---
 
 **Tonight is the first evening this system has ever ended with real delivery positions held
-overnight.** Two things below **cannot be re-created if missed** — §1 and §2.
+overnight.**
 
-**Order matters. Do §1 first, then §2. §3 and §4 can wait until after dinner.**
+## ⏰ THE ORDER, AND THE CLOCK ON EACH PART
+
+> **§0 — any time** · **§2 — from 16:00 (do this first)** · **§1 — ⛔ NOT BEFORE 17:40** ·
+> **§2b — only if §2 lands on the hazard branch** · **§2c · §3 · §4 — after dinner**
+
+⭐ **WHY §2 GOES FIRST EVEN THOUGH §1 IS THE URGENT ONE:** **nothing in §2 can change after 15:30.**
+The market is shut, no fill can happen, no GTT can trigger, and the `gtt_state` table cannot gain a
+row. **§2 is fully answerable the moment you sit down.**
+
+⛔ **AND §1 IS STILL THE ONE THING THAT CANNOT BE RECOVERED — it also cannot be captured before
+17:40, because the service does not write it until it shuts down at ~17:35. So it is SCHEDULED, not
+deprioritised.** Running it at 17:00 would return nothing, and "nothing" would look exactly like a
+lost census.
 
 ---
 
-## §0 — PRE-FLIGHT: THE ONE CHECK THAT COMES BEFORE EVERY OTHER READ
+## §0 — ⏰ ANY TIME · PRE-FLIGHT: THE ONE CHECK THAT COMES BEFORE EVERY OTHER READ
 
 ```bash
 ssh trading-vm 'cat /home/ubuntu/systems/trading-system/data_store/session/zerodha_token.json'
@@ -57,7 +80,7 @@ silence there means success. **The FILE is the gate.**
 
 ---
 
-## §1 — ⛔ MOST URGENT: THE ~17:35 SHUTDOWN CENSUS
+## §1 — ⏰ ⛔ NOT BEFORE 17:40 · THE ~17:35 SHUTDOWN CENSUS (irrecoverable, so SCHEDULED — not deprioritised)
 
 **This is written to the log ONCE, when the service shuts down around 17:35. If the service is
 restarted or disturbed, IT IS GONE AND CANNOT BE RE-CREATED.**
@@ -86,9 +109,12 @@ ssh trading-vm 'journalctl -u trading-system.service --since "2026-08-05 16:00" 
 **Copy both to your PC** *(run in Git Bash on the PC, not on the VM — the destination is named so
 you can find them tomorrow)*:
 ```bash
-mkdir -p /d/Projects/trading-system/data_store/evening_2026-08-05
-scp trading-vm:~/census_system_2026-08-05.log trading-vm:~/census_journal_2026-08-05.txt /d/Projects/trading-system/data_store/evening_2026-08-05/
+mkdir -p ~/Documents/trading-evidence/2026-08-05
+scp trading-vm:~/census_system_2026-08-05.log trading-vm:~/census_journal_2026-08-05.txt ~/Documents/trading-evidence/2026-08-05/
 ```
+⛔ **Deliberately OUTSIDE the project folder.** `data_store/` inside the repo is a **guarded
+directory** — writing scratch there is already a registered defect in this system (`F2`), and
+repeating it here would re-commit it. **`~/Documents/trading-evidence/2026-08-05/` on your PC.**
 
 ⭐ **Why capture before searching at all:** if a search term below is wrong, you can just search the
 file again. If you searched the live log and got nothing, you could not tell whether the census was
@@ -139,7 +165,9 @@ they begin `MISMATCH(i)`, `MISMATCH(ii)` or `MISMATCH(iv)`.
 
 ---
 
-## §2 — 🔴🔴 THE CHECK1 GATE — **THREE CHECKS, AND ONE COUNT THAT COMES BEFORE THEM**
+## §2 — ⏰ FROM 16:00, STABLE · 🔴🔴 THE CHECK1 GATE — **THREE CHECKS, AND ONE COUNT THAT COMES BEFORE THEM**
+
+⭐ **Do this section FIRST.** Nothing in it can change after 15:30 — the market is shut, no fill can happen, no GTT can trigger, and `gtt_state` cannot gain a row.
 
 ### Why this matters, in one paragraph
 Two CNC (delivery) positions are held. **Tomorrow they leave the broker's "positions" list and move
@@ -308,7 +336,7 @@ that carve-out actually mattered.
 
 ---
 
-## §2b — 🔴 IF YOU LANDED ON THE HAZARD BRANCH: THE THREE REAL OPTIONS
+## §2b — ⏰ ONLY IF §2 HIT THE HAZARD BRANCH · 🔴 THE THREE REAL OPTIONS
 
 > ## ⭐ **FIRST, THE THING THAT DECIDES HOW CALMLY YOU CHOOSE: YOUR SHARES ARE NOT AT RISK OF BEING SOLD.**
 > CHECK1 **cancels orders and releases capital in the accounting. It does not place a sell order.**
@@ -323,14 +351,64 @@ position" is impossible — the market is shut.*
 **(i) DO NOT LET THURSDAY BOOT.**
 **How it works** — verified from source: nothing in cron starts the trading service. The 08:15 cron
 writes only the token file, and `deploy/token_watcher.sh` starts the service **only** when
-`token_is_fresh && within_service_window` (`:185-186`). `token_is_fresh()` (`:53-71`) requires the
-token file to exist, its `date` field to equal today, **and** a non-empty `access_token` — any one
-failing means the watcher never calls `start_service`. ⇒ **no fresh token ⇒ no boot ⇒ CHECK1 never
-runs ⇒ nothing is cancelled.**
+`token_is_fresh && within_service_window` (`:185-186`). ⇒ **stop the watcher and nothing calls
+`start_service` ⇒ CHECK1 never runs ⇒ nothing is cancelled.**
 ⭐ **The boot chain has been recorded as a hazard. Tonight it is also a control.**
-**Its costs, and they are real:** **no intraday trading Thursday at all** · it is a **manual
-intervention outside every normal procedure** · and it must be **deliberately undone afterwards**,
-or Friday does not start either.
+
+> ### ⛔⛔ **THE COMMAND — ONLY UNDER ALL THREE CONDITIONS. READ THE UNDO BEFORE YOU RUN THE STOP.**
+> **1.** §2 landed on the **hazard branch**, **AND**
+> **2.** **Rama has chosen option (i)** — ⛔ this card does not choose it, **AND**
+> **3.** you have read the undo below and know you must run it.
+>
+> ⏰ **It must be in place BEFORE 08:15 Thursday — but decide TONIGHT, because 08:15 is early.**
+>
+> **STOP (run this):**
+> ```bash
+> ssh trading-vm 'sudo systemctl stop token-watcher.service && systemctl is-active token-watcher.service; systemctl is-active trading-system.service'
+> ```
+> **What you should see:** `inactive` for the watcher, and `inactive` for `trading-system` (it
+> self-exited at 17:35). **If either says `active`, stop and do not assume it worked.**
+>
+> **UNDO (run this when the decision is made and you want Friday to start — or Thursday, if the
+> position is resolved during the day):**
+> ```bash
+> ssh trading-vm 'sudo systemctl start token-watcher.service && systemctl is-active token-watcher.service'
+> ```
+> **What you should see:** `active`.
+> ⚠️ **If you undo it inside 08:00–16:00 on a day with a fresh token, the service will start within
+> 30 seconds.** That is the intended behaviour — just know it is immediate.
+>
+> ⭐ **WHY THIS MECHANISM AND NOT THE OTHERS** *(the HOW is an engineering answer; the WHETHER is
+> Rama's)*: stopping the unit is **deterministic, edits no file, and undoes with one command.**
+> ⛔ **Commenting out the 08:15 cron line** edits the crontab and is easy to forget — and the crontab
+> is generated from `config/cron_registry.yaml`, so a hand edit can be silently reverted.
+> ⛔⛔ **DELETING THE TOKEN FILE IS NOT OFFERED AND MUST NOT BE USED — it races the 30-second poll**
+> (the cron could rewrite it at 08:15 and the watcher could read it before you act again).
+>
+> ⚠️ **UNVERIFIED — ONE RESIDUAL HOLE, NAMED RATHER THAN GLOSSED:** `trading-system.service` is itself
+> `WantedBy=multi-user.target`, so **if the VM reboots between 08:00 and 16:00 Thursday it could start
+> directly, bypassing the stopped watcher.** No reboot is expected, and I could not check from here
+> whether the unit is `enabled`. **What would settle it:** `ssh trading-vm 'systemctl is-enabled
+> trading-system.service'` — if it prints `enabled`, add `sudo systemctl stop trading-system.service`
+> to the stop step and remember it in the undo.
+
+**Its costs, and they are real — all five:**
+1. **No intraday trading Thursday at all.**
+2. It is a **manual intervention outside every normal procedure**, and it must be **deliberately
+   undone**, or Friday does not start either.
+3. ⛔ **A PERMANENTLY LOST FORWARD-SHADOW DAY.** `forward_shadow_record.py` is the only out-of-sample
+   evidence producer, its output **cannot be regenerated**, and it must **never** be run by hand — a
+   gap is a loss, a manufactured day is a corruption. **Small, but it is the one cost that can never
+   be recovered.**
+4. ⚠️ **AN UNOBSERVED GTT TRIGGER.** If the broker GTT fires on Thursday while the system is down, the
+   exit happens at Zerodha and **the system learns nothing about it** — Friday's boot then meets a
+   position that closed itself, which is a **reconciliation event, not a clean start.** ⛔ Stated as a
+   consequence to expect, **not** as a reason against.
+5. ⭐ **AND ONE COST THAT IS NOT REAL — said plainly so it is not assumed: there is NO unattended
+   intraday risk.** No service means no entries, so **there is nothing open to manage.** The 15:17
+   squareoff not running is irrelevant on a day with no intraday positions — and it was never the
+   CNC position's subject anyway.
+
 ⚠️ **Worth only as much as CHECK (1) says:** if the GTT exists at Zerodha, not booting **preserves**
 that protection. If no GTT exists anywhere, not booting protects nothing.
 
@@ -347,33 +425,35 @@ GTT exist at the broker (CHECK 1), (b) how many positions and what total value (
 
 ---
 
-## §2c — ⭐ TWO CHEAP QUERIES THAT SETTLE AN OPEN QUESTION
+## §2c — ⏰ AFTER DINNER · ⭐ ONE CHEAP QUERY THAT SETTLES AN OPEN QUESTION
 
 There is a second, unguarded way for CHECK1 to fire that we found this morning. **Whether it can
-reach a delivery trade at all depends on one thing: is any CNC trade in `EXITING` status?** These two
-reads settle it, and you are already at the console.
+reach a delivery trade at all turns on one thing: is any CNC trade in `EXITING` status?** This read
+settles it, and you are already at the console.
 
 ```bash
 ssh trading-vm 'cd /home/ubuntu/systems/trading-system && sqlite3 -header -column data_store/trading_system.db "SELECT t.trade_id, o.product, t.status FROM trades t LEFT JOIN orders o ON o.trade_id = t.trade_id AND o.leg = '\''ENTRY'\'' WHERE o.product = '\''CNC'\'';"'
 ```
+**What you should see:** one row per CNC trade, with its status.
 ⭐ **If no CNC trade shows `EXITING`, that second path cannot fire today** — which turns an unknown
 into a known and makes tomorrow's design decision much easier. **One line either way is enough.**
 
-```bash
-ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -ilE "stuck_exiting" logs/*.log | head -20'
-```
-⭐ **Has that path ever actually fired?** A path that has never run in production is a very different
-problem from one that runs weekly.
-**What you should see:** a list of log filenames, or nothing.
-⛔⛔ **AND THE BOUND MUST BE WRITTEN DOWN BESIDE THE ANSWER, OR A ZERO WILL BE READ AS "NEVER" WHEN
-IT ONLY MEANS "NOT IN WHAT I LOOKED AT": the logs are deleted after 30 days**
-(`find logs -name '*.log' -mtime +30 -delete`, `config/cron_registry.yaml:9`). ⇒ **the honest way to
-record an empty result is *"not in the last 30 days of logs"* — never *"never".***
-**Nothing to do — just record what you see, including nothing.**
+> ### ⛔ A SECOND QUERY WAS HERE AND HAS BEEN **DELETED**, DELIBERATELY — recorded so nobody re-adds it
+> It asked *"has that path ever actually fired?"* by grepping the logs for `stuck_exiting`.
+> **It cannot answer that question, so it was removed rather than left to mislead:**
+> when that path resolves a trade it calls the *same* function CHECK1 does and returns
+> **`check_name="MANUAL_CLOSE"` — byte-identical to CHECK1's own disposition** — and it writes its own
+> log lines **only on failure**. **Nothing in the log distinguishes the two.** The word
+> `stuck_exiting` also appears in the config key `stuck_exiting_timeout_minutes`, so a hit would have
+> proved only that the *string* exists — and a list of filenames reads to a tired operator as
+> *"it fired, a lot."*
+> ⭐ **A check that cannot go red is not a check. Deleting it is the fix.**
+> *(The question is still open and is recorded in the audit record as CANNOT DETERMINE. The query
+> above answers the half that matters tonight — reachability — which is the useful half.)*
 
 ---
 
-## §3 — SCORE THE SIZING PREDICTION
+## §3 — ⏰ AFTER DINNER · SCORE THE SIZING PREDICTION
 
 A prediction was recorded **before** today's fills so it could be scored honestly:
 
@@ -406,7 +486,7 @@ rupee figure computed on it expires tonight.
 
 ---
 
-## §4 — ⚠️ WATCH ITEM ONLY. **NOTHING TO DO.**
+## §4 — ⏰ AFTER DINNER · ⚠️ WATCH ITEM ONLY. **NOTHING TO DO.**
 
 There is a deliberate design choice worth recognising if you ever see it: if the system's read of the
 `gtt_state` table fails for any reason (a database lock, for example), it treats the result as
@@ -415,28 +495,45 @@ hiccup from breaking the whole reconciler — but on a day with real delivery po
 transient error could briefly expose them.
 
 ```bash
-ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -iE "database is locked|OperationalError" logs/system_2026-08-05.log logs/debug_2026-08-05.log 2>/dev/null | head -20'
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -inE "gtt_state|database is locked|OperationalError|DatabaseError" logs/system_2026-08-05.log logs/reconciler_2026-08-05.log | head -30'
 ```
-**What you should see:** nothing, or ordinary informational lines.
-**If you see database-lock or error lines near the shutdown time:** note them. ⛔ **Do not act on
-this. It is for recognition only** — a database-lock morning is not exotic in this system.
-*(This reads the whole day's logs, not the evening window — a lock at 10:00 matters as much as one
-at 17:30.)*
+**What you should see:** nothing, or ordinary informational `gtt_state` lines.
+**If you see `database is locked` / `OperationalError` / `DatabaseError` on the same lines as
+`gtt_state`:** note them — that is the case described above. ⛔ **Do not act on it. Recognition
+only** — a database-lock morning is not exotic in this system.
+
+⚠️ **Two deliberate choices here, so the check cannot lie to you:**
+- **The pattern now includes `gtt_state`**, because the paragraph above is about a `gtt_state` read
+  failing — the earlier version searched only for generic database errors, so its description and its
+  command named different things.
+- ⛔ **There is no `2>/dev/null`.** If a log file is missing you will see an error and know it. The
+  earlier version hid that, so a missing file would have produced clean output and read as
+  *"no locks."* **An error you can see beats a silence you cannot interpret.**
+*(File names verified against `core/logger.py:400-412`: this application writes
+`system_<date>.log`, `trades_<date>.log`, `reconciler_<date>.log` and `debug_<date>.log`. The
+reconciler's own file is included because that is where these lines would land.)*
+*(Whole-day logs, not the evening window — a lock at 10:00 matters as much as one at 17:30.)*
 
 ---
 
 ## §5 — WHAT TO WRITE DOWN BEFORE BED
 
-1. **§1c:** did `cnc_gtt_placer` / `cnc_gtt_monitor` read `acted 0`? **(yes = a finding)**
-2. **§1d:** `mismatches=` — was it `0`?
-3. **§2 STEP 0:** the unfiltered (product, status) counts. **Especially any blank product.**
-4. **§2:** the three checks, **reported separately**, and which branch you landed in.
-5. **§2(A):** the two total-CNC-value figures, and whether they agree.
-6. **§2c:** is any CNC trade in `EXITING`? (one line either way)
-7. **§3:** which candidate was strictly smallest — or that the tier floor decided it.
-8. **Anything that did not match what this card said to expect.** ⭐ **A card that turns out to be
-   wrong is a useful result — write it down rather than working around it.** This card has already
-   been corrected once for exactly that reason.
+*(In the order you did them.)*
+
+1. **§2 STEP 0:** the unfiltered (product, status) counts. 🔴 **Especially any blank product.**
+2. **§2 STEP 0b:** did the duplicate check return anything? **(If yes, the totals are unreliable.)**
+3. **§2:** the three checks, **reported separately**, and which branch you landed in.
+4. **§2(A):** the position count, the two total-CNC-value figures, and whether they agree.
+5. **§2b** *(only if the hazard branch fired)*: which option Rama chose, and — if (i) — that the
+   stop command ran and **that you know the undo.**
+6. **§1c:** did `cnc_gtt_placer` / `cnc_gtt_monitor` read `acted 0`? **(yes = a finding)**
+7. **§1d:** `mismatches=` — was it `0`?
+8. **§2c:** is any CNC trade in `EXITING`? (one line either way)
+9. **§3:** which candidate was strictly smallest — or that the tier floor decided it.
+10. **Anything that did not match what this card said to expect.** ⭐ **A card that turns out to be
+    wrong is a useful result — write it down rather than working around it.** This card has been
+    corrected **three times** for exactly that reason, and each correction came from someone
+    checking a claim rather than trusting it.
 
 ---
 
