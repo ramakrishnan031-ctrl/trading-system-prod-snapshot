@@ -1,6 +1,15 @@
 # STOP PROCEDURE — 05-Aug-2026 EVENING (option C)
 
-> # ⛔⛔ DO NOT RUN THIS.
+> # ✅✅ **EXECUTED 05-Aug-2026 22:46:36 IST. COMPLETE. ALL CHECKS PASS.**
+> **GO given by Rama in his own words** (*"me also agreed!! [Go]"*). ⚠️ **The stated reason was
+> AUTHORED BY ChatGPT and ADOPTED by Rama** — ⛔ not written by him; recorded that way deliberately.
+> **Result:** `ActiveState=inactive` · `SubState=dead` · `Result=success` · `ExecMainStatus=0`.
+> **⭐ THE CENSUS WAS RECOVERED — 55 lines, `mismatches=0`.** Evidence on the PC at
+> `~/Documents/trading-evidence/2026-08-05/` (both files). **Full record in §(i) below.**
+> ⇒ **Thursday 06-Aug is now BRANCH A** (the service exited cleanly; the 08:15 boot is the ordinary
+> path). ➡️ `THURSDAY_CONTINGENCY_06-Aug-2026.md` → **BRANCH A CONTINUED**.
+
+> # ~~⛔⛔ DO NOT RUN THIS.~~ *(superseded 22:46 — GO received and executed; kept legible per §G4)*
 > **Nothing in this document may be executed until Rama says GO, in his own words.**
 > A console suggestion is not authorisation. A failing check is not authorisation. A deadline is not
 > authorisation. ⛔ **If GO has not arrived: report and wait.**
@@ -158,12 +167,61 @@ for it at all**. Stopping the service does not remove protection.
 > relevance. The value of this box is precisely the class the rest of the procedure cannot cover.**
 
 ```
-Time:
-What I expected:
-What I saw:
-Why it struck me as odd (even if I think it is nothing):
+Time:   22:16 – 22:49 IST, 05-Aug-2026 (filled in after execution)
 
+--- OBSERVATION 1 — the one that actually mattered -------------------------------
+What I expected:  to issue `sudo systemctl stop` myself, as the procedure is written.
+What I saw:       the tool-permission layer DENIED it, twice (bundled, then bare).
+                  I stopped and did not attempt a third form or route around it.
+                  Rama then ran it himself — and the line he typed carried a
+                  bracketed question INSIDE the shell command, so bash split it
+                  into extra arguments: systemctl tried to stop i.service,
+                  need.service, to.service, run.service, this.service — all of
+                  which failed loudly — WHILE trading-system.service stopped
+                  silently and correctly, because it was the first argument.
+Why it struck me as odd:
+                  The visible output was FIVE FAILURE LINES and no success line.
+                  The one unit that mattered succeeded, and its success is the
+                  only thing not printed. An operator reading that stderr would
+                  reasonably conclude the command had failed entirely.
+                  ⭐ This is the "silence is the success signal" hazard, arriving
+                  on the single most consequential command of the week — and it
+                  is why (c) exists as a SEPARATE verification step rather than
+                  trusting the stop command's own output.
+                  ⚠️ It also means the stop happened ~30 min after pre-flight (a)
+                  was measured at 22:16. Nothing had moved (the position cannot
+                  change after 15:30), but the gap was not planned.
 
+--- OBSERVATION 2 — the allowlist behaved opposite to its recorded hazard --------
+What I expected:  memory records `Bash(ssh *)` as pre-authorising an agent to
+                  mutate the live VM WITHOUT prompting ("3 surfaces, nothing
+                  narrowed", 02-Aug).
+What I saw:       every READ-ONLY ssh tonight ran unprompted (stat, cat,
+                  systemctl show, sqlite3 mode=ro, grep, scp). The ONE sudo
+                  state-change was denied.
+Why it struck me as odd:
+                  It is the inverse of the recorded hazard — the gate held
+                  exactly where the note says it would not. Either the allowlist
+                  was narrowed since 02-Aug, or `sudo` is the discriminator.
+                  ⛔ I did NOT probe to find out; testing which sudo commands
+                  pass would be the wrong move. The memory entry needs
+                  re-measuring, deliberately, not by experiment tonight.
+
+--- OBSERVATION 3 — the census announces a number that does not match itself -----
+What I expected:  BEGIN's `entries=N` to equal the number of unit lines after it.
+What I saw:       `entries=70`, then 52 unit lines; and a separate startup line
+                  `composition OK (62 registered, 62 expected)`. Three numbers.
+Why it struck me as odd:
+                  Counting lines against `entries=70` looks like 18 are missing.
+                  ✅ CHECKED, AND IT CLOSES EXACTLY — not a defect:
+                     70 registry entries
+                   − 18 `infra`           = 52 census lines (emitter `continue`s
+                                            on infra: "no census line")
+                   − 8 `expected-absent`  = 62 in `_CONSTRUCT_STATES` (the
+                                            composition assertion's denominator)
+                  ⭐ Recorded anyway because it could have gone red and did not,
+                  and because the BEGIN line invites a miscount by a reader who
+                  does not know the emitter skips `infra`.
 ```
 
 ⚠️ **Two things already known to be in flight tonight, so they are NOT surprises:**
@@ -173,6 +231,88 @@ Why it struck me as odd (even if I think it is nothing):
   WRITTEN AT RUNTIME by the `strategy_registry_officer` cron at 16:22 Mon-Fri — its live mtime is
   `2026-08-05 16:22:01`, the cron slot to the second. Documented behaviour since 17-Jul; nothing
   outside the officer reads the file.** ⛔ **Neither is in the shutdown path.**
+
+---
+
+## (i) ✅ EXECUTION RECORD — 05-Aug-2026
+
+**(a) PRE-FLIGHT — 22:16:07 IST. ALL FOUR PASS, exact match to the PASS block.**
+`active` · `"1 positions"` *(log line stamped 22:16:12 — LIVE, not a stale tail)* ·
+`330456580|trd_e66ee17b1844491db5d2e99afa6f104b|ATULAUTO|ACTIVE` *(single row)* · `0` non-terminal.
+
+**(b) THE STOP — issued 22:46:3x; `_shutdown()` reached and census written 22:46:36.511 IST.**
+⚠️ Run by **Rama**, not by me — see §(h) Observation 1.
+
+**(c) VERIFY — PASS, line for line:**
+| expected | actual |
+|---|---|
+| `ActiveState=inactive` | ✅ `inactive` |
+| `SubState=dead` | ✅ `dead` |
+| `Result=success` | ✅ `success` |
+| `ExecMainStatus=0` | ✅ `0` |
+| `effect_census \| BEGIN …` present | ✅ `BEGIN day=2026-08-05 mode=live entries=70` |
+| count > 0 | ✅ **55** |
+
+**(d) 90-SECOND CHECK — PASS at 22:48:58 (142 s after the stop).** `inactive`, and
+`token_watcher.log`'s last line is still `[2026-08-05 08:15:05]` ⇒ **no start attempt.**
+✅ Exactly as measured in the basis table: window `[08:00,16:00)`, and `Restart=on-failure` never
+auto-restarts an explicit stop.
+
+**(e) CAPTURE — done, both files, destination outside the repo tree.**
+`~/Documents/trading-evidence/2026-08-05/census_system_2026-08-05.log` (18,067,584 B / 101,008 lines)
+and `census_journal_2026-08-05.txt` (20,899 B / 130 lines).
+
+### ⭐ THE CENSUS — verbatim, `msg` field extracted from the JSON lines
+
+```
+BEGIN day=2026-08-05 mode=live entries=70
+kill_switch: acted 1 | active                 order_reconciler: acted 1168 | active
+fund_manager: acted 150 | active              eod_squareoff: acted 1 | active
+position_sizer: acted 167 | active            sr_detector: acted 27 | active
+risk_engine: acted 78 | active                v3_chain_runner: acted 112 | active
+signal_processor: acted 28 | active           pb01_capture_worker: acted 57 | active
+secondary_screener: acted 8675 | active       pb01_entry_stage: acted 28 | active
+quality_scorer: acted 8203 | active           portfolio_allocator: acted 46 | active
+hard_gate: acted 8203 | active                webhook_receiver: acted 4286 | covered-existing
+order_placer: acted 28 | active               mis_blocklist: acted 1 | event-driven
+limit_protocol: acted 28 | active             drift_handler: acted 17 | event-driven
+order_monitor: acted 77 | active              pb01_would_be_runner: acted 10 | event-driven
+
+🔴 THE TWO THAT WERE ON TRIAL TONIGHT:
+cnc_gtt_placer:  acted 2  | event-driven
+cnc_gtt_monitor: acted 24 | event-driven
+
+dormant (acted 0): entry_gate · smart_tgt · tgt_retry · co_protocol · shadow_tracker ·
+  live_feed · candle_persist · sizer.risk_bind · sizer.live_margin · risk.sector_cap_bound ·
+  risk.daily_loss_gate · fm.daily_loss_post_trade · fm.invariant_violation · fm.bucket_overflow ·
+  fm.commit_hard_kill · drift.soft_rung · drift.hard_rung · scorer.tier_high ·
+  scorer.score_gt_ceiling · placer.emergency_exit
+NEVER-CONSTRUCTED [expected]: breakeven_manager · sl_breach_monitor · structure_exit_manager ·
+  market_regime_runner · zone_cache · zone_warmer · retest_monitor · retest_diverter
+
+MISMATCH: NONE — every zero is an expected zero
+END day=2026-08-05 mismatches=0
+```
+
+### 📌 THE FALSIFIABLE EXPECTATION, SCORED
+
+**Stated before reading:** *"delivery TRADED today, so `cnc_gtt_placer`/`cnc_gtt_monitor` still
+reading `acted 0` is a FINDING."*
+✅ **NOT REFUTED — `acted 2` and `acted 24`. Neither is zero.**
+> ⛔⛔ **AND THAT IS AS FAR AS IT GOES. `acted` COUNTS ROWS *EXAMINED*, NOT ACTIONS *TAKEN*.**
+> `cnc_gtt_monitor: acted 24` does **not** mean the GTT was observed working — it means 24 rows were
+> examined across the day, `healthy:`/`noop:` included. ⭐ **The census is an ARTIFACT RECOVERED,
+> not a QUESTION ANSWERED.** The question stays **(d)** until `get_gtts` is instrumented.
+
+⭐ **`fm.invariant_violation: acted 0`** — the boot-path `hard_kill` traced for Q3 has still **never
+fired**, corroborating the source's *"0 ever, by design"*. ⚠️ **Thursday is its first run walking an
+open CNC trade** (`THURSDAY_CONTINGENCY` Branch D).
+
+### 🏁 THE FACT WITH NO PRIOR INSTANCE
+**`_shutdown()` ran to completion with a real CNC delivery position held — for the FIRST time.**
+It squared off nothing, cancelled nothing, released no capital, and closed no position. The census
+emitted, `mismatches=0`, exit 0. ⭐ **Recorded because it is the only first instance this system
+will ever have of this, and it would be worth recording whether it had gone well or badly.**
 
 ---
 
