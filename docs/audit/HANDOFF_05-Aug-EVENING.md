@@ -470,3 +470,79 @@ population — the schema and the `min()` call were.**
 ```
 §1 qty_by_flat / verdict integrity   RESULT = PASS -- DISPROVED stands, population verified
 ```
+
+---
+
+## ⭐ §2. THE REAL H5 GATE, NAMED — MEASURED 16:36
+
+### 2.1 — the code, the cites, and the predicate
+
+**Code: `SYMBOL_DIRECTION_DAILY_LIMIT`** → stored as `signals.status =
+REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT`.
+
+| where | at HEAD | at **deployed `0197923`** |
+|---|---|---|
+| the `raise` | `signals/signal_processor.py:717` | **`signals/signal_processor.py:693`** |
+| config switch | `config/system_config.yaml:207-215` | same |
+
+⚠️ **The two differ by 24 lines** — `git diff 0197923 HEAD -- signals/signal_processor.py` is
+**+29/−5**. ⭐ **Cite `:693` for anything about what ran today; `:717` only for HEAD.** *(A live
+instance of `M3`: a card's line numbers hold only at their measured SHA.)*
+
+**The predicate** (`:706-720`, HEAD):
+```python
+if not bool(getattr(self._risk, "_one_trade_per_symbol_direction", False)):
+    return
+direction = "LONG" if str(side).upper() == "BUY" else "SHORT"
+n = self._store.count_executed_trades_today_for_symbol_direction(symbol, direction, today)
+if n >= 1:
+    raise _PipelineReject("SYMBOL_DIRECTION_DAILY_LIMIT", ...)
+```
+
+> ### ⭐⭐ THE FINDING IS SHARPER THAN "DELIVERY BLOCKS INTRADAY"
+> **This gate is PRODUCT-BLIND.** It counts *executed trades* for a symbol+direction and **never
+> looks at CNC vs MIS.** ⇒ ⛔ **H5 is not a delivery feature — it is a product-blind daily limit
+> that a delivery fill reached for the first time today.** `vwap_bounce_long` was not refused
+> *because* the holder was CNC; it was refused because **something** already traded ATULAUTO LONG.
+> ⭐ **That is the accurate statement, and it is the one to register** — the delivery-specific
+> phrasing would send the next reader looking for a product branch that does not exist.
+
+⏰ **Config context:** the flag was turned **ON by Rama on 27-Jul evening**, first live **Mon 3-Aug
+08:15** (`system_config.yaml:207-215`). ⇒ **today is only its third live trading day, and the first
+on which a DELIVERY trade armed it.**
+
+### 2.2 — the correction sweep: **IN-REPO COUNT = 0.** ⛔ And that is the honest answer.
+
+`DUPLICATE_SYMBOL` and `CONTRARY_POSITION` are **real, live codes** — `capital/risk_engine.py:668`
+and `:689`. A repo-wide grep returns **~30 hits, and every one is a legitimate reference to those
+risk-engine gates.** ⛔ **Not one repo record attributes today's H5 rejection to them.**
+
+⇒ **There is nothing to correct in the repo.** The wrong attribution existed **only in the operator
+run sheet, which is not a tracked file.** ⭐ **Reported as zero rather than manufactured into a
+sweep** — a correction count inflated to look diligent would be the same defect in the other
+direction.
+
+⚠️ **One real rot found while sweeping, and it is a different fault:**
+`docs/DEPLOY_CALENDAR_28-JUL_TO_04-AUG.txt:674` cites **`signal_processor.py:686`** for this raise.
+**Actual: `:693` deployed, `:717` HEAD.** ⛔ **A rotted line cite, not a wrong code name** — logged
+here, ⛔ **not edited**: that file is a dated historical record and was true at its own SHA.
+
+### 2.3 — the method instance *(⛔ an INSTANCE of the M-family, not a new rule)*
+
+> **A grep built from a PREDICTED string measures the prediction, not the system. Build the pattern
+> from what the code EMITS — or search the behaviour and let it name itself.**
+
+**Today's instance:** the run sheet named two codes; both returned **zero rows for the whole day**;
+the gate that actually fired was a **third**. ⇒ **the predicted-string grep would have returned a
+clean zero and been recorded as "the coupling is inert."**
+⭐⭐ **What makes this one worth registering above the four earlier same-day instances: it is the
+first where the wrong grep would have INVERTED A LIVE CONCLUSION** — not left a gap, but produced a
+confident, false, opposite answer. ⛔ **That is the `V5` shape** (a check with no failing input
+manufactures confidence) **arriving on the signal path.**
+✅ **What actually saved it:** enumerating the real `rejection_reason` values instead of searching
+for the expected ones — i.e. letting the behaviour name itself.
+
+```
+§2 the real H5 gate named          RESULT = PASS
+§2 in-repo correction sweep        RESULT = PASS -- 0 records to correct (1 rotted line cite logged)
+```
