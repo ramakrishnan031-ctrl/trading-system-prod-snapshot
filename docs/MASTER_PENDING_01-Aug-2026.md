@@ -182,6 +182,23 @@ classes P/S/I) · **M10** (the ownership test) · **V5** (a check with no failin
 
 ---
 
+## 📋 A6/A7 COMPANION — **WHAT REMAINS OPEN ON DELIVERY** *(⛔ RECORD ONLY — no row, no N change, none of it authorised)*
+
+> **The INVESTIGATION is closed. The THREAD is not.** ⭐ **Naming these is what stops them being
+> rediscovered from scratch** — every one was found once already this week.
+> ⛔ **Nothing below is started, proposed, or scheduled.**
+
+| # | item | state | what unblocks it |
+|---|---|---|---|
+| **1** | **T+1 CARRY** — does CHECK1's delivery skip hold when the position has left `positions()` for `holdings()`? | 🔴 **the ONLY one with a date** | **Resolves THU 06-Aug**, `THURSDAY_CONTINGENCY` Branch-A-continued **step 3**; falsifiable expectation + baseline written **before** the fact |
+| **2** | **`_check_stuck_exiting`** — the **fourth** CHECK1 entry path, still **UNGUARDED** by the `trade_id` delivery skip | reachability **(d)** — undetermined | Not a fix; needs its own careful loop. ⛔ Do not widen from the guarded three |
+| **3** | **`get_gtts` UNINSTRUMENTED** — **0** call sites logged | ⇒ observed-vs-swept is **permanently (d)** until instrumented | ⛔ **NOT proposed.** It is why the census's `acted` cannot answer the GTT question |
+| **4** | **AR9's OVERNIGHT SCOPE GAP** — the drift acceptance scored the **in-session** band only | ⭐ **the overnight band is the one delivery actually lives in** (₹50 flat vs 10%) | One session is not enough to move a money-path governor; recurrence across sessions is |
+| **5** | **ITEM 4 — inventory reconciliation** (two real control inventories exist and overlap) | ⛔ **BLOCKED on Rama's AUTHORITY ruling** | Which inventory survives. ⛔ Annotating either alone creates a **third** authority |
+| **6** | **ITEM 5 — the delivery config surface** | gated on **#5**, ⭐ **and RE-ORDERED BY MEASUREMENT** | **concentration + tier multiplier FIRST; risk and position value AFTER** — at ₹10,000 the quantity is pinned by arithmetic, so the other two cannot bind |
+| **7** | **THE REGISTRY-TRACKED-IN-GIT GOVERNANCE QUESTION** *(new tonight — A7(e))* | 🔴 **Rama's ruling** | Should a file production rewrites daily be version-controlled? ⛔ Not "which version wins" — neither does |
+| **8** | **THE 122 BLANK-PRODUCT ROWS** | **LATENT** | Discriminator: **a blank-product row ever reaching a FILLED state.** Until then, document + pin |
+
 ## 🆕 A7 — **`strategy_direction_registry.yaml`: A TRACKED CONFIG FILE THAT PRODUCTION WRITES DAILY** *(N 232 → 233 — ONE new row; the three items below it are sub-entries, not rows)*
 
 **The deployed-tree divergence flagged as a possible pre-push blocker is REAL, EXPLAINED, and its
