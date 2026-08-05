@@ -23,6 +23,30 @@ ssh trading-vm 'systemctl show trading-system.service -p ActiveState,ExecMainSta
 > `clear_stale_state` never ran and **Wednesday's `SOFT_KILL` is still set** — a system that looks
 > healthy and will take no entries. ⛔ **Never route this morning on `is-active` by itself.**
 
+### 🤖 WHAT PRE-FLIGHT WILL AND WILL NOT DO BEFORE YOU LOOK — **measured, and it is the opposite of what was assumed**
+
+Pre-flight runs **08:30 (Phase A) · 09:14 (Phase B) · 09:15 (Phase C)** (`config/cron_registry.yaml`),
+and its `systemctl_start_service` auto-fix **is** armed and whitelisted (`scripts/preflight/autofix.py:35`).
+
+⛔ **BUT IT WILL MAKE *ZERO* ATTEMPTS TO START `trading-system.service`. Not one, not three.**
+**(S)** `scripts/preflight/checks/__init__.py:48` builds the Phase-B check as
+`ServiceActiveCheck("trading-system.service", auto_fixable=False)` — commented *"ALERT-ONLY
+(token-watcher owns lifecycle; never auto-start)"*. The auto-fix covers only the **six** support
+daemons in `SUPPORT_SERVICES` (`checks/services.py:85-92`: alert-watcher, token-watcher,
+security-watcher, cron, fail2ban, auditd) — `trading-system` is deliberately absent
+(`services.py:5-8`).
+**(P)** `RestartPreventExitStatus=3 4` confirmed on the **live** unit ⇒ systemd will not loop either.
+
+⇒ 🔴 **If you DO see repeated start attempts, that is not pre-flight and it IS a finding.**
+
+> ⭐⭐ **THE REAL PRE-FLIGHT HAZARD IS THE MIRROR IMAGE, AND IT LANDS EXACTLY ON BRANCH B:**
+> Phase B's check is `systemctl is-active` (`services.py:31-39`) — **which cannot tell a fresh
+> Thursday boot from Wednesday's process still running.** Under Branch B the service *is* `active`,
+> so **pre-flight will report `svc_trading_system` PASS on the precise failure mode this page
+> predicts.** ⛔ **A green pre-flight at 09:14 is NOT evidence a boot happened.** It is the same
+> defect the timestamp rule above exists to defeat — arriving from a second, more authoritative-
+> looking direction.
+
 ---
 
 ## ✅ BRANCH A — service active, timestamp is Thursday. **NOTHING TO DO.**
@@ -38,6 +62,38 @@ ATULAUTO while it is still held, the rejection code should switch to `DUPLICATE_
 - **(P)** the 18:45 Wednesday `system_manager` run said so in its own words:
   *"SOFT_KILL … from 2026-08-05 — prior-day at the next open, so the 2026-08-06 08:15 boot
   auto-clears it (HEADLESS GUARANTEE). No action needed; ⛔ do NOT run deploy/resume.sh for this."*
+  ⚠️ **That sentence is TRUE and its precondition is UNSTATED — it assumes a boot happens.**
+  On the one night it might not, it still reads *"no action needed"*. See §3 of the evening report.
+
+### ⛔ BUT "BRANCH A" DOES **NOT** BY ITSELF ESTABLISH THAT THE KILL IS CLEAR — **run one more command**
+
+**A boot that reaches the trading loop can still have set a NEW kill on the way there.** ChatGPT's
+Q3 asked exactly this, and the answer is **YES** — traced at the deployed SHA `0197923`:
+
+| # | boot stage (all **after** `clear_stale_state`) | what it can set | can it fire on the boot cycle? |
+|---|---|---|---|
+| 1 | `main.py:2442` `fund_manager.rehydrate_from_open_trades()` → `capital/fund_manager.py:1769` → `:2351` | **`hard_kill`** + raises `CapitalStateInconsistent` ⇒ **main returns 3** | **YES — single sample** |
+| 2 | `main.py:3403` `order_reconciler.reconcile_once()` → `orders/order_reconciler.py:976` `_check9_missing_exits` → `:2830` | **`soft_kill("MISSING_EXITS: naked position …")`** | **YES — single sample** |
+| 3 | same reconcile → `:1056` `_finalise_auth_counter` → `:720` | `soft_kill` (3 consecutive auth-error **cycles**) | **NO** — counter starts at 0; one cycle reaches at most 1 |
+
+Both live stages sit **before** the first trading action (`main.py:3497` `signal_processor.start()`,
+guarded by the boot-order assert at `:3491`). ⭐ **The source says so at the call site itself**
+(`main.py:1911-1913`): *"if the trigger was legitimate, startup reconciliation will re-trigger it
+within seconds"* — and that is now traced to a real mechanism, not taken on the comment's word.
+
+✅ **What CANNOT happen: the HALT *scenario* cannot be re-created.** It is decided **once** at
+`main.py:1922` and consumed at `:1938-1944`; `scenario` is never recomputed. ⇒ **a kill set after
+that gate does not produce exit 4** — stage 1 exits **3**, stage 2 leaves a *running* service
+with entries blocked.
+
+```bash
+# Branch A only — confirm the kill actually is clear before calling the morning good
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system
+grep -iE "auto-cleared|MISSING_EXITS|capital_invariant|soft_kill|hard_kill" logs/system_2026-08-06.log | tail -20'
+```
+- ✅ **Expect exactly one line:** `Kill switch auto-cleared: prior SOFT_KILL from 2026-08-05 …`
+- 🔴 **`MISSING_EXITS` or `capital_invariant_violated`** ⇒ a **new** kill was set this morning.
+  ⛔ **Do not clear it — it is same-day and it is not the breaker.** Record and report.
 
 ---
 
@@ -121,7 +177,37 @@ ssh trading-vm 'systemctl show trading-system.service -p ActiveState,ExecMainSta
 
 ## 🔵 BRANCH D — anything else
 
-⭐ **A case nobody predicted is a finding, not an emergency.** Capture the state and stop:
+### ⚠️ ONE CASE IN HERE IS NOW PREDICTED: **`inactive` with `ExecMainStatus=3`, NOT 4**
+
+Branch C is written for **status 4** (the HALT gate). **Status 3 is a different failure and it has
+its own first-ever exposure Thursday.** `main.py:2442` `rehydrate_from_open_trades()` replays every
+OPEN trade's reserve/commit chain, then checks the capital invariant once
+(`capital/fund_manager.py:1761`); on failure it fires **`hard_kill`** (`:2351`) and raises, and main
+returns **3**. **Thursday is the first boot where that replay walks an open CNC delivery trade.**
+
+⛔ **If you see `ExecMainStatus=3`: STOP. Do NOT run `resume.sh`.** A `hard_kill` from
+`capital_invariant_violated` is **not** the routine breaker, and Branch C's remedy is written only
+for `circuit_breaker_force_close_15:15` / `EOD_SQUAREOFF`. Capture and report:
+```bash
+ssh trading-vm 'cd /home/ubuntu/systems/trading-system
+grep -iE "capital_invariant|rehydrate|CapitalStateInconsistent|fund_manager.initialize" logs/system_2026-08-06.log | tail -30'
+```
+
+> **(S) The seed itself is NOT the risk.** `fund_manager.initialize()`
+> (`capital/fund_manager.py:417-457`) is a pure **INIT**: it writes `balance_before=0.0`,
+> `balance_after=broker_balance` and sets the buckets. **No comparison, no threshold, no drift
+> event, no kill.** ⇒ Thursday's lower `broker.net` simply *becomes* the day's total. ✅ Confirmed —
+> the seed **cannot** trigger anything by being smaller. (`check_paper_capital_consistency` is a
+> **no-op in live mode**, `utils/startup_checks.py:982`.)
+>
+> **(I) The stage AFTER it is where the arithmetic lands**, and the estimate says comfortable:
+> the guard needs a **negative** bucket (`fund_manager.py:2297-2299`), the positional bucket is a
+> **fixed 30%** (`conditional_allocation_enabled: false`, verified on the VM), so ~₹2,789 of a
+> ~₹9,296 seed against a ~₹587 CNC block ≈ **4.7× headroom.** ⛔ **That is an ESTIMATE computed
+> from Wednesday's figures — it is NOT a measurement of Thursday, and it is why the branch is
+> written rather than dismissed.**
+
+⭐ **Any OTHER case nobody predicted is a finding, not an emergency.** Capture the state and stop:
 
 ```bash
 ssh trading-vm 'systemctl status trading-system.service --no-pager | head -20
