@@ -126,7 +126,7 @@ ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -inE "gtt_state|d
 
 *(Everything from here down explains the sheet above. The revision tables are history — they are last-but-one on purpose.)*
 
-## 🔄 REVISION — 05-Aug ~12:5x IST. **The first version of this card had four faults that would have failed at the console. All measured against source; all fixed.**
+## 🔄 REVISION 1 — 05-Aug **11:26 IST**. **The first version of this card had four faults that would have failed at the console. All measured against source; all fixed.**
 
 | # | what was wrong | now |
 |---|---|---|
@@ -137,7 +137,7 @@ ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -inE "gtt_state|d
 | 5 | ⛔ The card named `scripts/list_gtts.py` (**does not exist**) and offered a fallback that cannot produce a GTT id | **No read-only GTT lister exists in this repo.** The only GTT script **places real orders** and is now explicitly forbidden below. CHECK (1) restructured so the gate does not depend on it |
 | 6 | A zero-row result could be read as "no position held" | **§2 now begins with an UNFILTERED count.** Zero rows is not a pass |
 
-## 🔄 REVISION 2 — 05-Aug ~12:2x IST. **Four more, and two of them would have produced a FALSE finding — which is worse than a missing one.**
+## 🔄 REVISION 2 — 05-Aug **11:45 IST**. **Four more, and two of them would have produced a FALSE finding — which is worse than a missing one.**
 
 | # | what was wrong | now |
 |---|---|---|
@@ -146,7 +146,7 @@ ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -inE "gtt_state|d
 | 9 | §2c and §4 asked whole-day / "has it ever" questions against a **two-hour** capture window | Both now read the **full-day log**, and "ever" is stated as bounded by **30-day** log retention (`config/cron_registry.yaml:9,:19`) |
 | 10 | ⛔ The hazard branch offered *"harden the skip, or close the position"* — **at 18:00 the market is shut and a capital-path code change is not doable.** Two impossible options | **Three real options with their costs**, plus the mitigation that actually exists (§2b), and the plain statement that **CHECK1 does not sell anything** |
 
-## 🔄 REVISION 3 — 05-Aug ~13:1x IST. **The order was backwards, two more greps could not answer their own questions, and one option had no command.**
+## 🔄 REVISION 3 — 05-Aug **12:28 IST**. **The order was backwards, two more greps could not answer their own questions, and one option had no command.**
 
 | # | what was wrong | now |
 |---|---|---|
@@ -156,6 +156,23 @@ ssh trading-vm 'cd /home/ubuntu/systems/trading-system && grep -inE "gtt_state|d
 | 14 | 🔴🔴 Option (i) explained **why** not-booting works but **never said what to type** — an option the operator cannot execute | **The exact command, its verification, and its undo are now in the same block**, gated behind three conditions, with the one residual hole named as **UNVERIFIED** |
 | 15 | Option (i)'s costs were incomplete | **Two real costs added** (a permanently lost forward-shadow day; an unobserved GTT trigger) — **and one cost that is NOT real is stated so it is not assumed** |
 | 16 | ⛔ The `scp` destination was inside `data_store/` — **a guarded directory, and "scratch inside `data_store/`" is already a registered finding (F2)** | Destination moved **outside the repo tree** |
+
+## 🔄 REVISION 4 — 05-Aug **12:49 IST**. **The last hardening pass. ⛔ The card is FROZEN after this — the next thing that improves it is running it.**
+
+| # | what was wrong | now |
+|---|---|---|
+| 17 | 543 lines, read at 17:40 by a tired person: **excellent as a reference, slow as a checklist** | ⚡ **A `§EXEC` front sheet at the top** — commands in order, one "you should see" each, a pointer to every section. ⛔ **NAVIGATION, not a summary and not a second card** (splitting would be the multi-authority defect on the worst possible night). **Every command extracted programmatically and byte-identity VERIFIED, not asserted** |
+| 18 | 🔴 The option (i) STOP used `ssh … 'sudo …'`, which **allocates no TTY** — it can fail with `no tty present` or appear to hang, on the one command whose failure costs most | **`-t` fallback added for BOTH the stop AND the undo**, with its symptom named. Precedent stated **as evidence, not proof**: the same pattern is a documented operational command in 4 tracked files. **Passwordless sudo marked UNVERIFIED** |
+| 19 | ⚠️ §1a still said *"do this before anything else"* after REVISION 3 made **§2** first — **the card contradicted itself** | Reworded to *"before anything else **in this section**"* with a pointer to the order block. Swept: 4 candidate hits, 3 correct in local scope, **1 real contradiction** |
+| 20 | §2 asserted the held positions **as fact**, when STEP 0 is precisely what would disprove it | Reworded to **REPORTED**, with *"a different count or a blank product is a FINDING, not your mistake"* — ⭐ one word turning a premise into a prediction the next command scores |
+| 21 | CHECK (2) said nothing about **more `ACTIVE` rows than positions** | One line: note the count and move on — orphan GTT rows are expected noise on delivery days and **not** tonight's gate |
+| 22 | ⛔ `SYSTEM_MAP.md` still read *"DORMANT / never exercised"* **on the day delivery traded** — and **M8 had just made reading it mandatory** | Corrected there (`3548cac`), ⛔ **not here** — with the compound label `<DEPLOYED — ENTRY PATH VERIFIED LIVE; EXIT PATH UNVERIFIED>` and no figures copied from conversation |
+
+## 🧊 REVISION 5 — 05-Aug **13:3x IST. ⛔ CHANGE-LOG ONLY. NOT ONE COMMAND CHANGED.**
+
+| # | what was wrong | now |
+|---|---|---|
+| 23 | ⛔ **The card made a FALSE CLAIM ABOUT ITSELF:** its revision table stopped at 3 while its content was at 4, and **§5 item 10 told the operator it had been corrected "three times"** | **REVISION 4 recorded above; "three" → "four"; the approximate heading times replaced with the real ones** (they had drifted out of order). ⭐ **The freeze covers commands and decisions — it does NOT license a document to describe itself untruthfully.** ✅ **Byte-identity re-verified after the edit** |
 
 *(History is here, on purpose. Nothing below is struck through — a struck-out command is a command you might still run.)*
 
@@ -677,7 +694,7 @@ reconciler's own file is included because that is where these lines would land.)
 9. **§3:** which candidate was strictly smallest — or that the tier floor decided it.
 10. **Anything that did not match what this card said to expect.** ⭐ **A card that turns out to be
     wrong is a useful result — write it down rather than working around it.** This card has been
-    corrected **three times** for exactly that reason, and each correction came from someone
+    corrected **four times** for exactly that reason, and each correction came from someone
     checking a claim rather than trusting it.
 
 ---
