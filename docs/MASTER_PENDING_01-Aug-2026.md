@@ -15,15 +15,28 @@ or the live gate buries the fix campaign.
 **Clock-read:** 01-Aug-2026, **Saturday**, session start **14:44 IST**. ~~Deployed SHA
 `297b587`; `main` **21 ahead**, all docs-only, unpushed by design.~~
 
-> # ▶️▶️ **RESUME — CURRENT AS OF 05-Aug-2026 EVENING. READ THIS BLOCK, THEN THE 05-AUG CONSOLIDATION BELOW.**
-> **N = 232** *(was 231; A6 added, A1 discharged to §D — reconciliation in §1)*. ⛔ **DEPLOYED SHA `0197923`, UNMOVED. NOTHING FROM TODAY IS DEPLOYED.**
-> ⛔ **THE AHEAD-COUNT IS NOT QUOTED HERE — it has moved ~60 times today and a number in prose ROTS.** Measure it: `git rev-list --count origin/main..main`. Its authority is the memory ledger's top block.
-> 🔴 **THE STATE, IN FOUR LINES:**
-> **1.** **The flip worked end to end.** Delivery entry AND exit are `VERIFIED LIVE 05-Aug`; **one CNC position is held overnight, a first.** ⛔ `<T+1 CARRY UNVERIFIED>` — nothing wider.
-> **2.** **The CHECK1 gate PASSED** and ran in production for the first time. ⇒ **§2b is not reached; no decision is owed on the gate; Thursday's 08:15 boot may run.**
-> **3.** 🔴 **A6 (NEW): the service never shut down** — the EOD self-exit is unreachable while delivery is held ⇒ **no census, and (I) no 08:15 boot, so the day's `SOFT_KILL` never auto-clears.** ⛔ **A restart is NOT the safe default** — it hits the HALT trap. **A decision is OWED and it is Rama's.**
-> **4.** ⛔ **A stop procedure and a Thursday contingency are WRITTEN AND UNRUN** — `docs/audit/STOP_PROCEDURE_05-Aug-2026.md` (awaits Rama's GO, in his own words) · `docs/audit/THURSDAY_CONTINGENCY_06-Aug-2026.md` (route on `ExecMainStartTimestamp`, ⛔ **never on `is-active` alone**).
-> ⛔ **STANDING:** no push (D3) · no code changed today (every commit is `.md`) · **no implementation authorised** — it needs evidence CONFIRMED **and** Rama's approval in his own words.
+> # ▶️▶️ **RESUME — WEDNESDAY 05-Aug CLOSED AT 23:4x. ⭐ WRITTEN FOR A FRESH SESSION AT 08:30 WITH NO MEMORY OF LAST NIGHT.**
+> **N = 233** *(231 → 232 A6, → 233 A7; A1 discharged to §D — reconciliation in §1)*. ⛔ **DEPLOYED SHA `0197923`, UNMOVED. NOTHING FROM 05-Aug IS DEPLOYED.**
+> **AHEAD-COUNT — ⛔ BY COMMAND, NEVER FROM PROSE:** `git rev-list --count origin/main..main` → **77 at 23:37:35 IST**, and **that number is already stale** *(this block's own commit increments it — the fixed point §A5 names)*. ⭐ **RE-RUN IT. Its authority is the memory ledger's top block, not this line.**
+>
+> ## 🔴 THE STATE, COLD — FIVE FACTS AND ONE OWED MEASUREMENT
+> **1.** 🌙 **THE SERVICE IS DOWN, DELIBERATELY AND CLEANLY.** Stopped **22:46:36** on Rama's explicit GO: `inactive · dead · Result=success · ExecMainStatus=0`, `NRestarts=0`, **did not return after 142 s**. ⇒ **Thursday's 08:15 boot is the ORDINARY path and Thursday is BRANCH A.** Record: `docs/audit/STOP_PROCEDURE_05-Aug-2026.md` §(i).
+> **2.** 🏁 **THE FACT WITH NO PRIOR INSTANCE:** `_shutdown()` ran to completion **with a real CNC delivery position held** — squared off nothing, cancelled nothing, released no capital, closed no position. ⭐ **The safety argument was read from source all evening; at 22:46:36 it held in production.**
+> **3.** **Delivery label = `<ROUND TRIP VERIFIED 05-Aug; CLEAN SHUTDOWN WITH POSITION HELD VERIFIED 05-Aug; T+1 CARRY UNVERIFIED>`.** ⛔ **Nothing wider.**
+> **4.** ✅ **The census was RECOVERED — 55 lines, `mismatches=0`** (it was ABSENT all evening because a carried position defers `eod_self_exit`). ⛔ **`acted` counts rows EXAMINED, not actions TAKEN** ⇒ **artifact recovered, question NOT answered.**
+> **5.** ✅ **The 08:15 token refresh is PC-INDEPENDENT** (S, width stated) — Rama's PC is off **07:55–08:25** and that does **not** affect the boot. ⚠️ **Mechanism verified, OBSERVATION not: Thursday is the first run with the PC off** ⇒ **check the token file first at 08:25** (a failed refresh is SILENT).
+>
+> ## 🔴🔴 THE ONE THING OWED THURSDAY — **THE T+1 CARRY, THREE READINGS**
+> ➡️ **START AT `docs/audit/THURSDAY_MORNING_06-Aug-2026.md`** → `THURSDAY_CONTINGENCY_06-Aug-2026.md` → **BRANCH A CONTINUED**.
+> | when | what |
+> |---|---|
+> | **08:30** | the boot · the kill actually cleared · **step 3 the carry** · **step 4 validates it** · the opening balance · the boot seed |
+> | **10:45** | mid-session: has anything moved the trade, the GTT row, or the reserved capital |
+> | **17:15** | end-of-day: the carry's final state before the second overnight |
+> ⭐⭐ **STEP 3 IS THE MEASUREMENT OF THE WEEK AND IT SITS BEHIND TWO STEPS THAT WILL BOTH LOOK FINE.** Its expectation and Wednesday's baseline were written **before** the fact, so it is scoreable either way. ⛔ **If step 4 says T+1 has not happened, step 3 measured NOTHING — say that; do not record a pass.**
+> 🔇 **AND A PREDICTION OF SILENCE:** the capital-drift CRITICAL should **not fire at all** Thursday. **If it fires without a new CNC purchase, the delivery-only characterisation is WRONG** — a real finding, ⛔ not "the usual one".
+>
+> ⛔ **STANDING:** no push (D3) · **no code changed 05-Aug — every commit is `.md`** · **no implementation authorised** (needs evidence CONFIRMED **and** Rama's approval in his own words) · ⛔ **the register-design-thread card is HELD until after the T+1 measurement.**
 >
 > ## 🔄 CURRENCY BLOCK — **BROUGHT CURRENT 04-Aug-2026 ~23:xx IST · ⭐ RE-MEASURED 05-Aug-2026 00:15 IST (the clock was READ, not recalled — `date` on the PC, offset `+0530`, cross-checked against `date -u`) · ⭐⭐ BROUGHT CURRENT AGAIN 05-Aug-2026 POST-BOOT — see the BOOT PASS below.** ⛔ THE FILENAME STILL SAYS 01-AUG AND MUST NOT BE RENAMED — it is cited by SHA-pinned references across the audit records. **The date in the title is the file's IDENTITY, not its currency; this block is its currency.**
 >
@@ -179,6 +192,102 @@ sub-taxonomy)*.
 classes P/S/I) · **M10** (the ownership test) · **V5** (a check with no failing input) · **AR9**
 (+ its 05-Aug scope correction) · **the M1 sub-taxonomy** (six mechanisms, two groups) · **the first
 *positive* G1 instance**. ⛔ **Do not copy their text here.**
+
+---
+
+## 🏁 **WEDNESDAY'S CLOSE — 20:07 → 23:4x. ⛔ EVERYTHING BELOW POSTDATES THE LAST REGISTER UPDATE.**
+
+> ⛔ **Every item is a POINTER to a committed record.** Nothing is re-derived here and no figure is
+> retyped from chat. Records: `STOP_PROCEDURE_05-Aug-2026.md` §(i) · `ADDENDUM_capital_drift_05-Aug-2026.md`
+> §4c/§6/§7/§8 · `THURSDAY_MORNING_06-Aug-2026.md` · `campaign_practices.md` §G1 #7, §M1 Group 3, §AR9.
+
+**(1) 🏁 THE STOP EXECUTED — 22:46:36, CLEAN.** `inactive · dead · Result=success · ExecMainStatus=0`;
+service **did not return after 142 s**; **census recovered — 55 lines, `mismatches=0`.** Authorised by
+**Rama in his own words**; ⚠️ **the stated reason was AUTHORED BY ChatGPT and ADOPTED by him — ⛔ not
+written by him.**
+⭐⭐ **THE FACT WITH NO PRIOR INSTANCE: `_shutdown()` ran to completion with a real CNC delivery
+position held — squared off nothing, cancelled nothing, released no capital, closed no position.**
+⭐ **The safety argument was read from source all evening; at 22:46:36 it held in production.**
+
+**(2) 🏷️ A6's STATUS MOVES — AND IT MOVES TO *WORKED AROUND*, ⛔ NOT *FIXED*.**
+The EOD self-exit coupling was **observed** (17:35 deferral, service still `active` at 17:49) and then
+**circumvented by a manual clean stop**. ⛔ **No code changed. The coupling is exactly as it was.**
+🔴 **IT WILL RECUR ON THE NEXT EVENING A DELIVERY POSITION IS HELD** — and the workaround is a human
+decision each time, not a mechanism. ⭐ **Recording a workaround as a workaround is the point: the
+census is only recoverable while someone remembers to stop the service.**
+
+**(3) ✅ THE CENSUS EXPECTATION — NOT REFUTED, AND IT GOES NO FURTHER.**
+`cnc_gtt_placer acted 2` · `cnc_gtt_monitor acted 24` · `MISMATCH: NONE — every zero is an expected
+zero`. ⛔⛔ **`acted` counts rows EXAMINED, not actions TAKEN** (`orders/cnc_gtt_monitor.py:145-153`
+appends on `healthy:`/`needs_review:`/`noop:` alike) ⇒ ⭐ **ARTIFACT RECOVERED, QUESTION NOT ANSWERED**;
+observed-vs-swept stays **(d)** until `get_gtts` is instrumented (**0** call sites logged).
+✅ **The `entries=70` / `62 registered` / 52 printed arithmetic reconciles EXACTLY** — 70 − 18 `infra`
+= 52, 70 − 8 `expected-absent` = 62. **Design, not defect** ⚠️ *(though the `BEGIN` line invites a miscount)*.
+
+**(4) ✅ THE 22:19 DRIFT ALERT — DECOMPOSED AND VERIFIED TERM BY TERM.**
+**632.01 = 587.40** *(the CNC purchase, deducted BROKER-SIDE ONLY)* **+ 44.61** *(realised P&L, booked
+locally, unsettled)*. **(S)** `order_reconciler.py:3590-3592`: `expected = snapshot.total` ·
+`actual = margins.net`. **Three terms measured via INDEPENDENT paths** — opening from `fm_ledger` INIT,
+realised by **two** routes (7 `RELEASE_USED` rows **and** the same 7 trades' `net_pnl`), purchase from
+`qty_filled × entry_actual_price`.
+⛔⛔ **EXPLICITLY *NOT* THE VACUOUS IDENTITY `V5` DELETED THE SAME DAY** — neither operand came from
+subtracting the alert. ⭐ **It could have gone red.**
+⭐ **CREDIT: the MECHANISM is RAMA'S** — *"the broker deducts the CNC purchase from free cash; the
+system does not; in MIS it never shows because 15:30 squares off and the two reconverge."* **The cost
+refinement (the blocked figure is the RAW scrip value) is MINE.**
+⭐⭐ **AND HIS SETTLEMENT FACTS, RECORDED AS THE GENERAL RULE: costs AND profits both settle on the
+NEXT TRADING DAY — which is precisely why MIS never shows this and delivery does.** *(It is also what
+makes Thursday's opening balance a real test rather than a curiosity.)*
+
+**(5) 🔴 AR9 — VERIFICATION UPGRADE ONLY.** The band was the **flat ₹50 overnight** figure
+(`tolerance=50.00 base=50.00`), **delta = 12.64×**; **(S)** `:3626-3631` widens by percentage **during
+market hours only**. ⛔ **Acceptance UNCHANGED. No tolerance proposed. Still one session of evidence.**
+
+**(6) ✅ THE 08:15 TOKEN REFRESH IS PC-INDEPENDENT.** **(S)**, width stated: VM-resident cron line ·
+*"fully headless via TOTP"* · a grep across the script **and both reused modules** for tailscale /
+private-IPs / mounts / scp / rsync / listen / socket / localhost / Windows paths returns **only the
+Zerodha URLs**, against a **control** proving the pattern matches elsewhere. **(P)** no network mounts;
+credentials present under the names `accounts.csv` declares.
+⚠️ **MECHANISM VERIFIED, OBSERVATION NOT — Thursday is the FIRST run with the PC off** (07:55–08:25).
+⛔ **Do not let that read as unverified, and do not let it read as observed.**
+
+**(7) 📜 G1 #7 — ⭐ THE AUTO-FILL STOPPED BEING TEXT AND BECAME THE ACT.** The ladder is complete:
+**suggest work → grant permission → PERFORM THE ACT.** ⛔⛔ **The command was CORRECT and the action
+was AUTHORISED — which is exactly why it counts:** plausibility is the attack surface, and a rule that
+needs the suggestion to be wrong fails on the one that is right.
+⭐ **The general rule it earned: A COMMAND'S OWN OUTPUT IS NOT EVIDENCE OF ITS EFFECT** — five bogus
+units failed loudly while the one that mattered stopped **silently**. *(Which is why step (c) is a
+SEPARATE verification.)*
+
+**(8) ⚠️ THE 02-Aug `Bash(ssh *)` MEMORY ENTRY: `REQUIRES RE-MEASUREMENT`.** Read-only `ssh` ran
+unprompted all night; the **one** `sudo` was **DENIED twice**. Two candidate explanations recorded,
+**neither tested**. ⛔ **The boundary was NOT probed and stays unprobed** — establishing which holds by
+running candidate `sudo` commands would be using a live money system as a test rig.
+⭐ **An inaccurate RISK entry fails in the WORSE direction: it makes you defend a hazard that has moved.**
+
+**(9) 📜 M1 GAINS GROUP 3 — THE SELECTION BOUNDARY.** *(⛔ instances, not a new rule.)*
+**Filter WIDER than the subject** — realised P&L summed to `0.0` because a `RESET_PNL −44.61` cancels
+the seven **by design**; ⭐ **that one would have refuted a CORRECT finding.** **Filter NARROWER** —
+`ZERODHA_API_KEY` read as MISSING because I checked the **fallback** name, not the **declared** one.
+⭐⭐ **Group 3 is the nastiest of the three: pattern, corpus AND width are each defensible, so nothing
+about the query looks wrong.** ⇒ **the width must now name the PREDICATE too.**
+**Three false zeros last night, all caught by controls.** *(The third — a self-truncated grep window —
+is an existing Group-2 instance.)*
+
+**(10) ⚠️ THE ₹4.36 STAYS `(d)`.** **No in-system close price exists** — 46 tables, none price-bearing;
+the only price all day is a **10:01 GTT-placement snapshot**; `583.04` = **0 hits against a control
+matching 32×**. ⭐ **Thursday's OPENING BALANCE is the test, and it exists ONLY because of Rama's
+settlement facts (item 4):** ≈ **9,340.91** ⇒ 44.61 settled ⇒ the 4.36 was an unrealised mark ·
+≈ **9,336.55** ⇒ the ledger over-books by 4.36 ⇒ the **cost model** · **neither ⇒ that is the finding.**
+⛔ **Score and stop. Do not adjust.**
+
+> ### ⚠️ **AND ONE CORRECTION TO THIS REGISTER'S OWN TEXT, FOUND BY MEASURING IT**
+> §A2 and the old resume block say **"TWO CNC positions are held"** — explicitly flagged there as
+> **OPERATOR-REPORTED, NOT MEASURED FROM HERE.** ⭐ **It has now been measured, three ways, and it is
+> ONE:** `trades.status='OPEN'` count = **1** · exactly **one** `ACTIVE` `gtt_state` row · the
+> reconciler's own `get_positions` log line reads **`"1 positions"`**.
+> ⛔ **The struck claim is left legible (§G4) because it is what the measurement is evidence against.**
+> ⭐⭐ **This is precisely why that line carried its provenance caveat — the caveat did its job.**
 
 ---
 
@@ -1626,6 +1735,50 @@ sub-entries. One passed:**
 `from C` = 2+1+0+2+0 = **5** ✅ · rows = 6+96+104+25+1 = **232** ✅ · N = 132+95+5 = **232** ✅
 ⛔ **Nothing was closed, re-graded or dropped to make this reconcile.**
 
+### 🔴 **AMENDED AGAIN 05-Aug-2026 23:4x — N MOVES 232 → 233. ONE MORE ROW: A7.**
+
+⭐ **The same test was applied, not the same habit:** *does it have a root cause no existing row owns,
+and would fixing it be separate work?* **Tonight produced eighteen further findings. Seventeen are
+sub-entries. One passed.**
+
+> ### 🆕 **A7 — A TRACKED CONFIG FILE THAT PRODUCTION REWRITES DAILY.** *(source **C**, band **§E**)*
+> Root cause owned by no existing row: **a file's AUTHORITY and its WRITER disagree.**
+> `config/strategy_direction_registry.yaml` is **version-controlled** and **rewritten by a cron job at
+> 16:22 Mon-Fri**, so every deploy reverts it and every officer run re-diverges it. ⛔ **Not a facet of
+> A6** (lifecycle), **not of debt-ledger #7** (multi-authority *concepts*, not files), **not of #12**
+> (that is the ledger's own untracked-ness — ⭐ **this is the mirror image: tracked, and it should
+> perhaps not be**).
+
+> #### ⚠️ **PLACEMENT: THE LABEL SAYS `A7`, THE BAND IS `§E`. THAT IS DELIBERATE AND IT HAS PRECEDENT.**
+> It was drafted in the 05-Aug consolidation block, which is why it carries an `A`-style label — but
+> **it is not live-trading and has no date: nothing reads the file, and what is owed is a GOVERNANCE
+> RULING from Rama** *(should a file production rewrites daily be tracked at all?)*.
+> ⭐ **`G17` already established label ≠ band in this register**, and §1's own note is explicit that
+> **placement errors are a distinct failure from count errors.** ⛔ **The label is NOT renamed — it is
+> cited by that name in tonight's commits and in the memory ledger.**
+
+**THE CHANGE, AND BOTH AXES BALANCE:**
+1. **+1 NEW ROW** — A7, source **C**, band **§E** ⇒ `from C` **5 → 6**, `§E from C` **0 → 1**,
+   `§E TOTAL` **1 → 2**, **N 232 → 233**.
+2. ⛔ **NOTHING ELSE MOVED.** No item was closed, re-graded, discharged or re-banded to absorb it.
+
+```
+  BAND                                          from A   from B   from C   TOTAL
+  §A  LIVE-TRADING THREAD                            4        0        2       6
+  §B  THE AUDIT FIX CAMPAIGN                         0       95        1      96
+  §C  PRE-AUDIT ITEMS STILL OPEN                   104        0        0     104
+  §D  SETTLED / DECIDED / KEPT FOR RECORD           23        0        2      25
+  §E  GOVERNANCE (6112791; +A7 05-Aug eve)           1        0        1       2   <- A7 ARRIVES
+                                                 -----    -----    -----   -----
+                                                   132       95        6     233  ✅
+```
+**COLUMN CHECK, both axes — ⭐ stated in full even though only one cell moved, because *silence about
+a count is how it rots*:** `from A` = 4+0+104+23+1 = **132** ✅ · `from B` = **95** ✅ ·
+`from C` = 2+1+0+2+1 = **6** ✅ · rows = 6+96+104+25+2 = **233** ✅ · N = 132+95+6 = **233** ✅
+
+⚠️ **A2 IS STILL NOT MOVED**, for the same reason as before: the round trip and the clean shutdown are
+verified, but **`<T+1 CARRY UNVERIFIED>`**. ⭐ **Thursday is the day that can discharge it — or not.**
+
 ⚠️ **A2 IS DELIBERATELY NOT MOVED.** The flip's entry AND exit are now verified live, but
 **`<T+1 CARRY UNVERIFIED>`** — it is not discharged and moving it would bank a green that was never
 measured. ⭐ **Discharging the easy half of an item is how a register loses the hard half.**
@@ -1690,8 +1843,9 @@ supersession mark (1, src C) = **4+3+1+3+11+1+1 = 24**.
 
 - ⭐ **B = 95 is EXACT and independently re-measurable** — the derivation (105 unique
   strings − 10 named sub-IDs) is given above so anyone can falsify it in one grep.
-- ⭐ **C = 5 is EXACT** *(was 4; A6 added 05-Aug evening)* — all five are enumerated by name.
-- ⭐ **§A, §B's ledger, §C's group totals, §D and §E are EXACT** — every one of the 232 is
+- ⭐ **C = 6 is EXACT** *(was 4; A6 added 05-Aug evening → 5; **A7 added 05-Aug 23:4x → 6**)* — all
+  six are enumerated by name.
+- ⭐ **§A, §B's ledger, §C's group totals, §D and §E are EXACT** — every one of the **233** is
   named or points at a source that names it. **§C's 55 sub-items are the one group carried
   by pointer, and S1 §9 enumerates all 55 by ID.**
 - ⚠️ **A = 132 is TAKEN FROM S2, NOT RE-DERIVED.** S2 states its M=131 is exact and
