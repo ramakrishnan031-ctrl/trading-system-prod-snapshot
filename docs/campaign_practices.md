@@ -362,6 +362,45 @@ M6 is that rule turned on a **zero** instead of on a **pass**.
 
 ---
 
+### M7 · ⭐ A DIGEST WITHOUT ITS METHOD IS NOT EVIDENCE
+
+> **Any hash recorded as evidence must carry, in the same place, the EXACT command that produced
+> it and the interpreter version that ran it. A digest without its method is not reproducible,
+> and a non-reproducible digest is decoration.**
+
+**Earned 05-Aug-2026.** The comment-only claim for `c5c1926` was recorded as *"`ast.dump(ast.parse())`
+sha256 `e19bccce…a171d21` IDENTICAL before and after"* — the right proof, correctly reasoned, and
+**the strongest available instrument for that claim** (an AST match shows there was nothing for the
+interpreter to execute differently; a passing test suite only shows it still passes).
+⛔ **But on independent re-computation the value did not reproduce.** Python 3.11.9 gives
+`ef355295a93f6e83…cba8b33b`, and it does not match under **any** of four dump variants tried
+(default · `include_attributes=True` · `indent=2` · `annotate_fields=False`).
+
+⭐ **THE CLAIM HELD; THE VALUE DID NOT — AND THOSE ARE DIFFERENT FAILURES.** Re-measured, the AST
+**is** identical across `c5c1926`, and `main.py`'s md5 **did** move `9bbc1747…` → `6cff0ce8…`
+(181,526 → 183,144 B), so the anti-vacuity half stands too. ⛔ **The original conclusion is NOT
+retracted.** What failed is the *audit trail*: a later reader cannot re-derive the number, so the
+number does no work — the claim has to be re-measured from scratch to be trusted, which is exactly
+what a recorded digest is supposed to prevent.
+
+**Why this is an M-family rule and not a nitpick:** a digest is recorded *precisely* because it is
+supposed to be checkable later by someone who does not trust the writer. `ast.dump` output is
+version-sensitive and option-sensitive; the same source can yield several legitimate digests. ⇒ **the
+method IS the measurement.** Recording the hash without it is the same error as quoting a percentage
+without its denominator (§the denominator discipline) — a number that reads as precise and cannot be
+checked.
+
+**In practice:** beside any recorded hash, write the command. Not a description of it — the command.
+`python -c "import ast,hashlib;print(hashlib.sha256(ast.dump(ast.parse(open('main.py').read())).encode()).hexdigest())"` with `python 3.11.9` beside it is reproducible; *"the AST sha256"* is not.
+
+⚠️ **Sibling of §M2** (*measure, don't infer — and PROVE, don't assert*). **M2 says produce the
+proof. M7 says record it so someone else can re-run it.** A proof only the author can reproduce is
+an assertion with extra steps.
+
+(Record: `docs/audit/check1_product_skip_step1_05aug2026.md` §T6 finding 13.)
+
+---
+
 ## V. VALIDATION
 
 ### V1 · PAPER CANNOT VALIDATE PRODUCT SEMANTICS
