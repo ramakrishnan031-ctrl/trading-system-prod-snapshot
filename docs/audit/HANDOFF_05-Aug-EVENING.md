@@ -2,25 +2,45 @@
 
 > **Written BEFORE it was needed (P3), and kept current as work proceeded.** The PC powers down
 > ~16:30–17:00; this is what survives that.
-> ⏰ **Last updated: 16:25 IST — ✅ ALL OF STAGE 1 IS MEASURED AND EVERY PART PASSES.**
+> ⏰ **Last updated: 16:29 IST (clock read from console) — ✅ STAGE 1 AND THE FOUR POST-GATE
+> MEASUREMENTS ARE ALL DONE. EVERY PART PASSES.**
 
 ---
 
 ## ▶️ THE STATE, IN ONE BLOCK — read this first if you are picking up cold
 
 ```
-STAGE 1a  §A  the CHECK1 gate .............. RESULT = PASS      (measured 16:03-16:06)
-STAGE 1b  §B  was the trigger observed ..... RESULT = PASS      (measured 16:10)
+STAGE 1a  §A  the CHECK1 gate .............. RESULT = PASS      (16:03-16:06)
+STAGE 1b  §B  was the trigger observed ..... RESULT = PASS      (16:10)
               why gtt_state says CLEANED ... RESULT = NOT DETERMINABLE -> Stage 2 answers it
-STAGE 1b  §C.1 H5 coupling ................. RESULT = PASS      (CONFIRMED, measured 16:21)
+STAGE 1b  §C.1 H5 coupling ................. RESULT = PASS      (CONFIRMED, 16:21)
 STAGE 1b  §C.2 sizing prediction ........... RESULT = PASS      (prediction DISPROVED, 16:11)
           §0d fm_ledger capital path ....... RESULT = PASS      (reconciles exactly, 16:14)
-          §0d the 4.36 day-P&L gap ......... RESULT = NOT DETERMINABLE (needs Kite)
-          §2c is any CNC trade EXITING ..... RESULT = PASS      (NO -- see below)
+          §0d the 4.36 day-P&L gap ......... RESULT = NOT DETERMINABLE (contract note)
+          §2c is any CNC trade EXITING ..... RESULT = PASS      (NO -- from STEP 0)
+--- post-gate card, 16:21-16:28 block ---
+§1  qty_by_flat / verdict integrity ........ RESULT = PASS      (DISPROVED survives)
+§2  the real H5 gate named ................. RESULT = PASS      (product-BLIND)
+§2  in-repo correction sweep ............... RESULT = PASS      (0 to correct -- honest zero)
+§3  does the cost model branch on product .. RESULT = PASS      (YES, at three points)
+§3  broker_costs.yaml / hardcoded fallback . RESULT = PASS      (loaded; NO fallback exists)
+§4  FIX-133 load-bearing + silent class ..... RESULT = PASS
+§4  delivery sizing pinned by arithmetic ... RESULT = PASS      (item 5 reordered)
+§5  this file's self-description ........... RESULT = PASS      (4 timestamps corrected)
+--- outstanding ---
 STAGE 2   the 17:35 census ................. RESULT = NOT RUN   (⛔ not before 17:40)
 STAGE 3   the push decision ................ RESULT = NOT RUN   (⛔ not before 18:15)
 CHECK (1) broker GTT on the Kite web page .. RESULT = NOT RUN   (⛔ OPERATOR ONLY)
+the register card (§5 of the post-gate) .... RESULT = NOT RUN   (⛔ FILE NOT FOUND -- see below)
 ```
+
+### ⛔ THE REGISTER CARD IS NOT IN THE REPO — SO IT WAS NOT STARTED
+`VSCODE_INSTRUCTION_05-Aug-2026_REGISTER-THE-DESIGN-THREAD.txt` **does not exist.**
+**Search width, stated:** exact-path `ls` · case-insensitive `find` over the whole tree excluding
+`.git` · `git ls-files | grep -i VSCODE_INSTRUCTION` (**zero tracked files of that shape**) · a root
+`*.txt` listing. ⇒ **it is an operator-side file, like the run sheet itself.**
+⛔ **Not started, and ⛔ NOTHING WAS INVENTED ABOUT WHAT IT CONTAINS.** ⭐ The findings it would draw
+on are all written and committed above, so it can be picked up whole whenever the file appears.
 
 ### ⭐ §2c IS ALREADY ANSWERED — BY STEP 0, WITH NO EXTRA COMMAND
 STEP 0's unfiltered count lists **every** CNC status held today: `CANCELLED 2 · CLOSED 1 ·
