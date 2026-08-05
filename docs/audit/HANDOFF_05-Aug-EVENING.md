@@ -2,7 +2,7 @@
 
 > **Written BEFORE it was needed (P3), and kept current as work proceeded.** The PC powers down
 > ~16:30–17:00; this is what survives that.
-> ⏰ **Last updated: 14:2x IST.**
+> ⏰ **Last updated: 14:2x IST — item-4 step-1 survey COMPLETE and committed (§1 + §2).**
 
 ---
 
@@ -78,7 +78,7 @@ NOT place a sell. The shares stay in the account either way.**
 |---|---|
 | `docs/audit/check1_product_skip_step1_05aug2026.md` | the CHECK1 measurement — operands, the four entry points, the dependency chain, and 8 open design questions **left unanswered** |
 | `docs/audit/ADDENDUM_capital_drift_05-Aug-2026.md` | the drift worksheet + the boot-seed prediction + **4 questions recorded unanswered** |
-| `docs/audit/item4_partA_inventory_survey_05aug2026.md` | ⭐ **"Part A" does not exist and TWO control inventories do** — item 4 must reconcile before it extends |
+| `docs/audit/item4_partA_inventory_survey_05aug2026.md` | ⭐⭐ **COMPLETE (§1 survey + §2 raw config list).** *"Part A" does not exist*; **TWO control inventories do** and overlap ⇒ **item 4 must RECONCILE before it extends.** Neither can express `ENFORCE + PLACEHOLDER`. Inventory #1's line cites have **rotted (3 of 4 spot-checks)**. 302 config keys enumerated, ⛔ **unclassified and with no value proposed** |
 | `docs/campaign_practices.md` | **M7** (a digest without its method) · **M8** (read the record before measuring) · **V5** (a check with no failing input) · **AR9** (the drift acceptance + reopen conditions) · a first *positive* **G1** instance |
 | `docs/expected_alarms.md` §3a | the drift CRITICAL, with a six-condition discriminator that can go red |
 | `docs/SYSTEM_MAP.md` | Delivery section corrected — it read *"DORMANT / never exercised"* on the day delivery traded |
@@ -96,8 +96,11 @@ NOT place a sell. The shares stay in the account either way.**
   question recorded in the ledger: **the "book flat" pre-push gate meets a book that is correctly
   NOT flat, for the first time.**
 - **231 stands.** No register row was created today.
-- **The delivery configuration surface is NAMED, NOT STARTED** — item 5, gated on item 4, and item 4
-  now has a survey saying what it must reconcile first.
+- **The delivery configuration surface is NAMED, NOT STARTED** — item 5, gated on item 4.
+  ⭐ **Item 4's step 1 is now DONE, and it changed item 4:** its instruction *"extend the existing
+  inventory"* named a subject (*"Part A"*) that **does not exist**, while **two real inventories do**.
+  ⇒ **item 4 begins with a RECONCILIATION, not an annotation.** ⛔ Which inventory survives is a
+  design decision and was NOT taken.
 
 ---
 
