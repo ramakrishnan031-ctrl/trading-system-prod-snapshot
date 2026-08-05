@@ -1187,3 +1187,157 @@ by mtime revealed it.
 no code changed · **no VM writes — every VM call was `grep`/`cat`/`sed`/`ls`/`systemctl show`, and
 the operator card's `cp`-capture was deliberately NOT run** · no design decided · no delivery config
 value proposed · **231 stands** · no implementation.
+
+---
+
+# 🔴 §12. THE THREE MEASUREMENTS THAT DECIDE TONIGHT — RUN 18:10–18:33. ⛔ READ-ONLY.
+
+⛔ **No recommendation is made here. Rama rules.**
+
+## ✅ 12.1 (card §1.2, taken FIRST because it is the safety gate) — **`_shutdown()` IS CLEAN**
+
+`_shutdown()` read **end to end**, `main.py:1253-1485`. **The complete inventory of what it does:**
+
+| # | act | touches position/GTT? |
+|---|---|---|
+| 1 | `_shutdown_event.set()` | no — in-process flag |
+| 2 | `kill_switch.drain_flatten(15s)` | **waits** for a HARD_KILL flatten; never starts one. None is running |
+| 3 | ⭐ **`emit_census()` `:1319`** | no — **THE CENSUS** |
+| 4 | `_invalidate_token()` — **only if `_broker_auth_failed`** | no |
+| 5 | ~14 daemon `.stop()` calls | no |
+| 6 | 🔴 **`order_monitor.cancel_all_entry_orders()` `:1422`** | **the ONLY broker-mutating call** |
+| 7 | `live_feed.disconnect()`, `candle_store.stop()` | no |
+| 8 | `notifier.send` · `insert_system_event("SHUTDOWN")` · `checkpoint_wal()` · `store.close()` | no |
+
+⛔ **NO square-off · NO GTT call · NO capital release · NO position close · NO `gtt_state` write.**
+
+**(S) The one mutating call is filtered — verified against the FILTER, not the comment**
+(`broker/order_monitor.py:550-554`):
+```python
+for entry in snapshot.values():
+    if entry.leg not in ("", "ENTRY"):   # "" = unset leg, treated as ENTRY
+        continue
+    result = self._adapter.cancel_order(entry.broker_order_id)
+```
+⇒ SL/TGT/EOD legs `continue` past. ⭐ **And `cancel_order` ≠ `delete_gtt` — a different API entirely.**
+
+**(S) The GTT monitor cannot run during teardown.** `order_reconciler.stop()` (`:446-452`) sets a
+stop event and joins — nothing else. The poll loop has **no `finally` and no final sweep**:
+```python
+while not self._stop_event.is_set():
+    self._stop_event.wait(timeout=self._cfg.poll_interval_sec)
+    if self._stop_event.is_set():
+        break                      # <- BEFORE reconcile_once() and _maybe_run_cnc_monitor()
+    self.reconcile_once()
+    self._maybe_run_cnc_monitor()
+```
+⭐ **Second, independent guard:** `_maybe_run_cnc_monitor` returns early unless `in_hours` — False now.
+
+**(P) THE EMPIRICAL HALF — there is nothing to cancel:**
+```
+ATULAUTO's orders:            order 260805170255228 | leg ENTRY | status COMPLETE | CNC
+  (rowcount control = 1, so the filter matched — the blank could have been a lie)
+NON-TERMINAL orders anywhere:  NONE
+gtt_state:                     330456580 ATULAUTO ACTIVE  ·  330462987 ASKAUTOLTD CLEANED
+```
+⭐⭐ **ATULAUTO HAS NO SL OR TGT ORDER AT ALL — its only order is the filled ENTRY.** Its exit
+protection **is** the broker-side GTT, which is not an `orders` row and is unreachable by
+`cancel_order`. ⇒ **`cancel_all_entry_orders()` is irrelevant to it twice over.**
+
+**(P) `_broker_auth_failed` is False** — 0 broker-auth errors today, against a control of **25**
+ERROR/CRITICAL lines. ⇒ **`_invalidate_token()` will NOT run; the token survives for Thursday.**
+
+⚠️ **ONE RESIDUAL, NAMED RATHER THAN BURIED:** the `""` unset-leg clause treats an unset-leg watched
+order as ENTRY. `_watched` is **in-memory**; I measured the **DB**. Zero non-terminal orders makes a
+populated `_watched` very unlikely, ⛔ **but this is (P)-strong, not (P)-exhaustive.**
+
+## ✅ 12.2 (card §1.1) — **YES: A CLEAN STOP REACHES `_shutdown()` AND EMITS THE CENSUS**
+
+**(S) unit** — `systemctl cat trading-system.service`, matching in-repo `deploy/systemd/…:24-25`:
+```
+KillSignal=SIGINT      # "Send SIGINT on stop so main.py's Ctrl+C handler runs"
+TimeoutStopSec=30      # no KillMode -> default control-group
+```
+⭐ **`systemctl stop` sends SIGINT, not SIGTERM** — and **both** are handled (`main.py:1229-1233`).
+**(S) the handler sets the event; it does NOT call `_shutdown()`** — so the real gate is the loop:
+```python
+_shutdown_event.wait()      # :3788 HEAD / :3761 deployed — the ENTIRE runtime loop
+_shutdown(...)              # :3791 HEAD / :3764 deployed — UNCONDITIONAL, nothing between
+```
+**(S) `_shutdown()` has exactly ONE call site.** ⇒ any path that sets the event reaches it.
+
+**Verified at the DEPLOYED SHA, not just HEAD (M3):** handler `:1229-1232` and `emit_census` `:1319`
+are at **identical line numbers** at `0197923` and HEAD; the `+27` diff is a **single hunk at
+`@@ -2438,6 +2438,33 @@`** inside `_main_locked` — outside `_shutdown()` and outside the signal path.
+
+⏱️ **Timing fits:** `emit_census()` runs EARLY — after the flatten drain, **before** all manager
+teardown — and `drain_flatten` returns immediately with no flatten running. ⇒ the census is written
+within seconds, far inside `TimeoutStopSec=30`. ⭐ **Even if teardown overran and systemd SIGKILLed,
+the census would already be on disk.**
+
+## ✅ 12.3 (card §1.3) — **STILL IN `positions()`. T+0, PRE-SETTLEMENT.**
+
+**(P)** `get_positions` at **18:25:51 → "1 positions"** (polled every ~15 s, still running).
+**(P)** `get_holdings` last returned **"0 holdings" at 15:22:24** — the calls stopped because
+`_maybe_run_cnc_monitor` is gated `in_hours`. ⚠️ **So the holdings zero is a 15:22 reading, not a
+live one; the positions reading IS live.**
+⇒ **A stop or boot tonight is the ordinary pre-settlement case. The T+1 case begins tomorrow.**
+
+## 🔴🔴 12.4 — THE SHARPENED QUESTION, ANSWERED PARTLY — **AND THE CENSUS COULD NOT HAVE ANSWERED IT**
+
+**(P) THE MONITOR RAN AND FINALISED THE EXIT** — this line has been in the log since this morning:
+```json
+{"ts":"2026-08-05T10:45:51.400+05:30","logger":"cnc_gtt_monitor","msg":"cnc_gtt_monitor.gtt_exit",
+ "trade_id":"trd_6b23c2e6899b4449bec816fd276d1185","symbol":"ASKAUTOLTD","exit_price":596.35,
+ "gtt_id":330462987,"pnl":16.02,"reason":"GTT_EXIT"}
+```
+
+⚠️ **I FIRST READ THIS AS "THE MONITOR OBSERVED THE TRIGGER" AND THAT WAS TOO STRONG.** **(S)** the
+K6 ladder has **three** paths to `_finalize_gtt_exit(reason="GTT_EXIT")`, all emitting an
+**identical** line: rung 1 `triggered` (`:486-488`, **observed**) · rung 4 orphan (`:505-508`) ·
+rung 4 *"GTT gone + flat"* (`:510`, **inferred**).
+
+| rung | verdict | evidence |
+|---|---|---|
+| 4-orphan | ✅ **ELIMINATED** | **(P)** 0 `orphan_active_gtt_flat`, 0 forensic entries of any kind — and `_forensic_log` emits at **WARNING** (`:712-716`), which does reach `system_*.log`, so the zero is interpretable |
+| 1 vs 4-gone | ⛔ **NOT DETERMINABLE** | the discriminator is what `get_gtts` returned at 10:45:51 — **and `get_gtts` is UNINSTRUMENTED: 0 `call_start`/`call_end` all day** |
+
+> ### 🔴🔴 **AND THE CENSUS WOULD NOT HAVE SETTLED IT EITHER — SO THE EVENING'S PREMISE WAS WRONG.**
+> **(S)** `cnc_gtt_monitor.py:145-153`:
+> ```python
+> actions.append(self._handle_row(r, broker_gtts, held_qty, in_hours))
+> ...
+> if actions:
+>     self._fx_actions.add(len(actions))
+> ```
+> ⛔ **`_handle_row` returns a label on EVERY path — including `healthy:`, `needs_review:` and
+> `noop:` — and every label is counted.** ⇒ ⭐⭐ **`acted` counts ROWS EXAMINED, NOT ACTIONS TAKEN**,
+> and it is identical for rung 1 and rung 4. **`acted > 0` cannot separate "observed" from "swept".**
+> ⇒ ⛔ **The claim carried all evening — *"the census is the ONLY source that can separate them"* —
+> is REFUTED on both halves: it is not the only source (the `gtt_exit` line is closer), and it is
+> not a source for this at all.** ⭐ **The census retains its other value; it never had this one.**
+> 🔴 **What would actually answer it: instrument `get_gtts`, or log `bg_status` in `_handle_row`.**
+> ⛔ **Recorded as a finding. NOT designed, NOT built, NOT proposed for tonight.**
+
+## ⚠️ 12.5 — A NEW RISK OBSERVED WHILE MEASURING, NOT IN ANY OPTION'S FRAME
+
+**(P) Zerodha returned `502 Bad Gateway` twice this evening — 17:22:37 and 17:50:58** — each taking
+`reconcile_once` down with it (`reconcile_once unhandled error`) and failing
+`cnc_gtt_adoption: get_gtts`. ✅ **The poll thread survived both** (drift alarm at 17:46, a further
+cycle at 17:50). ✅ **The broker is healthy now:** `get_positions`/`get_margins`/`get_quote` all
+returning in **17–40 ms at 18:25:51**.
+⚠️ **A 502 on `get_gtts` is a READ failure — it cannot harm the resting GTT.** ⛔ But it is a live
+input to any stop/restart decision: **the startup path reads the broker, and the broker was
+intermittent within the last hour.**
+⚠️ **Width correction I owe:** my first 502 sweep matched the digits `502` inside INFO price lines
+and returned ~100 false hits. **The real count is two, both ERROR-level.** *(Same class again — a
+pattern that cannot fail to match is not a check.)*
+
+```
+§12.1 does _shutdown() touch the position/GTT   RESULT = NO -- clean (S+P, one residual named)
+§12.2 does a clean stop reach _shutdown()       RESULT = YES -- and it EMITS the census (S, both SHAs)
+§12.3 positions() or holdings()                 RESULT = positions() -- T+0, live at 18:25:51
+§12.4 did the monitor OBSERVE the trigger       RESULT = PARTLY -- finalised (P); rung 1 vs 4 NOT DETERMINABLE
+§12.4 would the census have answered it         RESULT = NO -- acted counts rows examined (S). Premise refuted
+§12.5 broker stability                          RESULT = 2 x 502 this evening; healthy at 18:25
+```
