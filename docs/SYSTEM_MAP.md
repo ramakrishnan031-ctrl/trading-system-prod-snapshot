@@ -33,7 +33,7 @@
 **Live mechanisms / gates:**
 - `Circuit-band placeability gate` (NOCIL fix) · `MIS Learned Blocklist` (NO_FILL Mech-B)
 - `Control Tower` — VM operations monitoring
-- `Delivery (Slice 2.5)` — ~~BUILT / DORMANT / awaiting T2 validation (triple-locked)~~ ⭐ **UPDATED 05-Aug-2026: `<DEPLOYED — ENTRY PATH VERIFIED LIVE 05-Aug; EXIT PATH UNVERIFIED>`. The three locks are OFF and delivery has traded.**
+- `Delivery (Slice 2.5)` — ~~BUILT / DORMANT / awaiting T2 validation (triple-locked)~~ ~~UPDATED 05-Aug: `<DEPLOYED — ENTRY PATH VERIFIED LIVE 05-Aug; EXIT PATH UNVERIFIED>`~~ ⭐ **UPDATED 05-Aug-2026 23:0x: `<ROUND TRIP VERIFIED LIVE 05-Aug; CLEAN SHUTDOWN WITH POSITION HELD VERIFIED 05-Aug; T+1 CARRY UNVERIFIED>`. The three locks are OFF and delivery has traded.** ⛔ **Nothing wider — the carry is Thursday's.**
 
 **Open work / debt:**
 - `Known Duplicates / Issues` · `PENDING CLEANUP` · `Deferred items board`
@@ -1187,7 +1187,19 @@ Everything else is closed / deployed / dormant / awaiting normal production evid
 | 2 | **Delivery Slice 2.5 (T2)** | **DEFERRED (02-Jul attempt — live NEVER run; proof script bit-rotted)** | **off-market whole-script repair first** (never run since the API evolved) | Pre-checks PASSED 02-Jul (deploy both fixes live HEAD 59f83b5; delivery-lock gate GREEN — T2 adapter `delivery_enabled=True`, `force_intraday_only` off the direct path, reconciler CHECK2 non-destructive for the untracked CNC). Drift in `t2_cnc_gtt_realtest.py`: L71 `core.`→`broker.order_state_machine`, L83 `RateLimiter(cfg.broker_limits.rate_limits)`→`RateLimiter(cfg.broker_limits)`, L319 `store=None`→wire store (else NO `gtt_state` row = lifecycle unvalidatable). REPAIR whole script + full static audit of construction/live-order path vs main.py (a dry-run can't exercise the live path) → tests → clean dry-run → commit → Rama pushes OFF-MARKET → run COMPLETE T2 (mid-session, not open 30 min / not after 14:45, flat book). Parked branch `fix-t2-import-02jul`@`b826ae0` (L71 only, unpushed, superseded by the full repair). Memory `t2_attempt_02jul` / `delivery_slice25_status_30jun` |
 
 ## Delivery (Slice 2.5) — ~~STATUS: BUILT / DORMANT / AWAITING_T2_VALIDATION (30-Jun)~~
-## ⭐⭐ STATUS **UPDATED 05-Aug-2026: `<DEPLOYED — ENTRY PATH VERIFIED LIVE 05-Aug; EXIT PATH UNVERIFIED>`**
+## ~~STATUS UPDATED 05-Aug-2026: `<DEPLOYED — ENTRY PATH VERIFIED LIVE 05-Aug; EXIT PATH UNVERIFIED>`~~
+## ⭐⭐ STATUS **UPDATED 05-Aug-2026 23:0x: `<ROUND TRIP VERIFIED LIVE 05-Aug; CLEAN SHUTDOWN WITH POSITION HELD VERIFIED 05-Aug; T+1 CARRY UNVERIFIED>`**
+
+> ⭐ **WHAT THE SECOND CLAUSE MEANS, PRECISELY — and it is narrower than it sounds.** At **22:46:36**
+> a clean `systemctl stop` ran with a real CNC delivery position held: `_shutdown()` completed,
+> **squared off nothing, cancelled nothing, released no capital, closed no position**, emitted the
+> census (`mismatches=0`) and exited **0**. The safety argument had been read from source all
+> evening; **that is the reading that held in production.** Record: `docs/audit/STOP_PROCEDURE_05-Aug-2026.md` §(i).
+> ⛔ **IT DOES *NOT* MEAN THE EXIT PATH IS VERIFIED.** No GTT fired, nothing was sold, and
+> **`acted 24` on `cnc_gtt_monitor` counts rows EXAMINED, not actions TAKEN** — so the GTT question
+> remains **(d) undetermined** until `get_gtts` is instrumented.
+> 🔴 **T+1 CARRY IS THURSDAY'S** — scored at `docs/audit/THURSDAY_CONTINGENCY_06-Aug-2026.md`
+> → **BRANCH A CONTINUED, step 3**, whose expectation and baseline were written **before** the fact.
 
 > ### 🔄 CURRENCY — read this before the 30-Jun text below, which is **superseded, not deleted**
 > ⛔⛔ **THE THREE LOCKS ARE OFF AND DELIVERY HAS TRADED.** Flags pushed **04-Aug 19:08:09** (`0197923`)
