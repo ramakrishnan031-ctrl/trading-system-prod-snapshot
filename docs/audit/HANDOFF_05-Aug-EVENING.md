@@ -2,7 +2,73 @@
 
 > **Written BEFORE it was needed (P3), and kept current as work proceeded.** The PC powers down
 > ~16:30–17:00; this is what survives that.
-> ⏰ **Last updated: 14:2x IST — item-4 step-1 survey COMPLETE and committed (§1 + §2).**
+> ⏰ **Last updated: 16:07 IST — 🔴 THE CHECK1 GATE IS MEASURED AND IT PASSES. See §0 below.**
+
+---
+
+## ✅✅ §0. THE GATE — MEASURED 16:03–16:06 IST. **RESULT = PASS.**
+
+⛔ **This section is MEASURED, on the VM's live DB. It supersedes every operator-reported figure.**
+
+### The four commands and what they returned
+
+**STEP 0 — unfiltered `(product, status)`:**
+```
+|FAILED|63          <- BLANK product
+|REJECTED|59        <- BLANK product
+CNC|CANCELLED|2
+CNC|CLOSED|1
+CNC|FAILED|5
+CNC|OPEN|1
+MIS|CANCELLED|7
+MIS|CLOSED|171
+MIS|CLOSED_MANUAL|47
+MIS|FAILED|173
+```
+- ✅ **`CNC|OPEN|1`** — exactly one held delivery position. **Confirms the operator report.**
+- ✅ **`CNC|CLOSED|1`** — the same-day round trip is in the DB as **CLOSED**. ⭐ **The system did
+  not miss the close.** (Detail pending — §B.)
+- 🔴 **THE BLANK PRODUCT IS REAL: 122 rows (63 `FAILED` + 59 `REJECTED`).** The card said a blank
+  must be investigated before the branch table is read. **It has been, and here is the finding:**
+  ⭐ **every blank-product row is in a TERMINAL, NEVER-FILLED status.** Not one is `OPEN`,
+  `PARTIAL`, `EXITING`, `PENDING`, `PENDING_FILL` or `UNKNOWN_IN_FLIGHT`.
+  ⇒ **NO HELD POSITION IS HIDDEN FROM THE PRODUCT FILTER**, so the gate below stands.
+  ⚠️ **The blank is still a data-completeness gap worth a register sub-entry** — it is the
+  `LEFT JOIN` NULL that `schema_product_is_on_orders_05aug` warned about, now **OBSERVED IN
+  PRODUCTION at 122 rows** rather than reasoned about. ⛔ **Latent, not live** — it becomes live the
+  day a *fillable* status appears with a blank product.
+
+**STEP 0b — duplicate ENTRY rows:** **nothing returned.** ✅ The totals below are trustworthy.
+
+**CHECK (2) — `gtt_state`, the first rows this table has ever held in production:**
+```
+gtt_id     trade_id                              symbol      status   created_at
+330456580  trd_e66ee17b1844491db5d2e99afa6f104b  ATULAUTO    ACTIVE   2026-08-05T10:01:22+05:30
+330462987  trd_6b23c2e6899b4449bec816fd276d1185  ASKAUTOLTD  CLEANED  2026-08-05T10:13:27+05:30
+```
+
+**CHECK (3) — does the row's `trade_id` match the trade's?**
+```
+trade_id                              product  status  qty_filled  entry_actual_price  gtt_id     gtt_status
+trd_e66ee17b1844491db5d2e99afa6f104b  CNC      OPEN    1           587.4               330456580  ACTIVE
+```
+✅ **Non-empty `gtt_id`. `gtt_status` = `ACTIVE`. `trade_id` IDENTICAL on both sides.**
+
+**(A) money reconcile:** `positions = 1`, `total_cnc_value = 587.40`.
+✅ **The pre-registered prediction was ₹587.40. It landed exactly.** (Kite cross-check owed to Rama.)
+
+### 🟢 THE BRANCH: *"CNC held + every position has a matching `ACTIVE` row"* ⇒ **PROTECTED.**
+
+⭐ **And the thing worth recording beyond the pass: this protection has now actually RUN IN
+PRODUCTION for the first time.** The `gtt_state` table was empty before today.
+
+⇒ ⛔ **§2b IS NOT REACHED. No decision is owed tonight. Thursday's 08:15 boot may run.**
+⇒ ⛔ **The Stage-3 implementation gate is NOT met — condition (1) requires a CONFIRMED DEFECT and
+there is none.** The push, if any, is optional and routine.
+
+```
+STAGE 1a (§A the gate)   RESULT = PASS
+```
 
 ---
 
