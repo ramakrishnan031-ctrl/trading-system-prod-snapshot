@@ -839,6 +839,58 @@ before 18:15 · label BUILT/DEPLOYED/VERIFIED LIVE, never "fixed".
 **⇒ 22 distinct IA findings are ranked into the ledger** (rank #2 cites no IA finding —
 it is the pre-audit Q4/Q7 item, §A4).
 
+### 🔴 SUB-ENTRY ON ROW 7 (H5) — 05-Aug-2026. ⛔ **NOT A NEW ROW. 231 STANDS.**
+
+> ⛔ **ROW 7 IS CURRENTLY THE SOURCE OF A WRONG SEARCH STRING, AND IT COST NOTHING TO FIND
+> ONLY BECAUSE THE CHECK WAS RUN THE OTHER WAY ROUND.**
+>
+> *Placed here rather than inside row 7 because that row is one enormous single-line table
+> cell; appending inside it risks breaking the table. Cross-referenced, not relocated.*
+> ⚠️ **M3 instance recorded in passing:** this claim was measured at `:763` and sits at
+> **`:832`** at HEAD — the item-4 sub-entry shifted it by exactly **+69 lines**.
+
+**Row 7 says** a held delivery position blocks every intraday entry on that symbol *"invisibly,
+because it rejects as `DUPLICATE_SYMBOL`"*, and asks: *was any intraday signal on a held CNC
+symbol rejected AFTER the CNC fill? If yes, H5 has its FIRST PRODUCTION INSTANCE.*
+
+| the claim | verdict | evidence |
+|---|---|---|
+| mechanism: `has_active_position` filters **symbol + status only — no product, no date** | ✅ **CORRECT** | **(S)** `state_store.py:839-853`, read verbatim 05-Aug |
+| consumed at `risk_engine.py:690` as `DUPLICATE_SYMBOL` | ✅ **CORRECT** | **(S)** |
+| a delivery hold blocks intraday on that symbol **for all N days** | ✅ **CORRECT** | **(S)** |
+| ⛔ **the code you will see is `DUPLICATE_SYMBOL`** | 🔴 **WRONG FOR THE FILL DAY** — right from day 2 | **(P)** 05-Aug: **6 × `SYMBOL_DIRECTION_DAILY_LIMIT`, 0 × `DUPLICATE_SYMBOL`** |
+
+**Why:** a **second, earlier, also product-blind** gate shadows it. `signal_processor.py:693`
+*(deployed `0197923`; `:717` at HEAD — M3)* raises `SYMBOL_DIRECTION_DAILY_LIMIT` **before**
+`risk_engine` is ever reached.
+
+> ### 🔴 THEREFORE H5's OWN MECHANISM HAS **NOT** HAD ITS FIRST PRODUCTION INSTANCE. **STILL LATENT.**
+> **(P) CONFIRMED:** a **product-blind** gate blocked intraday signals on a symbol a CNC fill had
+> claimed — real, observed, six times. **The coupling CLASS is confirmed.**
+> 🔴 **(S) NOT H5's MECHANISM:** `has_active_position` was never reached; the pipeline rejected
+> upstream. ⛔ **Those two facts must travel together.**
+
+**⚠️ THE RISK ROW 7 CREATED, STATED PLAINLY:** an operator following it greps `DUPLICATE_SYMBOL`,
+gets **zero**, and records *"no H5 instance"* — **while a real product-blind block DID happen.**
+⭐ **A live instance of `V5`** (a check with no failing input available to it manufactures
+confidence) **and of the wide-check rule.** ✅ What saved it: enumerating the actual
+`rejection_reason` values instead of searching for the predicted ones.
+
+> ### ⏰ **THE DATED, FALSIFIABLE PREDICTION — THU 06-Aug**
+> **(S)** the two gates have **different reset semantics**, both verified 05-Aug:
+> `SYMBOL_DIRECTION_DAILY_LIMIT` counts via `SUBSTR(created_at,1,10) = today`
+> (`state_store.py:707-725`) ⇒ **resets at midnight**; `has_active_position` keys on
+> `status IN ('PENDING_FILL','OPEN','PARTIAL')` with **no date** (`:839-853`) ⇒ **does not reset
+> while the position is OPEN.**
+> **(I)** ⇒ **IF ATULAUTO IS STILL HELD ON 06-Aug AND ANY INTRADAY SIGNAL ARRIVES ON IT, THE
+> REJECTION CODE SWITCHES TO `DUPLICATE_SYMBOL`** — H5's genuine first production instance.
+> ⛔ **If no intraday signal arrives, the result is NOT DETERMINABLE — not a refutation.**
+> ⛔ **Never observed. This is arithmetic over two verified predicates, not a measurement.**
+
+⛔ **Nothing is fixed here and no fix is implied.** Row 7's ranking, mechanism and multi-day claim
+all stand unchanged; **only the expected code name is corrected, and only for day 1.**
+🔗 Measurement record: `docs/audit/HANDOFF_05-Aug-EVENING.md` §8.
+
 ## §B.2 — THE 73 FINDINGS **BELOW** THE LEDGER LINE — ⛔ ACCOUNTED FOR, NOT LOST
 
 **S3 carries 95 finding IDs.** 22 are ranked above. **The remaining 73 are not
