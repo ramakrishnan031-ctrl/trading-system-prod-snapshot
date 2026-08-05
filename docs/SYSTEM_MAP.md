@@ -620,6 +620,37 @@ To change cron: edit `config/cron_registry.yaml` → `scripts/generate_crontab.p
 | `security-watcher.service` | `python scripts/security_monitor.py --watch` | **VM Security Manager Phase 1+2** — auth.log + file-integrity monitor (9 checks incl. Phase-2 copy-switch + copy-bypass) **+ 1 non-security check (26-Jul-2026): `check_nse_holiday_calendar`** — CRITICAL while a REQUIRED `config/nse_holidays_<year>.yaml` is absent (current year always; next year from 15-Dec), silent the moment it exists. ⭐ It is hosted HERE, not on the boot path, because this is the only always-on process — on 1-Jan the trading service is the thing that is dead, so a boot-path check cannot warn you the boot died — and because `_dedup`'s presence ledger already turns a persistent condition into ONE CRITICAL then a 6h/24h/7d ladder. ⏳ It escalates ONCE near the deadline: the key carries a PHASE from a closed 3-value set (`boot-dead`/`notice`/`final`), so the presence ledger treats the escalation as the different condition it is and re-alerts at full severity — bounded at ≤3 CRITICALs per file per year by the set's size (a DATE in the key was MEASURED at 17). Whole 15→31-Dec window = **7 alerts, 2 CRITICAL**. Knobs: `holiday_calendar_alert` / `holiday_calendar_lead_days` (16 ⇒ 15-Dec) / `holiday_calendar_final_days` (3 ⇒ 28-Dec, must stay < lead_days) in `config/security.yaml`. [LFL836] alerts | **enabled+active (19-Jun)**. `Type=simple`+`Restart=always`+`RestartSec=60` → periodic (~60s); model = alert-watcher. Reads `/var/log/auth.log` (ubuntu ∈ `adm`). Config `config/security.yaml` (standalone — NOT system_config.yaml, which is `extra="forbid"`). State `data_store/security_state.json`. Alert-ONLY (never blocks). **SSH baseline:** the allowed key fingerprint(s) = `expected_key_fingerprint` in `config/security.yaml` (committed default) OR the durable operator override `data_store/security/ssh_key_baseline.json` (overlaid by `apply_operator_ssh_baseline`, wins when present, NOT git-tracked so it survives a deploy's `checkout -f`). **After ANY legitimate SSH key rotation, run `python scripts/approve_ssh_keys.py --apply`** — it shows the live keys + diff, writes the override, re-seeds state, and ALWAYS Telegrams (a re-baseline can never be silent). 28-Jun-2026: baseline DrHT9…→uDRN8… for Rama's LEGITIMATE rotation (ED25519 `oracle-vm-2026`, Airtel/Tamil-Nadu IP 223.237.190.224) — NOT a compromise. |
 | `cron-watchdog.timer`→`.service` | `venv/bin/python scripts/cron_watchdog.py` (oneshot) | **Tier-2 watch-the-watcher (ARMED 23-Jun)** — asserts `cron_officer_eod` + `check_cron_drift` both heartbeated today, else a CRITICAL sentinel via the **cron-INDEPENDENT** path (alert-watcher emails) | systemd (NOT cron) so it can't fail the way a dead crond / broken shared-env cron would. Fires **19:30 IST daily** (`Persistent=true`); first run **Wed 24-Jun 19:30**. `enabled`+`active`. From `deploy/systemd/cron-watchdog.{service,timer}`. |
 
+> ## 🔌🕳️ **THE BOOT CHAIN — WHAT ACTUALLY STARTS `trading-system.service` (traced 05-Aug-2026)**
+> ⛔⛔ **NOTHING IN CRON STARTS THE SERVICE.** The 08:15 cron entry (`auto_refresh_token`) writes
+> **only** the token file. The starter is **`token-watcher.service`** → `deploy/token_watcher.sh`,
+> polling **every 30 s** (`SLEEP_SEC=30`, set in the unit's `Environment=` and defaulted identically
+> in the script) and gated by `within_service_window()` — **`hour ≥ 8 and < 16` IST** (FIX-189).
+> The unit is `WantedBy=multi-user.target` (VM boot only) with `Restart=on-failure` +
+> `RestartPreventExitStatus=3 4`, so **a clean exit 0 never self-restarts** — which is why the
+> ~17:35 self-exit ends the trading day and nothing revives it until the next morning's token.
+> ⭐ **THE CHAIN IS: `08:15 cron → token file → (≤30 s poll) → token-watcher → trading-system.service`.**
+> Expect `active` anywhere in **08:15:02–08:15:32, roughly uniformly** — ⛔ **not "~08:15:30"**, which
+> is the pessimistic END of the poll window; quoting the end as the expectation makes every fast
+> start look anomalous. *(05-Aug measured: token `08:15:01.910`, service `active 08:15:05`.)*
+>
+> 🔴🔴 **THE CONSEQUENCE, AND IT IS THE REASON THIS BLOCK EXISTS: A FAILED TOKEN REFRESH IS SILENT.**
+> **No boot. No error. No alert. No CRITICAL.** ⇒ ⛔ **"no order today" and "the service never
+> started" are INDISTINGUISHABLE unless the token file is checked FIRST, and no later evidence
+> separates them.**
+> ⚠️ **`logs/cron-auto-token.log` IS NOT THE SUBSTITUTE** — it writes only on abnormality (measured:
+> no write in 8 days while the cron ran every weekday), so **silence there is SUCCESS and an
+> unchanged log is not proof of a refresh.**
+> ⭐ **THE GATE IS THE FILE:** `data_store/session/zerodha_token.json` — present, and its `date`
+> equal to today. **Check it before any other read, every trading morning.**
+> 📌 **Registered as a single point of failure with no alarm on it.** ⛔ Not fixed — recorded.
+> Sibling of the 16:00–17:35 unwatched-liveness tail above: both are **absence-of-signal** holes,
+> where healthy and dead emit the same thing — nothing.
+> ⛔ **G3 — WHAT THIS BLOCK DELIBERATELY DOES NOT REPEAT** (it was already here, and was checked
+> before writing): the unit's existence and `ExecStart` (services table above) · the exit-code-aware
+> back-off and the same-day/prior-day HALT handling (`Known Duplicates / Issues` #2, FIX-188) · the
+> 08:00–16:00 window and the "stays INACTIVE at a reboot outside it" reboot-drill note (E4, 03-Jul).
+> **What is new here is the CAUSAL CHAIN stated as such, and the SILENT-FAILURE consequence.**
+
 > **VM security tooling (Phase 1, 19-Jun)** — also installed at OS level (NOT via git):
 > **fail2ban** (`/etc/fail2ban/jail.local` from `deploy/security/jail.local`; sshd jail, `ignoreself`,
 > reads auth.log, no static IP allow-list — Rama's IPs are dynamic) and **auditd**
