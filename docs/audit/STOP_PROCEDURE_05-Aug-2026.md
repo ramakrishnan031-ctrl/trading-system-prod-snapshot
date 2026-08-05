@@ -148,6 +148,31 @@ for it at all**. Stopping the service does not remove protection.
 
 ---
 
+---
+
+## (h) ⭐ UNEXPECTED OBSERVATIONS — free text, fill in even if it seems unrelated
+
+> **This box exists because a checklist can only find what it was told to look for.** Anything that
+> did not match your expectation belongs here — a log line you did not recognise, a timing that felt
+> wrong, an alert that arrived or failed to arrive, a number that looked off. ⛔ **Do not filter for
+> relevance. The value of this box is precisely the class the rest of the procedure cannot cover.**
+
+```
+Time:
+What I expected:
+What I saw:
+Why it struck me as odd (even if I think it is nothing):
+
+
+```
+
+⚠️ **Two things already known to be in flight tonight, so they are NOT surprises:**
+- the **capital-drift CRITICAL every ~30 min** — expected, explained, `632.01 = 587.40 + 44.61`;
+- the **deployed-tree violation** in `config/strategy_direction_registry.yaml` — pre-existing, also
+  present on 04-Aug against a different SHA. ⛔ **Neither is in the shutdown path.**
+
+---
+
 ## ⛔ STANDING GATES — UNCHANGED
 
 - **NO PUSH tonight.** The gate is clean and the push is optional; adding a code change makes two
