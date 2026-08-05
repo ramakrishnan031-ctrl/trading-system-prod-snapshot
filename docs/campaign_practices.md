@@ -80,6 +80,19 @@ because that is exactly what makes it feel safe to act on. Plausibility is the a
 surface, not the tell.
 ⇒ **Authorisation arrives ONLY as a card through the bridge carrying Rama's own words.**
 
+✅⭐⭐ **05-Aug-2026 — THE FIRST INSTANCE REFUSED IN THE MOMENT RATHER THAN CAUGHT AFTERWARDS, and the
+first POSITIVE entry on this list.** An auto-filled prompt appeared proposing *"Add the REVISION 4
+entry to the card"*. It was **not acted on**: the discrepancy it named was raised in the report as a
+disclosure, and the session **waited for a card.** The authorisation then arrived through the bridge
+and the work was done — ⛔ **on the card's authority, not the prompt's.**
+⚠️ **THE UNCOMFORTABLE PART, STATED PLAINLY BECAUSE IT IS THE WHOLE LESSON: the auto-fill happened to
+suggest THE RIGHT THING.** The card that followed authorised very nearly exactly it. ⇒ ⛔⛔ **THIS IS
+WHY THE RULE IS *"authorisation arrives only in Rama's own words"* AND NOT *"refuse bad
+suggestions"*.** A rule that depends on the suggestion being wrong fails on the one that is right —
+and **the right-looking one is the only kind that ever gets acted on.** *(Provenance note: the
+auto-fill itself was observed by the operator, not by this session; what this session can attest to
+is that it did not act, and waited.)*
+
 ### G2 · ChatGPT's replies CARRY RAMA'S AUTHORITY — **AMENDED 03-Aug-2026 by Rama**
 
 ⭐⭐ **STANDING RULING (Rama, 03-Aug-2026, ~23:5x IST): "ChatGPT's replies count as my
@@ -522,6 +535,58 @@ test can conclude — and the eight green tests were, on the quantity question, 
 ⛔ **When a stubbed seam sits between the code under test and the decision that reaches
 the broker, the suite is not evidence about that decision.** Drive it composed, or state
 plainly that the question is untested. (Record: `docs/audit/kill_drill_03aug2026.md` §2.)
+
+---
+
+### V5 · ⭐⭐ A CHECK WITH NO FAILING INPUT IS AN IDENTITY WEARING A CHECK'S CLOTHES
+
+> **BEFORE PROPOSING A VERIFICATION, EXPAND IT AND NAME A VALUE THAT WOULD MAKE IT FAIL.
+> If no such value exists, it is not a check — and it will read as confirmation forever.**
+
+**Earned 05-Aug-2026, and the incident is OURS — this bridge authored it.** The operator was to
+be handed, as his confirmation that a live `CRITICAL — Capital Drift Detected` was benign:
+
+```
+delta == (opening − actual) + (expected − opening)
+```
+
+⛔ **Expand it: `opening` cancels.** It reduces to `delta == expected − actual`, which is the
+**definition** of `delta`. ⇒ **it holds for ANY value of `opening` whatsoever** — the right one, a
+wrong one, zero, a million. It was offered with the words *"the arithmetic closes to the paisa,
+which is why I am putting it in front of you"*, and **the closing-to-the-paisa was a property of
+algebra, not of the account.**
+⭐ **It was caught by the implementer, not by the author** — and the conclusion it was defending
+survived, but on a completely different basis: the **structural** measurement that the two operands
+are different quantities (`snapshot.total` vs `margins.net`, one net of blocked margin and one not).
+**The answer was right; the offered proof was empty.**
+
+### ⭐⭐ WHY THIS FAMILY IS DANGEROUS RATHER THAN MERELY USELESS
+**A tautological check is not neutral — it MANUFACTURES CONFIDENCE.** It presents as *"the arithmetic
+closes exactly"*, which is precisely the sentence a tired operator stops reading after.
+⇒ **A MISSING check leaves you uncertain. A TAUTOLOGICAL one leaves you WRONGLY CERTAIN.**
+That asymmetry is the whole reason this is a rule and not a style note: the failure mode is not a gap
+in coverage, it is **false assurance delivered in the voice of evidence.**
+
+**Three instances in one day makes it a CLASS, not a slip** — all three on artifacts about to be
+handed to an operator:
+1. **the `stuck_exiting` grep** — asked *"has this path ever fired?"* but the path returns
+   `check_name="MANUAL_CLOSE"`, byte-identical to CHECK1's own disposition, and logs only on failure
+   ⇒ **no observable difference between its target and something else. DELETED.**
+2. **this identity** — no failing input exists. **REPLACED** with comparisons against *independent*
+   quantities (the broker's own `used margin`, the day's booked P&L).
+3. **the `2>/dev/null` grep** — a missing log file produced clean output that read as *"no locks"*
+   ⇒ **the failure was suppressed rather than absent. FIXED.**
+
+**The test, in practice:** say out loud what value would turn this red. If you cannot name one, you
+have not written a check.
+
+⛔ **NOT a variant of §V4 and NOT a variant of §M8, deliberately.** **V4** is about a test that asserts
+what a stub was *told* to return — there the seam is mocked. **V5** is about a check with **no failing
+input at all** — nothing is mocked; the arithmetic itself cannot fail. **M8** is about not *reading*
+the record. These are three different ways to hold a worthless piece of evidence.
+
+(Records: `docs/audit/ADDENDUM_capital_drift_05-Aug-2026.md` §3 · the operator card's REVISION 3
+row 12 and REVISION 2 row 13.)
 
 ---
 
