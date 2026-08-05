@@ -1,6 +1,7 @@
 # ADDENDUM — THE CAPITAL-DRIFT CRITICALs OF 05-Aug-2026
 
-> ## 🧊 **THIS IS A SEPARATE SHEET. THE EVENING OPERATOR CARD IS FROZEN AT REVISION 4 AND IS NOT TOUCHED.**
+> ## 🧊 **THIS IS A SEPARATE SHEET. THE EVENING OPERATOR CARD IS FROZEN AND ITS COMMANDS ARE NOT TOUCHED.**
+> *(Its change-log was corrected to REVISION 5 on 05-Aug — ⛔ change-log only; not one command altered.)*
 > ⛔ **Nothing here duplicates a command from that card.** §2 below **reuses the capture that card's §1a
 > already makes** — do not run a second whole-log capture.
 
@@ -57,6 +58,28 @@ month.
 **Sanity check on each reading:** does **available + used = opening**?
 - **Yes** → the broker's own books balance at that moment. ✅
 - 🔴 **No** → **that is a finding.** Write down all three numbers and stop.
+
+> ### ⭐⭐ **READING B IS NOT "ANOTHER DATA POINT". IT IS THE DELIVERY-ONLY FIGURE — AND IT IS THE ONE CROSS-CHECK TODAY THAT CAN ACTUALLY GO RED.**
+> **After the 15:15/15:17 squareoff the intraday book is flat.** Whatever `used margin` is still
+> showing after that is **the CNC block alone** — and delivery runs at **1×**, so the blocked amount
+> is **roughly the full purchase value of what you are holding.**
+> ⇒ 🔴 **COMPARE IT WITH THE TOTAL CNC VALUE THE OPERATOR CARD ALREADY READS OUT OF THE DATABASE —
+> see the operator card, §2 (A).** ⛔ **Do not run a new query; that card already computes it.**
+>
+> | | figure | where it comes from |
+> |---|---|---|
+> | **1** | `used margin` in **reading B** | the **broker**, after the squareoff |
+> | **2** | total CNC value | the **database** — operator card §2 (A) |
+> | **3** | the CNC positions total shown on Kite's own **Positions/Holdings** page | the **broker**, a second way |
+>
+> ⭐ **1 and 2 come from two entirely different systems with no shared term, so a disagreement is
+> real information — unlike an identity that rearranges the same numbers.**
+> - **1 ≈ 2** → ✅ the broker's block and your books agree on what is deployed. **Strong confirmation.**
+> - 🔴 **1 and 2 differ materially** → **use 3 as the tie-breaker:** whichever of 1 or 2 it agrees
+>   with is the sound one, and **the other is the finding.** Write down all three.
+> ⚠️ **BOTH READINGS MUST BE TAKEN CLOSE IN TIME, AND BOTH AFTER THE SQUAREOFF.** Reading B at 15:35
+> against a database figure read at 19:00 is a comparison that should not have been made — the same
+> timing trap as §3 below.
 
 ---
 
@@ -152,10 +175,60 @@ ssh trading-vm 'grep -iE "SOFT_KILL|HARD_KILL" ~/census_system_2026-08-05.log | 
 
 ---
 
+## §4b — ⏰ **TOMORROW MORNING: RECORD THE BOOT SEED. THIS ONE EXPIRES AT 08:15.**
+
+> ### ⭐ WHY — and why it is worth two minutes
+> Every morning the system **seeds its capital from the broker** at the 08:15 boot. That seed is
+> written as an `INIT` row — ⛔ **it is not a drift event, it has no comparison of any kind, and
+> NO CHECK ANYWHERE COMPARES ONE DAY'S SEED WITH THE PREVIOUS DAY'S.**
+> That is not a guess: it is the register's own measurement, and it is how a **three-session capital
+> movement in July went unalerted** — it was absorbed by the seed. *(The figure and its dates are on
+> record in `MASTER_PENDING` §B#5; ⛔ cited, not retyped here.)*
+> ⇒ 🔴 **Tomorrow's seed will come in LOWER than today's, by roughly whatever is blocked in the CNC
+> positions — and nothing will flag it.**
+> ⭐⭐ **What makes today different from July: for the first time we can say that BEFORE it happens.**
+> A prediction written in advance can be scored. *(Registered as `IA-P6-02`'s first live instance —
+> `MASTER_PENDING` §B#5.)*
+
+**THE PREDICTION, written before the fact:**
+> **`tomorrow's seed ≈ today's seed − the CNC block ± settled P&L`**
+
+**Today's seed is already on record** — it is the `broker.net` figure in the register's currency
+block for the 05-Aug 08:15 boot (`docs/MASTER_PENDING_01-Aug-2026.md`). ⛔ **Cite it from there; do
+not copy a number out of an email or a chat message.**
+
+**THURSDAY MORNING, after 08:20, write down the new seed:**
+
+| | date | boot seed (`broker.net` at 08:15) |
+|---|---|---|
+| today | 2026-08-05 | *(on record — see the register currency block)* |
+| tomorrow | 2026-08-06 | ____________ |
+
+**Then check the prediction:**
+- **The drop ≈ the CNC block** (from §1 reading B) → ✅ **the prediction held.** Record it and move on.
+- ⚠️ **The drop is close but not exact** → **expected, and NOT a finding.** T+1 settlement means the
+  broker credits and debits on **its own schedule**, so small differences are normal.
+- 🔴 **A finding is a mismatch you cannot explain by settlement** — as a rule of thumb, a gap
+  **larger than the day's total realised P&L**, or one in the **wrong direction** (the seed going
+  *up* while positions are held). **Write the two seeds and the block down; do not act.**
+
+> ⛔⛔ **THIS IS AN OBSERVATION WITH A DATE. IT IS NOT A RECONCILIATION.**
+> **Nothing is fixed. Nothing is reconciled. Nobody edits a ledger.** The value of this is entirely
+> in having written the prediction down *before* the number arrived.
+
+⚠️ **ONE COROBBORATION, worth a single line:** if the CNC block turns out to be a **small fraction**
+of the delivery bucket, that is **consistent with the ~7% buying-power utilisation the register has
+already measured** (the concentration cap combined with the permanently-low tier multiplier).
+⛔ **Record the observation only — do not re-derive that figure, and do not open the sizing thread.**
+
+---
+
 ## §5 — WHAT TO WRITE DOWN
 
 1. **§1 reading A** — time, available, used, opening. **And whether available + used = opening.**
-2. **§1 reading B** (after 15:30) — the same four.
+2. **§1 reading B** (after 15:30) — the same four. 🔴 **Plus the delivery-only cross-check: does
+   reading B's `used margin` match the total CNC value from the operator card §2 (A)? If not, what
+   does Kite's own positions total say?**
 3. **§2** — how many alerts, at what times, with their four figures.
 4. **§3(i)** — the two numbers and whether they match.
 5. **§3(ii)** — the number, and whether it looks like today's P&L.
