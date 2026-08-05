@@ -727,3 +727,60 @@ license a document to describe itself untruthfully** — and a timestamp is a cl
 ```
 §5 self-description accuracy   RESULT = PASS (corrected)
 ```
+
+---
+
+## ⭐⭐ §6. THE ₹4.36 — SECOND HYPOTHESIS. **§1.2 IS ANSWERED: YES, REALISED-ONLY.**
+
+### ⚠️ FIRST, A NEAR-MISS I OWE — I ALMOST RECORDED A FALSE ABSENCE
+
+My first pass grepped `unrealis|mtm|last_price` across `*.py` with **`files_with_matches` and a
+15-file limit**, and `capital/fund_manager.py` **was not in the truncated list**. I was one step from
+writing *"the module that produces the day figure has no mark-to-market concept."*
+⛔ **That would have been FALSE.** An explicit grep of that one file returns **19 hits**.
+⭐ **A textbook `feedback_absence_needs_wide_check` failure — a truncated list read as an absence —
+caught only by re-running the check narrowed to the file instead of trusting the wide one's
+top-15.** ⚠️ **The zero I nearly recorded was a display limit, not a property.**
+
+### 🟢 §1.2 — **THE DAY FIGURE IS REALISED-ONLY BY CONSTRUCTION. YES.**
+
+⭐ **And the true answer is stronger than "there is no MTM", because there IS MTM — it is
+architecturally separated.**
+
+| | where | what it is |
+|---|---|---|
+| **the day figure** | `fund_manager.py:1820-1847` `today_realized_pnl_carryover()` | `Σ pnl_delta` over `_today_release_used_pnl_rows` (`:1809-1818`): `SELECT pnl_delta … WHERE entry_type = 'RELEASE_USED'` |
+| when `RELEASE_USED` is written | `:1271` | **only on an EXIT.** An open position has a `COMMIT` with `pnl_delta = 0.0` and **no `RELEASE_USED` row at all** |
+| `pnl_delta`'s definition | `:204` | `# realized PnL change (0 for plain release)` — and `:1203-1208`, the E4/W10 contract: `pnl_delta := gross_pnl − costs` (**NET**) |
+| **unrealised MTM** | `:386-392`, `:1564-1595` | a **separate, in-memory `dict[str, float]`**, marked ⭐ **"ADVISORY ONLY"** — ⛔ **it never enters `fm_ledger`, and never enters the day figure** |
+
+⇒ 🔴🔴 **THE TWO NUMBERS WERE NEVER COMPARABLE.** The ledger's **44.61** counts closed trades only;
+Kite's day P&L may carry ATULAUTO's open mark. ⭐⭐ **The "gap" is a CATEGORY ERROR, not a
+discrepancy — a finding about the COMPARISON, not about the money.** ⛔ **No money is missing, and
+nothing needed reconciling.**
+
+⚠️ **ONE DISTINCTION THAT MUST NOT BE COLLAPSED:** the *daily-loss GATE* is a different consumer and
+**may** use the advisory MTM — `:390-391`: *"Freshness is stamped so the gate can fall back to
+realized-only when the MTM is stale/unavailable (never silently)."* ⇒ ⛔ **"the day FIGURE is
+realised-only" does NOT mean "the daily-loss LIMIT is realised-only."** Two quantities, one name.
+
+### 1.1 — ⛔ STILL **NOT DETERMINABLE**. Rama's one glance decides it.
+**ATULAUTO's close and unrealised P&L on Kite.** Close ≈ **583.04** with unrealised ≈ **−4.36** ⇒
+hypothesis **holds**; materially different ⇒ **refuted, and say so.**
+⚠️ **A consistency check, offered as consistency and NOT as evidence:** 583.04 sits inside the OCO
+band 575.65 / 605.00 — which is merely **consistent** with the GTT correctly not having fired. ⛔ It
+confirms nothing.
+
+### 1.3 — BOTH HYPOTHESES ON THE RECORD, WITH THE FIRST ONE'S CAUSE OF DEATH
+
+| # | hypothesis | status | what killed it / what would |
+|---|---|---|---|
+| **H-A** | the cost model applies intraday rates to CNC | ⛔ **REFUTED** | `cost_calculator.py` branches on `product` at three points; two rate tables; ASKAUTOLTD's 1.53 reproduces from the **CNC** table to the paisa (MIS would be ≈0.63) |
+| **H-B** | the ledger is realised-only; Kite's figure includes the open mark | ⚠️ **OPEN — and its PC-side half is CONFIRMED** | realised-only is **proved** (`:1809-1847`). The remaining half needs **one glance at Kite** (1.1) |
+
+⛔ **NEITHER IS ADOPTED. The ₹4.36 stays (d) CANNOT DETERMINE. Nothing has been adjusted.**
+
+```
+§1.2 is the day figure realised-only    RESULT = PASS -- YES, by construction
+§1.1 does H-B explain the 4.36          RESULT = NOT DETERMINABLE (one Kite glance)
+```
