@@ -411,7 +411,7 @@ after the campaign twice re-derived facts the map already held.
 
 ---
 
-## 🔴 §1. `qty_by_flat` — CHASED TO THE SOURCE 16:30. **THE VERDICT SURVIVES.**
+## 🔴 §1. `qty_by_flat` — CHASED TO THE SOURCE (16:21–16:28 block). **THE VERDICT SURVIVES.**
 
 ### 1.1 — the measurement, unambiguous
 
@@ -473,7 +473,7 @@ population — the schema and the `min()` call were.**
 
 ---
 
-## ⭐ §2. THE REAL H5 GATE, NAMED — MEASURED 16:36
+## ⭐ §2. THE REAL H5 GATE, NAMED — MEASURED (16:21–16:28 block)
 
 ### 2.1 — the code, the cites, and the predicate
 
@@ -549,7 +549,7 @@ for the expected ones — i.e. letting the behaviour name itself.
 
 ---
 
-## ⚠️ §3. THE COST MODEL AND THE ₹4.36 GAP — MEASURED 16:45. **THE HYPOTHESIS IS REFUTED.**
+## ⚠️ §3. THE COST MODEL AND THE ₹4.36 GAP — MEASURED (16:21–16:28 block). **THE HYPOTHESIS IS REFUTED.**
 
 ### 3.1 — **DOES THE COST MODEL BRANCH ON `product`? YES. COMPREHENSIVELY.**
 
@@ -629,7 +629,7 @@ wrong, and today is the first day it could be scored at all. ⇒ 🟢 **It was s
 
 ---
 
-## ⭐⭐ §4. WHAT FIX-133 TURNED OUT TO BE — MEASURED 16:52. **THE DAY'S BIGGEST FINDING.**
+## ⭐⭐ §4. WHAT FIX-133 TURNED OUT TO BE — MEASURED (16:21–16:28 block). **THE DAY'S BIGGEST FINDING.**
 
 ### 4.1 — FIX-133's floor is **LOAD-BEARING FOR DELIVERY**, not a rounding nicety
 
@@ -688,4 +688,22 @@ nothing today.
 ```
 §4.1 FIX-133 load-bearing + silent-failure class   RESULT = PASS
 §4.2 delivery sizing pinned by arithmetic          RESULT = PASS -- item 5 reordered
+```
+
+---
+
+## 🧾 §5. A CORRECTION THIS FILE OWES ABOUT ITSELF
+
+§1–§4 originally carried the headings *"MEASURED 16:30 / 16:36 / 16:45 / 16:52."* ⛔ **Those were my
+own estimates, not clock readings, and they ran AHEAD of the real time.** The clock, read from the
+console, was **16:27:57** when §4 was committed — so all four sections were measured inside a single
+**16:21–16:28** block, not spread across 22 minutes.
+
+**Corrected in place to the honest window.** ⭐ **Recorded rather than quietly fixed, for the same
+reason the operator card's REVISION 5 exists: the freeze covers commands and decisions, it does not
+license a document to describe itself untruthfully** — and a timestamp is a claim like any other.
+⚠️ **The §0-series times (16:03–16:21) are from the first working block and stand.**
+
+```
+§5 self-description accuracy   RESULT = PASS (corrected)
 ```
