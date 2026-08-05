@@ -401,6 +401,50 @@ an assertion with extra steps.
 
 ---
 
+### M8 · ⭐⭐ READ THE RECORD **BEFORE** MEASURING — it is an ORDER OF OPERATIONS, not a virtue
+
+> **`docs/SYSTEM_MAP.md` is MANDATORY PRE-READING at the START of every session — step zero, before
+> any measurement, not a reference consulted when something seems unclear. Re-deriving a fact the
+> system has already written down costs a session, and can ship a wrong command in the meantime.**
+
+⛔ **Written as an ORDER, deliberately, because *"be more careful"* is not a rule and cannot be
+checked.** *"Did you read SYSTEM_MAP before your first measurement?"* is answerable yes or no.
+
+**Earned twice in four days, both times on the same shape — the system had already recorded the
+answer while the campaign was deriving it by hand:**
+
+- **04–05-Aug · the flag list.** `trade_type` was *"the flag nobody listed"* and had to be found by
+  measuring `control.py`'s two layers. ⭐ **`delivery_lock.status` (`main.py:2838-2846`) had been
+  publishing the full conjunct verbatim at every boot** — *"real CNC/GTT requires
+  `delivery_enabled=true` AND `force_intraday_only=false` AND `trade_type` in {DELIVERY,BOTH}"*. **The
+  flag list was short; the system was not.**
+- **05-Aug · the journald fact.** Two revisions of an operator card were spent tuning a `grep` anchor
+  against `journalctl`, before measuring that the census is `INFO` and stdout is `WARNING`+ ⇒ **it was
+  never in journald at all.** ⛔ **`SYSTEM_MAP.md` had carried that since 25-Jul** — *"the app boot log
+  is `logs/system_<YYYY-MM-DD>.log`, **NOT journald** (journald holds only ~6 lines/boot — WARNING+
+  and stdout; MEASURED on Fri 24-Jul)"*.
+  ⭐⭐ **AND THE SAME ENTRY CARRIED THE RULE THAT WOULD HAVE PREVENTED BOTH REVISIONS:** *"an operator
+  instruction that says 'grep X' must be VERIFIED against a real log before it ships — a check that
+  silently finds nothing is WORSE than no check, because 'no output' reads as 'it failed'."*
+  ⇒ **the map did not merely hold the fact; it held the lesson, already generalised, unread.**
+
+⭐ **THE ASYMMETRY THAT MAKES THIS WORTH A RULE:** reading the record is **cheaper** (one file, once)
+**and more authoritative** (it was written by whoever measured it, at the time, with the incident in
+view) than re-deriving it from source. A re-derivation can also be *wrong* — and a wrong
+re-derivation ships as a command.
+
+⚠️ **The map is not infallible and this rule does not say to trust it blindly** — §M3 still governs
+(*a card is not authoritative over a record*), and **§G4's superseded-but-legible discipline means
+map entries can be STALE**: the same 05-Aug session found the map's *Delivery (Slice 2.5)* section
+still reading *"DORMANT / never exercised, flags OFF"* on the day delivery traded. ⇒ **Read it
+first, then verify what you are about to rely on. Reading first changes what you verify, not
+whether you verify.**
+
+(Records: `docs/audit/check1_product_skip_step1_05aug2026.md` · `docs/MASTER_PENDING_01-Aug-2026.md`
+currency block, the composite-verdict finding · `docs/SYSTEM_MAP.md` BATCH-4 banner, 25-Jul.)
+
+---
+
 ## V. VALIDATION
 
 ### V1 · PAPER CANNOT VALIDATE PRODUCT SEMANTICS
