@@ -218,6 +218,47 @@ close to 4.36 but does not equal it.** A near-miss is not an explanation.
 
 ---
 
+## ⭐⭐ §0e. H5 — MEASURED 16:21. **RESULT = PASS. IT IS *CONFIRMED*, IN PRODUCTION.**
+
+The run sheet asked whether intraday signals on the two CNC symbols were rejected after their fills,
+and warned the check **CAN CONFIRM BUT CAN NEVER REFUTE**. ⭐ **The caveat is moot — it CONFIRMED.**
+
+```
+ATULAUTO    positional_momentum_long    PROCESSED                              10:00:21
+ATULAUTO    positional_sector_rotation  REJECTED_ENTRY_THROTTLED               10:01:15
+ATULAUTO    vwap_bounce_long            REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT  10:03:14  <- INTRADAY
+ATULAUTO    positional_momentum_long    REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT  10:06:12
+ATULAUTO    positional_sector_rotation  REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT  10:07:15
+ATULAUTO    vwap_bounce_long            REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT  10:09:13  <- INTRADAY
+ATULAUTO    positional_momentum_long    REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT  10:11:13
+ATULAUTO    positional_sector_rotation  REJECTED_SYMBOL_DIRECTION_DAILY_LIMIT  10:12:15
+ASKAUTOLTD  positional_momentum_long    PROCESSED                              10:13:12
+ASKAUTOLTD  positional_sector_rotation  REJECTED_ENTRY_THROTTLED               10:13:15
+```
+reason text: `ATULAUTO LONG already traded today (1 executed trade(s))`
+
+⇒ 🔴 **THE COUPLING IS REAL AND NOW OBSERVED: a DELIVERY fill consumes the symbol+direction for the
+whole trading day, and it blocks INTRADAY strategies too** — `vwap_bounce_long` was refused twice by
+a gate that a **CNC** trade had armed. ⛔ Whether that is intended is a **design** question, not a
+defect claim: classified **(b) confirmed design, pending confirmation**, ⛔ **no fix implied.**
+
+> ### ⛔⛔ AND THE NEAR-MISS THAT MATTERS MORE THAN THE RESULT
+> The run sheet named the codes to look for: **`DUPLICATE_SYMBOL` / `CONTRARY_POSITION`.**
+> **I checked. Both returned ZERO rows for the entire day.** The real gate is a **third** code,
+> **`SYMBOL_DIRECTION_DAILY_LIMIT`.**
+> ⇒ **Had this been run as a grep for the two predicted strings, it would have returned a clean
+> zero — and that zero would have been recorded as "the coupling is inert."** The exact false-clean-
+> bill the run sheet warned about, avoided **only** by enumerating the actual `rejection_reason`
+> values instead of searching for the expected ones.
+> ⭐ **A fresh instance of `feedback_absence_needs_wide_check`, and of `V5`: the narrow check had no
+> failing input available to it.**
+
+```
+STAGE 1b (§C.1 H5)   RESULT = PASS -- CONFIRMED, via a rejection code the card did not name
+```
+
+---
+
 ## 🔴 1. THE STATE OF THE DAY, IN FIVE LINES
 
 - **Flip day. It worked.** Boot passed on `0197923` (token 08:15:01.9 → service 08:15:05,
