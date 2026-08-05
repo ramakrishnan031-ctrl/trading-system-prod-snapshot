@@ -985,3 +985,158 @@ corollaries added, two candidates held with their trigger.
 **no implementation begun.**
 🏷️ **`<DELIVERY ROUND TRIP VERIFIED LIVE 05-Aug; T+1 CARRY UNVERIFIED>`.** ⛔ Nothing wider.
 ⛔ **Do NOT run `deploy/resume.sh`** — tonight's same-day `SOFT_KILL` is the routine 15:15 breaker.
+
+---
+
+# 🔴🔴 §10. THE CENSUS — RUN 17:49. **RESULT = THERE IS NO CENSUS, AND THAT IS THE FINDING.**
+
+⭐ *M9 applied throughout: every claim carries its evidence class.*
+
+## 10.1 — the zero, with its width stated **before** it is interpreted
+
+```
+log file  logs/system_2026-08-05.log   16,899,403 B   93,833 lines   mtime 17:48
+grep -c  effect_census .............. 0
+grep -ci census ..................... 0     <- case-insensitive, whole file
+grep -c  effect ..................... 8,204 <- the file is NOT empty of telemetry
+```
+**(P)** ⛔ **A zero on the one artifact that cannot be re-created — so it was widened before it was
+believed.** The `effect` control returning **8,204** is what makes the census zero interpretable:
+the logger is alive, the census specifically is absent. *(A check that could have gone red — `V5`.)*
+
+## 10.2 — 🔴 **WHY: THE SERVICE NEVER SHUT DOWN, AND IT DID SO DELIBERATELY**
+
+```
+(P) 17:35:00.002 WARNING main  "eod_self_exit: past 17:35 IST but 1 active position(s)
+                                remain — staying up to manage them; will exit once flat."
+(P) 17:35:00.652 telegram      "[LIVE] EOD shutdown deferred"        -> DELIVERED
+(P) 17:49       systemctl      ActiveState=active SubState=running
+                               ExecMainStartTimestamp=08:15:05  (never exited)
+```
+**(S)** `emit_census()` is called **at `_shutdown()` entry** — `main.py:1319`, documented at
+`core/effect_telemetry.py:33`. **(S)** `_eod_self_exit_due` (`main.py:1073-1113`) returns due
+**only** when active positions (`OPEN`/`PARTIAL`/`PENDING_FILL`) is **zero**.
+
+> ### ⇒ **NO SHUTDOWN ⇒ NO CENSUS. THE EOD SELF-EXIT IS UNREACHABLE WHILE DELIVERY IS HELD.**
+> ⭐⭐ **This is not a fault — every component behaved exactly as designed.** The self-exit was
+> written for a system that is flat by EOD **by construction**. The flip to delivery removed that
+> premise, and the census was silently coupled to it. **A dependency nobody declared.**
+
+⛔ **AND THE SHARPENED QUESTION IS THEREFORE UNANSWERABLE TONIGHT:** *does `cnc_gtt_monitor` read
+`acted > 0`?* — **`NOT DETERMINABLE`, and not for tonight only.** It stays unanswerable for **every
+day a delivery position is held**, which is the design going forward. ⭐ **The census was the only
+source that separates *"the monitor observed the trigger"* from *"a cleanup swept the row"*; that
+discriminator is now structurally unavailable on exactly the days it is needed.**
+
+## 10.3 — 🔴🔴 THE THURSDAY CONSEQUENCE — **AND THE REFUTATION ATTEMPT FAILED**
+
+**(S)** `deploy/token_watcher.sh`, decision block, read verbatim:
+```bash
+if [ "$active_state" = "active" ] || [ "$active_state" = "activating" ]; then
+    clear_alert_flags
+    # running -- nothing to do
+```
+⇒ **the watcher's FIRST branch is "active ⇒ do nothing."** Every restart path it owns keys on the
+**last exit code**; a service that never exits has none. **(S)** `within_service_window()` is
+`[08,16)` — at 08:15 Thursday the watcher is willing, but it never reaches the willing branch.
+
+**(S)** ⛔ **I tried to refute this and could not:**
+
+| what I looked for | result |
+|---|---|
+| `clear_stale_state` call sites (non-test) | **exactly one** — `main.py:1914`, **boot path** |
+| `auto_clear_scheduled_kill` call sites (non-test) | **exactly one** — `main.py:1919`, **boot path** |
+| any date-rollover / new-trading-day handler in `main.py`·`core/`·`capital/`·`orders/` | **none** |
+
+⚠️ **Width stated honestly:** the last row is a **name-based grep** (`date_rollover`,
+`new_trading_day`, `day_changed`, `rollover`, `_current_day`, `reset_for_new_day`). A
+differently-named mechanism would evade it. ⛔ **So the conclusion below is (I), not (P) — it has
+never been observed, because this state has never existed before.**
+
+**(P)** the kill is real and it is today's: `15:15:00.969 CRITICAL KillSwitchActivated: INACTIVE ->
+SOFT_KILL reason=circuit_breaker_force_close_15:15`. ✅ The routine breaker — **matched on `reason`,
+not on date**, exactly as the standing rule requires.
+
+> ## 🔴 **(I) PREDICTION FOR THU 06-Aug — DATED AND FALSIFIABLE**
+> **No boot occurs at 08:15** (the service is already `active`). ⇒ **`clear_stale_state` never
+> runs.** ⇒ **Wednesday's `SOFT_KILL` is still ACTIVE on Thursday morning, with no path in the
+> system that clears it.** ⇒ **the system enters Thursday in a state it has never been in, holding
+> a kill it cannot clear by itself.**
+> ⛔ **Scored Thursday 08:15–09:20. If a boot line appears, this is REFUTED — say so.**
+
+### ⚠️ 10.3b — THE OBVIOUS REMEDY IS **NOT** SAFE, AND THAT IS THE POINT OF WRITING IT DOWN
+
+A manual `systemctl restart` Thursday morning **would** clear it — `clear_stale_state(06-Aug)`
+treats a 05-Aug kill as prior-day, and the watcher's own contract says a prior-day exit-4 gets *"one
+clean start attempt."* ⛔ **But a restart on Thursday is exactly when a LATENT path becomes
+reachable for the first time:** `reconcile_positions` reads `positions()` only and is **blind to
+delivery T+1** — and on T+1 ATULAUTO moves from *positions* to *holdings*. The registered note says
+`MISSING_AT_BROKER` *"is REAL but LATENT — never fired, CAN'T until a delivery trade is OPEN in the
+LIVE db."* 🔴 **A delivery trade is now OPEN in the live DB.**
+⛔ **THEREFORE NO REMEDY IS RECOMMENDED HERE. Both branches carry a first-ever path. This is
+Rama's ruling, and it wants the trade-off in front of it, not a default.**
+
+## 10.4 — 🔴 THE DRIFT CRITICAL IS NOW IN A 30-MINUTE OVERNIGHT LOOP **(P, MEASURED)**
+
+```
+(P) 10:03:16  expected 9883.70  actual 8764.50  delta 1119.20  tolerance 988.37   <- in-session
+    10:13:25           9902.41         8470.74        1431.67            990.24   <- in-session
+    11:51:20           9918.40         8828.34        1090.06            991.84   <- in-session
+    15:45:10           9928.31         9296.30         632.01             50.00   <- OUT of session
+    16:15:29           9928.31         9296.30         632.01             50.00
+    16:45:46           9928.31         9296.30         632.01             50.00
+    17:16:03           9928.31         9296.30         632.01             50.00
+    17:46:24           9928.31         9296.30         632.01             50.00
+```
+**(P) ALL FIVE OUT-OF-SESSION ALARMS WERE *DELIVERED* AS `[LIVE] ⚠️ Capital Drift Detected`,
+severity CRITICAL** — verified in the `alert_send` outcomes, not assumed from the ERROR line.
+
+**(S)** `config/system_config.yaml:368-369`:
+`capital_drift_tolerance: 50.0` — *"Production threshold (**out-of-session / overnight**)"* ·
+`capital_drift_tolerance_pct: 0.10` — *"**in-session** tolerance = max(Rs, expected×10%)"*.
+
+> ### ⇒ 🔴 **THE TOLERANCE COLLAPSES FROM ~₹993 TO ₹50 THE MOMENT THE SESSION ENDS — WHILE ₹587.40
+> OF DELIVERY CAPITAL IS LEGITIMATELY DEPLOYED OVERNIGHT BY DESIGN.**
+> **(I)** at `capital_drift_alert_interval_sec: 1800` that is **~2 CRITICALs/hour, ~29 more before
+> Thursday 08:15**, and ⛔ **it does not stop there — it continues for every hour the position is
+> held.** The service staying up (§10.2) is what keeps the emitter alive to do it.
+
+⚠️ **THIS CORRECTS A STANDING NOTE OF MINE.** I recorded the 10% band as *"an intraday-leverage
+calibration."* ⭐ **Right in spirit, and it omitted the fact that decides tonight: the 10% applies
+IN-SESSION ONLY.** ⛔ **Overnight — the only time a delivery position can be held — the band is ₹50
+flat.** The three in-session alarms breached ~₹990; the five since 15:45 breached **₹50**. *Same
+alarm, two different regimes, and only the second one is structural.*
+⚠️ **AR9 accepted this CRITICAL for ONE SESSION with four reopen conditions. A regime it was not
+scored against has now appeared. ⛔ Not reopened here — flagged for Rama.**
+
+## 10.5 — ⭐⭐ AND THE DRIFT DECOMPOSES **EXACTLY**. ZERO MONEY IS MISSING.
+
+```
+expected  9928.31  =  9883.70 (fm_ledger INIT)  +  44.61 (day realised P&L)     ✅ to the paisa
+actual    9296.30  =  9883.70                   -  587.40 (ATULAUTO CNC block)  ✅ to the paisa
+delta      632.01  =   587.40 (deployed)        +  44.61 (unsettled realised)   ✅ to the paisa
+```
+⭐ **`V5` satisfied — this check could have gone red.** All three right-hand operands were measured
+at **16:14** from `fm_ledger`; both left-hand figures were emitted at **17:46** by a *different*
+subsystem (`order_reconciler`, reading the broker API). **Two independent systems, five numbers, no
+residual.**
+
+> ### ⇒ **THE DRIFT IS FULLY EXPLAINED: DEPLOYED CAPITAL + UNSETTLED REALISED P&L. NOTHING IS
+> MISSING, AND NOTHING NEEDED RECONCILING.**
+> ⭐ **This is also the FOURTH independent arrival at ₹587.40** — the pre-registered prediction, the
+> DB's `total_cnc_value`, the ledger's bucket arithmetic, and now the broker's own free-cash figure.
+> ⛔ **It upgrades the standing note from a qualitative *"operand mismatch"* to a closed identity.**
+
+```
+§10.1 the census .................. RESULT = ABSENT (0 of 93,833; width stated)
+§10.2 why ......................... RESULT = PASS -- self-exit unreachable while delivery held (P+S)
+§10.2 the sharpened question ...... RESULT = NOT DETERMINABLE -- structurally, not just tonight
+§10.3 no Thursday boot ............ RESULT = (I) PREDICTION -- refutation attempted and failed
+§10.3b the remedy ................. RESULT = NOT RECOMMENDED -- both branches are first-ever
+§10.4 drift loop overnight ........ RESULT = (P) MEASURED -- 5 delivered, ~29 more by 08:15
+§10.5 drift decomposition ......... RESULT = PASS -- exact, zero residual, 4th arrival at 587.40
+```
+
+⛔ **STANDING, RE-CONFIRMED:** nothing pushed · no code changed · **no VM writes — every VM call was
+`grep`/`cat`/`sed`/`systemctl show`, and the card's `cp`-capture was deliberately NOT run** ·
+no design decided · no delivery config value proposed · **231 stands** · no implementation.
