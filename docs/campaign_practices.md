@@ -520,6 +520,66 @@ generalisation, not a practice.**
 
 ---
 
+### M10 · ⭐⭐ THE OWNERSHIP TEST — **"WHAT PROCESS UPDATES THIS FIELD?"**
+
+> **For every field in every record, the question is NOT *"does it exist"* but **"WHAT PROCESS
+> UPDATES IT?"** ⇒ **Name the process, or mark the field `INFORMATIONAL` — not authoritative.**
+> - **nothing updates it** ⇒ **decoration.** Say so.
+> - **only a human, by hand** ⇒ ⚠️ **it WILL drift — write that in the schema rather than discover
+>   it later.**
+> - **code updates it** ⇒ ⭐ **name the writer: `file:line` + SHA.**
+
+⭐⭐ **WHY IT EARNS A RULE — the failure is not that the field is empty:** **an unowned field does
+not stay neutral. It stays at the day it was written and reads as CURRENT forever.** ⇒ **a stale
+field MANUFACTURES CONFIDENCE, exactly as a tautological check does — V5's failure mode, applied to
+DATA instead of to logic.**
+
+⛔ **DELIBERATELY NOT FOLDED INTO V5 OR M8 — three different failure modes:**
+| | what fails | the tell |
+|---|---|---|
+| **V5** | a **check** that cannot go red | no input exists that would fail it |
+| **M8** | an **order of operations** — measuring before reading the record | the answer was already written down |
+| **M10** | a **field** nobody writes to | it is *correct as of a date nobody can see* |
+
+**Instances — four, and the fourth is from production today:**
+1. the **~22 declared-but-inert subsystems** — declared, never constructed;
+2. a **STATUS column nobody maintains** (inventory #1);
+3. **`[LAUNCH-PHASE]` / `[PERMANENT]`** — ⚠️ **open: is either tag EVER READ BY CODE, or are they
+   comments?** *(the ownership test applied to the inventory's own STATUS axis)*;
+4. 🔴 **05-Aug, LIVE: `trades.closure_source` is EMPTY on the first delivery exit.** A standing rule
+   says *"group by `closure_source`, never `exit_reason`"* — ⛔ **and on the delivery path nothing
+   populates it, so the rule has NO OPERAND.** The 28-Jul backfill wrote 35 rows and left six NULL;
+   this is a seventh, on a path the backfill could not have covered. ⭐ **A rule pointed at an
+   unowned field is a rule that silently stops working when a new writer appears.**
+5. ⚠️ **And a fifth, caught the same day:** `SYSTEM_MAP.md`'s Delivery section still read *"DORMANT /
+   never exercised"* **on the day delivery traded** — a field whose only updater was human attention.
+
+⭐ **The cheapest form of compliance:** when adding a column or a record field, write the writer's
+`file:line` beside it in the schema comment. **If you cannot, that is the finding.**
+
+(Records: `docs/audit/item4_partA_inventory_survey_05aug2026.md` ·
+`docs/audit/HANDOFF_05-Aug-EVENING.md` §0b · `docs/MASTER_PENDING_01-Aug-2026.md` item-4 sub-entry.)
+
+---
+
+### 🕯️ CANDIDATES — ⛔ **HELD, NOT PROMOTED. ONE INSTANCE EACH.**
+
+⭐ **"One occasion is not a property" is this campaign's own standard, and it applies to its own
+rules.** Both below were argued for on 05-Aug and both were **refused promotion on the same
+ground**:
+
+| candidate | its single instance | ⏰ **TRIGGER FOR PROMOTION** |
+|---|---|---|
+| **the three-identity-fields rule** — Row ID (immutable) · dotted key · display name; nothing joins on the display name | inventory #1 | **a second, INDEPENDENT instance** |
+| **the conflict taxonomy** — `documentation error` · `implementation drift` · `intentional divergence` · `insufficient evidence` | the item-4 reconciliation | **a second, INDEPENDENT instance** |
+
+⛔ **On the conflict taxonomy specifically: it is the FOUR FINDING-BUCKETS specialised to a
+migration — ⛔ NOT a new scheme.** Recorded here so nobody later adopts it as one.
+📌 **Both are written in full at `docs/MASTER_PENDING_01-Aug-2026.md`, item-4 sub-entry** — ⭐ **held
+as candidates does NOT mean unrecorded; it means not yet general.**
+
+---
+
 ## V. VALIDATION
 
 ### V1 · PAPER CANNOT VALIDATE PRODUCT SEMANTICS
