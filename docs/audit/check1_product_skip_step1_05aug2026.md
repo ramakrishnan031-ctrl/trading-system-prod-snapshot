@@ -368,9 +368,26 @@ half-swept claim.**
 
 ⭐ **IS SUCH A TEST CONSTRUCTIBLE TODAY? — YES, and this answer is more useful than the criterion.**
 Three measured reasons:
-1. **The discriminator already exists in the data.** `trades.product` is `NOT NULL` (`schema.sql:326`)
-   and `_check1_manual_close` already reads it (`:1271`). A test can build one MIS trade and one CNC
-   trade through the **real** function and assert divergent outcomes — no new plumbing.
+1. **The discriminator already exists in the data.** ⛔⛔ **CORRECTED 05-Aug ~11:5x — SECOND
+   OCCURRENCE OF THE SAME DISPROVED CLAIM, IN THIS SAME DOCUMENT, SURVIVING A FIX APPLIED AT §
+   answer-3 TWO HOURS EARLIER.** The original text here read *"`trades.product` is `NOT NULL`
+   (`schema.sql:326`)"* — **there is no `trades.product` column**; `:326` is inside `CREATE TABLE
+   orders` (declared `:313`). ⭐ **THE CONCLUSION IS UNCHANGED AND THE MECHANISM IS NOT** — the
+   discriminator is reachable, but via **`LEFT JOIN orders o ON o.trade_id = t.trade_id AND
+   o.leg = 'ENTRY'`**, which is how `get_all_open_trades()` supplies it and how
+   `_check1_manual_close:1271` comes to hold it. ⚠️ **AND THE TEST MUST HANDLE `product IS NULL`** —
+   a trade with no `ENTRY` order row gets a NULL product, which `:1272` maps to the empty intent; a
+   test that only builds MIS-vs-CNC would never exercise that third case.
+   **CLASSIFICATION: (c) ASSUMPTION DISPROVED — second occurrence, same root.**
+   ⭐⭐ **AND THIS IS LEDGER #8's FINDING ARRIVING ON MY OWN DOCUMENT, WHICH IS WHY IT IS RECORDED
+   RATHER THAN QUIETLY EDITED: A FIX AT ONE SITE IS NOT PERMANENT.** Fourth instance in this
+   campaign. ✅ **SWEEP RUN, WIDTH STATED, SO THE "DONE" IS FALSIFIABLE:** `git ls-files -- 'docs/*'
+   | xargs grep -c "trades\.product"` → **3 hits total** — this one (**the only live error**), the
+   §answer-3 correction block quoting the claim in order to disprove it, and the operator card's
+   REVISION table describing it as the fault it fixed. ⇒ **the other two are correct usage; there is
+   no third live site.**
+   A test can build one MIS trade and one CNC trade through the **real** function and assert
+   divergent outcomes — the plumbing exists, but it is a join, not a column.
 2. **The real function is not stubbed** (0 hits, above), so such a test would exercise the actual
    predicate, not a mock's return value.
 3. **The precedent exists in-tree:** `tests/unit/test_reconciler_product_filter.py` and
