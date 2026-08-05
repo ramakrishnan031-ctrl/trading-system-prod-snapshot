@@ -784,3 +784,66 @@ confirms nothing.
 §1.2 is the day figure realised-only    RESULT = PASS -- YES, by construction
 §1.1 does H-B explain the 4.36          RESULT = NOT DETERMINABLE (one Kite glance)
 ```
+
+---
+
+## 🔴 §7. THE REAL SHAPE OF THE SIZING FINDING — AND ITS INTRADAY TWIN
+
+⭐ *First use of **M9**: every claim below carries its evidence class.*
+
+### 7.1 — the delivery side, as measured today
+
+**(P)** `qty_by_risk 8 · qty_by_capital 5 · qty_by_concentration 1` on both CNC trades;
+`tier_weight_applied 0.5`, `perf_weight_applied 1.0`, `qty_filled 1`. **n = 2** — ⛔ **every delivery
+trade that has ever existed, and still n = 2.**
+**(S)** `position_sizer.py:428` `raw_qty = min(risk, capital, concentration)` · `:527-530`
+`tiered_qty = max(1, min(floor(raw_qty × effective_mult), raw_qty × 2))` · `:486-489` production
+bounds `effective_mult ∈ [0.25, 1.0]`.
+**(I)** ⇒ at `raw_qty = 1`, `floor(1 × m) = 0` for **every** `m < 1` and the floor lifts it to 1;
+`raw_qty` must reach **4** before one extra share is ordered. ⛔ **Never observed at any other
+capital level — this is arithmetic, not an observation.**
+
+> ### 🔴 **THE DELIVERY QUANTITY IS PINNED AT 1 BY ARITHMETIC, NOT BY CONFIGURATION.**
+> **The tier multiplier is inert at this scale, and so is every risk or position-value knob** —
+> none can become binding while concentration returns 1. **(I)**
+
+### 7.2 — ⭐⭐ THE INTRADAY TWIN, AND IT IS THE SAME FINDING
+
+The register already carries it, **algebraically, at n in the hundreds** — ⛔ far stronger evidence
+than today's n = 2:
+
+| cite | what it says |
+|---|---|
+| `docs/decisions/02_d1_concentration_sizing.md:12` | *"Concentration binds on 100% of sized trades — `binding_constraint = concentration` in **298/298**. `qty_by_risk` binds **0** times; the risk sizer is **dead by algebra** (concentration binds ⟺ `sl_distance < 10% of price`, always true for 1–3% intraday stops)."* |
+| `…:13` | *"Actual risk is ~**1/20th** of intended: median **Rs 4.92** vs intended 1% = **Rs 98.76**."* |
+| `docs/audit/q9_batch4_sizing_floors_caps_18jul2026.md:96-97` | ✅ VERIFIED — `qty_by_risk <= qty_by_concentration` in **0** rows |
+| `docs/audit/integrity_audit_2026.md:1135` | ⭐ *"conc binds **415/415 + 67/67**; risk-binds **0 ever** (ratio floor **5.0×**); **upgraded from empirical to ALGEBRAIC (IA-P3-04)**"* |
+
+⇒ **(P)+(S)** **THE SAME ALGEBRAIC DEADNESS, NOW SEEN ON THE DELIVERY SIDE TOO.** Today's measured
+ratio `risk 8 : conc 1` sits **above** the intraday ratio floor of 5.0×, so delivery is not an
+exception to the intraday algebra — it is another instance of it.
+
+### 7.3 — 🔴🔴 THEREFORE: A SEPARATE DELIVERY CONFIG SURFACE **DOES NOT FIX THIS**
+
+**(S)** Both pipelines call the **same** `position_sizer.calculate` — the same `min()` at `:428`, the
+same floor at `:530`. A separate surface supplies **different VALUES to the SAME FORMULA.**
+**(I)** ⇒ **the binding constraint is ARITHMETIC and it is SHARED.** ⭐⭐ **Two pipelines with two
+config surfaces produce TWO INERT CONFIG SURFACES** — because what is inert is the *structure*
+(concentration binds, then the floor pins the result to 1), not the *values*.
+⇒ ⭐ **THE LEVER IS CAPITAL OR PRICE SELECTION, NOT SETTINGS.**
+
+### ⛔ 7.4 — WHAT THIS IS **NOT**, STATED SO IT CANNOT BE MISREAD
+
+- ⛔ **This is NOT "item 5 is pointless."** ⭐ **A knob that is inert at ₹10k is not inert at ₹100k,
+  and ₹10,000 is a TESTING value.** The surface must still exist. **What changes is item 5's
+  ORDER: concentration and the tier multiplier FIRST, risk and position value AFTER.**
+- ⛔ **NO delivery config value is proposed. None.**
+- ⛔ **DO NOT TOUCH THE CONCENTRATION CAP.** My own measurement says relaxing it far enough to matter
+  hands the ceiling **straight to capital at 5** — ⭐ **that is a different decision entirely, and it
+  is Rama's to take.**
+- ⚠️ **The delivery half is n = 2.** The *intraday* half is algebraic at n in the hundreds. ⛔ **The
+  strength of the joint claim comes from the intraday side, not from today.**
+
+```
+§7 sizing shape + intraday twin + two-inert-surfaces   RESULT = PASS (recorded, not acted on)
+```
