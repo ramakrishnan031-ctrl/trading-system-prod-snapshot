@@ -129,6 +129,57 @@ redesign ships.
 - **THIS IS REAL IF:** it names a symbol you are **not** knowingly holding as delivery, or
   a quantity that does not match the holding.
 
+### 3a. 💰 `⚠️ Capital Drift Detected` **CRITICAL** from `order_reconciler` — ⭐ **NEW 05-Aug, and it fired the day delivery went live**
+
+**You will see:** a `CRITICAL — [LIVE] Capital Drift Detected` email, `Module: order_reconciler`,
+carrying `expected` · `actual` · `delta` · `tolerance` · `base_tolerance` · `human_orders`.
+**Repeat alerts are throttled to one per 30 minutes** (`capital_drift_alert_interval_sec: 1800`),
+so several in a morning is **one episode, not several problems.**
+
+**Why it is expected on a delivery day — and this is the whole point:** the check compares
+**`expected` = your TOTAL capital** (`snapshot.total`; reservations reduce the *available* buckets,
+not the total) against **`actual` = the broker's FREE CASH** (Kite's `equity.net`, which is **net of
+blocked margin** — `order_reconciler.py:3590-3591`, `zerodha_adapter.py:1452`). ⇒ **the two
+legitimately differ by whatever is currently deployed in positions.**
+The in-session tolerance is **`max(₹50, 10% of expected)`** (`:3629-3631`,
+`system_config.yaml:368-369`), and **FIX-190 (Bug I) added that 10% band to silence exactly this
+noise — for an INTRADAY book.** ⛔⛔ **Intraday runs ~5× levered, so blocked margin is a fraction of
+position value and stays inside 10%. DELIVERY RUNS AT 1× AND BLOCKS THE FULL PURCHASE VALUE** ⇒ **a
+delivery book deploying more than ~10% of capital breaches a 10% band BY CONSTRUCTION**, and the
+positional bucket is **30% of total.** ⛔ **There is no delivery-specific tolerance** (width:
+`capital_drift_tolerance` across all tracked `.py`/`.yaml` — only a global rupee floor and a global
+percentage; zero variant hits).
+
+- **⛔ IT CANNOT KILL ANYTHING, AND THAT IS STRUCTURAL — VERIFIED IN SOURCE:** the event is published
+  with `source_module="order_reconciler"` (`:3667`), and `drift_handler._ESCALATING_SOURCES`
+  (`:66-70`) contains **only** `fund_manager`, `fund_manager_self_check` and
+  `fund_manager_bucket_overflow`. A non-escalating source logs one INFO line and **returns**
+  (`:147-161`) — before any tier, counter, `soft_kill` or `hard_kill`. ⇒ **informational by
+  construction.**
+- **THIS IS REAL IF** *(any one of these — ⛔ the arithmetic in the alert itself proves nothing, see
+  below)*:
+  **(i)** on the Kite Funds page, **available margin + used margin ≠ opening balance** — the broker's
+  own books do not balance; **or**
+  **(ii)** `opening balance − actual` does **not** match the broker's **used margin** read at
+  **the same time** — the gap is not deployed capital; **or**
+  **(iii)** `expected − opening balance` is **not** a small figure matching the day's booked P&L; **or**
+  **(iv)** `human_orders` is **non-empty** — someone traded manually on the account; **or**
+  **(v)** it fires **outside market hours** with `actual` **not** `0.0` (the overnight `net=0.0` case
+  is separately suppressed at `:3605-3616`); **or**
+  **(vi)** `kill_switch_state.state` is anything other than `INACTIVE` with **today's**
+  `triggered_at`.
+- ⛔⛔ **DO NOT VERIFY IT WITH `delta == (opening − actual) + (expected − opening)`.** That identity
+  is **always true** — `opening` cancels, leaving `delta == expected − actual`, which is the
+  definition of `delta`. **It closes to the paisa for any value of `opening`, including a wrong one.**
+  ⭐ **A check that cannot go red is not a check** — use (i)–(iii), which compare against something
+  independent.
+- ⏰ **AND CAPTURE THE BROKER MARGIN WHILE IT EXISTS:** `get_margins` is called **~2,225×/day and its
+  response value is persisted ZERO times** ⇒ what was actually blocked is **gone tomorrow**. Worksheet:
+  `docs/audit/ADDENDUM_capital_drift_05-Aug-2026.md`.
+- 📌 Registered: `MASTER_PENDING` **§B#7** (fourth member of the two-pipeline coupling family — and
+  the first that did **not** wait to be predicted) and **§B#5** (DH1's third instance, first with real
+  delivery positions). ⛔ **No fix and no tolerance change is authorised.**
+
 ## 4. 🚪 "The service didn't start" — the exit-code matrix, and where it is SILENT
 
 | exit | meaning | how loud |
