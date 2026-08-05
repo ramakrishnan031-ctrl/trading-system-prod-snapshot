@@ -546,3 +546,83 @@ for the expected ones — i.e. letting the behaviour name itself.
 §2 the real H5 gate named          RESULT = PASS
 §2 in-repo correction sweep        RESULT = PASS -- 0 records to correct (1 rotted line cite logged)
 ```
+
+---
+
+## ⚠️ §3. THE COST MODEL AND THE ₹4.36 GAP — MEASURED 16:45. **THE HYPOTHESIS IS REFUTED.**
+
+### 3.1 — **DOES THE COST MODEL BRANCH ON `product`? YES. COMPREHENSIVELY.**
+
+`broker/cost_calculator.py` takes `product` as a **required parameter** (`:117`) and **validates it**
+(`:147-148`, `ValueError` on anything but `MIS`/`CO`/`CNC`). It then branches at **three** places:
+
+| component | `file:line` | MIS / CO | **CNC** |
+|---|---|---|---|
+| brokerage | `:169-174` | `min(flat, pct×turnover)` | **BUY → 0.00 (free)**; SELL → same as MIS |
+| **STT** | `:190-198` | **SELL only**, `stt_sell_pct` | ⭐ **BOTH SIDES**, `stt_cnc_pct` |
+| stamp duty | `:224-228` | BUY `stamp_duty_mis_buy_pct` | BUY `stamp_duty_cnc_buy_pct` |
+
+and `config/broker_costs.yaml` carries **separate rates**, exactly along the hypothesis's axis:
+`stt_sell_pct: 0.025` vs **`stt_cnc_pct: 0.1`** (`:16-17`) · `stamp_duty_mis_buy_pct: 0.003` vs
+**`stamp_duty_cnc_buy_pct: 0.015`** (`:21-22`) — **5× the stamp duty and delivery STT on both legs.**
+
+> ### 🟢 **⇒ THE HYPOTHESIS — "the cost model applies intraday rates to a CNC trade" — IS FALSE.**
+> ⛔ **There is not one rate table. There are two, and the delivery one is present and correct in
+> shape.** ⭐ The hypothesis was worth writing down before the evidence; it is now **scored and
+> refuted**, which is the point of writing it down.
+
+### 3.2 — `broker_costs.yaml`: **EXISTS · TRACKED · LOADED. ⛔ AND THERE IS NO FALLBACK.**
+
+`config/broker_costs.yaml` is a tracked file, loaded by `core/config_loader.py:2160` into
+`BrokerCostsConfig` (`:1848`), with required-rate validation at `:1858-1884`.
+⭐⭐ **`config_loader.py:1852` states it outright: *"No hardcoded fallback values exist in
+CostCalculator (CC9)."*** ⇒ 🔴 **the older pending register's "falls back to hardcoded rates" claim
+is REFUTED.** *(Re-measured rather than quoted — which is exactly why the instruction said to.)*
+
+### ⭐⭐ THE NUMERIC CONFIRMATION — the recorded cost MATCHES the CNC table, not the MIS one
+
+ASKAUTOLTD, qty 1, buy 578.80 → sell 596.35. **Recorded costs: `1.53`** (gross 17.55 − net 16.02).
+Computed by hand from the yaml rates, per-component rounding as `:230-231` (`CC10`) requires:
+
+```
+BUY  (turnover 578.80)              SELL (turnover 596.35)
+  brokerage  CNC BUY free   0.00      brokerage  min(20, 0.03%)   0.18
+  STT        0.1%  both     0.58      STT        0.1%  both       0.60
+  exch txn   0.00297%       0.02      exch txn   0.00297%         0.02
+  sebi       0.0001%        0.00      sebi       0.0001%          0.00
+  GST        18%            0.00      GST        18%              0.04
+  stamp      0.015% CNC     0.09      stamp      SELL -> 0        0.00
+                          ------                                ------
+                            0.69                                  0.84     TOTAL = 1.53  ✅
+```
+**The same trade priced on the MIS table would have cost ≈ 0.63.** The recorded figure is **1.53**.
+
+⇒ ⭐⭐ **THE CNC BRANCH DEMONSTRABLY *RAN* — it is not merely present in code.** Before today it was
+unexercisable with real money (`paper_cannot_exercise_class`). 🏷️ **The CNC cost path moves to
+`VERIFIED LIVE 05-Aug`.**
+⚠️ **Stated as a hand computation, not an execution:** I did not run the code. Twelve rounded
+components agreeing to the paisa is strong evidence, ⛔ not proof.
+
+### 3.3 — ⛔ THE ₹4.36 GAP IS **NOT** RECONCILED, AND STAYS **(d) CANNOT DETERMINE**
+
+The cost model being *correct for delivery* removes the leading hypothesis and **explains nothing**
+about the gap. ⛔ **Nothing has been adjusted, and nothing will be, to make two numbers agree.**
+
+**What the contract note would have to show — written now so it can be scored later:**
+| the contract note says | verdict |
+|---|---|
+| day charges **≈ 4.75** | ⇒ the system's costs are right, and **Kite's 40.25 is measuring something else** — most likely excluding the CNC leg or being a positions-page-only figure |
+| day charges **≈ 9.11** *(= system gross 49.36 − Kite 40.25, **only if** both figures are net of charges and the gross agrees)* | ⇒ a genuine cost **understatement** — ⛔ but **not** from product-blindness, which §3.1 refutes; the cause would have to be found elsewhere |
+| anything else | both readings are wrong and the gross figures disagree too |
+
+### 3.4 — why this mattered beyond ₹4.36, and where it now lands
+The audit's central finding is that **costs dominate** — empirical breakeven **43.5%** against
+**38–39%** actual. A cost model wrong for delivery would make **every** delivery expectancy number
+wrong, and today is the first day it could be scored at all. ⇒ 🟢 **It was scored, and it is right.**
+⛔ **That closes the cost-model question, not the ₹4.36 question.**
+
+```
+§3.1 does the model branch on product   RESULT = PASS -- YES, at three points
+§3.2 broker_costs.yaml / fallback       RESULT = PASS -- loaded, and NO fallback exists
+§3.3 the 4.36 gap                       RESULT = NOT DETERMINABLE (contract note; bucket (d))
+```
