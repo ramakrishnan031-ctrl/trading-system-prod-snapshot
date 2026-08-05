@@ -1101,11 +1101,23 @@ severity CRITICAL** — verified in the `alert_send` outcomes, not assumed from 
 > Thursday 08:15**, and ⛔ **it does not stop there — it continues for every hour the position is
 > held.** The service staying up (§10.2) is what keeps the emitter alive to do it.
 
-⚠️ **THIS CORRECTS A STANDING NOTE OF MINE.** I recorded the 10% band as *"an intraday-leverage
-calibration."* ⭐ **Right in spirit, and it omitted the fact that decides tonight: the 10% applies
-IN-SESSION ONLY.** ⛔ **Overnight — the only time a delivery position can be held — the band is ₹50
-flat.** The three in-session alarms breached ~₹990; the five since 15:45 breached **₹50**. *Same
-alarm, two different regimes, and only the second one is structural.*
+### ⚠️ 10.4b — A CORRECTION I ALMOST MADE WRONGLY, AND `M8` CAUGHT IT
+
+I was about to write *"this corrects my standing note, which recorded the 10% band without saying it
+is in-session."* ⛔ **Then I read the note. It already says `in session`, explicitly, on the line
+that carries the formula.** ⭐ **`M8` again — and this time against my own record: I nearly claimed a
+correction without reading the thing I was correcting.** *(Third truncation/assumption near-miss of
+the day, and the only one where the record was right and I was the stale party.)*
+
+**What was actually missing, stated precisely:**
+- the **topic note** had `max(₹50, expected × 0.10)` **in session** ✅ — and ⛔ **never said what
+  happens OUT of session**;
+- the **one-line index entry** dropped the qualifier entirely, reading *"the 10% band is an
+  intraday-leverage calibration"* — ⚠️ **true, and it is the half that does not apply tonight.**
+- ⇒ 🔴 **NEITHER carried the fact that decides carry: overnight the band is ₹50 flat, and overnight
+  is the ONLY time a delivery position can be held.** The three in-session alarms breached ~₹990;
+  the five since 15:45 breached **₹50**. *Same alarm, two regimes, and only the second is
+  structural.* **Both records updated.**
 ⚠️ **AR9 accepted this CRITICAL for ONE SESSION with four reopen conditions. A regime it was not
 scored against has now appeared. ⛔ Not reopened here — flagged for Rama.**
 
