@@ -196,23 +196,36 @@ over one corpus ⇒ **the narrow one is lying.**
 > answer was a clean PASS, so the false zero cost nothing this time — which is exactly why it is
 > worth writing down.)*
 >
-> **Four same-class near-misses in ONE day, and the sub-shapes differ — the distinction is the
-> useful part:**
-> | # | what was wrong | how it was caught |
-> |---|---|---|
-> | 1 | a **truncated result set** (15-file limit) read as an absence — nearly denied MTM exists in `fund_manager.py` | re-ran narrowed to the one file |
-> | 2 | an **`[Omitted long matching line]`** read as a non-match — nearly left the register's H5 error unrecorded | chased the omitted line |
-> | 3 | a **predicted string** instead of an emitted one — would have INVERTED the H5 conclusion | enumerated the real `rejection_reason` values |
-> | 4 | ⭐ **right pattern, WRONG FILE** — the cron job owns its own log | listed the log directory by mtime |
-> | 5 | a pattern that **cannot fail to match** — `502` hit price digits in ~100 INFO lines | constrained to level + logger |
+> ### 🔎 THE SUB-TAXONOMY — **six instances in one day, and they are SIX MECHANISMS, not one lesson**
+> ⛔ **Not a new rule. These are M1 instances**, named so the next person can recognise which one
+> they are standing in. ⭐ **Every one of them returns a clean, confident ZERO — that property is
+> what makes them a family.**
 >
-> ⇒ ⭐⭐ **1–3 and 5 are wrong PATTERNS over a right corpus; 4 is a right pattern over the wrong
-> CORPUS.** ⛔ **Stating the width is therefore not enough — the width must name the CORPUS as well
-> as the pattern.** *(Same lesson as `census_not_in_journalctl`, one rung down: there, the right
-> grep over the wrong SOURCE.)*
-> ⭐ **The general form: a zero is not a result until you have named the corpus it came from — and
-> a control that proves the corpus is live is what turns it into evidence.** *(0 `effect_census`
-> against **8,204** `effect` hits; 0 auth errors against **25** ERROR/CRITICAL lines.)*
+> **GROUP 1 — THE QUERY WAS WRONG (right corpus, wrong search):**
+> | mechanism | today's instance | the fix that caught it |
+> |---|---|---|
+> | **wrong anchor** | the census grep anchored on `'CENSUS BEGIN'` — **a string emitted nowhere** | anchor taken verbatim from the emitter, `effect_telemetry.py:242` |
+> | **predicted string vs emitted string** | `DUPLICATE_SYMBOL` / `CONTRARY_POSITION` — both **0 rows all day**; the real gate was a **third** code | enumerate the actual `rejection_reason` values; let the behaviour name itself |
+> | **pattern that cannot fail** | `502` matched the **digits** inside ~100 INFO price lines | constrain to level **and** logger |
+>
+> **GROUP 2 — THE QUERY WAS RIGHT (wrong corpus, or a truncated view):**
+> | mechanism | today's instance | the fix that caught it |
+> |---|---|---|
+> | ⭐ **wrong file** | the cron-drift check writes to its **own** `logs/cron-drift-check.log`, not the service log | list the log directory by mtime |
+> | **wrong source** | the census is `INFO`, so `journalctl` (stdout = `WARNING`+) **structurally cannot hold it** | read `logs/system_<date>.log` |
+> | **truncated view** | a 15-file limit read as an absence (nearly denied MTM exists); an `[Omitted long matching line]` read as a non-match | re-run narrowed; **never read a truncated result as evidence** |
+>
+> ⇒ ⭐⭐ **GROUP 1 is a defect in the PATTERN; GROUP 2 is a defect in WHERE YOU LOOKED — and the
+> second is the one "state your search width" does not catch, because the width was fine.**
+> ⛔ **So the width must name the CORPUS as well as the pattern.**
+> 🔴 **The costliest of the six is `predicted string vs emitted string`: it is the only one that
+> would have INVERTED a live conclusion** — recording a real, six-times-observed coupling as inert —
+> rather than merely leaving a gap.
+>
+> ⭐ **THE GENERAL FORM: a zero is not a result until you have named the corpus it came from — and a
+> CONTROL proving that corpus is live is what turns the zero into evidence.** Today's controls:
+> 0 `effect_census` against **8,204** `effect` hits · 0 auth errors against **25** ERROR/CRITICAL
+> lines · a **rowcount = 1** proving an order filter matched before its columns were read.
 
 ### M2 · MEASURE, don't infer — and PROVE, don't assert
 - comment-only edit ⇒ **AST identity with docstrings stripped**, plus the constant's value
